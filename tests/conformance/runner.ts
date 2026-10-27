@@ -1,7 +1,7 @@
 /**
- * Run the language-neutral conformance cases in `conformance/cases/` against TypeScript yian.
+ * Run the language-neutral conformance cases in `tests/conformance/cases/` against TypeScript yian.
  *
- * Each case file is one test, named by its id `<group>/<name>`. `conformance/SPEC.md` defines
+ * Each case file is one test, named by its id `<group>/<name>`. `tests/conformance/SPEC.md` defines
  * the case format and what each kind checks.
  *
  * Runs under Bun from source and under Node from `dist/`; only `node:` APIs and `yaml`.
@@ -35,14 +35,14 @@ import {
   expressionTrees,
   resolveConstructorType,
   resolveIsinstanceType,
-} from "../src/compose/helpers/isinstance_types.ts";
-import { flowFingerprint } from "../src/compile/manifest.ts";
-import { END_ID } from "../src/compile/model.ts";
-import type { ComposedFlow } from "../src/compose/build/pipeline.ts";
-import { LoadError } from "../src/compose/helpers/errors.ts";
-import { loadFlow } from "../src/compose/loader.ts";
-import { ENTRIES, forget, nonDefaults, read, reload, withEnv } from "../src/defaults.ts";
-import type { Env } from "../src/defaults.ts";
+} from "../../src/compose/helpers/isinstance_types.ts";
+import { flowFingerprint } from "../../src/compile/manifest.ts";
+import { END_ID } from "../../src/compile/model.ts";
+import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { LoadError } from "../../src/compose/helpers/errors.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { ENTRIES, forget, nonDefaults, read, reload, withEnv } from "../../src/defaults.ts";
+import type { Env } from "../../src/defaults.ts";
 import {
   compareCodeUnits,
   type Diagnostic,
@@ -50,10 +50,10 @@ import {
   type FailureCode,
   OriginRef,
   reprText,
-} from "../src/diagnostics.ts";
-import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "../src/events.ts";
-import type { CompleteResult } from "../src/nodes/base.ts";
-import { ProviderError, kindForStatus } from "../src/llm/errors.ts";
+} from "../../src/diagnostics.ts";
+import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "../../src/events.ts";
+import type { CompleteResult } from "../../src/nodes/base.ts";
+import { ProviderError, kindForStatus } from "../../src/llm/errors.ts";
 import {
   type ChatModel,
   type Event,
@@ -62,7 +62,7 @@ import {
   TextDelta,
   ToolCallDelta,
   UsageReport,
-} from "../src/llm/events.ts";
+} from "../../src/llm/events.ts";
 import {
   Message,
   MessageFormatError,
@@ -71,10 +71,10 @@ import {
   TextPart,
   ToolCallPart,
   Usage,
-} from "../src/llm/messages.ts";
-import { ScriptedModel, type ScriptedReply } from "../src/llm/testing.ts";
-import { checkModelConfig, resolveModelConfig } from "../src/llm_clients/connection.ts";
-import type { ModelAccess } from "../src/llm_clients/factory.ts";
+} from "../../src/llm/messages.ts";
+import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
+import { checkModelConfig, resolveModelConfig } from "../../src/llm_clients/connection.ts";
+import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
   constructorNames,
   evalExpr,
@@ -82,12 +82,12 @@ import {
   isinstanceTypeNames,
   ResolveMode,
   resolveInRecord,
-} from "../src/expr/expressions.ts";
-import { type ExprNode, parseExpr } from "../src/expr/grammar.ts";
-import { evalBinding, renderTemplateRecord } from "../src/expr/template.ts";
-import { buildMemories, type MemoryRegistry } from "../src/memory_host.ts";
-import { ToolNode } from "../src/nodes/tool/node.ts";
-import { virtualScheduler } from "../src/platform.ts";
+} from "../../src/expr/expressions.ts";
+import { type ExprNode, parseExpr } from "../../src/expr/grammar.ts";
+import { evalBinding, renderTemplateRecord } from "../../src/expr/template.ts";
+import { buildMemories, type MemoryRegistry } from "../../src/memory_host.ts";
+import { ToolNode } from "../../src/nodes/tool/node.ts";
+import { virtualScheduler } from "../../src/platform.ts";
 import {
   inspectRun,
   replayRunLog,
@@ -103,26 +103,31 @@ import {
   send,
   staticNodes,
   withdraw,
-} from "../src/run.ts";
-import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
-import { addCrashedAttempts, type RunState } from "../src/runtime/state.ts";
-import { ASK, pending, type ToolContext } from "../src/tools/context.ts";
+} from "../../src/run.ts";
+import {
+  JsonlRunLog,
+  MemoryRunLog,
+  readRunLog,
+  type RunStartedRecord,
+} from "../../src/runtime/log.ts";
+import { addCrashedAttempts, type RunState } from "../../src/runtime/state.ts";
+import { ASK, pending, type ToolContext } from "../../src/tools/context.ts";
 import {
   PermanentToolError,
   ReportedToolError,
   ToolCheckError,
   TransientToolError,
-} from "../src/tools/errors.ts";
-import { tool } from "../src/tools/function_tools.ts";
-import type { AskRequest, AskTool, ToolEntry } from "../src/tools/registry.ts";
-import { canonicalJson, logJson, parseJson } from "../src/typesys/json.ts";
-import type { JsonMode, JsonObject } from "../src/typesys/json.ts";
-import { readTypedefs, typeFor } from "../src/typesys/types.ts";
-import { buildValueAs, FileRef, fromHost, InboxRef, isRecord } from "../src/typesys/values.ts";
-import type { Type, Value as YianValue, ValueRecord } from "../src/typesys/values.ts";
-import { withAppendHook } from "./append_hook.ts";
-import { validate } from "./schema.ts";
-import type { Schema } from "./schema.ts";
+} from "../../src/tools/errors.ts";
+import { tool } from "../../src/tools/function_tools.ts";
+import type { AskRequest, AskTool, ToolEntry } from "../../src/tools/registry.ts";
+import { canonicalJson, logJson, parseJson } from "../../src/typesys/json.ts";
+import type { JsonMode, JsonObject } from "../../src/typesys/json.ts";
+import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
+import { buildValueAs, FileRef, fromHost, InboxRef, isRecord } from "../../src/typesys/values.ts";
+import type { Type, Value as YianValue, ValueRecord } from "../../src/typesys/values.ts";
+import { withAppendHook } from "../append_hook.ts";
+import { validate } from "../schema.ts";
+import type { Schema } from "../schema.ts";
 
 /** A case value: an int is a `bigint`, a float a `number`. */
 export type Value = null | boolean | bigint | number | string | Value[] | Case;
@@ -143,7 +148,7 @@ export type Kind =
   | "cli"
   | "json";
 
-// The closed format, as conformance/SPEC.md defines it. Sets, and tables keyed by a checked
+// The closed format, as tests/conformance/SPEC.md defines it. Sets, and tables keyed by a checked
 // `Kind`, so a case value such as `kind: toString` never finds an `Object.prototype` member.
 const COMMON: ReadonlySet<string> = new Set(["kind", "pending", "expect"]);
 const FLOW: ReadonlySet<string> = new Set(["flow", "files", "env"]);
@@ -955,19 +960,19 @@ export function prepare(case_: Case): Case {
   );
 }
 
-/** Return the first directory above this file holding `conformance/cases`: the repository. */
+/** Return the first directory above this file holding `tests/conformance/cases`: the repository. */
 function findRoot(): string {
-  // `tests/` from source, `dist/tests/` when built.
+  // `tests/conformance/` from source, `dist/tests/conformance/` when built.
   let dir = dirname(fileURLToPath(import.meta.url));
-  while (!existsSync(join(dir, "conformance", "cases"))) {
+  while (!existsSync(join(dir, "tests", "conformance", "cases"))) {
     const parent = dirname(dir);
-    if (parent === dir) throw new Error("no `conformance/cases` above the conformance runner");
+    if (parent === dir) throw new Error("no `tests/conformance/cases` above the conformance runner");
     dir = parent;
   }
   return dir;
 }
 
-const CASES = join(findRoot(), "conformance", "cases");
+const CASES = join(findRoot(), "tests", "conformance", "cases");
 
 /** The runner's own "this case failed" error, carrying only a message. */
 export class CaseFailure extends Error {
@@ -3381,15 +3386,15 @@ async function runFingerprint(case_: Case, ctx: CaseContext): Promise<void> {
 // ---- cli ----
 
 /**
- * The `yian` entry: `../src/cli/index` beside this file, `.ts` from source and `.js` when
+ * The `yian` entry: `../../src/cli/index` from this file, `.ts` from source and `.js` when
  * built.
  */
 const CLI_ENTRY = fileURLToPath(
-  new URL(`../src/cli/index.${import.meta.url.endsWith(".ts") ? "ts" : "js"}`, import.meta.url),
+  new URL(`../../src/cli/index.${import.meta.url.endsWith(".ts") ? "ts" : "js"}`, import.meta.url),
 );
 // Read from the repository, not beside this file, so the built runner finds it too.
 const CLI_SCHEMA = JSON.parse(
-  readFileSync(join(findRoot(), "conformance", "schema", "cli.schema.json"), "utf8"),
+  readFileSync(join(findRoot(), "tests", "conformance", "schema", "cli.schema.json"), "utf8"),
 ) as Schema;
 const FILLED = /sk-conformance-[0-9]+/g;
 
@@ -3708,7 +3713,7 @@ function cliDocument(text: string, stdout: string): Value {
       .map((problem) => `  ${problem}\n`)
       .join("");
     throw new CaseFailure(
-      `stdout doesn't match conformance/schema/cli.schema.json\n${reasons}--- stdout\n${stdout}`,
+      `stdout doesn't match tests/conformance/schema/cli.schema.json\n${reasons}--- stdout\n${stdout}`,
     );
   }
   return parseJson(text, "codec") as Value;

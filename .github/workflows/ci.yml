@@ -42,4 +42,4 @@ jobs:
         run: bun run test:node
 
       - name: Conformance
-        run: bun tests/conformance.ts
+        run: bun tests/conformance/runner.ts

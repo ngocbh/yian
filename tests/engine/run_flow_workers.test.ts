@@ -14,7 +14,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { JsonlRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 
-const FIXTURES = fileURLToPath(new URL("../../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
 
 // topic -> {positive, cautious} in parallel -> a CODE node fans them in.
 const FANOUT = `

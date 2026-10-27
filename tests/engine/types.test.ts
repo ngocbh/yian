@@ -47,7 +47,7 @@ import {
   type ValueRecord,
 } from "../../src/typesys/values.ts";
 import { caseDocument, parametersFromYaml } from "../compose/declarations.ts";
-import type { Case } from "../conformance.ts";
+import type { Case } from "../conformance/runner.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));

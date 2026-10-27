@@ -22,7 +22,7 @@
  * canonical semantic failures come from `diagnostics`.
  *
  * Each event has a `type` discriminant equal to its class name and a `toJSON()`
- * giving its snake_case data form, described by `conformance/schema/events.schema.json`:
+ * giving its snake_case data form, described by `tests/conformance/schema/events.schema.json`:
  * keys in field order, every key present (`null` for an absent optional). Values the
  * flow produced are kept as they are, so write the form with yian's JSON codec, not
  * `JSON.stringify`, which turns infinity into null and throws on a bigint.

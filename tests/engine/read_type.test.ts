@@ -26,7 +26,7 @@ import {
   loadError,
   runCase,
 } from "../compose/declarations.ts";
-import type { Case } from "../conformance.ts";
+import type { Case } from "../conformance/runner.ts";
 
 const EMPTY: TypeRegistry = new Map();
 const LIMIT_TEXT = "the limit for a type (each record and list is a level)";

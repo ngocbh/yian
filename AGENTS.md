@@ -10,7 +10,7 @@ Read before you change code:
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): setup, the test commands and the pull-request workflow.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md): the pipeline, what each `src/` entry holds, and the rules
   that must not break.
-- [`conformance/README.md`](conformance/README.md): the cases that pin what a flow does.
+- [`tests/conformance/README.md`](tests/conformance/README.md): the cases that pin what a flow does.
 - [`docs/STYLE.md`](docs/STYLE.md): how to write a page on the docs site.
 
 ## Rules

@@ -1,6 +1,6 @@
 /**
  * Contracts for the transient observer events: each event's `type` discriminant, its snake_case
- * JSON data form, and `conformance/schema/events.schema.json`, which describes that form; the
+ * JSON data form, and `tests/conformance/schema/events.schema.json`, which describes that form; the
  * in-loop, retry, resume and wait observers included.
  */
 

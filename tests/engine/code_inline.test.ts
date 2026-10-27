@@ -223,7 +223,7 @@ test("a TypeCheckError the code throws stays node.execute", () => {
 // --- reference mode --- //
 
 /** The repository's conformance fixtures, where `compose_codefns.ts` lives. */
-const FIXTURES = fileURLToPath(new URL("../../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
 
 /** A temporary directory of helper modules the reference rows load. */
 let helpers: string;

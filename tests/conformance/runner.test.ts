@@ -39,11 +39,11 @@ import {
   setUp,
   sweepable,
   trace,
-} from "./conformance.ts";
-import type { Case, CaseContext, Kind, KindRunner } from "./conformance.ts";
-import { lintSchema, loadSchema, validate } from "./schema.ts";
-import { loadFlow } from "../src/compose/loader.ts";
-import { Failure } from "../src/diagnostics.ts";
+} from "./runner.ts";
+import type { Case, CaseContext, Kind, KindRunner } from "./runner.ts";
+import { lintSchema, loadSchema, validate } from "../schema.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { Failure } from "../../src/diagnostics.ts";
 import {
   decodeRecord,
   encodeRecord,
@@ -60,9 +60,9 @@ import {
   RunLogSchemaError,
   RunWaitingRecord,
   SCHEMA_VERSION,
-} from "../src/runtime/log.ts";
+} from "../../src/runtime/log.ts";
 
-const CASES = fileURLToPath(new URL("../conformance/cases/", import.meta.url));
+const CASES = fileURLToPath(new URL("./cases/", import.meta.url));
 // A crash sweep runs its case about once per record: under 1 s alone on a fast host, several
 // times that on a slow or busy one, past bun's 5 s default.
 const SWEEP = 30_000;
@@ -1990,7 +1990,7 @@ describe("runCli", () => {
       const bare = "kind: cli\nexpect: {exit: 0, json: {models: [a]}}\n";
       const unformatted = cli(bare, PRINT('{"models": ["a"]}\n'));
       await expect(unformatted).rejects.toThrow(
-        "stdout doesn't match conformance/schema/cli.schema.json\n",
+        "stdout doesn't match tests/conformance/schema/cli.schema.json\n",
       );
       await expect(unformatted).rejects.toThrow("$: missing format");
       const broken = cli("kind: cli\nexpect: {exit: 0, json: {}}\n", PRINT("{nope\n"));
@@ -2011,7 +2011,7 @@ describe("runCli", () => {
       await cli(`kind: cli\nexpect: {exit: 0, json_lines: ${expected}}\n`, PRINT(lines));
       const bad = PRINT('{"format": "yian.cli.v1", "event": "nope"}\n');
       await expect(cli("kind: cli\nexpect: {exit: 0, json_lines: []}\n", bad)).rejects.toThrow(
-        "stdout doesn't match conformance/schema/cli.schema.json",
+        "stdout doesn't match tests/conformance/schema/cli.schema.json",
       );
     },
     SPAWN,

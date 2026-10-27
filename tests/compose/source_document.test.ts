@@ -419,7 +419,7 @@ describe("range ends", () => {
 
   test("frame a block record up to the next key in the shared depends_on case", () => {
     const url = new URL(
-      "../../conformance/cases/run-agent/seed_12_depends_on.yaml",
+      "../conformance/cases/run-agent/seed_12_depends_on.yaml",
       import.meta.url,
     );
     const { flow } = parseYaml(readFileSync(url, "utf8")) as { flow: string };

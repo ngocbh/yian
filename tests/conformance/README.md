@@ -4,7 +4,7 @@ A conformance case pins one thing yian does, written as data rather than code. E
 YAML file, `cases/<group>/<name>.yaml`, whose id is `<group>/<name>`. It gives an input (a flow,
 an expression, a value, a CLI call, ...) and under `expect` the results yian must produce: load
 diagnostics, the run's output, its run log projected to a trace, events, and so on. The runner,
-`tests/conformance.ts`, turns each case into calls on yian and compares the results.
+`tests/conformance/runner.ts`, turns each case into calls on yian and compares the results.
 
 [`SPEC.md`](SPEC.md) defines the case format: the keys of each kind, the host as data, the
 trace projection, placeholders and error classes.
@@ -35,10 +35,10 @@ expect:
 ## Running cases
 
 ```bash
-bun tests/conformance.ts                                  # every case
-bun tests/conformance.ts --case run-core/code_greeting    # one case
-bun tests/conformance.ts --group defaults --kind defaults # a selection
-bun tests/conformance.ts --crash-sweep                    # also cut and resume each run case
+bun tests/conformance/runner.ts                                  # every case
+bun tests/conformance/runner.ts --case run-core/code_greeting    # one case
+bun tests/conformance/runner.ts --group defaults --kind defaults # a selection
+bun tests/conformance/runner.ts --crash-sweep                    # also cut and resume each run case
 ```
 
 The runner prints a `FAIL` line for each failing case and exits 1 when any case fails.
@@ -50,7 +50,7 @@ The runner prints a `FAIL` line for each failing case and exits 1 when any case 
    such as `output` or `raises`.
 2. For a `run`, `resume` or `backward` case, add the projections you want pinned as empty lists
    (`trace: []`, `events: []`), then fill them in from a real run:
-   `bun tests/conformance.ts --write-expect --case <group>/<name>`.
+   `bun tests/conformance/runner.ts --write-expect --case <group>/<name>`.
 3. Read the written values and check each one is what yian should do, then run the case again.
 
 Files several cases share (CODE helpers, stub data) go in `fixtures/`; a case's flow names them

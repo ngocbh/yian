@@ -1,8 +1,8 @@
 /**
  * Versioned compare-and-set markdown stores. The golden replay writes exactly the files in
- * `conformance/fixtures/markdown_store.json` for the same operations, byte for byte, since they
- * are the format of documents and write logs on users' disks; with `YIAN_TEST_NODE` set to a Node
- * binary, it and the read of the fixture copy also run under Node.
+ * `tests/conformance/fixtures/markdown_store.json` for the same operations, byte for byte, since
+ * they are the format of documents and write logs on users' disks; with `YIAN_TEST_NODE` set to a
+ * Node binary, it and the read of the fixture copy also run under Node.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -28,7 +28,7 @@ const ROOT = path.resolve(import.meta.dirname, "../..");
 const BUILT = path.join(ROOT, "dist/src/memory/storage/markdown.js");
 const BUILT_SCENARIOS = path.join(ROOT, "dist/tests/engine/markdown_both_runtimes.js");
 const FIXTURE: Record<string, string> = JSON.parse(
-  fs.readFileSync(path.join(ROOT, "conformance/fixtures/markdown_store.json"), "utf8"),
+  fs.readFileSync(path.join(ROOT, "tests/conformance/fixtures/markdown_store.json"), "utf8"),
 );
 
 /** Return what the promise or call `fn` rejects or throws with; fail when it succeeds. */

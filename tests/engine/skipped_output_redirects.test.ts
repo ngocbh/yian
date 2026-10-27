@@ -1,26 +1,6 @@
 /**
- * Skip propagation through node-owned logical output redirects: a port of
- * `tests/engine/test_skipped_output_redirects.py`.
- *
- * Ported: `test_required_call_child_end_redirect_skips_parent_output_path`,
- * `test_redirected_skip_completes_coalesced_fallback_and_run`,
- * `test_malformed_skipped_output_target_leaves_state_unchanged` (3 rows),
- * `test_multiple_redirect_owners_are_rejected_before_skip`,
- * `test_live_redirect_target_is_rejected_before_skip`,
- * `test_settled_redirect_residue_does_not_own_a_future_output`,
- * `test_map_collector_redirects_skipped_output_to_spawner`,
- * `test_loop_driver_redirects_skipped_output_to_origin`,
- * `test_nested_redirects_propagate_to_the_top_level_end`,
- * `test_redirected_skip_replays_without_a_terminal_record`.
- *
- * Changed: Python's `ValueError` is a `RangeError` here; each rejected row names its one class and
- * full message, where Python matches a part of it or only the class. The `0` target row sets
- * `commitAs` by cast. The state helpers are the shared ones: `routeInFlight` (START
- * commits the default output, where Python's `_router_in_flight` commits `{"seed": True}`, which
- * no row reads) and `callRedirectFlow`, `reducerSnapshot` (a superset of Python's value-only snapshot) for the
- * unchanged-state checks, and `replayOutcomeLog` for Python's local `_replay`; the run id and
- * fingerprint are the shared fixture's. Each test that commits a route pins `state.ready` after
- * it.
+ * Skip propagation through node-owned logical output redirects. Each rejected row names its one
+ * class and full message, and each test that commits a route pins `state.ready` after it.
  */
 
 import { expect, test } from "bun:test";

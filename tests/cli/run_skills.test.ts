@@ -1,15 +1,6 @@
 /**
- * `yian run` supplies Claude Code and Codex skill folders to the run: a port of
- * `tests/cli/test_run_skills.py`, all three tests under their names.
- *
- * Changed:
- * - Python's patched `model_from_config` is a fake `fetch` answering as an OpenAI-compatible chat
- *   endpoint (xAI's route, with its key and the default provider and model in the command's env);
- *   the system prompt is read from the request body.
- * - Python's `isolated_cli_home` fixture is `HOME` in the command's env; `monkeypatch.chdir` is
- *   `process.chdir`, restored afterwards.
- * - "UserWarning" never appears: TS warnings are `warn` calls, so the row checks only the
- *   `warning: skipped skill: ` line.
+ * `yian run` supplies Claude Code and Codex skill folders to the run; the system prompt is read
+ * from the request a fake `fetch` model gets.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -101,7 +92,7 @@ async function runIn(cwd: string, flow: string) {
   }
 }
 
-test("test_run_reads_user_and_project_skill_roots", async () => {
+test("run reads user and project skill roots", async () => {
   const project = join(tmp, "project");
   mkdirSync(join(project, ".git"), { recursive: true });
   skill(join(project, ".claude", "skills"), "code-review", "Project review.");
@@ -120,7 +111,7 @@ test("test_run_reads_user_and_project_skill_roots", async () => {
   expect(systems[0]).toEndWith("- code-review: Personal review.\n- release-notes: Project notes.");
 });
 
-test("test_run_reports_a_missing_granted_skill", async () => {
+test("run reports a missing granted skill", async () => {
   mkdirSync(join(tmp, ".git"));
   const flow = join(tmp, "flow.yaml");
   writeFileSync(flow, FLOW);
@@ -131,7 +122,7 @@ test("test_run_reports_a_missing_granted_skill", async () => {
   expect(stderr).toContain("grants skills not supplied to this run");
 });
 
-test("test_run_without_grants_reads_no_skill_roots", async () => {
+test("run without grants reads no skill roots", async () => {
   mkdirSync(join(tmp, ".git"));
   mkdirSync(join(tmp, ".claude", "skills", "broken"), { recursive: true });
   writeFileSync(join(tmp, ".claude", "skills", "broken", "SKILL.md"), "no frontmatter\n");

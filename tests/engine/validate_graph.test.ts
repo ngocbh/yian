@@ -1,28 +1,7 @@
 /**
  * Recursive type compatibility, the cycle check, CASE handle alignment and reference head checks:
- * a port of `tests/engine/test_validate_graph.py`.
- *
- * Ported: the cycle and CASE handle rows on seeds built node by node as the loader's build loop
- * builds them (`test_e02_cycle_is_loud`, `test_e02_cycle_carries_dependency_legend`,
- * `test_acyclic_seed_passes_cycle_check`, `test_case_seed_passes_cycle_check`,
- * `test_seed02_handles_align`, `test_seed06_handles_align`,
- * `test_handle_with_no_matching_case_rejected`, `test_case_without_outgoing_edge_rejected`,
- * `test_else_handle_always_allowed`), reading the seeds from conformance cases
- * `load-core/seed_e02_cycle`, `load-agent/seed_01_structured_agent`, `load-case/seed_02_case` and
- * `load-case/seed_06_case_on`; and the pure `types_compatible` tests
- * (`test_numeric_domain_compatibility_requires_interval_containment`,
- * `test_enum_compatibility_requires_tag_subset`,
- * `test_numeric_domain_compatibility_recurses_through_records_and_lists`,
- * `test_list_element_compatibility_preserves_nullable_direction`,
- * `test_none_source_is_compatible_exactly_with_none_or_nullable_sinks`,
- * `test_bare_list_compatibility_uses_its_storage_element_contract`,
- * `test_list_element_compatibility_recurses_before_storage_kind_rejection`).
- *
- * TS-only: the compile check `rejectCycles` on bare edges (the cycle message and `errors` for a two-node cycle,
- * as conformance `load-core/seed_e02_cycle`; the stuck nodes sorted; edges touching START and
- * END ignored; an acyclic graph passes; an edge naming an unknown node throws, as Python's
- * `KeyError`), `FlowValidationError`'s `errors`, and `classifyPath`'s
- * messages and its `null` for good paths.
+ * the compile check `rejectCycles` (stuck nodes sorted, edges touching START and END ignored, an
+ * edge naming an unknown node throws), `FlowValidationError`'s `errors`, and `classifyPath`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";

@@ -1,9 +1,7 @@
 /**
  * The union refinement's shape, tag fields, order, labels, overlap, value checks
- * (`buildValueAs`) and member helpers (`unionMemberForTag`, `restrictUnion`, `unionField`), a
- * port of `tests/engine/test_union_values.py`. Python's `ValueError` is a `RangeError` here.
- *
- * TS-only: a no-member error still reads as class `TypeCheckError` (`error.name`).
+ * (`buildValueAs`) and member helpers (`unionMemberForTag`, `restrictUnion`, `unionField`). A
+ * no-member error still reads as class `TypeCheckError` (`error.name`).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -354,8 +352,7 @@ describe("buildValueAs", () => {
   });
 
   test("a deep untagged union labels and checks in linear work", () => {
-    // Python counts calls to its private label function, which TS can't monkeypatch; a time
-    // bound stands in. An exponential walk of depth 30 would take minutes, not seconds.
+    // A time bound: an exponential walk of depth 30 would take minutes, not seconds.
     const depth = 30;
     const typ = deepUntaggedUnion(depth);
     let start = performance.now();
@@ -387,7 +384,7 @@ describe("buildValueAs", () => {
 
 describe("union labels and order", () => {
   test("a deep untagged union labels in linear work", () => {
-    // Python counts the nodes labelled; an exponential walk of depth 100 would not finish.
+    // An exponential walk of depth 100 would not finish.
     const depth = 100;
     const typ = deepUntaggedUnion(depth);
     const start = performance.now();

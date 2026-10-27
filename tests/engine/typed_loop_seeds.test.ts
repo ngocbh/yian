@@ -1,18 +1,9 @@
 /**
- * Typed LOOP seeds, `name: !Type value` on a loop's `input:` typing its carried record: a port of
- * `tests/engine/test_typed_loop_seeds.py`.
+ * Typed LOOP seeds, `name: !Type value` on a loop's `input:` typing its carried record.
  *
  * A loop's `input:` is the carried record's turn-0 seed, so a typed seed is checked when the
  * driver binds it, and a field the body omits carries the declared type into the loop's merged
  * output contract.
- *
- * Ported: `test_typed_literal_seed_binds_its_value_and_runs` (its run is also the harvested
- * `run-loop/engine_typed_loop_seeds__typed_literal_seed_binds_its_value`, which doesn't pin the
- * binding), `test_omitted_typed_seed_carries_its_declared_type` (its run is also
- * `run-loop/engine_typed_loop_seeds__omitted_typed_seed_is_carried`, which doesn't pin the
- * contract) and `test_typed_seed_rejects_a_value_that_does_not_fit`.
- *
- * Changed: the literal seed's source and the runs' integers are bigints (decision 4a).
  */
 
 import { expect, test } from "bun:test";

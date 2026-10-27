@@ -2,7 +2,6 @@
  * `yian chat`: a terminal host that sends each typed line to a flow's `Inbox(str)` or
  * `Inbox(Message)` input and advances the run. Driven in process on a scripted stdin (a fake TTY where keys matter), the
  * run's clock virtual and its signals a test emitter, so no model, timer or real signal is needed.
- * TS-only: Python's `yian chat` blocks inside a live `human_input` and has no inboxes.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";

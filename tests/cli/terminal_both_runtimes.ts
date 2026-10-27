@@ -935,11 +935,7 @@ async function aThrowingOnActiveStillRestoresTheTerminal(): Promise<void> {
   assertRestored(input, output, exitHooks);
 }
 
-// The `promptInputs` scenarios port the prompt-flow tests of `tests/engine/test_cli_prompt.py`,
-// each named in the comment above its scenario. Not ported: the questionary-internal
-// `test_nullable_open_repeated_palettes_use_fresh_choices` and
-// `test_prompt_controls_are_fresh_for_each_widget` (no widget objects are shared here), and
-// `test_gather_non_tty_*` (the run's prompt gate, not the terminal).
+// The `promptInputs` scenarios: the input prompts of a run, one widget per declared input.
 
 /** One source-free flow input; untyped when `type` is undefined. */
 function decl(
@@ -1575,7 +1571,7 @@ async function ctrlQInterruptsASelectButNotATextEditor(): Promise<void> {
   assert.deepEqual(input.rawCalls, [true, false, true, false]);
 }
 
-// Python's `str.strip()` blank set: U+0085 is blank, U+FEFF is not.
+// Blank is Unicode whitespace: U+0085 is blank, U+FEFF is not.
 async function anOptionalStringBlankIsUnicodeWhitespace(): Promise<void> {
   const { input, terminal } = setup();
   const answer = terminal.promptInputs([decl("kept", STR), decl("omitted", STR)], {});
@@ -1599,12 +1595,8 @@ async function aFailingOutputFailsTheCall(): Promise<void> {
   assertRestored(input, output, exitHooks, false);
 }
 
-// The `askUser` scenarios port `_prompt_request`, `_ask_question` and `assemble_question_answers`
-// of `src/yian/cli/run.py` (`tests/engine/test_cli_questions_render.py`, `tests/cli/test_run.py`'s
-// `test_prompt_request_offers_model_options_as_a_choice`) and the broker checks of
-// `tests/cli/test_terminal_broker.py` and `tests/cli/test_terminal_controller.py` named above
-// each scenario. `test_ask_user_secret_reaches_the_prompt_request` is deliberately not ported:
-// `AskUserRequest` has no `secret`.
+// The `askUser` scenarios: an `ask_user` request's questions rendered and answered on the
+// terminal, model options offered as a choice, and the terminal restored after each.
 
 /** An `ask_user` request: `fields` over the absent ones (null). */
 function request(fields: Partial<AskUserRequest>): AskUserRequest {
@@ -1939,7 +1931,6 @@ async function aPlainAskIsATextPrompt(): Promise<void> {
   answer = terminal.askUser(request({ nodeId: "ask/name" }), toolContext());
   input.write("Ann" + ENTER);
   assert.equal(await answer, "Ann");
-  // Python's `None` reads `null` in TS.
   answer = terminal.askUser(request({}), toolContext());
   input.write(ENTER);
   assert.equal(await answer, "");

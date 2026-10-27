@@ -2,7 +2,7 @@
  * The run reducer's rules for inboxes, calls and waits: sends, `node_waiting`, `node_woken` and
  * `run_waiting`, `pending` and `tool_result` steps, `complete`, the take commit, orphan takes at a
  * resume, `inbox_closed`, `run_cancelled` and `run_failed`, and the refusals a host delivery
- * meets. TS-only: Python yian has no inboxes or waits.
+ * meets.
  */
 import { describe, expect, test } from "bun:test";
 

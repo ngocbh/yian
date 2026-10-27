@@ -1,12 +1,6 @@
 /**
- * Ports the terminal checks of `tests/cli/test_terminal_broker.py` and the prompt checks of
- * `tests/engine/test_cli_prompt.py` that drive a real widget: the scenarios of
- * `terminal_both_runtimes.ts`, run here on Bun and, with `YIAN_TEST_NODE`, built on Node. Also
- * ports the pure prompt helpers' checks of `tests/engine/test_cli_prompt.py`
- * (`test_input_label_*`, `test_parse_structured_input_*`),
- * `tests/cli/test_run_long_ints.py::test_structured_prompt_rejects_a_long_int`, which TS turns
- * around: an int has no digit limit, and
- * `test_terminal_broker.py::test_terminal_module_imports_only_the_standard_library`.
+ * The terminal scenarios of `terminal_both_runtimes.ts`, run on Bun and, with `YIAN_TEST_NODE`,
+ * built on Node; and the pure prompt helpers (input labels, structured input parsing).
  */
 
 import { execFileSync, spawnSync } from "node:child_process";

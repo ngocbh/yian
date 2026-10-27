@@ -1,11 +1,5 @@
 /**
- * The `Route` outcome of `nodes/base.ts`, a port of `tests/engine/test_route.py`: a router
- * (CASE) returns `Route(handle)`, with no value.
- *
- * Changed: Python's keyword form `Route(handle=...)` is the same positional constructor.
- *
- * Not ported: `test_route_is_in_node_result_union` (the union is a type);
- * `test_node_routed_event_fields` is in `events.test.ts`.
+ * The `Route` outcome of `nodes/base.ts`: a router (CASE) returns `Route(handle)`, with no value.
  */
 
 import { expect, test } from "bun:test";

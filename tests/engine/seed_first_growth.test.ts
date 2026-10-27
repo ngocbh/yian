@@ -1,36 +1,7 @@
 /**
- * Seed-first growth, nodes describe expansion and compile constructs topology: a port of
- * `tests/engine/test_seed_first_growth.py`.
- *
- * Ported: `test_call_map_and_loop_return_seed_only`,
- * `test_loop_respawn_preserves_diagnostic_origin_separately_from_origin_id`,
- * `test_compile_builder_derives_prefix_from_each_spawner_failure_trace`,
- * `test_source_free_spawners_do_not_invent_generated_context`,
- * `test_compile_builder_propagates_each_spawner_memory_occurrence`,
- * `test_nested_map_then_call_extends_context_only_when_inner_expands`,
- * `test_compile_builder_reconstructs_every_growth_kind`,
- * `test_compile_builder_marks_only_explicit_legal_seed_rejection`,
- * `test_compile_builder_keeps_an_unsupported_kind_outside_growth_rejection` and
- * `test_compile_builder_preserves_helper_fault_identity_after_seed_validation`.
- *
- * Changed:
- * - `growthProducers` is async, as `run` is; ints are `bigint`s, as the reducer's canonical seed
- *   holds them, the LOOP iteration included (`[{ x: 1n }, 0n]`, where Python's seed is a tuple);
- * - Python's `ValueError` is a `RangeError`;
- * - `test_compile_builder_keeps_an_unsupported_kind_outside_growth_rejection`: the spawner is a
- *   `FuncNode` (kind `code`), since `Node` is abstract, and the message is pinned whole;
- * - `test_compile_builder_preserves_helper_fault_identity_after_seed_validation`: no monkeypatched
- *   `call_subgraph`; the CALL's child throws the fault from its `inputConnections` getter, which
- *   the builder reads after seed validation.
- *
- * Not ported: the `call-key-type` row of `test_compile_builder_marks_only_explicit_legal_seed_rejection`,
- * since JS record keys are always text.
- *
- * TS-only:
- * - a float LOOP iteration and one above 2^53-1 are rejected, beside Python's boolean and negative
- *   rows;
- * - two `buildGrow` calls on one spawner give equal fragments and leave its child template
- *   unchanged.
+ * Seed-first growth: CALL, MAP and LOOP return only their seed, and the compile builder
+ * (`buildGrow`) turns each seed into topology, origins and seed rejections. Ints are `bigint`s, as
+ * the reducer's canonical seed holds them, the LOOP iteration included.
  */
 
 import { expect, test } from "bun:test";

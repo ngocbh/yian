@@ -1,33 +1,8 @@
 /**
- * A builtin called with arguments it doesn't take fails at load in every binding and prompt: a
- * port of `tests/engine/test_span_calls.py`, loading each flow with `assembleText` (`assemble` as
- * the loader calls it) where Python calls `load_flow`.
- *
- * Ported: `test_mis_called_builtin_fails_to_load_at_its_site`,
- * `test_unknown_function_in_a_binding_keeps_the_flow_call_message`,
- * `test_a_binding_reports_both_an_unknown_ref_and_a_bad_call` and
- * `test_well_called_builtins_in_every_site_load`; each `defs:` entry is built by the harness's
- * callable scope, as the loader builds it.
- *
- * Pinned at the end: the harvested `load-map-call/engine_span_calls__*` cases the reference
- * validator decides and `well_called_builtins_in_a_map_load`, which loads.
- *
- * Ported through `loadFlow` and `runFlow`: the `test_python_built_*` rows and
- * `test_a_well_called_python_built_binding_still_runs`. Each sets a binding, a node's type table,
- * an agent prompt or a question of the loaded flow in code, as Python sets it on the compiled
- * flow; a wiring change replaces the node's wiring map rather than mutating it, as `Flow` asks.
- *
- * Changed: `test_python_built_binding_mis_calling_a_builtin_fails_before_resume_appends` stops its
- * first run with an aborted `signal` once node `a` starts (Python's CODE function raises), then
- * sets the bad binding and writes the edited flow's fingerprint into the log's `RunStarted`, where
- * Python stubs the run's template check during the first run; replay checks the fingerprint by
- * plain equality and the log has no hash chain. The CODE bodies are inline JavaScript.
- *
- * Changed: TS yian has no HUMAN_INPUT or WAIT kind. The question sites are a TOOL `ask`'s `prompt`
- * and `questions` inputs, wiring templates that read `${input.v}`, so each is named as that input;
- * the adaptive brief reads the ask's input `t`; the `until` site is a TOOL `sleep`'s input. The
- * code-built question row rewires the ask's `questions` input, and the code-built WAIT `until` row
- * is gone: a `sleep`'s `until` is an ordinary input, as in the code-built binding row.
+ * A builtin called with arguments it doesn't take fails at load in every binding and prompt,
+ * whether the flow is loaded from YAML or the binding is set in code on the loaded flow. The
+ * question sites are a TOOL `ask`'s `prompt` and `questions` inputs; the `until` site is a TOOL
+ * `sleep`'s input.
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";

@@ -1,117 +1,10 @@
 /**
- * Transactional flat graph expansion in the run-state reducer: a port of
- * `tests/engine/test_run_state_growth.py`. Python's `ValueError` is a `RangeError` here, and a
- * live rejection is a `GrowthRejected` whose `original` has the exact class and message.
+ * Transactional flat graph expansion in the run-state reducer: growth checks, pruning, the growth
+ * index, and live and replayed growth through `buildGrow`. A live rejection is a `GrowthRejected`
+ * whose `original` has the exact class and message.
  *
- * Ported:
- * `test_growth_rejects_a_nonfinite_seed_before_builder`,
- * `test_growth_rejects_invalid_node_owned_topology_targets`,
- * `test_growth_rejects_invalid_skipped_output_hook_target`,
- * `test_growth_rejects_duplicate_redirect_owner_in_final_topology`,
- * `test_growth_rejects_executable_redirect_target_in_final_topology`,
- * `test_growth_accepts_disconnected_inert_redirect_placeholder`,
- * `test_growth_replay_rejects_a_changed_but_valid_builder_digest`,
- * `test_growth_live_and_record_replay_produce_equal_state`,
- * `test_growth_record_replay_requires_the_injected_builder`,
- * `test_growth_accepts_the_closed_system_ambients`,
- * `test_growth_accepts_typed_fields_and_nested_map_item_scope`,
- * `test_growth_rejects_a_field_read_on_a_scalar_contract`,
- * `test_growth_builder_non_flow_return_is_a_raw_host_fault`,
- * `test_growth_rejects_a_binding_wrapped_unknown_reference_before_digesting`,
- * `test_growth_rejects_an_unknown_reference_nested_in_a_template`,
- * `test_growth_rejects_malformed_static_contract_as_a_host_invariant`,
- * `test_growth_enforces_peak_node_budget_before_same_transition_pruning`,
- * `test_growth_accepts_peak_node_count_equal_to_budget`,
- * `test_growth_rejects_invalid_exact_depth_deltas`,
- * `test_growth_treats_corrupt_stored_depth_as_a_host_invariant_error`,
- * `test_growth_stamps_positive_reference_depth_on_the_boundary`,
- * `test_growth_prunes_only_named_settled_dynamic_overlay_coordinates`,
- * `test_growth_preserves_unrelated_in_flight_siblings_and_fifo_order`,
- * `test_growth_rejects_live_node_collision_even_when_the_id_is_pruned`,
- * `test_growth_rejects_a_binding_wrapped_dependency_on_a_pruned_node`,
- * `test_growth_rejects_a_template_dependency_on_a_pruned_node`,
- * `test_growth_records_the_spawner_as_owner_of_its_fragment`,
- * `test_pruning_keeps_a_grown_subtree_with_unsettled_work`,
- * `test_pruning_retires_a_grown_subtree_once_settled`,
- * `test_growth_keeps_an_unsettled_prune_id_live_and_deferred`,
- * `test_growth_keeps_a_settled_prune_id_that_kept_work_reads`,
- * `test_growth_retires_a_settled_prune_id_the_kept_work_does_not_read`,
- * `test_actual_build_grow_splices_call_map_and_loop_with_fifo_and_depth`,
- * `test_actual_call_growth_allows_an_omitted_optional_defaulted_child_input`,
- * `test_zero_field_loop_growth_schedules_its_next_driver_after_the_body` and
- * `test_loop_clone_record_uses_actual_id_self_prunes_and_inherits_depth_zero`.
- *
- * Python's `_snapshot` is `snapshot` plus `topologySnapshot`: `snapshot` holds the flow by
- * reference, so a growth's topology change needs its own detached copy.
- *
- * Changed:
- * - `test_growth_canonicalizes_seed_and_isolates_builder_record_and_observers`: the record seed is
- *   deep-frozen, so the after-prepare mutations go to the observer's seed and the caller's seed.
- * - `test_growth_rejects_a_cyclic_seed_before_builder`: the original is a `TypeCheckError`
- *   (`value contains itself`), not a `ValueError` about a cyclic container.
- * - `test_growth_rejects_an_excessively_nested_seed_before_builder`: the net allows the seed two
- *   levels past `current().maxValueNesting` (the containers that wrap a bound value), so a seed
- *   two levels past prepares and one three levels past fails `rejectDeepNesting` with a
- *   `TypeCheckError`, where Python fails only at its codec's recursion limit (`nesting exceeds`,
- *   a `ValueError`).
- * - `test_growth_builder_receives_a_detached_spawner_and_failure_is_pure`: no `env` half
- *   (`copyGraph` copies the spawner shallowly, and `env` is read-only by contract); the builder
- *   gets a copy, its title change doesn't reach the live spawner, its error keeps its identity and
- *   the state is unchanged.
- * - `test_growth_rejects_invalid_edge_field_types`: the bad values go in through a cast to a new
- *   `Edge` (its constructor doesn't validate its fields), and each row pins the whole message.
- * - `test_growth_append_failure_leaves_topology_and_every_state_coordinate_unchanged`: the failing
- *   log's error is `disk full` (`FailingLog`), not `OSError: durability unavailable`.
- * - `test_growth_replay_unwraps_shared_growth_rejection_identity`: no monkeypatched validator; the
- *   replay builder returns a cyclic fragment, and replay throws the original `RangeError`, not a
- *   `GrowthRejected`, with no `cause`.
- * - `test_growth_rejects_invalid_fragments_atomically`: each row pins the original's class and
- *   message, where Python checks only that it is a `TypeError` or `ValueError`; a raw param's type
- *   label is `string` and the subclass is `ParameterSubclass`.
- * - `test_growth_reference_validation_reads_a_binding_source`: no monkeypatched `expr_refs_of`
- *   spy; an origin-carrying `Binding` with a valid reference prepares, and the plan's delta holds
- *   the fragment's node and edge ids.
- * - `test_growth_requires_exact_live_carriers`: the `{1, 2}` seed row is a JS `Set` in the seed (a
- *   `TypeCheckError`, `<Set object> is not a JSON value`); the empty prune id and the missing
- *   builder rows are as Python's.
- * - `test_growth_rejects_unsafe_pruning_matrix_atomically`: each row pins the original's message,
- *   where Python checks only that it is a `ValueError`.
- * - `test_read_ids_include_references_nested_in_a_template`: `readIds` is private, so the test goes
- *   through the keep rule: an unsettled node that reads a settled prune id only through a template
- *   keeps that id live and deferred.
- * - `test_growth_prune_scan_rejects_malformed_surviving_wiring_as_raw_invariant`: no monkeypatched
- *   `expr_refs_of`; the wiring is a real malformed `Binding`, and the error is a raw `RangeError`
- *   whose `cause` is the `ExpressionError`. Two rows: with the growth index built at this growth
- *   the index build reads the wiring first (`node '__end__' has invalid wiring`, the site Python's
- *   test reaches too), and with it built before the growth the prune scan does (`surviving node
- *   '__end__' has invalid wiring`).
- * - the `buildGrow` rows' LOOP seeds hold the iteration as a `bigint` (`[{}, 0n]`), as the
- *   reducer's canonical seed does.
- * - `test_growth_commit_performs_no_builder_codec_graph_or_event_work_after_append`: it keeps the
- *   after-prepare mutations, the builder call count and the `addSubgraph`/`removeSubgraph` spies;
- *   the guards on `copy.deepcopy`, `canonical_seed`, `expansion_digest` and `NodeExpanded` go,
- *   since they monkeypatch module functions.
- *
- * TS-only:
- * - a non-text prune id (`new Grow({}, [1])`) is `Grow.prune must contain only strings`;
- * - a growth that retires a node keeps its crashed-attempt count;
- * - every pruning test that grows also checks the kept growth index against a rebuild
- *   (`expectIndexMatchesRebuild`, a port of `_require_index_matches_rebuild` from
- *   `test_growth_index.py`); the deferral and retirement tests and the crashed-attempt test
- *   all replay the record on an identical setup and expect equal observers, state and topology,
- *   as Python's two grown-subtree tests do.
- *
- * Not ported:
- * - `test_growth_seed_rejection_retains_the_original_exception` and
- *   `test_growth_host_helper_faults_propagate_with_identity`: they monkeypatch module functions;
- *   the nonfinite and cyclic seed tests pin the original of a real seed error.
- * - `test_growth_rejects_non_string_record_keys_before_builder`: JS object keys are always text.
- * - `test_growth_detachment_faults_propagate_with_identity`: `copyGraph` has no `__deepcopy__`
- *   hook to fail.
- * - the non-frozenset `prune` row of `test_growth_requires_exact_live_carriers`: `Grow` always
- *   copies `prune` into a new `Set`.
- * - the `empty-param-tuple` and `param-tuple` rows of
- *   `test_growth_rejects_invalid_fragments_atomically`: a tuple and a list are both a JS array.
+ * `snapshot` holds the flow by reference, so a growth's topology change needs its own detached copy
+ * (`topologySnapshot`).
  */
 
 import { expect, spyOn, test } from "bun:test";
@@ -184,8 +77,7 @@ class OverlayNode extends Node {
 }
 
 /**
- * Return the topology coordinates `snapshot` holds by reference (Python's `_snapshot` topology
- * half): each node's class, id, `commitAs` and `originId`, the edges, the wiring, the adjacency
+ * Return the topology coordinates `snapshot` holds by reference: each node's class, id, `commitAs` and `originId`, the edges, the wiring, the adjacency
  * and the initial static ids, as detached copies.
  */
 function topologySnapshot(state: RunState): Record<string, unknown> {

@@ -1,60 +1,7 @@
 /**
- * The stop at the raw node boundary: a port of `tests/engine/test_stop_event.py`.
- *
- * TS has no stop event and no `_HostStop`: a stop is the node's aborted signal, which every node
- * receives as `caps.signal`.
- *
- * Changed: `test_stop_cap_is_exact_event_and_only_reaches_opted_in_node` is "every node gets the
- * given signal as `caps.signal`" (there is no opt-in trait);
- * `test_direct_opted_in_eval_gets_private_unset_event_when_host_omits_one` is "`evalNode` without
- * a signal gives an un-aborted one"; `test_preset_stop_prevents_node_execution_and_propagates_host_control`
- * is "an aborted signal rejects with its reason and `forward` never runs" (the `primary` flag has
- * no counterpart); `test_node_host_stop_bypasses_evaluation_failure_with_identity` is "a node
- * rejecting after its signal aborted rejects `evalNode` with the reason, not a failure".
- *
- * Not ported: `test_public_run_flow_signature_has_no_stop_event`, the file's only run row: TS
- * reads no signatures, and `runFlow` takes `{ signal }`. The run boundary's stop rows (an
- * already-aborted signal, a stop recorded as `RunStopped` and resumed) are in `run.test.ts`.
- *
- * TS-only, the engine's stop (serial and pooled): a host abort records one `RunStopped` (`signal`)
- * listing the in-flight nodes in dispatch order before the drain; a synchronous `onEvent` throw, a
- * rejected `onEvent` promise, a throwing `onStream` the node catches, a rejected `onStream` promise,
- * record a `callback` stop; the
- * message is an `Error`'s message or a non-`Error` reason's text; an already-aborted signal rejects
- * before the first start with the log unchanged; nothing is recorded after a terminal result, after
- * an earlier stop in the segment (also one a previous engine recorded over the same state), for a
- * host fault (an invalid step, a malformed contract, an opener fault), or for a late rejection after
- * `run()` settled; an opener's `MemoryRecallError` is the node's failure, a `RunFailed`. A refused
- * step or an opener fault the node catches ends the run at once, so a host abort after it records
- * nothing and `run()` rejects with the fault. Pooled
- * only: a host abort or a late `onEvent` rejection during a host fault's drain changes nothing; a
- * host abort during a `RunFailed`'s drain is ignored and `run()` returns normally; an outcome
- * settling after a callback stop is discarded; a callback throw during a node's synchronous start
- * starts no further node. No test leaves an unhandled rejection or an uncaught exception.
- *
- * TS-only, steps and events after a stop (serial and pooled): after a host stop, a settled step
- * (`{ settled: true }`) is still appended after the `RunStopped` and a `ToolCallFinished` still
- * published; another step throws the node signal's reason and appends nothing, and another event or
- * chunk is dropped; a sink a node keeps drops what it gets once its evaluation ended, during a
- * later node and after `run()` resolved, so the run neither stops nor aborts. Pooled only:
- * after a sibling's host fault, the settled step and the `ToolCallFinished` are still kept; after a
- * terminal `RunFailed`, they are refused.
- *
- * TS-only, a poisoned log (serial and pooled, a `JsonlRunLog` whose sync fails): a failing append
- * during an outcome, or during a step the node catches before a host abort, ends the run as a host
- * error with the log's error and no `RunStopped`; a log refusing the `RunStopped` of a host abort
- * leaves a note on the host's reason, which `run()` still rejects with; a failing rollback rejects
- * with the `AggregateError`; a step refused before reaching the log leaves the log accepting
- * appends.
- *
- * TS-only, nested runs (serial and pooled): a node running a child `FlowEngine` with
- * `signal: caps.signal` stops the child when the parent stops, and the child records its own
- * `RunStopped` (`signal`); a child's `RunFailed` doesn't abort the parent.
- *
- * TS-only, the per-node signals (serial and pooled): over 50 nodes, each node's link to the run
- * signal is removed when it settles, even for nodes that leave listeners on their own signal; the
- * host's signal keeps no listener once `run()` settles, whatever the ending (success, `RunFailed`,
- * a host stop, a host fault, an already-aborted signal).
+ * The stop at the raw node boundary and in the engine, serial and pooled: a stop is the node's
+ * aborted signal (`caps.signal`); a host abort or a callback failure records one `RunStopped`, and
+ * the rows pin the steps, events, poisoned logs, nested runs and per-node signals around it.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";

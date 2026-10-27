@@ -3,7 +3,7 @@
  * waiting, a send, a complete or a passed deadline is recorded, and a fresh engine over the log
  * (as `advance` builds one) wakes the node to its result. Also: a restart after a crash between a
  * host call's `pending` step and `node_waiting` reuses the call, and the `pending` step is capped by
- * the run's recorded event limit. TS-only: Python yian has no inboxes or pending calls.
+ * the run's recorded event limit.
  */
 
 import { expect, test } from "bun:test";

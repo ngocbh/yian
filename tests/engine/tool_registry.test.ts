@@ -1,12 +1,7 @@
 /**
- * The tool registry and `ToolSet`, a port of `tests/engine/test_tool_registry.py` with rows for
- * each construction and group error, `expand`, `forRun`, `toolIds`, `groups`, `validate` and the
- * `CheckedCall` it returns, `invoke` of a call (TS-only: a thrown non-`Error` is wrapped), `isConcurrencySafe` and the `ask_user` options
- * cleaning, plus `test_injected_arguments_are_not_inputs` and `test_function_tool_types` from
- * `test_tool_types.py`. Not ported: `test_invocation_supports_pydantic_v1_schema` and
- * `test_invocation_rejects_unvalidated_json_schema_tools` (TS has only `FunctionTool`s),
- * `test_install_ask_user_is_removed` (it never existed in TS), and the LangChain binding half of
- * `test_ask_user_openai_schema_offers_optional_string_options`.
+ * The tool registry and `ToolSet`: each construction and group error, `expand`, `forRun`, `toolIds`,
+ * `groups`, `validate` and the `CheckedCall` it returns, `invoke` of a call (a thrown non-`Error` is
+ * wrapped), `isConcurrencySafe` and the `ask_user` options cleaning.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -87,14 +82,14 @@ function loose(tools: unknown): ToolSet {
 }
 
 describe("registerTool", () => {
-  test("test_generic_registration_rejects_reserved_ask_user_id", () => {
+  test("generic registration rejects reserved ask user id", () => {
     expect(thrown(() => registerTool("ask_user", tool("ask_user")), RangeError)).toBe(
       "tool name 'ask_user' is reserved by yian: pass tools: {...registeredTools(), ask: handler} to runFlow or advance",
     );
     expect(TOOL_REGISTRY.has("ask_user")).toBe(false);
   });
 
-  test("test_register_tool_rejects_what_it_cannot_register", () => {
+  test("register tool rejects what it cannot register", () => {
     const scale = (value: number) => value * 2;
     for (const target of [scale, { name: "register_scale" }]) {
       const message = thrown(() => registerTool("register_scale", target as unknown as FunctionTool), TypeError);
@@ -323,7 +318,7 @@ describe("ToolSet construction", () => {
 });
 
 describe("ToolSet lookup", () => {
-  test("test_ask_user_never_falls_back_to_the_global_registry", () => {
+  test("ask user never falls back to the global registry", () => {
     TOOL_REGISTRY.set("ask_user", tool("ask_user", "global answer"));
     for (const tools of [new ToolSet(), new ToolSet({})]) {
       expect(thrown(() => tools.resolve(["ask_user"]), RangeError)).toBe(
@@ -332,7 +327,7 @@ describe("ToolSet lookup", () => {
     }
   });
 
-  test("test_tool_node_uses_public_invocation_path", async () => {
+  test("tool node uses public invocation path", async () => {
     registerTool(
       "tool_node_public_probe",
       new FunctionTool({
@@ -450,7 +445,7 @@ describe("ToolSet.forRun", () => {
     expect(bound.resolve(["late"])).toEqual([ft]);
   });
 
-  test("test_for_run_keeps_the_subclass", () => {
+  test("for run keeps the subclass", () => {
     class Sub extends ToolSet {}
     const bound = new Sub({ place: tool("place") }).forRun("r");
     expect(bound).toBeInstanceOf(Sub);
@@ -464,7 +459,7 @@ describe("ask_user invocation", () => {
   const CALL_FIELDS = { callId: expect.any(String), deadline: null, extra: {} };
   const NO_FIELDS = { options: null, questions: null, answerSchema: null, title: null, nodeId: null, ...CALL_FIELDS };
 
-  test("test_ask_user_public_schema_contains_question_and_options", async () => {
+  test("ask user public schema contains question and options", async () => {
     const seen: AskUserRequest[] = [];
     const tools = new ToolSet({ ask_user: recordingHandler(seen) });
 
@@ -476,7 +471,7 @@ describe("ask_user invocation", () => {
     expect(TOOL_REGISTRY.has("ask_user")).toBe(false);
   });
 
-  test("test_ask_user_openai_schema_offers_optional_string_options", () => {
+  test("ask user openai schema offers optional string options", () => {
     const [askUser] = new ToolSet({ ask_user: recordingHandler([]) }).resolve(["ask_user"]);
     const schema = askUser!.parametersJsonSchema as any;
 
@@ -574,7 +569,7 @@ describe("ask_user invocation", () => {
     });
   }
 
-  test("test_injected_arguments_are_not_inputs", () => {
+  test("injected arguments are not inputs", () => {
     const [askUser] = new ToolSet({ ask_user: () => "yes" }).resolve(["ask_user"]);
     const types = toolTypes(askUser!);
     const labels = Object.fromEntries(
@@ -778,7 +773,7 @@ describe("isConcurrencySafe", () => {
   });
 });
 
-describe("test_function_tool_types", () => {
+describe("function tool types", () => {
   const place = new FunctionTool({
     name: "place",
     description: "Place an order.",

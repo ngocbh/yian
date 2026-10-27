@@ -1,6 +1,5 @@
 /**
- * Runs of flows with value entries in `nodes:` (`exit_result: !object {exited: true}`): a port of
- * `tests/engine/test_value_entries_run.py`.
+ * Runs of flows with value entries in `nodes:` (`exit_result: !object {exited: true}`).
  *
  * A tagged entry lowers to a CODE node that returns its value, so a flow output, another node, or
  * a CASE route reads it as `${<id>.output}`. These runs cover literal and template entries (a span
@@ -12,31 +11,6 @@
  * names a skipped node, while an embedded span renders a skipped read as empty text and an
  * unrouted entry with no reads always runs. A routed `call(...)` entry skips its lifted call with
  * it, and a resumed log replays an entry's recorded output.
- *
- * Ported: every row but those covered below. The CODE bodies are Python's where they read the
- * same in JS (decision 11); `reply`'s and `other`'s Python dicts, the `f` def's `.upper()` and
- * `d`'s branch are written in JS. Ints read as `bigint`s (decision 4a), and Python's check of the
- * output's type is a check of its JS `typeof`. A host stop is the `ask` handler aborting the
- * run's signal and throwing its reason, where Python raises `_HostStop`; the run rejects with that
- * reason. The gate is a TOOL `ask` where Python's is a HUMAN_INPUT node (TS yian has no
- * HUMAN_INPUT kind). `run-case/engine_value_entries_run__a_case_routes_to_a_value_entry`,
- * `__an_untaken_flow_call_entry_skips_its_call` and `__a_routed_entry_reads_the_selected_union_field`
- * pin one of their rows' two runs each, so those rows are ported.
- *
- * Covered by `run-case/engine_value_entries_run__a_named_type_entry_runs_with_a_span`:
- * `test_a_named_type_entry_runs_with_a_span`; by
- * `run-case/engine_value_entries_run__a_flow_call_entry_runs_the_flow`:
- * `test_a_top_level_flow_call_entry_runs_the_flow`; by
- * `run-case/engine_value_entries_run__a_value_entry_in_a_defs_body`:
- * `test_a_value_entry_in_a_defs_body`; by
- * `run-case/engine_value_entries_run__a_value_entry_in_a_map_body`:
- * `test_a_value_entry_in_a_map_body`; by
- * `run-case/engine_value_entries_run__a_runtime_type_failure_points_at_the_entry`:
- * `test_a_runtime_type_failure_points_at_the_entry`; by
- * `run-case/engine_value_entries_run__entries_reading_a_routed_away_node`:
- * `test_entries_reading_a_routed_away_node`; by
- * `load-case/engine_value_entries_run__a_routed_entry_reading_an_excluded_field` (pinned in
- * `validate.test.ts`): `test_a_routed_entry_reading_a_field_its_branch_excludes_is_a_load_error`.
  */
 
 import { afterAll, expect, test } from "bun:test";

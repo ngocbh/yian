@@ -1,56 +1,10 @@
 /**
- * Recovery equivalence across nested growth and unfinished live effects: a port of
- * `tests/engine/test_run_recovery_matrix.py`.
+ * Recovery equivalence across nested growth and unfinished live effects.
  *
  * The live state is captured after every committed record, each prefix is replayed through
  * `run.ts`'s `replayRunLog`, and the complete reducer state and topology are compared. The effect
  * rows stop the run right after the effect's durable `NodeStarted`, so no model, human interaction
  * or wait runs. CODE references resolve from the conformance fixtures.
- *
- * Ported: `test_every_nested_growth_prefix_replays_to_the_live_state` (4 rows),
- * `test_every_loop_body_spawner_prefix_replays_to_the_live_state` (3 rows),
- * `test_every_partial_loop_prefix_replays_to_the_live_state` (2 rows),
- * `test_resume_prepends_ordered_effect_retries_before_existing_ready_work`, and from
- * `tests/engine/test_session_reducer.py`: `test_forged_resume_plan_cannot_change_the_retry_frontier`
- * (the forged transition spreads the frozen plan and its delta; the error is the `RangeError`
- * `frontier resume delta disagrees with its record`, and the state is checked with the shared
- * `snapshot` and `expectUnchanged`), `test_resume_allows_memory_free_unfinished_invocations` and
- * `test_resume_retries_every_unfinished_invocation` (2 rows), on an AGENT stand-in recalling an
- * episodic memory, since TS yian has no session memory. Python's local `_replay` is the local
- * `expectReplays`: `replayRecords` over a fresh flow, compared through the shared
- * `reducerSnapshot` plus the memory table, stacks, snapshots, `learnable` and backward state, the
- * topology, each node's class and scopes, and the trace (the backward handlers by key: a TS bound
- * handler can't name its node).
- *
- * Changed:
- * - The live snapshot after each commit is taken by the log, before the next append and once at
- *   the end (the engine changes the state only in its commits), where Python patches the engine's
- *   `commit_prepared`.
- * - TS yian has no HUMAN_INPUT or WAIT kind: each human interaction is a TOOL `ask` and each
- *   wait a TOOL `sleep` (so the effect rows are `[ask]` and `[sleep]`, Python's `[human_input]`
- *   and `[wait]`).
- * - `test_effect_start_prefix_replays_without_running_effect_work` and
- *   `test_namespaced_human_input_start_replays_without_host_interaction[call]`: an async engine
- *   can't be paused between a start and its evaluation, so the host callback throws at the
- *   effect's `NodeStarted` while the log refuses further appends: the engine's `RunStopped` is
- *   refused, nothing evaluates (the `ask` handler, the scheduler's sleep and the model fail
- *   the test if called), and the log ends with the start, as Python's closed generator leaves it.
- * - `test_recovered_wait_recomputes_from_the_authored_absolute_deadline`: the recovered `sleep`
- *   asks for the authored deadline in UTC whether the clock reads 12:00:04 or 12:00:07; the engine,
- *   not the node, turns it into a wait.
- * - `test_recorded_nested_growth_resumes_with_exact_memory_and_trace`: the prefix is the first 25
- *   lines of a live learnable TS run (schema 13 is the only TS schema) whose memory keys are served
- *   by `FakeMemory`, and the CODE reruns are seen by spying on `CodeNode.prototype.forward`.
- *
- * Covered by a case: `test_effect_start_prefix_replays_without_running_effect_work[agent]`
- * (`resume/run_recovery_matrix__an_agent_started_before_the_crash_runs_again`) and
- * `test_namespaced_human_input_start_replays_without_host_interaction[map]`
- * (`resume/run_recovery_matrix__an_ask_in_a_map_retries_under_its_namespaced_id`). Also
- * covered by a case, besides their rows here: `[serial-named]`
- * (`resume/run_recovery_matrix__a_cut_after_nested_growth_resumes_the_grown_nodes`, which covers
- * `test_recorded_nested_growth_resumes_with_exact_memory_and_trace` without its memory) and the
- * ordered-retries row (`resume/run_lifecycle__a_resume_retries_in_flight_work_ahead_of_ready_work`,
- * one retry).
  */
 
 import { expect, spyOn, test } from "bun:test";
@@ -692,7 +646,7 @@ test("test_namespaced_human_input_start_replays_without_host_interaction[call]",
   expect(prepareRunResumed(recovered, { numWorkers: 0 }).record).toEqual(new RunResumedRecord([target], 0));
 });
 
-test("test_recovered_wait_recomputes_from_the_authored_absolute_deadline", async () => {
+test("recovered wait recomputes from the authored absolute deadline", async () => {
   const loaded = await load(EFFECT_FLOWS["sleep"]!);
   const { log } = await pauseAfterStarted(loaded, (_state, nodeId) => nodeId === "effect");
   const recovered = replayRunLog(loaded, log);
@@ -716,7 +670,7 @@ test("test_recovered_wait_recomputes_from_the_authored_absolute_deadline", async
   }
 });
 
-test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async () => {
+test("recorded nested growth resumes with exact memory and trace", async () => {
   const dir = mkdtempSync(join(tmpdir(), "yian-recovery-matrix-"));
   const env = hostEnv(dir);
   try {
@@ -736,7 +690,7 @@ test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async ()
       env,
     });
     expect(fresh.status).toBe("succeeded");
-    // Through outer/mapped#1/echo's NodeSucceeded, as Python's recorded prefix.
+    // Through outer/mapped#1/echo's NodeSucceeded.
     const all = readFileSync(path, "utf8").split("\n").slice(0, -1);
     const length =
       all.findIndex((line) => {
@@ -801,7 +755,7 @@ test("test_recorded_nested_growth_resumes_with_exact_memory_and_trace", async ()
   }
 });
 
-test("test_resume_prepends_ordered_effect_retries_before_existing_ready_work", async () => {
+test("resume prepends ordered effect retries before existing ready work", async () => {
   const loaded = await load(ORDERED_EFFECTS);
   const { state, log } = newStartedRun(loaded, 2);
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));

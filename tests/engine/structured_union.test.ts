@@ -1,37 +1,7 @@
 /**
  * `generateStructured` for a union of records: the member value it returns and the output path of
- * an exhausted reply's error; mirrors the `generate_structured` rows of
- * `tests/engine/test_structured_union.py`.
- *
- * Ported (native and prompt where Python parametrizes): `test_native_union_reply_returns_the_member_dict`,
- * `test_fallback_union_reply_parses_json`,
- * `test_sell_reply_with_qty_retries_then_reports_the_sell_members_first_error`,
- * `test_sell_reply_with_extra_qty_reports_the_unknown_field` (`qty` is a contract path through the
- * `buy` member), `test_matching_member_field_error_keeps_the_member_field_path`,
- * `test_missing_or_unknown_tag_reports_the_tag_field`,
- * `test_nested_list_of_union_error_maps_to_the_item_field`,
- * `test_record_field_of_union_type_error_maps_through_the_member`,
- * `test_union_inside_a_union_member_maps_through_both_members`,
- * `test_untagged_union_with_no_match_maps_to_the_union_position` and
- * `test_untagged_union_reply_returns_the_matching_member`. The path is `OutputInvalidError.path`
- * rather than a function of the exception.
- *
- * Changed: an unknown field's output path is the record that refuses it, not the field, because
- * the field is not part of the output contract (`test_unknown_field_is_rejected_at_its_path`:
- * `[]` for Python's `("zzz",)`; `test_unknown_field_in_a_record_nested_in_a_member_is_rejected_at_its_path`:
- * `["limit"]` for `("limit", "zz")`). The value check's own error, the `cause`, keeps the field in
- * its path and message.
- *
- * Ported through `runFlow`, with the model config as the run's `llmConfig`:
- * `test_agent_union_output_with_an_unknown_tag_fails_the_agent` and the `sell` and `hold` rows of
- * `test_agent_union_output_routes_a_case_and_its_branch_reads_member_fields`. Changed: the
- * `sell` row's `2 * 1.5` stays the int `3n` (a `float` slot only checks); the unknown tag fails
- * with `agent.output_invalid` (Python: `node.execute`) and TS's message, which names the tag
- * field and the members' tags (Python's names pydantic's `literal_error`).
- *
- * Covered by `run-agent/engine_structured_union__an_agent_union_output_routes_a_case`, the
- * harvested `buy` row of `test_agent_union_output_routes_a_case_and_its_branch_reads_member_fields`
- * (the same flow, reply and output).
+ * an exhausted reply's error. An unknown field's output path is the record that refuses it, since
+ * the field is not part of the output contract; the `cause` keeps the field in its path.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -102,12 +72,12 @@ async function exhausted(
   throw new Error("generateStructured returned");
 }
 
-test("test_native_union_reply_returns_the_member_dict", async () => {
+test("native union reply returns the member dict", async () => {
   const model = replies('{"value": {"action": "buy", "qty": 2}}');
   expect(await generateStructured(model, [], TRADE)).toEqual({ action: "buy", qty: 2n });
 });
 
-test("test_fallback_union_reply_parses_json", async () => {
+test("fallback union reply parses json", async () => {
   const model = replies('{"value": {"action": "sell", "price": 1.5}}', 1, PROMPTED);
   expect(await generateStructured(model, [], TRADE)).toEqual({ action: "sell", price: 1.5 });
 });
@@ -121,7 +91,7 @@ describe("test_unknown_field_is_rejected_at_its_path (Changed: the record's path
   });
 });
 
-describe("test_sell_reply_with_qty_retries_then_reports_the_sell_members_first_error", () => {
+describe("sell reply with qty retries then reports the sell members first error", () => {
   test.each(CONFIGS)("%s", async (_label, config) => {
     const [model, error] = await exhausted(TRADE, '{"value": {"action": "sell", "qty": 2}}', {
       config,
@@ -140,35 +110,35 @@ test("test_unknown_field_in_a_record_nested_in_a_member_is_rejected_at_its_path 
   expect((error.cause as TypeCheckError).path).toEqual(["limit", "zz"]);
 });
 
-test("test_sell_reply_with_extra_qty_reports_the_unknown_field", async () => {
+test("sell reply with extra qty reports the unknown field", async () => {
   // `qty` is a contract path through the `buy` member, so the field itself is reported.
   const [, error] = await exhausted(TRADE, '{"value": {"action": "sell", "price": 1.0, "qty": 2}}');
   expect(error.path).toEqual(["qty"]);
 });
 
-test("test_matching_member_field_error_keeps_the_member_field_path", async () => {
+test("matching member field error keeps the member field path", async () => {
   const [, error] = await exhausted(TRADE, '{"value": {"action": "buy", "qty": "many"}}');
   expect(error.path).toEqual(["qty"]);
 });
 
-describe("test_missing_or_unknown_tag_reports_the_tag_field", () => {
+describe("missing or unknown tag reports the tag field", () => {
   test.each(['{"qty": 2}', '{"action": "hold"}'])("%s", async (payload) => {
     const [, error] = await exhausted(TRADE, `{"value": ${payload}}`);
     expect(error.path).toEqual(["action"]);
   });
 });
 
-test("test_nested_list_of_union_error_maps_to_the_item_field", async () => {
+test("nested list of union error maps to the item field", async () => {
   const [, error] = await exhausted(t("list(Union(Buy, Sell))"), '{"items": [{"action": "sell", "price": "high"}]}');
   expect(error.path).toEqual([0, "price"]);
 });
 
-test("test_record_field_of_union_type_error_maps_through_the_member", async () => {
+test("record field of union type error maps through the member", async () => {
   const [, error] = await exhausted(t("Order"), '{"trade": {"action": "buy", "qty": "x"}, "note": "n"}');
   expect(error.path).toEqual(["trade", "qty"]);
 });
 
-test("test_union_inside_a_union_member_maps_through_both_members", async () => {
+test("union inside a union member maps through both members", async () => {
   const typ = t("Union(Ticket, Skip)");
   let [, error] = await exhausted(typ, '{"value": {"kind": "ticket", "trade": {"action": "sell", "price": "high"}}}');
   expect(error.path).toEqual(["trade", "price"]);
@@ -177,7 +147,7 @@ test("test_union_inside_a_union_member_maps_through_both_members", async () => {
   expect(error.path).toEqual(["trade", "action"]);
 });
 
-test("test_untagged_union_with_no_match_maps_to_the_union_position", async () => {
+test("untagged union with no match maps to the union position", async () => {
   let [, error] = await exhausted(t("Union(Text, Call)"), '{"value": {"zz": 1}}');
   expect(error.path).toEqual([]);
 
@@ -185,7 +155,7 @@ test("test_untagged_union_with_no_match_maps_to_the_union_position", async () =>
   expect(error.path).toEqual([1]);
 });
 
-test("test_untagged_union_reply_returns_the_matching_member", async () => {
+test("untagged union reply returns the matching member", async () => {
   const model = replies('{"value": {"name": "lookup", "input": {"q": 1}}}');
   expect(await generateStructured(model, [], t("Union(Text, Call)"))).toEqual({ name: "lookup", input: { q: 1n } });
 });
@@ -255,7 +225,7 @@ async function runDecision(decision: string): Promise<[ScriptedModel, Awaited<Re
   return [model, result];
 }
 
-describe("test_agent_union_output_routes_a_case_and_its_branch_reads_member_fields", () => {
+describe("agent union output routes a case and its branch reads member fields", () => {
   test.each([
     ['{"action": "sell", "qty": 2, "price": 1.5}', { action: "sell", qty: 2n, price: 1.5 }, 3n],
     ['{"action": "hold", "note": "wait"}', { action: "hold", note: "wait" }, "hold: wait"],
@@ -267,7 +237,7 @@ describe("test_agent_union_output_routes_a_case_and_its_branch_reads_member_fiel
   });
 });
 
-test("test_agent_union_output_with_an_unknown_tag_fails_the_agent", async () => {
+test("agent union output with an unknown tag fails the agent", async () => {
   const [, result] = await runDecision('{"action": "wait"}');
   expect(result.status).toBe("failed");
   const failure = result.failure!;

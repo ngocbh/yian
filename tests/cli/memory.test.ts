@@ -1,80 +1,7 @@
 /**
- * `yian run`'s memory flags (`cli/memory.ts`): a port of `tests/cli/test_memory.py`.
- *
- * Ported (direct): `test_memory_storage_key_is_stripped_and_path_kept`,
- * `test_memory_root_without_flow_id_is_a_bad_parameter`, `test_no_declarations_build_an_empty_registry`
- * (Python's `_builtin` patch dropped: the row checks `size === 0`) and
- * `test_yaml_config_reaches_the_built_in_constructor` (both rows: `buildCliMemories`, `openRun()`,
- * the session's `snapshot.config` equals the YAML config).
- *
- * Ported (the builder half of a CLI row, called directly):
- * `test_bad_memory_storage_is_a_bad_parameter_before_inputs_provider_and_log` (5 option rows:
- * `MemoryOptionError`, `paramHint` `--memory-storage`, the message doesn't contain the flag),
- * `test_bad_storage_path_shape_fails_before_inputs_provider_and_log` (`MemorySetupError` `memory
- * 'notes': storage ':memory:' is not a local file path`),
- * `test_unsafe_flow_id_with_memory_root_names_the_memory_root` (the exact message `flow id 'a/b'
- * cannot name a directory under the memory root`; the root dir not created),
- * `test_memory_storage_for_a_custom_key_is_a_bad_parameter`, `test_custom_type_points_to_the_python_api`
- * (fresh half: `MemorySetupError` naming `buildMemories`) and
- * `test_cli_activates_declared_memory_without_learning` (construction half: each built-in type from
- * `--memory-root`/`--memory-storage` gets the derived or given path, seen after `openRun()` creates
- * the file).
- *
- * Changed:
- * - The custom-type message names the TS API, not "the Python API".
- * - `storage_options` is `storageOptions`.
- * - Messages write lists in the text form (`["vec"]`) and quote a lone key as Python's `repr` does.
- * - Flows are built by hand (`CompiledFlow` with START, a CODE or AGENT node and END) instead of
- *   loaded from YAML; the YAML config's ints are `bigint`s, as the loader gives them.
- *
- * Ported through `loadFlow` (Python's `_configured` text): `test_yaml_config_outside_the_allowlist_fails_at_load`,
- * `test_rejected_yaml_config_is_a_load_error_naming_the_key` (the cause's class is TS's: `RangeError`
- * for Python's `ValueError`).
- *
- * Ported through `main` (`yian run`, the "yian run" block):
- * `test_memory_root_persists_every_builtin_under_the_flow_id`,
- * `test_memory_storage_is_keyed_by_memory_key`, `test_no_flags_keep_builtins_in_ram`, the CLI halves
- * of `test_bad_memory_storage_is_a_bad_parameter_before_inputs_provider_and_log` (5 rows),
- * `test_bad_storage_path_shape_fails_before_inputs_provider_and_log`,
- * `test_unsafe_flow_id_with_memory_root_names_the_memory_root`,
- * `test_memory_storage_for_a_custom_key_is_a_bad_parameter` and
- * `test_custom_type_points_to_the_python_api` (fresh row), and
- * `test_cli_activates_declared_memory_without_learning` (6 rows),
- * `test_cli_cleanup_failure_has_concise_host_error`,
- * `test_open_failure_closes_every_backend_and_creates_no_directory`,
- * `test_cli_preserves_primary_when_cleanup_also_fails` and `test_run_help_describes_memory_flags`.
- * Changed there:
- * - Python's patched `model_from_config` is a fake `fetch` answering as an OpenAI-compatible chat
- *   endpoint (xAI's route; its key and the default provider and model in the command's env).
- * - "Before inputs and provider": instead of patching the input gate to fail, the flow declares a
- *   required input no flag supplies, so reaching the gate would be another usage error.
- * - "No Traceback" is no stack line (`    at `).
- * - Python's `_wrap_builtins` close wrappers patch `EpisodicMemory.prototype.close`; the
- *   cleanup-also-fails row gets its initiating failure from the run itself (a TOOL node naming a
- *   tool the run lacks) instead of a patched `_run_flow_controlled`, on episodic memory instead of
- *   a fake session backend.
- * - No-flags-in-RAM ignores the run log's own `run.jsonl.lock`.
- *
- * Ported through `main` (`yian run --resume`, the "yian run --resume" block):
- * `test_custom_type_points_to_the_python_api` (resume row), `test_flags_are_accepted_with_resume`,
- * `test_resume_opens_memory_only_when_the_record_needs_it` (4 rows) and
- * `test_resume_accepts_one_def_called_from_two_nodes`. Changed there: the recorded runs are
- * `runFlow` calls with the offline model and the command's env; the AGENT's memory is episodic
- * (Python's is session memory, which TS yian doesn't have), and the opens are counted on
- * `EpisodicMemory.prototype.openRun` (Python wraps the built-in constructors), the holder opening
- * its file before the count starts; Python's patched key checks aren't needed, xAI's key being set.
- *
- * Not ported: `test_no_memory_flow_imports_no_concrete_backend` (TS imports the backends
- * statically; `platform.ts` loads the SQLite driver only on first open);
- * `test_first_open_and_cleanup_run_in_controller_after_worker_drain` and
- * `test_real_pooled_cancellation_keeps_storage_until_model_callback_drains` (Python's controller
- * thread and terminal broker; TS has no threads); `test_cli_module_docstrings_name_the_new_flags`
- * (Python docstrings).
- *
- * TS-only: the parsed storage is a null-prototype record that keeps a `__proto__` key as data; an
- * undeclared key's message names the declared keys, or `none`; `env` reaches the built memories;
- * with `YIAN_TEST_NODE` set, the built `buildCliMemories` runs on Node with a root, opens the
- * episodic memory and closes the registry, and Bun then sees `<root>/<flow id>/notes.sqlite`.
+ * `yian run`'s memory flags (`cli/memory.ts`): `--memory-root` and `--memory-storage` parsed and
+ * built into memories directly, and through `yian run` and `yian run --resume`. Messages write
+ * lists in the text form (`["vec"]`).
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -143,14 +70,14 @@ function graph(body: Node): Map<string, Node> {
   ]);
 }
 
-/** A flow declaring `memories` around one CODE node (Python's `_flow_text`). */
+/** A flow declaring `memories` around one CODE node. */
 function codeFlow(memories: readonly MemoryDecl[], flowId: string | null = "cli-memory"): ComposedFlow {
   return new ComposedFlow(
     new CompiledFlow(graph(new CodeNode("work", { code: "return 7" })), [], { flowId, memories: [...memories] }),
   );
 }
 
-/** A flow whose AGENT node declares `chat` as episodic memory (Python's `_SESSION_FLOW`, on session memory). */
+/** A flow whose AGENT node declares `chat` as episodic memory. */
 function agentFlow(): ComposedFlow {
   const chat = new MemoryDecl("chat", "episodic", {}, new DeclSite([], ["root"], "work"));
   const body = new AgentNode("work", { prompt: "hello", memories: [chat] });
@@ -316,7 +243,7 @@ test.each([
   }
 });
 
-/** Return a flow declaring memory `policy` of type `policy` with YAML `config` (Python's `_configured`). */
+/** Return a flow declaring memory `policy` of type `policy` with YAML `config`. */
 function configured(policy: string, config: string): string {
   return `id: cli-memory
 name: cli_memory
@@ -457,7 +384,7 @@ console.log("ok");
 
 // --- `yian run` with the memory flags --- //
 
-/** Python's `_CODE_FLOW`: `memory` declared at flow level (none when `null`) around a CODE node. */
+/** A flow text with `memory` declared at flow level (none when `null`) around a CODE node. */
 function codeFlowText(memory: string | null = "{notes: episodic}", flowId = "cli-memory"): string {
   const declaration = memory === null ? "" : `long_term_memory: ${memory}\n`;
   return (
@@ -466,7 +393,7 @@ function codeFlowText(memory: string | null = "{notes: episodic}", flowId = "cli
   );
 }
 
-/** Python's `_SESSION_FLOW`: an AGENT node with `chat` memory, episodic here. */
+/** A flow text with an AGENT node declaring `chat` as episodic memory. */
 const AGENT_FLOW = `id: cli-memory
 name: cli_memory
 nodes:
@@ -493,7 +420,7 @@ async function offlineModel(): Promise<Response> {
 
 /**
  * Return flow `text` with a required input no flag supplies, so a run reaching the input gate fails
- * there with another usage error (Python patches the gate to fail instead).
+ * there with another usage error.
  */
 function withRequiredInput(text: string): string {
   return text.replace("nodes:\n", "input:\n  topic: !str\nnodes:\n");
@@ -507,7 +434,7 @@ function flowFile(text: string): string {
 }
 
 /**
- * Run `yian run <flow> --log tmp/run.jsonl --quiet ...extra` (Python's `_run`) with an offline
+ * Run `yian run <flow> --log tmp/run.jsonl --quiet ...extra` with an offline
  * model, the default provider and model set so reflective memory and AGENT nodes resolve one.
  */
 async function runCli(flow: string, ...extra: string[]) {
@@ -555,7 +482,7 @@ async function cli(args: readonly string[]) {
   }
 }
 
-/** Collapse whitespace, so wrapped messages match (Python's `_plain`; output here has no styles). */
+/** Collapse whitespace, so wrapped messages match (output here has no styles). */
 function plain(text: string): string {
   return text.split(/\s+/).filter(Boolean).join(" ");
 }
@@ -571,8 +498,8 @@ function records(path: string) {
 }
 
 /**
- * Patch `close` of every `EpisodicMemory` to run the real close, then `after` (Python's
- * `_wrap_builtins` close wrappers); returns the restore.
+ * Patch `close` of every `EpisodicMemory` to run the real close, then `after`; returns the
+ * restore.
  */
 function wrapEpisodicClose(after: () => void): () => void {
   const close = EpisodicMemory.prototype.close;

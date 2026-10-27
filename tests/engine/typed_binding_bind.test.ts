@@ -1,18 +1,7 @@
 /**
- * The binder checks a typed binding's value against its declared type: a port of
- * `tests/engine/test_typed_binding_bind.py`. A typed binding checks the resolved value,
- * converting only its file and object representation, and fails with `binding.type`; the
- * receiving parameter's own contract still runs afterwards.
- *
- * Ported (adapted): `test_binding_type_failure_keeps_the_route_without_usable_inputs` passes
- * Python's `wiring_override` as the wiring of a one-node flow (`nodeFlow`), since an override is a
- * JSON record and this one holds a `Binding`; Python's bare `Node` is a minimal subclass.
- *
- * Ported through `loadFlow` and `runFlow`: `test_run_fails_the_consumer_with_binding_type`,
- * `test_map_run_fails_an_item_with_binding_type` and
- * `test_run_fails_a_typed_flow_output_with_binding_type`; each types a loaded binding in code, as
- * Python does, replacing the node's wiring map rather than mutating it, as `Flow` asks. The CODE
- * bodies are JavaScript.
+ * The binder checks a typed binding's value against its declared type. A typed binding checks the
+ * resolved value, converting only its file and object representation, and fails with
+ * `binding.type`; the receiving parameter's own contract still runs afterwards.
  */
 
 import { expect, test } from "bun:test";

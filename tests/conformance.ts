@@ -7,7 +7,6 @@
  * Runs under Bun from source and under Node from `dist/`; only `node:` APIs and `yaml`.
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
 import { spawn } from "node:child_process";
 import {
   cpSync,
@@ -105,14 +104,7 @@ import {
   staticNodes,
   withdraw,
 } from "../src/run.ts";
-import {
-  JsonlRunLog,
-  MemoryRunLog,
-  readRunLog,
-  type RecordEnvelope,
-  type RunRecord,
-  type RunStartedRecord,
-} from "../src/runtime/log.ts";
+import { JsonlRunLog, MemoryRunLog, readRunLog, type RunStartedRecord } from "../src/runtime/log.ts";
 import { addCrashedAttempts, type RunState } from "../src/runtime/state.ts";
 import { ASK, pending, type ToolContext } from "../src/tools/context.ts";
 import {
@@ -128,6 +120,7 @@ import type { JsonMode, JsonObject } from "../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../src/typesys/types.ts";
 import { buildValueAs, FileRef, fromHost, InboxRef, isRecord } from "../src/typesys/values.ts";
 import type { Type, Value as YianValue, ValueRecord } from "../src/typesys/values.ts";
+import { withAppendHook } from "./append_hook.ts";
 import { validate } from "./schema.ts";
 import type { Schema } from "./schema.ts";
 
@@ -2322,39 +2315,18 @@ async function settle(start: () => Promise<unknown>): Promise<unknown> {
   }
 }
 
-/** `JsonlRunLog.prototype.append` as the engine defines it. */
-const engineAppend = JsonlRunLog.prototype.append;
-
-/** The cut a `cutAt` run is under: the last record its logs keep and the refusal past it. */
-const cutting = new AsyncLocalStorage<{ last: number; refused: Cut }>();
-
-/** Append `record`, unless the caller's cut refuses it. */
-function cutAppend(this: JsonlRunLog, record: RunRecord): RecordEnvelope {
-  const cut = cutting.getStore();
-  if (cut !== undefined && this.nextSequence > cut.last) throw cut.refused;
-  return engineAppend.call(this, record);
-}
-
-/** How many `cutAt` runs are in flight; `cutAppend` is installed while any is. */
-let cutsInFlight = 0;
-
 /**
  * Run `start` with every append it makes refused once the log holds record `last`; throw a
  * `CaseFailure` (`at` saying where) unless it rejects with that refusal.
  */
 async function cutAt(last: number, start: () => Promise<unknown>, at = ""): Promise<void> {
   const refused = new Cut("the conformance runner refused this append");
-  // Refused only inside `start` and the async work it starts, so a cut still running after its
-  // test timed out can't refuse another test's appends.
-  JsonlRunLog.prototype.append = cutAppend;
-  cutsInFlight += 1;
-  let outcome: unknown;
-  try {
-    outcome = await cutting.run({ last, refused }, () => settle(start));
-  } finally {
-    cutsInFlight -= 1;
-    if (cutsInFlight === 0) JsonlRunLog.prototype.append = engineAppend;
-  }
+  const refuse = (log: JsonlRunLog) => {
+    if (log.nextSequence > last) throw refused;
+  };
+  // Scoped to `start` and the async work it starts, so a cut still running after its test timed
+  // out can't refuse another test's appends.
+  const outcome = await withAppendHook(refuse, () => settle(start));
   if (outcome === ENDED) throw new CaseFailure(`the run ended before record ${last + 1}${at}`);
   if (outcome !== refused) {
     throw new CaseFailure(`the run raised before record ${last + 1}${at}\n${failureText(outcome)}`);

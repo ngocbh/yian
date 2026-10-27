@@ -49,7 +49,6 @@ import {
   encodeRecord,
   InboxClosedRecord,
   InboxWithdrawnRecord,
-  JsonlRunLog,
   NodeStepRecord,
   NodeWaitingRecord,
   NodeWokenRecord,
@@ -1870,8 +1869,7 @@ expect:
     await expect(failure).rejects.toThrow("output (crash sweep, cut after record 10) differs");
   }, SWEEP);
 
-  test("a sweep still going refuses no other run's appends, and leaves append as it was when it ends", async () => {
-    const append = JsonlRunLog.prototype.append;
+  test("a sweep still going refuses no other run's appends", async () => {
     const [case_, ctx] = twoNodes();
     // Not awaited yet, as when its test timed out: other runs go on while it cuts.
     let done = false;
@@ -1880,14 +1878,14 @@ expect:
     });
     let during = 0;
     while (!done) {
-      if (JsonlRunLog.prototype.append !== append) during += 1;
+      // Each cut writes its own `sweep-<k>.jsonl`; once one exists, the sweep is cutting.
+      if (readdirSync(ctx.dir).some((name) => name.startsWith("sweep-"))) during += 1;
       const [other, otherCtx] = twoNodes();
+      // Every append outside the sweep's scope goes through, so the case passes.
       await RUNNERS.run!(other, otherCtx);
     }
     await sweep;
-    // Some run went while a cut was in flight, so the sweep's refusals were live.
     expect(during).toBeGreaterThan(0);
-    expect(JsonlRunLog.prototype.append).toBe(append);
   }, SWEEP);
 });
 

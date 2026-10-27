@@ -8,7 +8,7 @@ body:
       value: |
         Thanks for the suggestion! Before submitting, please consider Yian's design intent:
 
-        - **New capability should usually be a node, not an engine branch.** The engine core stays kind-blind; kind-specific logic lives in a node's own `run()`. See [`src/yian/README.md`](https://github.com/ngocbh/yian/blob/main/src/yian/README.md).
+        - **New capability should usually be a node, not an engine branch.** The engine core stays kind-blind; kind-specific logic lives in a node's own `run()`. See [`docs/engine.md`](https://github.com/ngocbh/yian/blob/main/docs/engine.md).
         - **Prefer general combinators over one-off features.** The engine privileges no output type and no domain.
         - **Search [existing issues](https://github.com/ngocbh/yian/issues) and the [backlog](https://github.com/ngocbh/yian/tree/main/docs/backlog)** — it may already be planned.
 

@@ -62,17 +62,15 @@ with validated defaults and reference them in prompts as `${name}`.
 > **Early stage.** Yian is under active development. The API, YAML
 > surface, and CLI may change quickly.
 
-Yian is the npm package `@ngocbh/yian`, written in TypeScript, in `ts/`. It runs on Node 22.18+
+Yian is the npm package `@ngocbh/yian`, written in TypeScript. It runs on Node 22.18+
 or Bun 1.4+. The first release isn't published yet; until then, run it from a clone:
 
 ```console
 git clone https://github.com/ngocbh/yian
-cd yian/ts
+cd yian
 bun install --frozen-lockfile
 bun src/cli/index.ts --help
 ```
-
-See [Install](ts/README.md#install) for the package, the binaries and the optional MCP SDK.
 
 Yian has no built-in provider or model. Save a login with `yian auth <provider>`,
 such as `yian auth anthropic --model claude-sonnet-4-5` or `yian auth openai`
@@ -148,9 +146,6 @@ running reply on Ctrl-C, and ends with `/exit`; see [Chatting with a flow](docs/
 
 ## Use the library
 
-The TypeScript API (`loadFlow`, `runFlow`, `advance`, host tools, memories, streaming and
-events) is in [`ts/README.md`](ts/README.md).
-
 An AGENT can also use Claude Code and Codex skills. `skills: [release-notes]` (or
 `skills: all`) lists each granted skill's name and description in the system
 message, and the model reads a skill's `SKILL.md` or bundled files through the
@@ -197,7 +192,6 @@ it is closed. Idle run handles do not block closing; active work or queued turns
 ## Develop and test
 
 ```console
-cd ts
 bun run typecheck
 bun run test
 bun run test:node

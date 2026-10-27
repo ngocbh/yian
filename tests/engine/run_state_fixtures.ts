@@ -537,7 +537,7 @@ export const userText = (text: string) => ({ role: "user", parts: [{ type: "text
  * path. Five 60-character turns pass that budget, so small tests fold.
  */
 export function writeSmallBudgetChat(dir: string): string {
-  const examples = join(import.meta.dirname, "../../../examples");
+  const examples = join(import.meta.dirname, "../../examples");
   const chatText = readFileSync(join(examples, "chat.yaml"), "utf8");
   const compactedInput = `input: {summary: "\${input.summary}", history: "\${input.history}"}`;
   expect(chatText).toContain(compactedInput);

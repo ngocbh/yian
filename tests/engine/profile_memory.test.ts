@@ -940,7 +940,7 @@ test("onRetry sees the retried error scrubbed of the call's credentials", async 
   ]);
 });
 
-/** The `ts/` directory. */
+/** The package root. */
 const ROOT = join(import.meta.dirname, "../..");
 const BUILT = join(ROOT, "dist/src/memory/profile.js");
 

@@ -9,9 +9,9 @@ body:
         Sorry you're having trouble! Please fill out the details below so we can help.
 
         **Quick checks first:**
-        - From a clone, run `bun install --frozen-lockfile` in `ts/` (see [CONTRIBUTING](https://github.com/ngocbh/yian/blob/main/CONTRIBUTING.md#development-setup))
+        - From a clone, run `bun install --frozen-lockfile` (see [CONTRIBUTING](https://github.com/ngocbh/yian/blob/main/CONTRIBUTING.md#development-setup))
         - Yian needs **Bun 1.4+** or **Node 22.18+**. Confirm with `bun --version` or `node --version`.
-        - Run the CLI from a clone with `bun src/cli/index.ts` in `ts/`.
+        - Run the CLI from a clone with `bun src/cli/index.ts`.
         - Check the [README](https://github.com/ngocbh/yian/blob/main/README.md).
 
   - type: textarea
@@ -20,7 +20,7 @@ body:
       label: What's Going Wrong?
       description: Describe what you're trying to do and where it fails.
       placeholder: |
-        I ran `bun install` in `ts/` and then `bun src/cli/index.ts run flow.yaml`, but I get...
+        I ran `bun install` and then `bun src/cli/index.ts run flow.yaml`, but I get...
     validations:
       required: true
 
@@ -31,7 +31,7 @@ body:
       description: What did you do? Include the exact commands you ran.
       placeholder: |
         1. git clone https://github.com/ngocbh/yian
-        2. cd yian/ts && bun install --frozen-lockfile
+        2. cd yian && bun install --frozen-lockfile
         3. bun src/cli/index.ts run ../examples/....yaml
         4. Error appears: ...
     validations:

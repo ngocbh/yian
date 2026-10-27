@@ -103,7 +103,7 @@ test("boundary assert reads typed default", async () => {
 
 // --- a def's boundary assert fires from the cloned child START ------------------------------ //
 
-const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("../../conformance/fixtures", import.meta.url));
 
 const CHILD_ASSERT_FLOW = `
 id: d

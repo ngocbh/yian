@@ -38,7 +38,7 @@ import {
   writeSmallBudgetChat,
 } from "../engine/run_state_fixtures.ts";
 
-const EXAMPLES_DIR = fileURLToPath(new URL("../../../examples", import.meta.url));
+const EXAMPLES_DIR = fileURLToPath(new URL("../../examples", import.meta.url));
 const EXAMPLES = readdirSync(EXAMPLES_DIR)
   .filter((name) => name.endsWith(".yaml"))
   .sort();

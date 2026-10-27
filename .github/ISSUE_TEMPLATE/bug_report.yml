@@ -129,7 +129,7 @@ body:
         If you've dug into the code and identified the root cause, share it here.
         Include file paths, line numbers, and code snippets if possible. This massively speeds up fixes.
       placeholder: |
-        The bug is in `ts/src/compose/build/pipeline.ts` line 558. `stampBindingLabels` reads the
+        The bug is in `src/compose/build/pipeline.ts` line 558. `stampBindingLabels` reads the
         binding type from ref leaves only and ignores the `==` operator...
 
   - type: textarea

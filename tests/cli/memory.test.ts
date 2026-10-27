@@ -383,7 +383,7 @@ describe.each(["episodic", "reflective", "agent"] as const)("CLI builds %s memor
   });
 });
 
-/** The `ts/` directory. */
+/** The package root. */
 const ROOT = join(import.meta.dirname, "../..");
 const BUILT = join(ROOT, "dist/src/cli/memory.js");
 

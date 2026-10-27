@@ -174,7 +174,7 @@ test("resolved path resolves a symlink above a missing path", () => {
   expect(resolvedPath(join(tmp, "link", "missing", "x"))).toBe(join(realpathSync(join(tmp, "real")), "missing", "x"));
 });
 
-/** The `ts/` directory. */
+/** The package root. */
 const ROOT = resolve(import.meta.dirname, "../..");
 const BUILT = join(ROOT, "dist/src/compose/skills.js");
 

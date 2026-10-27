@@ -956,7 +956,7 @@ export function prepare(case_: Case): Case {
 
 /** Return the first directory above this file holding `conformance/cases`: the repository. */
 function findRoot(): string {
-  // `ts/tests/` from source, `ts/dist/tests/` when built.
+  // `tests/` from source, `dist/tests/` when built.
   let dir = dirname(fileURLToPath(import.meta.url));
   while (!existsSync(join(dir, "conformance", "cases"))) {
     const parent = dirname(dir);

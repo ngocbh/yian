@@ -1501,7 +1501,7 @@ describe("Standard Schema libraries", () => {
   });
 });
 
-/** The `ts/` directory. */
+/** The package root. */
 const ROOT = resolve(import.meta.dirname, "../..");
 const BUILT = join(ROOT, "dist/src/tools/index.js");
 
@@ -1584,7 +1584,7 @@ test.skipIf(!NODE)(
       await assert.rejects(placeSet.invoke("place", { symbol: "ab" }), { name: "ToolCheckError" });
       console.log("ok");
     `;
-    // From `ts/`, so the script's bare "zod" import resolves from `ts/node_modules`.
+    // From the package root, so the script's bare "zod" import resolves from its `node_modules`.
     const output = execFileSync(NODE!, ["--input-type=module", "-e", script], { cwd: ROOT, encoding: "utf8" });
     expect(output).toBe("ok\n");
   },

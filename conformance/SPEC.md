@@ -1,7 +1,7 @@
 # The conformance case format
 
 The format of the cases under `cases/`, and the contract of their runner,
-`ts/tests/conformance.ts`. A case states its expectations as data: load diagnostics, the run's
+`tests/conformance.ts`. A case states its expectations as data: load diagnostics, the run's
 output, its run log projected to a *trace*, observer events, and so on. The runner turns a case
 into calls on yian and compares the results.
 
@@ -208,7 +208,7 @@ given the path (`--log`).
 A `json` document, and each `json_lines` line, is checked as parsed (before the codec decoding)
 against `conformance/schema/cli.schema.json` before it is compared; a document that doesn't
 match fails the case. Runners validate with JSON Schema 2020-12; the TS runner uses
-`ts/tests/schema.ts`, the small validator the event and message schema tests share, which
+`tests/schema.ts`, the small validator the event and message schema tests share, which
 implements the keywords these schemas use.
 
 `expect.exists` maps relative paths under the case directory (not absolute, no `..` part) to
@@ -692,9 +692,9 @@ A case's group is its directory under `cases/`.
 ## Running the suite
 
 ```bash
-cd ts && bun tests/conformance.ts                                  # every case, on Bun
-cd ts && bun tests/conformance.ts --group defaults --kind defaults # a selection
-cd ts && bun run build && node dist/tests/conformance.js           # every case, on Node
+bun tests/conformance.ts                                  # every case, on Bun
+bun tests/conformance.ts --group defaults --kind defaults # a selection
+bun run build && node dist/tests/conformance.js           # every case, on Node
 ```
 
 The runner's flags, each repeatable, are `--group`, `--kind`, `--case <group>/<name>` and
@@ -738,8 +738,8 @@ a stub's or the runner's own (the stop's `conformance stop`).
 `resume` and `backward` case instead of comparing it.
 
 ```bash
-cd ts && bun tests/conformance.ts --write-expect --group run-core      # regenerate a group's expectations
-cd ts && bun tests/conformance.ts --write-expect --case run-core/x     # or one case's
+bun tests/conformance.ts --write-expect --group run-core      # regenerate a group's expectations
+bun tests/conformance.ts --write-expect --case run-core/x     # or one case's
 ```
 
 `--write-expect` reruns each selected `run`, `resume` and `backward` case and, for each of

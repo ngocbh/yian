@@ -1,6 +1,6 @@
 // Ported from tests/cli/test_cli_name.py: `test_help_names_composer` and
-// `test_docs_and_sources_name_the_composer_command`, the scan over `ts/src`, `ts/tests` and
-// `ts/README.md`. Added here: the help printed with no arguments and for a group alone.
+// `test_docs_and_sources_name_the_composer_command`, the scan over `src`, `tests` and
+// `README.md`. Added here: the help printed with no arguments and for a group alone.
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, realpathSync } from "node:fs";

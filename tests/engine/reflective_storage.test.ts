@@ -687,7 +687,7 @@ test.each([
   expect(loadInventory(file)).toEqual(inventory);
 });
 
-/** The `ts/` directory. */
+/** The package root. */
 const ROOT = path.resolve(import.meta.dirname, "../..");
 
 /**

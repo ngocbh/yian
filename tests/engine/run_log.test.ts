@@ -1830,7 +1830,7 @@ test("a tail repair failure releases the lock", () => {
   expectUnlocked(file);
 });
 
-/** The `ts/` directory. */
+/** The package root. */
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const BUILT = path.join(ROOT, "dist/src/runtime/log.js");
 

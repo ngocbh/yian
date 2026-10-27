@@ -36,7 +36,7 @@ test("a run keeps its tests' dirs in one yian-test dir and removes it at the end
     fs.mkdirSync(tmp);
     fs.writeFileSync(join(work, "fixture.test.ts"), FIXTURE);
     const conftest = join(import.meta.dirname, "conftest.ts");
-    // Run outside `ts/`, so Bun's `bunfig.toml` doesn't load the preload a second time.
+    // Run outside the package root, so Bun's `bunfig.toml` doesn't load the preload a second time.
     const args =
       runtime === "bun"
         ? ["test", "--preload", conftest, "./fixture.test.ts"]

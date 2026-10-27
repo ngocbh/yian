@@ -117,7 +117,7 @@ import {
   untimed,
 } from "./run_state_fixtures.ts";
 
-const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("../../conformance/fixtures", import.meta.url));
 const RUN_ID = "recovery-matrix";
 const SYSTEM_TODAY = "2026-08-14";
 const SYSTEM_NOW = "2026-08-14T12:00:00+00:00";

@@ -4,8 +4,7 @@ scratch/
 # Distribution / packaging
 dist/
 node_modules/
-/ts/LICENSE
-/ts/bin/
+/bin/
 
 # Local env / secrets
 .env

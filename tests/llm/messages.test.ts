@@ -1195,7 +1195,7 @@ describe("message schema", () => {
   });
 
   test("every scripted reply and request message in the conformance cases validates", () => {
-    const root = fileURLToPath(new URL("../../../conformance/cases", import.meta.url));
+    const root = fileURLToPath(new URL("../../conformance/cases", import.meta.url));
     const files = { reply: new Set<string>(), messages: new Set<string>() };
     const counts = { reply: 0, messages: 0 };
     const check = (kind: "reply" | "messages", file: string, value: Value) => {

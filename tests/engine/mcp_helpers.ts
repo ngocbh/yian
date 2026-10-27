@@ -12,7 +12,7 @@ import { fileURLToPath } from "node:url";
 
 // Built, this file runs as `dist/tests/engine/mcp_helpers.js`, one directory deeper.
 const BUILT = import.meta.url.endsWith(".js");
-/** The `ts/` directory. */
+/** The package root. */
 export const ROOT = fileURLToPath(new URL(BUILT ? "../../../" : "../../", import.meta.url));
 const FAKE_SOURCE = join(ROOT, "tests", "fixtures", "mcp", "fake_server.ts");
 const FAKE_BUILT = join(ROOT, "dist", "tests", "fixtures", "mcp", "fake_server.js");

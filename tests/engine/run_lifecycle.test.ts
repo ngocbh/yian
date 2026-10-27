@@ -146,7 +146,7 @@ import {
   textReply,
 } from "./run_state_fixtures.ts";
 
-const FIXTURES = fileURLToPath(new URL("../../../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("../../conformance/fixtures", import.meta.url));
 const RUN_ID = "lifecycle-run";
 let dir: string;
 
@@ -1072,7 +1072,7 @@ test("a resume with an aborted signal rejects before the lock is taken", async (
 
 // ---- The SIGKILL platform sweep ----
 
-/** The `ts/` directory: children run from it, so Bun never looks for packages to install. */
+/** The package root: children run from it, so Bun never looks for packages to install. */
 const TS_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 
 // Each CODE body waits for `YIAN_TEST_SWEEP_DELAY_MS`, which only the child sets: a killed

@@ -31,8 +31,9 @@ $ yian run summarize.yaml --input review="Arrived in two days, works great."
 The customer is happy with the fast delivery.
 ```
 
-An agent without `tools:` or `skills:` makes one model call. With them, it runs a tool loop:
-the model calls tools, reads their results, and calls again until it gives a final answer.
+An agent without `tools:` or `skills:` makes one model call, plus one for each reply it
+corrects. With them, it runs a tool loop: the model calls tools, reads their results, and calls
+again until it gives a final answer.
 
 | Field | What it holds |
 |---|---|
@@ -42,6 +43,7 @@ the model calls tools, reads their results, and calls again until it gives a fin
 | `variables` | Typed local values the prompts read |
 | `output` | The reply's type (default `str`) |
 | `retries` | Extra attempts to correct a reply that doesn't fit `output:` (default 2) |
+| `asserts` | Checks on the result (see [Expressions](/expressions/)) |
 | `tools` | Tool and tool group names the model may call |
 | `skills` | Skill names, or `all` |
 | `steer_inbox` | An `Inbox` input whose messages steer the agent while it runs |
@@ -104,8 +106,8 @@ nodes:
 output: ${answer.output}
 ```
 
-`Message` is the built-in message type (see [Types](/types/)); a record with `role` and `text`
-works too. The last item must be a user message. An agent's `${answer.new_messages}` holds the
+`Message` is the built-in message type (see [Types](/types/)); a record with `role` (`user` or
+`assistant`) and `text` works too. The last item must be a user message. An agent's `${answer.new_messages}` holds the
 messages its call added (replies, tool calls and their results), so a chat loop can append them
 to its history.
 
@@ -158,13 +160,12 @@ researcher:
 ```
 
 `tools:` is always a list. A name is a single tool or a **tool group**, such as all the tools of
-one MCP server. The flow looks the same either way; the run decides what each name holds, and
-fails before it starts when a granted name is missing.
+one MCP server. The run fails before it starts when a granted name is missing.
 
 | Where tools come from | How |
 |---|---|
-| `ask_user` | Built in. The model asks the person running the flow a question, with up to 4 options |
-| MCP servers | `yian run` reads them from config files (below); each server name is a tool group |
+| `ask_user` | Built in. The model asks the person running the flow a question, with optional answer choices. `yian run` asks in the terminal; a host must pass an `ask` handler in its tools |
+| MCP servers | `yian run` reads them from config files (below). A server's name grants all its tools; a tool's own name grants just that tool |
 | Host tools | A program passes them to the run (below) |
 
 - Consecutive calls in one reply run together when their tools say that is safe. Results reach
@@ -209,13 +210,15 @@ The file uses the `mcpServers` format other MCP clients use:
 | `disabled` | `true` turns the server off, even one an earlier file defines |
 
 - An entry has exactly one of `command` and `url`. SSE servers aren't supported.
+- A server can't share a name with a registered tool or a built-in: `take`, `sleep`, `ask`,
+  `ask_user`, `load_skill`.
 - In `command`, `args`, `cwd`, `url` and the values of `env` and `headers`, `${VAR}` reads an
   environment variable, `${VAR:-default}` gives a fallback, and `$$` is a literal `$`. An unset
   variable with no fallback is an error, so keep tokens in the environment, not the file.
 - A stdio server gets only a minimal environment (`PATH`, `HOME` and a few more) plus its `env`.
-- Servers start only when the flow needs their tools, and stop when the run ends. A flow that
-  uses no tools reads no config file.
-- MCP needs the optional package `@modelcontextprotocol/client` installed beside yian.
+- Servers start only when the flow needs their tools, and stop when the run ends. The config
+  files are read only when the flow names a tool yian doesn't already have.
+- MCP needs the optional package `@modelcontextprotocol/client` 2.3.1 installed beside yian.
 
 ### Host tools
 
@@ -241,8 +244,8 @@ A key holding one tool must match its name; a key holding a list is a tool group
 
 ## Skills
 
-A skill is a folder holding a `SKILL.md` file: YAML front matter with `name` and `description`,
-then Markdown instructions. Other files in the folder come with it. This is the format Claude
+A skill is a folder holding a `SKILL.md` file: YAML front matter with a `description` and an optional
+`name` (default: the folder's name), then Markdown instructions. Other files in the folder come with it. This is the format Claude
 Code and Codex use.
 
 ```yaml check=fragment
@@ -268,7 +271,7 @@ and hidden files are refused.
 
 1. `~/.claude/skills`, then `~/.agents/skills`;
 2. `.claude/skills`, then `.agents/skills`, in the current directory, then in each parent up to
-   the git root.
+   the git root (outside a git repo, the current directory only).
 
 A broken skill is skipped with a warning. Check a skill folder with `yian skills check`:
 
@@ -304,7 +307,8 @@ output: ${worker.output :- "(stopped)"}
 
 - **Steers.** Before each model call, the agent reads everything queued in the inbox and sends it
   with that request as a user message. A steer that arrives during the final answer gets one more
-  model call.
+  model call, within the turn cap. An agent with [structured output](/agents/#structured-output) and
+  no tools or skills reads its steers once, before its only call.
 - **Render.** `steer_inbox: {from: ${input.notes}, render: "From the owner: ${event}"}` wraps each
   message in a template. The template reads only `${event}`.
 - **Interrupts.** A host can interrupt every agent reading an inbox. The agent stops at its next

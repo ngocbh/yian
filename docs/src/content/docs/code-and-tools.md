@@ -77,18 +77,20 @@ export function countWords(inputs: { text: string }): number {
 
 The export gets the same `inputs` record an inline body gets, so a body moves into a file
 unchanged. At load, yian checks that the file exists; it doesn't import it until the node runs.
-A `module:function` value (a dotted module name with no `./`) fails at load.
+A `module:function` value with no `./`, such as `text:countWords`, fails at load.
 
 ### Values in and out
 
 | yian type | Your code sees | What you return |
 |---|---|---|
-| `int` | `number`, or `bigint` past 2^53 | a whole `number` or a `bigint` |
+| `int` | `number`, or `bigint` past 2^53 | a safe-integer `number`, or a `bigint` |
 | `float` | `number` | a `number` |
 | `str`, `bool` | `string`, `boolean` | the same |
+| `date`, `datetime` | an ISO `string` | an ISO `string` |
 | `None` | `null` | `null` |
 | `list(T)` | an array | an array |
-| record | a plain object | a plain object |
+| record, `object`, `dict(...)` | a plain object | a plain object |
+| `Any` | any of these | any of these |
 | `file` | a `FileRef` | a `FileRef` |
 
 The return value is checked against `output:`. A `Date`, a class instance, a getter or a function
@@ -106,7 +108,8 @@ slow CODE node doesn't block the rest of the run.
   way.
 - `console.log` and the other `console` calls print as usual.
 - Don't leave timers or other work running after you return. A late error from it fails
-  whichever call that thread runs next, and the thread is replaced.
+  the call its thread is running then, or prints an error line when the thread is idle; either
+  way the thread is replaced.
 - A worker is **not a sandbox**. Code shares the process's privileges, files and environment
   variables. Only run flows whose code you trust.
 
@@ -143,7 +146,7 @@ quote:
 | `tool_id` | yes | The tool's id, or a built-in: `take`, `sleep` or `ask` |
 | `input` | no | The tool's arguments, by the tool's own parameter names |
 | `output` | no | The type the result must have; without it any JSON value or file passes |
-| `retries` | no | Extra attempts after a failed call (default 0) |
+| `retries` | no | Extra attempts after a failed call (default 0); not for `take`, `sleep`, `ask` |
 | `asserts` | no | Checks on the result |
 | `adaptive_questions` | no | `ask` only (see [Inboxes and waiting](/inboxes/)) |
 
@@ -157,7 +160,8 @@ branches and child flows that may never run. The run doesn't start when:
 
 - the run's tools have no tool with that id (the error suggests a close match);
 - the node passes an argument the tool doesn't take, or leaves out a required one;
-- a literal argument can never fit the tool's parameter type, such as `"10"` for an `int`;
+- an argument, literal or `${...}`, can never fit the tool's parameter type, such as a `str` for
+  an `int`;
 - the declared `output:` can never match what the tool says it returns.
 
 Nothing is converted for you: pass `10`, not `"10"`, to an `int` parameter.
@@ -165,15 +169,17 @@ Nothing is converted for you: pass `10`, not `"10"`, to an `int` parameter.
 ### Retries
 
 `retries: N` calls the tool up to N more times after a failure. Before each retry the node waits
-an exponential backoff with jitter: about 1, 2, 4 seconds, and so on, up to 30 seconds. Each
-attempt is recorded in the run log, so a resumed run keeps counting from where it stopped.
+between half and all of 1, 2, 4 seconds, and so on, up to 30 seconds. Each attempt is recorded
+in the run log, so a resumed run keeps counting from where it stopped.
 
 | What the tool throws | Retried |
 |---|---|
 | any error | yes |
-| `PermanentToolError` | no |
+| `PermanentToolError`, or `ReportedToolError` with `permanent: true` | no |
 | `TransientToolError` with `retryAfter` | yes, after that many seconds (still capped) |
 | a failed argument or `output:` check | no |
 
 The default is 0, so a tool runs once unless you opt in: a retried call repeats any side effect
-the failed attempt already had. When every attempt fails, the error lists each attempt.
+the failed attempt already had. `YIAN_TOOL_RETRIES` changes the default;
+`YIAN_TOOL_RETRY_DELAY_SECONDS` (1) and `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS` (30) change the waits.
+When every attempt fails, the error lists each attempt.

@@ -1,44 +1,7 @@
 /**
- * Host intake, `fromHost`, a port of `tests/engine/test_plain_containers.py`, and its reverse,
- * `toHost`. TS yian reads a host value (a tool or CODE result, an input) through `fromHost`
- * where Python reads a node output into plain containers: it returns a fresh value made of
- * plain arrays and records, and refuses what isn't a yian value. Each row that differs from
- * Python carries a comment naming its rule.
- *
- * Ported: plain values and leaves (a `FileRef` kept; a class instance refused), shared values
- * copied once near the root and deep, the deep chain copied without recursion, and a
- * `TypedValue` (Python copies its payload; refused here). TS-only: the host-intake table
- * (scalars, numbers, `undefined`, lone surrogates, non-plain objects, an array whose prototype
- * was swapped), a record inside itself refused, `__proto__` kept as an own data key, an accessor
- * property (a getter or a setter) and a `Proxy` refused without running host code, skipped
- * symbol and non-enumerable keys (accessors included) and extra array properties, and a
- * depth-30 diamond copied in linear time.
- *
- * Also here: the cycle row of
- * `test_untyped_output_json.py::test_reject_non_json_locates_the_bad_part`.
- *
- * The `toHost` rows (TS-only; Python hands a host a deep copy of its own values): an int within
- * ±(2^53−1) handed over as a `number` and beyond as a `bigint`, floats kept, fresh arrays and
- * records, `__proto__` kept as an own data key, a `FileRef` kept, sharing kept, a 100 000-deep
- * list without recursion, and the `fromHost` round trip.
- *
- * Not ported: the list, tuple and dict subclass rows read through their own iteration
- * (`HiddenList`, `HiddenDict`, `YieldsOneNan`, the namedtuple, the tuple rows), which are
- * refused here as non-plain objects (one row checks an `Array` subclass); the cycle rows,
- * since intake refuses a container inside itself (an array row and a record row check it);
- * the unhashable-key row (a record key is always a string); and
- * `test_iteration_error_propagates`, since intake runs no host code (it refuses getters and
- * Proxies instead of reading them).
- *
- * Not ported from `tests/engine/test_hidden_container_outputs.py` (no TS file): its rows run
- * Python CODE returning list, tuple and dict subclasses whose iteration differs from their
- * storage, and sets; TS host intake takes only plain arrays and records and refuses the rest (the
- * non-plain-object, `Array` subclass and cycle rows here check it):
- * `test_stored_output_is_what_iteration_yields`,
- * `test_a_cycle_through_a_subclass_reads_it_once`, `test_a_yielded_nan_is_located`,
- * `test_a_yielded_set_is_located`, `test_a_yielded_text_key_is_required`,
- * `test_a_yielded_unhashable_key_is_located` and
- * `test_ordinary_subclasses_store_like_their_plain_equivalents`.
+ * Host intake, `fromHost`, and its reverse, `toHost`. Intake reads a host value (a tool or CODE
+ * result, an input) into a fresh value made of plain arrays and records, and refuses what isn't a
+ * yian value.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -89,7 +52,7 @@ function throwingTraps(): ProxyHandler<object> {
 
 describe("fromHost", () => {
   test("a plain value becomes an equal fresh value", () => {
-    // Host intake returns a fresh value; Python returns a plain value itself.
+    // Host intake returns a fresh value.
     const value = { a: [1n, [2.5, "x"]], b: null, c: { d: true } };
     const out = fromHost(value, "output") as ValueRecord;
     expect(out).toStrictEqual(value);
@@ -160,8 +123,7 @@ describe("fromHost", () => {
     ],
     ["a function", [() => 1], "output at [0]: function is not a yian value", [0]],
     ["a symbol", { s: Symbol("s") }, "output at s: symbol is not a yian value", ["s"]],
-    // Hosts don't build carriers: a TypedValue is refused like any class instance; Python
-    // copies its payload.
+    // Hosts don't build carriers: a TypedValue is refused like any class instance.
     ["a TypedValue", { t: buildValue(1n) }, "output at t: TypedValue is not a yian value", ["t"]],
     // A FileRef forged from the prototype never ran the constructor's checks.
     [
@@ -176,9 +138,8 @@ describe("fromHost", () => {
     expect(error.path).toEqual(path);
   });
 
-  // From test_untyped_output_json.py::test_reject_non_json_locates_the_bad_part (the cycle row).
   test("refuses a container inside itself at the entry holding it", () => {
-    // Intake refuses a cycle; Python's plain-container read keeps it.
+    // Intake refuses a cycle.
     const value: unknown[] = [];
     value.push(value);
     const error = intakeError(value);
@@ -187,7 +148,7 @@ describe("fromHost", () => {
   });
 
   test("refuses a record inside itself at the entry holding it", () => {
-    // Intake refuses a cycle; Python's plain-container read keeps it.
+    // Intake refuses a cycle.
     const inner: Record<string, unknown> = {};
     const value = { a: inner };
     inner["b"] = value;

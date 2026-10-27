@@ -1,14 +1,4 @@
-/**
- * Retired native settings fail before a flow can perform external work: mirrors
- * `tests/engine/test_provider_retirement.py`.
- *
- * Ported: `test_retired_tool_marker_is_not_an_implicit_tool_grant` and
- * `test_old_native_yaml_fails_during_loading` (the root flow assembled as the loader assembles
- * it), and the harvested case `engine_provider_retirement__provider_codex_is_rejected`.
- *
- * Elsewhere: `test_retired_native_config_points_to_unified_auth` and
- * `test_codex_is_not_a_separate_provider_route` belong to the `llm_clients` ports.
- */
+/** Retired native settings fail before a flow can perform external work. */
 
 import { expect, test } from "bun:test";
 

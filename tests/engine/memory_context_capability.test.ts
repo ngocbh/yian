@@ -1,24 +1,6 @@
 /**
- * Source-neutral, execution-scoped access to recalled memory notes: a port of
- * `tests/engine/test_memory_context_capability.py`. The local opener records each entry and
- * resolves to an empty context.
- *
- * Ported (adapted): `test_lazy_single_entry_binds_detached_identity_and_closes_after_execution`
- * (the closed capability rejects instead of raising; there is no invocation or compatibility to
- * bind), `test_no_eager_turn_and_no_memory_remains_dormant`,
- * `test_repeated_entry_is_host_fault_and_closes_first_turn`,
- * `test_opener_host_fault_keeps_identity_in_both_execution_shapes` (the streaming shape streams
- * through `caps.emitStream`), `test_scope_and_invocation_are_frozen_before_node_execution` (only the
- * scope), `test_malformed_scope_is_host_fault_even_for_custom_run_override` and
- * `test_missing_scoped_opener_remains_setup_fault_for_custom_run`.
- *
- * Not ported: TS yian has no session memory, so a memory context holds no conversation turn, and
- * the rows about how and when a turn closes have no counterpart.
- *
- * TS-only: a node that starts `openMemoryContext` and returns without awaiting it doesn't settle
- * before the open; a node that drops a rejecting opener promise, or an open after the evaluation, causes no unhandled rejection; invalid recall inputs, an opener result that
- * isn't a `MemoryContext`, and sections outside the scope's memories or without text are recall
- * failures.
+ * Source-neutral, execution-scoped access to recalled memory notes. The local opener records each
+ * entry and resolves to an empty context.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

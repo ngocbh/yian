@@ -1,15 +1,7 @@
 /**
- * `lowerFlowAsserts`, the pure flow-assert lowering pass: a port of
- * `tests/engine/test_lower_flow_asserts.py`. It takes a flow's `asserts:` list plus the name
- * environment (flow inputs, node ids, producer contracts) and lowers each assert into a node-local
- * assert for the synthesized START/END, plus the synth END params and wiring that make cross-node
- * post-asserts structural. These rows pin the exact rewritten forms and the synth naming scheme.
- *
- * The synth params compare with `toEqual`, as Python's `==` compares them, and the wiring is a
- * `Map`.
- *
- * Changed: a flow assert's text holding a lone surrogate is a located load error (Python yian
- * loads it); the TS-only row pins the message.
+ * `lowerFlowAsserts`, the pure flow-assert lowering pass: it lowers each of a flow's `asserts:`
+ * into a node-local assert for the synthesized START/END, plus the synth END params and wiring
+ * that cross-node asserts need.
  */
 
 import { expect, test } from "bun:test";

@@ -1,81 +1,4 @@
-/**
- * Run-record contracts for source-neutral memory carriers: a port of
- * `tests/engine/test_memory_run_records.py`. Ported: the carriers of
- * `test_source_neutral_carriers_are_defensive_and_frozen` and
- * `test_episode_accepts_binding_failure_and_typed_visible_material` (its keyword arguments are the
- * episode's options object). Python's `ValueError` is a `RangeError` here; a frozen field throws
- * `TypeError` where Python raises `FrozenInstanceError`.
- *
- * TS-only: one row per carrier message with its class, in Python's check order; the number rule
- * of the interaction JSON (`value`, `arguments`): `±Infinity` kept, `-0` read back as `0`, NaN
- * refused.
- *
- * Changed (TS yian):
- * - The carriers hold deep-frozen copies, with no copy on read: a reader's edit of `value`,
- *   `arguments` or a snapshot throws a `TypeError` where Python changes a private copy. The
- *   caller's later edits don't show, as in Python.
- *
- * Not ported: TS records no evidence on outcome records (learning reads the steps), so
- * `test_evidence_requires_coherent_prompts_and_ordered_scope_sections`, the evidence line of
- * `test_memory_scope_requires_unique_keys_and_nested_occurrences`, the evidence half of
- * `test_records_reject_forged_nested_carrier_subclasses`, and the outcome wire tests
- * (`test_all_outcome_records_round_trip_closed_evidence`,
- * `test_existing_outcome_records_round_trip_with_no_evidence`,
- * `test_memory_scope_wire_has_no_boundary_field`, the evidence rows of
- * `test_schema_four_rejects_old_schema_and_nested_extra_or_unknown_fields` and the evidence half
- * of `test_memory_payloads_name_keys_on_the_wire`) have no TS counterpart.
- *
- * Ported, the run-record constructors: `test_run_started_distinguishes_disabled_and_enabled_empty_memory`,
- * `test_run_started_requires_a_canonical_table_and_matching_snapshots` and the constructor rows of
- * `test_run_started_records_a_key_table_and_stacks` (each without its wire round trip), the
- * mutation half of `test_records_reject_forged_nested_carrier_subclasses`.
- *
- * TS-only (run records): the memory table, stacks and snapshots are held as frozen arrays whose
- * items are the given carriers, unchanged by the caller's later edits; a table, stack or snapshot
- * item of another class (a subclass too) is refused with its message; an unknown stack key is
- * named in the message (`["missing"]`).
- *
- * Changed (run records):
- * - The memory table, stacks and snapshots are arrays, so the rejected container is a `Set`
- *   (Python passes a list) and the message says "arrays" where Python says "tuples".
- * - `test_records_reject_forged_nested_carrier_subclasses` constructs subclass instances (TS has
- *   no forged dataclasses).
- *
- * Covered elsewhere: the scope rows of `test_memory_scope_requires_unique_keys_and_nested_occurrences`
- * by `memory_contracts.test.ts`; `test_memory_spec_config_rejects_private_keys` by
- * `memory_decl_shape.test.ts`.
- *
- * Not ported: `test_nested_frozen_carriers_are_revalidated_before_recording`,
- * `test_codec_revalidates_carriers_mutated_after_record_construction` and
- * `test_codec_replays_outer_record_invariants_after_forging` (they forge frozen carriers with
- * `object.__setattr__`, which a frozen TS carrier refuses).
- *
- * Ported, the run-start and memory-commit wire: `test_public_token_policy_options_round_trip_durably`,
- * `test_snapshot_envelope_preserves_opaque_public_memory_state`,
- * `test_run_started_uses_learnable_as_its_only_wire_retention_field`, the wire rows of
- * `test_run_started_records_a_key_table_and_stacks` (with the snapshots' wire and a round trip),
- * `test_every_memory_commit_record_round_trips`,
- * `test_memory_commit_wire_requires_an_explicit_positive_attempt_slot`, the mutation half of
- * `test_proposals_preserve_order_and_reject_duplicate_ids`, the schema row of
- * `test_schema_four_rejects_old_schema_and_nested_extra_or_unknown_fields`,
- * `test_schema_four_rejects_origin_and_extra_memory_operation_fields`,
- * `test_schema_four_rejects_plural_private_memory_config` and the commit row of
- * `test_memory_payloads_name_keys_on_the_wire`, each rejection with its class and message (the
- * private-key messages are `MemorySpec`'s).
- *
- * TS-only (run-start and commit wire): rows for a memory key, config, owner, eligibility flag,
- * snapshot, stack, mutation and memory operation failure of the wrong shape, each with its message;
- * memory JSON holding `-0` (a snapshot, a spec config and a mutation payload, which memory's carriers
- * keep) is written as `0.0` and read back as `0`.
- *
- * Changed (run-start and commit wire): `test_run_log_copying_isolated_from_new_carrier_accessors`:
- * a decoded mutation payload is frozen, so a reader's edit throws `TypeError` (Python edits a
- * private copy).
- *
- * Ported, the backward wire: the backward-ready half of `test_memory_payloads_name_keys_on_the_wire`
- * (its extra `frame_ref` row with its class and message) and the `MemoryProposal` line of
- * `test_proposals_preserve_order_and_reject_duplicate_ids`.
- */
+/** Run-record contracts for source-neutral memory carriers. */
 
 import { expect, test } from "bun:test";
 
@@ -216,7 +139,6 @@ test("the interaction JSON keeps infinities and reads negative zero back as zero
   expect(Object.is(call.arguments.offset, 0)).toBe(true);
 });
 
-// test_episode_accepts_binding_failure_and_typed_visible_material
 test("an episode accepts a binding failure and typed visible material", () => {
   const episode = new MemoryEpisode("run", [], ["flow", "agent"], MemoryEpisodeStatus.FAILED, null, {
     failure: { code: "binding.evaluate" },
@@ -332,7 +254,6 @@ test("run started requires a canonical table and matching snapshots", () => {
   );
 });
 
-// The constructor rows of test_run_started_records_a_key_table_and_stacks.
 test("run started records a key table and stacks", () => {
   const memories = [spec("profile", { mode: "flow" }, ROOT), spec("reflective", { mode: "agent" })];
   const stacks = [new MemoryStack(["agent"], ["profile", "reflective"])];
@@ -458,7 +379,6 @@ test("run started uses learnable as its only wire retention field", () => {
   );
 });
 
-// The wire rows of test_run_started_records_a_key_table_and_stacks.
 test("run started writes its key table and stacks on the wire", () => {
   const memories = [spec("profile", { mode: "flow" }, ROOT), spec("reflective", { mode: "agent" })];
   const record = started({
@@ -548,7 +468,6 @@ test.each([1, 2])("the memory commit wire requires an explicit positive attempt 
   }
 });
 
-// test_proposals_preserve_order_and_reject_duplicate_ids
 test("proposals preserve order and reject duplicate ids", () => {
   const ordered = [new MemoryMutation("m2", { sequence: 1n }), new MemoryMutation("m1", { sequence: 2n })];
   expect(new MemoryProposal("reflective", ordered).mutations).toEqual(ordered);
@@ -563,7 +482,6 @@ test("proposals preserve order and reject duplicate ids", () => {
   );
 });
 
-// The schema row of test_schema_four_rejects_old_schema_and_nested_extra_or_unknown_fields.
 test("the wire rejects an old schema", () => {
   const wire = wireOf(new NodeSucceededRecord("agent", 1));
   wire.schema = 3n;
@@ -632,13 +550,11 @@ test("a decoded commit's mutation payloads are frozen", () => {
   expect(record.mutations[0]!.payload).toEqual({ items: [1n] });
 });
 
-// The commit half of test_memory_payloads_name_keys_on_the_wire.
 test("a commit request names its mutations on the wire", () => {
   const commit = new MemoryCommitRequestedRecord("reflective", "c1", [new MemoryMutation("m1", { add: 1n })], 1);
   expect(wireOf(commit).payload.mutations).toEqual([{ mutation_id: "m1", payload: { add: 1n } }]);
 });
 
-// The backward-ready half of test_memory_payloads_name_keys_on_the_wire.
 test("a backward-ready record names its proposals' memory keys on the wire", () => {
   const proposal = new MemoryProposal("reflective", [new MemoryMutation("m1", { add: 1n })]);
   const ready = new BackwardReadyRecord(1, new BackwardResult(), [], [proposal]);
@@ -726,7 +642,7 @@ test.each<[string, (payload: Record<string, any>) => void, ErrorClass, string]>(
     TypeError,
     "run_started payload memory_stacks item memories must be an array of strings",
   ],
-])("decode rejects a run_started memory payload with %s (TS-only)", (_name, edit, cls, message) => {
+])("decode rejects a run_started memory payload with %s", (_name, edit, cls, message) => {
   const wire = wireOf(flowMemoryStarted());
   edit(wire.payload);
   expectError(() => decodeRecord(logJson(wire)), cls, message);
@@ -757,7 +673,7 @@ test.each<[string, (payload: Record<string, any>) => void, ErrorClass, string]>(
     RangeError,
     "mutation IDs must be unique",
   ],
-])("decode rejects a memory_commit_requested payload with %s (TS-only)", (_name, edit, cls, message) => {
+])("decode rejects a memory_commit_requested payload with %s", (_name, edit, cls, message) => {
   const wire = wireOf(new MemoryCommitRequestedRecord("notes", "c1", [new MemoryMutation("m1", {})], 1));
   edit(wire.payload);
   expectError(() => decodeRecord(logJson(wire)), cls, message);
@@ -776,13 +692,13 @@ test.each<[string, (failure: Record<string, any>) => void, ErrorClass, string]>(
     TypeError,
     "memory_commit_failed payload failure retryable must be a boolean",
   ],
-])("decode rejects a memory_commit_failed failure with %s (TS-only)", (_name, edit, cls, message) => {
+])("decode rejects a memory_commit_failed failure with %s", (_name, edit, cls, message) => {
   const wire = wireOf(new MemoryCommitFailedRecord("notes", "c1", COMMIT_FAILURE, 1));
   edit(wire.payload.failure);
   expectError(() => decodeRecord(logJson(wire)), cls, message);
 });
 
-test("memory JSON holding -0 is written as 0 (TS-only)", () => {
+test("memory JSON holding -0 is written as 0", () => {
   const snapshot = new MemorySnapshotEnvelope("reflective", { score: -0 });
   const memory = spec("reflective", { weight: -0 });
   const mutation = new MemoryMutation("m1", [-0]);

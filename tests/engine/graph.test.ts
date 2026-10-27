@@ -1,48 +1,6 @@
 /**
- * The compiled flow topology model of `compile/model.ts`: a port of `tests/engine/test_graph.py`.
- * Ported: `test_adjacency_and_root`, `test_diamond_incoming`, `test_edge_input_group`,
- * `test_compiled_flow_wiring_field_threads_and_defaults`,
- * `test_flow_base_normalizes_wiring_with_boundary_defaults`,
- * `test_compiled_flow_is_flow_and_keeps_boundary_and_terminal` and
- * `test_edge_optional_defaults_false_and_roundtrips`; the compose rows
- * `test_data_edge_optional_reflects_binding_escape`, `test_case_on_escape_marks_optional`, the
- * searched-case condition rows (`test_searched_case_condition_default_marks_optional`,
- * `test_searched_case_plain_reference_stays_required`,
- * `test_searched_case_literal_coalesce_and_required_mark_optional`,
- * `test_searched_case_default_to_another_reference_also_joins`,
- * `test_searched_case_plain_and_default_reads_of_one_output`,
- * `test_searched_case_unparenthesized_default_covers_the_whole_condition`),
- * `test_searched_case_condition_with_a_nested_span_shows_the_rewrite`, the branch gate rows the
- * narrowing and the skipped-arithmetic check decide (the `${a.output + 1}` case of
- * `test_a_plain_read_of_a_branch_keeps_the_gate_in_the_branch`,
- * `test_a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream`),
- * `test_item_head_ref_yields_no_edge_but_producer_ref_does`,
- * `test_binding_coskip_sets_edge_optional_per_stance` and the branch gate rows the reference
- * check decides by reading a union field under the gate: the `${d.output.limit}` case of
- * `test_a_plain_read_of_a_branch_keeps_the_gate_in_the_branch`,
- * `test_a_co_skipping_default_keeps_the_gate_in_the_branch` and
- * `test_a_guarded_read_inside_a_default_loads` (the gate's targets are narrowed to Buy), and
- * `test_a_default_read_of_a_branch_lets_the_gate_run_outside_it` (they aren't, since the default
- * read lets the gate run outside the branch), with its case
- * `load-core/engine_graph__a_default_read_of_a_branch_lets_the_gate_run_outside_it`.
- *
- * Changed: Python's `FuncNode` is a minimal `Node` subclass; node and wiring tables are `Map`s;
- * bindings compare by `source`, `origin` and `contract`. The compose rows assemble their flows
- * through `assembleText`, where Python calls `load_flow`, and name TS's CODE functions
- * (`./fixtures/compose_codefns.ts:<fn>`); the item-head row's consumer is a CODE descriptor whose
- * wiring the row hands to `inferDataEdges`, as Python's does.
- *
- * TS-only: `GrowthRejected` keeps `original` and refuses a non-`Error`; the `CompiledFlow`
- * `flowId` and `memories` checks; `terminalId` is `END_ID` on a hand-built flow holding an END
- * node and `null` once that node is removed; `copyGraph`, the shared graph
- * copier that stands in for Python's `copy.deepcopy` of a flow or node: a copied flow and its
- * nodes are distinct instances of their classes with fresh containers, and splicing or pruning the
- * copy leaves the original; a node or child flow reached twice is copied once; a cycle copies to a
- * cycle; a node copy takes its child flow along, with fresh containers; each call gets a fresh
- * memo; a copy shares its carriers, and a field reassigned on it leaves the original;
- * `validateGrowthMetadata` (Python tests it through the expansion builders): a small valid
- * fragment passes, and one row per refusal message; `compile/index.ts` exports exactly Python's
- * `yian.compile.__all__`.
+ * The compiled flow topology model of `compile/model.ts`: adjacency, edges and their input groups,
+ * the wiring, data-edge optionality, branch gates, and `copyGraph`.
  *
  * The harvested `load-core/engine_graph__a_default_read_of_a_branch_rejects_arithmetic_on_it_downstream`
  * is pinned at the end, with the `ok` case `load-core/engine_graph__a_guarded_read_inside_a_default_loads`,
@@ -85,7 +43,7 @@ import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { assembled, assembleText, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
 
-/** A minimal concrete node standing in for Python's `FuncNode`. */
+/** A minimal concrete node. */
 class FuncNode extends Node {
   readonly kind = NodeKind.CODE;
 
@@ -933,7 +891,7 @@ test.each([
   expect(() => validateGrowthMetadata(flow)).toThrow(message);
 });
 
-test("compile/index.ts exports exactly Python's yian.compile.__all__", () => {
+test("compile/index.ts exports exactly its public names", () => {
   // Each name and the module that defines it; a namespace lists its keys code-unit sorted.
   const sources: Record<string, Record<string, unknown>> = {
     CompiledFlow: modelModule,

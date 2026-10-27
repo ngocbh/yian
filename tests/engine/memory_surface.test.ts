@@ -1,28 +1,4 @@
-/**
- * The `long_term_memory:` surface, the declaration parser and its loader wiring: a port of
- * `tests/engine/test_memory_surface.py`.
- *
- * Ported: `test_sugar_is_one_memory_named_after_its_type`,
- * `test_mapping_and_long_form_keep_authored_order` and the rows of
- * `test_malformed_values_are_load_errors` (ints written as bigints). The messages of the
- * harvested `load-agent/engine_memory_surface__empty_flow_declaration` and
- * `load-agent/engine_memory_authoring__{reserved_memory_name,config_not_a_mapping,empty_memory_name}`
- * are pinned, and `load-agent/engine_memory_surface__empty_agent_declaration` (the `{}` half of
- * `test_agent_null_declaration_is_absent_and_empty_mapping_fails`) as `parseNodes` reads it.
- *
- * Changed: unknown long-form keys are listed with `writeAsText` over the names in code-unit
- * order (`unknown key(s) ["extra"]`), where Python writes a sorted list of reprs.
- *
- * Not ported: the `{3: "episodic"}` row (a record key is always text).
- *
- * Ported too, the loader rows: `test_root_flow_declarations_are_parsed_and_stamped`,
- * `test_null_flow_declaration_is_the_same_as_absent`,
- * `test_flow_shape_errors_point_at_the_value`, `test_def_flow_declarations_carry_the_def_owner`,
- * `test_agent_declarations_are_parsed_and_stamped_with_the_node`, the `null` half of
- * `test_agent_null_declaration_is_absent_and_empty_mapping_fails` and
- * `test_resolver_errors_become_located_load_errors`. Their CODE references are TS's form
- * (`./fixtures/compose_codefns.ts:echo`), resolved against the conformance directory.
- */
+/** The `long_term_memory:` surface, the declaration parser and its loader wiring. */
 
 import { afterEach, describe, expect, test } from "bun:test";
 

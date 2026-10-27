@@ -1,55 +1,6 @@
 /**
  * Node-level `asserts:`, the per-node contract: node-local validation, pre/post classification and
- * stamping onto the node. A port of `tests/engine/test_node_asserts.py::test_node_asserts_classify_pre_and_post`,
- * `::test_assertion_site_lookup_is_keyword_only`,
- * `::test_node_assert_field_walk_uses_the_canonical_output_contract`,
- * `::test_node_assert_rejects_unknown_field_on_partial_output_contract`,
- * `::test_node_asserts_classify_same_across_spellings`,
- * `::test_duplicate_node_asserts_are_distinct_ordered_occurrences`,
- * `::test_reject_unknown_input_ref_in_all_spellings`, `::test_reject_unknown_input_ref`,
- * `::test_node_assert_field_error_prefers_the_exact_input_range`,
- * `::test_node_assert_error_falls_back_to_the_descriptor_range`,
- * `::test_node_assert_aggregate_uses_first_available_range`, `::test_reject_pool_head_ref`,
- * `::test_reject_inline_call_in_node_assert`, `::test_reject_call_directive_in_node_assert`,
- * `::test_reject_input_named_output`, `::test_reject_dotted_field_on_scalar_output` and
- * `::test_reject_node_asserts_on_mapped_call`; and of
- * `tests/engine/test_surface_vocab_golden.py::test_pool_heads_singular`, which reads the same
- * module's pool heads.
- *
- * The load rows assemble the flow (`assembleText`); the mapped-call row loads it through
- * `loadFlow`, its `dbl` def built by the loader. Hand-built descriptors are `CodeDescriptor`s where
- * Python passes a `SimpleNamespace`.
- *
- * Changed: `validateNodeAsserts` takes its options as one object, so the keyword-only row pins that
- * a function passed in its place is a type error and is never called as the site lookup. A node
- * assert's text holding a lone surrogate is a located load error in the aggregate (Python yian
- * loads it); the TS-only row pins the message.
- *
- * Ported through `loadFlow` and `runFlow` (and `advance`): `test_pre_assert_passes_and_runs`,
- * `test_post_assert_violated_fails`, `test_def_internal_node_assert_via_call`,
- * `test_def_internal_node_assert_via_map` and the two `test_python_built_unparseable_assert_*`
- * rows, each failing run checked for `assertion.failed` where Python checks the status. The
- * before-the-run row sets the loaded node's `preAsserts` in code, as Python does. Changed: the
- * resume row stops its first run with an aborted `signal` once node `a` starts (Python's CODE
- * function raises), then sets the bad assert and writes the changed flow's fingerprint into the
- * log's `RunStarted` (`stoppedRunLog`), where Python stubs the run's condition check during the
- * first run. Changed: `test_post_assert_on_nonscalar_output_fails_cleanly` is the `run-leaves`
- * case `engine_node_asserts__a_post_assert_ordering_a_record_fails_cleanly`, which fails
- * `condition.evaluate`, where Python only checks the run fails: ordering a record is a type error,
- * and an assert that fails to evaluate fails `condition.evaluate` (decision 36, the failure-code
- * rule).
- *
- * Covered by `run-leaves` cases running the same flows on the same inputs:
- * `test_pre_assert_violated_fails_before_body`
- * (`engine_node_asserts__a_false_pre_assert_fails_before_the_body`),
- * `test_post_assert_record_field_passes`
- * (`engine_node_asserts__a_post_assert_on_a_record_field_passes`),
- * `test_skipped_branch_target_asserts_do_not_fire`
- * (`engine_node_asserts__a_skipped_node_assert_does_not_fire`) and
- * `test_absent_input_pre_assert_fails_cleanly`
- * (`engine_node_asserts__a_pre_assert_over_a_null_input_fails_cleanly`).
- *
- * TS-only: the harvested `load-leaves/engine_node_asserts__*` cases, pinned at the end.
+ * stamping onto the node.
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";

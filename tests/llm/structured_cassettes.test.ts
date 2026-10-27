@@ -1,8 +1,7 @@
 /**
  * Golden structured-output scenarios, replayed from streamed cassettes in `cassettes/structured/`
  * through `RouteModel` and `callWithRetries`: `planStructured` picks the strategy, the adapter
- * sends `plan.apply(request)` as each cassette records it, and `plan.parse` reads the reply. The
- * cassettes record the requests today's Python yian sends for `with_structured_output`.
+ * sends `plan.apply(request)` as each cassette records it, and `plan.parse` reads the reply.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -33,7 +32,7 @@ import type { JsonObject } from "../../src/typesys/json.ts";
 
 const DIR = fileURLToPath(new URL("cassettes/structured/", import.meta.url));
 
-/** Python's `type_to_schema(...).model_json_schema()` for the `corpus:*` fixtures: ints are `bigint`s. */
+/** The schemas `typeToSchema` emits for the `corpus:*` fixtures: ints are `bigint`s. */
 const SCHEMAS: Record<string, JsonObject> = {
   "corpus:Rec": {
     properties: { answer: { title: "Answer", type: "string" }, score: { title: "Score", type: "integer" } },

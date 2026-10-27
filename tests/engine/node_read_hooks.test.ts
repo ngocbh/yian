@@ -1,19 +1,4 @@
-/**
- * The node-owned read hooks of the `Node` base: a port of `tests/engine/test_node_read_hooks.py`.
- * Ported: `test_plain_node_defaults`, `test_map_binds_per_item_and_resolves_over` and
- * `test_map_over_not_a_list_raises`.
- *
- * Changed: the node wiring is a `Map`; the `binds_per_item` trait is read on an instance.
- *
- * Not ported: `test_wait_bind_reserved_resolves_until`. TS yian has no WAIT kind; the `sleep`
- * built-in reads `until` as an ordinary input.
- *
- * TS-only: the base reserves no wiring keys (`reservedWiringKeys`), and the default
- * `reservedKeyLabel` and `wiringRefLabel` phrases; MAP reserves `over`, labelled `map over`; a MAP
- * wiring without `over` throws a plain `Error` (Python's `KeyError`), not a `BindingError`; a
- * `bind` capability gets `over`, its source and the normalizer, whose result comes back as `over`;
- * a resolved list holding NaN is a `binding.evaluate` `BindingError`.
- */
+/** The node-owned read hooks of the `Node` base. */
 
 import { expect, test } from "bun:test";
 

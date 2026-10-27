@@ -1,20 +1,9 @@
 /**
- * The evaluator supplies in-loop observer sinks only to opted-in nodes: a port of
- * `tests/engine/test_live_event_caps.py`.
+ * The evaluator supplies in-loop observer sinks only to opted-in nodes.
  *
  * `needsLiveEvents` gates `caps.emitStream` and `caps.emitEvent`; each is present only when the
  * host supplied that sink, and a failing host sink escapes as the original host error rather than
  * a node failure.
- *
- * Ported: `test_node_without_trait_receives_no_sinks`,
- * `test_opted_in_node_receives_only_supplied_sinks` (4 rows),
- * `test_failing_host_sink_propagates_original_exception` (2 rows) and
- * `test_emit_event_must_be_callable`.
- *
- * Changed: every node also receives `signal`, so the capability names the probe sees include it.
- *
- * TS-only: a sink that throws a `CapabilityFault` rejects `evalNode` with that fault's original,
- * not with a fault wrapping the fault.
  */
 
 import { expect, test } from "bun:test";

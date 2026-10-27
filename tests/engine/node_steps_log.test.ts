@@ -1,62 +1,5 @@
 /**
- * Node steps: a port of `tests/engine/test_node_steps_log.py`, the `NodeStepRecord` a running node
- * appends and how the run-state reducer folds it. Python's `ValueError` is a `RangeError` here.
- *
- * Ported: `test_node_step_record_detaches_the_callers_step`,
- * `test_node_step_record_rejects_invalid_values` (list, text, null, NaN, a class instance, a
- * `Set`, an empty and a non-text node id; each with its exact error).
- *
- * Ported, the wire tests: `test_node_step_round_trips_under_its_wire_kind` (schema 20),
- * `test_node_step_wire_payload_rejects_invalid_shapes` (list, text, empty node id, missing step,
- * extra field; each with its exact class and message),
- * `test_node_step_wire_payload_rejects_non_finite_numbers` (`invalid run-record JSON`, caused by
- * the reader's `NaN is not JSON`).
- *
- * Ported, the reducer tests: `test_prepare_node_step_requires_an_in_flight_node` (3 rows),
- * `test_prepare_node_step_rejects_an_uninitialized_state`,
- * `test_node_starts_count_started_records`, `test_resume_keeps_steps_and_a_resumed_start_counts_two`,
- * `test_success_deletes_the_nodes_steps_and_starts`, `test_prepare_node_step_rejects_a_terminal_state`,
- * `test_failure_deletes_the_nodes_steps_and_starts`, `test_route_deletes_the_nodes_steps_and_starts`,
- * `test_expansion_deletes_the_spawners_steps_and_starts` (on the shared `initializedSpawner` and
- * `fragment`),
- * `test_learnable_run_accepts_a_step_with_an_empty_trace_delta`,
- * `test_broken_step_state_is_rejected_before_append` (4 rows) and
- * `test_loop_body_steps_go_at_the_outcome_and_stay_gone_after_the_prune` (on the shared
- * `initializedSpawner`, `parentFlow` and `canonicalChild`; the LOOP seed's iteration is `0n`, and
- * the replay runs over a `copyGraph` copy of a fresh parent flow). Each rejected row names its one
- * class and full message, where Python matches a part of the message or accepts either class.
- *
- * Ported, the replay tests (through `replayRecords` on a fresh `fanoutFlow()`; the log never
- * grows, so the builder is never called): `test_replay_reproduces_steps_and_starts`,
- * `test_learnable_replay_reproduces_steps_starts_and_trace`,
- * `test_replay_without_steps_has_no_steps`.
- *
- * TS-only: a step writes `-0` as `0`; a `FileRef` in a step is refused; a wire step keeps
- * yian's infinity tag as `Infinity`. A step has a string `kind` and an int `n` from 1, the node's
- * step count across its starts plus one; a record with any other `n` is refused on append and on
- * replay ("node step n is not dense").
- *
- * Changed:
- * - the `infinity` row of `test_node_step_record_rejects_invalid_values`: a step keeps
- *   `±Infinity` (a TS yian value).
- * - `test_node_step_too_deep_for_python_is_a_value_error`: a 5000-deep step is accepted (the TS
- *   codec is iterative).
- * - `test_prepare_node_step_rejects_a_step_past_the_nesting_limit`: a live step past the limit is
- *   accepted. A step is node detail, not a yian value, and an AGENT's `model_call` step holds a
- *   reply whose tool call arguments may themselves sit at the limit.
- * - `test_prepare_node_step_appends_in_order_without_observers`: the plan's delta is checked by
- *   its `kind` and fields, not its class name; a node's steps are a frozen array, not a tuple.
- * - `test_committed_step_is_detached_from_the_caller_and_the_record`: the record's step is
- *   deep-frozen, so changing it is a `TypeError`.
- * - `test_prepare_node_step_rejects_invalid_steps`: the list and NaN rows, each with its class and
- *   message.
- * - `test_frontier_commit_rejects_a_step_record_with_a_start_delta`: the forged transition spreads
- *   the frozen plan with a start delta.
- *
- * Not ported (TS types): the `non-text-key` row of `test_node_step_record_rejects_invalid_values`
- * and the `{1: "x"}` row of `test_prepare_node_step_rejects_invalid_steps` (JS object keys are
- * always text); the `list-steps` row of `test_broken_step_state_is_rejected_before_append` (a tuple
- * and a list are both an array).
+ * Node steps: the `NodeStepRecord` a running node appends and how the run-state reducer folds it.
  */
 
 import { expect, test } from "bun:test";
@@ -233,7 +176,7 @@ test("a node step record keeps infinite floats and writes -0 as 0", () => {
   expect(Object.is(record.step["zero"], 0)).toBe(true);
 });
 
-test("a node step too deep for Python is accepted", () => {
+test("a node step 5000 levels deep is accepted", () => {
   const record = new NodeStepRecord("a", 1, { kind: "x", ...nested(5000) });
 
   let value: unknown = record.step;

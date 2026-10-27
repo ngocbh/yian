@@ -1,33 +1,6 @@
 /**
- * A port of `tests/engine/test_long_int_replies.py`: an int over 4300 digits from a model reply,
- * a tool call or result, a backward reply, or backward feedback.
- *
- * Ported: every row but those not ported below. The models are `ScriptedModel`s served through
- * `models`, where Python patches `model_from_config`; a native model (`gpt-4o`) replies with JSON
- * text holding the value under `value`, where Python's `_Carrier` puts it in a raw tool call. The
- * tool is a `FunctionTool` taking an integer `value` (Python's `_Tool`), given through `tools`.
- *
- * Changed: ints are `bigint`s with no digit limit (decisions 4a, 23), so a long int from a reply,
- * tool call or tool result is accepted whole where Python retries and then fails with its
- * digit-limit message. A structured reply's whole int is the output at the first reply, with no
- * correction, so the `retries_to_a_good_value` rows output the long int too and the next reply
- * is never asked for. A tool call's long int argument runs the tool with the whole value, and a
- * tool's long int result is sent back whole; the model then answers `done`. The `invalid` row
- * streams the arguments as text (Python's parser refused that text; TS's assembler parses it
- * whole). A long int in a backward reply's `self_feedback`, or as backward feedback, is refused
- * for being an int, not for its size: `self_feedback messages must be strings`, and
- * `feedback["note"] must be a string, object, list, or None` (Python gives both messages for any
- * int). NaN feedback is refused by host intake first, with a `TypeCheckError` (a `RangeError`),
- * where Python's carrier check raises a `TypeError`.
- *
- * Not ported: the `python_limit=0` and `python_limit=6000` rows of
- * `test_a_prompted_long_int_fails_the_same_whatever_pythons_limit` and the `python_limit=0` rows
- * of `test_a_tool_returning_a_long_int_fails_naming_the_tool` (Python's
- * `sys.set_int_max_str_digits`),
- * `test_a_parser_digit_limit_error_reads_as_yians_in_correction_and_failure` and
- * `test_a_node_raising_pythons_digit_limit_error_fails_with_yians_message` (Python's
- * digit-limit error text, which nothing in TS raises), and the `session` rows (TS yian has no session
- * memory).
+ * An int over 4300 digits from a model reply, a tool call or result, a backward reply, or backward
+ * feedback.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -142,7 +115,7 @@ test("a long int in a prompted reply retries to a good value", async () => {
   expect(model.requests).toHaveLength(1);
 });
 
-test("a prompted long int fails the same whatever pythons limit (None)", async () => {
+test("a prompted long int parses whole with no retries", async () => {
   expect(await generate(texts(`{"n": ${D}}`), RECORD, 0)).toEqual({ n: BigInt(D) });
 });
 
@@ -156,10 +129,10 @@ test("a long int prompted record reply fails the run at the field", async () => 
 
 // Tool-call arguments
 
-// Python's `_TOOL_FLOW`: `PLAIN_FLOW` with the AGENT granted `lookup`.
+// `PLAIN_FLOW` with the AGENT granted `lookup`.
 const TOOL_FLOW = PLAIN_FLOW.replace("    kind: agent\n", "    kind: agent\n    tools: [lookup]\n");
 
-/** Python's `_Tool`: a tool taking an integer `value`, recording each call's arguments; `action` answers. */
+/** A tool taking an integer `value`, recording each call's arguments; `action` answers. */
 function recordedTool(
   action: (args: Record<string, unknown>) => unknown = (args) => `result:${args["value"]}`,
 ): { tool: FunctionTool; calls: unknown[] } {
@@ -235,7 +208,7 @@ test("a tool returning a long int fails naming the tool", async () => {
 
 // Backward replies and feedback
 
-/** Python's `_context`: a recorded AGENT backward context. */
+/** A recorded AGENT backward context. */
 function context(): BackwardContext {
   return new BackwardContext(
     { topic: "reefs", tags: ["a", "b"] },
@@ -300,7 +273,7 @@ test("a backward feedback message past the limit still fails", async () => {
   expect((error as TypeCheckError).message).toContain("deeper than 100 levels");
 });
 
-// Python's `_code_flow('return {"note": "x"}')`.
+// A flow whose CODE node returns `{"note": "x"}`.
 const CODE_FLOW = `
 id: nesting
 name: nesting

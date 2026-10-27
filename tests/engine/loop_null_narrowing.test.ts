@@ -1,74 +1,6 @@
 /**
  * A LOOP `while:` null check and what enters the body: the loop-entry helpers of
- * `compose/nodes/loop.ts`, a port of rows of `tests/engine/test_loop_null_narrowing.py`.
- *
- * Ported: `test_while_proves_the_null_checked_paths` (9), `test_until_and_times_prove_nothing` (3)
- * and `test_body_inputs_keep_their_declared_types_after_load`; through `assembleText`, the load
- * halves of `test_a_tag_in_the_inline_body_admits_the_while_null_checked_seed`,
- * `test_inline_body_returns_null_into_a_literal_seed_under_a_while_null_check` and
- * `test_inline_body_returning_a_while_null_checked_field_unchanged_runs`, each checking the
- * inline body's generated parameters (a record seed's type is canonical, its typedef name gone).
- *
- * The seed check (the cross-flow binding check on a LOOP seed), through `assembleText`: the load
- * halves of `test_optional_seed_fills_a_strict_body_input_under_a_while_null_check`,
- * `test_every_seed_shape_is_narrowed_by_a_while_null_check` (3),
- * `test_while_null_check_admits_a_null_seed_the_body_output_can_carry` and
- * `test_nested_null_check_narrows_the_record_above_it`; both loads of
- * `test_while_null_check_lets_a_seed_record_omit_the_checked_field`;
- * `test_while_null_check_rejects_a_record_seed_the_zero_iteration_output_cannot_carry` and
- * `test_while_null_check_rejects_a_null_seed_the_zero_iteration_output_cannot_carry` (each also
- * pinned as its harvested case at the end, `assembledWith`),
- * `test_seed_of_the_wrong_type_names_the_declared_input_under_a_while_null_check`, both loads of
- * `test_partial_loop_seed_check_alone_decides_a_carried_over_field` and both loads of
- * `test_while_null_check_keeps_the_case_narrowed_seed`. The loop type contract (a
- * returned field keeps its carried type and fits the body input it is bound to next), through
- * `assembleText`: `test_until_null_check_narrows_neither_the_seed_nor_a_returned_field`,
- * `test_null_check_under_or_narrows_nothing`,
- * `test_returned_field_still_keeps_its_carried_type_under_a_while_null_check`,
- * `test_nested_null_check_keeps_the_carried_type_of_the_returned_record`,
- * `test_returned_field_of_the_wrong_type_names_the_declared_input_under_a_while_check` (also
- * pinned as its harvested case at the end, with
- * `load-types/engine_loop_null_narrowing__until_null_check_does_not_narrow_a_named_body`), the
- * load half of `test_returned_null_fits_a_strict_body_input_under_a_while_null_check`, and the
- * inline rows `test_inline_body_reads_a_while_null_checked_seed_as_its_seed_types_it`,
- * `test_inline_returned_field_of_the_wrong_type_names_the_seed_type` and
- * `test_inline_body_under_until_reads_the_seed_as_optional`. Each error row pins the whole
- * message, where Python matches a fragment of some.
- *
- * Changed: `whileNonNullPaths` returns the proven paths as distinct field-name lists in path order,
- * where Python returns a `frozenset` of tuples. The declared-types row parses the loop node
- * (`nodesOf`) and builds it over the body built by hand (`handChild`), where Python loads the
- * flow whose def is the body. Every other row's defs (`fetch_page`, `step`, `seed`, `body`) are
- * built by hand too, the scope resolving each by name. The record seed's message writes the value
- * and the missing fields in the text form (`{"n":0}`, `["next"]`, rule `messages`).
- *
- * TS-only: `nullableAt` on a record field, a path through a union, a missing field or a scalar,
- * and the null type; `loopEntryInputs` relaxing only the parameters under a `while:` path, keeping
- * their origins, and returning an unchanged parameter as is; `carriedFieldTypes` on an exact
- * record, a partly typed record (its opaque fields skipped) and anything else; `whileNonNullPaths`
- * giving a path checked twice once and in order, and nothing for a condition that doesn't parse.
- *
- * The runs, each loading the flow with the defs Python writes in it (`withDefs`) and running it
- * through `runFlow`: both runs of
- * `test_optional_seed_fills_a_strict_body_input_under_a_while_null_check`,
- * `test_every_seed_shape_is_narrowed_by_a_while_null_check` (3, every run),
- * `test_while_null_check_keeps_the_case_narrowed_seed` (both runs),
- * `test_returned_null_fits_a_strict_body_input_under_a_while_null_check`,
- * `test_partial_loop_seed_check_alone_decides_a_carried_over_field` (both runs),
- * `test_nested_null_check_narrows_the_record_above_it` (both runs),
- * `test_while_null_check_admits_a_null_seed_the_body_output_can_carry`,
- * `test_a_tag_in_the_inline_body_admits_the_while_null_checked_seed` (both runs),
- * `test_inline_body_returns_null_into_a_literal_seed_under_a_while_null_check` and
- * `test_inline_body_returning_a_while_null_checked_field_unchanged_runs` (flat, nested; every run).
- * The CODE bodies are TS, ints arriving as `number` (decision 45), a Python `assert` throwing an
- * `Error`; the runs' ints are bigints (decision 4a).
- *
- * Not ported: the run of `test_while_null_check_lets_a_seed_record_omit_the_checked_field`, covered
- * by `run-loop/engine_loop_null_narrowing__an_absent_checked_field_reads_as_null` (its events pin
- * that the body never starts).
- *
- * Ported through `runFlow` and `advance`, in `hostEnv`:
- * `test_optional_seed_pagination_resumes_after_its_first_expansion`.
+ * `compose/nodes/loop.ts`.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -233,7 +165,7 @@ function load(text: string, children: ChildFlows = { fetch_page: pagesBody() }):
 
 /**
  * `text` with `defs` (each entry indented under `defs:`) before its `nodes:`: the runs load the flow
- * with the defs Python writes in it, where the rows above build each def by hand.
+ * with the defs written in it, where the rows above build each def by hand.
  */
 const withDefs = (text: string, defs: string) => text.replace(/^nodes:$/m, `defs:\n${defs}nodes:`);
 

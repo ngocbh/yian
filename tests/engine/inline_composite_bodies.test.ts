@@ -1,147 +1,6 @@
 /**
- * Inline composite bodies: a port of `tests/engine/test_inline_composite_bodies.py`: the rows the
- * CALL, MAP and LOOP parse decides, the inline body extraction and registration rows, and the load
- * halves of the rows that build inline children.
- *
- * Ported: `test_child_label_is_not_authorable`, through `parseNodes` with the registered kinds;
- * the TS message names the field and lists the allowed keys. Through `extractInlineBodies`:
- * `test_unchanged_inline_projection_preserves_alias_sharing`,
- * `test_inline_alias_projection_keeps_shared_payload_and_lightweight_sources`,
- * `test_extract_one_inline_body_masks_only_the_occurrence_and_retains_locations`,
- * `test_inline_projection_leaves_original_cursor_and_document_unchanged`,
- * `test_extract_alias_occurrences_get_distinct_ids_and_share_retained_children`,
- * `test_extract_merged_inline_body_retains_anchor_values_and_ranges`,
- * `test_extract_merged_local_body_override_uses_effective_values_and_ranges`,
- * `test_extract_rejects_authored_private_call_target_without_mutating_source`,
- * `test_extract_rejects_sibling_private_id_attack_before_masking_any_body`,
- * `test_extract_allows_private_prefix_in_graph_node_id`,
- * `test_inline_body_shape_errors_are_located_without_private_ids`. Through the exported
- * `registerInlineBodies`: `test_register_inline_bodies_associates_call_map_loop_and_stays_lazy`,
- * `test_register_inline_body_rejects_bad_association_located_and_redacted`,
- * `test_register_inline_bodies_preflights_all_before_first_registration`. Through
- * `assembleText`: `test_load_translates_recursive_inline_preflight_access_to_load_error`,
- * `test_loader_allows_private_callable_prefix_in_graph_node_id`,
- * `test_inline_body_shape_matrix_flows_through_loader`,
- * `test_inline_body_non_text_input_key_fails_at_the_key_through_loader`,
- * `test_loader_rejects_actual_sibling_private_digest_without_exposing_it`,
- * `test_inline_signature_self_cycle_uses_binding_path_and_range`,
- * `test_inline_signature_mutual_cycle_uses_closing_binding_range`,
- * `test_inline_signature_unknown_producer_is_located_and_strict`,
- * `test_inline_signature_producer_without_output_is_located_and_strict`,
- * `test_inline_map_direct_item_on_opaque_over_fails_at_requesting_binding`,
- * `test_inline_map_item_proof_is_lazy_and_cached`,
- * `test_inline_map_missing_list_element_fails_at_item_binding`,
- * `test_inline_outer_env_stays_on_driver_and_child_env_stays_inner`,
- * `test_inline_composites_reject_outer_llm_config_without_private_identity`,
- * `test_inline_loop_contract_diagnostics_are_friendly_and_redacted`,
- * `test_inline_wrapper_bad_input_uses_outer_binding_range`,
- * `test_inline_map_output_error_uses_friendly_child_label`, the node-assert check's
- * `test_inline_map_rejects_outer_asserts_without_private_identity`, the reference validator's
- * `test_inline_child_scope_is_closed_and_redacts_private_identity`,
- * `test_inline_map_child_keeps_item_namespace_closed`,
- * `test_inline_sibling_keeps_outer_bad_binding_range` and
- * `test_inline_child_bad_output_uses_retained_output_range`, and the load halves of
- * `test_typed_inline_call_preserves_nullable_parent_scalar`,
- * `test_typed_inline_call_canonicalizes_literal_record_and_retains_input_order`,
- * `test_forward_producer_type_builds_once_and_keeps_source_order`,
- * `test_producer_declared_none_type_is_not_treated_as_missing_output`,
- * `test_inline_alias_and_merge_occurrences_run_as_distinct_private_children`,
- * `test_inline_nested_containers_are_evaluated_at_edges_and_runtime` (the edge),
- * `test_inline_optional_record_paths_make_generated_inputs_nullable`,
- * `test_inline_input_inference_projects_known_partial_loop_field`,
- * `test_inline_map_literal_over_runs_with_inferred_item_type`,
- * `test_inline_map_opaque_over_without_direct_item_walk_loads_and_runs`,
- * `test_inline_map_typed_producer_maps_whole_item_and_field_in_parallel_order`,
- * `test_inline_map_proves_list_any_date_element_and_runs`,
- * `test_inline_map_nullable_root_and_intermediate_infer_optional_and_intermediate_runs_none`,
- * `test_basic_inline_loop_times_bakes_private_child_signature_and_runs`,
- * `test_inline_loop_predicates_run_to_the_same_carried_result`. Where
- * Python checks a message fragment, the row pins the whole message.
- *
- * TS-only: `inlineFlowId` pinned for two owners, one holding non-ASCII, control, quote and
- * backslash characters (the digest of Python's `json.dumps(..., ensure_ascii=False)` bytes); and
- * a CALL descriptor built with `childLabel: "inline body of node 'each'"` over a hand-built child
- * names the body by that label in an undeclared argument's message.
- *
- * Changed: the direct shape row drops its `non-string-input-key` param (the TS document gives
- * every key as text, so `extractInlineBodies` sees `"1"`); the non-text key row expects the
- * document's refusal of the key, as Python's loader row does. The sibling-attack row cannot patch
- * the private `maskInlineBody`, so it spies on `SourceCursor.prototype.projectMapping`, which
- * masking calls. A wrong-kind descriptor is a CODE descriptor, not an arbitrary object. Descriptor
- * equality leaves out `childLabel`, as Python's `compare=False` does. The monkeypatching rows spy
- * with `spyOn`: on `CodeDescriptor.prototype.build` (the producer's builds) and on the
- * `inferInlineBindingType` export (the MAP item proof; a module export can be spied on only on Bun,
- * so that row runs on Bun only); the row patching `read_source_flow_inputs` gives `assemble` its
- * `list` input with no element as a resolved parameter instead. The partial-LOOP row's `defs:` body
- * is a hand-built child whose `note` producer has no contract, so the LOOP's output is a partial
- * record, as the def's expression output makes it. The nullable-scalar row's `value` param only
- * feeds its run half, so the load half is one row. The basic LOOP row compares the output
- * contract's type (the contract carries the body's origins).
- *
- * Pinned at the end (`parsedNodes`):
- * `load-map-call/engine_inline_composite_bodies__llm_config_on_an_inline_{call,loop,map}`, whose
- * body-key check reaches `llm_config:`, the second key, before the inline `nodes:` key and before
- * the missing-`call:` check; and (`assembled`) the extraction cases
- * `load-map-call/engine_inline_composite_bodies__{call_node_naming_a_private_digest,
- * inline_body_missing_output,named_call_with_output,neither_call_nor_nodes,
- * non_mapping_inline_nodes}`, the child-building cases
- * `load-map-call/engine_inline_composite_bodies__{inline_map_body_without_output,
- * inline_loop_body_returns_an_uncarried_field,inline_signature_self_cycle}`, the reference cases
- * `load-map-call/engine_inline_composite_bodies__{inline_child_scope_is_closed,
- * inline_child_unknown_output_ref_is_located,inline_map_child_keeps_item_namespace_closed}` and
- * `load-types/compose_typed_bindings_downstream__inline_map_item_over_an_opaque_list`, and the ok
- * cases `load-map-call/engine_inline_composite_bodies__private_prefix_in_a_node_id_loads` and
- * `load-map-call/engine_templates_load__inline_composites_template_loads` (no mirror of
- * `tests/engine/test_templates_load.py` yet), and the node-assert check's
- * `load-map-call/engine_inline_composite_bodies__inline_map_rejects_outer_asserts`.
- *
- * Ported through `loadFlow` (the fixture CODE references resolve against the conformance dir):
- * `test_eager_def_inline_child_bad_output_preserves_absolute_range`,
- * `test_inline_call_resolver_failure_uses_friendly_child_label`, and the load halves of
- * `test_inline_multinode_body_matches_named_def_signature_and_runtime`,
- * `test_eager_def_inline_call_uses_origin_and_shared_scope`,
- * `test_eager_def_nested_inline_calls_use_exact_lexical_owners_once`,
- * `test_zero_input_inline_call_loads_and_runs_in_one_file_scope` and
- * `test_nested_inline_composites_register_four_lexical_children_once`, the rows counting
- * registrations and resolutions with spies on `CallableScope.prototype`'s `registerPrivate` and
- * `resolve`; on the scope itself, `test_def_assembly_cursor_fallback_restores_only_node_surfaces`
- * (through `defAssemblyCursor`, exported for it) and the `test_callable_scope_*` rows.
- * Changed there: the scope's private table is not readable, so the idempotent-registration row
- * checks the first builder is the one that builds, not the kept label; the eager-def row cannot
- * patch the module-private def build, so a subclass's `resolve` fakes it for `outer` (and the
- * row leaves out the def's cached identity). Where Python checks a message fragment, the row
- * pins the whole message.
- *
- * The runs, each loading the flow (`loadConformanceFlow`, with any `defs:` Python writes in it) and
- * running it through `runFlow`: the run halves of
- * `test_zero_input_inline_call_loads_and_runs_in_one_file_scope`,
- * `test_eager_def_inline_call_uses_origin_and_shared_scope`,
- * `test_nested_inline_composites_register_four_lexical_children_once` and
- * `test_eager_def_nested_inline_calls_use_exact_lexical_owners_once`, each spying on
- * `CallableScope.prototype` to check the run registers and resolves no private flow beyond the
- * load's (Python counts after the run); of `test_typed_inline_call_preserves_nullable_parent_scalar`
- * (2), `test_typed_inline_call_canonicalizes_literal_record_and_retains_input_order`,
- * `test_forward_producer_type_builds_once_and_keeps_source_order` (the producer built once across
- * the load and the run), `test_producer_declared_none_type_is_not_treated_as_missing_output`,
- * `test_inline_alias_and_merge_occurrences_run_as_distinct_private_children`,
- * `test_inline_nested_containers_are_evaluated_at_edges_and_runtime`,
- * `test_inline_optional_record_paths_make_generated_inputs_nullable` (both runs),
- * `test_inline_input_inference_projects_known_partial_loop_field` (with the real `body` def),
- * `test_inline_map_opaque_over_without_direct_item_walk_loads_and_runs`,
- * `test_inline_map_proves_list_any_date_element_and_runs`,
- * `test_basic_inline_loop_times_bakes_private_child_signature_and_runs` and
- * `test_inline_loop_predicates_run_to_the_same_carried_result`; and
- * `test_inline_call_and_loop_outer_post_asserts_still_fire` (2, run only). The runs' ints are
- * bigints (decision 4a). Changed: the date row's dates go in and come out as text (rule `dates`).
- *
- * Not ported: the run halves of `test_inline_multinode_body_matches_named_def_signature_and_runtime`,
- * covered by `run-map-call/engine_inline_composite_bodies__inline_body_runs_like_the_named_def`;
- * `test_inline_map_literal_over_runs_with_inferred_item_type`, covered by
- * `run-map-call/engine_inline_composite_bodies__inline_map_over_a_literal_list`;
- * `test_inline_map_typed_producer_maps_whole_item_and_field_in_parallel_order`, covered by
- * `run-map-call/engine_inline_composite_bodies__parallel_inline_map_keeps_item_order`; and
- * `test_inline_map_nullable_root_and_intermediate_infer_optional_and_intermediate_runs_none`,
- * covered by `run-map-call/engine_inline_composite_bodies__inline_map_item_paths_through_nulls`.
+ * Inline composite bodies: the CALL, MAP and LOOP parse of inline bodies, their extraction and
+ * registration, and loading flows that build inline children.
  */
 
 import { expect, spyOn, test } from "bun:test";
@@ -823,7 +682,7 @@ nodes:
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(expectedRange!);
 });
 
-/** A descriptor's fields, leaving out `childLabel` as Python's `compare=False` does. */
+/** A descriptor's fields, leaving out `childLabel`. */
 function withoutChildLabel(desc: NodeDescriptor): Record<string, unknown> {
   const { childLabel: _childLabel, ...fields } = desc as NodeDescriptor & { childLabel: unknown };
   return fields;
@@ -1543,7 +1402,7 @@ output: \${wrapper.output}
 });
 
 test("inline input inference runs a known field of a partial LOOP output", async () => {
-  // The flow with the `body` def Python writes, its `note` an expression output.
+  // The flow with a `body` def, its `note` an expression output.
   const output = await runOutput(`id: inline-partial-producer-field
 name: inline_partial_producer_field
 defs:

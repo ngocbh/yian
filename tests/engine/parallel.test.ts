@@ -1,28 +1,7 @@
 /**
- * The pooled engine (`numWorkers` above zero): a port of `tests/engine/test_parallel.py`.
- * Scheduling stays correct with workers in flight (the single-writer dispatcher gives the serial
- * outcomes: join-once, branch and skip), and independent branches overlap.
- *
- * Ported: `test_linear_is_deterministic_under_workers`, `test_diamond_join_once_under_workers`,
- * `test_case_skip_under_workers`, `test_veto_under_workers_data_edged_branch_skips`,
- * `test_terminal_skipped_fails_under_workers`, `test_failure_under_workers`,
- * `test_end_output_under_workers` and `test_no_declared_outputs_yields_none_under_workers`.
- *
- * Changed: `test_workers_inherit_host_context_without_leaking_node_changes` uses an
- * `AsyncLocalStorage` for the `ContextVar`, serial as well as pooled (every evaluation runs in its
- * own async resource): a store set around `run()` is seen by every node and by `onEvent`, and an
- * `enterWith` in a node, in its synchronous part or after an `await`, reaches neither the
- * dispatcher, a sibling nor a later node.
- *
- * Ported (adapted): `test_pooled_late_sibling_publishes_persisted_causal_terminal_failure`: `slow`
- * blocks on a promise `onEvent` resolves once `a` succeeded, and `onEvent` checks the state where
- * Python checked it while iterating the run. `test_fan_out_actually_overlaps`: overlap is shown
- * with promises, not timing: each branch blocks until all four have entered.
- *
- * TS-only: nothing ready and nothing in flight before a terminal result is nonterminal quiescence;
- * a store `onEvent` sets for a durable observer reaches later nodes (serial and pooled); a run of
- * 10,000 ready leaves succeeds and runs every node once, serial (in ready order) and with 8
- * workers.
+ * The pooled engine (`numWorkers` above zero). Scheduling stays correct with workers in flight
+ * (the single-writer dispatcher gives the serial outcomes: join-once, branch and skip), and
+ * independent branches overlap.
  */
 
 import { expect, test } from "bun:test";

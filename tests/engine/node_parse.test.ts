@@ -1,35 +1,4 @@
-/**
- * The keyed-map flat-body node descriptors `parseNodes` reads: a port of
- * `tests/engine/test_node_parse.py`. The rows read through `parseNodes` parse with the registered
- * kinds.
- *
- * TS-only: `inf` is an expression keyword, so it is a rejected node id too.
- *
- * Changed: `test_agent_knobs_parse`, `test_code_parses`, `test_tool_parses`,
- * `test_seed_11_anchored_nodes_parse`, `test_case_searched_parses`, `test_case_on_parses`,
- * `test_call_ref_form_parses` and `test_call_map_form_parses` read seeds 14, 01, 08, 11, 02, 06,
- * 04 and 05 through the conformance cases `load-agent/seed_14_agent_tools`,
- * `load-agent/seed_01_structured_agent`, `load-leaves/seed_08_tool_news`,
- * `load-core/seed_11_reuse_anchors`, `load-case/seed_02_case`, `load-case/seed_06_case_on`,
- * `load-map-call/seed_04_call` and `load-map-call/seed_05_call_map`;
- * seed 01's CODE reference is the TS form (`./fixtures/seeds.ts:one_line_summary`).
- * `test_case_carries_no_inputs` also pins that a CASE has no authored local, so no `inf` name.
- * `test_map_without_over_is_loud` and `test_over_on_kind_call_is_loud` pin the whole message,
- * where Python checks that it names the field.
- *
- * Ported through `loadFlow`: `test_hyphenated_single_node_def_rejected_but_multi_node_def_name_loads`,
- * which pins the whole message, where Python matches a pattern.
- *
- * Changed: `test_referenced_hyphenated_node_names_the_id_not_split_refs` reads its flow through
- * `parseFile`, `flowNodesCursor` and `parseNodes`, where Python loads it;
- * `test_hyphenated_node_in_inline_body_rejected` loads through `assembleText` and pins the whole
- * message.
- *
- * The harvested cases whose error `parseNodes` raises are pinned at the end, with
- * `load-core/engine_author_id_ban__author_id_with_hash_is_loud` (from
- * `tests/engine/test_author_id_ban.py`) and the e10 and e42 seeds; then (`assembled`)
- * `load-core/engine_node_parse__hyphenated_node_id_in_an_inline_body`.
- */
+/** The keyed-map flat-body node descriptors `parseNodes` reads, parsed with the registered kinds. */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
@@ -564,7 +533,6 @@ fetch:
 });
 
 test.each([
-  // tests/engine/test_author_id_ban.py
   "load-core/engine_author_id_ban__author_id_with_hash_is_loud",
   "load-core/engine_node_parse__hyphenated_node_id",
   "load-core/seed_e10_unknown_node_kind",

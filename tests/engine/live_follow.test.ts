@@ -1,7 +1,7 @@
 /**
- * TS-only: following a live run from another process. `LiveChannel.follow` hands a viewer the
- * snapshot, then every later frame, in one call; `LiveView` folds the log's records, that snapshot
- * and the frames into each call's text. A two-process test shows they compose over a byte pipe.
+ * Following a live run from another process. `LiveChannel.follow` hands a viewer the snapshot,
+ * then every later frame, in one call; `LiveView` folds the log's records, that snapshot and the
+ * frames into each call's text. A two-process test shows they compose over a byte pipe.
  */
 
 import { spawn } from "node:child_process";

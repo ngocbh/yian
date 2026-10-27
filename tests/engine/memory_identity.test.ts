@@ -1,38 +1,4 @@
-/**
- * Declaration sites, declarations, specs and stacks, from `tests/engine/test_memory_identity.py`:
- * `test_decl_site_validates_and_freezes`,
- * `test_decl_site_sort_is_total_and_puts_flow_before_agent`,
- * `test_memory_decl_snapshots_config_and_rejects_private_keys`,
- * `test_memory_decl_origins_traverse_and_rewrite_shared_carriers_once`,
- * `test_memory_spec_requires_sorted_owners_and_derived_eligibility`,
- * `test_memory_stack_requires_locator_and_unique_keys`,
- * `test_snapshot_envelope_names_its_memory_key`, `test_learning_carriers_name_their_memory_key`,
- * `test_backward_failure_and_commit_records_name_their_memory_key` (with the run-log codec)
- * and `test_package_docstring_and_exports_describe_keyed_memories`; plus a lone-surrogate node
- * id, a compiled spec whose key and config the declaration check would refuse, and a snapshot
- * deeper than the value nesting limit. From `tests/engine/test_session_contracts.py`, the rows
- * that don't involve a conversation: `test_memory_protocol_has_no_frames` (the fake memory is a
- * plain object, as Python's `_Memory`; `isMemory` stands in for `isinstance`), the text half of
- * `test_memory_content_validates_explicit_transcript_sources`, and `MemoryContext`'s section
- * checks.
- *
- * Changed: a spec has no `conversation_eligible` flag (session memory is gone), so the eligibility
- * rows of `test_memory_spec_requires_sorted_owners_and_derived_eligibility` are dropped. Sites
- * sort with `DeclSite.compare` (Python sorts by `DeclSite.sort_key()`; the order
- * message names `DeclSite.compare`), and equal sites compare 0. A declaration's config is its
- * deep-frozen snapshot, so assigning to it throws `TypeError` (Python returns a fresh copy). The
- * declarations are frozen, so the origin rewrite returns rebuilt declarations and leaves the inputs
- * unchanged (Python rewrites them in place); rewriting the same array with the same `seen` returns
- * the same array. An envelope's snapshot is its deep-frozen copy (Python returns a fresh copy).
- * The package test reads `memory/index.ts`'s leading TSDoc for the docstring and pins the exact
- * list of runtime exports for `__all__` (the type-only exports are checked by the typecheck).
- * Python's `ValueError` is `RangeError`; a frozen field throws `TypeError` where Python raises
- * `FrozenInstanceError`.
- *
- * Not ported: the list-for-tuple row (TS has only arrays); the origin re-check during traversal
- * and rewrite (`memory declaration origin must be an OriginRef or None`), since a frozen
- * `MemoryDecl` checked its origin when built.
- */
+/** Memory declaration sites, declarations, specs and stacks. */
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
@@ -94,7 +60,6 @@ function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeErro
   expect((caught as Error).message).toBe(message);
 }
 
-// test_decl_site_validates_and_freezes
 test("a declaration site validates and freezes", () => {
   const site = new DeclSite([], ["root"], "ask");
   expect([site.scope, site.owner, site.node]).toEqual([[], ["root"], "ask"]);
@@ -120,7 +85,6 @@ test("a declaration site copies its paths", () => {
   expect(site.owner).toEqual(["root"]);
 });
 
-// test_decl_site_sort_is_total_and_puts_flow_before_agent
 test("the site order is total and puts a flow site before AGENT sites", () => {
   const sites = [
     new DeclSite([], ["root"], "b"),
@@ -145,7 +109,6 @@ function decl(name = "notes", node: string | null = null, origin: OriginRef | nu
   return new MemoryDecl(name, "episodic", { recall_limit: 3n }, new DeclSite([], ["root"], node), origin);
 }
 
-// test_memory_decl_snapshots_config_and_rejects_private_keys
 test("a declaration snapshots its config and rejects private keys", () => {
   const config: Record<string, unknown> = { recall_limit: 3n };
   const site = new DeclSite([], ["root"]);
@@ -187,7 +150,6 @@ test("a declaration snapshots its config and rejects private keys", () => {
   );
 });
 
-// test_memory_decl_origins_traverse_and_rewrite_shared_carriers_once
 test("declaration origins traverse and rewrite shared carriers once", () => {
   const a = new OriginRef("a");
   const b = new OriginRef("b");
@@ -260,7 +222,6 @@ test("origin traversal requires an array of exact declarations", () => {
   }
 });
 
-// test_memory_spec_requires_sorted_owners_and_derived_eligibility, without the eligibility flag
 test("a spec requires sorted owners", () => {
   const agent = new DeclSite([], ["root"], "ask");
   const flow = new DeclSite([], ["root"]);
@@ -303,7 +264,6 @@ test("a compiled spec takes a scoped key and keys the declaration check refuses"
   expect(Object.keys(spec.config)).toEqual(["bogus", "storage"]);
 });
 
-// test_memory_stack_requires_locator_and_unique_keys
 test("a stack requires a locator and unique keys", () => {
   const stack = new MemoryStack(["child", "ask"], ["notes", "chat"]);
   expect(stack.memories).toEqual(["notes", "chat"]);
@@ -314,7 +274,6 @@ test("a stack requires a locator and unique keys", () => {
   expectError(() => new MemoryStack(["ask"], [""]), RangeError, "memories components must be non-empty");
 });
 
-// test_snapshot_envelope_names_its_memory_key
 test("a snapshot envelope names its memory key", () => {
   const snapshot: Record<string, unknown> = { v: 1n };
   const envelope = new MemorySnapshotEnvelope("notes", snapshot);
@@ -334,7 +293,7 @@ test("a snapshot envelope names its memory key", () => {
     RangeError,
     "Unicode surrogate is not valid canonical JSON",
   );
-  // The snapshot is checked first, as Python does.
+  // The snapshot is checked first.
   expectError(() => new MemorySnapshotEnvelope("", []), TypeError, "snapshot must be an exact JSON object");
 });
 
@@ -344,7 +303,6 @@ test("a snapshot envelope takes a snapshot deeper than the value nesting limit",
   expect(new MemorySnapshotEnvelope("notes", deep).snapshot).toEqual(deep);
 });
 
-// test_learning_carriers_name_their_memory_key
 test("learning carriers name their memory key", () => {
   const cause = new MemoryOperationFailure("commit", "declined", "Declined.", true);
   const failure = new LearningFailure("notes", "commit", cause);
@@ -359,7 +317,6 @@ test("learning carriers name their memory key", () => {
   );
 });
 
-// test_backward_failure_and_commit_records_name_their_memory_key
 test("a backward failure and the commit records name their memory key", () => {
   expect(new BackwardFailure("commit", "declined", "", { memory: "notes" }).memory).toBe("notes");
   const cause = new MemoryOperationFailure("commit", "declined", "Declined.", true);
@@ -375,7 +332,6 @@ test("a backward failure and the commit records name their memory key", () => {
   }
 });
 
-// test_package_docstring_and_exports_describe_keyed_memories
 test("the package doc and exports describe keyed memories", () => {
   const source = readFileSync(new URL("../../src/memory/index.ts", import.meta.url), "utf8");
   expect(source.startsWith("/**")).toBe(true);
@@ -420,7 +376,6 @@ test("the package doc and exports describe keyed memories", () => {
   ]);
 });
 
-// test_memory_protocol_has_no_frames
 test("the memory protocol has no frames", async () => {
   const recallContexts: (RecallContext | null)[] = [];
   const learnContexts: LearnContext[] = [];
@@ -459,7 +414,6 @@ test("the memory protocol has no frames", async () => {
   await session.close();
 });
 
-// test_memory_content_validates_explicit_transcript_sources, the notes half
 test("memory content validates its notes", () => {
   const content = new MemoryContent({ text: "notes" });
   expect(content.text).toBe("notes");

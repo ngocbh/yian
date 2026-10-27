@@ -1,49 +1,6 @@
 /**
- * Non-finite numbers at the binding boundary, a port of the two `apply_defaults` tests of
- * `tests/engine/test_nonfinite_boundaries.py`.
- *
- * Changed (rule: infinity and minus infinity are float values, NaN is not a yian value):
- * `test_apply_defaults_rejects_a_nonfinite_default` now shows an `Infinity` default accepted
- * and keeps the rejection as a NaN row; a NaN default fails with host intake's message
- * (`default for 'p': NaN is not a yian value`), also before its contract is checked.
- *
- * The run rows, through `loadFlow` and `runFlow` in the test's environment (JS CODE bodies; an
- * AGENT's model a `ScriptedModel` given as `models`, where Python patches `run_agent`), each with
- * the TS expectation of that rule (header "Changed" for every row whose Python run fails on an
- * infinity):
- *
- * - Ported with TS's NaN message (`NaN is not a yian value`, Python's `non-finite number nan is
- *   not a yian value`): `test_a_nonfinite_object_output_fails_the_node_at_the_field`,
- *   `test_a_nonfinite_tool_output_fails_the_node` and `test_a_nonfinite_float_output_fails_the_node`;
- *   the `nan` row of `test_a_nonfinite_run_input_is_rejected_before_the_run_starts` (a
- *   `TypeCheckError`, no log created).
- * - Changed, an infinity is a value, so the run succeeds with it:
- *   `test_a_float_output_too_large_for_float_fails_the_node` and
- *   `test_a_record_field_too_large_for_float_names_the_field` (JS's `10**400` is Infinity),
- *   `test_a_nonfinite_undeclared_output_fails_the_node_at_the_item`,
- *   `test_a_nonfinite_value_inside_a_record_field_names_the_path` (the reader runs),
- *   `test_a_binding_that_evaluates_to_infinity_fails_its_node` (both rows),
- *   `test_a_call_binding_that_evaluates_to_infinity_fails_the_call` (the `float` row),
- *   `test_a_nonfinite_start_default_fails_start`, `test_a_nonfinite_map_over_item_fails_the_map`,
- *   `test_a_nonfinite_map_item_binding_fails_the_map` (the other item, `2.0 * 10`, comes back from
- *   the CODE body as the int `20n`: a CODE body gets a whole float as a plain number, decision 45),
- *   `test_a_nonfinite_temporary_inside_a_template_is_allowed` (the text form is `v=Infinity`),
- *   `test_a_nonfinite_agent_variable_default_fails_the_agent` (both rows; the model sees
- *   `go Infinity`), and the `coerced-string` (text `inf` reads as Infinity) and `nested-object`
- *   rows of `test_a_nonfinite_run_input_is_rejected_before_the_run_starts`.
- * - Changed otherwise: the `int` row of `test_a_call_binding_that_evaluates_to_infinity_fails_the_call`
- *   fails the child START's input contract (`contract.input` at `k/__start__`, Infinity isn't an
- *   int) where Python fails the CALL's binding; the `list` row of
- *   `test_a_nonfinite_run_input_is_rejected_before_the_run_starts` starts the run and START fails
- *   `contract.input` (a list isn't an `object`); `test_a_learnable_literal_nan_binding_fails_its_node`
- *   and `test_a_literal_binding_names_the_nonfinite_path` fail at load (YAML's `.nan` is refused);
- *   `test_a_run_input_too_large_for_float_fails_at_start` and
- *   `test_an_undeclared_output_widening_past_float_fails_the_node` pass the int `10n ** 400n`,
- *   which stays an int (a whole number in a `float` slot stays an int, and no int widens to a
- *   float), so both succeed.
- *
- * Covered by `run-core/engine_nonfinite_boundaries__a_flow_output_binding_overflows_to_infinity`:
- * `test_a_nonfinite_flow_output_binding_fails_the_end_binding` (TS succeeds with Infinity).
+ * Non-finite numbers at the binding boundary: infinity and minus infinity are float values, NaN is
+ * not a yian value.
  */
 
 import { afterAll, expect, test } from "bun:test";

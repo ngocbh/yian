@@ -1,23 +1,4 @@
-/**
- * Named memories end to end, YAML to load to `buildMemories` to run to backward to rerun: mirrors
- * `tests/engine/test_named_memory_e2e.py`.
- *
- * Ported, through `runFlow` and `RunResult.backward`: `test_python_api_named_memories_persist_and_stack`.
- * Changed: the model is a `ChatModel` from `models` (Python patches `model_from_config`); the runs'
- * environment is `NO_ENV`, so `HOME` is the test preload's per-test home where Python uses `tmp_path`.
- * TS yian has no session memory, so the AGENT's own memory `chat` is episodic: the rerun's AGENT
- * recalls it after the root memory and sees one user turn.
- *
- * Ported through the CLI, each `yian run` a `main` call (`cli`):
- * `test_cli_memory_root_persists_session_across_processes` and
- * `test_cli_memory_storage_override_places_one_key`. Changed: `chat` is episodic, as above, and the
- * CLI never runs backward, so the second command sees what the first did; only where each key's
- * file lands is checked. Each command builds and closes its own memory registry in this process
- * (Python runs a child process per command); the model is a fake `fetch` answering as xAI's chat
- * endpoint (`runCli` with `describeCliSeen`), so the flows' `llm_config` names xAI, its key in the
- * command's env (`HOME` is the preload's per-test home), where Python patches `model_from_config`;
- * the printed output is its text form, compact JSON (design 3.2.3), not Python's `repr`.
- */
+/** Named memories end to end: YAML to load to `buildMemories` to run to backward to rerun. */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -73,7 +54,7 @@ nodes:
 output: \${summarize.output}
 `;
 
-/** Describe what the model saw: real user turns and recalled memory keys (Python's `_reply`). */
+/** Describe what the model saw: real user turns and recalled memory keys. */
 function describeSeen(messages: readonly Message[]) {
   const users = messages.filter((message) => message.role === "user");
   const keys: string[] = [];
@@ -81,7 +62,7 @@ function describeSeen(messages: readonly Message[]) {
   return reply(`users=${users.length} memories=${keys.join(",")}`);
 }
 
-/** Python's `_Model`: answers each request with `describeSeen`. */
+/** A model answering each request with `describeSeen`. */
 const MODEL: ChatModel = {
   provider: "openai",
   model: "fake-model",
@@ -155,7 +136,7 @@ function writeFlows(dir: string): string {
   return flow;
 }
 
-/** Python's `_Model` behind the CLI: what the model saw, as `describeSeen`. */
+/** The model behind the CLI: what the model saw, as `describeSeen`. */
 function describeCliSeen(messages: readonly ChatText[]): string {
   const texts = (role: string) => messages.filter((m) => m.role === role).map((m) => m.text);
   const users = texts("user");

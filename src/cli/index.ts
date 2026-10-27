@@ -6,12 +6,14 @@
  * and a `load` that imports the handler's module on demand, so `yian --help` or a usage error loads
  * no command module. A two-word key (`skills check`) is a command in a group (`skills`).
  *
+ * `COMMANDS` and `GROUPS` are exported for the docs test, which checks command lines against them.
+ *
  * Before a command parses its arguments, `main` checks the `YIAN_<NAME>` defaults in the command's
- * environment, as Python's root callback does.
+ * environment.
  *
  * Run as the entry script, `yian run ... --json` runs in a child of this runtime whose fd 1 goes to
  * stderr and whose `stdout` writer is fd 3, so stdout holds only the document even when a CODE body
- * or a tool writes to fd 1 (Python points fd 1 at stderr with `os.dup2`, which Node and Bun lack).
+ * or a tool writes to fd 1 (Node and Bun have no `dup2` to point fd 1 at stderr in-process).
  */
 
 import { spawn } from "node:child_process";
@@ -51,7 +53,7 @@ const JSON_HELP = "Print one yian.cli.v1 JSON document on stdout.";
 const JSON_OPTION: OptionSpec = { name: "json", type: "boolean", help: JSON_HELP };
 
 /** The commands by name, in the order the root help lists them. */
-const COMMANDS: Readonly<Record<string, Command>> = {
+export const COMMANDS: Readonly<Record<string, Command>> = {
   run: {
     spec: {
       name: "run",
@@ -400,7 +402,7 @@ const COMMANDS: Readonly<Record<string, Command>> = {
 };
 
 /** The groups by name, each with its one-line summary. */
-const GROUPS: Readonly<Record<string, string>> = {
+export const GROUPS: Readonly<Record<string, string>> = {
   config: "Check an llm_config layer.",
   skills: "Check skill directories.",
 };
@@ -552,8 +554,8 @@ function isRunJson(args: readonly string[]): boolean {
 }
 
 /**
- * Run `args` in a child of this runtime marked `JSON_CHILD`, whose fd 1 is this process's fd 2 (as
- * Python's `os.dup2(2, 1)`), copy its fd 3 to stdout, and exit as it did.
+ * Run `args` in a child of this runtime marked `JSON_CHILD`, whose fd 1 is this process's fd 2,
+ * copy its fd 3 to stdout, and exit as it did.
  *
  * The first SIGINT, SIGTERM or SIGHUP is forwarded as SIGUSR2 (except on Windows), a signal no
  * terminal sends, so a group Ctrl-C (which the child gets too) and the forwarded stop are one
@@ -630,7 +632,7 @@ async function runJsonChild(args: readonly string[]): Promise<number> {
 // under a test runner, whose entry is the test file.
 if (import.meta.main) {
   const args = process.argv.slice(2);
-  // The explicit exits end a run whose tool left a timer, as Python's process exit does.
+  // The explicit exits end a run whose tool left a timer pending.
   if (args[0] === JSON_CHILD) process.exit(await runJsonChild(args.slice(1)));
   if (isRunJson(args)) await runJsonParent(args);
   const io = processIo();

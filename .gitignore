@@ -4,6 +4,7 @@ scratch/
 # Distribution / packaging
 dist/
 node_modules/
+.astro/
 /bin/
 
 # Local env / secrets
@@ -17,6 +18,3 @@ node_modules/
 
 # Runtime transcripts
 .yian/
-
-# MkDocs build output
-site/

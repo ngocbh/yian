@@ -12,12 +12,12 @@ runs on disk, move messages and answers into them, and watch what they do. Insta
 | Import | What it's for |
 |---|---|
 | `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; host tools (`tool`, `ToolContext`, `pending`, the tool errors); memory (`buildMemories`, `MemoryRegistry`, storage classes); `LoadError`, `Failure`, `Diagnostic` |
-| `@ngocbh/yian/run` | Everything about runs: the calls above, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `EventHook` and `StreamHook`; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex` |
+| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `EventHook` and `StreamHook`; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex` |
 | `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, and the ask handler types `AskHandler` and `AskRequest` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | yian's file lock and SQLite wrapper, for hosts that lock files the same way: `lockFile`, `waitForLock`, `isLocked`, `FileLockError`, `openSqlite`, `sqliteErrorCode` |
 | `@ngocbh/yian/llm_clients` | Provider setup: `LLMConfig`, `SUPPORTED_LLM_PROVIDERS`, `listModels`, `AuthStore`, `AuthError` |
-| `@ngocbh/yian/code-worker` | No names. A host that bundles yian imports it as a bundle entry (see [Bundling](#bundling)) |
+| `@ngocbh/yian/code-worker` | Import it only for its side effect, as a bundle entry (see [Bundling](#bundling)) |
 
 On Bun each import loads the TypeScript source; on Node it loads the built JavaScript. The event
 classes aren't exported: narrow on `event.type` (see [Events](#events)).
@@ -79,8 +79,9 @@ console.log(result.status, result.output); // succeeded total: 7.5
 `codeRoot` (a folder every CODE file must stay inside) and `env`. A broken flow rejects with
 `LoadError`, whose `diagnostic` points into the source.
 
-A flow that fails still resolves, with `status: "failed"`. `runFlow` rejects only for problems
-in your program: a bad option, a callback that throws, a log it can't write.
+A flow that fails still resolves, with `status: "failed"`. `runFlow` rejects for problems in your
+program or setup: a bad option, a tool, provider or model the flow needs but the run lacks, an MCP
+server that doesn't start, a bad `YIAN_*` value, a callback that throws, a log it can't write.
 
 ### `RunResult`
 
@@ -137,15 +138,17 @@ media files beside the log.
 | Waiting, with an answer or deadline in | Wakes those nodes and runs on |
 | Waiting, with nothing new | Writes nothing and returns `waiting` again |
 
-`advance` runs the flow the log recorded, not the file on disk. It takes the inputs, run id and
-model settings from the log too. Pass again what the log doesn't hold: `tools`, `skills`,
-`memory`, `context`, and the API key (`apiKey`, `headers`) of a run started with
-`llmConfig.api_key`. [How yian works](/how-it-works/#crash-recovery) explains replay and what can
-run twice.
+`advance` runs the flow the log recorded, not the file on disk, with the log's inputs, run id and
+model settings. Pass again what the log doesn't hold: `tools`, `skills`, `memory`, `context`, and
+the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`.
 
-Only one writer holds a log at a time. A call on a log another process holds rejects with
-`RunBusyError`. While a run waits, its process keeps the run's state in memory, so the next call
-on the same log skips the replay.
+The log doesn't hold `codeRoot` either. Pass `codeRoot` again on every `advance` and every host
+call below; a call without it doesn't confine the recorded flow's CODE files at all.
+[How yian works](/how-it-works/#crash-recovery) explains replay and what can run twice.
+
+Only one writer holds a log at a time. A call on a log another process holds, or an `advance` of a
+run your process is already moving, rejects with `RunBusyError`. While a run waits, its process
+keeps the run's state in memory, so the next call on the same log skips the replay.
 
 ## Events
 
@@ -200,8 +203,8 @@ Your program reaches a waiting run by its log path:
 | `cancel(log)` | the open host calls it closed | Ends the run as `cancelled` |
 | `pendingCalls(log)` | `PendingCall[]` | Lists open host calls; reads without the lock |
 
-None of them moves the run on: call `advance` next. If your process is running the run right
-now, the call goes straight to it instead. This flow waits for notes:
+Apart from `cancel`, which ends the run, none of them moves the run on: call `advance` next. If
+your process is running the run right now, the call goes straight to it instead. This flow waits for notes:
 
 ```yaml title="notes.yaml"
 id: notes
@@ -310,8 +313,9 @@ const closed = await cancel(log);              // the open host calls it closed
 ```
 
 `interrupt` stops the agents whose `steer_inbox:` is that inbox (see
-[Agents](/agents/#steering-and-interrupts)). Each one's reply is cut and its output is null. The
-open calls it closes are refused by a later `complete`. An agent that starts reading the inbox
+[Agents](/agents/#steering-and-interrupts)). Each one's reply is cut: an `Optional(...)` output
+succeeds with `null`, any other fails with `agent.interrupted`. A later `complete` of the open
+calls it closes is refused. An agent that starts reading the inbox
 soon after is stopped too, before its first model call. `interrupt` appends nothing
 (`seq: null`) when the run is waiting for the next message on the inbox, or is already stopping.
 Queued steers stay; `withdraw` takes them back.
@@ -342,7 +346,7 @@ abort its `signal` instead: the run records a stop, rejects with the signal's re
 
 | Call | Gives |
 |---|---|
-| `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt` |
+| `inspectRun(log)` | Where a run stands, without the lock: `status` (`running`, `succeeded`, `failed`, `cancelled`, `waiting`, `stopped`, `crashed`), `inFlight`, `waits`, `ready`, `wakeAt`. Pass `{ flow }` (from `loadRecordedFlow`) for an exact `status` |
 | `loadRecordedFlow(log)` | The flow the log recorded |
 | `iterRunRecords(log)` | The log's records, one by one, while another process may still be writing |
 | `foldRunLog(log)` | Each record with the value it wrote |
@@ -392,8 +396,7 @@ offline with what the package exports:
 - For agents, point a provider at a small local server. Ollama needs no key and reads its address
   from `OLLAMA_BASE_URL` in `env`, so a test can answer its chat calls with canned replies.
 
-<!-- yian-test {"replies": ["Hello, Ada!"]} -->
-```yaml check=runnable title="greet.yaml"
+```yaml title="greet.yaml"
 id: greet
 name: greet
 input:
@@ -406,11 +409,6 @@ nodes:
     prompt: Greet ${name} in one short sentence.
     output: str
 output: ${hello.output}
-```
-
-```console
-$ yian run greet.yaml --input name=Ada
-Hello, Ada!
 ```
 
 ```ts check=fragment

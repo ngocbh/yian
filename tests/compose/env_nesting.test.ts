@@ -1,39 +1,13 @@
 /**
- * An `env:` value nested past the limit, holding itself through a recursive alias, or holding
- * a lone surrogate is a located load error: a port of `tests/compose/test_env_nesting.py`, through
- * `loadFlow` at each site (flow, node, multi-node and single-node `defs:` entries, compact flow),
- * and TS-only through `checkEnvValues` over a parsed document's flow `env:` and the written-value
- * check `checkWrittenValue`.
+ * An `env:` value nested past the limit, holding itself through a recursive alias, or holding a
+ * lone surrogate is a located load error.
  *
- * Each `env:` value is checked with the counting the run-time check applies to a value,
- * whether YAML text or aliases built it, so a 1000-link alias chain fails (under a raised
- * node limit: at the default, the chain's anchors exceed it first). A value at the limit
- * passes. A value holding itself reads `<prefix>env '<key>' at <path>: cannot descend through
- * a recursive alias occurrence`, where `<path>` names the first entry that refers back to a
- * container enclosing it. The depth check runs first, so a cyclic value nested past the limit
- * gets the depth message.
- *
- * Changed: text or a record key holding a lone surrogate is refused too, after the depth check
- * and before the cycle check (`K: &a ["\uD800", *a]` reports the surrogate at `[0]`, where
- * Python loads the text and reports the cycle at `[1]`).
- *
- * Ported through `loadFlow`: `test_env_value_over_a_1000_link_alias_chain_is_a_located_load_error`,
- * `test_flow_env_value_past_the_limit_as_text_is_a_located_load_error`,
- * `test_env_value_follows_the_configured_limit`,
- * `test_flow_env_nesting_is_checked_before_max_tool_iterations`,
- * `test_env_value_holding_itself_is_a_located_load_error`,
- * `test_env_mapping_holding_itself_is_a_located_load_error`, `test_env_scalar_value_loads`, and
- * `test_env_value_at_the_limit_loads_and_runs` and
- * `test_env_value_repeating_an_alias_loads_and_runs`, run with `runFlow`. The CODE reference is TS's
- * (`./fixtures/compose_codefns.ts:echo`). The other rows are ported through `checkEnvValues`.
- *
- * TS-only: `loadFlow`'s `env` sets the limit for one load, its imports included, without
- * reading the process environment; concurrent loads keep their own limits.
- *
- * Changed: Python's check that no `RecursionError` is in the error's chain is left out.
- *
- * Not ported: the `!!pairs` row of `test_flow_env_cycle_names_the_entry_that_refers_back`
- * (TS refuses `!!pairs`).
+ * Each `env:` value is checked with the counting the run-time check applies to a value, whether
+ * YAML text or aliases built it, so a 1000-link alias chain fails (under a raised node limit: at
+ * the default, the chain's anchors exceed it first). A value at the limit passes. A value holding
+ * itself reads `<prefix>env '<key>' at <path>: cannot descend through a recursive alias
+ * occurrence`, where `<path>` names the first entry that refers back to a container enclosing it.
+ * The depth check runs first, so a cyclic value nested past the limit gets the depth message.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";

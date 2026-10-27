@@ -1,18 +1,4 @@
-/**
- * Load-time walkers see the strings inside a nested binding value: a port of
- * `tests/compose/test_nested_template_walkers.py`, through `assembleText` where Python loads the
- * flow; the MAP row parses the flow's nodes (`nodesOf`), since the MAP parse raises its error.
- *
- * Ported, loaded with `loadFlow` and run with `runFlow`:
- * `test_map_over_literal_list_without_spans_still_loads`,
- * `test_nested_references_in_a_loop_body_run_after_growth` and
- * `test_nested_case_output_expands_in_inputs_and_outputs` (both rows); the load half of
- * `test_nested_references_in_a_map_child_run_after_growth`, whose run is covered by
- * `run-core/compose_nested_template_walkers__nested_references_in_a_map_child`.
- *
- * Not ported: `test_wait_until_container_with_a_span_fails_at_the_container`. TS yian has no
- * `wait`; a `sleep`'s `until` is a tool input.
- */
+/** Load-time walkers see the strings inside a nested binding value. */
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

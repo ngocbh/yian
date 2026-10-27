@@ -1,23 +1,4 @@
-/**
- * The `map` kind's parse: a port of `tests/compose/test_kind_map_parse.py`.
- *
- * Ported: `test_map_parse_matches_descriptor_and_records_ranges`,
- * `test_map_parse_requires_over`, `test_map_parse_records_parallel`.
- *
- * Changed: Python compares the descriptor to a `MapDescriptor` with the parse metadata and the
- * compiler-owned `child_label` and `call_site` excluded; TS compares its class and fields. The
- * requires-over row pins the whole message and its range (the node body), where Python matches a
- * fragment.
- *
- * TS-only: an unquoted `over:` starting with `call(` passes the parse (the loader lifts the
- * directive later, so even an unbalanced one passes here), while a quoted one is text and fails at
- * the `over:` value.
- *
- * Pinned at the end (`parsedNodes`): the harvested `over:` literal cases of
- * `tests/compose/test_map_wait_source_types.py` (mirror `map_wait_source_types.test.ts`);
- * `load-map-call/compose_map_wait_source_types__date_over_literal` reads the date as text (rule
- * `dates`).
- */
+/** The `map` kind's parse. */
 
 import { expect, test } from "bun:test";
 
@@ -42,7 +23,7 @@ function readerFor(text: string, nodeId: string): SourceCursor {
   return SourceDocument.parse(text).root.child("nodes").child(nodeId);
 }
 
-/** Return a descriptor's fields, leaving out what Python's `compare=False` leaves out. */
+/** Return a descriptor's fields, leaving out the parse metadata. */
 function fieldsOf(desc: CallDescriptor): Record<string, unknown> {
   const {
     range: _range,
@@ -122,7 +103,6 @@ test("a quoted call( over is text", () => {
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
-  // tests/compose/test_map_wait_source_types.py
   { id: "load-map-call/compose_map_wait_source_types__date_over_literal", call: parsedNodes },
   { id: "load-map-call/compose_map_wait_source_types__int_over_literal", call: parsedNodes },
   { id: "load-map-call/compose_map_wait_source_types__null_over_is_empty", call: parsedNodes },

@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e16-bad-typedef-name.yaml.
 # A typedef named like a typing constructor fails at the typedef's key.
 kind: load
 flow: |

@@ -1,6 +1,5 @@
-# From tests/engine/test_loop_run.py::test_while_loop_predicate_runtime_error_fails_run.
-# A LOOP `while:` that fails to evaluate (`10 / n` once n is 0) fails the run. TS fails
-# condition.evaluate and Python node.execute.
+# A LOOP `while:` that fails to evaluate (`10 / n` once n is 0) fails the run. It fails
+# condition.evaluate.
 kind: run
 flow: |2
 

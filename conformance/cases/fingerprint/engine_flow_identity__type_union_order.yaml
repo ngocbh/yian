@@ -1,4 +1,3 @@
-# From tests/engine/test_flow_identity.py::test_union_manifest_orders_members_canonically.
 # The order of union members is not identity.
 kind: fingerprint
 flow: |

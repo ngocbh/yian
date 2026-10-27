@@ -1,4 +1,3 @@
-# TS-only: withdraw and the remembered Stop (#1106).
 # Esc the other way round: the interrupt comes first, while the take holds an unwoken message, so
 # it records `interrupted {notes, []}`. The withdraw then takes the message back and reopens the
 # take, a pickup that ends the Stop. The next message gets a full reply, with no applied record.

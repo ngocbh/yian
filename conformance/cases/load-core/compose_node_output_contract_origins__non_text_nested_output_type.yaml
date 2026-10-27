@@ -1,4 +1,4 @@
-# `7 (type int)` is yian's wording for the non-text value and its kind, shared by both languages.
+# `7 (type int)` is yian's wording for the non-text value and its kind.
 kind: load
 flow: |
   id: unsupported-nested-output-type

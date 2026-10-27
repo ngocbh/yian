@@ -1,5 +1,5 @@
-# TS writes the missing-field list in the text form (rules: messages); Python's wording in python_expect.
-# Renamed from tests/compose/test_tagged_inputs.py:44's Message: TS yian reserves Message as a built-in type.
+# The message writes the missing-field list in the text form.
+# The typedef isn't named `Message`, which is a built-in type.
 kind: load
 flow: |
   id: tagged_inputs

@@ -1,5 +1,5 @@
 kind: load
-# The condition text is quoted as written, the Python-repr way (TS reprText): shared.
+# The condition text is quoted as written, by reprText.
 flow: |2
 
   id: f

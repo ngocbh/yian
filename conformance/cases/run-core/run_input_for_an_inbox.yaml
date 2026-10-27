@@ -1,4 +1,4 @@
-# TS-only: a run takes no input for an inbox; the host sends its events by name.
+# A run takes no input for an inbox; the host sends its events by name.
 kind: run
 flow: |
   id: f

@@ -1,8 +1,5 @@
-# TS-only: interrupt(run, inbox) is TS yian's (#1025).
-# From tests/engine/test_agent_steering.py::test_interrupt_before_a_tool_call_skips_only_the_remaining_calls
-# and ::test_skipped_tool_calls_reach_the_host_as_interrupted_tool_events (Python returns the
-# reply's text; TS yian's output is null). An interrupt delivered while tool call 1 runs lets it
-# finish and skips call 2 (ToolCallFinished error `interrupted`), then the honor step.
+# An interrupt delivered while tool call 1 runs lets it finish and skips call 2 (ToolCallFinished
+# error `interrupted`, which reaches the host), then the honor step; the agent's output is null.
 kind: run
 flow: |
   id: steer

@@ -1,24 +1,4 @@
-/**
- * The `agent` kind's parse side: a port of `tests/compose/test_kind_agent_parse.py`.
- *
- * Changed: Python compares the descriptor to an `AgentDescriptor` with `field_ranges` excluded;
- * TS compares its class and fields. The variable values keep YAML's ints as `bigint` (`4n`).
- *
- * TS-only: a `retries:` past `Number.MAX_SAFE_INTEGER` is refused, and a count is stored as a
- * `number`; the default follows `YIAN_AGENT_RETRIES`; a variable named `inf` is refused at its key,
- * before a like-named input; a lone surrogate in `prompt:` or `system_prompt:` is refused at the
- * field; the constructor refuses a non-exact `MemoryDecl`; `withSourceOrigins` registers one
- * origin per `long_term_memory:` entry; `build` on a hand-built descriptor and context (no
- * declarations build no variables, memory sites stamped with `ctx.owner`, the `llm_config` label
- * and the `__llm_config` range; the variable reader's fallback and return check are in
- * `agent_variables.test.ts`); and the literal `llm_config:` check, which reads `LLMConfig`'s
- * first issue where Python reads pydantic's: a text field read as non-text, at the top level or
- * in a block, is named as `notTextError` names it, and a field taking more than text (`azure.stop`)
- * keeps the validation error.
- *
- * Pinned at the end: the harvested cases whose error the AGENT parse or build raises, each under a
- * comment naming the Python file it comes from, and the flows that assemble.
- */
+/** The `agent` kind's parse side. */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
@@ -54,7 +34,7 @@ function parseA(text: string): AgentDescriptor {
   return AgentDescriptor.parse("a", readerFor(text, "a"));
 }
 
-/** Return a descriptor's fields, leaving out the parse metadata (Python's `compare=False`). */
+/** Return a descriptor's fields, leaving out the parse metadata. */
 function fieldsOf(desc: AgentDescriptor): Record<string, unknown> {
   const { range: _range, fieldRanges: _fieldRanges, assertRanges: _assertRanges, ...fields } = desc;
   return fields;
@@ -331,69 +311,45 @@ describe("literal llm_config fields", () => {
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
-  // tests/cli/test_memory.py
   { id: "load-agent/cli_memory__storage_key_is_host_owned", call: parsedNodes },
-  // tests/compose/test_agent_field_shapes.py
   { id: "load-agent/compose_agent_field_shapes__bool_retries", call: parsedNodes },
   { id: "load-agent/compose_agent_field_shapes__negative_retries", call: parsedNodes },
   { id: "load-agent/compose_agent_field_shapes__tools_as_text", call: parsedNodes },
-  // tests/compose/test_agent_mode_removed.py
   { id: "load-agent/compose_agent_mode_removed__mode_plain_without_tools", call: parsedNodes },
-  // tests/compose/test_agent_skills_yaml.py
   { id: "load-agent/compose_agent_skills_yaml__skills_as_text", call: parsedNodes },
-  // tests/engine/test_node_env.py
   { id: "load-agent/engine_node_env__env_must_be_string_keyed_mapping", call: parsedNodes },
-  // tests/seeds/errors/
   { id: "load-agent/seed_e40_agent_controls_no_range", call: parsedNodes },
   { id: "load-agent/seed_e43_agent_mode_removed", call: parsedNodes },
-  // tests/compose/test_non_text_prompt.py
   { id: "load-core/compose_non_text_prompt__non_text_agent_prompt", call: parsedNodes },
-  // TS-only (no Python test): the AGENT half of the `inf` name rule
+  // The AGENT half of the `inf` name rule
   { id: "load-agent/compose_infinity_names__an_agent_variable_named_inf", call: parsedNodes },
 ])("parseNodes: $id", runCase);
 
 test.each<CaseRow>([
-  // tests/compose/test_agent_field_shapes.py
   { id: "load-agent/compose_agent_field_shapes__inherit_on_is_text", call: assembled },
   { id: "load-agent/compose_agent_field_shapes__int_inherit", call: assembled },
-  // tests/compose/test_llm_config_blocks_load.py
   { id: "load-agent/compose_llm_config_blocks_load__node_level_reserved_field_fails_at_load", call: assembled },
-  // tests/engine/test_llm_inherit.py
   { id: "load-agent/engine_llm_inherit__unknown_node_llm_config_key_fails", call: assembled },
-  // tests/engine/test_run_api_key.py
   { id: "load-agent/engine_run_api_key__api_key_on_a_node", call: assembled },
-  // tests/engine/test_run_base_url.py
   { id: "load-agent/engine_run_base_url__base_url_on_a_node", call: assembled },
-  // tests/engine/test_run_connection_settings.py
   { id: "load-agent/engine_run_connection_settings__organization_on_a_node", call: assembled },
-  // tests/seeds/errors/
   { id: "load-agent/seed_e39_llm_config_no_range", call: assembled },
-  // tests/compose/test_agent_load_checks.py
   { id: "load-agent/compose_agent_load_checks__agent_output_of_file", call: assembled },
   { id: "load-agent/compose_agent_load_checks__node_env_max_tool_iterations_zero", call: assembled },
-  // tests/compose/test_agent_mode_removed.py
   { id: "load-agent/compose_agent_mode_removed__builtin_tools_is_rejected_at_the_tools_line", call: assembled },
-  // tests/compose/test_agent_output_nesting.py
   { id: "load-agent/compose_agent_output_nesting__a_written_out_record_past_the_limit", call: assembled },
   { id: "load-agent/compose_agent_output_nesting__an_agent_in_an_inline_map_body", call: assembled },
   { id: "load-agent/compose_agent_output_nesting__the_limit_follows_the_variable", call: assembled },
-  // tests/compose/test_agent_skills_yaml.py
   { id: "load-agent/compose_agent_skills_yaml__invalid_skill_name", call: assembled },
-  // tests/compose/test_llm_config_values_wiring.py
   { id: "load-agent/compose_llm_config_values_wiring__reserved_input_name", call: assembled },
 ])("assemble: $id", runCase);
 
 test.each<CaseRow>([
-  // tests/compose/test_agent_field_shapes.py
   { id: "load-agent/compose_agent_field_shapes__inherit_true_with_a_model_loads", call: assembled },
-  // tests/compose/test_agent_load_checks.py
   { id: "load-agent/compose_agent_load_checks__agent_union_output_loads", call: assembled },
   { id: "load-agent/compose_agent_load_checks__max_tool_iterations_minus_one_loads", call: assembled },
-  // tests/compose/test_agent_mode_removed.py
   { id: "load-agent/compose_agent_mode_removed__an_agent_with_a_steer_inbox_and_no_tools_loads", call: assembled },
-  // tests/compose/test_agent_output_nesting.py
   { id: "load-agent/compose_agent_output_nesting__a_written_out_record_at_the_limit_loads", call: assembled },
-  // tests/compose/test_llm_config_values_types.py
   { id: "load-agent/compose_llm_config_values_types__provider_with_a_known_member_loads", call: assembled },
   // examples/
   { id: "load-agent/example_ask_user", call: assembled },
@@ -403,6 +359,5 @@ test.each<CaseRow>([
   { id: "load-agent/example_structured_test", call: assembled },
   { id: "load-agent/example_summarize", call: assembled },
   { id: "load-agent/example_triage_ticket", call: assembled },
-  // tests/seeds/
   { id: "load-agent/seed_14_agent_tools", call: assembled },
 ])("assembles: $id", runCase);

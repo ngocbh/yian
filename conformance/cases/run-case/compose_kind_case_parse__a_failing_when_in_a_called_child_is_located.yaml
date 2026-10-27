@@ -1,6 +1,5 @@
-# From tests/compose/test_kind_case_parse.py::test_named_definition_case_failure_keeps_child_predicate_origin.
 # A CASE `when:` inside a called child that fails to evaluate fails the gate, located at the call
-# and at the child's arm. TS fails condition.evaluate and Python node.execute.
+# and at the child's arm. It fails condition.evaluate.
 kind: run
 flow: |
   id: named-case-origin

@@ -1,4 +1,3 @@
-# From tests/compose/test_value_entries_load.py::test_fingerprint_is_stable_and_tracks_the_literal.
 # A value entry's literal is identity.
 kind: fingerprint
 flow: |

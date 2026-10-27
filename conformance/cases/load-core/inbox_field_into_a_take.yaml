@@ -1,4 +1,4 @@
-# TS-only: a take reads the inbox whole; an inbox has no fields.
+# A take reads the inbox whole; an inbox has no fields.
 kind: load
 flow: |
   id: f

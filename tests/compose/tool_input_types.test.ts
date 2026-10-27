@@ -1,16 +1,4 @@
-/**
- * Loading stamps each TOOL node input's proven inferred type on the node: a port of
- * `tests/compose/test_tool_input_types.py`, loading each flow with `assembleText` where Python
- * calls `load_flow`.
- *
- * Ported: `test_a_proven_input_is_stamped_with_its_inferred_type` (11),
- * `test_a_non_finite_number_literal_is_absent`, `test_an_unproven_input_is_absent`,
- * `test_a_case_narrowed_input_is_stamped_with_the_member_record`,
- * `test_a_map_body_tool_reads_the_element_type` (an inline body, registered by the scope) and
- * `test_a_tool_in_a_child_flow_is_stamped` (a `defs:` entry, resolved by the scope).
- *
- * Changed: CODE references are TS's (`./fixtures/compose_codefns.ts:echo`).
- */
+/** Loading stamps each TOOL node input's proven inferred type on the node. */
 
 import { expect, test } from "bun:test";
 

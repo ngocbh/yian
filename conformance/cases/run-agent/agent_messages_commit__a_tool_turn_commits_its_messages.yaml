@@ -1,4 +1,4 @@
-# TS-only: an AGENT's success writes its output commit, then a messages commit holding the seqs
+# An AGENT's success writes its output commit, then a messages commit holding the seqs
 # of the steps its new messages are made of (the reply calling `lookup`, its result, the final
 # reply), then `node_succeeded` naming both commits.
 kind: run

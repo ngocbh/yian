@@ -1,5 +1,3 @@
-# From tests/engine/test_memory_storage_integration.py::test_explicit_learning_remains_saved_after_reopen (reflective)
-# and tests/engine/test_reflective_memory.py::test_recall_all_and_context_ranking_are_deterministic.
 # Pins: lessons a reflective learner adds on an earlier run's backward persist (fresh memories over the
 # same root), the next run's AGENT recalls the `recall_limit` best for its context in its memory block,
 # and the whole recall lists every lesson in order.

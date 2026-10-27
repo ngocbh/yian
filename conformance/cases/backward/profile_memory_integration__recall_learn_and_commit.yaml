@@ -1,4 +1,3 @@
-# From tests/engine/test_profile_memory_integration.py::test_recall_learn_and_commit_through_a_public_run.
 # Pins: a seeded profile document reaches the AGENT's system prompt; backward feedback makes the
 # profile learner rewrite it (one call, a <profile> reply), and the commit writes the new document.
 # YIAN_DEFAULT_PROVIDER/MODEL: a profile learner's model config comes from the defaults, not the flow.

@@ -1,5 +1,5 @@
 kind: expr
-# TS yian (#1149): a present null is a value, so the strict render refuses the null span.
+# A present null is a value, so the strict render refuses the null span.
 template: ${x :- y}
 values:
   x: null

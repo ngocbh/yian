@@ -1,4 +1,3 @@
-# From tests/engine/test_skipped_flow_outputs.py::test_rewritten_output_fingerprints_as_the_explicit_null_default.
 # An output from a skippable node fingerprints the same as its written `:-null` default.
 kind: fingerprint
 flow: |

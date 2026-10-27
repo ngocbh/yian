@@ -1,5 +1,4 @@
-# From tests/seeds/26-human-questions.yaml.
-# An ask with a static `questions` list and no `output:` loads; Python loads the human_input form.
+# An ask with a static `questions` list and no `output:` loads.
 kind: load
 flow: |
   # 26 — ask questions: the three question surfaces.

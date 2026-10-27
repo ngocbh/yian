@@ -1,9 +1,7 @@
-# From tests/engine/test_run_api_key.py::test_resume_ignores_a_key_for_a_run_started_without_one.
-# Also tests/engine/test_run_connection_settings.py::test_resume_ignores_headers_on_a_run_with_no_key_agents.
 # A run that recorded no host-key agent ignores a resume's api_key and headers (one branch drops both).
 # env: VLLM_API_KEY is the agent's own key, as in the test (the run's llm_config has none).
 # Record 8 is agent's node_started: its first model call runs, its result is refused.
-# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# Events left out: a resume also publishes NodeAttemptResumed for each
 # restarted node (decision 20); the trace still pins the resume.
 kind: resume
 flow: |

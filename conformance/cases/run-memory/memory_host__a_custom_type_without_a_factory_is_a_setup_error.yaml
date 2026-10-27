@@ -1,4 +1,3 @@
-# From tests/engine/test_memory_host.py::test_setup_errors (the `{vec: vector}` row).
 # Pins: a declared memory of a custom type that no factory builds is a setup error, before the run
 # starts.
 kind: run

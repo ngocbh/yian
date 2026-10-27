@@ -1,4 +1,3 @@
-# From tests/compose/test_agent_skills_yaml.py::test_skills_are_identity_but_empty_and_order_are_not.
 # The order of granted skills is not identity.
 kind: fingerprint
 flow: |

@@ -1,4 +1,3 @@
-# From tests/seeds/04-call.yaml.
 # A `call` node through a `uses:` alias to a sibling flow file loads.
 kind: load
 flow: |

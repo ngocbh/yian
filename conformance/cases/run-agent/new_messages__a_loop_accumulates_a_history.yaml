@@ -1,4 +1,4 @@
-# TS-only: a LOOP of agents carries a history: each turn's prompt splices the history so far, and
+# A LOOP of agents carries a history: each turn's prompt splices the history so far, and
 # the turn adds its agent's new messages to it.
 kind: run
 flow: |

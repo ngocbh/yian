@@ -1,5 +1,5 @@
 kind: load
-# In Python `1 == True`, so the second key would repeat the first; the non-text key is reported first.
+# `1` and `true` are different keys, so neither repeats the other; the non-text key is reported first.
 flow: |
   id: f
   name: f

@@ -1,16 +1,4 @@
-/**
- * The parse phase's `nodes:` mapping pass: a port of `tests/compose/test_parse.py`, with the real
- * `agent`, `code`, `case` and `map` kinds.
- *
- * Changed: `test_case_rejects_numeric_key` asserts "field '1' is not allowed", since TS keeps the
- * key `1` as the text written. Python compares the descriptor to an `AgentDescriptor` with
- * `field_ranges` excluded; TS compares its class and fields.
- *
- * TS-only: the `input:` binding ranges and positional `asserts:` ranges stamped after the kind
- * parse, which Python tests through later phases; and a node input named `inf`, refused where
- * the node reads its inputs by bare name (`inputsAreLocals`), at its key or, for a generated
- * binding, at the node, with its harvested case.
- */
+/** The parse phase's `nodes:` mapping pass. */
 
 import { afterEach, expect, test } from "bun:test";
 
@@ -135,8 +123,7 @@ test("case rejects numeric key", () => {
 
   const error = loadError(() => parseNodes(nodes));
 
-  // TS keeps the key `1` as the text written, so the message quotes it where Python's int key
-  // reads `field 1`.
+  // The key `1` stays the text written, so the message quotes it.
   expect(error.message).toContain("field '1' is not allowed");
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(route.rangeOf("1")!);
 });

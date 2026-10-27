@@ -1,5 +1,3 @@
-# From tests/engine/test_reported_tool_error.py::test_an_ordinary_tool_error_still_fails_the_agent_node.
-# Also tests/engine/test_agent_live_events.py::test_tool_error_is_reported_by_type_then_fails_the_node.
 # Any other tool error fails the AGENT node with the error's message ("disk on fire") after one
 # model call; the call's ToolCallFinished names the error by its type (RuntimeError).
 kind: run

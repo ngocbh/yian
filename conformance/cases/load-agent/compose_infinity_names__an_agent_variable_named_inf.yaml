@@ -1,4 +1,4 @@
-# TS reads `${inf}` as infinity, so an AGENT variable named `inf` is refused (rules: infinity); Python loads it.
+# yian reads `${inf}` as infinity, so an AGENT variable named `inf` is refused.
 kind: load
 flow: |
   id: f

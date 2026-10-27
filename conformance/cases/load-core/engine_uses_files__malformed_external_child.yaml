@@ -1,4 +1,4 @@
-# No TS `message`: it is PyYAML's text (rules: yaml); python_expect keeps it.
+# No `message`: the case pins the code and the frame, not the YAML parser's text.
 kind: load
 flow: |
   id: p

@@ -1,53 +1,4 @@
-/**
- * Authored `llm_config` layers: mirrors `tests/compose/test_llm_config_values_load.py`.
- *
- * Ported: `test_a_python_built_agent_keeps_its_literal_config`, and every node-layer test (loaded
- * with `assembleText` where Python calls `load_flow`): `test_a_field_value_loads_as_a_template`,
- * `test_a_block_field_value_loads_as_a_template`, `test_a_whole_block_value_loads_as_a_template`,
- * `test_a_whole_record_value_loads_as_a_binding`, `test_a_tagged_whole_record_keeps_its_type`,
- * `test_a_whole_record_that_is_not_one_value_must_be_a_mapping`,
- * `test_a_tag_on_a_field_value_is_read_and_consumed`, `test_a_tag_on_the_whole_mapping_is_rejected`,
- * `test_literal_inherit_is_split_off_a_template_layer`, `test_inherit_from_a_value_fails`,
- * `test_a_connection_field_from_a_value_fails_at_the_field`,
- * `test_headers_from_a_value_fail_at_the_field`, `test_a_whole_record_type_declaring_api_key_fails`,
- * `test_base_url_from_a_value_fails`, `test_base_url_from_a_value_fails_beside_azure`,
- * `test_a_literal_base_url_beside_a_provider_value_fails`,
- * `test_a_literal_base_url_beside_literal_azure_still_loads`,
- * `test_an_unknown_top_level_key_beside_a_value_fails`, `test_a_literal_node_layer_is_still_a_plain_dict`,
- * `test_a_quoted_span_is_no_longer_literal_text`, `test_a_doubled_dollar_reads_as_one_dollar`,
- * `test_a_literal_block_field_beside_a_value_is_checked`,
- * `test_an_unknown_block_key_beside_a_value_fails`, `test_a_required_block_field_given_as_a_value_loads`,
- * `test_a_literal_block_beside_a_value_is_checked_whole`,
- * `test_a_tagged_unknown_provider_is_checked_as_a_literal`, `test_a_tagged_literal_block_field_is_checked`,
- * `test_a_tagged_literal_azure_allows_a_literal_base_url`, `test_a_tagged_literal_inherit_is_accepted`,
- * `test_a_call_inside_an_llm_config_string_fails`,
- * `test_a_literal_field_error_in_a_value_layer_points_at_the_field`; the node halves of
- * `test_a_malformed_span_is_a_located_load_error` (the reference check reports it),
- * `test_a_layer_of_only_tagged_literals_is_a_literal_layer` and
- * `test_a_tag_with_no_value_on_the_layer_fails`; the adaptive composer `ask__compose` rows
- * `test_a_composer_value_loads_as_a_template`, `test_a_composer_tag_is_read_and_consumed`,
- * `test_a_composer_excluded_field_from_a_value_names_the_gate`,
- * `test_a_composer_literal_block_field_beside_a_value_names_the_gate` and
- * `test_a_literal_composer_layer_is_unchanged`; and
- * `test_a_composer_tag_on_the_whole_mapping_names_the_gate` (the gate's layer read raises it);
- * and, loaded with `loadFlow`, the flow layer: `test_a_flow_field_value_loads_as_a_template`,
- * `test_a_flow_whole_record_value_loads_as_a_binding`, `test_a_flow_tag_is_read_and_consumed`,
- * `test_a_tag_on_a_typedef_still_fails_beside_a_flow_value`,
- * `test_a_flow_excluded_field_from_a_value_fails_at_the_field`, `test_inherit_at_flow_level_still_fails`,
- * `test_a_literal_flow_layer_is_still_a_plain_dict`, `test_a_null_flow_layer_loads_as_empty`,
- * `test_a_flow_layer_that_is_not_a_mapping_fails`,
- * `test_a_literal_field_error_in_a_flow_value_layer_points_at_the_field`; the def layer:
- * `test_a_def_field_value_loads_as_a_template`, `test_a_def_whole_record_value_loads_as_a_binding`,
- * `test_a_def_excluded_field_from_a_value_fails_at_the_field`, `test_a_literal_def_layer_is_still_a_plain_dict`;
- * and the flow and def halves of the three split tests above.
- *
- * Changed: `LLMConfig` spells the provider choices in text form (`"openai"`) where pydantic writes
- * `'openai'`.
- *
- * TS-only: the `ownLlmConfig`/`llmConfig` split for an empty record, `null`, a `ValueTemplate`
- * and a `Binding`; the origin of a whole-record `Binding`; the harvested cases of the node layer
- * and the composer.
- */
+/** Authored `llm_config` layers. */
 
 import { expect, test } from "bun:test";
 
@@ -210,7 +161,7 @@ test("a literal field error in a flow value layer points at the field", async ()
   expect(lineOf(error)).toBe(lineHolding(text, "temparature:"));
 });
 
-test("a python built agent keeps its literal config", () => {
+test("an agent built in code keeps its literal config", () => {
   const config = { model: "m" };
   const agent = new AgentNode("a", { prompt: "p", llmConfig: config });
   expect(agent.llmConfig).toEqual({ model: "m" });
@@ -273,7 +224,7 @@ test("a whole record value loads as a binding", () => {
   expect(own.contract).toBeNull();
   expect(agent.llmConfig).toBeNull();
   expect(agent.llmInherit).toBe(true);
-  // TS-only: the binding's origin resolves to the authored `llm_config:` value.
+  // The binding's origin resolves to the authored `llm_config:` value.
   expect(builder.resolveRegistered(own.origin!)!.range.startLine).toBe(lineHolding(text, "llm_config:"));
 });
 

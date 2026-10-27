@@ -1,4 +1,3 @@
-# From tests/seeds/03-research-one.yaml.
 # A CODE leaf's record feeds an AGENT; the flow returns the AGENT's text and the given date.
 kind: run
 flow: |

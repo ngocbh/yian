@@ -1,6 +1,3 @@
-# From tests/engine/test_backward_composition.py::test_public_map_preserves_equal_item_positions_after_reversed_completion,
-# both parametrizations as two backward calls (serial here; the gate CODE that forced the reversed
-# completion is dropped).
 # Pins: MAP items with equal values keep their positions in backward: whole-output feedback calls
 # each item's AGENT and returns one positional message per item; positional feedback [null, ""]
 # calls only item 1 ("" is effective feedback).

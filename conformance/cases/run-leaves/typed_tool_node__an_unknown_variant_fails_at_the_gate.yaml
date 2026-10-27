@@ -1,4 +1,3 @@
-# From tests/engine/test_typed_tool_node.py::test_an_unknown_variant_fails_at_the_gate.
 # A TOOL return whose tag isn't one of the declared union's fails contract.output at the TOOL node.
 kind: run
 flow: |

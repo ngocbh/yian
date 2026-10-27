@@ -1,4 +1,4 @@
-# Renamed from tests/compose/test_tagged_inputs.py:44's Message: TS yian reserves Message as a built-in type.
+# The typedef isn't named `Message`, which is a built-in type.
 kind: run
 flow: |
   id: tagged_inputs

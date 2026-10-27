@@ -1,4 +1,4 @@
-# TS-only: a duration is expanded to seconds at load, so its spellings share a fingerprint.
+# A duration is expanded to seconds at load, so its spellings share a fingerprint.
 kind: fingerprint
 flow: |
   id: f

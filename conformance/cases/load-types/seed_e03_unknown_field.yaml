@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e03-unknown-field.yaml.
 # A flow output that reads a field the node's output record lacks fails at the `output:` value.
 kind: load
 flow: |

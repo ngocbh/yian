@@ -1,4 +1,4 @@
-# TS-only: a `steer_inbox:` render reads only `${event}` (yian #1025).
+# A `steer_inbox:` render reads only `${event}` (yian #1025).
 kind: load
 flow: |
   id: steer

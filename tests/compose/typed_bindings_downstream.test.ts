@@ -1,36 +1,9 @@
 /**
- * Downstream checks see a typed binding's declared type: a port of
- * `tests/compose/test_typed_bindings_downstream.py`, assembling each flow with `assembleText` where
- * Python calls `load_flow`.
+ * Downstream checks see a typed binding's declared type.
  *
- * A binding tagged with a type on a CALL, MAP or LOOP node declares the type its child receives,
- * so the cross-flow check compares that declared type with the child's parameters instead of the
- * type inferred from the value.
- *
- * Ported: `test_untyped_nullable_source_into_strict_child_fails_to_load`,
- * `test_typed_nullable_binding_into_strict_child_fails_to_load`,
- * `test_declared_float_does_not_fit_a_strict_int_child`, `test_map_binding_uses_the_declared_type`,
- * `test_declared_seed_type_is_checked_against_the_body_input`,
- * `test_declared_seed_type_is_compared_with_the_returned_field`, and, each as a load row then a run
- * row (`loadConformanceFlow` and `runFlow`), `test_typed_binding_narrows_a_nullable_source_into_a_strict_child`,
- * `test_typed_binding_rejects_a_null_at_runtime`,
- * `test_declared_seed_type_types_an_opaque_producer`,
- * `test_declared_seed_type_is_checked_on_the_loop_node` (both flows),
- * `test_typed_inline_loop_seed_types_the_body_parameter` and
- * `test_typed_inline_loop_seed_types_an_opaque_producer`; then, loaded and run whole,
- * `test_typed_inline_binding_skips_inference_of_an_opaque_expression`,
- * `test_typed_inline_binding_types_an_empty_list` and `test_typed_inline_map_item_binding_runs`.
- * Each reads the inline body's parameters from the node's `childInputs`, where Python reads the
- * child's START parameters; and the harvested case
- * `load-types/compose_typed_bindings_downstream__seed_type_is_compared_with_the_returned_field`.
- *
- * Changed: the error rows pin the whole message, where Python matches a fragment. CODE bodies are
- * JS, getting ints as `number`s (decision 45); a whole-number return reads back as an int, so the
- * outputs hold `bigint`s (decision 4a), and the float loop's `{r: 1.0}` is `{r: 1n}` (decision 38).
- *
- * Covered by `load-types/compose_typed_bindings_downstream__inline_map_item_over_an_opaque_list`
- * (pinned in `engine/inline_composite_bodies.test.ts`):
- * `test_untyped_inline_map_item_over_an_opaque_list_fails_to_load`.
+ * A binding tagged with a type on a CALL, MAP or LOOP node declares the type its child receives, so
+ * the cross-flow check compares that declared type with the child's parameters instead of the type
+ * inferred from the value.
  */
 
 import { afterAll, afterEach, expect, test } from "bun:test";

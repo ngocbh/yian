@@ -1,9 +1,8 @@
-# From tests/engine/test_run_api_key.py::test_resume_without_the_key_fails_instead_of_reading_the_environment[llm_config0-VLLM_API_KEY].
 # A resume without the host key fails the agent at its model call with `provider.auth` instead of reading the
 # environment's key; no model is called on resume.
 # env: VLLM_API_KEY is set, as in the test, to show the resume doesn't fall back to it.
 # Record 8 is agent's node_started: its first model call runs, its result is refused.
-# events left out: a TS resume also publishes NodeAttemptResumed for each restarted node (decision 20); the
+# events left out: a resume also publishes NodeAttemptResumed for each restarted node (decision 20); the
 # trace still pins the resume.
 kind: resume
 flow: |

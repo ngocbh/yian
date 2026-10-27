@@ -1,7 +1,5 @@
-# From tests/seeds/11-reuse-anchors.yaml.
 # Three AGENTs merged from one anchored block share its provider and provider block; `judge`
 # reads the other two's text.
-# The header's PyYAML note describes the Python loader.
 kind: run
 flow: |
   # 11 — DRY reuse with YAML anchors + x- extension keys.
@@ -9,7 +7,7 @@ flow: |
   # Three near-identical AGENT nodes share one config block via a YAML anchor parked
   # under an x- key. Shows: x-* extension keys (ignored by the strict schema — custom
   # metadata + a holder for the anchor), &anchor / *alias / <<: merge, and llm_config.
-  # The merge is pure YAML — PyYAML expands it before the engine sees the nodes.
+  # The merge is pure YAML — the YAML parser expands it before the engine sees the nodes.
 
   id: reuse-anchors
   name: reuse_anchors
@@ -53,7 +51,7 @@ flow: |
   output: ${judge.output}
 # The merged `llm_config` names `anthropic` with no model, and run start needs one, so
 # `run.llm_config` gives it; the node's own provider and `anthropic` block win over that layer.
-# With no saved login, Python records a non-OpenAI provider's connection as from the environment
+# With no saved login, a non-OpenAI provider's connection is recorded as from the environment
 # with no endpoint, key or no key; the key is set so a real run could authenticate.
 env: {ANTHROPIC_API_KEY: "<key:1>"}
 inputs: {topic: ACME}
@@ -80,9 +78,8 @@ host:
             parts: [{type: text, text: ACME grows while rivals gain.}]
 expect:
   output: {status: succeeded, output: ACME grows while rivals gain.}
-  # For a provider other than OpenAI, Python records `source: environment` and `endpoint: null`
-  # (src/yian/llm_clients/connection.py); `docs/` doesn't give these fields, and TS has to
-  # record the same.
+  # For a provider other than OpenAI, the connection is recorded as `source: environment` and
+  # `endpoint: null`; `docs/` doesn't give these fields.
   trace:
     - - run_started
       - null

@@ -1,61 +1,4 @@
-/**
- * The `case` kind's parse and build rows: a port of `tests/compose/test_kind_case_parse.py`.
- *
- * Ported: `test_case_parse_matches_descriptor_and_records_ranges`,
- * `test_case_parse_requires_cases`, `test_case_with_both_on_spellings_is_a_located_error`,
- * `test_case_rejects_boolean_key_at_its_location`,
- * `test_case_build_lowers_to_case_node_with_edges`,
- * `test_case_descriptor_rejects_misaligned_or_nonopaque_origins`,
- * `test_on_case_preserves_predicate_and_generated_binding_origins`,
- * `test_case_parse_keeps_then_styles_aligned_with_cases`, `test_case_parse_keeps_else_style`,
- * `test_case_parse_tells_else_null_from_no_else`,
- * `test_case_descriptor_constructed_with_else_has_else`, `test_case_parse_keeps_then_null_key`,
- * `test_case_parse_on_form_keeps_styles`, `test_case_rejects_malformed_cases_at_their_location`,
- * `test_source_attachment_does_not_preempt_malformed_case_validation`,
- * `test_source_free_case_build_keeps_predicates_and_wiring_origin_free`, the origin half of
- * `test_searched_case_origins_are_positional_and_select_the_failing_entry` (on the parsed
- * descriptor and on the built node), and the `thenRanges[0]` assertion of
- * `tests/compose/test_desugar.py`'s `test_desugar_case_call_targets_locate_at_their_target_line`.
- *
- * Changed: Python compares the descriptor to a `CaseDescriptor` with the parse metadata excluded;
- * TS compares its class and fields. The duplicate-key and boolean-key rows parse the flow with
- * `parseSourceDocument`, which raises both, where Python loads it. The malformed-`cases:` rows
- * parse the flow's nodes, where Python loads it, and spell values in the text form (`(got "done")`,
- * `(got null)`). The origin rows call `withSourceOrigins` on the parsed descriptor and resolve its
- * origins through `builder.resolveRegistered`, where Python loads the flow and reads the built
- * `CaseNode`; the searched and `on:` rows also assemble the flow (`assembleText`) and read the
- * built node and its `__r0` or `__on` wiring. The misaligned origins are a `RangeError` where
- * Python's are a `ValueError`, and the message says "or null" where Python's says "or None". The
- * requires-cases row pins the whole message and its range (the node body), and the
- * source-attachment row the whole message, where Python matches a fragment; the source-attachment
- * row assembles the flow (`assembleText`). The misaligned-origins row also checks that the origins
- * are a frozen copy.
- *
- * TS-only: the lowering row also checks the `__on` input's range and label; an `on:` case entry
- * with a null `when:` is refused at that `when:`; a lone surrogate in `on:` or in a searched
- * `when:` is refused at that value; a non-`OriginRef` `onOrigin` is a `TypeError` (the
- * misaligned-origins row; no Python test checks Python's matching `on_origin` check).
- *
- * Dropped: `test_case_keeps_no_key_normalization` (Python class-dict introspection).
- *
- * Ported through `loadFlow`: `test_external_alias_rebases_case_and_generated_binding_origins`,
- * `test_generated_child_clone_preserves_case_predicate_origins` and
- * `test_formatting_moves_case_ranges_without_changing_keys_or_fingerprint`; and, run with
- * `runFlow`, `test_inline_definition_case_failure_keeps_child_predicate_origin`.
- *
- * Covered by the run cases whose headers name the Python test:
- * `run-case/compose_kind_case_parse__a_failing_when_in_a_called_child_is_located`
- * (`test_named_definition_case_failure_keeps_child_predicate_origin`) and
- * `run-case/compose_kind_case_parse__a_failing_searched_when_is_located_at_its_arm` (the run half
- * of `test_searched_case_origins_are_positional_and_select_the_failing_entry`).
- *
- * The harvested cases whose error the CASE parse or build raises are pinned at the end, with
- * `load-core/compose_expression_nesting__thousands_of_nested_spans` and `__too_deep_searched_when`
- * from `tests/compose/test_expression_nesting.py` (mirrored in `expression_nesting.test.ts`), and
- * `load-case/compose_kind_case_parse__a_case_with_no_branch_has_no_value`, which the case-output
- * expansion raises, and `load-case/compose_kind_case_parse__a_flow_style_case_names_no_node`,
- * which the case-branch check raises.
- */
+/** The `case` kind's parse and build rows. */
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -164,7 +107,7 @@ function readerFor(text: string, nodeId: string): SourceCursor {
   return SourceDocument.parse(text).root.child("nodes").child(nodeId);
 }
 
-/** Return a descriptor's fields, leaving out the parse metadata (Python's `compare=False`). */
+/** Return a descriptor's fields, leaving out the parse metadata. */
 function fieldsOf(desc: CaseDescriptor): Record<string, unknown> {
   const {
     range: _range,
@@ -319,7 +262,7 @@ test("case descriptor rejects misaligned or non-opaque origins", () => {
   expect(desc.cases).toBe(pushed);
   pushed.push({ when: "false", then: "negative" });
   expect(() => desc.build(CTX)).toThrow(new RangeError("CASE predicate origins must align with cases"));
-  // The origins are a frozen copy (Python's tuple): a later push to the given array can't reach them.
+  // The origins are a frozen copy: a later push to the given array can't reach them.
   const given = [new OriginRef("first")];
   const copied = new CaseDescriptor({ id: "gate", cases, whenOrigins: given });
   given.push(new OriginRef("second"));
@@ -646,7 +589,7 @@ test("formatting moves case ranges without changing keys or fingerprint", async 
 
 // ---------- a failing arm in a child, run ----------
 
-/** Python's `_CASE_CHILD_BODY`: a CASE whose second `when:` divides by zero. */
+/** A CASE whose second `when:` divides by zero. */
 const CASE_CHILD_BODY = `nodes:
   zero:
     kind: code
@@ -707,17 +650,14 @@ test("an inline definition's case failure keeps the child predicate origin", asy
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
-  // tests/compose/test_kind_case_parse.py
   { id: "load-case/compose_kind_case_parse__a_single_case_mapping_asks_for_a_list_item", call: parsedNodes },
   { id: "load-case/compose_kind_case_parse__cases_that_is_not_a_list_is_located", call: parsedNodes },
   { id: "load-case/compose_kind_case_parse__a_case_item_that_is_not_a_mapping_is_located", call: parsedNodes },
 ])("parseNodes: $id", runCase);
 
 test.each<CaseRow>([
-  // tests/compose/test_kind_case_parse.py
   { id: "load-case/compose_kind_case_parse__a_case_with_no_branch_has_no_value", call: assembled },
   { id: "load-case/compose_kind_case_parse__a_flow_style_case_names_no_node", call: assembled },
-  // tests/compose/test_expression_nesting.py
   { id: "load-core/compose_expression_nesting__thousands_of_nested_spans", call: assembled },
   { id: "load-core/compose_expression_nesting__too_deep_searched_when", call: assembled },
 ])("assembled: $id", runCase);

@@ -1,10 +1,9 @@
-# From tests/engine/test_tool_retries_resume.py::test_a_crash_during_the_backoff_wait_rewaits_and_resumes_at_attempt_two.
 # A crash during the first backoff wait resumes at attempt 2 with the same call id; the restart waits the
 # recorded retry_in again without a new draw (jitter holds one draw, for attempt 1's backoff), and the resumed
 # attempt is the node's own start, so it records no `started` step.
 # env: YIAN_TOOL_RETRY_DELAY_SECONDS=1 with draw 0.0 keeps each wait at 0.5 s.
 # Record 9 is the `failed` step: the wait runs, then the `started` step is refused.
-# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# Events left out: a resume also publishes NodeAttemptResumed for each
 # restarted node (decision 20); the trace still pins the resume.
 kind: resume
 flow: |

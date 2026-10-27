@@ -1,4 +1,3 @@
-# From tests/seeds/09-interpolation-ops.yaml.
 # The prompt the AGENT sends: `:?` and a `|` chain resolve from given inputs, `$$` renders `$`,
 # and `system.run_id` is the run's id.
 kind: run
@@ -52,7 +51,7 @@ host:
           # The request pins the rendered prompt. Every `$$` in the `|-` prompt renders `$`,
           # including the one in the `# $$ -> ...` text after it, which is prompt text. The
           # system message is yian's default instruction (`DEFAULT_SYSTEM` in
-          # src/yian/nodes/agent/context.py), which `docs/` doesn't give.
+          # src/nodes/agent/context.ts), which `docs/` doesn't give.
           request:
             messages:
               - format: yian.message.v1

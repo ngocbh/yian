@@ -1,5 +1,4 @@
-# TS writes the value in compact text form, [true,"no"], and quotes the element as JSON text, "no"
-# (rules: messages); Python's shown_literal text [true, "no"] and repr 'no' in python_expect.
+# The message writes the value in compact text form, [true,"no"], and quotes the element as JSON text, "no".
 kind: load
 flow: |
   id: p

@@ -1,4 +1,3 @@
-# From tests/engine/test_backward_recovery.py::test_real_agent_failure_discards_partial_reverse_results_and_retries_every_callback.
 # Pins: an AGENT backward reply naming an input the AGENT doesn't have fails the backward call
 # (backward.result, at that AGENT), discarding the partial results; the next call is a whole new
 # pass that calls every AGENT again, with the next attempt id.

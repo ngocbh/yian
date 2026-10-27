@@ -1,4 +1,3 @@
-# From tests/engine/test_memory_authoring.py::test_compose_loaded_flow_id_changes_the_previous_memoryless_identity.
 # The flow id is identity; the name is the same in both.
 kind: fingerprint
 flow: |

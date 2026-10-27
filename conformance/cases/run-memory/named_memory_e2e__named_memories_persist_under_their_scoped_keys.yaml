@@ -1,5 +1,3 @@
-# From tests/engine/test_named_memory_e2e.py::test_python_api_named_memories_persist_and_stack,
-# without the AGENT's session memory `chat` (TS yian has none), so `ask` sees one user turn.
 # Pins: named memories persist across runs over one root: the earlier run's backward commits episodes
 # to the root flow's `notes` (every occurrence) and to the `uses:` file's own `notes`, the key
 # `lib.notes` (only that file's nodes), read back through fresh memories. The replies are what the

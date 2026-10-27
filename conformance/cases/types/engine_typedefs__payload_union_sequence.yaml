@@ -1,5 +1,5 @@
 kind: value
-# Hand-written from tests/engine/test_typedefs.py::test_payload_union_sequence_rejected: a bad typedef raises when the typedefs are read.
+# A bad typedef raises when the typedefs are read.
 type: Choice
 typedefs: {Choice: [defer, {approve: {count: int}}]}
 value: 1

@@ -43,7 +43,7 @@
       "required": ["code", "message", "node_id", "trace", "cause_type", "traceback"],
       "properties": {
         "code": {
-          "description": "The failure's stable category, documented in docs/api.md \"Failure codes\".",
+          "description": "The failure's stable category, listed on the Reference page.",
           "type": "string",
           "enum": [
             "binding.evaluate",
@@ -142,7 +142,7 @@
         "node_id": {"type": "string"},
         "output": {"$ref": "#/$defs/value"},
         "commit_as": {"type": ["string", "null"], "description": "The target the value was committed under instead of node_id; null when it was committed under node_id."},
-        "interrupted": {"type": "boolean", "description": "TS yian, which always sends it (Python yian doesn't): true only for an AGENT that honored a host interrupt and succeeded with null because its output is Optional(...); false when an interrupt landed after the reply was whole. Read from the recorded interrupted step, so a resumed run says the same."}
+        "interrupted": {"type": "boolean", "description": "Always sent: true only for an AGENT that honored a host interrupt and succeeded with null because its output is Optional(...); false when an interrupt landed after the reply was whole. Read from the recorded interrupted step, so a resumed run says the same."}
       }
     },
     "NodeRouted": {
@@ -294,7 +294,7 @@
       }
     },
     "ModelCallRetried": {
-      "description": "TS-only (Python yian publishes nothing): a model call outside a forward node (AGENT backward, a memory's learner) failed with a retryable error and is sent again after retry_in seconds; published before the wait (transient).",
+      "description": "A model call outside a forward node (AGENT backward, a memory's learner) failed with a retryable error and is sent again after retry_in seconds; published before the wait (transient).",
       "type": "object",
       "required": ["node_id", "consumer", "attempt", "error", "retry_in"],
       "properties": {

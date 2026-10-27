@@ -1,6 +1,5 @@
-# From tests/compose/test_kind_case_parse.py::test_searched_case_origins_are_positional_and_select_the_failing_entry.
 # A searched CASE `when:` that fails to evaluate (`1 / zero.output`) fails the gate, located at
-# its arm. TS fails condition.evaluate and Python node.execute.
+# its arm. It fails condition.evaluate.
 kind: run
 flow: |
   id: searched-case-origins

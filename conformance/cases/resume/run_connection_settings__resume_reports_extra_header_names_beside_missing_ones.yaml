@@ -1,4 +1,3 @@
-# From tests/engine/test_run_connection_settings.py::test_resume_reports_extra_header_names_beside_missing_ones.
 # Header names the run didn't record are named beside the missing ones.
 # Record 8 is agent's node_started: its first model call runs, its result is refused.
 kind: resume

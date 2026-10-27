@@ -1,4 +1,3 @@
-# From tests/compose/test_origin_resolver.py::test_two_aliases_rebase_canonical_child_without_mutating_it.
 # Identical child text in another file keeps the fingerprint: a child's file and origins are not identity.
 kind: fingerprint
 flow: |

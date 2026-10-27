@@ -1,4 +1,4 @@
-# TS-only: a named call passes the inbox to a child that takes from it.
+# A named call passes the inbox to a child that takes from it.
 kind: load
 flow: |
   id: f

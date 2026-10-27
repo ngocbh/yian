@@ -1,8 +1,6 @@
 /**
- * Compose keeps a node's YAML ranges and field labels on the transient build result, never on
- * the built node: a port of `tests/compose/test_field_ranges_guard.py`.
- *
- * Adapted: row 3 drops its equality half (TS has no dataclass `==`).
+ * Compose keeps a node's YAML ranges and field labels on the transient build result, never on the
+ * built node.
  */
 
 import { expect, test } from "bun:test";

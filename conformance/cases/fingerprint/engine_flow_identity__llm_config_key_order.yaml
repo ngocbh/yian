@@ -1,4 +1,3 @@
-# From tests/engine/test_flow_identity.py::test_flow_fingerprint_tracks_block_fields_but_not_key_order.
 # The key order of llm_config mappings is not identity.
 kind: fingerprint
 flow: |

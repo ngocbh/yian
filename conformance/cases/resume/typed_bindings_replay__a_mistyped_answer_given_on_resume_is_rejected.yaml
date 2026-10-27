@@ -1,7 +1,6 @@
-# From tests/engine/test_typed_bindings_replay.py::test_typed_consumer_after_resume_rejects_a_mistyped_answer.
 # The consumer binds after the resume, so its declared `!int` checks the answer given on resume.
 # Record 8 is ask's node_started: the first answer is given, its result is refused.
-# hand TS expect: events left out: a TS resume also publishes NodeAttemptResumed for each
+# Events left out: a resume also publishes NodeAttemptResumed for each
 # restarted node (decision 20); the trace still pins the resume.
 kind: resume
 flow: |

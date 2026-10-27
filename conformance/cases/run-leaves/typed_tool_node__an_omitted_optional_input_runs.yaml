@@ -1,4 +1,3 @@
-# From tests/engine/test_typed_tool_node.py::test_an_omitted_optional_input_runs.
 # A TOOL node may leave out an optional tool parameter: the call's args hold only the bound input.
 kind: run
 flow: |

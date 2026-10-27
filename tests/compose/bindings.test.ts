@@ -1,12 +1,4 @@
-/**
- * The kind-blind binding-field walk: a port of `tests/compose/test_bindings.py`. The rows use the
- * real `AgentDescriptor`, `ToolDescriptor`, `CaseDescriptor`, `CallDescriptor`, `MapDescriptor` and
- * `LoopDescriptor` with the registered `BINDING_FIELDS`, as Python does (an `ask` and a `sleep` are
- * TOOL nodes, so they walk their inputs like any tool).
- *
- * TS-only: `mapBindingSources` hands the mapper a `ValueTemplate` whole, in a record field and in
- * a scalar field, and `keyless` drops the field and key.
- */
+/** The kind-blind binding-field walk. */
 
 import { describe, expect, test } from "bun:test";
 

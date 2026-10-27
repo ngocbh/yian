@@ -1,4 +1,4 @@
-# TS-only: `Message` is a built-in type every flow can name, with no typedef: a spliced
+# `Message` is a built-in type every flow can name, with no typedef: a spliced
 # `!list(Message)` history, and a typedef field holding a `Message`.
 kind: load
 flow: |

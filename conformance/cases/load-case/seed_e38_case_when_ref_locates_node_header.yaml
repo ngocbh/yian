@@ -1,13 +1,11 @@
-# From tests/seeds/errors/e38-case-when-ref-locates-node-header.yaml.
 # A dangling reference in `cases[1].when` is named by that site and located at its value.
-# The header's `compose/nodes/case.py` is the Python loader.
 kind: load
 flow: |
   # e38 — a dangling `${...}` inside a `case` node's `when:` locates at the offending `when:` line,
   # not the node header. COMPILE: "unresolved references". Fails at load; no inputs needed.
   # Predicate-owned provenance keeps synthesized inputs tied to the authored condition.
   #
-  # `compose/nodes/case.py` hoists each distinct `${...}` in a `when:` into a synthetic CaseNode input
+  # The CASE loader hoists each distinct `${...}` in a `when:` into a synthetic CaseNode input
   # `__rN`, rewriting the condition to a bare local such as `${__r1}`.
   # Predicate-owned provenance maps that synthetic input back to `cases[N].when`.
   # The diagnostic therefore names the authored condition rather than the synthetic local.

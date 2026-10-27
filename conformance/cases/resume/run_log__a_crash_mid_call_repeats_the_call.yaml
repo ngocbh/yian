@@ -1,4 +1,3 @@
-# TS-only: Python reruns an AGENT from its start on resume.
 # The agent's first model call is made and lost when the crash refuses its model_call (the cut
 # keeps only the agent's node_started, record 8). Nothing of the agent is recorded, so the
 # resumed agent makes the call again as step 1; lookup runs only in the resumed run, under the

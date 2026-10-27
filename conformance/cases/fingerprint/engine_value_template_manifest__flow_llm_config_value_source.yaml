@@ -1,4 +1,3 @@
-# From tests/engine/test_value_template_manifest.py::test_a_flow_llm_config_value_is_fingerprinted_as_written.
 # A value in the flow llm_config is identity as written.
 kind: fingerprint
 flow: |

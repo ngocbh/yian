@@ -1,10 +1,4 @@
-/**
- * `hostControlEdges`: a lifted node takes its host's CASE routes, ordering, and data gates. A port
- * of `tests/compose/test_host_edges.py`.
- *
- * Changed: Python's `ValueError` for a compiler bug is a `RangeError`, and the error rows check
- * the whole message, where Python matches a fragment (`'L'`, `'nowhere'`, `cycle`).
- */
+/** `hostControlEdges`: a lifted node takes its host's CASE routes, ordering, and data gates. */
 
 import { expect, test } from "bun:test";
 

@@ -1,4 +1,3 @@
-# From tests/engine/test_answer_schema.py::test_record_expands_per_field_with_required.
 # An ask with a record `output:` sends one answer-schema entry per field (an Optional field not
 # required), and a record answer with a null field passes.
 kind: run

@@ -1,4 +1,3 @@
-# From tests/engine/test_tool_retries.py::test_an_awaitable_from_a_function_tool_is_not_retried.
 # A ToolCheckError (a check yian runs) is never retried: one call, the message unchanged.
 kind: run
 flow: |

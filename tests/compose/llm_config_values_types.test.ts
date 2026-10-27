@@ -1,23 +1,4 @@
-/**
- * The sources of `llm_config` values must be typed, and their types must fit the field: a port of
- * `tests/compose/test_llm_config_values_types.py`, loading each flow with `assembleText`
- * (`assemble` as the loader calls it, the flow's `llm_config:` read as the loader reads it) where
- * Python calls `load_flow`.
- *
- * Ported: `test_an_untyped_producer_must_be_tagged`, `test_an_int_into_model_is_disjoint`,
- * `test_a_provider_with_no_known_member_fails_naming_them`,
- * `test_a_provider_with_a_known_member_or_any_text_loads`,
- * `test_a_block_field_takes_its_annotation_type`,
- * `test_a_whole_record_type_must_declare_only_llm_config_fields` (5),
- * `test_a_whole_record_of_allowed_fields_or_object_loads`,
- * `test_a_whole_record_that_is_not_a_record_fails`,
- * `test_a_whole_block_type_must_declare_only_block_fields`, `test_a_constructor_fails`,
- * `test_isinstance_fails` (2), `test_a_tag_the_source_cannot_fit_fails_at_the_field` (4),
- * `test_a_flow_layer_value_no_agent_carries_is_still_checked`,
- * `test_a_whole_record_type_declaring_inherit_is_refused` (3).
- *
- * Pinned in kind_agent_parse.test.ts: the case `…__provider_with_a_known_member_loads`.
- */
+/** The sources of `llm_config` values must be typed, and their types must fit the field. */
 
 import { expect, test } from "bun:test";
 

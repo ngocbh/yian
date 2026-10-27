@@ -1,4 +1,4 @@
-# TS spells the node list as JSON text (rules: messages); Python's repr in python_expect.
+# The message spells the node list as JSON text.
 kind: load
 flow: |2
 

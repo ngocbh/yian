@@ -1,4 +1,4 @@
-# TS-only: a node output can't be an inbox.
+# A node output can't be an inbox.
 kind: load
 flow: |
   id: f

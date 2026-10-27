@@ -1,4 +1,4 @@
-# TS spells the rejected value in the text form (rules: messages); Python's repr in python_expect.
+# The message spells the rejected value in the text form.
 kind: load
 flow: |
   id: shapes

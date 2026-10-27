@@ -1,14 +1,9 @@
 /**
- * A YAML document that expands past `maxYamlNodes` nodes is a located error: a port of
- * `tests/compose/test_yaml_node_limit.py`.
+ * A YAML document that expands past `maxYamlNodes` nodes is a located error.
  *
- * Every mapping, list, and scalar node (mapping keys included) counts once per place it
- * appears, so an alias, and a `<<:` merge source, counts every node it names again. The
- * `load_flow` cases, with their frames, come with the loader; here each text is composed
- * directly, and the error node's line stands in for the frame's line. The harvested cases are
- * pinned at the end through `parseSourceDocument`, with the TS message (the cases leave Python's
- * out), except `__alias_chain_meets_the_value_limit`, which parses and then fails the value limit,
- * through `assembled`.
+ * Every mapping, list, and scalar node (mapping keys included) counts once per place it appears, so
+ * an alias, and a `<<:` merge source, counts every node it names again. Each text is composed
+ * directly, and the error node's line stands in for the frame's line.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";

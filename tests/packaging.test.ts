@@ -17,7 +17,7 @@
 // the Node `YIAN_TEST_NODE` names, and on Bun a compiled host runs CODE nodes with a shim entry
 // importing it, and fails them without one.
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -990,4 +990,92 @@ describe("the code-worker entry", () => {
     },
     HOST_TEST_LIMIT,
   );
+});
+
+/** Whether to pack the package and test the tarball: slow, and the install needs the network. */
+const PACK = process.env.YIAN_TEST_PACK === "1";
+/** The export paths a consumer imports (`./package.json` is data). */
+const IMPORTS = Object.keys(PACKAGE.exports).filter((path) => path !== "./package.json");
+
+describe.if(PACK)("the npm tarball", () => {
+  let dir = "";
+  let tarball = "";
+  let files: string[] = [];
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "yian-pack-"));
+    // Build first and pack with --ignore-scripts: a `prepack` run under `npm pack` prints npm's
+    // script banners to stdout, which would break the JSON parse.
+    execFileSync("npm", ["run", "build"], { cwd: ROOT, stdio: ["ignore", "ignore", "inherit"] });
+    const [packed] = JSON.parse(
+      execFileSync("npm", ["pack", "--json", "--ignore-scripts", "--pack-destination", dir], {
+        cwd: ROOT,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "inherit"],
+      }),
+    ) as { filename: string; files: { path: string }[] }[];
+    tarball = join(dir, packed!.filename);
+    files = packed!.files.map((file) => file.path).sort();
+    execFileSync("tar", ["-xzf", tarball, "-C", dir]);
+  }, 300_000);
+
+  // Removing the extracted tree and the consumer's node_modules can outlast the 5 s hook default.
+  afterAll(() => {
+    if (dir !== "") rmSync(dir, { recursive: true, force: true });
+  }, 60_000);
+
+  test("holds only the build, the sources, the notices and package.json", () => {
+    const top = new Set(["LICENSE", "NOTICE", "README.md", "package.json"]);
+    const stray = files.filter(
+      (path) =>
+        !(path.startsWith("dist/src/") || path.startsWith("src/") || top.has(path)) ||
+        /(^|\/)(tests?|fixtures|conformance)\//.test(path) ||
+        /\.test\./.test(path),
+    );
+    expect(stray).toEqual([]);
+  });
+
+  test("carries every export target and the bin", () => {
+    const targets = Object.values(PACKAGE.exports as Record<string, string | Record<string, string>>)
+      .flatMap((target) => (typeof target === "string" ? [target] : Object.values(target)))
+      .map((target) => target.replace(/^\.\//, ""));
+    expect([...targets, PACKAGE.bin.yian].filter((target) => !files.includes(target))).toEqual([]);
+  });
+
+  test("the bin starts with a node shebang", () => {
+    expect(readFileSync(join(dir, "package", PACKAGE.bin.yian), "utf8").startsWith("#!/usr/bin/env node\n")).toBe(true);
+  });
+
+  test("installs, runs and typechecks for a consumer on plain Node", () => {
+    const app = join(dir, "app");
+    mkdirSync(app);
+    writeFileSync(join(app, "package.json"), JSON.stringify({ name: "consumer", private: true, type: "module" }));
+    execFileSync("npm", ["install", "--no-audit", "--no-fund", tarball], { cwd: app, stdio: "pipe" });
+    const version = execFileSync(join(app, "node_modules", ".bin", "yian"), ["--version"], { cwd: app, encoding: "utf8" });
+    expect(version.trim()).toBe(PACKAGE.version);
+    const specifier = (path: string) => `@ngocbh/yian${path.slice(1)}`;
+    const imports = IMPORTS.map((path) => `await import(${JSON.stringify(specifier(path))});`).join("\n");
+    execFileSync("node", ["--input-type=module", "-e", imports], { cwd: app, stdio: "pipe" });
+    writeFileSync(
+      join(app, "index.ts"),
+      IMPORTS.map((path, i) => `import * as m${i} from ${JSON.stringify(specifier(path))};\nvoid m${i};`).join("\n"),
+    );
+    writeFileSync(
+      join(app, "tsconfig.json"),
+      JSON.stringify({
+        compilerOptions: {
+          module: "NodeNext",
+          moduleResolution: "NodeNext",
+          target: "ES2022",
+          strict: true,
+          noEmit: true,
+          skipLibCheck: false,
+          types: ["node"],
+          typeRoots: [join(ROOT, "node_modules", "@types")],
+        },
+        include: ["index.ts"],
+      }),
+    );
+    execFileSync(join(ROOT, "node_modules", ".bin", "tsc"), ["-p", app], { cwd: app, stdio: "pipe" });
+  }, 300_000);
 });

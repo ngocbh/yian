@@ -125,6 +125,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: outer
   - - NodeExpanded
@@ -139,6 +140,7 @@ expect:
     - node_id: outer/__start__
       output:
         v: 60
+      interrupted: false
   - - NodeStarted
     - node_id: outer/via
   - - NodeExpanded
@@ -153,11 +155,13 @@ expect:
     - node_id: outer/via/__start__
       output:
         v: 60
+      interrupted: false
   - - NodeStarted
     - node_id: outer/via/x
   - - NodeSucceeded
     - node_id: outer/via/x
       output: 120
+      interrupted: false
   - - NodeStarted
     - node_id: outer/via/__end__
   - - NodeFailed

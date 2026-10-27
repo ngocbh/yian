@@ -158,21 +158,25 @@ expect:
     - node_id: __start__
       output:
         name: Ada
+      interrupted: false
   - - NodeStarted
     - node_id: a
   - - NodeSucceeded
     - node_id: a
       output: 2
+      interrupted: false
   - - NodeStarted
     - node_id: b
   - - NodeSucceeded
     - node_id: b
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: items
   - - NodeSucceeded
     - node_id: items
       output: [a, b]
+      interrupted: false
   - - NodeStarted
     - node_id: x
   - - NodeExpanded
@@ -187,48 +191,57 @@ expect:
   - - NodeSucceeded
     - node_id: x/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: x#0/__start__
   - - NodeSucceeded
     - node_id: x#0/__start__
       output:
         v: a
+      interrupted: false
   - - NodeStarted
     - node_id: x#1/__start__
   - - NodeSucceeded
     - node_id: x#1/__start__
       output:
         v: b
+      interrupted: false
   - - NodeStarted
     - node_id: x#0/wrap
   - - NodeSucceeded
     - node_id: x#0/wrap
       output: got a
+      interrupted: false
   - - NodeStarted
     - node_id: x#1/wrap
   - - NodeSucceeded
     - node_id: x#1/wrap
       output: got b
+      interrupted: false
   - - NodeStarted
     - node_id: x#0/__end__
   - - NodeSucceeded
     - node_id: x#0/__end__
       output: got a
+      interrupted: false
   - - NodeStarted
     - node_id: x#1/__end__
   - - NodeSucceeded
     - node_id: x#1/__end__
       output: got b
+      interrupted: false
   - - NodeStarted
     - node_id: x/__end__
   - - NodeSucceeded
     - commit_as: x
       node_id: x/__end__
       output: [got a, got b]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: [got a, got b]
+      interrupted: false
   - - RunSucceeded
     - output: [got a, got b]

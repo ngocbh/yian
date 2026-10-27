@@ -149,6 +149,7 @@ expect:
     - node_id: __start__
       output:
         go: true
+      interrupted: false
   - - NodeStarted
     - node_id: router
   - - NodeRouted
@@ -179,12 +180,14 @@ expect:
         - description: Relational.
           label: Postgres
         question: Which database?
+      interrupted: false
   - - NodeStarted
     - node_id: ask
   - - NodeSucceeded
     - node_id: ask
       output:
         DB: Postgres
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -192,6 +195,7 @@ expect:
       output:
         r:
           DB: Postgres
+      interrupted: false
   - - RunSucceeded
     - output:
         r:

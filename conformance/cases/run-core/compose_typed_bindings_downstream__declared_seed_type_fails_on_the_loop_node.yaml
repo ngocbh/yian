@@ -89,11 +89,13 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: opaque
   - - NodeSucceeded
     - node_id: opaque
       output: '1'
+      interrupted: false
   - - NodeStarted
     - node_id: loop
   - - NodeFailed

@@ -134,6 +134,7 @@ expect:
     - node_id: __start__
       output:
         approve: true
+      interrupted: false
   - - NodeStarted
     - node_id: each
   - - NodeExpanded
@@ -148,18 +149,21 @@ expect:
   - - NodeSucceeded
     - node_id: each/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/__start__
   - - NodeSucceeded
     - node_id: each#0/__start__
       output:
         flag: true
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/__start__
   - - NodeSucceeded
     - node_id: each#1/__start__
       output:
         flag: false
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/gate
   - - NodeRouted
@@ -177,25 +181,30 @@ expect:
   - - NodeSucceeded
     - node_id: each#0/mk
       output: made
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/__end__
   - - NodeSucceeded
     - node_id: each#1/__end__
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/__end__
   - - NodeSucceeded
     - node_id: each#0/__end__
       output: made
+      interrupted: false
   - - NodeStarted
     - node_id: each/__end__
   - - NodeSucceeded
     - commit_as: each
       node_id: each/__end__
       output: [made, null]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: [made, null]
+      interrupted: false
   - - RunSucceeded
     - output: [made, null]

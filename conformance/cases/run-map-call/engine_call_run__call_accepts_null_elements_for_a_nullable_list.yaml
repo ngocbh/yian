@@ -91,11 +91,13 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: source
   - - NodeSucceeded
     - node_id: source
       output: [null]
+      interrupted: false
   - - NodeStarted
     - node_id: invoke
   - - NodeExpanded
@@ -110,16 +112,19 @@ expect:
     - node_id: invoke/__start__
       output:
         values: [null]
+      interrupted: false
   - - NodeStarted
     - node_id: invoke/__end__
   - - NodeSucceeded
     - commit_as: invoke
       node_id: invoke/__end__
       output: [null]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: [null]
+      interrupted: false
   - - RunSucceeded
     - output: [null]

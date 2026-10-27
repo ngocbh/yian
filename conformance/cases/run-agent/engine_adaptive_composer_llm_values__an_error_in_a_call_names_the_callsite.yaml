@@ -105,11 +105,13 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: pick
   - - NodeSucceeded
     - node_id: pick
       output: nope
+      interrupted: false
   - - NodeStarted
     - node_id: sub
   - - NodeExpanded
@@ -124,6 +126,7 @@ expect:
     - node_id: sub/__start__
       output:
         p: nope
+      interrupted: false
   - - NodeStarted
     - node_id: sub/ask__compose
   - - NodeFailed

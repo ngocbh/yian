@@ -139,6 +139,7 @@ expect:
     - node_id: __start__
       output:
         approve: false
+      interrupted: false
   - - NodeStarted
     - node_id: c1
   - - NodeExpanded
@@ -153,6 +154,7 @@ expect:
     - node_id: c1/__start__
       output:
         approve: false
+      interrupted: false
   - - NodeStarted
     - node_id: c1/gate
   - - NodeRouted
@@ -167,11 +169,13 @@ expect:
       node_id: c1/__end__
       output:
         order: null
+      interrupted: false
   - - NodeStarted
     - node_id: c1/rejected
   - - NodeSucceeded
     - node_id: c1/rejected
       output: no
+      interrupted: false
   - - NodeStarted
     - node_id: c2
   - - NodeFailed

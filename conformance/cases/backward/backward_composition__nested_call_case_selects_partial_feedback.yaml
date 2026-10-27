@@ -488,6 +488,7 @@ expect:
           - [b, c]
           title: unchanged
         selected: true
+      interrupted: false
   - - NodeStarted
     - node_id: outer
   - - NodeExpanded
@@ -512,6 +513,7 @@ expect:
           - [b, c]
           title: unchanged
         selected: true
+      interrupted: false
   - - NodeStarted
     - node_id: outer/gate
   - - NodeRouted
@@ -542,6 +544,7 @@ expect:
           - [a]
           - [b, c]
           title: unchanged
+      interrupted: false
   - - NodeStarted
     - node_id: outer/chosen/__end__
   - - NodeSucceeded
@@ -554,6 +557,7 @@ expect:
           - [a]
           - [b, c]
           title: unchanged
+      interrupted: false
   - - NodeStarted
     - node_id: outer/__end__
   - - NodeSucceeded
@@ -566,6 +570,7 @@ expect:
           - [a]
           - [b, c]
           title: unchanged
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -577,6 +582,7 @@ expect:
           - [a]
           - [b, c]
           title: unchanged
+      interrupted: false
   - - RunSucceeded
     - output:
         local: child default

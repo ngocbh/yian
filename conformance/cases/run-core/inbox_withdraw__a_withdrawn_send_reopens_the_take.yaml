@@ -106,6 +106,7 @@ expect:
     - node_id: __start__
       output:
         notes: {inbox: notes}
+      interrupted: false
   - - NodeStarted
     - {node_id: heard}
   - - NodeWaiting
@@ -121,14 +122,15 @@ expect:
       output:
         closed: false
         events: [second]
+      interrupted: false
   - - NodeStarted
     - {node_id: reply}
   - - NodeSucceeded
-    - {node_id: reply, output: second}
+    - {node_id: reply, output: second, interrupted: false}
   - - NodeStarted
     - {node_id: __end__}
   - - NodeSucceeded
-    - {node_id: __end__, output: second}
+    - {node_id: __end__, output: second, interrupted: false}
   - - RunSucceeded
     - {output: second}
   stream: []

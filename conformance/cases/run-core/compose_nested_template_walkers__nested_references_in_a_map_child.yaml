@@ -170,6 +170,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: m
   - - NodeExpanded
@@ -184,28 +185,33 @@ expect:
   - - NodeSucceeded
     - node_id: m/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/__start__
   - - NodeSucceeded
     - node_id: m#0/__start__
       output:
         v: 1
+      interrupted: false
   - - NodeStarted
     - node_id: m#1/__start__
   - - NodeSucceeded
     - node_id: m#1/__start__
       output:
         v: 2
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/e
   - - NodeSucceeded
     - node_id: m#0/e
       output: 10
+      interrupted: false
   - - NodeStarted
     - node_id: m#1/e
   - - NodeSucceeded
     - node_id: m#1/e
       output: 20
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/w
   - - NodeSucceeded
@@ -214,6 +220,7 @@ expect:
         e: [10]
         note: v=1
         v: 1
+      interrupted: false
   - - NodeStarted
     - node_id: m#1/w
   - - NodeSucceeded
@@ -222,6 +229,7 @@ expect:
         e: [20]
         note: v=2
         v: 2
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/__end__
   - - NodeSucceeded
@@ -230,6 +238,7 @@ expect:
         e: [10]
         note: v=1
         v: 1
+      interrupted: false
   - - NodeStarted
     - node_id: m#1/__end__
   - - NodeSucceeded
@@ -238,6 +247,7 @@ expect:
         e: [20]
         note: v=2
         v: 2
+      interrupted: false
   - - NodeStarted
     - node_id: m/__end__
   - - NodeSucceeded
@@ -250,6 +260,7 @@ expect:
       - e: [20]
         note: v=2
         v: 2
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -261,6 +272,7 @@ expect:
       - e: [20]
         note: v=2
         v: 2
+      interrupted: false
   - - RunSucceeded
     - output:
       - e: [10]

@@ -102,11 +102,13 @@ expect:
     - node_id: __start__
       output:
         pick: t
+      interrupted: false
   - - NodeStarted
     - node_id: src
   - - NodeSucceeded
     - node_id: src
       output: true
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -121,10 +123,12 @@ expect:
   - - NodeSucceeded
     - node_id: two
       output: two
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: two
+      interrupted: false
   - - RunSucceeded
     - output: two

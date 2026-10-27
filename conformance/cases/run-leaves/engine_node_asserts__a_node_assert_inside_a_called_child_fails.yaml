@@ -101,6 +101,7 @@ expect:
     - node_id: __start__
       output:
         v: -1
+      interrupted: false
   - - NodeStarted
     - node_id: call_it
   - - NodeExpanded
@@ -115,6 +116,7 @@ expect:
     - node_id: call_it/__start__
       output:
         n: -1
+      interrupted: false
   - - NodeStarted
     - node_id: call_it/y
   - - NodeFailed

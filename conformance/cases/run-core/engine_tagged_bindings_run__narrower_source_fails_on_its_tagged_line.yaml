@@ -75,11 +75,13 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: p
   - - NodeSucceeded
     - node_id: p
       output: '5'
+      interrupted: false
   - - NodeStarted
     - node_id: c
   - - NodeFailed

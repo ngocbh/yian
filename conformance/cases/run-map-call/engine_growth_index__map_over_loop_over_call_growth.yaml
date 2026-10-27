@@ -445,6 +445,7 @@ expect:
     - node_id: __start__
       output:
         xs: [1, 2]
+      interrupted: false
   - - NodeStarted
     - node_id: each
   - - NodeExpanded
@@ -459,18 +460,21 @@ expect:
   - - NodeSucceeded
     - node_id: each/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/__start__
   - - NodeSucceeded
     - node_id: each#0/__start__
       output:
         x: 1
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/__start__
   - - NodeSucceeded
     - node_id: each#1/__start__
       output:
         x: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat
   - - NodeExpanded
@@ -495,12 +499,14 @@ expect:
     - node_id: each#0/repeat#0/__start__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#0/__start__
   - - NodeSucceeded
     - node_id: each#1/repeat#0/__start__
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat#0/inner
   - - NodeExpanded
@@ -523,46 +529,54 @@ expect:
     - node_id: each#0/repeat#0/inner/__start__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#0/inner/__start__
   - - NodeSucceeded
     - node_id: each#1/repeat#0/inner/__start__
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat#0/inner/a
   - - NodeSucceeded
     - node_id: each#0/repeat#0/inner/a
       output: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#0/inner/a
   - - NodeSucceeded
     - node_id: each#1/repeat#0/inner/a
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat#0/inner/__end__
   - - NodeSucceeded
     - commit_as: each#0/repeat#0/inner
       node_id: each#0/repeat#0/inner/__end__
       output: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#0/inner/__end__
   - - NodeSucceeded
     - commit_as: each#1/repeat#0/inner
       node_id: each#1/repeat#0/inner/__end__
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat#0/__end__
   - - NodeSucceeded
     - node_id: each#0/repeat#0/__end__
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#0/__end__
   - - NodeSucceeded
     - node_id: each#1/repeat#0/__end__
       output:
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat~1
   - - NodeExpanded
@@ -595,12 +609,14 @@ expect:
     - node_id: each#0/repeat#1/__start__
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#1/__start__
   - - NodeSucceeded
     - node_id: each#1/repeat#1/__start__
       output:
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat#1/inner
   - - NodeExpanded
@@ -623,46 +639,54 @@ expect:
     - node_id: each#0/repeat#1/inner/__start__
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#1/inner/__start__
   - - NodeSucceeded
     - node_id: each#1/repeat#1/inner/__start__
       output:
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat#1/inner/a
   - - NodeSucceeded
     - node_id: each#0/repeat#1/inner/a
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#1/inner/a
   - - NodeSucceeded
     - node_id: each#1/repeat#1/inner/a
       output: 4
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat#1/inner/__end__
   - - NodeSucceeded
     - commit_as: each#0/repeat#1/inner
       node_id: each#0/repeat#1/inner/__end__
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#1/inner/__end__
   - - NodeSucceeded
     - commit_as: each#1/repeat#1/inner
       node_id: each#1/repeat#1/inner/__end__
       output: 4
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat#1/__end__
   - - NodeSucceeded
     - node_id: each#0/repeat#1/__end__
       output:
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#1/__end__
   - - NodeSucceeded
     - node_id: each#1/repeat#1/__end__
       output:
         n: 4
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat~2
   - - NodeExpanded
@@ -695,12 +719,14 @@ expect:
     - node_id: each#0/repeat#2/__start__
       output:
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#2/__start__
   - - NodeSucceeded
     - node_id: each#1/repeat#2/__start__
       output:
         n: 4
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat#2/inner
   - - NodeExpanded
@@ -723,46 +749,54 @@ expect:
     - node_id: each#0/repeat#2/inner/__start__
       output:
         n: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#2/inner/__start__
   - - NodeSucceeded
     - node_id: each#1/repeat#2/inner/__start__
       output:
         n: 4
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat#2/inner/a
   - - NodeSucceeded
     - node_id: each#0/repeat#2/inner/a
       output: 4
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#2/inner/a
   - - NodeSucceeded
     - node_id: each#1/repeat#2/inner/a
       output: 5
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat#2/inner/__end__
   - - NodeSucceeded
     - commit_as: each#0/repeat#2/inner
       node_id: each#0/repeat#2/inner/__end__
       output: 4
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#2/inner/__end__
   - - NodeSucceeded
     - commit_as: each#1/repeat#2/inner
       node_id: each#1/repeat#2/inner/__end__
       output: 5
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat#2/__end__
   - - NodeSucceeded
     - node_id: each#0/repeat#2/__end__
       output:
         n: 4
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat#2/__end__
   - - NodeSucceeded
     - node_id: each#1/repeat#2/__end__
       output:
         n: 5
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/repeat~3
   - - NodeSucceeded
@@ -770,6 +804,7 @@ expect:
       node_id: each#0/repeat~3
       output:
         n: 4
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/repeat~3
   - - NodeSucceeded
@@ -777,18 +812,21 @@ expect:
       node_id: each#1/repeat~3
       output:
         n: 5
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/__end__
   - - NodeSucceeded
     - node_id: each#0/__end__
       output:
         n: 4
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/__end__
   - - NodeSucceeded
     - node_id: each#1/__end__
       output:
         n: 5
+      interrupted: false
   - - NodeStarted
     - node_id: each/__end__
   - - NodeSucceeded
@@ -797,6 +835,7 @@ expect:
       output:
       - n: 4
       - n: 5
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -804,6 +843,7 @@ expect:
       output:
       - n: 4
       - n: 5
+      interrupted: false
   - - RunSucceeded
     - output:
       - n: 4

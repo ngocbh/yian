@@ -105,6 +105,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: writer
   - - ModelCallStarted
@@ -129,11 +130,13 @@ expect:
   - - NodeSucceeded
     - node_id: writer
       output: hello big world
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: hello big world
+      interrupted: false
   - - RunSucceeded
     - output: hello big world
   stream:

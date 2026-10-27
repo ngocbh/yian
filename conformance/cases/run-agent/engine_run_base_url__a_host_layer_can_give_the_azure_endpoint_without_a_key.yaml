@@ -114,6 +114,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: agent
   - - ModelCallStarted
@@ -131,11 +132,13 @@ expect:
   - - NodeSucceeded
     - node_id: agent
       output: ok
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: ok
+      interrupted: false
   - - RunSucceeded
     - output: ok
   stream:

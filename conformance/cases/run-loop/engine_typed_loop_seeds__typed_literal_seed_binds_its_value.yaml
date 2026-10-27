@@ -152,6 +152,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: loop
   - - NodeExpanded
@@ -167,17 +168,20 @@ expect:
     - node_id: loop#0/__start__
       output:
         rounds: 0
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/bump
   - - NodeSucceeded
     - node_id: loop#0/bump
       output: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/__end__
   - - NodeSucceeded
     - node_id: loop#0/__end__
       output:
         rounds: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop~1
   - - NodeExpanded
@@ -193,17 +197,20 @@ expect:
     - node_id: loop#1/__start__
       output:
         rounds: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/bump
   - - NodeSucceeded
     - node_id: loop#1/bump
       output: 2
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/__end__
   - - NodeSucceeded
     - node_id: loop#1/__end__
       output:
         rounds: 2
+      interrupted: false
   - - NodeStarted
     - node_id: loop~2
   - - NodeExpanded
@@ -219,17 +226,20 @@ expect:
     - node_id: loop#2/__start__
       output:
         rounds: 2
+      interrupted: false
   - - NodeStarted
     - node_id: loop#2/bump
   - - NodeSucceeded
     - node_id: loop#2/bump
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: loop#2/__end__
   - - NodeSucceeded
     - node_id: loop#2/__end__
       output:
         rounds: 3
+      interrupted: false
   - - NodeStarted
     - node_id: loop~3
   - - NodeSucceeded
@@ -237,12 +247,14 @@ expect:
       node_id: loop~3
       output:
         rounds: 3
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         rounds: 3
+      interrupted: false
   - - RunSucceeded
     - output:
         rounds: 3

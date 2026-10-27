@@ -93,12 +93,14 @@ expect:
       output:
         order:
           conviction: 0.5
+      interrupted: false
   - - NodeStarted
     - node_id: d
   - - NodeSucceeded
     - node_id: d
       output:
         conviction: 0.5
+      interrupted: false
   - - NodeStarted
     - node_id: c
   - - NodeFailed

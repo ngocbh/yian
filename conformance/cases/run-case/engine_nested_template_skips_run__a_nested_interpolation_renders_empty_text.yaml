@@ -97,6 +97,7 @@ expect:
     - node_id: __start__
       output:
         approve: false
+      interrupted: false
   - - NodeStarted
     - node_id: gate
   - - NodeRouted
@@ -110,17 +111,20 @@ expect:
     - node_id: c
       output:
         a: got !
+      interrupted: false
   - - NodeStarted
     - node_id: rejected
   - - NodeSucceeded
     - node_id: rejected
       output: no
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         a: got !
+      interrupted: false
   - - RunSucceeded
     - output:
         a: got !

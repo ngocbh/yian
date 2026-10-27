@@ -78,6 +78,7 @@ expect:
     - node_id: __start__
       output:
         plan: release
+      interrupted: false
   - - NodeStarted
     - node_id: approval
   - - NodeFailed

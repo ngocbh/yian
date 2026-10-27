@@ -139,6 +139,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: a
   - - NodeExpanded
@@ -153,6 +154,7 @@ expect:
     - node_id: a/__start__
       output:
         m: def-model
+      interrupted: false
   - - NodeStarted
     - node_id: a/chat
   - - ModelCallStarted
@@ -170,17 +172,20 @@ expect:
   - - NodeSucceeded
     - node_id: a/chat
       output: ok
+      interrupted: false
   - - NodeStarted
     - node_id: a/__end__
   - - NodeSucceeded
     - commit_as: a
       node_id: a/__end__
       output: ok
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: ok
+      interrupted: false
   - - RunSucceeded
     - output: ok
   stream:

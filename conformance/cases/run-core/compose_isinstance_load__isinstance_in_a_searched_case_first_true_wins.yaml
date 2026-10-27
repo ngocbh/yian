@@ -113,6 +113,7 @@ expect:
         order:
           action: sell
           price: 1.5
+      interrupted: false
   - - NodeStarted
     - node_id: d
   - - NodeSucceeded
@@ -120,6 +121,7 @@ expect:
       output:
         action: sell
         price: 1.5
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -134,10 +136,12 @@ expect:
   - - NodeSucceeded
     - node_id: o
       output: order
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: order
+      interrupted: false
   - - RunSucceeded
     - output: order

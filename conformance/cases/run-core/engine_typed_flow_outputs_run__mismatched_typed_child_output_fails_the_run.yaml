@@ -92,6 +92,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: use
   - - NodeExpanded
@@ -104,11 +105,13 @@ expect:
   - - NodeSucceeded
     - node_id: use/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: use/n
   - - NodeSucceeded
     - node_id: use/n
       output: x
+      interrupted: false
   - - NodeStarted
     - node_id: use/__end__
   - - NodeFailed

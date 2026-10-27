@@ -136,6 +136,7 @@ expect:
         decision:
           action: hold
           note: wait
+      interrupted: false
   - - NodeStarted
     - node_id: d
   - - NodeSucceeded
@@ -143,6 +144,7 @@ expect:
       output:
         action: hold
         note: wait
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -157,6 +159,7 @@ expect:
   - - NodeSucceeded
     - node_id: log_hold
       output: 'hold: wait'
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -164,6 +167,7 @@ expect:
       output:
         action: hold
         trade: 'hold: wait'
+      interrupted: false
   - - RunSucceeded
     - output:
         action: hold

@@ -84,6 +84,7 @@ expect:
     - node_id: __start__
       output:
         approve: false
+      interrupted: false
   - - NodeStarted
     - node_id: gate
   - - NodeRouted

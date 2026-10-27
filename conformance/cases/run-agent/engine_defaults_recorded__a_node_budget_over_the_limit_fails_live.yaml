@@ -87,6 +87,7 @@ expect:
     - node_id: __start__
       output:
         xs: [1, 2, 3, 4, 5]
+      interrupted: false
   - - NodeStarted
     - node_id: each
   - - NodeFailed

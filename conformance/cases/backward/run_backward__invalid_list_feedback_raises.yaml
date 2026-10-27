@@ -91,11 +91,13 @@ expect:
     - node_id: __start__
       output:
         text: hello
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: hello
+      interrupted: false
   - - RunSucceeded
     - output: hello
   backward:

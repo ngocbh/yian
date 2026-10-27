@@ -134,6 +134,7 @@ expect:
       output:
         go: false
         other: true
+      interrupted: false
   - - NodeStarted
     - node_id: c1
   - - NodeRouted
@@ -158,28 +159,33 @@ expect:
     - node_id: __call_0/__start__
       output:
         tag: publish
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0/fx
   - - NodeSucceeded
     - node_id: __call_0/fx
       output: publish
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0/__end__
   - - NodeSucceeded
     - commit_as: __call_0
       node_id: __call_0/__end__
       output: publish
+      interrupted: false
   - - NodeStarted
     - node_id: publish
   - - NodeSucceeded
     - node_id: publish
       output: published publish
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         r: published publish
+      interrupted: false
   - - RunSucceeded
     - output:
         r: published publish

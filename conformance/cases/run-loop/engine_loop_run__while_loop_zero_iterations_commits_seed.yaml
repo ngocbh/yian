@@ -84,6 +84,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: loop
   - - NodeSucceeded
@@ -91,6 +92,7 @@ expect:
       output:
         exited: true
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -98,6 +100,7 @@ expect:
       output:
         exited: true
         n: 0
+      interrupted: false
   - - RunSucceeded
     - output:
         exited: true

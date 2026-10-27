@@ -105,6 +105,7 @@ expect:
     - node_id: __start__
       output:
         go: true
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -117,6 +118,7 @@ expect:
   - - NodeSucceeded
     - node_id: yes_branch
       output: yes
+      interrupted: false
   - - NodeStarted
     - node_id: c
   - - NodeSucceeded
@@ -124,6 +126,7 @@ expect:
       output:
         note: took yes
         picked: yes
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -133,6 +136,7 @@ expect:
           note: took yes
           picked: yes
         direct: [yes]
+      interrupted: false
   - - RunSucceeded
     - output:
         c:

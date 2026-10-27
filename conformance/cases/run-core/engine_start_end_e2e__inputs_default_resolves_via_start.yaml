@@ -82,6 +82,7 @@ expect:
       output:
         topic: ACME
         window: 30
+      interrupted: false
   - - NodeStarted
     - node_id: emit
   - - NodeSucceeded
@@ -89,6 +90,7 @@ expect:
       output:
         n: 4
         report: report for ACME
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -96,6 +98,7 @@ expect:
       output:
         n: 4
         report: report for ACME
+      interrupted: false
   - - RunSucceeded
     - output:
         n: 4

@@ -61,15 +61,18 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: use
   - - NodeSucceeded
     - node_id: use
       output: no
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: no
+      interrupted: false
   - - RunSucceeded
     - output: no

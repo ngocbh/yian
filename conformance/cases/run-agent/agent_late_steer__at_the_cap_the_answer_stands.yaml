@@ -114,6 +114,7 @@ expect:
     - node_id: __start__
       output:
         notes: {inbox: notes}
+      interrupted: false
   - - NodeStarted
     - {node_id: chat}
   - - ModelCallStarted
@@ -121,10 +122,10 @@ expect:
   - - ModelCallFinished
     - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
   - - NodeSucceeded
-    - {node_id: chat, output: draft}
+    - {node_id: chat, output: draft, interrupted: false}
   - - NodeStarted
     - {node_id: __end__}
   - - NodeSucceeded
-    - {node_id: __end__, output: draft}
+    - {node_id: __end__, output: draft, interrupted: false}
   - - RunSucceeded
     - {output: draft}

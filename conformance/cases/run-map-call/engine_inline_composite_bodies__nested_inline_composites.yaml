@@ -322,6 +322,7 @@ expect:
     - node_id: __start__
       output:
         items: [3, 1, 2]
+      interrupted: false
   - - NodeStarted
     - node_id: outer_call
   - - NodeExpanded
@@ -346,6 +347,7 @@ expect:
     - node_id: outer_call/__start__
       output:
         items: [3, 1, 2]
+      interrupted: false
   - - NodeStarted
     - node_id: outer_loop#0/__start__
   - - NodeSucceeded
@@ -353,6 +355,7 @@ expect:
       output:
         exited: false
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: outer_call/inner
   - - NodeExpanded
@@ -377,6 +380,7 @@ expect:
   - - NodeSucceeded
     - node_id: outer_call/inner/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: outer_loop#0/inner/__start__
   - - NodeSucceeded
@@ -384,24 +388,28 @@ expect:
       output:
         exited: false
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: outer_call/inner#0/__start__
   - - NodeSucceeded
     - node_id: outer_call/inner#0/__start__
       output:
         value: 3
+      interrupted: false
   - - NodeStarted
     - node_id: outer_call/inner#1/__start__
   - - NodeSucceeded
     - node_id: outer_call/inner#1/__start__
       output:
         value: 1
+      interrupted: false
   - - NodeStarted
     - node_id: outer_call/inner#2/__start__
   - - NodeSucceeded
     - node_id: outer_call/inner#2/__start__
       output:
         value: 2
+      interrupted: false
   - - NodeStarted
     - node_id: outer_loop#0/inner/bump
   - - NodeSucceeded
@@ -409,21 +417,25 @@ expect:
       output:
         exited: false
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: outer_call/inner#0/echo
   - - NodeSucceeded
     - node_id: outer_call/inner#0/echo
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: outer_call/inner#1/echo
   - - NodeSucceeded
     - node_id: outer_call/inner#1/echo
       output: 1
+      interrupted: false
   - - NodeStarted
     - node_id: outer_call/inner#2/echo
   - - NodeSucceeded
     - node_id: outer_call/inner#2/echo
       output: 2
+      interrupted: false
   - - NodeStarted
     - node_id: outer_loop#0/inner/__end__
   - - NodeSucceeded
@@ -432,21 +444,25 @@ expect:
       output:
         exited: false
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: outer_call/inner#0/__end__
   - - NodeSucceeded
     - node_id: outer_call/inner#0/__end__
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: outer_call/inner#1/__end__
   - - NodeSucceeded
     - node_id: outer_call/inner#1/__end__
       output: 1
+      interrupted: false
   - - NodeStarted
     - node_id: outer_call/inner#2/__end__
   - - NodeSucceeded
     - node_id: outer_call/inner#2/__end__
       output: 2
+      interrupted: false
   - - NodeStarted
     - node_id: outer_loop#0/__end__
   - - NodeSucceeded
@@ -454,12 +470,14 @@ expect:
       output:
         exited: false
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: outer_call/inner/__end__
   - - NodeSucceeded
     - commit_as: outer_call/inner
       node_id: outer_call/inner/__end__
       output: [3, 1, 2]
+      interrupted: false
   - - NodeStarted
     - node_id: outer_loop~1
   - - NodeExpanded
@@ -480,6 +498,7 @@ expect:
     - commit_as: outer_call
       node_id: outer_call/__end__
       output: [3, 1, 2]
+      interrupted: false
   - - NodeStarted
     - node_id: outer_loop#1/__start__
   - - NodeSucceeded
@@ -487,6 +506,7 @@ expect:
       output:
         exited: false
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: outer_loop#1/inner
   - - NodeExpanded
@@ -503,6 +523,7 @@ expect:
       output:
         exited: false
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: outer_loop#1/inner/bump
   - - NodeSucceeded
@@ -510,6 +531,7 @@ expect:
       output:
         exited: false
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: outer_loop#1/inner/__end__
   - - NodeSucceeded
@@ -518,6 +540,7 @@ expect:
       output:
         exited: false
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: outer_loop#1/__end__
   - - NodeSucceeded
@@ -525,6 +548,7 @@ expect:
       output:
         exited: false
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: outer_loop~2
   - - NodeSucceeded
@@ -533,6 +557,7 @@ expect:
       output:
         exited: false
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -542,6 +567,7 @@ expect:
           exited: false
           n: 2
         mapped: [3, 1, 2]
+      interrupted: false
   - - RunSucceeded
     - output:
         looped:

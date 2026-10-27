@@ -206,6 +206,7 @@ expect:
         - detail: null
         - detail:
             name: ready
+      interrupted: false
   - - NodeStarted
     - node_id: each
   - - NodeExpanded
@@ -227,6 +228,7 @@ expect:
   - - NodeSucceeded
     - node_id: each/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/__start__
   - - NodeSucceeded
@@ -234,6 +236,7 @@ expect:
       output:
         name: null
         row: null
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/__start__
   - - NodeSucceeded
@@ -242,6 +245,7 @@ expect:
         name: null
         row:
           detail: null
+      interrupted: false
   - - NodeStarted
     - node_id: each#2/__start__
   - - NodeSucceeded
@@ -251,6 +255,7 @@ expect:
         row:
           detail:
             name: ready
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/collect
   - - NodeSucceeded
@@ -258,6 +263,7 @@ expect:
       output:
         name: null
         row: null
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/collect
   - - NodeSucceeded
@@ -266,6 +272,7 @@ expect:
         name: null
         row:
           detail: null
+      interrupted: false
   - - NodeStarted
     - node_id: each#2/collect
   - - NodeSucceeded
@@ -275,6 +282,7 @@ expect:
         row:
           detail:
             name: ready
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/__end__
   - - NodeSucceeded
@@ -282,6 +290,7 @@ expect:
       output:
         name: null
         row: null
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/__end__
   - - NodeSucceeded
@@ -290,6 +299,7 @@ expect:
         name: null
         row:
           detail: null
+      interrupted: false
   - - NodeStarted
     - node_id: each#2/__end__
   - - NodeSucceeded
@@ -299,6 +309,7 @@ expect:
         row:
           detail:
             name: ready
+      interrupted: false
   - - NodeStarted
     - node_id: each/__end__
   - - NodeSucceeded
@@ -314,6 +325,7 @@ expect:
         row:
           detail:
             name: ready
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -328,6 +340,7 @@ expect:
         row:
           detail:
             name: ready
+      interrupted: false
   - - RunSucceeded
     - output:
       - name: null

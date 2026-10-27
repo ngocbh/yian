@@ -169,6 +169,7 @@ expect:
     - node_id: __start__
       output:
         items: [a, b, c]
+      interrupted: false
   - - NodeStarted
     - node_id: m
   - - NodeExpanded
@@ -184,65 +185,77 @@ expect:
   - - NodeSucceeded
     - node_id: m/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/__start__
   - - NodeSucceeded
     - node_id: m#0/__start__
       output:
         item: a
+      interrupted: false
   - - NodeStarted
     - node_id: m#1/__start__
   - - NodeSucceeded
     - node_id: m#1/__start__
       output:
         item: b
+      interrupted: false
   - - NodeStarted
     - node_id: m#2/__start__
   - - NodeSucceeded
     - node_id: m#2/__start__
       output:
         item: c
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/place
   - - NodeSucceeded
     - node_id: m#0/place
       output: p0
+      interrupted: false
   - - NodeStarted
     - node_id: m#1/place
   - - NodeSucceeded
     - node_id: m#1/place
       output: p1
+      interrupted: false
   - - NodeStarted
     - node_id: m#2/place
   - - NodeSucceeded
     - node_id: m#2/place
       output: p2
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/__end__
   - - NodeSucceeded
     - node_id: m#0/__end__
       output: p0
+      interrupted: false
   - - NodeStarted
     - node_id: m#1/__end__
   - - NodeSucceeded
     - node_id: m#1/__end__
       output: p1
+      interrupted: false
   - - NodeStarted
     - node_id: m#2/__end__
   - - NodeSucceeded
     - node_id: m#2/__end__
       output: p2
+      interrupted: false
   - - NodeStarted
     - node_id: m/__end__
   - - NodeSucceeded
     - node_id: m/__end__
       output: [p0, p1, p2]
       commit_as: m
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: [p0, p1, p2]
+      interrupted: false
   - - RunSucceeded
     - output: [p0, p1, p2]
   tool_calls:

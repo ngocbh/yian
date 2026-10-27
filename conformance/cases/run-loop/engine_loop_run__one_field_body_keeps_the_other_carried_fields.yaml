@@ -155,6 +155,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: loop
   - - NodeExpanded
@@ -172,17 +173,20 @@ expect:
       output:
         count: 0
         label: x
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/bump
   - - NodeSucceeded
     - node_id: loop#0/bump
       output: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/__end__
   - - NodeSucceeded
     - node_id: loop#0/__end__
       output:
         count: 1
+      interrupted: false
   - - NodeStarted
     - node_id: loop~1
   - - NodeExpanded
@@ -200,17 +204,20 @@ expect:
       output:
         count: 1
         label: x
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/bump
   - - NodeSucceeded
     - node_id: loop#1/bump
       output: 2
+      interrupted: false
   - - NodeStarted
     - node_id: loop#1/__end__
   - - NodeSucceeded
     - node_id: loop#1/__end__
       output:
         count: 2
+      interrupted: false
   - - NodeStarted
     - node_id: loop~2
   - - NodeExpanded
@@ -228,17 +235,20 @@ expect:
       output:
         count: 2
         label: x
+      interrupted: false
   - - NodeStarted
     - node_id: loop#2/bump
   - - NodeSucceeded
     - node_id: loop#2/bump
       output: 3
+      interrupted: false
   - - NodeStarted
     - node_id: loop#2/__end__
   - - NodeSucceeded
     - node_id: loop#2/__end__
       output:
         count: 3
+      interrupted: false
   - - NodeStarted
     - node_id: loop~3
   - - NodeSucceeded
@@ -247,6 +257,7 @@ expect:
       output:
         count: 3
         label: x
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -254,6 +265,7 @@ expect:
       output:
         count: 3
         label: x
+      interrupted: false
   - - RunSucceeded
     - output:
         count: 3

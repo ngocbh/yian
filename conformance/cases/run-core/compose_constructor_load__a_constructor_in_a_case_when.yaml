@@ -105,6 +105,7 @@ expect:
         order:
           action: buy
           conviction: 0.5
+      interrupted: false
   - - NodeStarted
     - node_id: d
   - - NodeSucceeded
@@ -112,6 +113,7 @@ expect:
       output:
         action: buy
         conviction: 0.5
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -124,10 +126,12 @@ expect:
   - - NodeSucceeded
     - node_id: strong
       output: strong
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: strong
+      interrupted: false
   - - RunSucceeded
     - output: strong

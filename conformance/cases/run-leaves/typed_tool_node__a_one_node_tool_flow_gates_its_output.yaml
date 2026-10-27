@@ -79,6 +79,7 @@ expect:
     - node_id: __start__
       output:
         qty: 5
+      interrupted: false
   - - NodeStarted
     - node_id: count
   - - NodeFailed

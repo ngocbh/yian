@@ -104,6 +104,7 @@ expect:
       output:
         a: 0.9
         b: 0.2
+      interrupted: false
   - - NodeStarted
     - node_id: outer
   - - NodeRouted
@@ -123,10 +124,12 @@ expect:
   - - NodeSucceeded
     - node_id: lo
       output: LO
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: LO
+      interrupted: false
   - - RunSucceeded
     - output: LO

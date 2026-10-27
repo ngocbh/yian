@@ -311,6 +311,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: inherits
   - - ModelCallStarted
@@ -328,6 +329,7 @@ expect:
   - - NodeSucceeded
     - node_id: inherits
       output: ok
+      interrupted: false
   - - NodeStarted
     - node_id: child
   - - NodeExpanded
@@ -352,11 +354,13 @@ expect:
   - - NodeSucceeded
     - node_id: other
       output: ok
+      interrupted: false
   - - NodeStarted
     - node_id: child/__start__
   - - NodeSucceeded
     - node_id: child/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: optout
   - - ModelCallStarted
@@ -374,6 +378,7 @@ expect:
   - - NodeSucceeded
     - node_id: optout
       output: ok
+      interrupted: false
   - - NodeStarted
     - node_id: child/nested
   - - ModelCallStarted
@@ -391,17 +396,20 @@ expect:
   - - NodeSucceeded
     - node_id: child/nested
       output: ok
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: ok
+      interrupted: false
   - - NodeStarted
     - node_id: child/__end__
   - - NodeSucceeded
     - commit_as: child
       node_id: child/__end__
       output: ok
+      interrupted: false
   - - RunSucceeded
     - output: ok
   stream:

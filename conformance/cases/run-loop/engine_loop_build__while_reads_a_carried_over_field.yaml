@@ -143,6 +143,7 @@ expect:
       output:
         cfg:
           limit: 2
+      interrupted: false
   - - NodeStarted
     - node_id: repeat
   - - NodeExpanded
@@ -162,17 +163,20 @@ expect:
         cfg:
           limit: 2
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#0/inc
   - - NodeSucceeded
     - node_id: repeat#0/inc
       output: 1
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#0/__end__
   - - NodeSucceeded
     - node_id: repeat#0/__end__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: repeat~1
   - - NodeExpanded
@@ -192,17 +196,20 @@ expect:
         cfg:
           limit: 2
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#1/inc
   - - NodeSucceeded
     - node_id: repeat#1/inc
       output: 2
+      interrupted: false
   - - NodeStarted
     - node_id: repeat#1/__end__
   - - NodeSucceeded
     - node_id: repeat#1/__end__
       output:
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: repeat~2
   - - NodeSucceeded
@@ -212,6 +219,7 @@ expect:
         cfg:
           limit: 2
         n: 2
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -220,6 +228,7 @@ expect:
         cfg:
           limit: 2
         n: 2
+      interrupted: false
   - - RunSucceeded
     - output:
         cfg:

@@ -202,6 +202,7 @@ expect:
       output:
         go: true
         other: false
+      interrupted: false
   - - NodeStarted
     - node_id: m
   - - NodeExpanded
@@ -216,18 +217,21 @@ expect:
   - - NodeSucceeded
     - node_id: m/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/__start__
   - - NodeSucceeded
     - node_id: m#0/__start__
       output:
         go: true
+      interrupted: false
   - - NodeStarted
     - node_id: m#1/__start__
   - - NodeSucceeded
     - node_id: m#1/__start__
       output:
         go: false
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/gate
   - - NodeRouted
@@ -257,50 +261,59 @@ expect:
   - - NodeSucceeded
     - node_id: m#1/skip_it
       output: skipped
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/__call_0/__start__
   - - NodeSucceeded
     - node_id: m#0/__call_0/__start__
       output:
         tag: child
+      interrupted: false
   - - NodeStarted
     - node_id: m#1/__end__
   - - NodeSucceeded
     - node_id: m#1/__end__
       output: skipped
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/__call_0/fx
   - - NodeSucceeded
     - node_id: m#0/__call_0/fx
       output: child
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/__call_0/__end__
   - - NodeSucceeded
     - commit_as: m#0/__call_0
       node_id: m#0/__call_0/__end__
       output: child
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/publish
   - - NodeSucceeded
     - node_id: m#0/publish
       output: child
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/__end__
   - - NodeSucceeded
     - node_id: m#0/__end__
       output: child
+      interrupted: false
   - - NodeStarted
     - node_id: m/__end__
   - - NodeSucceeded
     - commit_as: m
       node_id: m/__end__
       output: [child, skipped]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         r: [child, skipped]
+      interrupted: false
   - - RunSucceeded
     - output:
         r: [child, skipped]

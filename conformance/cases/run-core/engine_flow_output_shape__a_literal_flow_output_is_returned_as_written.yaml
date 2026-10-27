@@ -67,11 +67,13 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: step
   - - NodeSucceeded
     - node_id: step
       output: filled
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -79,6 +81,7 @@ expect:
       output:
         x: 5
         y: filled
+      interrupted: false
   - - RunSucceeded
     - output:
         x: 5

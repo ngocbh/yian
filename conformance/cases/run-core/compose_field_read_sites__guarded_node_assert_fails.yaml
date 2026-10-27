@@ -111,12 +111,14 @@ expect:
         r:
           a: x
         s: x
+      interrupted: false
   - - NodeStarted
     - node_id: step
   - - NodeSucceeded
     - node_id: step
       output:
         a: x
+      interrupted: false
   - - NodeStarted
     - node_id: c
   - - NodeFailed

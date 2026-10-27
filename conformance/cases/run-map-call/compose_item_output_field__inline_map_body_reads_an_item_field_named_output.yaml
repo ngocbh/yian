@@ -142,6 +142,7 @@ expect:
         rows:
         - output: a
         - output: b
+      interrupted: false
   - - NodeStarted
     - node_id: m
   - - NodeExpanded
@@ -156,48 +157,57 @@ expect:
   - - NodeSucceeded
     - node_id: m/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/__start__
   - - NodeSucceeded
     - node_id: m#0/__start__
       output:
         x: a
+      interrupted: false
   - - NodeStarted
     - node_id: m#1/__start__
   - - NodeSucceeded
     - node_id: m#1/__start__
       output:
         x: b
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/up
   - - NodeSucceeded
     - node_id: m#0/up
       output: A
+      interrupted: false
   - - NodeStarted
     - node_id: m#1/up
   - - NodeSucceeded
     - node_id: m#1/up
       output: B
+      interrupted: false
   - - NodeStarted
     - node_id: m#0/__end__
   - - NodeSucceeded
     - node_id: m#0/__end__
       output: A
+      interrupted: false
   - - NodeStarted
     - node_id: m#1/__end__
   - - NodeSucceeded
     - node_id: m#1/__end__
       output: B
+      interrupted: false
   - - NodeStarted
     - node_id: m/__end__
   - - NodeSucceeded
     - commit_as: m
       node_id: m/__end__
       output: [A, B]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: [A, B]
+      interrupted: false
   - - RunSucceeded
     - output: [A, B]

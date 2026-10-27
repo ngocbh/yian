@@ -86,11 +86,13 @@ expect:
     - node_id: __start__
       output:
         proj: x
+      interrupted: false
   - - NodeStarted
     - node_id: pick
   - - NodeSucceeded
     - node_id: pick
       output: nope
+      interrupted: false
   - - NodeStarted
     - node_id: ask__compose
   - - NodeFailed

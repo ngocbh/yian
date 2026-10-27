@@ -125,6 +125,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: pick
   - - NodeSucceeded
@@ -132,6 +133,7 @@ expect:
       output:
         model: whole
         provider: openai
+      interrupted: false
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted
@@ -149,11 +151,13 @@ expect:
   - - NodeSucceeded
     - node_id: chat
       output: ok
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: ok
+      interrupted: false
   - - RunSucceeded
     - output: ok
   stream:

@@ -134,6 +134,7 @@ expect:
     - node_id: __start__
       output:
         question: q
+      interrupted: false
   - - NodeStarted
     - node_id: agent
   - - ModelCallStarted
@@ -156,12 +157,14 @@ expect:
     - node_id: agent
       output:
         k: 1
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         k: 1
+      interrupted: false
   - - RunSucceeded
     - output:
         k: 1

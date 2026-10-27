@@ -101,6 +101,7 @@ expect:
           action: sell
           price: 1.5
           qty: 2
+      interrupted: false
   - - NodeStarted
     - node_id: decide
   - - NodeSucceeded
@@ -109,6 +110,7 @@ expect:
         action: sell
         price: 1.5
         qty: 2
+      interrupted: false
   - - NodeStarted
     - node_id: place
   - - NodeFailed

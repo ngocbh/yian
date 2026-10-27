@@ -90,6 +90,7 @@ expect:
     - node_id: __start__
       output:
         x: null
+      interrupted: false
   - - NodeStarted
     - node_id: go
   - - NodeExpanded
@@ -104,17 +105,21 @@ expect:
     - node_id: go/__start__
       output:
         topic: null
+      interrupted: false
   - - NodeStarted
     - node_id: go/child
   - - NodeSucceeded
     - node_id: go/child
+      interrupted: false
   - - NodeStarted
     - node_id: go/__end__
   - - NodeSucceeded
     - commit_as: go
       node_id: go/__end__
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
+      interrupted: false
   - [RunSucceeded]

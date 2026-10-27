@@ -78,6 +78,7 @@ expect:
     - node_id: __start__
       output:
         topic: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: x
   - - NodeSucceeded
@@ -85,6 +86,7 @@ expect:
       output:
         n: 4
         report: report for ACME
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -92,6 +94,7 @@ expect:
       output:
         n: 4
         report: report for ACME
+      interrupted: false
   - - RunSucceeded
     - output:
         n: 4

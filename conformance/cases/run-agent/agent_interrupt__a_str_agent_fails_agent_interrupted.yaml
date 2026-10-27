@@ -110,6 +110,7 @@ expect:
     - node_id: __start__
       output:
         notes: {inbox: notes}
+      interrupted: false
   - - NodeStarted
     - {node_id: chat}
   - - ModelCallStarted

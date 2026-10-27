@@ -92,11 +92,13 @@ expect:
         approve: false
         label: none
         n: 50
+      interrupted: false
   - - NodeStarted
     - node_id: score
   - - NodeSucceeded
     - node_id: score
       output: 50
+      interrupted: false
   - - NodeStarted
     - node_id: gate
   - - NodeRouted
@@ -109,10 +111,12 @@ expect:
   - - NodeSucceeded
     - node_id: cold
       output: cold
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: cold
+      interrupted: false
   - - RunSucceeded
     - output: cold

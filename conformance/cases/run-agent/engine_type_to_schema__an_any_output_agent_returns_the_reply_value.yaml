@@ -130,6 +130,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: a
   - - ModelCallStarted
@@ -148,12 +149,14 @@ expect:
     - node_id: a
       output:
         a: [1, null]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         a: [1, null]
+      interrupted: false
   - - RunSucceeded
     - output:
         a: [1, null]

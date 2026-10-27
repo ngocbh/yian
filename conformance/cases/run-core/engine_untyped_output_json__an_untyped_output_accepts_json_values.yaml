@@ -76,6 +76,7 @@ expect:
     - node_id: __start__
       output:
         s: x
+      interrupted: false
   - - NodeStarted
     - node_id: mk
   - - NodeSucceeded
@@ -84,6 +85,7 @@ expect:
       - 1
       - a
       - k: 2.5
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -92,6 +94,7 @@ expect:
       - 1
       - a
       - k: 2.5
+      interrupted: false
   - - RunSucceeded
     - output:
       - 1

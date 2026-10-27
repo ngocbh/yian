@@ -65,6 +65,7 @@ expect:
     - node_id: __start__
       output:
         n: 1
+      interrupted: false
   - - NodeStarted
     - node_id: gate
   - - NodeRouted
@@ -77,5 +78,6 @@ expect:
   - - NodeSucceeded
     - node_id: __end__
       output: none
+      interrupted: false
   - - RunSucceeded
     - output: none

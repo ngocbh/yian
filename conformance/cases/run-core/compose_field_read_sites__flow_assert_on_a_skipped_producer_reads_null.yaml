@@ -115,12 +115,14 @@ expect:
         r:
           a: x
         s: stop
+      interrupted: false
   - - NodeStarted
     - node_id: step
   - - NodeSucceeded
     - node_id: step
       output:
         a: x
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -134,11 +136,13 @@ expect:
     - node_id: __end__
       output:
         a: x
+      interrupted: false
   - - NodeStarted
     - node_id: e
   - - NodeSucceeded
     - node_id: e
       output: 1
+      interrupted: false
   - - RunSucceeded
     - output:
         a: x

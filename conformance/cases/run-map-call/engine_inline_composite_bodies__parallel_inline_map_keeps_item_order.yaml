@@ -246,6 +246,7 @@ expect:
         row:
           name: second
           position: 2
+      interrupted: false
   - - NodeStarted
     - node_id: __start__
   - - NodeSucceeded
@@ -258,6 +259,7 @@ expect:
           position: 1
         - name: second
           position: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each
   - - NodeExpanded
@@ -286,6 +288,7 @@ expect:
         row:
           name: third
           position: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/__start__
   - - NodeSucceeded
@@ -295,6 +298,7 @@ expect:
         row:
           name: third
           position: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/render
   - - NodeSucceeded
@@ -304,6 +308,7 @@ expect:
         row:
           name: third
           position: 3
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/__end__
   - - NodeSucceeded
@@ -313,6 +318,7 @@ expect:
         row:
           name: first
           position: 1
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/__start__
   - - NodeSucceeded
@@ -322,6 +328,7 @@ expect:
         row:
           name: first
           position: 1
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/render
   - - NodeSucceeded
@@ -331,6 +338,7 @@ expect:
         row:
           name: first
           position: 1
+      interrupted: false
   - - NodeStarted
     - node_id: each#2/__end__
   - - NodeSucceeded
@@ -340,6 +348,7 @@ expect:
         row:
           name: second
           position: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each#2/__start__
   - - NodeSucceeded
@@ -349,6 +358,7 @@ expect:
         row:
           name: second
           position: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each#2/render
   - - NodeSucceeded
@@ -358,6 +368,7 @@ expect:
         row:
           name: second
           position: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each/__end__
   - - NodeSucceeded
@@ -376,11 +387,13 @@ expect:
         row:
           name: second
           position: 2
+      interrupted: false
   - - NodeStarted
     - node_id: each/__start__
   - - NodeSucceeded
     - node_id: each/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: prepare
   - - NodeSucceeded
@@ -392,3 +405,4 @@ expect:
         position: 1
       - name: second
         position: 2
+      interrupted: false

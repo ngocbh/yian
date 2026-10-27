@@ -104,6 +104,7 @@ expect:
           notes:
           - text: a
           - zz: 1
+      interrupted: false
   - - NodeStarted
     - node_id: d
   - - NodeFailed

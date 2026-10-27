@@ -110,6 +110,7 @@ expect:
       output:
         score: 0.2
         topic: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: gate
   - - NodeRouted
@@ -124,15 +125,18 @@ expect:
   - - NodeSucceeded
     - node_id: con
       output: 'con: ACME'
+      interrupted: false
   - - NodeStarted
     - node_id: assemble
   - - NodeSucceeded
     - node_id: assemble
       output: 'con: ACME|detail=null'
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: 'con: ACME|detail=null'
+      interrupted: false
   - - RunSucceeded
     - output: 'con: ACME|detail=null'

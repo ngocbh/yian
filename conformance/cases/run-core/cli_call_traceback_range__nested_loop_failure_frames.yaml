@@ -127,6 +127,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: outer
   - - NodeExpanded
@@ -139,6 +140,7 @@ expect:
   - - NodeSucceeded
     - node_id: outer/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: outer/repeat
   - - NodeExpanded
@@ -154,18 +156,21 @@ expect:
     - node_id: outer/repeat#0/__start__
       output:
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: outer/repeat#0/step
   - - NodeSucceeded
     - node_id: outer/repeat#0/step
       output:
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: outer/repeat#0/__end__
   - - NodeSucceeded
     - node_id: outer/repeat#0/__end__
       output:
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: outer/repeat~1
   - - NodeFailed

@@ -102,6 +102,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: loop
   - - NodeExpanded
@@ -119,6 +120,7 @@ expect:
       output:
         exited: false
         n: 0
+      interrupted: false
   - - NodeStarted
     - node_id: loop#0/step
   - - NodeFailed

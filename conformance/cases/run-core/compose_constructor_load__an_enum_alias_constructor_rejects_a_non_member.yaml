@@ -108,6 +108,7 @@ expect:
             action: sell
             price: 1.5
           size: xl
+      interrupted: false
   - - NodeStarted
     - node_id: d
   - - NodeSucceeded
@@ -117,6 +118,7 @@ expect:
           action: sell
           price: 1.5
         size: xl
+      interrupted: false
   - - NodeStarted
     - node_id: c
   - - NodeFailed

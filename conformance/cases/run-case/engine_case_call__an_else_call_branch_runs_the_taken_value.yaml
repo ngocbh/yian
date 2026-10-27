@@ -106,6 +106,7 @@ expect:
     - node_id: __start__
       output:
         score: 0.2
+      interrupted: false
   - - NodeStarted
     - node_id: gate
   - - NodeRouted
@@ -127,21 +128,25 @@ expect:
     - node_id: __call_1/__start__
       output:
         stance: con
+      interrupted: false
   - - NodeStarted
     - node_id: __call_1/x
   - - NodeSucceeded
     - node_id: __call_1/x
       output: took:con
+      interrupted: false
   - - NodeStarted
     - node_id: __call_1/__end__
   - - NodeSucceeded
     - commit_as: __call_1
       node_id: __call_1/__end__
       output: took:con
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: took:con
+      interrupted: false
   - - RunSucceeded
     - output: took:con

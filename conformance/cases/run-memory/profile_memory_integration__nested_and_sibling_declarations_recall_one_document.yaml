@@ -197,6 +197,7 @@ expect:
     - node_id: __start__
       output:
         message: hi
+      interrupted: false
   - - NodeStarted
     - node_id: first
   - - ModelCallStarted
@@ -214,6 +215,7 @@ expect:
   - - NodeSucceeded
     - node_id: first
       output: a
+      interrupted: false
   - - NodeStarted
     - node_id: second
   - - ModelCallStarted
@@ -231,11 +233,13 @@ expect:
   - - NodeSucceeded
     - node_id: second
       output: b
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: a
+      interrupted: false
   - - RunSucceeded
     - output: a
   stream:

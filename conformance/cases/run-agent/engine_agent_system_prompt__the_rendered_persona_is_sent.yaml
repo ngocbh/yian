@@ -183,6 +183,7 @@ expect:
         message: How are we doing?
         name: Ada
         title: CTO
+      interrupted: false
   - - NodeStarted
     - node_id: reply
   - - ModelCallStarted
@@ -200,6 +201,7 @@ expect:
   - - NodeSucceeded
     - node_id: reply
       output: draft
+      interrupted: false
   - - NodeStarted
     - node_id: after
   - - ModelCallStarted
@@ -217,11 +219,13 @@ expect:
   - - NodeSucceeded
     - node_id: after
       output: final
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: final
+      interrupted: false
   - - RunSucceeded
     - output: final
   stream:

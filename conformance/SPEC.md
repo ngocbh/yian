@@ -497,13 +497,12 @@ snake_case names, at every depth of yian's own structures (never inside a value 
 produced, such as an output or an answer); fields that are null are left out at the top level
 only; lists and tuples as lists, sets as sorted lists, a failure in failure form, a file as
 `{uri, mime, name}`.
-The `started_at` of `ModelCallStarted` is left out (a time), and so is a `NodeSucceeded`'s
-`interrupted` when it is false. A model call event and an AGENT's
+The `started_at` of `ModelCallStarted` is left out (a time). A model call event and an AGENT's
 stream chunk name the step their record becomes by `n` (with `node_id`), and a chunk's `index`
 counts that step's chunks from 0.
 
 - An **event** is `[<EventName>]` or `[<EventName>, <data form>]`, for example
-  `[NodeSucceeded, {node_id: hello, output: hi Ada}]` and `[RunStarted]`.
+  `[NodeSucceeded, {node_id: hello, output: hi Ada, interrupted: false}]` and `[RunStarted]`.
 - A **stream chunk** is its data form.
 
 ## The trace

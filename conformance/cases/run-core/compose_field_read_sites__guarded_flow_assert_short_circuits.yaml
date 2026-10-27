@@ -86,18 +86,21 @@ expect:
         o:
           action: sell
         s: x
+      interrupted: false
   - - NodeStarted
     - node_id: step
   - - NodeSucceeded
     - node_id: step
       output:
         a: x
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         a: x
+      interrupted: false
   - - RunSucceeded
     - output:
         a: x

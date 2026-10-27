@@ -97,11 +97,13 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: zero
   - - NodeSucceeded
     - node_id: zero
       output: 0
+      interrupted: false
   - - NodeStarted
     - node_id: gate
   - - NodeFailed

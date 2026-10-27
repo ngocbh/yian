@@ -184,6 +184,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: worker
   - - ModelCallStarted
@@ -228,11 +229,13 @@ expect:
   - - NodeSucceeded
     - node_id: worker
       output: the file is missing
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: the file is missing
+      interrupted: false
   - - RunSucceeded
     - output: the file is missing
   stream:

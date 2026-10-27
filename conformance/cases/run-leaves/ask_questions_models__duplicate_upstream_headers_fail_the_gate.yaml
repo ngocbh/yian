@@ -90,6 +90,7 @@ expect:
           question: a
         - header: D
           question: b
+      interrupted: false
   - - NodeStarted
     - node_id: ask
   - - NodeFailed

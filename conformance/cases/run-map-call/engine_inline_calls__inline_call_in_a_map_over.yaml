@@ -176,6 +176,7 @@ expect:
     - node_id: __start__
       output:
         topics: [A, B]
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0
   - - NodeExpanded
@@ -190,17 +191,20 @@ expect:
     - node_id: __call_0/__start__
       output:
         xs: [A, B]
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0/x
   - - NodeSucceeded
     - node_id: __call_0/x
       output: [A, B]
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0/__end__
   - - NodeSucceeded
     - commit_as: __call_0
       node_id: __call_0/__end__
       output: [A, B]
+      interrupted: false
   - - NodeStarted
     - node_id: each
   - - NodeExpanded
@@ -215,48 +219,57 @@ expect:
   - - NodeSucceeded
     - node_id: each/__start__
       output: {}
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/__start__
   - - NodeSucceeded
     - node_id: each#0/__start__
       output:
         topic: A
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/__start__
   - - NodeSucceeded
     - node_id: each#1/__start__
       output:
         topic: B
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/x
   - - NodeSucceeded
     - node_id: each#0/x
       output: A
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/x
   - - NodeSucceeded
     - node_id: each#1/x
       output: B
+      interrupted: false
   - - NodeStarted
     - node_id: each#0/__end__
   - - NodeSucceeded
     - node_id: each#0/__end__
       output: A
+      interrupted: false
   - - NodeStarted
     - node_id: each#1/__end__
   - - NodeSucceeded
     - node_id: each#1/__end__
       output: B
+      interrupted: false
   - - NodeStarted
     - node_id: each/__end__
   - - NodeSucceeded
     - commit_as: each
       node_id: each/__end__
       output: [A, B]
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: [A, B]
+      interrupted: false
   - - RunSucceeded
     - output: [A, B]

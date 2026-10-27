@@ -79,6 +79,7 @@ expect:
       output:
         counts: []
         maybe: null
+      interrupted: false
   - - NodeStarted
     - node_id: order
   - - NodeFailed

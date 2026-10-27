@@ -179,6 +179,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {notes: {inbox: notes}}
+      interrupted: false
   - - NodeStarted
     - node_id: chat
   - - ModelCallStarted
@@ -217,11 +218,13 @@ expect:
   - - NodeSucceeded
     - node_id: after
       output: summary
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: summary
+      interrupted: false
   - - RunSucceeded
     - output: summary
   stream:

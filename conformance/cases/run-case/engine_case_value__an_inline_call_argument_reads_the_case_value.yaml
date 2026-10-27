@@ -153,11 +153,13 @@ expect:
       output:
         seed: 0.9
         topic: ACME
+      interrupted: false
   - - NodeStarted
     - node_id: s
   - - NodeSucceeded
     - node_id: s
       output: 0.9
+      interrupted: false
   - - NodeStarted
     - node_id: gate
   - - NodeRouted
@@ -170,6 +172,7 @@ expect:
   - - NodeSucceeded
     - node_id: pro
       output: pro case for ACME
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0
   - - NodeExpanded
@@ -184,26 +187,31 @@ expect:
     - node_id: __call_0/__start__
       output:
         v: pro case for ACME
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0/x
   - - NodeSucceeded
     - node_id: __call_0/x
       output: pro case for ACME
+      interrupted: false
   - - NodeStarted
     - node_id: __call_0/__end__
   - - NodeSucceeded
     - commit_as: __call_0
       node_id: __call_0/__end__
       output: pro case for ACME
+      interrupted: false
   - - NodeStarted
     - node_id: wrap
   - - NodeSucceeded
     - node_id: wrap
       output: pro case for ACME
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: pro case for ACME
+      interrupted: false
   - - RunSucceeded
     - output: pro case for ACME

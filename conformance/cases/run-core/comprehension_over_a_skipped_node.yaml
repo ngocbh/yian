@@ -79,6 +79,7 @@ expect:
   - - NodeSucceeded
     - node_id: __start__
       output: {s: stop}
+      interrupted: false
   - - NodeStarted
     - {node_id: gate}
   - - NodeRouted

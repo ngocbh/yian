@@ -99,6 +99,7 @@ expect:
       output:
         approve: false
         inner: true
+      interrupted: false
   - - NodeStarted
     - node_id: outer
   - - NodeRouted
@@ -116,11 +117,13 @@ expect:
     - node_id: __end__
       output:
         order: null
+      interrupted: false
   - - NodeStarted
     - node_id: rejected
   - - NodeSucceeded
     - node_id: rejected
       output: no
+      interrupted: false
   - - RunSucceeded
     - output:
         order: null

@@ -625,6 +625,7 @@ expect:
     - node_id: __start__
       output:
         topic: reefs
+      interrupted: false
   - - NodeStarted
     - node_id: first
   - - ModelCallStarted
@@ -642,6 +643,7 @@ expect:
   - - NodeSucceeded
     - node_id: first
       output: draft
+      interrupted: false
   - - NodeStarted
     - node_id: second
   - - ModelCallStarted
@@ -659,11 +661,13 @@ expect:
   - - NodeSucceeded
     - node_id: second
       output: answer
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output: answer
+      interrupted: false
   - - RunSucceeded
     - output: answer
   stream:

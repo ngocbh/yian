@@ -167,6 +167,7 @@ expect:
     - node_id: __start__
       output:
         start: 5
+      interrupted: false
   - - NodeStarted
     - node_id: spin
   - - NodeExpanded
@@ -182,18 +183,21 @@ expect:
     - node_id: spin#0/__start__
       output:
         n: 5
+      interrupted: false
   - - NodeStarted
     - node_id: spin#0/step
   - - NodeSucceeded
     - node_id: spin#0/step
       output:
         n: 6
+      interrupted: false
   - - NodeStarted
     - node_id: spin#0/__end__
   - - NodeSucceeded
     - node_id: spin#0/__end__
       output:
         n: 6
+      interrupted: false
   - - NodeStarted
     - node_id: spin~1
   - - NodeExpanded
@@ -209,18 +213,21 @@ expect:
     - node_id: spin#1/__start__
       output:
         n: 6
+      interrupted: false
   - - NodeStarted
     - node_id: spin#1/step
   - - NodeSucceeded
     - node_id: spin#1/step
       output:
         n: 7
+      interrupted: false
   - - NodeStarted
     - node_id: spin#1/__end__
   - - NodeSucceeded
     - node_id: spin#1/__end__
       output:
         n: 7
+      interrupted: false
   - - NodeStarted
     - node_id: spin~2
   - - NodeExpanded
@@ -236,18 +243,21 @@ expect:
     - node_id: spin#2/__start__
       output:
         n: 7
+      interrupted: false
   - - NodeStarted
     - node_id: spin#2/step
   - - NodeSucceeded
     - node_id: spin#2/step
       output:
         n: 8
+      interrupted: false
   - - NodeStarted
     - node_id: spin#2/__end__
   - - NodeSucceeded
     - node_id: spin#2/__end__
       output:
         n: 8
+      interrupted: false
   - - NodeStarted
     - node_id: spin~3
   - - NodeSucceeded
@@ -255,12 +265,14 @@ expect:
       node_id: spin~3
       output:
         n: 8
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         n: 8
+      interrupted: false
   - - RunSucceeded
     - output:
         n: 8

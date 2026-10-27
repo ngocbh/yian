@@ -97,18 +97,21 @@ expect:
           options:
           - label: A
           question: Which option?
+      interrupted: false
   - - NodeStarted
     - node_id: ask
   - - NodeSucceeded
     - node_id: ask
       output:
         H: A
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
     - node_id: __end__
       output:
         H: A
+      interrupted: false
   - - RunSucceeded
     - output:
         H: A

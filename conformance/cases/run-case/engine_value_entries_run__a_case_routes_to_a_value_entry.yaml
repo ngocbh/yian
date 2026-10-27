@@ -86,6 +86,7 @@ expect:
     - node_id: __start__
       output:
         cmd: /exit
+      interrupted: false
   - - NodeStarted
     - node_id: route
   - - NodeRouted
@@ -100,6 +101,7 @@ expect:
       output:
         exited: true
         reply: ''
+      interrupted: false
   - - NodeStarted
     - node_id: __end__
   - - NodeSucceeded
@@ -107,6 +109,7 @@ expect:
       output:
         exited: true
         reply: ''
+      interrupted: false
   - - RunSucceeded
     - output:
         exited: true

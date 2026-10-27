@@ -248,7 +248,9 @@ http:
 - A `cli` case makes no HTTP request beyond those its `http` lists. The runner checks every
   request yian's auth and model-listing transport makes against `http` (an empty list when the
   case has none): it starts one server on 127.0.0.1 for every `cli` case and routes each such
-  request to it, whatever its origin, with the original URL, through yian's HTTP seam.
+  request to it, whatever its origin: the command first imports a module that wraps
+  `globalThis.fetch`, sending each request to the stub with the original URL in an
+  `x-conformance-url` header, which the request check ignores.
 - An exchange counts as requested once its request has been read, before its `delay`. A request
   that doesn't match the next exchange, or comes after the last one (unless that one has
   `repeat`), is answered 500 with no body and fails the case whatever the exit code; the failure

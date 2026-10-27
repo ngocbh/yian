@@ -1,4 +1,6 @@
-# yian
+# Yian - The Agent Composer
+
+> Yet Another Agent Composer
 
 yian runs readable YAML flows of agents, code and tools that people and LLMs write, check and
 improve. You write the graph in a YAML file, and it doesn't change at run time: LLMs fill in

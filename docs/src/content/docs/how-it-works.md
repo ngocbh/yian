@@ -17,8 +17,8 @@ yian can rebuild any run from it.
 flowchart LR
     yaml["flow.yaml"] --> load["Load<br/>check and compile"]
     load -->|error| err["Load error<br/>nothing runs"]
-    load --> graph["Fixed graph"]
-    graph --> engine["Engine<br/>runs ready nodes"]
+    load --> fixed["Fixed graph"]
+    fixed --> engine["Engine<br/>runs ready nodes"]
     engine -->|"append each step"| log[("Run log<br/>log.jsonl")]
     engine --> result["Result"]
     log -->|"replay on resume"| engine

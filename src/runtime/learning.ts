@@ -136,7 +136,7 @@ export function takeMessages(pending: PendingMessages, source: SourceRef): Backw
   const key = sourceKey(source);
   const messages = pending.get(key) ?? [];
   pending.delete(key);
-  // JS sort is stable, as Python's `sorted` is.
+  // JS sort is stable, so equal orders keep their place.
   return [...messages].sort((a, b) => compareOrder(a.order, b.order));
 }
 
@@ -174,7 +174,7 @@ export function takeOccurrenceMessages(pending: PendingMessages, occurrence: Tra
     (message) => new BackwardMessage(workFeedback(message.feedback), message.attribution, message.order, message.context),
   );
   if (work.length === 0) return own;
-  // JS sort is stable, as Python's `sorted` is.
+  // JS sort is stable, so equal orders keep their place.
   return [...own, ...work].sort((a, b) => compareOrder(a.order, b.order));
 }
 
@@ -511,7 +511,7 @@ function transferBackward(
     batch.forEach((feedback, messageIndex) => {
       const parents = structural !== null ? [structural.get(name)![messageIndex]!] : messages.map((_, index) => index);
       const input = routes.get(name);
-      // Python's `KeyError` on the route lookup.
+      // A name with no route fails the lookup.
       if (input === undefined) throw new RangeError(reprText(name));
       const routed = routeFeedback(input, feedback, lookup, { recordedValue: context.inputs![name] });
       routed.contributions.forEach((contribution, contributionIndex) => {
@@ -1006,7 +1006,7 @@ function acceptedOccurrence(trace: RetainedTrace, source: SourceRef, message: st
   try {
     return trace.occurrence(source);
   } catch (error) {
-    // Python's `KeyError` from the lookup, replaced by the caller's message.
+    // A failed lookup, replaced by the caller's message.
     if (error instanceof RangeError) throw new RangeError(message);
     throw error;
   }

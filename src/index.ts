@@ -1,37 +1,30 @@
 /**
- * The package root, as Python's `yian/__init__.py`: the names a host needs to load, run and
- * extend a flow, each re-exported from the module that defines it.
+ * The package root: the names a host needs to load, run and extend a flow, each re-exported
+ * from the module that defines it:
  *
- * Python's `__all__` (and its lazy `_EXPORTS` table, which lists the same names with their
- * defining modules) maps one to one, Python module -> TS module; the port keeps every one of them:
- *
- * - `compose`: `load_flow` -> `loadFlow` (`compose/loader`), `LoadError` (`compose/helpers/errors`),
+ * - loading: `loadFlow` (`compose/loader`), `LoadError` (`compose/helpers/errors`) and
  *   `ComposedFlow` (`compose/build/pipeline`);
- * - `run`: `run_flow` -> `runFlow`, `resume_flow` -> `advance` (`run`);
- * - `memory_host`: `build_memories` -> `buildMemories`, `MemoryRegistry` (`memory_host`);
- * - `diagnostics`: `Failure` (`diagnostics`);
- * - `compile.model`: `CompiledFlow` (`compile/model`);
- * - `compile.validation`: `FlowValidationError` (`compile/validation`);
- * - `typesys.pool`: `VariablePool` (`typesys/pool`);
- * - `expr.expressions`: `evaluate_when` -> `evaluateWhen`, `ExpressionError` (`expr/expressions`);
- * - `tools.context`: `ToolContext` (`tools/context`);
- * - `tools.function_tools`: `FunctionTool`, `function_tool` -> `tool` (`tools/function_tools`);
- * - `tools.errors`: `PermanentToolError`, `TransientToolError`, `ReportedToolError` (`tools/errors`).
+ * - running: `runFlow` and `advance` (`run`), and `buildMemories` and `MemoryRegistry`
+ *   (`memory_host`);
+ * - `Failure` and `Diagnostic` (`diagnostics`), `CompiledFlow` (`compile/model`),
+ *   `FlowValidationError` (`compile/validation`) and `VariablePool` (`typesys/pool`);
+ * - `evaluateWhen` and `ExpressionError` (`expr/expressions`), and `registerTemplateFn`
+ *   (`expr/builtins`);
+ * - tools: `ToolContext` and `pending` (`tools/context`), the marker a host tool returns when its
+ *   answer comes later; `FunctionTool` and `tool` (`tools/function_tools`); `PermanentToolError`,
+ *   `TransientToolError` and `ReportedToolError` (`tools/errors`), and `ToolAttemptsFailed`
+ *   (`nodes/tool/node`);
+ * - the host calls on a run log, `send`, `withdraw`, `complete`, `close`, `interrupt`, `cancel` and
+ *   `pendingCalls`, with their errors `RunBusyError` and `DeliveryRefused` (`run`);
+ * - storage: `SQLiteStorage` and `checkStoragePath` (`memory/storage/sqlite`), `FileMarkdownStore`,
+ *   `InMemoryMarkdownStore`, `MarkdownStore`, `MarkdownVersionMismatch` and `markdownVersion`
+ *   (`memory/storage/markdown`), and `ProfileMemory` (`memory/profile`) for hosts that keep the
+ *   profile document in their own `MarkdownStore`.
  *
- * Added beside them: `Diagnostic` (`diagnostics`) and `registerTemplateFn` (`expr/builtins`);
- * `pending` (`tools/context`), the marker a host tool returns when its answer comes later, and the
- * host calls on a run log, `send`, `withdraw`, `complete`, `close`, `interrupt`, `cancel` and `pendingCalls`, with their
- * errors `RunBusyError` and `DeliveryRefused` (`run`);
- * `ToolAttemptsFailed` (`nodes/tool/node`, Python's `yian.nodes.tool`), beside the tool errors; and
- * Python's `yian.memory.storage` names `SQLiteStorage`, `checkStoragePath` (`memory/storage/sqlite`),
- * `FileMarkdownStore`, `InMemoryMarkdownStore`, `MarkdownStore`, `MarkdownVersionMismatch` and
- * `markdownVersion` (`memory/storage/markdown`). `ProfileMemory` (`memory/profile`, Python's
- * `yian.memory.profile`, which Python's `yian` doesn't export) is here for hosts that keep the
- * profile document in their own `MarkdownStore`. `RunResult` and `BackwardOutcome` are
- * on `yian/run` (`run.ts`), as Python's `yian.run`. `Message`, `MessagePart`, `checkMessage`,
- * `checkConversation` and `ConversationError` (`nodes/agent/messages`), the built-in message value
- * and the conversation a model route can send, are also on `yian/run`. `InboxRef`
- * (`typesys/values`), the handle an `Inbox(T)` input holds, is on both.
+ * `RunResult` and `BackwardOutcome` are on `yian/run` (`run.ts`). `Message`, `MessagePart`,
+ * `checkMessage`, `checkConversation` and `ConversationError` (`nodes/agent/messages`), the
+ * built-in message value and the conversation a model route can send, are also on `yian/run`.
+ * `InboxRef` (`typesys/values`), the handle an `Inbox(T)` input holds, is on both.
  *
  * Knows about: compile, compose, diagnostics, expr, memory storage, `memory/profile`,
  * `memory_host`, nodes, `run`, tools and typesys.

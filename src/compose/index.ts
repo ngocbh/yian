@@ -1,13 +1,14 @@
 /**
- * The Compose-YAML loader, as Python's `yian.compose`: reads Compose-shaped YAML flows into the
+ * The Compose-YAML loader: reads Compose-shaped YAML flows into the
  * engine's runtime model.
  *
  * `loader.ts` is the front door (`loadFlow` to a `ComposedFlow`, or a `LoadError`); the phases it
  * runs live in `parse/`, `desugar/`, `edges/`, `validate/` and `build/`, the per-kind readers in
  * `nodes/`, and `skills.ts` reads `SKILL.md` folders for a run's `skills` (`loadSkills`,
- * `defaultSkillRoots`). This index re-exports Python's `__all__` and nothing else; callers of any
- * other name import the module that defines it. `ChildResolver` is the loader's `uses:` resolver,
- * which may return a promise, not the phases' internal call resolver of the same name.
+ * `defaultSkillRoots`). This index re-exports the loader's public names and nothing else;
+ * callers of any other name import the module that defines it. `ChildResolver` is the loader's
+ * `uses:` resolver, which may return a promise, not the phases' internal call resolver of the
+ * same name.
  *
  * Knows about: yaml (through `source/`), defaults, diagnostics, typesys, expr, nodes, memory
  * contracts, LLM-client config, skills, compile and platform.

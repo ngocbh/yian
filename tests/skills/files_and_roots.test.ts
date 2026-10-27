@@ -1,7 +1,6 @@
 /**
- * Bundled-file confinement and default Claude/Codex skill roots, a port of
- * `tests/skills/test_files_and_roots.py`; with `YIAN_TEST_NODE` set to a Node binary, the built
- * skills code on Node.
+ * Bundled-file confinement and default Claude/Codex skill roots; with `YIAN_TEST_NODE` set to a
+ * Node binary, the built skills code on Node.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -56,7 +55,7 @@ function expectSkillError(run: () => unknown, text: string): void {
 test("skill value validates name and description", () => {
   expectSkillError(() => new Skill({ name: "Has Space", description: "d", instructions: "" }), "invalid skill name");
   expectSkillError(() => new Skill({ name: "ok", description: "  ", instructions: "" }), "description");
-  // TS-only: values the type system can't keep out of a JS caller.
+  // Values the type system can't keep out of a JS caller.
   const loose = (options: Record<string, unknown>) =>
     new Skill({ name: "ok", description: "d", instructions: "", ...options } as never);
   expectSkillError(() => loose({ name: 5 }), "invalid skill name 5: use 1-64 lowercase letters");
@@ -134,7 +133,7 @@ test("compose facade exports the skill loaders", () => {
   expect(compose.loadSkills).toBe(loadSkills);
 });
 
-// TS-only: the rows below pin behavior Python gets from pathlib.
+// The rows below pin how the home, links and paths are read.
 
 test("default roots read the home from the injected env", () => {
   const roots = defaultSkillRoots({ cwd: tmp, env: (name) => (name === "HOME" ? "/h" : undefined) });

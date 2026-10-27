@@ -1,13 +1,10 @@
 /**
- * Every shipped example loads and compiles (no live LLM): mirrors
- * `tests/examples/test_examples.py`.
- *
- * Ported: `test_example_loads_and_compiles` (one test per `examples/*.yaml`, loaded with the
- * examples directory as the search path), `test_examples_present` and
- * `test_debate_agents_are_tool_free`. TS-only: the shape of `human-approval.yaml`'s `ask` gate,
- * `chat.yaml` on its `Inbox(Message)` input with a steerable `Optional(str)` reply, run end to
- * end on a scripted model, and `compact_history.yaml` alone (pass-through, `keep`, a budget of
- * text parts, a failed summary), and a learnable chat whose reply feedback reaches the summarizer.
+ * Every shipped example loads and compiles (no live LLM), one test per `examples/*.yaml` loaded
+ * with the examples directory as the search path, and the debate agents are tool-free. Also the
+ * shape of `human-approval.yaml`'s `ask` gate, `chat.yaml` on its `Inbox(Message)` input with a
+ * steerable `Optional(str)` reply, run end to end on a scripted model, and `compact_history.yaml`
+ * alone (pass-through, `keep`, a budget of text parts, a failed summary), and a learnable chat
+ * whose reply feedback reaches the summarizer.
  */
 
 import { afterAll, expect, test } from "bun:test";

@@ -457,8 +457,8 @@ function inferLiteral(value: unknown, path: string, activeContainers: Set<object
 }
 
 /**
- * Infer a sorted closed record from one literal mapping. A record key is always text, so Python's
- * non-text key check has no counterpart.
+ * Infer a sorted closed record from one literal mapping. A record key is always text, so no
+ * key needs checking.
  */
 function inferMapping(
   value: Readonly<Record<string, unknown>>,

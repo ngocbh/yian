@@ -228,7 +228,7 @@ function rewriteFlowOriginGraph(
     flow.outputs = flow.outputs.map((output) => {
       const done = seen.get(output);
       if (done !== undefined) return done as FlowOutput;
-      // Memoized so a FlowOutput shared by two flows stays one object, as Python's in-place rewrite keeps it.
+      // Memoized so a FlowOutput shared by two flows stays one object.
       const rebuilt = new FlowOutput(output.name, rewriteOriginCarrier(output.binding, mapper, seen));
       seen.set(output, rebuilt);
       return rebuilt;

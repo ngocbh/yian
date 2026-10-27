@@ -85,7 +85,7 @@ export interface NonTextKey {
   readonly range: SourceRange;
 }
 
-// PyYAML's printable characters; with the `u` flag a lone surrogate is one code point,
+// YAML's printable characters; with the `u` flag a lone surrogate is one code point,
 // outside every range here.
 const NON_PRINTABLE = /[^\t\n\r\x20-\x7E\x85\xA0-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/u;
 
@@ -460,7 +460,7 @@ function build(
   const targetOf = (written: ParsedNode | null): AnchoredNode | null =>
     written === null ? null : target(aliasTargets, written);
   /**
-   * Refuse a tag written at a `<<:` merge site, as Python's `_reject_merge_source_tag`: YAML
+   * Refuse a tag written at a `<<:` merge site: YAML
    * never builds a merge source, so a local tag there checks nothing. An alias is skipped: its
    * target's tag sits at the anchor and checks the value there. A missing value fails here,
    * where its key `key` ends, as `internMissing` places a missing value.
@@ -543,8 +543,8 @@ function build(
       if (!isScalar(keyNode)) throw collectionKey();
       const keyDefinition = intern(keyNode);
       const keyScalar = definitions[keyDefinition];
-      // A scalar tagged `!!seq` or `!!map` builds a list or record; it fails here, as PyYAML's
-      // unhashable key does, before the value is built.
+      // A scalar tagged `!!seq` or `!!map` builds a list or record, which can't be
+      // a key; it fails here, before the value is built.
       if (keyScalar?.kind !== "scalar") throw collectionKey();
       // A missing value sits where the key ends.
       const valueDefinition =
@@ -569,8 +569,8 @@ function build(
   };
   const arcRopes = new Map<PairSequence, ArcRope>();
   /**
-   * Return a pair rope as an arc rope of the same shape with its summary (Python's
-   * `effective_sequence` and its first-key order), post-order on an explicit stack and cached
+   * Return a pair rope as an arc rope of the same shape with its summary (its
+   * pairs in first-key order), post-order on an explicit stack and cached
    * per rope: each distinct leaf is interned once, leaves in first-occurrence order, and a
    * shared rope is summarized once.
    */
@@ -608,7 +608,7 @@ function build(
     const tag = localTag(node, span, starts);
     // A local tag reads its node as if untagged.
     const core = tag === null ? node.tag : undefined;
-    // The tag picks the constructor, as in PyYAML: `!!seq` builds a list and `!!map` a record
+    // The tag picks the constructor: `!!seq` builds a list and `!!map` a record
     // whatever the node's kind.
     const picksCollection = core === SEQ_TAG || core === MAP_TAG;
     if (isScalar(node) && !picksCollection) {
@@ -903,12 +903,12 @@ function propertySpans(source: string): SpanOf {
 }
 
 /**
- * Return where PyYAML ends a non-empty node that eemeli ends at `end`.
+ * Return where a source range ends a non-empty node that eemeli ends at `end`.
  *
- * PyYAML ends a block mapping or list at the block-end token that closes it, which the scanner
+ * A range ends a block mapping or list at the block-end token that closes it, which the scanner
  * emits at the next token, past blank lines and comments, or at the end of the text; it ends a
  * `|` or `>` scalar after the blank lines that follow its text. eemeli ends both at their last
- * content, so the scan moves the end on; every other node already ends where PyYAML's does.
+ * content, so the scan moves the end on; every other node already ends there.
  */
 function pyyamlEnd(source: string, node: Node, end: number): number {
   let at = end;
@@ -971,7 +971,7 @@ function afterValueIndicator(sep: readonly CST.SourceToken[]): readonly CST.Sour
 function localTag(node: AnchoredNode, span: Span, starts: readonly number[]): string | null {
   const tag = node.tag;
   if (isScalar(node) ? tag === "!" : span.bare) {
-    // PyYAML refuses the bare tag at the node's start event: a scalar's ends with the
+    // The bare tag is refused at the node's start: a scalar's ends with the
     // scalar, a flow collection's after its opening bracket, a block one's at its first token.
     const end = isScalar(node) ? span.end : node.flow ? node.range![0] + 1 : node.range![0];
     const range = toRange(starts, span.start, end);

@@ -16,7 +16,7 @@
  *
  * All modes read the node's bound typed input record (only its declared inputs, not the pool) and
  * return the node's one output value. Nothing is compiled or imported at construction; the
- * awaited load step's `check()` builds an inline body without calling it, refuses a Python-style
+ * awaited load step's `check()` builds an inline body without calling it, refuses a
  * `module:function` value, and requires a reference's file to exist (and, when the load has a code
  * root, to resolve inside it); it runs no code.
  *
@@ -553,13 +553,13 @@ export class CodeNode extends Node {
    *
    * A built-in passes. A reference's file, resolved against `baseDir` (the current directory
    * when `null`), must be a regular file; its module isn't imported, so a missing export is
-   * found when the node runs. An inline body that has Python's `module:function` shape is
+   * found when the node runs. An inline body that has the `module:function` shape is
    * refused; otherwise it is stripped of its types and built, never called.
    *
    * @param options.codeRoot The real path of the directory a reference's file must resolve
    *   inside, symlinks followed (a file names only itself); `null` (the default) confines nothing.
    * @throws RangeError when a reference's file isn't a regular file, or resolves outside
-   *   `options.codeRoot`, or an inline body looks like a Python reference.
+   *   `options.codeRoot`, or an inline body looks like a `module:function` reference.
    * @throws TypeStripError when the body doesn't parse or strip.
    * @throws SyntaxError when the function constructor refuses the stripped body.
    */

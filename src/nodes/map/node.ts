@@ -146,7 +146,7 @@ export class MapNode extends Node {
     if (!nodeWiring.has("over")) throw new Error(`MAP node ${reprText(this.id)} has no \`over\` wiring`);
     const overSrc = nodeWiring.get("over");
     const origin = sourceOrigin(overSrc);
-    // Python formats the source with `str()`, so source text is shown as written.
+    // A text source is shown as written, any other as its repr.
     const raw = bindingSource(overSrc);
     const label = `MAP node ${reprText(this.id)}: \`over\` (${typeof raw === "string" ? raw : valueRepr(raw)})`;
     const validate = (items: unknown): unknown => {

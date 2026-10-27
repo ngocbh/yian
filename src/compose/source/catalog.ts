@@ -125,7 +125,7 @@ function resolveRegisteredSite(
   return new DiagnosticFrame({ label: site.document.label, text: site.document.text, range });
 }
 
-/** Spell a site path as Python's tuple repr: `('nodes', 1)`, or `('a',)` for one segment. */
+/** Spell a site path as a tuple: `('nodes', 1)`, or `('a',)` for one segment. */
 function tupleRepr(path: SourceSitePath): string {
   const items = path.map((segment) =>
     typeof segment === "string" ? reprText(segment) : String(segment),

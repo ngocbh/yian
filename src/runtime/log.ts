@@ -1527,7 +1527,7 @@ export class RunLogChangedError extends RangeError {
   override name = "RunLogChangedError";
 }
 
-/** The error for a retired TS schema, in Python's wording for its retired schemas. */
+/** The error for a retired schema. */
 function retiredSchema(schema: number): RunLogSchemaError {
   return new RunLogSchemaError(`run log schema ${schema} predates schema ${SCHEMA_VERSION} and is not supported`, schema);
 }
@@ -1647,7 +1647,7 @@ export class RecordEnvelope {
   readonly at: string | null;
 
   /**
-   * The schema is checked first, so a Python log's schema is named whatever its other fields
+   * The schema is checked first, so an older log's schema is named whatever its other fields
    * hold.
    *
    * @throws RunLogSchemaError when the schema isn't `SCHEMA_VERSION`.
@@ -1713,7 +1713,7 @@ const PREPARED_FIELDS = ["schema", "run_id", "seq", "kind", "payload"];
  * Decode one run-log line into a validated envelope.
  *
  * `data` is one complete JSON object, as text or UTF-8 bytes, without a trailing newline. The
- * envelope's `schema` is checked before anything else, so a Python log is named whatever else
+ * envelope's `schema` is checked before anything else, so an older log is named whatever else
  * the line holds; the record is built through its constructor, so its checks apply. A line
  * without `at` (the text of an envelope no log has appended, which the engine prepares) reads
  * with `at: null`; the log readers refuse it.
@@ -3717,8 +3717,7 @@ function decodeCompletePrefix(data: Uint8Array, path: string): RecordEnvelope[] 
 
 /**
  * Take the writer's lock on the log at `path`, opened as `fd`, without waiting. The lock is the
- * sibling `<real>.lock` of the log's resolved path, so every symlink to the log shares it, as
- * Python's flock on the file does.
+ * sibling `<real>.lock` of the log's resolved path, so every symlink to the log shares it.
  *
  * @throws Error naming the log and the likely cause when another writer holds it, with the busy
  *   `FileLockError` as `cause`; `run log <path> was replaced while being opened` when the

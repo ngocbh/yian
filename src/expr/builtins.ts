@@ -9,7 +9,7 @@
  *
  * This is a deliberate, bounded bend of the "all computation is a node" law: builtins are pure
  * and read-only (formatting, plus `len`, which measures), and produce no graph node or edge. See
- * `docs/expressions.md`.
+ * the Expressions page (`docs/src/content/docs/expressions.md`).
  *
  * A builtin is a host callback: it declares its parameters, so a call's arguments are checked
  * (`bindArguments`) before it runs, and it receives yian values. Five ship here
@@ -63,7 +63,7 @@ export function registerTemplateFn(name: string, fn: TemplateFn): void {
 }
 
 /**
- * Bind a call's arguments to `fn`'s parameters, as Python's `Signature.bind` does.
+ * Bind a call's arguments to `fn`'s parameters.
  *
  * Each positional fills the next param; then each remaining param takes its keyword or its
  * default; then any keyword left names no param.
@@ -100,8 +100,7 @@ export function bindArguments<T>(
 
 /**
  * Return a value's kind as messages name it: `null`, `bool`, `int`, `float`, `str`, `list`,
- * `record`, `file` or `inbox`. The port of Python's `_kind`, which names a file by its class,
- * `FileRef`; Python has no inbox.
+ * `record`, `file` or `inbox`.
  */
 export function kindName(value: Value): string {
   if (value === null) return "null";
@@ -169,7 +168,7 @@ registerTemplateFn("join", { params: [{ name: "value" }, { name: "sep", default:
 registerTemplateFn("upper", { params: [{ name: "s" }], call: (s) => requireText("upper", s).toUpperCase() });
 registerTemplateFn("lower", { params: [{ name: "s" }], call: (s) => requireText("lower", s).toLowerCase() });
 
-/** Return the length of text (code points, as Python's `len`) or of a list (items). */
+/** Return the length of text (code points) or of a list (items). */
 function len(value: Value): bigint {
   rejectNull("len", value, "[]");
   if (typeof value === "string") return BigInt([...value].length);

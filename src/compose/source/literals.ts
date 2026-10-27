@@ -122,7 +122,7 @@ function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, Anc
     if (node === null) return null;
     const built = values.get(node);
     if (built !== undefined) return built;
-    // The tag picks the constructor, as in PyYAML: `!!seq` builds a list and `!!map` a record
+    // The tag picks the constructor: `!!seq` builds a list and `!!map` a record
     // whatever the node's kind.
     if (isScalar(node) && node.tag !== SEQ_TAG && node.tag !== MAP_TAG) {
       const value = scalarValue(node);
@@ -170,9 +170,7 @@ function construct(root: ParsedNode | null, aliasTargets: ReadonlyMap<Alias, Anc
    *
    * The walk is post-order over merge sources on an explicit stack, since a raised
    * `YIAN_MAX_YAML_NODES` admits merge chains deep enough to exhaust a recursive one. A
-   * source still being flattened (a merge cycle) contributes its own other pairs. Python
-   * flattens in place, so in a cycle with two merge keys it can order the keys differently;
-   * the values are the same.
+   * source still being flattened (a merge cycle) contributes its own other pairs.
    */
   const flatten = (root: YAMLMap.Parsed): MapPair[] => {
     const done = flattened.get(root);
@@ -264,8 +262,8 @@ export function* mergeSources(
       checkSite(pair.value, pair.key);
       if (isSeq(pair.value)) for (const item of pair.value.items) checkSite(item, pair.key);
     }
-    // Past `checkSite`, the value's tag is ignored, as in Python, which looks only at the
-    // node's kind.
+    // Past `checkSite`, the value's tag is ignored; only the node's kind
+    // counts.
     const value = target(pair.value);
     if (isMap(value)) {
       yield value;
@@ -319,7 +317,7 @@ export function isMergeKey(key: AnchoredNode | null): boolean {
   return key.tag === MERGE_TAG;
 }
 
-/** Name a node's kind as PyYAML's node id does; a missing node is an empty scalar. */
+/** Name a node's kind (`scalar`, `sequence` or `mapping`); a missing node is an empty scalar. */
 export function nodeId(node: AnchoredNode | null): string {
   return isSeq(node) ? "sequence" : isMap(node) ? "mapping" : "scalar";
 }

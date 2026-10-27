@@ -70,7 +70,7 @@ const HEAD_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*/;
 /** The `getCloseMatches` ratio a name must reach to be offered as a close match. */
 export const CLOSE_MATCH_CUTOFF = 0.6;
 const FLOW_INDICATORS = /[[\]{}]/;
-// The characters PyYAML reads into a tag, minus YAML 1.2's flow indicators, `!`, and the `%`
+// The characters YAML reads into a tag, minus YAML 1.2's flow indicators, `!`, and the `%`
 // that starts an escape: text made only of these reads back as one tag.
 const TAG_CHARACTERS = /^[A-Za-z0-9\-;/?:@&=+$_.~*'()]+$/;
 const TYPEDEF_EXAMPLE = "(e.g. `Decision: Union(Buy, Sell)`) and tag with its name (`!Decision`)";
@@ -1115,7 +1115,6 @@ function yamlEscaped(ch: string): string {
     // JSON would write a surrogate pair, which YAML does not join.
     return "\\U" + cp.toString(16).toUpperCase().padStart(8, "0");
   }
-  // JSON's escapes for the basic plane, as Python's `json.dumps` writes them, are all valid
-  // YAML escapes.
+  // JSON's escapes for the basic plane are all valid YAML escapes.
   return SHORT_ESCAPES.get(ch) ?? "\\u" + cp.toString(16).padStart(4, "0");
 }

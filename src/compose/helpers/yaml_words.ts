@@ -38,7 +38,7 @@ export function formerBooleanFix(
  * Name what YAML read a value as, for an error message about a value that must be text.
  *
  * Returns a phrase such as `a boolean`, `an integer` or `a list`. The loader keeps dates as
- * text and builds no bytes, so Python's date, datetime and binary phrases have no case here.
+ * text and builds no bytes, so no phrase names a date, a datetime or bytes.
  *
  * Example: `yamlReadAs(5n)` is `"an integer"`; `yamlReadAs(null)` is `"null"`.
  */

@@ -88,7 +88,7 @@ export function rejectCycles(
   for (const edge of edges) {
     if (edge.from === START_ID || edge.from === END_ID) continue;
     if (edge.to === START_ID || edge.to === END_ID) continue;
-    // An edge naming a node outside `nodeIds` is a caller defect, as Python's KeyError is.
+    // An edge naming a node outside `nodeIds` is a caller defect.
     for (const end of [edge.from, edge.to]) {
       if (!nodeIds.has(end)) throw new Error(`edge names unknown node ${reprText(end)}`);
     }

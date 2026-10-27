@@ -123,7 +123,7 @@ export function checkCallMapTypes(
     if (childInputs === undefined || childInputs.length === 0) continue;
     const kind = node.isLoop ? "loop" : node instanceof MapNode ? "map" : "call";
     const childDecls = new Map(childInputs.map((decl) => [decl.name, decl]));
-    // A loop is recognised by `isLoop`, as Python does, so a hand-built loop gets the relaxed
+    // A loop is recognised by `isLoop`, so a hand-built loop gets the relaxed
     // reading too.
     const entryDecls = node.isLoop
       ? new Map(loopEntryInputs(node as LoopNode).map((decl) => [decl.name, decl]))
@@ -502,8 +502,7 @@ function valueMismatch(
  * A YAML 1.1 boolean spelling such as `yes` gets the `true`/`false` to write when a boolean fits.
  * Other text that a run boundary would convert to a finite number or a bool is written unquoted
  * instead. A value YAML read as a non-text scalar, a boolean or a number, is quoted when its text
- * would fit. Dates are text in TS, so Python's quote-a-date and quote-each-date hints have no case
- * here.
+ * would fit. Dates are text, so no hint quotes a date.
  *
  * @param value The literal that failed.
  * @param decl The child input, with a declared contract.
@@ -527,7 +526,7 @@ function literalHint(value: unknown, decl: Parameter, text: string | null, optio
       throw error;
     }
     if (typeof candidate === "string" || !valueFits(childType, candidate)) return null;
-    // The hint would spell infinity `Infinity`, which YAML reads as text; Python gives none here either.
+    // The hint would spell infinity `Infinity`, which YAML reads as text.
     if (typeof candidate === "number" && !Number.isFinite(candidate)) return null;
     const written = shownLiteral(buildValueAs(childType, candidate).toObject());
     return `text is not converted between flows, so write ${written} without quotes`;

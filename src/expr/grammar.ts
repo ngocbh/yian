@@ -2,8 +2,8 @@
  * One unified `${...}` expression grammar: parse only, no evaluation here.
  *
  * This one grammar parses binding coalesce/default expressions, `when:` boolean and
- * arithmetic expressions, and prompt builtin calls into one tree shaped like Lark's, so code
- * that walks Python yian's trees ports line for line. Evaluation lives in `expressions.ts`.
+ * arithmetic expressions, and prompt builtin calls into one tree shaped like Lark's.
+ * Evaluation lives in `expressions.ts`.
  *
  * ## What it parses
  *
@@ -16,9 +16,9 @@
  * - List literals (`[1, "x"]`) and parenthesised sub-expressions.
  * - Subscripts: a list slice `xs[a:b]` after any operand, with either bound omitted
  *   (`xs[1:]`, `xs[:-1]`, `xs[:]`) and no step or index.
- * - List comprehensions as in Python: `[elem for x in xs]`, then any mix of `for x in ys` and
+ * - List comprehensions: `[elem for x in xs]`, then any mix of `for x in ys` and
  *   `if cond` clauses. A target is one bare name; each iterable and condition stops before the
- *   escapes, as Python's `or_test` does, so an escape there needs parentheses.
+ *   escapes, so an escape there needs parentheses.
  * - Pure builtin calls (`upper(name)`, `join(items, ", ")`), with dotted access on the result
  *   (`fn(x).field`), keyword arguments (`f(a=1)`), constructor calls `T(x)` / `T(a=...)`, and
  *   the `isinstance(x, T)` special form, all parsed alike.
@@ -44,7 +44,7 @@
  * - Unary `-x`: `neg[x]`, no token.
  * - `**`: `power`, flat, with `POW_OP` tokens between the operands.
  * - A postfix subscript `x[a:b]`: `subscript[x, slice[a, b]]`, where an omitted bound is
- *   `omitted[]`. It binds tighter than unary minus and `**`, as Python's primary does:
+ *   `omitted[]`. It binds tighter than unary minus and `**`:
  *   `-xs[1:]` is `neg[subscript]`. It counts one nesting level, like a call; `slice` and
  *   `omitted` add none.
  * - A list comprehension: `list_comp[elem, clause, ...]`, clauses in source order, each
@@ -94,7 +94,7 @@
  * Every parse ends with a pass that turns each read of a comprehension variable into a
  * `comp_var`, so the walkers that look for `refcall` reads (edges, name checks, guards, CASE
  * renames) skip variables with no change and still see the outer reads around them. Scoping is
- * lexical, as in Python: a variable is in scope in the elem and in the clauses after its own
+ * lexical: a variable is in scope in the elem and in the clauses after its own
  * `for`, nested comprehensions included, and the first iterable runs in the enclosing scope. A
  * variable may share a name with a node, an input, a typedef or a builtin; a call is never a
  * variable read, nor is `isinstance`'s type name. The parser refuses a target that is a keyword,
@@ -391,7 +391,7 @@ const COMP_REBOUND = (name: string) => `comprehension variable ${reprText(name)}
 // Names a variable would hide from the engine: the scopes every flow reads, and the `__` prefix
 // that generated locals (a CASE's `__rN`) use.
 const COMP_RESERVED_NAMES: ReadonlySet<string> = new Set(["input", "system", "item", "output"]);
-// The escapes sit below `or`, and a comprehension's iterable and condition are Python's `or_test`.
+// The escapes sit below `or`, and a comprehension's iterable and condition parse above them.
 const ESCAPES: ReadonlySet<string> = new Set(["|", ":-", ":?"]);
 
 /**
@@ -727,7 +727,7 @@ export function bindingKey(target: Token): string {
  *
  * A variable is in scope in its comprehension's elem and in every clause after its own `for`,
  * nested comprehensions included, but not in its own or an earlier iterable: the first iterable
- * runs in the enclosing scope, as in Python. Only a reference with no call suffix is a read, and
+ * runs in the enclosing scope. Only a reference with no call suffix is a read, and
  * `isinstance`'s type name is not one. So every walker that matches `refcall` skips variables
  * with no change. Iterative, as the parser is.
  *
@@ -882,7 +882,7 @@ function unwrapSpans(text: string, depth = 0, limit = current().maxValueNesting)
       const inner = unwrapped.trim();
       let piece = isLoneAtom(inner) ? inner : `(${inner})`;
       // `out` holds single characters and whole pieces, and only the first character of the last
-      // entry is tested, as Python does.
+      // entry is tested.
       if (out.length > 0 && NAME_CHAR.test(out.at(-1)!)) piece = " " + piece;
       if (NAME_CHAR.test(text.slice(end + 1, end + 2))) piece += " ";
       out.push(piece);
@@ -1126,7 +1126,7 @@ export function parseExpr(text: string): ExprNode {
       cause: error,
     });
   }
-  // First, as in Python: a too-deep expression reports the nesting limit before any other
+  // First: a too-deep expression reports the nesting limit before any other
   // post-parse check. (The comprehension scoping checks run inside the parse, without recursion.)
   rejectDeepExpression(tree);
   rejectOverflowingFloatLiterals(tree);

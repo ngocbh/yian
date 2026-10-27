@@ -3,7 +3,7 @@
  *
  * This module projects synthesized boundary-input ranges from an existing source cursor,
  * slices authored text out of a document, reads positional metadata, and spells a file path
- * as Python does. It never parses, keeping the helper layer below parsing. Assertion origins
+ * in normal form. It never parses, keeping the helper layer below parsing. Assertion origins
  * and temporary ranges are deliberately absent: the build conductor derives both from one
  * retained item cursor.
  */
@@ -18,7 +18,7 @@ export function isExtensionKey(key: string): boolean {
 }
 
 /**
- * Return `path` spelled as Python's `PurePosixPath` spells it: repeated slashes merged, `.`
+ * Return `path` in normal form: repeated slashes merged, `.`
  * segments and a trailing slash dropped, `..` kept, and `.` for an empty path.
  */
 export function pathText(path: string): string {

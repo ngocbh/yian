@@ -7,13 +7,13 @@
  * implements `OriginResolver` to turn those references into concrete presentation
  * frames. `ResolverTable` composes those namespaces through exact immutable routes.
  * `compareCodeUnits` is the one string order for sorting, `reprText` quotes text the
- * way Python's `repr` does, and `getCloseMatches` finds "did you mean" suggestions the
- * way Python's `difflib` does. `addNote` and `errorTypeName` help report a thrown error.
+ * way CPython 3.12's `repr` does, and `getCloseMatches` finds "did you mean" suggestions the
+ * way CPython 3.12's `difflib` does. `addNote` and `errorTypeName` help report a thrown error.
  */
 
 /**
  * Compare two strings by UTF-16 code units: the one string order for sorting in yian.
- * Python's `sorted` uses code points, which differs only for astral characters
+ * Sorting by code point would differ only for astral characters
  * (`rule: text`).
  */
 export function compareCodeUnits(a: string, b: string): number {
@@ -82,7 +82,7 @@ const PRINTABLE_RUNS = `
 let runStarts: number[] | undefined;
 
 /**
- * Return whether Python 3.12 counts code point `cp` as printable, as `str.isprintable` does
+ * Return whether CPython 3.12 counts code point `cp` as printable, as `str.isprintable` does
  * for one character: no control, format, surrogate, private-use or unassigned code point, and
  * no separator but the ASCII space.
  */
@@ -114,13 +114,13 @@ function hex(cp: number, width: number): string {
 /**
  * Return `text` quoted and escaped exactly as CPython 3.12's `repr` of a `str`: in
  * double quotes when it holds a single quote and no double quote, else in single
- * quotes, with characters Python doesn't count as printable written as `\x`, `\u` or
+ * quotes, with characters CPython doesn't count as printable written as `\x`, `\u` or
  * `\U` escapes.
  */
 export function reprText(text: string): string {
   const quote = text.includes("'") && !text.includes('"') ? '"' : "'";
   let out = quote;
-  // Iterating by code point yields a lone surrogate as one unit, as Python sees it.
+  // Iterating by code point yields a lone surrogate as one unit, as CPython sees it.
   for (const ch of text) {
     const cp = ch.codePointAt(0)!;
     if (ch === quote || ch === "\\") out += "\\" + ch;
@@ -150,7 +150,7 @@ function calculateRatio(matches: number, length: number): number {
 
 /**
  * Compares sequences of code points by their longest matching blocks: the part of
- * Python's `difflib.SequenceMatcher` that `getCloseMatches` needs.
+ * CPython's `difflib.SequenceMatcher` that `getCloseMatches` needs.
  */
 class SequenceMatcher {
   /** The first sequence, set by `setSeq1`. */
@@ -166,7 +166,7 @@ class SequenceMatcher {
 
   /** Set the first sequence to compare; the second is unchanged. */
   setSeq1(a: string): void {
-    // Python returns early when `a` is the same object; recomputing gives the same result.
+    // CPython returns early when `a` is the same object; recomputing gives the same result.
     this.a = Array.from(a);
     this.matchingBlocks = null;
   }
@@ -252,7 +252,7 @@ class SequenceMatcher {
       bestsize += 1;
     }
 
-    // Python next extends the match over junk elements on each side; with no junk
+    // CPython next extends the match over junk elements on each side; with no junk
     // function there are none, so those two loops can't run and are left out.
     return [besti, bestj, bestsize];
   }
@@ -266,7 +266,7 @@ class SequenceMatcher {
     const la = this.a.length;
     const lb = this.b.length;
 
-    // A queue of regions still to search rather than recursion, as in Python.
+    // A queue of regions still to search rather than recursion, as in CPython.
     const queue: [number, number, number, number][] = [[0, la, 0, lb]];
     const matchingBlocks: Match[] = [];
     while (queue.length > 0) {
@@ -343,8 +343,8 @@ class SequenceMatcher {
 
 /**
  * Return the best "good enough" matches for `word` among `possibilities`, best first:
- * at most `n`, each scoring at least `cutoff`. An exact port of Python's
- * `difflib.get_close_matches`, so "did you mean" suggestions match Python yian's; equal
+ * at most `n`, each scoring at least `cutoff`. An exact port of CPython's
+ * `difflib.get_close_matches`; equal
  * scores break by `compareCodeUnits`, descending. Throws `RangeError` when `n` is not
  * positive or `cutoff` is outside [0, 1].
  */
@@ -373,9 +373,9 @@ export function getCloseMatches(
 }
 
 /**
- * Append the note `text()` to `error`'s own `notes` array, creating it when absent (Python's
- * `add_note`). A failure, such as a frozen error, a non-array `notes`, a primitive or a throwing
- * `text`, loses the note, as Python swallows a failing `add_note`.
+ * Append the note `text()` to `error`'s own `notes` array, creating it when absent.
+ * A failure, such as a frozen error, a non-array `notes`, a primitive or a throwing
+ * `text`, loses the note.
  */
 export function addNote(error: unknown, text: () => string): void {
   try {
@@ -388,7 +388,7 @@ export function addNote(error: unknown, text: () => string): void {
 }
 
 /**
- * Python's `type(value).__name__` for a thrown value: the constructor's name, else a string
+ * The type name of a thrown value: the constructor's name, else a string
  * `name`, else `Error`.
  */
 export function errorTypeName(value: unknown): string {
@@ -425,8 +425,9 @@ const CODES = [
 
 /**
  * The closed list of semantic categories for expected flow failures. Each code is
- * `<area>.<condition>`, documented in `docs/api.md` "Failure codes" and stable once
- * added; codes are never derived from error class names.
+ * `<area>.<condition>`, listed on the Reference page
+ * (`docs/src/content/docs/reference.md`) and stable once added; codes are never derived from
+ * error class names.
  */
 export type FailureCode = (typeof CODES)[number];
 
@@ -474,7 +475,7 @@ export class SourceRange {
    */
   coveredLines(sourceText: string): number[] {
     const lines = sourceText.split(/\r\n|\r|\n/);
-    // Python's `splitlines` yields no empty line after a final line break.
+    // No empty line follows a final line break.
     if (lines[lines.length - 1] === "") lines.pop();
     const lineCount = lines.length;
     if (!(1 <= this.startLine && this.startLine <= lineCount)) return [this.startLine];

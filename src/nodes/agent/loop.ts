@@ -6,7 +6,7 @@
  *
  * A reply's tool calls run in groups: consecutive calls that are safe to run together
  * start together, an unsafe call runs alone, and results commit in call order whatever order the
- * calls finish in. Python runs them one at a time, which is what a reply without safe tools gets.
+ * calls finish in.
  *
  * Each model call is written as a `model_call` step before anything acts on its reply, and each
  * tool result as a `tool_result` step as soon as that call finishes, before the next model call
@@ -518,7 +518,7 @@ type CallCheck =
  * Calls are checked in call order. Consecutive calls that are safe to run together (a
  * `load_skill` call, or a tool whose `isConcurrencySafe` says so) form a group; an unsafe call
  * runs alone, after the group before it. A failed check ends the calls before it as their own
- * group, which runs and commits; then the node fails at it, as Python's one-at-a-time loop does.
+ * group, which runs and commits; then the node fails at it.
  *
  * A host interrupt seen before a call's check, before a group starts, or at a failed check skips
  * every call not started yet (`skipFrom`); a running group always finishes and commits.
@@ -533,7 +533,7 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
     // Not `checkStopped(ctx)`: without a context signal, the tools run under the tool set's bound
     // run signal, so a stop on it must stop the calls too.
     checkNodeStopped(turn);
-    // After the stop, as in Python; nothing of `group` has started yet, so it is skipped whole.
+    // After the stop; nothing of `group` has started yet, so it is skipped whole.
     if (turn.interrupt?.aborted) return skipFrom(turn, group[0]?.index ?? index);
     const check = await checkCall(turn, call, index);
     if ("error" in check) {
@@ -656,7 +656,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   } catch (error) {
     // A check the stop cut short is the stop, not a failed check.
     checkNodeStopped(turn);
-    // Python checks the arguments inside the call, where a reported error is the call's result.
+    // The arguments are checked as part of the call, so a reported error is the call's result.
     if (isReportedToolError(error)) {
       return { planned: { call, index, callId: undefined, deadline: null, invoke: () => Promise.reject(error) }, safe: false };
     }
@@ -676,7 +676,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
  *
  * As for a call about to start, a stop wins first, then a host interrupt skips it and every later
  * call. Otherwise a granted call whose arguments failed gets the brackets of a call that threw,
- * since Python checks them inside the call, and an ungranted one gets none.
+ * since the arguments are checked as part of the call, and an ungranted one gets none.
  *
  * @returns `true` when a host interrupt skipped the call.
  * @throws The failed check's error, or what publishing its brackets throws.

@@ -119,7 +119,7 @@ function parseResult(text: string): BackwardResult {
   // A message sits under the response object, its channel object, and its batch array, so those
   // three levels don't count against the message's own nesting.
   rejectDeepNesting(value, "backward response", { enclosingLevels: -3 });
-  // Python checks for over-long ints next; TS has no digit limit (`parseJson` reads any int).
+  // There is no digit limit: `parseJson` reads any int.
   if (
     !isRecord(value) ||
     Object.keys(value).length !== CHANNELS.length ||

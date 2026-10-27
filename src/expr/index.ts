@@ -1,6 +1,5 @@
 /**
- * One unified `${...}` expression engine and the template scanner that hosts it, as Python's
- * `yian.expr`.
+ * One unified `${...}` expression engine and the template scanner that hosts it.
  *
  * The engine is four layers, all pool-agnostic (none reads the pool directly):
  * - `grammar` (`parseExpr`): parse only, one grammar for every `${...}` construct (references,

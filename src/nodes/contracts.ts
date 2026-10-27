@@ -105,7 +105,7 @@ export function isExactly<T>(value: unknown, cls: abstract new (...args: never[]
   return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === cls.prototype;
 }
 
-/** Whether two arrays have equal items in order, by `same`; Python's tuple `==`. */
+/** Whether two arrays have equal items in order, by `same`. */
 export function sameItems<T>(
   a: readonly T[],
   b: readonly T[],
@@ -782,7 +782,7 @@ function sameOrigin(a: OriginRef | null, b: OriginRef | null): boolean {
 }
 
 /**
- * Whether two output contracts are equal, as Python's dataclass `==` compares them: `null` only
+ * Whether two output contracts are equal: `null` only
  * equals `null`; two exact `ValueContract`s by `typeEquals` and the same origins (default, then
  * each entry's path and origin key, in order); two `PartialRecordContract`s field by field, in
  * order.
@@ -1000,7 +1000,7 @@ export function outputContractFieldError(
 
   let typ = outputContractType(contract)!;
   // The path segments walked so far, starting with the ones before `fields`. A negative end
-  // drops from the back, as Python's slice does.
+  // drops from the back.
   const segments = path.split(".");
   const readWalked = segments.slice(0, segments.length - fields.length);
   const walked = unionRoot === null ? [...readWalked] : [unionRoot];

@@ -30,8 +30,7 @@ import { isRecord, type ValueRecord } from "../typesys/index.ts";
 import { pathText } from "./helpers/source.ts";
 import { parseYamlLiteral, SourceSyntaxError } from "./source/index.ts";
 
-// The `yian/skills` entry point is this module, so it carries the skill types too, as Python's
-// `yian.skills` does.
+// The `yian/skills` entry point is this module, so it carries the skill types too.
 export { Skill, SkillError } from "../skills/catalog.ts";
 
 /**
@@ -150,7 +149,7 @@ export function defaultSkillRoots({
   const start = resolvedPath(cwd ?? process.cwd());
   const chain = [start];
   for (let parent = dirname(start); parent !== chain.at(-1); parent = dirname(parent)) chain.push(parent);
-  // `statOrNull`, like Python's `exists()`, throws on errors other than a missing path.
+  // `statOrNull` throws on errors other than a missing path.
   const depth = chain.findIndex((level) => statOrNull(join(level, ".git")) !== null);
   const levels = depth === -1 ? [start] : chain.slice(0, depth + 1);
   const roots = [join(homeDir, ".claude", "skills"), join(homeDir, ".agents", "skills")];
@@ -178,7 +177,7 @@ function splitFrontmatter(text: string, path: string): [ValueRecord, string] {
   return [meta, lines.slice(index + 1).join("").replace(/^\n+/, "")];
 }
 
-/** `directory`'s last part, as Python's `Path(directory).name`: empty and `.` segments drop out. */
+/** `directory`'s last part: empty and `.` segments drop out. */
 function pathName(directory: string): string {
   return directory.split("/").filter((part) => part !== "" && part !== ".").at(-1) ?? "";
 }

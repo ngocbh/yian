@@ -133,7 +133,7 @@ export function deadlineUtc(text: string): number {
     const offset = parsed.offsetMinutes ?? 0;
     instant.setUTCHours(parsed.hour, parsed.minute - offset, parsed.second, Math.floor(parsed.microsecond / 1000));
   }
-  // A JS Date holds years 0 and 10000; Python's datetime doesn't, and refuses with this text.
+  // A JS Date holds years 0 and 10000; yian's dates run from year 1 to 9999.
   const year = instant.getUTCFullYear();
   if (year < 1 || year > 9999) throw new RangeError("date value out of range");
   return instant.getTime();
@@ -204,7 +204,7 @@ function datetimeFrom(match: RegExpExecArray): ParsedDatetime {
   return parsed;
 }
 
-// The reasons below are the messages of Python's `date()` and `datetime()` errors.
+// The reasons below are the messages for an invalid date or datetime.
 
 /** Return why year, month and day name no date, or `null` if they do. */
 function dateProblem(year: number, month: number, day: number): string | null {

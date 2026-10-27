@@ -93,8 +93,8 @@ function readRecordType(
   const fields = new Map<string, Type>();
   const sites: Site[] = [];
   for (const [key, value, childCursor] of entries) {
-    // Checked without a source too, where Python only checks with one: a source-free read
-    // then gets the same load error rather than the raw error `Type` gives such a name.
+    // Checked without a source too, so a source-free read
+    // gets the same load error rather than the raw error `Type` gives such a name.
     const range = childCursor === null ? null : (childCursor.keyRange ?? childCursor.range);
     if (!key) {
       throw diagnostics.error("record field names must be non-empty strings", { range });
@@ -519,8 +519,8 @@ function typeTextWithKnownHead(text: string, registry: TypeRegistry): string | n
 /**
  * Spell a tag and a default for an untagged value, as in `!str hello`.
  *
- * A finite float is spelled as Python's `repr` spells it (`2.0`, `1e-07`) and infinity as
- * `.inf` or `-.inf`, which YAML reads back as a float.
+ * A finite float is spelled in its shortest form with a fraction digit or exponent (`2.0`,
+ * `1e-07`) and infinity as `.inf` or `-.inf`, which YAML reads back as a float.
  *
  * @param value The untagged value.
  * @returns The tag's type and the default written after it: the value itself when it is text

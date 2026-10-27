@@ -1,4 +1,4 @@
-/** SKILL.md parsing, root precedence, and diagnostics; a port of `tests/skills/test_catalog.py`. */
+/** SKILL.md parsing, root precedence, and diagnostics. */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -80,7 +80,7 @@ test("name defaults to the directory and frontmatter name wins", () => {
   const review = writeSkill(tmp, "review", "description: Review code.\n");
   expect(loadSkillDir(review).name).toBe("review");
   expect(loadSkillDir(writeSkill(tmp, "x", "name: triage\ndescription: Triage.\n")).name).toBe("triage");
-  // TS-only: Python's `Path` drops a trailing `/` or `/.` before taking the name.
+  // A trailing `/` or `/.` is dropped before taking the name.
   expect(loadSkillDir(review + "/.").name).toBe("review");
   expect(loadSkillDir(review + "/").name).toBe("review");
 });
@@ -101,7 +101,7 @@ describe("bad skill files name the file", () => {
     ["---\nname: Bad_Name\ndescription: d\n---\n", "invalid skill name"],
     ["---\nname: a--b\ndescription: d\n---\n", "invalid skill name"],
     ["---\nname: a\ndescription: d\ndate: 2026-13-45\n---\nbody\n", "not a valid date"],
-    // TS-only: the literal reader's refusals and YAML values Python spells differently.
+    // The literal reader's refusals, and frontmatter or a name YAML reads as a non-text value.
     ["---\n1: x\n---\nbody\n", "mapping keys must be text"],
     ["---\na: !!binary aGk=\n---\nbody\n", "could not determine a constructor"],
     ["---\nfalse\n---\nbody\n", "frontmatter must be a mapping"],
@@ -193,7 +193,7 @@ test.skipIf(asRoot)("reports unreadable skill files", () => {
   expect(warnings[0]).toContain("locked: cannot read skill");
 });
 
-// TS-only: unreadable roots and directories, the sort order, and a non-path root.
+// Unreadable roots and directories, the sort order, and a non-path root.
 
 test.skipIf(asRoot)("reports an unreadable root", () => {
   const root = join(tmp, "root");

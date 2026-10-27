@@ -6,8 +6,7 @@
  * `Optional(str)`), the agent stays a text producer: `typeToSchema` returns `null` and the AGENT
  * loop takes the plain-text path. For any constrained or richer type (a `Literal(...)` variant,
  * record, union, scalar `int`/`float`/`bool`, or list) it returns the JSON Schema the model is
- * asked to fill: what Python yian's pydantic model emits (`model_json_schema()`), with ints as
- * `bigint`.
+ * asked to fill, with ints as `bigint`.
  *
  * Scalars and lists can't be a top-level schema on their own, so they are wrapped in a
  * single-field object (`ScalarWrapper` with `value`, `ListWrapper` with `items`), and so is a
@@ -22,17 +21,13 @@
  * `<key>__1`, `<key>__2`, ... in definition order, skipping any key another definition wants;
  * identical ones share it.
  *
- * Where pydantic's output is an accident of Python, it differs: keys are sorted at every level
- * but a `properties` map (pydantic leaves unsorted the schema of a field named `properties` or
- * `default` and of a definition named `properties`); a `properties` map follows JS key order,
- * so integer-like field names come first, then the others in field order; fields starting with
- * `_` are kept, `__proto__` included (pydantic drops them); a `.` in a `$defs` key becomes `_`
- * (pydantic keeps the text after the last one), and a clashing key is `<key>__<n>` (pydantic
- * qualifies it with its module, `yian__nodes__agent__structured__a_b__1`).
+ * Keys are sorted at every level but a `properties` map, which follows JS key order, so
+ * integer-like field names come first, then the others in field order. Fields starting with `_`
+ * are kept, `__proto__` included.
  *
  * `generateStructured` sends the schema the way `planStructured` picks for the model, and checks
  * the parsed reply with yian's value check (`checkReply`): the wrapper is stripped, and the value
- * keeps the shape Python's pydantic model gives it (an open record drops unknown fields, an absent
+ * keeps the declared type's shape (an open record drops unknown fields, an absent
  * optional field reads `null`, records follow the declared field order). An invalid reply is
  * corrected under `retries:`; once they are spent the node fails with `OutputInvalidError`, whose
  * `path` locates the last error inside the output when it can.
@@ -94,7 +89,7 @@ const SCALAR_TYPES: ReadonlyMap<ValueKind, string> = new Map([
   [ValueKind.DATETIME, "string"],
 ]);
 
-// Python's `str.isidentifier()`.
+// An identifier: an XID_Start character or `_`, then XID_Continue characters.
 const IDENTIFIER = new RegExp(`^(?:${IDENTIFIER_PATTERN})$`, "u");
 
 /**
@@ -225,7 +220,7 @@ function nested(position: string, segment: string): string {
 /**
  * Return the position names of the members of the union `typ` at `position`, in member order.
  *
- * A tagged union whose tag values are all identifiers (Python's `str.isidentifier()`) names
+ * A tagged union whose tag values are all identifiers names
  * each member after its tag (`buy`, `sell`); otherwise the members are `Member1`, `Member2`, ...
  */
 function memberNames(typ: Type, position: string): string[] {
@@ -287,8 +282,8 @@ function recordSchema(typ: Type, defs: Defs, position: string, closed = false): 
  */
 function define(defs: Defs, position: string, schema: JsonObject): JsonObject {
   const key = recordName(position).replace(/[^A-Za-z0-9_-]/gu, "_");
-  // Key order doesn't matter (Python compares dicts); the text sorts keys. Unlike Python, an
-  // int and a float bound of equal value differ here, which only costs a separate definition.
+  // Key order doesn't matter; the text sorts keys. An int and a float bound of equal value
+  // differ here, which only costs a separate definition.
   const text = logJson(schema);
   let index = defs.findIndex((definition) => definition.key === key && definition.text === text);
   if (index < 0) index = defs.push({ key, schema, text, refs: [] }) - 1;
@@ -569,7 +564,7 @@ function isBareRecord(typ: Type): boolean {
  *
  * A bare record (`isBareRecord`) is `data` itself; any other type is `data`'s wrapper field
  * (`items` for a list, else `value`). The value must not nest past `YIAN_MAX_VALUE_NESTING`; it is
- * then normalized the way Python's pydantic model dumps it (`normalize`) and checked with
+ * then normalized to the declared type's shape (`normalize`) and checked with
  * `buildValueAs`.
  *
  * @throws TypeCheckError reading `structured output[ at <path>]: <reason>`, `path` inside the
@@ -595,8 +590,7 @@ export function checkReply(data: JsonObject, typ: Type): Value {
 }
 
 /**
- * Return `value` in the shape Python's pydantic model for `typ` dumps it, for `buildValueAs` to
- * check.
+ * Return `value` in the shape of `typ`, for `buildValueAs` to check.
  *
  * A record is rebuilt in its declared field order: an absent nullable field becomes `null`, and
  * an unknown field is dropped from an open record but kept in a closed one, so the check refuses
@@ -688,7 +682,7 @@ export function isContractPath(path: ValuePath, typ: Type): boolean {
 }
 
 // --------------------------------------------------------------------------------------- //
-// Field titles: pydantic's `name.title().replace("_", " ").strip()`
+// Field titles: title case, `_` to a space, then trimmed
 // --------------------------------------------------------------------------------------- //
 
 const CASED = /\p{Cased}/u;
@@ -708,8 +702,9 @@ const STRIP_SPACE =
 const STRIP_RE = new RegExp(`^[${STRIP_SPACE}]+|[${STRIP_SPACE}]+$`, "gu");
 
 /**
- * Return the title of field `name`, as pydantic derives it: Python's `str.title()`, then `_` to
- * a space, then Python's `strip()`. Example: `lesson_id` gives `Lesson Id`, `_x` gives `X`.
+ * Return the title of field `name`: title case (a cased letter after an uncased character goes
+ * to title case, every other cased letter to lower case), then `_` to a space, then trimmed.
+ * Example: `lesson_id` gives `Lesson Id`, `_x` gives `X`.
  */
 function fieldTitle(name: string): string {
   let title = "";
@@ -723,7 +718,7 @@ function fieldTitle(name: string): string {
   return title.replaceAll("_", " ").replace(STRIP_RE, "");
 }
 
-/** Return the full title case of the character `ch`, as Python's `str.title()` maps it. */
+/** Return the full title case of the character `ch`, which may be more than one character. */
 function titleCase(ch: string): string {
   const letter = TITLE_LETTERS.get(ch.toLowerCase());
   if (letter !== undefined) return letter;
@@ -739,11 +734,11 @@ function titleCase(ch: string): string {
   return parts === null ? upper : parts[1]! + parts[2]!.toLowerCase();
 }
 
-/** Return the full lower case of `ch` at `index` of `text`, with Python's final-sigma rule. */
+/** Return the full lower case of `ch` at `index` of `text`, with the final-sigma rule. */
 function lowerCase(ch: string, text: string, index: number): string {
   if (ch !== "Σ") return ch.toLowerCase();
-  // Python skips case-ignorable characters on both sides, then asks whether a cased one
-  // precedes and none follows.
+  // Skip case-ignorable characters on both sides, then ask whether a cased one precedes and
+  // none follows.
   const before = text.slice(0, index).replace(/\p{Case_Ignorable}*$/u, "");
   const after = text.slice(index + 1).replace(/^\p{Case_Ignorable}*/u, "");
   return /\p{Cased}$/u.test(before) && !/^\p{Cased}/u.test(after) ? "ς" : "σ";

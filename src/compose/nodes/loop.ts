@@ -4,7 +4,7 @@
  * Owns the `loop` node's `LoopDescriptor`, which inherits the template `parse` from
  * `NodeDescriptor` (which records each field's `SourceRange`) and rejects a `call:` YAML read as
  * non-text and a `while:` or `until:` that isn't an expression string. `while` and `until` are
- * read into the `while_` and `until_` fields, as Python names them. Its `build` bakes the
+ * read into the `while_` and `until_` fields. Its `build` bakes the
  * runtime `LoopNode`: the driver and its counts, the `'a -> 'a` field-name contract (a body
  * returns a subset of the carried record and each omitted field carries over, so the loop's
  * output contract merges the returned body fields with the seeds of the omitted ones), the
@@ -169,7 +169,7 @@ export class LoopDescriptor extends NodeDescriptor {
         );
       }
     }
-    // After both predicate type checks, so a predicate Python refuses gets Python's error.
+    // After both predicate type checks, so a predicate that fails one gets that check's error.
     for (const [key] of PREDICATE_EXAMPLES) {
       const value = fields[this.keywordRemap.get(key)!];
       if (typeof value === "string") {
@@ -235,7 +235,7 @@ export class LoopDescriptor extends NodeDescriptor {
     node.outputContract = sig.output;
 
     const errors: string[] = [];
-    // Only a value that isn't null names a driver, as Python's `is not None` checks.
+    // Only a value that isn't null names a driver.
     const present = (
       [
         ["while", this.while_],

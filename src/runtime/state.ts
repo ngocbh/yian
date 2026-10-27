@@ -5028,7 +5028,7 @@ function validateGrowthFragment(state: RunState, fragment: Flow): ValidatedFragm
   return Object.freeze([Object.freeze(newNodeIds), Object.freeze(newEdgeIds)] as const);
 }
 
-/** Python's `repr` of a value a message names: quoted text, else the value's string form. */
+/** A value as a message names it: quoted text, else the value's string form. */
 function reprValue(value: unknown): string {
   return typeof value === "string" ? reprText(value) : String(value);
 }

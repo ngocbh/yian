@@ -70,9 +70,8 @@ export class InlineBody {
 /**
  * Return the stable private callable id for one complete lexical owner path.
  *
- * The id hashes the owner's compact JSON text (UTF-8), the same bytes Python's
- * `json.dumps(..., ensure_ascii=False, separators=(",", ":"))` gives for a list of strings. A
- * lone surrogate differs: JavaScript escapes it, where Python fails to encode it.
+ * The id hashes the owner's compact JSON text (UTF-8): no spaces after `,` or `:`, non-ASCII
+ * characters written as themselves, and a lone surrogate escaped as `\uXXXX`.
  */
 export function inlineFlowId(owner: readonly string[]): string {
   return INLINE_FLOW_PREFIX + createHash("sha256").update(JSON.stringify(owner), "utf8").digest("hex");

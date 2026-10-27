@@ -17,10 +17,10 @@ import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { loadSkills } from "../../src/compose/skills.ts";
 import { runFlow } from "../../src/run.ts";
-import { JsonlRunLog, type RunRecord } from "../../src/runtime/log.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import { TOOL_REGISTRY } from "../../src/tools/registry.ts";
+import { withAppendHook } from "../append_hook.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
 import { childAlive, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "../engine/mcp_helpers.ts";
 import { crashAfter, NO_ENV } from "../engine/run_state_fixtures.ts";
@@ -358,11 +358,6 @@ test(
     const log = join(tmp, "run.jsonl");
     const crash = new Error("simulated crash");
     let frozen = false;
-    const append = JsonlRunLog.prototype.append;
-    JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
-      if (frozen) throw crash;
-      return append.call(this, record);
-    };
     const whoami = tool({
       name: "whoami",
       description: "Crash the process on the call.",
@@ -372,13 +367,12 @@ test(
         return "never recorded";
       },
     });
-    try {
-      const options = { log, tools: { whoami }, runId: "run-5c2e", env: NO_ENV };
-      const crashed = runFlow(await loadFlow(WHOAMI_FLOW), {}, options);
-      await expect(crashed).rejects.toBe(crash);
-    } finally {
-      JsonlRunLog.prototype.append = append;
-    }
+    const freeze = () => {
+      if (frozen) throw crash;
+    };
+    const options = { log, tools: { whoami }, runId: "run-5c2e", env: NO_ENV };
+    const loaded = await loadFlow(WHOAMI_FLOW);
+    await expect(withAppendHook(freeze, () => runFlow(loaded, {}, options))).rejects.toBe(crash);
     const pid = marker();
     const cfg = config(join(tmp, "cfg.json"), { fake: stdio("--marker", pid) });
 

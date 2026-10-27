@@ -63,6 +63,9 @@ import {
 } from "../src/runtime/log.ts";
 
 const CASES = fileURLToPath(new URL("../conformance/cases/", import.meta.url));
+// A crash sweep runs its case about once per record: under 1 s alone on a fast host, several
+// times that on a slow or busy one, past bun's 5 s default.
+const SWEEP = 30_000;
 
 describe("readCase", () => {
   test("reads YAML 1.2 core scalars, ints as bigint", () => {
@@ -865,13 +868,8 @@ describe("expectRaises and results", () => {
 describe("setUp", () => {
   const made: string[] = [];
   const leaks = ["YIAN_LEAK", "FOO_API_KEY", "FOO_BASE_URL", "FOO_ENDPOINT", "FOO_API_VERSION"];
-  const saved = new Map([...leaks, "KEEP_ME"].map((name) => [name, process.env[name]]));
   afterEach(() => {
     for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
-    for (const [name, value] of saved) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
   });
 
   /** Return a new temporary directory, removed after the test. */
@@ -905,19 +903,24 @@ describe("setUp", () => {
   });
 
   test("gives yian only the case's variables", () => {
-    for (const name of leaks) process.env[name] = "leak";
-    process.env["KEEP_ME"] = "1";
-    const ctx = setUp({ kind: "load", env: { YIAN_X: "1", A_API_KEY: "k" } }, temp());
+    const outer: Record<string, string | undefined> = { KEEP_ME: "1", UNSET: undefined };
+    for (const name of leaks) outer[name] = "leak";
+    const before = { ...outer };
+    const ctx = setUp({ kind: "load", env: { YIAN_X: "1", A_API_KEY: "k" } }, temp(), outer);
     made.push(ctx.dir);
-    for (const name of leaks) expect(Object.hasOwn(ctx.env, name)).toBe(false);
+    for (const name of [...leaks, "UNSET"]) expect(Object.hasOwn(ctx.env, name)).toBe(false);
     expect(ctx.env["KEEP_ME"]).toBe("1");
     expect(ctx.env["YIAN_AUTH_FILE"]).toBe(join(ctx.dir, "auth.json"));
     expect(ctx.env["YIAN_X"]).toBe("1");
     expect(ctx.env["A_API_KEY"]).toBe("k");
-    // The process environment is never changed.
-    expect(process.env["YIAN_LEAK"]).toBe("leak");
-    expect(process.env["YIAN_X"]).toBeUndefined();
-    expect(process.env["YIAN_AUTH_FILE"]).not.toBe(ctx.env["YIAN_AUTH_FILE"]);
+    // The outer environment is never changed.
+    expect(outer).toEqual(before);
+  });
+
+  test("inherits the process environment by default", () => {
+    const ctx = setUp({ kind: "load" }, temp());
+    made.push(ctx.dir);
+    expect(ctx.env["PATH"]).toBe(process.env["PATH"]);
   });
 
   test("lets the case's `env` set YIAN_AUTH_FILE", () => {
@@ -1173,18 +1176,25 @@ describe("main", () => {
     ran = [];
   });
 
+  /** Return a new temporary directory, removed after the test. */
+  function caseRoot(): string {
+    const root = mkdtempSync(join(tmpdir(), "conformance-cases-"));
+    roots.push(root);
+    return root;
+  }
+
   /**
-   * Run `main` over `files` in a `cases/` directory, with `fixtures` beside it and `kinds`
-   * injected; return its exit code and output.
+   * Run `main` over `files` in `root`'s `cases/` directory, with `fixtures` beside it and `kinds`
+   * injected; return its exit code and output. A test reading `root` after passes its own, not
+   * the last in `roots`, which a timed-out test still running may have added to.
    */
   async function run(
     argv: string[],
     files: Record<string, string> = FILES,
     fixtures: Record<string, string> = {},
     kinds: Partial<Record<Kind, KindRunner>> = { expr },
+    root = caseRoot(),
   ) {
-    const root = mkdtempSync(join(tmpdir(), "conformance-cases-"));
-    roots.push(root);
     const casesDir = join(root, "cases");
     const written = [
       ...Object.entries(files).map(([name, text]) => [join(casesDir, name), text] as const),
@@ -1502,9 +1512,10 @@ describe("main", () => {
 
   test("writes a golden log with --write-logs, then compares it byte for byte", async () => {
     const kinds = { run: RUNNERS.run! };
-    const written = await run(["--write-logs", "--case", "a/two"], { "a/two.yaml": TWO_NODES }, {}, kinds);
+    const root = caseRoot();
+    const written = await run(["--write-logs", "--case", "a/two"], { "a/two.yaml": TWO_NODES }, {}, kinds, root);
     expect(written.code).toBe(0);
-    const golden = readFileSync(join(roots.at(-1)!, "cases", "a", "two.log.jsonl"), "utf8");
+    const golden = readFileSync(join(root, "cases", "a", "two.log.jsonl"), "utf8");
     const lines = golden.trimEnd().split("\n");
     expect(lines).toHaveLength(17);
     expect(lines[1]).toContain('"payload":{"key":"system.now","kind":"datetime","node_id":"__start__","value":"<masked>"}');
@@ -1543,7 +1554,7 @@ describe("main", () => {
     expect(cuts.map((names) => names.length)).toEqual([16]);
     expect((await run([], files, {}, { run: counting })).code).toBe(0);
     expect(cuts.map((names) => names.length)).toEqual([16, 0]);
-  });
+  }, SWEEP);
 
   test("sweeps a learnable run case, whose captures name their sources' records by seq", async () => {
     const learnable = TWO_NODES.replace("num_workers: 0}", "num_workers: 0, learnable: true}");
@@ -1552,7 +1563,7 @@ describe("main", () => {
     const { code, out } = await run(["--crash-sweep"], files, {}, { run: RUNNERS.run! });
     expect(out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
     expect(code).toBe(0);
-  });
+  }, SWEEP);
 
   test("restores a changed expectation with --write-expect, in the case's own form", async () => {
     const kinds = { run: RUNNERS.run! };
@@ -1562,13 +1573,14 @@ describe("main", () => {
     );
     expect(edited).not.toBe(FORMS);
     const argv = ["--write-expect", "--case", "a/forms"];
-    const written = await run(argv, { "a/forms.yaml": edited }, {}, kinds);
+    const root = caseRoot();
+    const written = await run(argv, { "a/forms.yaml": edited }, {}, kinds, root);
     expect(written).toEqual({
       code: 0,
       out: ["wrote a/forms: trace", "1 case: 1 passed, 0 failed, 0 pending"],
       err: [],
     });
-    const path = join(roots.at(-1)!, "cases", "a", "forms.yaml");
+    const path = join(root, "cases", "a", "forms.yaml");
     const text = readFileSync(path, "utf8");
     // Comments, styles and key order stay.
     expect(text).toBe(FORMS);
@@ -1581,19 +1593,20 @@ describe("main", () => {
     ]);
     expect(typeof (trace[9]![2] as { value: Case }).value["f"]).toBe("number");
     // Run again, it writes nothing.
-    const again = await run(argv, { "a/forms.yaml": text }, {}, kinds);
+    const again = await run(argv, { "a/forms.yaml": text }, {}, kinds, root);
     expect(again.out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
-    expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(text);
+    expect(readFileSync(path, "utf8")).toBe(text);
   });
 
   test("--write-expect writes a whole number in an event or chunk without a fraction", async () => {
     const cut = readFileSync(join(CASES, "run-agent", "model_stream_cut.yaml"), "utf8");
     const wrong = cut.replace("chunk: lo, final: false, n: 1, index: 1}", "chunk: lo, final: false, n: 7, index: 1}");
     expect(wrong).not.toBe(cut);
-    const written = await run(["--write-expect"], { "a/cut.yaml": wrong }, {}, { run: RUNNERS.run! });
+    const root = caseRoot();
+    const written = await run(["--write-expect"], { "a/cut.yaml": wrong }, {}, { run: RUNNERS.run! }, root);
     expect(written.out).toEqual(["wrote a/cut: stream", "1 case: 1 passed, 0 failed, 0 pending"]);
     // Numbers compare by value in a stream, so the int stays an int, not `1.0`.
-    expect(readFileSync(join(roots.at(-1)!, "cases", "a", "cut.yaml"), "utf8")).toBe(cut);
+    expect(readFileSync(join(root, "cases", "a", "cut.yaml"), "utf8")).toBe(cut);
   });
 
   test("--write-expect leaves a `?` in a flow collection bare, as YAML 1.2 allows", async () => {
@@ -1601,9 +1614,10 @@ describe("main", () => {
       .replace("output: {id: <id:1>, f: 2.0, big: 9007199254740993}", "output: {id: <id:1>, f: 2.0, big: 9007199254740993, q: \"why?\"}")
       .replace("{value: {big: 9007199254740993, f: 2.0, id: <id:1>}}", "{value: {big: 1}}");
     expect(asked).not.toBe(FORMS);
-    const written = await run(["--write-expect"], { "a/forms.yaml": asked }, {}, { run: RUNNERS.run! });
+    const root = caseRoot();
+    const written = await run(["--write-expect"], { "a/forms.yaml": asked }, {}, { run: RUNNERS.run! }, root);
     expect(written.out).toEqual(["wrote a/forms: trace", "1 case: 1 passed, 0 failed, 0 pending"]);
-    const text = readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8");
+    const text = readFileSync(join(root, "cases", "a", "forms.yaml"), "utf8");
     expect(text).toContain("q: why?}}]");
     expect(text).not.toContain('q: "why?"}}]');
   });
@@ -1618,9 +1632,10 @@ describe("main", () => {
     expect(block).not.toBe(FORMS);
     const edited = block.replace("    - value: {big: 9007199254740993,", "    - value: {big: 1,");
     expect(edited).not.toBe(block);
-    const written = await run(["--write-expect"], { "a/forms.yaml": edited }, {}, kinds);
+    const root = caseRoot();
+    const written = await run(["--write-expect"], { "a/forms.yaml": edited }, {}, kinds, root);
     expect(written.out).toEqual(["wrote a/forms: trace", "1 case: 1 passed, 0 failed, 0 pending"]);
-    const text = readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8");
+    const text = readFileSync(join(root, "cases", "a", "forms.yaml"), "utf8");
     expect(text).toBe(block);
   });
 
@@ -1628,24 +1643,26 @@ describe("main", () => {
     const kinds = { run: RUNNERS.run! };
     // Padding inside braces is a spelling the writer doesn't keep.
     const padded = FORMS.replace("{value: 1}]", "{ value: 2 }]");
-    const { code, out } = await run(["--write-expect"], { "a/forms.yaml": padded }, {}, kinds);
+    const root = caseRoot();
+    const { code, out } = await run(["--write-expect"], { "a/forms.yaml": padded }, {}, kinds, root);
     expect(code).toBe(1);
     expect(out[0]).toBe(
       "FAIL a/forms: --write-expect can't write expect back: the writer doesn't reproduce its text",
     );
     expect(out.at(-1)).toBe("1 case: 0 passed, 1 failed, 0 pending");
-    expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(padded);
+    expect(readFileSync(join(root, "cases", "a", "forms.yaml"), "utf8")).toBe(padded);
   });
 
   test("--write-expect leaves a case whose output differs as it is, and fails it", async () => {
     const kinds = { run: RUNNERS.run! };
     const wrong = FORMS.replace("output: {id: <id:1>, f: 2.0,", "output: {id: <id:1>, f: 3.0,")
       .replace("{value: 1}", "{value: 2}");
-    const { code, out } = await run(["--write-expect"], { "a/forms.yaml": wrong }, {}, kinds);
+    const root = caseRoot();
+    const { code, out } = await run(["--write-expect"], { "a/forms.yaml": wrong }, {}, kinds, root);
     expect(code).toBe(1);
     expect(out[0]).toBe("FAIL a/forms: output differs");
     expect(out.at(-1)).toBe("1 case: 0 passed, 1 failed, 0 pending");
-    expect(readFileSync(join(roots.at(-1)!, "cases", "a", "forms.yaml"), "utf8")).toBe(wrong);
+    expect(readFileSync(join(root, "cases", "a", "forms.yaml"), "utf8")).toBe(wrong);
   });
 });
 
@@ -1749,7 +1766,7 @@ describe("crashSweep", () => {
     await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
     // 16 cuts; the 4 inside the run start are refused instead of resumed.
     expect(cuts).toHaveLength(12);
-  });
+  }, SWEEP);
 
   test("fails a resume that drops a record", async () => {
     const [case_, ctx] = twoNodes();
@@ -1760,7 +1777,7 @@ describe("crashSweep", () => {
     const failure = crashSweep(case_, ctx, { beforeResume: dropSecond });
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
     await expect(failure).rejects.toThrow("the resume raised (crash sweep, cut after record 4)");
-  });
+  }, SWEEP);
 
   test("a cut after a retried tool's commit resumes from the recorded steps and succeeds", async () => {
     // The flaky tool fails twice, so its node records two steps before the commit. A cut right
@@ -1795,7 +1812,7 @@ expect:
     const ctx = setUp(case_, join(CASES, "..", "fixtures"));
     made.push(ctx.dir);
     await crashSweep(case_, ctx);
-  });
+  }, SWEEP);
 
   test("a host.models case is swept: each cut resumes with the replies after it put back, and passes", async () => {
     // The agent's first reply calls `lookup`, its second answers. A cut after the first model_call
@@ -1838,7 +1855,7 @@ expect:
     const cuts: string[] = [];
     await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
     expect(cuts.length).toBeGreaterThan(0);
-  });
+  }, SWEEP);
 
   test("fails the strong oracle when a recorded value changes before the resume", async () => {
     const [case_, ctx] = twoNodes();
@@ -1850,7 +1867,26 @@ expect:
     const failure = crashSweep(case_, ctx, { beforeResume: rewrite });
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
     await expect(failure).rejects.toThrow("output (crash sweep, cut after record 10) differs");
-  });
+  }, SWEEP);
+
+  test("a sweep still going refuses no other run's appends", async () => {
+    const [case_, ctx] = twoNodes();
+    // Not awaited yet, as when its test timed out: other runs go on while it cuts.
+    let done = false;
+    const sweep = crashSweep(case_, ctx).finally(() => {
+      done = true;
+    });
+    let during = 0;
+    while (!done) {
+      // Each cut writes its own `sweep-<k>.jsonl`; once one exists, the sweep is cutting.
+      if (readdirSync(ctx.dir).some((name) => name.startsWith("sweep-"))) during += 1;
+      const [other, otherCtx] = twoNodes();
+      // Every append outside the sweep's scope goes through, so the case passes.
+      await RUNNERS.run!(other, otherCtx);
+    }
+    await sweep;
+    expect(during).toBeGreaterThan(0);
+  }, SWEEP);
 });
 
 describe("runCli", () => {

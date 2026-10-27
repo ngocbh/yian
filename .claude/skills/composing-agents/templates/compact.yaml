@@ -3,20 +3,19 @@
 #
 # When a flow has exactly one node, skip the `nodes:` map and the redundant
 # `output: ${node.output}` line — put the node `kind:` and its fields at the top
-# level. The flow `id:` names the node; the flow `input:` is the node signature
-# (auto-wired by name, so you refer to it bare in the prompt); the flow `output:`
-# is the node's output TYPE, re-exported as the flow output.
+# level. The flow `id:` names the node; each flow input reaches the node under its
+# own name, so the prompt reads it bare; the flow `output:` is the node's output
+# TYPE, re-exported as the flow output.
 #
-# Allowed only for the value-producing LEAF kinds: agent, code, tool.
-# case/call/map reference other nodes a one-node flow has none of —
-# use the full `nodes:` form (see minimal.yaml) for those.
+# Allowed only for the LEAF kinds: agent, code, tool. case, call, map and loop
+# need the full `nodes:` form (see minimal.yaml).
 
 id: greet
 name: greet
 description: A one-node flow written inline — a name in, a greeting out.
 
 input:
-  name: !str                  # auto-wired into the node as ${input.name}
+  name: !str                  # the prompt reads it as ${name}
 output: str                  # the node's output TYPE; constrained types -> structured generation
 kind: agent
 prompt: |-

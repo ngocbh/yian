@@ -9,9 +9,9 @@ body:
         Sorry you're having trouble! Please fill out the details below so we can help.
 
         **Quick checks first:**
-        - Install with the extras you need: `pip install -e ".[all,dev]"` (see [CONTRIBUTING](https://github.com/ngocbh/yian/blob/main/CONTRIBUTING.md#development-setup))
-        - The package requires **Python 3.11+**; pip will not install it on 3.10 or older. Confirm with `python --version`.
-        - Run the engine anywhere with `PYTHONPATH=src`.
+        - From a clone, run `bun install --frozen-lockfile` in `ts/` (see [CONTRIBUTING](https://github.com/ngocbh/yian/blob/main/CONTRIBUTING.md#development-setup))
+        - Yian needs **Bun 1.4+** or **Node 22.18+**. Confirm with `bun --version` or `node --version`.
+        - Run the CLI from a clone with `bun src/cli/index.ts` in `ts/`.
         - Check the [README](https://github.com/ngocbh/yian/blob/main/README.md).
 
   - type: textarea
@@ -20,7 +20,7 @@ body:
       label: What's Going Wrong?
       description: Describe what you're trying to do and where it fails.
       placeholder: |
-        I ran `pip install -e ".[all]"` and then `yian run flow.yaml`, but I get...
+        I ran `bun install` in `ts/` and then `bun src/cli/index.ts run flow.yaml`, but I get...
     validations:
       required: true
 
@@ -31,8 +31,8 @@ body:
       description: What did you do? Include the exact commands you ran.
       placeholder: |
         1. git clone https://github.com/ngocbh/yian
-        2. pip install -e ".[all,dev]"
-        3. yian run examples/....yaml
+        2. cd yian/ts && bun install --frozen-lockfile
+        3. bun src/cli/index.ts run ../examples/....yaml
         4. Error appears: ...
     validations:
       required: true
@@ -42,9 +42,9 @@ body:
     attributes:
       label: Installation Method
       options:
-        - pip install -e (editable, from source)
-        - conda environment
-        - PYTHONPATH=src (no install)
+        - From a clone, on Bun
+        - From a clone, built and run on Node
+        - A single-file binary
         - Other
     validations:
       required: true
@@ -58,11 +58,11 @@ body:
       required: true
 
   - type: input
-    id: python-version
+    id: runtime-version
     attributes:
-      label: Python Version
-      description: Output of `python --version` (must be 3.11+)
-      placeholder: "3.11.9"
+      label: Runtime Version
+      description: Bun (`bun --version`, 1.4+) or Node (`node --version`, 22.18+)
+      placeholder: "Bun 1.4.2"
     validations:
       required: true
 
@@ -88,6 +88,6 @@ body:
       label: What I've Already Tried
       description: List any fixes or workarounds you've already attempted.
       placeholder: |
-        - Recreated the conda env with Python 3.11
-        - Reinstalled with `pip install -e ".[all]"`
-        - Ran with `PYTHONPATH=src`
+        - Upgraded Bun to 1.4
+        - Reinstalled with `bun install --frozen-lockfile`
+        - Ran a fresh clone

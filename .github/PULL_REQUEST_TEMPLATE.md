@@ -28,7 +28,7 @@ Fixes #<!-- issue number -->
 - [ ] Layer ladder stays acyclic (`diagnostics` below `events`; nodes combine
       `diagnostics` / `typesys` / `expr` before `compile <- compose`); runtime
       consumes contracts below compose, and the run boundary stays above both.
-- [ ] Engine core stays **kind-blind** — no new `match node.kind` in `runtime/`; `tests/engine/test_kind_census.py` still passes.
+- [ ] Engine core stays **kind-blind** — no new `match node.kind` in `runtime/`; `ts/tests/engine/kind_census.test.ts` still passes.
 - [ ] Nodes stay **pure at the graph-state boundary** — a node returns
       `Output | Route | Grow` and never writes the pool.
 - [ ] Runtime state stays **record-authoritative** — prepare, append to `RunLog`, then
@@ -42,7 +42,7 @@ Fixes #<!-- issue number -->
 <!-- The specific tests that prove this works. Paste the command you ran. -->
 
 ```bash
-PYTHONPATH=src python -m pytest tests/engine
+cd ts && bun run typecheck && bun run test && bun tests/conformance.ts
 ```
 
 - [ ] New/updated tests cover the change and would catch a regression.

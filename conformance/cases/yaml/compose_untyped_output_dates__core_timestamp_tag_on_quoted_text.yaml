@@ -1,4 +1,4 @@
-# TS reads a `!!timestamp` scalar as its text (rules: dates); Python's error in python_expect.
+# yian reads a `!!timestamp` scalar as its text.
 kind: load
 flow: |
   id: p

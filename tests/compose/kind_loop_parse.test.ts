@@ -1,31 +1,4 @@
-/**
- * The `loop` kind's parse: a port of `tests/compose/test_kind_loop_parse.py`.
- *
- * Ported: `test_loop_parse_matches_descriptor_and_records_ranges` (`max` is `10n`),
- * `test_loop_parse_requires_call`, `test_loop_parse_maps_until_keyword`,
- * `test_loop_rejects_a_non_string_predicate_at_its_field`,
- * `test_loop_rejects_an_empty_predicate_at_load` and
- * `test_loop_reports_a_malformed_predicate_at_its_field`.
- *
- * Changed: Python compares the descriptor to a `LoopDescriptor` with the parse metadata and the
- * compiler-owned `child_label` excluded; TS compares its class and fields. The requires-call row
- * pins the whole message and its range (the node body), where Python matches a fragment. The
- * non-string predicate rows parse the flow's nodes, where Python loads it, and spell the value in
- * the text form (`(got true)`, `(got ["x"])`). The empty and malformed predicate rows build the
- * loop node over a body built by hand (`handChild`), where Python loads the flow (the malformed
- * one seed 28, read from the `load-loop/seed_28_refine_loop` case), and pin the whole message.
- *
- * TS-only: a lone surrogate in `while:` is refused at the value.
- *
- * Pinned at the end (`parsedNodes`): the harvested
- * `load-loop/compose_kind_loop_parse__a_list_until_predicate_is_rejected` and
- * `__a_true_while_predicate_is_rejected`, both from this file's Python source; and (`assembledWith`,
- * over a body built by hand) `load-core/compose_expression_nesting__too_deep_loop_until`, whose
- * LOOP build refuses the predicate. The other harvested cases whose error the LOOP parse raises are
- * pinned in the TS mirrors of the Python files they come from: `non_text_fields.test.ts` (`call:`,
- * `while:`, `until:`), `node_input_shape.test.ts` (`input:`), `node_when_hint.test.ts` (`when:`)
- * and `engine/inline_composite_bodies.test.ts` (the key check).
- */
+/** The `loop` kind's parse. */
 
 import { expect, test } from "bun:test";
 
@@ -65,7 +38,7 @@ function readerFor(text: string, nodeId: string): SourceCursor {
   return SourceDocument.parse(text).root.child("nodes").child(nodeId);
 }
 
-/** Return a descriptor's fields, leaving out what Python's `compare=False` leaves out. */
+/** Return a descriptor's fields, leaving out the parse metadata. */
 function fieldsOf(desc: LoopDescriptor): Record<string, unknown> {
   const {
     range: _range,

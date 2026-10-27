@@ -27,7 +27,7 @@ nodes:
           value: ${input.value}
         output: int
         code: |
-          return inputs["value"] + 1
+          return inputs.value + 1;
     output: ${increment.output}
 
   map_each:
@@ -42,7 +42,7 @@ nodes:
           value: ${input.value}
         output: int
         code: |
-          return inputs["value"] * 2
+          return inputs.value * 2;
     output: ${double.output}
 
   loop_three:
@@ -58,7 +58,7 @@ nodes:
         output:
           n: int
         code: |
-          return {"n": inputs["n"] + 1}
+          return { n: inputs.n + 1 };
     output: ${bump.output}
 
 output:

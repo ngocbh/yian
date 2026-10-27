@@ -1,4 +1,4 @@
-# TS-only: an ask's literal questions are checked at load.
+# An ask's literal questions are checked at load.
 kind: load
 flow: |
   id: f

@@ -1,7 +1,5 @@
-# From tests/engine/test_tool_retries.py::test_two_failures_then_success_records_each_attempt (a
-# TimeoutError is retried) and the ToolNode docstring (src/yian/nodes/tool/node.py): every error but
-# PermanentToolError and ToolCheckError is retried.
-# A ConnectionError and an error of any other class are retried; each failed step names the class.
+# Every TOOL error but PermanentToolError and ToolCheckError is retried: a ConnectionError and an
+# error of any other class are retried; each failed step names the class.
 kind: run
 flow: |
   id: t

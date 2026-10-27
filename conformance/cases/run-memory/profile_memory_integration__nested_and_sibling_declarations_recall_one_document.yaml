@@ -1,5 +1,3 @@
-# From tests/engine/test_profile_memory_integration.py::test_nested_declarations_of_one_key_show_and_rewrite_the_document_once
-# and ::test_sibling_agents_recall_one_shared_profile_document, merged into one flow.
 # Pins: a profile key declared at the flow and again on each of two sibling AGENTs is one document,
 # shown once in each AGENT's system prompt; the document is seeded as a file at its storage path.
 kind: run

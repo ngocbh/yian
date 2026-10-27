@@ -1,5 +1,4 @@
-# The model entries carry no `request`: its schema instruction text spells the schema as each
-# implementation lowers it (Python's `json.dumps` spacing, TS compact JSON).
+# The model entries carry no `request`, so the schema instruction text isn't pinned.
 kind: run
 flow: |
   id: plain-session

@@ -1,9 +1,9 @@
-# A `code:` value in Python's `module:function` shape is a Python reference, which TS doesn't
-# run; read as TS it would be a labeled statement, so the TS load step refuses it with a hint.
+# A `code:` value in the `module:function` shape is not a reference to a TS file; read as TS it
+# would be a labeled statement, so the load step refuses it with a hint.
 kind: load
 flow: |
-  id: python-style-reference
-  name: python_style_reference
+  id: module-reference
+  name: module_reference
   nodes:
     helper:
       kind: code

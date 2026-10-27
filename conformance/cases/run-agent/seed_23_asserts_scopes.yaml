@@ -1,4 +1,3 @@
-# From tests/seeds/23-asserts-scopes.yaml.
 # Asserts at every scope pass: both calls grow the def, whose inline score is -0.6 for a
 # four-letter topic, so the `case` takes its `else:` route (`#else`) to `skip`.
 kind: run

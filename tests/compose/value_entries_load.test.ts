@@ -1,61 +1,11 @@
 /**
- * Load checks for value entries in `nodes:` (`total: !int ${a.output + b.output}`): a port of
- * `tests/compose/test_value_entries_load.py`, loading each flow with `assembleText` (`assemble`
- * as the loader calls it) where Python calls `load_flow`.
+ * Load checks for value entries in `nodes:` (`total: !int ${a.output + b.output}`).
  *
- * A tagged entry lowers at load to a CODE node with the entry's id and one typed input named
- * after it, so the tag is checked like a typed binding's: a span-free literal is checked while the
- * entry is read, a span's inferred type must not be disjoint from the tag, and a nested tag checks
- * its own value. A tag never fills in a missing field. A bare
- * `!object` over a written-out mapping keeps the record the mapping spells, and an empty key in
- * that record is a load error.
- *
- * Ported: `test_a_value_entry_builds_a_code_node_with_the_entry_id`,
- * `test_named_type_entry_reads_a_float_producer`,
- * `test_named_type_entry_rejects_a_disjoint_producer_at_the_entry`,
- * `test_a_tag_does_not_fill_in_a_missing_field`,
- * `test_a_named_field_read_into_a_disjoint_binding_is_rejected`,
- * `test_a_nested_tag_is_checked_at_its_own_line`, `test_entry_errors_are_located_at_the_entry`,
- * `test_a_disjoint_span_names_the_value_entry`,
- * `test_a_flow_call_of_a_disjoint_type_is_rejected_at_the_entry` (its `f` def built by hand),
- * `test_a_span_field_takes_its_producer_type`, `test_an_entry_under_a_credential_name_loads`,
- * `test_a_mistyped_literal_under_a_credential_name_gets_the_ordinary_error`,
- * `test_a_nested_binding_loads`, `test_fingerprint_is_stable_and_tracks_the_literal`,
- * `test_an_object_entry_with_an_empty_key_is_rejected`,
- * `test_an_empty_key_outside_a_written_out_record_loads` (a load row, then a run row),
- * `test_a_flow_call_inside_a_span_keeps_its_error`,
- * `test_a_written_out_object_entry_rejects_an_unknown_field_at_the_reader`,
- * `test_a_span_record_rejects_an_unknown_field`, `test_a_nested_untagged_mapping_keeps_its_fields`,
- * and the rows the build-cache reader decides (it types a span or nested tag in a written-out
- * record): `test_entries_reading_each_other_are_rejected`, `test_an_entry_reading_itself_is_rejected`,
- * `test_a_span_from_an_untyped_producer_is_opaque` and `test_a_nested_tagged_object_is_opaque`.
- *
- * Changed: the CODE node runs the built-in identity `{builtin: "identity", field: <id>}`, not
- * generated code. A mismatched text value is JSON-quoted (rule `messages`), and a missing-field
- * list is written in the text form (`["action"]`).
- * `test_a_number_that_is_not_finite_is_rejected_at_the_entry`: infinity is a float value in TS
- * (rule `infinity`), so the `.inf` and `-.inf` entries load, and the YAML reader refuses `.nan` at
- * the scalar before any entry is read. `test_a_written_out_object_entry_keeps_its_fields` also checks
- * the built node's output contract, the record `literalContract` spells;
- * `test_a_literal_field_takes_its_literal_type` and
- * `test_an_escaped_span_in_an_object_entry_is_text` check the typed reader's error, as Python
- * does, and also the record `literalContract` spells;
- * `test_an_object_entry_over_an_outside_value_stays_object` and
- * `test_an_object_entry_not_over_a_bare_object_mapping_keeps_its_tag` (its `call(...)` row with the
- * `g` def built by hand) check that the contract is the tag, and
- * `test_a_nested_tagged_object_is_opaque` that it is opaque.
- * `test_a_nested_untagged_mapping_keeps_its_fields` and
- * `test_a_span_record_rejects_an_unknown_field` also have rows that read a field the record has;
- * those check the output contract the reader gives the built entry node. A field from an untyped
- * producer stays opaque in that partial record.
- *
- * TS-only: the descriptor refusing node-only fields, a `RangeError` (a compiler bug) where Python
- * raises `ValueError`; and the harvested `load-case/compose_value_entries_load__*` cases this
- * reader, the build-cache reader, the typed-binding check and the reference validator decide
- * (`tags.test.ts` pins the ones `readTaggedValue` decides).
- *
- * Changed: the run of `test_an_empty_key_outside_a_written_out_record_loads` reads its ints back as
- * `bigint`s (decision 4a).
+ * A tagged entry lowers at load to a CODE node with the entry's id and one typed input named after
+ * it, so the tag is checked like a typed binding's: a span-free literal is checked while the entry
+ * is read, a span's inferred type must not be disjoint from the tag, and a nested tag checks its
+ * own value. A tag never fills in a missing field. A bare `!object` over a written-out mapping
+ * keeps the record the mapping spells, and an empty key in that record is a load error.
  */
 
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
@@ -361,7 +311,6 @@ describe("the record a written-out object keeps", () => {
     expect(canonicalTypeLabel((contract as ValueContract).type.fields!.get("b")!)).toBe(label);
   });
 
-  // Python's `test_a_literal_field_takes_its_literal_type` asserts it through a typed reader.
   test.each([
     ["[1, 2]", "list(int)"],
     ["true", "bool"],
@@ -386,7 +335,6 @@ describe("the record a written-out object keeps", () => {
     expect(contract).toStrictEqual(literalContract({ a: "${input.n}" }));
   });
 
-  // Python's `test_an_escaped_span_in_an_object_entry_is_text` asserts it through a typed reader.
   test("an escaped span in an object entry is text to a typed reader", () => {
     const text = recordFlow('  r: !object {a: "$${input.n}"}\n', "!int ${r.output.a}");
 

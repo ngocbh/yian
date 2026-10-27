@@ -1,5 +1,3 @@
-# From tests/engine/test_agent_memory_recall.py::test_recall_sections_reach_every_agent_path_in_order_with_trace_parity
-# (with two seeded profiles for the test's fake sections).
 # Pins: a flow-level memory and an AGENT-level one stack in the system prompt outer to local,
 # numbered from 1: outer first even though `own` sorts before `team`, and the flow-level
 # declaration comes after the AGENT's in the file.

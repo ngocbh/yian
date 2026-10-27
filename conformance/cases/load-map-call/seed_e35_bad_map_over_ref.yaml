@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e35-bad-map-over-ref.yaml.
 # A dangling reference in a MAP's `over:` is named `map over` and located at the `over:` value.
 kind: load
 flow: |

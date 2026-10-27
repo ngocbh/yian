@@ -1,15 +1,4 @@
-/**
- * Guards: what a condition proves, and what holds at each of its reads. A port of
- * `tests/compose/test_condition_guards.py`, all of it.
- *
- * Changed: guards and checks compare with `toStrictEqual`, which also compares classes, so
- * `NOTHING` (an empty `AllOf`) never equals `NEVER` (an empty `AnyOf`). A literal compares as
- * `[context, check, value, negated]`, leaving out its `node`, as Python's dataclass equality does.
- *
- * TS-only: `sameGuard`, `sameCheck` and `unknownCheck`, which stand in for Python's dataclass
- * equality and its `TypeError` for an unhandled check kind; a comprehension's reads stay in
- * lockstep with `conditionReads`, and a comprehension proves nothing.
- */
+/** Guards: what a condition proves, and what holds at each of its reads. */
 
 import { describe, expect, test } from "bun:test";
 

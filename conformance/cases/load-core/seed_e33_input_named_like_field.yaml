@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e33-input-named-like-field.yaml.
 # An input named like a field (`env`) is located at the input (line 35), not the `env:` field.
 kind: load
 flow: |

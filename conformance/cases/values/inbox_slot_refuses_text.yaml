@@ -1,4 +1,4 @@
-# TS-only: an Inbox(T) slot takes only a handle or its mapping, not the inbox's name as text.
+# An Inbox(T) slot takes only a handle or its mapping, not the inbox's name as text.
 kind: value
 type: Inbox(str)
 value: owner_messages

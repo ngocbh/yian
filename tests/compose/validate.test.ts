@@ -1,68 +1,4 @@
-/**
- * The validate phase's cross-node checks over the assembled flow: a port of
- * `tests/compose/test_validate.py`.
- *
- * Ported: the `rejectCycles` rows on hand-built edges (`test_reject_cycles_diag_has_range`,
- * `test_reject_cycles_no_ranges_leaves_range_none`,
- * `test_reject_cycles_excludes_nodes_only_blocked_downstream`,
- * `test_reject_cycles_omits_edges_between_separate_cycles`,
- * `test_reject_cycles_reports_a_self_dependency`,
- * `test_reject_cycles_names_a_gate_edge_by_its_host_input`,
- * `test_reject_cycles_keeps_a_dotted_group_that_is_not_a_gate`,
- * `test_reject_cycles_reports_an_alias_as_its_host`,
- * `test_reject_cycles_frames_an_unlocated_host_at_its_synth_node`,
- * `test_reject_cycles_alias_keeps_other_members`,
- * `test_reject_cycles_keeps_a_synth_node_read_inside_the_cycle`,
- * `test_reject_cycles_ignores_synth_out_edges_outside_the_component`);
- * `test_check_wiring_parity_moved`;
- * `test_check_call_map_types_is_owned_by_call_validation`, `test_check_loop_type_contract_moved`,
- * `test_check_loop_type_contract_tolerates_a_loop_without_child_inputs` and
- * `test_type_validators_reject_noncanonical_contract_maps_before_walking` (direct calls over
- * hand-built `BuildResult`s); and the parse rows
- * `test_node_local_asserts_carry_ranges`, `test_per_input_param_carries_ranges`,
- * `test_input_named_like_field_no_collision` (through `nodesOf`),
- * `test_unknown_top_level_key_lists_authored_names` (through `fileOf`) and
- * `test_field_not_allowed_lists_authored_names` (through `nodesOf`), where Python calls
- * `load_flow`.
- *
- * Changed: `test_reject_cycles_range_map_is_keyword_only`: TS takes one options object, so there
- * is no positional form to refuse. The cycle message writes its node list in the text form
- * (`["a"]`, rule `messages`). The CODE references are TS's
- * (`./fixtures/compose_codefns.ts:pick_pro`).
- *
- * Not ported: `test_validate_human_questions_diag_has_range`. TS yian has no `human_input`; an
- * `ask`'s literal questions are checked at its `questions` input.
- *
- * Also ported here: `test_a_case_output_over_a_1000_link_alias_chain_is_rejected_as_a_case_output`
- * from `tests/compose/test_record_type_nesting.py` (whose other rows are in
- * `record_type_nesting.test.ts`). Changed: it raises `maxYamlNodes` (the anchors hit the YAML node
- * limit first at the default), as `written_value_nesting.test.ts` does; its message is pinned (a
- * stack overflow would give another error, so there is no cause-chain check).
- *
- * TS-only: harvested cases whose Python file's mirror (`expression_nesting.test.ts`) lists them as
- * covered, and cases from files with no TS mirror, pinned at the end with `full` (every frame and
- * the notes): `load-core/engine_limit_overrides__written_value_over_the_set_value_limit`
- * (its `env:` sets the value limit, restored by the `afterEach`), the type-table pass's
- * `load-core/engine_binding_labels_flows__unknown_type_in_a_single_flow_output`, the reference
- * check's `load-core/compose_expression_nesting__too_deep_{call_argument,case_on,human_question,prompt_span}`,
- * `yaml/compose_load_error_ranges__mapped_root_output_keeps_the_retained_range`,
- * `load-case/engine_case_when_escape_e2e__*`, `load-core/unknown_namespace`,
- * `load-case/engine_value_entries_run__a_routed_entry_reading_an_excluded_field` (the `else`
- * branch's narrowed view of `d.output` gives its "unknown field" message), the node-assert check's
- * `load-core/compose_expression_nesting__too_deep_node_assert`, the flow-assert lowering's
- * `load-core/compose_expression_nesting__too_deep_flow_assert`, and the `ok` cases with flow asserts
- * `load-leaves/seed_23_asserts_scopes`, `load-core/seed_19_binding_stances` and
- * `load-core/seed_27_expr_ops`.
- *
- * The reference validator's rows: `test_validate_references_diag_has_range` (its leaves built from
- * `nodesOf`, as Python's `_built_flow` builds them), and
- * `test_validate_references_diag_locates_case_when_via_synth_param`,
- * `test_validate_references_diag_case_on_form_locates_at_on_line`,
- * `test_validate_references_diag_case_when_multi_ref_locates_at_that_when` and
- * `test_validate_references_diag_case_then_call_locates_at_then_line`, through `assembleText` where
- * Python calls `load_flow`; and their cases
- * `load-core/compose_validate__unknown_namespace_in_a_case_{when,on,then_call}`.
- */
+/** The validate phase's cross-node checks over the assembled flow. */
 
 import { afterEach, describe, expect, test } from "bun:test";
 
@@ -314,7 +250,6 @@ describe("located pass errors", () => {
 });
 
 describe("checkCallMapTypes", () => {
-  // Python's test_check_call_map_types_is_owned_by_call_validation.
   test("the call type check is owned by call validation", () => {
     // A `call` binding whose source type mismatches the child input's declared type is loud. The
     // error anchors on the call node's `input:` mapping span (the coarsest binding-site span),
@@ -636,10 +571,10 @@ output: \${calc.output}
   });
 });
 
-// ---------- rows ported here from other Python files ----------
+// ---------- other rows ----------
 
 test("a case output over a 1000-link alias chain is rejected as a case output", () => {
-  // From tests/compose/test_record_type_nesting.py. A listed chain's anchors cost quadratically
+  // A listed chain's anchors cost quadratically
   // many nodes, past the default node limit, so the limit is raised to reach the case check.
   install({ ...BUILTIN, maxYamlNodes: 10_000_000 });
   const items = ['&m0 {k: "str"}', ...Array.from({ length: 998 }, (_, i) => `&m${i + 1} {k: *m${i}}`)];
@@ -658,7 +593,7 @@ test("a case output over a 1000-link alias chain is rejected as a case output", 
   );
 });
 
-// ---------- harvested cases from other Python files ----------
+// ---------- other conformance cases ----------
 
 test.each<CaseRow>([
   {

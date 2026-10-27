@@ -1,9 +1,8 @@
-# From tests/seeds/13-types-objects.yaml.
 # Every scalar, `list(X)`, inline, block and nested records and typedefs load,
 # with deep dotted reads.
 kind: load
 flow: |
-  # 13 — The type grammar (Python typing): scalars, lists, objects, nesting.
+  # 13 — The type grammar: scalars, lists, objects, nesting.
   #
   # A planning CODE node whose I/O exercises every type form. Shows: all scalars
   # (str / int / float / bool / date), list(X), inline vs block objects (records),

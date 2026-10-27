@@ -1,40 +1,4 @@
-/**
- * An AGENT whose `llm_config` holds values gets them as the reserved `__llm_config` input: a port
- * of `tests/compose/test_llm_config_values_wiring.py`, loading each flow with `assembleText`
- * (`assemble` as the loader calls it, the flow's `llm_config:` read as the loader reads it) where
- * Python calls `load_flow`.
- *
- * Ported: `test_a_node_level_value_gives_an_edge_from_its_producer`,
- * `test_a_flow_level_value_reaches_every_agent_it_can_contribute_to`,
- * `test_an_agent_with_only_literal_layers_has_no_reserved_key`,
- * `test_an_inherit_false_agent_does_not_carry_the_flow_layer`,
- * `test_wiring_keys_equal_params_plus_the_reserved_key`,
- * `test_two_loads_of_the_same_text_have_the_same_fingerprint`,
- * `test_changing_which_lower_value_is_dropped_changes_the_wiring_identity`,
- * `test_a_flow_value_read_from_an_agent_that_always_sets_the_field_is_not_a_cycle` (3),
- * `test_a_flow_value_read_from_an_agent_whose_own_value_may_be_null_is_a_cycle`,
- * `test_an_llm_config_value_reading_a_skippable_node_lets_the_agent_skip`,
- * `test_a_shielded_flow_value_reading_a_skippable_node_does_not`,
- * `test_skipped_arithmetic_in_a_value_names_the_llm_config_field`,
- * `test_an_unknown_node_in_a_value_is_named_at_the_llm_config_field`,
- * `test_an_unknown_input_in_a_flow_value_is_located_at_the_flow_field` and
- * `test_a_composer_value_error_names_the_gate_field`,
- * `test_a_layer_of_only_tagged_literals_is_wired_as_a_literal_layer` and
- * `test_clone_child_renamespaces_the_reserved_key`, which loads its `defs:` child with `loadFlow`.
- *
- * Pinned in kind_agent_parse.test.ts: `test_an_authored_input_named_like_the_reserved_key_fails`.
- *
- * The harvested cases are pinned at the end with `full` (every frame and the notes):
- * `load-agent/compose_llm_config_values_wiring__flow_value_read_from_its_own_reader`, whose cycle
- * message writes the node list in the text form (`["pick"]`, rule `messages`), the two
- * unknown-reference cases, and `load-agent/compose_llm_config_values_wiring__skipped_arithmetic_in_a_value`.
- *
- * `test_runs_with_different_inputs_record_the_same_fingerprint` runs with a scripted model from
- * `models`, where Python patches `model_from_config`, and in an isolated environment with an empty
- * auth file, where Python sets `OPENAI_API_KEY`.
- *
- * Changed: the skipped-arithmetic row pins the whole message where Python checks its start.
- */
+/** An AGENT whose `llm_config` holds values gets them as the reserved `__llm_config` input. */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

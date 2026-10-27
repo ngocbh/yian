@@ -1,40 +1,9 @@
 /**
- * Load errors about an inline `call(...)` argument name the authored argument: a port of
- * `tests/compose/test_call_argument_labels.py`, loading each flow with `assembleText` (`assemble`
- * as the loader calls it) where Python calls `load_flow`.
+ * Load errors about an inline `call(...)` argument name the authored argument.
  *
  * An inline `call(child, y=...)` desugars to a synth `__call_<n>` node. An error about one of its
- * arguments reads `<site> call(<callee>) argument '<name>'`, where the site is the authored
- * binding the call was written in, and never names the synth node.
- *
- * Ported: `test_a_bad_ref_in_a_node_input_call_names_the_argument`,
- * `test_a_bad_ref_in_a_value_entry_call_names_the_argument`,
- * `test_a_bad_ref_in_a_case_else_call_names_the_argument`,
- * `test_a_bad_ref_in_a_case_then_call_names_the_argument`,
- * `test_a_bad_ref_in_a_single_flow_output_call_names_the_argument`,
- * `test_a_bad_ref_in_a_record_flow_output_call_names_the_argument`,
- * `test_a_bad_ref_in_a_map_over_call_names_the_argument`,
- * `test_a_bad_ref_in_a_flow_assert_call_names_the_argument`,
- * `test_a_nested_call_shares_its_enclosing_binding_site`,
- * `test_a_mis_called_builtin_in_an_argument_names_the_argument`,
- * `test_an_argument_source_type_mismatch_names_the_argument`,
- * `test_an_argument_literal_type_mismatch_names_the_argument`,
- * `test_an_undeclared_argument_names_the_argument`, `test_a_missing_argument_names_the_call`,
- * `test_an_authored_call_node_keeps_its_binding_wording`,
- * `test_an_undeclared_argument_in_a_value_entry_call_names_the_argument` and
- * `test_a_cycle_through_an_inline_call_names_its_host_in_a_note`.
- *
- * Changed: each `defs:` entry is a hand-built child (`handChild`) with the def's signature and
- * output contract. The cycle message writes its node list in the text form (`["__call_0","n"]`,
- * rule `messages`).
- *
- * Pinned at the end with `full` (every frame and the notes), the harvested cases the reference
- * validator, the call type check and the cycle check decide, each def built by hand
- * (`assembledWith`).
- * `kind_call_parse.test.ts` pins the four the CALL build decides
- * (`load-map-call/compose_call_argument_labels__{an_authored_call_node_keeps_its_binding_wording,
- * a_missing_argument_names_the_call,an_undeclared_argument_in_a_value_entry_call,
- * an_undeclared_argument_names_the_argument}`).
+ * arguments reads `<site> call(<callee>) argument '<name>'`, where the site is the authored binding
+ * the call was written in, and never names the synth node.
  */
 
 import { expect, test } from "bun:test";

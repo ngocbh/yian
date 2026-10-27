@@ -1,4 +1,4 @@
-# TS-only: a duration is a positive integer and a unit.
+# A duration is a positive integer and a unit.
 kind: load
 flow: |
   id: f

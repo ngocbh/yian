@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e22-required-missing.yaml.
 # A `:?` binding on an omitted Optional input fails its CODE node, at the binding.
 kind: run
 flow: |

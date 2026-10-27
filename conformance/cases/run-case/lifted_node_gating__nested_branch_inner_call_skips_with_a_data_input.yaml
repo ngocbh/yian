@@ -1,4 +1,3 @@
-# From tests/engine/test_lifted_node_gating.py::test_nested_branch_inner_call_is_skipped_with_the_branch_calls_data_input.
 # Pins: on the taken route, a nested branch call's inner call is skipped with the branch call's skipped argument.
 # The test's shared `defs:` are cut to the ones this flow calls (`meet` is never called).
 kind: run

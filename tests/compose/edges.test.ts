@@ -1,12 +1,9 @@
 /**
- * The edges phase's ordering edges (`compose/edges/ordering.ts`): a port of
- * `tests/compose/test_edges.py`.
+ * The edges phase's ordering edges (`compose/edges/ordering.ts`).
  *
  * `inferOrderingEdges` lowers each `depends_on:`/`runs_after:` declaration into a zero-data
  * ordering edge, and reports an unknown target as a `LoadError` located at the declaring node
  * descriptor's range.
- *
- * Changed: the CODE reference is TS's (`./m.ts:f`), where Python names `m:f`.
  */
 
 import { expect, test } from "bun:test";

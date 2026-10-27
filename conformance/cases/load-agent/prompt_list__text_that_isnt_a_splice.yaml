@@ -1,4 +1,4 @@
-# TS-only: a text item that isn't a lone `${name}` isn't a splice; it is refused at the item, with a fix.
+# A text item that isn't a lone `${name}` isn't a splice; it is refused at the item, with a fix.
 kind: load
 flow: |
   id: chat

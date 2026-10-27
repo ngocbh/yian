@@ -1,77 +1,8 @@
 /**
- * Flows that use `Any`: a port of `tests/compose/test_any_flows.py`, assembling each flow with
- * `assembleText` where Python calls `load_flow`, and running it with `loadConformanceFlow` and
- * `runFlow` where Python runs it.
+ * Flows that use `Any`.
  *
  * `Any` is any JSON value except null; `Optional(Any)` adds null. Wiring an `Any` into a narrower
  * child input is a load error unless a tag or an `isinstance` branch narrows it.
- *
- * Ported: `test_an_any_output_returns_any_json_value` (4),
- * `test_an_optional_str_output_into_a_child_any_input_is_a_load_error`,
- * `test_the_same_untagged_wiring_outside_the_branch_is_a_load_error`,
- * `test_a_map_over_a_list_of_optional_any_into_a_child_any_input_is_a_load_error`,
- * `test_a_map_over_a_mixed_literal_list_still_checks_each_element_at_load`,
- * `test_a_child_any_output_into_a_parent_int_input_is_a_load_error_with_the_hint`,
- * `test_an_untyped_seed_into_an_any_body_input_rejects_an_optional_any_body_field`,
- * `test_a_field_read_on_an_any_value_entry_is_not_checked`,
- * `test_a_field_read_on_an_object_value_entry_is_still_checked`,
- * `test_a_typed_any_literal_loads_and_runs` (4) and
- * `test_a_list_of_any_into_an_untagged_inline_body_parameter_runs` (2, its first row also the case
- * `run-core/compose_any_flows__a_list_of_any_into_an_inline_body_parameter_runs`); each as a load
- * row then a run row, `test_an_untagged_any_into_a_child_str_input_loads_inside_an_isinstance_branch`,
- * `test_a_tagged_any_binding_into_a_child_str_input_runs_for_text`,
- * `test_a_str_output_into_a_child_any_input_loads_and_runs`,
- * `test_a_map_over_a_list_of_any_runs_items_into_a_child_any_input`,
- * `test_a_map_over_a_list_of_optional_any_into_a_child_optional_any_input_runs`,
- * `test_a_map_over_a_mixed_literal_list_into_a_child_any_input_runs`,
- * `test_a_reader_tagging_a_case_result_any_gets_the_taken_branch_value` (both runs; its case
- * `run-core/compose_any_flows__a_reader_tagging_a_case_result_any_gets_the_taken_branch` holds
- * the first), `test_a_child_any_output_into_a_parent_any_consumer_runs`,
- * `test_a_typed_loop_seed_accepts_an_optional_any_body_field`,
- * `test_an_int_when_on_an_any_value_loads_and_matches` (both runs; its case
- * `run-core/compose_any_flows__an_int_when_does_not_match_text` holds the second),
- * `test_a_field_read_on_an_any_output_loads_in_a_binding`,
- * `test_a_field_read_on_an_any_output_loads_in_a_flow_output`,
- * `test_a_field_read_on_an_any_output_loads_in_a_case_condition` and
- * `test_a_field_read_on_an_any_output_loads_in_an_assert`; the load halves of the covered
- * `test_a_tagged_any_binding_into_a_child_str_input_fails_at_runtime_for_an_int`,
- * `test_a_loop_carrying_an_any_seed_with_an_any_body_field_runs`,
- * `test_a_null_from_an_optional_any_body_field_fails_the_next_turn` and
- * `test_a_text_when_on_an_any_value_loads_and_matches`;
- * `test_a_case_output_any_is_a_load_error_suggesting_the_reader_tag`, which the case-branch check
- * decides (its whole message pinned where Python checks two fragments); and the harvested cases
- * `load-types/compose_any_flows__a_map_over_a_mixed_literal_list_checks_each_element` and
- * `load-types/compose_any_flows__an_untyped_seed_rejects_an_optional_any_body_field`.
- *
- * Covered by `run-core/compose_any_flows__<case>`: `test_a_list_of_any_output_returns_mixed_items`
- * (`a_list_of_any_output_returns_mixed_items`), `test_an_any_output_rejects_null`
- * (`an_any_output_rejects_null`), `test_an_optional_any_output_returns_null`
- * (`an_optional_any_output_returns_null`), `test_an_any_flow_input_rejects_null_naming_the_input`
- * (`an_any_flow_input_rejects_null_naming_the_input`, TS expect, decision 7),
- * `test_an_unquoted_date_when_on_an_any_value_matches_its_text`
- * (`an_unquoted_date_when_matches_its_text`), and the runs of
- * `test_a_tagged_any_binding_into_a_child_str_input_fails_at_runtime_for_an_int`
- * (`a_tagged_any_binding_into_a_child_str_input_fails`),
- * `test_a_loop_carrying_an_any_seed_with_an_any_body_field_runs` (`a_loop_carrying_an_any_seed_runs`),
- * `test_a_null_from_an_optional_any_body_field_fails_the_next_turn` (same name; TS expect,
- * decision 7) and
- * `test_a_text_when_on_an_any_value_loads_and_matches` (`a_text_when_on_an_any_value_matches`).
- * Covered by `load-types/compose_any_flows__a_null_any_literal_is_a_load_error` (pinned in
- * `tags.test.ts`): `test_a_null_any_literal_is_a_load_error`.
- *
- * Changed: rows asserting fragments pin the whole message. CODE bodies are JS, getting ints as
- * `number`s (decision 45); the `child` def returns `JSON.stringify` of its input where Python
- * returns its `repr`, so `"hi"` reads `'"hi"'` and a null `'null'`. Ints read back as `bigint`s
- * (decision 4a).
- *
- * Python-only (dates and non-text keys): `test_an_object_output_rejects_a_date_member`,
- * `test_an_object_output_rejects_a_non_text_key_at_the_output`,
- * `test_an_object_flow_input_rejects_a_non_text_key_naming_the_input`,
- * `test_a_non_text_key_nested_in_a_flow_input_names_its_path`,
- * `test_a_date_inside_an_object_flow_input_arrives_as_text`,
- * `test_an_unquoted_datetime_when_on_an_any_value_keeps_its_quote_error` (dropped in
- * `case_on_typed.test.ts`) and `test_an_unquoted_date_any_literal_gets_the_quote_hint` (TS loads
- * it, as `tags.test.ts` notes).
  */
 
 import { afterAll, afterEach, expect, test } from "bun:test";

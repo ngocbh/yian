@@ -1,89 +1,5 @@
 /**
- * Load-time field-read checks in prompts, bindings, node and flow asserts and on builtin results: a
- * port of `tests/compose/test_field_read_sites.py`.
- *
- * Ported, the prompt and binding rows the reference validator decides:
- * `::test_agent_prompt_reads_unknown_field`, `::test_agent_system_prompt_reads_unknown_field`,
- * `::test_typed_input_field_read_errors_only_when_every_alternative_rejects`,
- * `::test_typed_union_input_reads_the_narrowed_member_inside_a_branch`,
- * `::test_typed_record_binding_reads_its_tagged_member` (2), `::test_optional_binding_field_reads`,
- * `::test_adaptive_brief_field_read_is_reported_on_the_gate`, `::test_literal_input_field_read`,
- * `::test_null_literal_input_field_read`, `::test_field_read_inside_a_builtin_argument`,
- * `::test_agent_variable_field_read`, `::test_human_input_prompt_field_read`,
- * `::test_human_input_question_field_read` (both on an `ask`, whose prompt and questions are input
- * wiring templates reading the pool, so the error names the input),
- * `::test_prompt_field_error_is_reported_once_per_ref`,
- * `::test_prompt_inside_a_def_reads_unknown_field`,
- * `::test_readable_fields_still_load` (6), `::test_narrowed_input_reads_the_branch_member`,
- * `::test_defaulted_union_binding_hint_names_the_bound_source` and
- * `::test_transformed_union_binding_hint_names_no_bound_source`.
- *
- * Ported, the assert rows the node-assert check and the flow-assert lowering decide:
- * `::test_node_assert_reads_unknown_input_field` (2),
- * `::test_node_assert_field_error_is_reported_once_per_ref`,
- * `::test_call_node_assert_reads_a_field_its_binding_lacks` (2),
- * `::test_loop_assert_reads_a_field_neither_seed_nor_carried_has` (2),
- * `::test_node_assert_literal_input_field_read`, `::test_node_assert_open_input_field_reads_load` (2),
- * `::test_node_assert_reads_the_narrowed_member_inside_a_branch`,
- * `::test_isinstance_branch_reads_the_narrowed_member` (5, its prompt rows decided by the reference
- * validator), `::test_node_assert_reads_are_narrowed_by_the_checks_before_them` (9),
- * `::test_node_assert_reads_the_checks_do_not_cover_are_rejected` (3),
- * `::test_node_assert_read_under_two_guards_is_checked_under_each`,
- * `::test_agent_node_assert_reads_are_narrowed`, `::test_node_assert_output_reads_are_narrowed`,
- * `::test_partial_union_node_assert_reads_the_narrowed_member`,
- * `::test_impossible_node_assert_check_is_located_at_the_assert`,
- * `::test_call_node_assert_tag_checks_narrow_its_local`, `::test_assert_reading_many_typed_inputs_loads`,
- * `::test_node_assert_read_after_a_reported_check_is_not_checked` (2),
- * `::test_node_assert_read_after_an_always_true_negation_is_not_checked`,
- * `::test_node_assert_read_of_one_local_after_a_reported_check_on_another_is_not_checked`,
- * `::test_node_assert_check_impossible_under_every_alternative_is_reported_once`,
- * `::test_node_assert_read_dead_under_only_some_alternatives_is_checked`,
- * `::test_node_assert_impossible_output_check_is_reported` (3),
- * `::test_node_assert_output_read_after_a_reported_check_is_not_checked`,
- * `::test_node_assert_over_many_locals_with_two_alternatives_loads`,
- * `::test_call_node_assert_member_only_hint_compares_the_tag`,
- * `::test_call_node_assert_member_only_hint_on_an_untagged_union_names_a_case`,
- * `::test_unparsable_condition_keeps_its_located_parse_error`,
- * `::test_flow_assert_reads_are_narrowed_by_the_checks_before_them` (5),
- * `::test_flow_post_assert_producer_reads_are_narrowed`, `::test_flow_assert_read_before_its_check_is_rejected`,
- * `::test_impossible_flow_assert_check_is_located_at_the_assert`,
- * `::test_flow_assert_check_impossible_even_on_null_is_reported` (2),
- * `::test_flow_assert_read_error_names_the_declared_type` (6),
- * `::test_flow_assert_shorthand_check_is_reported_as_written`, `::test_flow_assert_reads_unknown_input_field` (2),
- * `::test_flow_assert_readable_input_fields_load` (2); `::test_guarded_node_assert_runs` (3) and
- * `::test_guarded_flow_assert_runs` (2), run with `loadConformanceFlow` and `runFlow`; and, each
- * as a load row then a run row, `::test_loop_assert_reads_the_carried_field` (2),
- * `::test_node_assert_known_input_field_loads_and_runs`,
- * `::test_loop_node_assert_tag_checks_narrow_its_local` (the load row with its two load errors),
- * `::test_partial_record_local_root_reads` (the load row with its load error),
- * `::test_flow_assert_on_a_skippable_producer_reads_null` (2) and
- * `::test_flow_assert_known_input_field_loads_and_runs` (both runs). The harvested
- * `run-core/compose_field_read_sites__{guarded_node_assert_fails,guarded_flow_assert_short_circuits,
- * flow_assert_on_a_skipped_producer_reads_null}` each hold one parameter row, the second over a
- * smaller flow, so those tests are ported whole.
- *
- * Ported, the builtin-result rows: `::test_binding_reads_a_field_on_a_builtin_result`,
- * `::test_flow_output_reads_a_field_on_a_builtin_result`, `::test_prompt_reads_a_field_on_a_builtin_result`,
- * `::test_case_when_reads_a_field_on_a_builtin_result`, `::test_node_assert_reads_a_field_on_a_builtin_result`,
- * `::test_flow_assert_reads_a_field_on_a_builtin_result`, `::test_loop_while_reads_a_field_on_a_builtin_result`
- * (the last three decided by the type-table pass),
- * `::test_scanned_sites_read_a_field_on_a_builtin_result_once` (3),
- * `::test_builtin_results_without_a_field_read_load` (3) and `::test_host_builtin_field_reads_load`
- * (its builtins registered with `registerTemplateFn` and put back in a `finally`, as Python's
- * `monkeypatch.setitem` does).
- *
- * The flows assemble with `assembleText` where Python calls `load_flow`; the `defs:` entries a
- * CALL, MAP or LOOP calls resolve through the loader's scope.
- *
- * Changed: the CODE bodies are TS's, as the harvested cases spell them. A compared tag and its
- * close match are spelled `"byu"` / `did you mean "buy"?` (Python `'byu'` / `did you mean 'buy'?`),
- * as is the compared `"hold"` (Python `'hold'`), and the cycle's nodes `["b","c"]` (Python
- * `['b', 'c']`).
- *
- * TS-only: the harvested `load-core/compose_field_read_sites__*` cases the reference validator, the
- * node-assert check, the flow-assert lowering and the type-table pass decide, pinned at the end,
- * with `full` (every frame and the notes) for `loop_while_reads_a_field_on_a_builtin_result` and
- * `prompt_inside_a_def_reads_unknown_field`.
+ * Load-time field-read checks in prompts, bindings, node and flow asserts and on builtin results.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -222,7 +138,7 @@ const count = (text: string, needle: string) => text.split(needle).length - 1;
 /** The 1-based line of `text` holding `needle`. */
 const lineOf = (text: string, needle: string) => text.split("\n").findIndex((line) => line.includes(needle)) + 1;
 
-/** The `defs:` text of a `child` taking `v: !<typ>`, as Python's flows write it. */
+/** The `defs:` text of a `child` taking `v: !<typ>`. */
 function childText(typ: string): string {
   return (
     "defs:\n" +

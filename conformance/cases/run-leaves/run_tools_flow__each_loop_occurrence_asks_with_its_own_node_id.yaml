@@ -1,4 +1,3 @@
-# From tests/engine/test_run_tools_flow.py::test_each_loop_occurrence_asks_with_its_own_node_id.
 # An ask in a LOOP body asks once per iteration, each request naming its occurrence
 # (loop#0/ask, loop#1/ask).
 kind: run

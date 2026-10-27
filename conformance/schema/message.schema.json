@@ -61,7 +61,7 @@
       ]
     },
     "file": {
-      "description": "A file holding a media part's content: the FileRef form (TS yian only; the Python reference reads data or url). A run's media files live in <run folder>/media/<sha256>.<ext>, and uri names one by its path relative to the run folder (media/<sha256>.<ext>), so a copied run folder keeps its references.",
+      "description": "A file holding a media part's content: the FileRef form. A run's media files live in <run folder>/media/<sha256>.<ext>, and uri names one by its path relative to the run folder (media/<sha256>.<ext>), so a copied run folder keeps its references.",
       "type": "object",
       "required": ["uri"],
       "additionalProperties": false,

@@ -1,19 +1,4 @@
-/**
- * TOOL `retries:` lands on the node: a port of `tests/compose/test_tool_retries_load.py`.
- *
- * Ported: `test_tool_node_retries_defaults_to_the_tool_retries_default`.
- *
- * Changed: the test also sets `YIAN_TOOL_RETRIES=3`, so the node is shown to read the default
- * rather than hard-code the built-in 0. `test_retries_loads_onto_the_node`, `test_omitted_retries_uses_the_default` and
- * `test_bad_retries_is_a_load_error_at_its_line` assemble the root flow with `assembleText`, where
- * Python loads it; the bad value is spelled by `valueRepr` (`true`, `"2"`, `null` where Python
- * shows `True`, `'2'`, `None`). `test_zero_retries_keeps_the_flow_fingerprint` and
- * `test_nonzero_retries_changes_the_flow_fingerprint` load with `loadFlow` and compare with
- * Python's pinned digest.
- *
- * The harvested `load-leaves/compose_tool_retries_load__negative_retries` and
- * `load-leaves/compose_tool_retries_load__retries_loads` are pinned at the end.
- */
+/** TOOL `retries:` lands on the node. */
 
 import { afterEach, expect, test } from "bun:test";
 

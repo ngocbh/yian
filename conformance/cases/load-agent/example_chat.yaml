@@ -3,7 +3,6 @@
 # of a `uses:` flow, a routing-only `case`, an inbox passed through a CALL to an AGENT's
 # `steer_inbox:`, an `Optional(str)` reply, `${reply.new_messages}`, the built-in `Message`, list
 # comprehensions, len() and slices load.
-# `python_flow` keeps Python yian's chat example, which still asks with HUMAN_INPUT.
 kind: load
 flow: |
   # chat — a turn-by-turn conversational assistant that folds older turns into a rolling summary.
@@ -22,9 +21,9 @@ flow: |
   # "[interrupted by the user]". Each turn adds one list to the history: what was said, then the
   # reply's `new_messages` (its tool calls and results, the steers it read, and its final reply).
   # Closing the inbox (/exit in `yian chat`) ends the loop once the queued messages are answered.
-  # The flow grants no tools; see docs/examples.md to add some. The run log grows linearly (see
-  # "Growing a carried value" in docs/syntax.md).
-  # TS yian only. Run it with:  yian chat examples/chat.yaml
+  # The flow grants no tools; the Examples page shows how to add some. The run log grows linearly
+  # (the Control flow page covers carried values).
+  # Run it with:  yian chat examples/chat.yaml
   id: chat
   name: chat
   description: A turn-by-turn conversational assistant that folds older turns into a rolling summary.
@@ -117,7 +116,7 @@ files:
     # counts turns, so a tool call and its result never part. The budget counts the characters of
     # the messages' text parts; the summarizer reads those text parts too (tool calls, their results
     # and reasoning are left out of the summary).
-    # Comprehensions, len(), slices and the built-in `Message` are TS-only.
+    # It uses comprehensions, len(), slices and the built-in `Message`.
     id: compact_history
     name: compact_history
     description: Keep a chat history's text under a budget by folding older turns into a rolling summary.

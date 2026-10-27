@@ -1,4 +1,3 @@
-# From tests/engine/test_profile_memory.py::test_learn_without_feedback_calls_no_model.
 # Pins: a backward call with no feedback makes no profile learner call (and no AGENT backward call),
 # and the document stays as it was.
 # YIAN_DEFAULT_PROVIDER/MODEL: a profile learner's model config comes from the defaults, not the flow.

@@ -1,4 +1,4 @@
-# TS-only: a duration from a reference must be typed str.
+# A duration from a reference must be typed str.
 kind: load
 flow: |
   id: f

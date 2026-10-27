@@ -4,6 +4,6 @@ expect:
   load:
     diagnostics:
       # The message is the YAML parser's text. The range is the end of the stream, where
-      # PyYAML finds the sequence still open.
+      # the parser finds the sequence still open.
       - code: compose.load
         frames: [{label: flow.yaml, range: [4, 1, 4, 2]}]

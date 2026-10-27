@@ -1,5 +1,3 @@
-# From tests/engine/test_route_chain_costs.py::test_backward_results_match_the_recorded_results[scalar-3]
-# (tests/fixtures/route_chain_results.json, "scalar-3").
 # Pins: feedback on a CALL whose argument adds `input.x` three times reaches the flow input as one
 # message per operand.
 kind: backward

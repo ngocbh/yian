@@ -1,4 +1,4 @@
-# TS-only: a spliced `!list(Message)` history reaches the request with every part and role: the
+# A spliced `!list(Message)` history reaches the request with every part and role: the
 # assistant's tool call, the tool message's result, then the user message.
 kind: run
 flow: |

@@ -1,4 +1,3 @@
-# TS-only: Python reruns an AGENT from its start on resume.
 # The host stops the run while lookup runs (its first call), so lookup's result is never
 # written. The resumed agent replays the reply, and closes the call it can't know the outcome of
 # with a `crashed` tool_result (an error the model reads as "outcome unknown") instead of

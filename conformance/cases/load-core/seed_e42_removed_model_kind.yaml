@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e42-removed-model-kind.yaml.
 # The removed `kind: model` fails at the `kind:` value, naming what to write instead.
 kind: load
 flow: |

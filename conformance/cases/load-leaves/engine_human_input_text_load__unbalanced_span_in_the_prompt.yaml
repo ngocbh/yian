@@ -1,4 +1,4 @@
-# The quoted `${` and template are source text as written (shared, as the templates scanner cases are).
+# The quoted `${` and template are source text as written.
 kind: load
 flow: |
   id: f

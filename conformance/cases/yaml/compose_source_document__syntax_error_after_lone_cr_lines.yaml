@@ -1,5 +1,5 @@
-# TS stops earlier, at the line break before the double-quoted scalar's unindented continuation line (rules: yaml);
-# its line 3 still counts the two lone CRs before it. Python's error in python_expect.
+# The parser stops at the line break before the double-quoted scalar's unindented continuation line;
+# its line 3 still counts the two lone CRs before it..
 kind: load
 flow: "id: x\rname: x\rdescription: \"a\rb\"\rnodes: [\r"
 expect:

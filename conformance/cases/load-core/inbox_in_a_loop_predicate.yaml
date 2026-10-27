@@ -1,4 +1,4 @@
-# TS-only: a loop predicate can't read the inbox the loop carries.
+# A loop predicate can't read the inbox the loop carries.
 kind: load
 flow: |
   id: f

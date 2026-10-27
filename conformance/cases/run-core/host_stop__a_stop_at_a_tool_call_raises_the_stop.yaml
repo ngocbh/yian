@@ -1,4 +1,4 @@
-# TS-only (decision 20): a host stop after fetch's first tool call rejects the run with the stop, and
+# A host stop after fetch's first tool call rejects the run with the stop, and
 # the log ends with run_stopped naming fetch, still in flight.
 kind: run
 flow: |

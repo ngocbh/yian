@@ -1,5 +1,4 @@
-# TS-only (yian #1025): Python reruns an AGENT from its start on resume, and has no inboxes. A
-# steer sent during the final reply is read late, as a `steer` step; the crash comes right after
+# A steer sent during the final reply is read late, as a `steer` step; the crash comes right after
 # that step. The resumed agent replays the first reply, feeds the recorded steer back and makes
 # the second call live with it in the request (listed below); no second `steer` step is written.
 # The cut run made that call too, before the crash refused its record, so the script holds its

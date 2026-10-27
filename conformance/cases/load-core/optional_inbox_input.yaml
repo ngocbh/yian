@@ -1,4 +1,4 @@
-# TS-only: an inbox input is never optional.
+# An inbox input is never optional.
 kind: load
 flow: |
   id: f

@@ -1,5 +1,4 @@
-# hand TS expect: assemble_join's TS port interpolates a null `detail` as `null`; Python's f-string
-# writes `None`, kept in python_expect.
+# assemble_join interpolates a null `detail` as `null`.
 kind: run
 flow: |2
 

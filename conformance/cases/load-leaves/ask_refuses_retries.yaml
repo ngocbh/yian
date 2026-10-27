@@ -1,4 +1,4 @@
-# TS-only: the host owns retries of an ask.
+# The host owns retries of an ask.
 kind: load
 flow: |
   id: f

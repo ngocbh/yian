@@ -1,6 +1,6 @@
 /**
- * Every `composing-agents` skill template loads: a port of `tests/engine/test_templates_load.py`.
- * The templates are part of the authoring contract, so one that no longer loads is a bug.
+ * Every `composing-agents` skill template loads. The templates are part of the authoring
+ * contract, so one that no longer loads is a bug.
  */
 
 import { expect, test } from "bun:test";
@@ -20,7 +20,7 @@ test.each(NAMES)("template %s loads", async (name) => {
   expect(flow.compiled).toBeDefined();
 });
 
-test("the migrated templates are among those loaded", () => {
+test("the core templates are among those loaded", () => {
   for (const name of [
     "chat.yaml",
     "compact_history.yaml",

@@ -1,4 +1,4 @@
-# TS-only: a sleep takes exactly one of until: and for:.
+# A sleep takes exactly one of until: and for:.
 kind: load
 flow: |
   id: f

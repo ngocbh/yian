@@ -1,4 +1,4 @@
-# `('#' and '/' ...)` quotes the reserved characters in yian's wording, shared.
+# `('#' and '/' ...)` quotes the reserved characters in yian's wording.
 kind: load
 flow: |
   id: f

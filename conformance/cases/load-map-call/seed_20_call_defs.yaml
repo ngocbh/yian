@@ -1,4 +1,3 @@
-# From tests/seeds/20-call-defs.yaml.
 # A `call` resolving defs-first to an in-file multi-node `defs:` callable loads.
 kind: load
 flow: |

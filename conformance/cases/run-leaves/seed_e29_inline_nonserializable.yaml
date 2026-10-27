@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e29-inline-nonserializable.yaml.
 # An inline CODE return holding a non-yian value fails `contract.output` at its `output:`.
 kind: run
 flow: |

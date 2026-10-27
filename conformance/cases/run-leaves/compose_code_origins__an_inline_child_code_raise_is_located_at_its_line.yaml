@@ -1,5 +1,5 @@
-# hand TS expect: the TS body throws `new Error("boom")`, whose failure message is "Error: boom", and its
-# throwing line `throw new Error("boom")` ends at column 34; Python's "boom" and column 37 are in python_expect.
+# The body throws `new Error("boom")`, whose failure message is "Error: boom", and its
+# throwing line `throw new Error("boom")` ends at column 34.
 kind: run
 flow: |
   id: code-origin-inline-failure

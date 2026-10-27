@@ -1,4 +1,4 @@
-# TS-only (run-log). Pins: a learnable AGENT whose prompt renders a null fails after resolving its
+# Pins: a learnable AGENT whose prompt renders a null fails after resolving its
 # variables, so its node data holds the template, the variables and their domains, no rendered
 # prompt, and the run's model config; learning renders the occurrence again up to the same failure.
 kind: run

@@ -1,5 +1,5 @@
-# Conversational REPL — the turn-by-turn LOOP shape of examples/chat.yaml, with the
-# older turns folded into a rolling summary by compact_history.yaml.
+# Conversational REPL — a turn-by-turn LOOP, with the older turns folded into a rolling
+# summary by compact_history.yaml. Try it: `yian chat chat.yaml` from this folder.
 # The host sends each owner message (a built-in Message) to the `owner_messages` inbox
 # (`send`), and each turn's `take` reads everything sent since the last one. A take with
 # nothing to read waits: the run ends `waiting` and holds no worker until the next send.

@@ -1,4 +1,4 @@
-# TS-only: an AGENT whose output is Optional(str) is a text producer. After a tool turn its final
+# An AGENT whose output is Optional(str) is a text producer. After a tool turn its final
 # reply is the output, with no structured call: the models list has two entries, and a third
 # request would fail the case. Neither request asks for a schema.
 kind: run

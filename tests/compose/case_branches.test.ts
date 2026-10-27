@@ -1,75 +1,18 @@
 /**
- * A CASE routes only: a branch names a node or calls a flow, and a CASE has no `output:`. A port
- * of `tests/compose/test_case_branches.py`, loading each flow with `assembleText` where Python
- * calls `load_flow`, and running it with `loadConformanceFlow` and `runFlow` where Python runs it.
+ * A CASE routes only: a branch names a node or calls a flow, and a CASE has no `output:`.
  *
  * An untagged unquoted word names a node and an unquoted whole-value `call(...)` calls a flow.
- * Every other branch is a value: a tagged value (even a word naming a node), quoted text, `null`
- * or an empty `else:`, a number, a bool, a mapping, a list, or unquoted text holding `${`. A value
- * branch is a located load error that shows the value entry to write and the branch naming it,
- * and each suggested entry loads when applied. The entry keeps the branch's own tag, else takes
- * the CASE's former `output:` type when a tag spells it and the value fits it (a lone reference
- * fits when its type does), else the type of a lone reference or a tag guessed from the YAML
- * value, else a `!<type>` placeholder. A value no entry can hold (a value containing itself, a
- * written-out record with an empty key, a nested `call(...)`, a flow call or malformed span in
- * `${...}`, a span reading the case) is its own located error. An unquoted word that names no
- * node suggests the nearest node and the value entry for the text, which loads too. A CASE
- * `output:`, tagged or not, is a load error at the `output:` that says to tag the result where it
- * is read.
- *
- * Ported: every row. `test_case_output_over_node_branches_reads_the_taken_branch` and
- * `test_case_output_over_a_value_entry_branch_reads_the_taken_branch` run both branches. A row
- * that applies the suggested rewrite runs the rewritten flow on the branch it names (Python's
- * `_taken`), expecting it to succeed with Python's value:
- * `test_a_then_value_shows_its_value_entry_and_the_entry_loads`,
- * `test_an_else_value_shows_its_value_entry_and_the_entry_loads`,
- * `test_a_suggested_entry_id_skips_ids_already_taken`,
- * `test_the_old_typed_text_is_tagged_with_its_type`, `test_a_lone_reference_is_tagged_with_its_type`,
- * `test_a_lone_reference_takes_the_former_output_type_only_when_it_fits`,
- * `test_a_lone_span_of_unknown_type_asks_for_its_type`,
- * `test_a_list_of_mixed_items_is_tagged_list_of_any`,
- * `test_a_list_of_mixed_items_with_a_date_is_shown_with_the_date_quoted`,
- * `test_a_tagged_value_keeps_its_tag`, `test_a_value_branch_is_tagged_with_the_former_output_type`,
- * `test_a_value_branch_is_spelled_to_fit_the_former_output_type`,
- * `test_a_value_that_does_not_fit_the_former_output_type_guesses_its_tag`,
- * `test_a_value_branch_is_tagged_with_the_former_output_typedef`,
- * `test_a_value_branch_under_an_unspellable_output_guesses_its_tag`,
- * `test_an_unknown_then_word_suggests_the_nearest_node_and_its_text_entry`,
- * `test_an_unknown_else_word_suggests_the_nearest_node_and_its_text_entry`,
- * `test_an_unknown_sentence_gets_no_suggestion_and_an_entry_named_after_the_branch`,
- * `test_an_unknown_yes_gets_the_same_text_entry`,
- * `test_an_unknown_word_entry_id_skips_an_id_already_taken`,
- * `test_unquoted_call_that_is_not_one_directive_is_rejected`; and
- * `test_former_reserved_prefixes_name_authored_nodes` is assembled and run (both rows; its case
- * `run-case/compose_case_branches__a_former_reserved_prefix_names_an_authored_node` holds the
- * first). The error-only rows:
- * `test_a_value_in_a_later_then_names_its_index`, `test_a_long_mapping_is_cut_and_written_as_a_block`,
- * `test_a_value_that_contains_itself_is_rejected`, `test_a_number_that_is_not_finite_is_rejected`,
- * `test_a_mapping_with_an_empty_key_is_rejected`, `test_a_quoted_call_holding_a_span_is_its_own_error`,
- * `test_a_call_nested_in_a_value_is_rejected`, `test_a_value_reading_its_own_case_is_rejected`,
- * `test_a_malformed_span_in_a_value_is_rejected`,
- * `test_a_mapping_value_branch_gets_the_branch_error_under_any_key`,
- * `test_a_case_output_is_rejected_at_its_line`.
- *
- * Changed: the `reply` node runs the TS fixture `./fixtures/compose_codefns.ts:echo`. Ints read
- * back as `bigint`s (decision 4a), and the whole number in `!list(float) [1, 2.5]` stays an int
- * (decision 38). An unquoted date is text (rule `dates`). So `then: 2026-01-02` is a word that
- * names no node and gets the text entry `route_then_0: !str 2026-01-02` (Python: the value entry
- * `!date "2026-01-02"`), whose run gives the same text; a date in a mapping or list is shown plain
- * and typed as text
- * (`!object {a: 2026-01-02}`, `!list(str) [2026-01-02]`, `!list(Any) [1, 2024-01-01]`; Python
- * quotes it and types the list `list(date)`); and quoted date text in a branch is shown plain,
- * since plain YAML reads it back unchanged (`!date 2026-01-02` for the tagged `!date
- * "2026-01-02"`, `!list(Any) [1, 2024-01-01]` for `[1, "2024-01-01"]`).
- * `test_a_number_that_is_not_finite_is_rejected`: infinity is a float value (rule `infinity`), so
- * `.inf`, `-.inf`, `!float .inf`, `{a: .inf}` and `[1.5, -.inf]` are value branches with the usual
- * rewrite (each rewritten flow assembled, with no Python run to mirror), and the YAML reader
- * refuses `.nan` at the scalar before any branch is read.
- * A float in a flow-style branch value is spelled positionally (`10000000000000000.0`), where
- * Python's `repr` uses an exponent from 1e16 and below 1e-4; no Python row pins one.
- *
- * TS-only: a cut value counts code points, so an astral character at the cut stays whole; and the
- * harvested `load-case/compose_case_branches__*` cases.
+ * Every other branch is a value: a tagged value (even a word naming a node), quoted text, `null` or
+ * an empty `else:`, a number, a bool, a mapping, a list, or unquoted text holding `${`. A value
+ * branch is a located load error that shows the value entry to write and the branch naming it, and
+ * each suggested entry loads when applied. The entry keeps the branch's own tag, else takes the
+ * CASE's former `output:` type when a tag spells it and the value fits it (a lone reference fits
+ * when its type does), else the type of a lone reference or a tag guessed from the YAML value, else
+ * a `!<type>` placeholder. A value no entry can hold (a value containing itself, a written-out
+ * record with an empty key, a nested `call(...)`, a flow call or malformed span in `${...}`, a span
+ * reading the case) is its own located error. An unquoted word that names no node suggests the
+ * nearest node and the value entry for the text, which loads too. A CASE `output:`, tagged or not,
+ * is a load error at the `output:` that says to tag the result where it is read.
  */
 
 import { afterAll, afterEach, expect, test } from "bun:test";
@@ -243,17 +186,17 @@ test.each<[string, string, string, unknown]>([
     { reply: "a", exited: true },
   ],
   ["{a: 1, b: [2.5]}", "!object {a: 1, b: [2.5]}", "then: {a: 1", { a: 1n, b: [2.5] }],
-  // Changed: the unquoted date is text, shown plain.
+  // The unquoted date is text, shown plain.
   ["{a: 2026-01-02}", "!object {a: 2026-01-02}", "then: {a: 2026", { a: "2026-01-02" }],
   ['[{"": x}]', '!list(object) [{"": x}]', 'then: [{"": x}]', [{ "": "x" }]],
   ['[a, "${input.cmd}"]', '!list(str) [a, "${input.cmd}"]', "then: [a", ["a", "a"]],
-  // Changed: the unquoted date is text, so the list is a `list(str)`.
+  // The unquoted date is text, so the list is a `list(str)`.
   ["[2026-01-02]", "!list(str) [2026-01-02]", "then: [2026", ["2026-01-02"]],
   ["[[1, 2], [3]]", "!list(list(int)) [[1, 2], [3]]", "then: [[1", [[1n, 2n], [3n]]],
   ["[null, 1]", "!list(Optional(int)) [null, 1]", "then: [null", [null, 1n]],
   ["[[1], [null]]", "!list(list(Optional(int))) [[1], [null]]", "then: [[1]", [[1n], [null]]],
   ["[[], [1]]", "!list(list(int)) [[], [1]]", "then: [[]", [[], [1n]]],
-  // Changed: the whole number stays an int in the float list (decision 38).
+  // The whole number stays an int in the float list (decision 38).
   ["[1, 2.5]", "!list(float) [1, 2.5]", "then: [1, 2.5]", [1n, 2.5]],
   ["[{a: 1}, {b: 2}]", "!list(object) [{a: 1}, {b: 2}]", "then: [{a", [{ a: 1n }, { b: 2n }]],
   ["hi ${input.cmd}", "!str hi ${input.cmd}", "then: hi", "hi a"],
@@ -269,7 +212,7 @@ test.each<[string, string, string, unknown]>([
 });
 
 test("an unquoted date then is a word that names no node, and its text entry loads", async () => {
-  // Changed: Python reads the date as a date value and shows `!date "2026-01-02"`.
+  // The unquoted date is text.
   const text = flow(on("2026-01-02"));
 
   const error = loadErrorWith(
@@ -415,7 +358,7 @@ test.each<[string, string, unknown]>([
   ["[[1], [a]]", "!list(Any) [[1], [a]]", [[1n], ["a"]]],
   ["[{a: 1}, 2]", "!list(Any) [{a: 1}, 2]", [{ a: 1n }, 2n]],
   ["[null, 1, a]", "!list(Optional(Any)) [null, 1, a]", [null, 1n, "a"]],
-  // Changed: plain YAML reads the date back as the same text, so it is shown unquoted.
+  // Plain YAML reads the date back as the same text, so it is shown unquoted.
   ['[1, "2024-01-01"]', "!list(Any) [1, 2024-01-01]", [1n, "2024-01-01"]],
 ])("a list of mixed items is tagged list of Any: %s", async (then, shown, value) => {
   const text = flow(on(then));
@@ -430,7 +373,7 @@ test.each<[string, unknown]>([
   ["[1, 2024-01-01]", [1n, "2024-01-01"]],
   ["[{a: 2024-01-01}, 2]", [{ a: "2024-01-01" }, 2n]],
 ])("a list of mixed items with a date is shown with the date as written: %s", async (then, value) => {
-  // Changed: the unquoted date is text, so it reads back plain (Python quotes it).
+  // The unquoted date is text, so it reads back plain.
   const text = flow(on(then));
 
   const error = loadErrorWith(text, valueBranch("then", "route_then_0", `!list(Any) ${then}`));
@@ -454,7 +397,6 @@ test.each([
   ["[1.5, -.inf]", "!list(float) [1.5, -.inf]"],
   ["!float .inf", "!float .inf"],
 ])("an infinite number is a value branch: %s", (then, shown) => {
-  // Changed: Python rejects it as not finite.
   const text = flow(on(then));
 
   const error = loadErrorWith(text, valueBranch("then", "route_then_0", shown));
@@ -464,7 +406,6 @@ test.each([
 });
 
 test("a NaN branch is refused by the YAML reader at the scalar", () => {
-  // Changed: Python reads it and rejects it as not finite.
   const text = flow(on(".nan"));
 
   const error = loadErrorWith(text, "invalid YAML: NaN is not a yian value; quote it to keep it as text");
@@ -476,7 +417,7 @@ test.each<[string, string, unknown]>([
   ["!int 3", "!int 3", 3n],
   ["!float 1e3", "!float 1e3", 1000],
   ["!str approve", "!str approve", "approve"],
-  // Changed: plain YAML reads `2026-01-02` back as the same text, so it is shown unquoted.
+  // Plain YAML reads `2026-01-02` back as the same text, so it is shown unquoted.
   ['!date "2026-01-02"', "!date 2026-01-02", "2026-01-02"],
   ["!int ${input.n}", "!int ${input.n}", 3n],
   ["!Optional(int) null", "!Optional(int) null", null],

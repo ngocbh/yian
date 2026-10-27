@@ -1,14 +1,4 @@
-/**
- * Canonical diagnostic construction at the Compose load boundary: a port of
- * `tests/compose/test_load_diagnostics.py`, plus the `compose/helpers/source.ts` helpers,
- * which Python tests only through `load_flow`.
- *
- * Not ported: the `args`, copy/pickle and legacy-keyword tests (no counterpart), and the
- * absent `line` attribute (Bun puts `line` on every Error).
- *
- * Changed: payload writes throw `TypeError` (a frozen object) rather than `AttributeError`;
- * `oneLineText` returns `null` for a line past the text, where Python raises `IndexError`.
- */
+/** Canonical diagnostic construction at the Compose load boundary, and the source helpers. */
 
 import { describe, expect, test } from "bun:test";
 

@@ -1,26 +1,12 @@
 /**
- * The desugar phase: flow-level rewrites that run before the build loop. A port of
- * `tests/compose/test_desugar.py`.
+ * The desugar phase: flow-level rewrites that run before the build loop.
  *
  * Each desugar pass rewrites a flow's parsed descriptors into ordinary descriptors and bindings. A
  * synth node a pass mints locates at the SITE it desugared from (the `call(...)` directive's own
  * binding line, not the host node header), so its downstream errors caret the author's actual
  * source. The exception is `adaptive_questions`, whose synth composer genuinely SHARES the ask's
- * inputs verbatim and so inherits the ask's `range`/`fieldRanges`, except that the brief's range
- * is its `prompt:` range.
- *
- * Ported: the inline-call rows (`test_desugar_inline_calls_locate_at_their_binding_site`,
- * `test_inline_call_error_uses_binding_range`, `test_inline_output_error_uses_section_range`,
- * `test_inline_assert_error_uses_positional_range`,
- * `test_duplicate_inline_assertions_keep_positional_ranges`,
- * `test_inline_map_scalar_over_does_not_use_input_named_over_range`), the adaptive-questions
- * rows (`test_desugar_adaptive_questions_preserves_ranges`,
- * `test_desugar_adaptive_questions_without_source`) and the case rows
- * (`test_desugar_case_call_targets_locate_at_their_target_line`,
- * `test_case_binding_error_uses_binding_range`, `test_case_output_error_uses_section_range`,
- * `test_case_condition_error_uses_exact_condition_range`,
- * `test_case_assert_error_uses_positional_range`,
- * `test_case_map_scalar_over_does_not_use_input_named_over_range`).
+ * inputs verbatim and so inherits the ask's `range`/`fieldRanges`, except that the brief's range is
+ * its `prompt:` range.
  */
 
 import { expect, test } from "bun:test";

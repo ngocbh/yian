@@ -1,4 +1,4 @@
-# TS spells the name list as JSON text (rules: messages); Python's repr in python_expect.
+# The message spells the name list as JSON text.
 kind: load
 flow: |
   id: f

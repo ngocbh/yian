@@ -1,4 +1,4 @@
-# TS-only: a plain number is not a duration.
+# A plain number is not a duration.
 kind: load
 flow: |
   id: f

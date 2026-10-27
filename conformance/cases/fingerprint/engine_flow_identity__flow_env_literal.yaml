@@ -1,4 +1,3 @@
-# From tests/engine/test_flow_identity.py::test_env_literals_are_identity.
 # A flow env literal is identity.
 kind: fingerprint
 flow: |

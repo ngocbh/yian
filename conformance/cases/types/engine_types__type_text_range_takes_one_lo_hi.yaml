@@ -1,5 +1,5 @@
 kind: value
-# Hand-written from tests/engine/test_types.py::test_paren_syntax_errors: bad type text raises when the type is built.
+# Bad type text raises when the type is built.
 type: int(1..2..3)
 value: 1
 expect:

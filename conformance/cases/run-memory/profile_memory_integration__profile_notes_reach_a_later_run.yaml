@@ -1,5 +1,3 @@
-# From tests/engine/test_profile_memory_integration.py::test_profile_notes_and_a_session_transcript_share_one_agent_context,
-# profile only (TS yian has no session memory).
 # Pins: a flow-level profile reaches the AGENT's context on a later run: the profile document in the
 # system prompt once, then this run's message, and no earlier turn.
 kind: run

@@ -1,5 +1,4 @@
-# TS writes the seed value in compact text form, {"n":0} (rules: messages); Python's text from yian's
-# shown_literal (compose/validate/typed_bindings.py), {"n": 0}, in python_expect.
+# The message writes the seed value in compact text form, {"n":0}.
 kind: load
 flow: |
   id: mn

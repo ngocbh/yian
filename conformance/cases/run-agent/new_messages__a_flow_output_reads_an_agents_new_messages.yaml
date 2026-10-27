@@ -1,4 +1,4 @@
-# TS-only: a flow output reads an AGENT's new messages, `list(Message)`, here its one reply,
+# A flow output reads an AGENT's new messages, `list(Message)`, here its one reply,
 # rebuilt from its messages commit. Tool-less: a crash between a tool call and its result
 # resumes with an unknown-outcome result, so a crash sweep can't expect one history; the tool
 # turn is covered in tests/engine/agent_new_messages.test.ts.

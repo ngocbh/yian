@@ -1,9 +1,7 @@
-# From tests/engine/test_value_nesting_boundaries.py::test_a_structured_agent_over_the_limit_without_retries_fails.
-# Also ::test_a_structured_agent_over_the_limit_self_corrects_under_retries (retries: 1 takes a
-# second attempt). Both replies nest deeper than the value limit (YIAN_MAX_VALUE_NESTING=3
+# `retries: 1` takes a second attempt. Both replies nest deeper than the value limit (YIAN_MAX_VALUE_NESTING=3
 # keeps them short), so the one retry is spent and the node fails at `agent` with the yian
-# message "structured output at a.a.a: value nests deeper than 3 levels ...". TS fails
-# agent.output_invalid and Python node.execute.
+# message "structured output at a.a.a: value nests deeper than 3 levels ...", failing
+# agent.output_invalid.
 kind: run
 flow: |
   id: plain-session

@@ -1,8 +1,6 @@
-# From tests/engine/test_node_asserts.py::test_post_assert_on_nonscalar_output_fails_cleanly.
 # A post-assert ordering a record (`output >= 0`) fails the node cleanly. Ordering a record is an
-# error in TS, so the assert can't be evaluated: TS fails condition.evaluate, writing the record in
-# the text form; in Python the comparison raises, the assert counts as false and fails
-# assertion.failed.
+# error, so the assert can't be evaluated: the node fails condition.evaluate, writing the record in
+# the text form.
 kind: run
 flow: |2
 

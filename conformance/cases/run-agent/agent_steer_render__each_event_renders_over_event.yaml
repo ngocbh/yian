@@ -1,4 +1,4 @@
-# TS-only (yian #1025): `steer_inbox: {from, render}` renders each event of a read over
+# `steer_inbox: {from, render}` renders each event of a read over
 # `${event}` into one text part of the read's one user message. The event's text is inserted,
 # never evaluated: its `${secret}` reaches the model as written. Both sends land during the first
 # reply, so they join as a late steer.

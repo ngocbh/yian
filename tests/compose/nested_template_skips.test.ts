@@ -1,18 +1,11 @@
 /**
- * Each string nested in a value template is its own input group: a port of
- * `tests/compose/test_nested_template_skips.py`, assembling each flow with `assembleText` where
- * Python calls `load_flow`. Every row is ported.
+ * Each string nested in a value template is its own input group.
  *
  * Every leaf string of a `ValueTemplate` binding behaves as if it were its own input: its data
- * edges carry their own input group (the parameter name followed by the string's JSON-pointer
- * path) and their own co-skip stance, a flow output gets null at a nested position whose producers
- * may all be skipped, and arithmetic on a nested value that may be skipped is rejected. A plain
+ * edges carry their own input group (the parameter name followed by the string's JSON-pointer path)
+ * and their own co-skip stance, a flow output gets null at a nested position whose producers may
+ * all be skipped, and arithmetic on a nested value that may be skipped is rejected. A plain
  * top-level string keeps the parameter name as its group.
- *
- * The harvested `load-case/compose_nested_template_skips__*` cases are pinned at the end.
- *
- * Changed: the rows that match a message fragment pin the whole message. CODE bodies are TS; load
- * doesn't run them.
  */
 
 import { expect, test } from "bun:test";

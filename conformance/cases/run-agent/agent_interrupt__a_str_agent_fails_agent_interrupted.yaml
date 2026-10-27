@@ -1,4 +1,3 @@
-# TS-only: interrupt(run, inbox) is TS yian's (#1025).
 # An interrupted agent's output is null, so only an `Optional(...)` output can take it. This
 # agent's output is `str`: the interrupt delivered mid-stream cuts the reply and the agent writes
 # `interrupted {by}`, then fails with `agent.interrupted`.

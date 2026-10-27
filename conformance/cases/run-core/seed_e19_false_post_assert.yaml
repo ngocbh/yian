@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e19-false-post-assert.yaml.
 # A false flow assert over a node's output fails END after the node succeeds, at the assert.
 kind: run
 flow: |

@@ -1,5 +1,5 @@
 kind: expr
-# A null item is returned as is, as in Python, and renders as yian's text form of null.
+# A null item is returned as is, and renders as yian's text form of null.
 template: "${[x for x in [null, 1]]}"
 mode: strict
 expect:

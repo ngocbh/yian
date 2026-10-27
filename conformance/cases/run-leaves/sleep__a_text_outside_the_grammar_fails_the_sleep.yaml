@@ -1,8 +1,6 @@
-# From tests/engine/test_resolve_until.py::test_literal_outside_the_grammar_names_the_accepted_forms[basic-format].
 # A sleep `until` text outside the date/datetime grammar fails contract.input, naming the accepted
 # forms. The text comes from an input: a literal `until:` is checked at load (load-leaves).
-# The TS message shows the resolved `until` text in the text form ("20260102"); Python's wait node
-# (src/yian/nodes/wait/node.py) shows it with `!r` ('20260102'), in python_expect.
+# The message shows the resolved `until` text in the text form ("20260102").
 kind: run
 flow: |
   id: wait_bad

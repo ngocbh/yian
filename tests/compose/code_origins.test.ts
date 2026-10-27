@@ -1,25 +1,4 @@
-/**
- * The CODE node's whole-code and exact-line origins: a port of
- * `tests/compose/test_code_origins.py`.
- *
- * Ported: every row; the CODE bodies keep Python's text where load doesn't run them.
- * `test_runtime_failure_diagnoses_exact_line_across_composition_paths` runs its root, named-def
- * and external-alias rows with `runFlow`, over TS bodies (`throw new Error("boom")` on the second
- * line); its inline-child row is covered by
- * `run-leaves/compose_code_origins__an_inline_child_code_raise_is_located_at_its_line`.
- *
- * Ported (adapted): `test_code_origin_carriers_reject_invalid_shapes`, its node and descriptor
- * rows `whole-not-origin` and `line-item-not-origin`.
- *
- * Changed: the line origins are an array, not a tuple; a rewrite assigns a fresh array.
- *
- * TS-only: the node keeps a frozen copy of the line origins it is given, and a rewrite assigns a
- * fresh frozen array; a line-origins value that isn't an array is rejected, by the node and the
- * descriptor.
- *
- * Not ported: the `lines-not-tuple` row of `test_code_origin_carriers_reject_invalid_shapes` (TS
- * line origins are arrays only).
- */
+/** The CODE node's whole-code and exact-line origins. */
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -489,8 +468,6 @@ output: \${worker.output}
     baselineCursor.scalarSource!.constructedLineRanges,
   );
 });
-
-// --- TS-only rows --- //
 
 test("a line-origins value that isn't an array is rejected", () => {
   const origins = new OriginRef("line/0") as unknown as OriginRef[];

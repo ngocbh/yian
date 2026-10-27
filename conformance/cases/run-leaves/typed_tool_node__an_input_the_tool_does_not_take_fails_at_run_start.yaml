@@ -1,4 +1,3 @@
-# From tests/engine/test_typed_tool_node.py::test_an_input_the_tool_does_not_take_fails_at_run_start.
 # A TOOL input the tool doesn't take fails the run at its start, before the log, naming the inputs
 # the tool takes.
 kind: run

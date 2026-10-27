@@ -1,5 +1,5 @@
-# TS yian (#1149): `dict(str, str)` reads as untyped `object`, so `.zzz` on a dict without it raises
-# before the tag check; Python reads it as None, which breaks the tag.
+# `dict(str, str)` reads as untyped `object`, so `.zzz` on a dict without it raises
+# before the tag check.
 kind: run
 flow: |
   id: f

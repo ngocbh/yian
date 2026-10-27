@@ -1,5 +1,5 @@
 kind: load
-# The keyword and the call text are quoted as written, the Python-repr way (TS reprText): shared.
+# The keyword and the call text are quoted as written, by reprText.
 flow: |2
 
   id: bad

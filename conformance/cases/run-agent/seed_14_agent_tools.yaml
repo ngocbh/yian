@@ -1,4 +1,3 @@
-# From tests/seeds/14-agent-tools.yaml.
 # A structured AGENT with tools runs its tool loop (a text reply, no tool call), then the
 # structured call; the flow's own `llm_config:` (anthropic, with a provider block) is recorded.
 kind: run
@@ -39,7 +38,7 @@ flow: |
     claim:     ${reviewer.output.claim}
     confidence: ${reviewer.output.confidence}
 # The flow's `llm_config:` gives provider and model, so the run has no `llm_config`. With no saved
-# login, Python records a non-OpenAI provider's connection as from the environment with no endpoint,
+# login, a non-OpenAI provider's connection is recorded as from the environment with no endpoint,
 # key or no key; the key is set so a real run could authenticate.
 env: {ANTHROPIC_API_KEY: "<key:1>"}
 inputs: {topic: rates}
@@ -89,9 +88,8 @@ expect:
             provider: anthropic
             model: claude-opus-4-8
             anthropic: {temperature: 0.3}
-            # For a provider other than OpenAI, Python records `source: environment` and
-            # `endpoint: null` (src/yian/llm_clients/connection.py); `docs/` doesn't give these
-            # fields, and TS has to record the same.
+            # For a provider other than OpenAI, the connection is recorded as `source: environment` and
+            # `endpoint: null`; `docs/` doesn't give these fields.
             _connection: {method: api_key, source: environment, endpoint: null}
     - [pool_commit, __start__, {key: system.now}]
     - [pool_commit, __start__, {key: system.run_id, value: r1}]

@@ -1,21 +1,4 @@
-/**
- * A mapping key YAML reads as non-text is a load error at the key: a port of
- * `tests/compose/test_non_text_keys.py`, through `parseSourceDocument` (and `parseFile` +
- * `parseNodes` for the quoted-key row).
- *
- * Dropped: the date key rows (`2026-10-13` and `2026-10-13 10:00:00` are text in TS; their
- * harvested cases check they parse, rule `dates`) and the `!!binary` rows (the TS YAML layer
- * refuses `!!binary`).
- *
- * The harvested `yaml/compose_non_text_keys__*` cases are pinned at the end; the child-file case
- * parses the child file.
- *
- * Ported through `loadFlow`: `test_the_flow_loads_with_text_names_everywhere`,
- * `test_a_quoted_key_follows_the_usual_name_rules`,
- * `test_words_yaml_1_1_read_as_booleans_are_text_keys`, `test_case_on_needs_no_exemption` (which
- * also parses the flow's nodes with the real `case` kind) and
- * `test_a_child_flow_file_reports_its_own_key` (the child file read through `searchPaths`).
- */
+/** A mapping key YAML reads as non-text is a load error at the key. */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

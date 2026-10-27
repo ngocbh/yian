@@ -1,28 +1,11 @@
 /**
  * A too-deep expression is a located load error at every expression site; a long operator chain
- * loads and runs: a port of `tests/compose/test_expression_nesting.py`.
+ * loads and runs.
  *
  * Each call, list, unary operator, comparison, nested `${`, and chain of same-precedence operators
  * is one level, and an expression may nest 100. A deeper one fails the load with a message naming
  * the limit, located at the field that holds it. A chain of thousands of `+` or `*` terms is one
  * level, so it loads, runs, logs, and resumes.
- *
- * Ported: `test_a_too_deep_expression_is_a_located_load_error` (all fourteen sites at both
- * depths; the `loop until`, `map over` and `prompt span` sites edit the seeds 28, 05 and 00 read
- * from their `load-*` cases, and seed 05's `03-research-one` child comes from its case's
- * `files:`), `test_a_deep_case_on_match_value_is_text_and_loads`,
- * `test_a_long_sum_binding_loads_and_runs`, `test_a_long_sum_condition_routes` (both rows),
- * `test_a_long_product_binding_runs`, `test_a_learnable_run_of_a_long_list_chain_logs_and_resumes`,
- * `test_feedback_on_a_list_chain_passes_back`, `test_a_long_chain_inside_a_call_runs`,
- * `test_a_long_chain_inside_a_map_body_runs` and `test_a_condition_at_the_limit_runs_thirty_calls_deep`.
- * The CODE bodies are JS (`String(inputs.topic)`, `inputs.total`; decision 11); a CODE body gets
- * an int as a `number` (decision 45) and a whole-number return reads back as an int, so the
- * sums are `bigint`s (decision 4a). The memory backend is `memory_fakes.ts`'s `FakeMemory`.
- *
- * Covered by `load-core/compose_expression_nesting__thousands_of_nested_spans` (pinned in
- * `kind_case_parse.test.ts`): `test_thousands_of_nested_spans_are_a_located_load_error`; by
- * `run-core/compose_expression_nesting__a_binding_at_the_limit_runs`:
- * `test_a_binding_at_the_limit_runs`.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -95,7 +78,7 @@ const asked = (n: number) =>
   "output: ${ask.output}\n";
 
 const SEED_05 = "load-map-call/seed_05_call_map";
-// Python resolves seed 05's `uses:` child on the seeds directory; here it comes from the case.
+// Seed 05's `uses:` child comes from the case's files.
 const researchOne = caseText(SEED_05, { file: "03-research-one.yaml" }).text;
 
 /** A seed's flow text, read from its harvested case. */

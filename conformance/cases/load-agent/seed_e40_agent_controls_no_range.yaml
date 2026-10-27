@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e40-agent-controls-no-range.yaml.
 # The retired AGENT `controls:` field fails at its value, listing the allowed fields as authored
 # (`input`, `output`).
 kind: load

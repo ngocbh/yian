@@ -1,4 +1,3 @@
-# From tests/seeds/28-refine-loop.yaml.
 # A `loop` over an in-file `defs:` body with `until:` and `max:` loads.
 kind: load
 flow: |

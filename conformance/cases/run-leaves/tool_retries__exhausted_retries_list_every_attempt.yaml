@@ -1,4 +1,3 @@
-# From tests/engine/test_tool_retries.py::test_exhausted_retries_list_every_attempt.
 # Retries used up: the failure lists every attempt's error.
 kind: run
 flow: |

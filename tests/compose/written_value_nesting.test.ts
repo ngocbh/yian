@@ -1,33 +1,10 @@
 /**
- * A written-out value nested past 100 levels is a located load error: a port of
- * `tests/compose/test_written_value_nesting.py`.
+ * A written-out value nested past 100 levels is a located load error.
  *
  * Each value written out in a flow file at a value position is checked at load with the counting
  * the run-time check applies to it, whether YAML text or aliases built it. A value at the limit
  * loads; one past it fails at load, located, and a 1000-link alias chain fails the same way (under
  * a raised `YIAN_MAX_YAML_NODES`: at the default, the chain's anchors exceed the node limit first).
- *
- * Ported through `assembleText`: `test_binding_at_the_limit_passes_the_nesting_check` (its load half),
- * `test_binding_past_the_limit_is_a_located_load_error`,
- * `test_binding_over_a_1000_link_alias_chain_is_a_located_load_error`,
- * `test_issue_repro_alias_chain_is_a_located_load_error`,
- * `test_untagged_value_entry_past_the_limit_reports_the_limit`,
- * `test_case_value_branch_past_the_limit_reports_the_limit`, the load half of
- * `test_flow_output_at_the_limit_loads_and_runs`,
- * `test_flow_output_past_the_limit_is_a_located_load_error`,
- * `test_flow_output_over_a_1000_link_alias_chain_is_a_located_load_error` and
- * `test_binding_in_an_inline_map_body_over_a_1000_link_alias_chain_is_located`, each with its
- * `def-default` row (the `defs:` entry loaded through the scope); and the harvested
- * cases `yaml/compose_written_value_nesting__binding_past_the_limit` and
- * `__flow_output_past_the_limit`, pinned at the end. Ported through `loadConformanceFlow` and
- * `runFlow`, each in a row after its load row: the run half of
- * `test_binding_at_the_limit_passes_the_nesting_check` (the sites Python runs) and of
- * `test_flow_output_at_the_limit_loads_and_runs`.
- *
- * Changed: Python also asserts no `RecursionError` in the error's chain; here a stack overflow
- * would be a `RangeError`, not the `LoadError` the rows expect, so `loadError` fails on it. The
- * CODE references are TS's (`./fixtures/compose_codefns.ts:echo`). Python's `wait-until` site is
- * `sleep-until` here: a sleep's `until` input, named as an input.
  */
 
 import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";

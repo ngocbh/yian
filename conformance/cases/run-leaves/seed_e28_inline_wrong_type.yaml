@@ -1,4 +1,3 @@
-# From tests/seeds/errors/e28-inline-wrong-type.yaml.
 # An inline CODE body's text return into an `int` output fails `contract.output`.
 kind: run
 flow: |

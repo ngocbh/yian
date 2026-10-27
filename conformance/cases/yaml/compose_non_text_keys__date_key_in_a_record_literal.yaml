@@ -1,4 +1,4 @@
-# TS reads the unquoted date key as text (rules: dates); Python's error in python_expect.
+# yian reads the unquoted date key as text.
 kind: load
 flow: |
   id: f

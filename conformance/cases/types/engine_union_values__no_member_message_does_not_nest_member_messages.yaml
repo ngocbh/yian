@@ -1,5 +1,4 @@
-# From tests/engine/test_union_values.py::test_untagged_no_match_message_does_not_nest_member_messages.
-# TS writes the missing-field list in the text form (rules: messages); Python's wording in python_expect.
+# The message writes the missing-field list in the text form.
 kind: value
 typedefs:
   A:

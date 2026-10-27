@@ -1,7 +1,6 @@
-# From tests/seeds/_future/errors/f02-agent-tools-no-load-check.yaml.
 # An AGENT granting a tool the run lacks raises at run start, naming the node and the first one.
 # This pins the run-start check, not the load check the header asks for; it changes when that
-# lands. The header names Python's `run_flow`; the TS run entry point raises the same error.
+# lands. The flow's header comment's `run_flow` is the run entry point, `runFlow`.
 kind: run
 flow: |
   # f02 — an unknown AGENT `tools:` entry is NOT checked at load: this flow LOADS CLEAN.
@@ -41,6 +40,5 @@ run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}
 expect:
   raises:
     class: RangeError
-    # The empty list reads `[]` in both languages, so the message needs no `messages` rule.
     message: "AGENT node 'note' grants unknown tool or group 'web_search'; tool groups in this run: []"
   trace: []

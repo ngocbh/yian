@@ -1,17 +1,10 @@
 /**
- * Plain scalars read with YAML 1.2 core rules, keeping timestamps and merge keys: a port of
- * `tests/compose/test_source_scalars.py`.
+ * Plain scalars read with YAML 1.2 core rules, keeping timestamps and merge keys.
  *
- * TS-era differences: dates stay text, checked with yian's date grammar; `.nan` and an
- * overflowing float are refused; ints are `bigint`, so 'an int of any length reads exactly'
- * replaces Python's digit-limit tests. A literal's mapping keys must be text, local and
- * unknown tags are refused, and `! 5` is the text `"5"`. A document keeps such a key as written
- * and reports it as `nonTextKey`. Lone CRs are line breaks for both entry points. Both entry
- * points, `SourceDocument.parse` and `parseYamlLiteral`, read the shared rows, explicit core
- * tags included. The literal's merge rows quote Python's `017:` key; the document's keep it.
- * `test_pyyaml_globals_are_untouched` has no counterpart, since eemeli/yaml has no global
- * tables. The harvested `yaml/compose_source_scalars__*` cases are pinned at the end through
- * `parseSourceDocument`.
+ * Dates stay text, checked with yian's date grammar. A literal's mapping keys must be text, local
+ * and unknown tags are refused, and `! 5` is the text `"5"`. A document keeps such a key as written
+ * and reports it as `nonTextKey`. Both entry points, `SourceDocument.parse` and `parseYamlLiteral`,
+ * read the shared rows, explicit core tags included, and treat lone CRs as line breaks.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -165,7 +158,7 @@ describe("readPlainScalar", () => {
     for (const text of ["2026-01-01T10:00:00+05:59", "2026-01-01T10:00:00-23:59"]) {
       expect(readPlainScalar(text)).toBe(text);
     }
-    // Python reads +05:00; yian's datetime grammar needs the minutes.
+    // yian's datetime grammar needs the offset's minutes.
     const error = thrown(SourceSyntaxError, () => readPlainScalar("2026-01-01T10:00:00+5"));
     expect(error.message).toBe(DATETIME_MSG);
   });
@@ -265,7 +258,6 @@ describe.each(READERS)("both entry points: %s", (name, read) => {
   });
 
   test("nested collections read the same", () => {
-    // Python's `true: 1:30` key is refused by a literal, whose keys must be text.
     const text = "outer:\n  inner: [yes, 017, on]\n  map: {no: 0x1F, on: 1:30}\n";
 
     expect(read(text)).toEqual({
@@ -318,7 +310,7 @@ describe.each(READERS)("both entry points: %s", (name, read) => {
     ["2026-02-30", "not a valid date: day is out of range for month"],
     ["0000-01-01", "not a valid date: year 0 is out of range"],
     ["2026-01-01T25:00:00", "not a valid datetime: hour must be in 0..23"],
-    // Python's spaced offsets and one-digit offset hour are not in yian's datetime grammar.
+    // Spaced offsets and a one-digit offset hour are not in yian's datetime grammar.
     ["2026-01-01 10:00:00 +99:00", DATETIME_MSG],
     ["2026-01-01 10:00:00 +05:99", DATETIME_MSG],
     ["2026-01-01T10:00:00+05:60", "not a valid datetime: UTC offset minutes must be under 60"],
@@ -439,7 +431,7 @@ describe("parseYamlLiteral", () => {
     for (const text of ["2026-01-01T10:00:00+05:59", "2026-01-01T10:00:00-23:59"]) {
       expect(parseYamlLiteral(text)).toBe(text);
     }
-    // Python reads +05:00; yian's datetime grammar needs the minutes.
+    // yian's datetime grammar needs the offset's minutes.
     expect(literalError("2026-01-01T10:00:00+5")).toBe(DATETIME_MSG + QUOTE_FIX);
   });
 
@@ -483,9 +475,9 @@ describe("parseYamlLiteral", () => {
 
     expect(literalError("value: !int 5\n")).toBe(noConstructor("!int"));
     expect(literalError("value: !!binary aGk=\n")).toBe(noConstructor("tag:yaml.org,2002:binary"));
-    // YAML 1.2: the bare tag keeps the scalar as text, where Python reads 5.
+    // YAML 1.2: the bare tag keeps the scalar as text.
     expect(parseYamlLiteral("value: ! 5\n")).toEqual({ value: "5" });
-    // The bare tag keeps "<<" as a text key too, where Python merges.
+    // The bare tag keeps "<<" as a text key too.
     expect(parseYamlLiteral("{! <<: {a: 1}}")).toEqual({ "<<": { a: 1n } });
     expect(literalError("value: !!seq {a: 1}\n")).toBe(
       "expected a sequence node, but found mapping",
@@ -531,7 +523,7 @@ describe("parseYamlLiteral", () => {
   });
 
   test("merge keys merge and own keys override", () => {
-    // Python's `017: a` key is quoted here: a literal's keys must be text.
+    // The `017` key is quoted: a literal's keys must be text.
     const text = 'base: &base\n  on: x\n  yes: 1\n  "017": a\ntarget:\n  <<: *base\n  yes: 2\n';
 
     expect(parseYamlLiteral(text)).toEqual({
@@ -589,7 +581,7 @@ describe("parseYamlLiteral", () => {
       "[{<<: 1}, 2026-13-45]",
       "not a valid date: month must be in 1..12; quote it to keep it as text",
     ],
-  ])("merge errors come in Python's order: %p", (text, problem) => {
+  ])("merge errors: %p", (text, problem) => {
     expect(literalError(text)).toBe(problem);
   });
 
@@ -617,7 +609,6 @@ describe("parseYamlLiteral", () => {
   );
 });
 
-// The cases leave out Python's message, which adds PyYAML's mark to yian's text.
 test.each([
   [
     "yaml/compose_source_scalars__explicit_bool_tag_refuses_yes",

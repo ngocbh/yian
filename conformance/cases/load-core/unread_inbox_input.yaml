@@ -1,4 +1,4 @@
-# TS-only: an inbox input nothing reads is a load error, at its declaration.
+# An inbox input nothing reads is a load error, at its declaration.
 kind: load
 flow: |
   id: f

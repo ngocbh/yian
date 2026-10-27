@@ -1,4 +1,3 @@
-# From tests/engine/test_agent_backward.py::test_agent_backward_uses_recorded_model_and_no_tools.
 # Pins: one AGENT backward call whose reply gives input, self and variable feedback: the AGENT's
 # result keeps all three, and only the input feedback reaches the flow input (positionally, per tag).
 kind: backward

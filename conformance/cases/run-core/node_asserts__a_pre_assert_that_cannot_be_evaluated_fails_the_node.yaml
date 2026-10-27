@@ -1,6 +1,5 @@
 # A node pre-assert that fails to evaluate (`10 / n` with n 0) fails the node before its body.
-# TS fails condition.evaluate, naming the assert and the evaluation error; Python counts an assert
-# that raises as false and fails assertion.failed.
+# It fails condition.evaluate, naming the assert and the evaluation error.
 kind: run
 flow: |
   id: na

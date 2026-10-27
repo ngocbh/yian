@@ -1,12 +1,6 @@
 /**
- * YAML nested past the loader's limit is a located error: a port of
- * `tests/compose/test_yaml_nesting_limit.py`.
- *
- * The `load_flow` cases come with the loader; the harvested ones are pinned at the end:
- * `__600_levels_is_located` through `parseSourceDocument`, with the TS message (the case leaves
- * Python's out), and `__value_at_the_document_limit_parses`, which parses and then fails the value
- * limit, through `assembled`. TS-era additions:
- * the first problem in the text wins over a later one, and aliases resolve in the composed tree.
+ * YAML nested past the loader's limit is a located error. The first problem in the text wins over a
+ * later one, and aliases resolve in the composed tree.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";

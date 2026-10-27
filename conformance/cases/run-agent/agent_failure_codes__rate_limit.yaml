@@ -1,5 +1,5 @@
 # The AGENT's model call fails with a 429 reply.
-# No retry (YIAN_MODEL_RETRIES=0); TS fails provider.rate_limit and Python node.execute.
+# No retry (YIAN_MODEL_RETRIES=0); the node fails provider.rate_limit.
 kind: run
 flow: |
   id: agent-failure-rate-limit

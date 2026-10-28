@@ -56,11 +56,13 @@ function reservedReason(name: string): string {
   return "granting skills binds it";
 }
 
+// Says what the tool is for rather than restricting it: a "use only when" rule kept models from
+// calling it when the user asked to be asked something, so they drew question cards in text.
 const ASK_USER_DESCRIPTION =
-  "Ask the user one short question and wait for the answer. Use only when you need a decision " +
-  "or information that only the user can provide. Put the context they need in one or two " +
-  "sentences. When there are clear choices, pass 2-4 short `options`; the user can always type " +
-  "their own answer.";
+  "Ask the user a question and wait for their answer: when you need a decision or information " +
+  "only they can give, or when they ask you to ask them something. Put the context they need " +
+  "in one or two sentences. When there are clear choices, pass 2-4 short `options`; the user " +
+  "can always type a different answer.";
 
 // The schema LangChain's binding gives the model for `ask_user`, key order included, plus
 // `timeout`.

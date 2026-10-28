@@ -15,7 +15,7 @@ import { expansionDigest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
-import { Failure } from "../../src/diagnostics.ts";
+import { Failure, type FailureCode } from "../../src/diagnostics.ts";
 import { NodeExpanded, NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
 import { MISSING_ROOT } from "../../src/expr/expressions.ts";
@@ -1274,7 +1274,7 @@ function runNode(
   return step(step(trace, at(seq, new NodeStartedRecord(node.id)))!, at(seq + 1, record), node, options)!;
 }
 
-test("a binding that finished must rebind; only a binding failure rebuilds to null", () => {
+test("a binding that finished must rebind; only one that didn't rebuilds to null", () => {
   const unfinished = fixedRebinder(null);
   // A success's binding finished, so a rebind that fails is a fault, not missing inputs.
   const succeeded = drivenTrace(new TraceNode("a"), { rebinder: unfinished });
@@ -1283,20 +1283,33 @@ test("a binding that finished must rebind; only a binding failure rebuilds to nu
     RangeError,
     "the bound inputs of 'a' don't rebuild: the binding didn't finish",
   );
-  // A failure at a binding stage recorded none, and nothing is rebound.
+  // A binding that didn't finish, as its capture records, bound none, and nothing is rebound.
   let rebinds = 0;
   const counted: Rebinder = (sources, resolve, route) => {
     rebinds += 1;
     return unfinished(sources, resolve, route);
   };
-  const failure = new Failure({ code: "binding.evaluate", message: "Missing.", nodeId: "a" });
-  const failed = runNode(startedTrace(), 1, new TraceNode("a"), new NodeFailedRecord(failure, { forwardCapture: captureV() }), {
-    rebinder: counted,
-    terminalSucceeded: false,
-    terminalFailure: failure,
-  });
-  expect(failed.occurrences[0]!.boundInputs).toBeNull();
+  const failedWith = (code: FailureCode, capture: ForwardCapture, rebinder: Rebinder) => {
+    const failure = new Failure({ code, message: "Bad input.", nodeId: "a" });
+    return runNode(startedTrace(), 1, new TraceNode("a"), new NodeFailedRecord(failure, { forwardCapture: capture }), {
+      rebinder,
+      terminalSucceeded: false,
+      terminalFailure: failure,
+    }).occurrences[0]!;
+  };
+  expect(failedWith("binding.evaluate", captureV({ bound: false }), counted).boundInputs).toBeNull();
   expect(rebinds).toBe(0);
+  // A body failing with a binding code after its binding finished rebuilds its inputs.
+  expect(failedWith("contract.input", captureV(), fixedRebinder({ v: 1n })).boundInputs).toEqual({ v: 1n });
+});
+
+test("only a failure's capture may hold a binding that didn't finish", () => {
+  const record = new NodeSucceededRecord("a", 2, { forwardCapture: captureV({ bound: false }) });
+  expectError(
+    () => runNode(startedTrace(), 1, new TraceNode("a"), record, { rebinder: fixedRebinder({ v: 1n }) }),
+    RangeError,
+    "only a failure's capture may hold a binding that didn't finish",
+  );
 });
 
 test("prepareTrace and apply build the trace record by record", () => {
@@ -4444,7 +4457,7 @@ nodes:
 output: \${nap.output}
 `;
 
-test("a tool body failing with a binding code after its binding finished rebuilds its text", async () => {
+test("a tool body failing with a binding code after its binding finished rebuilds its inputs and text", async () => {
   const log = join(boundDir, "nap.jsonl");
   const nap = await loadFlow(NAP, { sourceLabel: "flow.yaml" });
   const result = await runFlow(nap, { x: "soon" }, { env: NO_ENV, log, numWorkers: 0, learnable: true });
@@ -4460,6 +4473,42 @@ test("a tool body failing with a binding code after its binding finished rebuild
   expect(occurrence.record).toBeInstanceOf(NodeFailedRecord);
   expect(interpolationIn(occurrence.capture.route)!.valueJson).toBe(JSON.stringify("not a date soon"));
   expect(interpolationIn(occurrence.inputRoute)!.valueJson).toBe(JSON.stringify("not a date soon"));
+  // `sleep` refuses `until` with `contract.input` after its binding finished.
+  expect((occurrence.record as NodeFailedRecord).failure.code).toBe("contract.input");
+  expect(occurrence.record.forwardCapture!.bound).toBe(true);
+  expect(occurrence.boundInputs).toEqual({ until: "not a date soon" });
+});
+
+/** A TOOL `sleep` whose `until` falls back to a date when a deep read of `x` is null. */
+const NAP_FALLBACK = `
+id: nap-fallback
+name: nap_fallback
+input: {x: !object}
+nodes:
+  nap: {kind: tool, tool_id: sleep, input: {until: "\${input.x?.k?.deep?.more | 'tomorrow'}"}}
+output: \${nap.output}
+`;
+
+test("a binding that failed rebuilds no inputs, even where binding again from its reads would finish", async () => {
+  const log = join(boundDir, "nap-fallback.jsonl");
+  const nap = await loadFlow(NAP_FALLBACK, { sourceLabel: "flow.yaml" });
+  // `deep` is an int, so reading `.more` from it fails the binding before the fallback.
+  const result = await runFlow(nap, { x: { k: { deep: 1n } } }, { env: NO_ENV, log, numWorkers: 0, learnable: true });
+  expect(result.status).toBe("failed");
+  const reopened = JsonlRunLog.resume(log);
+  let trace: RetainedTrace;
+  try {
+    trace = replayRunLog(nap, reopened).trace!;
+  } finally {
+    reopened[Symbol.dispose]();
+  }
+  const occurrence = trace.occurrences.find((each) => each.nodeId === "nap")!;
+  const record = occurrence.record as NodeFailedRecord;
+  expect(record.failure.code).toBe("binding.evaluate");
+  // The failed read recorded no route, so binding again without `x` would take the fallback.
+  expect(record.forwardCapture!.route.names).toEqual([]);
+  expect(record.forwardCapture!.bound).toBe(false);
+  expect(occurrence.boundInputs).toBeNull();
 });
 
 /**
@@ -4468,7 +4517,15 @@ test("a tool body failing with a binding code after its binding finished rebuild
  */
 function failedBindingOccurrence(capture: ForwardCapture, rebinder: Rebinder): TraceOccurrence {
   const failure = new Failure({ code: "binding.evaluate", message: "Missing.", nodeId: "a" });
-  const trace = runNode(startedTrace(), 1, new TraceNode("a"), new NodeFailedRecord(failure, { forwardCapture: capture }), {
+  const unbound = new ForwardCapture(capture.route, {
+    evaluatedKeys: capture.evaluatedKeys,
+    items: capture.items,
+    scope: capture.scope,
+    inputNames: capture.inputNames,
+    variableNames: capture.variableNames,
+    bound: false,
+  });
+  const trace = runNode(startedTrace(), 1, new TraceNode("a"), new NodeFailedRecord(failure, { forwardCapture: unbound }), {
     rebinder,
     terminalSucceeded: false,
     terminalFailure: failure,

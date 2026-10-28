@@ -106,3 +106,4 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [shout]
+        bound: false

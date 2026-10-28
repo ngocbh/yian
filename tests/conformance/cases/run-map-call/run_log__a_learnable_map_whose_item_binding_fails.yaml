@@ -110,6 +110,7 @@ expect:
               kind: record
               names: [line, x]
             scope: null
+            bound: false
           index: 0
         - capture:
             evaluated_keys: [line]
@@ -129,6 +130,7 @@ expect:
               kind: record
               names: [line]
             scope: null
+            bound: false
           index: 1
         route:
           children:
@@ -144,3 +146,4 @@ expect:
           flow_path: []
           occurrence_path: []
           static_path: [each]
+        bound: false

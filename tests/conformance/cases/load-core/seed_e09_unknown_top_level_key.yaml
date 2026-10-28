@@ -1,5 +1,4 @@
 # An unknown top-level key fails at the key, listing allowed keys as authored (`input`, `output`).
-# The seed's line-14 comment names the retired `inputs`/`outputs`; flow text stays verbatim.
 kind: load
 flow: |
   # e09 — unknown top-level section key (strict schema, extra='forbid').
@@ -15,7 +14,7 @@ flow: |
         topic: ${input.topic}
       output: str
       prompt: "Rate ${topic}."
-  bogus: oops            # ERROR: not one of id/name/description/inputs/nodes/outputs/asserts/typedefs
+  bogus: oops            # ERROR: not an allowed top-level key
   output: ${note.output}
 expect:
   load:

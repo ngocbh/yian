@@ -59,7 +59,7 @@ jobs:
       - run: bun test ./tests
 
       - name: Test the packed tarball
-        run: YIAN_TEST_PACK=1 bun test tests/packaging.test.ts -t "npm tarball"
+        run: YIAN_TEST_PACK=1 bun test tests/repo/packaging.test.ts -t "npm tarball"
 
       - run: npm publish --access public --dry-run
 

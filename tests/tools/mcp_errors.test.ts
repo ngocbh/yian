@@ -32,7 +32,7 @@ import {
   REDIRECT_LOCATION,
   startHttpServer,
 } from "../fixtures/mcp/fake_server.ts";
-import { hostEnv, killMarkers, stdioOptions, strayProcesses, trackServers } from "./mcp_helpers.ts";
+import { hostEnv, killMarkers, stdioOptions, strayProcesses, trackServers } from "../helpers/mcp_helpers.ts";
 
 // Process and HTTP tests get 15 s; the `< N s` assertions are the real check.
 const SLOW = 15_000;

@@ -46,7 +46,7 @@ import {
 import { advance, foldRunLog, replayRunLog, runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { logJson } from "../../src/typesys/json.ts";
-import { crashAfter, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
+import { crashAfter, NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-messages-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));

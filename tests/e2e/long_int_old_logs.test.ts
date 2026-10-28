@@ -24,7 +24,7 @@ import {
   type RunRecord,
 } from "../../src/runtime/log.ts";
 import type { Value } from "../../src/typesys/values.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-old-logs-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

@@ -37,8 +37,8 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { InboxRef, inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
-import { inboxEngine } from "./inbox_fixtures.ts";
-import { CrashAt, crashes, drive, graph, NO_ENV, noGrowth, rejected, resumeWith, runWith, serving } from "./run_state_fixtures.ts";
+import { inboxEngine } from "../helpers/inbox_fixtures.ts";
+import { CrashAt, crashes, drive, graph, NO_ENV, noGrowth, rejected, resumeWith, runWith, serving } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);

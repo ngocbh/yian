@@ -6,7 +6,7 @@ import { carriedFieldTypes } from "../../src/compose/nodes/loop.ts";
 import { type LoopNode } from "../../src/nodes/loop/node.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { inboxType, isInboxType, Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembleText, handChild, loadError } from "./declarations.ts";
+import { assembleText, handChild, loadError } from "../helpers/declarations.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const BOOL = Type.scalar(ValueKind.BOOLEAN);

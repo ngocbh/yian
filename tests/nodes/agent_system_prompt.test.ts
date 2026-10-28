@@ -26,9 +26,9 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { parametersFromYaml } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, editRecordedFlow, nodeFlow, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { parametersFromYaml } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { crashAfter, editRecordedFlow, nodeFlow, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 /** The node's private render, which `forward` and `learningMaterial` share. */
 function renderPrompt(

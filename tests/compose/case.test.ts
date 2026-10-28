@@ -18,7 +18,7 @@ import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { CaseNode } from "../../src/nodes/case/node.ts";
 import { type OutputContract, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { caseText, loadError, nodesOf } from "../compose/declarations.ts";
+import { caseText, loadError, nodesOf } from "../helpers/declarations.ts";
 
 /** A build context with no typedefs; a CASE build reads none. */
 const CTX = new BuildContext({ registry: new Map() });

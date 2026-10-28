@@ -23,7 +23,7 @@ import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/s
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import type { Value } from "../../src/typesys/index.ts";
-import { assembled, runCase, runTextCase } from "./declarations.ts";
+import { assembled, runCase, runTextCase } from "../helpers/declarations.ts";
 
 const MAX_YAML_NESTING = BUILTIN.maxYamlNesting;
 const MAX_VALUE_NESTING = BUILTIN.maxValueNesting;

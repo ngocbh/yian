@@ -12,16 +12,16 @@ import { inspect } from "node:util";
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
-import type { Env } from "../src/defaults.ts";
-import { ExtraHeadersAuth } from "../src/llm/auth.ts";
-import { collect } from "../src/llm/events.ts";
-import { Message, Request, TextPart } from "../src/llm/messages.ts";
-import { ApiKeyCredentials, OAuthCredentials } from "../src/llm_clients/auth/common.ts";
-import { AuthStore } from "../src/llm_clients/auth/store.ts";
-import { LLMConfig } from "../src/llm_clients/config.ts";
-import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
-import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
-import type { Send } from "../src/platform.ts";
+import type { Env } from "../../src/defaults.ts";
+import { ExtraHeadersAuth } from "../../src/llm/auth.ts";
+import { collect } from "../../src/llm/events.ts";
+import { Message, Request, TextPart } from "../../src/llm/messages.ts";
+import { ApiKeyCredentials, OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
+import { LLMConfig } from "../../src/llm_clients/config.ts";
+import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
+import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
+import type { Send } from "../../src/platform.ts";
 
 /** The runtime's own formatter, the one `console.log` uses: Bun's on Bun, `node:util`'s on Node. */
 const show = typeof Bun === "undefined" ? inspect : Bun.inspect;

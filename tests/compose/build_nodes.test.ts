@@ -21,7 +21,7 @@ import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
-import { caseDocument, loadError } from "../compose/declarations.ts";
+import { caseDocument, loadError } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

@@ -31,7 +31,7 @@ import {
   nodesOf,
   parametersFromYaml,
   runCase,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 const INT = new ValueContract(Type.scalar(ValueKind.INTEGER));
 const STR = new ValueContract(Type.scalar(ValueKind.STRING));

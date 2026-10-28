@@ -13,8 +13,8 @@ import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { ApiKeyCredentials, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { advance, runFlow, type RunFlowOptions } from "../../src/run.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { recording, rejected, responsesText, serving, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { recording, rejected, responsesText, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-openai-connection-recovery-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

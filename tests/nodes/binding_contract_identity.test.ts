@@ -26,7 +26,7 @@ import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/index.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 /** Return an exact int contract with an optional root origin. */
 function intContract(origin: OriginRef | null = null): ValueContract {

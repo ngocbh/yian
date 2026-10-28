@@ -29,7 +29,7 @@ import {
 } from "../../src/runtime/log.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../engine/run_state_fixtures.ts";
+import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../helpers/run_state_fixtures.ts";
 import { CTRL_C, CTRL_U, ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 10_000;

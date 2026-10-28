@@ -14,8 +14,8 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow } from "../../src/run.ts";
 import type { AskRequest } from "../../src/tools/registry.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-adaptive-llm-values-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

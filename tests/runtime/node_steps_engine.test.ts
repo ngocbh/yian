@@ -19,7 +19,7 @@ import {
 import { commitPrepared, prepareRunResumed, replayRecords, RunState } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
-import { aborted, engine, graph, noGrowth, rejected } from "./run_state_fixtures.ts";
+import { aborted, engine, graph, noGrowth, rejected } from "../helpers/run_state_fixtures.ts";
 
 /** A node that opts into steps and runs a scripted body over its capabilities; it may stream. */
 class StepNode extends Node {

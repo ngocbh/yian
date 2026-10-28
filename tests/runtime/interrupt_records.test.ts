@@ -48,8 +48,8 @@ import {
   RunState,
 } from "../../src/runtime/state.ts";
 import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
-import { FIXED_CLOCK, RUN_ID, startData } from "./run_state_fixtures.ts";
-import { call, MSGS, paramFlow, started, takeEntry, tool } from "./waits_fixtures.ts";
+import { FIXED_CLOCK, RUN_ID, startData } from "../helpers/run_state_fixtures.ts";
+import { call, MSGS, paramFlow, started, takeEntry, tool } from "../helpers/waits_fixtures.ts";
 
 const commit = (node: string, key: string, value: unknown) => new PoolCommitRecord(node, key, canonicalTyped(value, null)[0]);
 /** The run start's commits: a system value, then the START inputs (seqs 0 and 1). */

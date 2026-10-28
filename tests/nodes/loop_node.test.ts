@@ -23,7 +23,7 @@ import { mapCallsite, ns } from "../../src/nodes/ids.ts";
 import { LoopMaxExceeded, LoopNode } from "../../src/nodes/loop/node.ts";
 import type { JsonValue } from "../../src/typesys/json.ts";
 import { FileRef, Type, ValueKind } from "../../src/typesys/values.ts";
-import { childFlow, engine, graph, rejected } from "./run_state_fixtures.ts";
+import { childFlow, engine, graph, rejected } from "../helpers/run_state_fixtures.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {

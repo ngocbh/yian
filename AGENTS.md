@@ -20,6 +20,7 @@ Read before you change code:
 - Stay inside the issue's scope: no unrelated features, abstractions, error handling or
   refactors. Ask when an API, schema, name or behavior is unclear.
 - Work test-first. Don't say a check passed unless you ran it.
+- Put a new test where `tests/` mirrors `src/` ("Where tests live" in `ARCHITECTURE.md`).
 - Keep the rules in `ARCHITECTURE.md`: append before apply, deterministic replay, a fixed graph,
   pure nodes, a kind-blind engine, one-way imports, a closed list of failure codes.
 - Put a new external dependency behind a small injected function. Runtime-specific APIs go in

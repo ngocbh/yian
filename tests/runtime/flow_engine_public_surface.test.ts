@@ -38,7 +38,7 @@ import {
   rejected,
   RUN_ID,
   StreamNode,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 /** The invocations of the action flow's node. */
 const probe: string[] = [];

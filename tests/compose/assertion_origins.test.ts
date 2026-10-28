@@ -11,7 +11,7 @@ import { OriginRef, type OriginResolver } from "../../src/diagnostics.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Assertion, isExactly } from "../../src/nodes/contracts.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
-import { loadConformanceFlow } from "./declarations.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
 
 /** Check that one semantic assertion resolves its exact authored list item; return its origin. */
 function expectAssertionSite(

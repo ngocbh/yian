@@ -24,7 +24,7 @@ import {
   type RunState,
 } from "../../src/runtime/state.ts";
 import { applyWaitsRecord, decideWait, dueTimeouts, unreadEvents, wakeableNodes, WaitsState } from "../../src/runtime/waits.ts";
-import { NO_ENV, reducerSnapshot } from "./run_state_fixtures.ts";
+import { NO_ENV, reducerSnapshot } from "../helpers/run_state_fixtures.ts";
 import {
   askPending,
   call,
@@ -35,7 +35,7 @@ import {
   sleepEntry,
   takeEntry,
   traceParts,
-} from "./waits_fixtures.ts";
+} from "../helpers/waits_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-wait-scenarios-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));

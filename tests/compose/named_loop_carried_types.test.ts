@@ -18,7 +18,7 @@ import {
   loadConformanceFlow,
   loadError,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 /**
  * A flow whose LOOP `repeat` calls the `defs:` body `step`, carrying `n`.

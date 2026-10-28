@@ -12,7 +12,7 @@ import { DeclSite, type MemoryDecl } from "../../src/memory/contracts.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { Value } from "../../src/typesys/values.ts";
-import { type CaseRow, CONFORMANCE_DIR, loadErrorAsync, parsedNodes, runCase } from "../compose/declarations.ts";
+import { type CaseRow, CONFORMANCE_DIR, loadErrorAsync, parsedNodes, runCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

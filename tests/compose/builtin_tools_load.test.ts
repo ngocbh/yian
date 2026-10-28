@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { outputContractType } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
-import { assembleText, loadError } from "./declarations.ts";
+import { assembleText, loadError } from "../helpers/declarations.ts";
 
 /** Return a flow with one TOOL node `t` of tool id `toolId` and `extra` body lines. */
 const toolFlow = (toolId: string, extra: string) => `id: f

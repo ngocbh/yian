@@ -23,7 +23,7 @@ import {
   ToolSet,
 } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { callReply, drive, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { callReply, drive, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));

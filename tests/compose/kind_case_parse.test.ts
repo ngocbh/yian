@@ -23,8 +23,8 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import { CaseNode } from "../../src/nodes/case/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { assembled, assembleText, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { assembled, assembleText, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "../helpers/declarations.ts";
 
 const FLOW = `nodes:
   route:

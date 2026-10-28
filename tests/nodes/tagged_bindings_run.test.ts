@@ -16,8 +16,8 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import type { AskRequest } from "../../src/tools/registry.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { serving, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-tagged-bindings-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

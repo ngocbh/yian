@@ -10,7 +10,7 @@ import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Binding, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { Type, ValueKind, VariablePool } from "../../src/typesys/index.ts";
-import { drive, FuncNode } from "./run_state_fixtures.ts";
+import { drive, FuncNode } from "../helpers/run_state_fixtures.ts";
 
 const START_ID = "__start__";
 const INT = new ValueContract(Type.scalar(ValueKind.INTEGER));

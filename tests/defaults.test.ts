@@ -25,7 +25,7 @@ import {
   read,
   reload,
   withEnv,
-} from "../../src/defaults.ts";
+} from "../src/defaults.ts";
 
 /** Return the entry named `name`. */
 function entryNamed(name: string): Entry {
@@ -219,7 +219,7 @@ describe("read", () => {
 });
 
 describe("the Reference page's defaults table", () => {
-  const DOC = readFileSync(new URL("../../docs/src/content/docs/reference.md", import.meta.url), "utf8");
+  const DOC = readFileSync(new URL("../docs/src/content/docs/reference.md", import.meta.url), "utf8");
 
   /** Return the stripped cells of one Markdown table row. */
   function cells(line: string): string[] {

@@ -10,13 +10,13 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
-import type { Env } from "../src/defaults.ts";
-import { collect } from "../src/llm/events.ts";
-import { Message, Request, TextPart } from "../src/llm/messages.ts";
-import { AuthError, isAuthFailure, OAuthCredentials } from "../src/llm_clients/auth/common.ts";
-import { AuthStore } from "../src/llm_clients/auth/store.ts";
-import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
-import type { Send } from "../src/platform.ts";
+import type { Env } from "../../src/defaults.ts";
+import { collect } from "../../src/llm/events.ts";
+import { Message, Request, TextPart } from "../../src/llm/messages.ts";
+import { AuthError, isAuthFailure, OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
+import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
+import type { Send } from "../../src/platform.ts";
 
 // Each test's environment: a private store in a fresh directory, holding one subscription login.
 let home: string;

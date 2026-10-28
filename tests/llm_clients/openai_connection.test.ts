@@ -1,7 +1,7 @@
 /**
  * OpenAI connections: saved logins, subscriptions, refresh and the environment key. The model
  * calls build with `chatModelFromConfig` and answer from a recording `send`
- * (`engine/run_state_fixtures.ts`'s) that replies with one Responses stream. A pinned login is
+ * (`helpers/run_state_fixtures.ts`'s) that replies with one Responses stream. A pinned login is
  * read at build. The cascade tests go through `resolveLlmCascade` and the run tests through
  * `runFlow` with the test's environment.
  */
@@ -12,16 +12,16 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
-import { resolveLlmCascade } from "../src/compile/llm_cascade.ts";
-import { loadFlow } from "../src/compose/loader.ts";
-import type { Env } from "../src/defaults.ts";
-import { collect } from "../src/llm/events.ts";
-import { Message, Request, TextPart } from "../src/llm/messages.ts";
-import { planStructured, structuredTarget } from "../src/llm/structured.ts";
-import { ApiKeyCredentials, AuthError, OAuthCredentials, type ProviderSelection } from "../src/llm_clients/auth/common.ts";
-import { OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
-import { AuthStore } from "../src/llm_clients/auth/store.ts";
-import { LLMConfig } from "../src/llm_clients/config.ts";
+import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import type { Env } from "../../src/defaults.ts";
+import { collect } from "../../src/llm/events.ts";
+import { Message, Request, TextPart } from "../../src/llm/messages.ts";
+import { planStructured, structuredTarget } from "../../src/llm/structured.ts";
+import { ApiKeyCredentials, AuthError, OAuthCredentials, type ProviderSelection } from "../../src/llm_clients/auth/common.ts";
+import { OpenAIAuth } from "../../src/llm_clients/auth/openai.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
+import { LLMConfig } from "../../src/llm_clients/config.ts";
 import {
   checkModelConfig,
   type Connection,
@@ -30,11 +30,11 @@ import {
   legacyConnectionConfig,
   resolveModelConfig,
   splitModelConfig,
-} from "../src/llm_clients/connection.ts";
-import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
-import type { Send } from "../src/platform.ts";
-import { runFlow } from "../src/run.ts";
-import { recorder, responsesText, toolReply } from "./engine/run_state_fixtures.ts";
+} from "../../src/llm_clients/connection.ts";
+import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
+import type { Send } from "../../src/platform.ts";
+import { runFlow } from "../../src/run.ts";
+import { recorder, responsesText, toolReply } from "../helpers/run_state_fixtures.ts";
 
 // Each test's environment: a private store in a fresh directory and no default provider, model,
 // OpenAI key or endpoint.

@@ -47,7 +47,7 @@ import {
   replayRecords,
   RunState,
 } from "../../src/runtime/state.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
   crashAfter,
   flow,
@@ -63,7 +63,7 @@ import {
   startedRun,
   thrownBy,
   prepareGrowth,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` whose message is `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): void {

@@ -11,7 +11,7 @@ import { SourceRange } from "../../src/diagnostics.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembledWith, type CaseRow, handChild, loadError, parametersFromYaml, runCase } from "./declarations.ts";
+import { assembledWith, type CaseRow, handChild, loadError, parametersFromYaml, runCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

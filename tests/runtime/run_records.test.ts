@@ -91,8 +91,8 @@ import {
   ValueKind,
 } from "../../src/typesys/index.ts";
 import { JSONDecodeError, type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { FakeMemory } from "./memory_fakes.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { FakeMemory } from "../helpers/memory_fakes.ts";
 import {
   commitStartSuccess,
   flow,
@@ -104,7 +104,7 @@ import {
   stateSnapshot,
   terminalSkipRouteFlow,
   untimed,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 /** Assert `fn` throws a `TypeCheckError` with exactly `message` at `path`. */
 function expectTypeCheck(fn: () => unknown, message: string, path: readonly (string | number)[]): void {

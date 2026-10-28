@@ -25,7 +25,7 @@ import {
 import { ToolSet } from "../../src/tools/registry.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 import { type HttpServer, PNG_BASE64, startHttpServer } from "../fixtures/mcp/fake_server.ts";
-import { killMarkers, stdioOptions, strayProcesses } from "./mcp_helpers.ts";
+import { killMarkers, stdioOptions, strayProcesses } from "../helpers/mcp_helpers.ts";
 
 // Opening a server spawns a process or opens sockets; the default 5 s is too tight on a loaded machine.
 const SLOW = 15_000;

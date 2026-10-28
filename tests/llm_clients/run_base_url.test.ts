@@ -22,7 +22,7 @@ import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { advance, runFlow } from "../../src/run.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
   adaStore,
   chatText,
@@ -37,7 +37,7 @@ import {
   type Sent,
   serving,
   textReply,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-run-base-url-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

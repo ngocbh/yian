@@ -11,7 +11,7 @@ import { NodeKind } from "../../src/nodes/base.ts";
 import type { ValueContract } from "../../src/nodes/contracts.ts";
 import type { ToolNode } from "../../src/nodes/tool/node.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
-import { assembleText, loadError } from "../compose/declarations.ts";
+import { assembleText, loadError } from "../helpers/declarations.ts";
 
 const AUTO = `
 id: f

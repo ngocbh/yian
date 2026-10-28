@@ -32,7 +32,7 @@ import {
   loadErrorAsync,
   parametersFromYaml,
   runCase,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 const STR = new ValueContract(Type.scalar(ValueKind.STRING));
 

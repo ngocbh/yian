@@ -1,5 +1,5 @@
 /**
- * The writing side of `tests/engine/live_follow.test.ts`'s two-process test: a host that runs a
+ * The writing side of `tests/runtime/live_follow.test.ts`'s two-process test: a host that runs a
  * flow and forwards its live channel over stdout, with the pipe standing in for the host's channel.
  *
  * Run as `bun --no-install tests/fixtures/live/follow_child.ts <log>` (or with Node). It runs a MAP
@@ -21,7 +21,7 @@ import { loadFlow } from "../../../src/compose/loader.ts";
 import { runFlow } from "../../../src/run.ts";
 import { LiveChannel } from "../../../src/runtime/live.ts";
 import { logJson } from "../../../src/typesys/json.ts";
-import { GatedModel, MAP_AGENTS, until } from "../../engine/live_fixtures.ts";
+import { GatedModel, MAP_AGENTS, until } from "../../runtime/live_fixtures.ts";
 
 // A bound, so a stuck run can't outlive its test.
 setTimeout(() => process.exit(2), 60_000).unref();

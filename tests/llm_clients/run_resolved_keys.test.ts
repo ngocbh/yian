@@ -16,8 +16,8 @@ import type { RunEvent } from "../../src/events.ts";
 import { ApiKeyCredentials, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { chatText, expectHidden, inOrder, keyEcho401, type Replier, recording } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { chatText, expectHidden, inOrder, keyEcho401, type Replier, recording } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-run-resolved-keys-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

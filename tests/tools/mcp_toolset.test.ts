@@ -12,7 +12,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { McpServer, McpServerClosed, type McpServerSpec, mcpServer } from "../../src/tools/mcp.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { killMarkers, stdioOptions, strayProcesses } from "./mcp_helpers.ts";
+import { killMarkers, stdioOptions, strayProcesses } from "../helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-mcp-toolset-"));
 const marker = join(dir, "marker");

@@ -15,9 +15,9 @@ import type { Failure } from "../../src/diagnostics.ts";
 import { Message, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow, type RunFlowOptions } from "../../src/run.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { NO_ENV } from "../engine/run_state_fixtures.ts";
-import { loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { NO_ENV } from "../helpers/run_state_fixtures.ts";
+import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-open-range-flows-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

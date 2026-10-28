@@ -16,12 +16,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { ProviderError } from "../src/llm/errors.ts";
-import { AuthError, HttpResponse, OAuthCredentials } from "../src/llm_clients/auth/common.ts";
-import { request } from "../src/llm_clients/auth/http.ts";
-import { type AuthRequest, OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
-import { AuthStore } from "../src/llm_clients/auth/store.ts";
-import { realScheduler, USER_AGENT } from "../src/platform.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
+import { AuthError, HttpResponse, OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
+import { request } from "../../src/llm_clients/auth/http.ts";
+import { type AuthRequest, OpenAIAuth } from "../../src/llm_clients/auth/openai.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
+import { realScheduler, USER_AGENT } from "../../src/platform.ts";
 
 /** A spawned child, with everything it printed so far and its exit. */
 interface Child {

@@ -18,7 +18,7 @@ import {
   parametersFromYaml,
   runCase,
   variablesAt,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));

@@ -11,8 +11,8 @@ import { join } from "node:path";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
-import { caseText, linkConformanceFixtures, loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { caseText, linkConformanceFixtures, loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const REPRESENTATIVE = [
   "load-core/seed_00_hello_agent",

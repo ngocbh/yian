@@ -25,7 +25,7 @@ import {
   type CaseRow,
   loadError,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 const ECHO = "./fixtures/compose_codefns.ts:echo";
 const CHILD_EXPECTS = "call node 'use': binding 'v' — child expects 'str', source is 'Optional(str)'";

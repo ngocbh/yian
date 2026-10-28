@@ -2,7 +2,7 @@
  * The other process of `host_api.test.ts`'s registry tests, which appends to a run this test's
  * process left waiting.
  *
- * Run as `bun --no-install tests/engine/yian-host-api-child-send.ts <log> <op>` (or with Node).
+ * Run as `bun --no-install tests/helpers/yian-host-api-child-send.ts <log> <op>` (or with Node).
  * `send` sends `from child` to inbox `m` of a `processChatFlow()` run; `cancel` cancels a run whose
  * flow files were recorded. It writes the result as one JSON line and exits 0, or writes the error
  * and exits 1. It exits 2 after 20 seconds in any case.

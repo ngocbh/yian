@@ -6,7 +6,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
-import { loadError, runTextCase } from "./declarations.ts";
+import { loadError, runTextCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

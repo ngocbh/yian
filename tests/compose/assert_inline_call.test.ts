@@ -18,7 +18,7 @@ import {
   loadConformanceFlow,
   parametersFromYaml,
   runCase,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

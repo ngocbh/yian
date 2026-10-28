@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 import { START_ID } from "../../src/compile/model.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { inboxType, isInboxType, Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembleText, handChild, loadError } from "./declarations.ts";
+import { assembleText, handChild, loadError } from "../helpers/declarations.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const inboxParam = (name: string) =>

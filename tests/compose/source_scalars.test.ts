@@ -33,7 +33,7 @@ import { forget } from "../../src/defaults.ts";
 import { reprText, SourceRange } from "../../src/diagnostics.ts";
 import { isRecord, type Value } from "../../src/typesys/index.ts";
 import { parseDatetime } from "../../src/typesys/temporal.ts";
-import { runTextCase } from "./declarations.ts";
+import { runTextCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

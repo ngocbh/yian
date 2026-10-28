@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { rejected } from "../engine/run_state_fixtures.ts";
+import { rejected } from "../helpers/run_state_fixtures.ts";
 
 test.each([
   [

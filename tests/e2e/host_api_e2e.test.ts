@@ -14,9 +14,9 @@ import { advance, cancel, close, complete, foldRunLog, pendingCalls, runFlow, se
 import { PoolCommitRecord, readRunLog, RunCancelledRecord, RunStartedRecord } from "../../src/runtime/log.ts";
 import { pending } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { handClock } from "./inbox_fixtures.ts";
-import { rejected } from "./run_state_fixtures.ts";
-import { processChatFlow, processEnv as env } from "./yian-host-api-child-hold.ts";
+import { handClock } from "../helpers/inbox_fixtures.ts";
+import { rejected } from "../helpers/run_state_fixtures.ts";
+import { processChatFlow, processEnv as env } from "../helpers/yian-host-api-child-hold.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "host-api-e2e-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));

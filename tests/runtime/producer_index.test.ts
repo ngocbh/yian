@@ -37,7 +37,7 @@ import {
 } from "../../src/runtime/log.ts";
 import { resolveFromPool, type RunState } from "../../src/runtime/state.ts";
 import { referenceRoot, VariablePool } from "../../src/typesys/pool.ts";
-import { crashAfter, NO_ENV, startedRun } from "./run_state_fixtures.ts";
+import { crashAfter, NO_ENV, startedRun } from "../helpers/run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-producer-index-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));

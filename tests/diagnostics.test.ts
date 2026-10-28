@@ -22,8 +22,8 @@ import {
   reprText,
   sameFailure,
   SourceRange,
-} from "../../src/diagnostics.ts";
-import { importStatements } from "./source_scan.ts";
+} from "../src/diagnostics.ts";
+import { importStatements } from "./helpers/source_scan.ts";
 
 const EXPECTED_FAILURE_CODES: readonly FailureCode[] = [
   "binding.evaluate",
@@ -701,7 +701,7 @@ describe("ResolverTable", () => {
 describe("the diagnostics module", () => {
   test("imports nothing", () => {
     // The diagnostic value spine must stay below every other module.
-    const path = fileURLToPath(new URL("../../src/diagnostics.ts", import.meta.url));
+    const path = fileURLToPath(new URL("../src/diagnostics.ts", import.meta.url));
     expect(importStatements(readFileSync(path, "utf8"))).toEqual([]);
   });
 });

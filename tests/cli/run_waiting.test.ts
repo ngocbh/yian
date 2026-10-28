@@ -16,8 +16,8 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { replayRunLog, RunResult, runFlow } from "../../src/run.ts";
 import { JsonlRunLog } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareRunCancelled } from "../../src/runtime/state.ts";
-import { NO_ENV, rejected, runCli } from "../engine/run_state_fixtures.ts";
-import { loadSchema, type Schema, validate } from "../schema.ts";
+import { NO_ENV, rejected, runCli } from "../helpers/run_state_fixtures.ts";
+import { loadSchema, type Schema, validate } from "../helpers/schema.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "run-waiting-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));

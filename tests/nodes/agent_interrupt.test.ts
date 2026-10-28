@@ -63,8 +63,8 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { inboxType, Type, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
-import { inboxEngine } from "./inbox_fixtures.ts";
-import { crashAfter, graph, interruptible, NO_ENV, rejected, serving } from "./run_state_fixtures.ts";
+import { inboxEngine } from "../helpers/inbox_fixtures.ts";
+import { crashAfter, graph, interruptible, NO_ENV, rejected, serving } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);

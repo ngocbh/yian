@@ -15,8 +15,8 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { advance, complete, DeliveryRefused, pendingCalls, runFlow } from "../../src/run.ts";
 import { pending } from "../../src/tools/context.ts";
 import type { AskRequest } from "../../src/tools/registry.ts";
-import { handClock } from "../engine/inbox_fixtures.ts";
-import { NO_ENV as env, rejected } from "../engine/run_state_fixtures.ts";
+import { handClock } from "../helpers/inbox_fixtures.ts";
+import { NO_ENV as env, rejected } from "../helpers/run_state_fixtures.ts";
 
 const EXAMPLES_DIR = fileURLToPath(new URL("../../examples", import.meta.url));
 const TEXT = readFileSync(join(EXAMPLES_DIR, "approve-plan.yaml"), "utf8");

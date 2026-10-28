@@ -1,8 +1,8 @@
 /**
  * `yian run`'s structured input parsing, its prompt cancellation, and run-error rendering
  * (`renderRunError` over the seeds' conformance cases). The banner, input labels and prompt widgets
- * are tested in `../cli/run.test.ts`, `../cli/terminal.test.ts` and
- * `../cli/terminal_both_runtimes.ts`.
+ * are tested in `./run.test.ts`, `./terminal.test.ts` and
+ * `./terminal_both_runtimes.ts`.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -19,9 +19,9 @@ import { Diagnostic, Failure, OriginRef } from "../../src/diagnostics.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { RunResult, runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { FakeInput, FakeOutput } from "../cli/terminal_both_runtimes.ts";
-import { caseText, linkConformanceFixtures, loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
+import { caseText, linkConformanceFixtures, loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-cli-prompt-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

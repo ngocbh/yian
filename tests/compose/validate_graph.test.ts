@@ -21,7 +21,7 @@ import { forget } from "../../src/defaults.ts";
 import { ELSE_HANDLE, type Node } from "../../src/nodes/base.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { caseText, loadError, nodesOf } from "../compose/declarations.ts";
+import { caseText, loadError, nodesOf } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

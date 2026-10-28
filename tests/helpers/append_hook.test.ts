@@ -5,11 +5,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { loadFlow } from "../src/compose/loader.ts";
-import { runFlow } from "../src/run.ts";
-import type { JsonlRunLog } from "../src/runtime/log.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { runFlow } from "../../src/run.ts";
+import type { JsonlRunLog } from "../../src/runtime/log.ts";
 import { withAppendHook } from "./append_hook.ts";
-import { NO_ENV } from "./engine/run_state_fixtures.ts";
+import { NO_ENV } from "./run_state_fixtures.ts";
 
 const made: string[] = [];
 afterEach(() => {

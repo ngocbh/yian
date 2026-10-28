@@ -27,7 +27,7 @@ import {
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import type { Value } from "../../src/typesys/index.ts";
-import { runTextCase } from "./declarations.ts";
+import { runTextCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

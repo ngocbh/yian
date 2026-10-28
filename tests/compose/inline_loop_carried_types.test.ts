@@ -9,7 +9,7 @@
 import { expect, test } from "bun:test";
 
 import { runFlow } from "../../src/run.ts";
-import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "../helpers/declarations.ts";
 
 /** A flow whose inline LOOP body returns `seen` as `Optional(list(str))`, seeded by `seed`. */
 function seenLoop(seed: string): string {

@@ -49,7 +49,7 @@ import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { FileRef, Type, typeFor, ValueKind } from "../../src/typesys/index.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../../src/typesys/json.ts";
-import { editRecordedFlow } from "./run_state_fixtures.ts";
+import { editRecordedFlow } from "../helpers/run_state_fixtures.ts";
 
 const HEX = /^[0-9a-f]{64}$/;
 

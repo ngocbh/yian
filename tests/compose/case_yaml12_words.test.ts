@@ -6,8 +6,8 @@
 import { expect, test } from "bun:test";
 
 import { runFlow } from "../../src/run.ts";
-import { assembled, assembleText, loadConformanceFlow, loadError, runCase } from "../compose/declarations.ts";
-import { startedIds } from "./run_state_fixtures.ts";
+import { assembled, assembleText, loadConformanceFlow, loadError, runCase } from "../helpers/declarations.ts";
+import { startedIds } from "../helpers/run_state_fixtures.ts";
 
 /** Return a flow whose `route` case matches `input.cmd` and routes to echo nodes. */
 function flow(cmdType: string, caseTail: string): string {

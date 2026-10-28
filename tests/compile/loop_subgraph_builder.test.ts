@@ -19,7 +19,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { mapCallsite, ns } from "../../src/nodes/ids.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { childFlow } from "./run_state_fixtures.ts";
+import { childFlow } from "../helpers/run_state_fixtures.ts";
 
 /** Return an instance of `cls` holding `fields`, made without running its constructor. */
 function forged<T>(cls: abstract new (...args: never[]) => T, fields: object): T {

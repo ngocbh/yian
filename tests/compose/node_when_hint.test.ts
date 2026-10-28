@@ -7,7 +7,7 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { compareCodeUnits } from "../../src/diagnostics.ts";
-import { type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
+import { type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

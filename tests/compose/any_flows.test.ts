@@ -12,8 +12,8 @@ import { join } from "node:path";
 
 import { forget } from "../../src/defaults.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { assembled, assembleText, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { assembled, assembleText, loadConformanceFlow, loadError, runCase } from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-any-flows-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

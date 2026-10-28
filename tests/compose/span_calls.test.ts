@@ -21,8 +21,8 @@ import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
-import { expectFailsBeforeTheRun, rejected, stoppedRunLog } from "./run_state_fixtures.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
+import { expectFailsBeforeTheRun, rejected, stoppedRunLog } from "../helpers/run_state_fixtures.ts";
 
 const UPPER = "expression function 'upper' takes (s): too many positional arguments";
 

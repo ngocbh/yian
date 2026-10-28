@@ -19,7 +19,7 @@ import { OriginRef, type OriginResolver, SourceRange } from "../../src/diagnosti
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const CODE_ORIGIN = new OriginRef("/s:root/s:node/s:worker/s:field/s:code");
 const LINE_ORIGINS = [

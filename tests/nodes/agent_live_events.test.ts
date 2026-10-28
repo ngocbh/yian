@@ -51,7 +51,7 @@ import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
-import { agentFlow, drive, NO_ENV, rejected, runAgentFlow, serving } from "./run_state_fixtures.ts";
+import { agentFlow, drive, NO_ENV, rejected, runAgentFlow, serving } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);

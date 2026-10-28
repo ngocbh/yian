@@ -12,7 +12,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, posix, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { blank, importStatements } from "./source_scan.ts";
+import { blank, importStatements } from "../helpers/source_scan.ts";
 
 const SRC = fileURLToPath(new URL("../../src/", import.meta.url));
 

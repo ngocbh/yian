@@ -15,37 +15,37 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import type { Env } from "../src/defaults.ts";
-import { collect } from "../src/llm/events.ts";
-import { Message, Request, TextPart } from "../src/llm/messages.ts";
-import { AnthropicMessages } from "../src/llm/protocols/anthropic_messages.ts";
-import { OllamaChat } from "../src/llm/protocols/ollama_chat.ts";
-import { OpenAIChat } from "../src/llm/protocols/openai_chat.ts";
-import { OpenAIResponses } from "../src/llm/protocols/openai_responses.ts";
-import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../src/llm_clients/api_key_env.ts";
+import type { Env } from "../../src/defaults.ts";
+import { collect } from "../../src/llm/events.ts";
+import { Message, Request, TextPart } from "../../src/llm/messages.ts";
+import { AnthropicMessages } from "../../src/llm/protocols/anthropic_messages.ts";
+import { OllamaChat } from "../../src/llm/protocols/ollama_chat.ts";
+import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
+import { OpenAIResponses } from "../../src/llm/protocols/openai_responses.ts";
+import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
 import {
   ApiKeyCredentials,
   AuthError,
   HttpResponse,
   OAuthCredentials,
   ProviderSelection,
-} from "../src/llm_clients/auth/common.ts";
-import { OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
-import { AuthStore } from "../src/llm_clients/auth/store.ts";
+} from "../../src/llm_clients/auth/common.ts";
+import { OpenAIAuth } from "../../src/llm_clients/auth/openai.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import {
   AZURE_NEEDS_BASE_URL,
   azureResourceEndpoint,
   LLM_CONFIG_KEYS,
   LLMConfig,
   SUPPORTED_LLM_PROVIDERS,
-} from "../src/llm_clients/config.ts";
-import { OPENAI_COMPATIBLE } from "../src/llm_clients/endpoints.ts";
-import { chatModelFromConfig, DEDICATED_PROVIDERS } from "../src/llm_clients/factory.ts";
-import { getKnownModels, getModelOptions, MODEL_OPTIONS } from "../src/llm_clients/model_catalog.ts";
-import { listModels, ModelListError } from "../src/llm_clients/model_list.ts";
-import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
-import { VALID_MODELS, validateModel } from "../src/llm_clients/validators.ts";
-import { type Send, virtualScheduler } from "../src/platform.ts";
+} from "../../src/llm_clients/config.ts";
+import { OPENAI_COMPATIBLE } from "../../src/llm_clients/endpoints.ts";
+import { chatModelFromConfig, DEDICATED_PROVIDERS } from "../../src/llm_clients/factory.ts";
+import { getKnownModels, getModelOptions, MODEL_OPTIONS } from "../../src/llm_clients/model_catalog.ts";
+import { listModels, ModelListError } from "../../src/llm_clients/model_list.ts";
+import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
+import { VALID_MODELS, validateModel } from "../../src/llm_clients/validators.ts";
+import { type Send, virtualScheduler } from "../../src/platform.ts";
 
 // Each test's environment: a private, empty store and only the variables the test sets.
 let home: string;
@@ -341,7 +341,7 @@ test.each([null, "https://gateway.example/v1"])(
   },
 );
 
-const ROOT = join(import.meta.dirname, "..");
+const ROOT = join(import.meta.dirname, "..", "..");
 const BUILT = join(ROOT, "dist/src/llm_clients/index.js");
 /**
  * The public entry. It resolves by self-reference from inside ROOT (this file, and children whose
@@ -353,7 +353,7 @@ const ENTRY: string = "@ngocbh/yian/llm_clients";
  * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
  * value that can't run, a Node older than the `engines` floor, or a missing build
  * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/engine/platform.test.ts`'s: importing a test file would run its tests.
+ * A copy of `tests/platform.test.ts`'s: importing a test file would run its tests.
  */
 const NODE = ((): string | undefined => {
   const node = process.env.YIAN_TEST_NODE;
@@ -377,7 +377,7 @@ describe("the @ngocbh/yian/llm_clients entry", () => {
     expect(realpathSync(fileURLToPath(import.meta.resolve(ENTRY)))).toBe(
       realpathSync(join(ROOT, "src/llm_clients/index.ts")),
     );
-    const entry = (await import(ENTRY)) as typeof import("../src/llm_clients/index.ts");
+    const entry = (await import(ENTRY)) as typeof import("../../src/llm_clients/index.ts");
     expect(entry.LLMConfig).toBe(LLMConfig);
     expect(entry.LLM_CONFIG_KEYS).toBe(LLM_CONFIG_KEYS);
     expect(entry.SUPPORTED_LLM_PROVIDERS).toBe(SUPPORTED_LLM_PROVIDERS);

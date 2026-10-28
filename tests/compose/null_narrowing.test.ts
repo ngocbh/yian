@@ -40,7 +40,7 @@ import {
   type CaseRow,
   loadError,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 const REGISTRY = readTypedefs({
   A: { kind: "Literal(a)", n: "int" },

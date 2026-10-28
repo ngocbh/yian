@@ -21,9 +21,9 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
 import type { AskRequest } from "../../src/tools/registry.ts";
-import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { serving, startedIds, textReply } from "./run_state_fixtures.ts";
+import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { serving, startedIds, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-lifted-node-gating-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

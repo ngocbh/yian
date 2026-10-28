@@ -46,8 +46,8 @@ import {
   RecordingBackwardNode,
   rejected,
   stacks,
-} from "./run_state_fixtures.ts";
-import { FakeMemory, FakeSession } from "./memory_fakes.ts";
+} from "../helpers/run_state_fixtures.ts";
+import { FakeMemory, FakeSession } from "../helpers/memory_fakes.ts";
 
 const ROOT = new DeclSite([], ["root"]);
 

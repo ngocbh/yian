@@ -52,7 +52,7 @@ import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_to
 import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
-import { aborted, engine, graph, interruptible, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { aborted, engine, graph, interruptible, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);

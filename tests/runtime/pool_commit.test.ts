@@ -46,7 +46,7 @@ import {
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import { TypedValue as RuntimeTypedValue } from "../../src/typesys/values.ts";
-import { crashAfter, NO_ENV, rejected } from "./run_state_fixtures.ts";
+import { crashAfter, NO_ENV, rejected } from "../helpers/run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-pool-commit-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -150,7 +150,7 @@ const ENTRY: string = "@ngocbh/yian/run";
  * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
  * value that can't run, a Node older than the `engines` floor, or a missing build
  * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/llm_clients.test.ts`'s: importing a test file would run its tests.
+ * A copy of `tests/llm_clients/llm_clients.test.ts`'s: importing a test file would run its tests.
  */
 const NODE = ((): string | undefined => {
   const node = process.env.YIAN_TEST_NODE;

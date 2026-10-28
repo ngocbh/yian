@@ -10,12 +10,12 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
-import type { Env } from "../src/defaults.ts";
-import { collect } from "../src/llm/events.ts";
-import { Message, Request, TextPart } from "../src/llm/messages.ts";
-import { SUPPORTED_LLM_PROVIDERS } from "../src/llm_clients/config.ts";
-import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
-import type { Send } from "../src/platform.ts";
+import type { Env } from "../../src/defaults.ts";
+import { collect } from "../../src/llm/events.ts";
+import { Message, Request, TextPart } from "../../src/llm/messages.ts";
+import { SUPPORTED_LLM_PROVIDERS } from "../../src/llm_clients/config.ts";
+import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
+import type { Send } from "../../src/platform.ts";
 
 /** A model id and a block holding one vendor-specific and one standard field. */
 interface Case {

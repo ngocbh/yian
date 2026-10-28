@@ -20,10 +20,10 @@ import { runFlow } from "../../src/run.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import { TOOL_REGISTRY } from "../../src/tools/registry.ts";
-import { withAppendHook } from "../append_hook.ts";
+import { withAppendHook } from "../helpers/append_hook.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
-import { childAlive, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "../engine/mcp_helpers.ts";
-import { crashAfter, NO_ENV } from "../engine/run_state_fixtures.ts";
+import { childAlive, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "../helpers/mcp_helpers.ts";
+import { crashAfter, NO_ENV } from "../helpers/run_state_fixtures.ts";
 
 // Each row starts server processes; the default 5 s is too tight on a loaded machine.
 const SLOW = 60_000;

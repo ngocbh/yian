@@ -10,7 +10,7 @@ import type { ChatModel } from "../../src/llm/events.ts";
 import type { Message } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { buildMemories } from "../../src/memory_host.ts";
-import { type ChatText, memorySections, reply, runCli, runWith } from "./run_state_fixtures.ts";
+import { type ChatText, memorySections, reply, runCli, runWith } from "../helpers/run_state_fixtures.ts";
 
 const ROOT_FLOW = `id: e2e-memory
 name: e2e_memory

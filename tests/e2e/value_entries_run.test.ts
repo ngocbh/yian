@@ -21,8 +21,8 @@ import { join } from "node:path";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeSkipped, NodeStarted } from "../../src/events.ts";
 import { type RunResult, advance, runFlow } from "../../src/run.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { rejected } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { rejected } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-value-entries-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

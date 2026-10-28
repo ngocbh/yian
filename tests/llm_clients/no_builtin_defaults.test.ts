@@ -19,7 +19,7 @@ import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import { connectionSnapshot, resolveModelConfig } from "../../src/llm_clients/connection.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type RunFlowOptions, runFlow } from "../../src/run.ts";
-import { NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
+import { NO_ENV, rejected, textReply } from "../helpers/run_state_fixtures.ts";
 
 const FIXES = ["llm_config.provider/model", "--provider/--model", "yian auth <provider>"];
 

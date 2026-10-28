@@ -16,7 +16,7 @@ import { Binding, ContractOrigins, Parameter, ValueContract, ValueTemplate } fro
 import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
-import { nodeFlow } from "./run_state_fixtures.ts";
+import { nodeFlow } from "../helpers/run_state_fixtures.ts";
 
 const INTEGER = Type.scalar(ValueKind.INTEGER);
 const NUMBER = Type.scalar(ValueKind.NUMBER);

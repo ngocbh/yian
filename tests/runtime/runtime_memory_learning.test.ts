@@ -94,8 +94,8 @@ import {
   startTraceNode,
   terminalSkipRouteFlow,
   prepareGrowth,
-} from "./run_state_fixtures.ts";
-import { FakeMemory } from "./memory_fakes.ts";
+} from "../helpers/run_state_fixtures.ts";
+import { FakeMemory } from "../helpers/memory_fakes.ts";
 
 /** Assert that `fn` throws exactly `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: typeof TypeError | typeof RangeError, message: string): void {

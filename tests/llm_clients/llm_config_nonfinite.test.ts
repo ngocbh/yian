@@ -2,8 +2,8 @@
 
 import { expect, test } from "bun:test";
 
-import { LLMConfig } from "../src/llm_clients/config.ts";
-import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
+import { LLMConfig } from "../../src/llm_clients/config.ts";
+import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
 
 // A block takes numbers as written, so the string "inf" is refused as a non-number rather than
 // read as infinity.

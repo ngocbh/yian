@@ -22,9 +22,9 @@ import { ExpressionError } from "../../src/expr/expressions.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Assertion } from "../../src/nodes/contracts.ts";
 import { advance, runFlow } from "../../src/run.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { childResolver, rejected } from "./run_state_fixtures.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { childResolver, rejected } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-spawner-post-assert-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

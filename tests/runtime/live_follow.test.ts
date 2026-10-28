@@ -36,7 +36,7 @@ import {
 import { runFlow } from "../../src/run.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import { callTexts, GatedModel, key, MAP_AGENTS, ONE_AGENT, runLog, until } from "./live_fixtures.ts";
-import { NO_ENV, serving } from "./run_state_fixtures.ts";
+import { NO_ENV, serving } from "../helpers/run_state_fixtures.ts";
 
 const T0 = "2026-10-23T10:00:00.000Z";
 

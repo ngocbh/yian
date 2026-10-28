@@ -26,7 +26,7 @@ import { fileURLToPath } from "node:url";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { advance, close, runFlow, send } from "../../src/run.ts";
-import { NO_ENV, serving, textReply, userText } from "./run_state_fixtures.ts";
+import { NO_ENV, serving, textReply, userText } from "../helpers/run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-chat-log-growth-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));

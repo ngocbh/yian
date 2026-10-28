@@ -18,7 +18,7 @@ import { OriginRef } from "../../src/diagnostics.ts";
 import { MemoryOccurrenceKind, MemoryOccurrenceSegment, MemoryScope } from "../../src/memory/contracts.ts";
 import { Binding, ChildFlowBoundary, SeedConnection } from "../../src/nodes/contracts.ts";
 import { mapCallsite, ns } from "../../src/nodes/ids.ts";
-import { childFlow } from "./run_state_fixtures.ts";
+import { childFlow } from "../helpers/run_state_fixtures.ts";
 
 /** Return an instance of `cls` holding `fields`, made without running its constructor. */
 function forged<T>(cls: abstract new (...args: never[]) => T, fields: object): T {

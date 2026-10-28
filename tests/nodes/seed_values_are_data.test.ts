@@ -9,7 +9,7 @@ import { expect, test } from "bun:test";
 
 import { cloneChild } from "../../src/compile/expand.ts";
 import { runFlow } from "../../src/run.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
 
 function flow(source: string) {
   return loadConformanceFlow(source, { sourceLabel: "flow.yaml" });

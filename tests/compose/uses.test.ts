@@ -11,7 +11,7 @@ import { parseUsesRef, UsesRef } from "../../src/compose/helpers/uses.ts";
 import { parseFile } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 
-import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
+import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
 
 /** Return the `LoadError` parsing `value` throws. */
 function loadError(value: string): LoadError {

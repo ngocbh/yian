@@ -27,7 +27,7 @@ import {
   TypeCheckError,
   ValueKind,
 } from "../../src/typesys/values.ts";
-import { assembled, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
+import { assembled, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
 
 const LIST_VALUE_KINDS = Object.values(ValueKind).filter(isListKind);
 

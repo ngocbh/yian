@@ -34,7 +34,7 @@ import {
 } from "../../src/runtime/log.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { aborted, engine, FailNode, FuncNode, graph, noGrowth, rejected } from "./run_state_fixtures.ts";
+import { aborted, engine, FailNode, FuncNode, graph, noGrowth, rejected } from "../helpers/run_state_fixtures.ts";
 
 /** Record the capabilities supplied to one direct evaluation. */
 class CapNode extends Node {

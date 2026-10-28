@@ -2,8 +2,8 @@ import { expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import type { Node } from "../../src/nodes/base.ts";
-import { FakeHost, inboxEngine, inboxFlow, recordNames } from "./inbox_fixtures.ts";
-import { engine, graph, RecordNode, rejected } from "./run_state_fixtures.ts";
+import { FakeHost, inboxEngine, inboxFlow, recordNames } from "../helpers/inbox_fixtures.ts";
+import { engine, graph, RecordNode, rejected } from "../helpers/run_state_fixtures.ts";
 
 test("a host Pending waits, and the quiescent run records run_waiting and resolves", async () => {
   const host = new FakeHost("ask");
@@ -25,7 +25,7 @@ test.each([0, 2])("with nothing waiting, nonterminal quiescence still throws (%p
 
 import { NodeStarted, NodeSucceeded, type RunEvent } from "../../src/events.ts";
 import { NodeStartedRecord, NodeSucceededRecord, NodeWaitingRecord, PoolCommitRecord } from "../../src/runtime/log.ts";
-import { FakeTake } from "./inbox_fixtures.ts";
+import { FakeTake } from "../helpers/inbox_fixtures.ts";
 
 /** A take `heard` on inbox `m` between START and END. */
 const takeFlow = (take = new FakeTake("heard", "m")) => inboxFlow(["m"], [take], [[START_ID, "heard"], ["heard", END_ID]]);
@@ -83,7 +83,7 @@ import { RunFailed, RunSucceeded } from "../../src/events.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { formatRecordTime } from "../../src/runtime/log.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { FakeSleep, type HandClock, handClock } from "./inbox_fixtures.ts";
+import { FakeSleep, type HandClock, handClock } from "../helpers/inbox_fixtures.ts";
 
 const T0 = Date.UTC(2026, 9, 23, 12, 0, 0);
 
@@ -121,7 +121,7 @@ test("a sleep whose output contract refuses null fails contract.output", async (
 import { NodeWoken, RunWaiting } from "../../src/events.ts";
 import { NodeWokenRecord, RunWaitingRecord } from "../../src/runtime/log.ts";
 import { DeliveryRefused } from "../../src/runtime/state.ts";
-import { FakeHost as Host, GateNode } from "./inbox_fixtures.ts";
+import { FakeHost as Host, GateNode } from "../helpers/inbox_fixtures.ts";
 
 /** The index of the first record in `run`'s log matching `match`. */
 function indexOf(run: ReturnType<typeof inboxEngine>, match: (record: unknown) => boolean): number {
@@ -219,7 +219,7 @@ test("a send made from onEvent(RunWaiting) still wakes the take in the same run(
 });
 
 import { NodeWaiting } from "../../src/events.ts";
-import { FuncNode } from "./run_state_fixtures.ts";
+import { FuncNode } from "../helpers/run_state_fixtures.ts";
 
 const startedOf = (nodeId: string) => (record: unknown) =>
   record instanceof NodeStartedRecord && record.nodeId === nodeId;
@@ -317,7 +317,7 @@ import {
 } from "../../src/runtime/state.ts";
 import { InboxRef } from "../../src/typesys/values.ts";
 import { toolCallId } from "../../src/tools/context.ts";
-import { BranchNode, FailNode, FIXED_CLOCK, noGrowth, RUN_ID } from "./run_state_fixtures.ts";
+import { BranchNode, FailNode, FIXED_CLOCK, noGrowth, RUN_ID } from "../helpers/run_state_fixtures.ts";
 
 /**
  * START routes through `router` away from `dead`, END's `zeta` group, while host call `ask` (END's

@@ -37,7 +37,7 @@ import {
 import { commitInitialPool, commitPrepared, type GrowBuilder, NodeDataError, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { aborted, BlockingNode, fragment, fragmentBuilder, noGrowth, rejected } from "./run_state_fixtures.ts";
+import { aborted, BlockingNode, fragment, fragmentBuilder, noGrowth, rejected } from "../helpers/run_state_fixtures.ts";
 
 const RUN_ID = "recorded-dispatch";
 const FINGERPRINT = "d".repeat(64);

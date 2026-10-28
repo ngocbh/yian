@@ -209,7 +209,7 @@ given the path (`--log`).
 
 A `json` document, and each `json_lines` line, is checked as parsed (before the codec decoding)
 against `tests/conformance/schema/cli.schema.json` before it is compared; a document that doesn't
-match fails the case. The runner validates with `tests/schema.ts`, a small JSON Schema 2020-12
+match fails the case. The runner validates with `tests/helpers/schema.ts`, a small JSON Schema 2020-12
 validator that implements the keywords these schemas use.
 
 `expect.exists` maps relative paths under the case directory (not absolute, no `..` part) to

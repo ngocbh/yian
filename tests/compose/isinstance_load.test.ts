@@ -30,7 +30,7 @@ import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, TypeCheckError, typeEquals } from "../../src/typesys/values.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -39,7 +39,7 @@ import {
   loadError,
   loadErrorAsync,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-isinstance-load-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

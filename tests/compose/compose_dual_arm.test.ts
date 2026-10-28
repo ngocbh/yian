@@ -9,7 +9,7 @@ import { afterEach, expect, test } from "bun:test";
 import { parseFile } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
-import { fileOf, loadError, runTextCase } from "../compose/declarations.ts";
+import { fileOf, loadError, runTextCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

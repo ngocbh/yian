@@ -34,7 +34,7 @@ import {
 import { prepareRecord, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
 import { WaitsState } from "../../src/runtime/waits.ts";
 import { eventBytes, logJson } from "../../src/typesys/json.ts";
-import { commitStartSuccess, flow, initializedAndStarted, startData } from "./run_state_fixtures.ts";
+import { commitStartSuccess, flow, initializedAndStarted, startData } from "../helpers/run_state_fixtures.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 
 const DEADLINE = "2026-10-24T09:00:00.000Z";

@@ -21,7 +21,7 @@ import {
   parametersFromYaml,
   parsedNodes,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 const FLOW = `nodes:
   drive:

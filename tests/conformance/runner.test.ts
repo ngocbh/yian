@@ -41,7 +41,7 @@ import {
   trace,
 } from "./runner.ts";
 import type { Case, CaseContext, Kind, KindRunner } from "./runner.ts";
-import { lintSchema, loadSchema, validate } from "../schema.ts";
+import { lintSchema, loadSchema, validate } from "../helpers/schema.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import {

@@ -34,7 +34,7 @@ import {
   prepareOutput,
   RecordNode,
   rejected,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 /** Return the last event of a run of `flow`. */
 async function last(flow: CompiledFlow): Promise<unknown> {

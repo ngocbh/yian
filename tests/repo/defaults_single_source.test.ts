@@ -17,9 +17,9 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { blank } from "./engine/source_scan.ts";
+import { blank } from "../helpers/source_scan.ts";
 
-const SRC = fileURLToPath(new URL("../src/", import.meta.url));
+const SRC = fileURLToPath(new URL("../../src/", import.meta.url));
 
 // Each `(path relative to src, name)` the scan finds that is not a default or limit, with
 // the reason, keyed `path: name`. A method parameter is `Class.method.parameter`, a fallback

@@ -12,8 +12,8 @@ import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { assembled, assembleText, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "./declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { assembled, assembleText, type CaseRow, loadError, nodesOf, parsedNodes, runCase } from "../helpers/declarations.ts";
 
 /** Return a flow whose CODE node `c` binds `x` as `binding`. */
 function codeFlow(binding: string): string {

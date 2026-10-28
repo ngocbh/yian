@@ -16,9 +16,9 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { NodeStartedRecord, NodeStepRecord, NodeSucceededRecord, readRunLog, RunResumedRecord } from "../../src/runtime/log.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { crashAfter, NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-agent-in-loop-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

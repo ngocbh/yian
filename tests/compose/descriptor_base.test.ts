@@ -15,7 +15,7 @@ import {
 } from "../../src/compose/nodes/base.ts";
 import { SourceCursor } from "../../src/compose/source/index.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
-import { loadError } from "./declarations.ts";
+import { loadError } from "../helpers/declarations.ts";
 
 const RANGE = new SourceRange(2, 5, 2, 9);
 const DIAGNOSTICS = new LoadDiagnostics("f.yaml", "nodes:\n  a: 1234\n");

@@ -45,9 +45,9 @@ import {
 import { commitPrepared, prepareRecord } from "../../src/runtime/state.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 
-import { hostEnv } from "./mcp_helpers.ts";
-import { FakeMemory, FakeSession } from "./memory_fakes.ts";
-import { backwardReply, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { FakeMemory, FakeSession } from "../helpers/memory_fakes.ts";
+import { backwardReply, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const IDENTITY = "id: identity\nname: identity\ninput:\n  text: !str\nnodes: {}\noutput: ${input.text}\n";
 const WITH_MEMORY = IDENTITY.replace("name: identity", "name: identity\nlong_term_memory: test");
@@ -835,7 +835,7 @@ for (const phase of ["learn", "commit"]) {
         `const { writeFileSync } = await import("node:fs");
 const { loadFlow } = await import(${url("src/compose/loader.ts")});
 const { advance } = await import(${url("src/run.ts")});
-const { FakeMemory, FakeSession } = await import(${url("tests/engine/memory_fakes.ts")});
+const { FakeMemory, FakeSession } = await import(${url("tests/helpers/memory_fakes.ts")});
 const auth = ${JSON.stringify(join(dir, "auth.json"))};
 const block = () => {
   writeFileSync(${JSON.stringify(marker)}, ${JSON.stringify(phase)});

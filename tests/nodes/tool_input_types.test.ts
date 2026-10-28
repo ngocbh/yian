@@ -8,7 +8,7 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
 import type { ToolNode } from "../../src/nodes/tool/node.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
-import { assembleText } from "./declarations.ts";
+import { assembleText } from "../helpers/declarations.ts";
 
 /** Return the nodes of flow `text`'s root, assembled as the loader does. */
 const loadedNodes = (text: string) => assembleText(text).flow.compiled.nodes;

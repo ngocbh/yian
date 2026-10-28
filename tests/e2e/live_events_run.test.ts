@@ -25,8 +25,8 @@ import { runFlow } from "../../src/run.ts";
 import { readRunLog } from "../../src/runtime/log.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { barrier, serving } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { barrier, serving } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-live-events-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

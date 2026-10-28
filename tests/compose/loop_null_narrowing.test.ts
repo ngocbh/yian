@@ -29,8 +29,8 @@ import {
   nodesOf,
   parametersFromYaml,
   runCase,
-} from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+} from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 afterEach(() => forget());
 

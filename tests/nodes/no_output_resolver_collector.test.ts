@@ -7,7 +7,7 @@ import { Assertion, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { EvaluationFailure, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { drive, nodeFlow } from "./run_state_fixtures.ts";
+import { drive, nodeFlow } from "../helpers/run_state_fixtures.ts";
 
 /**
  * A spliced child END whose post-assert reads the synth param `__assert_tail`, bound into the

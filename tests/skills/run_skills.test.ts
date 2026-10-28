@@ -18,7 +18,7 @@ import { NodeStartedRecord, NodeSucceededRecord, readRunLog } from "../../src/ru
 import { Skill } from "../../src/skills/catalog.ts";
 import { LOAD_SKILL, systemPromptWithSkills } from "../../src/skills/tool.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { CrashAt, crashes, PLAIN_CONFIG, rejected, resumeWith, runWith, textReply } from "./run_state_fixtures.ts";
+import { CrashAt, crashes, PLAIN_CONFIG, rejected, resumeWith, runWith, textReply } from "../helpers/run_state_fixtures.ts";
 
 /** A reply calling `load_skill` with `args` as call `id`. */
 function loadCall(args: JsonObject, id: string): Response {

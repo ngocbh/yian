@@ -28,10 +28,10 @@ import type { Send } from "../../src/platform.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { TypeCheckError } from "../../src/typesys/index.ts";
 import { parseType } from "../../src/typesys/types.ts";
-import { linkConformanceFixtures, loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { FakeMemory } from "./memory_fakes.ts";
-import { serving, textReply } from "./run_state_fixtures.ts";
+import { linkConformanceFixtures, loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { FakeMemory } from "../helpers/memory_fakes.ts";
+import { serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-limit-overrides-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

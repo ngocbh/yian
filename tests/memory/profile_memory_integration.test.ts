@@ -24,7 +24,7 @@ import {
   MemoryCommitFailedRecord,
   RunStartedRecord,
 } from "../../src/runtime/log.ts";
-import { backwardReply, rejected, reply, resumeWith, runWith, sentTexts } from "./run_state_fixtures.ts";
+import { backwardReply, rejected, reply, resumeWith, runWith, sentTexts } from "../helpers/run_state_fixtures.ts";
 
 const CHAT = `id: chat
 name: chat

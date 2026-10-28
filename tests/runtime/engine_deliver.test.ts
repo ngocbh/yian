@@ -4,7 +4,7 @@ import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { CallClosed, NodeWaiting, type RunEvent, RunCancelled, RunWaiting } from "../../src/events.ts";
 import { PoolCommitRecord } from "../../src/runtime/log.ts";
 import { DeliveryRefused } from "../../src/runtime/state.ts";
-import { FakeHost, FakeTake, GateNode, inboxEngine, inboxFlow, recordNames } from "./inbox_fixtures.ts";
+import { FakeHost, FakeTake, GateNode, inboxEngine, inboxFlow, recordNames } from "../helpers/inbox_fixtures.ts";
 
 /** A run whose host call `ask` waits, with inbox `m` declared, already resolved waiting. */
 async function waitingRun() {

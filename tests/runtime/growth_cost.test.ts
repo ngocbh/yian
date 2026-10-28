@@ -8,7 +8,7 @@ import { expect, test } from "bun:test";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { RunEvent } from "../../src/events.ts";
 import { runFlow } from "../../src/run.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
 
 const MAP_OVER_CALL = `
 id: map-over-call

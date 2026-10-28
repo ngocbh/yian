@@ -45,7 +45,7 @@ export const TYPES = new Set(["null", "boolean", "integer", "number", "string", 
 
 /** Return the schema `tests/conformance/schema/<name>`, parsed. */
 export function loadSchema(name: string): Schema {
-  const path = fileURLToPath(new URL(`./conformance/schema/${name}`, import.meta.url));
+  const path = fileURLToPath(new URL(`../conformance/schema/${name}`, import.meta.url));
   return JSON.parse(readFileSync(path, "utf8")) as Schema;
 }
 

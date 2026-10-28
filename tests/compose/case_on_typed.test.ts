@@ -26,7 +26,7 @@ import {
   loadErrorAsync,
   nodesOf,
   runCase,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 /** A build context with no typedefs; a CASE build reads none. */
 const CTX = new BuildContext({ registry: new Map() });

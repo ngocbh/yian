@@ -8,7 +8,7 @@ import { afterEach, expect, test } from "bun:test";
 import { forget } from "../../src/defaults.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import { Binding, ValueContract } from "../../src/nodes/contracts.ts";
-import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

@@ -12,7 +12,7 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
-import { JsonlRunLog, type RecordEnvelope, type RunRecord } from "../src/runtime/log.ts";
+import { JsonlRunLog, type RecordEnvelope, type RunRecord } from "../../src/runtime/log.ts";
 
 /** Called before an append in scope; throw to refuse it. */
 export type AppendHook = (log: JsonlRunLog, record: RunRecord) => void;

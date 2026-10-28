@@ -20,8 +20,8 @@ import { type RunResult, runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { PLAIN_FLOW, rejected, serving } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { PLAIN_FLOW, rejected, serving } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-replies-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

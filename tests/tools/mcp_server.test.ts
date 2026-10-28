@@ -59,7 +59,7 @@ import {
   strayProcesses,
   trackServers,
   waitFor,
-} from "./mcp_helpers.ts";
+} from "../helpers/mcp_helpers.ts";
 
 /** How an HTTP server negotiates the protocol era: `auto`, the default, or the private `legacy`. */
 type Mode = "auto" | "legacy";
@@ -372,7 +372,7 @@ describe("StdioTransport", () => {
       // `close()` is the host's last statement: only close's own timers keep the host alive.
       const script = `
         import { StdioTransport } from ${src("../../src/tools/mcp.ts")};
-        import { pids, stdioOptions, waitFor } from ${src("./mcp_helpers.ts")};
+        import { pids, stdioOptions, waitFor } from ${src("../helpers/mcp_helpers.ts")};
         const file = ${JSON.stringify(grandchild)};
         const t = new StdioTransport({
           ...stdioOptions("--grandchild-ignores-term", file),
@@ -402,7 +402,7 @@ describe("StdioTransport", () => {
       const grandchild = marker("grandchild-ignores-term-node");
       const script = `
         import { StdioTransport } from ${builtUrl("dist/src/tools/mcp.js")};
-        import { pids, stdioOptions, waitFor } from ${builtUrl("dist/tests/engine/mcp_helpers.js")};
+        import { pids, stdioOptions, waitFor } from ${builtUrl("dist/tests/helpers/mcp_helpers.js")};
         const file = ${JSON.stringify(grandchild)};
         const t = new StdioTransport({
           ...stdioOptions("--grandchild-ignores-term", file),
@@ -1112,7 +1112,7 @@ describe("McpServer on Node, built", () => {
       const script = `
         import assert from "node:assert/strict";
         import { mcpServer, ToolSet } from ${builtUrl("dist/src/tools/index.js")};
-        import { childAlive, pids, stdioOptions, waitFor } from ${builtUrl("dist/tests/engine/mcp_helpers.js")};
+        import { childAlive, pids, stdioOptions, waitFor } from ${builtUrl("dist/tests/helpers/mcp_helpers.js")};
         const file = ${JSON.stringify(grandchild)};
         const server = mcpServer({ ...stdioOptions("--grandchild", file), label: "fake" });
         try {

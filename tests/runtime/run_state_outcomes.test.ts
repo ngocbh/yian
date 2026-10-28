@@ -69,7 +69,7 @@ import {
   snapshot,
   terminalSkipRouteFlow,
   prepareGrowth,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`; return it. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): Error {

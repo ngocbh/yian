@@ -14,7 +14,7 @@ import { BINDING_FIELDS, KINDS, REMOVED_KINDS } from "../../src/compose/nodes/in
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
-import { StandInCode, standIn, withKinds } from "./stand_ins.ts";
+import { StandInCode, standIn, withKinds } from "../helpers/stand_ins.ts";
 
 // The author-written kinds, as the Flows and nodes page lists them; the loader makes `start` and `end`.
 const AUTHORED_KINDS: readonly string[] = [

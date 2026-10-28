@@ -6,7 +6,7 @@ import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { current, forget, reload } from "../../src/defaults.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

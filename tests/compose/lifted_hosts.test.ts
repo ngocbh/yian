@@ -20,7 +20,7 @@ import type { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
-import { assembleText, loadError } from "./declarations.ts";
+import { assembleText, loadError } from "../helpers/declarations.ts";
 
 /** Parse a flow whose `nodes:` section is `nodesYaml` into descriptors. */
 function descriptorsOf(nodesYaml: string): Map<string, NodeDescriptor> {

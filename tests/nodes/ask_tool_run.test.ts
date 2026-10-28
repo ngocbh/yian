@@ -17,8 +17,8 @@ import { virtualScheduler } from "../../src/platform.ts";
 import { advance, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { pending } from "../../src/tools/context.ts";
 import type { AskRequest } from "../../src/tools/registry.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { rejected } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { rejected } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-ask-tool-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

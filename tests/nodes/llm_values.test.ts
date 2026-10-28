@@ -10,12 +10,12 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import type { Env } from "../src/defaults.ts";
-import { OriginRef } from "../src/diagnostics.ts";
-import { AuthError, OAuthCredentials } from "../src/llm_clients/auth/common.ts";
-import { AuthStore } from "../src/llm_clients/auth/store.ts";
-import { HostConnection, SUPPORTED_LLM_PROVIDERS } from "../src/llm_clients/config.ts";
-import { ConnectionSelection, connectionSnapshot, HOST_KEY_MARKER } from "../src/llm_clients/connection.ts";
+import type { Env } from "../../src/defaults.ts";
+import { OriginRef } from "../../src/diagnostics.ts";
+import { AuthError, OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
+import { HostConnection, SUPPORTED_LLM_PROVIDERS } from "../../src/llm_clients/config.ts";
+import { ConnectionSelection, connectionSnapshot, HOST_KEY_MARKER } from "../../src/llm_clients/connection.ts";
 import {
   agentLabel,
   CallTimeLLM,
@@ -36,10 +36,10 @@ import {
   typeNullable,
   typesNullable,
   valueLeaves,
-} from "../src/nodes/agent/llm_values.ts";
-import { BindingError } from "../src/nodes/binding.ts";
-import { Binding, ContractOrigins, type ValuePath, ValueContract, ValueTemplate } from "../src/nodes/contracts.ts";
-import { Type, typeFor, ValueKind, VariablePool } from "../src/typesys/index.ts";
+} from "../../src/nodes/agent/llm_values.ts";
+import { BindingError } from "../../src/nodes/binding.ts";
+import { Binding, ContractOrigins, type ValuePath, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { Type, typeFor, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const OPT_STR = new Type({ kind: ValueKind.STRING, nullable: true });

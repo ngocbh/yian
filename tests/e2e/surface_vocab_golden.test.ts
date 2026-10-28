@@ -14,8 +14,8 @@ import { RunFailed, RunSucceeded } from "../../src/events.ts";
 import { Assertion } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { engine, FuncNode, graph } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { engine, FuncNode, graph } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-surface-vocab-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

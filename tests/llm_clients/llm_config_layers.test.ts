@@ -2,10 +2,10 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { resolveLlmCascade } from "../src/compile/llm_cascade.ts";
-import { loadFlow } from "../src/compose/loader.ts";
-import { HOST_KEY_MARKER, missingModelMessage } from "../src/llm_clients/connection.ts";
-import { requireConcreteSelection, resolveAgentConfig, validateLayer } from "../src/llm_clients/layers.ts";
+import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { HOST_KEY_MARKER, missingModelMessage } from "../../src/llm_clients/connection.ts";
+import { requireConcreteSelection, resolveAgentConfig, validateLayer } from "../../src/llm_clients/layers.ts";
 
 const DEFAULTS = { provider: "anthropic", model: "default-model" };
 

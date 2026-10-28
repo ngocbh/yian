@@ -10,7 +10,7 @@ import { expect, test } from "bun:test";
 
 import { StreamChunk } from "../../src/events.ts";
 import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
-import { drive, rejected } from "./run_state_fixtures.ts";
+import { drive, rejected } from "../helpers/run_state_fixtures.ts";
 
 /** Record the received capability names and publish through whichever sinks exist. */
 class Probe extends Node {

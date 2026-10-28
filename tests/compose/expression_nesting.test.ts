@@ -14,9 +14,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { advance, runFlow } from "../../src/run.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { FakeMemory } from "../engine/memory_fakes.ts";
-import { caseText, loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { FakeMemory } from "../helpers/memory_fakes.ts";
+import { caseText, loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-expression-nesting-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

@@ -24,7 +24,7 @@ import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 
-import { CONFORMANCE_DIR, loadErrorAsync } from "../compose/declarations.ts";
+import { CONFORMANCE_DIR, loadErrorAsync } from "../helpers/declarations.ts";
 
 /** Return the error `fn` throws, failing when it returns. */
 function caught(fn: () => unknown): unknown {

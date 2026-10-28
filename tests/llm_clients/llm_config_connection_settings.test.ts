@@ -4,8 +4,8 @@ import { inspect } from "node:util";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { BUILTIN, install } from "../src/defaults.ts";
-import { LLMConfig } from "../src/llm_clients/config.ts";
+import { BUILTIN, install } from "../../src/defaults.ts";
+import { LLMConfig } from "../../src/llm_clients/config.ts";
 
 import {
   OPENAI_REFUSED_HEADER_NAMES,
@@ -15,8 +15,8 @@ import {
   validateHeaders,
   validateHeaderValue,
   validateOrganization,
-} from "../src/llm_clients/connection_settings.ts";
-import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
+} from "../../src/llm_clients/connection_settings.ts";
+import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
 
 afterEach(() => install(BUILTIN));
 

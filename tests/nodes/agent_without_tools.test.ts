@@ -20,7 +20,7 @@ import { interrupt, type RunFlowOptions, send } from "../../src/run.ts";
 import { NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { drive, runWith, serving } from "./run_state_fixtures.ts";
+import { drive, runWith, serving } from "../helpers/run_state_fixtures.ts";
 
 const CONFIG = { provider: "anthropic", model: "claude-test" };
 

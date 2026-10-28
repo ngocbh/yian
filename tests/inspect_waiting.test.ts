@@ -7,9 +7,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { END_ID, START_ID } from "../../src/compile/model.ts";
-import { Failure } from "../../src/diagnostics.ts";
-import { inspectRun } from "../../src/run.ts";
+import { END_ID, START_ID } from "../src/compile/model.ts";
+import { Failure } from "../src/diagnostics.ts";
+import { inspectRun } from "../src/run.ts";
 import {
   JsonlRunLog,
   NodeRoutedRecord,
@@ -23,8 +23,8 @@ import {
   type RunRecord,
   RunStartedRecord,
   RunWaitingRecord,
-} from "../../src/runtime/log.ts";
-import { FIXED_AT, FIXED_CLOCK } from "./run_state_fixtures.ts";
+} from "../src/runtime/log.ts";
+import { FIXED_AT, FIXED_CLOCK } from "./helpers/run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-inspect-waiting-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));

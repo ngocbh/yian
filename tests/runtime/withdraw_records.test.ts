@@ -33,8 +33,8 @@ import {
 } from "../../src/runtime/state.ts";
 import { applyWaitsRecord, availableUnread, decideWait, withdrawableEvents, WaitsState } from "../../src/runtime/waits.ts";
 import { prepareDelivery } from "../../src/runtime/engine.ts";
-import { FIXED_CLOCK, RUN_ID, startData } from "./run_state_fixtures.ts";
-import { call as callOf, started, steerFlow, takeEntry, tool, waitFlow } from "./waits_fixtures.ts";
+import { FIXED_CLOCK, RUN_ID, startData } from "../helpers/run_state_fixtures.ts";
+import { call as callOf, started, steerFlow, takeEntry, tool, waitFlow } from "../helpers/waits_fixtures.ts";
 
 const commit = (node: string, key: string, value: unknown) => new PoolCommitRecord(node, key, canonicalTyped(value, null)[0]);
 const send = (inbox: string, value: unknown) => commit("__start__", `__start__.${inbox}`, value);

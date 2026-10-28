@@ -13,7 +13,7 @@ import { type DiagnosticFrame, OriginRef, type OriginResolver, ResolverTable } f
 import { Node, NodeKind } from "../../src/nodes/base.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 
-import { loadErrorAsync } from "./declarations.ts";
+import { loadErrorAsync } from "../helpers/declarations.ts";
 
 const CHILD = `id: child
 name: child

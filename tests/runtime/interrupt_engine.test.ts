@@ -10,7 +10,7 @@ import { type CompleteResult, Node, NodeKind, type NodeCaps, type NodeResult, Ou
 import { acceptsNull, type CallView, HostToolCall, NodeSteps } from "../../src/nodes/contracts.ts";
 import { toolCallId } from "../../src/tools/context.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { noGrowth, RUN_ID } from "./run_state_fixtures.ts";
+import { noGrowth, RUN_ID } from "../helpers/run_state_fixtures.ts";
 import { InterruptedRecord, NodeWokenRecord, RunStoppedRecord } from "../../src/runtime/log.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import {
@@ -24,8 +24,8 @@ import {
 } from "../../src/runtime/state.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import { InboxRef } from "../../src/typesys/values.ts";
-import { FakeHost, GateNode, inboxEngine, inboxFlow } from "./inbox_fixtures.ts";
-import { succeed } from "./waits_fixtures.ts";
+import { FakeHost, GateNode, inboxEngine, inboxFlow } from "../helpers/inbox_fixtures.ts";
+import { succeed } from "../helpers/waits_fixtures.ts";
 
 /** A node reading steer inbox `inbox` (when `open`): it opens it, waits for `release()`, then returns whether its interrupt signal aborted. */
 class InterruptProbe extends Node {

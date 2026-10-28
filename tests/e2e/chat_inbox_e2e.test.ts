@@ -29,7 +29,7 @@ import {
 import { DeliveryRefused } from "../../src/runtime/state.ts";
 import { pending } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { callReply, crashAfter, NO_ENV, serving, textReply, userText as user } from "./run_state_fixtures.ts";
+import { callReply, crashAfter, NO_ENV, serving, textReply, userText as user } from "../helpers/run_state_fixtures.ts";
 
 const EXAMPLES_DIR = fileURLToPath(new URL("../../examples", import.meta.url));
 const CONFIG = { provider: "anthropic", model: "claude-test" };

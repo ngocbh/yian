@@ -34,8 +34,8 @@ import {
   loadError,
   loadErrorAsync,
   runCase,
-} from "../compose/declarations.ts";
-import { expectFailsBeforeTheRun, rejected, stoppedRunLog } from "./run_state_fixtures.ts";
+} from "../helpers/declarations.ts";
+import { expectFailsBeforeTheRun, rejected, stoppedRunLog } from "../helpers/run_state_fixtures.ts";
 
 const DOUBLE = "./fixtures/compose_codefns.ts:double";
 

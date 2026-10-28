@@ -9,7 +9,7 @@ import { flowNodesCursor } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
-import { loadError, nodesOf, runTextCase } from "./declarations.ts";
+import { loadError, nodesOf, runTextCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

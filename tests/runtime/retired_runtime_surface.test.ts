@@ -38,7 +38,7 @@ import { PermanentToolError, ReportedToolError, TransientToolError } from "../..
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { InboxRef } from "../../src/typesys/values.ts";
-import { assembleText, loadError } from "../compose/declarations.ts";
+import { assembleText, loadError } from "../helpers/declarations.ts";
 
 test.each(["entry", "controls"])("retired agent authoring field %s is rejected", (field) => {
   const text = `

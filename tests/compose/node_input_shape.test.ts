@@ -28,8 +28,8 @@ import {
   loadErrorAsync,
   parsedNodes,
   runCase,
-} from "./declarations.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+} from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const CLASSES: ReadonlyMap<string, DescriptorClass> = new Map<string, DescriptorClass>([
   ["loop", LoopDescriptor],

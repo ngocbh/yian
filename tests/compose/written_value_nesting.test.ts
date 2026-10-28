@@ -14,7 +14,7 @@ import { join } from "node:path";
 
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -22,7 +22,7 @@ import {
   loadConformanceFlow,
   loadError,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-written-value-nesting-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

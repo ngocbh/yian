@@ -23,7 +23,7 @@ import { LOAD_SKILL, systemPromptWithSkills } from "../../src/skills/tool.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { drive, nodeFlow, serving, textReply } from "./run_state_fixtures.ts";
+import { drive, nodeFlow, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 /** The node's private render, which `forward` and `learningMaterial` share. */
 function renderPrompt(

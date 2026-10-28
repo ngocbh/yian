@@ -35,9 +35,9 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, TypeCheckError, type Value, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { backwardReply, drive, NO_ENV, rejected, reply, serving } from "./run_state_fixtures.ts";
+import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { backwardReply, drive, NO_ENV, rejected, reply, serving } from "../helpers/run_state_fixtures.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));

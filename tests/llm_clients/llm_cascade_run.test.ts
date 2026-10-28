@@ -13,8 +13,8 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { resolveModelConfig } from "../../src/llm_clients/connection.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { serving, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-llm-cascade-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

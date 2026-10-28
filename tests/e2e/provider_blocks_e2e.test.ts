@@ -8,8 +8,8 @@ import { afterAll, expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { anthropicText, recording, responsesText, type Sent } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { anthropicText, recording, responsesText, type Sent } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-provider-blocks-e2e-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

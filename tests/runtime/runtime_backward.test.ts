@@ -114,7 +114,7 @@ import { type PrepareTraceOptions, prepareTrace, RetainedTrace, TraceTerminal } 
 import { FileRef, type Value, VariablePool } from "../../src/typesys/index.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
-import { parametersFromYaml } from "../compose/declarations.ts";
+import { parametersFromYaml } from "../helpers/declarations.ts";
 import {
   commitStartSuccess,
   engine,
@@ -134,7 +134,7 @@ import {
   RUN_ID,
   terminalSkipRouteFlow,
   traceSnapshot,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
 
 /** The error classes the refusals throw; a failing log's append throws an `Error`. */

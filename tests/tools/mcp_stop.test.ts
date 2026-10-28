@@ -16,7 +16,7 @@ import { type RunFlowOptions, type RunResult, advance, runFlow } from "../../src
 import { readRunLog } from "../../src/runtime/log.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { type McpServer, mcpServer } from "../../src/tools/mcp.ts";
-import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses, waitFor } from "./mcp_helpers.ts";
+import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses, waitFor } from "../helpers/mcp_helpers.ts";
 
 // Bounds that keep a hang from stalling the suite; a clean stop takes well under a second.
 const SLOW = 30_000;

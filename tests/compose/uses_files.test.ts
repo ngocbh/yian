@@ -27,7 +27,7 @@ import { SourceDocument } from "../../src/compose/source/index.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { CodeNode } from "../../src/nodes/code/node.ts";
 
-import { CONFORMANCE_DIR, linkConformanceFixtures, loadErrorAsync } from "../compose/declarations.ts";
+import { CONFORMANCE_DIR, linkConformanceFixtures, loadErrorAsync } from "../helpers/declarations.ts";
 
 const CODE = "./fixtures/compose_codefns.ts:echo";
 

@@ -15,9 +15,9 @@ import { NodeExpanded, type RunEvent, RunSucceeded } from "../../src/events.ts";
 import { replayRunLog, runFlow } from "../../src/run.ts";
 import { MemoryRunLog, NodeExpandedRecord, readRunLog } from "../../src/runtime/log.ts";
 import { replayRecords, RunState } from "../../src/runtime/state.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { engine, expectIndexMatchesRebuild, expectUnknownIncomingMatchesRecount } from "./run_state_fixtures.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { engine, expectIndexMatchesRebuild, expectUnknownIncomingMatchesRecount } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-growth-index-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

@@ -32,7 +32,7 @@ import {
 } from "../../src/runtime/state.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { type Value, writeAsText } from "../../src/typesys/values.ts";
-import { parametersFromYaml } from "../compose/declarations.ts";
+import { parametersFromYaml } from "../helpers/declarations.ts";
 import {
   engine,
   forwardCapture,
@@ -44,7 +44,7 @@ import {
   rejected,
   serving,
   traceSnapshot,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 test("the backward context rejects a captured reserved evidence collision", async () => {
   const node = new FuncNode("custom", () => "done");

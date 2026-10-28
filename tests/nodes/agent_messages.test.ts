@@ -17,7 +17,7 @@ import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { messagesKey, NEW_MESSAGES, VariablePool } from "../../src/typesys/pool.ts";
 import { newMessagesType, typeFor } from "../../src/typesys/types.ts";
 import { buildValue, buildValueAs, FileRef, TypeCheckError, TypedValue, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
-import { loadSchema } from "../schema.ts";
+import { loadSchema } from "../helpers/schema.ts";
 
 const FILE = { uri: "media/abc.png", mime: "image/png", name: null };
 

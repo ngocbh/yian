@@ -33,7 +33,7 @@ import {
   systemText,
   textReply,
   writeSmallBudgetChat,
-} from "../engine/run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 const EXAMPLES_DIR = fileURLToPath(new URL("../../examples", import.meta.url));
 const EXAMPLES = readdirSync(EXAMPLES_DIR)

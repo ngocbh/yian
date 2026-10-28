@@ -11,8 +11,8 @@ import { ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
 import { type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-field-reads-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

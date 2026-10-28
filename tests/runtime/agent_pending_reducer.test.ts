@@ -22,8 +22,8 @@ import {
   type RunState,
 } from "../../src/runtime/state.ts";
 import { wakeableNodes } from "../../src/runtime/waits.ts";
-import { RUN_ID } from "./run_state_fixtures.ts";
-import { call, paramFlow, started, tool } from "./waits_fixtures.ts";
+import { RUN_ID } from "../helpers/run_state_fixtures.ts";
+import { call, paramFlow, started, tool } from "../helpers/waits_fixtures.ts";
 
 const agent = (id: string) => new AgentNode(id, { prompt: "go", tools: ["ask_user", "lookup"] });
 

@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
 import type { AskRequest } from "../../src/tools/registry.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

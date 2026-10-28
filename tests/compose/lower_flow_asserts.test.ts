@@ -21,7 +21,7 @@ import {
   ValueContract,
 } from "../../src/nodes/contracts.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { loadError } from "../compose/declarations.ts";
+import { loadError } from "../helpers/declarations.ts";
 
 // A small shared environment: two opaque producers and two flow inputs. Opaque producers are absent
 // from the contract map and stay lenient in the Type walker.

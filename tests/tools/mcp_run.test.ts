@@ -19,7 +19,7 @@ import { McpConnectError, McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
-import { expectClosed, hostEnv, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "./mcp_helpers.ts";
+import { expectClosed, hostEnv, killMarkers, pids, stdioOptions, strayProcesses, waitFor } from "../helpers/mcp_helpers.ts";
 
 // Each row starts at least one server process; the default 5 s is too tight on a loaded machine.
 const SLOW = 30_000;

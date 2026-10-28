@@ -24,9 +24,9 @@ import { replayRunLog, advance, runFlow } from "../../src/run.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
 import { JsonlRunLog, NodeExpandedRecord } from "../../src/runtime/log.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { engine, NO_ENV } from "./run_state_fixtures.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { engine, NO_ENV } from "../helpers/run_state_fixtures.ts";
 
 const COUNTER = `
 id: counter

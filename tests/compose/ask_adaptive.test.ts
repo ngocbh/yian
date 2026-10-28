@@ -6,7 +6,7 @@ import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
-import { assembleText, loadError } from "./declarations.ts";
+import { assembleText, loadError } from "../helpers/declarations.ts";
 
 const ASK = `id: f
 name: f

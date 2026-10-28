@@ -12,7 +12,7 @@ import { runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
 import { parseJson } from "../../src/typesys/json.ts";
 import { fromHost, type Value, valueRepr } from "../../src/typesys/values.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-ints-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

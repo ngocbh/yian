@@ -25,7 +25,7 @@ import {
   type CaseRow,
   loadError,
   runCase,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 /** Return a flow text with the given `typedefs:`, `input:`, `defs:`, `nodes:` and `output:` blocks. */
 function flow(

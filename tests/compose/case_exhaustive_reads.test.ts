@@ -22,8 +22,8 @@ import {
   loadConformanceFlow,
   loadError,
   runCase,
-} from "../compose/declarations.ts";
-import { startedIds } from "./run_state_fixtures.ts";
+} from "../helpers/declarations.ts";
+import { startedIds } from "../helpers/run_state_fixtures.ts";
 
 /** Return the 1-based number of the first line of `text` holding `needle`. */
 function lineOf(text: string, needle: string): number {

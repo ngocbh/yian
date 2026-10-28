@@ -16,7 +16,7 @@ import { parseYamlLiteral, readPlainScalar } from "../../src/compose/source/lite
 import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/scalars.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { isRecord } from "../../src/typesys/index.ts";
-import { assembled, runCase, runTextCase } from "./declarations.ts";
+import { assembled, runCase, runTextCase } from "../helpers/declarations.ts";
 
 const MAX_YAML_NODES = BUILTIN.maxYamlNodes;
 

@@ -10,7 +10,7 @@ import { Assertion, Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { drive, nodeFlow } from "./run_state_fixtures.ts";
+import { drive, nodeFlow } from "../helpers/run_state_fixtures.ts";
 
 /** A value END named `n` whose post-assert `expression` reads the synth param `param`. */
 function endWithSynthAssert(param: string, expression: string, display: string): EndNode {

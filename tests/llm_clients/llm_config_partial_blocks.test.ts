@@ -7,7 +7,7 @@ import {
   blockFieldAnnotation,
   locatedBlockProblems,
   partialBlockProblems,
-} from "../src/llm_clients/provider_blocks.ts";
+} from "../../src/llm_clients/provider_blocks.ts";
 
 const SENTINEL = "sk-sentinel-5f0c2a9e";
 

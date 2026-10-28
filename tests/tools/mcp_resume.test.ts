@@ -17,10 +17,10 @@ import { type AdvanceOptions, type RunFlowOptions, advance, runFlow } from "../.
 import type { ToolContext } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { McpConnectError, type McpServer, mcpServer } from "../../src/tools/mcp.ts";
-import { withAppendHook } from "../append_hook.ts";
-import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses } from "./mcp_helpers.ts";
-import { FakeMemory } from "./memory_fakes.ts";
-import { Crash, rejected } from "./run_state_fixtures.ts";
+import { withAppendHook } from "../helpers/append_hook.ts";
+import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses } from "../helpers/mcp_helpers.ts";
+import { FakeMemory } from "../helpers/memory_fakes.ts";
+import { Crash, rejected } from "../helpers/run_state_fixtures.ts";
 
 const SLOW = 30_000;
 const markers: string[] = [];

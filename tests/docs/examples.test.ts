@@ -19,7 +19,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow } from "../../src/run.ts";
 import { type Value, writeAsText } from "../../src/typesys/values.ts";
-import { NO_ENV, serving, textReply } from "../engine/run_state_fixtures.ts";
+import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 import {
   type Block,
   checkOf,

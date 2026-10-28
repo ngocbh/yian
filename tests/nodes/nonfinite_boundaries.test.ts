@@ -17,8 +17,8 @@ import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { type RunResult, runFlow, type RunFlowOptions } from "../../src/run.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/index.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { rejected, serving, startedIds, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { rejected, serving, startedIds, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-nonfinite-boundaries-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

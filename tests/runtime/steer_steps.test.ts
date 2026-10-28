@@ -27,9 +27,9 @@ import {
 import { availableUnread } from "../../src/runtime/waits.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
-import { expectUnchanged, FINGERPRINT, FuncNode, nodeFailure, snapshot } from "./run_state_fixtures.ts";
-import { FakeHost, FakeTake, inboxEngine, inboxFlow } from "./inbox_fixtures.ts";
-import { call, MSGS, paramFlow, replayed, started, succeed } from "./waits_fixtures.ts";
+import { expectUnchanged, FINGERPRINT, FuncNode, nodeFailure, snapshot } from "../helpers/run_state_fixtures.ts";
+import { FakeHost, FakeTake, inboxEngine, inboxFlow } from "../helpers/inbox_fixtures.ts";
+import { call, MSGS, paramFlow, replayed, started, succeed } from "../helpers/waits_fixtures.ts";
 
 /** A second inbox param, `other: Inbox(str)`. */
 const OTHER = new Parameter("other", { contract: new ValueContract(inboxType(Type.scalar(ValueKind.STRING))) });

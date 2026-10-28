@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { main } from "../../src/cli/index.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
-import { NO_ENV } from "../engine/run_state_fixtures.ts";
+import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 
 /** Return a `CliIo` with an empty environment whose streams are collected. */
 function testIo() {

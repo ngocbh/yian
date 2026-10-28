@@ -30,7 +30,7 @@ import {
 import { runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, Type, ValueKind } from "../../src/typesys/values.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -40,7 +40,7 @@ import {
   loadError,
   parametersFromYaml,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-value-entries-load-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

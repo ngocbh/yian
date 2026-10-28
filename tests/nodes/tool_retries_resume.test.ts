@@ -32,8 +32,8 @@ import type { ToolContext } from "../../src/tools/context.ts";
 import { TransientToolError } from "../../src/tools/errors.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { barrier, Crash, crashAfter, rejected, startedRun } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { barrier, Crash, crashAfter, rejected, startedRun } from "../helpers/run_state_fixtures.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets: the
 // engine rows and the replays read the process's values.

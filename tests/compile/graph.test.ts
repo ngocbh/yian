@@ -41,7 +41,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "../compose/declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
 
 /** A minimal concrete node. */
 class FuncNode extends Node {

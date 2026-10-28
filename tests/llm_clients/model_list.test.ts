@@ -9,13 +9,13 @@ import { inspect } from "node:util";
 
 import { describe, expect, test } from "bun:test";
 
-import { current } from "../src/defaults.ts";
-import { ProviderError } from "../src/llm/errors.ts";
-import { HttpResponse } from "../src/llm_clients/auth/common.ts";
-import type { request } from "../src/llm_clients/auth/http.ts";
-import { OPENAI_COMPATIBLE, PROVIDER_BASE_URL } from "../src/llm_clients/endpoints.ts";
-import { listModels, ModelListError } from "../src/llm_clients/model_list.ts";
-import { virtualScheduler } from "../src/platform.ts";
+import { current } from "../../src/defaults.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
+import { HttpResponse } from "../../src/llm_clients/auth/common.ts";
+import type { request } from "../../src/llm_clients/auth/http.ts";
+import { OPENAI_COMPATIBLE, PROVIDER_BASE_URL } from "../../src/llm_clients/endpoints.ts";
+import { listModels, ModelListError } from "../../src/llm_clients/model_list.ts";
+import { virtualScheduler } from "../../src/platform.ts";
 
 const KEY = "sk-test-SENTINEL-0123456789";
 const BODY_MARKER = "Incorrect API key provided";

@@ -2,8 +2,8 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { compareCodeUnits } from "../src/diagnostics.ts";
-import { FileRef } from "../src/typesys/index.ts";
+import { compareCodeUnits } from "../../src/diagnostics.ts";
+import { FileRef } from "../../src/typesys/index.ts";
 import {
   AnthropicMessagesBlock,
   AzureChatBlock,
@@ -31,7 +31,7 @@ import {
   validateBlock,
   VLLMChatBlock,
   XAIChatBlock,
-} from "../src/llm_clients/provider_blocks.ts";
+} from "../../src/llm_clients/provider_blocks.ts";
 
 /** Return a frozen schema with `fields`, of which `required` are required. */
 function schema(fields: Record<string, Field>, required: string[] = []): ObjectSchema {

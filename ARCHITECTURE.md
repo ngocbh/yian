@@ -61,7 +61,7 @@ learning) is rebuilt from the log. Records are never changed or removed.
 **Replay is deterministic.** A resume folds the log through the same reducer that wrote it, and
 must reach the same state. Anything that can differ between runs (model replies, tool results,
 times, random draws, ids) is recorded once and read back on replay, never recomputed. The recovery
-tests (`tests/engine/run_recovery_*.test.ts`) and the conformance runner's `--crash-sweep` check
+tests (`tests/runtime/run_recovery_*.test.ts`) and the conformance runner's `--crash-sweep` check
 this.
 
 **The author fixes the graph.** A running flow never rewrites itself and a model never chooses the
@@ -72,13 +72,13 @@ graph. Growth only instantiates child flows the author wrote, through `call`, `m
 engine records and binds the result.
 
 **The engine is kind-blind.** `runtime/engine.ts` and `runtime/eval_node.ts` never branch on a
-node's kind; kind-specific work lives in `nodes/`. `tests/engine/kind_census.test.ts` holds the
+node's kind; kind-specific work lives in `nodes/`. `tests/repo/kind_census.test.ts` holds the
 count at zero.
 
 **Imports go one way.** `diagnostics`, `defaults`, `typesys` and `platform` sit at the bottom;
 `events`, `expr`, `llm`, `llm_clients`, `tools`, `skills` and `memory` above them; then `nodes`,
 then `compile`, then `compose` and `runtime`; then `run.ts` and `memory_host.ts`; then `index.ts`
-and `cli/`. A module never imports one above it. `tests/engine/layer_direction.test.ts` holds the
+and `cli/`. A module never imports one above it. `tests/repo/layer_direction.test.ts` holds the
 main edges of this order, and also that only `platform.ts` touches Bun or `fetch` and only
 `defaults.ts` reads the environment.
 
@@ -88,14 +88,17 @@ page. A code is never renamed or reused.
 
 ## Where tests live
 
-| Path | What it tests |
+`tests/` mirrors `src/`: a test of `src/<dir>/<file>.ts` goes in `tests/<dir>/`, and a test of a
+`src/*.ts` file at the `tests/` root. `tests/repo/layout.test.ts` keeps the top level to these:
+
+| Path | What it holds |
 |---|---|
-| `tests/engine/` | Most unit tests: runtime, nodes, compile, types, expressions, memory, platform |
-| `tests/compose/` | The loader |
-| `tests/llm/` | Messages, protocols and transport, with recorded provider replies (`cassettes/`) |
-| `tests/cli/`, `tests/skills/` | The CLI and skills |
-| `tests/*.test.ts` | Model config, providers, defaults and packaging |
+| `tests/*.test.ts` | Tests of `src/*.ts` (`run.ts`, `defaults.ts`, `events.ts`, `platform.ts`, ...) |
+| `tests/<dir>/` | Tests of `src/<dir>/`, one folder per `src/` folder |
+| `tests/e2e/` | Whole flows across areas, and the CLI with run logs |
+| `tests/repo/` | The repository: packaging, licenses, the defaults table, import layers |
 | `tests/docs/`, `tests/examples/` | Every code block on the docs site and in the README, and `examples/` |
+| `tests/helpers/`, `tests/fixtures/` | Helpers shared across folders, and fixture files |
 | `tests/conformance/` | 2,000-odd cases written as data (`cases/`) and their runner, `runner.ts` (see [`tests/conformance/README.md`](tests/conformance/README.md)) |
 
 `tests/conftest.ts` is the preload: each test starts with built-in defaults, an empty auth store

@@ -13,8 +13,8 @@ import { expect, test } from "bun:test";
 import { buildGrow } from "../../src/compile/expand.ts";
 import { RunFailed } from "../../src/events.ts";
 import { runFlow } from "../../src/run.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { engine } from "./run_state_fixtures.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { engine } from "../helpers/run_state_fixtures.ts";
 
 // `checked` def: doubles its int input; boundary asserts n>=0, post asserts the output < 100.
 const CHECKED_DEF = `

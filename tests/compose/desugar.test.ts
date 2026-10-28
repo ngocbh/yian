@@ -26,7 +26,7 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { Assertion } from "../../src/nodes/contracts.ts";
-import { loadError } from "./declarations.ts";
+import { loadError } from "../helpers/declarations.ts";
 
 /** Return the physical cursor over a flow document's `nodes:` mapping. */
 function nodesReader(text: string): SourceCursor {

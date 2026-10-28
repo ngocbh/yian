@@ -17,8 +17,8 @@ import { mapCallsite, ns } from "../../src/nodes/ids.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { runFlow } from "../../src/run.ts";
 import type { JsonValue } from "../../src/typesys/json.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { childFlow, childResolver, engine } from "./run_state_fixtures.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { childFlow, childResolver, engine } from "../helpers/run_state_fixtures.ts";
 
 // topic -> the topic (echo), so MAP results == the over list.
 const ECHO_CHILD = `

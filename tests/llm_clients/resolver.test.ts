@@ -45,7 +45,7 @@ import { AnthropicMessagesBlock } from "../../src/llm_clients/provider_blocks.ts
 import { virtualScheduler } from "../../src/platform.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
 
-const CASSETTES = fileURLToPath(new URL("cassettes/", import.meta.url));
+const CASSETTES = fileURLToPath(new URL("../llm/cassettes/", import.meta.url));
 // Far enough ahead that the build-time read never refreshes: the default refresh would use
 // `OpenAIAuth`'s own transport, not the case's replay.
 const FAR_FUTURE = 4_102_444_800;

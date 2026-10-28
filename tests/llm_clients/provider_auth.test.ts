@@ -16,8 +16,8 @@ import { inspect } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
-import { ENTRIES } from "../src/defaults.ts";
-import { ProviderError } from "../src/llm/errors.ts";
+import { ENTRIES } from "../../src/defaults.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
 import {
   ApiKeyCredentials,
   AuthError,
@@ -26,16 +26,16 @@ import {
   isAuthFailure,
   OAuthCredentials,
   ProviderSelection,
-} from "../src/llm_clients/auth/common.ts";
-import { request } from "../src/llm_clients/auth/http.ts";
-import { type AuthRequest, OpenAIAuth } from "../src/llm_clients/auth/openai.ts";
-import { AuthStore } from "../src/llm_clients/auth/store.ts";
-import { lockFile, realScheduler, type Scheduler, USER_AGENT, virtualScheduler } from "../src/platform.ts";
-import { parseJson } from "../src/typesys/json.ts";
+} from "../../src/llm_clients/auth/common.ts";
+import { request } from "../../src/llm_clients/auth/http.ts";
+import { type AuthRequest, OpenAIAuth } from "../../src/llm_clients/auth/openai.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
+import { lockFile, realScheduler, type Scheduler, USER_AGENT, virtualScheduler } from "../../src/platform.ts";
+import { parseJson } from "../../src/typesys/json.ts";
 import { SCENARIOS } from "./auth_both_runtimes.ts";
-import { NO_ENV } from "./engine/run_state_fixtures.ts";
+import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 
-const PLATFORM_URL = pathToFileURL(join(import.meta.dirname, "..", "src", "platform.ts")).href;
+const PLATFORM_URL = pathToFileURL(join(import.meta.dirname, "..", "..", "src", "platform.ts")).href;
 
 /** Return the error `run` throws, failing the test if it throws none. */
 function thrown(run: () => unknown): Error {
@@ -59,7 +59,7 @@ async function rejected(promise: Promise<unknown>): Promise<Error> {
 
 test("auth/index.ts exports the auth package names", async () => {
   // The types (AuthState, Credentials) have no runtime value.
-  const names = Object.keys(await import("../src/llm_clients/auth/index.ts")).sort();
+  const names = Object.keys(await import("../../src/llm_clients/auth/index.ts")).sort();
   expect(names).toEqual([
     "ApiKeyCredentials",
     "AuthError",
@@ -2938,13 +2938,13 @@ describe("browser callback listener", () => {
   });
 });
 
-const BUILT = join(import.meta.dirname, "..", "dist", "tests", "auth_both_runtimes.js");
+const BUILT = join(import.meta.dirname, "..", "..", "dist", "tests", "llm_clients", "auth_both_runtimes.js");
 
 /**
  * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
  * value that can't run, a Node older than the `engines` floor, or a missing build
  * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/engine/platform.test.ts`'s: importing a test file would run its tests.
+ * A copy of `tests/platform.test.ts`'s: importing a test file would run its tests.
  */
 const NODE = ((): string | undefined => {
   const node = process.env.YIAN_TEST_NODE;

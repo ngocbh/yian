@@ -4,7 +4,7 @@ import { expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { runFlow } from "../../src/run.ts";
-import { assembled, assembleText, loadError, runCase } from "../compose/declarations.ts";
+import { assembled, assembleText, loadError, runCase } from "../helpers/declarations.ts";
 
 // ---------- child bare assertions over internal producers ----------
 

@@ -14,7 +14,7 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { RunFlowOptions, RunResult } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { NO_ENV, runWith, textReply } from "./run_state_fixtures.ts";
+import { NO_ENV, runWith, textReply } from "../helpers/run_state_fixtures.ts";
 
 afterEach(() => {
   forget();

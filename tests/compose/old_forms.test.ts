@@ -23,8 +23,8 @@ import {
   loadErrorAsync,
   parametersFromYaml,
   runCase,
-} from "./declarations.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+} from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 // Pinned before `MESSAGE_REGISTRY` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);

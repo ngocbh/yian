@@ -49,7 +49,7 @@ import {
   RUN_ID,
   startData,
   stateSnapshot,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 const APPEND_MISMATCH = /^run-log append result does not match prepared transition$/;
 

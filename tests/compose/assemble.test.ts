@@ -58,8 +58,8 @@ import {
   loadError,
   nodesOf,
   runTextCase,
-} from "../compose/declarations.ts";
-import { StandInCode, withKinds } from "../compose/stand_ins.ts";
+} from "../helpers/declarations.ts";
+import { StandInCode, withKinds } from "../helpers/stand_ins.ts";
 
 afterEach(() => forget());
 

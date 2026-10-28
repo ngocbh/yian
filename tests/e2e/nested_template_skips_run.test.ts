@@ -16,7 +16,7 @@ import { cloneChild } from "../../src/compile/expand.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeSkipped } from "../../src/events.ts";
 import { type RunResult, runFlow } from "../../src/run.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-nested-template-skips-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

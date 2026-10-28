@@ -15,8 +15,8 @@ import { join } from "node:path";
 import { copyGraph } from "../../src/compile/model.ts";
 import { outputContractType } from "../../src/nodes/contracts.ts";
 import { type RunResult, advance, runFlow } from "../../src/run.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-deep-type-copies-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

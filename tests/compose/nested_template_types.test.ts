@@ -19,8 +19,8 @@ import type { ValueContract } from "../../src/nodes/contracts.ts";
 import type { ToolNode } from "../../src/nodes/tool/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { canonicalTypeLabel, type Type } from "../../src/typesys/values.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-nested-template-types-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

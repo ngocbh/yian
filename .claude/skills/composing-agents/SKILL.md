@@ -103,6 +103,8 @@ output:
 - **A tag ends at the first space and holds no `,`.** Name a type with several arguments in
   `typedefs:` and tag with the name: `Order: Union(Buy, Sell)`, then `!Order`. One-argument
   types work inline: `!Optional(list(str))`.
+- **Quote a type with a `,` inside `{...}`.** YAML splits a flow mapping at each comma, so
+  write `Msg: {role: "Literal(user, assistant)", text: str}` or the record in block style.
 - **Spellings:** parentheses, not brackets (`Optional(str)`, `int(1..12)`); `Any`, not `any`;
   `Union(A, B)`, not `A | B`; `Optional(Order)`, not `Union(Order, None)`.
 - **Union members must differ by a tag field or by shape.** A tag field is the same field as a

@@ -1,0 +1,24 @@
+# In a `{...}` record typedef, YAML splits `Literal(user, assistant)` at its comma into the
+# fields `Literal(user` and a null-valued `assistant)`; the error names the cut type's field.
+kind: load
+flow: |
+  id: err-split-typedef-field
+  name: err_split_typedef_field
+  typedefs:
+    Msg: {role: Literal(user, assistant), text: str}   # ERROR: quote the type or use block style
+  input:
+    msg: !Msg
+  nodes:
+    echo:
+      kind: code
+      input:
+        msg: ${input.msg}
+      output: str
+      code: ./fixtures/seeds.ts:echo_value
+  output: ${echo.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "bad typedefs: typedef 'Msg' field 'role': malformed type expression 'Literal(user': unbalanced parentheses — if this type sits inside a `{...}` mapping, its comma split it; quote it or use block style"
+        frames: [{label: flow.yaml, range: [4, 15, 4, 27]}]

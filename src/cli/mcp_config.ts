@@ -55,10 +55,11 @@ export function userMcpConfig(env: Env): string {
  * A later file's entry replaces an earlier entry of the same name whole; an entry with
  * `"disabled": true` drops the server, so `{"disabled": true}` alone turns off a server an earlier
  * file defines. Entry keys read are `command`, `args`, `env`, `cwd`, `url`, `headers`, `type`
- * (`"stdio"`, `"http"` or `"streamable-http"`) and `disabled`; any other key is ignored with a
- * warning. In `command`, each `args` item, `cwd`, `url`, and the values of `env` and `headers`,
- * `${VAR}` expands to `env(VAR)`, `${VAR:-default}` to `default` when `VAR` is unset or empty, and
- * `$$` to `$`; a default can't contain `$`, and any other `$` stays as written.
+ * (`"stdio"`, `"http"` or `"streamable-http"`) and `disabled`, each absent when `null`; any other
+ * key is ignored with a warning. In `command`, each `args` item, `cwd`, `url`, and the values of
+ * `env` and `headers`, `${VAR}` expands to `env(VAR)`, `${VAR:-default}` to `default` when `VAR`
+ * is unset or empty, and `$$` to `$`; a default can't contain `$`, and any other `$` stays as
+ * written.
  *
  * @param paths The config files to read, each of which must exist. Later files win.
  * @param env The variables `${VAR}` references expand from.
@@ -161,7 +162,7 @@ function build(
   for (const key of Object.keys(entry)) {
     if (!KNOWN_KEYS.has(key)) warn(`${where}: ignoring unknown key ${reprText(key)}`);
   }
-  const disabled = Object.hasOwn(entry, "disabled") ? (entry.disabled as JsonValue) : false;
+  const disabled = Object.hasOwn(entry, "disabled") ? ((entry.disabled as JsonValue) ?? false) : false;
   if (typeof disabled !== "boolean") {
     throw new McpConfigError(`${where}: 'disabled' must be true or false, got ${kind(disabled)}`);
   }
@@ -187,7 +188,7 @@ function build(
     }
   }
 
-  const args = Object.hasOwn(entry, "args") ? entry.args : [];
+  const args = Object.hasOwn(entry, "args") ? (entry.args ?? []) : [];
   if (!Array.isArray(args) || !args.every((arg) => typeof arg === "string")) {
     throw new McpConfigError(`${where}: 'args' must be a list of strings`);
   }

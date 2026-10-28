@@ -302,7 +302,6 @@ test.each([
   [{ command: "srv", cwd: 1 }, "cwd"],
   [{ url: 5 }, "url"],
   [{ command: "srv", disabled: "yes" }, "disabled"],
-  [{ command: "srv", disabled: null }, "disabled"],
 ])("test_bad_entries_name_file_server_and_field (%j)", (entry, field) => {
   const path = write("mcp.json", { s: entry });
 
@@ -316,10 +315,10 @@ test.each([
 test("bad entries' messages", () => {
   const cases: [unknown, string][] = [
     ["srv", "the entry must be an object, got a string"],
-    [{ command: "srv", args: null }, "'args' must be a list of strings"],
+    [{ command: "srv", args: "a" }, "'args' must be a list of strings"],
     [{ command: "srv", env: { A: 1 } }, `env["A"] must be a string, got a number`],
     [{ url: "https://x.example.com/mcp", headers: ["A"] }, "'headers' must be an object of strings, got an array"],
-    [{ command: "srv", disabled: null }, "'disabled' must be true or false, got null"],
+    [{ command: "srv", disabled: "yes" }, "'disabled' must be true or false, got a string"],
   ];
   for (const [entry, reason] of cases) {
     const path = write("mcp.json", { s: entry });
@@ -346,15 +345,21 @@ test("no files gives no servers", () => {
   expect(Object.keys(loadMcpConfig([], envOf({})))).toEqual([]);
 });
 
-test("null counts as absent for type, env, headers, cwd and url", () => {
+test("null counts as absent for every key", () => {
   const path = write("mcp.json", {
-    local: { command: "srv", type: null, env: null, cwd: null, url: null },
+    local: { command: "srv", args: null, type: null, env: null, cwd: null, url: null, disabled: null },
     remote: { url: "https://x.example.com/mcp", headers: null, command: null },
   });
 
   const servers = loadMcpConfig([path], envOf({}));
 
-  expect(spec(servers["local"])).toMatchObject({ command: "srv", env: undefined, cwd: undefined, url: undefined });
+  expect(spec(servers["local"])).toMatchObject({
+    command: "srv",
+    args: [],
+    env: undefined,
+    cwd: undefined,
+    url: undefined,
+  });
   expect(spec(servers["remote"])).toMatchObject({ url: "https://x.example.com/mcp", headers: undefined });
 });
 

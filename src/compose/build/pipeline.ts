@@ -2227,6 +2227,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     resolveOrigin,
     diagnostics,
     searchedWhens,
+    caseSpellings,
   });
   // Node-local `asserts:` (per-node contract): validate node-locally + classify pre/post + stamp
   // onto each built leaf/call node. Shared by defs (a def's internal nodes too).

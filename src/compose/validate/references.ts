@@ -31,7 +31,8 @@
  * carriers), `typesys` (`Type`), `compose/helpers` (closed-path
  * projection, binding-contract resolution, narrowed reads, and errors), and `compose/validate`
  * (`constructors` for the constructor and builtin checks, `narrowing` for each node's view, and
- * `typed_bindings` for the node-local contracts and a MAP's item contract).
+ * `typed_bindings` for the node-local contracts and a MAP's item contract), and `compose/desugar`
+ * (`case_outputs` to spell an expanded case value read as written).
  * Never imports: the loader or the compose package facade; they import this back.
  */
 
@@ -91,6 +92,7 @@ import {
   projectOutputContract,
   referenceContract,
 } from "../../compile/output_contracts.ts";
+import { type CaseRead, caseReadsAsWritten } from "../desugar/case_outputs.ts";
 import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { builtinFieldErrors, constructorErrors } from "./constructors.ts";
@@ -267,6 +269,8 @@ function outputBindings(outputs: unknown): unknown[] {
  * @param options.registry The flow's typedefs, naming a narrowed type and resolving constructors.
  * @param options.resolveOrigin Resolves a registered origin to its source frame.
  * @param options.diagnostics Factory for located load errors.
+ * @param options.caseSpellings Each expanded case value read, so an error names the read as
+ *   written, once.
  * @throws TypeError when a producer contract is not a `ValueContract` or `PartialRecordContract`.
  * @throws LoadError listing every unresolved reference, else every constructor call that can never
  *   succeed, else every inbox input nothing reads.
@@ -286,9 +290,11 @@ export function validateReferences(
     resolveOrigin?: ResolveOrigin | null;
     diagnostics?: LoadDiagnostics | null;
     searchedWhens?: ReadonlyMap<string, readonly SearchedWhen[]> | null;
+    caseSpellings?: ReadonlyMap<string, CaseRead> | null;
   } = {},
 ): void {
   const { outputsRange = null, narrowing = null, registry = null, resolveOrigin = null } = options;
+  const caseSpellings = options.caseSpellings ?? new Map<string, CaseRead>();
   const searchedWhens = options.searchedWhens ?? new Map<string, readonly SearchedWhen[]>();
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const inputContracts = options.inputContracts ?? new Map<string, ValueContract>();
@@ -385,6 +391,7 @@ export function validateReferences(
         }
       }
     }
+    const pathErrors = new Set<string>();
     for (const path of paths) {
       const parts = path.split(".");
       if (parts[0] === "input" && inboxInputs.has(parts[1]!)) {
@@ -419,7 +426,12 @@ export function validateReferences(
           });
         }
       }
-      if (err !== null) errors.push([`${where}: ${asWritten(err, path, trees)}`, rng]);
+      if (err === null) continue;
+      // Each leaf of an expanded case read gives the same message once spelled as written.
+      const message = `${where}: ${caseReadsAsWritten(asWritten(err, path, trees), text, caseSpellings)}`;
+      if (pathErrors.has(message)) continue;
+      pathErrors.add(message);
+      errors.push([message, rng]);
     }
     for (const tree of trees) {
       const err = optionalInsideRoot(tree, poolRootLength);

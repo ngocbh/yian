@@ -171,9 +171,9 @@ expect:
   - - ModelCallFinished
     - {node_id: chat, n: 1, purpose: chat, provider: openai, model: gpt-5.5}
   - - ModelCallStarted
-    - {node_id: chat, n: 2, purpose: chat, provider: openai, model: gpt-5.5}
+    - {node_id: chat, n: 3, purpose: chat, provider: openai, model: gpt-5.5}
   - - ModelCallFinished
-    - {node_id: chat, n: 2, purpose: chat, provider: openai, model: gpt-5.5}
+    - {node_id: chat, n: 3, purpose: chat, provider: openai, model: gpt-5.5}
   - - NodeSucceeded
     - {node_id: chat, output: 'final, with sources', interrupted: false}
   - - NodeStarted

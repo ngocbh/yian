@@ -719,8 +719,16 @@ export class FlowEngine {
     // The node reads its calls on every evaluation, so a node holding a call reuses it instead of
     // calling its handler again after a wake or a crash.
     const calls = callViews(state, nodeId);
-    return new NodeSteps(state.nodeStarts.get(nodeId)!, prior, record, calls, state.runDefaults.maxEventBytes, this.#durable, () =>
-      callViews(state, nodeId),
+    return new NodeSteps(
+      state.nodeStarts.get(nodeId)!,
+      prior,
+      record,
+      calls,
+      state.runDefaults.maxEventBytes,
+      this.#durable,
+      () => callViews(state, nodeId),
+      // A steer read and a host's answer append the node's steps without `record`.
+      () => (state.nodeSteps.get(nodeId)?.length ?? 0) + 1,
     );
   }
 

@@ -1219,6 +1219,8 @@ export class NodeSteps {
   #next: number;
   /** Reads the node's calls as the run state holds them now; `null` outside a run. */
   readonly #current: (() => readonly CallView[]) | null;
+  /** Reads the `n` the node's next step gets in the run state; `null` outside a run. */
+  readonly #nextStep: (() => number) | null;
 
   /**
    * Check the field types and that the current start is counted; `prior` and `calls` are
@@ -1227,9 +1229,12 @@ export class NodeSteps {
    * @param currentCalls Reads the node's calls as the run state holds them now (answers and
    *   closes since the evaluation began); the engine passes it, and `currentCalls()` gives `calls`
    *   without it.
+   * @param nextStep Reads the `n` the node's next step gets in the run state, which counts the
+   *   steps the engine appends for the node without `record` (a steer read, a host's answer); the
+   *   engine passes it, and `next` counts only `record`'s steps without it.
    * @throws TypeError when `starts` isn't a safe integer, `prior` isn't an array of plain
-   *   records, `record` isn't a function, `calls` isn't an array, or `currentCalls` isn't a
-   *   function or `null`.
+   *   records, `record` isn't a function, `calls` isn't an array, or `currentCalls` or `nextStep`
+   *   isn't a function or `null`.
    * @throws RangeError when `starts` is less than 1 or `maxEventBytes` isn't a positive safe
    *   integer.
    */
@@ -1241,6 +1246,7 @@ export class NodeSteps {
     maxEventBytes: number = MAX_EVENT_BYTES,
     durable: boolean = true,
     currentCalls: (() => readonly CallView[]) | null = null,
+    nextStep: (() => number) | null = null,
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new TypeError("starts must be an int");
     if (starts < 1) throw new RangeError("starts must be at least 1");
@@ -1250,6 +1256,7 @@ export class NodeSteps {
     if (typeof record !== "function") throw new TypeError("record must be callable");
     if (!Array.isArray(calls)) throw new TypeError("calls must be an array");
     if (currentCalls !== null && typeof currentCalls !== "function") throw new TypeError("currentCalls must be callable or null");
+    if (nextStep !== null && typeof nextStep !== "function") throw new TypeError("nextStep must be callable or null");
     if (typeof maxEventBytes !== "number" || !Number.isSafeInteger(maxEventBytes) || maxEventBytes < 1) {
       throw new RangeError("maxEventBytes must be a positive int");
     }
@@ -1260,6 +1267,7 @@ export class NodeSteps {
     this.durable = durable === true;
     this.#next = prior.length + 1;
     this.#current = currentCalls;
+    this.#nextStep = nextStep;
     this.record = (step, options) => {
       const n = record(step, options);
       this.#next = n + 1;
@@ -1269,12 +1277,12 @@ export class NodeSteps {
   }
 
   /**
-   * The `n` the next step recorded through this object gets: one past the last `n` `record`
-   * returned, or past `prior` before any. A call in flight names its step by it before the step is
-   * recorded.
+   * The `n` the node's next step gets: in a run, as the run state counts the node's steps now;
+   * outside one, one past the last `n` `record` returned, or past `prior` before any. A call in
+   * flight names its step by it before the step is recorded.
    */
   get next(): number {
-    return this.#next;
+    return this.#nextStep === null ? this.#next : this.#nextStep();
   }
 
   /**

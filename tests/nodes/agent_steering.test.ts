@@ -28,7 +28,8 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { runFlow, send } from "../../src/run.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
-import { NodeStepRecord } from "../../src/runtime/log.ts";
+import { type LiveFrame, LiveChannel, LiveView } from "../../src/runtime/live.ts";
+import { NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareSend, replayRecords, RunState } from "../../src/runtime/state.ts";
 import { unreadEvents } from "../../src/runtime/waits.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
@@ -335,6 +336,38 @@ test("a steer queued between two calls of a reply joins after both results", asy
   const roles = model.requests[1]!.messages.slice(-4).map((message) => message.role);
   expect(roles).toEqual(["assistant", "tool", "tool", "user"]);
   expect(model.requests[1]!.messages.at(-1)!.text()).toBe("mid-turn steer");
+});
+
+// --- live frames ------------------------------------------------------------ //
+
+test("after a steer read, the next call's live frames carry its model_call step's n, so a view drops it at that step", async () => {
+  const log = join(dir, "live-after-steer.jsonl");
+  const flow = await loadFlow(steerFlow());
+  const live = new LiveChannel();
+  const view = LiveView.from([], { last_seq: -1, calls: [] });
+  const frames: LiveFrame[] = [];
+  let gaps = 0;
+  live.subscribe((frame) => {
+    if (frame.type !== "record") frames.push(frame);
+    if (!view.apply(frame)) gaps++;
+  });
+  const onEvent = (event: unknown) => {
+    if (event instanceof RunStarted) void send(log, "notes", "use dataset B");
+  };
+  const result = await runWith(flow, {}, null, new ScriptedModel([reply("done")], CONFIG), { log, onEvent, live });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const steps = readRunLog(log).flatMap(({ record }) => (record instanceof NodeStepRecord ? [[record.step["kind"], record.n]] : []));
+  expect(steps).toEqual([
+    ["steer", 1],
+    ["model_call", 2],
+  ]);
+  expect(frames.map((frame) => [frame.type, (frame as { n: number }).n])).toEqual([
+    ["start", 2],
+    ["chunk", 2],
+    ["end", 2],
+  ]);
+  expect(gaps).toBe(0);
+  expect(view.calls()).toEqual([]);
 });
 
 // --- resume ----------------------------------------------------------------- //

@@ -146,5 +146,5 @@ expect:
     - [pool_commit, __end__, {value: Done with 2024.}]
     - [node_succeeded, __end__, {commit: 20}]
   stream:
-    - {chunk: Done with 2024., final: false, key: text, node_id: chat, n: 3, index: 0}
-    - {chunk: '', final: true, key: text, node_id: chat, n: 3, index: 1}
+    - {chunk: Done with 2024., final: false, key: text, node_id: chat, n: 4, index: 0}
+    - {chunk: '', final: true, key: text, node_id: chat, n: 4, index: 1}

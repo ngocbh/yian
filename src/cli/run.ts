@@ -886,12 +886,12 @@ function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
  * after its own checks and closes it. A TOOL node's id names one tool, never a group, so it counts
  * as unresolved unless it is in `known`; so does a grant that is neither in `known` nor a server
  * name. When some id is unresolved, the granted servers open here instead, and if their tools don't
- * supply every unresolved id, every other server opens to show its tools; those that list a
- * still-unresolved id stay open and the rest close before the run, so an unused server's tool
- * names can't collide with another's. A server opened only to show its tools that fails to start is
- * skipped with a `warn` call, unless the flow still lacks a needed id afterwards. Once `signal`
- * aborts, no further server opens, and only the servers already open are selected. Nothing is
- * selected when the flow needs no tools.
+ * supply every unresolved id, the other servers open in turn to show their tools until every id is
+ * supplied; those that list a still-unresolved id stay open and the rest close before the run, so
+ * an unused server's tool names can't collide with another's. A server opened only to show its
+ * tools that fails to start is skipped with a `warn` call, unless the flow still lacks a needed id
+ * afterwards. Once `signal` aborts, no further server opens, and only the servers already open are
+ * selected. Nothing is selected when the flow needs no tools.
  *
  * @param servers The configured servers by name, none of them open.
  * @param toolIds The tool ids the flow's static TOOL nodes call.
@@ -944,15 +944,19 @@ export async function openMcpServers<T>(
           failed.push(error);
           continue;
         }
-        if (server.tools.some((tool) => unresolved.has(tool.name))) selected[name] = server;
-        else await server.close();
+        if (server.tools.some((tool) => unresolved.has(tool.name))) {
+          selected[name] = server;
+          // A later server that lists the same id would collide with this one.
+          for (const tool of server.tools) unresolved.delete(tool.name);
+        } else {
+          await server.close();
+        }
       }
       if (signal.aborted) {
         // The run throws the stop; only what is already open goes to it.
         selected = Object.fromEntries(Object.entries(selected).filter(([, server]) => server.isOpen));
       } else {
-        const supplied = toolNames(selected);
-        const missing = [...unresolved].filter((id) => !supplied.has(id)).sort(compareCodeUnits);
+        const missing = [...unresolved].sort(compareCodeUnits);
         if (missing.length > 0 && failed.length > 0) {
           // A server that failed to start may be the one that supplies them.
           const [error, ...others] = failed as [McpConnectError, ...McpConnectError[]];

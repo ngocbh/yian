@@ -245,6 +245,27 @@ test(
 );
 
 test(
+  "probing stops at the first server that supplies the tool",
+  async () => {
+    const files = { none: marker("none.pid"), a: marker("a.pid"), b: marker("b.pid") };
+    const cfg = config(join(tmp, "cfg.json"), {
+      none: stdio("--only", "add", "--marker", files.none),
+      a: stdio("--marker", files.a),
+      b: stdio("--marker", files.b),
+    });
+
+    const result = await run([toolFlow(), "--mcp-config", cfg]);
+
+    expect(result.code, result.output).toBe(0);
+    expect(lastLine(result.stdout)).toBe("hi");
+    // `a` supplies `echo`, so `b`, which lists it too, never starts.
+    expect(Object.values(files).map((file) => pids(file).length)).toEqual([1, 1, 0]);
+    await expectNoChildren(...Object.values(files));
+  },
+  SLOW,
+);
+
+test(
   "a tool id named like a server still probes for the tool",
   async () => {
     const files = { echo: marker("echo.pid"), fake: marker("fake.pid") };

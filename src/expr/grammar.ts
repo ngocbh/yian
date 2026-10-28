@@ -831,10 +831,16 @@ export function wholeSpanInterior(text: string): string | null {
 // A character that would fuse with an unwrapped name: `not${x}` must become `not x`.
 const NAME_CHAR = /^[A-Za-z0-9_#/]/;
 
-/** Return whether `text` parses within the nesting limit (a rewrite worth suggesting). */
+/**
+ * Return whether `text` parses within the nesting limit with no reserved word as a reference root
+ * (a rewrite worth suggesting). `parseExpr`'s other checks report their own errors once the spans
+ * are gone.
+ */
 function parses(text: string): boolean {
   try {
-    rejectDeepExpression(parseRaw(text));
+    const tree = parseRaw(text);
+    rejectDeepExpression(tree);
+    rejectReservedReferenceRoots(tree);
   } catch (error) {
     if (error instanceof ParseError || error instanceof ExpressionError) return false;
     throw error;
@@ -842,7 +848,10 @@ function parses(text: string): boolean {
   return true;
 }
 
-/** Return whether `text` parses as one reference or one literal (no operator or call). */
+/**
+ * Return whether `text` parses as one reference or one literal (no operator or call). A reserved
+ * word (`in`, `and`, ...) is not one, so unwrapping `${in}` can't turn it into an operator.
+ */
 function isLoneAtom(text: string): boolean {
   let tree: ExprNode;
   try {
@@ -851,7 +860,10 @@ function isLoneAtom(text: string): boolean {
     if (error instanceof ParseError) return false;
     throw error;
   }
-  return tree instanceof Token || (tree.data === "refcall" && callSuffixOf(tree) === undefined);
+  if (tree instanceof Token) return true;
+  if (tree.data !== "refcall" || callSuffixOf(tree) !== undefined) return false;
+  const head = tree.children[0];
+  return !(head instanceof Token && head.type === "NAME" && RESERVED_REFERENCE_ROOTS.has(head.value));
 }
 
 /**

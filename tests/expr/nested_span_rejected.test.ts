@@ -84,7 +84,6 @@ test("nested span shows the rewrite", () => {
     ["isinstance(x, ${Buy})", "isinstance(x, Buy)"],
     ["render_as_json(${briefs}, 4)", "render_as_json(briefs, 4)"],
     ["not${x}", "not x"],
-    ["x :- ${and}", "x :- and"],
   ];
   for (const [text, rewrite] of cases) {
     expect(caught(() => parseExpr(text)).message).toBe(`${NESTED}; write \`${rewrite}\``);
@@ -98,6 +97,10 @@ test("nested span without a parsable rewrite shows none", () => {
 test("a rewrite never merges the names of adjacent spans", () => {
   // Kept apart, `not x y` doesn't parse, so no rewrite is shown rather than `not xy`.
   for (const text of ["not${x}${y}", "not${x}${y.z}"]) expectNoRewrite(text);
+});
+
+test("a rewrite never turns a reserved word into an operator", () => {
+  for (const text of ["x :- ${and}", "${a}${in}${b}", "${a}${and}${b}", "${a}${or}${b}"]) expectNoRewrite(text);
 });
 
 test("a span inside a string literal is text", () => {

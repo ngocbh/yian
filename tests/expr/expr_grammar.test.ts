@@ -173,8 +173,8 @@ describe("references", () => {
   test("wrapped reserved keyword is a nested-span error", () => {
     for (const keyword of ["and", "or", "not", "in"]) {
       for (const prefix of ["", "x :- "]) {
-        // `(not)` doesn't parse, so a wrapped `not` gets no rewrite.
-        expectMessage(`${prefix}\${${keyword}}`, nestedSpan(keyword === "not" ? null : prefix + keyword));
+        // A reserved word can't be a reference, so no rewrite is offered.
+        expectMessage(`${prefix}\${${keyword}}`, nestedSpan(null));
       }
     }
   });

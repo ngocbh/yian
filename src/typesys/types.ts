@@ -1628,13 +1628,17 @@ export function typeName(value: unknown): string {
 }
 
 /**
- * Parse each text field type of record typedef `name`, without resolving names.
+ * Parse each text field type of record typedef `name` that opens more `(` than it closes.
  *
- * @throws TypeCheckError naming the first field whose type text doesn't parse.
+ * Only such a field can be the front of a type a comma cut; any other field's mistake is
+ * left for its own check.
+ *
+ * @throws TypeCheckError naming the first such field, whose type text doesn't parse.
  */
-function checkFieldSyntax(name: string, fields: Readonly<Record<string, unknown>>): void {
+function checkCutFields(name: string, fields: Readonly<Record<string, unknown>>): void {
   for (const [field, written] of Object.entries(fields)) {
     if (typeof written !== "string") continue;
+    if (written.split("(").length <= written.split(")").length) continue;
     try {
       parseType(written);
     } catch (error) {
@@ -1711,7 +1715,7 @@ export function readTypedefs(
         if (typeof ftype !== "string") {
           // A `{...}` mapping's comma cuts `Literal(a, b)` into a field `Literal(a` and a
           // null-valued field `b)`; report the cut type, whose parse error says why.
-          checkFieldSyntax(name, value);
+          checkCutFields(name, value);
           throw new TypeCheckError(
             `typedef ${reprText(name)} field ${reprText(fname)}: type must be a string ` +
               `expression (got ${typeName(ftype)})`,

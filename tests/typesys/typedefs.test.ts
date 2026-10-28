@@ -302,6 +302,15 @@ describe("record fields", () => {
     );
   });
 
+  test("a missing type is reported before another field's bad type", () => {
+    // Only a type that opens more `(` than it closes can be one a comma cut.
+    expectRejected(
+      { Msg: { role: null, text: "Lst(str)" } },
+      "typedef 'Msg' field 'role': type must be a string expression (got NoneType)",
+      ["Msg", "role"],
+    );
+  });
+
   test.each([
     ["", "typedef 'R' field '': field names must be non-empty strings"],
     ["\ud800", "typedef 'R' field '\\ud800': field names must not contain a Unicode surrogate"],

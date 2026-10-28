@@ -1195,6 +1195,11 @@ function parentFlow(ref: string): string {
   );
 }
 
+/** A flow taking `n` whose one node `a` runs the CODE reference `ref`. */
+function codeFlowText(ref: string): string {
+  return `id: c\nname: c\ninput:\n  n: !int\nnodes:\n  a: {kind: code, code: ${ref}, input: {n: "\${input.n}"}}\noutput: \${a.output}\n`;
+}
+
 /** Run `yian check --json --root root flow`, which fails, and return its one diagnostic. */
 async function rootDiagnostic(root: string, flow: string) {
   const { code, flows } = await checkJson(["--root", root, flow]);
@@ -1375,6 +1380,29 @@ describe("check", () => {
     const diagnostic = await rootDiagnostic(root, flow);
     expect(diagnostic.code).toBe("compose.outside_root");
     expect(diagnostic.message).toBe(`${join("..", "lib", "child.yaml")} is outside the root`);
+  });
+
+  test("--root: a CODE reference outside the root fails, written as in the flow, whether or not its file exists", async () => {
+    const root = join(tmp, "company");
+    file("helpers.ts", "export function fn(inputs) { return 1 }\n");
+    for (const ref of ["../helpers.ts:fn", "../missing.ts:fn"]) {
+      const flow = file("company/main.yaml", codeFlowText(ref));
+      const diagnostic = await rootDiagnostic(root, flow);
+      expect(diagnostic.code).toBe("compose.load");
+      expect(diagnostic.message).toBe(`node 'a': \`code:\` reference '${ref}' is outside the code root`);
+    }
+  });
+
+  test("--root: a uses: child's CODE reference outside the root fails; inside, it loads", async () => {
+    const root = join(tmp, "company");
+    const flow = file("company/main.yaml", parentFlow("lib/child"));
+    file("helpers.ts", "export function fn(inputs) { return 1 }\n");
+    file("company/lib/helpers.ts", "export function fn(inputs) { return 1 }\n");
+    file("company/lib/child.yaml", codeFlowText("../../helpers.ts:fn"));
+    const diagnostic = await rootDiagnostic(root, flow);
+    expect(diagnostic.message).toEndWith("`code:` reference '../../helpers.ts:fn' is outside the code root");
+    file("company/lib/child.yaml", codeFlowText("./helpers.ts:fn"));
+    expect((await checkJson(["--root", root, flow])).code).toBe(0);
   });
 
   test("--root: a reference cycle names the flow it reaches again", async () => {

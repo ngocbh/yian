@@ -355,7 +355,7 @@ test("loadFlowSource with codeRoot refuses a recorded file whose CODE reference 
   });
 
   const error = await loadErrorAsync(loadFlowSource(loaded.source!, { codeRoot: dir }));
-  expect(error.message).toEndWith(`outside the code root '${realpathSync(dir)}'`);
+  expect(error.message).toEndWith(" is outside the code root");
   expect((await loadFlowSource(loaded.source!, { codeRoot: tmp })).compiled.flowId).toBe("root");
 });
 
@@ -373,7 +373,7 @@ test("loadFlowSource with codeRoot checks a recorded child file outside flow.dir
   expect(Object.keys(source.files).sort()).toEqual([`${ref}.yaml`, "flow.yaml"]);
 
   const error = await loadErrorAsync(loadFlowSource(source, { codeRoot: dir }));
-  expect(error.message).toEndWith(`outside the code root '${realpathSync(dir)}'`);
+  expect(error.message).toEndWith(" is outside the code root");
   expect((await loadFlowSource(source, { codeRoot: tmp })).compiled.flowId).toBe("root");
 });
 
@@ -392,7 +392,7 @@ test("a host child outside codeRoot loads, but loadFlowSource refuses its record
   });
 
   const error = await loadErrorAsync(loadFlowSource(loaded.source!, { codeRoot: dir }));
-  expect(error.message).toEndWith(`outside the code root '${realpathSync(dir)}'`);
+  expect(error.message).toEndWith(" is outside the code root");
 });
 
 // ---------- the run start ----------
@@ -638,10 +638,10 @@ test.each(MOVED_OUT)(
     const before = readFileSync(log);
 
     const error = await loadErrorAsync(advance({ log, env: hostEnv(logs), codeRoot: root }));
-    expect(error.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+    expect(error.message).toEndWith(" is outside the code root");
     expect(readFileSync(log).equals(before)).toBe(true);
     const loadError = await loadErrorAsync(loadRecordedFlow(log, { env: hostEnv(logs), codeRoot: root }));
-    expect(loadError.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+    expect(loadError.message).toEndWith(" is outside the code root");
 
     // Unconfined, the same log resumes: the moved file still exports `up`.
     const resumed = await advance({ log, env: hostEnv(logs) });
@@ -660,7 +660,7 @@ test("a finished log is refused with codeRoot too when its CODE file resolves ou
 
   const error = await loadErrorAsync(advance({ log, env: hostEnv(logs), codeRoot: root }));
 
-  expect(error.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+  expect(error.message).toEndWith(" is outside the code root");
   expect(readFileSync(log).equals(before)).toBe(true);
 });
 
@@ -695,7 +695,7 @@ test.each(MOVED_OUT)(
     const before = readFileSync(log);
 
     const error = await loadErrorAsync(foldRunLog(log, { env: hostEnv(logs), codeRoot: root }));
-    expect(error.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+    expect(error.message).toEndWith(" is outside the code root");
     expect(readFileSync(log).equals(before)).toBe(true);
 
     // Unconfined, the same log folds: the moved file still exports `up`.

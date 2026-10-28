@@ -458,7 +458,7 @@ test("codeRoot: an offline call refuses a CODE file outside it before any append
   ]) {
     const error = await rejected(call());
     expect(error).toBeInstanceOf(LoadError);
-    expect((error as Error).message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+    expect((error as Error).message).toEndWith(" is outside the code root");
     expect(readFileSync(log).equals(before)).toBe(true);
   }
   unlinkSync(join(dir, "fn.ts"));
@@ -669,7 +669,7 @@ test("a relative codeRoot resolves before a call waits on another holder, so a d
       expect(typeof (await first)).toBe("number");
       const error = await rejected(second);
       expect(error).toBeInstanceOf(LoadError);
-      expect((error as Error).message).toEndWith(`outside the code root '${realpathSync(join(dir, ".."))}'`);
+      expect((error as Error).message).toEndWith(" is outside the code root");
     } finally {
       process.chdir(cwd);
     }

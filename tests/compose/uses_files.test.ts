@@ -485,10 +485,8 @@ test("loadFlow with codeRoot accepts a CODE reference inside it", async () => {
 });
 
 test("loadFlow with codeRoot refuses a ../ reference outside it, at the code: value", async () => {
-  const { root, out } = codeDirs();
-  const outside =
-    `\`code:\` file '../out/h.ts' resolves to '${realpathSync(join(out, "h.ts"))}', ` +
-    `outside the code root '${realpathSync(root)}'`;
+  const { root } = codeDirs();
+  const outside = "`code:` reference '../out/h.ts:fn' is outside the code root";
   const text = codeFlow("../out/h.ts:fn");
 
   const error = await loadErrorAsync(loadFlow(text, { baseDir: root, codeRoot: root }));
@@ -518,10 +516,7 @@ test("loadFlow with codeRoot refuses a symlink pointing outside it", async () =>
   symlinkSync(join(out, "h.ts"), join(root, "link.ts"));
 
   const error = await loadErrorAsync(loadFlow(codeFlow("./link.ts:fn"), { baseDir: root, codeRoot: root }));
-  expect(error.message).toBe(
-    `node 'a': \`code:\` file './link.ts' resolves to '${realpathSync(join(out, "h.ts"))}', ` +
-      `outside the code root '${realpathSync(root)}'`,
-  );
+  expect(error.message).toBe("node 'a': `code:` reference './link.ts:fn' is outside the code root");
 });
 
 test("loadFlow with codeRoot checks a search-path child file's CODE references", async () => {
@@ -534,7 +529,7 @@ test("loadFlow with codeRoot checks a search-path child file's CODE references",
 
   writeFileSync(join(lib, "child.yaml"), codeFlow("../../out/h.ts:fn"));
   const error = await loadErrorAsync(loadFlow(parent, options));
-  expect(error.message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+  expect(error.message).toEndWith(" is outside the code root");
 
   writeFileSync(join(lib, "child.yaml"), codeFlow("./h.ts:fn"));
   const loaded = await loadFlow(parent, options);

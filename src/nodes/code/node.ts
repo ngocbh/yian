@@ -55,9 +55,9 @@
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
-import { realpathSync, statSync } from "node:fs";
+import { readlinkSync, realpathSync, statSync } from "node:fs";
 import { availableParallelism } from "node:os";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { SHARE_ENV, Worker } from "node:worker_threads";
 
 import { current } from "../../defaults.ts";
@@ -103,6 +103,58 @@ const MODULE_REFERENCE_RE = /^[A-Za-z_][\w.]*:[A-Za-z_]\w*$/;
  */
 function leavesRoot(rel: string): boolean {
   return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+}
+
+/**
+ * Return the real path `file` has, or would have if it existed: for a missing file, its parent's
+ * real path with its name appended, a dangling symlink followed to its target.
+ *
+ * @throws Error A system error other than a missing path, such as `ELOOP` for a symlink loop.
+ */
+function realPathOf(file: string): string {
+  try {
+    // The native realpath, like the loader's `fsp.realpath` for the root, so both give the
+    // on-disk case and compare equal on a case-insensitive disk, on Bun and Node alike.
+    return realpathSync.native(file);
+  } catch (error) {
+    if (!isMissingPath(error)) throw error;
+  }
+  const parent = dirname(file);
+  if (parent === file) return file;
+  const path = join(realPathOf(parent), basename(file));
+  let target: string;
+  try {
+    target = readlinkSync(path);
+  } catch (error) {
+    // `EINVAL`: not a symlink; `ENOENT`, `ENOTDIR`: nothing there.
+    if (isSystemCode(error, "EINVAL") || isMissingPath(error)) return path;
+    throw error;
+  }
+  return realPathOf(resolve(dirname(path), target));
+}
+
+/**
+ * Return the real path of `file`'s nearest ancestor (`file` included) that has one, with the
+ * rest of `file` appended.
+ */
+function nearestRealPath(file: string): string {
+  for (let candidate = file; ; candidate = dirname(candidate)) {
+    try {
+      return join(realpathSync.native(candidate), relative(candidate, file));
+    } catch {
+      if (dirname(candidate) === candidate) return file;
+    }
+  }
+}
+
+/** Whether `error` is the system error that a path, or a folder on it, doesn't exist. */
+function isMissingPath(error: unknown): boolean {
+  return isSystemCode(error, "ENOENT") || isSystemCode(error, "ENOTDIR");
+}
+
+/** Whether `error` is a system error with `code`. */
+function isSystemCode(error: unknown, code: string): boolean {
+  return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
 }
 
 /** The built-in identity operation: return the input named `field` unchanged. */
@@ -558,8 +610,11 @@ export class CodeNode extends Node {
    *
    * @param options.codeRoot The real path of the directory a reference's file must resolve
    *   inside, symlinks followed (a file names only itself); `null` (the default) confines nothing.
-   * @throws RangeError when a reference's file isn't a regular file, or resolves outside
-   *   `options.codeRoot`, or an inline body looks like a `module:function` reference.
+   *   A reference outside it is refused whether or not its file exists, by the reference as written;
+   *   under it, no message names an absolute path.
+   * @throws RangeError when a reference's file resolves outside `options.codeRoot`, can't be
+   *   resolved under it, or isn't a regular file, or an inline body looks like a `module:function`
+   *   reference.
    * @throws TypeStripError when the body doesn't parse or strip.
    * @throws SyntaxError when the function constructor refuses the stripped body.
    */
@@ -570,19 +625,24 @@ export class CodeNode extends Node {
       const { path } = splitReference(code);
       const dir = this.baseDir ?? process.cwd();
       const file = resolve(dir, path);
-      if (statSync(file, { throwIfNoEntry: false })?.isFile() !== true) {
-        throw new RangeError(`\`code:\` file ${reprText(path)} does not exist in ${reprText(dir)}`);
-      }
       const { codeRoot = null } = options;
+      // Checked before the file's existence, and worded without absolute paths, so a confined
+      // load tells a flow's author nothing about the host's folders or what exists outside the root.
       if (codeRoot !== null) {
-        // The native realpath, like the loader's `fsp.realpath` for the root, so both give the
-        // on-disk case and compare equal on a case-insensitive disk, on Bun and Node alike.
-        const real = realpathSync.native(file);
-        if (leavesRoot(relative(codeRoot, real))) {
-          throw new RangeError(
-            `\`code:\` file ${reprText(path)} resolves to ${reprText(real)}, outside the code root ${reprText(codeRoot)}`,
-          );
+        const outside = new RangeError(`\`code:\` reference ${reprText(code)} is outside the code root`);
+        let real: string;
+        try {
+          real = realPathOf(file);
+        } catch {
+          // A symlink loop or an unreadable folder: the system error's message holds absolute paths.
+          if (leavesRoot(relative(codeRoot, nearestRealPath(file)))) throw outside;
+          throw new RangeError(`\`code:\` reference ${reprText(code)} can't be resolved`);
         }
+        if (leavesRoot(relative(codeRoot, real))) throw outside;
+      }
+      if (statSync(file, { throwIfNoEntry: false })?.isFile() !== true) {
+        const where = codeRoot === null ? ` in ${reprText(dir)}` : "";
+        throw new RangeError(`\`code:\` file ${reprText(path)} does not exist${where}`);
       }
       return;
     }

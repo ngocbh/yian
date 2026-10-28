@@ -19,6 +19,7 @@
  * - `validateRunLogOptions` and `defaultRunLogPath` pick the run's log under `defaultRunsDir`;
  *   `reportRunLog` prints it.
  * - `ensureProviderKeys` checks the keys of the connections `agentConnections` finds before a run.
+ * - `readGrantedSkills` reads the skill folders when a flow's AGENTs grant skills.
  * - `stopOnSignals` stops a run's controller with a `HostStop` on SIGINT, SIGTERM or SIGHUP.
  *
  * Output is raw ANSI on stderr, coloured only on a TTY without `NO_COLOR`.
@@ -1439,15 +1440,7 @@ async function startRun(
   let outcome: RunResult | number;
   try {
     outcome = await closingAfter(registry, async () => {
-      // Claude Code and Codex skill folders (user, then project up to the git root), read only
-      // when an AGENT grants skills. An invalid skill is warned about and skipped rather than
-      // blocking the run.
-      let skills: Map<string, Skill> | null = null;
-      if (skillGrants(flow.compiled).length > 0) {
-        const roots = defaultSkillRoots({ cwd: process.cwd(), env: commandEnv.read });
-        skills = loadSkills(roots, { skipInvalid: true, warn });
-        await writeWarnings();
-      }
+      const skills = await readGrantedSkills(flow, commandEnv.read, io);
 
       // MCP configs are read only when the flow needs a tool yian doesn't already have, so a
       // broken config file can't block flows that never use MCP. The servers stay unopened here;
@@ -1914,6 +1907,21 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
   const lines = table.map((cells) => cells.map((cell, column) => (column < 3 ? cell.padEnd(widths[column]!) : cell)).join("  "));
   await io.stdout.write(`${lines.join("\n")}\n`);
   return 0;
+}
+
+/**
+ * Return the skills `flow`'s AGENTs can be granted, read from the Claude Code and Codex skill
+ * folders (user, then project from the working directory up to the git root), or null, reading
+ * nothing, when no AGENT grants skills. An invalid skill is skipped with a `warning:` line on
+ * stderr rather than blocking the run.
+ */
+export async function readGrantedSkills(flow: ComposedFlow, env: Env, io: CliIo): Promise<Map<string, Skill> | null> {
+  if (skillGrants(flow.compiled).length === 0) return null;
+  const warned: string[] = [];
+  const roots = defaultSkillRoots({ cwd: process.cwd(), env });
+  const skills = loadSkills(roots, { skipInvalid: true, warn: (message) => void warned.push(message) });
+  for (const message of warned) await printStyled(io, `warning: ${message}`, "yellow");
+  return skills;
 }
 
 /** One `yian skills check` result: the skill's name and description, or why it failed to load. */

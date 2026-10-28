@@ -25,6 +25,8 @@ output: \${review.output}
 
 let tmp: string;
 let home: string;
+// Restores the cwd and `fetch` even when a test times out, before `afterEach` removes `tmp`.
+let restore: (() => void) | null = null;
 
 beforeEach(() => {
   tmp = realpathSync(mkdtempSync(join(tmpdir(), "yian-cli-skills-")));
@@ -33,6 +35,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  restore?.();
+  restore = null;
   rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -83,13 +87,12 @@ async function runIn(cwd: string, flow: string) {
   systems = [];
   process.chdir(cwd);
   globalThis.fetch = fakeFetch as typeof fetch;
-  try {
-    const code = await main(["run", flow, "--quiet", "--log", join(tmp, "run.jsonl")], io);
-    return { code, stderr: chunks.join("") };
-  } finally {
+  restore = () => {
     globalThis.fetch = send;
     process.chdir(before);
-  }
+  };
+  const code = await main(["run", flow, "--quiet", "--log", join(tmp, "run.jsonl")], io);
+  return { code, stderr: chunks.join("") };
 }
 
 test("run reads user and project skill roots", async () => {

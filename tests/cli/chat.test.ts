@@ -1288,3 +1288,99 @@ describe("the entry's chat, signalled", () => {
     30_000,
   );
 });
+
+describe("yian chat's skills", () => {
+  // Restores the cwd and `fetch` even when a test times out, before the outer `afterEach` removes `tmp`.
+  let restore: (() => void) | null = null;
+  afterEach(() => {
+    restore?.();
+    restore = null;
+  });
+
+  /** A chat whose `reply` agent grants `code-review`. */
+  const SKILLED = turnFlow(`      reply:
+        kind: agent
+        input:
+          events: \${heard.output.events}
+        skills: [code-review]
+        output: str
+        prompt: "Reply to: \${events}"
+`);
+
+  /** Write a skill `name` under `root`, or a broken one when `description` is null. */
+  function skill(root: string, name: string, description: string | null): void {
+    mkdirSync(join(root, name), { recursive: true });
+    const text = description === null ? "no frontmatter\n" : `---\ndescription: ${description}\n---\nBody.\n`;
+    writeFileSync(join(root, name, "SKILL.md"), text);
+  }
+
+  /** Chat on `flow` from `project` with `lines` typed and a model answering "7"; also return each system prompt. */
+  async function chatIn(project: string, flow: string, lines: string) {
+    const { io, stdin, stdout, stderr } = chatIo({ env: { ...XAI, HOME: join(tmp, "home") } });
+    stdin.write(lines);
+    const systems: string[] = [];
+    const original = globalThis.fetch;
+    const before = process.cwd();
+    globalThis.fetch = (async (input: Request | string | URL, init?: RequestInit) => {
+      const body = JSON.parse(input instanceof Request ? await input.text() : String(init?.body)) as {
+        messages: { role: string; content: unknown }[];
+      };
+      const system = body.messages.find((message) => message.role === "system");
+      systems.push(typeof system?.content === "string" ? system.content : JSON.stringify(system?.content));
+      return new Response(SEVEN, { headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    process.chdir(project);
+    restore = () => {
+      process.chdir(before);
+      globalThis.fetch = original;
+    };
+    const { code, log } = await runChat(flow, io);
+    return { code, log, stdout: stdout(), stderr: stderr(), systems };
+  }
+
+  test(
+    "a flow that grants skills reads the user and project skill folders once, as yian run does",
+    async () => {
+      const project = realpathSync(tmp);
+      mkdirSync(join(project, ".git"));
+      skill(join(project, ".claude", "skills"), "code-review", "Project review.");
+      skill(join(project, ".claude", "skills"), "broken", null);
+      skill(join(tmp, "home", ".claude", "skills"), "code-review", "Personal review.");
+      const { code, log, stdout, stderr, systems } = await chatIn(project, flowFile(SKILLED), "hi\nthere\n/exit\n");
+      expect([code, stderr]).toEqual([0, expect.stringContaining("session ended")]);
+      expect(stdout).toBe("7\n7\n7\n");
+      expect(stderr.split("warning: skipped skill: ").length - 1).toBe(1);
+      expect(stderr).toContain("broken");
+      expect(systems.length).toBe(3);
+      for (const system of systems) expect(system).toEndWith("- code-review: Personal review.");
+      expect(inspectRun(log).status).toBe("succeeded");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a flow that grants a skill no folder has fails before it starts",
+    async () => {
+      mkdirSync(join(tmp, ".git"));
+      const { code, log, stderr } = await chatIn(realpathSync(tmp), flowFile(SKILLED), "/exit\n");
+      expect(code).toBe(1);
+      expect(stderr).toContain("grants skills not supplied to this run");
+      expect(existsSync(log)).toBe(false);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a flow without grants reads no skill folders",
+    async () => {
+      const project = realpathSync(tmp);
+      mkdirSync(join(project, ".git"));
+      skill(join(project, ".claude", "skills"), "broken", null);
+      const flow = flowFile(SKILLED.replace("        skills: [code-review]\n", ""));
+      const { code, stdout, stderr } = await chatIn(project, flow, "hi\n/exit\n");
+      expect([code, stdout]).toEqual([0, "7\n7\n"]);
+      expect(stderr).not.toContain("skipped skill");
+    },
+    TIMEOUT,
+  );
+});

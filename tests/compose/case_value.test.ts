@@ -17,13 +17,14 @@ import { expect, test } from "bun:test";
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import { expandCaseOutputs } from "../../src/compose/desugar/case_outputs.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
+import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { CodeDescriptor } from "../../src/compose/nodes/code.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { ToolDescriptor } from "../../src/compose/nodes/tool.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { Assertion, Binding, ValueContract } from "../../src/nodes/contracts.ts";
+import { Assertion, Binding, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import {
@@ -90,6 +91,19 @@ test("?. inside a case ref's root is the ?.-inside-root error", () => {
   expect(error.message).toContain(
     "reference ${gate?.output.report} puts ?. inside its root; ?. goes after the root, as in ${gate.output?.report}",
   );
+});
+
+test("an agent's llm_config case ref expands", () => {
+  const llmConfig = new ValueTemplate({ model: "${gate.output}" });
+  const out = expanded({ gate: gate(), a: new AgentDescriptor({ id: "a", prompt: "Go.", llmConfig }) });
+  const expected = new ValueTemplate({ model: "${pro.output | caut.output}" });
+  expect((out.get("a") as AgentDescriptor).llmConfig).toEqual(expected);
+});
+
+test("a flow llm_config case ref expands", () => {
+  const flowLlmConfig = new ValueTemplate({ provider: "openai", model: "${gate.output}" });
+  const [, , layer] = expandCaseOutputs(new Map([["gate", gate()]]), null, [], { flowLlmConfig });
+  expect(layer).toEqual(new ValueTemplate({ provider: "openai", model: "${pro.output | caut.output}" }));
 });
 
 test("embedded case ref expands", () => {
@@ -338,6 +352,18 @@ test("node consuming case value loads with data edges from both branches", () =>
   const edges = load(text).edges.map((edge) => `${edge.from}->${edge.to}`);
   expect(edges).toContain("pro->summary");
   expect(edges).toContain("caut->summary");
+});
+
+test("an adaptive ask's llm_config reading a case value is wired from both branches", () => {
+  const text = CASE_VALUE_FLOW.replace(
+    "output: ${gate.output}\n",
+    "  ask:\n    kind: tool\n    tool_id: ask\n    adaptive_questions:\n      prompt: Ask\n" +
+      "      llm_config: {model: !str '${gate.output}'}\noutput: ${ask.output}\n",
+  );
+  const edges = load(text).edges.map((edge) => `${edge.from}->${edge.to}`);
+  expect(edges).toContain("pro->ask__compose");
+  expect(edges).toContain("caut->ask__compose");
+  expect(edges).not.toContain("gate->ask__compose");
 });
 
 test("seed 22 case value output expanded", () => {

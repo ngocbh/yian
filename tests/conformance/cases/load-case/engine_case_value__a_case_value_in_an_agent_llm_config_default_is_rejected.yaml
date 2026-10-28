@@ -1,0 +1,32 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    big: !bool
+  llm_config:
+    provider: openai
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: input.big
+          then: slow
+      else: fast
+    slow: {kind: code, output: str, code: "return 'model-big'"}
+    fast: {kind: code, output: str, code: "return 'model-small'"}
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config:
+        openai: {temperature: 0.5}
+        model: !str '${gate.output :- "m"}'
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'' llm_config.model: ${gate.output} — a case value can''t be read in a coalesce operand, a default, an expression, a condition, or an assert; read it as a whole binding or inside text'
+      frames:
+      - label: flow.yaml
+        range: [21, 14, 21, 42]

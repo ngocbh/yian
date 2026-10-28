@@ -39,6 +39,20 @@ export type SqliteValue = null | number | string | Uint8Array;
 /** One result row: a plain object from column name to value. */
 export type SqliteRow = Record<string, SqliteValue>;
 
+/** What `SqliteStatement.run` reports, the same on both runtimes. */
+export interface SqliteRunResult {
+  /**
+   * The rows an INSERT, UPDATE or DELETE changed. Meaningful only after those: for any other
+   * statement Bun reports 0 and Node the previous one's count.
+   */
+  changes: number;
+  /**
+   * The connection's most recent successful INSERT rowid, 0 when there's been none: a `number`
+   * when it passes `Number.isSafeInteger`, else the exact `bigint`.
+   */
+  lastInsertRowid: number | bigint;
+}
+
 /**
  * A prepared statement taking positional `?` parameters. Passing some but too few
  * throws on Bun but binds NULL on Node (passing none binds NULL on both); the wrapper
@@ -49,8 +63,8 @@ export interface SqliteStatement {
   all(...params: SqliteParam[]): SqliteRow[];
   /** Return the first result row, or `undefined` when there's none. */
   get(...params: SqliteParam[]): SqliteRow | undefined;
-  /** Run the statement, discarding any rows. */
-  run(...params: SqliteParam[]): void;
+  /** Run the statement, discarding any rows, and return what it changed. */
+  run(...params: SqliteParam[]): SqliteRunResult;
 }
 
 /** An open SQLite connection. */
@@ -59,6 +73,8 @@ export interface Sqlite {
   exec(sql: string): void;
   /** Return the statement for `sql`, prepared once per connection and cached by its text. */
   prepare(sql: string): SqliteStatement;
+  /** Whether a transaction is open on this connection. */
+  readonly inTransaction: boolean;
   /** Finalize the cached statements and close the connection; a second call does nothing. */
   close(): void;
 }
@@ -67,8 +83,9 @@ export interface Sqlite {
 interface DriverStatement {
   all(...params: SqliteParam[]): unknown[];
   get(...params: SqliteParam[]): unknown;
-  run(...params: SqliteParam[]): unknown;
+  run(...params: SqliteParam[]): { changes: number | bigint; lastInsertRowid: number | bigint };
   finalize?(): void;
+  setReadBigInts?(enabled: boolean): void;
 }
 
 /** The part of either driver's connection the wrapper uses. */
@@ -78,27 +95,43 @@ interface DriverDatabase {
   close(): void;
 }
 
+/** A driver connection and the way to ask it whether a transaction is open, which the drivers name differently. */
+interface DriverConnection {
+  db: DriverDatabase;
+  inTransaction(): boolean;
+}
+
 const require = createRequire(import.meta.url);
 
-let openDriver: ((path: string, readonly: boolean) => DriverDatabase) | undefined;
+let openDriver: ((path: string, readonly: boolean) => DriverConnection) | undefined;
 
 /** Return the opener for this runtime's SQLite driver, loading the driver on first use. */
-function driver(): (path: string, readonly: boolean) => DriverDatabase {
+function driver(): (path: string, readonly: boolean) => DriverConnection {
   if (openDriver) return openDriver;
   if (runtime === "bun") {
     const { Database: BunDatabase } = require("bun:sqlite") as { Database: typeof Database };
-    openDriver = (path, readonly) =>
-      new BunDatabase(path, { create: !readonly, readwrite: !readonly, readonly, strict: true, safeIntegers: true });
+    openDriver = (path, readonly) => {
+      const db = new BunDatabase(path, {
+        create: !readonly,
+        readwrite: !readonly,
+        readonly,
+        strict: true,
+        safeIntegers: true,
+      });
+      return { db, inTransaction: () => db.inTransaction };
+    };
   } else {
     const { DatabaseSync: NodeDatabase } = requireNodeSqlite();
     // Node's defaults differ from Bun's, which leaves foreign keys off and accepts
     // double-quoted string literals.
-    openDriver = (path, readonly) =>
-      new NodeDatabase(path, {
+    openDriver = (path, readonly) => {
+      const db = new NodeDatabase(path, {
         readOnly: readonly,
         enableForeignKeyConstraints: false,
         enableDoubleQuotedStringLiterals: true,
       });
+      return { db, inTransaction: () => db.isTransaction };
+    };
   }
   return openDriver;
 }
@@ -125,16 +158,27 @@ function bindable(params: SqliteParam[]): SqliteParam[] {
   return params.map((value) => (typeof value === "number" && Number.isSafeInteger(value) ? BigInt(value) : value));
 }
 
+/** Return a driver integer as a `number` when it is a safe integer, else as the exact `bigint`. */
+function numberIfSafe(value: number | bigint): number | bigint {
+  if (typeof value === "number") return value;
+  return value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER) ? value : Number(value);
+}
+
+/** Return a driver integer as a safe number, throwing `RangeError` naming `what` when it isn't one. */
+function safeNumber(value: number | bigint, what: string): number {
+  const result = numberIfSafe(value);
+  if (typeof result === "bigint") {
+    throw new RangeError(`SQLite integer ${result} in ${what} is outside the safe integer range`);
+  }
+  return result;
+}
+
 /** Copy a driver row into a plain object, turning Bun's `bigint`s into safe numbers. */
 function plainRow(row: object): SqliteRow {
   // Spread defines each column as an own property, even one named `__proto__`.
   const copy = { ...row } as Record<string, unknown>;
   for (const [key, value] of Object.entries(copy)) {
-    if (typeof value !== "bigint") continue;
-    if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
-      throw new RangeError(`SQLite integer ${value} in column ${key} is outside the safe integer range`);
-    }
-    copy[key] = Number(value);
+    if (typeof value === "bigint") copy[key] = safeNumber(value, `column ${key}`);
   }
   return copy as SqliteRow;
 }
@@ -142,13 +186,13 @@ function plainRow(row: object): SqliteRow {
 /**
  * Open the SQLite database file at `path`, creating it unless `readonly`.
  *
- * Integers read back as `number` on both runtimes, and one outside
+ * Integers in rows read back as `number` on both runtimes, and one outside
  * `Number.isSafeInteger` throws `RangeError`. On both runtimes foreign keys
  * are off and double-quoted string literals are accepted. Driver errors pass
  * through; read their result code with `sqliteErrorCode`.
  */
 export function openSqlite(path: string, { readonly = false }: { readonly?: boolean } = {}): Sqlite {
-  const db = driver()(path, readonly);
+  const { db, inTransaction } = driver()(path, readonly);
   const statements = new Map<string, { statement: SqliteStatement; raw: DriverStatement }>();
   let closed = false;
   return {
@@ -159,6 +203,9 @@ export function openSqlite(path: string, { readonly = false }: { readonly?: bool
       const cached = statements.get(sql);
       if (cached) return cached.statement;
       const raw = db.prepare(sql);
+      // Node otherwise throws on an unsafe integer, even a rowid `run` reports; only Bun's
+      // statements lack the setter, and they already read bigints.
+      raw.setReadBigInts?.(true);
       const statement: SqliteStatement = {
         all: (...params) => raw.all(...bindable(params)).map((row) => plainRow(row as object)),
         get: (...params) => {
@@ -167,11 +214,18 @@ export function openSqlite(path: string, { readonly = false }: { readonly?: bool
           return row == null ? undefined : plainRow(row);
         },
         run: (...params) => {
-          raw.run(...bindable(params));
+          const { changes, lastInsertRowid } = raw.run(...bindable(params));
+          return {
+            changes: safeNumber(changes, "changes"),
+            lastInsertRowid: numberIfSafe(lastInsertRowid),
+          };
         },
       };
       statements.set(sql, { statement, raw });
       return statement;
+    },
+    get inTransaction() {
+      return inTransaction();
     },
     close() {
       if (closed) return;

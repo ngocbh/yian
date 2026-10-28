@@ -184,6 +184,41 @@ describe("openSqlite", () => {
     expect(db.prepare('SELECT "x" AS v').get()).toEqual({ v: "x" });
   });
 
+  test("run returns the rows changed and the last inserted rowid as numbers", () => {
+    const db = open(file);
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, a INTEGER)");
+    const insert = db.prepare("INSERT INTO t (a) VALUES (?)");
+    expect(insert.run(1)).toEqual({ changes: 1, lastInsertRowid: 1 });
+    expect(insert.run(1)).toEqual({ changes: 1, lastInsertRowid: 2 });
+    expect(db.prepare("UPDATE t SET a = ? WHERE a = ?").run(2, 1)).toEqual({ changes: 2, lastInsertRowid: 2 });
+    expect(db.prepare("DELETE FROM t WHERE a = ?").run(9)).toEqual({ changes: 0, lastInsertRowid: 2 });
+  });
+
+  test("run returns a last inserted rowid outside the safe integer range as the exact bigint", () => {
+    const db = open(file);
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, a INTEGER)");
+    expect(db.prepare("INSERT INTO t VALUES (?, ?)").run(2n ** 53n, 1)).toEqual({
+      changes: 1,
+      lastInsertRowid: 2n ** 53n,
+    });
+    expect(db.prepare("UPDATE t SET a = ?").run(2)).toEqual({ changes: 1, lastInsertRowid: 2n ** 53n });
+  });
+
+  test("inTransaction is true only while a transaction is open", () => {
+    const db = open(file);
+    db.exec("CREATE TABLE t (a INTEGER)");
+    expect(db.inTransaction).toBe(false);
+    db.exec("BEGIN");
+    expect(db.inTransaction).toBe(true);
+    db.exec("COMMIT");
+    expect(db.inTransaction).toBe(false);
+    db.exec("BEGIN IMMEDIATE");
+    db.prepare("INSERT INTO t VALUES (?)").run(1);
+    expect(db.inTransaction).toBe(true);
+    db.exec("ROLLBACK");
+    expect(db.inTransaction).toBe(false);
+  });
+
   test("preparing the same SQL twice returns the cached statement", () => {
     const db = open(file);
     expect(db.prepare("SELECT 1 AS one")).toBe(db.prepare("SELECT 1 AS one"));

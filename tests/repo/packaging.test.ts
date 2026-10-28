@@ -42,6 +42,7 @@ import type {
   Sqlite,
   SqliteParam,
   SqliteRow,
+  SqliteRunResult,
   SqliteStatement,
   SqliteValue,
 } from "../../src/platform.ts";
@@ -295,6 +296,7 @@ describe("entry points", () => {
       SqliteParam?,
       SqliteValue?,
       SqliteRow?,
+      SqliteRunResult?,
       LLMProvider?,
       ListModelsOptions?,
       AuthRequest?,

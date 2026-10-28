@@ -194,10 +194,14 @@ describe("openSqlite", () => {
     expect(db.prepare("DELETE FROM t WHERE a = ?").run(9)).toEqual({ changes: 0, lastInsertRowid: 2 });
   });
 
-  test("run throws RangeError for a last inserted rowid outside the safe integer range", () => {
+  test("run returns a last inserted rowid outside the safe integer range as the exact bigint", () => {
     const db = open(file);
-    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY)");
-    expect(() => db.prepare("INSERT INTO t VALUES (?)").run(2n ** 53n)).toThrow(RangeError);
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, a INTEGER)");
+    expect(db.prepare("INSERT INTO t VALUES (?, ?)").run(2n ** 53n, 1)).toEqual({
+      changes: 1,
+      lastInsertRowid: 2n ** 53n,
+    });
+    expect(db.prepare("UPDATE t SET a = ?").run(2)).toEqual({ changes: 1, lastInsertRowid: 2n ** 53n });
   });
 
   test("inTransaction is true only while a transaction is open", () => {

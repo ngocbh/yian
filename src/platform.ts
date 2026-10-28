@@ -39,12 +39,18 @@ export type SqliteValue = null | number | string | Uint8Array;
 /** One result row: a plain object from column name to value. */
 export type SqliteRow = Record<string, SqliteValue>;
 
-/** What `SqliteStatement.run` reports, as safe `number`s on both runtimes. */
+/** What `SqliteStatement.run` reports, the same on both runtimes. */
 export interface SqliteRunResult {
-  /** The rows the statement inserted, updated or deleted; 0 for any other statement. */
+  /**
+   * The rows an INSERT, UPDATE or DELETE changed. Meaningful only after those: for any other
+   * statement Bun reports 0 and Node the previous one's count.
+   */
   changes: number;
-  /** The connection's most recent successful INSERT rowid, 0 when there's been none. */
-  lastInsertRowid: number;
+  /**
+   * The connection's most recent successful INSERT rowid, 0 when there's been none: a `number`
+   * when it passes `Number.isSafeInteger`, else the exact `bigint`.
+   */
+  lastInsertRowid: number | bigint;
 }
 
 /**
@@ -57,10 +63,7 @@ export interface SqliteStatement {
   all(...params: SqliteParam[]): SqliteRow[];
   /** Return the first result row, or `undefined` when there's none. */
   get(...params: SqliteParam[]): SqliteRow | undefined;
-  /**
-   * Run the statement, discarding any rows, and return what it changed. A rowid outside
-   * `Number.isSafeInteger` throws `RangeError` after the statement has run.
-   */
+  /** Run the statement, discarding any rows, and return what it changed. */
   run(...params: SqliteParam[]): SqliteRunResult;
 }
 
@@ -82,6 +85,7 @@ interface DriverStatement {
   get(...params: SqliteParam[]): unknown;
   run(...params: SqliteParam[]): { changes: number | bigint; lastInsertRowid: number | bigint };
   finalize?(): void;
+  setReadBigInts?(enabled: boolean): void;
 }
 
 /** The part of either driver's connection the wrapper uses. */
@@ -154,13 +158,19 @@ function bindable(params: SqliteParam[]): SqliteParam[] {
   return params.map((value) => (typeof value === "number" && Number.isSafeInteger(value) ? BigInt(value) : value));
 }
 
+/** Return a driver integer as a `number` when it is a safe integer, else as the exact `bigint`. */
+function numberIfSafe(value: number | bigint): number | bigint {
+  if (typeof value === "number") return value;
+  return value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER) ? value : Number(value);
+}
+
 /** Return a driver integer as a safe number, throwing `RangeError` naming `what` when it isn't one. */
 function safeNumber(value: number | bigint, what: string): number {
-  if (typeof value === "number") return value;
-  if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
-    throw new RangeError(`SQLite integer ${value} in ${what} is outside the safe integer range`);
+  const result = numberIfSafe(value);
+  if (typeof result === "bigint") {
+    throw new RangeError(`SQLite integer ${result} in ${what} is outside the safe integer range`);
   }
-  return Number(value);
+  return result;
 }
 
 /** Copy a driver row into a plain object, turning Bun's `bigint`s into safe numbers. */
@@ -176,8 +186,8 @@ function plainRow(row: object): SqliteRow {
 /**
  * Open the SQLite database file at `path`, creating it unless `readonly`.
  *
- * Integers read back as `number` on both runtimes, in rows and in what `run`
- * returns, and one outside `Number.isSafeInteger` throws `RangeError`. On both runtimes foreign keys
+ * Integers in rows read back as `number` on both runtimes, and one outside
+ * `Number.isSafeInteger` throws `RangeError`. On both runtimes foreign keys
  * are off and double-quoted string literals are accepted. Driver errors pass
  * through; read their result code with `sqliteErrorCode`.
  */
@@ -193,6 +203,9 @@ export function openSqlite(path: string, { readonly = false }: { readonly?: bool
       const cached = statements.get(sql);
       if (cached) return cached.statement;
       const raw = db.prepare(sql);
+      // Node otherwise throws on an unsafe integer, even a rowid `run` reports; only Bun's
+      // statements lack the setter, and they already read bigints.
+      raw.setReadBigInts?.(true);
       const statement: SqliteStatement = {
         all: (...params) => raw.all(...bindable(params)).map((row) => plainRow(row as object)),
         get: (...params) => {
@@ -204,7 +217,7 @@ export function openSqlite(path: string, { readonly = false }: { readonly?: bool
           const { changes, lastInsertRowid } = raw.run(...bindable(params));
           return {
             changes: safeNumber(changes, "changes"),
-            lastInsertRowid: safeNumber(lastInsertRowid, "lastInsertRowid"),
+            lastInsertRowid: numberIfSafe(lastInsertRowid),
           };
         },
       };

@@ -90,6 +90,8 @@ output: ${input.signal.score}
 - Every field is required, except an `Optional(...)` field, which may be left out.
 - A tag never fills a field in. A `Buy` with `action: Literal(buy)` must still write
   `action: buy`.
+- A record written inside `{...}` splits at each comma, so quote a type with a comma in it:
+  `Msg: {role: "Literal(user, assistant)", text: str}`, or write the record in block style.
 - A record can't contain itself, directly or through other typedefs.
 - A typedef can't take a built-in name, such as `str`, `Optional` or `Message`.
 - Every typedef is checked when the flow loads, even one nothing uses.

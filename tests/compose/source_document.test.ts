@@ -424,9 +424,9 @@ describe("range ends", () => {
     );
     const { flow } = parseYaml(readFileSync(url, "utf8")) as { flow: string };
 
-    // The frame the case expects for `fetch`'s declared output record.
+    // `fetch`'s declared output record, from line 34 to the next key.
     expect(definitionAt(flow, "nodes", "fetch", "output").range).toEqual(
-      new SourceRange(34, 7, 35, 5),
+      new SourceRange(34, 7, 36, 5),
     );
   });
 });

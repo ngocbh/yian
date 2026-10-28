@@ -35,6 +35,7 @@ flow: |
         topic: ${input.topic}
       output:
         values: list(float)
+        news: list(str)
       code: ./fixtures/seeds.ts:fetch_facts
 
     note:

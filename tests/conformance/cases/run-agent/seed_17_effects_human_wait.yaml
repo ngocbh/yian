@@ -1,7 +1,5 @@
 # The human approves, the `case ... on` the answer takes `settle`, the sleep's past deadline returns
-# at once with no value, and `confirm` runs after it; `abort` is skipped.
-# `confirm_action` reads `answer`, which `confirm` doesn't bind (it binds `action`), so it returns
-# its default, `cancel`.
+# at once with no value, and `confirm` runs after it and returns the answer; `abort` is skipped.
 # No `tool_calls`: the form of the `ask_user` tool's `answer_schema` isn't documented, so it isn't pinned.
 kind: run
 flow: |
@@ -64,6 +62,7 @@ flow: |
       depends_on: [settle]                # ordering edge — run after the sleep (side effect)
       input:
         action: ${propose.output}
+        answer: ${approve.output}
       output: str
       code: ./fixtures/seeds.ts:confirm_action
 
@@ -93,7 +92,7 @@ host:
             role: assistant
             parts: [{type: text, text: Review the rate outlook on Friday.}]
 expect:
-  output: {status: succeeded, output: cancel}
+  output: {status: succeeded, output: approve}
   # Run start resolves every AGENT, the skipped ones included; a skipped node writes no record.
   trace:
     - - run_started
@@ -131,8 +130,8 @@ expect:
     - [pool_commit, settle]
     - [node_succeeded, settle, {commit: 19}]
     - [node_started, confirm]
-    - [pool_commit, confirm, {value: cancel}]
+    - [pool_commit, confirm, {value: approve}]
     - [node_succeeded, confirm, {commit: 22}]
     - [node_started, __end__]
-    - [pool_commit, __end__, {value: cancel}]
+    - [pool_commit, __end__, {value: approve}]
     - [node_succeeded, __end__, {commit: 25}]

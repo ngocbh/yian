@@ -4,7 +4,7 @@ flow: |
   # 25 — Nested interaction: an ask inside a called child.
   #
   # The parent `call`s an in-file `defs:` callable whose body asks (tool_id: ask). The
-  # engine grows the live graph via Grow, then the namespaced leaf (`review/approve`) calls
+  # engine grows the live graph via Grow, then the namespaced leaf (`gate/approve`) calls
   # the host's ask handler, which answers or holds the call. Its ordinary typed
   # Output feeds the next child node. Shows: an interaction under graph growth, an
   # ask in a child, and the child re-exporting its confirmed value to the parent.

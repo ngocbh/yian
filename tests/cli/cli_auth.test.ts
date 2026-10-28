@@ -123,7 +123,7 @@ openrouter: api-key (OPENROUTER_API_KEY)
 vllm: api-key, none (VLLM_API_KEY)
 ollama: none
 anthropic: api-key (ANTHROPIC_API_KEY)
-google: api-key (GOOGLE_API_KEY)
+google: api-key (GOOGLE_API_KEY or GEMINI_API_KEY)
 azure: api-key (AZURE_OPENAI_API_KEY)
 `;
 
@@ -139,7 +139,8 @@ describe("providers", () => {
     const listed = PROVIDERS_TEXT.trimEnd()
       .split("\n")
       .map((line) => {
-        const [, name, methods, variable] = /^(\S+): ([^(]+?)(?: \((\w+)\))?$/.exec(line)!;
+        // The JSON field holds only the first key variable.
+        const [, name, methods, variable] = /^(\S+): ([^(]+?)(?: \((\w+)(?: or \w+)*\))?$/.exec(line)!;
         return { name, methods: methods!.split(", "), api_key_env: variable ?? null };
       });
     expect(listed).toHaveLength(15);

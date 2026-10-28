@@ -337,7 +337,7 @@ openrouter: api-key (OPENROUTER_API_KEY)
 vllm: api-key, none (VLLM_API_KEY)
 ollama: none
 anthropic: api-key (ANTHROPIC_API_KEY)
-google: api-key (GOOGLE_API_KEY)
+google: api-key (GOOGLE_API_KEY or GEMINI_API_KEY)
 azure: api-key (AZURE_OPENAI_API_KEY)
 ```
 

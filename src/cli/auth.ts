@@ -997,7 +997,7 @@ export async function providers(command: ParsedArgs, io: CliIo): Promise<number>
     return 0;
   }
   for (const provider of listed) {
-    const suffix = provider.api_key_env ? ` (${provider.api_key_env})` : "";
+    const suffix = provider.api_key_env ? ` (${apiKeyEnvNames(provider.name).join(" or ")})` : "";
     await io.stdout.write(`${provider.name}: ${provider.methods.join(", ")}${suffix}\n`);
   }
   return 0;

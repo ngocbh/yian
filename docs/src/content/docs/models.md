@@ -27,7 +27,7 @@ you leave out; for an API key it reads the provider's key variable or asks with 
 | `yian auth PROVIDER` | Save or replace that provider's login |
 | `yian auth PROVIDER --default` | Make a saved provider the default |
 | `yian auth PROVIDER --remove` | Delete that provider's login |
-| `yian providers` | List every provider, the login kinds it takes and its key variable |
+| `yian providers` | List every provider, the login kinds it takes and its key variables |
 | `yian models --provider P` | List the models P offers to the key read from stdin (not for Azure) |
 
 Logins live in `~/.config/yian/auth.json` (or `$XDG_CONFIG_HOME/yian/auth.json`), a file only

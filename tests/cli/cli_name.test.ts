@@ -77,12 +77,16 @@ function files(dir: string): string[] {
     .map((entry) => join(entry.parentPath, entry.name));
 }
 
-// Reading the ~3,000 files in parallel takes 2-4 s on a loaded machine (load 50), against about 30 s
+// Reading the ~3,000 files in parallel batches takes 2-5 s on a loaded machine (load 50), against about 30 s
 // one at a time.
 test("docs and sources name the composer command", async () => {
   const self = fileURLToPath(import.meta.url);
   const scanned = [join(TS_ROOT, "README.md"), ...files(join(TS_ROOT, "src")), ...files(join(TS_ROOT, "tests"))];
-  const texts = await Promise.all(scanned.map((path) => readFile(path, "utf8")));
+  // Batches keep the open files under a default descriptor limit (256 on macOS).
+  const texts: string[] = [];
+  for (let at = 0; at < scanned.length; at += 64) {
+    texts.push(...(await Promise.all(scanned.slice(at, at + 64).map((path) => readFile(path, "utf8")))));
+  }
   const stale = scanned.flatMap((path, at) =>
     path === self || !STALE.test(texts[at]!)
       ? []

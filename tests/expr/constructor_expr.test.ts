@@ -21,7 +21,13 @@ import {
 } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { routeFeedback, SourceRef } from "../../src/expr/lineage.ts";
-import { bindingCoSkips, evalBinding, flowCallCalleesInSpans, promptRefs } from "../../src/expr/template.ts";
+import {
+  bindingCoSkips,
+  evalBinding,
+  flowCallCalleesInSpans,
+  promptRefs,
+  spanCallDirectiveText,
+} from "../../src/expr/template.ts";
 import { BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { Parameter, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { Type, typeFor, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
@@ -272,6 +278,16 @@ test("a typedef name is not a flow callee", () => {
   const text = "${Buy(d.output)} ${review(d.output)}";
   expect(flowCallCalleesInSpans(text)).toEqual(["Buy", "review"]);
   expect(flowCallCalleesInSpans(text, new Set(["Buy"]))).toEqual(["review"]);
+});
+
+test.each([
+  ["a call in text", "see ${call(enrich, topic=input.topic)}", "call(enrich, topic=input.topic)"],
+  ["the first span", "${call(a)} ${call(b)}", "call(a)"],
+  ["the outer of nested calls", "${call(outer, x=call(inner))}", "call(outer, x=call(inner))"],
+  ["a call inside an expression", "${upper(call (my-flow))}", "call (my-flow)"],
+  ["no call", "${review(x)}", null],
+])("the source of a span call(...): %s", (_name, text, source) => {
+  expect(spanCallDirectiveText(text)).toBe(source);
 });
 
 test("a constructor is not a prompt function", () => {

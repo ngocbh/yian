@@ -45,7 +45,7 @@ import { BUILTIN_TYPE_NAMES, type TypeRegistry } from "../../typesys/types.ts";
 import { buildValueAs, isList, isRecord, rejectDeepNesting, type Type, TypeCheckError } from "../../typesys/values.ts";
 import { ArgumentValueError, desugarCallDirectives } from "../desugar/inline_calls.ts";
 import { EMPTY_RECORD_KEY, infersRecord, ValueEntryDescriptor } from "../desugar/value_entries.ts";
-import { CALL_HEAD } from "../helpers/directives.ts";
+import { CALL_HEAD, spanCallFlowId } from "../helpers/directives.ts";
 import { type LoadDiagnostics, LoadError, sourceText } from "../helpers/errors.ts";
 import { nth } from "../helpers/source.ts";
 import {
@@ -394,6 +394,13 @@ function rejectSpan(
   } catch (error) {
     if (!(error instanceof ExpressionError)) throw error;
     throw diagnostics.error(`${host} ${error.message}`, { range: branch.range, cause: error });
+  }
+  if (callees[0] === "call") {
+    throw diagnostics.error(
+      `${host} call(...) can't go inside \`\${...}\`. Write it unquoted as the branch, ` +
+        `\`${branch.label} call(${spanCallFlowId(text)}, ...)\`.`,
+      { range: branch.range },
+    );
   }
   if (callees.length > 0) {
     throw diagnostics.error(

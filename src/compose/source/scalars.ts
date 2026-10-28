@@ -40,7 +40,7 @@ import {
   type YAMLSeq,
 } from "yaml";
 
-import { current } from "../../defaults.ts";
+import { current, ENTRIES } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
 import { parseDate, parseDatetime } from "../../typesys/temporal.ts";
 
@@ -156,14 +156,17 @@ export function normalizeBreaks(text: string): string {
 // closes about 2000 at once ("- - - ... x" then a dedent) overflows a Node stack (5300 in a
 // Bun Worker), and its composer recurses once per level (793 under a 1 MiB Node stack). The
 // parser reads no further once it holds more than this many open nodes: over twice the
-// highest `maxYamlNesting`, so the composed tree still holds the level past the limit, which
-// opened before the stop, and every YAML error before it.
-const PARSER_DEPTH_STOP = 500;
+// highest `maxYamlNesting`, so where the stop comes from nesting the composed tree still holds
+// the level past the limit, which opened before the stop, and every YAML error before it.
+export const PARSER_DEPTH_STOP =
+  2 * ENTRIES.find((entry) => entry.name === "MAX_YAML_NESTING")!.maximum! + 100;
 
 /**
  * Yield the CST tokens of `source` as `new Parser(onNewLine).parse(source)` does, but read
- * no further once the parser holds more than `PARSER_DEPTH_STOP` open nodes, deeper than any
- * `maxYamlNesting` allows, and close what is open there.
+ * no further once the parser holds more than `PARSER_DEPTH_STOP` open nodes: close what is
+ * open there, then yield an error token at the token that passed the stop. Nesting past
+ * `maxYamlNesting` passes it, and so does a line of explicit keys (`? a? b? c...`), each of
+ * which the parser opens as a mapping inside the last.
  */
 export function* parseTokens(
   source: string,
@@ -171,12 +174,26 @@ export function* parseTokens(
 ): Generator<CST.Token, void> {
   const parser = new Parser(onNewLine);
   onNewLine?.(0);
+  let stoppedAt: number | null = null;
   for (const lexeme of new Lexer().lex(source)) {
     yield* parser.next(lexeme);
-    if (parser.stack.length > PARSER_DEPTH_STOP) break;
+    if (parser.stack.length > PARSER_DEPTH_STOP) {
+      stoppedAt = parser.offset - lexeme.length;
+      break;
+    }
   }
   // Iterative: pops one open node at a time.
   yield* parser.end();
+  if (stoppedAt !== null) {
+    yield {
+      type: "error",
+      offset: stoppedAt,
+      source: "",
+      message:
+        `the YAML here opens more than ${PARSER_DEPTH_STOP} nodes inside each other, deeper ` +
+        "than yian reads; flatten it or split the line",
+    };
+  }
 }
 
 /**

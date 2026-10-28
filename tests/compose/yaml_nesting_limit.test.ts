@@ -19,8 +19,12 @@ import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceSyntaxError } from "../../src/compose/source/common.ts";
 import { SourceDocument } from "../../src/compose/source/document.ts";
 import { parseYamlLiteral } from "../../src/compose/source/literals.ts";
-import { composeFlowDocument, FlowLoaderError } from "../../src/compose/source/scalars.ts";
-import { BUILTIN, install } from "../../src/defaults.ts";
+import {
+  composeFlowDocument,
+  FlowLoaderError,
+  PARSER_DEPTH_STOP,
+} from "../../src/compose/source/scalars.ts";
+import { BUILTIN, ENTRIES, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import type { Value } from "../../src/typesys/index.ts";
 import { assembled, runCase, runTextCase } from "../helpers/declarations.ts";
@@ -78,6 +82,11 @@ describe("the YAML nesting limit", () => {
 
     expect(error.message).toContain(`this ${kind} ${MESSAGE}`);
     expect(error.node?.range?.[0]).toBe(lastLine);
+  });
+
+  test("the parser reads past twice the highest limit before it stops", () => {
+    const highest = ENTRIES.find((entry) => entry.name === "MAX_YAML_NESTING")!.maximum!;
+    expect(PARSER_DEPTH_STOP).toBeGreaterThan(2 * highest + 2);
   });
 
   test("lets a document at the limit compose", () => {
@@ -138,6 +147,24 @@ describe("the YAML nesting limit", () => {
     expect(caught).not.toBeInstanceOf(FlowLoaderError);
     expect((caught as YAMLError).pos[0]).toBe(3);
   });
+
+  test.each(["\n? z\n", "\nz: 2\n"])(
+    "refuses a line of explicit keys too deep for the parser instead of cutting it: %p",
+    (tail) => {
+      const keys = '? "q"'.repeat(600);
+      let caught: unknown;
+      try {
+        composeFlowDocument("a: 1\n" + keys + tail);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(YAMLError);
+      expect((caught as YAMLError).message).toContain("deeper than yian reads");
+      const at = (caught as YAMLError).pos[0];
+      expect(at).toBeGreaterThan(5);
+      expect(at).toBeLessThan(5 + keys.length);
+    },
+  );
 
   test("an isolated literal past the limit is a syntax error", () => {
     const text = "[".repeat(600) + "]".repeat(600);

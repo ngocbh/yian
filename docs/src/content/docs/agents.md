@@ -79,7 +79,7 @@ output: ${writer.output}
 - `system_prompt:` replaces yian's default instruction; it doesn't add to it. Every model call
   of the node starts with it.
 - Each `variables:` entry is a type tag and a value, checked at load. Variables can't share a
-  name with an input.
+  name with an input, and can't be named `__llm_config` or `__steer_inbox`.
 
 ### A list prompt
 

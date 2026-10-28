@@ -1,0 +1,24 @@
+# A variable can't take the steer inbox's reserved key, as an input can't; it would fail every run.
+kind: load
+flow: |
+  id: steer
+  name: steer
+  input:
+    notes: !Inbox(str)
+  nodes:
+    chat:
+      kind: agent
+      prompt: Help the user.
+      steer_inbox: ${input.notes}
+      variables:
+        __steer_inbox: !str hello
+      output: str
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'': variable ''__steer_inbox'' is reserved for `steer_inbox:`; rename the variable'
+      frames:
+      - label: flow.yaml
+        range: [11, 7, 11, 20]

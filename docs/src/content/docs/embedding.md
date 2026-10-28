@@ -77,7 +77,9 @@ console.log(result.status, result.output); // succeeded total: 7.5
 `loadFlow` takes `searchPaths` (where `uses:` targets are found; put the flow's own folder first),
 `sourceLabel` (the name errors show), `baseDir` (where `./file.ts:fn` references resolve),
 `codeRoot` (a folder every CODE file must stay inside) and `env`. A broken flow rejects with
-`LoadError`, whose `diagnostic` points into the source.
+`LoadError`, whose `diagnostic` points into the source. A CODE reference outside `codeRoot` is
+named as the flow wrote it (`'../x.ts:fn' is outside the code root`), with no absolute path, and
+reads the same whether or not its file exists, so you can show it to the flow's author.
 
 A flow that fails still resolves, with `status: "failed"`. `runFlow` rejects for problems in your
 program or setup: a bad option, a tool, provider or model the flow needs but the run lacks, an MCP

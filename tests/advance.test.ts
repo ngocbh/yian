@@ -417,7 +417,7 @@ test("advance with codeRoot refuses a CODE file outside it; runFlow's entry has 
   const before = readFileSync(log);
   const error = await rejected(advance({ log, tools, env: NO_ENV, codeRoot: root }));
   expect(error).toBeInstanceOf(LoadError);
-  expect((error as Error).message).toEndWith(`outside the code root '${realpathSync(root)}'`);
+  expect((error as Error).message).toEndWith(" is outside the code root");
   expect(readFileSync(log).equals(before)).toBe(true);
   unlinkSync(join(dir, "fn.ts"));
   writeFileSync(join(dir, "fn.ts"), code);

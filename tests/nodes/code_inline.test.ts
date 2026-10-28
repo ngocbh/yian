@@ -912,6 +912,7 @@ beforeAll(() => {
   }
   symlinkSync(join(confined, "out", "h.ts"), join(confined, "root", "link.ts"));
   symlinkSync(join(confined, "out"), join(confined, "root", "lib"));
+  symlinkSync(join(confined, "out", "missing.ts"), join(confined, "root", "dangling.ts"));
 });
 
 afterAll(() => {
@@ -932,10 +933,44 @@ test("the load check refuses a ../ reference outside codeRoot", async () => {
   const error = await rejected(node.check({ codeRoot }));
 
   expect((error as Error).constructor).toBe(RangeError);
-  const real = realpathSync(join(confined, "out", "h.ts"));
-  expect((error as Error).message).toBe(
-    `\`code:\` file '../out/h.ts' resolves to '${real}', outside the code root '${codeRoot}'`,
+  expect((error as Error).message).toBe("`code:` reference '../out/h.ts:fn' is outside the code root");
+});
+
+test("the load check refuses a missing file outside codeRoot as outside, the same words as an existing one", async () => {
+  const codeRoot = realpathSync(join(confined, "root"));
+  const node = new CodeNode("r", { code: "../out/missing.ts:fn", baseDir: join(confined, "root") });
+
+  const error = await rejected(node.check({ codeRoot }));
+
+  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).message).toBe("`code:` reference '../out/missing.ts:fn' is outside the code root");
+  const under = new CodeNode("r", { code: "../nowhere/deep/h.ts:fn", baseDir: join(confined, "root") });
+  expect((await rejected(under.check({ codeRoot })) as Error).message).toBe(
+    "`code:` reference '../nowhere/deep/h.ts:fn' is outside the code root",
   );
+});
+
+test("the load check refuses a dangling symlink to a missing file outside codeRoot as outside", async () => {
+  const codeRoot = realpathSync(join(confined, "root"));
+  const link = new CodeNode("r", { code: "./dangling.ts:fn", baseDir: join(confined, "root") });
+
+  const error = await rejected(link.check({ codeRoot }));
+
+  expect((error as Error).message).toBe("`code:` reference './dangling.ts:fn' is outside the code root");
+  const dir = new CodeNode("r", { code: "./lib/missing.ts:fn", baseDir: join(confined, "root") });
+  expect((await rejected(dir.check({ codeRoot })) as Error).message).toBe(
+    "`code:` reference './lib/missing.ts:fn' is outside the code root",
+  );
+});
+
+test("the load check under codeRoot says a missing file inside it does not exist", async () => {
+  const codeRoot = realpathSync(join(confined, "root"));
+  const baseDir = join(confined, "root", "in");
+  const node = new CodeNode("r", { code: "./missing.ts:fn", baseDir });
+
+  const error = await rejected(node.check({ codeRoot }));
+
+  expect((error as Error).message).toBe(`\`code:\` file './missing.ts' does not exist in '${baseDir}'`);
 });
 
 test("the load check refuses a symlink pointing outside codeRoot", async () => {
@@ -945,13 +980,10 @@ test("the load check refuses a symlink pointing outside codeRoot", async () => {
   const error = await rejected(link.check({ codeRoot }));
 
   expect((error as Error).constructor).toBe(RangeError);
-  const real = realpathSync(join(confined, "out", "h.ts"));
-  expect((error as Error).message).toBe(
-    `\`code:\` file './link.ts' resolves to '${real}', outside the code root '${codeRoot}'`,
-  );
+  expect((error as Error).message).toBe("`code:` reference './link.ts:fn' is outside the code root");
   const dir = new CodeNode("r", { code: "./lib/h.ts:fn", baseDir: join(confined, "root") });
   expect((await rejected(dir.check({ codeRoot })) as Error).message).toBe(
-    `\`code:\` file './lib/h.ts' resolves to '${real}', outside the code root '${codeRoot}'`,
+    "`code:` reference './lib/h.ts:fn' is outside the code root",
   );
 });
 

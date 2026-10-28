@@ -1771,6 +1771,18 @@ describe("pooled", () => {
     const entries = [["pool_commit", "c", { from: { a: 4n } }]];
     expect(() => pooled(results(entries))).toThrow(new CaseFailure("a derived commit names seq 4, which the log doesn't hold"));
   });
+
+  test("fails on a from seq naming a record that isn't the name's pool_commit", () => {
+    const wrong = (source: unknown[]) => [source, ["pool_commit", "c", { from: { a: 0n } }]];
+    const message = "a derived commit names seq 0 for `a`, which isn't its pool_commit";
+    expect(() => pooled(results(wrong(["node_started", "a"])))).toThrow(new CaseFailure(message));
+    expect(() => pooled(results(wrong(["pool_commit", "a", { key: "a#0/__start__" }])))).toThrow(new CaseFailure(message));
+    expect(() => pooled(results(wrong(["pool_commit", "b", { value: 1n }])))).toThrow(new CaseFailure(message));
+    expect(pooled(results([["pool_commit", "s", { key: "a" }], ["pool_commit", "c", { from: { a: 0n } }]]))["trace"]).toEqual([
+      ["pool_commit", "c", { from: { a: "pool_commit s" } }],
+      ["pool_commit", "s", { key: "a" }],
+    ]);
+  });
 });
 
 describe("crashSweep", () => {

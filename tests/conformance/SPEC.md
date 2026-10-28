@@ -624,7 +624,9 @@ calls are first grouped: run-level entries first, then each node's entries, node
 order, each group keeping its order, each `node_succeeded` leaves out its `commit` and `messages`
 (the seqs of the `pool_commit`s just before it in its node's group) and each messages commit its
 `steps`, since those seqs depend on how the parallel nodes interleave, and each derived commit's
-`from` seq is named by the kind and node of the record it names (`pool_commit prepare`).
+`from` seq is named by the kind and node of the record it names (`pool_commit prepare`), which
+must be the `pool_commit` of its name (its `key`, else its node). A seq the log doesn't hold
+fails the case.
 Placeholders are numbered and lists compared after that.
 Expectations are written grouped. A `resume` case's results are grouped by the resumed run's
 `num_workers` (`resume.num_workers`, else the recorded one). A `before` run's trace is grouped

@@ -2249,6 +2249,11 @@ export function pooled(results: Record<string, unknown>): Record<string, unknown
           // The trace has one entry per log line, and a record's seq is its line index.
           const source = entries[Number(seq)];
           if (source === undefined) throw new CaseFailure(`a derived commit names seq ${seq}, which the log doesn't hold`);
+          // A node writes several commits, so the name alone can't tell a wrong one of its node's.
+          const key = ((source[2] ?? {}) as Case)["key"] ?? source[1];
+          if (source[0] !== "pool_commit" || key !== name) {
+            throw new CaseFailure(`a derived commit names seq ${seq} for \`${name}\`, which isn't its pool_commit`);
+          }
           return [name, `${String(source[0])} ${String(source[1])}`];
         }),
       );

@@ -1717,12 +1717,8 @@ async function loadConfined(
     if (inside && !statOrNull(childPath)?.isFile()) {
       throw new Error(`flow ${reprText(ref)} not found: ${relative(root, childPath)}`);
     }
-    const child = await loadConfined(root, childPath, importing, env);
-    if (version !== null && child.version !== version) {
-      const shownVersion = child.version === null ? "null" : reprText(child.version);
-      throw new Error(`${ref} is version ${shownVersion}, not ${reprText(version)}`);
-    }
-    return child;
+    // The loader holds the child to a pinned `@<version>`.
+    return loadConfined(root, childPath, importing, env);
   };
   // `CodeNode.check()` resolves a `./file.ts:fn` reference against `baseDir`, here and in a child,
   // and refuses one outside `codeRoot`; a child is loaded here, so it gets the root too.

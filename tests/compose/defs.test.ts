@@ -73,7 +73,7 @@ test("the defs: section parses", () => {
 test("the callable scope eagerly builds defs and memoizes resolution", async () => {
   // One scope eagerly builds local defs and resolves each external alias once.
   const seen: [string, string | null][] = [];
-  const externalChild = await loadConformanceFlow("id: external\nname: external\nnodes: {}\n");
+  const externalChild = await loadConformanceFlow("id: external\nname: external\nversion: declared-v1\nnodes: {}\n");
   const document = SourceDocument.parse("defs:\n  local:\n    nodes: {}\n");
   const external = (path: string, version: string | null) => {
     seen.push([path, version]);

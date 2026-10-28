@@ -217,10 +217,10 @@ describe("package.json", () => {
     expect(PACKAGE).not.toHaveProperty("bugs");
   });
 
-  test("the yian bin is the built CLI, run by node", () => {
+  test("the yian bin is the built CLI entry, run by node", () => {
     // Without a leading `./`: `npm publish` drops a bin path written with one.
-    expect(PACKAGE.bin).toEqual({ yian: "dist/src/cli/index.js" });
-    expect(readFileSync(join(ROOT, "src", "cli", "index.ts"), "utf8").split("\n")[0]).toBe(
+    expect(PACKAGE.bin).toEqual({ yian: "dist/src/cli/bin.js" });
+    expect(readFileSync(join(ROOT, "src", "cli", "bin.ts"), "utf8").split("\n")[0]).toBe(
       "#!/usr/bin/env node",
     );
   });
@@ -268,6 +268,73 @@ describe("package.json", () => {
     expect(readme.match(/\]\((?!https:\/\/)[^)]*\)/g) ?? []).toEqual([]);
     expect(readme).not.toMatch(/python|pytest|pip install/i);
     expect(readme.split("\n").length).toBeLessThanOrEqual(60);
+  });
+});
+
+/** The `yian` bin's source, which Bun and Node (22.18 and later) run as is. */
+const BIN = join(ROOT, "src", "cli", "bin.ts");
+/** The error the bin prints, after `this is`, on a runtime older than the floor. */
+const FLOOR_ERROR = "Error: yian needs Node 22.18 or later, or Bun 1.4 or later; this is ";
+
+/**
+ * The source of a preload module that makes `process.versions` report `runtime` at `version`:
+ * for Node, it also removes `bun`, so Bun passes for an older Node too.
+ */
+function reportAs(runtime: "node" | "bun", version: string): string {
+  const set = `Object.defineProperty(process.versions, ${JSON.stringify(runtime)}, { value: ${JSON.stringify(version)}, configurable: true, enumerable: true });\n`;
+  return runtime === "bun" ? set : `delete process.versions.bun;\n${set}`;
+}
+
+/**
+ * Run `bin` with `args` on this runtime in a fresh temp dir, first loading a module whose source is
+ * `preload` when given.
+ */
+function runBin(bin: string, args: string[], preload?: string) {
+  const dir = mkdtempSync(join(tmpdir(), "yian-bin-"));
+  try {
+    const flags: string[] = [];
+    if (process.versions.bun !== undefined) flags.push("--no-install", "--no-env-file");
+    if (preload !== undefined) {
+      const file = join(dir, "preload.mjs");
+      writeFileSync(file, preload);
+      flags.push(...(process.versions.bun !== undefined ? ["--preload", file] : ["--import", pathToFileURL(file).href]));
+    }
+    return spawnSync(process.execPath, [...flags, bin, ...args], {
+      cwd: dir,
+      env: { HOME: dir, PATH: process.env.PATH ?? "" },
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("the yian bin", () => {
+  test("runs the CLI on this runtime", () => {
+    const result = runBin(BIN, ["--version"]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe(PACKAGE.version);
+  });
+
+  // 22.9 sorts after 22.18 as text, so the parts must compare as numbers.
+  for (const [runtime, version] of [
+    ["bun", "1.3.9"],
+    ["node", "22.17.1"],
+    ["node", "22.9.0"],
+    ["node", "20.19.0"],
+  ] as const) {
+    test(`refuses ${runtime} ${version}, naming the floor, before loading the CLI`, () => {
+      const result = runBin(BIN, ["--version"], reportAs(runtime, version));
+      const name = runtime === "bun" ? "Bun" : "Node";
+      expect(result.stderr).toBe(`${FLOOR_ERROR}${name} ${version}.\n`);
+      expect(result.stdout).toBe("");
+      expect(result.status).toBe(1);
+    });
+  }
+
+  test("the floor it names is package.json's engines", () => {
+    expect(FLOOR_ERROR).toContain(`Node ${PACKAGE.engines.node.slice(2)} or later, or Bun ${PACKAGE.engines.bun.slice(2)} or later`);
   });
 });
 
@@ -1039,8 +1106,18 @@ describe.if(PACK)("the npm tarball", () => {
     mkdirSync(app);
     writeFileSync(join(app, "package.json"), JSON.stringify({ name: "consumer", private: true, type: "module" }));
     execFileSync("npm", ["install", "--no-audit", "--no-fund", tarball], { cwd: app, stdio: "pipe" });
-    const version = execFileSync(join(app, "node_modules", ".bin", "yian"), ["--version"], { cwd: app, encoding: "utf8" });
+    const bin = join(app, "node_modules", ".bin", "yian");
+    const version = execFileSync(bin, ["--version"], { cwd: app, encoding: "utf8" });
     expect(version.trim()).toBe(PACKAGE.version);
+    // On a Node older than the floor, the installed bin says so instead of exiting 0 silently.
+    const preload = join(dir, "old-node.mjs");
+    writeFileSync(preload, reportAs("node", "22.17.0"));
+    const old = spawnSync(bin, ["--version"], {
+      cwd: app,
+      env: { ...process.env, NODE_OPTIONS: `--import=${pathToFileURL(preload).href}` },
+      encoding: "utf8",
+    });
+    expect([old.status, old.stdout, old.stderr]).toEqual([1, "", `${FLOOR_ERROR}Node 22.17.0.\n`]);
     const specifier = (path: string) => `@ngocbh/yian${path.slice(1)}`;
     const imports = IMPORTS.map((path) => `await import(${JSON.stringify(specifier(path))});`).join("\n");
     execFileSync("node", ["--input-type=module", "-e", imports], { cwd: app, stdio: "pipe" });

@@ -49,7 +49,7 @@ flowchart LR
 | `memory/` | Memory contracts and the episodic, reflective and profile memories, with their storage |
 | `memory_host.ts` | Builds the memories a flow declares and owns their lifetime |
 | `platform.ts` | The only module that uses Bun- or Node-specific APIs (SQLite, file locks, `fetch`, timers) |
-| `cli/` | The `yian` command: the command table (`index.ts`), its handlers in `run.ts` (`run`, `check`, `status`, `skills check`), `chat.ts` and `auth.ts` (`auth`, `providers`, `models`, `config check`), and their helpers |
+| `cli/` | The `yian` command: the bin (`bin.ts`), which checks the runtime floor first, the command table (`index.ts`), its handlers in `run.ts` (`run`, `check`, `status`, `skills check`), `chat.ts` and `auth.ts` (`auth`, `providers`, `models`, `config check`), and their helpers |
 
 ## Rules that must not break
 

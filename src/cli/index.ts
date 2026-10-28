@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 /**
  * The `yian` command line: the command table and `main`, which routes the arguments to a command.
  *
@@ -628,9 +627,11 @@ async function runJsonChild(args: readonly string[]): Promise<number> {
   return code;
 }
 
-// True for the script Bun or Node (22.18 and later) runs and for a compiled binary's entry; false
-// under a test runner, whose entry is the test file.
-if (import.meta.main) {
+/**
+ * Run the process's arguments as the `yian` command and exit with its code. The `yian` bin
+ * (`bin.ts`) calls it after checking the runtime.
+ */
+export async function runEntry(): Promise<never> {
   const args = process.argv.slice(2);
   // The explicit exits end a run whose tool left a timer pending.
   if (args[0] === JSON_CHILD) process.exit(await runJsonChild(args.slice(1)));
@@ -640,3 +641,7 @@ if (import.meta.main) {
   await flush(io);
   process.exit(code);
 }
+
+// True for the script Bun or Node (22.18 and later) runs and for a compiled binary's entry; false
+// under a test runner, whose entry is the test file, and when `bin.ts` imports this module.
+if (import.meta.main) await runEntry();

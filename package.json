@@ -6,7 +6,7 @@
   "homepage": "https://yian.readthedocs.io/",
   "type": "module",
   "engines": { "node": ">=22.18", "bun": ">=1.4" },
-  "bin": { "yian": "dist/src/cli/index.js" },
+  "bin": { "yian": "dist/src/cli/bin.js" },
   "exports": {
     ".": { "bun": "./src/index.ts", "types": "./dist/src/index.d.ts", "default": "./dist/src/index.js" },
     "./run": { "bun": "./src/run.ts", "types": "./dist/src/run.d.ts", "default": "./dist/src/run.js" },

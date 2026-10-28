@@ -881,9 +881,9 @@ function unwrapSpans(text: string, depth = 0, limit = current().maxValueNesting)
       if (unwrapped === null) return null;
       const inner = unwrapped.trim();
       let piece = isLoneAtom(inner) ? inner : `(${inner})`;
-      // `out` holds single characters and whole pieces, and only the first character of the last
-      // entry is tested.
-      if (out.length > 0 && NAME_CHAR.test(out.at(-1)!)) piece = " " + piece;
+      // `out` holds single characters and whole pieces; a piece can start with a space (` x`), so
+      // the last character of the last entry decides whether the names would run together.
+      if (out.length > 0 && NAME_CHAR.test(out.at(-1)!.at(-1)!)) piece = " " + piece;
       if (NAME_CHAR.test(text.slice(end + 1, end + 2))) piece += " ";
       out.push(piece);
       i = end + 1;

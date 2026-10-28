@@ -95,6 +95,11 @@ test("nested span without a parsable rewrite shows none", () => {
   for (const text of ["a :- ${b", "a :- ${b +}", "${}"]) expectNoRewrite(text);
 });
 
+test("a rewrite never merges the names of adjacent spans", () => {
+  // Kept apart, `not x y` doesn't parse, so no rewrite is shown rather than `not xy`.
+  for (const text of ["not${x}${y}", "not${x}${y.z}"]) expectNoRewrite(text);
+});
+
 test("a span inside a string literal is text", () => {
   for (const text of ['x == "${y}"', "x == '${y}'"]) expect(() => parseExpr(text)).not.toThrow();
 });

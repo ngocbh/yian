@@ -152,8 +152,8 @@ Without flags, each built-in memory a flow declares lives in RAM for one run.
 
 ### Skills and MCP servers
 
-When an agent in the flow grants skills, `yian run` reads skill folders, and the first folder that
-has a name wins:
+When an agent in the flow grants skills, `yian run` and `yian chat` read skill folders, and the
+first folder that has a name wins:
 
 1. `~/.claude/skills`, then `~/.agents/skills`;
 2. `.claude/skills`, then `.agents/skills`, in the current folder and each parent up to the git
@@ -222,8 +222,9 @@ $ yian chat support.yaml --inbox questions --input team=billing
 - While the prompt is up, the chat wakes the run when a `sleep` or a timeout is due.
 - A failed run prints its error and exits 1; `yian status LOG` shows where it stands.
 
-`yian chat` opens no MCP servers, loads no skills and builds no memories. See
-[Inboxes and waiting](/inboxes/) for how a flow reads its inbox.
+`yian chat` reads skills as `yian run` does (see [Skills and MCP servers](#skills-and-mcp-servers)),
+once when it starts, so a skill edited during the chat takes effect in the next one. It opens no MCP
+servers and builds no memories. See [Inboxes and waiting](/inboxes/) for how a flow reads its inbox.
 
 ## yian check
 

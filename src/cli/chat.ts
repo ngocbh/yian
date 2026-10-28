@@ -49,6 +49,7 @@ import {
   mergeInputs,
   NotUtf8Error,
   readFlowText,
+  readGrantedSkills,
   removeEmptyDir,
   renderDiagnostic,
   renderRunError,
@@ -180,8 +181,9 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
  * on and exits 0.
  *
  * The flow loads, inputs, provider keys and log path are handled as `yian run`'s, except that the
- * inbox input is never asked for or supplied. The chat opens no MCP servers, loads no skills and
- * builds no memories. A host failure prints `chat failed: <message>` and exits 1.
+ * inbox input is never asked for or supplied. Skills are read as `yian run` reads them, once per
+ * chat, before any input prompt. The chat opens no MCP servers and builds no memories. A host
+ * failure prints `chat failed: <message>` and exits 1.
  *
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a flow without exactly
  *   one `Inbox(str)` or `Inbox(Message)` input to pick; for an input the flow doesn't declare
@@ -332,6 +334,8 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
   stop.signal.addEventListener("abort", takeDown, { once: true });
 
   try {
+    // Read once: every `advance` must pass the skills the run recorded at its start.
+    const skills = await readGrantedSkills(flow, env.read, io);
     const prompter = io.stdin.isTTY === true ? terminal : null;
     const gathered = await gatherMissingInputs(values, supplied, prompter);
     stop.signal.throwIfAborted();
@@ -371,6 +375,7 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     const shared = {
       onEvent,
       tools: { ...registeredTools(), ...deps.tools, ask: terminal.askUser },
+      skills,
       env: env.read,
       signal: stop.signal,
       scheduler,

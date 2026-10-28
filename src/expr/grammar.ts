@@ -831,10 +831,16 @@ export function wholeSpanInterior(text: string): string | null {
 // A character that would fuse with an unwrapped name: `not${x}` must become `not x`.
 const NAME_CHAR = /^[A-Za-z0-9_#/]/;
 
-/** Return whether `text` parses within the nesting limit (a rewrite worth suggesting). */
+/**
+ * Return whether `text` parses within the nesting limit with no reserved word as a reference root
+ * (a rewrite worth suggesting). `parseExpr`'s other checks report their own errors once the spans
+ * are gone.
+ */
 function parses(text: string): boolean {
   try {
-    rejectDeepExpression(parseRaw(text));
+    const tree = parseRaw(text);
+    rejectDeepExpression(tree);
+    rejectReservedReferenceRoots(tree);
   } catch (error) {
     if (error instanceof ParseError || error instanceof ExpressionError) return false;
     throw error;
@@ -842,7 +848,10 @@ function parses(text: string): boolean {
   return true;
 }
 
-/** Return whether `text` parses as one reference or one literal (no operator or call). */
+/**
+ * Return whether `text` parses as one reference or one literal (no operator or call). A reserved
+ * word (`in`, `and`, ...) is not one, so unwrapping `${in}` can't turn it into an operator.
+ */
 function isLoneAtom(text: string): boolean {
   let tree: ExprNode;
   try {
@@ -851,7 +860,10 @@ function isLoneAtom(text: string): boolean {
     if (error instanceof ParseError) return false;
     throw error;
   }
-  return tree instanceof Token || (tree.data === "refcall" && callSuffixOf(tree) === undefined);
+  if (tree instanceof Token) return true;
+  if (tree.data !== "refcall" || callSuffixOf(tree) !== undefined) return false;
+  const head = tree.children[0];
+  return !(head instanceof Token && head.type === "NAME" && RESERVED_REFERENCE_ROOTS.has(head.value));
 }
 
 /**
@@ -881,9 +893,9 @@ function unwrapSpans(text: string, depth = 0, limit = current().maxValueNesting)
       if (unwrapped === null) return null;
       const inner = unwrapped.trim();
       let piece = isLoneAtom(inner) ? inner : `(${inner})`;
-      // `out` holds single characters and whole pieces, and only the first character of the last
-      // entry is tested.
-      if (out.length > 0 && NAME_CHAR.test(out.at(-1)!)) piece = " " + piece;
+      // `out` holds single characters and whole pieces; a piece can start with a space (` x`), so
+      // the last character of the last entry decides whether the names would run together.
+      if (out.length > 0 && NAME_CHAR.test(out.at(-1)!.at(-1)!)) piece = " " + piece;
       if (NAME_CHAR.test(text.slice(end + 1, end + 2))) piece += " ";
       out.push(piece);
       i = end + 1;

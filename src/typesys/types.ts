@@ -1628,6 +1628,23 @@ export function typeName(value: unknown): string {
 }
 
 /**
+ * Parse each text field type of record typedef `name`, without resolving names.
+ *
+ * @throws TypeCheckError naming the first field whose type text doesn't parse.
+ */
+function checkFieldSyntax(name: string, fields: Readonly<Record<string, unknown>>): void {
+  for (const [field, written] of Object.entries(fields)) {
+    if (typeof written !== "string") continue;
+    try {
+      parseType(written);
+    } catch (error) {
+      if (!(error instanceof TypeCheckError)) throw error;
+      throw typedefError(name, field, error, { cause: error });
+    }
+  }
+}
+
+/**
  * Build a `TypeRegistry` from a raw `typedefs:` mapping.
  *
  * A plain-object value is a RECORD (`RecordDef`; field type texts kept raw, in property
@@ -1692,6 +1709,9 @@ export function readTypedefs(
           );
         }
         if (typeof ftype !== "string") {
+          // A `{...}` mapping's comma cuts `Literal(a, b)` into a field `Literal(a` and a
+          // null-valued field `b)`; report the cut type, whose parse error says why.
+          checkFieldSyntax(name, value);
           throw new TypeCheckError(
             `typedef ${reprText(name)} field ${reprText(fname)}: type must be a string ` +
               `expression (got ${typeName(ftype)})`,

@@ -288,6 +288,21 @@ describe("record fields", () => {
   });
 
   test.each([
+    ["first", { role: "Literal(user", "assistant)": null, text: "str" }, "Literal(user"],
+    ["not first", { text: "str", role: "List(Dict(str", "int))": null }, "List(Dict(str"],
+  ])("a type split by a flow mapping's comma names the split type: %s", (_label, fields, cut) => {
+    // YAML reads `{role: Literal(user, assistant)}` as the fields `Literal(user` and a
+    // null-valued `assistant)`; the error points at the cut type, not the stray field.
+    expectRejected(
+      { Msg: fields },
+      `typedef 'Msg' field 'role': malformed type expression '${cut}': unbalanced ` +
+        "parentheses — if this type sits inside a `{...}` mapping, its comma split it; quote " +
+        "it or use block style",
+      ["Msg", "role"],
+    );
+  });
+
+  test.each([
     ["", "typedef 'R' field '': field names must be non-empty strings"],
     ["\ud800", "typedef 'R' field '\\ud800': field names must not contain a Unicode surrogate"],
   ])("field name %p is rejected", (field, message) => {

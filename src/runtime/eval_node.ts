@@ -765,8 +765,15 @@ async function evaluateNode(
         throw error;
       }
     };
-    caps.steps = new NodeSteps(steps.starts, steps.prior, recordStep, steps.calls, steps.maxEventBytes, steps.durable, () =>
-      steps.currentCalls(),
+    caps.steps = new NodeSteps(
+      steps.starts,
+      steps.prior,
+      recordStep,
+      steps.calls,
+      steps.maxEventBytes,
+      steps.durable,
+      () => steps.currentCalls(),
+      () => steps.next,
     );
   }
   if (steerInbox !== null && node.readsSteerInbox === true) {

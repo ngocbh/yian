@@ -264,13 +264,13 @@ expect:
       node_id: chat
       provider: openai
       purpose: chat
-      n: 3
+      n: 4
   - - ModelCallFinished
     - model: gpt-5.5
       node_id: chat
       provider: openai
       purpose: chat
-      n: 3
+      n: 4
   - - NodeSucceeded
     - node_id: chat
       output: done
@@ -294,13 +294,13 @@ expect:
     final: false
     key: text
     node_id: chat
-    n: 3
+    n: 4
     index: 0
   - chunk: ''
     final: true
     key: text
     node_id: chat
-    n: 3
+    n: 4
     index: 1
   tool_calls:
     lookup:

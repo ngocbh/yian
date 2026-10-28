@@ -117,19 +117,19 @@ expect:
   - [node_started, each]
   - - pool_commit
     - each
-    - from: {prepare: 9}
+    - from: {prepare: pool_commit prepare}
       key: each/__start__
   - - pool_commit
     - each
-    - from: {prepare: 9}
+    - from: {prepare: pool_commit prepare}
       key: each#0/__start__
   - - pool_commit
     - each
-    - from: {prepare: 9}
+    - from: {prepare: pool_commit prepare}
       key: each#1/__start__
   - - pool_commit
     - each
-    - from: {prepare: 9}
+    - from: {prepare: pool_commit prepare}
       key: each#2/__start__
   - - node_expanded
     - each
@@ -137,7 +137,7 @@ expect:
   - [node_started, each#0/__end__]
   - - pool_commit
     - each#0/__end__
-    - from: {each#0/render: 28}
+    - from: {each#0/render: pool_commit each#0/render}
   - - node_succeeded
     - each#0/__end__
   - [node_started, each#0/__start__]
@@ -156,7 +156,7 @@ expect:
   - [node_started, each#1/__end__]
   - - pool_commit
     - each#1/__end__
-    - from: {each#1/render: 38}
+    - from: {each#1/render: pool_commit each#1/render}
   - - node_succeeded
     - each#1/__end__
   - [node_started, each#1/__start__]
@@ -175,7 +175,7 @@ expect:
   - [node_started, each#2/__end__]
   - - pool_commit
     - each#2/__end__
-    - from: {each#2/render: 33}
+    - from: {each#2/render: pool_commit each#2/render}
   - - node_succeeded
     - each#2/__end__
   - [node_started, each#2/__start__]
@@ -195,7 +195,7 @@ expect:
   - - pool_commit
     - each/__end__
     - key: each
-      from: {each#0/__end__: 31, each#1/__end__: 41, each#2/__end__: 36}
+      from: {each#0/__end__: pool_commit each#0/__end__, each#1/__end__: pool_commit each#1/__end__, each#2/__end__: pool_commit each#2/__end__}
   - - node_succeeded
     - each/__end__
   - [node_started, each/__start__]

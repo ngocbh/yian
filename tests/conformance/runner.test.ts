@@ -36,6 +36,7 @@ import {
   runCli,
   same,
   masked,
+  pooled,
   setUp,
   sweepable,
   trace,
@@ -1743,6 +1744,32 @@ describe("sourcesByRecord", () => {
     expect(() => sourcesByRecord(entries)).toThrow(
       new CaseFailure("a capture source names seq 7, which the log doesn't hold"),
     );
+  });
+});
+
+describe("pooled", () => {
+  const results = (entries: unknown[][]) => ({ trace: entries, events: [], stream: [], tool_calls: {} });
+
+  test("names each from seq by its record's kind and node, so the interleaving doesn't show", () => {
+    const aFirst = [
+      ["run_started", null, { num_workers: 2n }],
+      ["pool_commit", "a", { value: 1n }],
+      ["pool_commit", "b", { value: 2n }],
+      ["pool_commit", "c", { from: { a: 1n, b: 2n } }],
+    ];
+    const bFirst = [aFirst[0]!, aFirst[2]!, aFirst[1]!, ["pool_commit", "c", { from: { a: 2n, b: 1n } }]];
+    expect(pooled(results(aFirst))["trace"]).toEqual([
+      ["run_started", null, { num_workers: 2n }],
+      ["pool_commit", "a", { value: 1n }],
+      ["pool_commit", "b", { value: 2n }],
+      ["pool_commit", "c", { from: { a: "pool_commit a", b: "pool_commit b" } }],
+    ]);
+    expect(pooled(results(bFirst))).toEqual(pooled(results(aFirst)));
+  });
+
+  test("fails on a from seq the log doesn't hold", () => {
+    const entries = [["pool_commit", "c", { from: { a: 4n } }]];
+    expect(() => pooled(results(entries))).toThrow(new CaseFailure("a derived commit names seq 4, which the log doesn't hold"));
   });
 });
 

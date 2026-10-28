@@ -623,8 +623,9 @@ expectation is compared as is; a case whose error names the run id gives `run_id
 calls are first grouped: run-level entries first, then each node's entries, nodes in sorted
 order, each group keeping its order, each `node_succeeded` leaves out its `commit` and `messages`
 (the seqs of the `pool_commit`s just before it in its node's group) and each messages commit its
-`steps`, since those seqs depend on how the parallel nodes interleave. Placeholders are numbered
-and lists compared after that.
+`steps`, since those seqs depend on how the parallel nodes interleave, and each derived commit's
+`from` seq is named by the kind and node of the record it names (`pool_commit prepare`).
+Placeholders are numbered and lists compared after that.
 Expectations are written grouped. A `resume` case's results are grouped by the resumed run's
 `num_workers` (`resume.num_workers`, else the recorded one). A `before` run's trace is grouped
 when its own `num_workers` isn't 0.

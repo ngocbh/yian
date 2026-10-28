@@ -2227,7 +2227,7 @@ function grouped<T>(entries: readonly T[], nodeOf: (entry: T) => string | null):
 }
 
 /** Return `results` with the trace, events, stream and each tool's calls `grouped` by node. */
-function pooled(results: Record<string, unknown>): Record<string, unknown> {
+export function pooled(results: Record<string, unknown>): Record<string, unknown> {
   // A `NodeFailed` belongs to its failure's node; run events have no `node_id`.
   const eventNode = (event: Value[]): string | null => {
     const data = (event[1] ?? {}) as Case;
@@ -2237,10 +2237,22 @@ function pooled(results: Record<string, unknown>): Record<string, unknown> {
   const toolCalls = results["tool_calls"] as Record<string, Case[]>;
   // A success's `commit` and `messages` are seqs of `pool_commit`s just before it in its node's
   // group, and a messages commit's `steps` are seqs of its node's steps: seqs that depend on how the
-  // parallel nodes interleave, so a grouped trace leaves them out.
-  const trace = (results["trace"] as Value[][]).map((entry) => {
+  // parallel nodes interleave, so a grouped trace leaves them out. A derived commit's `from` seqs
+  // point into other nodes' groups, so each is named by the kind and node of its record instead.
+  const entries = results["trace"] as Value[][];
+  const trace = entries.map((entry) => {
     if (!(entry[0] === "node_succeeded" || entry[0] === "pool_commit") || entry[2] === undefined) return entry;
     const { commit: _commit, messages: _messages, steps: _steps, ...rest } = entry[2] as Case;
+    if (isMapping(rest["from"])) {
+      rest["from"] = Object.fromEntries(
+        Object.entries(rest["from"]).map(([name, seq]) => {
+          // The trace has one entry per log line, and a record's seq is its line index.
+          const source = entries[Number(seq)];
+          if (source === undefined) throw new CaseFailure(`a derived commit names seq ${seq}, which the log doesn't hold`);
+          return [name, `${String(source[0])} ${String(source[1])}`];
+        }),
+      );
+    }
     return Object.keys(rest).length > 0 ? [entry[0], entry[1], rest] : [entry[0], entry[1]];
   });
   return {

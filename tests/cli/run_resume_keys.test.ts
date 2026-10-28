@@ -278,6 +278,18 @@ test("resume checks other providers by env var", async () => {
   expect(readFileSync(log)).toEqual(before);
 });
 
+test("resume accepts Google's later key variable, as the Google client does", async () => {
+  const flow = flowFile(tmp, "google");
+  const log = await unfinishedLog(flow, { envVar: "GEMINI_API_KEY", key: "sk-gemini" });
+  vars["GEMINI_API_KEY"] = "sk-gemini";
+
+  const result = await withFetch(noModel, () => resume(log));
+
+  // Past the key check, the run calls the model, which fails.
+  expect(result.output).not.toContain("needs an API key");
+  expect(reached.length).toBeGreaterThan(0);
+});
+
 test("resume on a saved api key login needs no environment key", async () => {
   const flow = flowFile();
   await new AuthStore(null, { env }).save("openai", new ApiKeyCredentials("saved-key"), "gpt-5.5");

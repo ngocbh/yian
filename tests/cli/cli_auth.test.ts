@@ -1889,6 +1889,19 @@ describe("auth provider setup", () => {
     expect(c.store.selection("google")?.model).toBe("m1");
   });
 
+  test("Google setup reads GEMINI_API_KEY when GOOGLE_API_KEY is unset", async () => {
+    const c = checks();
+    let result = await runAuth(c, "google", { model: "m1" });
+    expect(result).toMatchObject({
+      code: 1,
+      err: "Set GOOGLE_API_KEY or GEMINI_API_KEY before API-key setup, or run in an interactive terminal\n",
+    });
+    c.env["GEMINI_API_KEY"] = "private-gemini";
+    result = await runAuth(c, "google", { model: "m1" });
+    expect(result.code).toBe(0);
+    expect(c.fake.listings).toEqual([["google", "private-gemini", null]]);
+  });
+
   // Base url variable on a terminal asks for a model name.
   test("a base-URL variable on a terminal asks for a model name", async () => {
     const c = checks();

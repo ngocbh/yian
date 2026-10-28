@@ -1,9 +1,10 @@
 /**
  * Canonical provider to API-key environment variable mapping.
  *
- * The single source of truth for which environment variable holds the API key for each supported
- * LLM provider. It holds names only and reads no environment; `connection.ts` reads the
- * variables. A config `apiKey` takes precedence over these variables when the client is built.
+ * The single source of truth for which environment variables hold the API key for each supported
+ * LLM provider, and in which order they are read. It holds names only and reads no environment;
+ * the clients and the CLI read the variables. A config `apiKey` takes precedence over these
+ * variables when the client is built.
  *
  * When adding a new provider, register its variable here so the CLI asks for it instead of the
  * first API call failing.
@@ -36,6 +37,16 @@ export const PROVIDER_API_KEY_ENV: Readonly<Record<string, string | null>> = Obj
 );
 
 /**
+ * Further key variables a provider's client reads, in order, when its own (`PROVIDER_API_KEY_ENV`)
+ * is unset.
+ */
+const API_KEY_ENV_FALLBACKS: Readonly<Record<string, readonly string[]>> = Object.freeze(
+  Object.assign(Object.create(null) as Record<string, readonly string[]>, {
+    google: ["GEMINI_API_KEY"],
+  }),
+);
+
+/**
  * Self-hosted runtimes whose key variable may be unset.
  *
  * vLLM runs keyless unless its server was started with `--api-key`, so its client sends a dummy
@@ -52,4 +63,15 @@ export const OPTIONAL_API_KEY_PROVIDERS: ReadonlySet<string> = new Set(["vllm"])
 export function getApiKeyEnv(provider: string): string | null {
   const key = provider.toLowerCase();
   return Object.hasOwn(PROVIDER_API_KEY_ENV, key) ? (PROVIDER_API_KEY_ENV[key] ?? null) : null;
+}
+
+/**
+ * Return every variable that can hold `provider`'s API key, in the order its client reads them:
+ * its own (`getApiKeyEnv`) first, then any fallbacks (`GEMINI_API_KEY` for Google). The first set
+ * one wins. Keyless and unknown providers give an empty list.
+ */
+export function apiKeyEnvNames(provider: string): readonly string[] {
+  const own = getApiKeyEnv(provider);
+  if (own === null) return [];
+  return [own, ...(API_KEY_ENV_FALLBACKS[provider.toLowerCase()] ?? [])];
 }

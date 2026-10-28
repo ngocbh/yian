@@ -21,7 +21,7 @@ import { parseArgs } from "node:util";
 
 import { current, type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
-import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
+import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
 import { logJson } from "../typesys/json.ts";
 import type { Terminal } from "./terminal.ts";
 
@@ -492,13 +492,15 @@ export interface PromptContext {
 }
 
 /**
- * Return `provider`'s API key from its environment variable, prompting for it if unset.
+ * Return `provider`'s API key from its environment variables, prompting for it if unset.
  *
- * Saved logins are not consulted. A keyless provider (`ollama`) or an unknown one has no key
- * variable, so `null` is returned; so is an optional key (`vllm`) left unset. A set variable's
- * value is returned as is. When it is unset and a terminal is given, the user is asked; the answer
- * is stripped and `set` in the command's environment so the run's clients read it. An empty answer
- * is a fingerslip and asks again, up to `current().maxKeyPrompts` times.
+ * The variables are the ones its client reads, in the same order (`apiKeyEnvNames`), so Google
+ * takes `GOOGLE_API_KEY`, then `GEMINI_API_KEY`. Saved logins are not consulted. A keyless
+ * provider (`ollama`) or an unknown one has no key variable, so `null` is returned; so is an
+ * optional key (`vllm`) left unset. The first set variable's value is returned as is. When none is
+ * set and a terminal is given, the user is asked for the first; the answer is stripped and `set`
+ * in the command's environment so the run's clients read it. An empty answer is a fingerslip and
+ * asks again, up to `current().maxKeyPrompts` times.
  *
  * @param provider The LLM provider name (such as `"anthropic"`), matched case-insensitively.
  * @returns The key, or `null` when the provider needs none.
@@ -506,14 +508,18 @@ export interface PromptContext {
  *   the user cancels the prompt, or every attempt was empty.
  */
 export async function ensureEnvKey(provider: string, { env, terminal }: PromptContext): Promise<string | null> {
-  const envVar = getApiKeyEnv(provider);
-  if (envVar === null) return null;
-  const existing = env.read(envVar);
-  if (existing) return existing;
+  const names = apiKeyEnvNames(provider);
+  const envVar = names[0];
+  if (envVar === undefined) return null;
+  for (const name of names) {
+    const existing = env.read(name);
+    if (existing) return existing;
+  }
   if (OPTIONAL_API_KEY_PROVIDERS.has(provider.toLowerCase())) return null;
   if (terminal === null) {
+    const unset = names.map((name) => `$${name}`).join(" or ");
     throw new MissingKeyError(
-      `provider ${reprText(provider)} needs an API key but $${envVar} is not set ` +
+      `provider ${reprText(provider)} needs an API key but ${unset} is not set ` +
         `(set it in the environment, or run interactively to be prompted). ` +
         `Or run 'yian auth ${provider.toLowerCase()}' to save a login`,
     );

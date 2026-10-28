@@ -15,7 +15,7 @@ import type { EventEmitter } from "node:events";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { collect } from "../llm/events.ts";
 import { Message, Request, TextPart } from "../llm/messages.ts";
-import { OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../llm_clients/api_key_env.ts";
+import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../llm_clients/api_key_env.ts";
 import { ApiKeyCredentials, AuthError, AuthStore, type OAuthCredentials, OpenAIAuth } from "../llm_clients/auth/index.ts";
 import {
   LLM_CONFIG_KEYS,
@@ -175,10 +175,10 @@ async function ask(message: string, option: string, ctx: SetupContext): Promise<
 }
 
 /**
- * Read the provider's key from `variable` or a hidden prompt.
+ * Read the provider's key from the first set variable of `variables`, or a hidden prompt.
  *
  * @param provider Provider name shown in the prompt.
- * @param variable Environment variable checked first.
+ * @param variables Environment variables checked first, in order.
  * @param optional The provider can run without a key; off a terminal or with an empty answer, no
  *   key is returned.
  * @returns The key, or `null` when an optional key is not given.
@@ -186,15 +186,17 @@ async function ask(message: string, option: string, ctx: SetupContext): Promise<
  */
 async function apiKey(
   provider: string,
-  variable: string,
+  variables: readonly string[],
   ctx: SetupContext,
   { optional = false }: { optional?: boolean } = {},
 ): Promise<string | null> {
-  const key = ctx.io.env(variable);
-  if (key) return key;
+  for (const variable of variables) {
+    const key = ctx.io.env(variable);
+    if (key) return key;
+  }
   if (ctx.terminal === null) {
     if (optional) return null;
-    throw new AuthError(`Set ${variable} before API-key setup, or run in an interactive terminal`);
+    throw new AuthError(`Set ${variables.join(" or ")} before API-key setup, or run in an interactive terminal`);
   }
   const hint = optional ? " (leave empty for none)" : "";
   const answer = await ctx.terminal.askText(`${provider} API key${hint}:`, { secret: true, signal: ctx.signal });
@@ -506,7 +508,7 @@ async function setupOpenai(
   } else {
     if (login !== undefined) throw new AuthError("--login applies to subscription authentication");
     // A required key is never null.
-    const key = (await apiKey("openai", apiKeyEnv, ctx))!;
+    const key = (await apiKey("openai", [apiKeyEnv], ctx))!;
     const values = await headers(sources, "openai", ctx);
     const apiCredentials = new ApiKeyCredentials(key, values);
     credentials = apiCredentials;
@@ -672,9 +674,9 @@ async function setupProvider(
   let key: string | null = null;
   if (provider !== "ollama") {
     // Every provider but ollama has a key variable.
-    const variable = apiKeyEnv ?? PROVIDER_API_KEY_ENV[provider]!;
+    const variables = apiKeyEnv === undefined ? apiKeyEnvNames(provider) : [apiKeyEnv];
     const optional = OPTIONAL_API_KEY_PROVIDERS.has(provider) && apiKeyEnv === undefined && sources.size === 0;
-    key = await apiKey(provider, variable, ctx, { optional });
+    key = await apiKey(provider, variables, ctx, { optional });
   }
   const values = await headers(sources, provider, ctx);
   let models: readonly string[] | null = null;

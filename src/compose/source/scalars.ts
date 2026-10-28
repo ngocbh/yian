@@ -21,18 +21,22 @@
 
 import {
   type Alias,
+  Composer,
+  type CST,
   type Document,
   isAlias,
   isMap,
   isNode,
   isSeq,
+  Lexer,
   type Node,
   type ParsedNode,
-  parseDocument,
   type ParseOptions,
+  Parser,
   type Scalar,
   type YAMLError,
   type YAMLMap,
+  YAMLParseError,
   type YAMLSeq,
 } from "yaml";
 
@@ -148,6 +152,62 @@ export function normalizeBreaks(text: string): string {
   return text.replace(/\r(?!\n)/g, "\n");
 }
 
+// eemeli's parser closes the block collections one token ends by recursion, so a token that
+// closes about 2000 at once ("- - - ... x" then a dedent) overflows a Node stack (5300 in a
+// Bun Worker), and its composer recurses once per level (793 under a 1 MiB Node stack). The
+// parser reads no further once it holds more than this many open nodes: over twice the
+// highest `maxYamlNesting`, so the composed tree still holds the level past the limit, which
+// opened before the stop, and every YAML error before it.
+const PARSER_DEPTH_STOP = 500;
+
+/**
+ * Yield the CST tokens of `source` as `new Parser(onNewLine).parse(source)` does, but read
+ * no further once the parser holds more than `PARSER_DEPTH_STOP` open nodes, deeper than any
+ * `maxYamlNesting` allows, and close what is open there.
+ */
+export function* parseTokens(
+  source: string,
+  onNewLine?: (offset: number) => void,
+): Generator<CST.Token, void> {
+  const parser = new Parser(onNewLine);
+  onNewLine?.(0);
+  for (const lexeme of new Lexer().lex(source)) {
+    yield* parser.next(lexeme);
+    if (parser.stack.length > PARSER_DEPTH_STOP) break;
+  }
+  // Iterative: pops one open node at a time.
+  yield* parser.end();
+}
+
+/**
+ * Compose `source` as eemeli's `parseDocument` does, reading it through `parseTokens`: the
+ * first document, with a `MULTIPLE_DOCS` error when another follows.
+ */
+function parseFlowDocument(
+  source: string,
+  options: typeof FLOW_OPTIONS & FlowParseOptions,
+): Document.Parsed {
+  const composer = new Composer(options);
+  const tokens = parseTokens(source, options.lineCounter?.addNewLine);
+  let document: Document.Parsed | undefined;
+  for (const composed of composer.compose(tokens, true, source.length)) {
+    if (document === undefined) {
+      document = composed;
+      continue;
+    }
+    document.errors.push(
+      new YAMLParseError(
+        [composed.range[0], composed.range[1]],
+        "MULTIPLE_DOCS",
+        "Source contains multiple documents; please use YAML.parseAllDocuments()",
+      ),
+    );
+    break;
+  }
+  // `compose` with `forceDoc` yields a document even for empty text.
+  return document!;
+}
+
 /**
  * Compose `normalizeBreaks(text)` as one YAML document under `FLOW_OPTIONS` plus `options`,
  * and map each alias to the latest node anchored with its name before it. eemeli/yaml breaks
@@ -165,13 +225,12 @@ export function normalizeBreaks(text: string): string {
  *   node on the path already over the limit once the count would need repeating.
  */
 export function composeFlowDocument(text: string, options: FlowParseOptions = {}): FlowDocument {
-  const document = parseDocument(normalizeBreaks(text), { ...FLOW_OPTIONS, ...options });
+  const document = parseFlowDocument(normalizeBreaks(text), { ...FLOW_OPTIONS, ...options });
   const limits = current();
   const anchors = new Map<string, AnchoredNode>();
   const aliasTargets = new Map<Alias, AnchoredNode>();
-  // The check runs on the composed tree: eemeli catches its own stack overflow
-  // (RESOURCE_EXHAUSTION) far deeper than the limit and keeps the levels above it, and the
-  // order check below puts the nesting error first when it comes first in the text.
+  // The check runs on the composed tree, which `parseTokens` keeps shallow enough to compose,
+  // and the order check below puts the nesting error first when it comes first in the text.
   let refused: { error: FlowLoaderError; at: number } | null = null;
   // Each entry: a node and its parent collection's level. Children are pushed in reverse,
   // so they pop in source order and an anchor is seen before the aliases after it.

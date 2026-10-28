@@ -111,6 +111,34 @@ describe("the YAML nesting limit", () => {
     expect(error.message).toContain(`this list ${MESSAGE}`);
   });
 
+  test.each([20_000, 100_000])(
+    "refuses a %p-level compact block list with the nesting error, not a stack overflow",
+    (depth) => {
+      const error = refusal("- ".repeat(depth) + "x\n- y\n");
+
+      expect(error.message).toContain(`this list ${MESSAGE}`);
+      expect(error.node?.range?.[0]).toBe(2 * MAX_YAML_NESTING);
+    },
+  );
+
+  test("refuses 100,000 compact explicit keys with the nesting error", () => {
+    const error = refusal("? ".repeat(100_000) + "x\n: y\n");
+
+    expect(error.message).toContain(`this mapping ${MESSAGE}`);
+  });
+
+  test("reports a YAML error before a compact block list deep enough to overflow", () => {
+    let caught: unknown;
+    try {
+      composeFlowDocument("- [,]\n" + "- ".repeat(20_000) + "x\n- y\n");
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(YAMLError);
+    expect(caught).not.toBeInstanceOf(FlowLoaderError);
+    expect((caught as YAMLError).pos[0]).toBe(3);
+  });
+
   test("an isolated literal past the limit is a syntax error", () => {
     const text = "[".repeat(600) + "]".repeat(600);
 
@@ -182,6 +210,14 @@ describe("a source document", () => {
     expect(error.range).toEqual(
       new SourceRange(depth + 1, 2 * depth + 1, depth + 1, 2 * depth + 2),
     );
+  });
+
+  test("locates a compact block list deep enough to overflow the parser", () => {
+    const error = documentRefusal("- ".repeat(20_000) + "x\n- y\n");
+
+    expect(error.message).toContain(`this list ${MESSAGE}`);
+    const column = 1 + 2 * MAX_YAML_NESTING;
+    expect(error.range).toEqual(new SourceRange(1, column, 1, column + 1));
   });
 
   test("parses a document at the limit", () => {
@@ -261,4 +297,14 @@ test("parseSourceDocument: yaml/compose_yaml_nesting_limit__600_levels_is_locate
 
 test("assemble: yaml/compose_yaml_nesting_limit__value_at_the_document_limit_parses", () => {
   runCase({ id: "yaml/compose_yaml_nesting_limit__value_at_the_document_limit_parses", call: assembled });
+});
+
+test("parseSourceDocument: yaml/compose_yaml_nesting_limit__a_10000_level_compact_list_is_located", () => {
+  runTextCase({
+    id: "yaml/compose_yaml_nesting_limit__a_10000_level_compact_list_is_located",
+    call: parseSourceDocument,
+    message:
+      "invalid YAML: this list nests deeper than 200 levels, the limit for a YAML document " +
+      "(each mapping and list is a level; a yian value nests at most 100); flatten it",
+  });
 });

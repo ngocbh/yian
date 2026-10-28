@@ -15,7 +15,6 @@ import {
   isScalar,
   isSeq,
   type Node,
-  Parser,
   type ParsedNode,
   Scalar,
   YAMLError,
@@ -56,6 +55,7 @@ import {
   MAP_TAG,
   MERGE_TAG,
   normalizeBreaks,
+  parseTokens,
   resolvePlain,
   type ScalarValue,
   SEQ_TAG,
@@ -835,7 +835,7 @@ function propertySpans(source: string): SpanOf {
     if (token) byToken.set(tokenKey(token.offset, CST.isCollection(token)), span);
   };
   const stack: CST.Token[] = [];
-  const document = [...new Parser().parse(source)].find(
+  const document = [...parseTokens(source)].find(
     (token): token is CST.Document => token.type === "document",
   );
   if (document !== undefined) {

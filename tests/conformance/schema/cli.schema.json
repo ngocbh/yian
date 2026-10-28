@@ -124,8 +124,8 @@
               "properties": {
                 "code": {
                   "enum": [
-                    "compose.load", "defaults.invalid", "run.setup", "run.cancelled", "auth.failed",
-                    "models.failed", "models.timeout"
+                    "compose.load", "expr.nullable_field_read", "defaults.invalid", "run.setup",
+                    "run.cancelled", "auth.failed", "models.failed", "models.timeout"
                   ]
                 },
                 "status": {"type": ["integer", "null"]}
@@ -182,7 +182,7 @@
                   {"$ref": "#/$defs/diagnostic"},
                   {
                     "properties": {
-                      "code": {"enum": ["compose.load", "compose.outside_root"]}
+                      "code": {"enum": ["compose.load", "expr.nullable_field_read", "compose.outside_root"]}
                     }
                   }
                 ]

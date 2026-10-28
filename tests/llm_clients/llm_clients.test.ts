@@ -22,7 +22,12 @@ import { AnthropicMessages } from "../../src/llm/protocols/anthropic_messages.ts
 import { OllamaChat } from "../../src/llm/protocols/ollama_chat.ts";
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { OpenAIResponses } from "../../src/llm/protocols/openai_responses.ts";
-import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
+import {
+  apiKeyEnvNames,
+  getApiKeyEnv,
+  OPTIONAL_API_KEY_PROVIDERS,
+  PROVIDER_API_KEY_ENV,
+} from "../../src/llm_clients/api_key_env.ts";
 import {
   ApiKeyCredentials,
   AuthError,
@@ -105,6 +110,15 @@ test("lookups lower-case the provider and know only the table's providers", () =
   expect(getApiKeyEnv("OPENAI")).toBe("OPENAI_API_KEY");
   expect(getApiKeyEnv("no-such-provider")).toBeNull();
   expect(getApiKeyEnv("constructor")).toBeNull();
+});
+
+test("apiKeyEnvNames lists a provider's key variables in the order its client reads them", () => {
+  expect(apiKeyEnvNames("google")).toEqual(["GOOGLE_API_KEY", "GEMINI_API_KEY"]);
+  expect(apiKeyEnvNames("Google")).toEqual(["GOOGLE_API_KEY", "GEMINI_API_KEY"]);
+  expect(apiKeyEnvNames("openai")).toEqual(["OPENAI_API_KEY"]);
+  expect(apiKeyEnvNames("ollama")).toEqual([]);
+  expect(apiKeyEnvNames("no-such-provider")).toEqual([]);
+  expect(apiKeyEnvNames("constructor")).toEqual([]);
 });
 
 test("vllm is the only provider whose key is optional", () => {

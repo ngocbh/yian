@@ -8,7 +8,7 @@
  * `OPENAI_BASE_URL` for a host key on a pinned subscription connection; each Chat Completions
  * vendor's key variable (`getApiKeyEnv`) and `VLLM_BASE_URL`; `AZURE_OPENAI_AD_TOKEN`,
  * `AZURE_OPENAI_API_KEY` and `OPENAI_API_VERSION` for Azure; `ANTHROPIC_API_KEY` and
- * `ANTHROPIC_BASE_URL`; `GOOGLE_API_KEY` and `GEMINI_API_KEY`; and `OLLAMA_BASE_URL`. An empty
+ * `ANTHROPIC_BASE_URL`; Google's key variables (`apiKeyEnvNames`); and `OLLAMA_BASE_URL`. An empty
  * value counts as unset.
  */
 
@@ -36,7 +36,7 @@ import { Route } from "../llm/route.ts";
 import { type Scheduler, type Send, warn } from "../platform.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost } from "../typesys/values.ts";
-import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS } from "./api_key_env.ts";
+import { apiKeyEnvNames, getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS } from "./api_key_env.ts";
 import {
   ApiKeyCredentials,
   AuthError,
@@ -197,11 +197,11 @@ function withHeaders(auth: Auth, headers: Record<string, string>): Auth {
   return Object.keys(headers).length > 0 ? new ExtraHeadersAuth(auth, headers) : auth;
 }
 
-/** The error for `provider` with no key, naming the environment `variable` to set. */
-function missingKey(provider: string, variable: string): RangeError {
+/** The error for `provider` with no key, naming every environment variable that could hold it. */
+function missingKey(provider: string, variables: readonly string[]): RangeError {
   return new RangeError(
-    `API key for provider '${provider}' is not set. Please set the ${variable} environment ` +
-      `variable (e.g. add ${variable}=your_key to your .env file).`,
+    `API key for provider '${provider}' is not set. Please set the ${variables.join(" or ")} environment ` +
+      `variable (e.g. add ${variables[0]}=your_key to your .env file).`,
   );
 }
 
@@ -260,7 +260,7 @@ function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): Rout
   const variable = getApiKeyEnv(provider)!;
   const key = resolved.keyAtBuild ?? (wiring.env(variable) || null);
   if (key === null && !OPTIONAL_API_KEY_PROVIDERS.has(provider)) {
-    throw missingKey(provider, variable);
+    throw missingKey(provider, [variable]);
   }
   const responses = routedToResponses(provider, model, block);
   const envBaseUrl =
@@ -355,7 +355,7 @@ function azureModel(resolved: Resolved, wiring: Wiring): RouteModel {
 function anthropicModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const { env } = wiring;
   const key = resolved.keyAtBuild ?? (env("ANTHROPIC_API_KEY") || null);
-  if (key === null) throw missingKey("anthropic", "ANTHROPIC_API_KEY");
+  if (key === null) throw missingKey("anthropic", ["ANTHROPIC_API_KEY"]);
   const route = new Route({
     provider: "anthropic",
     baseUrl: resolved.baseUrl ?? (env("ANTHROPIC_BASE_URL") || ANTHROPIC_ENDPOINT),
@@ -391,15 +391,16 @@ function geminiPath(model: string): [path: string, id: string] {
  * Build the Gemini Developer API route: the model's `streamGenerateContent` with `alt=sse` and
  * the key as `x-goog-api-key`, never in the query.
  *
- * The key is the resolved one, else a non-empty `GOOGLE_API_KEY`, else a non-empty
- * `GEMINI_API_KEY`; the base URL (the API root) the resolved one, else
- * `https://generativelanguage.googleapis.com`. Throws `RangeError` naming `GOOGLE_API_KEY` if no
+ * The key is the resolved one, else the first non-empty variable of `apiKeyEnvNames("google")`
+ * (`GOOGLE_API_KEY`, then `GEMINI_API_KEY`); the base URL (the API root) the resolved one, else
+ * `https://generativelanguage.googleapis.com`. Throws `RangeError` naming both variables if no
  * key is found.
  */
 function googleModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const { env } = wiring;
-  const key = resolved.keyAtBuild ?? (env("GOOGLE_API_KEY") || env("GEMINI_API_KEY") || null);
-  if (key === null) throw missingKey("google", "GOOGLE_API_KEY");
+  let key = resolved.keyAtBuild;
+  for (const name of apiKeyEnvNames("google")) key ??= env(name) || null;
+  if (key === null) throw missingKey("google", apiKeyEnvNames("google"));
   const [path, id] = geminiPath(resolved.model);
   const route = new Route({
     provider: "google",

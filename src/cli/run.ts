@@ -51,7 +51,7 @@ import {
   type Value,
   writeAsText,
 } from "../typesys/values.ts";
-import { getApiKeyEnv, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
+import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
 import { AuthError } from "../llm_clients/auth/index.ts";
 import {
   type AgentConfig,
@@ -1068,12 +1068,13 @@ interface ResumeKeyContext extends PromptContext {
 }
 
 /**
- * Require `envVar` to hold the key a recorded run started with.
+ * Require the first set variable of `envVars` to hold the key a recorded run started with.
  *
- * Only a missing key prompts, at `context.terminal`; a typed key that passes is `set` in
- * `context.env`, as a fresh run's prompted key is.
+ * Only a missing key prompts, at `context.terminal`, for the first variable; a typed key that
+ * passes is `set` there in `context.env`, as a fresh run's prompted key is.
  *
  * @param provider The provider name shown in prompts and errors.
+ * @param envVars The variables the provider's client reads its key from, in its order.
  * @param identity The recorded `keyIdentity` of the key, or `null` when the record has none, in
  *   which case any non-empty key passes.
  * @throws {ResumeKeyError} The key is set but differs from the recorded one, is missing with no
@@ -1083,22 +1084,23 @@ interface ResumeKeyContext extends PromptContext {
  */
 async function resumeEnvKey(
   provider: string,
-  envVar: string,
+  envVars: readonly string[],
   identity: string | null,
   { env, terminal, signal }: ResumeKeyContext,
 ): Promise<void> {
-  const existing = env.read(envVar);
-  if (existing) {
+  for (const name of envVars) {
+    const existing = env.read(name);
+    if (!existing) continue;
     if (identity !== null && keyIdentity(existing) !== identity) {
-      throw new ResumeKeyError(
-        `$${envVar} is not the key this run started with; set it to that key and resume again`,
-      );
+      throw new ResumeKeyError(`$${name} is not the key this run started with; set it to that key and resume again`);
     }
     return;
   }
+  const envVar = envVars[0]!;
   if (terminal === null) {
+    const unset = envVars.map((name) => `$${name}`).join(" or ");
     throw new ResumeKeyError(
-      `provider ${reprText(provider)} needs an API key but $${envVar} is not set; set it and resume again`,
+      `provider ${reprText(provider)} needs an API key but ${unset} is not set; set it and resume again`,
     );
   }
   const cancelled = `no API key provided for ${reprText(provider)} ($${envVar}); set it and resume again`;
@@ -1189,7 +1191,7 @@ async function checkResumeCredentials(
   for (const [provider, connection] of connections) {
     const { source } = connection;
     if (provider === "openai" && (source === "environment" || source === "legacy_environment")) {
-      await resumeEnvKey("openai", "OPENAI_API_KEY", connection.credential_id, context);
+      await resumeEnvKey("openai", ["OPENAI_API_KEY"], connection.credential_id, context);
     }
   }
   for (const [provider, connection] of connections) {
@@ -1201,9 +1203,10 @@ async function checkResumeCredentials(
     }
   }
   for (const provider of providers) {
-    const envVar = getApiKeyEnv(provider);
-    if (envVar === null || (OPTIONAL_API_KEY_PROVIDERS.has(provider) && !context.env.read(envVar))) continue;
-    await resumeEnvKey(provider, envVar, null, context);
+    const envVars = apiKeyEnvNames(provider);
+    if (envVars.length === 0) continue;
+    if (OPTIONAL_API_KEY_PROVIDERS.has(provider) && !envVars.some((name) => context.env.read(name))) continue;
+    await resumeEnvKey(provider, envVars, null, context);
   }
 }
 

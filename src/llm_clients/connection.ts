@@ -14,8 +14,8 @@
  * The `YIAN_*` limits, such as `YIAN_MAX_BASE_URL_CHARS`, come through `defaults.ts`'s `current()`;
  * everything else is read only through the `env` parameter (default `processEnv`), one variable
  * at a time: `YIAN_DEFAULT_PROVIDER`, `YIAN_DEFAULT_MODEL`, `OPENAI_BASE_URL` and `OPENAI_API_KEY`
- * for the snapshot and OpenAI's credentials; for `callCredentials`, each provider's key variable
- * (`PROVIDER_API_KEY_ENV`), `GEMINI_API_KEY` after Google's, `AZURE_OPENAI_AD_TOKEN` for Azure and
+ * for the snapshot and OpenAI's credentials; for `callCredentials`, each provider's key variables
+ * (`apiKeyEnvNames`, so `GEMINI_API_KEY` after Google's), `AZURE_OPENAI_AD_TOKEN` for Azure and
  * `OLLAMA_BASE_URL` for Ollama; and, through `AuthStore`, `YIAN_AUTH_FILE`, `XDG_CONFIG_HOME` and
  * `HOME` for the store path. An empty value counts as unset.
  */
@@ -29,7 +29,7 @@ import { BasicAuth } from "../llm/auth.ts";
 import { scrubError } from "../llm/errors.ts";
 import type { Scheduler } from "../platform.ts";
 import { isList, isRecord, valueRepr } from "../typesys/values.ts";
-import { getApiKeyEnv } from "./api_key_env.ts";
+import { apiKeyEnvNames } from "./api_key_env.ts";
 import {
   ApiKeyCredentials,
   AuthError,
@@ -78,9 +78,6 @@ export const HOST_KEY_MARKER = "_host_key";
  * Their values, like the key, are never recorded.
  */
 export const HEADER_NAMES_KEY = "_header_names";
-// Key variables a provider's client reads after the provider's own, and only when it is given no
-// key.
-const KEY_ENV_FALLBACKS: ReadonlyMap<string, readonly string[]> = new Map([["google", ["GEMINI_API_KEY"]]]);
 // Token variables listed whenever set, though only a call given no key sends them.
 const ALWAYS_SENT_ENV: ReadonlyMap<string, readonly string[]> = new Map([["azure", ["AZURE_OPENAI_AD_TOKEN"]]]);
 const SELECTION_FIELDS: ReadonlySet<string> = new Set([
@@ -1188,8 +1185,8 @@ export async function connectionCredentials(
  * `headers` values are listed whenever given. Otherwise a `store` connection sends its provider's
  * saved login, read without refresh: its key and saved header values, or its subscription tokens
  * and account id, expired ones too. Otherwise (an `environment` or `legacy_environment`
- * connection, or none) the client reads the first set variable of the provider's key variable,
- * then its fallbacks (`GEMINI_API_KEY` for Google). `AZURE_OPENAI_AD_TOKEN` is listed for `azure`
+ * connection, or none) the client reads the first set variable of `apiKeyEnvNames` (for Google,
+ * `GOOGLE_API_KEY` then `GEMINI_API_KEY`). `AZURE_OPENAI_AD_TOKEN` is listed for `azure`
  * whenever set. For `ollama`, a non-empty `OLLAMA_BASE_URL` whose userinfo has a non-empty user
  * lists the Basic auth password and token the route sends (`splitOllamaBaseUrl`); a malformed
  * value lists nothing. A config without connection metadata is resolved first, as the factory
@@ -1241,8 +1238,8 @@ export function callCredentials(config: unknown, options: { env?: Env } = {}): r
         const path = Object.hasOwn(connection, "store_path") ? connection["store_path"] : undefined;
         if (typeof path === "string" || path === null) found.push(...new AuthStore(path, { env }).savedSecrets(name));
       } else if (source === null || source === "environment" || source === "legacy_environment") {
-        for (const variable of [getApiKeyEnv(name), ...(KEY_ENV_FALLBACKS.get(name) ?? [])]) {
-          const key = variable === null ? undefined : env(variable);
+        for (const variable of apiKeyEnvNames(name)) {
+          const key = env(variable);
           if (key) {
             found.push(key);
             break;

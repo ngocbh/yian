@@ -235,13 +235,13 @@ const VENDOR_HEADERS = { "x-gateway": "gateway-1", "x-team": "blue" };
 const bearer = (key: string) => ({ authorization: `Bearer ${key}` });
 const apiKey = (key: string) => ({ "api-key": key });
 
-/** The missing-key error for `provider`'s `variable`. */
-function missingKey(provider: string, variable: string): Failed {
+/** The missing-key error for `provider`'s key `variables`. */
+function missingKey(provider: string, ...variables: string[]): Failed {
   return {
     error: RangeError,
     message:
-      `API key for provider '${provider}' is not set. Please set the ${variable} environment variable ` +
-      `(e.g. add ${variable}=your_key to your .env file).`,
+      `API key for provider '${provider}' is not set. Please set the ${variables.join(" or ")} environment variable ` +
+      `(e.g. add ${variables[0]}=your_key to your .env file).`,
     at: "build",
   };
 }
@@ -1108,11 +1108,11 @@ const CASES: Case[] = [
     expect: sends("google", "gemini-2.5-flash", googKey(HOST_KEY)),
   },
   {
-    name: "google key missing names GOOGLE_API_KEY",
+    name: "google key missing names both key variables",
     config: GOOGLE,
     env: { GOOGLE_API_KEY: "", GEMINI_API_KEY: "" },
     golden: "gemini/plain",
-    expect: missingKey("google", "GOOGLE_API_KEY"),
+    expect: missingKey("google", "GOOGLE_API_KEY", "GEMINI_API_KEY"),
   },
   {
     name: "ollama OLLAMA_BASE_URL unset",
@@ -1525,7 +1525,7 @@ describe("environment values never reach the wire", () => {
       (thrown: unknown) => thrown,
     );
     expect(error).toBeInstanceOf(RangeError);
-    expect((error as Error).message).toBe(missingKey("google", "GOOGLE_API_KEY").message);
+    expect((error as Error).message).toBe(missingKey("google", "GOOGLE_API_KEY", "GEMINI_API_KEY").message);
   });
 
   test("ollama_does_not_send_the_environment_key", async () => {

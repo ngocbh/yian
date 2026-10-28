@@ -150,6 +150,26 @@ describe("ensureEnvKey", () => {
     expect(terminal.prompts).toHaveLength(1);
   });
 
+  test("accepts Google's later key variable, as the Google client does", async () => {
+    vars.set("GEMINI_API_KEY", "sk-gemini");
+    expect(await ensureEnvKey("google", { env: new CommandEnv(base), terminal: null })).toBe("sk-gemini");
+    vars.set("GOOGLE_API_KEY", "sk-google");
+    expect(await ensureEnvKey("google", { env: new CommandEnv(base), terminal: null })).toBe("sk-google");
+  });
+
+  test("names every key variable when none is set, and prompts for the first", async () => {
+    const error = await rejection(ensureEnvKey("google", { env: new CommandEnv(base), terminal: null }));
+    expect(error.message).toBe(
+      "provider 'google' needs an API key but $GOOGLE_API_KEY or $GEMINI_API_KEY is not set (set it in the " +
+        "environment, or run interactively to be prompted). Or run 'yian auth google' to save a login",
+    );
+    const env = new CommandEnv(base);
+    const terminal = fakeTerminal(["sk-typed"]);
+    expect(await ensureEnvKey("google", { env, terminal })).toBe("sk-typed");
+    expect(terminal.prompts).toEqual([{ label: "Enter GOOGLE_API_KEY for provider 'google':", secret: true }]);
+    expect(env.read("GOOGLE_API_KEY")).toBe("sk-typed");
+  });
+
   test("skips an unset optional key", async () => {
     const terminal = fakeTerminal("typed");
     expect(await ensureEnvKey("vllm", { env: new CommandEnv(base), terminal })).toBeNull();

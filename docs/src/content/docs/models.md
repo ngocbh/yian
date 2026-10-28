@@ -27,7 +27,7 @@ you leave out; for an API key it reads the provider's key variable or asks with 
 | `yian auth PROVIDER` | Save or replace that provider's login |
 | `yian auth PROVIDER --default` | Make a saved provider the default |
 | `yian auth PROVIDER --remove` | Delete that provider's login |
-| `yian providers` | List every provider, the login kinds it takes and its key variable |
+| `yian providers` | List every provider, the login kinds it takes and its key variables |
 | `yian models --provider P` | List the models P offers to the key read from stdin (not for Azure) |
 
 Logins live in `~/.config/yian/auth.json` (or `$XDG_CONFIG_HOME/yian/auth.json`), a file only
@@ -40,7 +40,7 @@ you can read. Set `YIAN_AUTH_FILE`, or pass `--auth-file F`, to use another file
 |---|---|---|
 | `openai` | `OPENAI_API_KEY` | API key, or a ChatGPT subscription |
 | `anthropic` | `ANTHROPIC_API_KEY` | API key |
-| `google` | `GOOGLE_API_KEY` | API key |
+| `google` | `GOOGLE_API_KEY`, else `GEMINI_API_KEY` | API key |
 | `azure` | `AZURE_OPENAI_API_KEY` | API key |
 | `xai`, `deepseek`, `openrouter` | `XAI_API_KEY`, `DEEPSEEK_API_KEY`, `OPENROUTER_API_KEY` | API key |
 | `qwen`, `qwen-cn` | `DASHSCOPE_API_KEY`, `DASHSCOPE_CN_API_KEY` | API key |
@@ -50,10 +50,10 @@ you can read. Set `YIAN_AUTH_FILE`, or pass `--auth-file F`, to use another file
 | `ollama` | none | none |
 
 The `-cn` providers are the China-region services; their keys don't work on the international
-ones. For Google, a host's run also reads `GEMINI_API_KEY`; `yian run` and `yian auth` check only
-`GOOGLE_API_KEY`. An agent's key comes from, highest first: a key the host passes, the saved login, then the
-key variable. `yian run` asks for a missing key before the run starts when it can prompt, and
-fails early when it can't.
+ones. For Google, runs, `yian run` and `yian auth` read `GEMINI_API_KEY` when `GOOGLE_API_KEY` is
+unset, and ask for `GOOGLE_API_KEY` when neither is set. An agent's key comes from, highest
+first: a key the host passes, the saved login, then the key variable. `yian run` asks for a
+missing key before the run starts when it can prompt, and fails early when it can't.
 
 ## Choosing a provider and model
 

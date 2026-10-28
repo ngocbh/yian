@@ -123,7 +123,7 @@ openrouter: api-key (OPENROUTER_API_KEY)
 vllm: api-key, none (VLLM_API_KEY)
 ollama: none
 anthropic: api-key (ANTHROPIC_API_KEY)
-google: api-key (GOOGLE_API_KEY)
+google: api-key (GOOGLE_API_KEY or GEMINI_API_KEY)
 azure: api-key (AZURE_OPENAI_API_KEY)
 `;
 
@@ -139,7 +139,8 @@ describe("providers", () => {
     const listed = PROVIDERS_TEXT.trimEnd()
       .split("\n")
       .map((line) => {
-        const [, name, methods, variable] = /^(\S+): ([^(]+?)(?: \((\w+)\))?$/.exec(line)!;
+        // The JSON field holds only the first key variable.
+        const [, name, methods, variable] = /^(\S+): ([^(]+?)(?: \((\w+)(?: or \w+)*\))?$/.exec(line)!;
         return { name, methods: methods!.split(", "), api_key_env: variable ?? null };
       });
     expect(listed).toHaveLength(15);
@@ -1887,6 +1888,19 @@ describe("auth provider setup", () => {
     expect(c.fake.listings).toEqual([["google", "private-key", null]]);
     expect(c.answers()).toEqual([]);
     expect(c.store.selection("google")?.model).toBe("m1");
+  });
+
+  test("Google setup reads GEMINI_API_KEY when GOOGLE_API_KEY is unset", async () => {
+    const c = checks();
+    let result = await runAuth(c, "google", { model: "m1" });
+    expect(result).toMatchObject({
+      code: 1,
+      err: "Set GOOGLE_API_KEY or GEMINI_API_KEY before API-key setup, or run in an interactive terminal\n",
+    });
+    c.env["GEMINI_API_KEY"] = "private-gemini";
+    result = await runAuth(c, "google", { model: "m1" });
+    expect(result.code).toBe(0);
+    expect(c.fake.listings).toEqual([["google", "private-gemini", null]]);
   });
 
   // Base url variable on a terminal asks for a model name.

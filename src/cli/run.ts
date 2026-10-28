@@ -1654,6 +1654,7 @@ function leavesRoot(shown: string): boolean {
 /**
  * Load the flow at `path` from inside `root`, labelled with its path relative to `root`; its
  * `uses:` children load the same way, each ref only from `<importing file's dir>/<ref>.yaml`.
+ * Every `./file.ts:fn` CODE reference must resolve inside `root` too.
  *
  * The loader puts the `uses:` alias frame on a child's `LoadError` and turns anything else a child
  * throws into a `compose.load` error there.
@@ -1710,8 +1711,9 @@ async function loadConfined(
     }
     return child;
   };
-  // `CodeNode.check()` resolves a `./file.ts:fn` reference against `baseDir`, here and in a child.
-  return loadFlow(text, { childResolver, sourceLabel: shown, baseDir: dir, env });
+  // `CodeNode.check()` resolves a `./file.ts:fn` reference against `baseDir`, here and in a child,
+  // and refuses one outside `codeRoot`; a child is loaded here, so it gets the root too.
+  return loadFlow(text, { childResolver, sourceLabel: shown, baseDir: dir, codeRoot: root, env });
 }
 
 /** A loaded flow's input in a `yian check` result. */
@@ -1773,10 +1775,11 @@ async function checkFlow(path: string, root: string | undefined, env: Env): Prom
  * Load each flow without running it and report whether it loads; returns the exit code, 1 when
  * any fails.
  *
- * With `root`, each flow must be inside that directory and may not set `system.paths`, and its
- * diagnostics are labelled with its path relative to the root. As text, a loaded flow is a
- * `<path>: ok` line on stdout and a failure its `<path>:` line and diagnostic on stderr; with
- * `json`, one document lists every result, each path as given.
+ * With `root`, each flow, its `uses:` imports and its CODE references must be inside that
+ * directory, a flow may not set `system.paths`, and its diagnostics are labelled with its path
+ * relative to the root. As text, a loaded flow is a `<path>: ok` line on stdout and a failure its
+ * `<path>:` line and diagnostic on stderr; with `json`, one document lists every result, each
+ * path as given.
  */
 export async function check(
   flows: readonly string[],

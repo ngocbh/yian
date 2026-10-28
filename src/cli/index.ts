@@ -310,7 +310,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
           name: "root",
           type: "string",
           path: { exists: true, dir: true },
-          help: "Load each flow and its uses: children only from inside this directory.",
+          help: "Load each flow, its uses: children and its CODE files only from inside this directory.",
         },
       ],
     },

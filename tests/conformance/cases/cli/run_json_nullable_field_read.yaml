@@ -1,0 +1,26 @@
+# A load error with a code narrower than compose.load keeps it in the error document.
+kind: cli
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Rec: {a: str}
+  input:
+    maybe: !Optional(Rec)
+  nodes:
+    use:
+      kind: code
+      input:
+        v: ${input.maybe.a}
+      output: str
+      code: |
+        return "x"
+  output: ${use.output}
+args: [run, flow.yaml, -w, "0", --log, run.jsonl, --json]
+expect:
+  exit: 1
+  json:
+    format: yian.cli.v1
+    error:
+      code: expr.nullable_field_read
+      frames: [{label: flow.yaml, range: [11, 10, 11, 26]}]

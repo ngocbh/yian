@@ -93,6 +93,13 @@ test("?. inside a case ref's root is the ?.-inside-root error", () => {
   );
 });
 
+test("a case ref written with spaces around its dots expands like a tight one", () => {
+  const whole = expanded({ gate: gate(), c: code("c", { v: "${gate . output}" }) });
+  expect(inputOf(whole, "c", "v")).toBe("${pro.output | caut.output}");
+  const dotted = expanded({ gate: gate(), c: code("c", { v: "${ gate.output . report ?. x }" }) });
+  expect(inputOf(dotted, "c", "v")).toBe("${pro.output?.report?.x | caut.output?.report?.x}");
+});
+
 test("an agent's llm_config case ref expands", () => {
   const llmConfig = new ValueTemplate({ model: "${gate.output}" });
   const out = expanded({ gate: gate(), a: new AgentDescriptor({ id: "a", prompt: "Go.", llmConfig }) });

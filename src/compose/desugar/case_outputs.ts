@@ -28,8 +28,16 @@
  */
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
-import { conditionRefs, ExpressionError, optionalInsideRoot, parseCondition } from "../../expr/expressions.ts";
-import { findSpanEnd } from "../../expr/grammar.ts";
+import {
+  conditionRefs,
+  ExpressionError,
+  optionalInsideRoot,
+  parseCondition,
+  type RefStep,
+  splitReference,
+  stepsText,
+} from "../../expr/expressions.ts";
+import { callSuffixOf, type ExprNode, findSpanEnd, parseExpr, Tree } from "../../expr/grammar.ts";
 import { exprRefsOf, scanTemplate, Span } from "../../expr/template.ts";
 import {
   Assertion,
@@ -47,12 +55,6 @@ import { type NodeDescriptor, type OriginPresenter, siteKey } from "../nodes/bas
 import { mapBindingStrings } from "../nodes/bindings.ts";
 import { CaseDescriptor } from "../nodes/case.ts";
 import { mapOutputsStrings } from "./inline_calls.ts";
-
-// A clean whole-span case-output ref INTERIOR. Singular only: `<id>.output[.<seg>…]` (group 1 =
-// id, group 2 = the steps after `output`, each `.<seg>` or `?.<seg>`, kept as written). The id and
-// each path segment are reference-path style — a letter/underscore, then letters, digits, `_`, `#`
-// or `/`; no `-`.
-const CASE_OUTPUT_INTERIOR = /^([A-Za-z_][A-Za-z0-9_#/]*)\.output((?:\??\.[A-Za-z_][A-Za-z0-9_#/]*)*)$/;
 
 /**
  * Expand every `${<case>.output}` binding ref to a coalesce over its branch targets.
@@ -310,8 +312,7 @@ function expander(
   options: { range: SourceRange | null; diagnostics: LoadDiagnostics; spellings: Map<string, CaseRead> | null },
 ): (value: string) => string {
   return (value) => {
-    // Singular only: detect the `.output` marker.
-    if (!value.includes(".output")) return value;
+    if (!value.includes("${")) return value;
     const out: string[] = [];
     let i = 0;
     while (i < value.length) {
@@ -356,29 +357,46 @@ function expandSpan(
   options: { range: SourceRange | null; diagnostics: LoadDiagnostics; spellings: Map<string, CaseRead> | null },
 ): string {
   const { range, diagnostics, spellings } = options;
-  const match = CASE_OUTPUT_INTERIOR.exec(interior.trim());
-  if (match !== null) {
-    const caseId = match[1]!;
-    const suffix = match[2] ?? "";
-    if (caseIds.has(caseId)) {
-      const leaves = targets(caseId);
-      // No then:/else:, or a case-target cycle (the flatten dropped the arm).
-      if (leaves.length === 0) {
-        throw diagnostics.error(
-          `${host}: \${${caseId}.output} — case ${reprText(caseId)} has no resolvable branch value ` +
-            "(a case needs a `then:` or `else:`, and its targets must not form a cycle)",
-          { range },
-        );
-      }
-      // The first step after each branch root is ?.: a branch the route didn't take is skipped.
-      const steps = suffix.startsWith(".") ? "?" + suffix : suffix;
-      const expanded = leaves.map((target) => `${String(target)}.output${steps}`).join(" | ");
-      spellings?.set(expanded, { caseId, leaves: leaves.map(String) });
-      return "${" + expanded + "}";
+  const read = caseRead(interior, caseIds);
+  if (read !== null) {
+    const { caseId, steps } = read;
+    const leaves = targets(caseId);
+    // No then:/else:, or a case-target cycle (the flatten dropped the arm).
+    if (leaves.length === 0) {
+      throw diagnostics.error(
+        `${host}: \${${caseId}.output} — case ${reprText(caseId)} has no resolvable branch value ` +
+          "(a case needs a `then:` or `else:`, and its targets must not form a cycle)",
+        { range },
+      );
     }
+    // The first step after each branch root is ?.: a branch the route didn't take is skipped.
+    const suffix = stepsText(steps.map((step, index) => (index === 0 ? { ...step, optional: true } : step)));
+    const expanded = leaves.map((target) => `${String(target)}.output${suffix}`).join(" | ");
+    spellings?.set(expanded, { caseId, leaves: leaves.map(String) });
+    return "${" + expanded + "}";
   }
   rejectCaseRefs("${" + interior + "}", caseIds, host, { range, diagnostics }); // a non-clean read is loud
   return "${" + interior + "}";
+}
+
+/**
+ * Return the case and the steps after `output` when a span interior is just a case value read,
+ * `<case>.output[.path]` (spaces around a `.` allowed), else `null`; a malformed interior is
+ * `null`, left for the binding parser.
+ */
+function caseRead(interior: string, caseIds: ReadonlySet<string>): { caseId: string; steps: RefStep[] } | null {
+  let tree: ExprNode;
+  try {
+    tree = parseExpr(interior);
+  } catch (error) {
+    if (!(error instanceof ExpressionError)) throw error;
+    return null;
+  }
+  if (!(tree instanceof Tree) || tree.data !== "refcall" || callSuffixOf(tree) !== undefined) return null;
+  const { head, steps } = splitReference(tree);
+  // `${g?.output}` puts ?. inside the root; the rejection below names that.
+  if (!caseIds.has(head) || steps[0]?.name !== "output" || steps[0].optional) return null;
+  return { caseId: head, steps: steps.slice(1) };
 }
 
 /**

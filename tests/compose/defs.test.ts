@@ -21,9 +21,9 @@ import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
 
-import { loadConformanceFlow, loadError, loadErrorAsync } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { childResolver } from "./run_state_fixtures.ts";
+import { loadConformanceFlow, loadError, loadErrorAsync } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { childResolver } from "../helpers/run_state_fixtures.ts";
 
 /** The baked child of `flow`'s CALL node `nodeId`. */
 const childOf = (flow: CompiledFlow, nodeId: string) => (flow.nodes.get(nodeId) as CallNode).child as CompiledFlow;

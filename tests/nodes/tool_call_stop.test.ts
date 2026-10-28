@@ -15,7 +15,7 @@ import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../sr
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { aborted, engine, graph, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { aborted, engine, graph, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 /** Calls the `probe` tool once, naming itself as the calling node, and outputs its answer. */
 class ProbeNode extends Node {

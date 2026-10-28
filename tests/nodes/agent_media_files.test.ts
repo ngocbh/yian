@@ -33,8 +33,8 @@ import { type AgentRunContext, fileToInline, inlineToFile, writeRunFile } from "
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { FileRef } from "../../src/typesys/values.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { crashAfter, serving, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { crashAfter, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-media-files-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));

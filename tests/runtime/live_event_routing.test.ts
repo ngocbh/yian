@@ -10,7 +10,7 @@ import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { NodeStarted, NodeSucceeded, StreamChunk } from "../../src/events.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import type { FlowEngine, FlowEngineOptions } from "../../src/runtime/engine.ts";
-import { engine, graph } from "./run_state_fixtures.ts";
+import { engine, graph } from "../helpers/run_state_fixtures.ts";
 
 /** Publishes one chunk and two in-loop observers through whichever sinks exist. */
 class Live extends Node {

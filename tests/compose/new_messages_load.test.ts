@@ -14,7 +14,7 @@ import { forget } from "../../src/defaults.ts";
 import { Binding, ValueContract } from "../../src/nodes/contracts.ts";
 import { messagesKey } from "../../src/typesys/pool.ts";
 import { newMessagesType, typeFor } from "../../src/typesys/types.ts";
-import { loadErrorAsync } from "./declarations.ts";
+import { loadErrorAsync } from "../helpers/declarations.ts";
 
 /** The load error for reading `node`'s new messages when it isn't an AGENT, or not here. */
 const NOT_AN_AGENT = (node: string) =>

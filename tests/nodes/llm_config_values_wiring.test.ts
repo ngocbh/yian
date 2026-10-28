@@ -17,8 +17,8 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { LLM_CONFIG_KEY } from "../../src/nodes/agent/llm_values.ts";
 import { Binding, iterSourceStrings, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
-import { serving, textReply } from "../engine/run_state_fixtures.ts";
-import { assembled, assembleText, loadError, runCase } from "./declarations.ts";
+import { serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { assembled, assembleText, loadError, runCase } from "../helpers/declarations.ts";
 
 const compiled = (text: string): CompiledFlow => assembleText(text, "f.yaml").flow.compiled;
 

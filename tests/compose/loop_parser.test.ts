@@ -6,7 +6,7 @@
 import { expect, test } from "bun:test";
 
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
-import { nodesOf } from "../compose/declarations.ts";
+import { nodesOf } from "../helpers/declarations.ts";
 
 const LOOP_YAML = `
 id: chat

@@ -16,8 +16,8 @@ import { join } from "node:path";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunResult, advance, runFlow } from "../../src/run.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { editRecordedFlow, rejected, startedIds } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { editRecordedFlow, rejected, startedIds } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-replay-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

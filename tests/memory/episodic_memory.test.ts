@@ -25,7 +25,7 @@ import {
 } from "../../src/memory/contracts.ts";
 import { EpisodicMemory, type EpisodicSession } from "../../src/memory/episodic.ts";
 import { logJson } from "../../src/typesys/json.ts";
-import { importStatements } from "./source_scan.ts";
+import { importStatements } from "../helpers/source_scan.ts";
 
 // Cloned snapshots and nested test values are edited freely.
 type Mutable = any;

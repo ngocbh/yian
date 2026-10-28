@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
 
 const TYPEDEFS = `typedefs:
   WithKey:

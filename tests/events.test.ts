@@ -8,9 +8,9 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { FAILURE_CODES, Failure, OriginRef } from "../../src/diagnostics.ts";
-import { ERROR_KINDS } from "../../src/llm/errors.ts";
-import * as events from "../../src/events.ts";
+import { FAILURE_CODES, Failure, OriginRef } from "../src/diagnostics.ts";
+import { ERROR_KINDS } from "../src/llm/errors.ts";
+import * as events from "../src/events.ts";
 import {
   CallClosed,
   CLOSE_REASONS,
@@ -40,9 +40,9 @@ import {
   TokenUsage,
   ToolCallFinished,
   ToolCallStarted,
-} from "../../src/events.ts";
-import { lintSchema, loadSchema, type Schema, validate } from "../schema.ts";
-import { importStatements } from "./source_scan.ts";
+} from "../src/events.ts";
+import { lintSchema, loadSchema, type Schema, validate } from "./helpers/schema.ts";
+import { importStatements } from "./helpers/source_scan.ts";
 
 const FAILURE = new Failure({
   code: "node.execute",
@@ -728,7 +728,7 @@ describe("events schema", () => {
 describe("the events module", () => {
   test('imports only "./diagnostics.ts"', () => {
     // The observer vocabulary sits just above the diagnostic value spine.
-    const path = fileURLToPath(new URL("../../src/events.ts", import.meta.url));
+    const path = fileURLToPath(new URL("../src/events.ts", import.meta.url));
     const specifiers = importStatements(readFileSync(path, "utf8")).map((i) => i.specifier);
     expect(specifiers).toEqual(["./diagnostics.ts"]);
   });

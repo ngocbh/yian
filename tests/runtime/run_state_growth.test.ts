@@ -66,7 +66,7 @@ import {
   RUN_ID,
   snapshot,
   Spawner,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 /** A `Parameter` subclass, near-canonical, proving growth requires the exact carrier. */
 class ParameterSubclass extends Parameter {}

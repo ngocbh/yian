@@ -16,8 +16,8 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { StartNode } from "../../src/nodes/start/node.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-input-contract-origins-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

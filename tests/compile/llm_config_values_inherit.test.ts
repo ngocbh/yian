@@ -10,7 +10,7 @@ import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ValueTemplate } from "../../src/nodes/contracts.ts";
 
-import { loadErrorAsync } from "./declarations.ts";
+import { loadErrorAsync } from "../helpers/declarations.ts";
 
 const FIX = "pass it to the child as an input and write `${input.model}` in the child";
 

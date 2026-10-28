@@ -47,9 +47,9 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/index.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { parametersFromYaml } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { engine, graph, NO_ENV, serving, stacks, textReply } from "./run_state_fixtures.ts";
+import { parametersFromYaml } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { engine, graph, NO_ENV, serving, stacks, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-memory-evaluation-evidence-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

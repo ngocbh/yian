@@ -19,8 +19,8 @@ import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { runFlow } from "../../src/run.ts";
-import { fileOf, loadConformanceFlow, loadError, runTextCase } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { fileOf, loadConformanceFlow, loadError, runTextCase } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 afterEach(() => forget());
 

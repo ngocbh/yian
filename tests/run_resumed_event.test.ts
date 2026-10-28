@@ -4,7 +4,7 @@
 
 import { expect, test } from "bun:test";
 
-import { RunFailed, RunResumed, RunStarted, RunSucceeded } from "../../src/events.ts";
+import { RunFailed, RunResumed, RunStarted, RunSucceeded } from "../src/events.ts";
 
 test("run resumed constructible no required fields", () => {
   expect(new RunResumed()).toBeDefined();

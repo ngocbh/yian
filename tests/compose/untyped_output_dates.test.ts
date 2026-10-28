@@ -13,7 +13,7 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -23,7 +23,7 @@ import {
   loadErrorAsync,
   runCase,
   runTextCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-untyped-output-dates-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

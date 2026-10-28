@@ -27,7 +27,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { typeFor } from "../../src/typesys/index.ts";
 import { TypeCheckError, type ValueRecord } from "../../src/typesys/values.ts";
-import { engine, graph, rejected } from "./run_state_fixtures.ts";
+import { engine, graph, rejected } from "../helpers/run_state_fixtures.ts";
 
 /** JS has no built-in `TimeoutError`, so the rows throw this one. */
 class TimeoutError extends Error {

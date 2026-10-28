@@ -24,8 +24,8 @@ import { BUILTIN, DefaultsError, ENTRIES, type Env, forget, install, processEnv 
 import { SourceRange } from "../../src/diagnostics.ts";
 import { runFlow } from "../../src/run.ts";
 import { TypeCheckError, type Value } from "../../src/typesys/values.ts";
-import { loadConformanceFlow, loadErrorAsync } from "./declarations.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const MAX_VALUE_NESTING = BUILTIN.maxValueNesting;
 const LIMIT = `value nests deeper than ${MAX_VALUE_NESTING} levels`;

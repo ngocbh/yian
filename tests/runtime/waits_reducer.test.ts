@@ -79,8 +79,8 @@ import {
   RUN_ID,
   snapshot,
   startData,
-} from "./run_state_fixtures.ts";
-import { call, MSGS, paramFlow, started, succeed, tool, waitFlow, work } from "./waits_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
+import { call, MSGS, paramFlow, started, succeed, tool, waitFlow, work } from "../helpers/waits_fixtures.ts";
 
 describe("DeliveryRefused", () => {
   test("is a RangeError naming why, with the call's state and cause when given", () => {

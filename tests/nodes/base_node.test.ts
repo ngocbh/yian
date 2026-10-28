@@ -37,7 +37,7 @@ import {
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
-import { BranchNode, drive, FailNode, FuncNode as FakeFuncNode, StreamNode } from "./run_state_fixtures.ts";
+import { BranchNode, drive, FailNode, FuncNode as FakeFuncNode, StreamNode } from "../helpers/run_state_fixtures.ts";
 
 /** A minimal concrete node; the base constructor is the subject. */
 class FuncNode extends Node {

@@ -36,7 +36,7 @@ import {
   loadError,
   parametersFromYaml,
   runCase,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 // ---------- descriptor-level `expandCaseOutputs` coverage ----------
 

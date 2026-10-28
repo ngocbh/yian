@@ -16,8 +16,8 @@ import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import { runFlow } from "../../src/run.ts";
 
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { textReply } from "./run_state_fixtures.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { textReply } from "../helpers/run_state_fixtures.ts";
 
 const DEFAULTS = { provider: "anthropic", model: "default-model" };
 const PROVIDER_MODELS = { openai: "openai-default", google: "google-default" };

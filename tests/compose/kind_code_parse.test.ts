@@ -9,8 +9,8 @@ import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { rejected } from "../engine/run_state_fixtures.ts";
-import { assembled, assembleText, type CaseRow, parsedNodes, runCase } from "./declarations.ts";
+import { rejected } from "../helpers/run_state_fixtures.ts";
+import { assembled, assembleText, type CaseRow, parsedNodes, runCase } from "../helpers/declarations.ts";
 
 const FLOW = `nodes:
   verdict:

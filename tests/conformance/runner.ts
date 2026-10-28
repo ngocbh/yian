@@ -125,9 +125,9 @@ import type { JsonMode, JsonObject } from "../../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { buildValueAs, FileRef, fromHost, InboxRef, isRecord } from "../../src/typesys/values.ts";
 import type { Type, Value as YianValue, ValueRecord } from "../../src/typesys/values.ts";
-import { withAppendHook } from "../append_hook.ts";
-import { validate } from "../schema.ts";
-import type { Schema } from "../schema.ts";
+import { withAppendHook } from "../helpers/append_hook.ts";
+import { validate } from "../helpers/schema.ts";
+import type { Schema } from "../helpers/schema.ts";
 
 /** A case value: an int is a `bigint`, a float a `number`. */
 export type Value = null | boolean | bigint | number | string | Value[] | Case;

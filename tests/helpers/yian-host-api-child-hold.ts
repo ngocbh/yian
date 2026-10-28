@@ -1,7 +1,7 @@
 /**
  * The other process of `host_api.test.ts`'s lock tests, which holds a run while the test calls it.
  *
- * Run as `bun --no-install tests/engine/yian-host-api-child-hold.ts <log>` (or with Node). It runs
+ * Run as `bun --no-install tests/helpers/yian-host-api-child-hold.ts <log>` (or with Node). It runs
  * `processChatFlow()` at `<log>`. Its `gate` tool writes `locked` on stdout, reads one line from
  * stdin and returns, so the run holds the log's lock until the test writes that line. The run
  * then ends waiting on its take and the process exits 0. It exits 2 after 20 seconds in any case.

@@ -17,8 +17,8 @@ import { NodeStarted } from "../../src/events.ts";
 import { type RunResult, advance, runFlow } from "../../src/run.ts";
 import { decodeRecord } from "../../src/runtime/log.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { rejected } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { rejected } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-any-replay-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

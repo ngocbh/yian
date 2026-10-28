@@ -12,24 +12,24 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
-import { ENTRIES, type Env } from "../src/defaults.ts";
-import { collect } from "../src/llm/events.ts";
-import { Message, Request, TextPart } from "../src/llm/messages.ts";
-import { PROVIDER_API_KEY_ENV } from "../src/llm_clients/api_key_env.ts";
+import { ENTRIES, type Env } from "../../src/defaults.ts";
+import { collect } from "../../src/llm/events.ts";
+import { Message, Request, TextPart } from "../../src/llm/messages.ts";
+import { PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
 import {
   ApiKeyCredentials,
   AuthError,
   type Credentials,
   OAuthCredentials,
   type ProviderSelection,
-} from "../src/llm_clients/auth/common.ts";
-import { AuthStore } from "../src/llm_clients/auth/store.ts";
+} from "../../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import {
   azureResourceEndpoint,
   HostConnection,
   LLMConfig,
   SUPPORTED_LLM_PROVIDERS,
-} from "../src/llm_clients/config.ts";
+} from "../../src/llm_clients/config.ts";
 import {
   type AgentConfig,
   blockProblem,
@@ -48,10 +48,10 @@ import {
   resolveModelConfig,
   splitModelConfig,
   validateConnection,
-} from "../src/llm_clients/connection.ts";
-import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
-import { requireConcreteSelection, validateLayer } from "../src/llm_clients/layers.ts";
-import type { Send } from "../src/platform.ts";
+} from "../../src/llm_clients/connection.ts";
+import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
+import { requireConcreteSelection, validateLayer } from "../../src/llm_clients/layers.ts";
+import type { Send } from "../../src/platform.ts";
 
 const STORE: Connection = {
   method: "api_key",

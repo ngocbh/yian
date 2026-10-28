@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 
 import { bindingSource, outputContractType } from "../../src/nodes/contracts.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
-import { assembleText, loadError } from "./declarations.ts";
+import { assembleText, loadError } from "../helpers/declarations.ts";
 
 /** Return a flow with inbox `m`, input `t` of type `tType`, and a take with `timeout` line `timeout`. */
 const takeFlow = (timeout: string, tType = "str") => `id: f

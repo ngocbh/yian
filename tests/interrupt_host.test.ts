@@ -8,11 +8,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { loadFlow } from "../../src/compose/loader.ts";
-import { ModelCallFinished, NodeSucceeded, NodeWaiting, type RunEvent, type StreamChunk } from "../../src/events.ts";
-import { Finish, TextDelta } from "../../src/llm/events.ts";
-import { ScriptedModel } from "../../src/llm/testing.ts";
-import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts";
+import { loadFlow } from "../src/compose/loader.ts";
+import { ModelCallFinished, NodeSucceeded, NodeWaiting, type RunEvent, type StreamChunk } from "../src/events.ts";
+import { Finish, TextDelta } from "../src/llm/events.ts";
+import { ScriptedModel } from "../src/llm/testing.ts";
+import { FileLockError, lockFile, virtualScheduler } from "../src/platform.ts";
 import {
   advance,
   close,
@@ -24,13 +24,13 @@ import {
   RunBusyError,
   runFlow,
   send,
-} from "../../src/run.ts";
-import { decodeRecord, InterruptedRecord, JsonlRunLog, NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
-import { applyWaitsRecord, WaitsState } from "../../src/runtime/waits.ts";
-import { pending } from "../../src/tools/context.ts";
-import { tool } from "../../src/tools/function_tools.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { callReply, crashAfter, rejected, serving, textReply, userText } from "./run_state_fixtures.ts";
+} from "../src/run.ts";
+import { decodeRecord, InterruptedRecord, JsonlRunLog, NodeStepRecord, readRunLog } from "../src/runtime/log.ts";
+import { applyWaitsRecord, WaitsState } from "../src/runtime/waits.ts";
+import { pending } from "../src/tools/context.ts";
+import { tool } from "../src/tools/function_tools.ts";
+import { hostEnv } from "./helpers/mcp_helpers.ts";
+import { callReply, crashAfter, rejected, serving, textReply, userText } from "./helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-interrupt-host-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -377,7 +377,7 @@ test("a Stop after the send, before the take wakes, stops the reply", async () =
   expectStoppedByApplied(log, done.output, model);
 });
 
-const EXAMPLES_DIR = fileURLToPath(new URL("../../examples", import.meta.url));
+const EXAMPLES_DIR = fileURLToPath(new URL("../examples", import.meta.url));
 /** `examples/chat.yaml`. */
 const chatExample = () => loadFlow(readFileSync(join(EXAMPLES_DIR, "chat.yaml"), "utf8"), { searchPaths: [EXAMPLES_DIR] });
 const CHUNKS = () => [new TextDelta(0, "one"), new TextDelta(0, " two"), new TextDelta(0, " three"), new Finish({ reason: "stop" })];

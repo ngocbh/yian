@@ -33,9 +33,9 @@ import {
   nodesOf,
   parametersFromYaml,
   runCase,
-} from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { rejected } from "./run_state_fixtures.ts";
+} from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { rejected } from "../helpers/run_state_fixtures.ts";
 
 afterEach(() => forget());
 

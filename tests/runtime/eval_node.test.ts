@@ -45,7 +45,7 @@ import { type EvalNodeOptions, EvaluationFailure, evalNode } from "../../src/run
 import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, type Value, ValueKind } from "../../src/typesys/values.ts";
-import { drive, engine, FuncNode, graph, NO_ENV, nodeFlow, rejected, thrownBy as thrown } from "./run_state_fixtures.ts";
+import { drive, engine, FuncNode, graph, NO_ENV, nodeFlow, rejected, thrownBy as thrown } from "../helpers/run_state_fixtures.ts";
 
 /** Return the failure `drive` resolves to, or fail when it resolves to anything else. */
 async function driveFailure(

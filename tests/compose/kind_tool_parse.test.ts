@@ -9,7 +9,7 @@ import { SourceRange } from "../../src/diagnostics.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
 
 const FLOW = `nodes:
   fetch:

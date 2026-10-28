@@ -11,8 +11,8 @@ import { join } from "node:path";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { assembleText, loadConformanceFlow, loadError } from "./declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { assembleText, loadConformanceFlow, loadError } from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-any-name-literals-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

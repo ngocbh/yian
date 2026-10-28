@@ -16,9 +16,9 @@ import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { advance, type RunResult, runFlow } from "../../src/run.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import { commitPrepared, NodeDataError, prepareNodeRouted } from "../../src/runtime/state.ts";
-import { loadErrorAsync } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { callRedirectFlow, rejected, routeInFlight } from "./run_state_fixtures.ts";
+import { loadErrorAsync } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { callRedirectFlow, rejected, routeInFlight } from "../helpers/run_state_fixtures.ts";
 
 const runDir = mkdtempSync(join(tmpdir(), "yian-case-else-runs-"));
 afterAll(() => rmSync(runDir, { recursive: true, force: true }));

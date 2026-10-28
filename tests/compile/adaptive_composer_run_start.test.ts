@@ -15,8 +15,8 @@ import { copyGraph } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import { checkRecordedLlmFields, runFlow } from "../../src/run.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { rejected } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { rejected } from "../helpers/run_state_fixtures.ts";
 
 const LLM_SITE = "node 'ask' adaptive_questions.llm_config";
 

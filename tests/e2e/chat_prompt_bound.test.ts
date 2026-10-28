@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { Request } from "../../src/llm/messages.ts";
 import { advance, close, runFlow, send } from "../../src/run.ts";
-import { NO_ENV, PromptModel, serving, SUMMARIZER_FIRST_LINE, systemText, userText } from "./run_state_fixtures.ts";
+import { NO_ENV, PromptModel, serving, SUMMARIZER_FIRST_LINE, systemText, userText } from "../helpers/run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-chat-prompt-bound-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));

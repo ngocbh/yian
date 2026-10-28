@@ -23,7 +23,7 @@ import {
   parsedNodes,
   runCase,
   runTextCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

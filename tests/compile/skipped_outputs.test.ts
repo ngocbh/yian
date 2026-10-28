@@ -15,7 +15,7 @@ import {
   ValueContract,
 } from "../../src/nodes/contracts.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const INT = Type.scalar(ValueKind.INTEGER);

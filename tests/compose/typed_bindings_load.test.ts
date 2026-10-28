@@ -15,8 +15,8 @@ import type { StartNode } from "../../src/nodes/start/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals } from "../../src/typesys/values.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { loadConformanceFlow } from "./declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-load-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

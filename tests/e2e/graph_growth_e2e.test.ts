@@ -18,9 +18,9 @@ import { RunSucceeded } from "../../src/events.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
 import { runFlow } from "../../src/run.ts";
 import type { AskRequest } from "../../src/tools/registry.ts";
-import { caseText, linkConformanceFixtures, loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { childResolver, engine } from "./run_state_fixtures.ts";
+import { caseText, linkConformanceFixtures, loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { childResolver, engine } from "../helpers/run_state_fixtures.ts";
 
 // --- CODE-child CALL/MAP fixtures --- //
 

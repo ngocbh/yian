@@ -19,14 +19,14 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { type RunResult, advance, runFlow } from "../../src/run.ts";
 import { commitPrepared, NodeDataError, prepareNodeStarted } from "../../src/runtime/state.ts";
 import { Type, TypeCheckError, type Value, ValueKind } from "../../src/typesys/index.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
   commitStartSuccess,
   FuncNode,
   initializedAndStarted,
   prepareOutput,
   thrownBy,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-boundaries-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

@@ -35,9 +35,9 @@ import {
   loadErrorAsync,
   parametersFromYaml,
   runCase,
-} from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { childResolver } from "./run_state_fixtures.ts";
+} from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { childResolver } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-inline-calls-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

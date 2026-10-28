@@ -18,8 +18,8 @@ import { generateStructured, OutputInvalidError } from "../../src/nodes/agent/st
 import { runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, TypeCheckError } from "../../src/typesys/values.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { serving } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { serving } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);

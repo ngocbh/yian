@@ -14,25 +14,25 @@ import { inspect } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import type { Env } from "../src/defaults.ts";
-import { REDACTED as AUTH_REDACTED } from "../src/llm/auth.ts";
-import { ProviderError, scrubError } from "../src/llm/errors.ts";
-import { collect } from "../src/llm/events.ts";
-import { Message, Request, TextPart } from "../src/llm/messages.ts";
-import { AuthError, OAuthCredentials } from "../src/llm_clients/auth/common.ts";
-import { AuthStore } from "../src/llm_clients/auth/store.ts";
-import { LLMConfig } from "../src/llm_clients/config.ts";
+import type { Env } from "../../src/defaults.ts";
+import { REDACTED as AUTH_REDACTED } from "../../src/llm/auth.ts";
+import { ProviderError, scrubError } from "../../src/llm/errors.ts";
+import { collect } from "../../src/llm/events.ts";
+import { Message, Request, TextPart } from "../../src/llm/messages.ts";
+import { AuthError, OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
+import { LLMConfig } from "../../src/llm_clients/config.ts";
 import {
   type Connection,
   connectionCredentials,
   resolveModelConfig,
   splitModelConfig,
   validateConnection,
-} from "../src/llm_clients/connection.ts";
-import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
-import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
-import { REDACTED, redactKey, redactKeys } from "../src/llm_clients/redact.ts";
-import { type Send, virtualScheduler } from "../src/platform.ts";
+} from "../../src/llm_clients/connection.ts";
+import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
+import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
+import { REDACTED, redactKey, redactKeys } from "../../src/llm_clients/redact.ts";
+import { type Send, virtualScheduler } from "../../src/platform.ts";
 
 const SENTINEL = "sk-sentinel-3f9c1a7e";
 

@@ -25,7 +25,7 @@ import { Assertion, Binding, ContractOrigins, Parameter, ValueContract } from ".
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { FileRef, Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
-import { nodeFlow } from "./run_state_fixtures.ts";
+import { nodeFlow } from "../helpers/run_state_fixtures.ts";
 
 const START_ID = "__start__";
 

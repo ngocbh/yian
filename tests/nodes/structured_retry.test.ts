@@ -42,8 +42,8 @@ import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { Type, TypeCheckError, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { PLAIN_FLOW, runWith } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { PLAIN_FLOW, runWith } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);

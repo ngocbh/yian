@@ -11,7 +11,7 @@ import { BUILTIN, forget, reload } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import { assembled, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import { assembled, type CaseRow, loadError, parsedNodes, runCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

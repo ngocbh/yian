@@ -38,10 +38,10 @@ import { readRunIndex } from "../../src/run.ts";
 import { JsonlRunLog, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 import { compiled, VERSION } from "../../src/platform.ts";
-import { NO_ENV } from "../engine/run_state_fixtures.ts";
+import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 import { parseJson } from "../../src/typesys/json.ts";
-import { type Schema, validate } from "../schema.ts";
+import { type Schema, validate } from "../helpers/schema.ts";
 
 let tmp: string;
 

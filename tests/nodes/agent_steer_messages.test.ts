@@ -32,7 +32,7 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { FileRef, InboxRef, Type, type Value, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
-import { callReply, crashAfter, NO_ENV, resumeWith, runWith, serving, textReply } from "./run_state_fixtures.ts";
+import { callReply, crashAfter, NO_ENV, resumeWith, runWith, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 /** A pool whose START holds the handle of inbox `name`, as START binds an Inbox input. */
 function poolWithInbox(name: string): VariablePool {

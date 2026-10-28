@@ -29,7 +29,7 @@ import {
   loadError,
   parametersFromYaml,
   runCase,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 const NESTED = "`${...}` can't appear inside an expression";
 

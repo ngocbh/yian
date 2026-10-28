@@ -7,7 +7,7 @@ import { expect, test } from "bun:test";
 
 import { NodeSucceeded } from "../../src/events.ts";
 import { type RunResult, runFlow } from "../../src/run.ts";
-import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "../compose/declarations.ts";
+import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "../helpers/declarations.ts";
 
 const FNS = "./fixtures/compose_codefns.ts";
 

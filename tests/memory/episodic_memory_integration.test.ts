@@ -9,7 +9,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { EpisodicMemory } from "../../src/memory/episodic.ts";
-import { memorySections, NO_ENV, reply, runWith } from "./run_state_fixtures.ts";
+import { memorySections, NO_ENV, reply, runWith } from "../helpers/run_state_fixtures.ts";
 
 const FLOW = `id: episodic-history
 name: episodic_history

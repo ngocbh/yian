@@ -19,8 +19,8 @@ import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/types.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { assembled, assembleText, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { assembled, assembleText, loadConformanceFlow, loadError, runCase } from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-typed-bindings-downstream-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

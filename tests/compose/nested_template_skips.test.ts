@@ -12,7 +12,7 @@ import { expect, test } from "bun:test";
 
 import { type CompiledFlow, END_ID } from "../../src/compile/model.ts";
 import { ValueTemplate } from "../../src/nodes/contracts.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
 
 const HEADER = `
 id: nested_skips

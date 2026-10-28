@@ -34,9 +34,9 @@ import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { FileRef, Type, TypeCheckError, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
-import { parametersFromYaml } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { engine, graph, NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
+import { parametersFromYaml } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { engine, graph, NO_ENV, rejected, textReply } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);

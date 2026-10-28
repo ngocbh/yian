@@ -37,8 +37,8 @@ import {
   RunStartedRecord,
 } from "../../src/runtime/log.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
-import { FakeMemory } from "./memory_fakes.ts";
-import { rejected } from "./run_state_fixtures.ts";
+import { FakeMemory } from "../helpers/memory_fakes.ts";
+import { rejected } from "../helpers/run_state_fixtures.ts";
 
 const FLOW = `id: memory-run
 name: memory_run

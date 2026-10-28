@@ -14,7 +14,7 @@ import {
   loadError,
   loadErrorAsync,
   runCase,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 const LLM_SITE = "node 'ask' adaptive_questions.llm_config";
 

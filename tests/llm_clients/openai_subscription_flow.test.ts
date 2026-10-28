@@ -13,8 +13,8 @@ import { AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts
 import { virtualScheduler } from "../../src/platform.ts";
 import { runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { PLAIN_FLOW, recording, type Replier, sse } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { PLAIN_FLOW, recording, type Replier, sse } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-openai-subscription-flow-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

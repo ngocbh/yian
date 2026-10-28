@@ -16,7 +16,7 @@ import {
   type CaseRow,
   loadError,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

@@ -73,7 +73,7 @@ import { registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.t
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
-import { drive, engine, graph, NO_ENV, noGrowth, rejected, runWith, serving, textReply } from "./run_state_fixtures.ts";
+import { drive, engine, graph, NO_ENV, noGrowth, rejected, runWith, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 test("textOf returns a string as it is", () => {
   expect(textOf("hello\nworld")).toBe("hello\nworld");

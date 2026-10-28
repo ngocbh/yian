@@ -42,7 +42,7 @@ import {
   parametersFromYaml,
   parsedNodes,
   runCase,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 /** Each mapping pair of `cursor`: its key's built value, key range, value range and value. */
 function mappingSnapshot(cursor: SourceCursor): (Value | SourceRange | null)[][] {

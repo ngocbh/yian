@@ -24,7 +24,7 @@ import { ELSE_HANDLE } from "../../src/nodes/base.ts";
 import { Case, CaseNode } from "../../src/nodes/case/node.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
 import { VariablePool } from "../../src/typesys/index.ts";
-import { engine, FuncNode, graph, RecordNode } from "./run_state_fixtures.ts";
+import { engine, FuncNode, graph, RecordNode } from "../helpers/run_state_fixtures.ts";
 
 /** Return a pool holding each node's value; `${<id>.output}` reads it. */
 function poolWith(outputs: Record<string, unknown>): VariablePool {

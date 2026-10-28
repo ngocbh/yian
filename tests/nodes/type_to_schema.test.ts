@@ -42,8 +42,8 @@ import {
   TypeCheckError,
   ValueKind,
 } from "../../src/typesys/values.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { serving } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { serving } from "../helpers/run_state_fixtures.ts";
 
 const NO_TYPEDEFS = readTypedefs({});
 const POINT = readTypedefs({ Point: { x: "int" } });

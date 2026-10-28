@@ -19,7 +19,7 @@ import { flowNodesCursor, parseFile } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import type { TypeRegistry } from "../../src/typesys/types.ts";
-import { caseDocument, caseRegistry } from "../compose/declarations.ts";
+import { caseDocument, caseRegistry } from "../helpers/declarations.ts";
 
 /** Return the flow-owned wiring of a built leaf descriptor. */
 function wiring(desc: NodeDescriptor, registry: TypeRegistry = new Map()): Map<string, unknown> {

@@ -30,8 +30,8 @@ import { EvaluationFailure, evalNode, rebuildNodeData } from "../../src/runtime/
 import { captureBindings } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
-import { parametersFromYaml } from "../compose/declarations.ts";
-import { NO_ENV, rejected } from "./run_state_fixtures.ts";
+import { parametersFromYaml } from "../helpers/declarations.ts";
+import { NO_ENV, rejected } from "../helpers/run_state_fixtures.ts";
 
 /** A backward context over the node's declared inputs and captured layout. */
 function contextFor(node: Node, inputs: Record<string, unknown>, output: unknown): BackwardContext {

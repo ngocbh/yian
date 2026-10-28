@@ -7,7 +7,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { forget } from "../../src/defaults.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, parsedNodes, runCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

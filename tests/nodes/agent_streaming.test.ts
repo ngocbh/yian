@@ -47,7 +47,7 @@ import {
   runAgentFlow,
   runWith,
   serving,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);

@@ -12,7 +12,7 @@ import { SourceDocument } from "../../src/compose/source/index.ts";
 import { ValueContract } from "../../src/nodes/contracts.ts";
 import { type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
   assembledWith,
   assembleText,
@@ -23,7 +23,7 @@ import {
   loadError,
   parametersFromYaml,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-call-binding-types-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

@@ -29,7 +29,7 @@ import {
   loadError,
   parametersFromYaml,
   runCase,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 /** A def built by hand: `input:` text `inputs`, one producer `x` of type `str`. */
 function def(inputs: string): ComposedFlow {

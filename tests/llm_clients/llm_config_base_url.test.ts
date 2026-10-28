@@ -14,12 +14,12 @@ import { inspect } from "node:util";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import type { Env } from "../src/defaults.ts";
-import { ProviderError } from "../src/llm/errors.ts";
-import { collect } from "../src/llm/events.ts";
-import { Message, Request, TextPart } from "../src/llm/messages.ts";
-import { OAuthCredentials } from "../src/llm_clients/auth/common.ts";
-import { AuthStore } from "../src/llm_clients/auth/store.ts";
+import type { Env } from "../../src/defaults.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
+import { collect } from "../../src/llm/events.ts";
+import { Message, Request, TextPart } from "../../src/llm/messages.ts";
+import { OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import {
   azureResourceEndpoint,
   HostConnection,
@@ -28,16 +28,16 @@ import {
   popApiKey,
   popHostCredentials,
   splitOllamaBaseUrl,
-} from "../src/llm_clients/config.ts";
+} from "../../src/llm_clients/config.ts";
 import {
   checkModelConfig,
   type Connection,
   resolveModelConfig,
   splitModelConfig,
-} from "../src/llm_clients/connection.ts";
-import { chatModelFromConfig } from "../src/llm_clients/factory.ts";
-import { ValidationError } from "../src/llm_clients/provider_blocks.ts";
-import { type Send, virtualScheduler } from "../src/platform.ts";
+} from "../../src/llm_clients/connection.ts";
+import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
+import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
+import { type Send, virtualScheduler } from "../../src/platform.ts";
 
 const SENTINEL = "sk-sentinel-7d1f3b20";
 const AZURE_V1 = "https://res.openai.azure.com/openai/v1/";

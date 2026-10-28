@@ -8,7 +8,7 @@ import { expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { NodeFailed, NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
-import { BlockingNode, engine, FuncNode, graph } from "./run_state_fixtures.ts";
+import { BlockingNode, engine, FuncNode, graph } from "../helpers/run_state_fixtures.ts";
 
 test("independent node completes while one worker waits for a human", async () => {
   const release = Promise.withResolvers<string>();

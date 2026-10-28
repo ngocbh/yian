@@ -3,7 +3,7 @@
 import { expect, test } from "bun:test";
 
 import { AgentNode } from "../../src/nodes/agent/node.ts";
-import { assembled, assembleText, loadError, runCase } from "../compose/declarations.ts";
+import { assembled, assembleText, loadError, runCase } from "../helpers/declarations.ts";
 
 test("retired tool marker is not an implicit tool grant", () => {
   expect(() => new AgentNode("agent", { tools: ["builtin_tools"] })).toThrow(RangeError);

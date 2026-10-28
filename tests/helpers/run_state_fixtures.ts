@@ -125,7 +125,7 @@ import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";
 import { Type, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
+import { loadConformanceFlow } from "./declarations.ts";
 
 /** The run id the run-state tests record. */
 export const RUN_ID = "run-123";

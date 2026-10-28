@@ -31,8 +31,8 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { type AskRequest, ToolSet } from "../../src/tools/registry.ts";
 import { eventBytes } from "../../src/typesys/json.ts";
 import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
-import { type HandClock, handClock, inboxEngine, recordNames } from "./inbox_fixtures.ts";
-import { FIXED_CLOCK, noGrowth, RUN_ID } from "./run_state_fixtures.ts";
+import { type HandClock, handClock, inboxEngine, recordNames } from "../helpers/inbox_fixtures.ts";
+import { FIXED_CLOCK, noGrowth, RUN_ID } from "../helpers/run_state_fixtures.ts";
 
 const T0 = Date.UTC(2026, 9, 23);
 

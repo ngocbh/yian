@@ -14,8 +14,8 @@ import { TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type RunResult, advance, runFlow } from "../../src/run.ts";
 import type { AskRequest, ToolEntry } from "../../src/tools/registry.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { serving, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-text-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

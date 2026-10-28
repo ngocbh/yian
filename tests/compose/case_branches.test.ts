@@ -23,8 +23,8 @@ import { join } from "node:path";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { forget } from "../../src/defaults.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "./declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { assembled, assembleText, type CaseRow, loadConformanceFlow, loadError, runCase } from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-case-branches-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

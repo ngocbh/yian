@@ -22,8 +22,8 @@ import { ReportedToolError } from "../../src/tools/errors.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { drive, rejected, serving } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { drive, rejected, serving } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);

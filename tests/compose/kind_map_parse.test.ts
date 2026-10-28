@@ -7,7 +7,7 @@ import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { type CaseRow, loadError, parsedNodes, runCase } from "./declarations.ts";
+import { type CaseRow, loadError, parsedNodes, runCase } from "../helpers/declarations.ts";
 
 const FLOW = `nodes:
   fan:

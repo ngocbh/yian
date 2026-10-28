@@ -17,8 +17,8 @@ import { Assertion, Parameter, ValueContract } from "../../src/nodes/contracts.t
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { engine, FuncNode, graph } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { engine, FuncNode, graph } from "../helpers/run_state_fixtures.ts";
 
 const INT = new ValueContract(Type.scalar(ValueKind.INTEGER));
 

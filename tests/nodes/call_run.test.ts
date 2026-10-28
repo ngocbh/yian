@@ -18,8 +18,8 @@ import type { ValueContract } from "../../src/nodes/contracts.ts";
 import { ns } from "../../src/nodes/ids.ts";
 import { runFlow } from "../../src/run.ts";
 import type { JsonValue } from "../../src/typesys/json.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { childFlow, childResolver } from "./run_state_fixtures.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { childFlow, childResolver } from "../helpers/run_state_fixtures.ts";
 
 // A CODE-only child: topic -> {report, n}.
 const CHILD = `

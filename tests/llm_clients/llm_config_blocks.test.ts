@@ -2,11 +2,11 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { compareCodeUnits } from "../src/diagnostics.ts";
-import { LLM_CONFIG_KEYS, LLMConfig, mergeLlmConfig, SUPPORTED_LLM_PROVIDERS } from "../src/llm_clients/config.ts";
-import { validateLayer } from "../src/llm_clients/layers.ts";
-import { type Issue, PROVIDER_BLOCKS, ValidationError } from "../src/llm_clients/provider_blocks.ts";
-import { fromHost } from "../src/typesys/values.ts";
+import { compareCodeUnits } from "../../src/diagnostics.ts";
+import { LLM_CONFIG_KEYS, LLMConfig, mergeLlmConfig, SUPPORTED_LLM_PROVIDERS } from "../../src/llm_clients/config.ts";
+import { validateLayer } from "../../src/llm_clients/layers.ts";
+import { type Issue, PROVIDER_BLOCKS, ValidationError } from "../../src/llm_clients/provider_blocks.ts";
+import { fromHost } from "../../src/typesys/values.ts";
 
 const SENTINEL = "sk-sentinel-5f0c2a9e";
 

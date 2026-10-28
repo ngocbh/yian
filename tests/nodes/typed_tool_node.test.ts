@@ -18,8 +18,8 @@ import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { toolTypes } from "../../src/tools/types.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { rejected } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { rejected } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-typed-tool-node-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

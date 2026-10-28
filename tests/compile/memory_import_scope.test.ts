@@ -14,7 +14,7 @@ import { DeclSite, MemoryDecl, MemorySetupError } from "../../src/memory/contrac
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 
-import { CONFORMANCE_DIR, linkConformanceFixtures, loadErrorAsync } from "../compose/declarations.ts";
+import { CONFORMANCE_DIR, linkConformanceFixtures, loadErrorAsync } from "../helpers/declarations.ts";
 
 const CODE = "./fixtures/compose_codefns.ts:echo_x";
 

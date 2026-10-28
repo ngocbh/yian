@@ -13,8 +13,8 @@ import { join } from "node:path";
 
 import { flowManifest } from "../../src/compile/manifest.ts";
 import { advance, runFlow } from "../../src/run.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-node-range-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

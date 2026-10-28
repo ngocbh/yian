@@ -34,7 +34,7 @@ import {
   loadError,
   nodesOf,
   runCase,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

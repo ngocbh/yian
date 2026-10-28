@@ -23,9 +23,9 @@ import { DeliveryRefused } from "../../src/runtime/state.ts";
 import { pending } from "../../src/tools/context.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
-import { gateTool, handClock } from "./inbox_fixtures.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { callReply, crashAfter, serving, textReply } from "./run_state_fixtures.ts";
+import { gateTool, handClock } from "../helpers/inbox_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { callReply, crashAfter, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-agent-closers-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

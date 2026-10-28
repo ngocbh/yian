@@ -7,7 +7,7 @@ import { expect, test } from "bun:test";
 
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../compose/declarations.ts";
+import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../helpers/declarations.ts";
 
 const GATE_PROMPT = '      prompt: "Pick one for ${input.proj}"\n';
 

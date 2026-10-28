@@ -18,8 +18,8 @@ import type { StartNode } from "../../src/nodes/start/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 import { isListKind } from "../../src/typesys/values.ts";
-import { type CaseRow, inputsAt, loadError, loadErrorAsync, parametersFromYaml, runCase } from "./declarations.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+import { type CaseRow, inputsAt, loadError, loadErrorAsync, parametersFromYaml, runCase } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 // Pinned before `REG` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);

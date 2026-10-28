@@ -13,8 +13,8 @@ import { fileURLToPath } from "node:url";
 
 import { parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
-import { blank, importStatements } from "../engine/source_scan.ts";
-import { loadConformanceFlow, loadError, loadErrorAsync } from "./declarations.ts";
+import { blank, importStatements } from "../helpers/source_scan.ts";
+import { loadConformanceFlow, loadError, loadErrorAsync } from "../helpers/declarations.ts";
 
 const SRC = fileURLToPath(new URL("../../src/", import.meta.url));
 

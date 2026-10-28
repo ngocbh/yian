@@ -24,17 +24,17 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { flowFingerprint } from "../../src/compile/manifest.ts";
-import { END_ID, START_ID } from "../../src/compile/model.ts";
-import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
-import { loadFlow } from "../../src/compose/loader.ts";
-import { current, DefaultsError, DefaultsMismatchError, type Env } from "../../src/defaults.ts";
-import { NodeSucceeded, type RunEvent, RunStarted } from "../../src/events.ts";
-import { ExpressionError } from "../../src/expr/index.ts";
-import { ScriptedModel } from "../../src/llm/testing.ts";
-import type { ModelAccess } from "../../src/llm_clients/factory.ts";
-import type { CaseNode } from "../../src/nodes/case/node.ts";
-import { Binding } from "../../src/nodes/contracts.ts";
+import { flowFingerprint } from "../src/compile/manifest.ts";
+import { END_ID, START_ID } from "../src/compile/model.ts";
+import type { ComposedFlow } from "../src/compose/build/pipeline.ts";
+import { loadFlow } from "../src/compose/loader.ts";
+import { current, DefaultsError, DefaultsMismatchError, type Env } from "../src/defaults.ts";
+import { NodeSucceeded, type RunEvent, RunStarted } from "../src/events.ts";
+import { ExpressionError } from "../src/expr/index.ts";
+import { ScriptedModel } from "../src/llm/testing.ts";
+import type { ModelAccess } from "../src/llm_clients/factory.ts";
+import type { CaseNode } from "../src/nodes/case/node.ts";
+import { Binding } from "../src/nodes/contracts.ts";
 import {
   inspectRun,
   iterRunRecords,
@@ -48,8 +48,8 @@ import {
   runLogPath,
   staticNodes,
   staticPathOf,
-} from "../../src/run.ts";
-import { virtualScheduler } from "../../src/platform.ts";
+} from "../src/run.ts";
+import { virtualScheduler } from "../src/platform.ts";
 import {
   JsonlRunLog,
   NodeStartedRecord,
@@ -58,13 +58,13 @@ import {
   type RunStartedRecord,
   RunStoppedRecord,
   SCHEMA_VERSION,
-} from "../../src/runtime/log.ts";
-import { commitPrepared, prepareNodeStarted } from "../../src/runtime/state.ts";
-import { Skill } from "../../src/skills/catalog.ts";
-import { tool } from "../../src/tools/function_tools.ts";
-import { TypeCheckError } from "../../src/typesys/values.ts";
+} from "../src/runtime/log.ts";
+import { commitPrepared, prepareNodeStarted } from "../src/runtime/state.ts";
+import { Skill } from "../src/skills/catalog.ts";
+import { tool } from "../src/tools/function_tools.ts";
+import { TypeCheckError } from "../src/typesys/values.ts";
 
-import { hostEnv } from "./mcp_helpers.ts";
+import { hostEnv } from "./helpers/mcp_helpers.ts";
 import {
   crashAfter,
   NO_ENV,
@@ -75,9 +75,9 @@ import {
   startedRun,
   textReply,
   thrownBy,
-} from "./run_state_fixtures.ts";
+} from "./helpers/run_state_fixtures.ts";
 
-const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("./conformance/fixtures", import.meta.url));
 
 /** Load inline Compose YAML whose CODE references resolve from the conformance fixtures. */
 function load(text: string): Promise<ComposedFlow> {

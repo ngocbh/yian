@@ -11,7 +11,7 @@ import type { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { forget } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { loadError, loadErrorAsync, nodesOf, runTextCase } from "./declarations.ts";
+import { loadError, loadErrorAsync, nodesOf, runTextCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

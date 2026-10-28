@@ -23,14 +23,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
-import { flowFingerprint } from "../../src/compile/manifest.ts";
-import { CompiledFlow, copyGraph, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
-import { rebaseFlowOrigins } from "../../src/compile/origins.ts";
-import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
-import { loadFlow } from "../../src/compose/loader.ts";
-import type { Env } from "../../src/defaults.ts";
-import { OriginRef } from "../../src/diagnostics.ts";
+import { resolveLlmCascade } from "../src/compile/llm_cascade.ts";
+import { flowFingerprint } from "../src/compile/manifest.ts";
+import { CompiledFlow, copyGraph, Edge, END_ID, START_ID } from "../src/compile/model.ts";
+import { rebaseFlowOrigins } from "../src/compile/origins.ts";
+import { ComposedFlow } from "../src/compose/build/pipeline.ts";
+import { loadFlow } from "../src/compose/loader.ts";
+import type { Env } from "../src/defaults.ts";
+import { OriginRef } from "../src/diagnostics.ts";
 import {
   NodeAttemptResumed,
   NodeFailed,
@@ -41,15 +41,15 @@ import {
   RunResumed,
   RunStarted,
   RunSucceeded,
-} from "../../src/events.ts";
-import { ScriptedModel } from "../../src/llm/testing.ts";
-import { legacyConnectionConfig, legacyConnectionMap } from "../../src/llm_clients/connection.ts";
-import type { ModelAccess } from "../../src/llm_clients/factory.ts";
-import type { Node } from "../../src/nodes/base.ts";
-import { CodeNode } from "../../src/nodes/code/node.ts";
-import { EndNode } from "../../src/nodes/end/node.ts";
-import { StartNode } from "../../src/nodes/start/node.ts";
-import { virtualScheduler } from "../../src/platform.ts";
+} from "../src/events.ts";
+import { ScriptedModel } from "../src/llm/testing.ts";
+import { legacyConnectionConfig, legacyConnectionMap } from "../src/llm_clients/connection.ts";
+import type { ModelAccess } from "../src/llm_clients/factory.ts";
+import type { Node } from "../src/nodes/base.ts";
+import { CodeNode } from "../src/nodes/code/node.ts";
+import { EndNode } from "../src/nodes/end/node.ts";
+import { StartNode } from "../src/nodes/start/node.ts";
+import { virtualScheduler } from "../src/platform.ts";
 import {
   inspectRun,
   type AdvanceOptions,
@@ -57,7 +57,7 @@ import {
   type RunResult,
   advance,
   runFlow,
-} from "../../src/run.ts";
+} from "../src/run.ts";
 import {
   JsonlRunLog,
   MemoryRunLog,
@@ -73,12 +73,12 @@ import {
   RunResumedRecord,
   RunStartedRecord,
   RunStoppedRecord,
-} from "../../src/runtime/log.ts";
-import { commitPrepared, prepareNodeStarted } from "../../src/runtime/state.ts";
-import { TransientToolError } from "../../src/tools/errors.ts";
-import { tool } from "../../src/tools/function_tools.ts";
+} from "../src/runtime/log.ts";
+import { commitPrepared, prepareNodeStarted } from "../src/runtime/state.ts";
+import { TransientToolError } from "../src/tools/errors.ts";
+import { tool } from "../src/tools/function_tools.ts";
 
-import { hostEnv } from "./mcp_helpers.ts";
+import { hostEnv } from "./helpers/mcp_helpers.ts";
 import {
   committedValue,
   crashAfter,
@@ -88,9 +88,9 @@ import {
   requiredEndFlow,
   startedRun,
   textReply,
-} from "./run_state_fixtures.ts";
+} from "./helpers/run_state_fixtures.ts";
 
-const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("./conformance/fixtures", import.meta.url));
 const RUN_ID = "lifecycle-run";
 let dir: string;
 
@@ -1017,7 +1017,7 @@ test("a resume with an aborted signal rejects before the lock is taken", async (
 // ---- The SIGKILL platform sweep ----
 
 /** The package root: children run from it, so Bun never looks for packages to install. */
-const TS_ROOT = fileURLToPath(new URL("../../", import.meta.url));
+const TS_ROOT = fileURLToPath(new URL("../", import.meta.url));
 
 // Each CODE body waits for `YIAN_TEST_SWEEP_DELAY_MS`, which only the child sets: a killed
 // child's node is still running at the kill, and the test process's runs don't wait. A body runs

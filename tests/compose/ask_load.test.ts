@@ -8,7 +8,7 @@ import { SourceRange } from "../../src/diagnostics.ts";
 import { bindingSource, outputContractType } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
-import { assembleText, loadError } from "./declarations.ts";
+import { assembleText, loadError } from "../helpers/declarations.ts";
 
 /** Return a flow with one TOOL node `q` of tool id `toolId` and `body` lines. */
 const askFlow = (body: string, toolId = "ask") => `id: f

@@ -16,9 +16,9 @@ import { NodeStarted, NodeSucceeded } from "../../src/events.ts";
 import { NodeKind } from "../../src/nodes/base.ts";
 import { runFlow } from "../../src/run.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { assembleText, loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { engine, FuncNode, graph } from "./run_state_fixtures.ts";
+import { assembleText, loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { engine, FuncNode, graph } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-boundary-nodes-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

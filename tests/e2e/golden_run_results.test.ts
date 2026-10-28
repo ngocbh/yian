@@ -13,8 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { type RunFlowOptions, type RunResult, runFlow } from "../../src/run.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-golden-run-results-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

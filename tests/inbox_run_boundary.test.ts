@@ -1,9 +1,9 @@
 /** A run takes no input for an inbox; its START binds the handle instead. */
 import { expect, test } from "bun:test";
 
-import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import { hostInputs, runStartInputs, startWiring } from "../../src/run.ts";
-import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
+import { Parameter, ValueContract } from "../src/nodes/contracts.ts";
+import { hostInputs, runStartInputs, startWiring } from "../src/run.ts";
+import { inboxType, Type, ValueKind } from "../src/typesys/values.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const inboxParam = (name: string) =>

@@ -11,11 +11,11 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import type { Env } from "../src/defaults.ts";
-import { ProviderError } from "../src/llm/errors.ts";
-import { ApiKeyCredentials, OAuthCredentials } from "../src/llm_clients/auth/common.ts";
-import { AuthStore } from "../src/llm_clients/auth/store.ts";
-import { LLMConfig } from "../src/llm_clients/config.ts";
+import type { Env } from "../../src/defaults.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
+import { ApiKeyCredentials, OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
+import { AuthStore } from "../../src/llm_clients/auth/store.ts";
+import { LLMConfig } from "../../src/llm_clients/config.ts";
 import {
   type AgentConfig,
   callCredentials,
@@ -23,8 +23,8 @@ import {
   legacyConnectionConfig,
   resolveModelConfig,
   scrubCallCredentials,
-} from "../src/llm_clients/connection.ts";
-import { redactKeys } from "../src/llm_clients/redact.ts";
+} from "../../src/llm_clients/connection.ts";
+import { redactKeys } from "../../src/llm_clients/redact.ts";
 
 const AZURE_URL = "https://r.openai.azure.com/";
 

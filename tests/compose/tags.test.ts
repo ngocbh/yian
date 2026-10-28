@@ -31,7 +31,7 @@ import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { readTypedefs, type TypeRegistry, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import { assembled, type CaseCall, type CaseRow, cursorAt, loadError, runCase } from "./declarations.ts";
+import { assembled, type CaseCall, type CaseRow, cursorAt, loadError, runCase } from "../helpers/declarations.ts";
 
 // Pinned before `REG` is read too, so neither depends on the shell's `YIAN_*` limits.
 install(BUILTIN);

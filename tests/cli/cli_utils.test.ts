@@ -31,7 +31,7 @@ import { type Env, forget } from "../../src/defaults.ts";
 import { reprText } from "../../src/diagnostics.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ApiKeyCredentials, AuthStore } from "../../src/llm_clients/auth/index.ts";
-import { caseText } from "../compose/declarations.ts";
+import { caseText } from "../helpers/declarations.ts";
 
 // Each test's environment: a private home and auth store, so no real login is read.
 let home: string;

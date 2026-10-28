@@ -30,7 +30,7 @@ import {
   rebuildNodeData,
 } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { drive, FailNode, FuncNode, nodeFlow, rejected, StreamNode } from "./run_state_fixtures.ts";
+import { drive, FailNode, FuncNode, nodeFlow, rejected, StreamNode } from "../helpers/run_state_fixtures.ts";
 
 /** Return one configured result from its body. */
 class ResultNode extends Node {

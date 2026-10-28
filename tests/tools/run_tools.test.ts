@@ -16,7 +16,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { type AskHandler, type AskRequest, ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { engine, graph, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { engine, graph, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 /** A tool that returns a fixed reply. */
 const PING = new FunctionTool({

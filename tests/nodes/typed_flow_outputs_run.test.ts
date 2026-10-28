@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunResult, runFlow } from "../../src/run.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-typed-flow-outputs-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

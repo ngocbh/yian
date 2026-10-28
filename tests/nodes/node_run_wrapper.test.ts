@@ -29,7 +29,7 @@ import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Assertion, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { BranchNode, drive } from "./run_state_fixtures.ts";
+import { BranchNode, drive } from "../helpers/run_state_fixtures.ts";
 
 /**
  * A node that implements `forward` (not `run`), so the base template is under test. `forward`

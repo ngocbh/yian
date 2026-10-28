@@ -13,7 +13,7 @@ import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
 
 const TYPED_COUNTER = `
 id: typed-counter

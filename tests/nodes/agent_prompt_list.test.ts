@@ -17,7 +17,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { callReply, rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { callReply, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 /** The node's private render, which `forward` and `learningMaterial` share. */
 function renderPrompt(

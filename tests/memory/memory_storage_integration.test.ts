@@ -16,7 +16,7 @@ import { ReflectiveMemory } from "../../src/memory/reflective.ts";
 import { SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
-import { memorySnapshot, NO_ENV, reply } from "./run_state_fixtures.ts";
+import { memorySnapshot, NO_ENV, reply } from "../helpers/run_state_fixtures.ts";
 
 const MODEL_CONFIG = { provider: "openai", model: "storage-test-model" };
 const CODE_FLOW = `id: durable-learning

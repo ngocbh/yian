@@ -10,7 +10,7 @@ import { type AddressInfo, createServer } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// Built, this file runs as `dist/tests/engine/mcp_helpers.js`, one directory deeper.
+// Built, this file runs as `dist/tests/helpers/mcp_helpers.js`, one directory deeper.
 const BUILT = import.meta.url.endsWith(".js");
 /** The package root. */
 export const ROOT = fileURLToPath(new URL(BUILT ? "../../../" : "../../", import.meta.url));

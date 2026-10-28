@@ -46,7 +46,7 @@ import {
   prepareOutput,
   routeInFlight,
   prepareGrowth,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: string): unknown {

@@ -58,7 +58,7 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
 import { typeEquals } from "../../src/typesys/values.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { assembleText, handChild, loadError } from "../compose/declarations.ts";
+import { assembleText, handChild, loadError } from "../helpers/declarations.ts";
 
 /** A minimal concrete node; the base fields are the subject. */
 class BareNode extends Node {

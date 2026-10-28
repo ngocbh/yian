@@ -23,8 +23,8 @@ import {
   nodesOf,
   runCase,
   runTextCase,
-} from "../compose/declarations.ts";
-import { withKinds } from "../compose/stand_ins.ts";
+} from "../helpers/declarations.ts";
+import { withKinds } from "../helpers/stand_ins.ts";
 
 afterEach(() => forget());
 

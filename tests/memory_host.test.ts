@@ -5,18 +5,18 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
-import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
-import { loadFlow } from "../../src/compose/loader.ts";
-import { BUILTIN, forget, install, processEnv } from "../../src/defaults.ts";
-import { OriginRef } from "../../src/diagnostics.ts";
-import { ModelCallRetried, ReplayDegraded } from "../../src/events.ts";
-import * as yian from "../../src/index.ts";
-import { ProviderError } from "../../src/llm/errors.ts";
-import { type RetryInfo, RouteModel } from "../../src/llm/executor.ts";
-import { Message, Response, TextPart } from "../../src/llm/messages.ts";
-import { ScriptedModel } from "../../src/llm/testing.ts";
-import type { ModelAccess } from "../../src/llm_clients/factory.ts";
+import { CompiledFlow, END_ID, START_ID } from "../src/compile/model.ts";
+import { ComposedFlow } from "../src/compose/build/pipeline.ts";
+import { loadFlow } from "../src/compose/loader.ts";
+import { BUILTIN, forget, install, processEnv } from "../src/defaults.ts";
+import { OriginRef } from "../src/diagnostics.ts";
+import { ModelCallRetried, ReplayDegraded } from "../src/events.ts";
+import * as yian from "../src/index.ts";
+import { ProviderError } from "../src/llm/errors.ts";
+import { type RetryInfo, RouteModel } from "../src/llm/executor.ts";
+import { Message, Response, TextPart } from "../src/llm/messages.ts";
+import { ScriptedModel } from "../src/llm/testing.ts";
+import type { ModelAccess } from "../src/llm_clients/factory.ts";
 import {
   DeclSite,
   type JsonObject,
@@ -27,22 +27,22 @@ import {
   MemoryEpisodeStatus,
   MemoryOperationError,
   MemorySetupError,
-} from "../../src/memory/contracts.ts";
-import { EpisodicMemory } from "../../src/memory/episodic.ts";
-import { ProfileMemory } from "../../src/memory/profile.ts";
-import { ReflectiveMemory } from "../../src/memory/reflective.ts";
-import { buildMemories, MemoryRegistry } from "../../src/memory_host.ts";
-import { AgentNode } from "../../src/nodes/agent/node.ts";
-import type { Node } from "../../src/nodes/base.ts";
-import { CallNode } from "../../src/nodes/call/node.ts";
-import { CodeNode } from "../../src/nodes/code/node.ts";
-import { EndNode } from "../../src/nodes/end/node.ts";
-import { StartNode } from "../../src/nodes/start/node.ts";
-import { RunStarted } from "../../src/events.ts";
-import { advance, runFlow, type RunFlowOptions } from "../../src/run.ts";
+} from "../src/memory/contracts.ts";
+import { EpisodicMemory } from "../src/memory/episodic.ts";
+import { ProfileMemory } from "../src/memory/profile.ts";
+import { ReflectiveMemory } from "../src/memory/reflective.ts";
+import { buildMemories, MemoryRegistry } from "../src/memory_host.ts";
+import { AgentNode } from "../src/nodes/agent/node.ts";
+import type { Node } from "../src/nodes/base.ts";
+import { CallNode } from "../src/nodes/call/node.ts";
+import { CodeNode } from "../src/nodes/code/node.ts";
+import { EndNode } from "../src/nodes/end/node.ts";
+import { StartNode } from "../src/nodes/start/node.ts";
+import { RunStarted } from "../src/events.ts";
+import { advance, runFlow, type RunFlowOptions } from "../src/run.ts";
 
-import { FakeMemory, type FakeSession } from "./memory_fakes.ts";
-import { NO_ENV } from "./run_state_fixtures.ts";
+import { FakeMemory, type FakeSession } from "./helpers/memory_fakes.ts";
+import { NO_ENV } from "./helpers/run_state_fixtures.ts";
 
 let tmp: string;
 

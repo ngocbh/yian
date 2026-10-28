@@ -18,8 +18,8 @@ import { validateRoute, validateSource } from "../../src/runtime/contracts.ts";
 import { routeFromPayload, routePayload } from "../../src/runtime/log.ts";
 import { RetainedTrace } from "../../src/runtime/trace.ts";
 import { JSONDecodeError, logJson, parseJson } from "../../src/typesys/json.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { FakeMemory } from "./memory_fakes.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { FakeMemory } from "../helpers/memory_fakes.ts";
 
 /** One valid source leaf shared by the route error trees. */
 const SOURCE = new ValueRoute("source", { source: new SourceRef("run", 1) });

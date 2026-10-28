@@ -17,7 +17,7 @@ import { Assertion, Parameter } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
-import { childFlow, FuncNode, parentWithSpawner } from "./run_state_fixtures.ts";
+import { childFlow, FuncNode, parentWithSpawner } from "../helpers/run_state_fixtures.ts";
 
 /** One live seed-producing spawner of every legal grow kind, with the `Grow` its `run` gives. */
 async function growthProducers(): Promise<[[CallNode, Grow], [MapNode, Grow], [LoopNode, Grow]]> {

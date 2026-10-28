@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
-import { assembleText, loadError } from "./declarations.ts";
+import { assembleText, loadError } from "../helpers/declarations.ts";
 
 const ASK = `id: f
 name: f

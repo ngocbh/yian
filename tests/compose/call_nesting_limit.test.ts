@@ -31,8 +31,8 @@ import {
   loadConformanceFlow,
   loadErrorAsync,
   runCase,
-} from "./declarations.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+} from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 // The runs' isolated environment and logs.
 const runDir = mkdtempSync(join(tmpdir(), "yian-call-nesting-"));

@@ -20,8 +20,8 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { NodeState } from "../../src/runtime/common.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { childFlow, engine, intParameter, parentWithSpawner } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { childFlow, engine, intParameter, parentWithSpawner } from "../helpers/run_state_fixtures.ts";
 
 test("rensInternal re-namespaces input and output heads", () => {
   // `${input.k}` reads the namespaced child START's output object; `${x.output}` is node-first.

@@ -21,17 +21,17 @@ import { join, resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import { FlowOutput, START_ID } from "../../src/compile/model.ts";
-import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
-import type { Node } from "../../src/nodes/base.ts";
-import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import { StartNode } from "../../src/nodes/start/node.ts";
-import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { FileLockError, lockFile } from "../../src/platform.ts";
-import { LoadError } from "../../src/compose/helpers/errors.ts";
-import { loadFlow } from "../../src/compose/loader.ts";
-import { DefaultsMismatchError } from "../../src/defaults.ts";
-import { CallClosed, NodeSucceeded, NodeWaiting, type RunEvent, RunStarted, RunWaiting } from "../../src/events.ts";
+import { FlowOutput, START_ID } from "../src/compile/model.ts";
+import { ComposedFlow } from "../src/compose/build/pipeline.ts";
+import type { Node } from "../src/nodes/base.ts";
+import { Parameter, ValueContract } from "../src/nodes/contracts.ts";
+import { StartNode } from "../src/nodes/start/node.ts";
+import { ToolNode } from "../src/nodes/tool/node.ts";
+import { FileLockError, lockFile } from "../src/platform.ts";
+import { LoadError } from "../src/compose/helpers/errors.ts";
+import { loadFlow } from "../src/compose/loader.ts";
+import { DefaultsMismatchError } from "../src/defaults.ts";
+import { CallClosed, NodeSucceeded, NodeWaiting, type RunEvent, RunStarted, RunWaiting } from "../src/events.ts";
 import {
   advance,
   cancel,
@@ -44,14 +44,14 @@ import {
   RunBusyError,
   runFlow,
   send,
-} from "../../src/run.ts";
-import { PoolCommitRecord, readRunLog, RunCancelledRecord } from "../../src/runtime/log.ts";
-import { pending } from "../../src/tools/context.ts";
-import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { inboxType, Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
-import { gateTool, handClock } from "./inbox_fixtures.ts";
-import { processChatFlow, processEnv } from "./yian-host-api-child-hold.ts";
-import { graph, NO_ENV, rejected } from "./run_state_fixtures.ts";
+} from "../src/run.ts";
+import { PoolCommitRecord, readRunLog, RunCancelledRecord } from "../src/runtime/log.ts";
+import { pending } from "../src/tools/context.ts";
+import { FunctionTool } from "../src/tools/function_tools.ts";
+import { inboxType, Type, TypeCheckError, ValueKind } from "../src/typesys/values.ts";
+import { gateTool, handClock } from "./helpers/inbox_fixtures.ts";
+import { processChatFlow, processEnv } from "./helpers/yian-host-api-child-hold.ts";
+import { graph, NO_ENV, rejected } from "./helpers/run_state_fixtures.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "host-api-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -468,8 +468,8 @@ test("codeRoot: an offline call refuses a CODE file outside it before any append
   expect(readRunLog(log).at(-1)!.record).toBeInstanceOf(RunCancelledRecord);
 });
 
-const HOLD_SCRIPT = fileURLToPath(new URL("./yian-host-api-child-hold.ts", import.meta.url));
-const SEND_SCRIPT = fileURLToPath(new URL("./yian-host-api-child-send.ts", import.meta.url));
+const HOLD_SCRIPT = fileURLToPath(new URL("./helpers/yian-host-api-child-hold.ts", import.meta.url));
+const SEND_SCRIPT = fileURLToPath(new URL("./helpers/yian-host-api-child-send.ts", import.meta.url));
 // Without `--no-install`, Bun may try to install the script's imports from the network.
 const FLAGS = process.versions.bun === undefined ? [] : ["--no-install"];
 

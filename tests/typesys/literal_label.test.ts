@@ -14,7 +14,7 @@ import {
   typeEquals,
   ValueKind,
 } from "../../src/typesys/values.ts";
-import { assembled, assembleText, loadError, runCase } from "../compose/declarations.ts";
+import { assembled, assembleText, loadError, runCase } from "../helpers/declarations.ts";
 
 /** Return the message of the `TypeCheckError` `readTypedefs(raw)` throws. */
 function typedefsError(raw: Readonly<Record<string, unknown>>): string {

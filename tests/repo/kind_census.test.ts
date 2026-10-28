@@ -39,7 +39,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync } from "node:fs";
 
-import { blank, closing, importStatements } from "./source_scan.ts";
+import { blank, closing, importStatements } from "../helpers/source_scan.ts";
 
 const SRC = new URL("../../src/", import.meta.url);
 

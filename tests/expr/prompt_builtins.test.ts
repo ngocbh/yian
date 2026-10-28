@@ -21,8 +21,8 @@ import { ScriptedModel } from "../../src/llm/testing.ts";
 import { runFlow } from "../../src/run.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
-import { assembleText, loadError } from "../compose/declarations.ts";
-import { NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
+import { assembleText, loadError } from "../helpers/declarations.ts";
+import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const REC: ValueRecord = { briefs: ["ab", "adf"], name: "zeta", sig: { value: 0.8 } };
 

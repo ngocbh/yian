@@ -9,10 +9,10 @@ import { join } from "node:path";
 
 import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 
-import { buildGrow } from "../../src/compile/expand.ts";
-import { flowFingerprint } from "../../src/compile/manifest.ts";
-import { copyGraph } from "../../src/compile/model.ts";
-import { loadFlow } from "../../src/compose/loader.ts";
+import { buildGrow } from "../src/compile/expand.ts";
+import { flowFingerprint } from "../src/compile/manifest.ts";
+import { copyGraph } from "../src/compile/model.ts";
+import { loadFlow } from "../src/compose/loader.ts";
 import {
   BUILTIN,
   DefaultsError,
@@ -21,13 +21,13 @@ import {
   install,
   processEnv,
   withEnv,
-} from "../../src/defaults.ts";
-import { ScriptedModel } from "../../src/llm/testing.ts";
-import { advance, runFlow } from "../../src/run.ts";
-import { NodeExpandedRecord, readRunLog } from "../../src/runtime/log.ts";
-import { RunState, replayRecords } from "../../src/runtime/state.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { rejected, serving, textReply } from "./run_state_fixtures.ts";
+} from "../src/defaults.ts";
+import { ScriptedModel } from "../src/llm/testing.ts";
+import { advance, runFlow } from "../src/run.ts";
+import { NodeExpandedRecord, readRunLog } from "../src/runtime/log.ts";
+import { RunState, replayRecords } from "../src/runtime/state.ts";
+import { hostEnv } from "./helpers/mcp_helpers.ts";
+import { rejected, serving, textReply } from "./helpers/run_state_fixtures.ts";
 
 import {
   decodeRecord,
@@ -35,8 +35,8 @@ import {
   RecordEnvelope,
   RunStartedRecord,
   SCHEMA_VERSION,
-} from "../../src/runtime/log.ts";
-import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
+} from "../src/runtime/log.ts";
+import { type JsonObject, logJson, parseJson } from "../src/typesys/json.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));

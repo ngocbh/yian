@@ -7,7 +7,7 @@ import { forget } from "../../src/defaults.ts";
 import type { Binding, ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, typeEquals } from "../../src/typesys/values.ts";
-import { assembled, assembleText, type CaseRow, loadError, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

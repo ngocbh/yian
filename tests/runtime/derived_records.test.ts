@@ -42,7 +42,7 @@ import {
 import { rebuildCommit, rebuildGrowth } from "../../src/runtime/state.ts";
 import { decodeTyped } from "../../src/runtime/trace.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
-import { crashAfter, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
+import { crashAfter, NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-derived-records-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));

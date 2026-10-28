@@ -29,9 +29,9 @@ import {
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { FakeMemory } from "./memory_fakes.ts";
-import { CrashAt, crashes, rejected, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { FakeMemory } from "../helpers/memory_fakes.ts";
+import { CrashAt, crashes, rejected, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-backward-recovery-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

@@ -7,7 +7,7 @@ import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
-import { assembled, assembleText, type CaseRow, loadError, loadErrorAsync, runCase } from "./declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, loadErrorAsync, runCase } from "../helpers/declarations.ts";
 
 const INPUTS = `\
 input:

@@ -8,7 +8,7 @@ a trusted publisher only on an existing package):
 1. Merge a PR that sets `version` in `package.json` and `VERSION` in `src/platform.ts`.
 2. In a fresh clone at the merge commit: `bun install --frozen-lockfile`, then
    `bun run typecheck && bun run build && bun test ./tests` and
-   `YIAN_TEST_PACK=1 bun test tests/packaging.test.ts -t "npm tarball"`.
+   `YIAN_TEST_PACK=1 bun test tests/repo/packaging.test.ts -t "npm tarball"`.
 3. `npm login` (account `ngocbh`, 2FA on), then `npm publish --access public --dry-run`: check the
    file list has `README.md`, `LICENSE`, `NOTICE` and no `tests/`.
 4. `npm publish --access public` (it asks for the one-time password).

@@ -25,9 +25,9 @@ import { runtime, TypeStripError } from "../../src/platform.ts";
 import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FileRef, Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { drive, engine, graph, rejected } from "./run_state_fixtures.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { drive, engine, graph, rejected } from "../helpers/run_state_fixtures.ts";
 
 /** Run a CODE node `n` with `code` on the bound `inputs` and return its result's value. */
 async function run(code: string, inputs: Record<string, unknown> = {}): Promise<unknown> {

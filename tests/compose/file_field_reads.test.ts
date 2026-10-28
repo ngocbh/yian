@@ -16,8 +16,8 @@ import { runFlow } from "../../src/run.ts";
 import { prepareExpanded } from "../../src/runtime/state.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { fileFieldType, Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
-import { fragment, initializedSpawner } from "../engine/run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { fragment, initializedSpawner } from "../helpers/run_state_fixtures.ts";
 import {
   assembled,
   assembledWith,
@@ -29,7 +29,7 @@ import {
   loadError,
   parametersFromYaml,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-file-field-reads-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

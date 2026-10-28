@@ -14,7 +14,7 @@ import type { EndNode } from "../../src/nodes/end/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { type Type, typeEquals } from "../../src/typesys/values.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-typed-flow-outputs-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

@@ -20,7 +20,7 @@ import {
   loadError,
   parametersFromYaml,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 /** A def over the one input `name: !<type>` whose node `x` returns `output`, built by hand. */
 const def = (name: string, type: string, output: string): ComposedFlow =>

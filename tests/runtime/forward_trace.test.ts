@@ -157,7 +157,7 @@ import {
   prepareGrowth,
   fixedRebinder,
   serving,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 import { replayRunLog, runFlow } from "../../src/run.ts";
 
 type ErrorClass = typeof TypeError | typeof RangeError;

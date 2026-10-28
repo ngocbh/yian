@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
-import { assembleText, handChild, loadError } from "./declarations.ts";
+import { assembleText, handChild, loadError } from "../helpers/declarations.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const inboxParam = (name: string, element: Type = STR) =>

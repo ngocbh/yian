@@ -31,7 +31,7 @@ import { loadSkillTool } from "../../src/skills/tool.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { NO_ENV } from "./run_state_fixtures.ts";
+import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);

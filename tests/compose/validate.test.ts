@@ -26,7 +26,7 @@ import {
   loadError,
   nodesOf,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

@@ -30,7 +30,7 @@ import {
   type Value,
   ValueKind,
 } from "../../src/typesys/values.ts";
-import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../compose/declarations.ts";
+import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../helpers/declarations.ts";
 
 const ANY = Type.scalar(ValueKind.ANY);
 const OPTIONAL_ANY = new Type({ kind: ValueKind.ANY, nullable: true });

@@ -43,7 +43,7 @@ import {
   RunState,
 } from "../../src/runtime/state.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { blank, closing } from "./source_scan.ts";
+import { blank, closing } from "../helpers/source_scan.ts";
 import {
   commitStartSuccess,
   expectUnchanged,
@@ -59,7 +59,7 @@ import {
   roots,
   RUN_ID,
   snapshot,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 /** Assert `fn` throws an error of exactly class `cls` whose message matches, or is, `message`. */
 function expectError(fn: () => unknown, cls: new (...args: never[]) => Error, message: RegExp | string): void {

@@ -83,7 +83,7 @@ import {
   ValueKind,
 } from "../../src/typesys/values.ts";
 import type { Case } from "../conformance/runner.ts";
-import { caseDocument, caseRegistry, cursorAt, loadError } from "./declarations.ts";
+import { caseDocument, caseRegistry, cursorAt, loadError } from "../helpers/declarations.ts";
 
 // `caseDocument` reloads the defaults from each case's `env:`.
 afterEach(forget);

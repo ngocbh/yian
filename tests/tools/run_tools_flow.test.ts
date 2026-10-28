@@ -22,8 +22,8 @@ import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { advance, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { type AskRequest, registerTool, TOOL_REGISTRY, type ToolEntry } from "../../src/tools/registry.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { barrier, NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { barrier, NO_ENV, rejected, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-run-tools-flow-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

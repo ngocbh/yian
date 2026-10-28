@@ -26,7 +26,7 @@ import { type ExtendResult, readAndExtend, replay } from "./markdown_both_runtim
 /** The package root. */
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const BUILT = path.join(ROOT, "dist/src/memory/storage/markdown.js");
-const BUILT_SCENARIOS = path.join(ROOT, "dist/tests/engine/markdown_both_runtimes.js");
+const BUILT_SCENARIOS = path.join(ROOT, "dist/tests/memory/markdown_both_runtimes.js");
 const FIXTURE: Record<string, string> = JSON.parse(
   fs.readFileSync(path.join(ROOT, "tests/conformance/fixtures/markdown_store.json"), "utf8"),
 );
@@ -490,7 +490,7 @@ test("a lock path that isn't a file fails with a system error and writes nothing
  * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
  * value that can't run, a Node older than the `engines` floor, or a missing build
  * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/engine/platform.test.ts`'s: importing a test file would run its tests.
+ * A copy of `tests/platform.test.ts`'s: importing a test file would run its tests.
  */
 const NODE = ((): string | undefined => {
   const node = process.env.YIAN_TEST_NODE;

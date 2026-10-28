@@ -20,11 +20,11 @@ import { basename, dirname, join } from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
-import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
-import { flowFingerprint } from "../../src/compile/manifest.ts";
-import { loadFlow, loadFlowSource } from "../../src/compose/loader.ts";
-import { ScriptedModel } from "../../src/llm/testing.ts";
-import { VERSION, withWarnings } from "../../src/platform.ts";
+import { ComposedFlow } from "../src/compose/build/pipeline.ts";
+import { flowFingerprint } from "../src/compile/manifest.ts";
+import { loadFlow, loadFlowSource } from "../src/compose/loader.ts";
+import { ScriptedModel } from "../src/llm/testing.ts";
+import { VERSION, withWarnings } from "../src/platform.ts";
 import {
   type FoldedRun,
   foldRunLog,
@@ -32,14 +32,14 @@ import {
   advance,
   type RunFlowOptions,
   runFlow,
-} from "../../src/run.ts";
-import { PoolCommitRecord, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
-import { Skill } from "../../src/skills/catalog.ts";
-import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
-import { mcpServer } from "../../src/tools/mcp.ts";
-import { handChild, loadErrorAsync } from "./../compose/declarations.ts";
-import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses } from "./mcp_helpers.ts";
-import { crashAfter, NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
+} from "../src/run.ts";
+import { PoolCommitRecord, readRunLog, RunStartedRecord } from "../src/runtime/log.ts";
+import { Skill } from "../src/skills/catalog.ts";
+import { type FunctionTool, tool } from "../src/tools/function_tools.ts";
+import { mcpServer } from "../src/tools/mcp.ts";
+import { handChild, loadErrorAsync } from "./helpers/declarations.ts";
+import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses } from "./helpers/mcp_helpers.ts";
+import { crashAfter, NO_ENV, rejected, textReply } from "./helpers/run_state_fixtures.ts";
 
 // Not resolved: on macOS the temp folder sits under the /var -> /private/var symlink.
 const tmp = mkdtempSync(join(tmpdir(), "yian-run-started-sources-"));

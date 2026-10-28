@@ -37,7 +37,7 @@ import {
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 import { type Case, decode, readCase, type Value } from "../conformance/runner.ts";
-import { lintSchema, loadSchema, type Schema, validate } from "../schema.ts";
+import { lintSchema, loadSchema, type Schema, validate } from "../helpers/schema.ts";
 
 /** JSON data a test edits freely. */
 type Data = { [key: string]: any };

@@ -27,7 +27,7 @@ import {
   caseRegistry,
   handChild,
   parametersFromYaml,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 /** Seed 05's `research-one` def: `{report, asof}` from its `synth` agent and its `as_of` input. */
 const researchOne = handChild({

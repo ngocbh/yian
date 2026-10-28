@@ -57,8 +57,8 @@ import {
 import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 
-import { hostEnv } from "./mcp_helpers.ts";
-import { FakeMemory } from "./memory_fakes.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { FakeMemory } from "../helpers/memory_fakes.ts";
 import {
   expectUnchanged,
   FuncNode,
@@ -69,7 +69,7 @@ import {
   snapshot,
   startedRun,
   untimed,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
 const RUN_ID = "recovery-matrix";

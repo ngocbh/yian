@@ -41,7 +41,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
-import { editRecordedFlow, NO_ENV } from "../engine/run_state_fixtures.ts";
+import { editRecordedFlow, NO_ENV } from "../helpers/run_state_fixtures.ts";
 
 /** The runtime's own formatter, the one `console.log` uses: Bun's on Bun, `node:util`'s on Node. */
 const show = typeof Bun === "undefined" ? inspect : Bun.inspect;
@@ -323,7 +323,7 @@ function childEnv(): NodeJS.ProcessEnv {
  * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
  * value that can't run, a Node older than the `engines` floor, or a missing build
  * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/engine/profile_memory.test.ts`'s: importing a test file would run its tests.
+ * A copy of `tests/memory/profile_memory.test.ts`'s: importing a test file would run its tests.
  */
 const NODE = ((): string | undefined => {
   const node = process.env.YIAN_TEST_NODE;

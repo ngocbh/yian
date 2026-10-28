@@ -54,8 +54,8 @@ import * as runtimeContracts from "../../src/runtime/contracts.ts";
 import { BackwardFailure, MemoryProposal } from "../../src/runtime/contracts.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import { logJson } from "../../src/typesys/json.ts";
-import { FakeMemory } from "./memory_fakes.ts";
-import { importStatements } from "./source_scan.ts";
+import { FakeMemory } from "../helpers/memory_fakes.ts";
+import { importStatements } from "../helpers/source_scan.ts";
 
 /** Build a custom-type declaration, so the built-in key allowlist does not apply. */
 function decl(config: unknown, origin: OriginRef | null = null): MemoryDecl {

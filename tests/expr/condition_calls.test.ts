@@ -32,8 +32,8 @@ import {
   loadError,
   parametersFromYaml,
   runCase,
-} from "../compose/declarations.ts";
-import { expectFailsBeforeTheRun } from "./run_state_fixtures.ts";
+} from "../helpers/declarations.ts";
+import { expectFailsBeforeTheRun } from "../helpers/run_state_fixtures.ts";
 
 // Each registration's previous entry (or its absence), put back after the test.
 const saved: [string, TemplateFn | undefined][] = [];

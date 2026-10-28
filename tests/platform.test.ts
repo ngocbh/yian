@@ -41,7 +41,7 @@ import {
   waitForLock,
   warn,
   withWarnings,
-} from "../../src/platform.ts";
+} from "../src/platform.ts";
 
 const realSetTimeout = globalThis.setTimeout;
 
@@ -849,7 +849,7 @@ describe("redirectDetail", () => {
 });
 
 /** The package root: Bun children run from it, so Bun never looks for packages to install. */
-const ROOT = path.resolve(import.meta.dirname, "../..");
+const ROOT = path.resolve(import.meta.dirname, "..");
 const SOURCE_URL = pathToFileURL(path.join(ROOT, "src/platform.ts")).href;
 const BUILT = path.join(ROOT, "dist/src/platform.js");
 const BUILT_URL = pathToFileURL(BUILT).href;
@@ -1360,7 +1360,7 @@ describe("the @ngocbh/yian/platform entry", () => {
     expect(fs.realpathSync(fileURLToPath(import.meta.resolve(ENTRY)))).toBe(
       fs.realpathSync(path.join(ROOT, "src/platform.ts")),
     );
-    const entry = (await import(ENTRY)) as typeof import("../../src/platform.ts");
+    const entry = (await import(ENTRY)) as typeof import("../src/platform.ts");
     expect(entry.lockFile).toBe(lockFile);
     expect(entry.waitForLock).toBe(waitForLock);
     expect(entry.isLocked).toBe(isLocked);

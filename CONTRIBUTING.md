@@ -17,13 +17,16 @@ Run focused tests while you work, then the full checks before you open a pull re
 
 ```bash
 bun run typecheck
-bun test ./tests/engine/kind_census.test.ts                    # one file
+bun test ./tests/repo/kind_census.test.ts                      # one file
 bun run build                                                  # some tests run the built dist/ on Node
 bun run test                                                   # every test, on Bun
 bun run test:node                                              # the same tests, on Node
 bun tests/conformance/runner.ts                                # every conformance case
 bun tests/conformance/runner.ts --case run-core/code_greeting  # one case
 ```
+
+A new test goes in the `tests/` folder that mirrors the `src/` folder it tests (the root for
+`src/*.ts`), or `tests/e2e/` for a whole flow; see "Where tests live" in `ARCHITECTURE.md`.
 
 When you change the docs site (`docs/`), also run:
 

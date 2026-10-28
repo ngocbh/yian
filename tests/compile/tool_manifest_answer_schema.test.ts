@@ -19,7 +19,7 @@ nodes:
 output: \${q.output}
 `;
 
-// A tool flow from before built-ins; its fingerprint is pinned in `tests/compose/tool_retries_load.test.ts`.
+// A tool flow from before built-ins; its fingerprint is pinned in `tests/nodes/tool_retries_load.test.ts`.
 const PLAIN = `id: old_tool_crash
 name: old_tool_crash
 nodes:

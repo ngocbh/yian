@@ -17,9 +17,9 @@ import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { decodeRecord, encodeRecord } from "../../src/runtime/log.ts";
-import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { rejected, serving, textReply } from "./run_state_fixtures.ts";
+import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-retired-llm-keys-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

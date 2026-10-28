@@ -12,7 +12,7 @@ import {
   loadError,
   runTextCase,
   type TextCaseRow,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 
 afterEach(() => forget());
 

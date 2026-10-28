@@ -7,7 +7,7 @@ import { Grow, Output } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { InboxRef, inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
-import { handChild } from "../compose/declarations.ts";
+import { handChild } from "../helpers/declarations.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const BOOL = Type.scalar(ValueKind.BOOLEAN);

@@ -23,10 +23,10 @@ import { decodeRecord, NodeStepRecord, NodeWaitingRecord } from "../../src/runti
 import { pending } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { type ToolEntry, ToolSet } from "../../src/tools/registry.ts";
-import { gateTool, handClock } from "./inbox_fixtures.ts";
-import { FakeMemory } from "./memory_fakes.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { callReply, crashAfter, NO_ENV, serving, textReply } from "./run_state_fixtures.ts";
+import { gateTool, handClock } from "../helpers/inbox_fixtures.ts";
+import { FakeMemory } from "../helpers/memory_fakes.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { callReply, crashAfter, NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-agent-pending-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

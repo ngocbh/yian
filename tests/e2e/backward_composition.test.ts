@@ -36,9 +36,9 @@ import {
 } from "../../src/runtime/log.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import { type Value, writeAsText } from "../../src/typesys/values.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { FakeMemory } from "./memory_fakes.ts";
-import { feedbackEntries, rejected, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { FakeMemory } from "../helpers/memory_fakes.ts";
+import { feedbackEntries, rejected, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-backward-composition-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

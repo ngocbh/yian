@@ -19,9 +19,9 @@ import { type SourceCursor, SourceDocument } from "../../src/compose/source/inde
 import { forget } from "../../src/defaults.ts";
 import { runFlow } from "../../src/run.ts";
 import { canonicalTypeLabel } from "../../src/typesys/values.ts";
-import { loadError, nodesOf, runTextCase } from "./declarations.ts";
-import { standIn } from "./stand_ins.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+import { loadError, nodesOf, runTextCase } from "../helpers/declarations.ts";
+import { standIn } from "../helpers/stand_ins.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 afterEach(() => forget());
 

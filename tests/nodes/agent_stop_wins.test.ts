@@ -15,7 +15,7 @@ import { ValueContract } from "../../src/nodes/contracts.ts";
 import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { drive, NO_ENV, rejected, textReply } from "./run_state_fixtures.ts";
+import { drive, NO_ENV, rejected, textReply } from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);

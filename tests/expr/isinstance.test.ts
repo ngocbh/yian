@@ -47,8 +47,8 @@ import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { Type, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
-import { assembleText } from "../compose/declarations.ts";
-import { startedIds } from "./run_state_fixtures.ts";
+import { assembleText } from "../helpers/declarations.ts";
+import { startedIds } from "../helpers/run_state_fixtures.ts";
 
 /** Build a closed record tagged by a single-value `action` Literal. */
 function member(tag: string, fields: Record<string, ValueKind>): Type {

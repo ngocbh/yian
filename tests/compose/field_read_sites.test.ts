@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 import { registerTemplateFn, TEMPLATE_FNS } from "../../src/expr/builtins.ts";
 import { runFlow } from "../../src/run.ts";
-import { hostEnv } from "../engine/mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
   assembled,
   assembleText,
@@ -17,7 +17,7 @@ import {
   loadConformanceFlow,
   loadError,
   runCase,
-} from "./declarations.ts";
+} from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-field-read-sites-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

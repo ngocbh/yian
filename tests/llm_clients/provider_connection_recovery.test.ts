@@ -12,7 +12,7 @@ import type { Env } from "../../src/defaults.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { ApiKeyCredentials, AuthStore } from "../../src/llm_clients/auth/index.ts";
 import { advance, runFlow, type RunFlowOptions } from "../../src/run.ts";
-import { hostEnv } from "./mcp_helpers.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
   anthropicText,
   chatText,
@@ -23,7 +23,7 @@ import {
   rejected,
   responsesText,
   type Sent,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-provider-connection-recovery-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

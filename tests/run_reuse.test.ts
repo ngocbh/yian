@@ -9,18 +9,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { Flow } from "../../src/compile/model.ts";
-import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
-import { loadFlow } from "../../src/compose/loader.ts";
-import { ScriptedModel } from "../../src/llm/testing.ts";
-import type { ModelAccess } from "../../src/llm_clients/factory.ts";
-import { AgentNode } from "../../src/nodes/agent/node.ts";
-import { advance, runFlow } from "../../src/run.ts";
+import type { Flow } from "../src/compile/model.ts";
+import type { ComposedFlow } from "../src/compose/build/pipeline.ts";
+import { loadFlow } from "../src/compose/loader.ts";
+import { ScriptedModel } from "../src/llm/testing.ts";
+import type { ModelAccess } from "../src/llm_clients/factory.ts";
+import { AgentNode } from "../src/nodes/agent/node.ts";
+import { advance, runFlow } from "../src/run.ts";
 
-import { hostEnv } from "./mcp_helpers.ts";
-import { rejected, textReply } from "./run_state_fixtures.ts";
+import { hostEnv } from "./helpers/mcp_helpers.ts";
+import { rejected, textReply } from "./helpers/run_state_fixtures.ts";
 
-const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
+const FIXTURES = fileURLToPath(new URL("./conformance/fixtures", import.meta.url));
 let dir: string;
 
 beforeEach(() => {

@@ -10,7 +10,7 @@ import { MemoryContext, MemoryScope, MemorySection, type RecallContext } from ".
 import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { EvaluationFailure, evalNode, type EvalNodeOptions, type MemoryContextOpener } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { FuncNode, rejected } from "./run_state_fixtures.ts";
+import { FuncNode, rejected } from "../helpers/run_state_fixtures.ts";
 
 type Open = NonNullable<NodeCaps["openMemoryContext"]>;
 

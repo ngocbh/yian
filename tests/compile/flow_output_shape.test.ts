@@ -21,9 +21,9 @@ import { runFlow } from "../../src/run.ts";
 import { computeBackward } from "../../src/runtime/backward.ts";
 import { validateAttributedBackward } from "../../src/runtime/learning.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
-import { assembled, assembleText, type CaseRow, loadError, loadErrorAsync, runCase } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { engine, graph, RecordingBackwardNode } from "./run_state_fixtures.ts";
+import { assembled, assembleText, type CaseRow, loadError, loadErrorAsync, runCase } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { engine, graph, RecordingBackwardNode } from "../helpers/run_state_fixtures.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const INT = Type.scalar(ValueKind.INTEGER);

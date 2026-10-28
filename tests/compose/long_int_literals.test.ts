@@ -9,9 +9,9 @@ import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { runFlow } from "../../src/run.ts";
 import { parseType } from "../../src/typesys/types.ts";
 import { TypeCheckError, type Value } from "../../src/typesys/values.ts";
-import { loadConformanceFlow } from "../compose/declarations.ts";
-import { hostEnv } from "./mcp_helpers.ts";
-import { rejected, thrownBy } from "./run_state_fixtures.ts";
+import { loadConformanceFlow } from "../helpers/declarations.ts";
+import { hostEnv } from "../helpers/mcp_helpers.ts";
+import { rejected, thrownBy } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-literals-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));

@@ -10,7 +10,7 @@ import { BUILTIN, forget, install, reload } from "../../src/defaults.ts";
 import type { ValueContract } from "../../src/nodes/contracts.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import { TypeCheckError, typeLevels } from "../../src/typesys/values.ts";
-import { loadConformanceFlow, loadErrorAsync } from "../compose/declarations.ts";
+import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));

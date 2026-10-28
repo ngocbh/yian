@@ -25,7 +25,7 @@ import {
   inputsAt,
   loadError,
   runCase,
-} from "../compose/declarations.ts";
+} from "../helpers/declarations.ts";
 import type { Case } from "../conformance/runner.ts";
 
 const EMPTY: TypeRegistry = new Map();

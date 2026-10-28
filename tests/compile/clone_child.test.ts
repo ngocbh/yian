@@ -25,7 +25,7 @@ import { StartNode } from "../../src/nodes/start/node.ts";
 import { EvaluationFailure, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
-import { drive, FuncNode, nodeFlow } from "./run_state_fixtures.ts";
+import { drive, FuncNode, nodeFlow } from "../helpers/run_state_fixtures.ts";
 
 /** A required text parameter that coerces supplied strings. */
 function parameter(name: string): Parameter {

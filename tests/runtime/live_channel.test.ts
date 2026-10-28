@@ -32,7 +32,7 @@ import { withWarnings } from "../../src/platform.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import { callTexts, CONFIG, GatedModel, key, MAP_AGENTS, ONE_AGENT, runLog, until } from "./live_fixtures.ts";
-import { crashAfter, NO_ENV, rejected, serving } from "./run_state_fixtures.ts";
+import { crashAfter, NO_ENV, rejected, serving } from "../helpers/run_state_fixtures.ts";
 
 /** A `model_call` step record of `node`'s step `n`. */
 function step(node: string, n: number): NodeStepRecord {

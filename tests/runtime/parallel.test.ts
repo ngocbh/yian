@@ -24,7 +24,7 @@ import {
   graph,
   RecordNode,
   rejected,
-} from "./run_state_fixtures.ts";
+} from "../helpers/run_state_fixtures.ts";
 
 /** Runs an async body and outputs its value. */
 class AsyncNode extends Node {

@@ -133,6 +133,20 @@ function realPathOf(file: string): string {
   return realPathOf(resolve(dirname(path), target));
 }
 
+/**
+ * Return the real path of `file`'s nearest ancestor (`file` included) that has one, with the
+ * rest of `file` appended.
+ */
+function nearestRealPath(file: string): string {
+  for (let candidate = file; ; candidate = dirname(candidate)) {
+    try {
+      return join(realpathSync.native(candidate), relative(candidate, file));
+    } catch {
+      if (dirname(candidate) === candidate) return file;
+    }
+  }
+}
+
 /** Whether `error` is the system error that a path, or a folder on it, doesn't exist. */
 function isMissingPath(error: unknown): boolean {
   return isSystemCode(error, "ENOENT") || isSystemCode(error, "ENOTDIR");
@@ -596,9 +610,11 @@ export class CodeNode extends Node {
    *
    * @param options.codeRoot The real path of the directory a reference's file must resolve
    *   inside, symlinks followed (a file names only itself); `null` (the default) confines nothing.
-   *   A reference outside it is refused whether or not its file exists, by the reference as written.
-   * @throws RangeError when a reference's file resolves outside `options.codeRoot` or isn't a
-   *   regular file, or an inline body looks like a `module:function` reference.
+   *   A reference outside it is refused whether or not its file exists, by the reference as written;
+   *   under it, no message names an absolute path.
+   * @throws RangeError when a reference's file resolves outside `options.codeRoot`, can't be
+   *   resolved under it, or isn't a regular file, or an inline body looks like a `module:function`
+   *   reference.
    * @throws TypeStripError when the body doesn't parse or strip.
    * @throws SyntaxError when the function constructor refuses the stripped body.
    */
@@ -610,13 +626,23 @@ export class CodeNode extends Node {
       const dir = this.baseDir ?? process.cwd();
       const file = resolve(dir, path);
       const { codeRoot = null } = options;
-      // Checked before the file's existence, and worded without absolute paths, so the refusal
-      // tells a flow's author nothing about the host's folders or what exists outside the root.
-      if (codeRoot !== null && leavesRoot(relative(codeRoot, realPathOf(file)))) {
-        throw new RangeError(`\`code:\` reference ${reprText(code)} is outside the code root`);
+      // Checked before the file's existence, and worded without absolute paths, so a confined
+      // load tells a flow's author nothing about the host's folders or what exists outside the root.
+      if (codeRoot !== null) {
+        const outside = new RangeError(`\`code:\` reference ${reprText(code)} is outside the code root`);
+        let real: string;
+        try {
+          real = realPathOf(file);
+        } catch {
+          // A symlink loop or an unreadable folder: the system error's message holds absolute paths.
+          if (leavesRoot(relative(codeRoot, nearestRealPath(file)))) throw outside;
+          throw new RangeError(`\`code:\` reference ${reprText(code)} can't be resolved`);
+        }
+        if (leavesRoot(relative(codeRoot, real))) throw outside;
       }
       if (statSync(file, { throwIfNoEntry: false })?.isFile() !== true) {
-        throw new RangeError(`\`code:\` file ${reprText(path)} does not exist in ${reprText(dir)}`);
+        const where = codeRoot === null ? ` in ${reprText(dir)}` : "";
+        throw new RangeError(`\`code:\` file ${reprText(path)} does not exist${where}`);
       }
       return;
     }

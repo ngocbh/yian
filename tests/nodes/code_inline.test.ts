@@ -913,6 +913,7 @@ beforeAll(() => {
   symlinkSync(join(confined, "out", "h.ts"), join(confined, "root", "link.ts"));
   symlinkSync(join(confined, "out"), join(confined, "root", "lib"));
   symlinkSync(join(confined, "out", "missing.ts"), join(confined, "root", "dangling.ts"));
+  for (const loop of ["out/loop.ts", "root/loop.ts"]) symlinkSync(join(confined, loop), join(confined, loop));
 });
 
 afterAll(() => {
@@ -963,14 +964,34 @@ test("the load check refuses a dangling symlink to a missing file outside codeRo
   );
 });
 
-test("the load check under codeRoot says a missing file inside it does not exist", async () => {
+test("the load check under codeRoot says a missing file inside it does not exist, naming no folder", async () => {
   const codeRoot = realpathSync(join(confined, "root"));
   const baseDir = join(confined, "root", "in");
   const node = new CodeNode("r", { code: "./missing.ts:fn", baseDir });
 
   const error = await rejected(node.check({ codeRoot }));
 
-  expect((error as Error).message).toBe(`\`code:\` file './missing.ts' does not exist in '${baseDir}'`);
+  expect((error as Error).message).toBe("`code:` file './missing.ts' does not exist");
+});
+
+test("the load check under codeRoot refuses a symlink loop outside it as outside, without the system error", async () => {
+  const codeRoot = realpathSync(join(confined, "root"));
+  const node = new CodeNode("r", { code: "../out/loop.ts:fn", baseDir: join(confined, "root") });
+
+  const error = await rejected(node.check({ codeRoot }));
+
+  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).message).toBe("`code:` reference '../out/loop.ts:fn' is outside the code root");
+});
+
+test("the load check under codeRoot says a symlink loop inside it can't be resolved, naming no folder", async () => {
+  const codeRoot = realpathSync(join(confined, "root"));
+  const node = new CodeNode("r", { code: "./loop.ts:fn", baseDir: join(confined, "root") });
+
+  const error = await rejected(node.check({ codeRoot }));
+
+  expect((error as Error).constructor).toBe(RangeError);
+  expect((error as Error).message).toBe("`code:` reference './loop.ts:fn' can't be resolved");
 });
 
 test("the load check refuses a symlink pointing outside codeRoot", async () => {

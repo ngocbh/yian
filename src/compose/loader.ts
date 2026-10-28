@@ -83,6 +83,7 @@ import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
 import { checkLlmConfigValue, readLlmConfig } from "./nodes/agent.ts";
 import { notTextDetail, notTextError } from "./nodes/base.ts";
+import { KINDS, REMOVED_KINDS } from "./nodes/index.ts";
 import { checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
 import { callNestingScope } from "./nodes/resolver.ts";
 import {
@@ -251,6 +252,11 @@ const DEF_ALLOWED: ReadonlySet<string> = new Set([
   "env",
   "long_term_memory",
 ]);
+// The kinds a single-node def may use, sorted: a case routes to other nodes, which a one-node
+// def has none of.
+const SINGLE_NODE_DEF_KINDS: readonly string[] = [...KINDS.keys()]
+  .filter((kind) => kind !== "case")
+  .sort(compareCodeUnits);
 // The authored spellings of `DEF_ALLOWED`, sorted, for error messages.
 const DEF_SURFACE_KEYS: readonly string[] = [...DEF_ALLOWED]
   .map((key) => (key === "inputs" ? "input" : key === "outputs" ? "output" : key))
@@ -1800,8 +1806,9 @@ function loadDef(
  * @param scope The file's callable scope.
  * @param defCursor The authored body, or `null` for a virtual fallback.
  * @returns The built child flow.
- * @throws LoadError, located and prefixed `defs entry '<name>': `, when `input:` isn't a param
- *   map, a parameter is named `inf`, or the node fails to assemble.
+ * @throws LoadError, located and prefixed `defs entry '<name>': `, when `kind:` is non-text,
+ *   unknown or `case`, `input:` isn't a param map, a parameter is named `inf`, or the node fails
+ *   to assemble.
  */
 function loadSingleNodeDef(
   name: string,
@@ -1812,6 +1819,28 @@ function loadSingleNodeDef(
 ): ComposedFlow {
   const diagnostics = scope.diagnostics;
   const where = `defs entry ${reprText(name)}`;
+  // Framed like an error from assembling the node: the definition, then the `kind:` value.
+  const kindError = (message: string): LoadError =>
+    diagnostics.prepend(diagnostics.error(message, { range: defCursor?.rangeOf("kind") ?? null }), {
+      range: defCursor?.range ?? null,
+      message: `${where}: ${message}`,
+      note: `definition ${reprText(name)}`,
+    });
+  const kind = body["kind"]!;
+  const allowed = SINGLE_NODE_DEF_KINDS.join(", ");
+  if (typeof kind !== "string") {
+    throw kindError(`node ${reprText(name)}: ${notTextError("kind", kind, `write one of ${allowed}`)}`);
+  }
+  if (kind === "case") {
+    throw kindError(
+      `kind 'case' is not allowed in a single-node def (allowed: ${allowed}); a case routes to other ` +
+        "nodes, which a one-node def has none of — write a full `nodes:` body instead",
+    );
+  }
+  // A removed kind keeps the node parse's message, which names its replacement.
+  if (!KINDS.has(kind) && !REMOVED_KINDS.has(kind)) {
+    throw kindError(`node ${reprText(name)}: unknown kind ${reprText(kind)} (allowed: ${allowed})`);
+  }
   const inputCursor = sourceChild(defCursor, "input");
   const paramTypes = signatureParams(Object.hasOwn(body, "inputs") ? body["inputs"]! : null, {
     where,

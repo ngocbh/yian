@@ -2,7 +2,7 @@
 
 import { reprText } from "../../diagnostics.ts";
 import { ExpressionError } from "../../expr/expressions.ts";
-import { findParenEnd, splitCallsAware } from "../../expr/template.ts";
+import { findParenEnd, spanCallDirectiveText, splitCallsAware } from "../../expr/template.ts";
 
 /** An unquoted value whose trimmed text starts with this is a `call(...)` directive. */
 export const CALL_HEAD = /^call\s*\(/;
@@ -52,4 +52,22 @@ export function matchCallDirective(value: string): [flowId: string, remaining: s
   // loudly there.
   const comma = argsStr.indexOf(",");
   return [first, comma !== -1 ? argsStr.slice(comma + 1) : ""];
+}
+
+/**
+ * Return the flow id to suggest for a `call(...)` written inside a `${...}` span of `text`.
+ *
+ * @param text A binding or branch value whose spans parse and call `call`.
+ * @returns The first such call's flow id, read as `matchCallDirective` reads it, or `<flow>` when
+ *   that call doesn't start with a flow id.
+ */
+export function spanCallFlowId(text: string): string {
+  const call = spanCallDirectiveText(text);
+  if (call === null) return "<flow>";
+  try {
+    return matchCallDirective(call)?.[0] ?? "<flow>";
+  } catch (error) {
+    if (!(error instanceof ExpressionError)) throw error;
+    return "<flow>";
+  }
 }

@@ -83,6 +83,7 @@ import {
   type ExprNode,
   findSpanEnd,
   iterSubtrees,
+  iterSubtreesTopdown,
   parseExpr,
   rejectNestedSpans,
   type Token,
@@ -100,12 +101,15 @@ export class Literal {
   }
 }
 
-/** A `${...}` span of a template: its interior parsed by `parseExpr`. */
+/** A `${...}` span of a template: its interior parsed by `parseExpr`, and the interior text. */
 export class Span {
   readonly tree: ExprNode;
+  /** The interior text the tree's token offsets index into. */
+  readonly source: string;
 
-  constructor(tree: ExprNode) {
+  constructor(tree: ExprNode, source: string) {
     this.tree = tree;
+    this.source = source;
   }
 }
 
@@ -159,7 +163,7 @@ export function scanTemplate(text: string): TemplateSegment[] {
       const interior = text.slice(i + 2, end);
       // Checked before parseExpr so the error shows the whole fixed span.
       rejectNestedSpans(interior, { inSpan: true });
-      segments.push(new Span(parseExpr(interior)));
+      segments.push(new Span(parseExpr(interior), interior));
       i = end + 1;
     } else {
       literal += text[i];
@@ -783,25 +787,26 @@ export function flowCallCalleesInSpans(text: string, typeNames: ReadonlySet<stri
 }
 
 /**
- * Return the flow id the first `call(<flow>, ...)` inside a `${...}` span of `text` names.
+ * Return the source text of the first `call(...)` inside a `${...}` span of `text`.
  *
  * Compose uses this to name the real flow when it rejects the `call(...)` directive written inside
- * a span, where it parses as a call to a function named `call`.
+ * a span, where it parses as a call to a function named `call`. Calls are visited outermost
+ * first, so `${call(outer, x=call(inner))}` gives the outer call.
  *
  * @param text A binding or template value whose spans parse.
- * @returns The first argument when it is a bare name, else `null` (also when no span calls `call`).
+ * @returns The text from `call` through its closing `)`, or `null` when no span calls `call`.
  * @throws {ExpressionError} If a span is malformed or doesn't parse.
  */
-export function spanCallDirectiveFlow(text: string): string | null {
+export function spanCallDirectiveText(text: string): string | null {
   for (const segment of scanTemplate(text)) {
     if (!(segment instanceof Span) || !(segment.tree instanceof Tree)) continue;
-    for (const node of iterSubtrees(segment.tree)) {
-      const suffix = node.data === "refcall" ? callSuffixOf(node) : undefined;
-      if (suffix === undefined || String(node.children[0]) !== "call") continue;
-      const arg = suffix.children[0];
-      const first = arg instanceof Tree && arg.children.length === 1 ? arg.children[0] : undefined;
-      const bare = first instanceof Tree && first.data === "refcall" && first.children.length === 1;
-      return bare ? String(first.children[0]) : null;
+    for (const node of iterSubtreesTopdown(segment.tree)) {
+      if (node.data !== "refcall" || callSuffixOf(node) === undefined) continue;
+      const name = node.children[0] as Token;
+      if (name.value !== "call") continue;
+      const open = segment.source.indexOf("(", name.endPos);
+      const close = findParenEnd(segment.source, open + 1);
+      if (close !== null) return segment.source.slice(name.startPos, close + 1);
     }
   }
   return null;

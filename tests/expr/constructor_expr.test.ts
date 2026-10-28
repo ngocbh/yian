@@ -26,7 +26,7 @@ import {
   evalBinding,
   flowCallCalleesInSpans,
   promptRefs,
-  spanCallDirectiveFlow,
+  spanCallDirectiveText,
 } from "../../src/expr/template.ts";
 import { BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { Parameter, ValueTemplate } from "../../src/nodes/contracts.ts";
@@ -281,14 +281,13 @@ test("a typedef name is not a flow callee", () => {
 });
 
 test.each([
-  ["a bare first argument", "see ${call(enrich, topic=input.topic)}", "enrich"],
-  ["the first call in span order", "${call(a)} ${call(b)}", "a"],
-  ["a hyphenated flow id", "${call(my-flow, x=1)}", null],
-  ["a dotted first argument", "${call(a.b)}", null],
-  ["no argument", "${call()}", null],
+  ["a call in text", "see ${call(enrich, topic=input.topic)}", "call(enrich, topic=input.topic)"],
+  ["the first span", "${call(a)} ${call(b)}", "call(a)"],
+  ["the outer of nested calls", "${call(outer, x=call(inner))}", "call(outer, x=call(inner))"],
+  ["a call inside an expression", "${upper(call (my-flow))}", "call (my-flow)"],
   ["no call", "${review(x)}", null],
-])("the flow a span call(...) names: %s", (_name, text, flow) => {
-  expect(spanCallDirectiveFlow(text)).toBe(flow);
+])("the source of a span call(...): %s", (_name, text, source) => {
+  expect(spanCallDirectiveText(text)).toBe(source);
 });
 
 test("a constructor is not a prompt function", () => {

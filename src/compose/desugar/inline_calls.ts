@@ -61,17 +61,11 @@
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError, unknownFunctionMessage } from "../../expr/expressions.ts";
-import {
-  exprRefsOf,
-  flowCallCalleesInSpans,
-  InlineCall,
-  spanCallDirectiveFlow,
-  splitCallsAware,
-} from "../../expr/template.ts";
+import { exprRefsOf, flowCallCalleesInSpans, InlineCall, splitCallsAware } from "../../expr/template.ts";
 import { Assertion, Binding, iterSourceStrings, mapSourceStrings, ValueTemplate } from "../../nodes/contracts.ts";
 import { BUILTIN_TYPE_NAMES } from "../../typesys/types.ts";
 import { isRecord, jsTypeName, type Value } from "../../typesys/values.ts";
-import { CALL_HEAD, matchCallDirective } from "../helpers/directives.ts";
+import { CALL_HEAD, matchCallDirective, spanCallFlowId } from "../helpers/directives.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { QUOTED_STYLES, yamlQuoted } from "../helpers/tags.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
@@ -537,9 +531,8 @@ function rejectSpanFlowCalls(
   }
   if (callee === "call") {
     throw diagnostics.error(
-      `${where}: call(...) inside \${...} is not supported — write it as the whole value, without ` +
-        `\${...}: call(${spanCallDirectiveFlow(value) ?? "<flow>"}, ...), or call the flow in its own ` +
-        "node and read its output; a call(...) in the middle of text is plain text",
+      `${where}: call(...) can't go inside \${...}. Write it unquoted as the whole value, ` +
+        `call(${spanCallFlowId(value)}, ...), or call the flow in its own node and read its output.`,
       { range },
     );
   }

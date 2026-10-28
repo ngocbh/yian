@@ -121,8 +121,8 @@ nodes:
 output: \${gate.output}
 `;
   expect(loadError(() => load(text)).message).toBe(
-    "case node 'gate' then: call(...) inside `${...}` is not supported; call the flow as the " +
-      "branch, without `${...}`: `then: call(take, ...)`",
+    "case node 'gate' then: call(...) can't go inside `${...}`. Write it unquoted as the branch, " +
+      "`then: call(take, ...)`.",
   );
 });
 

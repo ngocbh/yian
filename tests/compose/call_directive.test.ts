@@ -630,13 +630,15 @@ test.each([
 test.each([
   ["inside text", "see ${call(enrich, topic=input.topic)}", "enrich"],
   ["as the whole value", "${call(enrich, topic=input.topic)}", "enrich"],
-  ["with a hyphenated flow id", "${call(my-flow, x=1)}", "<flow>"],
+  ["with a hyphenated flow id", "${call(my-flow, x=1)}", "my-flow"],
+  ["around a nested call", "${call(outer, x=call(inner))}", "outer"],
+  ["inside an expression", "${upper(call(enrich))}", "enrich"],
+  ["with no flow id", '${call("enrich")}', "<flow>"],
 ])("call directive in a span %s names the forms that work", (_name, value, flow) => {
   // The hint names the real flow, not `call`, and never suggests another `${...}` form.
   expect(topicError(value).message).toBe(
-    "use: call(...) inside ${...} is not supported — write it as the whole value, without ${...}: " +
-      `call(${flow}, ...), or call the flow in its own node and read its output; a call(...) ` +
-      "in the middle of text is plain text",
+    "use: call(...) can't go inside ${...}. Write it unquoted as the whole value, " +
+      `call(${flow}, ...), or call the flow in its own node and read its output.`,
   );
 });
 

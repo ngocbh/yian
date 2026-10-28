@@ -1,6 +1,9 @@
 ---
-title: "yian"
+title: "Yian - The Agent Composer"
 description: "A small declarative language, written in YAML, for flows of agents, code and tools that people and LLMs write, check and improve."
+head:
+  - tag: title
+    content: "Yian - The Agent Composer"
 ---
 
 yian is a small declarative language for flows: YAML files that wire agents, code and tools

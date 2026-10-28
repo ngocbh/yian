@@ -42,7 +42,7 @@ export default defineConfig({
     // Before Starlight, so it sees `mermaid` blocks before Expressive Code does.
     mermaid({ autoTheme: true }),
     starlight({
-      title: "yian",
+      title: "Yian - The Agent Composer",
       description: "Readable YAML flows of agents, code and tools that people and LLMs write, check and improve.",
       plugins: [starlightLinksValidator({ errorOnLocalLinks: true })],
       sidebar: [

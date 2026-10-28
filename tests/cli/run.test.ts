@@ -1676,22 +1676,34 @@ describe("the entry's run --json", () => {
   }, 30_000);
 
   test("a grandchild holding the flow's stdout doesn't hold the command", async () => {
-    // Detached and unref'd so the run ends; it keeps fd 1 and fd 2, which go to stderr, for 5 s.
-    const spawnSleep = "(await import('node:child_process'))" +
-      ".spawn('sleep', ['5'], { stdio: 'inherit', detached: true }).unref();";
+    // Detached and unref'd so the run ends; it keeps fd 1 and fd 2, which go to stderr, for 60 s.
+    const pidFile = join(tmp, "sleep.pid");
+    const spawnSleep = "const sleeper = (await import('node:child_process'))" +
+      ".spawn('sleep', ['60'], { stdio: 'inherit', detached: true });\n      sleeper.unref();\n      " +
+      `(await import('node:fs')).writeFileSync(${JSON.stringify(pidFile)}, String(sleeper.pid));`;
     const code = `|\n      ${spawnSleep}\n      return 'done';`;
     const flow = file("flow.yaml", topicFlow(code));
     const log = join(tmp, "run.jsonl");
     const args = ["run", flow, "-q", "--json", "--log", log, "--input", "topic=t"];
-    const started = Date.now();
     const { child, streams } = spawnEntry(args);
-    // Not `close`: the grandchild holds this test's stderr pipe too.
-    const ended = new Promise((resolve) => child.stdout.on("end", resolve));
-    const exited = await new Promise((resolve) => child.on("exit", (code) => resolve(code)));
-    await ended;
-    expect(Date.now() - started).toBeLessThan(4000);
-    expect(exited).toBe(0);
-    expect(JSON.parse(streams.out).output).toEqual({ topic: "done" });
+    try {
+      // Not `close`: the grandchild holds this test's stderr pipe too.
+      const ended = new Promise((resolve) => child.stdout.on("end", resolve));
+      const exited = await new Promise((resolve) => child.on("exit", (code) => resolve(code)));
+      await ended;
+      expect(exited).toBe(0);
+      expect(JSON.parse(streams.out).output).toEqual({ topic: "done" });
+      // The command ended while the grandchild still runs, however slow the machine is.
+      expect(() => process.kill(Number(readFileSync(pidFile, "utf8")), 0)).not.toThrow();
+    } finally {
+      if (existsSync(pidFile)) {
+        try {
+          process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    }
   }, 30_000);
 
   test("a second SIGINT kills a run stuck in a sync body: exit 130, no document", async () => {

@@ -321,6 +321,32 @@ export function checkIn(tree: ExprNode): [Check, boolean] | null {
  * new Holds(new TagCheck("v", "action", "sell"), false)])`.
  */
 export function proves(tree: ExprNode, value: boolean): Guard {
+  return provesWith(tree, value, new Map());
+}
+
+/** What sub-trees prove within one top-level call, by node identity: `[when false, when true]`. */
+type ProvesMemo = Map<ExprNode, [Guard | undefined, Guard | undefined]>;
+
+/**
+ * `proves`, reusing what `memo` already holds and adding to it.
+ *
+ * A chain proves its operands for both values, and a nested chain does the same for its own, so
+ * without the memo the work doubles at each level of alternating `and`/`or` nesting.
+ */
+function provesWith(tree: ExprNode, value: boolean, memo: ProvesMemo): Guard {
+  let known = memo.get(tree);
+  if (known === undefined) {
+    known = [undefined, undefined];
+    memo.set(tree, known);
+  }
+  const index = Number(value);
+  const guard = known[index] ?? provesUncached(tree, value, memo);
+  known[index] = guard;
+  return guard;
+}
+
+/** `proves` for a node not in `memo` yet. */
+function provesUncached(tree: ExprNode, value: boolean, memo: ProvesMemo): Guard {
   const found = checkIn(tree);
   if (found !== null) {
     const [check, positive] = found;
@@ -328,33 +354,33 @@ export function proves(tree: ExprNode, value: boolean): Guard {
   }
   if (!(tree instanceof Tree)) return NOTHING;
   if (tree.data === NEVER_HAS) return value === (String(tree.children[0]) === "true") ? NEVER : NOTHING;
-  if (tree.data === "negate") return proves(tree.children.at(-1)!, !value);
+  if (tree.data === "negate") return provesWith(tree.children.at(-1)!, !value, memo);
   if (tree.data !== "and_expr" && tree.data !== "or_expr") return NOTHING;
   const operands = operandsOf(tree);
   // An `and` is decided by its first false operand, an `or` by its first true one.
   const deciding = tree.data === "or_expr";
-  if (value !== deciding) return allOf(...operands.map((operand) => proves(operand, value)));
-  const decided = operands.map((operand) => proves(operand, deciding));
+  if (value !== deciding) return allOf(...operands.map((operand) => provesWith(operand, value, memo)));
+  const decided = operands.map((operand) => provesWith(operand, deciding, memo));
   // An operand that proves nothing may be the one that decided the chain.
   if (decided.some((guard) => sameGuard(guard, NOTHING))) return NOTHING;
   const branches: Guard[] = [];
   const passed: Guard[] = [];
   for (const [i, operand] of operands.entries()) {
     branches.push(allOf(...passed, decided[i]!));
-    passed.push(proves(operand, !deciding));
+    passed.push(provesWith(operand, !deciding, memo));
   }
   return anyOf(...branches);
 }
 
 /** Each operand of an `and_expr`/`or_expr` with what holds whenever it is evaluated. */
-function operandContexts(node: Tree, context: Guard): [ExprNode, Guard][] {
+function operandContexts(node: Tree, context: Guard, memo: ProvesMemo): [ExprNode, Guard][] {
   // The value an operand must have for the next one to run.
   const continues = node.data === "and_expr";
   const contexts: [ExprNode, Guard][] = [];
   const passed: Guard[] = [context];
   for (const operand of operandsOf(node)) {
     contexts.push([operand, allOf(...passed)]);
-    passed.push(proves(operand, continues));
+    passed.push(provesWith(operand, continues, memo));
   }
   return contexts;
 }
@@ -387,6 +413,7 @@ export interface GuardedOccurrence {
  */
 export function guardedReads(tree: ExprNode): GuardedOccurrence[] {
   const reads: GuardedOccurrence[] = [];
+  const memo: ProvesMemo = new Map();
 
   const walk = (node: ExprNode, context: Guard): void => {
     if (node instanceof Token) return;
@@ -408,7 +435,7 @@ export function guardedReads(tree: ExprNode): GuardedOccurrence[] {
       return;
     }
     if (node.data === "and_expr" || node.data === "or_expr") {
-      for (const [operand, operandContext] of operandContexts(node, context)) walk(operand, operandContext);
+      for (const [operand, operandContext] of operandContexts(node, context, memo)) walk(operand, operandContext);
       return;
     }
     if (node.data === "list_comp") {
@@ -417,7 +444,7 @@ export function guardedReads(tree: ExprNode): GuardedOccurrence[] {
       let passed = context;
       for (const clause of clauses) {
         contexts.push(passed);
-        if (clause.data === "comp_if") passed = allOf(passed, proves(clause.children[0]!, true));
+        if (clause.data === "comp_if") passed = allOf(passed, provesWith(clause.children[0]!, true, memo));
       }
       walk(elem!, passed);
       // A `comp_for`'s iterable is its second child; a `comp_if`'s condition its only one.
@@ -487,6 +514,7 @@ export class CheckLiteral {
  */
 export function literalsInContext(tree: ExprNode): CheckLiteral[] {
   const literals: CheckLiteral[] = [];
+  const memo: ProvesMemo = new Map();
 
   // A boolean position.
   const walk = (node: ExprNode, context: Guard, negated: boolean): void => {
@@ -500,7 +528,7 @@ export function literalsInContext(tree: ExprNode): CheckLiteral[] {
     if (node.data === "negate") {
       walk(node.children.at(-1)!, context, !negated);
     } else if (node.data === "and_expr" || node.data === "or_expr") {
-      for (const [operand, operandContext] of operandContexts(node, context)) walk(operand, operandContext, false);
+      for (const [operand, operandContext] of operandContexts(node, context, memo)) walk(operand, operandContext, false);
     } else if (node.data === "default_expr" || node.data === "required_expr") {
       walk(node.children[0]!, context, false);
       scan(node.children[1]!, context);
@@ -520,12 +548,12 @@ export function literalsInContext(tree: ExprNode): CheckLiteral[] {
           scan(clause.children[1]!, passed);
         } else {
           walk(clause.children[0]!, passed, false);
-          passed = allOf(passed, proves(clause.children[0]!, true));
+          passed = allOf(passed, provesWith(clause.children[0]!, true, memo));
         }
       }
       scan(elem!, passed);
     } else if (node.data === "and_expr" || node.data === "or_expr") {
-      for (const [operand, operandContext] of operandContexts(node, context)) scan(operand, operandContext);
+      for (const [operand, operandContext] of operandContexts(node, context, memo)) scan(operand, operandContext);
     } else {
       for (const child of node.children) scan(child, context);
     }

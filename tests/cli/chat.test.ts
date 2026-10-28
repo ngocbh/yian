@@ -1290,6 +1290,13 @@ describe("the entry's chat, signalled", () => {
 });
 
 describe("yian chat's skills", () => {
+  // Restores the cwd and `fetch` even when a test times out, before the outer `afterEach` removes `tmp`.
+  let restore: (() => void) | null = null;
+  afterEach(() => {
+    restore?.();
+    restore = null;
+  });
+
   /** A chat whose `reply` agent grants `code-review`. */
   const SKILLED = turnFlow(`      reply:
         kind: agent
@@ -1323,13 +1330,12 @@ describe("yian chat's skills", () => {
       return new Response(SEVEN, { headers: { "content-type": "text/event-stream" } });
     }) as unknown as typeof fetch;
     process.chdir(project);
-    try {
-      const { code, log } = await runChat(flow, io);
-      return { code, log, stdout: stdout(), stderr: stderr(), systems };
-    } finally {
+    restore = () => {
       process.chdir(before);
       globalThis.fetch = original;
-    }
+    };
+    const { code, log } = await runChat(flow, io);
+    return { code, log, stdout: stdout(), stderr: stderr(), systems };
   }
 
   test(

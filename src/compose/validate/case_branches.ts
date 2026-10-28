@@ -40,7 +40,7 @@ import { typeRelation } from "../../compile/validation.ts";
 import { getCloseMatches, reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError, exprRefsOf } from "../../expr/index.ts";
 import { wholeSpanInterior } from "../../expr/grammar.ts";
-import { flowCallCalleesInSpans } from "../../expr/template.ts";
+import { flowCallCalleesInSpans, spanCallDirectiveFlow } from "../../expr/template.ts";
 import { BUILTIN_TYPE_NAMES, type TypeRegistry } from "../../typesys/types.ts";
 import { buildValueAs, isList, isRecord, rejectDeepNesting, type Type, TypeCheckError } from "../../typesys/values.ts";
 import { ArgumentValueError, desugarCallDirectives } from "../desugar/inline_calls.ts";
@@ -394,6 +394,13 @@ function rejectSpan(
   } catch (error) {
     if (!(error instanceof ExpressionError)) throw error;
     throw diagnostics.error(`${host} ${error.message}`, { range: branch.range, cause: error });
+  }
+  if (callees[0] === "call") {
+    throw diagnostics.error(
+      `${host} call(...) inside \`\${...}\` is not supported; call the flow as the branch, without ` +
+        `\`\${...}\`: \`${branch.label} call(${spanCallDirectiveFlow(text) ?? "<flow>"}, ...)\``,
+      { range: branch.range },
+    );
   }
   if (callees.length > 0) {
     throw diagnostics.error(

@@ -61,7 +61,13 @@
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError, unknownFunctionMessage } from "../../expr/expressions.ts";
-import { exprRefsOf, flowCallCalleesInSpans, InlineCall, splitCallsAware } from "../../expr/template.ts";
+import {
+  exprRefsOf,
+  flowCallCalleesInSpans,
+  InlineCall,
+  spanCallDirectiveFlow,
+  splitCallsAware,
+} from "../../expr/template.ts";
 import { Assertion, Binding, iterSourceStrings, mapSourceStrings, ValueTemplate } from "../../nodes/contracts.ts";
 import { BUILTIN_TYPE_NAMES } from "../../typesys/types.ts";
 import { isRecord, jsTypeName, type Value } from "../../typesys/values.ts";
@@ -528,6 +534,14 @@ function rejectSpanFlowCalls(
   const callee = flowCallees[0]!;
   if (BUILTIN_TYPE_NAMES.has(callee)) {
     throw diagnostics.error(`${where}: ${unknownFunctionMessage(callee)}`, { range });
+  }
+  if (callee === "call") {
+    throw diagnostics.error(
+      `${where}: call(...) inside \${...} is not supported — write it as the whole value, without ` +
+        `\${...}: call(${spanCallDirectiveFlow(value) ?? "<flow>"}, ...), or call the flow in its own ` +
+        "node and read its output; a call(...) in the middle of text is plain text",
+      { range },
+    );
   }
   throw diagnostics.error(
     `${where}: a flow call ${reprText(callee)} inside \${...} is not supported — write it ` +

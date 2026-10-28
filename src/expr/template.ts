@@ -783,6 +783,31 @@ export function flowCallCalleesInSpans(text: string, typeNames: ReadonlySet<stri
 }
 
 /**
+ * Return the flow id the first `call(<flow>, ...)` inside a `${...}` span of `text` names.
+ *
+ * Compose uses this to name the real flow when it rejects the `call(...)` directive written inside
+ * a span, where it parses as a call to a function named `call`.
+ *
+ * @param text A binding or template value whose spans parse.
+ * @returns The first argument when it is a bare name, else `null` (also when no span calls `call`).
+ * @throws {ExpressionError} If a span is malformed or doesn't parse.
+ */
+export function spanCallDirectiveFlow(text: string): string | null {
+  for (const segment of scanTemplate(text)) {
+    if (!(segment instanceof Span) || !(segment.tree instanceof Tree)) continue;
+    for (const node of iterSubtrees(segment.tree)) {
+      const suffix = node.data === "refcall" ? callSuffixOf(node) : undefined;
+      if (suffix === undefined || String(node.children[0]) !== "call") continue;
+      const arg = suffix.children[0];
+      const first = arg instanceof Tree && arg.children.length === 1 ? arg.children[0] : undefined;
+      const bare = first instanceof Tree && first.data === "refcall" && first.children.length === 1;
+      return bare ? String(first.children[0]) : null;
+    }
+  }
+  return null;
+}
+
+/**
  * Require every builtin call in `text`'s `${...}` spans to pass arguments it takes.
  *
  * Compose runs this on every binding and flow output; a prompt gets the same check through

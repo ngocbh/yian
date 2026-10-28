@@ -103,6 +103,29 @@ output: \${gate.output}
   expect(loadError(() => load(text)).message).toBe(spanFlowCall("then"));
 });
 
+test("call directive inside a span branch names the flow", () => {
+  // `call` is the directive, not a flow: the hint names the flow it calls.
+  const text = `
+id: bad
+name: bad
+input:
+  score: !float
+${TAKE_DEF}
+nodes:
+  gate:
+    kind: case
+    cases:
+      - when: "input.score >= 0.5"
+        then: \${ call(take, stance="a") }
+    else: call(take, stance="c")
+output: \${gate.output}
+`;
+  expect(loadError(() => load(text)).message).toBe(
+    "case node 'gate' then: call(...) inside `${...}` is not supported; call the flow as the " +
+      "branch, without `${...}`: `then: call(take, ...)`",
+  );
+});
+
 // An inline-binding call(...) AND a then: call(...) in one flow: the two share one minter.
 const BOTH = `
 id: both

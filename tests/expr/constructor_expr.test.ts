@@ -21,7 +21,13 @@ import {
 } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { routeFeedback, SourceRef } from "../../src/expr/lineage.ts";
-import { bindingCoSkips, evalBinding, flowCallCalleesInSpans, promptRefs } from "../../src/expr/template.ts";
+import {
+  bindingCoSkips,
+  evalBinding,
+  flowCallCalleesInSpans,
+  promptRefs,
+  spanCallDirectiveFlow,
+} from "../../src/expr/template.ts";
 import { BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { Parameter, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { Type, typeFor, type Value, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
@@ -272,6 +278,17 @@ test("a typedef name is not a flow callee", () => {
   const text = "${Buy(d.output)} ${review(d.output)}";
   expect(flowCallCalleesInSpans(text)).toEqual(["Buy", "review"]);
   expect(flowCallCalleesInSpans(text, new Set(["Buy"]))).toEqual(["review"]);
+});
+
+test.each([
+  ["a bare first argument", "see ${call(enrich, topic=input.topic)}", "enrich"],
+  ["the first call in span order", "${call(a)} ${call(b)}", "a"],
+  ["a hyphenated flow id", "${call(my-flow, x=1)}", null],
+  ["a dotted first argument", "${call(a.b)}", null],
+  ["no argument", "${call()}", null],
+  ["no call", "${review(x)}", null],
+])("the flow a span call(...) names: %s", (_name, text, flow) => {
+  expect(spanCallDirectiveFlow(text)).toBe(flow);
 });
 
 test("a constructor is not a prompt function", () => {

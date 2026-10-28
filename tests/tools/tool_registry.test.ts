@@ -291,7 +291,7 @@ describe("ToolSet construction", () => {
     const [askUser] = tools.resolve(["ask_user"]);
     expect(askUser!.name).toBe("ask_user");
     expect(askUser!.description).toBe(
-      "Ask the user one short question and wait for the answer. Use only when you need a decision or information that only the user can provide. Put the context they need in one or two sentences. When there are clear choices, pass 2-4 short `options`; the user can always type their own answer.",
+      "Ask the user a question and wait for their answer: when you need a decision or information only they can give, or when they ask you to ask them something. Put the context they need in one or two sentences. When there are clear choices, pass 2-4 short `options`; the user can always type a different answer.",
     );
     expect(JSON.stringify(askUser!.parametersJsonSchema)).toBe(
       '{"properties":{"question":{"type":"string"},"options":{"anyOf":[{"items":{"type":"string"},"type":"array"},{"type":"null"}],"default":null,"description":"Optional 2-4 short answer choices. The user can always type a different answer."},"timeout":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"description":"Optional: how long to wait for an answer, such as 30m, 24h or 2d. After it the call returns \'timed out: no answer\'."}},"required":["question"],"type":"object"}',

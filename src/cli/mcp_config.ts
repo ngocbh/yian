@@ -16,6 +16,7 @@ import { reprText } from "../diagnostics.ts";
 import { warn as platformWarn } from "../platform.ts";
 import { isSystemError } from "../skills/catalog.ts";
 import { type McpServer, mcpServer } from "../tools/mcp.ts";
+import { RESERVED_TOOL_NAMES } from "../tools/registry.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../typesys/json.ts";
 import { type Value, writeAsJson, writeAsText } from "../typesys/values.ts";
 import { osReason } from "./utils.ts";
@@ -104,7 +105,7 @@ export function loadMcpConfig(
     if (taken.has(name)) {
       throw new McpConfigError(
         `${sources[name]}: server ${reprText(name)}: the name is reserved (a registered tool or a yian` +
-          " built-in: take, sleep, ask, ask_user, load_skill); rename the server",
+          ` built-in: ${[...RESERVED_TOOL_NAMES].join(", ")}); rename the server`,
       );
     }
   }

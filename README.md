@@ -24,6 +24,10 @@ Or `bun add @ngocbh/yian`. yian runs on Node ≥ 22.18 or Bun ≥ 1.4. To put th
 your PATH, install it globally with `npm i -g @ngocbh/yian`, or run it with `npx @ngocbh/yian`
 or `bunx @ngocbh/yian`. Plain `npx yian` fetches an unrelated package.
 
+From a clone of this repo, `./install.sh` puts the checkout's `yian` on your PATH: it installs Bun
+if there is none, writes a `yian` wrapper into `~/.local/bin` and adds that folder to PATH in your
+shell's rc file. `./uninstall.sh` takes both back out.
+
 ## Set up a model
 
 yian has no built-in model. Save a login for a provider; [the docs](https://yian.readthedocs.io/models/)

@@ -24,6 +24,7 @@ To run flows from the terminal, you need the `yian` command. Pick one way:
 | Install it globally | `npm i -g @ngocbh/yian` | Puts `yian` on your PATH |
 | Run it once with npm | `npx @ngocbh/yian` | Downloads the package if needed |
 | Run it once with Bun | `bunx --bun @ngocbh/yian` | Without `--bun`, bunx runs it with Node |
+| Install a clone of the repo | `./install.sh` | Runs the checkout with Bun, installing Bun if needed. `./uninstall.sh` removes it |
 
 ```console
 $ npx @ngocbh/yian --version

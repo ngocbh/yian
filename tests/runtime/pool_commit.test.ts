@@ -557,9 +557,15 @@ test("a messages commit may name no steps; other commits have steps null", () =>
   expect(new PoolCommitRecord("x", "x", { kind: "str", value: "v" }).steps).toBeNull();
 });
 
-test.each([[[3, 3]], [[4, 2]], [[0]], [[1.5]], [["1"]]])("steps %j is refused", (steps) => {
+test.each([
+  [[3, 3], "steps must be strictly increasing"],
+  [[4, 2], "steps must be strictly increasing"],
+  [[0], "steps must be positive integers"],
+  [[1.5], "steps must be positive integers"],
+  [["1"], "steps must be positive integers"],
+])("steps %j is refused", (steps, message) => {
   expect(() => new PoolCommitRecord("reply", "reply.new_messages", null, { steps: steps as number[] })).toThrow(
-    "steps must be strictly increasing positive integers",
+    new RangeError(message),
   );
 });
 

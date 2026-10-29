@@ -960,14 +960,7 @@ function validatedEventSeqs(events: unknown, label: string): number[] {
  * @throws RangeError when `steps` isn't a list of strictly increasing positive safe integers.
  */
 function validatedSteps(steps: unknown): readonly number[] {
-  const ok =
-    isList(steps) &&
-    [...steps].every(
-      (seq, index, all) =>
-        typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 1 && (index === 0 || (all[index - 1] as number) < seq),
-    );
-  if (!ok) throw new RangeError("steps must be strictly increasing positive integers");
-  return Object.freeze([...(steps as readonly number[])]);
+  return Object.freeze(validatedEventSeqs(steps, "steps"));
 }
 
 /**

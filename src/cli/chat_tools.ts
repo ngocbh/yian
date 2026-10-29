@@ -45,6 +45,9 @@ import { osReason } from "./utils.ts";
 /** The most flows `list_flows` lists. */
 const LIST_FLOWS_LIMIT = 500;
 
+/** The most files and folders `list_flows` looks at. */
+const LIST_FLOWS_ENTRIES = 50_000;
+
 /** The largest flow file `read_flow` reads, in bytes. */
 const READ_FLOW_BYTES = 256 * 1024;
 
@@ -151,12 +154,18 @@ function isFlowFile(path: string): boolean {
 }
 
 /**
- * The flow files under `dir`, relative to `root` and sorted, skipping `node_modules` and
- * dot-folders and not following symlinks; at most `LIST_FLOWS_LIMIT` of them, then a note.
+ * @internal The flow files under `dir`, relative to `root` and sorted, skipping `node_modules`
+ * and dot-folders and not following symlinks: the first `limits.flows` of them in that order,
+ * then a note when there were more. The walk stops, with a note, after `limits.entries` files and
+ * folders, so a huge tree stays quick.
  */
-function listFlows(root: string, dir: string): string {
+export function listFlows(
+  root: string,
+  dir: string,
+  limits: { flows: number; entries: number } = { flows: LIST_FLOWS_LIMIT, entries: LIST_FLOWS_ENTRIES },
+): string {
   const found: string[] = [];
-  let cut = false;
+  let visited = 0;
   const walk = (folder: string): void => {
     let entries: Dirent[];
     try {
@@ -168,21 +177,27 @@ function listFlows(root: string, dir: string): string {
     }
     entries.sort((a, b) => compareCodeUnits(a.name, b.name));
     for (const entry of entries) {
-      if (cut) return;
+      if (visited === limits.entries) return;
+      visited++;
       const path = join(folder, entry.name);
       if (entry.isDirectory()) {
         if (entry.name !== "node_modules" && !entry.name.startsWith(".")) walk(path);
       } else if (entry.isFile() && isFlowFile(entry.name)) {
-        if (found.length === LIST_FLOWS_LIMIT) cut = true;
-        else found.push(slashed(relative(root, path)));
+        found.push(slashed(relative(root, path)));
       }
     }
   };
   walk(dir);
-  if (found.length === 0) return "no flows";
+  if (found.length === 0 && visited < limits.entries) return "no flows";
   found.sort(compareCodeUnits);
-  if (cut) found.push(`(stopped at ${LIST_FLOWS_LIMIT} flows; pass dir to list one folder)`);
-  return found.join("\n");
+  const lines = found.slice(0, limits.flows);
+  if (found.length > limits.flows) {
+    lines.push(`(${found.length - limits.flows} more not shown; pass dir to list one folder)`);
+  }
+  if (visited === limits.entries) {
+    lines.push(`(stopped after ${limits.entries} files and folders; pass dir to list one folder)`);
+  }
+  return lines.join("\n");
 }
 
 /**

@@ -56,6 +56,7 @@ const ALLOWED: Record<string, string> = {
   "llm/testing.ts: NULL_BODY_STATUSES": "HTTP statuses whose response has no body",
   // Display and message formatting.
   "cli/chat_tools.ts: FOCUS_BYTES": "size of the focus flow's text shown the chat's model",
+  "cli/chat_tools.ts: LIST_FLOWS_ENTRIES": "files and folders list_flows looks at before it stops",
   "cli/chat_tools.ts: LIST_FLOWS_LIMIT": "flow paths list_flows shows the chat's model",
   "cli/chat_tools.ts: READ_FLOW_BYTES": "size of a flow file read_flow shows the chat's model",
   "cli/diff.ts: CONTEXT": "lines of context around a change in a diff",

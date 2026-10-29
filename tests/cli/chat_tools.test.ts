@@ -18,7 +18,14 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { type ChatToolHost, chatFileTools, checkFocus, confine, ToolRefused } from "../../src/cli/chat_tools.ts";
+import {
+  type ChatToolHost,
+  chatFileTools,
+  checkFocus,
+  confine,
+  listFlows,
+  ToolRefused,
+} from "../../src/cli/chat_tools.ts";
 import type { ApproveRequest } from "../../src/cli/terminal.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { isReportedToolError } from "../../src/tools/errors.ts";
@@ -194,7 +201,27 @@ describe("list_flows", () => {
     expect(lines).toHaveLength(501);
     expect(lines[0]).toBe("many/000.yaml");
     expect(lines[499]).toBe("many/499.yaml");
-    expect(lines[500]).toBe("(stopped at 500 flows; pass dir to list one folder)");
+    expect(lines[500]).toBe("(1 more not shown; pass dir to list one folder)");
+  });
+
+  test("cuts after sorting, so the first flows in order are shown", () => {
+    mkdirSync(join(root, "a"));
+    writeFileSync(join(root, "a", "x.yaml"), "");
+    writeFileSync(join(root, "a-b.yaml"), "");
+    // The walk reaches a/x.yaml first; in code-unit order a-b.yaml comes first.
+    expect(listFlows(root, root, { flows: 1, entries: 100 })).toBe(
+      "a-b.yaml\n(2 more not shown; pass dir to list one folder)",
+    );
+  });
+
+  test("stops walking after the entry limit, with a note", () => {
+    for (const name of ["a.yaml", "b.yaml", "c.yaml"]) writeFileSync(join(root, name), "");
+    expect(listFlows(root, root, { flows: 10, entries: 2 })).toBe(
+      "a.yaml\nb.yaml\n(stopped after 2 files and folders; pass dir to list one folder)",
+    );
+    expect(listFlows(root, join(root, "sub"), { flows: 10, entries: 0 })).toBe(
+      "(stopped after 0 files and folders; pass dir to list one folder)",
+    );
   });
 
   test("refuses a folder outside the root", async () => {

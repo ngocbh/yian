@@ -1,6 +1,6 @@
 /** Canonical, source-owned diagnostics for Compose load failures. */
 
-import { Diagnostic, DiagnosticFrame, SourceRange } from "../../diagnostics.ts";
+import { Diagnostic, DiagnosticFrame, type SourceRange } from "../../diagnostics.ts";
 import type { SourceCursor, SourceDocument } from "../source/index.ts";
 import { oneLineSlice } from "./source.ts";
 
@@ -33,17 +33,10 @@ export class LoadDiagnostics {
    * Create a context owning `label` and `text`, or an unlocated one when both are `null`.
    *
    * @throws RangeError when only one of them is `null`.
-   * @throws TypeError when either is not text.
    */
   constructor(label: string | null = null, text: string | null = null) {
     if ((label === null) !== (text === null)) {
       throw new RangeError("load diagnostic source requires both label and text");
-    }
-    if (label !== null && typeof label !== "string") {
-      throw new TypeError("load diagnostic label must be a string");
-    }
-    if (text !== null && typeof text !== "string") {
-      throw new TypeError("load diagnostic text must be a string");
     }
     this.label = label;
     this.text = text;
@@ -67,18 +60,10 @@ export class LoadDiagnostics {
   /**
    * Resolve one concrete range against this context's source, with an optional `note`
    * printed next to it; `null` when the range or the source is absent.
-   *
-   * @throws TypeError for a range that isn't a `SourceRange`, or a note that isn't text.
    */
   frame(range: SourceRange | null, options: { note?: string | null } = {}): DiagnosticFrame | null {
     const { note = null } = options;
     if (range === null || this.label === null || this.text === null) return null;
-    if (!(range instanceof SourceRange)) {
-      throw new TypeError("load diagnostic range must be a SourceRange or null");
-    }
-    if (note !== null && typeof note !== "string") {
-      throw new TypeError("load diagnostic frame note must be a string or null");
-    }
     return new DiagnosticFrame({ label: this.label, text: this.text, range, note });
   }
 
@@ -86,36 +71,23 @@ export class LoadDiagnostics {
    * Construct one canonical Compose load diagnostic, code `compose.load` unless `code` names a
    * narrower one, such as `expr.nullable_field_read`.
    *
-   * @throws TypeError for a malformed message, frame or note.
    * @throws RangeError when `range` and explicit frames are both given.
    */
   diagnostic(message: string, options: LoadDiagnosticOptions = {}): Diagnostic {
     const { range = null, frames = [], notes = [], code = "compose.load" } = options;
-    if (typeof message !== "string") {
-      throw new TypeError("load diagnostic message must be a string");
-    }
     let ownedFrames = [...frames];
     if (range !== null && ownedFrames.length > 0) {
       throw new RangeError("load diagnostic accepts a range or frames, not both");
-    }
-    for (const frame of ownedFrames) {
-      if (!(frame instanceof DiagnosticFrame)) {
-        throw new TypeError("load diagnostic frames must be DiagnosticFrame values");
-      }
     }
     if (range !== null) {
       const frame = this.frame(range);
       ownedFrames = frame !== null ? [frame] : [];
     }
-    const ownedNotes = [...notes];
-    if (ownedNotes.some((note) => typeof note !== "string")) {
-      throw new TypeError("load diagnostic notes must be strings");
-    }
     return new Diagnostic({
       code,
       message,
       frames: ownedFrames,
-      notes: ownedNotes,
+      notes: [...notes],
     });
   }
 

@@ -92,7 +92,7 @@ function dispatchFlow(): CompiledFlow {
     ["ordinary", new FuncNode("ordinary", (inputs) => inputs)],
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [
+  return new CompiledFlow(nodes, [
     new Edge("start-first", START_ID, "first"),
     new Edge("first-second", "first", "second"),
     new Edge("second-ordinary", "second", "ordinary"),
@@ -355,7 +355,7 @@ function wideResumeFlow(width: number): CompiledFlow {
     nodes.set(`queued-${index}`, new FuncNode(`queued-${index}`, (inputs) => inputs));
     edges.push(new Edge(`start-queued-${index}`, START_ID, `queued-${index}`));
   }
-  return CompiledFlow.fromParts(nodes, edges);
+  return new CompiledFlow(nodes, edges);
 }
 
 test("RunResumed keeps wide ready work without copying it", () => {

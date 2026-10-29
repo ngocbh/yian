@@ -38,7 +38,7 @@ function driver(origin: string, k: number, child: Flow): LoopNode {
 
 /** Return a valid zero-field loop body. */
 function emptyChild(): CompiledFlow {
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: [] })],
       [END_ID, EndNode.value(END_ID, { outputName: null })],

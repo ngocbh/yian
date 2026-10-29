@@ -325,7 +325,7 @@ export function validateGrowthMetadata(flow: Flow): void {
   }
 }
 
-/** The options of `CompiledFlow`'s constructor and `fromParts`. */
+/** The options of `CompiledFlow`'s constructor. */
 type CompiledFlowOptions = {
   outputs?: readonly FlowOutput[] | null;
   wiring?: WiringInput;
@@ -409,15 +409,6 @@ export class CompiledFlow extends Flow {
     this.incomingEdges = new Map();
     this.outgoingEdges = new Map();
     indexEdges(edges, this.incomingEdges, this.outgoingEdges);
-  }
-
-  /**
-   * Build a compiled flow. The entry is always the synthesized START node (`StartNode.ID`), added
-   * implicitly by the loader or graph builder and never authored; the engine seeds and advances
-   * it at run start.
-   */
-  static fromParts(nodes: Map<string, Node>, edges: Edge[], options: CompiledFlowOptions = {}): CompiledFlow {
-    return new CompiledFlow(nodes, edges, options);
   }
 
   /** The edges ending at `nodeId` (its inputs); empty when none. */

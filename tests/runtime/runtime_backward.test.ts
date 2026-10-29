@@ -2416,7 +2416,7 @@ test("a root output that is the run inputs doesn't invent an executed producer",
     params: [new Parameter("topic"), new Parameter("omitted", { hasDefault: true, default: "unused" })],
   });
   (start as Node).forward = () => new Route(ELSE_HANDLE);
-  const flow = CompiledFlow.fromParts(new Map([[START_ID, start]]), []);
+  const flow = new CompiledFlow(new Map([[START_ID, start]]), []);
   // `endId` is readonly and fixed by the constructor.
   (flow as { endId: string }).endId = START_ID;
   const initialPool = new VariablePool(START_ID);

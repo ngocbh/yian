@@ -193,7 +193,7 @@ test("static run yields only new post durable observers", async () => {
 
 test("stream chunks are callback only and never durable", async () => {
   const stream = new StreamNode("stream", ["hel", "lo"]);
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["stream", stream],

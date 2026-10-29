@@ -112,7 +112,7 @@ function compiled(): CompiledFlow {
   step.postAsserts = [new Assertion("output > x", "output > x")];
   step.env = { alpha: 1n, beta: 2n };
   const end = EndNode.value(END_ID, { outputName: "result" });
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, start],
       ["step", step],
@@ -141,7 +141,7 @@ function oneStepFlow(
   const step = new CodeNode("step", { code: 'return "ok"' });
   step.params = wiring.map(([name]) => new Parameter(name));
   step.env = env;
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: inputs })],
       ["step", step],
@@ -548,7 +548,7 @@ function llmFlow(
 ): CompiledFlow {
   const ask = new AgentNode("ask", { prompt: "Answer briefly.", llmConfig: nodeLayer, llmInherit });
   ask.outputContract = strContract();
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: [] })],
       ["ask", ask],
@@ -1389,7 +1389,7 @@ test("manifest has no redaction markers", () => {
     sig: "first-value",
     webhook_url: "https://hooks.example/services/T0/B0/first-value",
   };
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [
         START_ID,
@@ -1552,7 +1552,7 @@ const INT_TYPE_MANIFEST = { element: null, fields: null, kind: "int", nullable: 
 test("flow fingerprint preserves semantic edge order", () => {
   const original = compiled();
   const base = compiled();
-  const reordered = CompiledFlow.fromParts(base.nodes, [...base.edges].reverse(), {
+  const reordered = new CompiledFlow(base.nodes, [...base.edges].reverse(), {
     outputs: base.outputs,
     wiring: base.wiring,
     flowLlmConfig: base.flowLlmConfig,

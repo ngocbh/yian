@@ -94,7 +94,7 @@ export function paramFlow(
 ): CompiledFlow {
   const options = rest[0] instanceof Node || rest.length === 0 ? {} : (rest.shift() as { wiring: ReadonlyMap<string, ReadonlyMap<string, unknown>> });
   const nodes = rest as Node[];
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params })],
       ...nodes.map((node) => [node.id, node] as const),

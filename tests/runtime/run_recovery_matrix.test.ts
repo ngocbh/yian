@@ -797,7 +797,7 @@ function agentFlow(options: { sibling?: boolean } = {}): CompiledFlow {
     throw new Error("replay invoked a node");
   });
   agent.memoryScope = new MemoryScope(["agent"], { memories: ["notes"] });
-  const built = CompiledFlow.fromParts(
+  const built = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["agent", agent],

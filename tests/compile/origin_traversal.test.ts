@@ -434,7 +434,7 @@ function richFlow(): { flow: CompiledFlow; expected: Set<string>; payloadOrigin:
   const childEnd = EndNode.value(END_ID, { outputName: "result" });
   childEnd.origin = origin("child/end/node");
   const childOutput = new Binding("${child_body.output}", { origin: origin("child/output") });
-  const child = CompiledFlow.fromParts(
+  const child = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, childStart],
       ["child_body", childBody],
@@ -460,7 +460,7 @@ function richFlow(): { flow: CompiledFlow; expected: Set<string>; payloadOrigin:
   loop!.origin = origin("root/loop/node");
 
   const rootOutput = new Binding("${body.output}", { origin: origin("root/output") });
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: [] })],
       ["body", body],
@@ -645,7 +645,7 @@ function sharedDecl(declOrigin: OriginRef | null): MemoryDecl {
 
 /** Return a compiled flow of two AGENTs, `left` and `right`, that both declare `shared`. */
 function aliasedFlow(shared: MemoryDecl): CompiledFlow {
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map([
       ["left", new AgentNode("left", { memories: [shared] })],
       ["right", new AgentNode("right", { memories: [shared] })],
@@ -772,7 +772,7 @@ for (const [label, make] of COMPOSITES) {
     const signature = new Parameter("item", { origin: origin("signature") });
     const childStart = new StartNode(START_ID, { params: [signature] });
     childStart.origin = origin("child");
-    const child = CompiledFlow.fromParts(new Map([[START_ID, childStart]]), [], {
+    const child = new CompiledFlow(new Map([[START_ID, childStart]]), [], {
       wiring: new Map([[START_ID, new Map()]]),
     });
     const driver = make(child, signature);
@@ -896,7 +896,7 @@ test("source-free graph ignores origin refs in semantic payloads", () => {
   const node = new BareNode("n");
   node.params = [new Parameter("value", { hasDefault: true, default: payload })];
   node.env = { ordinary: payloadOrigin };
-  const flow = CompiledFlow.fromParts(new Map([["n", node]]), [], {
+  const flow = new CompiledFlow(new Map([["n", node]]), [], {
     outputs: [new FlowOutput("result", payloadOrigin)],
     wiring: new Map([["n", new Map([["value", payload]])]]),
   });
@@ -1072,7 +1072,7 @@ function codeFlow(): CompiledFlow {
   const end = EndNode.value(END_ID, { outputName: "result" });
   end.origin = origin("code/end");
   const output = new Binding("${body.output}", { origin: origin("code/output") });
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, start],
       ["body", body],

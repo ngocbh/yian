@@ -742,7 +742,7 @@ describe("resumes and the terminal", () => {
 
   test("a waiting node keeps the run from ending; its own success ends it", () => {
     // `heard` has no edge to END, so END's success would end the run but for the wait.
-    const flow = CompiledFlow.fromParts(
+    const flow = new CompiledFlow(
       new Map<string, Node>([
         [START_ID, new StartNode(START_ID, { params: [MSGS] })],
         ["heard", tool("heard", "take")],
@@ -847,7 +847,7 @@ describe("inbox_closed", () => {
  * skips `dead`, so END is unreachable and the latch is set while `heard` and `ask` wait.
  */
 function unreachableFlow(): CompiledFlow {
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: [MSGS] })],
       ["router", new FuncNode("router", (inputs) => inputs)],

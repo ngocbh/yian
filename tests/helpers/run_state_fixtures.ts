@@ -329,7 +329,7 @@ export function flow(): CompiledFlow {
     ["work", new FuncNode("work", (inputs) => inputs)],
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [
+  return new CompiledFlow(nodes, [
     new Edge("start-work", START_ID, "work"),
     new Edge("work-end", "work", END_ID),
   ]);
@@ -343,7 +343,7 @@ export function fanoutFlow(): CompiledFlow {
     ["second", new FuncNode("second", (inputs) => inputs)],
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [
+  return new CompiledFlow(nodes, [
     new Edge("start-first", START_ID, "first"),
     new Edge("start-second", START_ID, "second"),
   ]);
@@ -358,7 +358,7 @@ export function routeFlow(): CompiledFlow {
     ),
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [
+  return new CompiledFlow(nodes, [
     new Edge("start-router", START_ID, "router"),
     new Edge("route-dead", "router", "dead-parent", { sourceHandle: "no" }),
     new Edge("route-chosen", "router", "chosen", { sourceHandle: "yes" }),
@@ -395,7 +395,7 @@ export function terminalSkipRouteFlow(
     nodes.set("unrelated", new FuncNode("unrelated", (inputs) => inputs));
     edges.push(new Edge("start-unrelated", START_ID, "unrelated"));
   }
-  return CompiledFlow.fromParts(nodes, edges);
+  return new CompiledFlow(nodes, edges);
 }
 
 /** The id of `callRedirectFlow`'s child END. */
@@ -426,7 +426,7 @@ export function callRedirectFlow(options: { fallback?: boolean } = {}): Compiled
     edges.splice(1, 0, new Edge("start-fallback", START_ID, "fallback"));
     edges.push(new Edge("fallback-end", "fallback", END_ID, { inputGroup: "result" }));
   }
-  return CompiledFlow.fromParts(nodes, edges);
+  return new CompiledFlow(nodes, edges);
 }
 
 /** Return the complete pool a fresh run of `flow` records under `runId`. */
@@ -462,7 +462,7 @@ export function nodeFlow(
   node: Node,
   wiring: Readonly<Record<string, unknown>> = node instanceof FuncNode ? node.reads : {},
 ): CompiledFlow {
-  return CompiledFlow.fromParts(new Map([[node.id, node]]), [], {
+  return new CompiledFlow(new Map([[node.id, node]]), [], {
     wiring: new Map([[node.id, new Map(Object.entries(wiring))]]),
   });
 }
@@ -851,7 +851,7 @@ export function graph(
   if (outputs.length > 0) {
     wiring.set(END_ID, new Map(outputs.map((output) => [output.name, output.binding])));
   }
-  return CompiledFlow.fromParts(nodeMap, edges, { outputs, wiring });
+  return new CompiledFlow(nodeMap, edges, { outputs, wiring });
 }
 
 /**
@@ -1498,7 +1498,7 @@ export function parentFlow(options: { spawner?: Node; sibling?: boolean } = {}):
   if (options.sibling) nodes.set("side", new FuncNode("side", (inputs) => inputs));
   const edges = [new Edge("start-spawn", START_ID, spawner.id), new Edge("spawn-end", spawner.id, END_ID)];
   if (options.sibling) edges.push(new Edge("start-side", START_ID, "side"));
-  return CompiledFlow.fromParts(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])) });
+  return new CompiledFlow(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])) });
 }
 
 /** Return a replay-valid state and log with the static spawner in flight. */
@@ -1576,7 +1576,7 @@ export function canonicalChild(options: { optionalInput?: boolean } = {}): Compi
     [START_ID, new StartNode(START_ID, { params: parameters })],
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [new Edge("child-boundary", START_ID, END_ID, { ordering: true })], {
+  return new CompiledFlow(nodes, [new Edge("child-boundary", START_ID, END_ID, { ordering: true })], {
     wiring: new Map([
       [START_ID, new Map(options.optionalInput ? [["optional", "${input.optional}"]] : [])],
       [END_ID, new Map()],
@@ -1618,7 +1618,7 @@ export function childFlow(): CompiledFlow {
     [START_ID, new Map([["x", "${input.x}"]])],
     [END_ID, new Map([["out", "${tail.output}"]])],
   ]);
-  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${tail.output}")], wiring });
+  return new CompiledFlow(nodes, edges, { outputs: [new FlowOutput("out", "${tail.output}")], wiring });
 }
 
 /**
@@ -1646,7 +1646,7 @@ export function parentWithSpawner(child: CompiledFlow): CompiledFlow {
     [START_ID, new Map([["x", "${input.x}"]])],
     [END_ID, new Map([["out", "${after.output}"]])],
   ]);
-  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${after.output}")], wiring });
+  return new CompiledFlow(nodes, edges, { outputs: [new FlowOutput("out", "${after.output}")], wiring });
 }
 
 /** A memory log, holding `prior`'s records, whose append fails before it retains the record. */

@@ -259,7 +259,7 @@ test("data edged branch target does not run when skipped", async () => {
     new Edge("pro_note->end", "pro_note", END_ID),
     new Edge("con_note->end", "con_note", END_ID),
   ];
-  const built = engine(CompiledFlow.fromParts(new Map(nodes), edges));
+  const built = engine(new CompiledFlow(new Map(nodes), edges));
   const events = await built.run();
   expect(log).toContain("pro_note");
   expect(log).not.toContain("con_note");

@@ -309,7 +309,7 @@ function sourceFreeFailureFlow(): ComposedFlow {
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
   const edges = [new Edge("start-fail", START_ID, "fail"), new Edge("fail-end", "fail", END_ID)];
-  return new ComposedFlow(CompiledFlow.fromParts(nodes, edges));
+  return new ComposedFlow(new CompiledFlow(nodes, edges));
 }
 
 /** One programmatic flow whose CODE node throws `code`'s error. */
@@ -320,7 +320,7 @@ function throwingFlow(code: string): ComposedFlow {
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
   const edges = [new Edge("start-fail", START_ID, "fail"), new Edge("fail-end", "fail", END_ID)];
-  return new ComposedFlow(CompiledFlow.fromParts(nodes, edges));
+  return new ComposedFlow(new CompiledFlow(nodes, edges));
 }
 
 /** Count the CODE evaluations while `fn` runs. */

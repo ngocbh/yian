@@ -828,9 +828,8 @@ export class AgentDescriptor extends NodeDescriptor {
    *
    * @throws LoadError for a bad `env.max_tool_iterations`, a bad variable declaration, a tool or
    *   skill grant the node refuses, an `output:` nesting deeper than
-   *   `current().maxAgentOutputNesting` or holding a type a model can't produce, a steer inbox with
-   *   non-text output, a variable named like an input, or an input or variable named
-   *   `__llm_config` or `__steer_inbox`.
+   *   `current().maxAgentOutputNesting` or holding a type a model can't produce, a variable named
+   *   like an input, or an input or variable named `__llm_config` or `__steer_inbox`.
    * @throws TypeError when `ctx.variableDeclarationReader` returns anything but an array of exact
    *   `Parameter`s or `null`.
    */

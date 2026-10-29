@@ -494,6 +494,34 @@ test(
 );
 
 test(
+  "yian run --resume refuses a chat's log left waiting, and one from a chat of another yian version",
+  async () => {
+    // Stopped at the prompt: the chat's run waits at its take.
+    const signals = new EventEmitter();
+    const { io, stderr } = chatIo();
+    const chatting = runChat(io, new AnsweringModel(() => textReply("hello")), undefined, { deps: { signals } });
+    await until(() => stderr().includes("Run log: "));
+    await until(() => signals.listenerCount("SIGTERM") > 0);
+    signals.emit("SIGTERM");
+    const { code, log } = await chatting;
+    expect(code).toBe(130);
+    expect(inspectRun(log).status).toBe("waiting");
+    const resumed = chatIo();
+    expect(await main(["run", "--resume", log], resumed.io)).toBe(1);
+    expect(resumed.stderr()).toContain("this run is a yian chat's; yian run --resume can't continue it");
+    // Another version's chat: its flow file is chat.yaml with the chat's id, its text not this one's.
+    const other = join(root, "chat.yaml");
+    writeFileSync(other, HELLO.replace("id: hello", "id: yian-chat"));
+    const otherLog = join(tmp, "other.jsonl");
+    expect(await main(["run", other, "--input", "name=Ada", "--log", otherLog, "--quiet"], chatIo().io)).toBe(0);
+    const again = chatIo();
+    expect(await main(["run", "--resume", otherLog], again.io)).toBe(1);
+    expect(again.stderr()).toContain("this run is a yian chat's");
+  },
+  TIMEOUT,
+);
+
+test(
   "yian run --resume on a user's own flow with the id yian-chat resumes it",
   async () => {
     const path = join(root, "mine.yaml");

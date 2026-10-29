@@ -341,7 +341,9 @@ and how to go on:
 Ctrl-C while the chat ends stops every flow at once, cancelled or not, and the chat still prints
 where each one is: a flow stopped while it ran prints `run rN was stopped while it ran` and its log.
 
-The chat's own run can't be resumed: `yian run --resume` on its log exits 1.
+The chat's own run can't be resumed: `yian run --resume` on its log exits 1. It tells a chat's log
+by its flow, `id: yian-chat` in a file named `chat.yaml`, so a flow of yours with both is refused
+too.
 
 ## yian check
 

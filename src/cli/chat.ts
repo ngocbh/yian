@@ -35,13 +35,13 @@ import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
 import { inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { printStyled } from "./render.ts";
-import { removeEmptyDir, validateRunLogOptions } from "./run.ts";
+import { CHAT_FLOW_FILE, removeEmptyDir, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
 import type { CliIo } from "./utils.ts";
 
 /** The label the bundled flow's diagnostics and recorded source go by. */
-const CHAT_LABEL = "chat.yaml";
+const CHAT_LABEL = CHAT_FLOW_FILE;
 
 /** The path of the assistant's reply agent in the bundled flow, whose model the banner names. */
 const REPLY_PATH = "chat/answered/reply";

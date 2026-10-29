@@ -144,7 +144,7 @@ test.each([
   ["{role: Literal(a, b, null, c)}", "null", "null", "Literal(a"],
   ["{n: Literal(1, 2, 3)}", "2", "an integer", "Literal(1"],
   ["{t: Dict(str, List(int)), u: Literal(x, 1, y)}", "1", "an integer", "Literal(x"],
-])("a key a flow mapping's comma made names the split type: %s", (written, key, readAs, cut) => {
+])("a key a flow mapping's comma made names the split value: %s", (written, key, readAs, cut) => {
   // YAML splits `{role: Literal(a, true, b)}` at each comma, so `true` becomes a key.
   const text = flowWith("x_block", "n_x_block").replace("  n_x_block: v", `  R: ${written}`);
 
@@ -152,8 +152,8 @@ test.each([
 
   expect(error.diagnostic.message).toBe(
     `the key \`${key}\` was read by YAML as ${readAs}, but names in a flow must be text. This ` +
-      `\`{...}\` mapping's comma split the type that starts \`${cut}\`; quote the type or use ` +
-      "block style.",
+      `\`{...}\` mapping's comma split the value that starts \`${cut}\`; quote that value or ` +
+      "use block style.",
   );
 });
 

@@ -20,5 +20,5 @@ expect:
   load:
     diagnostics:
       - code: compose.load
-        message: "duplicate key 'int)' (first at line 4); this `{...}` mapping's comma split the type that starts `Dict(str`, so quote the type or use block style"
+        message: "duplicate key 'int)' (first at line 4); this `{...}` mapping's comma split the value that starts `Dict(str`, so quote that value or use block style"
         frames: [{label: flow.yaml, range: [4, 42, 4, 46]}]

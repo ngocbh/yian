@@ -186,20 +186,32 @@ test.each([
   ["{a: Dict(str, int), b: Dict(str, int)}", "int)", "Dict(str", 4],
   ["{a: Dict(str, List(int)), b: Dict(str, List(int))}", "List(int))", "Dict(str", 4],
   ["{a: Union(A, B, C), b: Union(A, B, C)}", "B", "Union(A", 4],
-])("a repeat a flow mapping's comma made names the split type: %s", (written, key, cut, at) => {
+  ["{status: Literal(ok, error, timeout), error: str}", "error", "Literal(ok", 4],
+])("a repeat a flow mapping's comma made names the split value: %s", (written, key, cut, at) => {
   // YAML splits `{a: Dict(str, int), ...}` at each comma, so the type's tail `int)` becomes a
-  // key that the next split type repeats.
+  // key that the next split type repeats; in the last row the first copy is the split piece.
   const text = `id: f\nname: f\ntypedefs:\n  R: ${written}\n${NODES}`;
 
   const error = loadError(() => parseSourceDocument(text, "dup.yaml"));
 
   expect(error.message).toBe(
-    `duplicate key '${key}' (first at line ${at}); this \`{...}\` mapping's comma split the type ` +
-      `that starts \`${cut}\`, so quote the type or use block style`,
+    `duplicate key '${key}' (first at line ${at}); this \`{...}\` mapping's comma split the ` +
+      `value that starts \`${cut}\`, so quote that value or use block style`,
   );
   // The second key, after the space before it, in 1-based columns.
   const column = text.split("\n")[3]!.lastIndexOf(` ${key}`) + 2;
   expect(error.diagnostic.frames.at(-1)!.range.startCol).toBe(column);
+});
+
+test("a repeat a flow mapping's comma made outside a type names the split value", () => {
+  const text = `id: f\nname: f\nx-meta: {note: see (below, b, b}\n${NODES}`;
+
+  const error = loadError(() => parseSourceDocument(text, "dup.yaml"));
+
+  expect(error.message).toBe(
+    "duplicate key 'b' (first at line 3); this `{...}` mapping's comma split the value that " +
+      "starts `see (below`, so quote that value or use block style",
+  );
 });
 
 test.each([

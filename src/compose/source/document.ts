@@ -76,8 +76,11 @@ export interface RepeatedKey {
   readonly key: string;
   readonly first: SourceRange;
   readonly second: SourceRange;
-  /** The front of a type a `{...}` mapping's comma split before the repeat, if one did. */
-  readonly cutType?: string;
+  /**
+   * The front of a value a `{...}` mapping's comma split before either copy of the key, if one
+   * did.
+   */
+  readonly cutValue?: string;
 }
 
 /** The first mapping key, in document order, that YAML read as non-text. */
@@ -85,8 +88,8 @@ export interface NonTextKey {
   readonly key: Exclude<ScalarValue, string>;
   readonly text: string;
   readonly range: SourceRange;
-  /** The front of a type a `{...}` mapping's comma split before the key, if one did. */
-  readonly cutType?: string;
+  /** The front of a value a `{...}` mapping's comma split before the key, if one did. */
+  readonly cutValue?: string;
 }
 
 // YAML's printable characters; with the `u` flag a lone surrogate is one code point,
@@ -568,12 +571,12 @@ function build(
           keyAlias === null
             ? keyScalar.range!
             : toRange(starts, keyAlias.range![0], keyAlias.range![1]);
-        const cutType = flow ? cutTypeBefore(pairs, index) : null;
+        const cutValue = flow ? cutValueBefore(pairs, index) : null;
         nonTextKey = Object.freeze({
           key: keyValue,
           text: key,
           range,
-          ...(cutType === null ? {} : { cutType }),
+          ...(cutValue === null ? {} : { cutValue }),
         });
         nonTextKeyAt = keyAt;
       }
@@ -736,13 +739,13 @@ function openParens(text: string): number {
 }
 
 /**
- * Return the front of a type a `{...}` mapping's comma split before `pairs[index]`, or null.
+ * Return the front of a value a `{...}` mapping's comma split before `pairs[index]`, or null.
  *
  * YAML reads `{role: Literal(a, true, b)}` as the value `Literal(a` and the keys `true` and
  * `b)` with no value. The front is the nearest earlier plain value, past plain keys with no
- * value; it is a split type's when it and those keys open more `(` than they close.
+ * value; it is a split value's when it and those keys open more `(` than they close.
  */
-function cutTypeBefore(pairs: readonly MapPair[], index: number): string | null {
+function cutValueBefore(pairs: readonly MapPair[], index: number): string | null {
   let open = 0;
   for (let i = index - 1; i >= 0; i--) {
     const { key, value } = pairs[i]!;
@@ -835,7 +838,7 @@ function firstRepeatedKey(
       continue;
     }
     if (!isMap(node)) continue;
-    const firstKeys = new Map<string, SourceRange>();
+    const firstKeys = new Map<string, { readonly range: SourceRange; readonly index: number }>();
     for (const [index, pair] of node.items.entries()) {
       const keyNode = target(aliasTargets, pair.key);
       // Keys a merge brings in override; only a mapping's own pairs count.
@@ -850,15 +853,19 @@ function firstRepeatedKey(
         : keyScalar.range!;
       const first = firstKeys.get(key);
       if (first !== undefined) {
-        const cutType = node.flow === true ? cutTypeBefore(node.items, index) : null;
+        // Either copy of the key can be a piece of the split value.
+        const cutValue =
+          node.flow === true
+            ? (cutValueBefore(node.items, index) ?? cutValueBefore(node.items, first.index))
+            : null;
         return Object.freeze({
           key,
-          first,
+          first: first.range,
           second: range,
-          ...(cutType === null ? {} : { cutType }),
+          ...(cutValue === null ? {} : { cutValue }),
         });
       }
-      firstKeys.set(key, range);
+      firstKeys.set(key, { range, index });
     }
     for (let i = node.items.length - 1; i >= 0; i--) {
       const pair = node.items[i]!;

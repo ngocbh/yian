@@ -986,6 +986,22 @@ const PAUSE_FLOW =
   "      await new Promise((resolve) => setTimeout(resolve, 30_000));\n      return null;\n" +
   "output: ${first.output}\n";
 
+test("an ask off a terminal writes its prompt with no escape codes", async () => {
+  const flow = file("flow.yaml", ASK_FLOW);
+  const { io, stdout, stderr } = testIo();
+  // A piped run: stdin has ended and stderr isn't a TTY.
+  const input = new FakeInput({ tty: false });
+  input.end();
+  const output = new FakeOutput({ tty: false });
+  const argv = ["run", flow, "-q", "--json", "--log", join(tmp, "run.jsonl")];
+  const code = await main(argv, { ...io, stdin: input, stderrStream: output });
+  expect(code).toBe(1);
+  expect(stderr()).toEndWith("\nrun cancelled\n");
+  expect(JSON.parse(stdout()).error.code).toBe("run.cancelled");
+  expect(output.text).toContain("Proceed?");
+  expect(output.text).not.toContain("\x1b");
+});
+
 describe("run's stops", () => {
   test("Ctrl-C at a prompt during the run: cancelled by user, exit 130, no document", async () => {
     const ctrlC = (keys: FakeInput) => keys.write("\x03");

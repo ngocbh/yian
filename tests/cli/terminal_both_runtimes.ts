@@ -61,17 +61,22 @@ export class FakeInput extends PassThrough {
   }
 }
 
-/** An output collecting what is written, `columns` wide; with `throwOn`, that write (1-based) throws once. */
+/**
+ * An output collecting what is written, `columns` wide and a TTY unless `tty` is false; with
+ * `throwOn`, that write (1-based) throws once.
+ */
 export class FakeOutput extends Writable {
   text = "";
   columns: number;
+  isTTY: boolean;
   writes = 0;
   readonly throwOn: number | undefined;
   readonly failure = new Error("the output broke");
 
-  constructor({ columns = 80, throwOn }: { columns?: number; throwOn?: number } = {}) {
+  constructor({ columns = 80, throwOn, tty = true }: { columns?: number; throwOn?: number; tty?: boolean } = {}) {
     super();
     this.columns = columns;
+    this.isTTY = tty;
     this.throwOn = throwOn;
   }
 

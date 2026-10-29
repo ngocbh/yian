@@ -92,6 +92,7 @@ import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
 import { buildCliMemories, MemoryOptionError } from "./memory.ts";
 import { cells, charCells, Terminal, TerminalStopped } from "./terminal.ts";
 import {
+  atTerminal,
   type CliIo,
   CommandEnv,
   ensureEnvKey,
@@ -1230,7 +1231,9 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * stderr, and closes them all when the run ends. Unless `quiet`, the flow's banner and per-node
  * progress go to stderr; the log path always does. A warning raised during the run prints as a
  * `warning:` line on stderr, above the spinners. On a TTY stdin, each input not supplied is
- * prompted for on stderr, and a cancelled prompt prints `run cancelled` and exits 1. `provider` and
+ * prompted for on stderr, and a cancelled prompt prints `run cancelled` and exits 1. Off a terminal
+ * (stdin or stderr isn't a TTY), each prompt, an `ask` node's included, is written once, with no
+ * escape codes. `provider` and
  * `model`, those given, are the run's outermost `llmConfig` layer. Before the log exists, every key
  * the agents need is checked (`ensureProviderKeys`), prompted for on a TTY stdin; a missing one is
  * printed and exits 1. The log is `log`, else `~/.yian/runs/<run id>/log.jsonl` in a fresh folder.
@@ -1283,6 +1286,8 @@ export async function run(flowPath: string | undefined, options: RunOptions, io:
   const terminal = new Terminal({
     input: io.stdin,
     output: io.stderrStream,
+    // Off a terminal, stderr gets the prompts once each, with no escape codes.
+    plain: !atTerminal(io),
     // Before the run, a stopped prompt answers null and the command reports it.
     onStop: (reason) => {
       if (!started.value) return;

@@ -44,13 +44,21 @@ export interface CliIo {
   stdout: Writer;
   stderr: Writer;
   stdin: NodeJS.ReadableStream & { isTTY?: boolean };
-  stderrStream: NodeJS.WritableStream & { columns?: number };
+  stderrStream: NodeJS.WritableStream & { isTTY?: boolean; columns?: number };
   env: Env;
   /**
    * A stop from outside the process's signals, aborted with a `HostStop`: aborted, or aborting
    * later, it stops the run.
    */
   stop?: AbortSignal;
+}
+
+/**
+ * Whether `io`'s stdin and stderr are both TTYs, so a `Terminal` over them may draw with escape
+ * codes; otherwise it should be `plain`.
+ */
+export function atTerminal(io: CliIo): boolean {
+  return io.stdin.isTTY === true && io.stderrStream.isTTY === true;
 }
 
 /** The last write each `streamWriter` started, which `flush` awaits. */

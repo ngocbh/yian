@@ -58,7 +58,7 @@ import {
   waitingText,
 } from "./run.ts";
 import { Terminal, TerminalStopped } from "./terminal.ts";
-import { type CliIo, CommandEnv, HostStop, MissingKeyError, UsageError } from "./utils.ts";
+import { atTerminal, type CliIo, CommandEnv, HostStop, MissingKeyError, UsageError } from "./utils.ts";
 
 /**
  * The options `chat` reads; an absent option is `undefined`, an absent repeatable one an empty
@@ -305,12 +305,11 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     });
     interrupting = Promise.all([interrupting, done]).then(() => {});
   };
-  const tty = io.stdin.isTTY === true && (io.stderrStream as { isTTY?: boolean }).isTTY === true;
   const terminal = new Terminal({
     input: io.stdin,
     output: io.stderrStream,
     // Off a terminal, stderr gets the prompts once each, with no escape codes.
-    plain: !tty,
+    plain: !atTerminal(io),
     onStop: (reason) => {
       if (log !== null) stop.abort(reason === "interrupt" ? new HostStop("SIGINT") : new TerminalStopped("eof"));
     },

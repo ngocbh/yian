@@ -75,7 +75,7 @@ function chatIo({ tty = false, env = {} }: { tty?: boolean; env?: Record<string,
   const out = sink();
   const err = sink();
   // A TTY chat draws on a TTY stderr; a piped one on a plain one.
-  const stderrStream = Object.assign(new FakeOutput(), { isTTY: tty });
+  const stderrStream = new FakeOutput({ tty });
   const io: CliIo = {
     stdout: out.out,
     stderr: err.out,

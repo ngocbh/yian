@@ -542,6 +542,47 @@ describe("the chat's view", () => {
     expect(rows()).toEqual(["warning: a skill didn't load"]);
   });
 
+  test("a reply that streams only blank lines, or whose text is blank, draws no ⏺ line", () => {
+    const { view, rows } = viewOn();
+    view.turn(true);
+    view.onEvent(started(1));
+    view.onStream(chunk(1, "\n\n  \n"));
+    const call = { nodeId: REPLY, n: 1, callIndex: 0, toolCallId: "c1" };
+    view.onEvent(new ToolCallStarted({ ...call, name: "answer_flow", arguments: { run: "r1" } }));
+    view.onEvent(new ToolCallFinished({ ...call, name: "answer_flow", result: "ok" }));
+    view.onEvent(started(2));
+    view.onEvent(finished(2));
+    view.onEvent(new NodeSucceeded({ nodeId: REPLY, output: "" }));
+    view.reply("\n");
+    view.turn(false);
+    expect(rows()).toEqual(["", "⏺ answer_flow(r1)", "  ⎿  ok"]);
+  });
+
+  test("a reply's blank lines before its text are dropped, and so are those after it", () => {
+    const { view, rows } = viewOn();
+    view.turn(true);
+    view.onStream(chunk(1, "\n\nStarted it (r1).\n\n"));
+    view.onEvent(finished(1));
+    view.turn(false);
+    expect(rows()).toEqual(["", "⏺ Started it (r1)."]);
+  });
+
+  test("a turn of a child event after a reply's turn leaves one blank line between them, not two", () => {
+    const { view, rows } = viewOn();
+    view.turn(true);
+    view.onStream(chunk(1, "Started it (r1)."));
+    view.onEvent(finished(1));
+    view.turn(false);
+    // The prompt went up and was taken down for the event, leaving nothing on the screen.
+    view.active(true);
+    view.active(false, false);
+    view.turn(true);
+    const status = { run: "r1", seq: 2, log: "r1.jsonl", status: "succeeded" as const, output: "ok" };
+    view.childEvent(childEvent(status)!);
+    view.turn(false);
+    expect(rows()).toEqual(["", "⏺ Started it (r1).", "", "⏺ r1 succeeded", '  ⎿  with output "ok"']);
+  });
+
   test("a block longer than the screen prints its top for good", () => {
     const { view, rows } = viewOn(8);
     view.onStream(chunk(1, "1\n2\n3\n4\n5\n6\n"));

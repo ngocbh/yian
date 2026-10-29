@@ -134,8 +134,8 @@ export interface InboxChatView {
   onStream(chunk: StreamChunk): void;
   /** A turn starts (`true`) or ends. */
   turn(active: boolean): void;
-  /** A prompt takes the terminal (`true`) or gives it back. */
-  active(active: boolean): void;
+  /** A prompt takes the terminal (`true`) or gives it back, having left rows on it when `printed`. */
+  active(active: boolean, printed: boolean): void;
   /** The output of a node named `reply`, as text. */
   reply(text: string): void;
   /** A child event, once sent. */
@@ -482,7 +482,7 @@ export async function inboxChat(
     onStop: (reason) => {
       if (log !== null) stop.abort(reason === "interrupt" ? new HostStop("SIGINT") : new TerminalStopped("eof"));
     },
-    onActive: view === null ? undefined : (active) => view.active(active),
+    onActive: view === null ? undefined : (active, printed) => view.active(active, printed),
   });
   const onStopSignal = (signal: NodeJS.Signals) => () => stop.abort(new HostStop(signal));
   const listeners = [

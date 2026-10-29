@@ -50,8 +50,11 @@ export interface TerminalOptions {
   output?: Output;
   /** Called once when Ctrl-C ("interrupt") or the end of input ("eof") closes the terminal. */
   onStop?: (reason: "interrupt" | "eof") => void;
-  /** Called with true when a prompt turn takes the terminal and false when it gives it back. */
-  onActive?: (active: boolean) => void;
+  /**
+   * Called with true when a prompt turn takes the terminal and false when it gives it back, with
+   * `printed` true when the turn left rows on the screen (a collapsed answer, an approval's card).
+   */
+  onActive?: (active: boolean, printed: boolean) => void;
   /**
    * Write each prompt once as it opens, with no escape codes or carriage returns, and leave the
    * input in cooked mode: for an output or input that isn't a terminal.
@@ -572,6 +575,8 @@ export class Terminal {
   /** The last key was a `return`, so an `enter` now is the `\n` of the same `\r\n`. */
   #afterReturn = false;
   #pasting = false;
+  /** Whether the turn holding the terminal left rows on the screen. */
+  #printed = false;
 
   /** Build a terminal over `options.input` and `options.output`; touches neither stream. */
   constructor(options: TerminalOptions = {}) {
@@ -918,7 +923,8 @@ export class Terminal {
       if (turn.ending === undefined) {
         started = true;
         this.#turn = turn;
-        quietly(() => this.#onActive?.(true));
+        this.#printed = false;
+        quietly(() => this.#onActive?.(true, false));
         this.#attach();
         // Under a watch the terminal is raw for it; the mode before the watch is the one to restore.
         wasRaw = this.#watch?.wasRaw ?? input.isRaw === true;
@@ -946,7 +952,7 @@ export class Terminal {
         quietly(() => process.removeListener("exit", onExit));
         if (watch === undefined) quietly(() => input.pause());
         if (this.#closed) quietly(() => this.#detach());
-        quietly(() => this.#onActive?.(false));
+        quietly(() => this.#onActive?.(false, this.#printed));
       }
     }
     const ending = turn.ending;
@@ -1040,7 +1046,10 @@ export class Terminal {
       const vanish = turn.keepOpen && "stop" in ended && ended.stop === "aborted";
       const line = vanish ? null : widget.done(ended);
       if (line === null) output.write(erase());
-      else if (!this.#plain) output.write(erase() + crlf(line) + "\r\n");
+      else if (!this.#plain) {
+        output.write(erase() + crlf(line) + "\r\n");
+        this.#printed = true;
+      }
     } catch (error) {
       finish({ error });
     } finally {

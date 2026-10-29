@@ -24,7 +24,7 @@ import {
 import type { Scheduler } from "../platform.ts";
 import type { ChildEvent } from "./chat_events.ts";
 import { MarkdownLines, renderMarkdown, TAB } from "./markdown.ts";
-import { cells, clip, columnsOf, fit, wrapLine } from "./cells.ts";
+import { ANSI, cells, clip, columnsOf, fit, wrapLine } from "./cells.ts";
 import { box, type Colored, paint, type Span, type Style, wrapSpans } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 import type { CliIo, Writer } from "./utils.ts";
@@ -215,6 +215,16 @@ interface Block {
   printed: number;
   /** The text after the last newline. */
   partial: string;
+  /**
+   * Whether the block shows anything yet: its blank lines before its first text are dropped, and
+   * it opens (with the blank line before it) only once text comes.
+   */
+  opened: boolean;
+}
+
+/** Whether `row` shows nothing but spaces. */
+function blank(row: string): boolean {
+  return row.replace(ANSI, "").trim() === "";
 }
 
 /** The colour of a child event's card, by the status it came from. */
@@ -269,6 +279,8 @@ export class ChatView {
   };
   /** What was printed last, for the blank line before the next item. */
   #last: "tool" | "text" | "other" | null = null;
+  /** Whether the last row printed for good is blank, so no second blank row follows it. */
+  #blank = false;
   /** Whether the turn running printed anything. */
   #turnPrinted = false;
   /** Set while a turn runs: its start time on the clock, and what stops its spinner. */
@@ -342,7 +354,7 @@ export class ChatView {
       this.#turn.stop.abort();
       this.#turn = null;
       // A blank line between what the turn printed and the prompt.
-      if (this.#turnPrinted) this.#commit([""]);
+      if (this.#turnPrinted) this.#blankLine();
       this.#turnPrinted = false;
       this.#last = null;
       this.#redraw();
@@ -355,9 +367,13 @@ export class ChatView {
     }
   }
 
-  /** A prompt takes the terminal (`true`) or gives it back: the live rows go meanwhile. */
-  active(active: boolean): void {
+  /**
+   * A prompt takes the terminal (`true`) or gives it back, having left rows on the screen when
+   * `printed`: the live rows go meanwhile.
+   */
+  active(active: boolean, printed = false): void {
     this.#paused = active;
+    if (!active && printed) this.#blank = false;
     // The prompt shows the cursor as it ends; the turn hides it again.
     if (!active && this.#turn !== null) this.#output.write(HIDE_CURSOR);
     this.#redraw();
@@ -369,10 +385,9 @@ export class ChatView {
     let block = this.#block;
     if (block === null || block.node !== chunk.nodeId || block.n !== chunk.n) {
       this.#finishBlock();
-      this.#gap("text");
       // Its width is fixed now: after a resize its rows are cut to the new width, not wrapped again.
       const markdown = new MarkdownLines(this.#width() - 2, this.#output, this.#env);
-      block = { node: chunk.nodeId, n: chunk.n, markdown, rows: [], printed: 0, partial: "" };
+      block = { node: chunk.nodeId, n: chunk.n, markdown, rows: [], printed: 0, partial: "", opened: false };
       this.#block = block;
       this.#streamed = true;
     }
@@ -381,7 +396,9 @@ export class ChatView {
     const held = block.partial.endsWith("\r");
     const lines = (held ? block.partial.slice(0, -1) : block.partial).split(/\r\n|\n|\r/);
     block.partial = lines.pop()! + (held ? "\r" : "");
-    for (const line of lines) block.rows.push(...block.markdown.line(line));
+    const rows = lines.flatMap((line) => block.markdown.line(line));
+    if (!this.#open(block, rows)) return;
+    block.rows.push(...rows);
     if (!this.#trim()) this.#redraw();
   }
 
@@ -421,6 +438,8 @@ export class ChatView {
       this.#streamed = false;
       return;
     }
+    // A reply of only tool calls ends with no text: it has nothing to show.
+    if (text.trim() === "") return;
     this.#finishBlock();
     this.#gap("text");
     const rows = renderMarkdown(text, this.#width() - 2, this.#output, this.#env).split("\n");
@@ -521,9 +540,32 @@ export class ChatView {
 
   /** A blank line before an item of `kind`, unless it follows one of its kind (tool lines). */
   #gap(kind: "tool" | "text"): void {
-    const blank = kind === "text" || this.#last !== "tool";
+    const gap = kind === "text" || this.#last !== "tool";
     this.#last = kind;
-    if (blank) this.#commit([""]);
+    if (gap) this.#blankLine();
+  }
+
+  /** Print a blank line, unless the last row printed is one. */
+  #blankLine(): void {
+    // The reply's finished rows go first: the row before the blank may be one of them.
+    this.#settleBlock();
+    if (!this.#blank) this.#commit([""]);
+  }
+
+  /**
+   * Whether `block` shows anything once `rows` (rows to add to it) come: a block not opened yet
+   * drops the blank rows at their head, and opens, after the blank line before it, once a row or
+   * its line still coming has text.
+   */
+  #open(block: Block, rows: string[]): boolean {
+    if (block.opened) return true;
+    // A model's text may start with blank lines (before a tool call, say): they show nothing.
+    while (rows.length > 0 && blank(rows[0]!)) rows.shift();
+    if (rows.length === 0 && this.#partialText(block.partial).trim() === "") return false;
+    // Opened after the gap, so the gap's redraw doesn't draw its rows yet.
+    this.#gap("text");
+    block.opened = true;
+    return true;
   }
 
   /** Print the streaming block's finished rows for good; its unfinished line stays live. */
@@ -541,9 +583,12 @@ export class ChatView {
     const block = this.#block;
     if (block === null) return;
     const partial = block.partial.replace(/\r$/, "");
-    if (partial !== "") block.rows.push(...block.markdown.line(partial));
-    block.rows.push(...block.markdown.end());
     block.partial = "";
+    const rows = [...(partial === "" ? [] : block.markdown.line(partial)), ...block.markdown.end()];
+    // Blank lines at its end show nothing either.
+    while (rows.length > 0 && blank(rows.at(-1)!)) rows.pop();
+    if (rows.length === 0) while (block.rows.length > 0 && blank(block.rows.at(-1)!)) block.rows.pop();
+    if (this.#open(block, rows)) block.rows.push(...rows);
     this.#settleBlock();
     this.#block = null;
     this.#redraw();
@@ -559,7 +604,7 @@ export class ChatView {
     if (this.#paused) return [];
     const rows: string[] = [];
     const block = this.#block;
-    if (block !== null) {
+    if (block !== null && block.opened) {
       // The line still coming is shown as written; it is drawn as Markdown once it ends.
       const partial = this.#partialRows(block).map(([, text]) => text);
       rows.push(...this.#prefixed([...block.rows, ...partial], block.printed));
@@ -591,6 +636,7 @@ export class ChatView {
   #write(rows: readonly string[]): void {
     if (rows.length === 0) return;
     if (this.#turn !== null) this.#turnPrinted = true;
+    this.#blank = blank(rows.at(-1)!);
     this.#output.write(this.#erase() + rows.map((row) => `${row}\r\n`).join(""));
     this.#drawn = 0;
   }

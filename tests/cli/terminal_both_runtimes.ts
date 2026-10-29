@@ -437,6 +437,27 @@ async function anAbortedReadLineReturnsItsDraftForTheNextPrompt(): Promise<void>
   assert.deepEqual(await early, { aborted: true, draft: "kept" });
 }
 
+async function onActiveSaysWhetherATurnLeftRows(): Promise<void> {
+  const calls: [boolean, boolean][] = [];
+  const { input, terminal } = setup({ onActive: (on, printed) => calls.push([on, printed]) });
+  const controller = new AbortController();
+  const line = terminal.readLine("You:", { signal: controller.signal });
+  input.write("half");
+  await tick();
+  controller.abort(new Error("woke"));
+  await line;
+  // Erased, it leaves nothing; entered, it leaves its collapsed line.
+  const next = terminal.readLine("You:");
+  input.write(ENTER);
+  await next;
+  assert.deepEqual(calls, [
+    [true, false],
+    [false, false],
+    [true, false],
+    [false, true],
+  ]);
+}
+
 async function escapeAtReadLineReturnsTheDraft(): Promise<void> {
   const stops: string[] = [];
   const { input, output, terminal, view, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
@@ -2589,6 +2610,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an aborted readLine keeps later keys": anAbortedReadLineKeepsLaterKeys,
   "a non-TTY readLine reads one line per call": aNonTtyReadLineReadsOneLinePerCall,
   "an aborted readLine returns its draft for the next prompt": anAbortedReadLineReturnsItsDraftForTheNextPrompt,
+  "onActive says whether a turn left rows on the screen": onActiveSaysWhetherATurnLeftRows,
   "Escape at readLine with escape returns the draft": escapeAtReadLineReturnsTheDraft,
   "Escape at readLine without escape is ignored": escapeAtReadLineWithoutTheOptionIsIgnored,
   "watchKeys sends Escape and Ctrl-C and buffers the rest": watchKeysSendsEscapeAndCtrlCAndBuffersTheRest,

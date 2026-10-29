@@ -972,6 +972,11 @@ export class Terminal {
     this.#now = options.now ?? Date.now;
   }
 
+  /** Whether `approve` can ask: the terminal isn't plain or closed, and its input is a TTY. */
+  get canApprove(): boolean {
+    return !this.#plain && !this.#closed && this.#input.isTTY === true;
+  }
+
   /** A `LineEditor` as wide as this terminal's output. */
   lineEditor(options: { hint: string; list?: PromptList | null }): LineEditor {
     const output = this.#output;

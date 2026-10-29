@@ -3104,6 +3104,8 @@ async function aFramedApprovalCutsALongTitle(): Promise<void> {
 
 async function approveOffATtyReturnsNullWithoutReading(): Promise<void> {
   const { input, output, terminal } = setup({ tty: false });
+  assert.equal(terminal.canApprove, false);
+  assert.equal(setup().terminal.canApprove, true);
   input.write(ENTER);
   assert.equal(await terminal.approve(approval()), null);
   assert.equal(output.text, "");

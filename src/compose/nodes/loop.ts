@@ -253,11 +253,9 @@ export class LoopDescriptor extends NodeDescriptor {
     } else if (present[0] === "times") {
       // A fixed count: exactly N runs, no predicate. `maxIters` doubles as N, so the runtime
       // guard needs no special case.
-      const count = checkedCount(subject, "times", this.times, errors);
       node.predicateKind = "times";
       node.predicate = null;
-      node.times = count;
-      node.maxIters = count;
+      node.maxIters = checkedCount(subject, "times", this.times, errors);
       if (this.max !== null) errors.push(`${subject}: max: is redundant with times: (times bounds the count)`);
     } else {
       const kind = present[0]!;

@@ -390,6 +390,48 @@ test("times stops at count", async () => {
   expect((result as Output).commitAs).toBe("lp");
 });
 
+test("a times loop built with only times: stops after that many runs", async () => {
+  const child = childFlow();
+  const node = new LoopNode("lp", { flowId: "f", child, predicateKind: "times", times: 2 });
+  node.params = child.nodes.get(child.startId)!.params;
+  const driver = (k: number): LoopNode => {
+    const clone = k === 0 ? node : node.respawn(k);
+    clone.params = node.params;
+    return clone;
+  };
+
+  expect(node.maxIters).toBe(2);
+  expect(await driver(0).run({ x: 1n })).toBeInstanceOf(Grow);
+  expect(await driver(1).run({ x: 1n })).toBeInstanceOf(Grow);
+  expect(await driver(2).run({ x: 1n })).toBeInstanceOf(Output);
+});
+
+test("times is a times loop's count, so it can't sit beside another loop kind or another maxIters", () => {
+  expectError(
+    () => new LoopNode("lp", { flowId: "f", predicateKind: "while", predicate: "${x}", times: 2 }),
+    RangeError,
+    "loop 'lp': times: is the count of a times loop, not of a while loop",
+  );
+  expectError(
+    () => new LoopNode("lp", { flowId: "f", predicateKind: "times", times: 2, maxIters: 3 }),
+    RangeError,
+    "loop 'lp': a times loop's count is times: 2, but maxIters is 3",
+  );
+});
+
+test.each([["while"], ["until"]] as const)("a %s loop with no predicate fails its setup check", async (kind) => {
+  const node = new LoopNode("lp", { flowId: "f", child: childFlow(), predicateKind: kind });
+  const message = `loop node 'lp' has no \`${kind}\` expression`;
+
+  expectError(() => node.validateExecutionSetup(), RangeError, message);
+  expect(await rejected(node.run({ x: 1n }))).toEqual(new RangeError(message));
+});
+
+test("a times loop with no count fails its setup check", () => {
+  const node = new LoopNode("lp", { flowId: "f", child: childFlow(), predicateKind: "times" });
+  expectError(() => node.validateExecutionSetup(), RangeError, "loop node 'lp' has no `times` count");
+});
+
 test("runaway guard raises loop max exceeded", async () => {
   const child = childFlow();
   // `max: 1` permits exactly one body run.

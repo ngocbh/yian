@@ -146,7 +146,9 @@ itself. An `ask` never waits in `yian run`: it prompts at the terminal. See
 
 When stdin and stderr are a terminal, `yian run FLOW` chats with a flow that has an `Inbox(str)`
 or `Inbox(Message)` input, as [`yian chat`](#yian-chat) does: each line you type goes to the inbox,
-and the output of each node named `reply` prints on stdout. It chats when all of these hold:
+and the output of each node named `reply` prints on stdout. Only stdin and stderr are checked, so
+with stdout redirected it still chats and the replies go to the file. It chats when all of these
+hold:
 
 - The flow has one such input, or `--inbox NAME` picks one of several.
 - The flow declares no memory and grants or calls no MCP tool.

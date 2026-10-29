@@ -643,7 +643,6 @@ export async function reportRunLog(path: string, out: Writer, env: Env): Promise
  * an absent flag `false`.
  */
 export interface RunOptions {
-  inbox?: string | undefined;
   inputValues: readonly string[];
   inputs?: string | undefined;
   log?: string | undefined;
@@ -709,14 +708,18 @@ function knownToolIds(): Set<string> {
   return new Set([...Object.keys(registeredTools()), ...BUILTIN_TOOL_IDS, ASK_USER, LOAD_SKILL]);
 }
 
+/** Whether some id in `toolIds` or `grants` isn't in `known`. */
+function namesUnknown(toolIds: ReadonlySet<string>, grants: ReadonlySet<string>, known: ReadonlySet<string>): boolean {
+  return [...toolIds, ...grants].some((id) => !known.has(id));
+}
+
 /**
  * @internal Whether a static TOOL node or AGENT grant of `flow` names a tool the run doesn't
  * supply without MCP, so `run` reads the MCP configs.
  */
 export function needsMcp(flow: ComposedFlow): boolean {
-  const known = knownToolIds();
   const [toolIds, grants] = mcpNeededNames(flow);
-  return [...toolIds, ...grants].some((id) => !known.has(id));
+  return namesUnknown(toolIds, grants, knownToolIds());
 }
 
 /**
@@ -1004,8 +1007,6 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * Start a durable run of the flow at `flowPath`, or recover the one recorded at `resume`; returns
  * the exit code.
  *
- * `inbox` is ignored: `runOrChat` reads it before it hands the command here.
- *
  * The run-log options are checked before the flow is read. A flow that isn't UTF-8 text or doesn't
  * load is reported on stderr (a load error located, with its stack under `engineTrace`) and exits
  * 1. The flow's memories are built from `memoryRoot` and `memoryStorage`, passed to the run, and
@@ -1208,7 +1209,7 @@ async function startRun(
       const known = knownToolIds();
       const [toolIds, grants] = mcpNeededNames(flow);
       let servers: Record<string, McpServer> = {};
-      if (needsMcp(flow)) {
+      if (namesUnknown(toolIds, grants, known)) {
         const user = userMcpConfig(commandEnv.read);
         const paths = [...(statOrNull(user)?.isFile() ? [user] : []), ...options.mcpConfig];
         try {

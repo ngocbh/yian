@@ -15,12 +15,10 @@ import {
   inboxChat,
   type InboxChatDeps,
   type InboxChatOptions,
-  inboxTarget,
   runOrChat,
+  type RunOrChatOptions,
 } from "../../src/cli/inbox_chat.ts";
-import type { RunOptions } from "../../src/cli/run.ts";
 import { main } from "../../src/cli/index.ts";
-import { loadFlow } from "../../src/compose/loader.ts";
 import { type CliIo, HostStop, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { FileLockError, lockFile, type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import { cancel, inspectRun, readRunIndex, send } from "../../src/run.ts";
@@ -37,7 +35,6 @@ import {
 } from "../../src/runtime/log.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import { ECHO, ECHO_REPLY, turnFlow } from "../helpers/chat_fixtures.ts";
 import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../helpers/run_state_fixtures.ts";
 import { CTRL_C, CTRL_U, ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
 
@@ -133,6 +130,57 @@ async function until(check: () => boolean): Promise<void> {
 function pastEscapeTimeout(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 600));
 }
+
+/** A chat turn per line: take everything sent, reply with `reply` (YAML lines, 6 spaces in). */
+function turnFlow(reply: string, { input = "", nodes = "" } = {}): string {
+  return `id: echo_chat
+name: echo_chat
+input:
+  messages: !Inbox(str)
+${input}defs:
+  turn:
+    input:
+      said: !list(str)
+      closed: !bool
+      messages: !Inbox(str)
+${input.replace(/^ {2}/gm, "      ")}    nodes:
+      heard:
+        kind: tool
+        tool_id: take
+        input:
+          from: \${input.messages}
+          take: all
+${nodes}${reply}    output:
+      said: \${input.said + heard.output.events}
+      closed: \${heard.output.closed}
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input:
+      said: []
+      closed: false
+      messages: \${input.messages}
+${input.replace(/^ {2}(\w+):.*$/gm, "      $1: ${input.$1}")}    while: not closed
+output: \${chat.output.said}
+`;
+}
+
+const ECHO_REPLY = `      reply:
+        kind: code
+        input:
+          events: \${heard.output.events}
+        output: str
+        code: |
+          return "echo: " + inputs["events"].join(" | ");
+`;
+
+const ECHO = turnFlow(ECHO_REPLY);
+
+/** ECHO over an `Inbox(Message)`, echoing each message's text. */
+const MESSAGE_ECHO = turnFlow(ECHO_REPLY.replace('inputs["events"]', 'inputs["events"].map((m) => m.parts[0].text)'))
+  .replaceAll("Inbox(str)", "Inbox(Message)")
+  .replace("said: !list(str)", "said: !list(Message)");
 
 /** One turn: take a line, ask about it, reply. */
 const ASK_ONCE = `id: once
@@ -754,12 +802,9 @@ describe("yian chat's inbox and inputs", () => {
   test(
     "an Inbox(Message) input takes each line as a user message",
     async () => {
-      const messageEcho = turnFlow(ECHO_REPLY.replace('inputs["events"]', 'inputs["events"].map((m) => m.parts[0].text)'))
-        .replaceAll("Inbox(str)", "Inbox(Message)")
-        .replace("said: !list(str)", "said: !list(Message)");
-      const { io, stdin, stdout } = chatIo();
+            const { io, stdin, stdout } = chatIo();
       stdin.write("hi\n/exit\n");
-      const { code, log } = await runChat(flowFile(messageEcho), io);
+      const { code, log } = await runChat(flowFile(MESSAGE_ECHO), io);
       expect([code, stdout()]).toEqual([0, "echo: hi\necho: \n"]);
       const sent = records(log).filter(
         (record) => record instanceof PoolCommitRecord && record.key === "__start__.messages",
@@ -800,43 +845,6 @@ describe("yian chat's inbox and inputs", () => {
   );
 });
 
-describe("inboxTarget", () => {
-  /**
-   * A flow `f` whose inputs are `inboxes` (name to element type), each read by a take, with
-   * `extra` top-level YAML and `nodes` added.
-   */
-  const flow = (inboxes: Record<string, string>, { extra = "", nodes = "" } = {}) => {
-    const names = Object.keys(inboxes);
-    const input = names.map((name) => `  ${name}: !Inbox(${inboxes[name]})\n`).join("");
-    const takes = names
-      .map((name) => `  take_${name}:\n    kind: tool\n    tool_id: take\n    input:\n      from: \${input.${name}}\n`)
-      .join("");
-    const node = "  n:\n    kind: code\n    output: str\n    code: return \"x\";\n";
-    const top = `id: f\nname: f\n${extra}${input ? `input:\n${input}` : ""}`;
-    return loadFlow(`${top}nodes:\n${node}${takes}${nodes}output: \${n.output}\n`);
-  };
-
-  test("returns the only Inbox(str) or Inbox(Message) input, or the chosen one", async () => {
-    expect(inboxTarget(await flow({ m: "str", n: "int" }), undefined)).toEqual({ name: "m", message: false, several: false });
-    expect(inboxTarget(await flow({ m: "Message" }), undefined)).toEqual({ name: "m", message: true, several: false });
-    const several = await flow({ a: "str", b: "Message" });
-    expect(inboxTarget(several, "b")).toEqual({ name: "b", message: true, several: true });
-  });
-
-  test("returns null where a chat can't take the flow, never throwing", async () => {
-    expect(inboxTarget(await flow({}), undefined)).toBeNull();
-    expect(inboxTarget(await flow({ n: "int" }), undefined)).toBeNull();
-    const several = await flow({ a: "str", b: "Message", c: "int" });
-    expect(inboxTarget(several, undefined)).toBeNull();
-    expect(inboxTarget(several, "c")).toBeNull();
-    expect(inboxTarget(several, "z")).toBeNull();
-    // The chat builds no memories and opens no MCP servers.
-    expect(inboxTarget(await flow({ m: "str" }, { extra: "long_term_memory: episodic\n" }), undefined)).toBeNull();
-    const agent = "  worker:\n    kind: agent\n    prompt: go\n    tools: [fake]\n";
-    expect(inboxTarget(await flow({ m: "str" }, { nodes: agent }), undefined)).toBeNull();
-  });
-});
-
 describe("runOrChat", () => {
   let runs = 0;
 
@@ -847,7 +855,7 @@ describe("runOrChat", () => {
    */
   async function runOn(
     flow: string | undefined,
-    { tty = true, typed = "", ...options }: Partial<RunOptions> & { tty?: boolean; typed?: string } = {},
+    { tty = true, typed = "", ...options }: Partial<RunOrChatOptions> & { tty?: boolean; typed?: string } = {},
   ) {
     const { io, stdin, stdout, stderr } = chatIo({ tty });
     stdin.write(typed);
@@ -982,6 +990,28 @@ describe("runOrChat", () => {
   );
 
   test(
+    "a flow with no Inbox(str) or Inbox(Message) input goes to run",
+    async () => {
+      const ints = ECHO.replaceAll("!Inbox(str)", "!Inbox(int)").replace("said: !list(str)", "said: !list(int)");
+      waited(await runOn(flowFile(ints, "ints.yaml"), { typed: BYE }));
+      const code = '  n: {kind: code, output: str, code: return "x";}\n';
+      const plain = flowFile(`id: plain\nname: plain\nnodes:\n${code}output: \${n.output}\n`, "plain.yaml");
+      const result = await runOn(plain, { typed: BYE });
+      expect([result.code, result.stdout]).toEqual([0, "x\n"]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "an Inbox(Message) input chats too",
+    async () => {
+      const result = await runOn(flowFile(MESSAGE_ECHO, "message.yaml"), { typed: BYE });
+      expect([result.code, result.stdout]).toEqual([0, "echo: hi\necho: \n"]);
+    },
+    TIMEOUT,
+  );
+
+  test(
     "a flow that needs MCP tools goes to run, which reads the MCP config",
     async () => {
       const tool = "  fetch:\n    kind: tool\n    tool_id: fake\n";
@@ -989,7 +1019,7 @@ describe("runOrChat", () => {
       const result = await runOn(flow, { typed: BYE });
       expect(result.code).toBe(1);
       expect(result.stdout).toBe("");
-      expect(result.stderr).toContain("fake");
+      expect(result.stderr).toContain("TOOL node 'fetch' names tool 'fake', which isn't in this run's tools");
       expect(result.stderr).not.toContain("session ended");
     },
     TIMEOUT,

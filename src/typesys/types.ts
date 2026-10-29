@@ -177,8 +177,8 @@ function isShadow(name: string): boolean {
  *
  * @throws TypeCheckError when the text is not a valid expression (including unbalanced
  *   parentheses, a lone Unicode surrogate, or an empty `Literal` member), uses an unknown
- *   constructor or the lowercase `any`, writes a constructor without its arguments, gives a numeric range with no end, no `..`, or as
- *   two arguments, spells a union as `A | B` (the hint suggests `Union(A, B)`), lists
+ *   constructor or the lowercase `any`, writes a constructor without its arguments, gives a
+ *   numeric range with no end, no `..`, or as two arguments, spells a union as `A | B` (the hint suggests `Union(A, B)`), lists
  *   `None` as a `Union(...)` member (the hint suggests `Optional(Union(...))`), wraps an
  *   `Inbox(...)` in `Optional(...)`, or holds a `[` outside a quoted string (the message shows
  *   the parenthesized spelling).
@@ -590,16 +590,25 @@ const CONSTRUCTOR_ARGS: ReadonlyMap<string, readonly [takes: string, example: st
 ]);
 
 /**
+ * Return the hint for type text `text` that is a typing constructor's bare name, else `null`.
+ *
+ * Example: `bareConstructorHint("list")` gives `"'list' takes a type: write list(X)"`.
+ */
+export function bareConstructorHint(text: string): string | null {
+  const usage = CONSTRUCTOR_ARGS.get(text);
+  if (usage === undefined) return null;
+  return `${reprText(text)} takes ${usage[0]}: write ${text}(${usage[1]})`;
+}
+
+/**
  * Read a bare type name: a scalar keyword, an alias, or a registry reference.
  *
  * @throws TypeCheckError for the lowercase `any`, or a typing constructor written without its
  *   arguments (the hint shows them).
  */
 function namedType(name: string): TypeExpr {
-  const usage = CONSTRUCTOR_ARGS.get(name);
-  if (usage !== undefined) {
-    throw new TypeCheckError(`${reprText(name)} takes ${usage[0]}: write ${name}(${usage[1]})`);
-  }
+  const hint = bareConstructorHint(name);
+  if (hint !== null) throw new TypeCheckError(hint);
   if (name === "any") {
     // `any` stays a builtin name (the expression function), so it never reads as a
     // registry reference.

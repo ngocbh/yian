@@ -79,9 +79,10 @@ function envWith(extra: Record<string, string> = {}): Env {
 
 /**
  * An io on one fake TTY 60 columns wide: stdout and stderr are written where the terminal draws,
- * each `\n` as `\r\n` as a cooked terminal shows it. With `noColor`, `NO_COLOR` is set.
+ * each `\n` as `\r\n` as a cooked terminal shows it. With `noColor`, `NO_COLOR` is set; `extra`
+ * adds variables.
  */
-function terminalIo({ noColor = false } = {}) {
+function terminalIo({ noColor = false, extra = {} as Record<string, string> } = {}) {
   stdin = new FakeInput({ tty: true });
   const output = Object.assign(new FakeOutput({ columns: COLUMNS }), { isTTY: true });
   const writer: Writer = {
@@ -89,7 +90,7 @@ function terminalIo({ noColor = false } = {}) {
     isTTY: true,
     columns: COLUMNS,
   };
-  const env = envWith(noColor ? { NO_COLOR: "1" } : {});
+  const env = envWith({ ...extra, ...(noColor ? { NO_COLOR: "1" } : {}) });
   const io: CliIo = { stdout: writer, stderr: writer, stdin, stderrStream: output, env };
   return { io, stdin, output, rows: () => screen(output.text, COLUMNS).rows };
 }
@@ -205,6 +206,23 @@ describe("yian chat on a terminal", () => {
       const chatting = runChat(io, new AnsweringModel(() => textReply("hello")));
       await until(() => rows().includes(HINT));
       expect(rows()[3]).toBe(row("  cwd     ~/proj"));
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "names the folder as the shell reached it ($PWD), through a symlink under the home",
+    async () => {
+      const real = join(tmp, "elsewhere");
+      mkdirSync(join(real, "proj"), { recursive: true });
+      symlinkSync(real, join(home, "radev"));
+      root = join(real, "proj");
+      const { io, stdin, rows } = terminalIo({ extra: { PWD: join(home, "radev", "proj") } });
+      const chatting = runChat(io, new AnsweringModel(() => textReply("hello")));
+      await until(() => rows().includes(HINT));
+      expect(rows()[3]).toBe(row("  cwd     ~/radev/proj"));
       stdin.write(`/exit${ENTER}`);
       expect(await chatting).toBe(0);
     },

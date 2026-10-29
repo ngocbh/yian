@@ -146,6 +146,19 @@ function focusName(root: string, path: string): { name: string; outside: boolean
   return leavesRoot(inside) ? { name: real, outside: true } : { name: slashed(inside), outside: false };
 }
 
+/**
+ * The folder `root` as the shell reached it: `pwd` (its `$PWD`, which keeps the symlinks the shell
+ * went through) when that is the same folder, else `root`.
+ */
+function reachedAs(root: string, pwd: string | undefined): string {
+  if (!pwd) return root;
+  try {
+    return realpathSync(pwd) === realpathSync(root) ? pwd : root;
+  } catch {
+    return root;
+  }
+}
+
 /** The real path of `home`, or undefined when it is unset or doesn't resolve. */
 function realHome(home: string | undefined): string | undefined {
   if (!home) return undefined;
@@ -342,7 +355,7 @@ export async function chat(
   const focus = flowPath === undefined ? null : (inputs["flow"] as string);
   if (view !== null) {
     const home = env("HOME");
-    const info = { ...model, cwd: homePath(root, home, realHome(home)), focus };
+    const info = { ...model, cwd: homePath(reachedAs(root, env("PWD")), home, realHome(home)), focus };
     await io.stderr.write(`${chatBanner(info, io.stderrStream, env)}${view.note(sanitize(hint))}`);
   } else {
     const banner = [`yian chat`, model.model, focus === null ? null : `focus: ${focus}`]

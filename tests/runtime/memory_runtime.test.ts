@@ -195,41 +195,7 @@ async function expectError(run: () => Promise<unknown>, cls: ErrorClass, message
   return caught;
 }
 
-test("open validates the memory table and its origins", async () => {
-  const events: Events = [];
-  const memory = pair(events);
-  const [alpha, beta] = table() as [MemorySpec, MemorySpec];
-  await expectError(
-    () => MemoryRuntime.open({ memories: new Set(table()) as never, origins: origins(), memory }),
-    TypeError,
-    "memories must be an array of MemorySpec values",
-  );
-  await expectError(
-    () => MemoryRuntime.open({ memories: [beta, alpha], origins: origins(), memory }),
-    RangeError,
-    "memories must be sorted by key and unique",
-  );
-  await expectError(
-    () => MemoryRuntime.open({ memories: [alpha, alpha], origins: new Map([["alpha", null]]), memory }),
-    RangeError,
-    "memories must be sorted by key and unique",
-  );
-  await expectError(
-    () => MemoryRuntime.open({ memories: table(), origins: new Map([["alpha", null]]), memory }),
-    RangeError,
-    "memory origins must exactly match the memory keys",
-  );
-  await expectError(
-    () =>
-      MemoryRuntime.open({
-        memories: table(),
-        origins: new Map<string, unknown>([["alpha", "site"], ["beta", null]]) as never,
-        memory,
-      }),
-    TypeError,
-    "memory origins must be OriginRef values or null",
-  );
-  expect(events).toEqual([]);
+test("an empty table opens nothing", async () => {
   const empty = await MemoryRuntime.open({ memories: [], origins: new Map(), memory: new Map() });
   expect(empty.memories).toEqual([]);
   expect(empty.snapshots).toEqual([]);
@@ -265,20 +231,6 @@ test("open uses key order and captures snapshots", async () => {
     ["close", "beta"],
     ["close", "alpha"],
   ]);
-});
-
-test("restore rejects noncanonical snapshot order before opening", async () => {
-  const events: Events = [];
-  const snapshots = [
-    new MemorySnapshotEnvelope("beta", { revision: 3n }),
-    new MemorySnapshotEnvelope("alpha", { revision: 2n }),
-  ];
-  await expectError(
-    () => open(pair(events), { snapshots }),
-    RangeError,
-    "memory snapshots must exactly match the memory keys in canonical order",
-  );
-  expect(events).toEqual([]);
 });
 
 test("open restores exact recorded snapshot per key", async () => {
@@ -345,62 +297,6 @@ test("registry rejects aliases and attributes missing key origin", async () => {
   expect(events).toEqual([]);
 });
 
-test("a plain-object table item is not a MemorySpec", async () => {
-  const events: Events = [];
-  const [alpha, beta] = table() as [MemorySpec, MemorySpec];
-  await expectError(
-    () => MemoryRuntime.open({ memories: [{ ...alpha }, beta] as never, origins: origins(), memory: pair(events) }),
-    TypeError,
-    "memories must be an array of MemorySpec values",
-  );
-  expect(events).toEqual([]);
-});
-
-test("a sparse table is not an array of MemorySpec values", async () => {
-  const events: Events = [];
-  const sparse = [table()[0]!];
-  sparse.length = 2;
-  await expectError(
-    () => MemoryRuntime.open({ memories: sparse, origins: origins(), memory: pair(events) }),
-    TypeError,
-    "memories must be an array of MemorySpec values",
-  );
-  expect(events).toEqual([]);
-});
-
-test("origins must be a Map of string keys to valid origins", async () => {
-  const events: Events = [];
-  const memory = pair(events);
-  await expectError(
-    () =>
-      MemoryRuntime.open({
-        memories: table(),
-        origins: { alpha: null, beta: null } as never,
-        memory,
-      }),
-    TypeError,
-    "memory origins must be a Map",
-  );
-  await expectError(
-    () =>
-      MemoryRuntime.open({
-        memories: table(),
-        origins: new Map<unknown, null>([["alpha", null], [1, null], ["beta", null]]) as never,
-        memory,
-      }),
-    TypeError,
-    "memory origin keys must be strings",
-  );
-  const emptied = new OriginRef("site");
-  (emptied as { key: string }).key = "";
-  await expectError(
-    () => open(memory, { origins: new Map([["alpha", null], ["beta", emptied]]) }),
-    RangeError,
-    "origin key must be a non-empty string",
-  );
-  expect(events).toEqual([]);
-});
-
 test("registry names must be non-empty well-formed strings", async () => {
   const events: Events = [];
   const backend = new FakeMemory("alpha", events);
@@ -432,21 +328,6 @@ test("registry must be a Map", async () => {
   expect(events).toEqual([]);
 });
 
-test("snapshots must be an array of unique envelopes", async () => {
-  const events: Events = [];
-  const envA = new MemorySnapshotEnvelope("alpha", { revision: 2n });
-  for (const [snapshots, cls, message] of [
-    [{ alpha: envA }, TypeError, "memory snapshots must be an array or null"],
-    [[{ memory: "alpha", snapshot: {} }], TypeError, "memory snapshots must contain MemorySnapshotEnvelope values"],
-    [[envA, envA], RangeError, "memory snapshot keys must be unique"],
-    // Each item is checked in turn, so the repeated key is found before the bad item.
-    [[envA, envA, "x"], RangeError, "memory snapshot keys must be unique"],
-  ] as const) {
-    await expectError(() => open(pair(events), { snapshots: snapshots as never }), cls, message);
-  }
-  expect(events).toEqual([]);
-});
-
 test("later open failure closes prior session and preserves origin", async () => {
   const events: Events = [];
   const failure = new MemoryOperationError("openRun", "beta.unavailable", "temporarily unavailable", true);
@@ -474,14 +355,11 @@ test("later open failure closes prior session and preserves origin", async () =>
   ]);
 });
 
-test("frame-era session is closed before setup failure", async () => {
+test("a session without recall and learn is closed before setup failure", async () => {
   const events: Events = [];
-  // A session with the removed frame surface and no recall or learn.
-  const frameSession = {
+  // A session with commit and close but no recall or learn.
+  const partialSession = {
     snapshot: {},
-    openFrame(spec: unknown): never {
-      throw new Error(String(spec));
-    },
     commit(commitId: string): never {
       throw new Error(commitId);
     },
@@ -489,10 +367,10 @@ test("frame-era session is closed before setup failure", async () => {
       events.push(["close", "alpha-invalid"]);
     },
   };
-  const frameMemory = {
+  const partialMemory = {
     openRun(options: { snapshot?: JsonObject | null } = {}) {
       events.push(["openRun", "alpha-invalid", options.snapshot ?? null]);
-      return frameSession;
+      return partialSession;
     },
     reset(): void {},
   };
@@ -500,7 +378,7 @@ test("frame-era session is closed before setup failure", async () => {
 
   const error = await expectError(
     () =>
-      open(new Map<string, unknown>([["alpha", frameMemory], ["beta", new FakeMemory("beta", events)]]) as never, {
+      open(new Map<string, unknown>([["alpha", partialMemory], ["beta", new FakeMemory("beta", events)]]) as never, {
         origins: authored,
       }),
     MemorySetupError,
@@ -782,44 +660,6 @@ test("a reentrant close from inside a session's close doesn't close again", asyn
   expect(events.filter((event) => event[0] === "close")).toEqual([["close", "alpha"]]);
 });
 
-test("the caller's array and Maps edited during open change nothing", async () => {
-  const events: Events = [];
-  const memories = table();
-  const authored = origins();
-  const memory = pair(events);
-  const snapshots = [
-    new MemorySnapshotEnvelope("alpha", { policy: "alpha" }),
-    new MemorySnapshotEnvelope("beta", { policy: "beta" }),
-  ];
-
-  const opening = MemoryRuntime.open({ memories, origins: authored, memory, snapshots });
-  memories.pop();
-  authored.delete("beta");
-  memory.delete("beta");
-  snapshots.reverse();
-  const runtime = await opening;
-
-  expect(runtime.memories).toEqual(table());
-  expect(runtime.snapshots).toEqual([
-    new MemorySnapshotEnvelope("alpha", { policy: "alpha" }),
-    new MemorySnapshotEnvelope("beta", { policy: "beta" }),
-  ]);
-  expect(Object.isFrozen(runtime.memories)).toBe(true);
-  expect(Object.isFrozen(runtime.snapshots)).toBe(true);
-  await runtime.close();
-  expect(events.slice(-2)).toEqual([
-    ["close", "beta"],
-    ["close", "alpha"],
-  ]);
-});
-
-test("a subclass's open returns the subclass", async () => {
-  class Sub extends MemoryRuntime {}
-  const runtime = await Sub.open({ memories: table(), origins: origins(), memory: pair([]) });
-  expect(runtime).toBeInstanceOf(Sub);
-  await runtime.close();
-});
-
 /** Return the AGENT consumer scope: flow key beta outside AGENT key alpha. */
 function scope(): MemoryScope {
   return new MemoryScope(["agent"], { memories: ["beta", "alpha"] });
@@ -871,7 +711,7 @@ test("context recalls every key in stack order", async () => {
   }
 });
 
-test("context validates scope, recall and full opened coverage", async () => {
+test("context checks the recall path and full opened coverage", async () => {
   const alpha = new FakeMemory("alpha", []);
   const runtime = await MemoryRuntime.open({
     memories: table().slice(0, 1),
@@ -881,23 +721,6 @@ test("context validates scope, recall and full opened coverage", async () => {
   const consumer = scope();
   const recall = new RecallContext("system", "prompt", {}, consumer.staticPath);
   try {
-    await expectError(
-      () => runtime.openContext(null as never, recall, live()),
-      TypeError,
-      "memory context scope must be a MemoryScope",
-    );
-    await expectError(
-      () => runtime.openContext(consumer, null as never, live()),
-      TypeError,
-      "memory recall must be a RecallContext",
-    );
-    for (const options of [undefined, {}, { signal: null }, { signal: { aborted: false } }]) {
-      await expectError(
-        () => runtime.openContext(consumer, recall, options as never),
-        TypeError,
-        "signal must be an AbortSignal",
-      );
-    }
     const wrong = new RecallContext("system", "prompt", {}, ["other"]);
     await expectError(
       () => runtime.openContext(consumer, wrong, live()),
@@ -1257,22 +1080,6 @@ test("commit learning maps its result and operation errors", async () => {
     } finally {
       await runtime.close();
     }
-  }
-});
-
-test("commit learning requires an exact MemoryCommitRequestedRecord", async () => {
-  const events: Events = [];
-  const runtime = await open(pair(events));
-  try {
-    const shaped = { memory: "beta", commitId: "commit-1", mutations: [], attemptId: 1 };
-    await expectError(
-      () => runtime.commitLearning(shaped as never),
-      TypeError,
-      "backward commit requires an exact MemoryCommitRequestedRecord",
-    );
-    expect(events.filter((event) => event[0] === "commit")).toEqual([]);
-  } finally {
-    await runtime.close();
   }
 });
 

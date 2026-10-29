@@ -38,7 +38,7 @@ import { loadFlow } from "../compose/loader.ts";
 import { parseSourceDocument } from "../compose/parse/file.ts";
 import { defaultSkillRoots, loadSkillDir, loadSkills } from "../compose/skills.ts";
 import { current, type Env } from "../defaults.ts";
-import { compareCodeUnits, Diagnostic, reprText } from "../diagnostics.ts";
+import { compareCodeUnits, Diagnostic, noteCleanup, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
 import { resolvedPath, type Skill, SkillError } from "../skills/catalog.ts";
 import { LOAD_SKILL } from "../skills/tool.ts";
@@ -63,7 +63,7 @@ import {
   keyIdentity,
 } from "../llm_clients/connection.ts";
 import { MemoryOperationError } from "../memory/contracts.ts";
-import { type MemoryRegistry, noteCleanup } from "../memory_host.ts";
+import type { MemoryRegistry } from "../memory_host.ts";
 import { checkInputNames, coerceInputs } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import {

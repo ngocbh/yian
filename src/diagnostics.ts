@@ -8,7 +8,8 @@
  * frames. `ResolverTable` composes those namespaces through exact immutable routes.
  * `compareCodeUnits` is the one string order for sorting, `reprText` quotes text the
  * way CPython 3.12's `repr` does, and `getCloseMatches` finds "did you mean" suggestions the
- * way CPython 3.12's `difflib` does. `addNote` and `errorTypeName` help report a thrown error.
+ * way CPython 3.12's `difflib` does. `addNote`, `errorTypeName` and `noteCleanup` help report
+ * a thrown error.
  */
 
 /**
@@ -396,6 +397,20 @@ export function errorTypeName(value: unknown): string {
   if (typeof constructorName === "string" && constructorName) return constructorName;
   const name = (value as { name?: unknown } | null | undefined)?.name;
   return typeof name === "string" ? name : "Error";
+}
+
+/**
+ * Attach one cleanup failure to `target` as the note `<label> <name>: <message>`, then the notes
+ * the failure carries.
+ */
+export function noteCleanup(target: unknown, cleanup: unknown, label: string): void {
+  addNote(target, () => {
+    const [name, message] =
+      cleanup instanceof Error ? [cleanup.name, cleanup.message] : [errorTypeName(cleanup), String(cleanup)];
+    return `${label} ${name}: ${message}`;
+  });
+  const notes = (cleanup as { notes?: unknown } | null | undefined)?.notes;
+  if (Array.isArray(notes)) for (const note of notes) addNote(target, () => String(note));
 }
 
 const CODES = [

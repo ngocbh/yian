@@ -73,7 +73,7 @@ import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
 import { loadFlowSource } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
-import { compareCodeUnits, type Failure, getCloseMatches, type OriginRef, reprText } from "./diagnostics.ts";
+import { compareCodeUnits, type Failure, getCloseMatches, noteCleanup, type OriginRef, reprText } from "./diagnostics.ts";
 import { CallClosed, RunCancelled, type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
 import type { FeedbackValue } from "./expr/lineage.ts";
@@ -107,7 +107,7 @@ import {
   RecallContext,
   sameMemorySpec,
 } from "./memory/contracts.ts";
-import { MemoryRegistry, noteCleanup } from "./memory_host.ts";
+import { MemoryRegistry } from "./memory_host.ts";
 import { type NumberedStep, type ReadSteps, readAgentSteps } from "./nodes/agent/context.ts";
 import { fromModelMessage, type Message as MessageValue } from "./nodes/agent/messages.ts";
 import { staticPathOf } from "./nodes/ids.ts";

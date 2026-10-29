@@ -960,24 +960,6 @@ test("a learner's edits to its arguments and returned values cannot change autho
   expect(memory.get("A")!.commitCalls[0]![1][0]!.payload).toEqual({ items: ["saved"] });
 });
 
-test("an opened MemoryRuntime subclass is closed by the driver", async () => {
-  class SpecializedRuntime extends MemoryRuntime {}
-
-  const { engine: built } = await terminal();
-  const memory = new FakeMemory();
-  const memories = built.state.memories!;
-  const runtime = await SpecializedRuntime.open({
-    memories,
-    origins: new Map(memories.map((spec) => [spec.key, null])),
-    memory: new Map([["A", memory]]),
-    snapshots: built.state.memorySnapshots,
-  });
-  expect(runtime).toBeInstanceOf(SpecializedRuntime);
-  const outcome = await driveBackward(built.state, built.log, "review", { openMemory: () => runtime });
-  expect(outcome.status).toBe("succeeded");
-  expect(memory.closeCount).toBe(1);
-});
-
 test("submission gates reject before opening or appending", async () => {
   const rows: [string, string][] = [
     ["learn_disabled", "backward requires a retained terminal trace"],

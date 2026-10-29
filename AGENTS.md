@@ -26,7 +26,8 @@ Read before you change code:
 - Put a new external dependency behind a small injected function. Runtime-specific APIs go in
   `src/platform.ts`, and environment reads in `src/defaults.ts`.
 - A change to flow syntax also updates the `composing-agents` skill in `.claude/skills/`, in the
-  same pull request as its docs page.
+  same pull request as its docs page. A change to the docs, the skill or `src/cli/flows/` also
+  regenerates the bundle `yian chat` carries (`YIAN_UPDATE_BUNDLE=1 bun test tests/repo/bundled.test.ts`).
 
 ## The flow language
 

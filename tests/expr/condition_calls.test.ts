@@ -202,6 +202,8 @@ describe("registerTemplateFn", () => {
     ["true", "`true` is a literal"],
     ["none", "`none` is a literal"],
     ["inf", "`inf` is a literal"],
+    ["true/x", "it starts with the literal `true`"],
+    ["inf#a", "it starts with the literal `inf`"],
     ["isinstance", "`isinstance(x, T)` is the type test"],
   ])("a name no expression can call is refused: %p", (name, reason) => {
     saved.push([name, TEMPLATE_FNS.get(name)]);
@@ -221,7 +223,7 @@ describe("registerTemplateFn", () => {
     expect(TEMPLATE_FNS.has(name)).toBe(false);
   });
 
-  test.each(["and", "not", "item", "input", "int", "Order", "_x", "node#0"])(
+  test.each(["and", "not", "item", "input", "int", "Order", "_x", "node#0", "a/b", "trueish", "none_x"])(
     "a name a call can reach registers: %p",
     (name) => {
       standIn(name, [{ name: "v" }]);

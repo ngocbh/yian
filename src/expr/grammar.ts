@@ -788,24 +788,34 @@ function scopeComprehensions(root: ExprNode, cursor: Cursor): ExprNode {
 
 const RESERVED_REFERENCE_ROOTS: ReadonlySet<string> = new Set(["and", "or", "not", "in"]);
 
-// The words that lex as a literal wherever an operand starts, so no call can name them.
-const LITERAL_WORDS: ReadonlySet<string> = new Set(["true", "false", "null", "none", "inf"]);
-
 /** The keywords of the grammar; none of them can be a reference root. */
-export const EXPRESSION_KEYWORDS: ReadonlySet<string> = new Set([...RESERVED_REFERENCE_ROOTS, ...LITERAL_WORDS]);
-
-const WHOLE_NAME = new RegExp(`^(?:${NAME[1].source})$`);
+export const EXPRESSION_KEYWORDS: ReadonlySet<string> = new Set([
+  ...RESERVED_REFERENCE_ROOTS,
+  "true",
+  "false",
+  "null",
+  "none",
+  "inf",
+]);
 
 /**
  * Return why no expression can call a function named `name`, else `null`.
  *
- * A callee is one `NAME` token. The literal words (`true`, `inf`, ...) never lex as one where a
- * callee starts, and `isinstance(...)` is always the type test. The operator words stay callable:
- * `and(x)` is a call, and so is `not(x)` after an operator (`1 + not(x)`).
+ * A callee is one `NAME` token lexed where an operand starts, so `name` must lex as exactly one
+ * there: a literal word (`true`, `inf`) lexes as a literal, even before a `#` or `/`
+ * (`true/x(1)` reads as `true / x(1)`). `isinstance(...)` is always the type test. The operator
+ * words stay callable: `and(x)` is a call, and so is `not(x)` after an operator (`1 + not(x)`).
  */
 export function uncallableReason(name: string): string | null {
-  if (!WHOLE_NAME.test(name)) return "it is no name: a call names a letter or `_` followed by letters, digits and `_`";
-  if (LITERAL_WORDS.has(name)) return `\`${name}\` is a literal`;
+  const token = lexAt(name, 0, OPERAND_WITHOUT_NOT);
+  if (token !== null && (token.type === "BOOL" || token.type === "NULL" || token.type === "INF")) {
+    return token.endPos === name.length
+      ? `\`${name}\` is a literal`
+      : `it starts with the literal \`${token.value}\``;
+  }
+  if (token?.type !== "NAME" || token.endPos !== name.length) {
+    return "it is no name: a call names a letter or `_` followed by letters, digits and `_`";
+  }
   if (name === ISINSTANCE) return "`isinstance(x, T)` is the type test";
   return null;
 }

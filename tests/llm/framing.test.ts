@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { withEnv } from "../../src/defaults.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { iterNdjson, iterSse, SSEEvent } from "../../src/llm/framing.ts";
 
@@ -47,6 +48,28 @@ async function rejection(promise: Promise<unknown>): Promise<unknown> {
     return err;
   }
   throw new Error("expected a rejection");
+}
+
+/** Expect `err` to be the non-retryable protocol error `message`. */
+function expectOverCap(err: unknown, message: string): void {
+  expect(err).toBeInstanceOf(ProviderError);
+  const error = err as ProviderError;
+  expect(error.kind).toBe("protocol");
+  expect(error.retryable).toBe(false);
+  expect(error.message).toBe(message);
+}
+
+/** Return a source that yields `first`, then `chunk` `count` times, and a record of how many `chunk`s it gave. */
+function countedSource(first: Uint8Array, chunk: Uint8Array, count: number) {
+  const state = { given: 0 };
+  function* source(): Generator<Uint8Array> {
+    yield first;
+    for (; state.given < count; ) {
+      state.given += 1;
+      yield chunk;
+    }
+  }
+  return { source: source(), state };
 }
 
 /**
@@ -183,6 +206,37 @@ describe("SSE", () => {
     expect(events[0]!.data.length).toBe(1_000_000);
   });
 
+  test("a line past the default cap throws before the stream ends", async () => {
+    const mib = utf8("x".repeat(1024 * 1024));
+    const { source, state } = countedSource(utf8("data: "), mib, 64);
+    const err = await rejection(collect(iterSse(source)));
+    expectOverCap(err, "SSE event at line 1 is over the limit of 16777216 bytes (YIAN_MAX_MODEL_EVENT_BYTES)");
+    expect(state.given).toBeLessThan(64);
+  });
+
+  test("data lines past the cap throw naming the line", async () => {
+    const err = await rejection(collect(iterSse([utf8("data: aaaa\ndata: bbbb\ndata: cccc\n\n")], 14)));
+    expectOverCap(err, "SSE event at line 3 is over the limit of 14 bytes (YIAN_MAX_MODEL_EVENT_BYTES)");
+  });
+
+  test("an event at the cap is read and the next event starts afresh", async () => {
+    const events = await collect(iterSse([utf8("data: aaaa\n\ndata: bbbb\n\n")], 10));
+    expect(events).toEqual([new SSEEvent({ data: "aaaa" }), new SSEEvent({ data: "bbbb" })]);
+  });
+
+  test("the cap counts UTF-8 bytes", async () => {
+    const err = await rejection(collect(iterSse([utf8("data: \u00e9\u00e9\n\n")], 9)));
+    expectOverCap(err, "SSE event at line 1 is over the limit of 9 bytes (YIAN_MAX_MODEL_EVENT_BYTES)");
+    const events = await collect(iterSse([utf8("data: \u00e9\u00e9\n\n")], 10));
+    expect(events).toEqual([new SSEEvent({ data: "\u00e9\u00e9" })]);
+  });
+
+  test("the cap defaults to YIAN_MAX_MODEL_EVENT_BYTES", async () => {
+    const env = (name: string) => (name === "YIAN_MAX_MODEL_EVENT_BYTES" ? "4" : undefined);
+    const err = await rejection(withEnv(env, () => collect(iterSse([utf8("data: abc\n\n")]))));
+    expectOverCap(err, "SSE event at line 1 is over the limit of 4 bytes (YIAN_MAX_MODEL_EVENT_BYTES)");
+  });
+
   test("is lazy", async () => {
     function* chunks() {
       yield utf8("data: a\n\n");
@@ -259,6 +313,22 @@ describe("NDJSON", () => {
     expect(err).toBeInstanceOf(ProviderError);
     expect((err as ProviderError).kind).toBe("protocol");
     expect("cause" in (err as ProviderError)).toBe(false);
+  });
+
+  test("a line past the cap throws before the stream ends, naming its number", async () => {
+    const { source, state } = countedSource(utf8("1\n"), utf8("x".repeat(4)), 64);
+    const err = await rejection(collect(iterNdjson(source, 10)));
+    expectOverCap(err, "NDJSON line 2 is over the limit of 10 bytes (YIAN_MAX_MODEL_EVENT_BYTES)");
+    expect(state.given).toBeLessThan(64);
+  });
+
+  test("a line at the cap is read", async () => {
+    expect(await collect(iterNdjson([utf8('"12345678"\n"1234567"')], 10))).toEqual(["12345678", "1234567"]);
+  });
+
+  test("a final line past the cap throws", async () => {
+    const err = await rejection(collect(iterNdjson([utf8("1\n12345678901")], 10)));
+    expectOverCap(err, "NDJSON line 2 is over the limit of 10 bytes (YIAN_MAX_MODEL_EVENT_BYTES)");
   });
 
   test("a break after the first value closes the source", async () => {

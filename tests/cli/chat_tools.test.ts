@@ -10,6 +10,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -129,6 +130,12 @@ describe("confine", () => {
     const error = thrown(() => confine(root, path));
     expect(error).toBeInstanceOf(ToolRefused);
     expect((error as Error).message).toContain(path);
+  });
+
+  test("refuses a path through a file", () => {
+    const error = thrown(() => confine(root, "sub/a.yaml/x.yaml"));
+    expect(error).toBeInstanceOf(ToolRefused);
+    expect((error as Error).message).toBe("sub/a.yaml/x.yaml goes through a file, not a folder");
   });
 
   test("refuses a symlink pointing out of the root", () => {
@@ -251,6 +258,13 @@ describe("read_flow", () => {
     expect(error.message).toContain("262144");
   });
 
+  test("refuses a folder", async () => {
+    mkdirSync(join(root, "d.yaml"));
+    const error = await rejection(call("read_flow", { path: "d.yaml" }));
+    expect(error).toBeInstanceOf(ToolRefused);
+    expect(error.message).toBe("d.yaml is not a file");
+  });
+
   test("a missing file is an error the model reads", async () => {
     const error = await rejection(call("read_flow", { path: "missing.yaml" }));
     expect(isReportedToolError(error)).toBe(true);
@@ -290,6 +304,12 @@ describe("check_flow", () => {
     writeFileSync(join(root, "code.yaml"), codeFlowText("../helpers.ts:fn"));
     const text = String(await call("check_flow", { path: "code.yaml" }));
     expect(text).toContain("`code:` reference '../helpers.ts:fn' is outside the code root");
+  });
+
+  test("a missing file is an error the model reads", async () => {
+    const error = await rejection(call("check_flow", { path: "missing.yaml" }));
+    expect(isReportedToolError(error)).toBe(true);
+    expect(error.message).toBe("can't read missing.yaml: No such file or directory");
   });
 
   test("checks only YAML files inside the root", async () => {
@@ -415,29 +435,38 @@ describe("write_flow", () => {
     expect(readFileSync(path, "utf8")).toBe(FLOW);
   });
 
-  test("a folder swapped for a symlink out during approval is refused", async () => {
+  /**
+   * A host whose approval swaps `sub` for a symlink to an outside folder holding `f.yaml`; the
+   * outside folder's path.
+   */
+  function swappingSub(): { chatHost: ChatToolHost; outside: string } {
     writeFileSync(join(root, "sub", "f.yaml"), FLOW);
-    mkdirSync(join(tmp, "out"));
-    writeFileSync(join(tmp, "out", "f.yaml"), FLOW);
-    const swap = (): void => {
+    const outside = join(tmp, "out");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "f.yaml"), FLOW);
+    const { chatHost } = approving("Approve", () => {
       renameSync(join(root, "sub"), join(root, "moved"));
-      symlinkSync(join(tmp, "out"), join(root, "sub"));
-    };
-    for (const path of ["sub/f.yaml", "sub/new.yaml"]) {
-      if (existsSync(join(root, "moved"))) {
-        rmSync(join(root, "sub"));
-        renameSync(join(root, "moved"), join(root, "sub"));
-      }
-      const { chatHost } = approving("Approve", swap);
-      expect(await rejection(call("write_flow", { path, content: FLOW + "# new\n" }, chatHost))).toBeInstanceOf(
-        ToolRefused,
-      );
-    }
-    expect(readdirSync(join(tmp, "out"))).toEqual(["f.yaml"]);
-    expect(readFileSync(join(tmp, "out", "f.yaml"), "utf8")).toBe(FLOW);
+      symlinkSync(outside, join(root, "sub"));
+    });
+    return { chatHost, outside };
+  }
+
+  test("a folder swapped for a symlink out during approval leaves an existing file alone", async () => {
+    const { chatHost, outside } = swappingSub();
+    const result = await call("write_flow", { path: "sub/f.yaml", content: FLOW + "# new\n" }, chatHost);
+    expect(result).toBe("not written: sub/f.yaml is outside the folder the chat started in");
+    expect(readdirSync(outside)).toEqual(["f.yaml"]);
+    expect(readFileSync(join(outside, "f.yaml"), "utf8")).toBe(FLOW);
   });
 
-  test("a file swapped for a symlink out during approval is refused", async () => {
+  test("a folder swapped for a symlink out during approval creates no new file", async () => {
+    const { chatHost, outside } = swappingSub();
+    const result = await call("write_flow", { path: "sub/new.yaml", content: FLOW }, chatHost);
+    expect(result).toBe("not written: sub/new.yaml is outside the folder the chat started in");
+    expect(readdirSync(outside)).toEqual(["f.yaml"]);
+  });
+
+  test("a file swapped for a symlink out during approval is not written", async () => {
     const path = join(root, "sub", "f.yaml");
     writeFileSync(path, FLOW);
     writeFileSync(join(tmp, "out.yaml"), FLOW);
@@ -445,9 +474,54 @@ describe("write_flow", () => {
       rmSync(path);
       symlinkSync(join(tmp, "out.yaml"), path);
     });
-    const content = FLOW + "# new\n";
-    expect(await rejection(call("write_flow", { path: "sub/f.yaml", content }, chatHost))).toBeInstanceOf(ToolRefused);
+    const result = await call("write_flow", { path: "sub/f.yaml", content: FLOW + "# new\n" }, chatHost);
+    expect(result).toBe("not written: sub/f.yaml is outside the folder the chat started in");
     expect(readFileSync(join(tmp, "out.yaml"), "utf8")).toBe(FLOW);
+  });
+
+  test("a path through a file is refused before asking", async () => {
+    writeFileSync(join(root, "f.yaml"), FLOW);
+    const { chatHost, requests } = approving("Approve");
+    const error = await rejection(call("write_flow", { path: "f.yaml/x.yaml", content: FLOW }, chatHost));
+    expect(error).toBeInstanceOf(ToolRefused);
+    expect(error.message).toBe("f.yaml/x.yaml goes through a file, not a folder");
+    expect(requests).toEqual([]);
+  });
+
+  test("content over the size cap is refused before asking", async () => {
+    const { chatHost, requests } = approving("Approve");
+    const content = FLOW + `# ${"x".repeat(256 * 1024)}\n`;
+    expect(await rejection(call("write_flow", { path: "a.yaml", content }, chatHost))).toBeInstanceOf(ToolRefused);
+    expect(requests).toEqual([]);
+  });
+
+  test("a file over the size cap is not replaced, and never asked about", async () => {
+    writeFileSync(join(root, "big.yaml"), "#".repeat(256 * 1024 + 1));
+    const { chatHost, requests } = approving("Approve");
+    const error = await rejection(call("write_flow", { path: "big.yaml", content: FLOW }, chatHost));
+    expect(error).toBeInstanceOf(ToolRefused);
+    expect(error.message).toContain("262144");
+    expect(requests).toEqual([]);
+  });
+
+  test("a folder is refused before asking", async () => {
+    mkdirSync(join(root, "d.yaml"));
+    const { chatHost, requests } = approving("Approve");
+    const error = await rejection(call("write_flow", { path: "d.yaml", content: FLOW }, chatHost));
+    expect(error).toBeInstanceOf(ToolRefused);
+    expect(error.message).toBe("d.yaml is not a file");
+    expect(requests).toEqual([]);
+  });
+
+  test("a replaced file keeps its mode", async () => {
+    const path = join(root, "sub", "f.yaml");
+    writeFileSync(path, FLOW);
+    chmodSync(path, 0o640);
+    const { chatHost } = approving("Approve");
+    expect(await call("write_flow", { path: "sub/f.yaml", content: FLOW + "# new\n" }, chatHost)).toBe(
+      "wrote sub/f.yaml",
+    );
+    expect(statSync(path).mode & 0o777).toBe(0o640);
   });
 
   // Root reads and writes a read-only folder anyway.
@@ -495,7 +569,7 @@ describe("write_flow", () => {
   test("without a terminal to approve, nothing is written", async () => {
     const { chatHost } = approving(null);
     const result = await call("write_flow", { path: "a.yaml", content: FLOW }, chatHost);
-    expect(result).toBe("not written: needs a terminal to approve");
+    expect(result).toBe("not written: not approved (no terminal, or the prompt ended)");
     expect(existsSync(join(root, "a.yaml"))).toBe(false);
   });
 

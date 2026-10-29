@@ -10,13 +10,15 @@
 
 import {
   closeSync,
+  constants,
   type Dirent,
+  fstatSync,
   fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
-  readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   type Stats,
@@ -32,13 +34,13 @@ import type { Env } from "../defaults.ts";
 import { compareCodeUnits, type Diagnostic, reprText } from "../diagnostics.ts";
 import { isSystemError, leavesRoot } from "../platform.ts";
 import { resolvedPath } from "../skills/catalog.ts";
-import { ReportedToolError } from "../tools/errors.ts";
+import { isReportedToolError, ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
 import { canonicalTypeLabel } from "../typesys/values.ts";
 import { loadConfinedText } from "./confined_load.ts";
 import { unifiedDiff } from "./diff.ts";
 import { renderDiagnostic } from "./render.ts";
-import { NotUtf8Error, readFlowText } from "./startup.ts";
+import { decodeFlowText, NotUtf8Error, readFlowText } from "./startup.ts";
 import type { ApproveRequest } from "./terminal.ts";
 import { osReason } from "./utils.ts";
 
@@ -78,8 +80,8 @@ export class ToolRefused extends ReportedToolError {
  * Return the real path `path` (relative to `root`, or absolute) names, which must be inside
  * `root`. A path that doesn't exist yet resolves through its nearest existing folder.
  *
- * @throws {ToolRefused} When the path has a control character, leaves `root`, or is or goes
- *   through a symlink whose target doesn't exist.
+ * @throws {ToolRefused} When the path has a control character, leaves `root`, goes through a
+ *   file, or is or goes through a symlink whose target doesn't exist.
  * @throws {ReportedToolError} When the path can't be resolved, through a symlink loop say.
  */
 export function confine(root: string, path: string): string {
@@ -93,9 +95,8 @@ export function confine(root: string, path: string): string {
     real = realpathSync(target);
   } catch (error) {
     if (!isSystemError(error)) throw error;
-    if (error.code !== "ENOENT" && error.code !== "ENOTDIR") {
-      throw new ReportedToolError(`can't resolve ${path}: ${osReason(error)}`);
-    }
+    if (error.code === "ENOTDIR") throw new ToolRefused(`${path} goes through a file, not a folder`);
+    if (error.code !== "ENOENT") throw new ReportedToolError(`can't resolve ${path}: ${osReason(error)}`);
     refuseDanglingLink(path, target);
     real = resolvedPath(target);
   }
@@ -140,8 +141,12 @@ function slashed(path: string): string {
   return path.split(sep).join("/");
 }
 
-/** The error the model reads for a file `path` that can't be read: why, never what it holds. */
-function readFailure(path: string, error: unknown): ReportedToolError {
+/**
+ * The error the model reads for a file `path` that can't be read: why, never what it holds.
+ *
+ * @throws `error` itself when it is neither a system error nor a `NotUtf8Error`.
+ */
+function toReadFailure(path: string, error: unknown): ReportedToolError {
   if (error instanceof NotUtf8Error) return new ReportedToolError(`can't read ${path}: not UTF-8 text`);
   if (isSystemError(error)) return new ReportedToolError(`can't read ${path}: ${osReason(error)}`);
   throw error;
@@ -173,7 +178,7 @@ export function listFlows(
     } catch (error) {
       // A folder inside that can't be read (no permission, say) leaves only its flows out.
       if (folder !== dir && isSystemError(error)) return;
-      throw readFailure(slashed(relative(root, folder)) || ".", error);
+      throw toReadFailure(slashed(relative(root, folder)) || ".", error);
     }
     entries.sort((a, b) => compareCodeUnits(a.name, b.name));
     for (const entry of entries) {
@@ -201,26 +206,42 @@ export function listFlows(
 }
 
 /**
+ * The file at `real` (`path` as the model gave it): its status and its bytes, read through one
+ * descriptor so both are of the same file, and never more than `READ_FLOW_BYTES` of them.
+ *
+ * @throws {ToolRefused} When it isn't a file or is larger than `READ_FLOW_BYTES`.
+ * @throws {Error} A system error when it can't be opened or read.
+ */
+function readCapped(path: string, real: string): { bytes: Buffer; stats: Stats } {
+  // Non-blocking, so a FIFO named like a flow can't hang the open.
+  const fd = openSync(real, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
+  try {
+    const stats = fstatSync(fd);
+    if (!stats.isFile()) throw new ToolRefused(`${path} is not a file`);
+    const buffer = Buffer.alloc(READ_FLOW_BYTES + 1);
+    let length = 0;
+    for (let read = -1; read !== 0 && length < buffer.length; length += read) {
+      read = readSync(fd, buffer, length, buffer.length - length, null);
+    }
+    if (length > READ_FLOW_BYTES) {
+      throw new ToolRefused(`${path} is over ${READ_FLOW_BYTES} bytes, the most the chat's file tools read`);
+    }
+    return { bytes: buffer.subarray(0, length), stats };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
  * The text of the flow file `path` (as the model gave it) at `real`, refusing anything but a YAML
  * file of at most `READ_FLOW_BYTES`.
  */
 function readFlow(path: string, real: string): string {
   if (!isFlowFile(real)) throw new ToolRefused(`${path} is not a .yaml or .yml file`);
-  let size: number;
   try {
-    const stats = statSync(real);
-    if (!stats.isFile()) throw new ToolRefused(`${path} is not a file`);
-    size = stats.size;
+    return decodeFlowText(readCapped(path, real).bytes, path);
   } catch (error) {
-    throw error instanceof ToolRefused ? error : readFailure(path, error);
-  }
-  if (size > READ_FLOW_BYTES) {
-    throw new ToolRefused(`${path} is ${size} bytes; read_flow reads at most ${READ_FLOW_BYTES}`);
-  }
-  try {
-    return readFlowText(real);
-  } catch (error) {
-    throw readFailure(path, error);
+    throw error instanceof ToolRefused ? error : toReadFailure(path, error);
   }
 }
 
@@ -270,7 +291,7 @@ export async function checkFocus(path: string, env: Env): Promise<{ text: string
   try {
     text = readFlowText(path);
   } catch (error) {
-    return { text: "", check: readFailure(path, error).message };
+    return { text: "", check: toReadFailure(path, error).message };
   }
   const real = realpathSync(path);
   return { text: focusText(text), check: await checkText(dirname(real), real, text, env) };
@@ -282,20 +303,19 @@ const WRITE_CHOICES = ["Approve", "Reject"] as const;
 /** A file as it was when its approval was asked: its bytes and identity, or null when absent. */
 type Snapshot = { bytes: Buffer; dev: number; ino: number } | null;
 
-/** The file at `real` now, as a `Snapshot`; a folder or another non-file is refused. */
+/**
+ * The file at `real` now, as a `Snapshot`.
+ *
+ * @throws {ToolRefused} When it is a folder or another non-file, or larger than `READ_FLOW_BYTES`.
+ * @throws {ReportedToolError} When it can't be read.
+ */
 function snapshot(path: string, real: string): Snapshot {
-  let stats: Stats;
   try {
-    stats = statSync(real);
+    const { bytes, stats } = readCapped(path, real);
+    return { bytes, dev: stats.dev, ino: stats.ino };
   } catch (error) {
     if (isSystemError(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) return null;
-    throw readFailure(path, error);
-  }
-  if (!stats.isFile()) throw new ToolRefused(`${path} is not a file`);
-  try {
-    return { bytes: readFileSync(real), dev: stats.dev, ino: stats.ino };
-  } catch (error) {
-    throw readFailure(path, error);
+    throw error instanceof ToolRefused ? error : toReadFailure(path, error);
   }
 }
 
@@ -307,11 +327,16 @@ function sameSnapshot(a: Snapshot, b: Snapshot): boolean {
 
 /**
  * Write `content` to the flow file `path` inside `host.root` once it loads there and the user
- * approves it on the terminal, with a diff against the file it replaces. Returns what happened, for
- * the model: `wrote <path>`, `invalid:` and the diagnostic, or `not written: <why>`. A file that
- * changed during the approval is left alone; a new file is created only if still absent, and an
- * existing one is replaced through a temporary file in its folder, flushed to disk before the
- * rename. A write that fails (a read-only folder, a full disk) is `not written: <why>` too.
+ * approves it on the terminal, with a diff against the file it replaces. A file that changed
+ * during the approval is left alone; a new file is created only if still absent, and an existing
+ * one is replaced through a temporary file in its folder, flushed to disk before the rename.
+ *
+ * Returns what happened, for the model: `wrote <path>`, `invalid:` and the diagnostic, or `not
+ * written: <why>`. Once the user is asked, every outcome is returned, a refusal or a failed write
+ * included.
+ *
+ * @throws {ToolRefused} Before asking, for a path that is refused or content or a file too large.
+ * @throws {ReportedToolError} Before asking, for a file that can't be read.
  */
 async function writeFlow(host: ChatToolHost, path: string, content: string, signal: AbortSignal): Promise<string> {
   const root = realpathSync(host.root);
@@ -321,9 +346,10 @@ async function writeFlow(host: ChatToolHost, path: string, content: string, sign
     throw new ToolRefused(`the content is over ${READ_FLOW_BYTES} bytes, the most write_flow writes`);
   }
   const shown = slashed(relative(root, real));
+  // Taken first, so a file write_flow can't replace is refused before the content is checked.
+  const before = snapshot(path, real);
   const check = await checkText(root, real, content, host.env);
   if (check.startsWith("invalid:")) return check;
-  const before = snapshot(path, real);
   const diff = unifiedDiff(before === null ? "" : before.bytes.toString("utf8"), content, {
     oldLabel: before === null ? "/dev/null" : shown,
     newLabel: shown,
@@ -335,12 +361,14 @@ async function writeFlow(host: ChatToolHost, path: string, content: string, sign
     choices: WRITE_CHOICES,
     signal,
   });
-  if (answer === null) return "not written: needs a terminal to approve";
+  if (answer === null) return "not written: not approved (no terminal, or the prompt ended)";
   if (answer !== WRITE_CHOICES[0]) return "not written: rejected";
   try {
     return writeApproved(root, path, real, before, content);
   } catch (error) {
-    // The model reads why the write failed (a read-only folder, a full disk) as the outcome.
+    // The model reads why the write failed (a read-only folder, a full disk, a path that now
+    // leaves the root) as the outcome.
+    if (isReportedToolError(error)) return `not written: ${(error as Error).message}`;
     if (isSystemError(error)) return `not written: ${osReason(error)}`;
     throw error;
   }
@@ -350,7 +378,7 @@ async function writeFlow(host: ChatToolHost, path: string, content: string, sign
  * Write `content` to `real` (`path` as the model gave it) once approved, as `writeFlow` describes,
  * unless the file is no longer as `before` saw it.
  *
- * @throws {ToolRefused} When the path now leaves `root`.
+ * @throws {ReportedToolError} When the path is now refused or the file can't be read.
  * @throws {Error} A system error when a write fails; the temporary file is gone either way.
  */
 function writeApproved(root: string, path: string, real: string, before: Snapshot, content: string): string {
@@ -360,6 +388,7 @@ function writeApproved(root: string, path: string, real: string, before: Snapsho
   if (confine(root, path) !== real || !sameSnapshot(before, snapshot(path, real))) return changed;
   const folder = dirname(real);
   if (before === null) {
+    // A refusal below can leave the folders made here empty; they hold nothing outside the root.
     mkdirSync(folder, { recursive: true });
     // Again after the folders exist, so one swapped for a symlink meanwhile can't steer the write.
     if (confine(root, path) !== real || realpathSync(folder) !== folder) return changed;

@@ -2362,6 +2362,96 @@ async function aChildExitsOnItsOwnAfterCtrlCWithStdinOpen(): Promise<void> {
 }
 
 /** The scenarios by name, in the order `main` runs them. */
+/** An approval request for `approve`, with the Approve and Reject choices. */
+function approval(fields: { signal?: AbortSignal; diff?: string | null } = {}) {
+  return {
+    title: "Write a.yaml",
+    body: "a new flow",
+    diff: fields.diff ?? null,
+    choices: ["Approve", "Reject"],
+    signal: fields.signal,
+  };
+}
+
+async function approveEnterPicksTheFirstChoiceAndDownTheNext(): Promise<void> {
+  const { input, output, terminal, view, exitHooks } = setup();
+  let answer = terminal.approve(approval({ diff: "--- a.yaml\n+++ a.yaml\n@@ -1 +1 @@\n-old\n+new\n" }));
+  await tick();
+  assert.deepEqual(view().rows, [
+    "a new flow",
+    "--- a.yaml",
+    "+++ a.yaml",
+    "@@ -1 +1 @@",
+    "-old",
+    "+new",
+    "? Write a.yaml (Use arrow keys)",
+    " » Approve",
+    "   Reject",
+  ]);
+  input.write(ENTER);
+  assert.equal(await answer, "Approve");
+  assertRestored(input, output, exitHooks);
+  answer = terminal.approve(approval());
+  input.write(DOWN + ENTER);
+  assert.equal(await answer, "Reject");
+  assert.equal(view().rows.at(-1), "? Write a.yaml Reject");
+}
+
+async function approveShowsItsTextSanitized(): Promise<void> {
+  const { input, output, terminal } = setup();
+  const answer = terminal.approve({
+    title: "Write\x1b[2J a.yaml",
+    body: "body\x1b]52;c;aGk=\x07 \u202eend",
+    diff: "+line\x1b[1A",
+    choices: ["Approve\x07", "Reject"],
+  });
+  input.write(ENTER);
+  assert.equal(await answer, "Approve\x07");
+  for (const sent of ["\x1b[2J", "\x1b]", "\x07", "\u202e", "\x1b[1A"]) {
+    assert.ok(!output.text.includes(sent), JSON.stringify(sent));
+  }
+  for (const shown of ["Write a.yaml", "body \\u{202e}end", "+line", "Approve^G"]) {
+    assert.ok(output.text.includes(shown), JSON.stringify(shown));
+  }
+}
+
+async function approveOffATtyReturnsNullWithoutReading(): Promise<void> {
+  const { input, output, terminal } = setup({ tty: false });
+  input.write(ENTER);
+  assert.equal(await terminal.approve(approval()), null);
+  assert.equal(output.text, "");
+  // The Enter is still there for the next prompt.
+  assert.equal(await terminal.askText("Name:"), "");
+}
+
+async function ctrlCInApproveRejectsAndKeepsTheTerminalOpen(): Promise<void> {
+  const stops: string[] = [];
+  const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
+  const answer = terminal.approve(approval());
+  input.write(CTRL_C);
+  assert.equal(await answer, "Reject");
+  assert.deepEqual(stops, []);
+  assertRestored(input, output, exitHooks);
+  const next = terminal.approve(approval());
+  input.write(ENTER);
+  assert.equal(await next, "Approve");
+}
+
+async function anAbortedApproveReturnsNull(): Promise<void> {
+  const { input, terminal } = setup();
+  const aborted = new AbortController();
+  aborted.abort(new Error("stop"));
+  assert.equal(await terminal.approve(approval({ signal: aborted.signal })), null);
+  const later = new AbortController();
+  const answer = terminal.approve(approval({ signal: later.signal }));
+  await tick();
+  later.abort(new Error("stop"));
+  assert.equal(await answer, null);
+  const next = terminal.approve(approval());
+  input.write(ENTER);
+  assert.equal(await next, "Approve");
+}
+
 export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "typing a line returns it": typingALineReturnsIt,
   "an initial value can be edited": anInitialValueCanBeEdited,
@@ -2488,6 +2578,11 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a non-TTY turn still has the exit hook": aNonTtyTurnStillHasTheExitHook,
   "a child exits on its own after an answer with stdin open": aChildExitsOnItsOwnAfterAnAnswerWithStdinOpen,
   "a child exits on its own after Ctrl-C with stdin open": aChildExitsOnItsOwnAfterCtrlCWithStdinOpen,
+  "approve: Enter picks the first choice and Down the next": approveEnterPicksTheFirstChoiceAndDownTheNext,
+  "approve shows its text sanitized": approveShowsItsTextSanitized,
+  "approve off a TTY returns null without reading": approveOffATtyReturnsNullWithoutReading,
+  "Ctrl-C in approve rejects and keeps the terminal open": ctrlCInApproveRejectsAndKeepsTheTerminalOpen,
+  "an aborted approve returns null": anAbortedApproveReturnsNull,
 };
 
 /** Run every scenario, printing `{"name", "ok", "error"?}` per line; return how many failed. */

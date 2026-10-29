@@ -57,6 +57,20 @@ export interface TerminalOptions {
   plain?: boolean;
 }
 
+/** What `Terminal.approve` asks the user to approve. */
+export interface ApproveRequest {
+  /** What is to be done, such as `Write a.yaml`; the select's label. */
+  title: string;
+  /** More about it, written above the select; empty for none. */
+  body: string;
+  /** A unified diff of the change, or null for none. */
+  diff: string | null;
+  /** The answers, the approving one first and the rejecting one last. */
+  choices: readonly string[];
+  /** Ends the prompt, with no answer, when it aborts. */
+  signal?: AbortSignal;
+}
+
 /** A prompt ended because the terminal closed (Ctrl-C, end of input, or close()). */
 export class TerminalStopped extends Error {
   override name = "TerminalStopped";
@@ -565,6 +579,39 @@ export class Terminal {
     const initial = options.initial === undefined ? 0 : choices.indexOf(options.initial);
     const ended = await this.#runTurn(options.signal, (run) => run(selectWidget({ label, titles: choices.map(visible), initial })));
     return "value" in ended ? choices[ended.value]! : null;
+  }
+
+  /**
+   * Ask the user to approve an action: write `body` and the unified `diff` when there is one, then
+   * select among `choices` under `title`, the first preselected. All the text is drawn through
+   * `sanitize`. Returns the chosen choice; the last one (the reject) for Ctrl-C, which leaves the
+   * terminal open; null without drawing or reading when the terminal is plain, closed or its input
+   * isn't a TTY, and null when the input ends or `signal` aborts.
+   */
+  async approve(request: ApproveRequest): Promise<string | null> {
+    const { choices, signal } = request;
+    if (choices.length === 0) throw new RangeError("approve needs at least one choice");
+    // Only a person at a terminal can approve: piped input could approve on their behalf.
+    if (this.#plain || this.#input.isTTY !== true || signal?.aborted) return null;
+    const label = sanitize(request.title);
+    const card = [request.body, request.diff ?? ""].filter((text) => text !== "").map((text) => sanitize(text));
+    const titles = choices.map((choice) => sanitize(choice));
+    let ended: { value: number } | { stop: StopReason };
+    try {
+      ended = await this.#runTurn(
+        signal,
+        (run) => {
+          for (const text of card) this.#output.write(crlf(text.replace(/\n$/, "")) + "\r\n");
+          return run(selectWidget({ label, titles }));
+        },
+        { keepOpen: true },
+      );
+    } catch (error) {
+      if (signal?.aborted && error === signal.reason) return null;
+      throw error;
+    }
+    if ("value" in ended) return choices[ended.value]!;
+    return ended.stop === "interrupt" ? choices[choices.length - 1]! : null;
   }
 
   /**

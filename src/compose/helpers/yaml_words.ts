@@ -30,7 +30,7 @@ export function formerBooleanFix(
 ): [boolean, string] | null {
   if (typeof value !== "string") return null;
   const fix = wordFix(value);
-  if (fix === null || declared === null || fits(declared, fix[0])) return fix;
+  if (fix === null || declared === null || valueFits(declared, fix[0])) return fix;
   return null;
 }
 
@@ -61,10 +61,10 @@ function wordFix(value: string): [boolean, string] | null {
   return [flag, `\`${text}\` is text; write \`${flag ? "true" : "false"}\``];
 }
 
-/** Return whether `value` passes the write-boundary check for `declared`. */
-function fits(declared: Type, value: unknown): boolean {
+/** Return whether `value` passes the write-boundary check for `typ`. */
+export function valueFits(typ: Type, value: unknown): boolean {
   try {
-    buildValueAs(declared, value);
+    buildValueAs(typ, value);
   } catch (error) {
     if (error instanceof TypeCheckError) return false;
     throw error;

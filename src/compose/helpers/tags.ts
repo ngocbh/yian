@@ -64,7 +64,7 @@ import {
 import { CALL_HEAD } from "./directives.ts";
 import type { LoadDiagnostics } from "./errors.ts";
 import { isExtensionKey } from "./source.ts";
-import { formerBooleanFix } from "./yaml_words.ts";
+import { formerBooleanFix, valueFits } from "./yaml_words.ts";
 
 const HEAD_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*/;
 /** The `getCloseMatches` ratio a name must reach to be offered as a close match. */
@@ -286,17 +286,6 @@ export function suggestedLiteral(text: string, typ: Type): [shown: string, note:
   if (fix !== null) return [fix[0] ? "true" : "false", fix[1]];
   if (typeof parsed !== "string" && valueFits(typ, text)) return [yamlQuoted(text), null];
   return [text, null];
-}
-
-/** Return whether `value` passes the write-boundary check for `typ`. */
-export function valueFits(typ: Type, value: unknown): boolean {
-  try {
-    buildValueAs(typ, value);
-  } catch (error) {
-    if (error instanceof TypeCheckError) return false;
-    throw error;
-  }
-  return true;
 }
 
 /**

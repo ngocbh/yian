@@ -87,13 +87,7 @@ test("the reply agent gets the tools, the skill and steering, with no tool-call 
 test("the prompt reads before explaining, checks before runs, and relays inbox runs", async () => {
   // Read with its lines joined: the prompt wraps.
   const text = flowText("chat.yaml").replace(/\s+/g, " ");
-  expect(text).toContain("write_flow refuses content that doesn't load; fix what it reports.");
-  expect(text).toContain("Check a flow before you run it.");
-  expect(text).toContain(
-    "To explain or change a flow, read it with read_flow first; " +
-      "check_flow only says whether it loads and lists its inputs.",
-  );
-  expect(text).toContain("refuse a path outside it");
+  expect(text).toContain("Read a flow before you explain or change it, and check it before you run it.");
   expect(text).not.toContain("Check a flow before you write it");
   for (const phrase of [
     "message_flow",

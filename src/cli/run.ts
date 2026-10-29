@@ -73,6 +73,7 @@ import {
   leavesRoot,
   sqliteErrorCode,
   statOrNull,
+  syncFolder,
   withWarnings,
 } from "../platform.ts";
 import {
@@ -737,22 +738,25 @@ export function validateRunLogOptions(options: {
  * `env` (the account's home directory when it is unset or empty).
  *
  * `~/.yian` and `~/.yian/runs` are created with mode 0700, or set to it if they exist; the run's
- * folder must be new and is created with mode 0700. The file itself is not created: the run log
- * creates it exclusively, owner-only.
+ * folder must be new and is created with mode 0700. The folder above each one created is synced.
+ * The file itself is not created: the run log creates it exclusively, owner-only.
  *
- * @throws {Error} When a directory can't be created or changed, a non-directory holds the path of
- *   `~/.yian` or `~/.yian/runs`, or anything holds the run folder's path.
+ * @throws {Error} When a directory can't be created, changed or synced, a non-directory holds the
+ *   path of `~/.yian` or `~/.yian/runs`, or anything holds the run folder's path.
  */
 export function defaultRunLogPath(runId: string, env: Env): string {
   const runsDir = defaultRunsDir(env);
   for (const dir of [dirname(runsDir), runsDir]) {
+    let made = true;
     try {
       mkdirSync(dir, { mode: 0o700 });
     } catch (error) {
       const taken = (error as NodeJS.ErrnoException).code === "EEXIST";
       if (!taken || !statSync(dir, { throwIfNoEntry: false })?.isDirectory()) throw error;
+      made = false;
     }
     chmodSync(dir, 0o700);
+    if (made) syncFolder(dirname(dir));
   }
   return runLogPath(runsDir, runId);
 }

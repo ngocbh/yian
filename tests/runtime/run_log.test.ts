@@ -28,6 +28,7 @@ import {
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import { folderSyncs } from "../helpers/folder_syncs.ts";
 import { testNode } from "../helpers/test_node.ts";
 
 const DIGEST = "d".repeat(64);
@@ -1076,6 +1077,32 @@ test("jsonl create sets owner read-write permissions", () => {
     }
   }
   expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+});
+
+test("jsonl create syncs the log's folder once, so the new log survives a power loss", () => {
+  const file = path.join(dir, "run.jsonl");
+  let log: JsonlRunLog | undefined;
+  const synced = folderSyncs(() => {
+    log = JsonlRunLog.create(file, "run", { clock: CLOCK });
+    log.append(new NodeStartedRecord("first"));
+    log.append(new NodeStartedRecord("second"));
+  });
+  log![Symbol.dispose]();
+  expect(synced).toEqual([fs.realpathSync(dir)]);
+});
+
+test("jsonl create throws a folder sync's I/O error and releases the log's lock", () => {
+  const file = path.join(dir, "run.jsonl");
+  let caught: NodeJS.ErrnoException | undefined;
+  folderSyncs(() => {
+    try {
+      JsonlRunLog.create(file, "run");
+    } catch (error) {
+      caught = error as NodeJS.ErrnoException;
+    }
+  }, "EIO");
+  expect(caught?.code).toBe("EIO");
+  expectUnlocked(file);
 });
 
 test("jsonl create refuses a lone-surrogate run id before any file exists", () => {

@@ -64,6 +64,7 @@ import { Skill } from "../src/skills/catalog.ts";
 import { tool } from "../src/tools/function_tools.ts";
 import { TypeCheckError } from "../src/typesys/values.ts";
 
+import { folderSyncs } from "./helpers/folder_syncs.ts";
 import { hostEnv } from "./helpers/mcp_helpers.ts";
 import {
   crashAfter,
@@ -1548,6 +1549,17 @@ test("runLogPath is log.jsonl in the run's own 0700 folder, and creates no file"
   expect(path).toBe(join(runs, "r1", "log.jsonl"));
   expect(statSync(join(runs, "r1")).mode & 0o777).toBe(0o700);
   expect(existsSync(path)).toBe(false);
+});
+
+test("runLogPath syncs the runs folder once, and the folders above the ones it made", () => {
+  const runs = join(dir, "state", "runs");
+  const real = fs.realpathSync(dir);
+  expect(folderSyncs(() => runLogPath(runs, "r1"))).toEqual([join(real, "state", "runs"), join(real, "state"), real]);
+  expect(folderSyncs(() => runLogPath(runs, "r2"))).toEqual([join(real, "state", "runs")]);
+});
+
+test("runLogPath throws a folder sync's I/O error", () => {
+  expect(() => folderSyncs(() => runLogPath(dir, "r1"), "EIO")).toThrow(/EIO/);
 });
 
 test("runLogPath refuses an existing run folder, and a symlink to one, leaving its target as it was", () => {

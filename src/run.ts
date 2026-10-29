@@ -122,7 +122,7 @@ import {
   sameItems,
   sameOptional,
 } from "./nodes/contracts.ts";
-import { FileLockError, realScheduler, type Scheduler, VERSION, warn } from "./platform.ts";
+import { FileLockError, realScheduler, type Scheduler, syncFolder, VERSION, warn } from "./platform.ts";
 import { driveBackward, recordedGrants } from "./runtime/backward.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { type DeliveryOp, FlowEngine, prepareDelivery, resumedAttemptEvents } from "./runtime/engine.ts";
@@ -2316,23 +2316,28 @@ function agentCallArguments(reply: Readonly<JsonObject> | undefined, index: numb
  *
  * A run's folder is the folder that holds its log, and the run's other files go only there, so
  * each run gets a folder of its own. `runsDir` is made when missing. The run folder must not
- * exist yet; it is made with mode 0700. The log file is not created: the run log creates it
- * exclusively, owner-only.
+ * exist yet; it is made with mode 0700. The folder above each one made is synced, so the run
+ * folder survives a power loss. The log file is not created: the run log creates it exclusively,
+ * owner-only.
  *
  * @throws {RangeError} When `runId` isn't one folder name: empty, `.`, `..`, or holding `/`, `\`
  *   or NUL.
  * @throws {Error} `EEXIST` when anything (a folder, a file, a symlink) already holds the run
- *   folder's path, or another error when a folder can't be made or changed.
+ *   folder's path, or another error when a folder can't be made, changed or synced.
  */
 export function runLogPath(runsDir: string, runId: string): string {
   if (runId === "" || runId === "." || runId === ".." || /[/\\\0]/.test(runId)) {
     throw new RangeError(`run id is not one folder name: ${reprText(runId)}`);
   }
-  mkdirSync(runsDir, { recursive: true, mode: 0o700 });
+  const first = mkdirSync(runsDir, { recursive: true, mode: 0o700 });
   const runDir = join(runsDir, runId);
   mkdirSync(runDir, { mode: 0o700 });
   // The umask can narrow mkdir's mode.
   chmodSync(runDir, 0o700);
+  // Each new folder's entry lives in its parent: sync the run folder's and, when `runsDir` was
+  // made, each made folder's up to the first.
+  const stop = first === undefined ? resolve(runsDir) : dirname(resolve(first));
+  for (let made = resolve(runDir); made !== stop; made = dirname(made)) syncFolder(dirname(made));
   return join(runDir, "log.jsonl");
 }
 

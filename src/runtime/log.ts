@@ -14,6 +14,7 @@
  */
 
 import fs from "node:fs";
+import { dirname } from "node:path";
 
 import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.ts";
 import {
@@ -40,7 +41,7 @@ import {
   validateMutations,
 } from "../memory/contracts.ts";
 import { BackwardResult, copyBackwardValue, retainFailure } from "../nodes/base.ts";
-import { type FileLock, FileLockError, isLocked, lockFile, VERSION } from "../platform.ts";
+import { type FileLock, FileLockError, isLocked, lockFile, syncFolder, VERSION } from "../platform.ts";
 import {
   comparePaths,
   ExecutionPosition,
@@ -1998,8 +1999,9 @@ export class JsonlRunLog implements RunLog {
   }
 
   /**
-   * Create a new owner-only (0600) log at `path` and lock it. An existing path is never replaced.
-   * A failure after the file is created closes it and releases the lock; the empty file stays.
+   * Create a new owner-only (0600) log at `path`, sync its folder so the new file survives a power
+   * loss, and lock it. An existing path is never replaced. A failure after the file is created
+   * closes it and releases the lock; the empty file stays.
    *
    * @param options.clock The clock appends read their times from (default `Date.now`).
    * @throws RangeError when `runId` isn't a non-empty string or holds a lone surrogate; nothing
@@ -2007,7 +2009,8 @@ export class JsonlRunLog implements RunLog {
    * @throws TypeError when the clock isn't a function; nothing is created then.
    * @throws Error `run log <path> is locked by another writer (is the run still active?)`, with
    *   the busy `FileLockError` as `cause`.
-   * @throws the `fs` error (`code` `EEXIST` for an existing path) and other `lockFile` errors.
+   * @throws the `fs` error (`code` `EEXIST` for an existing path, or the folder sync's), and other
+   *   `lockFile` errors.
    */
   static create(path: string, runId: string, options: RunLogOptions = {}): JsonlRunLog {
     const canonicalRunId = validatedRunId(runId);
@@ -2018,6 +2021,7 @@ export class JsonlRunLog implements RunLog {
     try {
       // The open's mode is masked by the umask.
       fs.fchmodSync(fd, 0o600);
+      syncFolder(dirname(path));
       lock = lockRunLog(path, fd);
       return new JsonlRunLog(path, canonicalRunId, fd, lock, clock, [], 0);
     } catch (error) {

@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -26,6 +27,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { readRunIndex, runFlow } from "../../src/run.ts";
 import { JsonlRunLog, readRunLog, RunResumedRecord, RunStartedRecord } from "../../src/runtime/log.ts";
+import { folderSyncs } from "../helpers/folder_syncs.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 
 let tmp: string;
@@ -96,6 +98,17 @@ describe("defaultRunLogPath", () => {
     expect(mode(join(tmp, ".yian", "runs"))).toBe(0o700);
     expect(mode(join(tmp, ".yian", "runs", "run-1"))).toBe(0o700);
     expect(existsSync(path)).toBe(false);
+  });
+
+  test("syncs the folder above each folder it makes, and the runs folder once per run", () => {
+    const env = (name: string) => (name === "HOME" ? tmp : undefined);
+    const home = realpathSync(tmp);
+    expect(folderSyncs(() => defaultRunLogPath("run-1", env))).toEqual([
+      home,
+      join(home, ".yian"),
+      join(home, ".yian", "runs"),
+    ]);
+    expect(folderSyncs(() => defaultRunLogPath("run-2", env))).toEqual([join(home, ".yian", "runs")]);
   });
 
   test("forces existing directories to 0700", () => {

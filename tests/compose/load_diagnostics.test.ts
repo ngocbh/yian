@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { LoadDiagnostics, LoadError, sourceText } from "../../src/compose/helpers/errors.ts";
+import { LoadDiagnostics, LoadError, locatedError, sourceText } from "../../src/compose/helpers/errors.ts";
 import {
   boundaryFieldRanges,
   isExtensionKey,
@@ -10,7 +10,6 @@ import {
   oneLineText,
 } from "../../src/compose/helpers/source.ts";
 import { SourceAccessError, SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
-import { locatedError } from "../../src/compose/validate/typed_bindings.ts";
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 

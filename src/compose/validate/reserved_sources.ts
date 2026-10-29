@@ -20,12 +20,12 @@
  * Never imports: the loader or the compose package facade; they import this back.
  */
 
-import { reprText, type SourceRange } from "../../diagnostics.ts";
-import { Binding, bindingSource, type OutputContract, type ValueContract } from "../../nodes/contracts.ts";
+import { reprText } from "../../diagnostics.ts";
+import { asBinding, bindingSource, type OutputContract, type ValueContract } from "../../nodes/contracts.ts";
 import { MapNode } from "../../nodes/map/node.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isListKind, ValueKind } from "../../typesys/values.ts";
-import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
+import { LoadDiagnostics, locatedError } from "../helpers/errors.ts";
 import { literalValue, NOT_LITERAL, type TypeFn } from "../../compile/output_contracts.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
@@ -78,33 +78,10 @@ export function checkReservedSources(
     throw locatedError(
       `node ${reprText(nodeId)} (kind=map): \`over:\` must be a list, but the value is ${label}; ` +
         "write a reference to a list",
-      source,
+      asBinding(source),
       result.fieldRanges.get(siteKey("field", "over")) ?? result.nodeRange,
       resolveOrigin,
       diagnostics,
     );
   }
-}
-
-/**
- * Build the load error, located at the source's registered origin when it resolves.
- *
- * @param message The error message.
- * @param source The rejected source, a `Binding` when it carries an origin.
- * @param fallback The location used when no origin resolves.
- * @param resolveOrigin Resolves a registered origin to its source frame.
- * @param diagnostics Factory for located load errors.
- * @returns The located error.
- */
-function locatedError(
-  message: string,
-  source: unknown,
-  fallback: SourceRange | null,
-  resolveOrigin: ResolveOrigin | null,
-  diagnostics: LoadDiagnostics,
-): LoadError {
-  const origin = source instanceof Binding ? source.origin : null;
-  const frame = resolveOrigin !== null && origin !== null ? resolveOrigin(origin) : null;
-  if (frame !== null) return diagnostics.error(message, { frames: [frame] });
-  return diagnostics.error(message, { range: fallback });
 }

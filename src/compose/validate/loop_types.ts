@@ -19,9 +19,9 @@
  * checks every seed against the body's declared input.
  *
  * Knows about: `compile/validation` (the type comparator), `compose/helpers` (shared
- * output-contract inference, tag advice and load diagnostics), `compose/nodes/loop` (a body's
- * inputs as the carried values enter them, and the carried field types) and
- * `compose/validate/typed_bindings` (the text form of a literal).
+ * output-contract inference, tag advice, load diagnostics and the text form of a literal) and
+ * `compose/nodes/loop` (a body's inputs as the carried values enter them, and the carried field
+ * types).
  * Never imports: the loader or the compose package facade; only they import this back.
  */
 
@@ -39,13 +39,12 @@ import {
 import type { LoopNode } from "../../nodes/loop/node.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { canonicalTypeLabel, isList, isRecord, jsTypeName, type Type, ValueKind } from "../../typesys/values.ts";
-import { LoadDiagnostics } from "../helpers/errors.ts";
+import { LoadDiagnostics, shownLiteral } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { assertExactContracts, resolveOutputBindingContract } from "../../compile/output_contracts.ts";
 import { anySourceHint, suggestTag, tagText } from "../helpers/tags.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
-import { shownLiteral } from "./typed_bindings.ts";
 
 /**
  * The type-level half of a `loop`'s `'a -> 'a` contract (a loader post-build pass).

@@ -63,11 +63,11 @@ import {
   NOTHING,
   NotNullCheck,
 } from "../helpers/condition_guards.ts";
-import { LoadDiagnostics } from "../helpers/errors.ts";
+import { LoadDiagnostics, locatedError } from "../helpers/errors.ts";
 import { resolveIsinstanceType } from "../helpers/isinstance_types.ts";
 import { directReferenceParts, directReferencePath } from "../../compile/output_contracts.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
-import { locatedError, type ResolveOrigin } from "./typed_bindings.ts";
+import type { ResolveOrigin } from "./typed_bindings.ts";
 
 /** The grammar's arithmetic trees: the `+ -`, `* / %` and `**` chains and unary minus. */
 export const ARITHMETIC: ReadonlySet<string> = new Set(["sum", "product", "power", "neg"]);
@@ -411,28 +411,11 @@ export function checkSkippedArithmetic(
   const known = model.nodes;
   for (const [nodeId, wiring] of flowWiring) {
     const result = buildResults.get(nodeId) ?? null;
-    const reserved = result !== null ? result.node.reservedWiringKeys() : new Set<string>();
     for (const [param, binding] of wiring) {
       const found = skippedOperand(binding, model, nodeId, known, registry);
       if (found === null) continue;
       const [site, operand, producers] = found;
-      let where = `node ${reprText(nodeId)} input ${reprText(param)}`;
-      let fallback: SourceRange | null = null;
-      if (result !== null) {
-        let label: string;
-        let own: SourceRange | undefined;
-        if (reserved.has(param)) {
-          // A reserved key (`over`, `until`) is a kind field, not an input.
-          label = result.node.reservedKeyLabel(param);
-          own = result.fieldRanges.get(siteKey("field", param));
-        } else {
-          label = result.node.wiringRefLabel(param);
-          own = result.fieldRanges.get(siteKey("input", param));
-        }
-        fallback = own ?? result.fieldRanges.get(siteKey("field", "inputs")) ?? result.nodeRange;
-        // A synthetic param's label may already end in a colon (`on:`); the message adds one.
-        where = result.siteName(nodeId, label.replace(/:+$/, ""));
-      }
+      const [where, fallback] = bindingSite(nodeId, param, result);
       throw locatedError(
         `${where}: ${arithmeticMessage(site, operand, producers)}`,
         site,
@@ -477,6 +460,32 @@ export function checkSkippedArithmetic(
       diagnostics,
     );
   }
+}
+
+/**
+ * Return how a message names one node binding, and where it points when the binding's origin
+ * doesn't resolve: the binding's own entry, else the node's `input:` mapping, else the node.
+ *
+ * A reserved key (`over`, `until`) is named and located as its kind field, any other param as an
+ * input. Without a build result the binding is named by node id and param, with no location.
+ *
+ * @param nodeId The node's id.
+ * @param param The binding's wiring key.
+ * @param result The node's build, or `null` when there is none.
+ * @returns The binding's name and its fallback range.
+ */
+export function bindingSite(
+  nodeId: string,
+  param: string,
+  result: BuildResult | null,
+): [where: string, fallback: SourceRange | null] {
+  if (result === null) return [`node ${reprText(nodeId)} input ${reprText(param)}`, null];
+  const isReserved = result.node.reservedWiringKeys().has(param);
+  const label = isReserved ? result.node.reservedKeyLabel(param) : result.node.wiringRefLabel(param);
+  const own = result.fieldRanges.get(siteKey(isReserved ? "field" : "input", param));
+  const fallback = own ?? result.fieldRanges.get(siteKey("field", "inputs")) ?? result.nodeRange;
+  // A synthetic param's label may already end in a colon (`on:`); the message adds one.
+  return [result.siteName(nodeId, label.replace(/:+$/, "")), fallback];
 }
 
 /**

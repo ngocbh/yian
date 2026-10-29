@@ -86,13 +86,13 @@ import { Binding, bindingSource } from "../../nodes/contracts.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
-import { LoadDiagnostics } from "../helpers/errors.ts";
+import { LoadDiagnostics, locatedError } from "../helpers/errors.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
 import { bindingProducers } from "../edges/producers.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import type { Narrowing } from "./narrowing.ts";
-import { ARITHMETIC, type SearchedWhen, type SkipModel, stringSites } from "./skips.ts";
-import { LocalInput, locatedError, type ResolveOrigin } from "./typed_bindings.ts";
+import { ARITHMETIC, bindingSite, type SearchedWhen, type SkipModel, stringSites } from "./skips.ts";
+import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
 /** The code of a nullable field-read load error. */
 export const NULLABLE_FIELD_READ = "expr.nullable_field_read";
@@ -1157,7 +1157,6 @@ export function checkFieldReads(
   const typeFn = level.typeFn ?? null;
   for (const [nodeId, wiring] of flowWiring) {
     const result = buildResults.get(nodeId) ?? null;
-    const reserved = result !== null ? result.node.reservedWiringKeys() : new Set<string>();
     // A desugared node (an adaptive composer, a lifted call) is named by its author-facing labels,
     // not by its generated id.
     const roots = poolRoots(level, nodeId, wiring, result !== null && result.fieldLabels.size > 0 ? null : nodeId);
@@ -1167,17 +1166,7 @@ export function checkFieldReads(
         const read = firstFieldReadError(text, roots, registry, typeFn);
         if (read === null) continue;
         const message = caseReadsAsWritten(read.message, String(text), level.caseSpellings ?? new Map());
-        let where = `node ${reprText(nodeId)} input ${reprText(param)}`;
-        let fallback: SourceRange | null = null;
-        if (result !== null) {
-          // A reserved key (`over`, `until`) is a kind field, not an input.
-          const isReserved = reserved.has(param);
-          const label = isReserved ? result.node.reservedKeyLabel(param) : result.node.wiringRefLabel(param);
-          const own = result.fieldRanges.get(siteKey(isReserved ? "field" : "input", param));
-          fallback = own ?? result.fieldRanges.get(siteKey("field", "inputs")) ?? result.nodeRange;
-          // A synthetic param's label may already end in a colon (`on:`); the message adds one.
-          where = result.siteName(nodeId, label.replace(/:+$/, ""));
-        }
+        const [where, fallback] = bindingSite(nodeId, param, result);
         throw locatedError(`${where}: ${message}`, site, fallback, resolveOrigin, diagnostics, { code: read.code });
       }
     }

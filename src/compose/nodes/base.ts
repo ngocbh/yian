@@ -28,7 +28,7 @@ import {
   type SourceRange,
 } from "../../diagnostics.ts";
 import { ExpressionError } from "../../expr/expressions.ts";
-import { isBareName, type Tree, wholeSpanInterior } from "../../expr/grammar.ts";
+import { isBareName, wholeSpanInterior } from "../../expr/grammar.ts";
 import { scanTemplate, Span, type TemplateSegment } from "../../expr/template.ts";
 import type { ValidationError } from "../../llm_clients/provider_blocks.ts";
 import type { Node } from "../../nodes/base.ts";
@@ -287,7 +287,7 @@ export function wholeRefName(text: string): string | null {
   }
   const [segment] = segments;
   if (segments.length !== 1 || !(segment instanceof Span) || !isBareName(segment.tree)) return null;
-  return String((segment.tree as Tree).children[0]);
+  return String(segment.tree.children[0]);
 }
 
 /**

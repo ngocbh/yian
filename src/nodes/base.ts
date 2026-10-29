@@ -1376,7 +1376,7 @@ export abstract class Node {
    * @throws TypeError for a node that doesn't produce messages.
    */
   rebuildMessages(
-    _steps: readonly Readonly<JsonObject>[],
+    _steps: readonly Readonly<ValueRecord>[],
     _output: TypedValue | null,
     _localTypes: ReadonlyMap<string, Type | null> | null = null,
   ): TypedValue {

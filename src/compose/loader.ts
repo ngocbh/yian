@@ -56,7 +56,6 @@ import {
   type SourceRange,
 } from "../diagnostics.ts";
 import { DeclSite, MemorySetupError } from "../memory/contracts.ts";
-import type { Node } from "../nodes/base.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { typeName, readTypedefs, type TypeRegistry } from "../typesys/types.ts";
 import {
@@ -962,8 +961,7 @@ function refuseInheritedLlmValues(flow: ComposedFlow): void {
   if (found.callsite === null) {
     subject = `flow ${field}`;
   } else {
-    // A CALL, MAP or LOOP callsite names its child flow.
-    const name = reprText((found.callsite as Node & { flowId: string }).flowId);
+    const name = reprText(found.callsite.flowId);
     const called = `called by node ${reprText(found.owner.join("/"))}`;
     const callsiteFrame = frame(found.callsite.origin);
     if (valueFrame === null || callsiteFrame === null) {

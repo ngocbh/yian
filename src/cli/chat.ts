@@ -115,8 +115,8 @@ function pickInbox(flow: ComposedFlow, chosen: string | undefined): LineInbox {
   const inboxes = flow.input.flatMap((param): Omit<LineInbox, "several">[] => {
     const type = param.contract?.type ?? null;
     if (!isInboxType(type)) return [];
-    if (canonicalTypeLabel(type!.element!) === "str") return [{ name: param.name, message: false }];
-    return typeEquals(type!.element!, builtinType("Message")!) ? [{ name: param.name, message: true }] : [];
+    if (canonicalTypeLabel(type.element) === "str") return [{ name: param.name, message: false }];
+    return typeEquals(type.element, builtinType("Message")!) ? [{ name: param.name, message: true }] : [];
   });
   const several = inboxes.length > 1;
   const names = inboxes.map((inbox) => inbox.name);

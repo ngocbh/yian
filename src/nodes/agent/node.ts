@@ -697,7 +697,7 @@ export class AgentNode extends Node {
 
   /** Rebuild this agent's new messages (see `rebuildMessages` in `messages.ts`). */
   override rebuildMessages(
-    steps: readonly Readonly<JsonObject>[],
+    steps: readonly Readonly<ValueRecord>[],
     output: TypedValue | null,
     localTypes: ReadonlyMap<string, Type | null> | null = null,
   ): TypedValue {

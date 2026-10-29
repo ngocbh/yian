@@ -1,5 +1,5 @@
 /**
- * Shared model catalog for CLI selections and validation.
+ * Shared model catalog for CLI selections and the known-model check.
  */
 
 import { compareCodeUnits } from "../diagnostics.ts";
@@ -208,4 +208,18 @@ export function getKnownModels(): Record<string, string[]> {
     known[provider] = [...values].sort(compareCodeUnits);
   }
   return known;
+}
+
+// Built once: the known-model check runs on every model build.
+const KNOWN_MODELS: Readonly<Record<string, readonly string[]>> = table(getKnownModels());
+
+/**
+ * Whether `model` passes the known-model check for `provider` (case-insensitive provider, exact
+ * model): it is one of the provider's known model ids. Any model passes for `ollama`, which serves
+ * whatever was pulled, and for a provider outside the catalog (OpenRouter, vLLM, Azure, ...).
+ */
+export function isKnownModel(provider: string, model: string): boolean {
+  const key = provider.toLowerCase();
+  if (key === "ollama" || !Object.hasOwn(KNOWN_MODELS, key)) return true;
+  return KNOWN_MODELS[key]!.includes(model);
 }

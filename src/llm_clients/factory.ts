@@ -61,7 +61,7 @@ import {
   prefersResponses,
   PROVIDER_BASE_URL,
 } from "./endpoints.ts";
-import { validateModel } from "./validators.ts";
+import { isKnownModel } from "./model_catalog.ts";
 
 /** Providers with a dedicated route. */
 export const DEDICATED_PROVIDERS: readonly string[] = Object.freeze([
@@ -538,7 +538,7 @@ export async function chatModelFromConfig(
   // After the credential and header reads, so a removed login or
   // mismatched header names raise without a warning, while a missing environment key (outside
   // OpenAI) still warns first.
-  if (!validateModel(provider, model)) {
+  if (!isKnownModel(provider, model)) {
     onWarning(
       `Model '${model}' is not in the known model list for provider '${provider}'. ` +
         "Continuing anyway.",

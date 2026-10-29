@@ -368,12 +368,15 @@ describe("an azure run without base url fails before any request", () => {
   });
 });
 
-test("a host layer can give the azure endpoint without a key", async () => {
+test.each([
+  ["no headers", {}],
+  ["empty headers", { headers: {} }],
+])("a host layer can give the azure endpoint without a key (%s)", async (_, extra) => {
   const models = fakeClients(azureEnv, "ok");
   const path = join(fresh(), "run.jsonl");
   const result = await runFlow(await loadFlow(FLOW, { env: azureEnv }), {}, {
     log: path,
-    llmConfig: { provider: "azure", model: "d", base_url: AZURE_RESOURCE },
+    llmConfig: { provider: "azure", model: "d", base_url: AZURE_RESOURCE, ...extra },
     models,
     env: azureEnv,
   });
@@ -465,6 +468,14 @@ test("memories take a keyless azure endpoint", () => {
   const profile = new ProfileMemory(new FileMarkdownStore(join(fresh(), "ada.md")), { llmConfig: { ...config }, env });
   expect(profile["llmConfig"]).toEqual(config);
   expect([profile["host"].apiKey, profile["host"].baseUrl]).toEqual([null, null]);
+});
+
+test("profile memory keeps a keyless azure endpoint beside empty headers", () => {
+  const config = { provider: "azure", model: "d", base_url: AZURE_RESOURCE };
+  const llmConfig = { ...config, headers: {} };
+  const profile = new ProfileMemory(new FileMarkdownStore(join(fresh(), "ada.md")), { llmConfig, env });
+  expect(profile["llmConfig"]).toEqual(config);
+  expect([profile["host"].apiKey, profile["host"].baseUrl, profile["host"].headers]).toEqual([null, null, null]);
 });
 
 // ---- resume and backward reuse the recorded base_url ----

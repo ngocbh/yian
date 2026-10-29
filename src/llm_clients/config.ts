@@ -727,14 +727,16 @@ export function popHostCredentials(config: Record<string, unknown>): HostConnect
     if (value !== null && value !== undefined) settings[field] = value;
   }
   const provider = own(config, "provider");
+  let baseUrl: unknown = null;
   if (apiKey === null && provider === "azure") {
+    // A keyless Azure base_url is the resource endpoint, an ordinary setting that stays in the
+    // layer; its settings are still checked below, without it.
     const endpoint = own(config, "base_url");
     if (endpoint !== null && endpoint !== undefined) validateBaseUrl(endpoint);
-    if (Object.keys(settings).length === 0) return new HostConnection();
-    // Settings without a key go on to the validation below, which names the first that needs one.
+  } else {
+    baseUrl = own(config, "base_url");
+    delete config["base_url"];
   }
-  const baseUrl = own(config, "base_url");
-  delete config["base_url"];
   const noBaseUrl = baseUrl === null || baseUrl === undefined;
   if (noBaseUrl && apiKey !== null && provider === "azure") {
     throw new RangeError(

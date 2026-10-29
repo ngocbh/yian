@@ -222,6 +222,12 @@ test("popHostCredentials takes the url only with the layer's key", () => {
   layer = { provider: "azure", model: "gpt-4o", base_url: AZURE_RESOURCE };
   expect(fields(popHostCredentials(layer))).toEqual(NO_CONNECTION);
   expect(layer).toEqual({ provider: "azure", model: "gpt-4o", base_url: AZURE_RESOURCE });
+  // Empty headers are no headers, so the endpoint stays a layer setting beside them too.
+  for (const headers of [{}, { "X-A": undefined }]) {
+    layer = { provider: "azure", model: "gpt-4o", base_url: AZURE_RESOURCE, headers };
+    expect(fields(popHostCredentials(layer))).toEqual(NO_CONNECTION);
+    expect(layer).toEqual({ provider: "azure", model: "gpt-4o", base_url: AZURE_RESOURCE });
+  }
   // A host Azure key never goes to an endpoint another layer names.
   error = caught(() => popHostCredentials({ provider: "azure", model: "gpt-4o", api_key: SENTINEL }));
   expect(error).toBeInstanceOf(RangeError);

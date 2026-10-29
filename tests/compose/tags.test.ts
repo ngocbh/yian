@@ -86,6 +86,13 @@ describe("readTagType", () => {
     expect(rejected(tag).message).toContain(fragment);
   });
 
+  test("a paren inside a quoted Literal member is text", () => {
+    for (const tag of ["Literal('(')", "Literal(')')", 'Literal("((")']) {
+      expect(rt(tag).kind).toBe(ValueKind.STRING);
+    }
+    expect(rejected("Literal('('").message).toContain("ends at the first space");
+  });
+
   test("an incomplete tag's message names the tag and the fix", () => {
     const message = rejected("Union(Buy,").message;
     expect(message).toContain("`!Union(Buy,` is not a complete type");

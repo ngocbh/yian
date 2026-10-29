@@ -1,0 +1,10 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    open: !Literal('(') "("
+    close: !Literal(')') ")"
+  output: {open: "${open.output}", close: "${close.output}"}
+expect:
+  load: ok

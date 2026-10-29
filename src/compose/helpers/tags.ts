@@ -118,7 +118,17 @@ export function readTagType(
     }
     throw diagnostics.error(message, { range });
   }
-  if (tag.endsWith(",") || tag.split("(").length > tag.split(")").length) {
+  let resolved: Type | TypeCheckError;
+  try {
+    resolved = typeFor(tag, registry);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    resolved = error;
+  }
+  // Parens are counted only for a tag that names no type, so one inside a quoted `Literal`
+  // member (`!Literal('(')`) doesn't read as cut short.
+  const unclosed = tag.split("(").length > tag.split(")").length;
+  if (tag.endsWith(",") || (resolved instanceof TypeCheckError && unclosed)) {
     throw diagnostics.error(
       `${reprText(label)}: \`!${tag}\` is not a complete type: a YAML tag ends at the first ` +
         "space and can't contain `,`; name a type with several arguments in " +
@@ -133,15 +143,13 @@ export function readTagType(
       { range },
     );
   }
-  try {
-    return typeFor(tag, registry);
-  } catch (error) {
-    if (!(error instanceof TypeCheckError)) throw error;
-    let message = `${reprText(label)}: \`!${tag}\` is not a type (${error.message})`;
+  if (resolved instanceof TypeCheckError) {
+    let message = `${reprText(label)}: \`!${tag}\` is not a type (${resolved.message})`;
     const match = closeTypeName(tag, registry);
     if (match !== null) message += `. Did you mean \`${match}\`?`;
     throw diagnostics.error(message, { range });
   }
+  return resolved;
 }
 
 /**

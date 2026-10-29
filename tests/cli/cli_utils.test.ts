@@ -633,6 +633,19 @@ describe("stripControls", () => {
   ])("drops %s", (_, text, expected) => {
     expect(stripControls(text)).toBe(expected);
   });
+
+  test.each<[string, string]>([
+    ["OSC", "\x9d"],
+    ["DCS", "\x90"],
+    ["mixed 7-bit and C1", "\x1b]\x9d\x90\x1bP"],
+  ])("takes linear time on a megabyte of unended %s introducers", (_, introducer) => {
+    const text = introducer.repeat(Math.ceil(1_000_000 / introducer.length));
+    const start = performance.now();
+    const stripped = stripControls(text);
+    expect(performance.now() - start).toBeLessThan(1000);
+    // No control survives, nor anything else: an unended introducer is a control on its own.
+    expect(stripped).toBe("");
+  });
 });
 
 describe("forTerminal", () => {

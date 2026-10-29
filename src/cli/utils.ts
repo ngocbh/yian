@@ -57,9 +57,10 @@ export interface CliIo {
 
 // An escape sequence, matched whole: CSI (7-bit or C1) to its final byte; OSC through BEL or ST;
 // DCS, SOS, PM and APC through ST; or ESC with intermediates and a final byte (`ESC 7`, `ESC ( B`).
-// The string bodies stop at the first ESC, BEL or ST, so an unended one costs one pass to the next.
+// The string bodies stop at the first ESC, BEL or C1 character (ST and every introducer among them),
+// so an unended one scans only to the next sequence and the whole match stays linear.
 const ESCAPE_SEQUENCE =
-  /(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)|(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x9c]*(?:\x1b\\|\x9c)|\x1b[ -/]*[0-~]/g;
+  /(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|(?:\x1b\]|\x9d)[^\x07\x1b\x80-\x9f]*(?:\x07|\x1b\\|\x9c)|(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x80-\x9f]*(?:\x1b\\|\x9c)|\x1b[ -/]*[0-~]/g;
 // Each C0 control but `\t` and `\n`, DEL and each C1 control.
 const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
 

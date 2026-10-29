@@ -617,6 +617,15 @@ describe("parseType", () => {
     ["Optional(str, int)", malformed("Optional(str, int)", "Optional(...) takes one type")],
     ["dict(str)", malformed("dict(str)", "dict(...) takes 2 types")],
     ["Foo(int)", "unknown type constructor 'Foo' in 'Foo(int)'"],
+    ["list", "'list' takes a type: write list(X)"],
+    ["List", "'List' takes a type: write List(X)"],
+    ["Optional(list)", "'list' takes a type: write list(X)"],
+    ["Optional", "'Optional' takes a type: write Optional(X)"],
+    ["Inbox", "'Inbox' takes a type: write Inbox(X)"],
+    ["dict", "'dict' takes two types: write dict(K, V)"],
+    ["Dict", "'Dict' takes two types: write Dict(K, V)"],
+    ["Union", "'Union' takes records: write Union(A, B)"],
+    ["Literal", "'Literal' takes members: write Literal(a, b)"],
     ["bool(0..1)", "unknown type constructor 'bool' in 'bool(0..1)'"],
     ["", malformed("")],
     ["   ", malformed("")],
@@ -824,8 +833,12 @@ describe("formatTypeExpr", () => {
     expect(formatTypeExpr(parseType("int( -2 .. +4 )"))).toBe("int(-2..4)");
   });
 
-  test("prints a dict as dict", () => {
-    expect(formatTypeExpr(parseType("dict(str, int)"))).toBe("dict");
+  test.each(["dict(str, int)", "dict(str, list(Buy))"])("round-trips the dict %p", (text) => {
+    expect(formatTypeExpr(parseType(text))).toBe(text);
+  });
+
+  test("prints a dict with no key and value types as object", () => {
+    expect(formatTypeExpr({ kind: "dict" })).toBe("object");
   });
 });
 
@@ -1090,6 +1103,12 @@ describe("typeFor", () => {
 
   test("dict is a lenient object placeholder", () => {
     expect(typeFor("dict(str, int)", REG).kind).toBe(ValueKind.OBJECT);
+  });
+
+  test("a dict's key and value types must name known types", () => {
+    expect(typeForError("dict(str, Bogus)", REG)).toBe("unknown type 'Bogus'");
+    expect(typeForError("dict(Bogus, int)", REG)).toBe("unknown type 'Bogus'");
+    expect(typeForError("list(dict(str, Optional(Bogus)))", REG)).toBe("unknown type 'Bogus'");
   });
 
   test("records and variants", () => {

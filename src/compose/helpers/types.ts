@@ -30,6 +30,7 @@ import {
   SourceSyntaxError,
 } from "../source/index.ts";
 import {
+  bareConstructorHint,
   BUILTIN_TYPE_NAMES,
   encodesAsUtf8,
   typeName,
@@ -461,6 +462,9 @@ function untaggedDeclarationError(
     for (const [text, fallback] of candidates) {
       const typeText = typeTextWithKnownHead(text, registry);
       if (typeText === null) continue; // value text, not a type
+      // A bare `list` has no tag to suggest; say what it takes instead.
+      const bare = bareConstructorHint(typeText);
+      if (bare !== null) return `${head}: ${bare}`;
       const resolved = resolveTypeText(typeText, registry);
       // Text whose leading name is a type but whose arguments name none still gets its tag,
       // so pasting it back reaches the tag reader's unknown-type error.

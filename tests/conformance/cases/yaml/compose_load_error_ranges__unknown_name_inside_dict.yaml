@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: typedefs
+  name: typedefs
+  typedefs:
+    Book: dict(str, Pricee)
+  input:
+    m: !Book
+  output: object
+  kind: code
+  code: |
+    return inputs["m"]
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'bad typedefs: typedef ''Book'': unknown type ''Pricee'''
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 7]

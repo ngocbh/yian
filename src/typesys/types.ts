@@ -80,7 +80,7 @@ export interface EnumExpr {
 
 /**
  * `dict(K, V)`: resolves to a lenient object. Its key and value types, when read, are kept only to
- * refuse an inbox inside it.
+ * check the names they use and to refuse an inbox inside it.
  */
 export interface DictExpr {
   readonly kind: "dict";
@@ -177,8 +177,8 @@ function isShadow(name: string): boolean {
  *
  * @throws TypeCheckError when the text is not a valid expression (including unbalanced
  *   parentheses, a lone Unicode surrogate, or an empty `Literal` member), uses an unknown
- *   constructor or the lowercase `any`, gives a numeric range with no end, no `..`, or as
- *   two arguments, spells a union as `A | B` (the hint suggests `Union(A, B)`), lists
+ *   constructor or the lowercase `any`, writes a constructor without its arguments, gives a
+ *   numeric range with no end, no `..`, or as two arguments, spells a union as `A | B` (the hint suggests `Union(A, B)`), lists
  *   `None` as a `Union(...)` member (the hint suggests `Optional(Union(...))`), wraps an
  *   `Inbox(...)` in `Optional(...)`, or holds a `[` outside a quoted string (the message shows
  *   the parenthesized spelling).
@@ -577,8 +577,38 @@ function validBounds(ctor: "int" | "float", bounds: Bounds): boolean {
   return true;
 }
 
-/** Read a bare type name: a scalar keyword, an alias, or a registry reference. */
+/** What each typing constructor takes and a sample argument list, for a name written bare. */
+const CONSTRUCTOR_ARGS: ReadonlyMap<string, readonly [takes: string, example: string]> = new Map([
+  ["list", ["a type", "X"]],
+  ["List", ["a type", "X"]],
+  ["Optional", ["a type", "X"]],
+  ["Inbox", ["a type", "X"]],
+  ["dict", ["two types", "K, V"]],
+  ["Dict", ["two types", "K, V"]],
+  ["Union", ["records", "A, B"]],
+  ["Literal", ["members", "a, b"]],
+]);
+
+/**
+ * Return the hint for type text `text` that is a typing constructor's bare name, else `null`.
+ *
+ * Example: `bareConstructorHint("list")` gives `"'list' takes a type: write list(X)"`.
+ */
+export function bareConstructorHint(text: string): string | null {
+  const usage = CONSTRUCTOR_ARGS.get(text);
+  if (usage === undefined) return null;
+  return `${reprText(text)} takes ${usage[0]}: write ${text}(${usage[1]})`;
+}
+
+/**
+ * Read a bare type name: a scalar keyword, an alias, or a registry reference.
+ *
+ * @throws TypeCheckError for the lowercase `any`, or a typing constructor written without its
+ *   arguments (the hint shows them).
+ */
 function namedType(name: string): TypeExpr {
+  const hint = bareConstructorHint(name);
+  if (hint !== null) throw new TypeCheckError(hint);
   if (name === "any") {
     // `any` stays a builtin name (the expression function), so it never reads as a
     // registry reference.
@@ -1023,10 +1053,13 @@ export function resolveType(
       return new Type({ kind: ValueKind.STRING, tags: new Set(t.tags) });
     case "dict":
       if (t.args?.some((arg) => namesInbox(arg, registry, seen))) {
-        // `formatTypeExpr` spells a dict as `dict`, the lenient object it reads as; show its parts.
-        const written = `dict(${t.args.map(formatTypeExpr).join(", ")})`;
-        throw new TypeCheckError(`an inbox is a whole input; it can't be a dict key or value in ${reprText(written)}`);
+        throw new TypeCheckError(
+          `an inbox is a whole input; it can't be a dict key or value in ${reprText(formatTypeExpr(t))}`,
+        );
       }
+      // Only names are checked: the dict stays a lenient object, so a record may hold itself
+      // through one and its members need not resolve as a type of their own.
+      for (const arg of t.args ?? []) checkLocal(arg, registry);
       return Type.scalar(ValueKind.OBJECT); // lenient (no key/value typing yet)
     case "union":
       return resolveUnion(t, registry, seen);
@@ -1190,8 +1223,8 @@ function unionParts(t: TypeExpr, registry: TypeRegistry, seen: ReadonlySet<strin
  * Render a parsed type in the parenthesized spelling `parseType` reads back.
  *
  * A float range end prints in its shortest form with a fraction digit or exponent (`1.0`,
- * `1e-05`) and an int end as its digits, as labels spell them. A `dict(K, V)` renders as
- * `dict`, since its key and value types are not kept.
+ * `1e-05`) and an int end as its digits, as labels spell them. A dict read without its key
+ * and value types (from the bracket spelling) renders as `object`, the lenient object it reads as.
  *
  * Example: `formatTypeExpr(parseType("Optional(Union(Buy,Sell))"))` gives
  * `"Optional(Union(Buy, Sell))"`.
@@ -1214,7 +1247,8 @@ export function formatTypeExpr(t: TypeExpr): string {
     case "union":
       return "Union(" + t.members.map(formatTypeExpr).join(", ") + ")";
     case "dict":
-      return "dict";
+      if (t.args === undefined) return "object";
+      return "dict(" + t.args.map(formatTypeExpr).join(", ") + ")";
   }
 }
 
@@ -1335,8 +1369,11 @@ function checkLocal(t: TypeExpr, registry: TypeRegistry): void {
     case "union":
       for (const member of t.members) checkLocal(member, registry);
       break;
+    case "dict":
+      for (const arg of t.args ?? []) checkLocal(arg, registry);
+      break;
     default:
-      break; // enums and dict(...) have nothing to check locally
+      break; // enums have nothing to check locally
   }
 }
 

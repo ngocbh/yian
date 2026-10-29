@@ -14,22 +14,18 @@
  * - `readRoot(names)` backs the `${...}` expression evaluator: it reads a reference's root
  *   (`${x.output}` is the node's whole value), and the evaluator walks the typed value's fields
  *   after it, so `${x.output.ratio}` traverses into an object output.
- * - `toWire()`/`fromWire()` and `dumps()`/`loads()` are a lossless whole-pool snapshot codec
- *   (each value's `{kind, value}` wire form keeps its exact type).
+ * - `toWire()` writes the whole pool as a plain object (each value as its `{kind, value}` wire
+ *   form), for comparing snapshots.
  */
 
-import { logJson, parseJson } from "./json.ts";
 import {
   buildValue,
   buildValueAs,
   fieldOf,
-  isRecord,
-  requireFields,
   type Type,
   TypedValue,
   type Value,
   type ValueKind,
-  type ValueRecord,
 } from "./values.ts";
 
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -204,64 +200,4 @@ export class VariablePool {
       start_id: this.startId,
     };
   }
-
-  /**
-   * Decode and strictly validate a variable-pool wire object.
-   *
-   * `data` must be a plain record with exactly `store`, `system` and `start_id`; `store` and
-   * `system` records whose every entry is a typed value's wire form (`TypedValue.fromWire`);
-   * and `start_id` text. Entries keep the record's key order. Values aren't walked: the
-   * lossless reader made the data.
-   *
-   * @throws RangeError when `data` has missing or extra fields, a namespace or entry of the
-   *   wrong shape, an invalid typed value, or a `start_id` that isn't text.
-   */
-  static fromWire(data: unknown): VariablePool {
-    if (!isRecord(data)) throw new RangeError("variable-pool wire must be a JSON object");
-    requireFields(data, ["store", "system", "start_id"], "variable pool");
-    const store = data["store"];
-    const system = data["system"];
-    if (!isRecord(store) || !isRecord(system)) {
-      throw new RangeError("variable-pool store and system must be JSON objects");
-    }
-    const storeEntries = decodeEntries(store, "store");
-    const systemEntries = decodeEntries(system, "system");
-    const startId = data["start_id"];
-    if (typeof startId !== "string") {
-      throw new RangeError("variable-pool start_id must be a string");
-    }
-    const pool = new VariablePool(startId);
-    for (const [key, typed] of storeEntries) pool.store.set(key, typed);
-    for (const [key, typed] of systemEntries) pool.system.set(key, typed);
-    return pool;
-  }
-
-  /** Serialize the whole pool with its exact typed-value kinds, as yian's JSON codec writes it. */
-  dumps(): string {
-    return logJson(this.toWire());
-  }
-
-  /**
-   * Reconstruct a pool from `dumps` output, decoding each value to its exact type.
-   *
-   * @throws JSONDecodeError when `text` isn't JSON.
-   * @throws RangeError when the JSON isn't a pool's wire object (see `fromWire`).
-   */
-  static loads(text: string): VariablePool {
-    return VariablePool.fromWire(parseJson(text, "codec"));
-  }
-}
-
-/**
- * Decode a namespace record's entries, in key order.
- *
- * @throws RangeError when an entry isn't a record or isn't a typed value's wire form.
- */
-function decodeEntries(record: ValueRecord, namespace: string): [string, TypedValue][] {
-  return Object.entries(record).map(([key, typedWire]) => {
-    if (!isRecord(typedWire)) {
-      throw new RangeError(`variable-pool ${namespace} entries must be typed objects`);
-    }
-    return [key, TypedValue.fromWire(typedWire)];
-  });
 }

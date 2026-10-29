@@ -180,6 +180,11 @@ describe("untagged declarations", () => {
     ],
     ["n: int = 3", "flow input 'n': write the type as a tag: `n: !int 3`"],
     ["o: Optional[str]", "flow input 'o': write the type as a tag: `o: !Optional(str)`"],
+    // A constructor written without its arguments gets their hint, not a tag that can't load.
+    ["xs: list", "flow input 'xs': 'list' takes a type: write list(X)"],
+    ["xs: List", "flow input 'xs': 'List' takes a type: write List(X)"],
+    ["xs: list = []", "flow input 'xs': 'list' takes a type: write list(X)"],
+    ["m: dict", "flow input 'm': 'dict' takes two types: write dict(K, V)"],
     [
       "cfg: {a: int}",
       "flow input 'cfg': name the record in `typedefs:` and tag the input with it, " +

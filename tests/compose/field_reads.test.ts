@@ -687,6 +687,20 @@ test.each([
   expect(nullableReadErrors(parseCondition(text), typedRoots(holder), NestedTypes)).toEqual([]);
 });
 
+test("a comprehension variable over a root whose alternatives differ is untyped in either order", () => {
+  // Either alternative may be the value, so the variable is narrowed from untyped elements.
+  const typed = new ValueContract(typeFor("list(T)", NestedTypes));
+  const loose = new ValueContract(typeFor("list(Any)", NestedTypes));
+  const errors = (alternatives: ValueContract[]) =>
+    fieldReadErrors(
+      parseCondition("len([p.f for p in xs if isinstance(p, T)]) > 0"),
+      new Map([["xs", alternatives]]),
+      NestedTypes,
+    ).map(({ message }) => message);
+  expect(errors([loose, typed])).toEqual([expect.stringContaining("only narrowed to T; write p?.f")]);
+  expect(errors([typed, loose])).toEqual(errors([loose, typed]));
+});
+
 test("a guard on the field alone still leaves the root step flagged", () => {
   const holder = typeFor("Optional(Holder)", NestedTypes);
   expect(nullableReadErrors(parseCondition("x.k != null and x.k.y == 'a'"), typedRoots(holder), NestedTypes)[0]).toStartWith(

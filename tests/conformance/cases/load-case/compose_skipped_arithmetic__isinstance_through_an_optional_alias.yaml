@@ -1,0 +1,47 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    MaybeInt: Optional(int)
+  input:
+    approve: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: a
+      else: b
+    a:
+      kind: code
+      output: int
+      code: "return 2"
+    b:
+      kind: code
+      output: str
+      code: "return 'no'"
+    gate2:
+      kind: case
+      cases:
+        - when: "isinstance(a.output, MaybeInt) and a.output + 1 > 1 :- false"
+          then: hot
+      else: cold
+    hot:
+      kind: code
+      output: str
+      code: "return 'hot'"
+    cold:
+      kind: code
+      output: str
+      code: "return 'cold'"
+  output:
+    v: ${hot.output | cold.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''gate2'' cases[0].when: isinstance(a.output, MaybeInt) and a.output + 1 > 1 :- false does arithmetic on a.output, which is null when node ''a'' is skipped; give it a default with :-, e.g. (a.output :- <default>)'
+      frames:
+      - label: flow.yaml
+        range: [25, 15, 25, 77]

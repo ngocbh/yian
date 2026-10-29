@@ -1,0 +1,32 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  defs:
+    child:
+      input:
+        n: !int
+      nodes:
+        c:
+          kind: code
+          input:
+            n: ${input.n}
+          output: int
+          code: "return inputs.n"
+      output: ${c.output}
+  nodes:
+    m:
+      kind: map
+      over: [{x: 1}, {y: 2}]
+      call: child
+      input:
+        n: ${item.x :- 0}
+  output: ${m.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'map node ''m'': binding ''n'' — ${item.x} fails on element 1 of over:, where item has no field ''x''; add it to every element, or write item?.x to read null where it is missing'
+      frames:
+      - label: flow.yaml
+        range: [21, 7, 22, 1]

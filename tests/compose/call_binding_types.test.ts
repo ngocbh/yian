@@ -189,6 +189,16 @@ test.each<[string, string, string | null, string]>([
     null,
     "child expects 'int', but the default \"3\" does not fit; text is not converted between flows, so write 3 without quotes",
   ],
+  // An element the run can't read `${item...}` on fails, whatever falls back after it.
+  [
+    "int",
+    "${item.x :- 0}",
+    "[{x: 1}, {y: 2}]",
+    "${item.x} fails on element 1 of over:, where item has no field 'x'; add it to every element, or write item?.x to read null where it is missing",
+  ],
+  ["int", "${item.a.b}", "[{a: {b: 1}}, {a: 3}]", "${item.a.b} fails on element 1 of over:, where item.a is int, which has no fields"],
+  ["int", "${item.a.b}", "[{a: null}]", "${item.a.b} fails on element 0 of over:, where item.a is null; write item.a?.b to read null instead"],
+  ["int", "${item?.a.b :- 0}", "[{c: 1}]", "${item?.a.b} fails on element 0 of over:, where item?.a is null; write item?.a?.b to read null instead"],
   [
     "str",
     "${input.m:-1.50}",
@@ -317,6 +327,8 @@ test.each<[string, string, string | null, unknown]>([
   ["date", "${item}", '["2026-01-01"]', ['"2026-01-01"']],
   ["int", "${item:-3}", "[null, 1]", ["3", "1"]],
   ["int", "${input.n | 3}", null, "3"],
+  ["int", "${item?.x :- 0}", "[{x: 1}, {y: 2}]", ["1", "0"]],
+  ["int", "${item.a?.b :- 0}", "[{a: {b: 1}}, {a: null}, {a: {}}]", ["1", "0", "0"]],
 ])("bindings that fit load and run: %s from %s over %p", async (type, binding, over, output) => {
   const result = await runFlow(await loadConformanceFlow(flow(type, binding, over)), INPUTS, { env });
 

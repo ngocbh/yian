@@ -631,6 +631,17 @@ export function rootBaseType(
   };
 }
 
+/**
+ * Return the first of `alternatives` when they all have one type, else `null`. Origins are not
+ * compared: a typed binding's declared and inferred alternatives differ only there.
+ */
+function sameTypeContract(alternatives: readonly OutputContract[]): OutputContract | null {
+  const first = alternatives[0];
+  if (first === undefined) return null;
+  const typ = contractType(first)!;
+  return alternatives.every((contract) => typeEquals(contractType(contract)!, typ)) ? first : null;
+}
+
 /** Return `contracts` without repeats, in order. */
 function distinct(contracts: readonly OutputContract[]): OutputContract[] {
   const kept: OutputContract[] = [];
@@ -1069,7 +1080,11 @@ export function fieldReadErrors(
   } = options;
   const readRoots: ReadRoots = {
     contracts: (root) => roots.get(root) ?? (opaqueRoots.has(root) ? [null] : undefined),
-    baseContract: (root) => (roots.has(root) ? roots.get(root)![0] ?? null : opaqueRoots.has(root) ? null : undefined),
+    baseContract: (root) => {
+      const alternatives = roots.get(root);
+      if (alternatives === undefined) return opaqueRoots.has(root) ? null : undefined;
+      return sameTypeContract(alternatives);
+    },
     rootLength,
     nullable: (root) => nullableRoots.has(root),
     why,
@@ -1368,9 +1383,7 @@ function localRoots(level: FieldReadLevel, nodeId: string, result: BuildResult):
     contracts: (local) => locals.get(local)?.alternatives,
     baseContract: (local) => {
       const alternatives = base.get(local)?.alternatives;
-      if (alternatives === undefined) return undefined;
-      const distinctOnes = distinct(alternatives);
-      return distinctOnes.length === 1 ? distinctOnes[0]! : null;
+      return alternatives === undefined ? undefined : sameTypeContract(alternatives);
     },
     rootLength: () => 1,
     nullable: (local) => skippedProducer(local) !== null,

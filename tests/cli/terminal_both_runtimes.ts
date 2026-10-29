@@ -2361,7 +2361,6 @@ async function aChildExitsOnItsOwnAfterCtrlCWithStdinOpen(): Promise<void> {
   assert.equal(stdout, "null\n");
 }
 
-/** The scenarios by name, in the order `main` runs them. */
 /** An approval request for `approve`, with the Approve and Reject choices. */
 function approval(fields: { signal?: AbortSignal; diff?: string | null } = {}) {
   return {
@@ -2452,6 +2451,7 @@ async function anAbortedApproveReturnsNull(): Promise<void> {
   assert.equal(await next, "Approve");
 }
 
+/** The scenarios by name, in the order `main` runs them. */
 export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "typing a line returns it": typingALineReturnsIt,
   "an initial value can be edited": anInitialValueCanBeEdited,

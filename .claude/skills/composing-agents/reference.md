@@ -128,7 +128,7 @@ False values are `false`, `null`, `0`, `0.0`, `""`, `[]` and an empty record. Bu
 | `str`, `int`, `float`, `bool` | `int` is any size; an int fits a `float` |
 | `date`, `datetime` | Text such as `2026-10-14`, `2026-10-14T10:30:00Z` |
 | `int(1..12)`, `int(0..)`, `float(0.0..1.0)` | Inclusive ranges; one end may be open |
-| `object`, `dict(K, V)` | Any JSON object |
+| `object`, `dict(K, V)` | Any JSON object; `K` and `V` must name known types |
 | `Any` | Any JSON value but null; fills only an `Any` slot unless tagged or narrowed |
 | `None`, `Optional(X)` | Null; `X` or null |
 | `list(X)` | Holds null only if `X` does: `list(Optional(int))` |

@@ -1092,6 +1092,12 @@ describe("typeFor", () => {
     expect(typeFor("dict(str, int)", REG).kind).toBe(ValueKind.OBJECT);
   });
 
+  test("a dict's key and value types must name known types", () => {
+    expect(typeForError("dict(str, Bogus)", REG)).toBe("unknown type 'Bogus'");
+    expect(typeForError("dict(Bogus, int)", REG)).toBe("unknown type 'Bogus'");
+    expect(typeForError("list(dict(str, Optional(Bogus)))", REG)).toBe("unknown type 'Bogus'");
+  });
+
   test("records and variants", () => {
     const s = typeFor("Rating", REG);
     expect(s.kind).toBe(ValueKind.OBJECT);

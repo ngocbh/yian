@@ -80,7 +80,7 @@ export interface EnumExpr {
 
 /**
  * `dict(K, V)`: resolves to a lenient object. Its key and value types, when read, are kept only to
- * refuse an inbox inside it.
+ * check the names they use and to refuse an inbox inside it.
  */
 export interface DictExpr {
   readonly kind: "dict";
@@ -1027,6 +1027,9 @@ export function resolveType(
         const written = `dict(${t.args.map(formatTypeExpr).join(", ")})`;
         throw new TypeCheckError(`an inbox is a whole input; it can't be a dict key or value in ${reprText(written)}`);
       }
+      // Only names are checked: the dict stays a lenient object, so a record may hold itself
+      // through one and its members need not resolve as a type of their own.
+      for (const arg of t.args ?? []) checkLocal(arg, registry);
       return Type.scalar(ValueKind.OBJECT); // lenient (no key/value typing yet)
     case "union":
       return resolveUnion(t, registry, seen);
@@ -1335,8 +1338,11 @@ function checkLocal(t: TypeExpr, registry: TypeRegistry): void {
     case "union":
       for (const member of t.members) checkLocal(member, registry);
       break;
+    case "dict":
+      for (const arg of t.args ?? []) checkLocal(arg, registry);
+      break;
     default:
-      break; // enums and dict(...) have nothing to check locally
+      break; // enums have nothing to check locally
   }
 }
 

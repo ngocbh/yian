@@ -183,6 +183,29 @@ describe("rejected definitions", () => {
     expectRejected({ Al: "Nope" }, "typedef 'Al': unknown type 'Nope'", ["Al"]);
   });
 
+  test("an unknown name inside dict(K, V) is rejected", () => {
+    expectRejected({ Book: "dict(str, Pricee)" }, "typedef 'Book': unknown type 'Pricee'", ["Book"]);
+    expectRejected(
+      { Shelf: { books: "dict(str, list(Pricee))" } },
+      "typedef 'Shelf' field 'books': unknown type 'Pricee'",
+      ["Shelf", "books"],
+    );
+  });
+
+  test("dict(K, V) may name a typedef, Message, or the record that holds it", () => {
+    // Only the names inside a dict are checked: it stays a lenient object, so a record may
+    // hold itself through one and its members need not form a valid union.
+    const reg = readTypedefs({
+      Price: { amount: "float" },
+      Prices: "dict(str, Price)",
+      Chat: "dict(str, Message)",
+      Tree: { kids: "dict(str, Tree)" },
+      Mixed: "dict(str, Union(int, str))",
+    });
+    for (const name of ["Prices", "Chat", "Mixed"]) expect(typeFor(name, reg).kind).toBe(ValueKind.OBJECT);
+    expect(typeFor("Tree", reg).fields!.get("kids")!.kind).toBe(ValueKind.OBJECT);
+  });
+
   test("the error names the broken typedef, not its user", () => {
     // `Wrapper` is listed first and uses `Signal`; the fault is Signal's own field.
     expectRejected(

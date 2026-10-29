@@ -6,10 +6,25 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { type ChatToolHost, chatFileTools, confine, ToolRefused } from "../../src/cli/chat_tools.ts";
+import { type ChatToolHost, chatFileTools, checkFocus, confine, ToolRefused } from "../../src/cli/chat_tools.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { isReportedToolError } from "../../src/tools/errors.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
+
+const FLOW = "id: f\nname: f\ninput:\n  n: !int\nnodes: {}\noutput: ${input.n}\n";
+
+/** A flow calling the flow `ref` through a `uses:` alias. */
+function parentFlow(ref: string): string {
+  return (
+    "id: main\nname: main\ninput:\n  n: !int\nnodes:\n  work:\n    kind: call\n    call: child\n" +
+    `    input:\n      n: \${input.n}\noutput: \${work.output}\nuses:\n  child: ${ref}\n`
+  );
+}
+
+/** A flow taking `n` whose one node `a` runs the CODE reference `ref`. */
+function codeFlowText(ref: string): string {
+  return `id: c\nname: c\ninput:\n  n: !int\nnodes:\n  a: {kind: code, code: ${ref}, input: {n: "\${input.n}"}}\noutput: \${a.output}\n`;
+}
 
 let tmp: string;
 let root: string;
@@ -182,5 +197,73 @@ describe("read_flow", () => {
 
   test("refuses a path outside the root", async () => {
     expect(await rejection(call("read_flow", { path: "../outside.yaml" }))).toBeInstanceOf(ToolRefused);
+  });
+});
+
+describe("check_flow", () => {
+  test("a flow that loads is ok, with its name and inputs", async () => {
+    writeFileSync(join(root, "main.yaml"), parentFlow("sub/child"));
+    writeFileSync(join(root, "sub", "child.yaml"), FLOW);
+    expect(await call("check_flow", { path: "main.yaml" })).toBe("ok\nname: main\ninputs:\n  n: int");
+  });
+
+  test("a flow that doesn't load shows the diagnostic as yian check does, without colour", async () => {
+    writeFileSync(join(root, "bad.yaml"), "id: [\n");
+    const text = String(await call("check_flow", { path: "bad.yaml" }));
+    expect(text).toStartWith("invalid:\n");
+    expect(text).toContain("bad.yaml");
+    expect(text).not.toContain("\x1b");
+  });
+
+  test("a uses: child outside the root is refused", async () => {
+    writeFileSync(join(tmp, "child.yaml"), FLOW);
+    writeFileSync(join(root, "main.yaml"), parentFlow("../child"));
+    const text = String(await call("check_flow", { path: "main.yaml" }));
+    expect(text).toStartWith("invalid:\n");
+    expect(text).toContain(`${join("..", "child.yaml")} is outside the root`);
+  });
+
+  test("a CODE reference outside the root is refused", async () => {
+    writeFileSync(join(tmp, "helpers.ts"), "export function fn(inputs) { return 1 }\n");
+    writeFileSync(join(root, "code.yaml"), codeFlowText("../helpers.ts:fn"));
+    const text = String(await call("check_flow", { path: "code.yaml" }));
+    expect(text).toContain("`code:` reference '../helpers.ts:fn' is outside the code root");
+  });
+
+  test("checks only YAML files inside the root", async () => {
+    writeFileSync(join(root, ".env"), "KEY: [secret\n");
+    expect(await rejection(call("check_flow", { path: ".env" }))).toBeInstanceOf(ToolRefused);
+    expect(await rejection(call("check_flow", { path: "../outside.yaml" }))).toBeInstanceOf(ToolRefused);
+  });
+});
+
+describe("checkFocus", () => {
+  test("checks a flow outside the chat's root against its own folder", async () => {
+    mkdirSync(join(tmp, "elsewhere", "lib"), { recursive: true });
+    const path = join(tmp, "elsewhere", "main.yaml");
+    writeFileSync(path, parentFlow("lib/child"));
+    writeFileSync(join(tmp, "elsewhere", "lib", "child.yaml"), FLOW);
+    expect(await checkFocus(path, NO_ENV)).toEqual({
+      text: parentFlow("lib/child"),
+      check: "ok\nname: main\ninputs:\n  n: int",
+    });
+  });
+
+  test("cuts a long flow's text, with a note, but checks all of it", async () => {
+    const path = join(root, "long.yaml");
+    writeFileSync(path, FLOW + `# ${"x".repeat(40 * 1024)}\n`);
+    const focus = await checkFocus(path, NO_ENV);
+    expect(focus.text).toStartWith(FLOW);
+    expect(focus.text).toEndWith("\n(cut at 32768 bytes)");
+    expect(Buffer.byteLength(focus.text)).toBeLessThan(33 * 1024);
+    expect(focus.check).toBe("ok\nname: f\ninputs:\n  n: int");
+  });
+
+  test("a flow that doesn't load gives its diagnostic", async () => {
+    const path = join(root, "bad.yaml");
+    writeFileSync(path, "id: [\n");
+    const focus = await checkFocus(path, NO_ENV);
+    expect(focus.text).toBe("id: [\n");
+    expect(focus.check).toStartWith("invalid:\n");
   });
 });

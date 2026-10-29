@@ -9,14 +9,19 @@
  */
 
 import { type Dirent, lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 
+import type { ComposedFlow } from "../compose/build/pipeline.ts";
+import { LoadError } from "../compose/helpers/errors.ts";
 import type { Env } from "../defaults.ts";
-import { compareCodeUnits } from "../diagnostics.ts";
+import { compareCodeUnits, type Diagnostic } from "../diagnostics.ts";
 import { isSystemError, leavesRoot } from "../platform.ts";
 import { resolvedPath } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
+import { canonicalTypeLabel } from "../typesys/values.ts";
+import { loadConfinedText } from "./confined_load.ts";
+import { renderDiagnostic } from "./render.ts";
 import { NotUtf8Error, readFlowText } from "./startup.ts";
 import type { ApproveRequest } from "./terminal.ts";
 import { osReason } from "./utils.ts";
@@ -26,6 +31,9 @@ const LIST_FLOWS_LIMIT = 500;
 
 /** The largest flow file `read_flow` reads, in bytes. */
 const READ_FLOW_BYTES = 256 * 1024;
+
+/** The most of a focus flow's text `checkFocus` gives, in bytes. */
+const FOCUS_BYTES = 32 * 1024;
 
 /** What the chat's file tools work with. */
 export interface ChatToolHost {
@@ -154,6 +162,58 @@ function readFlow(path: string, real: string): string {
   }
 }
 
+/** `diag` as `yian check` writes it, without colour. */
+async function renderedDiagnostic(diag: Diagnostic, env: Env): Promise<string> {
+  let text = "";
+  await renderDiagnostic(diag, { write: async (chunk) => void (text += chunk), isTTY: false }, env);
+  return text.trimEnd();
+}
+
+/**
+ * Check `text` as the flow at `path`, confined to `root`: `ok`, the flow's name and its inputs as
+ * `name: type` lines, or `invalid:` and the diagnostic.
+ */
+async function checkText(root: string, path: string, text: string, env: Env): Promise<string> {
+  let flow: ComposedFlow;
+  try {
+    flow = await loadConfinedText(root, path, text, env);
+  } catch (error) {
+    if (error instanceof LoadError) return `invalid:\n${await renderedDiagnostic(error.diagnostic, env)}`;
+    throw error;
+  }
+  // A flow's `input:` entry always declares its type, so its contract is set.
+  const inputs = flow.input.map((decl) => `  ${decl.name}: ${canonicalTypeLabel(decl.contract!.type)}`);
+  const name = flow.name ?? flow.compiled.flowId;
+  return ["ok", `name: ${name}`, ...(inputs.length > 0 ? ["inputs:", ...inputs] : ["inputs: none"])].join("\n");
+}
+
+/** `text` cut to at most `FOCUS_BYTES` of UTF-8, between characters, with a note when it was cut. */
+function focusText(text: string): string {
+  const bytes = Buffer.from(text, "utf8");
+  if (bytes.length <= FOCUS_BYTES) return text;
+  let end = FOCUS_BYTES;
+  // Back off a UTF-8 continuation byte, so the cut never splits a character.
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end--;
+  const kept = bytes.subarray(0, end).toString("utf8");
+  return `${kept}${kept.endsWith("\n") ? "" : "\n"}(cut at ${FOCUS_BYTES} bytes)`;
+}
+
+/**
+ * Read and check the flow the chat is about (its focus) at `path`, confined to its own folder, so
+ * a flow outside the chat's root works: its text, cut at `FOCUS_BYTES` with a note, and its check
+ * as `check_flow` gives it, of the whole text. A file that can't be read gives no text and why.
+ */
+export async function checkFocus(path: string, env: Env): Promise<{ text: string; check: string }> {
+  let text: string;
+  try {
+    text = readFlowText(path);
+  } catch (error) {
+    return { text: "", check: readFailure(path, error).message };
+  }
+  const real = realpathSync(path);
+  return { text: focusText(text), check: await checkText(dirname(real), real, text, env) };
+}
+
 /** A tool's JSON Schema for string arguments, each `[name, description, required]`. */
 function stringArguments(...fields: [name: string, description: string, required: boolean][]) {
   return {
@@ -165,7 +225,7 @@ function stringArguments(...fields: [name: string, description: string, required
 }
 
 /**
- * The chat assistant's file tools over `host`: `list_flows` and `read_flow`.
+ * The chat assistant's file tools over `host`: `list_flows`, `read_flow` and `check_flow`.
  */
 export function chatFileTools(host: ChatToolHost): FunctionTool[] {
   const { root } = host;
@@ -192,6 +252,18 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
       execute: (args) => {
         const path = String(args["path"]);
         return readFlow(path, confine(root, path));
+      },
+    }),
+    tool({
+      name: "check_flow",
+      description:
+        "Check that a flow file in the chat's folder loads, running nothing: ok with its name and inputs, " +
+        "or invalid with the error. Its uses: flows and code files must be in the chat's folder too.",
+      parameters: stringArguments(["path", "The flow file, relative to the chat's folder.", true]),
+      execute: async (args) => {
+        const path = String(args["path"]);
+        const real = confine(root, path);
+        return checkText(realpathSync(root), real, readFlow(path, real), host.env);
       },
     }),
   ];

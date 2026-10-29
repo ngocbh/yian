@@ -439,10 +439,11 @@ export function seedBackward(trace: RetainedTrace, feedback: FeedbackValue): [Pe
 }
 
 /**
- * Verify the transfer the node data prescribes before assigning incoming ordinals.
+ * Return, for each input, the positions of the received messages its feedback entries came from.
  *
- * Returns each input's parent positions when the result is exactly the structural projection of
- * the messages, else `null`.
+ * This holds when the node data maps each input to a path in the output (`input_output_paths`) and
+ * the result's input feedback is exactly each message's feedback at those paths. Otherwise it
+ * returns `null`, and the caller counts every received message as each entry's parent.
  *
  * @throws RangeError when a node-data path is absent from the accepted output.
  */
@@ -526,10 +527,12 @@ function transferBackward(
 }
 
 /**
- * Project the validated START and actual source-zero fields without duplication.
+ * Return the run's root backward result, taking the run input messages (source zero) out of
+ * `pending`.
  *
- * Starts from a fresh copy of `rootInputs` (START's input feedback) and appends each root input
- * field another sender's source-zero message selects.
+ * Its input feedback is a copy of `rootInputs` (START's input feedback) with, for each run input,
+ * the feedback each other sender's run input message holds for it appended. START's own messages
+ * are skipped, as `rootInputs` already holds them. Its self feedback is `directRoot`'s.
  *
  * @throws RangeError when messages remain for another source: an unavailable or later occurrence.
  */
@@ -1111,7 +1114,7 @@ export function reduceBackwardRecord(
     const { ready, requests } = current;
     next = new BackwardAttempt(current.started, { ready, requests, observations: [...current.observations, record] });
   } else {
-    throw new RangeError("backward commit requires a completed memory proposal");
+    throw new RangeError("unknown backward record");
   }
   return withAttempts(backward, [...backward.attempts.slice(0, -1), next]);
 }
@@ -1278,7 +1281,12 @@ function localEntries(channel: "self" | "variable", name: string | null, batch: 
   }));
 }
 
-/** Keep the source-free and root-input fallback channels without duplicating START. */
+/**
+ * Return the root's feedback entries for owner contexts: one `input` entry per message to a run
+ * input, then the `self` and `variable` entries, each marked `root` and with no execution
+ * coordinates. The caller builds `result` without START's input feedback, which START's own
+ * entries already carry.
+ */
 function rootOwnerFeedback(result: BackwardResult): JsonObject[] {
   const entries: JsonObject[] = [];
   for (const [name, batch] of Object.entries(result.inputFeedback)) {

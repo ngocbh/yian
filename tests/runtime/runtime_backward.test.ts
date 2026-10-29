@@ -1391,7 +1391,7 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
     "a record of another class",
     (trace) => reduced([started(), forgedRecord()], trace),
     RangeError,
-    "backward commit requires a completed memory proposal",
+    "unknown backward record",
   ],
   [
     "Finished feedback that differs from Ready",

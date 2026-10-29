@@ -197,33 +197,6 @@ export function referenceContract(
 }
 
 /**
- * Return the field-read error for an output path, else `null`.
- *
- * The error is an undeclared record field, any field on a scalar or list, a field of a `file`
- * other than `uri`, `mime` and `name`, or a field only some members of a union have (unless
- * `partialUnionFields`). An opaque field inside a partial record remains lenient below that
- * field, while the partial record's closed root name set is still enforced. A member-only
- * field's fix names the union from `unionRoot` when it is set, and points at an
- * `isinstance(..., <Type>) and ...` check before the read instead of a case when
- * `isinstanceHint` is set (for a read inside a condition), or at a tag comparison before the
- * read when `tagHint` is set and the union is tagged (for a condition where `isinstance` is not
- * allowed).
- */
-export function outputContractPathError(
-  contract: OutputContract,
-  fields: readonly string[],
-  path: string,
-  options: {
-    partialUnionFields?: boolean;
-    unionRoot?: string | null;
-    isinstanceHint?: boolean;
-    tagHint?: boolean;
-  } = {},
-): string | null {
-  return outputContractFieldError(contract, fields, path, options);
-}
-
-/**
  * Return the field-read error for a node-local name's path, else `null`.
  *
  * A local name's value may have any of several proven contracts (a typed binding's declared one
@@ -249,7 +222,7 @@ export function localFieldError(
   const { source = null, partialUnionFields = false } = options;
   let first: string | null = null;
   for (const contract of alternatives) {
-    const error = outputContractPathError(contract, fields, path, { partialUnionFields, unionRoot: source });
+    const error = outputContractFieldError(contract, fields, path, { partialUnionFields, unionRoot: source });
     if (error === null) return null;
     first ??= error;
   }

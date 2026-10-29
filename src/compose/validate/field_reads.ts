@@ -18,7 +18,6 @@ import {
   contractType,
   directReferencePath,
   itemContract,
-  outputContractPathError,
   projectOutputContract,
   referenceContract,
   type TypeFn,
@@ -34,7 +33,13 @@ import {
   stepsText,
 } from "../../expr/expressions.ts";
 import { bindingKey, type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
-import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../nodes/contracts.ts";
+import {
+  isExactly,
+  type OutputContract,
+  outputContractFieldError,
+  sameOutputContract,
+  ValueContract,
+} from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import {
   fileFieldType,
@@ -725,7 +730,7 @@ export class ReadSite {
     ref: string,
     options: { partialUnionFields: boolean; unionRoot?: string | null },
   ): string | null {
-    return outputContractPathError(contract, fields, ref, {
+    return outputContractFieldError(contract, fields, ref, {
       partialUnionFields: options.partialUnionFields,
       unionRoot: this.spawner ? (options.unionRoot ?? null) : null,
       isinstanceHint: !this.spawner,

@@ -1,0 +1,57 @@
+# A CASE reads a maybe-skipped AGENT's new messages under a default: the read takes an optional
+# edge, so when the agent is skipped the CASE still routes, on the default.
+kind: run
+flow: |
+  id: routed
+  name: routed
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    ask: !bool
+  nodes:
+    pre:
+      kind: case
+      cases:
+        - when: "${input.ask}"
+          then: reply
+      else: skipped
+    reply:
+      kind: agent
+      system_prompt: Help.
+      prompt: hi
+      output: str
+    skipped: !str not asked
+    gate:
+      kind: case
+      cases:
+        - when: "${(reply.new_messages :- []) == []}"
+          then: silent
+      else: spoke
+    silent: !str no messages
+    spoke: !str some messages
+  output: ${gate.output}
+inputs: {ask: false}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output: {status: succeeded, output: no messages}
+  trace:
+    - [run_started, null, {effective_llm_by_static_path: {reply: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {ask: false}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {ask: false}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, pre]
+    - [node_routed, pre, {handle: '#else'}]
+    - [node_started, gate]
+    - [node_routed, gate, {handle: silent}]
+    - [node_started, skipped]
+    - [pool_commit, skipped, {value: not asked}]
+    - [node_succeeded, skipped, {commit: 13}]
+    - [node_started, silent]
+    - [pool_commit, silent, {value: no messages}]
+    - [node_succeeded, silent, {commit: 16}]
+    - [node_started, __end__]
+    - [pool_commit, __end__, {value: no messages}]
+    - [node_succeeded, __end__, {commit: 19}]

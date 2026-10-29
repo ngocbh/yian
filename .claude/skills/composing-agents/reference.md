@@ -65,7 +65,8 @@ or `./file.ts:fn`), `input`, `output`. The body reads `inputs.<name>` and return
 starts when the tool is missing or an argument can never fit.
 
 **case** ([Control flow](https://yian.readthedocs.io/control-flow/#branch-with-case)): `on`
-(optional), `cases` (a list of `{when, then}`), `else`.
+(optional), `cases` (a list of `{when, then}`), `else`. A `when:` or `on:` may read an agent's
+`new_messages` (`when: ${len(reply.new_messages) > 1}`).
 
 **call / map / loop** ([Control flow](https://yian.readthedocs.io/control-flow/)): `call` or
 inline `nodes` plus `output`; `input` (the child's arguments, or the loop's seed record); `map`

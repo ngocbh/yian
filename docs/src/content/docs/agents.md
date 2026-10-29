@@ -109,7 +109,7 @@ output: ${answer.output}
 `Message` is the built-in message type (see [Types](/types/)); a record with `role` (`user` or
 `assistant`) and `text` works too. The last item must be a user message. An agent's `${answer.new_messages}` holds the
 messages its call added (replies, tool calls and their results), so a chat loop can append them
-to its history.
+to its history, and a `case` can route on them.
 
 ## Structured output
 

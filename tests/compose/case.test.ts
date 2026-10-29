@@ -579,3 +579,55 @@ test("a searched when: that reads comprehension variables builds", () => {
   expect(result.wiring).toEqual(new Map([["__r0", "${x.output}"]]));
   expect(caseNode(result).cases[0]!.when).toBe("len([p.text for p in __r0.parts if p.type == 'text']) > 0");
 });
+
+// ---------- an AGENT's new messages ----------
+
+test("searched when: an agent's new_messages read takes a required edge from the agent", () => {
+  const result = searched("reply.new_messages == []");
+
+  expect(result.wiring).toEqual(new Map([["__r0", "${reply.new_messages}"]]));
+  expect(caseNode(result).cases[0]!.when).toBe("__r0 == []");
+  expect(edgeStances(result)).toEqual([["reply", "__r0", false]]);
+});
+
+test("searched when: a new_messages read inside a default takes an optional edge", () => {
+  const result = searched("len(reply.new_messages :- []) > 0");
+
+  expect(result.wiring).toEqual(new Map([["__r0", "${reply.new_messages :- null}"]]));
+  expect(caseNode(result).cases[0]!.when).toBe("len(__r0 :- []) > 0");
+  expect(edgeStances(result)).toEqual([["reply", "__r0", true]]);
+});
+
+test("searched when: a coalesce of new_messages adds a required join over its producers", () => {
+  const result = searched("(left.new_messages | right.output) != null");
+
+  expect(result.wiring).toEqual(
+    new Map([
+      ["__r0", "${left.new_messages :- null}"],
+      ["__r1", "${right.output :- null}"],
+      ["__r2", "${left.new_messages | right.output}"],
+    ]),
+  );
+  expect(edgeStances(result)).toEqual([
+    ["left", "__r0", true],
+    ["right", "__r1", true],
+    ["left", "__r2", false],
+    ["right", "__r2", false],
+  ]);
+});
+
+test("on: an agent's new_messages takes a data edge from the agent", () => {
+  const desc = new CaseDescriptor({ id: "route", on: "${reply.new_messages}", cases: [{ when: "x", then: "a" }], else_: "b" });
+  const result = desc.build(CTX);
+
+  expect(edgeStances(result)).toEqual([["reply", "__on", false]]);
+});
+
+test.each(["input.new_messages", "input.output", "item.new_messages", "system.output"])(
+  "a read of %s names no producer node, so it takes no data edge",
+  (ref) => {
+    const result = searched(`${ref} == []`, `(${ref} :- []) == []`, `(${ref} | input.other) == []`);
+    expect(edgeStances(result)).toEqual([]);
+    expect([...result.wiring.values()]).not.toContain(`\${${ref} :- null}`);
+  },
+);

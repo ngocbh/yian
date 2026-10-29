@@ -8,9 +8,10 @@
  * and relinquishes direct mutation of its execution fields; chronological reducer transitions are
  * the only topology writers. Everything here is synchronous.
  *
- * Knows about:   compile/manifest, compile/model, compile/validation, defaults, diagnostics,
- *                events, expr, memory, nodes, runtime/common, runtime/contracts, runtime/eval_node,
- *                runtime/learning, runtime/log, runtime/trace, typesys.
+ * Knows about:   compile/declared_types, compile/manifest, compile/model, compile/validation,
+ *                defaults, diagnostics, events, expr, memory, nodes, runtime/common,
+ *                runtime/contracts, runtime/eval_node, runtime/learning, runtime/log, runtime/trace,
+ *                runtime/waits, tools/context, typesys.
  * Never imports: engine, run, backward, compose, or the CLI.
  */
 
@@ -3799,13 +3800,9 @@ function appendAndVerify(log: RunLog, prepared: PreparedTransition): void {
   }
 }
 
-/**
- * Check the initialized reducer roots, and the inventory entries of the nodes written since the
- * last check (`requireTouchedInventories`), in time that doesn't grow with the run: every
- * transition pays it.
- */
-function requireInitialized(state: RunState): void {
-  const exactContainers =
+/** Whether every reducer root is the exact container type the constructor creates. */
+function hasReducerContainers(state: RunState): boolean {
+  return (
     isExactly(state.pool, VariablePool) &&
     isExactly(state.nodeState, Map) &&
     isExactly(state.edgeState, Map) &&
@@ -3830,8 +3827,17 @@ function requireInitialized(state: RunState): void {
     isRecord(state.input) &&
     isRecord(state.effectiveLlmByStaticPath) &&
     isExactly(state.backwardState, RuntimeBackwardState) &&
-    isExactly(state.initialStaticIds, Set);
-  if (!exactContainers) throw new RangeError("transition requires initialized reducer containers");
+    isExactly(state.initialStaticIds, Set)
+  );
+}
+
+/**
+ * Check the initialized reducer roots, and the inventory entries of the nodes written since the
+ * last check (`requireTouchedInventories`), in time that doesn't grow with the run: every
+ * transition pays it.
+ */
+function requireInitialized(state: RunState): void {
+  if (!hasReducerContainers(state)) throw new RangeError("transition requires initialized reducer containers");
   if (typeof state.runId !== "string" || !state.runId) throw new RangeError("run state is not initialized");
   if (typeof state.flowFingerprint !== "string" || !state.flowFingerprint) {
     throw new RangeError("run state is not initialized with a flow fingerprint");
@@ -6482,29 +6488,7 @@ function dropUnknownIncoming(state: RunState, nodeId: string): void {
 
 /** Reject any state that no longer has its constructor-created empty frontier. */
 function requirePristine(state: RunState): void {
-  const exactContainers =
-    isExactly(state.pool, VariablePool) &&
-    isExactly(state.nodeState, Map) &&
-    isExactly(state.edgeState, Map) &&
-    Array.isArray(state.ready) &&
-    isExactly(state.inFlight, Set) &&
-    isExactly(state.acceptedStarts, Map) &&
-    isExactly(state.nodeStarts, Map) &&
-    isExactly(state.nodeSteps, Map) &&
-    isExactly(state.pendingCommits, Map) &&
-    isExactly(state.producers, Map) &&
-    isExactly(state.crashedAttempts, Map) &&
-    isExactly(state.depth, Map) &&
-    isExactly(state.growthOwner, Map) &&
-    isExactly(state.deferredPrune, Set) &&
-    isExactly(state.wiringOverrides, Map) &&
-    isExactly(state.waits, WaitsState) &&
-    isExactly(state.inboxEvents, Map) &&
-    isRecord(state.input) &&
-    isRecord(state.effectiveLlmByStaticPath) &&
-    isExactly(state.backwardState, RuntimeBackwardState) &&
-    isExactly(state.initialStaticIds, Set);
-  if (!exactContainers) throw new RangeError("RunStarted requires pristine reducer container types");
+  if (!hasReducerContainers(state)) throw new RangeError("RunStarted requires pristine reducer container types");
   const flow = state.flow;
   const pristine =
     state.pool.startId === flow.startId &&

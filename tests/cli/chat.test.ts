@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -51,6 +51,9 @@ function env(name: string): string | undefined {
   return values[name];
 }
 
+/** The test's home and nothing else: no provider or model. */
+const homeOnly = (name: string): string | undefined => (name === "HOME" ? home : undefined);
+
 /** A writer collecting what it is given. */
 function sink() {
   const chunks: string[] = [];
@@ -59,12 +62,12 @@ function sink() {
 }
 
 /** A fresh io over a scripted stdin (a fake TTY when `tty`), its outputs collected. */
-function chatIo({ tty = false } = {}) {
+function chatIo({ tty = false, environment = env } = {}) {
   stdin = new FakeInput({ tty });
   const out = sink();
   const err = sink();
   const stderrStream = Object.assign(new FakeOutput(), { isTTY: tty });
-  const io: CliIo = { stdout: out.out, stderr: err.out, stdin, stderrStream, env };
+  const io: CliIo = { stdout: out.out, stderr: err.out, stdin, stderrStream, env: environment };
   return { io, stdin, stdout: out.text, stderr: err.text, screen: () => stderrStream.text };
 }
 
@@ -165,6 +168,21 @@ test(
     expect(inspectRun(log).status).toBe("succeeded");
     // The assistant's system prompt names no flow in focus.
     expect(model.requests[0]!.messages[0]!.text()).toContain("Flow in focus: none");
+  },
+  TIMEOUT,
+);
+
+test(
+  "yian chat without a provider and model for the assistant says how to set one and exits 1",
+  async () => {
+    const { io, stdin, stderr } = chatIo({ environment: homeOnly });
+    stdin.end();
+    const model = new AnsweringModel(() => textReply("hello"));
+    const { code, log } = await runChat(io, model);
+    expect(code).toBe(1);
+    expect(stderr()).toContain("chat failed: the assistant has no provider or model; run 'yian auth <provider>'");
+    expect(existsSync(log)).toBe(false);
+    expect(model.requests).toEqual([]);
   },
   TIMEOUT,
 );

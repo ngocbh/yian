@@ -69,18 +69,16 @@ export async function loadChatFlow(env: Env): Promise<ComposedFlow> {
   return loadFlow(FLOWS[CHAT_LABEL]!, { sourceLabel: CHAT_LABEL, env, childResolver: async () => compaction });
 }
 
-/** `provider/model` the assistant's replies use under `layer`, or `null` when it isn't known before the run. */
+/** `provider/model` the assistant's replies use under `layer`, or `null` when no layer sets them. */
 function replyModel(flow: ComposedFlow, layer: Readonly<Record<string, string>>, env: Env): string | null {
   try {
-    const snapshot = connectionSnapshot({ env });
-    const resolved = runStartLlm(copyGraph(flow.compiled), coerceInputs(flow.input, hostInputs(flow.input, {})), {
-      ...layer,
-    }, snapshot);
+    const inputs = coerceInputs(flow.input, hostInputs(flow.input, {}));
+    const resolved = runStartLlm(copyGraph(flow.compiled), inputs, { ...layer }, connectionSnapshot({ env }));
     const config = resolved.effective[REPLY_PATH];
     if (typeof config?.["provider"] !== "string" || typeof config["model"] !== "string") return null;
     return `${config["provider"]}/${config["model"]}`;
   } catch {
-    // The chat's key preflight reports a provider or model that doesn't resolve.
+    // The bundled flow sets no model, so only a missing provider or model fails to resolve.
     return null;
   }
 }
@@ -123,7 +121,8 @@ function waitingLines(children: readonly WaitingChild[]): string {
  *
  * The chat runs the bundled flow as `inboxChat` runs a flow (the prompt, Ctrl-C, Esc and `/exit`
  * work as there; replies are printed on stdout through `sanitize`), its log at `options.log` or
- * in a new run folder under `~/.yian/runs`. A banner line on stderr names the assistant's model
+ * in a new run folder under `~/.yian/runs`. Without a provider and model for the assistant, it
+ * prints `chat failed: ...` and exits 1. A banner line on stderr names the assistant's model
  * and the flow in focus; when that flow has an `Inbox` input, a hint says `yian run` chats with
  * it. The assistant gets the file tools (`chatFileTools`, over the docs bundle) and the run tools
  * (`chatRunTools`) over the chat's child runs, whose logs go in new run folders under
@@ -164,7 +163,14 @@ export async function chat(flowPath: string | undefined, options: ChatOptions, i
     if (focus.inbox) hint = `to chat with this flow itself, run yian run ${flowPath}\n`;
   }
   const model = replyModel(flow, cliLayer(options), env);
-  const banner = [`yian chat`, model ?? null, flowPath === undefined ? null : `focus: ${inputs["flow"]}`]
+  if (model === null) {
+    const message =
+      "chat failed: the assistant has no provider or model; run 'yian auth <provider>', or pass " +
+      "--provider and --model";
+    await printStyled(io, message, "red");
+    return 1;
+  }
+  const banner = [`yian chat`, model, flowPath === undefined ? null : `focus: ${inputs["flow"]}`]
     .filter((part) => part !== null)
     .join(" · ");
   await io.stderr.write(`${sanitize(banner)}\n${sanitize(hint)}`);

@@ -91,7 +91,6 @@ import {
 import {
   decodeRecord,
   encodeRecord,
-  JsonlRunLog,
   MemoryRunLog,
   type OutcomeCarriers,
   RecordEnvelope,
@@ -125,6 +124,7 @@ import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";
 import { Type, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
+import { withAppendHook } from "./append_hook.ts";
 import { loadConformanceFlow } from "./declarations.ts";
 
 /** The run id the run-state tests record. */
@@ -1780,22 +1780,15 @@ export class Crash extends Error {
 }
 
 /**
- * Run `fn` with every durable log refusing appends once it holds `k` records, as a crash after
- * record `k - 1` would; `fn` must reject with that `Crash`. `JsonlRunLog.prototype.append` is
- * patched while `fn` runs and restored after.
+ * Run `fn` with every durable log it and the async work it starts append to refusing appends once
+ * it holds `k` records, as a crash after record `k - 1` would; `fn` must reject with that `Crash`.
  */
 export async function crashAfter(k: number, fn: () => Promise<unknown>): Promise<void> {
-  const append = JsonlRunLog.prototype.append;
   const crash = new Crash(`crash after record ${k - 1}`);
-  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
-    if (this.nextSequence >= k) throw crash;
-    return append.call(this, record);
+  const refuse = (log: RunLog) => {
+    if (log.path !== null && log.nextSequence >= k) throw crash;
   };
-  try {
-    expect(await rejected(fn())).toBe(crash);
-  } finally {
-    JsonlRunLog.prototype.append = append;
-  }
+  expect(await withAppendHook(refuse, () => rejected(fn()))).toBe(crash);
 }
 
 /**
@@ -1997,21 +1990,16 @@ export class CrashAt extends ScriptedModel {
 }
 
 /**
- * Await `run`, which must reject with the `Crash` every durable log throws once `model` froze
- * them: a process lost while serving request `at`, so no record of its outcome reaches the log.
+ * Await `run`, which must reject with the `Crash` every durable log it and the async work it
+ * starts append to throws once `model` froze them: a process lost while serving request `at`, so
+ * no record of its outcome reaches the log.
  */
 export async function crashes(model: CrashAt, run: () => Promise<unknown>): Promise<void> {
   const crash = new Crash("process lost");
-  const append = JsonlRunLog.prototype.append;
-  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
-    if (model.frozen) throw crash;
-    return append.call(this, record);
+  const refuse = (log: RunLog) => {
+    if (log.path !== null && model.frozen) throw crash;
   };
-  try {
-    expect(await rejected(run())).toBe(crash);
-  } finally {
-    JsonlRunLog.prototype.append = append;
-  }
+  expect(await withAppendHook(refuse, () => rejected(run()))).toBe(crash);
 }
 
 /** The texts of the messages of `model`'s request `index` (the last by default) after its system prompt. */

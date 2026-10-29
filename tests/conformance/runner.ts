@@ -105,9 +105,9 @@ import {
   withdraw,
 } from "../../src/run.ts";
 import {
-  JsonlRunLog,
   MemoryRunLog,
   readRunLog,
+  type RunLog,
   type RunStartedRecord,
 } from "../../src/runtime/log.ts";
 import { addCrashedAttempts, type RunState } from "../../src/runtime/state.ts";
@@ -2344,7 +2344,7 @@ async function settle(start: () => Promise<unknown>): Promise<unknown> {
  */
 async function cutAt(last: number, start: () => Promise<unknown>, at = ""): Promise<void> {
   const refused = new Cut("the conformance runner refused this append");
-  const refuse = (log: JsonlRunLog) => {
+  const refuse = (log: RunLog) => {
     if (log.nextSequence > last) throw refused;
   };
   // Scoped to `start` and the async work it starts, so a cut still running after its test timed

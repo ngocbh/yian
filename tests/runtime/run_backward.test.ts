@@ -40,11 +40,13 @@ import {
   MemoryRunLog,
   readRunLog,
   type RecordEnvelope,
+  type RunLog,
   type RunRecord,
 } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareRecord } from "../../src/runtime/state.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 
+import { withAppendHook } from "../helpers/append_hook.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { FakeMemory, FakeSession } from "../helpers/memory_fakes.ts";
 import { backwardReply, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
@@ -127,24 +129,12 @@ test.each(["memory", "durable"])("a %s log stamps backward records from the run'
   const log = kind === "durable" ? join(dir, "run.jsonl") : null;
   const scheduler = virtualScheduler(Date.UTC(2026, 9, 20, 14, 0));
   const result = await run(await loadFlow(IDENTITY), { text: "hello" }, { learnable: true, log, scheduler });
-  const append = MemoryRunLog.prototype.append;
-  const times: (string | null)[] = [];
-  MemoryRunLog.prototype.append = function (this: MemoryRunLog, record: RunRecord) {
-    const envelope = append.call(this, record);
-    times.push(envelope.at);
-    return envelope;
-  };
-  try {
-    expect((await result.backward("Too long.")).status).toBe("succeeded");
-  } finally {
-    MemoryRunLog.prototype.append = append;
-  }
-  const backward =
-    log === null
-      ? times
-      : readRunLog(log)
-          .filter((envelope) => envelope.kind.startsWith("backward_"))
-          .map((envelope) => envelope.at);
+  const appended = new Set<RunLog>();
+  const outcome = await withAppendHook((into) => appended.add(into), () => result.backward("Too long."));
+  expect(outcome.status).toBe("succeeded");
+  const backward = (log === null ? [...appended].flatMap((into) => into.records()) : readRunLog(log))
+    .filter((envelope) => envelope.kind.startsWith("backward_"))
+    .map((envelope) => envelope.at);
   expect(backward.length).toBeGreaterThan(0);
   expect(new Set(backward)).toEqual(new Set(["2026-10-20T14:00:00.000Z"]));
 });

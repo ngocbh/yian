@@ -5,8 +5,7 @@
  * another test file registers its tests twice, so these live here.
  */
 import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
@@ -143,7 +142,8 @@ export function started(
 ) {
   const fingerprint = options.fingerprint ?? flowFingerprint(flow);
   if (options.learnable) applyExecutionLayout(flow, resolveExecutionLayout(flow));
-  const path = join(mkdtempSync(join(tmpdir(), "waits-")), "log.jsonl");
+  // Beside the test's HOME, in the per-test dir the preload removes once the run ends.
+  const path = join(mkdtempSync(join(dirname(process.env.HOME!), "waits-")), "log.jsonl");
   const log = JsonlRunLog.create(path, RUN_ID, { clock: FIXED_CLOCK });
   const state = new RunState(flow);
   commitPrepared(

@@ -157,12 +157,15 @@ export interface OutcomeCarriers {
   forwardCapture?: ForwardCapture | null;
 }
 
-/** One flow file a load read: its text, and where each `uses:` ref written in it resolved. */
-export interface FlowSourceFile {
+/**
+ * One flow file a load read: its text, and where each `uses:` ref written in it resolved. A type,
+ * not an interface, so it is a `JsonObject` as recorded.
+ */
+export type FlowSourceFile = {
   readonly text: string;
   /** Each `uses:` ref (its path, with `@<version>` when pinned), mapped to the key of its file. */
   readonly refs: Readonly<Record<string, string>>;
-}
+};
 
 /**
  * The flow files a loaded flow was compiled from, as `ComposedFlow.source` holds them and
@@ -184,21 +187,24 @@ export interface FlowSource {
   readonly files: Readonly<Record<string, FlowSourceFile>>;
 }
 
-/** A tool an AGENT of the run grants, as the model is told about it. */
-export interface RecordedTool {
+/**
+ * A tool an AGENT of the run grants, as the model is told about it. A type, not an interface, so
+ * it is a `JsonObject` as recorded.
+ */
+export type RecordedTool = {
   /** The tool's description. */
   readonly description: string;
   /** The tool's parameters, a JSON Schema object. */
   readonly parameters: Readonly<JsonObject>;
-}
+};
 
-/** A skill an AGENT of the run grants. */
-export interface RecordedSkill {
+/** A skill an AGENT of the run grants. A type, not an interface, so it is a `JsonObject` as recorded. */
+export type RecordedSkill = {
   /** When to use the skill. */
   readonly description: string;
   /** The `SKILL.md` body after the frontmatter. */
   readonly instructions: string;
-}
+};
 
 /** The run that started this one: a host-started child run or a learning pass. */
 export interface RunParent {
@@ -2472,7 +2478,7 @@ function memorySpecFromPayload(value: unknown, label: string): MemorySpec {
 
 /** Encode a `run_started` flow. */
 function flowPayload(flow: FlowSource): JsonObject {
-  return { root: flow.root, dir: flow.dir, files: flow.files as unknown as JsonObject };
+  return { root: flow.root, dir: flow.dir, files: flow.files };
 }
 
 /**
@@ -2486,21 +2492,22 @@ function flowFromPayload(value: unknown, label: string): FlowSource {
   return {
     root: requireText(wire["root"], `${label} root`),
     dir: requireText(wire["dir"], `${label} dir`),
-    files: wireEntries(wire["files"], `${label} files`, ["text", "refs"]) as never,
+    files: wireEntries<FlowSourceFile>(wire["files"], `${label} files`, ["text", "refs"]),
   };
 }
 
 /**
- * Return a by-name object whose every entry is an object with exactly `fields`; `label` names it
- * in errors.
+ * Return a by-name object whose every entry is an object with exactly `fields`, typed as entries
+ * of `T`; `label` names it in errors. Only the fields are checked here: the record's constructor
+ * checks each entry's values.
  *
  * @throws RangeError for an entry's missing or extra fields.
  * @throws TypeError when `value` or an entry isn't an object.
  */
-function wireEntries(value: unknown, label: string, fields: readonly string[]): JsonObject {
+function wireEntries<T extends JsonObject>(value: unknown, label: string, fields: readonly string[]): Record<string, T> {
   const wire = wireObject(value, label);
   for (const [name, item] of Object.entries(wire)) wireObject(item, `${label}[${reprText(name)}]`, fields);
-  return wire;
+  return wire as Record<string, T>;
 }
 
 /**
@@ -3183,8 +3190,8 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       defaults: record.defaults as JsonObject,
       call_time_llm: record.callTimeLlm as JsonObject | null,
       flow: record.flow === null ? null : flowPayload(record.flow),
-      skills: record.skills as unknown as JsonObject,
-      tools: record.tools as unknown as JsonObject,
+      skills: record.skills,
+      tools: record.tools,
       tool_groups: Object.fromEntries(Object.entries(record.toolGroups).map(([name, members]) => [name, [...members]])),
       yian_version: record.yianVersion,
       parent: record.parent === null ? null : { run_id: record.parent.runId, node: record.parent.node },
@@ -3212,9 +3219,9 @@ const RECORD_CODECS: readonly RecordCodec[] = [
         defaults: wireObject(payload["defaults"], `${label} defaults`) as Record<string, bigint>,
         callTimeLlm: payload["call_time_llm"] as JsonObject | null,
         flow: payload["flow"] === null ? null : flowFromPayload(payload["flow"], `${label} flow`),
-        skills: wireEntries(payload["skills"], `${label} skills`, ["description", "instructions"]) as never,
-        tools: wireEntries(payload["tools"], `${label} tools`, ["description", "parameters"]) as never,
-        toolGroups: wireObject(payload["tool_groups"], `${label} tool_groups`) as never,
+        skills: wireEntries<RecordedSkill>(payload["skills"], `${label} skills`, ["description", "instructions"]),
+        tools: wireEntries<RecordedTool>(payload["tools"], `${label} tools`, ["description", "parameters"]),
+        toolGroups: wireObject(payload["tool_groups"], `${label} tool_groups`) as Record<string, string[]>,
         yianVersion: requireText(payload["yian_version"], `${label} yian_version`),
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),
       });

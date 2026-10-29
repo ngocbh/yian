@@ -514,7 +514,7 @@ export async function inboxChat(
       const gathered = await gatherMissingInputs(flow.input, supplied, prompter);
       stop.signal.throwIfAborted();
       if (gathered === null) {
-        await io.stderr.write("chat cancelled\n");
+        await note("chat cancelled\n");
         return 1;
       }
       Object.assign(supplied, gathered);
@@ -720,7 +720,7 @@ export async function inboxChat(
         } catch (error) {
           if (!(error instanceof DeliveryRefused)) throw error;
           if (error.reason !== "ended") {
-            await io.stderr.write(`not sent: ${forTerminal(error.message, io.stderr)}\n`);
+            await note(`not sent: ${forTerminal(error.message, io.stderr)}\n`);
             continue;
           }
         }
@@ -730,18 +730,18 @@ export async function inboxChat(
     // A cancel that lost to the run's end is refused; its other failures are the chat's.
     if (cancelling !== null) await cancelling;
     if (cancelled || result.status === "cancelled") {
-      await io.stderr.write("chat cancelled\n");
+      await note("chat cancelled\n");
       return 130;
     }
     if (result.status === "succeeded") {
-      await io.stderr.write("session ended\n");
+      await note("session ended\n");
       return 0;
     }
     await renderRunError(result, flow, options.engineTrace, io.stderr, io.env);
     return 1;
   } catch (error) {
     if (error instanceof HostStop || (error instanceof TerminalStopped && error.reason === "eof")) {
-      await io.stderr.write(log === null ? "chat cancelled\n" : stoppedText(log, inbox));
+      await note(log === null ? "chat cancelled\n" : stoppedText(log, inbox));
       return error instanceof HostStop ? 130 : 1;
     }
     if (error instanceof ResumeKeyError) {

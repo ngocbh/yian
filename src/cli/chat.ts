@@ -208,9 +208,6 @@ export async function chat(
   validateRunLogOptions({ flow: CHAT_LABEL, inputValues: [], log: options.log });
   const root = deps.root ?? process.cwd();
   const env = io.env;
-  // On a terminal, everything the chat prints goes through its view.
-  const view = richChat(io) ? new ChatView(io.stderrStream, env, deps.ticker ?? realScheduler) : null;
-  if (view !== null) io = { ...io, stdout: view.writer, stderr: view.writer };
   const flow = await loadChatFlow(env);
   let skill: Skill;
   try {
@@ -258,6 +255,10 @@ export async function chat(
     await printStyled(io, message, "red");
     return 1;
   }
+  // On a terminal, everything the chat prints from here on goes through its view, which holds
+  // nothing to release until a turn starts.
+  const view = richChat(io) ? new ChatView(io.stderrStream, env, deps.ticker ?? realScheduler) : null;
+  if (view !== null) io = { ...io, stdout: view.writer, stderr: view.writer };
   const focus = flowPath === undefined ? null : (inputs["flow"] as string);
   if (view !== null) {
     const info = { ...model, cwd: homePath(root, env("HOME")), focus };

@@ -1,0 +1,57 @@
+# An `on:` CASE matches a value computed from an AGENT's new messages. Written before the agent,
+# it starts only once the agent commits, through its edge from the agent.
+kind: run
+flow: |
+  id: routed
+  name: routed
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    route:
+      kind: case
+      on: ${len(reply.new_messages)}
+      cases:
+        - when: 1
+          then: one
+      else: more
+    reply:
+      kind: agent
+      system_prompt: Help.
+      prompt: hi
+      output: str
+    one: !str one message
+    more: !str more messages
+  output: ${route.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  models:
+    reply:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: text, text: done}
+expect:
+  output: {status: succeeded, output: one message}
+  trace:
+    - [run_started, null, {effective_llm_by_static_path: {reply: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, reply]
+    - [node_step, reply, {n: 1, step: {finish: null, kind: model_call, model: claude-test, output: {format: yian.message.v1, parts: [{text: done, type: text}], role: assistant}, purpose: chat, request_sha256: 0c2d612474786e4d309464090eba530c35a97e3b3432cf6da0b668dd13355633, response_id: null, usage: null}}]
+    - [pool_commit, reply, {value: done}]
+    - [pool_commit, reply, {key: reply.new_messages, steps: [9]}]
+    - [node_succeeded, reply, {commit: 10, messages: 11}]
+    - [node_started, route]
+    - [node_routed, route, {handle: one}]
+    - [node_started, one]
+    - [pool_commit, one, {value: one message}]
+    - [node_succeeded, one, {commit: 16}]
+    - [node_started, __end__]
+    - [pool_commit, __end__, {value: one message}]
+    - [node_succeeded, __end__, {commit: 19}]

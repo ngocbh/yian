@@ -19,7 +19,7 @@ import { loadErrorAsync } from "../helpers/declarations.ts";
 /** The load error for reading `node`'s new messages when it isn't an AGENT, or not here. */
 const NOT_AN_AGENT = (node: string) =>
   `reference \${${node}.new_messages} reads new_messages, which only an AGENT node has, from a node input, ` +
-  `flow output or flow assert; node '${node}' isn't one there`;
+  `case, flow output or flow assert; node '${node}' isn't one there`;
 
 afterEach(() => forget());
 
@@ -237,19 +237,64 @@ const ROUTED = (gate: string) => `${FLOW(`${gate}
     code: return 2
     output: int`, "${a.output :- b.output}")}`;
 
-test("a CASE can't route on new_messages, in on: or in a when:", async () => {
+/** Return each edge into node `to` as `[from, inputGroup, optional]`, in order. */
+const edgesInto = (flow: Awaited<ReturnType<typeof loadFlow>>, to: string) =>
+  flow.compiled.edges.filter((edge) => edge.to === to).map((edge) => [edge.from, edge.inputGroup, edge.optional]);
+
+test("a CASE routes on new_messages, in on: or in a when:, after the agent", async () => {
   for (const gate of [
-    `  gate:\n    kind: case\n    on: \${reply.new_messages}\n    cases:\n      - when: x\n        then: a\n    else: b`,
+    `  gate:\n    kind: case\n    on: \${len(reply.new_messages)}\n    cases:\n      - when: 1\n        then: a\n    else: b`,
     `  gate:\n    kind: case\n    cases:\n      - when: "\${reply.new_messages != []}"\n        then: a\n    else: b`,
   ]) {
-    const message = (await loadErrorAsync(loadFlow(ROUTED(gate)))).message;
-    expect(message).toContain("node 'gate'");
-    expect(message).toContain(
-      "reference ${reply.new_messages}: a case can't route on an agent's new_messages yet; " +
-        "read it in a node input, and route on that node's output",
-    );
-    expect(message).not.toContain("isn't one there");
+    const edges = edgesInto(await loadFlow(ROUTED(gate)), "gate").map(([from, group]) => [from, group]);
+    expect(edges).toEqual([["reply", gate.includes("on:") ? "__on" : "__r0"]]);
   }
+});
+
+test("a CASE's on: over new_messages is typed list(Message)", async () => {
+  const gate = `  gate:\n    kind: case\n    on: \${reply.new_messages}\n    cases:\n      - when: x\n        then: a\n    else: b`;
+  const message = (await loadErrorAsync(loadFlow(ROUTED(gate)))).message;
+  expect(message).toContain("case node 'gate': `when: x` is text but `on: ${reply.new_messages}` is `list(");
+});
+
+test("a CASE's field read into new_messages is checked", async () => {
+  const gate = `  gate:\n    kind: case\n    cases:\n      - when: "\${reply.new_messages.nope == 1}"\n        then: a\n    else: b`;
+  const message = (await loadErrorAsync(loadFlow(ROUTED(gate)))).message;
+  expect(message).toContain("node 'gate' cases[0].when from: reference ${reply.new_messages.nope} reads field 'nope'");
+});
+
+test("a CASE reading new_messages of a CODE node is refused", async () => {
+  const gate = `  gate:\n    kind: case\n    cases:\n      - when: "\${a.new_messages == []}"\n        then: a\n    else: b`;
+  expect((await loadErrorAsync(loadFlow(ROUTED(gate)))).message).toContain(NOT_AN_AGENT("a"));
+});
+
+test("a CASE reads a maybe-skipped agent's new_messages through an optional edge or a join", async () => {
+  const gated = (when: string) =>
+    MAYBE_SKIPPED("${a.output :- b.output}").replace(
+      "output: ${a.output :- b.output}",
+      `  route:
+    kind: case
+    cases:
+      - when: "${when}"
+        then: a
+    else: b
+  a:
+    kind: code
+    code: return 1
+    output: int
+  b:
+    kind: code
+    code: return 2
+    output: int
+output: \${a.output :- b.output}`,
+    );
+  expect(edgesInto(await loadFlow(gated("${(reply.new_messages :- []) == []}")), "route")).toEqual([["reply", "__r0", true]]);
+  expect(edgesInto(await loadFlow(gated("${(reply.new_messages | other.output) != null}")), "route")).toEqual([
+    ["reply", "__r0", true],
+    ["other", "__r1", true],
+    ["reply", "__r2", false],
+    ["other", "__r2", false],
+  ]);
 });
 
 test("a reader behind a CASE branch reads new_messages", async () => {

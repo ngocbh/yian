@@ -1,0 +1,30 @@
+# A CASE may route on an AGENT's new messages, but only an AGENT has them: a `when:` reading a
+# CODE node's is a load error.
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    count:
+      kind: code
+      code: return 1
+      output: int
+    gate:
+      kind: case
+      cases:
+        - when: "${count.new_messages == []}"
+          then: a
+      else: b
+    a: !str a
+    b: !str b
+  output: ${gate.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          node 'gate' cases[0].when from: reference ${count.new_messages} reads new_messages, which only an AGENT node has, from a node input, case, flow output or flow assert; node 'count' isn't one there
+      frames:
+      - label: flow.yaml
+        range: [11, 15, 11, 44]

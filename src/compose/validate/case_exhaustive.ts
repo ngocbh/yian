@@ -36,6 +36,7 @@
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError, exprRefsOf } from "../../expr/index.ts";
 import { isExactly, type OutputContract, ValueContract } from "../../nodes/contracts.ts";
+import { NEW_MESSAGES } from "../../typesys/pool.ts";
 import {
   buildValueAs,
   canonicalTypeLabel,
@@ -488,7 +489,8 @@ function coveredTags(covered: readonly unknown[]): Set<string> {
  * @param onRef The case's `on:` template.
  * @param producers Each producer node's output contract by id.
  * @param flowInputs The flow-input contracts by name. With them an `${input.<name>[.<field>...]}`
- *   ref resolves too; without them (`null`, the default) only `${<id>.output[.<field>...]}` does.
+ *   ref resolves too; without them (`null`, the default) only `${<id>.output[.<field>...]}` and an
+ *   AGENT's `${<id>.new_messages[...]}` do.
  * @returns The resolved type, or `null` for an unsupported head, an opaque result, or a non-record
  *   step (lenient: no check).
  */
@@ -506,7 +508,7 @@ function resolveOnType(
   }
   if (refs.length !== 1) return null;
   const parts = refs[0]!.split(".");
-  const nodeOutput = parts.length >= 2 && parts[1] === "output";
+  const nodeOutput = parts.length >= 2 && (parts[1] === "output" || parts[1] === NEW_MESSAGES);
   const flowInput = flowInputs !== null && parts.length >= 2 && parts[0] === "input";
   if (!(nodeOutput || flowInput)) return null;
   const contract = resolveOutputBindingContract(onRef, producers, flowInputs ?? new Map());

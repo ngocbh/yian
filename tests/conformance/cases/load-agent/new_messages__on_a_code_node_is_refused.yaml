@@ -21,7 +21,7 @@ expect:
     - code: compose.load
       message: |-
         flow has unresolved references:
-          node 'reader' input 'history' from: reference ${count.new_messages} reads new_messages, which only an AGENT node has, from a node input, flow output or flow assert; node 'count' isn't one there
+          node 'reader' input 'history' from: reference ${count.new_messages} reads new_messages, which only an AGENT node has, from a node input, case, flow output or flow assert; node 'count' isn't one there
       frames:
       - label: flow.yaml
         range: [11, 16, 11, 37]

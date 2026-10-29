@@ -531,8 +531,8 @@ export function classifyPath(
     if (parts[1] === NEW_MESSAGES) {
       if (validTargets.has(messagesKey(head))) return null;
       return (
-        `${ref} reads new_messages, which only an AGENT node has, from a node input, flow output or ` +
-        `flow assert; node ${reprText(head)} isn't one there`
+        `${ref} reads new_messages, which only an AGENT node has, from a node input, case, flow ` +
+        `output or flow assert; node ${reprText(head)} isn't one there`
       );
     }
     // The second segment MUST be the literal `output` (the discriminator).

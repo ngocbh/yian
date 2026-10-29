@@ -333,6 +333,7 @@ question), the view says so in its last line, and Esc takes you to it.
 | `answer_flow` | Answers a question a flow it started asks, with your answer |
 | `message_flow`, `close_inbox` | Send a message to, or close, an inbox input of a flow it started |
 | `stop_flow` | Cancels a flow it started |
+| `report_issue` | Helps you report something yian did wrong (see [Reporting a problem](#reporting-a-problem)) |
 
 It also has the `composing-agents` skill, yian's guide to writing flows. Every path
 stays inside the folder the chat started in: a path that leaves it, through `..`, an absolute path
@@ -349,7 +350,8 @@ Before a write or a start, the chat shows a card on the terminal and waits for y
   agents get, and the code files it runs. Approve starts it; "Approve this flow for this chat"
   also starts it again later without asking, until the flow or its code files change.
 
-Off a terminal nothing is approved, and the assistant is told so.
+Off a terminal nothing is approved, and the assistant is told so. `report_issue` starts its flow
+without a card: that flow's own card comes before anything leaves your machine.
 
 ### Flows the assistant runs
 
@@ -370,6 +372,33 @@ terminal: its question goes through the assistant.
 After Ctrl-C or Esc, news from the flows waits for your next line and reaches the assistant just
 before it. Each waiting event shows above the prompt as
 `(child event waiting; sent with your next message: ...)`.
+
+### Reporting a problem
+
+When yian does something unexpected, the assistant offers to report it. `report_issue` starts a
+flow bundled with yian, in the background like any flow the assistant runs. The flow drafts the
+report (what you ran, what you expected, what happened, the error, the yian version and platform,
+and the run log's path) and asks you, through the assistant, for what it lacks. It gives a run
+log's path, never its contents. Then it replaces what looks like a secret (API keys, `sk-`, `ghp_`
+and `github_pat_` tokens, `Authorization` and `Bearer` values, `password=`) with `[redacted]`, and
+your home folder with `~`.
+
+Last, a card shows the whole report and the ways to file it that work on your machine:
+
+| Choice | What it does |
+|---|---|
+| File it with gh | Runs `gh issue create`, when the `gh` CLI is installed and logged in |
+| File it with GITHUB_TOKEN | Makes one GitHub API call with the `GITHUB_TOKEN` in your environment. yian reads the token itself: the assistant never sees it, and no log holds it |
+| Open a prefilled link in the browser | Gives a link to GitHub's new-issue page with the report filled in. A body too long for a link is cut, and says so |
+| Save it only | Keeps the report, to send another way |
+| Cancel | Files and saves nothing |
+
+Every choice but Cancel also saves the report to `~/.yian/reports/<time>.md`. The issue tracker
+is private for now, so gh and the token file only for people with access to it; the link and the
+saved file work for anyone.
+
+Never paste a password or token into the chat: the model reads it, and the chat's run log keeps
+it. If you pasted one, revoke it.
 
 ### Leaving the chat
 

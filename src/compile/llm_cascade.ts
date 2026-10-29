@@ -240,7 +240,7 @@ class RunInputs {
 }
 
 /** A CALL, MAP or LOOP node, the only kinds with a static child flow, which each name by `flowId`. */
-export type Callsite = Node & { readonly flowId: string };
+type Callsite = Node & { readonly flowId: string };
 
 /**
  * An `llm_config` value in an enclosing flow's layer that a child flow's agent inherits. Frozen.

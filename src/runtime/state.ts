@@ -1333,7 +1333,7 @@ function sendKey(state: RunState, inbox: string): string {
 export function inboxElementType(state: RunState, name: string): Type | null {
   const start = state.flow.nodes.get(state.flow.startId);
   const type = (start?.params ?? []).find((param) => param.name === name)?.contract?.type;
-  return type !== undefined && isInboxType(type) ? type.element! : null;
+  return type !== undefined && isInboxType(type) ? type.element : null;
 }
 
 /**

@@ -95,6 +95,15 @@ function focusName(root: string, path: string): string {
   return leavesRoot(inside) ? real : slashed(inside);
 }
 
+/** The markers the focus flow's text and check sit between in the prompt, which calls it data. */
+const FENCE_START = "<<<FLOW TEXT";
+const FENCE_END = "FLOW TEXT>>>";
+
+/** `text` with each end marker broken, so the file can't close the fence early. */
+function fenced(text: string): string {
+  return text.replaceAll(FENCE_END, "FLOW TEXT> >>");
+}
+
 /** The file the children's CODE console output goes to: beside the chat's log, named after it. */
 function consoleFileFor(log: string): string {
   return join(dirname(log), `${basename(log, extname(log))}.child-output.log`);
@@ -116,7 +125,8 @@ function waitingLines(children: readonly WaitingChild[]): string {
 
 /**
  * `yian chat`: chat with yian's assistant in the folder `deps.root` (the current directory), with
- * `flowPath` in focus when given: its text and check go to the assistant each turn. Returns the
+ * `flowPath` in focus when given: its text and check as they were when the chat opened, fenced as
+ * data, go to the assistant each turn (`read_flow` and `check_flow` give its current state). Returns the
  * exit code.
  *
  * The chat runs the bundled flow as `inboxChat` runs a flow (the prompt, Ctrl-C, Esc and `/exit`
@@ -163,8 +173,9 @@ export async function chat(
     const name = focusName(root, flowPath);
     inputs["flow"] = name;
     inputs["focus"] =
-      `The user opened this chat to get help with the flow ${name}.\n\n` +
-      `Its text:\n${focus.text}\n\nIts check (check_flow):\n${focus.check}`;
+      `The user opened this chat to get help with the flow ${name}. Here are its text and its check ` +
+      "(check_flow) as they were when the chat opened; read_flow and check_flow give its current state.\n" +
+      `${FENCE_START}\n${fenced(focus.text)}\n\n${fenced(focus.check)}\n${FENCE_END}`;
     if (focus.inbox) hint = `to chat with this flow itself, run yian run ${flowPath}\n`;
   }
   const model = replyModel(flow, cliLayer(options), env);

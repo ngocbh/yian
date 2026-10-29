@@ -79,3 +79,14 @@ test("the chat's reply agent gets the file and run tools, the composing-agents s
   expect(reply.steerInbox).toBe(true);
   expect(Object.hasOwn(reply.env, "max_tool_iterations")).toBe(false);
 });
+
+test("the chat's prompt has write_flow's refusal, checks before runs, and relays an inbox run's replies", async () => {
+  // Read with its lines joined: the prompt wraps.
+  const text = flowText("chat.yaml").replace(/\s+/g, " ");
+  expect(text).toContain("write_flow refuses content that doesn't load; fix what it reports.");
+  expect(text).toContain("Check a flow before you run it.");
+  expect(text).not.toContain("Check a flow before you write it");
+  for (const phrase of ["message_flow", "close_inbox when the user is done with it", "what a run said"]) {
+    expect(text).toContain(phrase);
+  }
+});

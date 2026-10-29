@@ -250,8 +250,9 @@ exit 130. Once the log exists, `yian run --resume` continues it. A second signal
 
 `yian chat` opens a chat with yian's assistant. It helps you find, read, check, write and run the
 flows in the folder you start it in, and it reads yian's docs to answer questions about writing
-flows. Give it a flow to start the chat about that flow: the assistant sees the flow's text and
-whether it loads at every turn.
+flows. Give it a flow to start the chat about that flow: at every turn the assistant sees the
+flow's text and whether it loads, as they were when the chat opened. It reads the file again to
+see your later changes.
 
 ```console
 $ yian chat

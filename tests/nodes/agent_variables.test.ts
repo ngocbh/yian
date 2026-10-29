@@ -22,6 +22,7 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type MaterialCaps, Node, NodeKind, Output } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
+import { driveBackward } from "../../src/runtime/backward.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import {
   decodeRecord,
@@ -31,6 +32,7 @@ import {
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
+import { NodeDataError } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { FileRef, Type, TypeCheckError, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
@@ -221,18 +223,45 @@ test.each(["render", "empty"] as const)(
   },
 );
 
-test("a retained agent whose variables fail to resolve fails the node, and rebuilding its node data throws", async () => {
+/** A retained run of an agent whose variables fail to resolve with `expected`. */
+async function unresolvable(expected: Error) {
   const node = new AgentNode("writer", { prompt: "${note}", variables: variables("note: !Optional(str) null\n") });
-  const expected = new RangeError("variable resolution failed");
   spyResolve(node, () => {
     throw expected;
   });
+  return await retainedAgent(node);
+}
 
-  const { record, occurrence } = await retainedAgent(node);
+test("a retained agent whose variables fail to resolve fails the node, and its node data names the node", async () => {
+  const expected = new TypeError("variable resolution failed");
+
+  const { record, occurrence } = await unresolvable(expected);
 
   expect(record).toBeInstanceOf(NodeFailedRecord);
   expect((record as NodeFailedRecord).failure.code).toBe("node.execute");
-  expect(() => occurrence.nodeData).toThrow(expected);
+  let error: unknown = null;
+  try {
+    void occurrence.nodeData;
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toEqual(new NodeDataError("writer", expected));
+  expect((error as NodeDataError).message).toBe("node 'writer': its node data can't be rebuilt: variable resolution failed");
+  expect((error as NodeDataError).cause).toBe(expected);
+});
+
+test("backward over an agent whose node data can't be rebuilt finishes with a failure attributed to it", async () => {
+  const { built, occurrence } = await unresolvable(new TypeError("variable resolution failed"));
+
+  const outcome = await driveBackward(built.state, built.log, "Review.");
+
+  expect(outcome.status).toBe("failed");
+  expect(outcome.failure!.code).toBe("backward.execute");
+  expect(outcome.failure!.message).toBe("node 'writer': its node data can't be rebuilt: variable resolution failed");
+  expect(outcome.failure!.nodeId).toBe("writer");
+  expect(outcome.failure!.nodeStartedSeq).toBe(occurrence.source.executionSeq);
+  expect(outcome.failure!.runId).toBe(built.state.runId);
+  expect(built.state.backwardState.finished!.outcome).toBe(outcome);
 });
 
 test.each([

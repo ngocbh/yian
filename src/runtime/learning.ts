@@ -988,9 +988,11 @@ function validateBackwardFinished(
     throw new RangeError("backward computation failure requires accepted occurrence attribution");
   }
   const source = new SourceRef(trace.runId, failure.nodeStartedSeq);
-  acceptedOccurrence(trace, source, "backward computation failure requires an accepted occurrence");
-  const context = trace.backwardContext(source);
-  if (failure.nodeId !== context.nodeId || !sameOptional(failure.scope, context.scope, sameExecutionScope)) {
+  const occurrence = acceptedOccurrence(trace, source, "backward computation failure requires an accepted occurrence");
+  // Read off the occurrence, not its backward context: the failure may be that its node data
+  // can't be rebuilt.
+  const scope = occurrence.capture.scope;
+  if (failure.nodeId !== occurrence.nodeId || !sameOptional(failure.scope, scope, sameExecutionScope)) {
     throw new RangeError("backward computation failure must match its recorded invocation");
   }
   if (!sameOptional(outcome.learning, prefixLearning(backward), sameLearningResult)) {

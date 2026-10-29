@@ -45,6 +45,7 @@ import {
   type BackwardResult,
   type LearningMaterial,
   type MaterialCaps,
+  markerMessage,
   type Node,
   retainFailure,
   validateDeclaredNames,
@@ -310,6 +311,18 @@ export function checkMemoryScope(scope: MemoryScope | null): MemoryScope | null 
   return scope;
 }
 
+/** An occurrence's node data (`TraceOccurrence.nodeData`) couldn't be rebuilt; the error the rebuild threw is the `cause`. */
+export class NodeDataError extends Error {
+  override name = "NodeDataError";
+  /** The occurrence's node. */
+  readonly nodeId: string;
+
+  constructor(nodeId: string, cause: unknown) {
+    super(`node ${reprText(nodeId)}: its node data can't be rebuilt: ${markerMessage(cause)}`, { cause });
+    this.nodeId = nodeId;
+  }
+}
+
 /**
  * One accepted outcome and its derived route, identified by its accepted start. Frozen.
  *
@@ -480,15 +493,21 @@ export class TraceOccurrence {
    * node and its bound inputs (`rebuildNodeData`): its static material and, for a node whose
    * `forward` rendered, the render and the model config it used. Built on the first read.
    *
-   * @throws RangeError when the occurrence was made without a rebuilder, as `boundInputs` (a
-   *   finished binding whose bound inputs don't rebuild included), or when the run recorded no
-   *   model config for the node.
+   * @throws RangeError when the occurrence was made without a rebuilder.
+   * @throws NodeDataError carrying what the rebuild threw: an error rebinding the inputs (as
+   *   `boundInputs`, a finished binding whose bound inputs don't rebuild included), a run that
+   *   recorded no model config for the node, or a render error that isn't one of the run's refusals
+   *   (`Node.renderCapture`), such as a capture fault.
    */
   get nodeData(): JsonObject {
     if (this.#rebuildNodeData === null) {
       throw new RangeError(`occurrence of ${reprText(this.nodeId)} can't rebuild its node data`);
     }
-    this.#nodeData ??= this.#rebuildNodeData();
+    try {
+      this.#nodeData ??= this.#rebuildNodeData();
+    } catch (error) {
+      throw new NodeDataError(this.nodeId, error);
+    }
     return this.#nodeData;
   }
 

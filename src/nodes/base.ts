@@ -1644,10 +1644,13 @@ export abstract class Node {
   /**
    * Return what an invocation's `forward` renders for bound `inputs`, rendered again: the JSON
    * material backward reads beside `captureBackwardContext`'s, with the parts established before
-   * a render that fails. Pure: it renders with the node's authored fields and calls no model.
+   * a render the run refused the same way. Pure: it renders with the node's authored fields and
+   * calls no model.
    *
    * @param localTypes The declared type of each local, as `NodeCaps.localTypes` gives it.
    * @returns The render material, or `null` (the default) for a kind that renders nothing.
+   * @throws CapabilityFault when building the capture fails; any render error that isn't one of
+   *   the run's refusals (a fault), unchanged. The run failed the node on the same error.
    */
   renderCapture(
     inputs: Readonly<Record<string, unknown>>,

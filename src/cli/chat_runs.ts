@@ -419,6 +419,8 @@ export class ChildRuns {
           ...common,
         }),
       );
+      // Already settled by `RunStarted`; kept so that `start` can never hang.
+      started.resolve();
       // The deadline the run was last moved at. A node is due once any of its calls passes its
       // deadline, so that pass times it out and `wakeAt` comes later; were it to stay, resting
       // until it would only spin.

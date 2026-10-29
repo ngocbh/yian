@@ -444,7 +444,8 @@ export class ChildRuns {
    * @throws {RangeError} When no child has the id.
    */
   stop(id: string): Promise<ChildStatus> {
-    return this.#deliver(this.#child(id), (log, options) => (this.#options.cancel ?? cancel)(log, options));
+    const move = this.#options.cancel ?? cancel;
+    return this.#deliver(this.#child(id), (log, options) => move(log, options));
   }
 
   /**

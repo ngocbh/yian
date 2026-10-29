@@ -1045,8 +1045,9 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * the log path is printed and `advance` recovers the run, with no input prompts, no
  * `provider`/`model` layer and no key preflight; `numWorkers` absent keeps the recorded count. A
  * log whose flow was built in code, or that `yian chat` wrote (its flow's id `CHAT_FLOW_ID` and
- * its file `CHAT_FLOW_FILE`), can't be resumed here and prints `resume failed: ...`. Before anything is appended, the keys the recorded configs need are checked: a missing one is
- * prompted for on a TTY stdin; a missing, changed or declined key, a run whose key came from a
+ * its file `CHAT_FLOW_FILE`), can't be resumed here and prints `resume failed: ...`. Before
+ * anything is appended, the keys the recorded configs need are checked: a missing one is prompted
+ * for on a TTY stdin; a missing, changed or declined key, a run whose key came from a
  * host, or a saved login that no longer resolves prints its message and exits 1 (`run.setup`). A
  * host failure, an empty, damaged or locked log included, prints `resume failed: <message>`. A
  * finished log prints its recorded outcome and appends nothing.

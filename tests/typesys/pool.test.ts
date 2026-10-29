@@ -1,15 +1,14 @@
 /**
  * `VariablePool`: typed reads and writes of a node's single value, the `${...}` resolver, the
- * declared-type write check and the lossless round trip.
+ * declared-type write check and the wire object.
  */
 
 import { describe, expect, test } from "bun:test";
 
 import { evalExpr, optionalInsideRoot, resolveReference } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
-import { JSONDecodeError } from "../../src/typesys/json.ts";
 import { poolRootLength, referenceRoot, VariablePool } from "../../src/typesys/pool.ts";
-import { FileRef, Type, TypeCheckError, TypedValue, type Value, ValueKind } from "../../src/typesys/values.ts";
+import { FileRef, Type, TypeCheckError, type Value, ValueKind } from "../../src/typesys/values.ts";
 
 // The START node's id; `boundary_ids.test.ts` pins the pool's default to `StartNode.ID`.
 const START_ID = "__start__";
@@ -152,137 +151,25 @@ describe("VariablePool.readRoot through the evaluator", () => {
   });
 });
 
-describe("VariablePool round trip", () => {
-  test("dumps and loads keep every value's type", () => {
-    const pool = new VariablePool();
-    pool.set("n1", { a: 1n, b: [1.5, 2.5] });
-    pool.set("flag_node", true);
-    pool.set("n2", ["ACME", "BETA"]);
-    pool.set(START_ID, { as_of_date: "2026-06-05" }); // the flow's run args (the START record)
-
-    const back = VariablePool.loads(pool.dumps());
-
-    expect(back.get("n1")).toEqual({ a: 1n, b: [1.5, 2.5] });
-    expect(back.getValue("flag_node")!.kind).toBe(ValueKind.BOOLEAN);
-    expect(back.getValue("n2")!.kind).toBe(ValueKind.LIST_STRING);
-    // store[START_ID] survives dumps/loads
-    expect(read(back, "input.as_of_date")).toBe("2026-06-05");
-    expect(back.get("flag_node")).toBe(true);
-  });
-
-  test(
-    "nullable specialized list items survive",
-    () => {
-      const row = new Type({
-        kind: ValueKind.OBJECT,
-        fields: new Map([["score", Type.scalar(ValueKind.NUMBER)]]),
-        required: new Set(["score"]),
-        nullable: true,
-      });
-      const rows = new Type({ kind: ValueKind.LIST_OBJECT, element: row });
-      const pool = new VariablePool();
-      pool.set("rows", [{ score: 0.9 }, null], rows);
-
-      const restored = VariablePool.loads(pool.dumps());
-
-      const stored = restored.getValue("rows");
-      expect(stored).toBeInstanceOf(TypedValue);
-      expect(stored!.kind).toBe(ValueKind.LIST_OBJECT);
-      expect(restored.get("rows")).toEqual([{ score: 0.9 }, null]);
-    },
-  );
-
-  test("dumps writes the wire object with sorted keys", () => {
-    const pool = new VariablePool();
-    pool.set("n", 2.5);
-    expect(pool.dumps()).toBe(
-      '{"start_id":"__start__","store":{"n":{"kind":"float","value":2.5}},"system":{}}',
-    );
-  });
-
-  test("an int in a float slot and a list(float) holding an int round-trip", () => {
-    const pool = new VariablePool();
+describe("VariablePool.toWire", () => {
+  test("writes each value's wire form, the system values and the START id", () => {
+    const pool = new VariablePool("c/__start__");
     pool.set("n", 2n, ValueKind.NUMBER);
-    pool.set("xs", [1n, 2.5], ValueKind.LIST_NUMBER);
-    const back = VariablePool.loads(pool.dumps());
-    expect(back.getValue("n")!.kind).toBe(ValueKind.INTEGER);
-    expect(back.get("n")).toBe(2n);
-    expect(back.getValue("xs")!.kind).toBe(ValueKind.LIST_NUMBER);
-    expect(back.get("xs")).toEqual([1n, 2.5]);
+    pool.addSystem("run_id", "r1");
+    expect(pool.toWire()).toEqual({
+      store: { n: { kind: "int", value: 2n } },
+      system: { run_id: { kind: "str", value: "r1" } },
+      start_id: "c/__start__",
+    });
   });
 
-  test("infinity round-trips", () => {
-    const pool = new VariablePool();
-    pool.set("n", Infinity);
-    pool.addSystem("low", -Infinity);
-    const back = VariablePool.loads(pool.dumps());
-    expect(back.get("n")).toBe(Infinity);
-    expect(read(back, "system.low")).toBe(-Infinity);
-  });
-
-  test("node ids constructor and __proto__ round-trip as own keys", () => {
+  test("node ids constructor and __proto__ stay own keys", () => {
     const pool = new VariablePool();
     pool.set("constructor", 1n);
     pool.set("__proto__", "p");
     const wire = pool.toWire();
     expect(Object.hasOwn(wire.store, "constructor")).toBe(true);
     expect(Object.hasOwn(wire.store, "__proto__")).toBe(true);
-    const back = VariablePool.loads(pool.dumps());
-    expect(back.get("constructor")).toBe(1n);
-    expect(back.get("__proto__")).toBe("p");
-  });
-
-  test("fromWire reads toWire's object", () => {
-    const pool = new VariablePool("c/__start__");
-    pool.set("n", "v");
-    pool.addSystem("run_id", "r1");
-    const back = VariablePool.fromWire(pool.toWire());
-    expect(back.startId).toBe("c/__start__");
-    expect(back.get("n")).toBe("v");
-    expect(read(back, "system.run_id")).toBe("r1");
-  });
-
-  const entry = { kind: "str", value: "v" };
-  test.each([
-    ["not a record", ["store"], "variable-pool wire must be a JSON object"],
-    [
-      "a missing and an extra key",
-      { store: {}, start_id: "s", x: 1n },
-      'invalid variable pool fields; missing=["system"], extra=["x"]',
-    ],
-    [
-      "store an array",
-      { store: [], system: {}, start_id: "s" },
-      "variable-pool store and system must be JSON objects",
-    ],
-    [
-      "a store entry that isn't a record",
-      { store: { n: "v" }, system: {}, start_id: "s" },
-      "variable-pool store entries must be typed objects",
-    ],
-    [
-      "a system entry that isn't a record",
-      { store: { n: entry }, system: { k: [entry] }, start_id: "s" },
-      "variable-pool system entries must be typed objects",
-    ],
-    [
-      "a bad entry",
-      { store: { n: { kind: "int", value: "x" } }, system: {}, start_id: "s" },
-      `invalid int typed value: expected a bigint, got "x"`,
-    ],
-    [
-      "start_id not text",
-      { store: {}, system: {}, start_id: 1n },
-      "variable-pool start_id must be a string",
-    ],
-  ])("fromWire refuses %s", (_label, data, message) => {
-    const read = () => VariablePool.fromWire(data);
-    expect(read).toThrow(RangeError);
-    expect(read).toThrow(new RangeError(message));
-  });
-
-  test("loads of bad JSON throws JSONDecodeError", () => {
-    expect(() => VariablePool.loads("{")).toThrow(JSONDecodeError);
   });
 });
 

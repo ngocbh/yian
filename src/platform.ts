@@ -2,10 +2,11 @@
  * The one module holding runtime-specific APIs, so the rest of yian runs unchanged
  * on Node and Bun: runtime detection, whether this is a compiled binary, a SQLite
  * wrapper over `bun:sqlite` or `node:sqlite`, loaded lazily for the runtime in use,
- * an exclusive file lock built on it, the scheduler that clocks and timed waits go through, the
- * TypeScript stripper for CODE bodies, loaded lazily too, `safeFetch`, the one way out
- * to the network: no redirects, yian's User-Agent, and a warning when TLS checks are off, and
- * `warn`, the path every yian warning takes.
+ * an exclusive file lock built on it, `syncFolder` for durable folder entries, the
+ * scheduler that clocks and timed waits go through, the TypeScript stripper for CODE
+ * bodies, loaded lazily too, `safeFetch`, the one way out to the network: no redirects,
+ * yian's User-Agent, and a warning when TLS checks are off, and `warn`, the path every
+ * yian warning takes.
  */
 
 import type { Database } from "bun:sqlite";
@@ -400,6 +401,35 @@ export function isLocked(path: string): boolean {
     throw error;
   } finally {
     db?.close();
+  }
+}
+
+/**
+ * The errors that mean this file system or platform can't sync a folder: Linux gives `EINVAL` for
+ * a file system without directory sync, some file systems give `ENOTSUP` or `EOPNOTSUPP`, and
+ * Windows can't open a folder (`EISDIR`, `EPERM`).
+ */
+const FOLDER_SYNC_UNSUPPORTED = new Set(["EINVAL", "ENOTSUP", "EOPNOTSUPP", "EISDIR", "EPERM"]);
+
+/**
+ * Flush the entries of folder `path` to disk, so a file created, renamed or removed in it
+ * survives a power loss. Does nothing where the file system or platform can't sync a folder; any
+ * other error (`ENOENT` for a missing folder) propagates.
+ */
+export function syncFolder(path: string): void {
+  let fd: number;
+  try {
+    fd = fs.openSync(path, "r");
+  } catch (error) {
+    if (FOLDER_SYNC_UNSUPPORTED.has(errnoCode(error) as string)) return;
+    throw error;
+  }
+  try {
+    fs.fsyncSync(fd);
+  } catch (error) {
+    if (!FOLDER_SYNC_UNSUPPORTED.has(errnoCode(error) as string)) throw error;
+  } finally {
+    fs.closeSync(fd);
   }
 }
 

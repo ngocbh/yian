@@ -474,6 +474,78 @@ test.each(["kept copy", "document"])(
   },
 );
 
+/**
+ * Run `fn` and return, in order, each rename (`rename <to>`), directory made (`mkdir <path>`) and
+ * fsync (`fsync <path>`) it does, paths relative to the test directory.
+ */
+async function fileEvents(fn: () => Promise<unknown>): Promise<string[]> {
+  const events: string[] = [];
+  const opened = new Map<number, string>();
+  const root = fs.realpathSync(dir);
+  const relative = (target: fs.PathLike) => path.relative(root, String(target)) || ".";
+  const { openSync, renameSync, mkdirSync, fsyncSync } = fs;
+  const spies = [
+    spyOn(fs, "openSync").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
+      const fd = (openSync as (...args: unknown[]) => number)(target, ...rest);
+      opened.set(fd, relative(target));
+      return fd;
+    }) as typeof fs.openSync),
+    spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      renameSync(from, to);
+      events.push(`rename ${relative(to)}`);
+    }),
+    spyOn(fs, "mkdirSync").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
+      const existed = fs.existsSync(target);
+      const first = (mkdirSync as (...args: unknown[]) => string | undefined)(target, ...rest);
+      if (!existed) events.push(`mkdir ${relative(target)}`);
+      return first;
+    }) as typeof fs.mkdirSync),
+    spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+      fsyncSync(fd);
+      // Temporary files are left out: only the directory syncs matter here.
+      const name = opened.get(fd)!;
+      if (!/\.[0-9a-f]{16}$/.test(name)) events.push(`fsync ${name}`);
+    }),
+  ];
+  try {
+    await fn();
+  } finally {
+    for (const spy of spies) spy.mockRestore();
+  }
+  return events;
+}
+
+test("every new entry's directory is synced before the call returns", async () => {
+  const store = new FileMarkdownStore(path.join(dir, "notes", "ada.md"), { createParent: true });
+  const empty = markdownVersion("");
+  const v1 = markdownVersion("# Ada\n");
+  const kept = (version: string) => path.join("notes", ".ada.md.versions", `${version.slice(7)}.md`);
+  expect(await fileEvents(() => store.read())).toEqual([
+    "mkdir notes",
+    "fsync .",
+    "mkdir notes/.ada.md.versions",
+    "fsync notes",
+    `rename ${kept(empty)}`,
+    "fsync notes/.ada.md.versions",
+  ]);
+  expect(await fileEvents(() => store.write("# Ada\n", { baseVersion: empty }))).toEqual([
+    `rename ${kept(v1)}`,
+    "fsync notes/.ada.md.versions",
+    "rename notes/ada.md",
+    "fsync notes",
+    "fsync notes/.ada.md.writes.jsonl",
+    "fsync notes",
+  ]);
+  // The write log exists now, so only the renames need their directories synced.
+  expect(await fileEvents(() => store.write("# Ada\nMore.\n", { baseVersion: v1 }))).toEqual([
+    `rename ${kept(markdownVersion("# Ada\nMore.\n"))}`,
+    "fsync notes/.ada.md.versions",
+    "rename notes/ada.md",
+    "fsync notes",
+    "fsync notes/.ada.md.writes.jsonl",
+  ]);
+});
+
 test("a lock path that isn't a file fails with a system error and writes nothing", async () => {
   fs.mkdirSync(path.join(dir, ".ada.md.lock"));
   const store = new FileMarkdownStore(path.join(dir, "ada.md"));

@@ -12,7 +12,7 @@ import fs from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { reprText } from "../../diagnostics.ts";
-import { type FileLock, FileLockError, sqliteErrorCode, waitForLock } from "../../platform.ts";
+import { type FileLock, FileLockError, sqliteErrorCode, syncFolder, waitForLock } from "../../platform.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { floatText } from "../../typesys/values.ts";
 import { freezeJsonObject } from "../contracts.ts";
@@ -141,7 +141,10 @@ function readExact(source: string): string {
   }
 }
 
-/** Write `text` to `target` through a synced temporary file in its directory. */
+/**
+ * Write `text` to `target` through a synced temporary file in its directory, then sync the
+ * directory so the renamed entry survives a power loss.
+ */
 function replace(target: string, text: string): void {
   const temporary = join(dirname(target), `.${basename(target)}.${randomBytes(8).toString("hex")}`);
   const { O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
@@ -158,6 +161,18 @@ function replace(target: string, text: string): void {
     if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
     throw error;
   }
+  syncFolder(dirname(target));
+}
+
+/** Make directory `path` unless it exists, and sync its parent when it was made. */
+function makeDirectory(path: string): void {
+  try {
+    fs.mkdirSync(path);
+  } catch (error) {
+    if (isSystemError(error) && error.code === "EEXIST") return;
+    throw error;
+  }
+  syncFolder(dirname(path));
 }
 
 const VERSION = /^sha256:[0-9a-f]{64}$/;
@@ -170,7 +185,9 @@ const VERSION = /^sha256:[0-9a-f]{64}$/;
  * is kept under `.<name>.versions/` next to it, so recorded runs can reopen it later. Each write
  * appends its versions and provenance to `.<name>.writes.jsonl` as one JSON line: keys sorted by
  * code point, separators `, ` and `: `, non-ASCII as `\uXXXX`, floats with a fraction digit.
- * Writers on one host take turns through `.<name>.lock`. Nothing on disk is touched until the first read or write. A
+ * Writers on one host take turns through `.<name>.lock`. Files and the directory entries naming
+ * them are synced before a call returns, so a version it handed out survives a power loss.
+ * Nothing on disk is touched until the first read or write. A
  * person may edit `path` directly; the next compare-and-set write then reports a mismatch. A
  * symlinked `path` is resolved when the store is built: writes update the link's target, and the
  * versions, write log and lock sit next to the target.
@@ -258,13 +275,23 @@ export class FileMarkdownStore implements MarkdownStore {
       if (current !== baseVersion) throw new MarkdownVersionMismatch(baseVersion, current);
       this.#keep(newVersion, text);
       replace(this.path, text);
-      const fd = fs.openSync(this.#writes, "a");
+      const { O_APPEND, O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
+      let created = true;
+      let fd: number;
+      try {
+        fd = fs.openSync(this.#writes, O_CREAT | O_EXCL | O_WRONLY | O_APPEND);
+      } catch (error) {
+        if (!isSystemError(error) || error.code !== "EEXIST") throw error;
+        created = false;
+        fd = fs.openSync(this.#writes, O_WRONLY | O_APPEND);
+      }
       try {
         fs.appendFileSync(fd, line);
         fs.fsyncSync(fd);
       } finally {
         fs.closeSync(fd);
       }
+      if (created) syncFolder(this.#directory);
       return newVersion;
     });
   }
@@ -272,7 +299,11 @@ export class FileMarkdownStore implements MarkdownStore {
   /** Run `body` holding the host-wide exclusive lock for this document. */
   async #locked<T>(body: () => T): Promise<T> {
     if (this.#createParent) {
-      fs.mkdirSync(this.#directory, { recursive: true });
+      const first = fs.mkdirSync(this.#directory, { recursive: true });
+      // Each new directory's entry lives in its parent, from the one above the first made down.
+      if (first !== undefined) {
+        for (let made = this.#directory; made !== dirname(first); made = dirname(made)) syncFolder(dirname(made));
+      }
     } else if (!statOrNull(this.#directory)?.isDirectory()) {
       throw Object.assign(new Error(`document directory does not exist: ${this.#directory}`), {
         code: "ENOENT",
@@ -316,7 +347,7 @@ export class FileMarkdownStore implements MarkdownStore {
   #keep(version: string, text: string): void {
     const kept = this.#versionPath(version);
     if (kept !== null && statOrNull(kept) === null) {
-      fs.mkdirSync(this.#versions, { recursive: true });
+      makeDirectory(this.#versions);
       replace(kept, text);
     }
   }

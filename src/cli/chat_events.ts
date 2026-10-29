@@ -1,18 +1,20 @@
 /**
  * The child events `yian chat`'s assistant hears about: a child run's question, reply or end,
  * queued as one line each until the chat sends it into its own flow's inbox as a message
- * authored `yian`.
+ * authored `yian`; and the count of the assistant's tool calls in flight, which tells the chat
+ * when such a send would land in the middle of one.
  *
- * Knows about: the chat's child statuses and the host tool API's names.
+ * Knows about: the chat's child statuses and the host tool API.
  */
 
 import { TAKE } from "../tools/context.ts";
+import { FunctionTool } from "../tools/function_tools.ts";
 import type { ChildStatus } from "./chat_runs.ts";
 
 /** The most characters of a child event's line. */
 const EVENT_BODY_CHARS = 2000;
 
-/** The type of the event a queue push dispatches on the wake target. */
+/** The type of the event a queue push or the last tool call ending dispatches on the wake target. */
 export const CHAT_WAKE = "wake";
 
 /** One child event: the line the assistant reads, and the status it came from. */
@@ -132,4 +134,55 @@ export class EventQueue {
   requeueFront(events: readonly ChildEvent[]): void {
     this.#queued = [...events.map((event) => ({ event, taken: true })), ...this.#queued];
   }
+}
+
+/** The count of tool calls in flight. */
+export class InFlight {
+  readonly #wake: EventTarget | null;
+  #count = 0;
+
+  /** @param wake Gets a `CHAT_WAKE` event each time the last call in flight ends. */
+  constructor(wake: EventTarget | null = null) {
+    this.#wake = wake;
+  }
+
+  /** Whether any call is in flight. */
+  get busy(): boolean {
+    return this.#count > 0;
+  }
+
+  /** A call starts. */
+  enter(): void {
+    this.#count += 1;
+  }
+
+  /** A call ends: the last one wakes. */
+  leave(): void {
+    this.#count -= 1;
+    if (this.#count === 0) this.#wake?.dispatchEvent(new Event(CHAT_WAKE));
+  }
+}
+
+/** `tools`, each counted in `counter` from its call until it returns or throws. */
+export function trackInFlight(tools: readonly FunctionTool[], counter: InFlight): FunctionTool[] {
+  return tools.map(
+    (each) =>
+      new FunctionTool({
+        name: each.name,
+        description: each.description,
+        parametersJsonSchema: each.parametersJsonSchema,
+        isConcurrencySafe: each.isConcurrencySafe,
+        parametersValidator: each.parametersValidator,
+        outputJsonSchema: each.outputJsonSchema,
+        outputValidator: each.outputValidator,
+        execute: async (args, ctx) => {
+          counter.enter();
+          try {
+            return await each.execute(args, ctx);
+          } finally {
+            counter.leave();
+          }
+        },
+      }),
+  );
 }

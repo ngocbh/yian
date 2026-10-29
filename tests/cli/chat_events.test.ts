@@ -1,5 +1,6 @@
 /**
- * The chat's child events, queued from child statuses.
+ * The chat's child events, queued from child statuses, and the count of the assistant's tool
+ * calls in flight.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
@@ -11,10 +12,14 @@ import {
   type ChildEvent,
   childEvent,
   EventQueue,
+  InFlight,
   toMessage,
+  trackInFlight,
 } from "../../src/cli/chat_events.ts";
 import { ChildRuns, type ChildStatus } from "../../src/cli/chat_runs.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
+import { ToolContext } from "../../src/tools/context.ts";
+import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 import { heldScheduler } from "../helpers/schedulers.ts";
 
@@ -154,4 +159,74 @@ describe("EventQueue", () => {
     },
     TIMEOUT,
   );
+});
+
+describe("trackInFlight", () => {
+  /** A context for calling a tool directly. */
+  const context = () =>
+    new ToolContext({
+      callId: "c",
+      attempt: 1,
+      toolName: "t",
+      runId: "r",
+      node: "n",
+      context: undefined,
+      signal: new AbortController().signal,
+    });
+
+  /** A tool whose calls each wait for their own release, and throw when released with an error. */
+  function gated() {
+    const releases: ((error?: Error) => void)[] = [];
+    const held = new FunctionTool({
+      name: "held",
+      description: "waits",
+      parametersJsonSchema: { type: "object" },
+      isConcurrencySafe: () => true,
+      execute: () =>
+        new Promise((resolve, reject) => {
+          releases.push((error) => (error === undefined ? resolve("done") : reject(error)));
+        }),
+    });
+    return { held, releases };
+  }
+
+  test("busy while any call runs, overlapping or throwing, and the last to end wakes", async () => {
+    const wake = new EventTarget();
+    let woken = 0;
+    wake.addEventListener(CHAT_WAKE, () => void (woken += 1));
+    const counter = new InFlight(wake);
+    const { held, releases } = gated();
+    const [tracked] = trackInFlight([held], counter);
+    expect(tracked!.name).toBe("held");
+    expect(tracked!.isConcurrencySafe?.({})).toBe(true);
+    expect(counter.busy).toBe(false);
+    const first = Promise.resolve(tracked!.execute({}, context()));
+    const second = Promise.resolve(tracked!.execute({}, context()));
+    expect(counter.busy).toBe(true);
+    releases[0]!(new Error("boom"));
+    expect(await first.catch((error: Error) => error.message)).toBe("boom");
+    expect([counter.busy, woken]).toEqual([true, 0]);
+    releases[1]!();
+    expect(await second).toBe("done");
+    expect([counter.busy, woken]).toEqual([false, 1]);
+  });
+
+  test("a call that throws at once still ends", async () => {
+    const counter = new InFlight();
+    const [tracked] = trackInFlight(
+      [
+        new FunctionTool({
+          name: "bad",
+          description: "throws",
+          parametersJsonSchema: { type: "object" },
+          execute: () => {
+            throw new Error("now");
+          },
+        }),
+      ],
+      counter,
+    );
+    expect(await Promise.resolve(tracked!.execute({}, context())).catch((error: Error) => error.message)).toBe("now");
+    expect(counter.busy).toBe(false);
+  });
 });

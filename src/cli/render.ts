@@ -13,7 +13,7 @@ import type { Diagnostic } from "../diagnostics.ts";
 import { cells, charCells } from "./terminal.ts";
 import { type CliIo, forTerminal, type Writer } from "./utils.ts";
 
-const SGR = { bold: 1, dim: 2, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
+const SGR = { bold: 1, dim: 2, italic: 3, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
 
 /** @internal A text style: a colour or weight, or two of them (`"red bold"`). */
 export type Style = keyof typeof SGR | `${keyof typeof SGR} ${keyof typeof SGR}`;

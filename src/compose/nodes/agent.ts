@@ -791,8 +791,8 @@ export class AgentDescriptor extends NodeDescriptor {
    * @throws LoadError for a bad `env.max_tool_iterations`, a bad variable declaration, a tool or
    *   skill grant the node refuses, an `output:` nesting deeper than
    *   `current().maxAgentOutputNesting` or holding a type a model can't produce, a steer inbox with
-   *   non-text output, a variable named like an input, or an input named `__llm_config` or
-   *   `__steer_inbox`.
+   *   non-text output, a variable named like an input, or an input or variable named
+   *   `__llm_config` or `__steer_inbox`.
    * @throws TypeError when `ctx.variableDeclarationReader` returns anything but an array of exact
    *   `Parameter`s or `null`.
    */
@@ -882,10 +882,24 @@ export class AgentDescriptor extends NodeDescriptor {
     node.params = this.sinkParams();
     const inputNames = new Set(node.params.map((parameter) => parameter.name));
     for (const variable of variables) {
-      if (!inputNames.has(variable.name)) continue;
+      // The reserved keys are refused whether or not this agent wires them, as for an input: the
+      // run binds them beside the inputs, so a variable of that name collides there.
+      let message: string;
+      if (variable.name === LLM_CONFIG_KEY) {
+        message =
+          `node ${id}: variable ${reprText(LLM_CONFIG_KEY)} is reserved for the values of \`llm_config\`; ` +
+          "rename the variable";
+      } else if (variable.name === STEER_INBOX_KEY) {
+        message =
+          `node ${id}: variable ${reprText(STEER_INBOX_KEY)} is reserved for \`steer_inbox:\`; ` +
+          "rename the variable";
+      } else if (inputNames.has(variable.name)) {
+        message = `node ${id}: variable ${reprText(variable.name)} collides with an input name`;
+      } else {
+        continue;
+      }
       const frame =
         ctx.resolveOrigin !== null && variable.origin !== null ? ctx.resolveOrigin(variable.origin) : null;
-      const message = `node ${id}: variable ${reprText(variable.name)} collides with an input name`;
       if (frame !== null) throw ctx.diagnostics.error(message, { frames: [frame] });
       throw ctx.diagnostics.error(message, {
         range: this.fieldRanges.get(siteKey("field", "variables")) ?? this.range,

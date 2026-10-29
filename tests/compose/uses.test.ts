@@ -142,12 +142,16 @@ const withCall = (alias: string) =>
   `nodes:\n  a: {kind: call, call: ${alias}, input: {x: "\${input.x}"}}\n` +
   'output: {y: "${a.output}"}\n';
 
-/** A resolver recording each `(path, version)` in `seen` and loading `CHILD`. */
+/** Return `CHILD` declaring `version`, or as written when `version` is `null`. */
+const childAt = (version: string | null) =>
+  version === null ? CHILD : CHILD.replace("name: child\n", `name: child\nversion: "${version}"\n`);
+
+/** A resolver recording each `(path, version)` in `seen` and loading `CHILD` at that version. */
 const fakeResolver =
   (seen: [string, string | null][]) =>
   (path: string, version: string | null): Promise<ComposedFlow> => {
     seen.push([path, version]);
-    return loadConformanceFlow(CHILD);
+    return loadConformanceFlow(childAt(version));
   };
 
 /** A resolver refusing every path. */
@@ -252,11 +256,25 @@ describe("resolving a uses: alias", () => {
     const text =
       "id: f\nname: f\ninput:\n  s: !str\n" +
       'nodes:\n  a: {kind: call, call: mom, input: {x: "${input.s}"}}\n' +
-      'output: {y: "${a.output}"}\nuses:\n  mom: c@1\n';
+      'output: {y: "${a.output}"}\nuses:\n  mom: c\n';
     const error = await loadErrorAsync(
       loadConformanceFlow(text, { childResolver: () => loadConformanceFlow(childInt) }),
     );
     expect(error.message).toBe("call node 'a': binding 'x' — child expects 'int', source is 'str'");
+  });
+
+  test("a host resolver's child is held to the ref's version pin", async () => {
+    // The file resolver and a resume check the pin too, so a flow that loads here also resumes.
+    const text = withCall("c") + "uses:\n  c: child@1\n";
+    const expected = SourceDocument.parse(text).root.child("uses").child("c").range;
+    const error = await loadErrorAsync(
+      loadConformanceFlow(text, { childResolver: () => loadConformanceFlow(childAt("2")) }),
+    );
+    expect(error.message).toBe(
+      'uses: ref pinned child@1 but the resolved file declares version: "2" ' +
+        '(file-per-version: name a file that declares "1")',
+    );
+    expect(error.diagnostic.frames.map((frame) => frame.range)).toEqual([expected!]);
   });
 
   test("a bare call without uses: or defs: is a located error that never asks the resolver", async () => {

@@ -277,7 +277,7 @@ export class CaseDescriptor extends NodeDescriptor {
    * Return `desc.cases` once it is a list of mappings; later passes index it so.
    *
    * @throws LoadError at `cases:` when it isn't a list (a mapping gets a hint to start each case
-   *   with `- `), or at the first item that isn't a mapping.
+   *   with `- `) or is empty with no `else:`, or at the first item that isn't a mapping.
    */
   static _checkCasesShape(desc: CaseDescriptor, cursor: SourceCursor): readonly CaseSpec[] {
     const diagnostics = LoadDiagnostics.fromCursor(cursor);
@@ -287,6 +287,12 @@ export class CaseDescriptor extends NodeDescriptor {
       const hint = isRecord(cases) ? "; start each case with `- `" : "";
       throw diagnostics.error(
         `${where}: \`cases:\` must be a list of {when:, then:} mappings (got ${valueRepr(cases)})${hint}`,
+        { range: desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range },
+      );
+    }
+    if (cases.length === 0 && !desc.hasElse) {
+      throw diagnostics.error(
+        `${where}: \`cases:\` is empty and there is no \`else:\`, so it routes nowhere; add a case or an \`else:\``,
         { range: desc.fieldRanges.get(siteKey("field", "cases")) ?? desc.range },
       );
     }

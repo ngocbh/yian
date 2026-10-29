@@ -83,6 +83,7 @@ import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
 import { checkLlmConfigValue, readLlmConfig } from "./nodes/agent.ts";
 import { notTextDetail, notTextError } from "./nodes/base.ts";
+import { KINDS, REMOVED_KINDS } from "./nodes/index.ts";
 import { checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
 import { callNestingScope } from "./nodes/resolver.ts";
 import {
@@ -98,7 +99,8 @@ import { SourceAccessError, SourceCursor, type SourceDocument } from "./source/i
 
 /**
  * Resolves a `uses:` ref to its flow: `path` is the ref's flow path and `version` its
- * `@<version>` (`null` when unpinned). It may return the flow or a promise of it.
+ * `@<version>` (`null` when unpinned). It may return the flow or a promise of it; a pinned ref's
+ * flow must declare that `version`, or the load fails.
  */
 export type ChildResolver = (path: string, version: string | null) => ComposedFlow | Promise<ComposedFlow>;
 
@@ -250,6 +252,11 @@ const DEF_ALLOWED: ReadonlySet<string> = new Set([
   "env",
   "long_term_memory",
 ]);
+// The kinds a single-node def may use, sorted: a case routes to other nodes, which a one-node
+// def has none of.
+const SINGLE_NODE_DEF_KINDS: readonly string[] = [...KINDS.keys()]
+  .filter((kind) => kind !== "case")
+  .sort(compareCodeUnits);
 // The authored spellings of `DEF_ALLOWED`, sorted, for error messages.
 const DEF_SURFACE_KEYS: readonly string[] = [...DEF_ALLOWED]
   .map((key) => (key === "inputs" ? "input" : key === "outputs" ? "output" : key))
@@ -545,8 +552,8 @@ export function finalizeComposedFlow(
  * Build the default local file resolver for `uses:` references.
  *
  * The returned resolver finds a ref's `<dir>/<path>.yaml` on the search path, the first match
- * winning; `@<version>` is never part of the file name but a guard: the resolved file is loaded,
- * then its declared `version:` must equal the pinned one. Children load recursively, so their own
+ * winning; `@<version>` is never part of the file name: the importer checks the resolved file's
+ * declared `version:` against the pin. Children load recursively, so their own
  * `uses:` and `system.paths` re-root at the child's directory. A `hub:` or other scheme ref never
  * reaches here.
  *
@@ -555,8 +562,8 @@ export function finalizeComposedFlow(
  *   diamond-reuse cache, keyed by real path, and the files read.
  * @param from The importing file, which records the path each of its refs resolved to; `null`
  *   records nothing.
- * @returns The resolver; it rejects with a `LoadError` for a missing target, a cross-file
- *   reference cycle, or a pinned-version mismatch.
+ * @returns The resolver; it rejects with a `LoadError` for a missing target or a cross-file
+ *   reference cycle.
  */
 export function makeFileResolver(
   searchPaths: readonly string[],
@@ -575,10 +582,7 @@ export function makeFileResolver(
       }
       from?.refs.set(usesRef(path, version), real);
       const cached = ctx.flows.get(real);
-      if (cached !== undefined) {
-        checkVersion(cached, path, version);
-        return cached;
-      }
+      if (cached !== undefined) return cached;
       if (ctx.loading.has(real)) {
         throw UNLOCATED_DIAGNOSTICS.error(`flow-reference cycle across files: ${real}`);
       }
@@ -594,7 +598,6 @@ export function makeFileResolver(
         ctx.loading.delete(real);
       }
       ctx.flows.set(real, child);
-      checkVersion(child, path, version);
       return child;
     }
     throw UNLOCATED_DIAGNOSTICS.error(
@@ -720,10 +723,7 @@ function sourceResolver(source: FlowSource, from: string, ctx: LoadCtx): ChildRe
     }
     const key = refs[ref]!;
     const cached = ctx.flows.get(key);
-    if (cached !== undefined) {
-      checkVersion(cached, path, version);
-      return cached;
-    }
+    if (cached !== undefined) return cached;
     if (ctx.loading.has(key)) throw UNLOCATED_DIAGNOSTICS.error(`flow-reference cycle across files: ${key}`);
     ctx.loading.add(key);
     let child: ComposedFlow;
@@ -733,7 +733,6 @@ function sourceResolver(source: FlowSource, from: string, ctx: LoadCtx): ChildRe
       ctx.loading.delete(key);
     }
     ctx.flows.set(key, child);
-    checkVersion(child, path, version);
     return child;
   };
 }
@@ -1515,8 +1514,8 @@ export class CallableScope implements AssemblyScope {
    * @param alias A declared `uses:` alias.
    * @returns The alias's rebased child, cached for later calls.
    * @throws LoadError (as a rejection), located at the alias, when its ref is malformed or has a
-   *   scheme, no resolver was given, the resolver fails or returns a bad flow, or the import chain
-   *   is past the limit.
+   *   scheme, no resolver was given, the resolver fails or returns a bad flow, the flow declares
+   *   another `version` than the ref pins, or the import chain is past the limit.
    */
   async resolveAlias(alias: string): Promise<ComposedFlow> {
     const built = this.#built.get(alias);
@@ -1554,6 +1553,8 @@ export class CallableScope implements AssemblyScope {
         throw this.#diagnostics.error(`${where}: could not resolve: ${errorText(error)}`, { cause: error });
       }
       loaded = rebaseExternalChild(alias, child);
+      // Checked here for every resolver, a host's too, so a load and a resume apply one rule.
+      checkVersion(loaded, ref.path, ref.version);
       const depth: unknown = loaded.importDepth;
       if (typeof depth !== "number" || !Number.isInteger(depth) || depth < 0) {
         throw this.#diagnostics.error(
@@ -1805,8 +1806,9 @@ function loadDef(
  * @param scope The file's callable scope.
  * @param defCursor The authored body, or `null` for a virtual fallback.
  * @returns The built child flow.
- * @throws LoadError, located and prefixed `defs entry '<name>': `, when `input:` isn't a param
- *   map, a parameter is named `inf`, or the node fails to assemble.
+ * @throws LoadError, located and prefixed `defs entry '<name>': `, when `kind:` is non-text,
+ *   unknown or `case`, `input:` isn't a param map, a parameter is named `inf`, or the node fails
+ *   to assemble.
  */
 function loadSingleNodeDef(
   name: string,
@@ -1817,6 +1819,28 @@ function loadSingleNodeDef(
 ): ComposedFlow {
   const diagnostics = scope.diagnostics;
   const where = `defs entry ${reprText(name)}`;
+  // Framed like an error from assembling the node: the definition, then the `kind:` value.
+  const kindError = (message: string): LoadError =>
+    diagnostics.prepend(diagnostics.error(message, { range: defCursor?.rangeOf("kind") ?? null }), {
+      range: defCursor?.range ?? null,
+      message: `${where}: ${message}`,
+      note: `definition ${reprText(name)}`,
+    });
+  const kind = body["kind"]!;
+  const allowed = SINGLE_NODE_DEF_KINDS.join(", ");
+  if (typeof kind !== "string") {
+    throw kindError(`node ${reprText(name)}: ${notTextError("kind", kind, `write one of ${allowed}`)}`);
+  }
+  if (kind === "case") {
+    throw kindError(
+      `kind 'case' is not allowed in a single-node def (allowed: ${allowed}); a case routes to other ` +
+        "nodes, which a one-node def has none of — write a full `nodes:` body instead",
+    );
+  }
+  // A removed kind keeps the node parse's message, which names its replacement.
+  if (!KINDS.has(kind) && !REMOVED_KINDS.has(kind)) {
+    throw kindError(`node ${reprText(name)}: unknown kind ${reprText(kind)} (allowed: ${allowed})`);
+  }
   const inputCursor = sourceChild(defCursor, "input");
   const paramTypes = signatureParams(Object.hasOwn(body, "inputs") ? body["inputs"]! : null, {
     where,

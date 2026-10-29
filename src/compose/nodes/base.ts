@@ -668,10 +668,11 @@ export class NodeDescriptor {
     for (const key of Object.keys(body)) {
       if (this.allowed.has(key)) continue;
       const hint = key === "when" ? this.whenHint : "";
-      // Name the authored spellings; the plural carrier names fail to load.
+      // Name the authored spellings, the offending key's too; the plural carrier names fail to load.
+      const field = SURFACE_NAMES.get(key) ?? key;
       const surface = new Set([...this.allowed].map((name) => SURFACE_NAMES.get(name) ?? name));
       throw diagnostics.error(
-        `node ${reprText(nodeId)} (kind=${this.kind}): field ${reprText(key)} is not allowed ` +
+        `node ${reprText(nodeId)} (kind=${this.kind}): field ${reprText(field)} is not allowed ` +
           `(allowed: ${[...surface].sort(compareCodeUnits).join(", ")})${hint}`,
         { range: cursor.rangeOf(key) },
       );

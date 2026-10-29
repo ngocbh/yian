@@ -396,6 +396,11 @@ test.each([
   ["    cases: null\n", "`cases:` must be a list of {when:, then:} mappings (got null)", casesValue],
   ["    cases: 7\n", "`cases:` must be a list of {when:, then:} mappings (got 7)", casesValue],
   ["    cases: [done]\n", '`cases[0]` must be a {when:, then:} mapping (got "done")', firstItem],
+  [
+    "    cases: []\n",
+    "`cases:` is empty and there is no `else:`, so it routes nowhere; add a case or an `else:`",
+    casesValue,
+  ],
 ])("case rejects malformed cases at their location: %s", (body, message, rangeIn) => {
   const text = SHAPE_HEAD + body + SHAPE_TAIL;
   const error = loadError(() => nodesOf(text));

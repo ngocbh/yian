@@ -1419,10 +1419,16 @@ describe("check", () => {
     const root = join(tmp, "company");
     const pinned = file("company/pinned.yaml", parentFlow("lib/child@2"));
     file("company/lib/child.yaml", FLOW.replace("name: f\n", "name: f\nversion: '1'\n"));
-    expect((await rootDiagnostic(root, pinned)).message).toEndWith("lib/child is version '1', not '2'");
+    expect((await rootDiagnostic(root, pinned)).message).toBe(
+      'uses: ref pinned lib/child@2 but the resolved file declares version: "1" ' +
+        '(file-per-version: name a file that declares "2")',
+    );
     const unversioned = file("company/unversioned.yaml", parentFlow("lib/bare@2"));
     file("company/lib/bare.yaml", FLOW);
-    expect((await rootDiagnostic(root, unversioned)).message).toEndWith("lib/bare is version null, not '2'");
+    expect((await rootDiagnostic(root, unversioned)).message).toBe(
+      "uses: ref pinned lib/bare@2 but the resolved file declares version: null " +
+        '(file-per-version: name a file that declares "2")',
+    );
   });
 
   test("a CODE reference resolves against its own file's directory, not the cwd", async () => {

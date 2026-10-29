@@ -345,3 +345,18 @@ test(
   },
   TIMEOUT,
 );
+
+test(
+  "yian run --resume on a user's own flow with the id yian-chat resumes it",
+  async () => {
+    const path = join(root, "mine.yaml");
+    writeFileSync(path, HELLO.replace("id: hello", "id: yian-chat"));
+    const log = join(tmp, "mine.jsonl");
+    const first = chatIo();
+    expect(await main(["run", path, "--input", "name=Ada", "--log", log, "--quiet"], first.io)).toBe(0);
+    const resumed = chatIo();
+    expect(await main(["run", "--resume", log, "--quiet"], resumed.io)).toBe(0);
+    expect(resumed.stdout()).toBe("Hi Ada\n");
+  },
+  TIMEOUT,
+);

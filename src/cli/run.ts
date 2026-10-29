@@ -553,7 +553,11 @@ function lexists(path: string): boolean {
   }
 }
 
-/** The id of `yian chat`'s bundled flow: `yian run --resume` refuses a log whose run it started. */
+/**
+ * The id of `yian chat`'s bundled flow: `yian run --resume` refuses a log whose run it started
+ * (its id, and its recorded text the bundled one). A chat started by another yian version, whose
+ * bundled text differs, isn't recognized.
+ */
 export const CHAT_FLOW_ID = "yian-chat";
 
 /**
@@ -1173,9 +1177,14 @@ async function startRun(
         new RangeError("this run's flow was built in code; resume it with advance({log, flow})"),
       );
     }
-    // A chat's run needs the chat to type into it and to host its tools.
+    // A chat's run needs the chat to type into it and to host its tools. Imported only for a run
+    // with the chat's id: the bundle is large, and a user's own flow may share the id.
     if (recorded.compiled.flowId === CHAT_FLOW_ID) {
-      return setupFailed(new RangeError("this run is a yian chat's; yian run --resume can't continue it"));
+      const { FLOWS } = await import("./bundled.ts");
+      const source = recorded.source;
+      if (source !== null && source.files[source.root]?.text === FLOWS["chat.yaml"]) {
+        return setupFailed(new RangeError("this run is a yian chat's; yian run --resume can't continue it"));
+      }
     }
     flow = recorded;
   } else {

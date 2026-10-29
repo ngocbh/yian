@@ -306,10 +306,11 @@ export class ProfileMemory implements Memory {
    * Pin the current document, or the recorded version when restoring.
    *
    * @param options.snapshot A snapshot recorded by an earlier session of this backend.
+   * @param options.signal The run's stop, passed to the store's `read`.
    * @throws MemoryOperationError `profile.closed` after `close()`, `profile.store_unavailable`
-   *   (retryable) when the store can't be reached, `profile.store_invalid` when its document can't
-   *   be decoded, or `profile.snapshot_unavailable` when the recorded version is malformed,
-   *   unknown, or changed. Other store errors pass through unchanged.
+   *   (retryable) when the store can't be reached, fresh or restoring, `profile.store_invalid` when
+   *   its current document can't be decoded, or `profile.snapshot_unavailable` when the recorded
+   *   version is malformed, unknown, or changed. Other store errors pass through unchanged.
    */
   async openRun(options: { snapshot?: JsonObject | null; signal?: AbortSignal } = {}): Promise<ProfileSession> {
     this.ensureOpen("openRun");
@@ -342,7 +343,9 @@ export class ProfileMemory implements Memory {
         throw new RangeError("stored text differs from the recorded version");
       }
     } catch (cause) {
-      if (!(cause instanceof TypeError || cause instanceof RangeError || isSystemError(cause))) throw cause;
+      // An unreachable store, a lock wait that timed out included, may answer a retry.
+      if (isSystemError(cause)) throw readError("openRun", cause);
+      if (!(cause instanceof TypeError || cause instanceof RangeError)) throw cause;
       throw error("openRun", "profile.snapshot_unavailable", "recorded profile version cannot be restored", {
         cause,
       });

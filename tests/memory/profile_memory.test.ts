@@ -768,7 +768,8 @@ test("store read failures: a plain Error escapes, a system error is retryable", 
     "profile store could not be read",
   ]);
   expect(error.cause).toBe(thrown);
-  expect((await failure(() => memory.openRun({ snapshot }))).code).toBe("profile.snapshot_unavailable");
+  const restoring = await failure(() => memory.openRun({ snapshot }));
+  expect([restoring.code, restoring.retryable, restoring.cause]).toEqual(["profile.store_unavailable", true, thrown]);
 });
 
 test("a file store's lock held past its cap is retryable store_unavailable; an abort rejects", async () => {

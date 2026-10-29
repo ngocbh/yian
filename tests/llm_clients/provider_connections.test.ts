@@ -557,6 +557,7 @@ describe("edge cases", () => {
     expect(rangeError(() => checkModelConfig(azure)).message).toContain("model 'prod-codex' is routed to the Responses API");
     // No block, a model on Chat Completions, and OpenAI (always the Responses API) are fine.
     checkModelConfig({ provider: "openrouter", model: "openai/gpt-5-codex" });
+    checkModelConfig({ ...routed, openrouter: { temperature: null } });
     checkModelConfig({ ...routed, model: "openai/gpt-5" });
     checkModelConfig({ provider: "openai", model: "gpt-5-codex", openai: { temperature: 0.5 } });
   });

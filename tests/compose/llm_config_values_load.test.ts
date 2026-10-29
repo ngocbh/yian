@@ -135,6 +135,8 @@ test.each([
 test("a block beside a model from a value loads, to be checked when the model is known", () => {
   agentOf(flow("    llm_config: {provider: openrouter, model: '${input.m}', openrouter: {temperature: 0.5}}\n"));
   agentOf(flow("    llm_config: {provider: openrouter, model: openai/gpt-5-codex}\n"));
+  // A null field is unset, so the block is empty.
+  agentOf(flow("    llm_config: {provider: openrouter, model: openai/gpt-5-codex, openrouter: {temperature: null}}\n"));
 });
 
 test("a literal flow layer is still a plain dict", async () => {

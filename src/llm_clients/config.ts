@@ -54,12 +54,14 @@ export const AZURE_NEEDS_BASE_URL =
  *
  * A Chat Completions vendor (any OpenAI-compatible provider but `openai`) or Azure sends a model
  * that `prefersResponses` to the Responses API, while its block mirrors the Chat Completions
- * request, so such a model needs the block empty. A block that is not a record is left to the
- * block's own check.
+ * request, so such a model needs the block empty; a field set to `null` counts as unset. A block
+ * that is not a record is left to the block's own check.
  */
 export function responsesBlockError(provider: string, model: string, block: unknown): string | null {
   const chat = provider === "azure" || Object.hasOwn(PROVIDER_BASE_URL, provider);
-  if (!chat || !prefersResponses(model) || !isRecord(block) || Object.keys(block).length === 0) return null;
+  if (!chat || !prefersResponses(model) || !isRecord(block)) return null;
+  // A null field is unset, as `LLMConfig` reads it, so a block of only nulls is empty.
+  if (!Object.values(block).some((value) => value !== null && value !== undefined)) return null;
   return (
     `The ${reprText(provider)} block mirrors the Chat Completions request, but model ${reprText(model)} ` +
     "is routed to the Responses API; remove the block or use a model served through Chat Completions."

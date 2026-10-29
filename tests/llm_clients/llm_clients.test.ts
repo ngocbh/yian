@@ -273,6 +273,7 @@ test.each(FACTORY_SUPPORTED_PROVIDERS)("llm config accepts every factory support
 
 test("llm config and factory provider vocabularies match", () => {
   expect(new Set<string>(SUPPORTED_LLM_PROVIDERS)).toEqual(new Set(FACTORY_SUPPORTED_PROVIDERS));
+  expect(FACTORY_SUPPORTED_PROVIDERS).toHaveLength(SUPPORTED_LLM_PROVIDERS.length);
 });
 
 test("llm config still rejects unknown provider", () => {

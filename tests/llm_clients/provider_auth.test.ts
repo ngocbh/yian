@@ -2125,6 +2125,39 @@ describe("OpenAIAuth", () => {
     expect(error.message).toMatch(/account/);
   });
 
+  const refusedRefreshes: [string, HttpResponse, string][] = [
+    [
+      "an OAuth error string",
+      new HttpResponse(400, { error: "invalid_grant", error_description: "token old-refresh was revoked" }),
+      "OpenAI authentication request failed (HTTP 400, invalid_grant); sign in again",
+    ],
+    [
+      "an error record's code",
+      new HttpResponse(401, { error: { code: "refresh_token_expired", message: "old-refresh expired" } }),
+      "OpenAI authentication request failed (HTTP 401, refresh_token_expired); sign in again",
+    ],
+    [
+      "a known code that leaves the grant usable",
+      new HttpResponse(400, { error: "invalid_scope" }),
+      "OpenAI authentication request failed (HTTP 400, invalid_scope)",
+    ],
+    [
+      "a code off the known list",
+      new HttpResponse(400, { error: "old-refresh" }),
+      "OpenAI authentication request failed (HTTP 400)",
+    ],
+    ["no body", new HttpResponse(502, null), "OpenAI authentication request failed (HTTP 502)"],
+  ];
+  for (const [label, response, message] of refusedRefreshes) {
+    test(`a refused refresh names the token endpoint's error code: ${label}`, async () => {
+      const error = await rejected(new OpenAIAuth({ request: new FakeHttp(response).request }).refresh(OLD()));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(message);
+      expect((error as AuthError).status).toBe(response.status);
+      expect(error.cause).toBeUndefined();
+    });
+  }
+
   const invalidExpiries: [string, unknown][] = [
     ["10n ** 1000n", 10n ** 1000n],
     ["NaN", NaN],
@@ -2290,6 +2323,22 @@ describe("OpenAIAuth", () => {
     expect(asyncError.message).toBe("OpenAI authentication request failed");
     expect(asyncError.cause).toBeUndefined();
   });
+
+  const transportKinds: [ProviderError, string][] = [
+    [new ProviderError("timeout", "HTTP request failed (timeout): sensitive"), "timed out"],
+    [new ProviderError("connection", "HTTP request failed (connection): sensitive"), "could not connect"],
+    [new ProviderError("protocol", "HTTP response is larger than 10 bytes: sensitive"), "reply too large"],
+  ];
+  for (const [transport, words] of transportKinds) {
+    test(`a transport failure keeps its kind but not its text: ${transport.kind}`, async () => {
+      const auth = new OpenAIAuth({ request: async () => Promise.reject(transport) });
+      const error = await rejected(auth.apiModels(new ApiKeyCredentials("key")));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(`OpenAI authentication request failed (${words})`);
+      expect(error.cause).toBeUndefined();
+      expect(error.stack).not.toContain("sensitive");
+    });
+  }
 
   test("the subscription catalog uses account routing and visibility order", async () => {
     const http = new FakeHttp(
@@ -2704,7 +2753,7 @@ describe("OpenAIAuth", () => {
             expect(error).toBe(reason);
           } else {
             expect(error).toBeInstanceOf(AuthError);
-            expect(error.message).toBe("OpenAI authentication request failed");
+            expect(error.message).toBe("OpenAI authentication request failed (timed out)");
           }
           expect(performance.now() - start).toBeLessThan(700);
           const peer = await Promise.race([

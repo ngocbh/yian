@@ -5,6 +5,7 @@ import net from "node:net";
 
 import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
+import { ProviderError } from "../../llm/errors.ts";
 import { realScheduler, type Scheduler, USER_AGENT } from "../../platform.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { openaiIdHeaders, validateHeaders } from "../connection_settings.ts";
@@ -171,10 +172,51 @@ function sameText(a: string, b: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-/** Return a 2xx response's body record, or throw `AuthError`. */
+/** What a transport failure of each kind reads as; its own text can hold request values. */
+const TRANSPORT_FAILURES: Readonly<Partial<Record<string, string>>> = {
+  timeout: "timed out",
+  connection: "could not connect",
+  protocol: "reply too large",
+};
+
+/**
+ * The token endpoint's error codes a failure message may name, each mapped to whether it means
+ * the grant is unusable and the user must sign in again: OAuth's (RFC 6749) and OpenAI's
+ * refresh-token codes. A code off this list isn't shown, since a reply's text can echo
+ * request values.
+ */
+const ERROR_CODES: ReadonlyMap<string, boolean> = new Map([
+  ["invalid_request", false],
+  ["invalid_client", false],
+  ["invalid_grant", true],
+  ["unauthorized_client", false],
+  ["unsupported_grant_type", false],
+  ["invalid_scope", false],
+  ["refresh_token_expired", true],
+  ["refresh_token_reused", true],
+  ["refresh_token_invalidated", true],
+]);
+
+/** Return a failed reply's known error code: the OAuth `error` string or an `error` record's `code`. */
+function errorCode(data: unknown): string | null {
+  if (!isRecord(data)) return null;
+  let code = get(data, "error");
+  if (isRecord(code)) code = get(code, "code");
+  return typeof code === "string" && ERROR_CODES.has(code) ? code : null;
+}
+
+/**
+ * Return a 2xx response's body record, or throw `AuthError`.
+ *
+ * A failure's message names the status and a known error code (`ERROR_CODES`), and says to sign
+ * in again when the code means the grant is unusable.
+ */
 function responseData(response: HttpResponse): Record<string, unknown> {
   if (!(response.status >= 200 && response.status < 300)) {
-    throw new AuthError(`OpenAI authentication request failed (HTTP ${response.status})`, {
+    const code = errorCode(response.data);
+    const detail = code === null ? "" : `, ${code}`;
+    const hint = code !== null && ERROR_CODES.get(code) ? "; sign in again" : "";
+    throw new AuthError(`OpenAI authentication request failed (HTTP ${response.status}${detail})${hint}`, {
       status: response.status,
     });
   }
@@ -281,10 +323,11 @@ export class OpenAIAuth {
     let response: unknown;
     try {
       response = await untilStopped(this.#request(method, url, sent), signal);
-    } catch {
+    } catch (error) {
       if (signal.aborted) throw signal.reason;
-      // The transport's error can hold request values, so none of it is kept.
-      throw new AuthError("OpenAI authentication request failed");
+      // The transport's error can hold request values, so only its kind is kept.
+      const failure = error instanceof ProviderError ? TRANSPORT_FAILURES[error.kind] : undefined;
+      throw new AuthError(`OpenAI authentication request failed${failure === undefined ? "" : ` (${failure})`}`);
     }
     signal.throwIfAborted();
     if (

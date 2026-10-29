@@ -39,28 +39,23 @@ import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
 import { builtinType } from "../typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
+import { printStyled, renderDiagnostic, writeEngineTrace } from "./render.ts";
 import {
   checkSuppliedInputs,
-  cliLayer,
-  freshLog,
   gatherMissingInputs,
   indexRun,
   isSetupError,
-  loadFlowFile,
   mergeInputs,
-  preflightKeys,
-  printStyled,
   readGrantedSkills,
   removeEmptyDir,
-  renderDiagnostic,
   renderRunError,
   reportRunLog,
   ResumeKeyError,
   resumeKeyCheck,
   validateRunLogOptions,
   waitingText,
-  writeEngineTrace,
 } from "./run.ts";
+import { cliLayer, freshLog, loadFlowFile, preflightKeys } from "./startup.ts";
 import { Terminal, TerminalStopped } from "./terminal.ts";
 import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, shellQuote, UsageError } from "./utils.ts";
 

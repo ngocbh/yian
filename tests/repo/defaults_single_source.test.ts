@@ -56,9 +56,9 @@ const ALLOWED: Record<string, string> = {
   "llm/testing.ts: NULL_BODY_STATUSES": "HTTP statuses whose response has no body",
   // Display and message formatting.
   "cli/chat.ts: SECOND_PRESS_MS": "how soon a second Ctrl-C cancels the chat's run",
-  "cli/run.ts: ERR_CONTEXT": "lines of YAML shown around an error",
+  "cli/render.ts: ERR_CONTEXT": "lines of YAML shown around an error",
+  "cli/render.ts: SGR": "terminal color and style codes",
   "cli/run.ts: flowBanner.||": "terminal width when the output reports none",
-  "cli/run.ts: SGR": "terminal color and style codes",
   "cli/run.ts: SPIN_MS": "spinner frame interval",
   "cli/terminal.ts: Terminal.#runWidget.<arrow>.||": "terminal width when the output reports none",
   "cli/terminal.ts: writeRule.||": "terminal width when the output reports none",

@@ -1,7 +1,8 @@
 /**
  * The flow commands, `yian run`, `yian check`, `yian status` and `yian skills check`, and `yian
- * run`'s helpers: what it prints on stderr, the inputs it reads from flags, its run-log options and
- * default log path.
+ * run`'s helpers: what it prints on stderr, the inputs it reads from flags and its run-log options.
+ * The start-up it shares with `yian chat` is in `startup.ts`, and the rendering both use in
+ * `render.ts`.
  *
  * - `run` checks the run-log options, loads the flow, builds its memories, reads skills and MCP
  *   servers when it needs them, runs it on a fresh log or recovers the run recorded on a
@@ -11,27 +12,22 @@
  *   lists the run index of `~/.yian/runs`, as text or a `--json` document. A run whose log is in
  *   `~/.yian/runs` updates that index when it ends.
  * - `skillsCheck` loads skill directories and reports each as text or one `--json` document.
- * - `renderDiagnostic` boxes each source frame of a diagnostic, its marked lines numbered, the
- *   message below; `diagnosticJson` gives the same diagnostic as a `--json` document's part;
- *   `renderRunError` renders a failed run's diagnostic.
+ * - `renderRunError` renders a failed run's diagnostic.
  * - `flowBanner` is the "what am I running" box; `ProgressReporter` draws per-node progress.
  * - `mergeInputs` reads `--inputs` then `--input k=v` (`readInputsJson`, `parseKv`).
- * - `validateRunLogOptions` and `defaultRunLogPath` pick the run's log under `defaultRunsDir`;
- *   `reportRunLog` prints it.
- * - `loadFlowFile`, `checkSuppliedInputs`, `cliLayer`, `preflightKeys`, `freshLog` and `indexRun`
- *   are the steps of a fresh run's start and end that `yian chat` shares.
- * - `ensureProviderKeys` checks the keys of the connections `agentConnections` finds before a run.
+ * - `validateRunLogOptions` checks the run-log options; `reportRunLog` prints the log's path.
+ * - `checkSuppliedInputs` and `indexRun` are the steps of a fresh run's start and end that `yian
+ *   chat` shares beside `startup.ts`'s.
  * - `readGrantedSkills` reads the skill folders when a flow's AGENTs grant skills.
  *
  * Output is raw ANSI on stderr, coloured only on a TTY without `NO_COLOR`.
  */
 
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmdirSync, statSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, rmdirSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-import { knownCallTimeBaseUrls, knownCallTimeProviders } from "../compile/llm_cascade.ts";
-import { copyGraph, END_ID, START_ID } from "../compile/model.ts";
+import { END_ID, START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { loadFlow } from "../compose/loader.ts";
@@ -57,28 +53,17 @@ import {
   type AgentConfig,
   type Connection,
   connectionCredentials,
-  connectionSnapshot,
   HEADER_NAMES_KEY,
   HOST_KEY_MARKER,
   keyIdentity,
 } from "../llm_clients/connection.ts";
 import { MemoryOperationError } from "../memory/contracts.ts";
 import type { MemoryRegistry } from "../memory_host.ts";
-import { checkInputNames, coerceInputs } from "../nodes/binding.ts";
+import { checkInputNames } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import {
-  FileLockError,
-  homeDir,
-  isSystemError,
-  leavesRoot,
-  sqliteErrorCode,
-  statOrNull,
-  syncFolder,
-  withWarnings,
-} from "../platform.ts";
+import { FileLockError, isSystemError, leavesRoot, sqliteErrorCode, statOrNull, withWarnings } from "../platform.ts";
 import {
   advance,
-  hostInputs,
   inspectRun,
   type LlmConfigsCheck,
   loadRecordedFlow,
@@ -87,8 +72,6 @@ import {
   type RunInspection,
   type RunResult,
   runFlow,
-  runLogPath,
-  runStartLlm,
   skillGrants,
   staticNodes,
   updateRunIndex,
@@ -100,15 +83,35 @@ import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
 import { buildCliMemories, MemoryOptionError } from "./memory.ts";
-import { cells, charCells, Terminal, TerminalStopped } from "./terminal.ts";
+import {
+  box,
+  diagnosticJson,
+  paint,
+  printStyled,
+  renderDiagnostic,
+  splitLines,
+  type Style,
+  tracebackBox,
+  wrapLine,
+  writeEngineTrace,
+} from "./render.ts";
+import {
+  cliLayer,
+  defaultRunsDir,
+  ensureProviderKeys,
+  freshLog,
+  loadFlowFile,
+  NotUtf8Error,
+  preflightKeys,
+  readFlowText,
+} from "./startup.ts";
+import { cells, Terminal, TerminalStopped } from "./terminal.ts";
 import {
   atTerminal,
   type CliIo,
   CommandEnv,
-  ensureEnvKey,
   forTerminal,
   HostStop,
-  MissingKeyError,
   osReason,
   printJson,
   type PromptContext,
@@ -117,176 +120,6 @@ import {
   UsageError,
   type Writer,
 } from "./utils.ts";
-
-const SGR = { bold: 1, dim: 2, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
-
-/** A text style: a colour or weight, or two of them (`"red bold"`). */
-type Style = keyof typeof SGR | `${keyof typeof SGR} ${keyof typeof SGR}`;
-
-/** Return `text` in `style` when `out` is a TTY and `NO_COLOR` is unset or empty, else as is. */
-function paint(text: string, style: Style, out: Writer, env: Env): string {
-  if (!out.isTTY || env("NO_COLOR")) return text;
-  const codes = style.split(" ").map((word) => SGR[word as keyof typeof SGR]);
-  return `\x1b[${codes.join(";")}m${text}\x1b[0m`;
-}
-
-/** @internal Write `text` in `style` and a newline to `io.stderr`. */
-export function printStyled(io: CliIo, text: string, style: Style): Promise<void> {
-  return io.stderr.write(`${paint(forTerminal(text, io.stderr), style, io.stderr, io.env)}\n`);
-}
-
-/** Return `text`'s lines as source ranges count them, with no empty line after a final break. */
-function splitLines(text: string): string[] {
-  const lines = text.split(/\r\n|\r|\n/);
-  if (lines[lines.length - 1] === "") lines.pop();
-  return lines;
-}
-
-/**
- * Return `rows` in a box drawn in `border`, `title` set into its top edge, at least `width` cells
- * inside. Each row is its plain text, which sizes the box, and the text to print.
- */
-function box(
-  rows: readonly (readonly [string, string])[],
-  border: Style,
-  out: Writer,
-  env: Env,
-  title = "",
-  width = 0,
-): string {
-  const heading = title ? `─ ${title} ` : "";
-  const inner = Math.max(width, cells(heading) - 1, ...rows.map(([plain]) => cells(plain)));
-  const edge = (text: string) => paint(text, border, out, env);
-  const lines = [edge(`╭${heading}${"─".repeat(inner + 2 - cells(heading))}╮`)];
-  for (const [plain, printed] of rows) {
-    lines.push(`${edge("│")} ${printed}${" ".repeat(inner - cells(plain))} ${edge("│")}`);
-  }
-  lines.push(edge(`╰${"─".repeat(inner + 2)}╯`));
-  return lines.join("\n");
-}
-
-/**
- * Return the UTF-16 ranges of `text`'s rows wrapped to `width` cells, each ending before its
- * row's trailing whitespace; an empty line is one empty row. Follows rich's `divide_line`: a word
- * keeps its trailing spaces, moves to a new row when it doesn't fit the rest of this one, and is
- * folded by characters when it is wider than a row.
- */
-function wrapLine(text: string, width: number): [start: number, end: number][] {
-  const starts = [0];
-  let used = 0;
-  for (const match of text.matchAll(/\s*\S+\s*/g)) {
-    const word = match[0];
-    const length = cells(word.trimEnd());
-    if (length <= width - used) {
-      used += cells(word);
-    } else if (length > width) {
-      // Folded: each chunk of at most `width` cells starts a row; a character that doesn't fit
-      // starts the next chunk.
-      if (match.index > 0) starts.push(match.index);
-      let at = match.index;
-      let chunk = 0;
-      for (const char of word) {
-        const size = charCells(char);
-        if (chunk > 0 && chunk + size > width) {
-          starts.push(at);
-          chunk = 0;
-        }
-        chunk += size;
-        at += char.length;
-      }
-      used = chunk;
-    } else {
-      starts.push(match.index);
-      used = cells(word);
-    }
-  }
-  return starts.map((start, i) => {
-    const row = text.slice(start, starts[i + 1] ?? text.length);
-    return [start, start + row.trimEnd().length];
-  });
-}
-
-// Lines of source shown above and below the marked lines, so a large flow isn't printed whole.
-const ERR_CONTEXT = 5;
-
-/**
- * Return one boxed source frame, or `null` when no line of `marks` is in `text`.
- *
- * The box shows the source from 5 lines above the first mark to 5 below the last, numbered, each
- * marked line flagged `❱`, and is titled `title:line[,line...]`.
- */
-function renderFrameBox(text: string, marks: readonly number[], title: string, out: Writer, env: Env): string | null {
-  const lines = splitLines(text);
-  const shown = [...new Set(marks)].filter((mark) => 1 <= mark && mark <= lines.length).sort((a, b) => a - b);
-  if (shown.length === 0) return null;
-  const start = Math.max(1, shown[0]! - ERR_CONTEXT);
-  const end = Math.min(lines.length, shown[shown.length - 1]! + ERR_CONTEXT);
-  const width = String(end).length;
-  const rows: [string, string][] = [];
-  for (let line = start; line <= end; line++) {
-    const marked = shown.includes(line);
-    const gutter = `${marked ? "❱" : " "} ${String(line).padStart(width)} `;
-    const code = lines[line - 1]!;
-    rows.push([gutter + code, paint(gutter, marked ? "red bold" : "dim", out, env) + code]);
-  }
-  return box(rows, "red", out, env, `${title}:${shown.join(",")}`);
-}
-
-/**
- * Write `diag` to `out`: each frame, outermost first, then the message, then the notes.
- *
- * A frame is boxed around the lines its range covers (`SourceRange.coveredLines`), or shown as
- * its label when none is in its text; its note follows it. Several frames are headed `source
- * locations:`. A diagnostic without frames prints only its message. On a TTY the message and notes,
- * which can carry provider or tool text, go through `forTerminal`.
- */
-export async function renderDiagnostic(diag: Diagnostic, out: Writer, env: Env): Promise<void> {
-  const parts: string[] = [];
-  if (diag.frames.length > 1) parts.push(paint("source locations:", "red bold", out, env));
-  for (const frame of diag.frames) {
-    const framed = renderFrameBox(frame.text, frame.range.coveredLines(frame.text), frame.label, out, env);
-    parts.push(framed ?? paint(frame.label, "red bold", out, env));
-    if (frame.note !== null) parts.push(paint(`  ↳ ${forTerminal(frame.note, out)}`, "yellow", out, env));
-  }
-  parts.push(paint(forTerminal(diag.message, out), "red", out, env));
-  for (const note of diag.notes) parts.push(paint(`  ↳ ${forTerminal(note, out)}`, "yellow", out, env));
-  await out.write(`${parts.join("\n")}\n`);
-}
-
-/** A diagnostic in the `yian.cli.v1` form. */
-export interface DiagnosticJson {
-  code: string;
-  message: string;
-  frames?: { label: string; range: [bigint, bigint, bigint, bigint]; note?: string }[];
-  notes?: string[];
-}
-
-/**
- * Return `diag` in the `yian.cli.v1` diagnostic form.
- *
- * A frame's range is `[startLine, startCol, endLine, endCol]`, 1-based with an exclusive end
- * column, as ints (`bigint`s, so `printJson` writes them without `.0`). `frames`, `notes` and a
- * frame's `note` are left out when empty.
- */
-export function diagnosticJson(diag: Diagnostic): DiagnosticJson {
-  const document: DiagnosticJson = { code: diag.code, message: diag.message };
-  if (diag.frames.length > 0) {
-    document.frames = diag.frames.map(({ label, range, note }) => ({
-      label,
-      range: [BigInt(range.startLine), BigInt(range.startCol), BigInt(range.endLine), BigInt(range.endCol)],
-      ...(note ? { note } : {}),
-    }));
-  }
-  if (diag.notes.length > 0) document.notes = [...diag.notes];
-  return document;
-}
-
-/** Return `text`, a stack or captured traceback, in a box titled `traceback`, ending in a newline. */
-function tracebackBox(text: string, out: Writer, env: Env): string {
-  const lines = splitLines(forTerminal(text, out).trimEnd());
-  const rows = lines.map((line) => [line, paint(line, "dim", out, env)] as const);
-  return `${box(rows, "red", out, env, "traceback")}\n`;
-}
 
 /**
  * Write a failed run's diagnostic to `out` and return it: the flow's `diagnose` of its failure,
@@ -764,35 +597,6 @@ export function validateRunLogOptions(options: {
   }
 }
 
-/**
- * Create the private CLI directories and the run's folder, and return a fresh run's default log
- * path, `~/.yian/runs/<runId>/log.jsonl` (`runLogPath` under `~/.yian/runs`), with `HOME` from
- * `env` (the account's home directory when it is unset or empty).
- *
- * `~/.yian` and `~/.yian/runs` are created with mode 0700, or set to it if they exist; the run's
- * folder must be new and is created with mode 0700. The folder above each one created is synced.
- * The file itself is not created: the run log creates it exclusively, owner-only.
- *
- * @throws {Error} When a directory can't be created, changed or synced, a non-directory holds the
- *   path of `~/.yian` or `~/.yian/runs`, or anything holds the run folder's path.
- */
-export function defaultRunLogPath(runId: string, env: Env): string {
-  const runsDir = defaultRunsDir(env);
-  for (const dir of [dirname(runsDir), runsDir]) {
-    let made = true;
-    try {
-      mkdirSync(dir, { mode: 0o700 });
-    } catch (error) {
-      const taken = (error as NodeJS.ErrnoException).code === "EEXIST";
-      if (!taken || !statSync(dir, { throwIfNoEntry: false })?.isDirectory()) throw error;
-      made = false;
-    }
-    chmodSync(dir, 0o700);
-    if (made) syncFolder(dirname(dir));
-  }
-  return runLogPath(runsDir, runId);
-}
-
 /** Remove the directory `dir` if it is empty; otherwise, or when that fails, leave it as it is. */
 export function removeEmptyDir(dir: string): void {
   try {
@@ -801,11 +605,6 @@ export function removeEmptyDir(dir: string): void {
     // Not empty (the run created its log) or not removable: tidying must not replace the
     // command's own outcome.
   }
-}
-
-/** Return the CLI's runs folder, `~/.yian/runs`, with `HOME` from `env` as `defaultRunLogPath` reads it. */
-export function defaultRunsDir(env: Env): string {
-  return join(homeDir(env), ".yian", "runs");
 }
 
 /**
@@ -837,110 +636,6 @@ export async function indexRun(log: string, io: CliIo): Promise<void> {
 /** Write the run's log path to `out`, even when progress is quiet. */
 export async function reportRunLog(path: string, out: Writer, env: Env): Promise<void> {
   await out.write(`${paint(`Run log: ${path}`, "dim", out, env)}\n`);
-}
-
-/** @internal A flow or inputs file holding bytes that aren't UTF-8. */
-export class NotUtf8Error extends Error {
-  override name = "NotUtf8Error";
-}
-
-/**
- * @internal Read the flow or inputs file at `path` as strict UTF-8, a BOM kept, `\r\n` and `\r` read as `\n`.
- *
- * @throws {NotUtf8Error} When the file isn't UTF-8 text.
- * @throws {Error} A system error when the file can't be read.
- */
-export function readFlowText(path: string): string {
-  const bytes = readFileSync(path);
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-  } catch (error) {
-    if (error instanceof TypeError) throw new NotUtf8Error(path);
-    throw error;
-  }
-  return text.replace(/\r\n?/g, "\n");
-}
-
-/** @internal Write `error`'s stack in a traceback box on stderr when `engineTrace` is set. */
-export async function writeEngineTrace(error: Error, engineTrace: boolean, io: CliIo): Promise<void> {
-  if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
-}
-
-/**
- * @internal Read and load the flow file at `path` for a fresh run. A file that isn't UTF-8 text or
- * a flow that doesn't load is reported on stderr (a load error located, its stack below under
- * `engineTrace`), and its diagnostic is returned instead of the flow.
- *
- * @throws {Error} A system error when the file can't be read.
- */
-export async function loadFlowFile(path: string, engineTrace: boolean, io: CliIo): Promise<ComposedFlow | Diagnostic> {
-  let text: string;
-  try {
-    text = readFlowText(path);
-  } catch (error) {
-    if (!(error instanceof NotUtf8Error)) throw error;
-    const message = `can't read ${path}: not UTF-8 text`;
-    await printStyled(io, message, "red");
-    return new Diagnostic({ code: "compose.load", message });
-  }
-  try {
-    return await loadFlow(text, { searchPaths: [dirname(path)], sourceLabel: basename(path), env: io.env });
-  } catch (error) {
-    if (!(error instanceof LoadError)) throw error;
-    // Where in the `.yaml` the flow broke, not the engine's internals, unless asked for.
-    await renderDiagnostic(error.diagnostic, io.stderr, io.env);
-    await writeEngineTrace(error, engineTrace, io);
-    return error.diagnostic;
-  }
-}
-
-/**
- * @internal Return the outermost `llmConfig` layer of a fresh run: `provider` and `model`, those
- * given. It fills the gaps rather than overriding: an agent's own llm_config and the flow's still
- * win.
- */
-export function cliLayer(options: { provider?: string | undefined; model?: string | undefined }): Record<string, string> {
-  const layer: Record<string, string> = {};
-  if (options.provider) layer["provider"] = options.provider;
-  if (options.model) layer["model"] = options.model;
-  return layer;
-}
-
-/**
- * @internal Check every key `flow`'s agents need before a fresh run creates its log
- * (`ensureProviderKeys`), and return the message of a missing key or of a login that doesn't
- * resolve, else null.
- *
- * @throws `signal`'s reason once it has aborted: a key prompt the stop closed is the stop, not a
- *   missing key. Any other failure, as `ensureProviderKeys` throws it.
- */
-export async function preflightKeys(
-  flow: ComposedFlow,
-  cliCfg: Readonly<Record<string, string>>,
-  supplied: Readonly<Record<string, unknown>>,
-  context: PromptContext,
-  signal: AbortSignal,
-): Promise<string | null> {
-  try {
-    await ensureProviderKeys(flow, cliCfg, supplied, context);
-  } catch (error) {
-    signal.throwIfAborted();
-    if (!(error instanceof MissingKeyError || error instanceof AuthError)) throw error;
-    return error.message;
-  }
-  return null;
-}
-
-/**
- * @internal Return the log a fresh run writes, `log`, else `defaultRunLogPath`'s in a fresh run
- * folder, and that folder (`runDir`; null for a given `log`), which the caller removes
- * (`removeEmptyDir`) once the command ends, so a run that never created its log leaves none.
- */
-export function freshLog(log: string | undefined, runId: string, env: Env): { log: string; runDir: string | null } {
-  if (log !== undefined) return { log, runDir: null };
-  const path = defaultRunLogPath(runId, env);
-  return { log: path, runDir: dirname(path) };
 }
 
 /**
@@ -1104,91 +799,6 @@ export async function openMcpServers<T>(
     // Closing a server that never opened, or that its run already closed, does nothing; this
     // also covers one stopped between opening and being recorded.
     for (const server of Object.values(servers)) await server.close();
-  }
-}
-
-/**
- * @internal Return the distinct provider and connection of every agent in `flow`, as a fresh run
- * would bind them.
- *
- * Snapshots the provider and model defaults and the connections once, resolves the `llm_config`
- * cascade as a fresh run would (`cliCfg` its outermost gap-fill layer, values read from `inputs`)
- * on a throwaway copy of the compiled flow, and binds each agent's connection as a fresh run would.
- * An agent whose config resolves only when it runs counts when its provider is already known, an
- * Azure one with the `base_url` its layers set; otherwise its key is checked at its model call.
- *
- * @param cliCfg The `--provider`/`--model` layer, possibly empty.
- * @param inputs The run's supplied inputs, before coercion; absent supplies none.
- * @returns The distinct `[provider, connection]` pairs in first-seen order, the connection `null`
- *   for a provider without one (`ollama`).
- * @throws {RangeError} If no layer gives an agent a provider and model, a supplied input can't be
- *   coerced, an input or a value the `llm_config` reads is invalid, or the saved logins or the
- *   default-provider environment are invalid.
- * @throws {TypeError} As `hostInputs` and `coerceInputs` do.
- */
-export function agentConnections(
-  flow: ComposedFlow,
-  cliCfg: Readonly<Record<string, string>>,
-  { inputs = {}, env }: { inputs?: Readonly<Record<string, unknown>>; env: Env },
-): [string, Connection | null][] {
-  const probe = copyGraph(flow.compiled);
-  const snapshot = connectionSnapshot({ env });
-  // Coerced as `runFlow` coerces, so an input selects the provider the run will use.
-  const coerced = coerceInputs(flow.input, hostInputs(flow.input, inputs));
-  const runLlm = runStartLlm(probe, coerced, { ...cliCfg }, snapshot);
-  // A call-time agent whose provider no value can change needs its key as surely as a static
-  // agent; finding out at its model call would waste the nodes before it.
-  const known = knownCallTimeProviders(probe, runLlm.callTime, snapshot.defaults);
-  const baseUrls = knownCallTimeBaseUrls(probe, runLlm.callTime);
-  const effective: Record<string, Record<string, unknown>> = { ...runLlm.effective };
-  for (const [path, provider] of known) {
-    if (!provider) continue;
-    effective[path] = { provider };
-    // A saved Azure key covers only its own resource, so the endpoint picks the key.
-    const baseUrl = baseUrls.get(path);
-    if (provider === "azure" && baseUrl !== undefined) effective[path]["base_url"] = baseUrl;
-  }
-  const seen: [string, Connection | null][] = [];
-  for (const config of Object.values(snapshot.bind(effective))) {
-    const connection = (config["_connection"] as Connection | undefined) ?? null;
-    const pair: [string, Connection | null] = [config["provider"] as string, connection];
-    if (!seen.some((other) => isDeepStrictEqual(other, pair))) seen.push(pair);
-  }
-  return seen;
-}
-
-/**
- * @internal Check every key `flow`'s agents will need before the run starts, prompting at
- * `context.terminal` if one is missing.
- *
- * Each distinct agent connection (`agentConnections`) is checked once: a saved login resolves its
- * stored credential without a prompt; any other agent needs its provider's key variable, through
- * `ensureEnvKey`, which skips keyless and unknown providers and an unset optional key. An Azure
- * agent whose `base_url` names another resource than the saved login needs `AZURE_OPENAI_API_KEY`.
- * A prompted key is `set` in `context.env`.
- *
- * @param cliCfg The `--provider`/`--model` layer, possibly empty.
- * @param supplied The run's supplied inputs, which `llm_config` values may read to select a
- *   provider.
- * @throws {MissingKeyError} As `ensureEnvKey` does, for a required key that is missing.
- * @throws {AuthError} If a saved login can't be resolved.
- * @throws {RangeError} As `agentConnections` and `connectionCredentials` do.
- * @throws {TypeError} As `agentConnections` does, for inputs that can't be coerced.
- * @throws {Error} A system error when a saved login can't be read.
- */
-export async function ensureProviderKeys(
-  flow: ComposedFlow,
-  cliCfg: Readonly<Record<string, string>>,
-  supplied: Readonly<Record<string, unknown>>,
-  context: PromptContext,
-): Promise<void> {
-  const env = context.env.read;
-  for (const [provider, connection] of agentConnections(flow, cliCfg, { inputs: supplied, env })) {
-    if (connection !== null && connection.source === "store") {
-      await connectionCredentials(connection, provider, { env });
-    } else {
-      await ensureEnvKey(provider, context);
-    }
   }
 }
 

@@ -21,7 +21,8 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { main } from "../../src/cli/index.ts";
-import { defaultRunLogPath, reportRunLog, validateRunLogOptions } from "../../src/cli/run.ts";
+import { reportRunLog, validateRunLogOptions } from "../../src/cli/run.ts";
+import { defaultRunLogPath } from "../../src/cli/startup.ts";
 import { type CliIo, HostStop, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";

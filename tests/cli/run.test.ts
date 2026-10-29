@@ -11,16 +11,9 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import {
-  defaultRunsDir,
-  diagnosticJson,
-  flowBanner,
-  jsonValue,
-  mergeInputs,
-  parseKv,
-  readInputsJson,
-  skillsCheck,
-} from "../../src/cli/run.ts";
+import { diagnosticJson } from "../../src/cli/render.ts";
+import { flowBanner, jsonValue, mergeInputs, parseKv, readInputsJson, skillsCheck } from "../../src/cli/run.ts";
+import { defaultRunsDir } from "../../src/cli/startup.ts";
 import { childCommand, main } from "../../src/cli/index.ts";
 import { LICENSES } from "../../src/cli/licenses.ts";
 import { userMcpConfig } from "../../src/cli/mcp_config.ts";

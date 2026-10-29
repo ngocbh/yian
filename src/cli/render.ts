@@ -1,0 +1,198 @@
+/**
+ * What the CLI commands print on stderr: styled text, boxes, a diagnostic's boxed source frames
+ * (`renderDiagnostic`) or its `--json` form (`diagnosticJson`), and a boxed traceback
+ * (`writeEngineTrace` under `--engine-trace`).
+ *
+ * Output is raw ANSI, coloured only on a TTY without `NO_COLOR`.
+ *
+ * Knows about: diagnostics, the terminal's cell widths and the CLI's io.
+ */
+
+import type { Env } from "../defaults.ts";
+import type { Diagnostic } from "../diagnostics.ts";
+import { cells, charCells } from "./terminal.ts";
+import { type CliIo, forTerminal, type Writer } from "./utils.ts";
+
+const SGR = { bold: 1, dim: 2, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
+
+/** @internal A text style: a colour or weight, or two of them (`"red bold"`). */
+export type Style = keyof typeof SGR | `${keyof typeof SGR} ${keyof typeof SGR}`;
+
+/**
+ * @internal Return `text` in `style` when `out` is a TTY and `NO_COLOR` is unset or empty, else as
+ * is.
+ */
+export function paint(text: string, style: Style, out: Writer, env: Env): string {
+  if (!out.isTTY || env("NO_COLOR")) return text;
+  const codes = style.split(" ").map((word) => SGR[word as keyof typeof SGR]);
+  return `\x1b[${codes.join(";")}m${text}\x1b[0m`;
+}
+
+/** @internal Write `text` in `style` and a newline to `io.stderr`. */
+export function printStyled(io: CliIo, text: string, style: Style): Promise<void> {
+  return io.stderr.write(`${paint(forTerminal(text, io.stderr), style, io.stderr, io.env)}\n`);
+}
+
+/**
+ * @internal Return `text`'s lines as source ranges count them, with no empty line after a final
+ * break.
+ */
+export function splitLines(text: string): string[] {
+  const lines = text.split(/\r\n|\r|\n/);
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+/**
+ * @internal Return `rows` in a box drawn in `border`, `title` set into its top edge, at least
+ * `width` cells inside. Each row is its plain text, which sizes the box, and the text to print.
+ */
+export function box(
+  rows: readonly (readonly [string, string])[],
+  border: Style,
+  out: Writer,
+  env: Env,
+  title = "",
+  width = 0,
+): string {
+  const heading = title ? `─ ${title} ` : "";
+  const inner = Math.max(width, cells(heading) - 1, ...rows.map(([plain]) => cells(plain)));
+  const edge = (text: string) => paint(text, border, out, env);
+  const lines = [edge(`╭${heading}${"─".repeat(inner + 2 - cells(heading))}╮`)];
+  for (const [plain, printed] of rows) {
+    lines.push(`${edge("│")} ${printed}${" ".repeat(inner - cells(plain))} ${edge("│")}`);
+  }
+  lines.push(edge(`╰${"─".repeat(inner + 2)}╯`));
+  return lines.join("\n");
+}
+
+/**
+ * @internal Return the UTF-16 ranges of `text`'s rows wrapped to `width` cells, each ending
+ * before its row's trailing whitespace; an empty line is one empty row. Follows rich's
+ * `divide_line`: a word keeps its trailing spaces, moves to a new row when it doesn't fit the rest
+ * of this one, and is folded by characters when it is wider than a row.
+ */
+export function wrapLine(text: string, width: number): [start: number, end: number][] {
+  const starts = [0];
+  let used = 0;
+  for (const match of text.matchAll(/\s*\S+\s*/g)) {
+    const word = match[0];
+    const length = cells(word.trimEnd());
+    if (length <= width - used) {
+      used += cells(word);
+    } else if (length > width) {
+      // Folded: each chunk of at most `width` cells starts a row; a character that doesn't fit
+      // starts the next chunk.
+      if (match.index > 0) starts.push(match.index);
+      let at = match.index;
+      let chunk = 0;
+      for (const char of word) {
+        const size = charCells(char);
+        if (chunk > 0 && chunk + size > width) {
+          starts.push(at);
+          chunk = 0;
+        }
+        chunk += size;
+        at += char.length;
+      }
+      used = chunk;
+    } else {
+      starts.push(match.index);
+      used = cells(word);
+    }
+  }
+  return starts.map((start, i) => {
+    const row = text.slice(start, starts[i + 1] ?? text.length);
+    return [start, start + row.trimEnd().length];
+  });
+}
+
+// Lines of source shown above and below the marked lines, so a large flow isn't printed whole.
+const ERR_CONTEXT = 5;
+
+/**
+ * Return one boxed source frame, or `null` when no line of `marks` is in `text`.
+ *
+ * The box shows the source from 5 lines above the first mark to 5 below the last, numbered, each
+ * marked line flagged `❱`, and is titled `title:line[,line...]`.
+ */
+function renderFrameBox(text: string, marks: readonly number[], title: string, out: Writer, env: Env): string | null {
+  const lines = splitLines(text);
+  const shown = [...new Set(marks)].filter((mark) => 1 <= mark && mark <= lines.length).sort((a, b) => a - b);
+  if (shown.length === 0) return null;
+  const start = Math.max(1, shown[0]! - ERR_CONTEXT);
+  const end = Math.min(lines.length, shown[shown.length - 1]! + ERR_CONTEXT);
+  const width = String(end).length;
+  const rows: [string, string][] = [];
+  for (let line = start; line <= end; line++) {
+    const marked = shown.includes(line);
+    const gutter = `${marked ? "❱" : " "} ${String(line).padStart(width)} `;
+    const code = lines[line - 1]!;
+    rows.push([gutter + code, paint(gutter, marked ? "red bold" : "dim", out, env) + code]);
+  }
+  return box(rows, "red", out, env, `${title}:${shown.join(",")}`);
+}
+
+/**
+ * Write `diag` to `out`: each frame, outermost first, then the message, then the notes.
+ *
+ * A frame is boxed around the lines its range covers (`SourceRange.coveredLines`), or shown as
+ * its label when none is in its text; its note follows it. Several frames are headed `source
+ * locations:`. A diagnostic without frames prints only its message. On a TTY the message and notes,
+ * which can carry provider or tool text, go through `forTerminal`.
+ */
+export async function renderDiagnostic(diag: Diagnostic, out: Writer, env: Env): Promise<void> {
+  const parts: string[] = [];
+  if (diag.frames.length > 1) parts.push(paint("source locations:", "red bold", out, env));
+  for (const frame of diag.frames) {
+    const framed = renderFrameBox(frame.text, frame.range.coveredLines(frame.text), frame.label, out, env);
+    parts.push(framed ?? paint(frame.label, "red bold", out, env));
+    if (frame.note !== null) parts.push(paint(`  ↳ ${forTerminal(frame.note, out)}`, "yellow", out, env));
+  }
+  parts.push(paint(forTerminal(diag.message, out), "red", out, env));
+  for (const note of diag.notes) parts.push(paint(`  ↳ ${forTerminal(note, out)}`, "yellow", out, env));
+  await out.write(`${parts.join("\n")}\n`);
+}
+
+/** A diagnostic in the `yian.cli.v1` form. */
+export interface DiagnosticJson {
+  code: string;
+  message: string;
+  frames?: { label: string; range: [bigint, bigint, bigint, bigint]; note?: string }[];
+  notes?: string[];
+}
+
+/**
+ * Return `diag` in the `yian.cli.v1` diagnostic form.
+ *
+ * A frame's range is `[startLine, startCol, endLine, endCol]`, 1-based with an exclusive end
+ * column, as ints (`bigint`s, so `printJson` writes them without `.0`). `frames`, `notes` and a
+ * frame's `note` are left out when empty.
+ */
+export function diagnosticJson(diag: Diagnostic): DiagnosticJson {
+  const document: DiagnosticJson = { code: diag.code, message: diag.message };
+  if (diag.frames.length > 0) {
+    document.frames = diag.frames.map(({ label, range, note }) => ({
+      label,
+      range: [BigInt(range.startLine), BigInt(range.startCol), BigInt(range.endLine), BigInt(range.endCol)],
+      ...(note ? { note } : {}),
+    }));
+  }
+  if (diag.notes.length > 0) document.notes = [...diag.notes];
+  return document;
+}
+
+/**
+ * @internal Return `text`, a stack or captured traceback, in a box titled `traceback`, ending in
+ * a newline.
+ */
+export function tracebackBox(text: string, out: Writer, env: Env): string {
+  const lines = splitLines(forTerminal(text, out).trimEnd());
+  const rows = lines.map((line) => [line, paint(line, "dim", out, env)] as const);
+  return `${box(rows, "red", out, env, "traceback")}\n`;
+}
+
+/** @internal Write `error`'s stack in a traceback box on stderr when `engineTrace` is set. */
+export async function writeEngineTrace(error: Error, engineTrace: boolean, io: CliIo): Promise<void> {
+  if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
+}

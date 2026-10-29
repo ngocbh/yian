@@ -221,12 +221,16 @@ function runList(
   return {
     list: {
       // Each row comes after the list's two-cell pointer.
-      rows: () => runRows(runs.live(), scheduler.now(), columnsOf(out) - 2, out, env),
+      rows: () => {
+        const live = runs.live();
+        const texts = runRows(live, scheduler.now(), columnsOf(out) - 2, out, env);
+        return live.map((child, i) => ({ key: child.id, text: texts[i]! }));
+      },
       subscribe: (listener) => every(ticker, LIST_TICK_MS, listener),
       hint: "↓ runs",
     },
-    async open(index: number, terminal: Terminal) {
-      const child = runs.live()[index];
+    async open(id: string, terminal: Terminal) {
+      const child = runs.live().find((each) => each.id === id);
       if (child === undefined) return;
       const progress = new RunProgress(child.status.log, () => columnsOf(out), out, env);
       const info = () => ({ id: child.id, name: child.name, status: runs.status(child.id) });

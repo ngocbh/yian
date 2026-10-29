@@ -727,11 +727,14 @@ function pastEscape(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 600));
 }
 
-/** A list of `rows` that can change, telling its one subscriber with `changed`. */
+/**
+ * A list of `rows`, each keyed by its first word, that can change, telling its one subscriber with
+ * `changed`.
+ */
 function rowList(rows: string[]) {
   let listener: (() => void) | null = null;
   return {
-    rows: () => rows,
+    rows: () => rows.map((text) => ({ key: text.split(" ")[0]!, text })),
     subscribe(next: () => void) {
       listener = next;
       return () => (listener = null);
@@ -775,7 +778,7 @@ async function aFramedReadLineWithAListMovesIntoItAndOpensARow(): Promise<void> 
   await pastEscape();
   assert.equal(editor.focus(), null);
   input.write(DOWN + DOWN + ENTER);
-  assert.deepEqual(await line, { open: 1, draft: "hi!" });
+  assert.deepEqual(await line, { open: "r2", draft: "hi!" });
   assert.deepEqual(view().rows, []);
   // The editor keeps the text and the row for the next prompt.
   assert.equal(editor.focus(), 1);
@@ -804,6 +807,23 @@ async function aListRowThatGoesGivesTheKeysBackAndTheListRedrawsOnItsOwn(): Prom
   assert.deepEqual(await line, { value: "x" });
 }
 
+async function aLongListShowsWhatFitsTheFocusedRowAmongThem(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const rows = Array.from({ length: 10 }, (_, i) => `r${i + 1}`);
+  // Twelve rows high: the box takes three and the hint one, and four are left above it.
+  const editor = new LineEditor({ columns: () => 60, rows: () => 12, hint: "", list: rowList(rows) });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  await tick();
+  assert.deepEqual(view().rows.slice(4), ["  r1", "  r2", "  r3", "  +7 more"]);
+  input.write(DOWN.repeat(5));
+  await tick();
+  assert.deepEqual(view().rows.slice(4), ["  r3", "  r4", "» r5", "  +7 more"]);
+  // The focus follows its row's key: a row going above it leaves it on the same item.
+  rows.splice(0, 1);
+  input.write(ENTER);
+  assert.deepEqual(await line, { open: "r5", draft: "" });
+}
+
 async function downOnAFoldedLineMovesIntoTheListOnlyFromItsLastRow(): Promise<void> {
   const { input, terminal } = setup({ columns: 20 });
   const editor = new LineEditor({ columns: () => 20, hint: "", list: rowList(["r1"]) });
@@ -816,7 +836,7 @@ async function downOnAFoldedLineMovesIntoTheListOnlyFromItsLastRow(): Promise<vo
   await tick();
   assert.equal(editor.focus(), 0);
   input.write(ENTER);
-  assert.deepEqual(await line, { open: 0, draft: "a".repeat(20) });
+  assert.deepEqual(await line, { open: "r1", draft: "a".repeat(20) });
 }
 
 async function watchKeysWithAnEditorGivesItTheKeysButCtrlC(): Promise<void> {
@@ -2894,6 +2914,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a framed readLine with a list moves into it and opens a row": aFramedReadLineWithAListMovesIntoItAndOpensARow,
   "a list row that goes gives the keys back, and the list redraws on its own":
     aListRowThatGoesGivesTheKeysBackAndTheListRedrawsOnItsOwn,
+  "a long list shows what fits, the focused row among them": aLongListShowsWhatFitsTheFocusedRowAmongThem,
   "Down on a folded line moves into the list only from its last row":
     downOnAFoldedLineMovesIntoTheListOnlyFromItsLastRow,
   "watchKeys with an editor gives it the keys but Ctrl-C": watchKeysWithAnEditorGivesItTheKeysButCtrlC,

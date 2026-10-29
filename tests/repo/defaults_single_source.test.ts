@@ -71,6 +71,7 @@ const ALLOWED: Record<string, string> = {
   "cli/run.ts: SPIN_MS": "spinner frame interval",
   "cli/cells.ts: columnsOf.||": "terminal width when the output reports none",
   "cli/cells.ts: rowsOf.||": "terminal height when the output reports none",
+  "cli/terminal.ts: LIST_MARGIN": "screen rows a prompt's list leaves for what is drawn above the box",
   "cli/chat.ts: LIST_TICK_MS": "how often the chat's run list is drawn again",
   "cli/chat.ts: VIEW_TICK_MS": "how often the chat's run view reads its run's log again",
   "cli/chat_view.ts: SPIN_MS": "the chat's spinner frame interval",

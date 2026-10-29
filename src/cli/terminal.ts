@@ -357,12 +357,18 @@ function textWidget(options: {
   };
 }
 
+/** One row of a `PromptList`: what names its item, and its text, drawn as given (styled). */
+export interface PromptRow {
+  readonly key: string;
+  readonly text: string;
+}
+
 /**
  * A list of rows under a framed prompt (`LineEditor`), which Down moves into: each row is one
- * item, drawn as given (styled; one row of the screen each). No rows hides the list.
+ * item, one row of the screen. No rows hides the list.
  */
 export interface PromptList {
-  rows(): readonly string[];
+  rows(): readonly PromptRow[];
   /** Added to the prompt's hint while the list has rows (how to reach it, say). */
   hint?: string;
   /** Calls `listener` when the rows may have changed; returns what stops it. */
@@ -374,27 +380,40 @@ export interface PromptList {
  * row `open`s it, Escape in the box is `escape`, Ctrl-D in an empty box the end of input; `null`
  * when the key only edited or moved.
  */
-export type EditorAction = { value: string } | { open: number } | { escape: true } | { stop: "eof" } | null;
+export type EditorAction = { value: string } | { open: string } | { escape: true } | { stop: "eof" } | null;
+
+/** The screen rows a prompt's list leaves for what is drawn above the box. */
+const LIST_MARGIN = 4;
 
 /**
  * A line typed in a framed box `columns()` wide: a box holding `> ` and the text, folded onto as
  * many rows as it needs, the dim `hint` below it (and the list's own after it, when it fits), and
  * under that `list`'s rows when it has any. The box has the keys, as a line prompt does, until
  * Down on its last row moves them to the list; there Up and Down move between rows, and Up from
- * the top row, Escape or a typed character goes back to the box. The text and where the keys are last across prompts, so one editor can
- * serve a chat's prompt and the box it keeps up while a reply runs.
+ * the top row, Escape or a typed character goes back to the box. On a short screen the list shows
+ * as many rows as fit (`rows()` high, leaving `LIST_MARGIN` rows), the row with the keys among
+ * them, and a dim `+N more` for the others. The text and where the keys are last across prompts,
+ * so one editor can serve a chat's prompt and the box it keeps up while a reply runs.
  */
 export class LineEditor {
   readonly #text = textWidget({ label: "", mark: ">" });
   readonly #columns: () => number;
+  readonly #rows: () => number;
   readonly #hint: string;
   /** The list under the hint, if any. */
   readonly list: PromptList | null;
-  /** The list row with the keys, or null while the box has them. */
-  #focus: number | null = null;
+  /** The list row with the keys, by its key and where it last was, or null while the box has them. */
+  #focus: { key: string; index: number } | null = null;
 
-  constructor(options: { columns: () => number; hint: string; list?: PromptList | null }) {
+  /** @param options.rows The screen's height, which the list keeps within; no bound when absent. */
+  constructor(options: {
+    columns: () => number;
+    rows?: () => number;
+    hint: string;
+    list?: PromptList | null;
+  }) {
     this.#columns = options.columns;
+    this.#rows = options.rows ?? (() => Infinity);
     this.#hint = options.hint;
     this.list = options.list ?? null;
   }
@@ -409,12 +428,37 @@ export class LineEditor {
     this.#text.set(text);
   }
 
-  /** The list row with the keys, or null while the box has them. */
+  /** Where the list row with the keys is, or null while the box has them. */
   focus(): number | null {
-    const count = this.list?.rows().length ?? 0;
-    // A row that went (its run ended) gives the keys to the one above it, or the box.
-    if (this.#focus !== null) this.#focus = count === 0 ? null : Math.min(this.#focus, count - 1);
-    return this.#focus;
+    return this.#find(this.list?.rows() ?? []);
+  }
+
+  /** Where the focused row is among `rows`: by its key; once it went, the row now where it was. */
+  #find(rows: readonly PromptRow[]): number | null {
+    if (this.#focus === null) return null;
+    const at = rows.findIndex((row) => row.key === this.#focus!.key);
+    // A row that went (its run ended) gives the keys to the one in its place, or above it, or the box.
+    const index = at !== -1 ? at : rows.length === 0 ? null : Math.min(this.#focus.index, rows.length - 1);
+    this.#focus = index === null ? null : { key: rows[index]!.key, index };
+    return index;
+  }
+
+  /** Give the keys to row `index` of `rows`, or to the box for null. */
+  #focusOn(rows: readonly PromptRow[], index: number | null): void {
+    this.#focus = index === null ? null : { key: rows[index]!.key, index };
+  }
+
+  /** The list's rows as drawn: at most what fits, the focused one among them, then `+N more`. */
+  #listRows(boxRows: number): string[] {
+    const rows = this.list?.rows() ?? [];
+    const focus = this.#find(rows);
+    const room = Math.max(1, this.#rows() - boxRows - 1 - LIST_MARGIN);
+    const pointer = (i: number): string => (i === focus ? `${style("1;36", "»")} ` : "  ");
+    if (rows.length <= room) return rows.map((row, i) => pointer(i) + row.text);
+    const shown = Math.max(1, room - 1);
+    const start = Math.min(Math.max(0, (focus ?? 0) - shown + 1), rows.length - shown);
+    const drawn = rows.slice(start, start + shown).map((row, i) => pointer(start + i) + row.text);
+    return [...drawn, `  ${style("2", `+${rows.length - shown} more`)}`];
   }
 
   /** The rows, styled: the box, the hint and the list. */
@@ -422,9 +466,7 @@ export class LineEditor {
     const { rows, width } = this.#fold();
     const edge = "─".repeat(width + 4);
     const border = (part: string): string => style("2", part);
-    const focus = this.focus();
-    const pointer = (i: number): string => (i === focus ? `${style("1;36", "»")} ` : "  ");
-    const list = (this.list?.rows() ?? []).map((row, i) => pointer(i) + row);
+    const list = this.#listRows(rows.length + 2);
     const both = list.length > 0 && this.list?.hint ? `${this.#hint} · ${this.list.hint}` : this.#hint;
     // The list's hint only when it fits on the row: the box's hint matters more.
     const hint = cells(both) + 2 <= this.#columns() ? both : this.#hint;
@@ -456,15 +498,16 @@ export class LineEditor {
       this.#text.key(key);
       return null;
     }
-    const focus = this.focus();
-    const count = this.list?.rows().length ?? 0;
-    const enter = (key.name === "return" || key.name === "enter") && !key.paste;
+    const list = this.list?.rows() ?? [];
+    const focus = this.#find(list);
+    const count = list.length;
+    const enter = key.name === "return" || key.name === "enter";
     const plain = !key.ctrl && !key.meta;
     if (focus !== null) {
-      if (enter) return { open: focus };
+      if (enter) return { open: list[focus]!.key };
       if (key.name === "escape" || (plain && key.name === "up" && focus === 0)) this.#focus = null;
-      else if (plain && key.name === "up") this.#focus = focus - 1;
-      else if (plain && key.name === "down") this.#focus = Math.min(focus + 1, count - 1);
+      else if (plain && key.name === "up") this.#focusOn(list, focus - 1);
+      else if (plain && key.name === "down") this.#focusOn(list, Math.min(focus + 1, count - 1));
       else if (printable(key)) {
         this.#focus = null;
         this.#text.key(key);
@@ -473,7 +516,7 @@ export class LineEditor {
     }
     if (plain && key.name === "down" && count > 0) {
       const { rows, row } = this.#fold();
-      if (row === rows.length - 1) this.#focus = 0;
+      if (row === rows.length - 1) this.#focusOn(list, 0);
       return null;
     }
     if (key.name === "escape") return { escape: true };
@@ -512,7 +555,7 @@ function lead(row: number): string {
 }
 
 /** What a framed `readLine` answers when Enter opens a list row. */
-type Opened = { open: number };
+type Opened = { open: string };
 
 /**
  * `editor` as a prompt: once entered it collapses to `> <text>`; any other ending erases it.
@@ -734,7 +777,8 @@ export class Terminal {
 
   /** A `LineEditor` as wide as this terminal's output. */
   lineEditor(options: { hint: string; list?: PromptList | null }): LineEditor {
-    return new LineEditor({ ...options, columns: () => columnsOf(this.#output) });
+    const output = this.#output;
+    return new LineEditor({ ...options, columns: () => columnsOf(output), rows: () => rowsOf(output) });
   }
 
   /** A free-text or hidden prompt; null when the user cancels or the terminal is closed. */
@@ -763,7 +807,7 @@ export class Terminal {
    * `> ` and the text, the dim `hint` below it, instead of the label; once entered it collapses
    * to `> <line>`. Given `editor`, the box is that editor's (`LineEditor`, its hint instead of
    * `hint`), its text set to `initial` when it differs, and Enter on a row of its list answers
-   * `{open}` with the row and the draft.
+   * `{open}` with the row's key and the draft.
    */
   async readLine<E extends boolean = false>(
     label: string,
@@ -780,7 +824,7 @@ export class Terminal {
     | { eof: true }
     | { interrupt: true }
     | { aborted: true; draft: string }
-    | { open: number; draft: string }
+    | { open: string; draft: string }
     | (E extends true ? Escaped : never)
   > {
     const { signal, initial = "" } = options;

@@ -122,9 +122,10 @@ export interface InboxChatHost {
   view?: InboxChatView | null;
   /**
    * With `view`, the rows listed under the chat's input box (the runs a host started, say), and
-   * what Enter on one does: `open` shows it, through the chat's terminal, until the user leaves.
+   * what Enter on one does: `open` shows the row's item, by its key, through the chat's terminal,
+   * until the user leaves.
    */
-  rows?: { list: PromptList; open(index: number, terminal: Terminal): Promise<void> } | null;
+  rows?: { list: PromptList; open(key: string, terminal: Terminal): Promise<void> } | null;
 }
 
 /**
@@ -526,8 +527,8 @@ export async function inboxChat(
     view !== null && atTerminal(io) ? terminal.lineEditor({ hint: view.hint, list: host.rows?.list }) : null;
   // Opens a row of `host.rows` without waiting for the user to leave it: the chat goes on meanwhile
   // (its prompt queues behind the row's screen), and only a failure stops it.
-  const openRow = (index: number): void => {
-    host.rows?.open(index, terminal).catch((error: unknown) => stop.abort(error));
+  const openRow = (key: string): void => {
+    host.rows?.open(key, terminal).catch((error: unknown) => stop.abort(error));
   };
   const onStopSignal = (signal: NodeJS.Signals) => () => stop.abort(new HostStop(signal));
   const listeners = [

@@ -214,12 +214,12 @@ export class OpenAIResponses implements SseProtocol {
    * @returns The deltas and parts, then `UsageReport` (when the reply has usage) and `Finish` on
    *   `response.completed` (or `response.done`) or a length-truncated `response.incomplete` (or
    *   `response.done`).
-   * @throws {ProviderError} For `response.failed`, a failed `response.done` that carries an error,
-   *   or an `error` event (kind from the error code, else its type), a stream that ends without a
-   *   terminal event or a reply that did not complete (kind `incomplete`, or `refused` for a
-   *   content filter), or an event that is not JSON, lacks the output index it needs, or holds an
-   *   item or usage that cannot be read (kind `protocol`). The message holds the provider's text
-   *   uncapped.
+   * @throws {ProviderError} For `response.failed`, a terminal reply with status `failed` that
+   *   carries an error, or an `error` event (kind from the error code, else its type), a stream
+   *   that ends without a terminal event or a reply that did not complete (kind `incomplete`, or
+   *   `refused` for a content filter), or an event that is not JSON, lacks the output index it
+   *   needs, or holds an item or usage that cannot be read (kind `protocol`). The message holds
+   *   the provider's text uncapped.
    */
   async *parse(frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
     // Part index by output index, then content index.
@@ -465,7 +465,7 @@ export class OpenAIResponses implements SseProtocol {
   }
 
   /**
-   * Return the error for `response.failed`, a failed `response.done` or an `error` event; its
+   * Return the error for `response.failed`, a failed terminal reply or an `error` event; its
    * kind from the error's code, else its type.
    */
   #streamFailure(error: JsonObject): ProviderError {

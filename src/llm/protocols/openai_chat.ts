@@ -11,8 +11,8 @@
  * route sends it).
  *
  * Replies stream text, reasoning and tool calls as deltas; a refusal is collected into one part.
- * A call without an id gets one (`yian_call_<n>`). The finish is held until the stream ends, so
- * the usage chunk that follows it is read. Reasoning parts carry replay records naming the wire
+ * A call without an id, or with one an earlier call took, gets `yian_call_<n>`. The finish is
+ * held until the stream ends, so the usage chunk that follows it is read. Reasoning parts carry replay records naming the wire
  * field they came from, so only reasoning this route parsed from `reasoning_content` is echoed.
  * DeepSeek requires every earlier turn's `reasoning_content` when the request sends tools, so on
  * a tool request a turn with no reasoning to echo sends `reasoning_content: ""`.

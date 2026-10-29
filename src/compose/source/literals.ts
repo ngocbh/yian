@@ -215,8 +215,12 @@ function scalarValue(node: Scalar.Parsed): ScalarValue {
   const text = node.source;
   const plain = node.type === Scalar.PLAIN;
   switch (node.tag) {
-    case undefined:
-      return plain ? constructScalar(resolvePlain(text), text, true) : text;
+    case undefined: {
+      if (!plain) return text;
+      const tag = resolvePlain(text);
+      // `<<` merges only as a mapping key, which never reaches here; as a value it is text.
+      return tag === MERGE_TAG ? text : constructScalar(tag, text, true);
+    }
     case "!":
       return text; // YAML 1.2: the bare tag keeps a scalar as text
     default:

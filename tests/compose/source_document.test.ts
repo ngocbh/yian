@@ -938,6 +938,15 @@ describe("merges", () => {
     });
   });
 
+  // `<<` merges only as a mapping key, as `readPlainScalar` reads it.
+  test.each<[string, Value]>([
+    ["a: <<\n", { a: "<<" }],
+    ["a: [<<, {b: <<}]\n", { a: ["<<", { b: "<<" }] }],
+    ["k: &m <<\nv: *m\n", { k: "<<", v: "<<" }],
+  ])("a plain `<<` value is text: %p", (text, value) => {
+    expect(SourceDocument.parse(text)._value).toEqual(value);
+  });
+
   test("a merged key is not a repeated key", () => {
     const document = SourceDocument.parse("base: &b {a: x}\nc:\n  <<: *b\n  a: y\n");
 

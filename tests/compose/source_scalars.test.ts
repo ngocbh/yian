@@ -485,7 +485,9 @@ describe("parseYamlLiteral", () => {
     expect(literalError("value: !!str [1]\n")).toBe("expected a scalar node, but found sequence");
     expect(literalError("value: !!map [1]\n")).toBe("expected a mapping node, but found sequence");
     expect(literalError("value: !!seq 1\n")).toBe("expected a sequence node, but found scalar");
-    expect(literalError("value: <<\n")).toBe(noConstructor(MERGE_TAG));
+    // `<<` merges only as a mapping key; as a value it is text.
+    expect(parseYamlLiteral("value: <<\n")).toEqual({ value: "<<" });
+    expect(parseYamlLiteral("value: [<<]\n")).toEqual({ value: ["<<"] });
   });
 
   test.each(["[!!seq {a: 1}, 2026-13-45]", "[!!seq 1, 2026-13-45]"])(

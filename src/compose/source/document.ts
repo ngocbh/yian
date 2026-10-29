@@ -622,7 +622,7 @@ function build(
       const plain = node.type === Scalar.PLAIN;
       let value: ScalarValue;
       try {
-        value = scalarValue(text, plain, core, tag !== null);
+        value = scalarValue(text, plain, core);
       } catch (error) {
         if (error instanceof FlowLoaderError) throw new SourceSyntaxError(error.message, at);
         throw error;
@@ -1001,13 +1001,12 @@ function scalarValue(
   text: string,
   plain: boolean,
   core: string | undefined,
-  local: boolean,
 ): ScalarValue {
   if (core !== undefined) return constructScalar(core, text, plain);
   if (!plain) return text;
   const resolved = resolvePlain(text);
-  // `<<` merges only as an untagged key; under a local tag it is text.
-  return constructScalar(local && resolved === MERGE_TAG ? STR_TAG : resolved, text, true);
+  // `<<` merges only as an untagged key, which never reaches here; anywhere else it is text.
+  return constructScalar(resolved === MERGE_TAG ? STR_TAG : resolved, text, true);
 }
 
 /**

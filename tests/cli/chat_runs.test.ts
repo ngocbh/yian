@@ -13,6 +13,7 @@ import { MissingKeyError } from "../../src/cli/utils.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { advance, inspectRun } from "../../src/run.ts";
 import { readRunLog, type RunStartedRecord } from "../../src/runtime/log.ts";
+import { tool } from "../../src/tools/function_tools.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 import { heldScheduler } from "../helpers/schedulers.ts";
 
@@ -113,6 +114,36 @@ test(
     expect((await settled(children, "r2")).output).toBe("hi b");
     expect((await settled(children, "r1")).output).toBe("hi a");
     expect(inspectRun(second.log).runId).toBe(`${CHAT}-r2`);
+  },
+  TIMEOUT,
+);
+
+test(
+  "a child started with tools of its own can call them, and only that child",
+  async () => {
+    const children = childRuns();
+    const shout = await flow(`id: shout
+name: shout
+nodes:
+  loud:
+    kind: tool
+    tool_id: shout
+    input:
+      text: hi
+    output: str
+output: \${loud.output}
+`);
+    const tools = {
+      shout: tool({
+        name: "shout",
+        description: "Shout the text.",
+        parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+        execute: (args) => String(args["text"]).toUpperCase(),
+      }),
+    };
+    const started = await children.start(shout, {}, { tools });
+    expect((await settled(children, started.id)).output).toBe("HI");
+    expect(children.start(shout, {})).rejects.toThrow("shout");
   },
   TIMEOUT,
 );

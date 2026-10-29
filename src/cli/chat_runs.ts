@@ -267,7 +267,8 @@ export class ChildRuns {
    * that succeeds. Each first checks the provider keys the flow's agents need, without a prompt.
    * `options.signal` is the caller's: aborting it before the start begins rejects, and after it
    * does nothing to the child. `options.name` is what `live` lists it by (the flow's file, say);
-   * the flow's name when absent.
+   * the flow's name when absent. `options.tools` are host tools this child alone gets, beside the
+   * registered ones.
    *
    * @throws {MissingKeyError} When an agent's provider needs a key that isn't set, before anything
    *   is written; `ensureProviderKeys`' other errors likewise.
@@ -278,10 +279,16 @@ export class ChildRuns {
   start(
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
-    options: { signal?: AbortSignal | null; name?: string } = {},
+    options: {
+      signal?: AbortSignal | null;
+      name?: string;
+      tools?: Readonly<Record<string, ToolEntry>>;
+    } = {},
   ): Promise<{ id: string; log: string; seq: number }> {
     const name = options.name ?? flow.name ?? flow.compiled.flowId ?? "flow";
-    const turn = this.#starting.then(() => this.#begin(flow, inputs, name, options.signal ?? null));
+    const tools = options.tools ?? {};
+    const signal = options.signal ?? null;
+    const turn = this.#starting.then(() => this.#begin(flow, inputs, name, tools, signal));
     this.#starting = turn.catch(() => {});
     return turn;
   }
@@ -291,6 +298,7 @@ export class ChildRuns {
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
     name: string,
+    tools: Readonly<Record<string, ToolEntry>>,
     signal: AbortSignal | null,
   ): Promise<{ id: string; log: string; seq: number }> {
     const check = () => {
@@ -313,7 +321,7 @@ export class ChildRuns {
       since: this.#options.scheduler.now(),
       log,
       // One handler serves `ask` and `ask_user` (passing both is refused).
-      tools: { ...registeredTools(), ask: () => pending() },
+      tools: { ...registeredTools(), ...tools, ask: () => pending() },
       skills: skillsFor(flow),
       status: { run: id, status: "running", log, seq },
       waiters: new Set(),

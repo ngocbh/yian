@@ -11,7 +11,7 @@
 
 import { readdirSync } from "node:fs";
 import { userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
@@ -36,7 +36,9 @@ export { Skill, SkillError } from "../skills/catalog.ts";
 /**
  * Read one skill directory.
  *
- * The frontmatter `name` wins; without it the directory name is used, as Claude Code does.
+ * The frontmatter `name` wins; without it the directory name is used, as Claude Code does. The
+ * name is the last part of the absolute path, so `.` works and a symlinked directory keeps its
+ * link's name.
  * Fields other than `name` and `description` are ignored.
  *
  * @param directory Directory containing `SKILL.md`. A symlinked directory is allowed; its
@@ -52,7 +54,7 @@ export function loadSkillDir(directory: string): Skill {
   const [meta, body] = splitFrontmatter(readSkillText(path), path);
   let name: string;
   try {
-    name = checkSkillName(Object.hasOwn(meta, "name") ? meta.name : pathName(directory));
+    name = checkSkillName(Object.hasOwn(meta, "name") ? meta.name : basename(resolve(directory)));
   } catch (error) {
     if (error instanceof SkillError) throw new SkillError(`${path}: ${error.message}`);
     throw error;
@@ -175,9 +177,4 @@ function splitFrontmatter(text: string, path: string): [ValueRecord, string] {
   }
   if (!isRecord(meta)) throw new SkillError(`${path}: frontmatter must be a mapping`);
   return [meta, lines.slice(index + 1).join("").replace(/^\n+/, "")];
-}
-
-/** `directory`'s last part: empty and `.` segments drop out. */
-function pathName(directory: string): string {
-  return directory.split("/").filter((part) => part !== "" && part !== ".").at(-1) ?? "";
 }

@@ -85,7 +85,7 @@ export function checkSkillName(name: unknown): string {
  * @param skill The granted skill.
  * @param path POSIX path relative to the skill directory, such as `references/api.md`. Absolute
  *   paths, `..`, backslashes, hidden (dot) files and folders, and symlinks that leave the
- *   directory are rejected.
+ *   directory or resolve to a hidden file or folder inside it are rejected.
  * @returns The file text.
  * @throws {SkillError} If the path is unsafe, hidden, missing, not a regular file, larger than
  *   `current().maxSkillFileBytes`, or not UTF-8 text.
@@ -106,6 +106,10 @@ export function readSkillFile(skill: Skill, path: string): string {
   const rel = relative(root, target);
   if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) {
     throw new SkillError(`${where} resolves outside the skill directory`);
+  }
+  // A symlink with a visible name can still point at a hidden file or folder.
+  if (rel.split(sep).some((part) => part.startsWith("."))) {
+    throw new SkillError(`${where}: hidden files and folders are not readable`);
   }
   if (!statOrNull(target)?.isFile()) throw new SkillError(`${where} does not exist`);
   return readSkillText(target, where);

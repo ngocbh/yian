@@ -85,6 +85,22 @@ test("name defaults to the directory and frontmatter name wins", () => {
   expect(loadSkillDir(review + "/").name).toBe("review");
 });
 
+test("name defaults to the folder the path names, not its text", () => {
+  const review = writeSkill(tmp, "review", "description: Review code.\n");
+  mkdirSync(join(review, "sub"));
+  expect(loadSkillDir(review + "/sub/..").name).toBe("review");
+  const cwd = process.cwd();
+  process.chdir(review);
+  try {
+    expect(loadSkillDir(".").name).toBe("review");
+  } finally {
+    process.chdir(cwd);
+  }
+  // A symlinked skill keeps its link's name.
+  symlinkSync(review, join(tmp, "alias"));
+  expect(loadSkillDir(join(tmp, "alias")).name).toBe("alias");
+});
+
 test("frontmatter reads yes and no as text", () => {
   // Frontmatter follows the flow's YAML 1.2 rules, as Claude Code and Codex read it.
   const skill = loadSkillDir(writeSkill(tmp, "no", "name: no\ndescription: yes\n"));

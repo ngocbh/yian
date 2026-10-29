@@ -56,9 +56,11 @@ nodes:
       const label = String.raw`([A-Za-z0-9_-]*` + word + String.raw`["']?\s*[:=]\s*)`;
       const value = String.raw`("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;&"]+)`;
       const flag = String.raw`(--[A-Za-z0-9-]*` + word + String.raw`(?:=|\s+))`;
-      // A long run of letters and digits, as a key or token is; a path's `/` breaks it up.
-      const long = String.raw`(?<![A-Za-z0-9+_-])(?=[A-Za-z0-9+_-]*\d)(?=[A-Za-z0-9+_-]*[A-Za-z])` +
-        String.raw`[A-Za-z0-9+_-]{40,}={0,2}`;
+      // 40 or more random-looking characters, as a key or token is: upper and lower case and two
+      // digits, with no `-`, `_` or `/` splitting them into words, so lowercase hex (commit SHAs,
+      // digests), run ids, identifiers and paths are kept.
+      const long = String.raw`(?<![A-Za-z0-9+_\/-])(?=[A-Za-z0-9+]*[A-Z])(?=[A-Za-z0-9+]*[a-z])` +
+        String.raw`(?=(?:[A-Za-z0-9+]*\d){2})[A-Za-z0-9+]{40,}={0,2}(?![A-Za-z0-9+_\/-])`;
       const patterns: [RegExp, string][] = [
         [
           /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,

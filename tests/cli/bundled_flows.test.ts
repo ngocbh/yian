@@ -192,6 +192,7 @@ test("the report flow's scrub redacts each kind of secret and shows the home as 
     ["hf_abcdefghijklmnopqrstuvwxyz123456", "[redacted]"],
     ["npm_abcdefghijklmnopqrstuvwxyz0123456789", "[redacted]"],
     ["QmFzZTY0U2VjcmV0VmFsdWVUaGF0SXNMb25nRW5vdWdoVG9CZUFLZXk=", "[redacted]"],
+    ["AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEf", "[redacted]"],
     [
       "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----",
       "[redacted private key]",
@@ -202,6 +203,12 @@ test("the report flow's scrub redacts each kind of secret and shows the home as 
     "log: /home/ada/.yian/runs/9eccdeca88574a9f96cba63e7564b67e/log.jsonl",
     "real: /gpfs/real/ada/x.yaml",
     "not hers: /home/adam/x",
+    // Kept: a commit SHA, a sha256 digest, a child run's id, long identifiers.
+    "commit 3e8c4a51e2b0c9d8f7a6b5c4d3e2f1a0b9c8d7e6",
+    "sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "run 9eccdeca88574a9f96cba63e7564b67e-r10-r2",
+    "node chat_answered_reply_with_a_long_name_and_digit_1_in_it",
+    "path src/cli/flows/report_issue_with_a_much_longer_name_v2.yaml",
     "yian check nap.yaml",
   ].join("\n");
   const title = "crash with ghp_abcdefghijklmnopqrstuvwxyz0123456789";
@@ -212,6 +219,11 @@ test("the report flow's scrub redacts each kind of secret and shows the home as 
     "log: ~/.yian/runs/9eccdeca88574a9f96cba63e7564b67e/log.jsonl",
     "real: ~/x.yaml",
     "not hers: /home/adam/x",
+    "commit 3e8c4a51e2b0c9d8f7a6b5c4d3e2f1a0b9c8d7e6",
+    "sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "run 9eccdeca88574a9f96cba63e7564b67e-r10-r2",
+    "node chat_answered_reply_with_a_long_name_and_digit_1_in_it",
+    "path src/cli/flows/report_issue_with_a_much_longer_name_v2.yaml",
     "yian check nap.yaml",
   ]);
 });

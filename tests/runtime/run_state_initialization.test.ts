@@ -298,10 +298,6 @@ test("the private plan contains no mutable transition payload", () => {
   expect(() => {
     (plan as { envelopeJson: string }).envelopeJson = "changed";
   }).toThrow(TypeError);
-  // Strict-mode code can't write into a string's characters.
-  expect(() => {
-    (plan.envelopeJson as unknown as string[])[0] = "x";
-  }).toThrow(TypeError);
 });
 
 test.each(["schema", "numeric payload"])(

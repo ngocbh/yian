@@ -149,6 +149,28 @@ export function errorName(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
 }
 
+/** Where `callModel` writes a call: the node's steps, and the request's digest (`requestSha256`). */
+interface CallRecord {
+  readonly steps: AgentSteps;
+  readonly digest: string;
+}
+
+/** How `callModel` makes a call; see its `options`. */
+interface CallOptions {
+  readonly purpose: ModelCallPurpose;
+  readonly signal?: AbortSignal;
+  readonly interrupt?: AbortSignal;
+  readonly retry?: RetrySettings;
+  readonly record?: CallRecord;
+}
+
+/** What `callModel` returns: the reply, its `model_call` step's `n` (`N`), and whether it was replayed. */
+interface Called<N extends number | null> {
+  readonly response: Response;
+  readonly n: N;
+  readonly replayed: boolean;
+}
+
 /**
  * Make one model call through `callWithRetries`, publishing each attempt to the sinks and, with
  * `record`, writing it as a `model_call` step.
@@ -192,7 +214,8 @@ export function errorName(error: unknown): string {
  *   `interrupt` is the host's interrupt signal; `retry`'s `scheduler` and `random` run the retry
  *   waits; `record` holds the steps to write to and the request's digest (`requestSha256`).
  * @returns The successful attempt's reply, its media in file form with `record`; with `record`
- *   the `n` of the reply's `model_call` step (`null` without); and whether the reply was replayed.
+ *   the `n` of the reply's `model_call` step (typed `number` then; `null` without); and whether the
+ *   reply was replayed.
  * @throws ReplyInterrupted carrying the text shown before the cut and its usage, or an empty
  *   reply and `null` usage for a cut wait; it is never marked.
  * @throws CapabilityFault when a recorded call's purpose or digest differs from this one's.
@@ -201,14 +224,20 @@ export async function callModel(
   live: LiveSinks | null,
   model: ChatModel,
   request: Request,
-  options: {
-    purpose: ModelCallPurpose;
-    signal?: AbortSignal;
-    interrupt?: AbortSignal;
-    retry?: RetrySettings;
-    record?: { steps: AgentSteps; digest: string };
-  },
-): Promise<{ response: Response; n: number | null; replayed: boolean }> {
+  options: CallOptions & { record: CallRecord },
+): Promise<Called<number>>;
+export async function callModel(
+  live: LiveSinks | null,
+  model: ChatModel,
+  request: Request,
+  options: CallOptions,
+): Promise<Called<number | null>>;
+export async function callModel(
+  live: LiveSinks | null,
+  model: ChatModel,
+  request: Request,
+  options: CallOptions,
+): Promise<Called<number | null>> {
   const { purpose, signal, interrupt, retry = {}, record } = options;
   let prior: PriorAttempts | undefined;
   if (record !== undefined) {

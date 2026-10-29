@@ -184,8 +184,8 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
     spec: {
       name: "chat",
       summary:
-        "Chat with yian's assistant: it helps you find, read, check, write and run the flows in this " +
-        "folder, and runs them for you. With FLOW, the chat is about that flow.",
+        "Chat with Yian, yian's assistant: it runs, writes, edits and improves the flows in this " +
+        "folder with you. With FLOW, the chat is about that flow.",
       positionals: [
         {
           name: "flow",

@@ -1,6 +1,6 @@
 /**
- * `yian chat [FLOW]`: chat with yian's assistant, a bundled flow (`flows/chat.yaml`) that helps
- * the user discover, read, check, write and run flows in the folder the chat started in, and
+ * `yian chat [FLOW]`: chat with Yian, yian's assistant, a bundled flow (`flows/chat.yaml`) that
+ * runs, writes, edits and improves flows with the user in the folder the chat started in, and
  * hosts the flows it runs as child runs of the chat. With FLOW, the chat opens with that flow in
  * focus.
  *
@@ -152,7 +152,7 @@ function waitingLines(children: readonly WaitingChild[]): string {
 }
 
 /**
- * `yian chat`: chat with yian's assistant in the folder `deps.root` (the current directory), with
+ * `yian chat`: chat with Yian, yian's assistant, in the folder `deps.root` (the current directory), with
  * `flowPath` in focus when given: its text and check as they were when the chat opened, fenced as
  * data, go to the assistant each turn (`read_flow` and `check_flow` give its current state), and a
  * flow outside the folder is said to be out of the tools' reach. Returns the exit code.

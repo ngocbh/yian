@@ -356,29 +356,6 @@ export class Binding {
     this.contract = contract;
     Object.freeze(this);
   }
-
-  /**
-   * Return this binding with every origin transformed by `mapper`.
-   *
-   * That covers its own origin, its contract's origins, and, for a `ValueTemplate` source, the
-   * template's origins and nested bindings. Any other source is retained by identity.
-   */
-  mapOrigins(mapper: OriginMapper): Binding {
-    const origin = mapOrigin(this.origin, mapper);
-    const contract = this.contract !== null ? this.contract.mapOrigins(mapper) : null;
-    const source = this.source instanceof ValueTemplate ? this.source.mapOrigins(mapper) : this.source;
-    return new Binding(source, { origin, contract });
-  }
-
-  /**
-   * Yield this binding's present origin, then its contract's origins.
-   *
-   * For a `ValueTemplate` source, the template's origins follow, then each nested binding's
-   * origin and contract origins, in tree order.
-   */
-  *iterOrigins(): Generator<OriginRef> {
-    yield* iterOriginCarrier(this, new Set());
-  }
 }
 
 /** A template tree: a record or a list whose leaves are any values. */
@@ -432,14 +409,6 @@ export class ValueTemplate {
     }
     return null;
   }
-
-  /** Return this template with its origins and nested bindings' origins mapped. */
-  mapOrigins(mapper: OriginMapper): ValueTemplate {
-    return new ValueTemplate(
-      mapTree(this.value, (text) => text, mapper) as TemplateTree,
-      this.origins.map(([path, origin]) => [path, mapOrigin(origin, mapper) as OriginRef] as const),
-    );
-  }
 }
 
 /** Yield every binding nested in a template tree, each before those in its source. */
@@ -470,23 +439,19 @@ function* treeStrings(node: unknown, path: ValuePath): Generator<[ValuePath, str
 /**
  * Rebuild a template tree with `fn` applied to each leaf string.
  *
- * Nested bindings keep their contracts; with `mapper` their origins are transformed too. Rebuilt
- * records hold own data properties.
+ * Nested bindings keep their origins and contracts. Rebuilt records hold own data properties.
  */
-function mapTree(node: unknown, fn: (text: string) => unknown, mapper: OriginMapper | null = null): unknown {
+function mapTree(node: unknown, fn: (text: string) => unknown): unknown {
   if (node instanceof Binding) {
-    return new Binding(mapTree(node.source, fn, mapper), {
-      origin: mapper === null ? node.origin : mapOrigin(node.origin, mapper),
-      contract: mapper === null || node.contract === null ? node.contract : node.contract.mapOrigins(mapper),
-    });
+    return new Binding(mapTree(node.source, fn), { origin: node.origin, contract: node.contract });
   }
   if (typeof node === "string") return fn(node);
   if (isRecord(node)) {
     const rebuilt: ValueRecord = {};
-    for (const [key, item] of Object.entries(node)) setField(rebuilt, key, mapTree(item, fn, mapper) as Value);
+    for (const [key, item] of Object.entries(node)) setField(rebuilt, key, mapTree(item, fn) as Value);
     return rebuilt;
   }
-  if (Array.isArray(node)) return node.map((item: unknown) => mapTree(item, fn, mapper));
+  if (Array.isArray(node)) return node.map((item: unknown) => mapTree(item, fn));
   return node;
 }
 
@@ -580,11 +545,6 @@ export class Assertion {
     const origin = mapOrigin(this.origin, mapper);
     return new Assertion(this.expression, this.display, { origin });
   }
-
-  /** Yield this assertion's present origin. */
-  *iterOrigins(): Generator<OriginRef> {
-    yield* iterOriginCarrier(this, new Set());
-  }
 }
 
 /**
@@ -659,11 +619,6 @@ export class ContractOrigins {
     const entries = this.entries.map(([path, origin]) => [path, mapOrigin(origin, mapper) as OriginRef] as const);
     return new ContractOrigins({ default: fallback, entries });
   }
-
-  /** Yield the default, then the nested origins in canonical path order. */
-  *iterOrigins(): Generator<OriginRef> {
-    yield* iterOriginCarrier(this, new Set());
-  }
 }
 
 /** A semantic runtime type paired with source-neutral nested provenance. Frozen. */
@@ -684,16 +639,6 @@ export class ValueContract {
     this.type = type;
     this.origins = origins;
     Object.freeze(this);
-  }
-
-  /** Return this contract with nested origins transformed, retaining its type. */
-  mapOrigins(mapper: OriginMapper): ValueContract {
-    return new ValueContract(this.type, this.origins.mapOrigins(mapper));
-  }
-
-  /** Yield this contract's root and nested origins in canonical order. */
-  *iterOrigins(): Generator<OriginRef> {
-    yield* iterOriginCarrier(this, new Set());
   }
 }
 
@@ -758,18 +703,6 @@ export class PartialRecordContract {
   /** The closed field-name sequence in declaration order. */
   get names(): readonly string[] {
     return this.fields.map(([name]) => name);
-  }
-
-  /** Return this contract with every proven field origin transformed. */
-  mapOrigins(mapper: OriginMapper): PartialRecordContract {
-    return new PartialRecordContract(
-      this.fields.map(([name, contract]) => [name, contract === null ? null : contract.mapOrigins(mapper)] as const),
-    );
-  }
-
-  /** Yield proven field-contract origins in declaration order. */
-  *iterOrigins(): Generator<OriginRef> {
-    yield* iterOriginCarrier(this, new Set());
   }
 }
 
@@ -1400,20 +1333,6 @@ export class Parameter {
       defaultOrigin: this.defaultOrigin,
       ...changes,
     });
-  }
-
-  /** Transform parameter, default, and nested contract origins without copying data. */
-  mapOrigins(mapper: OriginMapper): Parameter {
-    return this.replace({
-      contract: this.contract !== null ? this.contract.mapOrigins(mapper) : null,
-      origin: mapOrigin(this.origin, mapper),
-      defaultOrigin: mapOrigin(this.defaultOrigin, mapper),
-    });
-  }
-
-  /** Yield contract, declaration, then default origins in stable order. */
-  *iterOrigins(): Generator<OriginRef> {
-    yield* iterOriginCarrier(this, new Set());
   }
 }
 

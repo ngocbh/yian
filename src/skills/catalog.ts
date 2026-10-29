@@ -94,7 +94,9 @@ export interface SkillFileDeps {
  * @param path POSIX path relative to the skill directory, such as `references/api.md`. Absolute
  *   paths, `..`, backslashes, hidden (dot) files and folders, and symlinks that leave the
  *   directory or resolve to a hidden file or folder inside it are rejected. The checks apply to
- *   the file actually opened, so a folder swapped for a symlink mid-read is refused too. A hard
+ *   the file actually opened, so a folder swapped for a symlink mid-read is refused too. Where
+ *   the OS can't report an open file's path (Node on macOS, Linux without `/proc`, Windows), that
+ *   recheck reads paths again and only narrows the race with a writer that keeps swapping. A hard
  *   link to a hidden file can't be told from a visible file and is read.
  * @returns The file text.
  * @throws {SkillError} If the path is unsafe, hidden, missing, not a regular file, larger than
@@ -127,7 +129,8 @@ export function readSkillFile(skill: Skill, path: string, deps: SkillFileDeps = 
   try {
     // Another process can swap a checked folder for a symlink before the open, so check the file
     // the descriptor holds: by the path the OS reports for it where it can, else by resolving
-    // the path again and matching the file's identity.
+    // the path again and matching the file's identity. That fallback reads paths too, so a writer
+    // that keeps swapping can still win it, just far less often.
     const opened = fstatSync(fd, { bigint: true });
     if (!opened.isFile()) throw new SkillError(`${where} does not exist`);
     const real = (deps.openedPath ?? openFilePath)(fd) ?? resolvedPath(target);

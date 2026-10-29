@@ -262,8 +262,10 @@ reviewer:
 The model sees only each skill's name and description. When it needs one, it calls the built-in
 `load_skill` tool, which returns the instructions, or a file in the skill's folder such as
 `references/checklist.md`. Files must be UTF-8 text of at most 256 KiB; paths outside the folder
-and hidden files are refused, including through symlinks. A hard link to a hidden file reads like
-any other file, so don't keep hard links to secrets in a skill folder.
+and hidden files are refused, including through symlinks. Against another process swapping
+folders in a skill folder while it's read, this holds on Linux with `/proc` and with Bun on
+macOS; elsewhere (Node on macOS, Windows) it is best effort. A hard link to a hidden file reads like any other file, so
+don't keep hard links to secrets in a skill folder.
 
 - `skills: [name, ...]` grants those skills; `skills: all` grants every skill the run has.
 - Names use lowercase letters, digits and single hyphens, up to 64 characters.

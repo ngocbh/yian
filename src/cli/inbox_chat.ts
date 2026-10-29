@@ -1,6 +1,7 @@
 /**
  * `yian chat`: a terminal host that sends each typed line to a flow's `Inbox(str)` or
- * `Inbox(Message)` input and advances the run.
+ * `Inbox(Message)` input and advances the run. `yian run` comes here first too (`runOrChat`): on a
+ * terminal, a flow the chat can take is chatted with, and any other goes on to `run`.
  *
  * The chat starts the flow, then loops while the run waits: read a line, `send` it, `advance`.
  * The engine holds no prompt and the run holds no worker between turns, and an `advance` finishes
@@ -15,6 +16,7 @@
  * run command's helpers.
  */
 
+import { resolveMemoryLayout } from "../compile/memory_layout.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { Diagnostic } from "../diagnostics.ts";
@@ -46,12 +48,15 @@ import {
   indexRun,
   isSetupError,
   mergeInputs,
+  needsMcp,
   readGrantedSkills,
   removeEmptyDir,
   renderRunError,
   reportRunLog,
   ResumeKeyError,
   resumeKeyCheck,
+  run,
+  type RunOptions,
   validateRunLogOptions,
   waitingText,
 } from "./run.ts";
@@ -60,10 +65,10 @@ import { Terminal, TerminalStopped } from "./terminal.ts";
 import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, shellQuote, UsageError } from "./utils.ts";
 
 /**
- * The options `chat` reads; an absent option is `undefined`, an absent repeatable one an empty
- * list, an absent flag `false`.
+ * The options `inboxChat` reads, for `yian chat` and for the chats `runOrChat` hands over; an
+ * absent option is `undefined`, an absent repeatable one an empty list, an absent flag `false`.
  */
-export interface ChatOptions {
+export interface InboxChatOptions {
   inbox?: string | undefined;
   inputValues: readonly string[];
   inputs?: string | undefined;
@@ -79,7 +84,7 @@ export interface ChatOptions {
  * @internal Test seams: the clock the run and the chat's timers share, the source of the process
  * signals, and host tools added to the registered ones.
  */
-export interface ChatDeps {
+export interface InboxChatDeps {
   scheduler?: Scheduler;
   signals?: Pick<NodeJS.EventEmitter, "on" | "off">;
   tools?: Readonly<Record<string, ToolEntry>>;
@@ -89,6 +94,9 @@ const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel
 // A second Ctrl-C this soon after the one that interrupted a turn cancels the run.
 const SECOND_PRESS_MS = 2_000;
 const EXIT_LINES = new Set(["/exit", "/quit"]);
+
+/** `yian run`'s options, and the inbox a chat it hands over sends lines to. */
+export type RunOrChatOptions = RunOptions & { inbox?: string | undefined };
 
 /**
  * The inbox lines go to: its name, whether it takes messages (`Inbox(Message)`) or text, and
@@ -101,18 +109,36 @@ interface LineInbox {
 }
 
 /**
+ * Whether the chat provides all `flow` needs: it declares no memories and needs no MCP tools.
+ * Never throws.
+ */
+function chattable(flow: ComposedFlow): boolean {
+  try {
+    return !resolveMemoryLayout(flow.compiled).enabled && !needsMcp(flow);
+  } catch {
+    // A memory layout that doesn't resolve is left to `yian run` to report.
+    return false;
+  }
+}
+
+/** Return `flow`'s `Inbox(str)` and `Inbox(Message)` inputs, in declaration order. */
+function lineInboxes(flow: ComposedFlow): Omit<LineInbox, "several">[] {
+  return flow.input.flatMap((param): Omit<LineInbox, "several">[] => {
+    const type = param.contract?.type ?? null;
+    if (!isInboxType(type)) return [];
+    if (canonicalTypeLabel(type.element) === "str") return [{ name: param.name, message: false }];
+    return typeEquals(type.element, builtinType("Message")!) ? [{ name: param.name, message: true }] : [];
+  });
+}
+
+/**
  * Return the `Inbox(str)` or `Inbox(Message)` input lines go to: `chosen`, or the flow's only one.
  *
  * @throws {UsageError} When the flow has none, several and `chosen` is absent, or `chosen` isn't
  *   one of them.
  */
 function pickInbox(flow: ComposedFlow, chosen: string | undefined): LineInbox {
-  const inboxes = flow.input.flatMap((param): Omit<LineInbox, "several">[] => {
-    const type = param.contract?.type ?? null;
-    if (!isInboxType(type)) return [];
-    if (canonicalTypeLabel(type.element) === "str") return [{ name: param.name, message: false }];
-    return typeEquals(type.element, builtinType("Message")!) ? [{ name: param.name, message: true }] : [];
-  });
+  const inboxes = lineInboxes(flow);
   const several = inboxes.length > 1;
   const names = inboxes.map((inbox) => inbox.name);
   const id = flow.compiled.flowId ?? flow.name;
@@ -251,21 +277,23 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
  * ended (<status>); ...`, appends nothing and exits 1, as do a log that can't be read and a flow
  * built in code; a recorded flow that no longer loads is reported located.
  *
+ * @param loaded The flow at `flowPath`, already loaded; read from the file when absent.
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a flow without exactly
  *   one `Inbox(str)` or `Inbox(Message)` input to pick; for an input the flow doesn't declare
  *   (the inbox included); off a TTY, for missing required inputs.
  */
-export async function chat(
+export async function inboxChat(
   flowPath: string | undefined,
-  options: ChatOptions,
+  options: InboxChatOptions,
   io: CliIo,
-  deps: ChatDeps = {},
+  deps: InboxChatDeps = {},
+  loaded?: ComposedFlow,
 ): Promise<number> {
   validateRunLogOptions({ ...options, flow: flowPath });
   const resumed = options.resume ?? null;
   const flow =
     resumed === null
-      ? await loadFlowFile(flowPath!, io, { engineTrace: options.engineTrace })
+      ? (loaded ?? (await loadFlowFile(flowPath!, io, { engineTrace: options.engineTrace })))
       : await recordedFlow(resumed, options.engineTrace, io);
   if (flow === null || flow instanceof Diagnostic) return 1;
   const inbox = pickInbox(flow, options.inbox);
@@ -597,4 +625,56 @@ export async function chat(
     if (log !== null) await indexRun(log, io);
     if (runDir !== null) removeEmptyDir(runDir);
   }
+}
+
+/**
+ * `yian run`: chat with the flow at `flowPath` (`inboxChat`, given `deps`) when stdin and stderr
+ * are a TTY, the run is fresh (no `resume`, `json`, `memoryRoot` or `memoryStorage`), and the flow
+ * loads, declares no memories, needs no MCP tools, and has an `Inbox(str)` or `Inbox(Message)`
+ * input to type into: its only one, or `inbox`. Otherwise hand the command to `run`, which reads
+ * the flow again and reports what is wrong with it; checking writes nothing. Returns the exit code.
+ *
+ * The chat's start-up comes before `run` sets anything up, so the two never share the terminal,
+ * the signals or stderr. `deps.tools` reaches only the chat's run: whether the flow needs MCP
+ * tools is judged by the registered tools alone, as `run` judges it.
+ *
+ * @throws {UsageError} As `run` or `inboxChat` does; for an `inbox` that isn't one of the
+ *   `Inbox(str)` or `Inbox(Message)` inputs of a flow the chat could otherwise take.
+ */
+export async function runOrChat(
+  flowPath: string | undefined,
+  options: RunOrChatOptions,
+  io: CliIo,
+  deps: InboxChatDeps = {},
+): Promise<number> {
+  const flow = await chatFlow(flowPath, options, io);
+  if (flow === null) return run(flowPath, options, io);
+  const { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace } = options;
+  const chatOptions = { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace };
+  return inboxChat(flowPath!, chatOptions, io, deps, flow);
+}
+
+/**
+ * Return the flow at `flowPath` when `runOrChat` chats with it, else `null`, writing nothing. A
+ * flow the chat could take whose `inbox` names none of its inboxes is returned too, so that
+ * `inboxChat` refuses the name.
+ */
+async function chatFlow(
+  flowPath: string | undefined,
+  options: RunOrChatOptions,
+  io: CliIo,
+): Promise<ComposedFlow | null> {
+  if (flowPath === undefined || options.resume !== undefined || options.json || !atTerminal(io)) return null;
+  // `run` checks the memory flags against the flow and reports what they can't take.
+  if (options.memoryRoot !== undefined || options.memoryStorage.length > 0) return null;
+  const silent: CliIo = { ...io, stderr: { write: async () => {} } };
+  let flow: ComposedFlow | Diagnostic;
+  try {
+    flow = await loadFlowFile(flowPath, silent, { engineTrace: false });
+  } catch {
+    return null;
+  }
+  if (flow instanceof Diagnostic || !chattable(flow)) return null;
+  const count = lineInboxes(flow).length;
+  return (options.inbox !== undefined ? count > 0 : count === 1) ? flow : null;
 }

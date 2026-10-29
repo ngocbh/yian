@@ -6,7 +6,8 @@
  *
  * - `run` checks the run-log options, loads the flow, builds its memories, reads skills and MCP
  *   servers when it needs them, runs it on a fresh log or recovers the run recorded on a
- *   `--resume` log, checking its recorded keys, and prints its output or its failure;
+ *   `--resume` log, checking its recorded keys, and prints its output or its failure; `yian run`
+ *   reaches it through `runOrChat` in `inbox_chat.ts`, which hands a terminal chat to `inboxChat`;
  *   `check` loads each flow, or confined to `--root`, and reports each as text or one `--json`
  *   document; `status` reports where the run in a run log stands, or, given no log, updates and
  *   lists the run index of `~/.yian/runs`, as text or a `--json` document. A run whose log is in
@@ -641,7 +642,7 @@ export async function reportRunLog(path: string, out: Writer, env: Env): Promise
  * The options `run` reads; an absent option is `undefined`, an absent repeatable one an empty list,
  * an absent flag `false`.
  */
-interface RunOptions {
+export interface RunOptions {
   inputValues: readonly string[];
   inputs?: string | undefined;
   log?: string | undefined;
@@ -700,6 +701,25 @@ function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
     for (const grant of node.grantedTools()) grants.add(grant);
   }
   return [toolIds, grants];
+}
+
+/** Return the tool ids a run supplies without MCP: the registered, built-in and skill tools. */
+function knownToolIds(): Set<string> {
+  return new Set([...Object.keys(registeredTools()), ...BUILTIN_TOOL_IDS, ASK_USER, LOAD_SKILL]);
+}
+
+/** Whether some id in `toolIds` or `grants` isn't in `known`. */
+function namesUnknown(toolIds: ReadonlySet<string>, grants: ReadonlySet<string>, known: ReadonlySet<string>): boolean {
+  return [...toolIds, ...grants].some((id) => !known.has(id));
+}
+
+/**
+ * @internal Whether a static TOOL node or AGENT grant of `flow` names a tool the run doesn't
+ * supply without MCP, so `run` reads the MCP configs.
+ */
+export function needsMcp(flow: ComposedFlow): boolean {
+  const [toolIds, grants] = mcpNeededNames(flow);
+  return namesUnknown(toolIds, grants, knownToolIds());
 }
 
 /**
@@ -1186,10 +1206,10 @@ async function startRun(
       // MCP configs are read only when the flow needs a tool yian doesn't already have, so a
       // broken config file can't block flows that never use MCP. The servers stay unopened here;
       // `openMcpServers` selects the ones the flow needs just before the run.
-      const known = new Set([...Object.keys(registeredTools()), ...BUILTIN_TOOL_IDS, ASK_USER, LOAD_SKILL]);
+      const known = knownToolIds();
       const [toolIds, grants] = mcpNeededNames(flow);
       let servers: Record<string, McpServer> = {};
-      if ([...toolIds, ...grants].some((id) => !known.has(id))) {
+      if (namesUnknown(toolIds, grants, known)) {
         const user = userMcpConfig(commandEnv.read);
         const paths = [...(statOrNull(user)?.isFile() ? [user] : []), ...options.mcpConfig];
         try {

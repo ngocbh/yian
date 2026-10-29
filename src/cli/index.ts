@@ -75,6 +75,13 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
           help: "A JSON file of inputs.",
         },
         {
+          name: "inbox",
+          type: "string",
+          help:
+            "The Inbox(str) or Inbox(Message) input to send typed lines to, when the flow has " +
+            "several (on a terminal).",
+        },
+        {
           name: "log",
           type: "string",
           path: { dir: false },
@@ -148,11 +155,12 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       ],
     },
     load: async () => {
-      const { run } = await import("./run.ts");
+      const { runOrChat } = await import("./inbox_chat.ts");
       return ({ args, options: o }, io) =>
-        run(
+        runOrChat(
           args["flow"] as string | undefined,
           {
+            inbox: o["inbox"] as string | undefined,
             inputValues: o["input"] as string[],
             inputs: o["inputs"] as string | undefined,
             log: o["log"] as string | undefined,
@@ -226,9 +234,9 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       ],
     },
     load: async () => {
-      const { chat } = await import("./chat.ts");
+      const { inboxChat } = await import("./inbox_chat.ts");
       return ({ args, options: o }, io) =>
-        chat(
+        inboxChat(
           args["flow"] as string | undefined,
           {
             inbox: o["inbox"] as string | undefined,

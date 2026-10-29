@@ -11,9 +11,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { chat, type ChatDeps, type ChatOptions } from "../../src/cli/chat.ts";
+import {
+  inboxChat,
+  type InboxChatDeps,
+  type InboxChatOptions,
+  runOrChat,
+  type RunOrChatOptions,
+} from "../../src/cli/inbox_chat.ts";
 import { main } from "../../src/cli/index.ts";
-import { type CliIo, HostStop, type Writer } from "../../src/cli/utils.ts";
+import { type CliIo, HostStop, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { FileLockError, lockFile, type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import { cancel, inspectRun, readRunIndex, send } from "../../src/run.ts";
 import {
@@ -97,11 +103,11 @@ function chatIo({
 async function runChat(
   flow: string,
   io: CliIo,
-  options: Partial<ChatOptions> = {},
-  deps: ChatDeps = {},
+  options: Partial<InboxChatOptions> = {},
+  deps: InboxChatDeps = {},
 ): Promise<{ code: number; log: string }> {
   const log = join(tmp, "run.jsonl");
-  const code = await chat(
+  const code = await inboxChat(
     flow,
     { inputValues: [], engineTrace: false, log, ...options },
     io,
@@ -170,6 +176,11 @@ const ECHO_REPLY = `      reply:
 `;
 
 const ECHO = turnFlow(ECHO_REPLY);
+
+/** ECHO over an `Inbox(Message)`, echoing each message's text. */
+const MESSAGE_ECHO = turnFlow(ECHO_REPLY.replace('inputs["events"]', 'inputs["events"].map((m) => m.parts[0].text)'))
+  .replaceAll("Inbox(str)", "Inbox(Message)")
+  .replace("said: !list(str)", "said: !list(Message)");
 
 /** One turn: take a line, ask about it, reply. */
 const ASK_ONCE = `id: once
@@ -529,7 +540,7 @@ test(
         if (text.startsWith("Run log: ")) stop.abort(new HostStop("SIGTERM"));
       },
     };
-    const code = await chat(
+    const code = await inboxChat(
       flowFile(ECHO),
       { inputValues: [], engineTrace: false },
       { ...io, stderr: stderrOut, stop: stop.signal },
@@ -550,7 +561,7 @@ test(
     mkdirSync(home);
     const { io, stdin } = chatIo({ env: { HOME: home } });
     stdin.write("hi\n/exit\n");
-    const code = await chat(
+    const code = await inboxChat(
       flowFile(ECHO),
       { inputValues: [], engineTrace: false },
       io,
@@ -791,12 +802,9 @@ describe("yian chat's inbox and inputs", () => {
   test(
     "an Inbox(Message) input takes each line as a user message",
     async () => {
-      const messageEcho = turnFlow(ECHO_REPLY.replace('inputs["events"]', 'inputs["events"].map((m) => m.parts[0].text)'))
-        .replaceAll("Inbox(str)", "Inbox(Message)")
-        .replace("said: !list(str)", "said: !list(Message)");
-      const { io, stdin, stdout } = chatIo();
+            const { io, stdin, stdout } = chatIo();
       stdin.write("hi\n/exit\n");
-      const { code, log } = await runChat(flowFile(messageEcho), io);
+      const { code, log } = await runChat(flowFile(MESSAGE_ECHO), io);
       expect([code, stdout()]).toEqual([0, "echo: hi\necho: \n"]);
       const sent = records(log).filter(
         (record) => record instanceof PoolCommitRecord && record.key === "__start__.messages",
@@ -832,6 +840,197 @@ describe("yian chat's inbox and inputs", () => {
       const inbox = await cli([path, "-i", "topic=x", "-i", "messages=hi"]);
       expect(inbox.code).toBe(2);
       expect(inbox.stderr).toContain('input "messages" is an inbox; it takes messages through send, not a value');
+    },
+    TIMEOUT,
+  );
+});
+
+describe("runOrChat", () => {
+  let runs = 0;
+
+  /**
+   * `yian run`'s command on `flow` with a fresh log in `tmp` (`flow` undefined under `--resume`),
+   * stdin and stderr fake TTYs when `tty`, `typed` written ahead, the chat's clock virtual and its
+   * signals the test's.
+   */
+  async function runOn(
+    flow: string | undefined,
+    { tty = true, typed = "", ...options }: Partial<RunOrChatOptions> & { tty?: boolean; typed?: string } = {},
+  ) {
+    const { io, stdin, stdout, stderr } = chatIo({ tty });
+    stdin.write(typed);
+    const log = join(tmp, `run-${(runs += 1)}.jsonl`);
+    const code = await runOrChat(
+      flow,
+      {
+        inputValues: [],
+        quiet: true,
+        memoryStorage: [],
+        verbose: false,
+        engineTrace: false,
+        mcpConfig: [],
+        json: false,
+        ...(options.resume === undefined ? { log } : {}),
+        ...options,
+      },
+      io,
+      { scheduler: virtualScheduler(Date.parse("2026-01-01T00:00:00Z")), signals },
+    );
+    return { code, stdout: stdout(), stderr: stderr(), log };
+  }
+
+  /** `yian run`'s own handling of a chat flow: it waits at the take, prints nothing on stdout, exits 0. */
+  const waited = (result: { code: number; stdout: string; stderr: string }) => {
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("run waiting: ");
+    expect(result.stderr).not.toContain("session ended");
+  };
+
+  /** Lines a chat answers and then ends on; `run` leaves them unread. */
+  const BYE = "hi" + ENTER + "/exit" + ENTER;
+
+  /** ECHO with a second inbox, `other`, read by its own take. */
+  const TWO_INBOXES = ECHO.replace("  messages: !Inbox(str)\n", "  messages: !Inbox(str)\n  other: !Inbox(str)\n")
+    .replace(
+      "nodes:\n  chat:",
+      "nodes:\n  other:\n    kind: tool\n    tool_id: take\n    input:\n      from: \${input.other}\n  chat:",
+    );
+
+  test(
+    "on a terminal each typed line is sent and answered; /exit ends the session",
+    async () => {
+      const result = await runOn(flowFile(ECHO), { typed: BYE });
+      expect(result.code).toBe(0);
+      expect(result.stdout).toBe("echo: hi\necho: \n");
+      expect(result.stderr).toContain("session ended");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "-i supplies the chat's other inputs",
+    async () => {
+      const topic = `      reply:
+        kind: code
+        input:
+          topic: \${input.topic}
+          events: \${heard.output.events}
+        output: str
+        code: |
+          return inputs["topic"] + ": " + inputs["events"].join(" | ");
+`;
+      const flow = flowFile(turnFlow(topic, { input: "  topic: !str\n" }), "topic.yaml");
+      const result = await runOn(flow, { inputValues: ["topic=x"], typed: BYE });
+      expect([result.code, result.stdout]).toEqual([0, "x: hi\nx: \n"]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "off a terminal, or under --json, the run waits",
+    async () => {
+      const flow = flowFile(ECHO);
+      waited(await runOn(flow, { tty: false, typed: BYE }));
+      const json = await runOn(flow, { json: true, typed: BYE });
+      expect(json.code).toBe(0);
+      expect(JSON.parse(json.stdout).status).toBe("waiting");
+      expect(json.stderr).not.toContain("session ended");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "--resume recovers the run; with FLOW too it stays run's usage error",
+    async () => {
+      const flow = flowFile(ECHO);
+      const first = await runOn(flow, { tty: false });
+      waited(first);
+      waited(await runOn(undefined, { resume: first.log, typed: BYE }));
+      await expect(runOn(flow, { resume: first.log })).rejects.toThrow(
+        new UsageError("Invalid value: --resume runs the flow recorded in the log; leave out <flow>"),
+      );
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "several inboxes run as before unless --inbox picks one; a name that isn't one is a usage error",
+    async () => {
+      const flow = flowFile(TWO_INBOXES, "two.yaml");
+      waited(await runOn(flow, { typed: BYE }));
+      const picked = await runOn(flow, { inbox: "messages", typed: BYE });
+      expect(picked.code).toBe(0);
+      expect(picked.stdout).toBe("echo: hi\necho: \n");
+      // The other inbox, which nothing sends to, leaves the run waiting.
+      expect(picked.stderr).toContain("run waiting: other (take)");
+      await expect(runOn(flow, { inbox: "nope" })).rejects.toThrow(
+        new UsageError("--inbox 'nope' is not one of the flow's Inbox(str) or Inbox(Message) inputs (messages, other)"),
+      );
+      // Off a terminal --inbox has no use, so it is left alone.
+      waited(await runOn(flow, { tty: false, inbox: "nope" }));
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a flow with memory, or a memory flag, runs as before",
+    async () => {
+      const memory = ECHO.replace("name: echo_chat\n", "name: echo_chat\nlong_term_memory: episodic\n");
+      waited(await runOn(flowFile(memory, "memory.yaml"), { typed: BYE }));
+      const echo = flowFile(ECHO);
+      await expect(runOn(echo, { memoryStorage: ["notes=" + join(tmp, "notes")] })).rejects.toThrow(
+        new UsageError(
+          "Invalid value for --memory-storage: key 'notes' is not a memory declared by this flow (declared: none)",
+        ),
+      );
+      waited(await runOn(echo, { memoryRoot: join(tmp, "memory"), typed: BYE }));
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a flow with no Inbox(str) or Inbox(Message) input goes to run",
+    async () => {
+      const ints = ECHO.replaceAll("!Inbox(str)", "!Inbox(int)").replace("said: !list(str)", "said: !list(int)");
+      waited(await runOn(flowFile(ints, "ints.yaml"), { typed: BYE }));
+      const code = '  n: {kind: code, output: str, code: return "x";}\n';
+      const plain = flowFile(`id: plain\nname: plain\nnodes:\n${code}output: \${n.output}\n`, "plain.yaml");
+      const result = await runOn(plain, { typed: BYE });
+      expect([result.code, result.stdout]).toEqual([0, "x\n"]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "an Inbox(Message) input chats too",
+    async () => {
+      const result = await runOn(flowFile(MESSAGE_ECHO, "message.yaml"), { typed: BYE });
+      expect([result.code, result.stdout]).toEqual([0, "echo: hi\necho: \n"]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a flow that needs MCP tools goes to run, which reads the MCP config",
+    async () => {
+      const tool = "  fetch:\n    kind: tool\n    tool_id: fake\n";
+      const flow = flowFile(ECHO.replace("nodes:\n  chat:", `nodes:\n${tool}  chat:`), "mcp.yaml");
+      const result = await runOn(flow, { typed: BYE });
+      expect(result.code).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("TOOL node 'fetch' names tool 'fake', which isn't in this run's tools");
+      expect(result.stderr).not.toContain("session ended");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a flow that doesn't load prints its diagnostic once",
+    async () => {
+      const result = await runOn(flowFile(ECHO.replace("kind: loop", "kind: lop"), "bad.yaml"));
+      expect(result.code).toBe(1);
+      expect(result.stderr.split("unknown kind 'lop'").length - 1).toBe(1);
     },
     TIMEOUT,
   );
@@ -1498,8 +1697,8 @@ describe("yian chat's skills", () => {
 
 describe("yian chat --resume", () => {
   /** `chat --resume log` with the virtual clock and the test's signals. */
-  function resumeChat(log: string, io: CliIo, options: Partial<ChatOptions> = {}, deps: ChatDeps = {}) {
-    return chat(
+  function resumeChat(log: string, io: CliIo, options: Partial<InboxChatOptions> = {}, deps: InboxChatDeps = {}) {
+    return inboxChat(
       undefined,
       { inputValues: [], engineTrace: false, resume: log, ...options },
       io,

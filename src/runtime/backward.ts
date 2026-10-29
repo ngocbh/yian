@@ -29,8 +29,8 @@ import {
   type BackwardOptions,
   BackwardResult,
   copyBackwardValue,
+  failureMessage,
   type LearningMaterial,
-  markerMessage,
   type MaterialCaps,
   tracebackText,
   validateBackwardResult,
@@ -84,7 +84,7 @@ export class BackwardComputeError extends Error {
 /** Return `error` as a `code` failure of the occurrence `context` describes. */
 function computeFailure(context: BackwardContext, code: string, error: unknown): BackwardComputeError {
   return new BackwardComputeError(
-    new BackwardFailure("backward", code, markerMessage(error), {
+    new BackwardFailure("backward", code, failureMessage(error), {
       scope: context.scope,
       runId: context.runId,
       nodeId: context.nodeId,
@@ -340,7 +340,7 @@ async function driveOpenedBackward(
       // A trace's backward context always names its occurrence's node.
       if (context !== null) message += ` for node ${reprText(context.nodeId!)}`;
       // A MemoryOperationFailure refuses a lone surrogate, which the original's text may hold.
-      const text = `${message}: ${error.original.message}`.toWellFormed();
+      const text = `${message}: ${failureMessage(error.original)}`.toWellFormed();
       cause = new MemoryOperationFailure("learn", "memory.invalid_context", text, false);
     } else if (error instanceof LearningProposalError) {
       key = error.memory;

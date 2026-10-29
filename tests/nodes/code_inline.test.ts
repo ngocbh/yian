@@ -8,7 +8,16 @@
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { getEventListeners } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -1053,6 +1062,19 @@ test("inline flow loads and runs", async () => {
   const result = await runFlow(await loadConformanceFlow(INLINE_FLOW), { rating: 3.0 }, { env: hostEnv(helpers) });
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("r=3.0");
+});
+
+test("a huge thrown message is cut in the logged failure", async () => {
+  const flow = INLINE_FLOW.replace(`return "r=" + inputs['rating'].toFixed(1)`, 'throw new Error("x".repeat(3000000))');
+  const log = join(helpers, "huge_throw.jsonl");
+  const result = await runFlow(await loadConformanceFlow(flow), { rating: 3.0 }, { env: hostEnv(helpers), log });
+  expect(result.status).toBe("failed");
+  expect(result.failure!.message).toMatch(/^Error: x+… \(\d+ more characters\)$/);
+  const failed = readFileSync(log, "utf8")
+    .split("\n")
+    .find((line) => line.includes('"node_failed"'))!;
+  // The message and the traceback are each at most 10,000 characters plus the cut's note.
+  expect(failed.length).toBeLessThan(21_000);
 });
 
 test("inline raise becomes failed run", async () => {

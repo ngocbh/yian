@@ -20,6 +20,7 @@
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
+import { current } from "../defaults.ts";
 import { Failure, type FailureCode, OriginRef, reprText } from "../diagnostics.ts";
 import type {
   ModelCallFinished,
@@ -54,6 +55,7 @@ import type { ToolSet } from "../tools/registry.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
 import {
+  cutText,
   fromHost,
   isList,
   isRecord,
@@ -817,14 +819,33 @@ export function markerMessage(original: unknown): string {
 }
 
 /**
+ * @internal Return a thrown value's `markerMessage` cut to `YIAN_MAX_FAILURE_CHARS` code points by
+ * `cutText`. Used for a failure's message, which the run log records.
+ */
+export function failureMessage(error: unknown): string {
+  return cutText(markerMessage(error), current().maxFailureChars);
+}
+
+/**
  * @internal Return an `Error`'s stack followed by its string `notes`, one per line, else `null`;
- * the notes in the text keep a cleanup note durable. Used
- * for a failure's traceback.
+ * the notes in the text keep a cleanup note durable. Used for a failure's traceback.
+ *
+ * The stack's header (the error's name and message, before its first `at` frame), its frames
+ * and each note are each cut to `YIAN_MAX_FAILURE_CHARS` code points by `cutText`, so a huge
+ * message can't push the frames and notes out.
  */
 export function tracebackText(error: unknown): string | null {
   if (!(error instanceof Error)) return null;
+  const cap = current().maxFailureChars;
   const notes: unknown = (error as { notes?: unknown }).notes;
-  const lines = [error.stack, ...(Array.isArray(notes) ? notes : [])].filter((line) => typeof line === "string");
+  const lines: string[] = [];
+  if (typeof error.stack === "string") {
+    const frames = /\n[ \t]+at /.exec(error.stack)?.index ?? error.stack.length;
+    lines.push(cutText(error.stack.slice(0, frames), cap) + cutText(error.stack.slice(frames), cap));
+  }
+  for (const note of Array.isArray(notes) ? notes : []) {
+    if (typeof note === "string") lines.push(cutText(note, cap));
+  }
   return lines.length > 0 ? lines.join("\n") : null;
 }
 

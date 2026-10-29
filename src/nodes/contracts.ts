@@ -1103,7 +1103,7 @@ export interface CallView {
  * Example:
  * ```ts
  * if (steps !== undefined) {
- *   const attempt = steps.starts + steps.prior.length;
+ *   const attempt = steps.starts + steps.prior.filter((step) => step.event === "started").length;
  *   steps.record({ kind: "tool_attempt", event: "started", attempt: BigInt(attempt) });
  * }
  * ```

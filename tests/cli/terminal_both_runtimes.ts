@@ -12,7 +12,7 @@ import { getEventListeners } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
-import { Terminal, type TerminalOptions, TerminalStopped } from "../../src/cli/terminal.ts";
+import { LineEditor, Terminal, type TerminalOptions, TerminalStopped } from "../../src/cli/terminal.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { parseQuestions } from "../../src/nodes/tool/questions.ts";
 import { ToolContext } from "../../src/tools/context.ts";
@@ -68,6 +68,7 @@ export class FakeInput extends PassThrough {
 export class FakeOutput extends Writable {
   text = "";
   columns: number;
+  rows: number | undefined;
   isTTY: boolean;
   writes = 0;
   readonly throwOn: number | undefined;
@@ -108,14 +109,17 @@ function charWidth(char: string): number {
 
 /**
  * Replay `text` on a `columns`-wide terminal. It knows text, `\r`, `\n` (down one row, as with
- * output newline translation off), `ESC[nA`, `ESC[J`, `ESC[K` and `ESC[nG`; colours are ignored.
- * Writing past the last column wraps on the next character, as terminals do.
+ * output newline translation off), `ESC[nA`, `ESC[J`, `ESC[K`, `ESC[nG`, `ESC[r;cH` and the
+ * alternate screen (`ESC[?1049h` and `l`, which gives back the main screen and its cursor);
+ * colours are ignored. Writing past the last column wraps on the next character, as terminals do.
  */
 export function screen(text: string, columns = 80): Screen {
-  const rows: string[][] = [[]];
+  let rows: string[][] = [[]];
   const modes: string[] = [];
   let row = 0;
   let col = 0;
+  // The main screen while the alternate one is up.
+  let main: { rows: string[][]; row: number; col: number } | null = null;
   const line = (): string[] => {
     while (rows.length <= row) rows.push([]);
     return rows[row]!;
@@ -145,7 +149,22 @@ export function screen(text: string, columns = 80): Screen {
       continue;
     }
     const n = args === "" ? 1 : Number(args);
-    if (priv === "?") modes.push(`?${args}${command}`);
+    if (priv === "?") {
+      modes.push(`?${args}${command}`);
+      if (args === "1049" && command === "h" && main === null) {
+        main = { rows, row, col };
+        rows = [[]];
+        row = 0;
+        col = 0;
+      } else if (args === "1049" && command === "l" && main !== null) {
+        ({ rows, row, col } = main);
+        main = null;
+      }
+    } else if (command === "H") {
+      const [down = 1, across = 1] = (args ?? "").split(";").map((part) => (part === "" ? 1 : Number(part)));
+      row = down - 1;
+      col = across - 1;
+    }
     else if (command === "A") row = Math.max(0, row - n);
     else if (command === "G") col = Math.max(1, Math.min(n, columns)) - 1;
     else if (command === "K") line().length = Math.min(line().length, col);
@@ -437,6 +456,27 @@ async function anAbortedReadLineReturnsItsDraftForTheNextPrompt(): Promise<void>
   assert.deepEqual(await early, { aborted: true, draft: "kept" });
 }
 
+async function onActiveSaysWhetherATurnLeftRows(): Promise<void> {
+  const calls: [boolean, boolean][] = [];
+  const { input, terminal } = setup({ onActive: (on, printed) => calls.push([on, printed]) });
+  const controller = new AbortController();
+  const line = terminal.readLine("You:", { signal: controller.signal });
+  input.write("half");
+  await tick();
+  controller.abort(new Error("woke"));
+  await line;
+  // Erased, it leaves nothing; entered, it leaves its collapsed line.
+  const next = terminal.readLine("You:");
+  input.write(ENTER);
+  await next;
+  assert.deepEqual(calls, [
+    [true, false],
+    [false, false],
+    [true, false],
+    [false, true],
+  ]);
+}
+
 async function escapeAtReadLineReturnsTheDraft(): Promise<void> {
   const stops: string[] = [];
   const { input, output, terminal, view, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
@@ -680,6 +720,317 @@ async function escapeErasesAFramedReadLine(): Promise<void> {
   input.write(ESCAPE);
   assert.deepEqual(await line, { escape: true, draft: "half" });
   assert.deepEqual(view().rows, ["above"]);
+}
+
+/** Wait past readline's escape timeout, so a lone Escape written before arrives as the Escape key. */
+function pastEscape(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 600));
+}
+
+/**
+ * A list of `rows`, each keyed by its first word, that can change, telling its one subscriber with
+ * `changed`.
+ */
+function rowList(rows: string[]) {
+  let listener: (() => void) | null = null;
+  return {
+    rows: () => rows.map((text) => ({ key: text.split(" ")[0]!, text })),
+    subscribe(next: () => void) {
+      listener = next;
+      return () => (listener = null);
+    },
+    changed: () => listener?.(),
+    subscribed: () => listener !== null,
+  };
+}
+
+async function aFramedReadLineWithAListMovesIntoItAndOpensARow(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const list = rowList(["r1  a.yaml", "r2  b.yaml"]);
+  const editor = new LineEditor({ columns: () => 60, hint: HINT, list });
+  const box = [FRAME_TOP, framed("> hi"), FRAME_BOTTOM, `  ${HINT}`];
+  const line = terminal.readLine("You:", { frame: true, escape: true, editor, initial: "hi" });
+  await tick();
+  assert.deepEqual(view().rows, [...box, "  r1  a.yaml", "  r2  b.yaml"]);
+  // Arrows and Escape inside a paste move nothing.
+  input.write(PASTE_START + DOWN + ESCAPE + PASTE_END);
+  await tick();
+  assert.equal(editor.focus(), null);
+  input.write(DOWN);
+  await tick();
+  assert.deepEqual(view().rows, [...box, "» r1  a.yaml", "  r2  b.yaml"]);
+  // The list has the keys: the cursor is hidden, and Down stops at the last row.
+  assert.equal(view().modes.at(-1), "?25l");
+  input.write(DOWN + DOWN);
+  await tick();
+  assert.deepEqual(view().rows.slice(-2), ["  r1  a.yaml", "» r2  b.yaml"]);
+  input.write(UP);
+  await tick();
+  assert.deepEqual(view().rows.slice(-2), ["» r1  a.yaml", "  r2  b.yaml"]);
+  // Up from the top row gives the keys back to the box, and the text goes on.
+  input.write(UP + "!");
+  await tick();
+  const typed = [FRAME_TOP, framed("> hi!"), FRAME_BOTTOM, `  ${HINT}`];
+  assert.deepEqual(view().rows, [...typed, "  r1  a.yaml", "  r2  b.yaml"]);
+  assert.equal(view().modes.at(-1), "?25h");
+  // Escape in the list goes back to the box; it doesn't end the prompt.
+  input.write(DOWN + ESCAPE);
+  await pastEscape();
+  assert.equal(editor.focus(), null);
+  input.write(DOWN + DOWN + ENTER);
+  assert.deepEqual(await line, { open: "r2", draft: "hi!" });
+  assert.deepEqual(view().rows, []);
+  // The editor keeps the text and the row for the next prompt.
+  assert.equal(editor.focus(), 1);
+  assert.equal(list.subscribed(), false);
+}
+
+async function aListRowThatGoesGivesTheKeysBackAndTheListRedrawsOnItsOwn(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const rows = ["r1  a.yaml"];
+  const list = { ...rowList(rows), hint: "↓ runs" };
+  const editor = new LineEditor({ columns: () => 60, hint: "esc withdraws", list });
+  const line = terminal.readLine("You:", { frame: true, escape: true, editor });
+  await tick();
+  // The list's hint follows the box's while it has rows.
+  assert.deepEqual(view().rows.slice(-2), ["  esc withdraws · ↓ runs", "  r1  a.yaml"]);
+  input.write(DOWN);
+  await tick();
+  assert.equal(editor.focus(), 0);
+  rows.pop();
+  list.changed();
+  await tick();
+  assert.deepEqual(view().rows, [FRAME_TOP, framed(">"), FRAME_BOTTOM, "  esc withdraws"]);
+  assert.equal(editor.focus(), null);
+  // With no rows, Down stays in the box.
+  input.write(DOWN + "x" + ENTER);
+  assert.deepEqual(await line, { value: "x" });
+}
+
+async function aLongListShowsWhatFitsTheFocusedRowAmongThem(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const rows = Array.from({ length: 10 }, (_, i) => `r${i + 1}`);
+  // Twelve rows high: the box takes three and the hint one, and four are left above it.
+  const editor = new LineEditor({ columns: () => 60, rows: () => 12, hint: "", list: rowList(rows) });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  await tick();
+  assert.deepEqual(view().rows.slice(4), ["  r1", "  r2", "  r3", "  +7 more"]);
+  input.write(DOWN.repeat(5));
+  await tick();
+  assert.deepEqual(view().rows.slice(4), ["  r3", "  r4", "» r5", "  +7 more"]);
+  // The focus follows its row's key: a row going above it leaves it on the same item.
+  rows.splice(0, 1);
+  input.write(ENTER);
+  assert.deepEqual(await line, { open: "r5", draft: "" });
+}
+
+async function aPasteTallerThanTheScreenShowsTheRowsAroundTheCursor(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  // Twelve rows high: five rows of text fit in the box, under four left above it.
+  const editor = new LineEditor({ columns: () => 60, rows: () => 12, hint: "hint" });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  const text = Array.from({ length: 8 }, (_, i) => String(i).repeat(54)).join("");
+  input.write(PASTE_START + text + PASTE_END);
+  await tick();
+  const rows = view().rows;
+  assert.equal(rows.length, 8);
+  assert.equal(rows[0], `╭─ ↑ 4 more ${"─".repeat(47)}╮`);
+  assert.equal(rows[1], framed(`  ${"4".repeat(54)}`));
+  assert.equal(rows[5], framed(""));
+  assert.deepEqual(rows.slice(-2), [FRAME_BOTTOM, "  hint"]);
+  // The cursor stays on its row, and the window follows it.
+  assert.deepEqual(view().cursor, { row: 5, col: 4 });
+  input.write(HOME);
+  await tick();
+  assert.equal(view().rows[1], framed(`> ${"0".repeat(54)}`));
+  // Eight rows now: the cursor needs no row of its own after the last.
+  assert.equal(view().rows[6], `╰─ ↓ 3 more ${"─".repeat(47)}╯`);
+  assert.deepEqual(view().cursor, { row: 1, col: 4 });
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: text });
+}
+
+async function anEnterAfterTheListShiftedOpensTheRunItsPointerIsOn(): Promise<void> {
+  const { input, terminal } = setup({ columns: 60 });
+  const rows = ["r1  a.yaml", "r2  b.yaml", "r3  c.yaml"];
+  const list = rowList(rows);
+  const editor = new LineEditor({ columns: () => 60, hint: "", list });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  input.write(DOWN + DOWN);
+  await tick();
+  assert.equal(editor.focus(), 1);
+  // r1 ends and r4 starts at the head: the pointer stays on r2, now the second row again.
+  rows.splice(0, 1, "r4  d.yaml");
+  rows.splice(1, 0, "r5  e.yaml");
+  list.changed();
+  await tick();
+  assert.equal(editor.focus(), 2);
+  input.write(ENTER);
+  assert.deepEqual(await line, { open: "r2", draft: "" });
+}
+
+async function downOnAFoldedLineMovesIntoTheListOnlyFromItsLastRow(): Promise<void> {
+  const { input, terminal } = setup({ columns: 20 });
+  const editor = new LineEditor({ columns: () => 20, hint: "", list: rowList(["r1"]) });
+  const line = terminal.readLine("You:", { frame: true, editor, initial: "a".repeat(20) });
+  // Twenty characters fold onto two rows of fourteen: the cursor at the end is on the last.
+  input.write(HOME + DOWN);
+  await tick();
+  assert.equal(editor.focus(), null);
+  input.write(END + DOWN);
+  await tick();
+  assert.equal(editor.focus(), 0);
+  input.write(ENTER);
+  assert.deepEqual(await line, { open: "r1", draft: "a".repeat(20) });
+}
+
+async function watchKeysWithAnEditorGivesItTheKeysButCtrlC(): Promise<void> {
+  const { input, terminal } = setup();
+  const keys: string[] = [];
+  const edited: string[] = [];
+  const watch = new AbortController();
+  // The editor takes every key but Escape.
+  terminal.watchKeys(
+    watch.signal,
+    (key) => keys.push(key),
+    (key) => {
+      if (key.name === "escape") return false;
+      edited.push(key.name ?? key.str ?? "?");
+      return true;
+    },
+  );
+  input.write("ab" + ENTER);
+  input.write(CTRL_C);
+  input.write(ESCAPE);
+  await pastEscape();
+  assert.deepEqual(edited, ["a", "b", "return"]);
+  assert.deepEqual(keys, ["interrupt", "escape"]);
+  watch.abort();
+  // Nothing was kept for the next prompt.
+  const line = terminal.readLine("You:");
+  input.write("c" + ENTER);
+  assert.deepEqual(await line, { value: "c" });
+}
+
+async function showScreenDrawsOnTheAlternateScreenAndGivesTheScreenBack(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 20 });
+  output.rows = 3;
+  output.write("chat line\r\n");
+  let shown = ["one", "a row longer than the screen is wide", "three", "four"];
+  let redraw: (() => void) | null = null;
+  const screenUp = terminal.showScreen({
+    draw: (columns, rows) => [`${columns}x${rows}`, ...shown],
+    subscribe: (next) => {
+      redraw = next;
+      return () => (redraw = null);
+    },
+  });
+  await tick();
+  // As many rows as the screen holds, each cut to the width.
+  assert.deepEqual(view().rows, ["20x3", "one", "a row longer than th"]);
+  assert.ok(view().modes.includes("?1049h"));
+  shown = ["changed"];
+  redraw!();
+  assert.deepEqual(view().rows, ["20x3", "changed"]);
+  input.write("x");
+  await tick();
+  assert.deepEqual(view().rows, ["20x3", "changed"]);
+  input.write("q");
+  await screenUp;
+  assert.equal(redraw, null);
+  assert.deepEqual(view().rows, ["chat line"]);
+  assert.deepEqual(view().cursor, { row: 1, col: 0 });
+  // Escape leaves it too, and so does Ctrl-C, which leaves the terminal open.
+  const escaped = terminal.showScreen({ draw: () => ["x"] });
+  input.write(ESCAPE);
+  await pastEscape();
+  await escaped;
+  const again = terminal.showScreen({ draw: () => ["x"] });
+  input.write(CTRL_C);
+  await again;
+  const line = terminal.readLine("You:");
+  input.write("ok" + ENTER);
+  assert.deepEqual(await line, { value: "ok" });
+}
+
+async function showScreenSaysWhenAPromptWaitsBehindItAndClosesFirst(): Promise<void> {
+  const events: string[] = [];
+  const { input, terminal, view } = setup({ columns: 40, onActive: (on) => events.push(on ? "active" : "inactive") });
+  const screenUp = terminal.showScreen({
+    draw: (_columns, _rows, waiting) => [waiting ? "a prompt waits" : "nothing waits"],
+    onClose: () => events.push("closed"),
+  });
+  await tick();
+  assert.deepEqual(view().rows, ["nothing waits"]);
+  // A line prompt behind it waits on no one; an ask does.
+  const line = terminal.readLine("You:", { signal: AbortSignal.timeout(60_000) });
+  await tick();
+  assert.deepEqual(view().rows, ["nothing waits"]);
+  const answer = terminal.askText("Name:");
+  await tick();
+  assert.deepEqual(view().rows, ["a prompt waits"]);
+  input.write("q");
+  await screenUp;
+  // The screen's owner is told it closed before the prompt behind takes the terminal.
+  assert.deepEqual(events.slice(0, 3), ["active", "closed", "inactive"]);
+  await tick();
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "" });
+  input.write("ada" + ENTER);
+  assert.equal(await answer, "ada");
+}
+
+async function aWatchWithAnEditorTurnsBracketedPasteOnAndAPasteStaysOneLine(): Promise<void> {
+  const { input, output, terminal } = setup({ columns: 60 });
+  const modes = () => screen(output.text).modes.filter((mode) => mode.startsWith("?2004"));
+  const editor = new LineEditor({ columns: () => 60, hint: "" });
+  const sent: string[] = [];
+  const watch = new AbortController();
+  terminal.watchKeys(
+    watch.signal,
+    () => {},
+    (key) => {
+      const action = editor.key(key);
+      if (action !== null && "value" in action) sent.push(action.value);
+      return action === null || !("escape" in action);
+    },
+  );
+  // The terminal brackets a paste only while bracketed paste is on.
+  assert.deepEqual(modes(), ["?2004h"]);
+  input.write(PASTE_START + "one\r/exit\r" + UP + "three" + PASTE_END);
+  await tick();
+  assert.deepEqual(sent, []);
+  assert.equal(editor.text(), "one\n/exit\nthree");
+  // A prompt meanwhile leaves it on for the watch.
+  const answer = terminal.askText("Name:");
+  await tick();
+  input.write("x" + ENTER);
+  assert.equal(await answer, "x");
+  assert.equal(modes().at(-1), "?2004h");
+  input.write(ENTER);
+  await tick();
+  assert.deepEqual(sent, ["one\n/exit\nthree"]);
+  watch.abort();
+  assert.equal(modes().at(-1), "?2004l");
+}
+
+async function theExitHookLeavesTheAlternateScreen(): Promise<void> {
+  const { input, output, terminal } = setup();
+  const before = process.listeners("exit");
+  const screenUp = terminal.showScreen({ draw: () => ["x"] });
+  await tick();
+  const added = process.listeners("exit").filter((listener) => !before.includes(listener));
+  assert.equal(added.length, 1);
+  added[0]!(0);
+  assert.equal(screen(output.text).modes.at(-1), "?1049l");
+  input.write("q");
+  await screenUp;
+}
+
+async function showScreenOffATtyDoesNothing(): Promise<void> {
+  const { output, terminal } = setup({ tty: false });
+  await terminal.showScreen({ draw: () => ["x"] });
+  assert.equal(output.text, "");
 }
 
 async function wideCharactersRedrawWithoutStaleRows(): Promise<void> {
@@ -2589,6 +2940,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an aborted readLine keeps later keys": anAbortedReadLineKeepsLaterKeys,
   "a non-TTY readLine reads one line per call": aNonTtyReadLineReadsOneLinePerCall,
   "an aborted readLine returns its draft for the next prompt": anAbortedReadLineReturnsItsDraftForTheNextPrompt,
+  "onActive says whether a turn left rows on the screen": onActiveSaysWhetherATurnLeftRows,
   "Escape at readLine with escape returns the draft": escapeAtReadLineReturnsTheDraft,
   "Escape at readLine without escape is ignored": escapeAtReadLineWithoutTheOptionIsIgnored,
   "watchKeys sends Escape and Ctrl-C and buffers the rest": watchKeysSendsEscapeAndCtrlCAndBuffersTheRest,
@@ -2604,6 +2956,25 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a framed readLine folds a long line inside the box": aFramedReadLineFoldsALongLineInsideTheBox,
   "a bracketed paste keeps its newlines in a framed readLine": aBracketedPasteKeepsItsNewlinesFramed,
   "Escape erases a framed readLine": escapeErasesAFramedReadLine,
+  "a framed readLine with a list moves into it and opens a row": aFramedReadLineWithAListMovesIntoItAndOpensARow,
+  "a list row that goes gives the keys back, and the list redraws on its own":
+    aListRowThatGoesGivesTheKeysBackAndTheListRedrawsOnItsOwn,
+  "a long list shows what fits, the focused row among them": aLongListShowsWhatFitsTheFocusedRowAmongThem,
+  "a paste taller than the screen shows the rows around the cursor":
+    aPasteTallerThanTheScreenShowsTheRowsAroundTheCursor,
+  "an Enter after the list shifted opens the run its pointer is on":
+    anEnterAfterTheListShiftedOpensTheRunItsPointerIsOn,
+  "Down on a folded line moves into the list only from its last row":
+    downOnAFoldedLineMovesIntoTheListOnlyFromItsLastRow,
+  "watchKeys with an editor gives it the keys but Ctrl-C": watchKeysWithAnEditorGivesItTheKeysButCtrlC,
+  "showScreen draws on the alternate screen and gives the screen back":
+    showScreenDrawsOnTheAlternateScreenAndGivesTheScreenBack,
+  "showScreen says when a prompt waits behind it, and closes before that prompt":
+    showScreenSaysWhenAPromptWaitsBehindItAndClosesFirst,
+  "showScreen off a TTY does nothing": showScreenOffATtyDoesNothing,
+  "a watch with an editor turns bracketed paste on, and a paste stays one line":
+    aWatchWithAnEditorTurnsBracketedPasteOnAndAPasteStaysOneLine,
+  "the exit hook leaves the alternate screen": theExitHookLeavesTheAlternateScreen,
   "wide characters redraw without stale rows": wideCharactersRedrawWithoutStaleRows,
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,
   "a long line redraws without stale rows": aLongLineRedrawsWithoutStaleRows,

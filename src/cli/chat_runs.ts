@@ -145,6 +145,16 @@ export interface WaitingChild {
   readonly log: string;
 }
 
+/** A child still running or waiting, as `live` lists it. */
+export interface LiveChild {
+  readonly id: string;
+  /** What it runs, as its start named it: the flow's file, or else the flow's name. */
+  readonly name: string;
+  /** When it started, on the children's clock. */
+  readonly since: number;
+  readonly status: ChildStatus;
+}
+
 /** A `next` call waiting for a status numbered after `after`. */
 interface Waiter {
   readonly after: number;
@@ -155,6 +165,10 @@ interface Waiter {
 interface Child {
   readonly id: string;
   readonly flow: ComposedFlow;
+  /** What its start named it (`LiveChild.name`). */
+  readonly name: string;
+  /** When it started, on the children's clock. */
+  readonly since: number;
   readonly log: string;
   /** The tools and skills every pass of the child is given. */
   readonly tools: Record<string, ToolEntry>;
@@ -252,7 +266,8 @@ export class ChildRuns {
    * Starts run one at a time in call order, so ids follow it, and an id is taken only by a start
    * that succeeds. Each first checks the provider keys the flow's agents need, without a prompt.
    * `options.signal` is the caller's: aborting it before the start begins rejects, and after it
-   * does nothing to the child.
+   * does nothing to the child. `options.name` is what `live` lists it by (the flow's file, say);
+   * the flow's name when absent.
    *
    * @throws {MissingKeyError} When an agent's provider needs a key that isn't set, before anything
    *   is written; `ensureProviderKeys`' other errors likewise.
@@ -263,9 +278,10 @@ export class ChildRuns {
   start(
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
-    options: { signal?: AbortSignal | null } = {},
+    options: { signal?: AbortSignal | null; name?: string } = {},
   ): Promise<{ id: string; log: string; seq: number }> {
-    const turn = this.#starting.then(() => this.#begin(flow, inputs, options.signal ?? null));
+    const name = options.name ?? flow.name ?? flow.compiled.flowId ?? "flow";
+    const turn = this.#starting.then(() => this.#begin(flow, inputs, name, options.signal ?? null));
     this.#starting = turn.catch(() => {});
     return turn;
   }
@@ -274,6 +290,7 @@ export class ChildRuns {
   async #begin(
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
+    name: string,
     signal: AbortSignal | null,
   ): Promise<{ id: string; log: string; seq: number }> {
     const check = () => {
@@ -292,6 +309,8 @@ export class ChildRuns {
     const child: Child = {
       id,
       flow,
+      name,
+      since: this.#options.scheduler.now(),
       log,
       // One handler serves `ask` and `ask_user` (passing both is refused).
       tools: { ...registeredTools(), ask: () => pending() },
@@ -356,6 +375,13 @@ export class ChildRuns {
     child.waiters.add(waiter);
     signal?.addEventListener("abort", onAbort, { once: true });
     return promise;
+  }
+
+  /** The children still running or waiting (and driven), by id. */
+  live(): LiveChild[] {
+    return [...this.#children.values()]
+      .filter((child) => this.#driving(child))
+      .map(({ id, name, since, status }) => ({ id, name, since, status }));
   }
 
   /** @internal For tests: how many `next` calls wait, over all children. */

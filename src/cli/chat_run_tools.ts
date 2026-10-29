@@ -416,7 +416,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
     }
     let id: string;
     try {
-      ({ id } = await runs.start(flow, inputs as Record<string, unknown>, { signal }));
+      ({ id } = await runs.start(flow, inputs as Record<string, unknown>, { signal, name: file }));
     } catch (error) {
       if (error instanceof Error) return `not started: ${error.message}`;
       throw error;

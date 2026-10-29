@@ -284,6 +284,29 @@ lists, code blocks) drawn. Each tool call shows as a `⏺` line with its result 
 each event of a flow the assistant runs. A spinner runs while the assistant works, and you type in
 a framed box. Set `NO_COLOR`, or redirect any of the three, to get the plain lines above.
 
+The box stays up under the spinner while the assistant works. Press Enter there to send the line at
+once: the assistant reads it before its next model call, so it can change course mid-reply. Ctrl-C
+and Esc work as they do between replies. An approval card or a question takes the box's place
+until you answer it.
+
+Under the box, the chat lists the flows the assistant started that are still running or waiting,
+one row each, such as `r1  color.yaml  ● asks · 12s`, and the hint under the box adds `↓ runs`
+when there is room. A flow drops off the list once it ends; its result stays in the chat. The
+list's keys:
+
+| Key | What it does |
+|---|---|
+| ↓ | From the box's last line, moves into the list; then moves to the next row |
+| ↑ | Moves to the row above; from the top row, back to the box |
+| Esc | In the list, goes back to the box. It takes nothing back |
+| Enter | Opens the flow's view |
+
+A flow's view fills the screen with the flow, its run id, where it stands and its log, then what
+it has done so far, as `yian run` draws it, and the question it waits on, if any. It updates as
+the flow goes on. It only shows the flow: you still answer through the assistant. Press Esc to go
+back to the chat, which kept going meanwhile. When the chat needs you (an approval card or a
+question), the view says so in its last line, and Esc takes you to it.
+
 ### What the assistant can do
 
 | Tool | What it does |

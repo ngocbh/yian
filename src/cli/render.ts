@@ -179,3 +179,27 @@ export function tracebackBox(text: string, out: Writer, env: Env): string {
 export async function writeEngineTrace(error: Error, engineTrace: boolean, io: CliIo): Promise<void> {
   if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
 }
+
+/**
+ * Return `ms` as a bracketed elapsed time in whole units: `[5s]`, `[1m05s]`, `[1h02m]`.
+ */
+export function elapsedTag(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `[${seconds}s]`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `[${minutes}m${String(seconds % 60).padStart(2, "0")}s]`;
+  return `[${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m]`;
+}
+
+/**
+ * @internal The text of a run's line for node `nodeId` that ended: `✓ <node>`, `✓ <node> →
+ * <handle>` for a router, then `took` (` [<elapsed>]`, or "").
+ */
+export function endedNodeText(nodeId: string, took: string, handle: string | null = null): string {
+  return `✓ ${nodeId}${handle === null ? "" : ` → ${handle}`}${took}`;
+}
+
+/** @internal The text of a run's line for node `nodeId` that failed: `✗ <node>`, then `took`. */
+export function failedNodeText(nodeId: string, took: string): string {
+  return `✗ ${nodeId}${took}`;
+}

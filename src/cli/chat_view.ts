@@ -22,10 +22,20 @@ import {
   ToolCallStarted,
 } from "../events.ts";
 import type { Scheduler } from "../platform.ts";
+import { TAKE } from "../tools/context.ts";
 import type { ChildEvent } from "./chat_events.ts";
+import type { ChildStatus, LiveChild } from "./chat_runs.ts";
 import { MarkdownLines, renderMarkdown, TAB } from "./markdown.ts";
-import { cells, clip, columnsOf, fit, wrapLine } from "./cells.ts";
-import { box, type Colored, paint, type Span, type Style, wrapSpans } from "./render.ts";
+import { ANSI, cells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
+import {
+  box,
+  type Colored,
+  elapsedTag,
+  paint,
+  type Span,
+  type Style,
+  wrapSpans,
+} from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 import type { CliIo, Writer } from "./utils.ts";
 
@@ -72,20 +82,20 @@ export function loginLabel(connection: unknown): string | null {
   return method === "api_key" && source !== "missing" ? "API key" : null;
 }
 
-/** `path` with `home` (when set and not the root) shown as `~`. */
-export function homePath(path: string, home: string | undefined): string {
-  const trimmed = home?.replace(/[\\/]+$/, "");
-  if (!trimmed) return path;
-  if (path === trimmed) return "~";
-  for (const sep of ["/", "\\"]) {
-    if (path.startsWith(trimmed + sep)) return `~${path.slice(trimmed.length)}`;
+/**
+ * `path` with the home shown as `~`: `home`, or else `realHome` (the home's real path, for a home
+ * reached through a symlink), each when set and not the root.
+ */
+export function homePath(path: string, home: string | undefined, realHome?: string): string {
+  for (const each of [home, realHome]) {
+    const trimmed = each?.replace(/[\\/]+$/, "");
+    if (!trimmed) continue;
+    if (path === trimmed) return "~";
+    for (const sep of ["/", "\\"]) {
+      if (path.startsWith(trimmed + sep)) return `~${path.slice(trimmed.length)}`;
+    }
   }
   return path;
-}
-
-/** The rows `out` is high: as it reports, else 24. */
-function rowsOf(out: ViewOutput): number {
-  return out.rows || 24;
 }
 
 /** Width of the banner's label column: `  focus   `. */
@@ -186,6 +196,42 @@ export function summary(text: string, width: number): string[] {
   return rows.length <= 2 ? rows : [rows[0]!, fit(`${rows[1]} ${rows[2]}`, width)];
 }
 
+/**
+ * What a child run does now, in a word or two, and its colour: `running`, `asks` (a question
+ * waits for an answer), `waits for a message`, `waits` (for a timer), or how it ended.
+ */
+export function runStatusLabel(status: ChildStatus): [string, Style] {
+  if (status.status === "running") return ["running", "cyan"];
+  if (status.status !== "waiting") return [status.status, CARD_STYLE[status.status]!];
+  if ((status.asks ?? []).length > 0) return ["asks", "yellow"];
+  const waits = (status.waits ?? []) as readonly { tool?: unknown; settled?: unknown }[];
+  const take = waits.some((wait) => wait.tool === TAKE && wait.settled !== true);
+  return take ? ["waits for a message", "yellow"] : ["waits", "dim"];
+}
+
+/**
+ * The run list's rows, one per child `children` lists (`ChildRuns.live`): its id, its flow and
+ * `● <what it does> · <time since it started>`, coloured by what it does, the columns lined up
+ * and each row cut to `width`.
+ */
+export function runRows(
+  children: readonly LiveChild[],
+  now: number,
+  width: number,
+  out: Colored,
+  env: Env,
+): string[] {
+  const ids = Math.max(0, ...children.map((child) => cells(child.id)));
+  const names = Math.max(0, ...children.map((child) => cells(sanitize(child.name))));
+  return children.map((child) => {
+    const [label, style] = runStatusLabel(child.status);
+    const since = paint(`· ${elapsedTag(now - child.since).slice(1, -1)}`, "dim", out, env);
+    const name = sanitize(child.name);
+    const head = `${child.id.padEnd(ids)}  ${name}${" ".repeat(names - cells(name))}`;
+    return clip(`${head}  ${paint(`● ${label}`, style, out, env)} ${since}`, width);
+  });
+}
+
 /** Whether `nodeId` is a node named `reply`, at any depth: the chat's assistant. */
 function isReply(nodeId: string): boolean {
   return nodeId.slice(nodeId.lastIndexOf("/") + 1) === "reply";
@@ -210,6 +256,25 @@ interface Block {
   printed: number;
   /** The text after the last newline. */
   partial: string;
+  /**
+   * Whether the block shows anything yet: its blank lines before its first text are dropped, and
+   * it opens (with the blank line before it) only once text comes.
+   */
+  opened: boolean;
+}
+
+/** Whether `row` shows nothing but spaces. */
+function blank(row: string): boolean {
+  return row.replace(ANSI, "").trim() === "";
+}
+
+/**
+ * The input box the view keeps under the spinner while a turn runs (the terminal's `LineEditor`):
+ * its rows, and where its cursor is among them (null to hide it).
+ */
+export interface LiveInput {
+  lines(): string[];
+  cursor(): { row: number; before: string } | null;
 }
 
 /** The colour of a child event's card, by the status it came from. */
@@ -226,7 +291,8 @@ const CARD_STYLE: Readonly<Record<string, Style>> = {
  * through `writer`, the run's events through `onEvent` and `onStream`.
  *
  * The bottom of the screen is live: the reply streaming in and, while a turn runs and no prompt
- * has the terminal, the spinner. Text reaches the screen three ways. `print` (the writer) takes
+ * has the terminal, the spinner and under it the input box (`input`). Text reaches the screen
+ * three ways. `print` (the writer) takes
  * whole lines from the rest of the chat; `#commit` prints rows for good above the live rows, which
  * it erases first and draws again after; `#redraw` draws the live rows again in place, and is the
  * only way they change. Before anything is printed for good, the rows of the reply finished so far
@@ -244,8 +310,16 @@ export class ChatView {
   readonly #output: ViewStream;
   readonly #env: Env;
   readonly #clock: Scheduler;
-  /** How many live rows are on screen; the cursor is at the end of the last. */
+  /** How many live rows are on screen. */
   #drawn = 0;
+  /** The live row the cursor is on: the last one's end, or the input box's cursor. */
+  #cursorRow = 0;
+  /** Whether the view shows the cursor in the input box. */
+  #cursorShown = false;
+  /** The input box drawn under the spinner, if any. */
+  #input: LiveInput | null = null;
+  /** What is written while held (`hold`), written once let go; null while not held. */
+  #held: string[] | null = null;
   /** What `print` was given after its last newline, printed once the line ends. */
   #pending = "";
   #block: Block | null = null;
@@ -264,6 +338,8 @@ export class ChatView {
   };
   /** What was printed last, for the blank line before the next item. */
   #last: "tool" | "text" | "other" | null = null;
+  /** Whether the last row printed for good is blank, so no second blank row follows it. */
+  #blank = false;
   /** Whether the turn running printed anything. */
   #turnPrinted = false;
   /** Set while a turn runs: its start time on the clock, and what stops its spinner. */
@@ -324,7 +400,7 @@ export class ChatView {
       this.#last = "other";
       this.#output.on?.("resize", this.#onResize);
       process.once("exit", this.#showOnExit);
-      this.#output.write(HIDE_CURSOR);
+      this.#emit(HIDE_CURSOR);
       void this.#spin(this.#turn.stop.signal);
       this.#redraw();
       return;
@@ -337,7 +413,7 @@ export class ChatView {
       this.#turn.stop.abort();
       this.#turn = null;
       // A blank line between what the turn printed and the prompt.
-      if (this.#turnPrinted) this.#commit([""]);
+      if (this.#turnPrinted) this.#blankLine();
       this.#turnPrinted = false;
       this.#last = null;
       this.#redraw();
@@ -346,16 +422,57 @@ export class ChatView {
       this.#turn = null;
       this.#output.off?.("resize", this.#onResize);
       process.removeListener("exit", this.#showOnExit);
-      this.#output.write(SHOW_CURSOR);
+      this.#cursorShown = false;
+      this.#emit(SHOW_CURSOR);
     }
   }
 
-  /** A prompt takes the terminal (`true`) or gives it back: the live rows go meanwhile. */
-  active(active: boolean): void {
+  /**
+   * A prompt takes the terminal (`true`) or gives it back, having left rows on the screen when
+   * `printed`: the live rows go meanwhile.
+   */
+  active(active: boolean, printed = false): void {
     this.#paused = active;
+    if (!active && printed) this.#blank = false;
     // The prompt shows the cursor as it ends; the turn hides it again.
-    if (!active && this.#turn !== null) this.#output.write(HIDE_CURSOR);
+    if (!active && this.#turn !== null) this.#emit(HIDE_CURSOR);
+    this.#cursorShown = false;
     this.#redraw();
+  }
+
+  /**
+   * Keep `input` under the spinner while a turn runs (`null` for none), its cursor shown there;
+   * call `refresh` once it changes.
+   */
+  input(input: LiveInput | null): void {
+    this.#input = input;
+    this.#redraw();
+  }
+
+  /** Draw the live rows again: the input box changed. */
+  refresh(): void {
+    this.#redraw();
+  }
+
+  /** Print `line`, a line sent from the input box, as the prompt leaves one: `> <line>`. */
+  echo(line: string): void {
+    this.#last = "other";
+    const text = `${this.#paint(">", "bold")} ${sanitize(line).replaceAll("\n", "⏎")}`;
+    this.#commit([clip(text, this.#width())]);
+  }
+
+  /**
+   * Hold what the view writes (`true`) while another screen is up, and write it all once let go,
+   * so the screen it comes back to is drawn as if it had stayed.
+   */
+  hold(held: boolean): void {
+    if (held) {
+      this.#held ??= [];
+      return;
+    }
+    const text = this.#held?.join("") ?? "";
+    this.#held = null;
+    if (text !== "") this.#output.write(text);
   }
 
   /** A chunk of streamed text: a reply's is drawn after `⏺ `, a new model call starting a block. */
@@ -364,10 +481,10 @@ export class ChatView {
     let block = this.#block;
     if (block === null || block.node !== chunk.nodeId || block.n !== chunk.n) {
       this.#finishBlock();
-      this.#gap("text");
       // Its width is fixed now: after a resize its rows are cut to the new width, not wrapped again.
       const markdown = new MarkdownLines(this.#width() - 2, this.#output, this.#env);
-      block = { node: chunk.nodeId, n: chunk.n, markdown, rows: [], printed: 0, partial: "" };
+      const fresh = { markdown, rows: [], printed: 0, partial: "", opened: false };
+      block = { node: chunk.nodeId, n: chunk.n, ...fresh };
       this.#block = block;
       this.#streamed = true;
     }
@@ -376,7 +493,9 @@ export class ChatView {
     const held = block.partial.endsWith("\r");
     const lines = (held ? block.partial.slice(0, -1) : block.partial).split(/\r\n|\n|\r/);
     block.partial = lines.pop()! + (held ? "\r" : "");
-    for (const line of lines) block.rows.push(...block.markdown.line(line));
+    const rows = lines.flatMap((line) => block.markdown.line(line));
+    if (!this.#open(block, rows)) return;
+    block.rows.push(...rows);
     if (!this.#trim()) this.#redraw();
   }
 
@@ -416,6 +535,8 @@ export class ChatView {
       this.#streamed = false;
       return;
     }
+    // A reply of only tool calls ends with no text: it has nothing to show.
+    if (text.trim() === "") return;
     this.#finishBlock();
     this.#gap("text");
     const rows = renderMarkdown(text, this.#width() - 2, this.#output, this.#env).split("\n");
@@ -475,7 +596,10 @@ export class ChatView {
   #trim(): boolean {
     const block = this.#block;
     if (block === null) return false;
-    const keep = Math.max(1, rowsOf(this.#output) - 4);
+    // The spinner and the input box stay below the block.
+    const input = this.#turn !== null && !this.#paused ? this.#input : null;
+    const below = input === null ? 0 : input.lines().length;
+    const keep = Math.max(1, rowsOf(this.#output) - 4 - below);
     const partial = this.#partialRows(block);
     let excess = block.rows.length + partial.length - keep;
     if (excess <= 0) return false;
@@ -516,9 +640,32 @@ export class ChatView {
 
   /** A blank line before an item of `kind`, unless it follows one of its kind (tool lines). */
   #gap(kind: "tool" | "text"): void {
-    const blank = kind === "text" || this.#last !== "tool";
+    const gap = kind === "text" || this.#last !== "tool";
     this.#last = kind;
-    if (blank) this.#commit([""]);
+    if (gap) this.#blankLine();
+  }
+
+  /** Print a blank line, unless the last row printed is one. */
+  #blankLine(): void {
+    // The reply's finished rows go first: the row before the blank may be one of them.
+    this.#settleBlock();
+    if (!this.#blank) this.#commit([""]);
+  }
+
+  /**
+   * Whether `block` shows anything once `rows` (rows to add to it) come: a block not opened yet
+   * drops the blank rows at their head, and opens, after the blank line before it, once a row or
+   * its line still coming has text.
+   */
+  #open(block: Block, rows: string[]): boolean {
+    if (block.opened) return true;
+    // A model's text may start with blank lines (before a tool call, say): they show nothing.
+    while (rows.length > 0 && blank(rows[0]!)) rows.shift();
+    if (rows.length === 0 && this.#partialText(block.partial).trim() === "") return false;
+    // Opened after the gap, so the gap's redraw doesn't draw its rows yet.
+    this.#gap("text");
+    block.opened = true;
+    return true;
   }
 
   /** Print the streaming block's finished rows for good; its unfinished line stays live. */
@@ -536,9 +683,14 @@ export class ChatView {
     const block = this.#block;
     if (block === null) return;
     const partial = block.partial.replace(/\r$/, "");
-    if (partial !== "") block.rows.push(...block.markdown.line(partial));
-    block.rows.push(...block.markdown.end());
     block.partial = "";
+    const rows = [...(partial === "" ? [] : block.markdown.line(partial)), ...block.markdown.end()];
+    // Blank lines at its end show nothing either.
+    while (rows.length > 0 && blank(rows.at(-1)!)) rows.pop();
+    if (rows.length === 0) {
+      while (block.rows.length > 0 && blank(block.rows.at(-1)!)) block.rows.pop();
+    }
+    if (this.#open(block, rows)) block.rows.push(...rows);
     this.#settleBlock();
     this.#block = null;
     this.#redraw();
@@ -554,7 +706,7 @@ export class ChatView {
     if (this.#paused) return [];
     const rows: string[] = [];
     const block = this.#block;
-    if (block !== null) {
+    if (block !== null && block.opened) {
       // The line still coming is shown as written; it is drawn as Markdown once it ends.
       const partial = this.#partialRows(block).map(([, text]) => text);
       rows.push(...this.#prefixed([...block.rows, ...partial], block.printed));
@@ -563,15 +715,18 @@ export class ChatView {
       const seconds = Math.floor((this.#clock.now() - this.#turn.start) / 1000);
       const frame = SPIN_FRAMES[this.#frame % SPIN_FRAMES.length]!;
       rows.push(`${this.#paint(frame, "cyan")} ${this.#paint(`Thinking… (${seconds}s · esc to interrupt)`, "dim")}`);
+      if (this.#input !== null) rows.push(...this.#input.lines());
     }
-    // Each row fits the width, so each takes one row of the screen.
-    return rows.map((row) => clip(row, this.#width()));
+    // Each row fits the width, so each takes one row of the screen; and no more rows than the
+    // screen has, less one, are drawn, or each redraw would leave a copy above in the scrollback.
+    const kept = rows.slice(Math.max(0, rows.length - (rowsOf(this.#output) - 1)));
+    return kept.map((row) => clip(row, this.#width()));
   }
 
   /** The text that erases the live rows, leaving the cursor at the start of where they began. */
   #erase(): string {
     if (this.#drawn === 0) return "";
-    return `\r${this.#drawn > 1 ? `\x1b[${this.#drawn - 1}A` : ""}\x1b[J`;
+    return `\r${this.#cursorRow > 0 ? `\x1b[${this.#cursorRow}A` : ""}\x1b[J`;
   }
 
   /** Print `rows` for good above the live rows, after the reply's finished rows, then draw those again. */
@@ -586,16 +741,42 @@ export class ChatView {
   #write(rows: readonly string[]): void {
     if (rows.length === 0) return;
     if (this.#turn !== null) this.#turnPrinted = true;
-    this.#output.write(this.#erase() + rows.map((row) => `${row}\r\n`).join(""));
+    this.#blank = blank(rows.at(-1)!);
+    this.#emit(this.#hideCursor() + this.#erase() + rows.map((row) => `${row}\r\n`).join(""));
     this.#drawn = 0;
+    this.#cursorRow = 0;
   }
 
-  /** Draw the live rows again in place of those on screen. */
+  /** Draw the live rows again in place of those on screen, the cursor in the input box if any. */
   #redraw(): void {
     const rows = this.#liveRows();
-    const text = this.#erase() + rows.join("\r\n");
+    let text = this.#hideCursor() + this.#erase() + rows.join("\r\n");
     this.#drawn = rows.length;
-    if (text !== "") this.#output.write(text);
+    this.#cursorRow = Math.max(0, rows.length - 1);
+    const cursor = this.#turn !== null && !this.#paused ? (this.#input?.cursor() ?? null) : null;
+    const target = cursor === null ? -1 : rows.length - this.#input!.lines().length + cursor.row;
+    // A cursor on a row cut off the top isn't shown.
+    if (cursor !== null && target >= 0) {
+      const col = Math.min(cells(cursor.before.replace(ANSI, "")), this.#width() - 1);
+      if (this.#cursorRow > target) text += `\x1b[${this.#cursorRow - target}A`;
+      text += `\r\x1b[${col + 1}G${SHOW_CURSOR}`;
+      this.#cursorRow = target;
+      this.#cursorShown = true;
+    }
+    if (text !== "") this.#emit(text);
+  }
+
+  /** The text that hides the cursor the input box shows, before the live rows are drawn again. */
+  #hideCursor(): string {
+    if (!this.#cursorShown) return "";
+    this.#cursorShown = false;
+    return HIDE_CURSOR;
+  }
+
+  /** Write `text` on the output, or keep it while held. */
+  #emit(text: string): void {
+    if (this.#held !== null) this.#held.push(text);
+    else this.#output.write(text);
   }
 
   /** Turn the spinner once each `SPIN_MS`, until `signal` aborts. */

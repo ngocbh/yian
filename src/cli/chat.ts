@@ -31,15 +31,31 @@ import { DOCS, FLOWS } from "./bundled.ts";
 import { bundledSkill } from "./bundled_skill.ts";
 import { EventQueue, InFlight, trackInFlight } from "./chat_events.ts";
 import { chatRunTools } from "./chat_run_tools.ts";
-import { chatBanner, ChatView, homePath, loginLabel, richChat } from "./chat_view.ts";
+import {
+  chatBanner,
+  ChatView,
+  homePath,
+  loginLabel,
+  richChat,
+  runRows,
+  type ViewStream,
+} from "./chat_view.ts";
 import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
+import { columnsOf } from "./cells.ts";
 import { inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { type Colored, paint, printStyled, type Style } from "./render.ts";
 import { CHAT_FLOW_FILE, removeEmptyDir, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
+import { RunProgress, runScreen } from "./run_view.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
+import type { Terminal } from "./terminal.ts";
 import type { CliIo } from "./utils.ts";
+
+/** How often the run list under the input box is drawn again, for its times. */
+const LIST_TICK_MS = 1_000;
+/** How often an open run view reads its run's log again. */
+const VIEW_TICK_MS = 500;
 
 /** The label the bundled flow's diagnostics and recorded source go by. */
 const CHAT_LABEL = CHAT_FLOW_FILE;
@@ -130,6 +146,29 @@ function focusName(root: string, path: string): { name: string; outside: boolean
   return leavesRoot(inside) ? { name: real, outside: true } : { name: slashed(inside), outside: false };
 }
 
+/**
+ * The folder `root` as the shell reached it: `pwd` (its `$PWD`, which keeps the symlinks the shell
+ * went through) when that is the same folder, else `root`.
+ */
+function reachedAs(root: string, pwd: string | undefined): string {
+  if (!pwd) return root;
+  try {
+    return realpathSync(pwd) === realpathSync(root) ? pwd : root;
+  } catch {
+    return root;
+  }
+}
+
+/** The real path of `home`, or undefined when it is unset or doesn't resolve. */
+function realHome(home: string | undefined): string | undefined {
+  if (!home) return undefined;
+  try {
+    return realpathSync(home);
+  } catch {
+    return undefined;
+  }
+}
+
 /** `path` as a shell word: as it is when it has nothing the shell reads, else single-quoted. */
 function shellWord(path: string): string {
   return /^[\w./@%+=:,-]+$/.test(path) ? path : `'${path.replaceAll("'", "'\\''")}'`;
@@ -147,6 +186,68 @@ function fenced(text: string): string {
 /** The file the children's CODE console output goes to: beside the chat's log, named after it. */
 function consoleFileFor(log: string): string {
   return join(dirname(log), `${basename(log, extname(log))}.child-output.log`);
+}
+
+/** Call `listener` every `ms` on `clock` until the function returned is called. */
+function every(clock: Scheduler, ms: number, listener: () => void): () => void {
+  const stop = new AbortController();
+  void (async () => {
+    while (!stop.signal.aborted) {
+      try {
+        await clock.sleep(ms, stop.signal);
+      } catch {
+        return;
+      }
+      listener();
+    }
+  })();
+  return () => stop.abort();
+}
+
+/**
+ * The run list under the chat's input box (`runRows` of the children still live, their times on
+ * `scheduler`), drawn again each `LIST_TICK_MS` on `ticker`, and the run view Enter on a row opens:
+ * the run's screen (`runScreen`), read again from its log each `VIEW_TICK_MS`, while the chat's
+ * view holds what it draws; the screen says when an approval or a question waits behind it.
+ */
+function runList(
+  runs: ChildRuns,
+  view: ChatView,
+  clocks: { scheduler: Scheduler; ticker: Scheduler },
+  out: ViewStream,
+  env: Env,
+): NonNullable<InboxChatHost["rows"]> {
+  const { scheduler, ticker } = clocks;
+  return {
+    list: {
+      // Each row comes after the list's two-cell pointer.
+      rows: () => {
+        const live = runs.live();
+        const texts = runRows(live, scheduler.now(), columnsOf(out) - 2, out, env);
+        return live.map((child, i) => ({ key: child.id, text: texts[i]! }));
+      },
+      subscribe: (listener) => every(ticker, LIST_TICK_MS, listener),
+      hint: "↓ runs",
+    },
+    async open(id: string, terminal: Terminal) {
+      const child = runs.live().find((each) => each.id === id);
+      if (child === undefined) return;
+      const progress = new RunProgress(child.status.log, () => columnsOf(out), out, env);
+      const info = () => ({ id: child.id, name: child.name, status: runs.status(child.id) });
+      view.hold(true);
+      try {
+        await terminal.showScreen({
+          draw: (columns, rows, waiting) =>
+            runScreen(info(), progress.rows(scheduler.now()), columns, rows, out, env, waiting),
+          subscribe: (redraw) => every(ticker, VIEW_TICK_MS, redraw),
+          // What the chat drew meanwhile goes out before a prompt waiting behind the view draws.
+          onClose: () => view.hold(false),
+        });
+      } finally {
+        view.hold(false);
+      }
+    },
+  };
 }
 
 /**
@@ -257,11 +358,14 @@ export async function chat(
   }
   // On a terminal, everything the chat prints from here on goes through its view, which holds
   // nothing to release until a turn starts.
-  const view = richChat(io) ? new ChatView(io.stderrStream, env, deps.ticker ?? realScheduler) : null;
+  const ticker = deps.ticker ?? realScheduler;
+  const view = richChat(io) ? new ChatView(io.stderrStream, env, ticker) : null;
   if (view !== null) io = { ...io, stdout: view.writer, stderr: view.writer };
   const focus = flowPath === undefined ? null : (inputs["flow"] as string);
   if (view !== null) {
-    const info = { ...model, cwd: homePath(root, env("HOME")), focus };
+    const home = env("HOME");
+    const cwd = homePath(reachedAs(root, env("PWD")), home, realHome(home));
+    const info = { ...model, cwd, focus };
     await io.stderr.write(`${chatBanner(info, io.stderrStream, env)}${view.note(sanitize(hint))}`);
   } else {
     const banner = [`yian chat`, model.model, focus === null ? null : `focus: ${focus}`]
@@ -332,6 +436,10 @@ export async function chat(
         tools,
         events: { queue, inFlight, wake, onInterrupt: () => runs.cancelWaits() },
         view,
+        rows:
+          view === null
+            ? null
+            : runList(runs, view, { scheduler, ticker }, io.stderrStream, env),
       },
     );
   } finally {

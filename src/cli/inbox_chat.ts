@@ -71,7 +71,13 @@ import {
 } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import { cliLayer, freshLog, loadFlowFile, preflightKeys } from "./startup.ts";
-import { Terminal, TerminalStopped } from "./terminal.ts";
+import {
+  type Key,
+  type LineEditor,
+  type PromptList,
+  Terminal,
+  TerminalStopped,
+} from "./terminal.ts";
 import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, shellQuote, sleepUntil, UsageError } from "./utils.ts";
 
 /**
@@ -120,12 +126,18 @@ export interface InboxChatHost {
   events?: ChatEvents;
   /** How the chat draws itself on a terminal (`yian chat`'s look); its plain lines when null or absent. */
   view?: InboxChatView | null;
+  /**
+   * With `view`, the rows listed under the chat's input box (the runs a host started, say), and
+   * what Enter on one does: `open` shows the row's item, by its key, through the chat's terminal,
+   * until the user leaves.
+   */
+  rows?: { list: PromptList; open(key: string, terminal: Terminal): Promise<void> } | null;
 }
 
 /**
  * What a host drawing the chat's look gives it (`ChatView`): the chat hands it the run's events
  * and its stream, its turns, the times a prompt has the terminal, the reply and the child events
- * sent; and frames its prompt.
+ * sent, and the input box it keeps up while a turn runs; and frames its prompt.
  */
 export interface InboxChatView {
   /** The hint under the framed prompt. */
@@ -134,14 +146,20 @@ export interface InboxChatView {
   onStream(chunk: StreamChunk): void;
   /** A turn starts (`true`) or ends. */
   turn(active: boolean): void;
-  /** A prompt takes the terminal (`true`) or gives it back. */
-  active(active: boolean): void;
+  /** A prompt takes the terminal (`true`) or gives it back, having left rows when `printed`. */
+  active(active: boolean, printed: boolean): void;
   /** The output of a node named `reply`, as text. */
   reply(text: string): void;
   /** A child event, once sent. */
   childEvent(event: ChildEvent): void;
   /** `text`, whole lines of the chat's own notes, styled. */
   note(text: string): string;
+  /** Keep `input` under the spinner while a turn runs, or none (`null`). */
+  input(input: LineEditor | null): void;
+  /** Draw the input box again, once a key changed it. */
+  refresh(): void;
+  /** A line sent from the input box while a turn runs, printed as the prompt leaves one. */
+  echo(line: string): void;
 }
 
 const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
@@ -300,7 +318,7 @@ function inboxClosed(log: string, inbox: string): boolean {
  * during a sleep or an approval the reply after it stops before its first model call. At the take
  * Esc does nothing; it never cancels. While a turn runs on a terminal, the input is raw, so Ctrl-C
  * arrives as a key with the same rule, Ctrl-Z and Ctrl-\ raise no signal, and other keys are kept
- * for the next prompt. SIGTERM, SIGHUP or
+ * for the next prompt (unless the box stays up, below). SIGTERM, SIGHUP or
  * `io.stop` stops the run and leaves its log (`chat stopped; the run is in <log>` and the
  * `yian run --resume <log>` that continues it, exit 130), as does Ctrl-C at an `ask` prompt,
  * which ignores Esc. While the prompt is up, the run is advanced
@@ -314,7 +332,17 @@ function inboxClosed(log: string, inbox: string): boolean {
  * With `host.view`, the chat draws its look through it (`InboxChatView`): it gets the run's events,
  * its stream and the reply instead of stdout, the turns, the child events sent and the times a
  * prompt has the terminal; the chat's own notes are styled by it, and the prompt is framed with its
- * hint.
+ * hint. On a terminal the framed box then stays up while a turn runs, under the spinner, holding
+ * what was typed: Enter there sends the line to the inbox at once (an agent reading it as its
+ * steer inbox reads it before its next model call; `/exit` or `/quit` closes the inbox, a blank
+ * line is not sent), and the keys are kept for no later prompt. Ctrl-C and Esc keep their
+ * meanings there; a prompt the run shows (an ask, an approval) takes the terminal from the box,
+ * which comes back after it. A line sent once the engine stopped moves the run again, as a child
+ * event does. With `host.rows`, their list is drawn under the box's hint: Down on the box's last
+ * row moves into it, Up and Down move along it, Up from its top row or Esc goes back to the box
+ * (an Esc there withdraws nothing), and Enter on a row calls `host.rows.open`, which the chat
+ * doesn't wait for: its turns, deadlines and child events go on while the row is open, and the
+ * next prompt waits behind it.
  *
  * With `host.events`, each child event queued is sent to the inbox as a message authored `yian`
  * (as text to an `Inbox(str)`): while a turn runs, at once, unless a tool call is in flight, then
@@ -393,6 +421,11 @@ export async function inboxChat(
   let draft = "";
   // Set once the inbox is closed (`/exit`, `/quit`, the end of input): no prompt comes back.
   let closed = false;
+  // The sends of lines typed in the input box while a turn ran, in order, and their seqs.
+  let liveSends: Promise<void> = Promise.resolve();
+  const liveSeqs: number[] = [];
+  // Set once `/exit` or `/quit` was entered in the box: it takes no more keys.
+  let exiting = false;
   const move = deps.advance ?? advance;
   const view = host.view ?? null;
   // The chat's own notes, styled when it draws its look.
@@ -452,7 +485,12 @@ export async function inboxChat(
     const path = log;
     flusher?.interrupted(turning);
     const done = (async () => {
+      // A line entered in the box just before is in the log first, so Esc takes it back too.
+      await liveSends;
       let back = await withdraw(path, inbox.name, { env: env.read });
+      // What was taken back is no longer for the run to read: it moves the run no more.
+      const gone = new Set(back.map((event) => event.seq));
+      liveSeqs.splice(0, liveSeqs.length, ...liveSeqs.filter((seq) => !gone.has(seq)));
       // The child events among them go back to the queue (or, after /exit, are printed).
       if (flusher !== null) back = await flusher.reclaim(back, closed);
       // Kept before the interrupt, which may be refused.
@@ -462,8 +500,14 @@ export async function inboxChat(
         // After /exit no prompt comes back, so the text is printed rather than lost.
         if (closed) await note(`(withdrew ${count}: ${texts.join(" ")})\n`);
         else {
-          // Sent before the draft was typed, so it goes first.
-          draft = [...texts, draft].filter(Boolean).join(" ");
+          // Sent before the draft was typed, so it goes first. While a turn runs, the draft is
+          // what the input box holds.
+          const box = turning ? editor : null;
+          draft = [...texts, box?.text() ?? draft].filter(Boolean).join(" ");
+          if (box !== null) {
+            box.set(draft);
+            view?.refresh();
+          }
           await note(`(withdrew ${count}; back in the prompt)\n`);
         }
       }
@@ -482,8 +526,18 @@ export async function inboxChat(
     onStop: (reason) => {
       if (log !== null) stop.abort(reason === "interrupt" ? new HostStop("SIGINT") : new TerminalStopped("eof"));
     },
-    onActive: view === null ? undefined : (active) => view.active(active),
+    onActive: view === null ? undefined : (active, printed) => view.active(active, printed),
   });
+  // With the chat's look on a terminal, the prompt's box stays up while a turn runs.
+  const editor =
+    view !== null && atTerminal(io)
+      ? terminal.lineEditor({ hint: view.hint, list: host.rows?.list })
+      : null;
+  // Opens a row of `host.rows` without waiting for the user to leave it: the chat goes on meanwhile
+  // (its prompt queues behind the row's screen), and only a failure stops it.
+  const openRow = (key: string): void => {
+    host.rows?.open(key, terminal).catch((error: unknown) => stop.abort(error));
+  };
   const onStopSignal = (signal: NodeJS.Signals) => () => stop.abort(new HostStop(signal));
   const listeners = [
     ["SIGINT", interrupt],
@@ -570,24 +624,84 @@ export async function inboxChat(
       scheduler,
     };
     /**
+     * Send `line`, entered in the input box while a turn runs, after the lines entered before it:
+     * to the inbox at once (an agent reading it as its steer inbox reads it), or, for `/exit` or
+     * `/quit`, close the inbox as the prompt does. A blank line isn't sent.
+     */
+    const sendLive = (line: string): void => {
+      if (line.trim() === "") return;
+      view?.echo(line);
+      const exit = EXIT_LINES.has(line.trim());
+      // No line comes after it: the box goes.
+      if (exit) {
+        exiting = true;
+        view?.input(null);
+      }
+      else pressedAt = null;
+      liveSends = liveSends
+        .then(async () => {
+          if (exit) {
+            if (closed) return;
+            closed = true;
+            await flusher?.printLeft();
+            flusher?.close();
+            await close(path, inbox.name, { env: env.read });
+            return;
+          }
+          // The hold ends with this line: held events, and those withdrawn, go before it.
+          await flusher?.lineSent();
+          const event = lineEvent(line, inbox.message);
+          liveSeqs.push(await send(path, inbox.name, event, { env: env.read }));
+        })
+        .catch(async (error: unknown) => {
+          if (!(error instanceof DeliveryRefused)) return stop.abort(error);
+          if (error.reason === "ended") return;
+          await note(`not sent: ${forTerminal(error.message, io.stderr)}\n`);
+        });
+    };
+    /** A key at the input box while a turn runs; false for one it leaves to `watchKeys` (Esc). */
+    const liveKey = (key: Key): boolean => {
+      // Once the inbox is closing, no prompt comes back: the keys go to no box.
+      if (closed || exiting) return false;
+      const action = editor!.key(key);
+      if (action !== null && "escape" in action) return false;
+      if (action !== null && "value" in action) {
+        editor!.set("");
+        sendLive(action.value);
+      } else if (action !== null && "open" in action) {
+        openRow(action.open);
+      }
+      view?.refresh();
+      return true;
+    };
+    /**
      * Run `move` as a turn: a Ctrl-C meanwhile interrupts the reply instead of cancelling, and on a
-     * terminal, Esc withdraws and stops it (`escape`).
+     * terminal, Esc withdraws and stops it (`escape`). With the chat's look, the input box stays
+     * up under the spinner, its lines sent at once (`sendLive`).
      */
     const turn = async (step: () => Promise<RunResult>): Promise<RunResult> => {
       turning = true;
       const keys = new AbortController();
-      terminal.watchKeys(keys.signal, (key) => (key === "escape" ? escape() : interrupt()));
+      const live = editor !== null && !closed && !exiting;
+      if (live) editor.set(draft);
+      const onKey = (key: "escape" | "interrupt") => (key === "escape" ? escape() : interrupt());
+      terminal.watchKeys(keys.signal, onKey, live ? liveKey : null);
       flusher?.beginTurn();
       view?.turn(true);
+      if (live) view?.input(editor);
       try {
         return await step();
       } finally {
+        view?.input(null);
         view?.turn(false);
         keys.abort();
+        if (live) draft = editor.text();
         turning = false;
-        // An interrupt sent during the turn lands before the next line is sent.
+        // An interrupt sent during the turn lands before the next line is sent, and so do the
+        // lines sent during it.
         await interrupting;
         interrupting = null;
+        await liveSends;
       }
     };
     /**
@@ -597,11 +711,17 @@ export async function inboxChat(
      */
     const settle = async (first: () => Promise<RunResult>): Promise<RunResult> => {
       let settled = await turn(first);
-      while (flusher !== null) {
-        const seqs = await flusher.endTurn();
-        if (settled.status !== "waiting" || !flusher.tracking(seqs)) break;
+      for (;;) {
+        const seqs = flusher === null ? [] : await flusher.endTurn();
+        // The lines sent from the input box during the turn, which may be stranded the same way.
+        const lines = liveSeqs.splice(0);
+        if (settled.status !== "waiting") break;
+        const tracked = flusher?.tracking(seqs) ?? false;
+        if (!tracked && lines.length === 0) break;
         // Read once per turn, for both the stranded sends and the ones the run has read.
-        if (!flusher.afterTurn(seqs, lastWaitingSeq(path))) break;
+        const last = lastWaitingSeq(path);
+        const events = tracked && flusher!.afterTurn(seqs, last);
+        if (!events && !lines.some((seq) => seq > last)) break;
         settled = await turn(() => move({ log: path, checkLlmConfigs, ...shared }));
       }
       return settled;
@@ -671,8 +791,14 @@ export async function inboxChat(
       }
       if (stop.signal.aborted) prompt.abort();
       const framing = view === null ? {} : { frame: true, hint: view.hint };
-      const read = await terminal.readLine("You:", { signal: prompt.signal, initial: draft, escape: true, ...framing });
-      draft = "aborted" in read || "escape" in read ? read.draft : "";
+      const read = await terminal.readLine("You:", {
+        signal: prompt.signal,
+        initial: draft,
+        escape: true,
+        ...framing,
+        ...(editor === null ? {} : { editor }),
+      });
+      draft = "aborted" in read || "escape" in read || "open" in read ? read.draft : "";
       timer.abort();
       line = null;
       const flushed = flusher?.promptDown() ?? false;
@@ -697,6 +823,10 @@ export async function inboxChat(
       }
       if ("interrupt" in read) {
         interrupt();
+        continue;
+      }
+      if ("open" in read) {
+        openRow(read.open);
         continue;
       }
       // A run that ended under the chat (a cancel from outside) refuses the line or the close as

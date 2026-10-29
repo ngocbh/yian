@@ -1,9 +1,10 @@
 /**
  * Closed run-record vocabulary and canonical JSON codecs.
  *
- * The dispatcher is the sole producer of these durable records. Records contain only transition
- * data; their enclosing `RecordEnvelope` owns run identity, schema version, sequence and the time
- * the log appended the record. This module deliberately knows nothing about the scheduler or
+ * The engine, the host deliveries and the backward driver build these durable records, and each
+ * one reaches a log through `RunLog.append`. Records contain only transition data; their enclosing
+ * `RecordEnvelope` owns run identity, schema version, sequence and the time the log appended the
+ * record. This module deliberately knows nothing about the scheduler or
  * reducer, so the same validated carriers can back memory and JSONL logs without creating an
  * authority cycle.
  *

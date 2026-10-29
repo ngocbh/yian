@@ -83,6 +83,12 @@ or not its file exists. Under `codeRoot` no CODE error names an absolute path, s
 to the flow's author. A run records the flow's `codeRoot`, and every later call on its log holds
 the CODE files to it ([Keep runs on disk](#keep-runs-on-disk)).
 
+yian follows local `uses:` refs and the flow's `system.paths` as written, so an absolute path,
+`..` or a symlink can load any file your process can read; `codeRoot` confines only CODE files.
+If you run flows you didn't write, vet each flow and every file it imports yourself, or run yian
+in a sandbox. [`yian check --root`](/cli/#yian-check) checks that they stay inside a folder, and
+refuses a flow that sets `system.paths`.
+
 A flow that fails still resolves, with `status: "failed"`. `runFlow` rejects for problems in your
 program or setup: a bad option, a tool, provider or model the flow needs but the run lacks, an MCP
 server that doesn't start, a bad `YIAN_*` value, a callback that throws, a log it can't write.

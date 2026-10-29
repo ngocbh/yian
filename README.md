@@ -22,7 +22,7 @@ $ npm install @ngocbh/yian
 
 Or `bun add @ngocbh/yian`. yian runs on Node ≥ 22.18 or Bun ≥ 1.4. To put the `yian` command on
 your PATH, install it globally with `npm i -g @ngocbh/yian`, or run it with `npx @ngocbh/yian`
-or `bunx @ngocbh/yian`. Plain `npx yian` fetches an unrelated package.
+or `bunx --bun @ngocbh/yian`. Plain `npx yian` fetches an unrelated package.
 
 ## Set up a model
 

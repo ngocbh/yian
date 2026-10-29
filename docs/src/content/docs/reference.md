@@ -90,6 +90,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_REFLECTIVE_MAX_LIMIT_CHARS` | setting | 256 | 256 or more | Characters of the memory limits shown to the reflection model |
 | `YIAN_PROFILE_MAX_CHARS` | setting | 32,000 | 1 or more | Characters a profile memory may hold |
 | `YIAN_PROFILE_INPUT_BUDGET_CHARS` | setting | 24,000 | 1 or more | Characters of run material sent to a profile memory's learner |
+| `YIAN_PROFILE_LOCK_TIMEOUT_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds for another writer to release a profile memory's `.lock` file |
 | `YIAN_MAX_AUTH_RESPONSE_BYTES` | input cap | 1,048,576 | 1 or more | Largest response body read from a sign-in server |
 | `YIAN_MAX_AUTH_STORE_BYTES` | input cap | 1,048,576 | 1 or more | Largest auth store file read or written |
 | `YIAN_MAX_OAUTH_CALLBACK_BYTES` | input cap | 16,384 | 1 or more | Largest request header block read from the sign-in callback |

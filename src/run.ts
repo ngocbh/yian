@@ -1381,6 +1381,7 @@ async function startRun(
         origins: layout.origins,
         memory,
         snapshots: null,
+        signal,
       });
     }
 
@@ -1767,7 +1768,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
       checkRecordedToolGroups(start.toolGroups, recordedToolGroups(flow.compiled, runTools));
 
-      if (state.memories !== null) memoryRuntime = await openRecordedMemory(flow, state, memory!);
+      if (state.memories !== null) memoryRuntime = await openRecordedMemory(flow, state, memory!, signal);
 
       const prepared = resume ? prepareRunResumed(state, { numWorkers }) : null;
       // This segment's appends go through the live channel's wrapper.
@@ -3621,7 +3622,8 @@ function resolveAuthoredMemoryLayout(flow: ComposedFlow): MemoryLayoutParts {
 
 /**
  * Open `memory` on the memory table and snapshots the replayed run in `state` recorded, once the
- * registry's types and `flow`'s authored layout match the table, as a resume opens it.
+ * registry's types and `flow`'s authored layout match the table, as a resume opens it. `signal`,
+ * the run's stop, reaches each backend's `openRun`.
  *
  * @throws MemorySetupError when a registry type differs (`checkRegistryTypes`), or the layout
  *   breaks a rule.
@@ -3631,12 +3633,19 @@ async function openRecordedMemory(
   flow: ComposedFlow,
   state: RunState,
   memory: ReadonlyMap<string, Memory>,
+  signal: AbortSignal | null = null,
 ): Promise<MemoryRuntime> {
   const memories = state.memories!;
   checkRegistryTypes(memory, memories);
   const authored = resolveAuthoredMemoryLayout(flow);
   checkRecordedMemoryTable(memories, state.memoryStacks, authored.memories, authored.stacks, "supplied flow");
-  return await MemoryRuntime.open({ memories, origins: authored.origins, memory, snapshots: state.memorySnapshots });
+  return await MemoryRuntime.open({
+    memories,
+    origins: authored.origins,
+    memory,
+    snapshots: state.memorySnapshots,
+    signal,
+  });
 }
 
 /**

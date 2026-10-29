@@ -410,7 +410,7 @@ export class MemoryRuntime {
    *
    * `snapshots` `null` or omitted opens the implementations at their current state for a fresh
    * run. An array restores the exact public snapshots recorded by `RunStarted` during recovery. An
-   * empty table opens nothing.
+   * empty table opens nothing. `signal`, the run's stop, reaches each backend's `openRun`.
    *
    * @throws TypeError or RangeError for a malformed table, origins, registry or snapshots.
    * @throws MemorySetupError when the host supplied no backend for a key, a backend fails to open
@@ -423,6 +423,7 @@ export class MemoryRuntime {
     origins: ReadonlyMap<string, OriginRef | null>;
     memory: ReadonlyMap<string, Memory>;
     snapshots?: readonly MemorySnapshotEnvelope[] | null;
+    signal?: AbortSignal | null;
   }): Promise<MemoryRuntime> {
     const keys = validateMemories(options.memories);
     const origins = validateOrigins(keys, options.origins);
@@ -438,6 +439,7 @@ export class MemoryRuntime {
     // Copy the caller's arrays before the first await, so later edits to them change nothing.
     const memories = Object.freeze([...options.memories]);
     const recorded = options.snapshots == null ? null : [...options.snapshots];
+    const signal = options.signal ?? null;
 
     const opened = new Map<string, MemorySession>();
     const captured: MemorySnapshotEnvelope[] = [];
@@ -445,7 +447,9 @@ export class MemoryRuntime {
       for (const key of keys) {
         const origin = origins.get(key)!;
         try {
-          const session: unknown = await registry.get(key)!.openRun({ snapshot: restore.get(key) ?? null });
+          const snapshot = restore.get(key) ?? null;
+          const options = signal === null ? { snapshot } : { snapshot, signal };
+          const session: unknown = await registry.get(key)!.openRun(options);
           // Register anything closable first, so a session failing the surface check is still closed.
           if (typeof (session as { close?: unknown } | null | undefined)?.close === "function") {
             opened.set(key, session as MemorySession);

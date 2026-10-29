@@ -311,13 +311,14 @@ export class ProfileMemory implements Memory {
    *   be decoded, or `profile.snapshot_unavailable` when the recorded version is malformed,
    *   unknown, or changed. Other store errors pass through unchanged.
    */
-  async openRun(options: { snapshot?: JsonObject | null } = {}): Promise<ProfileSession> {
+  async openRun(options: { snapshot?: JsonObject | null; signal?: AbortSignal } = {}): Promise<ProfileSession> {
     this.ensureOpen("openRun");
     const snapshot = options.snapshot ?? null;
+    const read = options.signal === undefined ? {} : { signal: options.signal };
     let document: readonly [string, string];
     if (snapshot === null) {
       try {
-        document = await this.store.read(null);
+        document = await this.store.read(null, read);
       } catch (cause) {
         throw readError("openRun", cause);
       }
@@ -336,7 +337,7 @@ export class ProfileMemory implements Memory {
       }
       const recorded = snapshot.profile_version;
       if (typeof recorded !== "string") throw new RangeError("profile_version must be a string");
-      document = await this.store.read(recorded);
+      document = await this.store.read(recorded, read);
       if (document[1] !== recorded || sha256(document[0]) !== snapshot.text_sha256) {
         throw new RangeError("stored text differs from the recorded version");
       }

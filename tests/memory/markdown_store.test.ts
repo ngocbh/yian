@@ -20,7 +20,8 @@ import {
   MarkdownVersionMismatch,
   markdownVersion,
 } from "../../src/memory/storage/markdown.ts";
-import { FileLockError } from "../../src/platform.ts";
+import { withEnv } from "../../src/defaults.ts";
+import { FileLockError, lockFile } from "../../src/platform.ts";
 import { type ExtendResult, readAndExtend, replay } from "./markdown_both_runtimes.ts";
 
 /** The package root. */
@@ -561,6 +562,55 @@ test("a lock path that isn't a file fails with a system error and writes nothing
     expectSystemError(error);
     expect([error.code, error.syscall]).toEqual(["EIO", "lock"]);
     expect(error.cause).toBeInstanceOf(FileLockError);
+  }
+  expect(fs.readdirSync(dir)).toEqual([".ada.md.lock"]);
+});
+
+/** `env` setting only the markdown lock wait to `seconds`. */
+const lockTimeout = (seconds: string) => (name: string) =>
+  name === "YIAN_PROFILE_LOCK_TIMEOUT_SECONDS" ? seconds : undefined;
+
+test("a held lock fails a read or write with a system error once the wait passes its cap", async () => {
+  const store = new FileMarkdownStore(path.join(dir, "ada.md"));
+  const lock = lockFile(path.join(dir, ".ada.md.lock"));
+  try {
+    for (const operation of [() => store.read(), () => store.write("x", { baseVersion: markdownVersion("") })]) {
+      const started = performance.now();
+      const error = await withEnv(lockTimeout("1"), () => failure(operation));
+      const waited = performance.now() - started;
+      expect(waited).toBeGreaterThanOrEqual(900);
+      expect(waited).toBeLessThan(3000);
+      expectSystemError(error);
+      expect([error.code, error.syscall]).toEqual(["EIO", "lock"]);
+      expect(error.message).toContain("timed out after 1000 ms");
+      expect((error.cause as FileLockError).reason).toBe("busy");
+    }
+    // A cap of 0 tries once.
+    const error = await withEnv(lockTimeout("0"), () => failure(() => store.read()));
+    expect((error as Error).message).toContain("timed out after 0 ms");
+  } finally {
+    lock.release();
+  }
+  expect(fs.readdirSync(dir)).toEqual([".ada.md.lock"]);
+});
+
+test("an abort while waiting for the lock rejects with its reason and writes nothing", async () => {
+  const store = new FileMarkdownStore(path.join(dir, "ada.md"));
+  const lock = lockFile(path.join(dir, ".ada.md.lock"));
+  try {
+    for (const operation of [
+      (signal: AbortSignal) => store.read(null, { signal }),
+      (signal: AbortSignal) => store.write("x", { baseVersion: markdownVersion(""), signal }),
+    ]) {
+      const controller = new AbortController();
+      const reason = new Error("stop");
+      setTimeout(() => controller.abort(reason), 50);
+      const started = performance.now();
+      expect(await failure(() => operation(controller.signal))).toBe(reason);
+      expect(performance.now() - started).toBeLessThan(3000);
+    }
+  } finally {
+    lock.release();
   }
   expect(fs.readdirSync(dir)).toEqual([".ada.md.lock"]);
 });

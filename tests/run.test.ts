@@ -1558,8 +1558,24 @@ test("runLogPath syncs the runs folder once, and the folders above the ones it m
   expect(folderSyncs(() => runLogPath(runs, "r2"))).toEqual([join(real, "state", "runs")]);
 });
 
-test("runLogPath throws a folder sync's I/O error", () => {
-  expect(() => folderSyncs(() => runLogPath(dir, "r1"), "EIO")).toThrow(/EIO/);
+test("runLogPath syncs the runs folder once when its path climbs out of folders it doesn't make", () => {
+  mkdirSync(join(dir, "p"));
+  let path: string | undefined;
+  const synced = folderSyncs(() => {
+    path = runLogPath(`${dir}/p/q/../..`, "r1");
+  });
+  expect(synced).toEqual([fs.realpathSync(dir)]);
+  expect(path).toBe(join(dir, "r1", "log.jsonl"));
+  expect(existsSync(join(dir, "p", "q"))).toBe(false);
+});
+
+test("runLogPath throws a folder sync's I/O error and removes the run folder", () => {
+  expect(() =>
+    folderSyncs(() => {
+      runLogPath(dir, "r1");
+    }, "EIO"),
+  ).toThrow(/EIO/);
+  expect(existsSync(join(dir, "r1"))).toBe(false);
 });
 
 test("runLogPath refuses an existing run folder, and a symlink to one, leaving its target as it was", () => {

@@ -6,9 +6,10 @@ import fs from "node:fs";
 
 /**
  * Run `fn` and return the real paths of the folders synced while it ran, in order. With `fail`,
- * each folder's fsync throws a system error with that code instead; files sync as usual.
+ * each folder's fsync throws a system error with that code instead; files sync as usual. `fn` must
+ * be synchronous: the spies are gone before a promise's later work runs.
  */
-export function folderSyncs(fn: () => unknown, fail?: string): string[] {
+export function folderSyncs(fn: () => void, fail?: string): string[] {
   const synced: string[] = [];
   const folders = new Map<number, string>();
   const { openSync, fsyncSync } = fs;
@@ -30,7 +31,8 @@ export function folderSyncs(fn: () => unknown, fail?: string): string[] {
     }),
   ];
   try {
-    fn();
+    const result: unknown = fn();
+    if (result instanceof Promise) throw new TypeError("folderSyncs takes a synchronous function");
   } finally {
     for (const spy of spies) spy.mockRestore();
   }

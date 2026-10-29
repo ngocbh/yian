@@ -1999,8 +1999,8 @@ export class JsonlRunLog implements RunLog {
   }
 
   /**
-   * Create a new owner-only (0600) log at `path`, sync its folder so the new file survives a power
-   * loss, and lock it. An existing path is never replaced. A failure after the file is created
+   * Create a new owner-only (0600) log at `path`, lock it, and sync its folder so the new file
+   * survives a power loss. An existing path is never replaced. A failure after the file is created
    * closes it and releases the lock; the empty file stays.
    *
    * @param options.clock The clock appends read their times from (default `Date.now`).
@@ -2021,8 +2021,8 @@ export class JsonlRunLog implements RunLog {
     try {
       // The open's mode is masked by the umask.
       fs.fchmodSync(fd, 0o600);
-      syncFolder(dirname(path));
       lock = lockRunLog(path, fd);
+      syncFolder(dirname(path));
       return new JsonlRunLog(path, canonicalRunId, fd, lock, clock, [], 0);
     } catch (error) {
       releaseAfterFailure(fd, lock);

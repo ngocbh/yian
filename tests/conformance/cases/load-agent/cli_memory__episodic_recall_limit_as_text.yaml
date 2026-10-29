@@ -16,4 +16,4 @@ expect:
       message: 'long_term_memory ''episodic'': episodic memory config recall_limit must be an integer or null, got "two"'
       frames:
       - label: flow.yaml
-        range: [3, 19, 3, 76]
+        range: [3, 30, 3, 75]

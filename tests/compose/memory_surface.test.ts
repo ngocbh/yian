@@ -18,13 +18,38 @@ afterEach(() => forget());
 
 const SITE = new DeclSite([], ["root"], null);
 
-/** Parse `value` with an unlocated context, no range and `SITE`. */
+/** Parse `value` with an unlocated context, no cursor and `SITE`. */
 function parse(value: Value): readonly MemoryDecl[] {
   return parseMemoryDeclarations(value, {
     diagnostics: new LoadDiagnostics(),
-    sourceRange: null,
+    cursor: null,
     site: SITE,
   });
+}
+
+/** Return the `LoadError` parsing a document's `long_term_memory:` throws. */
+function locatedError(text: string): LoadError {
+  const document = SourceDocument.parse(text);
+  try {
+    parseMemoryDeclarations(document.root.get("long_term_memory"), {
+      diagnostics: LoadDiagnostics.fromDocument(document),
+      cursor: document.root.child("long_term_memory"),
+      site: SITE,
+    });
+  } catch (error) {
+    expect(error).toBeInstanceOf(LoadError);
+    return error as LoadError;
+  }
+  throw new Error("expected a LoadError");
+}
+
+/** Return the one-line authored text the error parsing `text` frames. */
+function framedText(text: string): string {
+  const { frames } = locatedError(text).diagnostic;
+  expect(frames).toHaveLength(1);
+  const range = frames[0]!.range;
+  expect(range.endLine).toBe(range.startLine);
+  return text.split("\n")[range.startLine - 1]!.slice(range.startCol - 1, range.endCol - 1);
 }
 
 /** Return each declaration's name, type, config and site. */
@@ -128,23 +153,27 @@ describe("parseMemoryDeclarations", () => {
   });
 
   test("a located error has the value's range as its one frame", () => {
-    const document = SourceDocument.parse("long_term_memory: {}\n");
-    const sourceRange = document.root.rangeOf("long_term_memory");
-    expect(sourceRange).not.toBeNull();
-    let caught: unknown = null;
-    try {
-      parseMemoryDeclarations(document.root.get("long_term_memory"), {
-        diagnostics: LoadDiagnostics.fromDocument(document),
-        sourceRange,
-        site: SITE,
-      });
-    } catch (error) {
-      caught = error;
-    }
-    expect(caught).toBeInstanceOf(LoadError);
-    const { frames } = (caught as LoadError).diagnostic;
-    expect(frames).toHaveLength(1);
-    expect(frames[0]!.range).toEqual(sourceRange!);
+    expect(framedText("long_term_memory: {}\n")).toBe("{}");
+    expect(framedText("long_term_memory: my.type\n")).toBe("my.type");
+  });
+
+  test.each<[string, string, string]>([
+    ["a reserved name", "name: reflective", "name"],
+    ["a bad entry", "notes: 3", "3"],
+    ["a bad type", "notes: my.type", "my.type"],
+    ["a missing type", "notes: {config: {}}", "{config: {}}"],
+    ["an unknown key", "notes: {type: profile, confg: {}}", "confg"],
+    ["a non-text type", "notes: {type: 3}", "3"],
+    ["a bad config", "notes: {type: profile, config: []}", "[]"],
+  ])("%s is framed at its own text", (_name, entry, framed) => {
+    expect(framedText(`long_term_memory:\n  ok: episodic\n  ${entry}\n`)).toBe(framed);
+  });
+
+  test("an unknown key offers a close match", () => {
+    const error = locatedError("long_term_memory:\n  notes: {type: profile, confg: {}}\n");
+    expect(error.diagnostic.message).toBe(
+      'long_term_memory \'notes\' has unknown key(s) ["confg"] (allowed: type, config); did you mean \'config\'?',
+    );
   });
 });
 

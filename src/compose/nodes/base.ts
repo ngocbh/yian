@@ -642,7 +642,7 @@ export class NodeDescriptor {
       if (range !== null) ranges.set(siteKey("field", key), range);
       fields[this.keywordRemap.get(key) ?? camelCase(key)] = normalized.get(key);
     }
-    this._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+    this._validateFields(nodeId, fields, ranges, ownRange, diagnostics, normalized);
     this._readCommonFields(nodeId, normalized, fields, ranges);
     const descriptorFields = { ...fields, range: ownRange, fieldRanges: ranges } as NodeDescriptorFields;
     return new this(descriptorFields) as InstanceType<T>;
@@ -765,6 +765,7 @@ export class NodeDescriptor {
    * @param ranges The field ranges recorded so far.
    * @param ownRange The node body's range, for an error about an absent field.
    * @param diagnostics Factory for located load errors.
+   * @param cursor The node body, for errors located inside a field.
    * @throws LoadError for a bad `input:` or `asserts:`.
    */
   static _validateFields(
@@ -773,6 +774,7 @@ export class NodeDescriptor {
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
+    cursor: SourceCursor,
   ): void {
     const inputs = fields["inputs"];
     if (inputs !== undefined && inputs !== null && !isRecord(inputs)) {

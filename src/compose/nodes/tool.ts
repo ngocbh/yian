@@ -155,6 +155,7 @@ export class ToolDescriptor extends NodeDescriptor {
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
+    cursor: SourceCursor,
   ): void {
     const rangeOf = (key: string) => ranges.get(siteKey("field", key)) ?? ownRange;
     rejectNonText(this.kind, nodeId, "tool_id", fields["toolId"] ?? null, rangeOf("tool_id"), diagnostics, {
@@ -191,7 +192,7 @@ export class ToolDescriptor extends NodeDescriptor {
       }
       fields["retries"] = Number(fields["retries"]);
     }
-    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
   /**

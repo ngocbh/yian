@@ -1159,7 +1159,7 @@ export async function loadFlowFile(
     root.has("nodes") && f.longTermMemory !== null
       ? parseMemoryDeclarations(f.longTermMemory, {
           diagnostics,
-          sourceRange: root.rangeOf("long_term_memory"),
+          cursor: root.child("long_term_memory"),
           site: new DeclSite([], ["root"], null),
         })
       : [];
@@ -1759,7 +1759,7 @@ function loadDef(
       field("long_term_memory") !== null
         ? parseMemoryDeclarations(body["long_term_memory"]!, {
             diagnostics,
-            sourceRange: defCursor?.rangeOf("long_term_memory") ?? null,
+            cursor: defCursor?.has("long_term_memory") ? defCursor.child("long_term_memory") : null,
             site: new DeclSite([], ["def", name], null),
           })
         : [];

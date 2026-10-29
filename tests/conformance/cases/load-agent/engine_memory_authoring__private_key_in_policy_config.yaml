@@ -20,4 +20,4 @@ expect:
       message: 'long_term_memory ''notes'': config.nested contains forbidden private key ''clientSecret'''
       frames:
       - label: flow.yaml
-        range: [4, 3, 7, 1]
+        range: [5, 5, 7, 1]

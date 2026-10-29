@@ -20,6 +20,7 @@ import { ContractOrigins, isExactly, type Parameter, ValueContract } from "../..
 import { MapNode } from "../../nodes/map/node.ts";
 import { isInboxType, listKindForElement, Type } from "../../typesys/values.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
+import type { SourceCursor } from "../source/index.ts";
 import {
   type BuildContext,
   type BuildResult,
@@ -111,6 +112,7 @@ export class CallDescriptor extends NodeDescriptor {
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
+    cursor: SourceCursor,
   ): void {
     rejectNonText(
       this.kind,
@@ -121,7 +123,7 @@ export class CallDescriptor extends NodeDescriptor {
       diagnostics,
       { required: true },
     );
-    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
   /**

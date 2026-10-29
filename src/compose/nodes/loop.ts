@@ -50,6 +50,7 @@ import {
 } from "../helpers/narrowing_facts.ts";
 import { combineOutputContracts, projectOutputContract } from "../../compile/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
+import type { SourceCursor } from "../source/index.ts";
 import {
   type BuildContext,
   type BuildResult,
@@ -150,6 +151,7 @@ export class LoopDescriptor extends NodeDescriptor {
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
+    cursor: SourceCursor,
   ): void {
     rejectNonText(
       this.kind,
@@ -178,7 +180,7 @@ export class LoopDescriptor extends NodeDescriptor {
         checkWrittenValue(value, `node ${reprText(nodeId)} field ${reprText(key)}`, range, diagnostics);
       }
     }
-    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
   /**

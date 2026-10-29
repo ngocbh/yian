@@ -17,4 +17,4 @@ expect:
       message: 'long_term_memory ''episodic'': episodic memory config has unknown key(s) ["bogus"] (allowed: max_episodes, recall_limit)'
       frames:
       - label: flow.yaml
-        range: [3, 19, 3, 67]
+        range: [3, 30, 3, 66]

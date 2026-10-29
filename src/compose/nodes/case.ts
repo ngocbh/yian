@@ -207,6 +207,7 @@ export class CaseDescriptor extends NodeDescriptor {
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
+    cursor: SourceCursor,
   ): void {
     const on = fields["on"] ?? null;
     const range = ranges.get(siteKey("field", "on")) ?? ownRange;
@@ -222,7 +223,7 @@ export class CaseDescriptor extends NodeDescriptor {
         );
       }
     }
-    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
   /**

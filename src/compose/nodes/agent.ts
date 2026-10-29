@@ -704,6 +704,7 @@ export class AgentDescriptor extends NodeDescriptor {
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
+    cursor: SourceCursor,
   ): void {
     const id = reprText(nodeId);
     const rangeOf = (key: string) => ranges.get(siteKey("field", key)) ?? ownRange;
@@ -773,11 +774,11 @@ export class AgentDescriptor extends NodeDescriptor {
           ? []
           : parseMemoryDeclarations(value, {
               diagnostics,
-              sourceRange: ranges.get(siteKey("field", "long_term_memory")) ?? null,
+              cursor: cursor.child("long_term_memory"),
               site: new DeclSite([], ["root"], nodeId),
             });
     }
-    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
   /**

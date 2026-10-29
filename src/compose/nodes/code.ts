@@ -94,6 +94,7 @@ export class CodeDescriptor extends NodeDescriptor {
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
+    cursor: SourceCursor,
   ): void {
     rejectNonText(
       this.kind,
@@ -104,7 +105,7 @@ export class CodeDescriptor extends NodeDescriptor {
       diagnostics,
       { required: true },
     );
-    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
   /**

@@ -34,6 +34,7 @@ import {
   type Sqlite,
   sqliteErrorCode,
   stripTypes,
+  syncFolder,
   TypeStripError,
   USER_AGENT,
   VERSION,
@@ -745,6 +746,73 @@ describe("waitForLock", () => {
     const error = await rejection(waitForLock(file, { private: true, scheduler }));
     expect((error as FileLockError).reason).toBe("not-private");
     expect(scheduler.sleeps).toBe(0);
+  });
+});
+
+describe("syncFolder", () => {
+  /** A Node system error with `code`, as `fs` throws. */
+  const systemError = (code: string) => Object.assign(new Error(code), { code, syscall: "fsync" });
+
+  test("syncs the folder through a descriptor it closes", () => {
+    const opened = new Map<number, string>();
+    const synced: string[] = [];
+    const closed: number[] = [];
+    const open = fs.openSync;
+    const fsync = fs.fsyncSync;
+    const close = fs.closeSync;
+    spyOn(fs, "openSync").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
+      const fd = (open as (...args: unknown[]) => number)(target, ...rest);
+      opened.set(fd, String(target));
+      return fd;
+    }) as typeof fs.openSync);
+    spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+      synced.push(opened.get(fd)!);
+      fsync(fd);
+    });
+    spyOn(fs, "closeSync").mockImplementation((fd) => {
+      closed.push(fd);
+      close(fd);
+    });
+    syncFolder(dir);
+    expect(synced).toEqual([dir]);
+    expect(closed).toEqual([...opened.keys()]);
+  });
+
+  test.each(["EINVAL", "ENOTSUP", "EOPNOTSUPP"])(
+    "does nothing where a folder sync fails %s, open or sync",
+    (code) => {
+      const open = spyOn(fs, "openSync").mockImplementation(() => {
+        throw systemError(code);
+      });
+      expect(syncFolder(dir)).toBeUndefined();
+      open.mockRestore();
+      spyOn(fs, "fsyncSync").mockImplementation(() => {
+        throw systemError(code);
+      });
+      expect(syncFolder(dir)).toBeUndefined();
+    },
+  );
+
+  test.skipIf(process.platform === "win32").each(["EISDIR", "EPERM"])(
+    "a folder sync failing %s off Windows propagates",
+    (code) => {
+      const failure = systemError(code);
+      spyOn(fs, "fsyncSync").mockImplementation(() => {
+        throw failure;
+      });
+      expect(thrown(() => syncFolder(dir))).toBe(failure);
+    },
+  );
+
+  test("any other failure propagates, and the descriptor is still closed", () => {
+    expect(thrown(() => syncFolder(path.join(dir, "missing")))).toMatchObject({ code: "ENOENT" });
+    const failure = systemError("EIO");
+    spyOn(fs, "fsyncSync").mockImplementation(() => {
+      throw failure;
+    });
+    const close = spyOn(fs, "closeSync");
+    expect(thrown(() => syncFolder(dir))).toBe(failure);
+    expect(close).toHaveBeenCalledTimes(1);
   });
 });
 

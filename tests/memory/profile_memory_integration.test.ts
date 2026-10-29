@@ -18,13 +18,23 @@ import type { Request } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type JsonObject, MemoryOperationError, MemorySetupError } from "../../src/memory/contracts.ts";
 import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
+import { lockFile } from "../../src/platform.ts";
 import {
   BackwardStartedRecord,
   JsonlRunLog,
   MemoryCommitFailedRecord,
   RunStartedRecord,
 } from "../../src/runtime/log.ts";
-import { backwardReply, rejected, reply, resumeWith, runWith, sentTexts } from "../helpers/run_state_fixtures.ts";
+import {
+  backwardReply,
+  CrashAt,
+  crashes,
+  rejected,
+  reply,
+  resumeWith,
+  runWith,
+  sentTexts,
+} from "../helpers/run_state_fixtures.ts";
 
 const CHAT = `id: chat
 name: chat
@@ -313,6 +323,33 @@ test("resume reopens the recorded version for backward", async () => {
   expect(input["seen_profile"]).toBe(recordedText);
   expect(input["current_profile"]).toBe("# Ada\n- Edited later.\n");
   expect((await memory.read())[0]).toBe("# Ada\n- Edited later.\n- Brief.\n");
+});
+
+test("a run or resume waiting for a held profile lock stops when its signal aborts", async () => {
+  const memory = await profile();
+  const flow = await loadFlow(CHAT);
+  const path = join(dir, "run.jsonl");
+  const registry = new Map([["profile", memory]]);
+  // A run lost mid-flight, so a resume reopens its memory.
+  const crashing = new CrashAt([reply("never recorded")], 1);
+  await crashes(crashing, () => runWith(flow, { message: "hi" }, registry, crashing, { log: path, env }));
+  const lock = lockFile(join(dir, ".ada.md.lock"));
+  try {
+    for (const start of [
+      (signal: AbortSignal) => runWith(flow, { message: "hi" }, registry, chat(["Hello."]), { env, signal }),
+      (signal: AbortSignal) => resumeWith(flow, path, registry, chat([]), { env, signal }),
+    ]) {
+      const controller = new AbortController();
+      const reason = new Error("stop");
+      setTimeout(() => controller.abort(reason), 50);
+      const started = performance.now();
+      await expect(start(controller.signal)).rejects.toBe(reason);
+      // Well under the 30 s lock wait cap.
+      expect(performance.now() - started).toBeLessThan(5000);
+    }
+  } finally {
+    lock.release();
+  }
 });
 
 test("a new attempt after a mismatch learns from the edited document", async () => {

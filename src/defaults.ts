@@ -284,6 +284,14 @@ export const ENTRIES = Object.freeze([
     group: "setting",
     minimum: 1,
   }),
+  // A hung holder of a profile's `.lock` would otherwise stall a run or a backward pass
+  // forever; SQLite memory storage fails at once instead.
+  entry("PROFILE_LOCK_TIMEOUT_SECONDS", {
+    default: 30,
+    description: "Longest wait in seconds for another writer to release a profile memory's `.lock` file",
+    group: "setting",
+    minimum: 0,
+  }),
   // Input-size caps.
   entry("MAX_AUTH_RESPONSE_BYTES", {
     default: 1024 * 1024,

@@ -177,7 +177,7 @@ const NAMES: Record<string, string[]> = {
     "ASK",
   ],
   "./skills": ["loadSkills", "loadSkillDir", "defaultSkillRoots", "Skill", "SkillError"],
-  "./platform": ["lockFile", "waitForLock", "isLocked", "FileLockError", "openSqlite", "sqliteErrorCode"],
+  "./platform": ["lockFile", "waitForLock", "isLocked", "FileLockError", "openSqlite", "sqliteErrorCode", "syncFolder"],
   "./llm_clients": [
     "LLMConfig",
     "LLM_CONFIG_KEYS",

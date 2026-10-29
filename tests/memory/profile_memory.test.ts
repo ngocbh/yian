@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { BUILTIN, DefaultsError, type Env, forget, install } from "../../src/defaults.ts";
+import { BUILTIN, DefaultsError, type Env, forget, install, withEnv } from "../../src/defaults.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import type { RetryInfo } from "../../src/llm/executor.ts";
 import { Message, type Request, Response, TextPart } from "../../src/llm/messages.ts";
@@ -31,6 +31,7 @@ import {
 } from "../../src/memory/contracts.ts";
 import { parseReply, ProfileMemory, type ProfileSession } from "../../src/memory/profile.ts";
 import { FileMarkdownStore, InMemoryMarkdownStore, markdownVersion } from "../../src/memory/storage/markdown.ts";
+import { lockFile } from "../../src/platform.ts";
 import { type Value, writeAsJson } from "../../src/typesys/values.ts";
 
 // Rows pass values the signatures refuse, to reach the runtime checks.
@@ -767,7 +768,25 @@ test("store read failures: a plain Error escapes, a system error is retryable", 
     "profile store could not be read",
   ]);
   expect(error.cause).toBe(thrown);
-  expect((await failure(() => memory.openRun({ snapshot }))).code).toBe("profile.snapshot_unavailable");
+  const restoring = await failure(() => memory.openRun({ snapshot }));
+  expect([restoring.code, restoring.retryable, restoring.cause]).toEqual(["profile.store_unavailable", true, thrown]);
+});
+
+test("a file store's lock held past its cap is retryable store_unavailable; an abort rejects", async () => {
+  const memory = await newMemory();
+  const lock = lockFile(join(home, ".ada.md.lock"));
+  try {
+    const capped = baseEnv({ YIAN_PROFILE_LOCK_TIMEOUT_SECONDS: "0" });
+    const error = await withEnv(capped, () => failure(() => memory.openRun()));
+    expect([error.code, error.retryable]).toEqual(["profile.store_unavailable", true]);
+    expect((error.cause as Error).message).toContain("timed out after 0 ms");
+    const controller = new AbortController();
+    const reason = new Error("stop");
+    setTimeout(() => controller.abort(reason), 50);
+    await expect(memory.openRun({ signal: controller.signal })).rejects.toBe(reason);
+  } finally {
+    lock.release();
+  }
 });
 
 test("two concurrent commits of one id write once", async () => {

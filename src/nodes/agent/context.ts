@@ -19,7 +19,7 @@ import { ProviderError } from "../../llm/errors.ts";
 import { MediaPart, Message, NamedTool, type Part, Request, Response, TextPart, Usage } from "../../llm/messages.ts";
 import type { ModelAccess } from "../../llm_clients/factory.ts";
 import type { MemoryContext } from "../../memory/contracts.ts";
-import { type Scheduler, warn } from "../../platform.ts";
+import { type Scheduler, syncFolder, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
@@ -775,16 +775,6 @@ export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): File
   }
   syncFolder(media);
   return new FileRef({ uri: `media/${name}`, mime, name });
-}
-
-/** Flush folder `path`'s entries to disk. */
-function syncFolder(path: string): void {
-  const fd = fs.openSync(path, "r");
-  try {
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
 }
 
 /**

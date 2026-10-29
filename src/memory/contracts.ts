@@ -1780,8 +1780,12 @@ export interface MemorySession {
  * value or a promise, and yian always awaits it.
  */
 export interface Memory {
-  /** Open one run session, optionally restoring a recorded snapshot. */
-  openRun(options?: { snapshot?: JsonObject | null }): MemorySession | Promise<MemorySession>;
+  /**
+   * Open one run session, optionally restoring a recorded snapshot. `signal`, when given, is the
+   * run's stop: a backend that waits on its storage should give up with `signal.reason` once it
+   * aborts.
+   */
+  openRun(options?: { snapshot?: JsonObject | null; signal?: AbortSignal }): MemorySession | Promise<MemorySession>;
   /** Clear current memory state according to the backend's policy. */
   reset(): void | Promise<void>;
 }

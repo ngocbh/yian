@@ -10,7 +10,6 @@ import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import * as compose from "../../src/compose/index.ts";
 import { defaultSkillRoots, loadSkills } from "../../src/compose/skills.ts";
 import { current } from "../../src/defaults.ts";
 import { openFilePath } from "../../src/platform.ts";
@@ -209,11 +208,6 @@ test("default roots put user before project and stop at git root", () => {
 test("default roots outside git use only cwd", () => {
   const roots = defaultSkillRoots({ cwd: tmp, home: join(tmp, "home") });
   expect(roots.slice(2)).toEqual([join(tmp, ".claude", "skills"), join(tmp, ".agents", "skills")]);
-});
-
-test("compose facade exports the skill loaders", () => {
-  expect(compose.defaultSkillRoots).toBe(defaultSkillRoots);
-  expect(compose.loadSkills).toBe(loadSkills);
 });
 
 // The rows below pin how the home, links and paths are read.

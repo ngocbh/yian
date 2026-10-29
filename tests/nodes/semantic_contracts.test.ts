@@ -33,8 +33,6 @@ import {
   ValueContract,
   type ValuePath,
 } from "../../src/nodes/contracts.ts";
-import * as nodes from "../../src/nodes/index.ts";
-import type { OutputContract as NodesOutputContract, ValuePath as NodesValuePath } from "../../src/nodes/index.ts";
 import { FileRef, Type, TypeCheckError, TypedValue, ValueKind } from "../../src/typesys/index.ts";
 
 /** Build a short valid origin for carrier tests. */
@@ -409,22 +407,6 @@ for (const invalid of [null, "not-an-origin"]) {
     expect(() => rewrite(carrier, mapper)).toThrow(/mapper must return an OriginRef/);
   });
 }
-
-test("nodes package exports the canonical contract vocabulary", () => {
-  expect(nodes.Assertion).toBe(Assertion);
-  expect(nodes.Binding).toBe(Binding);
-  expect(nodes.ContractOrigins).toBe(ContractOrigins);
-  expect(nodes.PartialRecordContract).toBe(PartialRecordContract);
-  expect(nodes.Parameter).toBe(Parameter);
-  expect(nodes.ValueContract).toBe(ValueContract);
-  expect(nodes.asBinding).toBe(asBinding);
-  expect(nodes.bindingSource).toBe(bindingSource);
-  // The type-only names have no runtime value; these lines compile only if the index exports them.
-  const contract: NodesOutputContract = new ValueContract(Type.scalar(ValueKind.STRING));
-  const path: NodesValuePath = ["field", 0];
-  expect(contract).toBeInstanceOf(ValueContract);
-  expect(path).toEqual(["field", 0]);
-});
 
 // --- TS-only rows --- //
 

@@ -217,9 +217,14 @@ test("end to end: listing, load, escape and resume", async () => {
   expect(review(NodeStartedRecord)).toBe(2);
   expect(review(NodeSucceededRecord)).toBe(1);
 
-  const escape = new ScriptedModel([loadCall({ name: "code-review", path: "../../secret.txt" }, "c")], PLAIN_CONFIG);
-  const failed = await runWith(await loadFlow(FLOW), { change: "diff-2" }, null, escape, { skills });
-  expect(failed.status).toBe("failed");
-  expect(failed.failure!.message).toContain("relative path inside the skill directory");
-  expect(failed.failure!.message).not.toContain("do not leak");
+  // An escape attempt is refused as the call's error result, and the model answers.
+  const escape = new ScriptedModel(
+    [loadCall({ name: "code-review", path: "../../secret.txt" }, "c"), textReply("refused")],
+    PLAIN_CONFIG,
+  );
+  const answered = await runWith(await loadFlow(FLOW), { change: "diff-2" }, null, escape, { skills });
+  expect(answered.status).toBe("succeeded");
+  expect(answered.output).toBe("refused");
+  expect(lastResult(escape, 1)).toContain("relative path inside the skill directory");
+  expect(lastResult(escape, 1)).not.toContain("do not leak");
 });

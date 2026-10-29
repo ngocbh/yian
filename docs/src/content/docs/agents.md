@@ -267,7 +267,9 @@ The model sees only each skill's name and description. When it needs one, it cal
 and hidden files are refused, including through symlinks. Against another process swapping
 folders in a skill folder while it's read, this holds on Linux with `/proc` and with Bun on
 macOS; elsewhere (Node on macOS, Windows) it is best effort. A hard link to a hidden file reads like any other file, so
-don't keep hard links to secrets in a skill folder.
+don't keep hard links to secrets in a skill folder. A call the model gets wrong (a skill it wasn't
+granted, a missing or refused file, bad arguments) doesn't fail the node: the model reads the
+refusal as the call's error result and carries on.
 
 - `skills: [name, ...]` grants those skills; `skills: all` grants every skill the run has.
 - Names use lowercase letters, digits and single hyphens, up to 64 characters.

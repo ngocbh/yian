@@ -13,4 +13,4 @@ expect:
       message: 'flow: llm_config.headers goes wherever the host''s api_key is sent; pass it with that key in the run''s llm_config, or save it with the login by `yian auth`, not in a flow file'
       frames:
       - label: flow.yaml
-        range: [3, 13, 3, 72]
+        range: [3, 41, 3, 71]

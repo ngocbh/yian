@@ -61,12 +61,12 @@ test.each([
   expect(lineOf(error)).toBe(12);
 });
 
-test("block llm config error is located at its first key", () => {
+test("block llm config error is located at the offending key", () => {
   const error = loadError(() => assembleText(flow("      llm_config:\n        model: m\n        bogus: 1\n")));
   expect(error.message).toBe(
     `${LLM_SITE}: 1 validation error for LLMConfig\nbogus\n  Extra inputs are not permitted`,
   );
-  expect(lineOf(error)).toBe(13);
+  expect(lineOf(error)).toBe(14);
 });
 
 test("valid llm config loads", () => {

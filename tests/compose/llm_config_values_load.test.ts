@@ -188,6 +188,41 @@ test("a literal field error in a flow value layer points at the field", async ()
   expect(lineOf(error)).toBe(lineHolding(text, "temparature:"));
 });
 
+test("a field error in a literal flow layer points at the field", async () => {
+  const text = flowLayer("llm_config:\n  provider: openai\n  model: m\n  temparature: 1\n");
+  const error = await loadFailsAsync(text);
+  expect(error.message).toStartWith("flow: llm_config:");
+  expect(lineOf(error)).toBe(lineHolding(text, "temparature:"));
+});
+
+test("inherit in a literal flow layer points at the field", async () => {
+  const text = flowLayer("llm_config:\n  model: m\n  inherit: false\n");
+  const error = await loadFailsAsync(text);
+  expect(error.message).toContain("inherit");
+  expect(lineOf(error)).toBe(lineHolding(text, "inherit:"));
+});
+
+test("a host-only field in a literal def layer points at the field", async () => {
+  const text = defLayer("    llm_config:\n      provider: openai\n      project: p\n");
+  const error = await loadFailsAsync(text);
+  expect(error.message).toContain("defs entry 'sub': llm_config.project goes wherever");
+  expect(lineOf(error)).toBe(lineHolding(text, "project:"));
+});
+
+test("a field error in a literal agent layer points at the field", () => {
+  const text = flow("    llm_config:\n      model: m\n      temparature: 1\n");
+  const error = loadFails(text);
+  expect(error.message).toStartWith("node 'a': llm_config:");
+  expect(lineOf(error)).toBe(lineHolding(text, "temparature:"));
+});
+
+test("a non-boolean inherit in a literal agent layer points at the field", () => {
+  const text = flow("    llm_config:\n      model: m\n      inherit: yes\n");
+  const error = loadFails(text);
+  expect(error.message).toContain("node 'a': llm_config `inherit:` must be true or false");
+  expect(lineOf(error)).toBe(lineHolding(text, "inherit:"));
+});
+
 test("an agent built in code keeps its literal config", () => {
   const config = { model: "m" };
   const agent = new AgentNode("a", { prompt: "p", llmConfig: config });

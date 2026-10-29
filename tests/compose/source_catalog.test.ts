@@ -363,52 +363,6 @@ describe("snapshots", () => {
     expect(secondSnapshot.has("not-an-origin")).toBe(false);
   });
 
-  test("a failed transaction releases registered site keys", () => {
-    // A retry may reuse every semantic path from a failed construction.
-    const cursor = valueCursor();
-    const builder = new SourceCatalogBuilder();
-
-    expect(() =>
-      builder.transaction(() => {
-        builder.register(["value"], cursor);
-        throw new Error("construction failed");
-      }),
-    ).toThrow("construction failed");
-
-    const retried = builder.register(["value"], cursor);
-
-    expect(builder.freeze().resolve(retried!)).not.toBeNull();
-  });
-
-  test("a failed transaction restores consumed tags", () => {
-    // Tags read by a failed construction are not counted as consumed.
-    const builder = new SourceCatalogBuilder();
-    const ledger = builder.consumedTags;
-    ledger.add(1);
-
-    expect(() =>
-      builder.transaction(() => {
-        ledger.add(2);
-        throw new Error("construction failed");
-      }),
-    ).toThrow("construction failed");
-
-    expect(builder.consumedTags).toBe(ledger);
-    expect([...ledger]).toEqual([1]);
-  });
-
-  test("a successful transaction returns the callback's result and keeps its work", () => {
-    const builder = new SourceCatalogBuilder();
-
-    const origin = builder.transaction(() => {
-      builder.consumedTags.add(3);
-      return builder.register(["value"], valueCursor());
-    });
-
-    expect(builder.freeze().has(origin)).toBe(true);
-    expect([...builder.consumedTags]).toEqual([3]);
-  });
-
   test("builder lookup reads current sites without freezing", () => {
     const document = SourceDocument.parse("first: one\nsecond: two\n", "flow.yaml");
     const builder = new SourceCatalogBuilder();
@@ -555,32 +509,6 @@ describe("constructed lines", () => {
     expect(() => wholeFirst.registerConstructedLine(sitePath, cursor, 0)).toThrow(
       SourceAccessError,
     );
-  });
-
-  test("transactions and freeze are stable", () => {
-    const cursor = literalCursor();
-    const builder = new SourceCatalogBuilder();
-    const firstOrigin = builder.registerConstructedLine(["line", 0], cursor, 0)!;
-    const firstSnapshot = builder.freeze();
-    let rolledBackOrigin = null as OriginRef | null;
-
-    expect(() =>
-      builder.transaction(() => {
-        rolledBackOrigin = builder.registerConstructedLine(["line", 1], cursor, 1);
-        throw new Error("construction failed");
-      }),
-    ).toThrow("construction failed");
-
-    expect(firstSnapshot.resolve(firstOrigin)).not.toBeNull();
-    expect(firstSnapshot.resolve(rolledBackOrigin!)).toBeNull();
-
-    const retriedOrigin = builder.registerConstructedLine(["line", 1], cursor, 1)!;
-    const secondSnapshot = builder.freeze();
-
-    expect(retriedOrigin).toEqual(rolledBackOrigin!);
-    expect(firstSnapshot.resolve(retriedOrigin)).toBeNull();
-    expect(secondSnapshot.resolve(firstOrigin)).not.toBeNull();
-    expect(secondSnapshot.resolve(retriedOrigin)).not.toBeNull();
   });
 
   test("alias occurrences replay the shared definition", () => {

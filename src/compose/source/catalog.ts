@@ -319,30 +319,7 @@ export class SourceCatalogBuilder {
     return resolveRegisteredSite(this.#sites, origin);
   }
 
-  /**
-   * Run `fn` as one construction attempt and return its result; when it throws, roll back
-   * its registrations and consumed tags, then rethrow.
-   *
-   * Callable compilation is success-cached and may be retried after an error, so a failed
-   * attempt must leave the catalog at the same insertion boundary as the cache. Nested
-   * transactions are savepoints; the builder is single-threaded during Compose loading.
-   */
-  transaction<T>(fn: () => T): T {
-    const checkpoint = this.#sites.size;
-    const consumed = new Set(this.consumedTags);
-    try {
-      return fn();
-    } catch (error) {
-      for (const key of [...this.#sites.keys()].slice(checkpoint)) this.#sites.delete(key);
-      // Readers hold the ledger itself, so it is restored in place.
-      for (const tag of this.consumedTags) {
-        if (!consumed.has(tag)) this.consumedTags.delete(tag);
-      }
-      throw error;
-    }
-  }
-
-  /** Return an immutable snapshot of all successful registrations. */
+  /** Return an immutable snapshot of all registrations so far. */
   freeze(): SourceCatalog {
     return new SourceCatalog(this.#sites);
   }

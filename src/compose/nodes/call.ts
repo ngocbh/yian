@@ -44,8 +44,8 @@ export interface CallDescriptorFields extends NodeDescriptorFields {
 /**
  * kind=call|map: apply a callable (`call:`) to the call-argument bindings in `input:`.
  *
- * `call` names the callable, resolved first among the flow's `defs:`, else as an external flow
- * id (the loader composes that resolution). `kind: call` is a single application; `kind: map`
+ * `call` names the callable: a `defs:` entry or a `uses:` alias (the loader composes that
+ * resolution; any other name is a load error). `kind: call` is a single application; `kind: map`
  * with `over: ${list}` (`MapDescriptor`) applies it to each element, with `${item}` in element
  * scope. `parallel:` is kept but inert: run-level workers control concurrency.
  *
@@ -69,7 +69,7 @@ export class CallDescriptor extends NodeDescriptor {
   static override readonly required = this.require("call");
   static override readonly bindingFields: readonly string[] = ["inputs", "over"];
 
-  /** The callable's name: a `defs:` entry or an external flow id. */
+  /** The callable's name: a `defs:` entry or a `uses:` alias. */
   readonly call: string;
   /** The diagnostic label of an anonymous inline child; `null` on an authored node. */
   readonly childLabel: string | null;

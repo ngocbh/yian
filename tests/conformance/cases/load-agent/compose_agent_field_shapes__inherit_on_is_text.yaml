@@ -16,4 +16,4 @@ expect:
       message: 'node ''a'': llm_config `inherit:` must be true or false, got "on"; `on` is text; write `true`'
       frames:
       - label: flow.yaml
-        range: [7, 17, 7, 30]
+        range: [7, 27, 7, 29]

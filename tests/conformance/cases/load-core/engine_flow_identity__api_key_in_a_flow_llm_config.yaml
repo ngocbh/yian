@@ -19,4 +19,4 @@ expect:
       message: 'flow: llm_config.api_key is a host credential; pass it in the run''s llm_config, not in a flow file'
       frames:
       - label: flow.yaml
-        range: [5, 3, 7, 1]
+        range: [6, 12, 6, 26]

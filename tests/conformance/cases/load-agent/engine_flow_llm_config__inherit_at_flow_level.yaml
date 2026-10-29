@@ -13,4 +13,4 @@ expect:
     - code: compose.load
       frames:
       - label: flow.yaml
-        range: [3, 13, 3, 29]
+        range: [3, 23, 3, 28]

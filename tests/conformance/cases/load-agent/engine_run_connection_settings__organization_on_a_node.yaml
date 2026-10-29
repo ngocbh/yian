@@ -12,4 +12,4 @@ expect:
       message: 'node ''agent'': llm_config.organization goes wherever the host''s api_key is sent; pass it with that key in the run''s llm_config, or save it with the login by `yian auth`, not in a flow file'
       frames:
       - label: flow.yaml
-        range: [4, 48, 4, 89]
+        range: [4, 81, 4, 88]

@@ -15,4 +15,4 @@ expect:
       message: 'flow: llm_config: `model:` must be text, but YAML read it as an integer; put it in quotes'
       frames:
       - label: flow.yaml
-        range: [3, 13, 3, 23]
+        range: [3, 21, 3, 22]

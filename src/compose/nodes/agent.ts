@@ -7,7 +7,8 @@
  * checks the shapes of its own fields, and builds the runtime `AgentNode`. Registered in `KINDS`
  * and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  * `readLlmConfig` reads an authored `llm_config:` layer with the `${...}` values and tags in it,
- * and `checkLlmConfigValue` checks a layer holding values.
+ * `validateLlmConfig` checks a flow, def or AGENT layer, and `checkLlmConfigValue` one holding
+ * values.
  *
  * Knows about: diagnostics, compose source and helpers, expr (span reading and the binder),
  *              llm_clients (config and provider blocks), memory contracts, nodes (agent and
@@ -109,8 +110,8 @@ function formerBooleanHint(value: unknown): string {
  * @param options.sitePath Catalog site prefix for the layer.
  * @param options.catalogBuilder File-owned origin catalog builder.
  * @param options.diagnostics Factory for located load errors.
- * @returns The layer, and for a `ValueTemplate` the value range of each key written in it, keyed
- *   by its dotted path (`anthropic.thinking`); empty otherwise.
+ * @returns The layer, and the value range of each key written in it, keyed by its dotted path
+ *   (`anthropic.thinking`); empty for a whole-record value.
  * @throws LoadError when a tag is malformed or names no type, a tag sits on the whole mapping, a
  *   tag has no value, or the tag reader refuses the value.
  */
@@ -151,13 +152,13 @@ export function readLlmConfig(
       { range: cursor.range },
     );
   }
-  if (!(value instanceof ValueTemplate)) return [value, new Map()];
-  if (valueLeaves(value).length === 0) {
-    // Only tagged literals, already checked against their tags: a literal layer.
-    return [literalPart(value.value), new Map()];
-  }
   const ranges = new Map<string, SourceRange>();
   collectKeyRanges(cursor, "", ranges);
+  if (!(value instanceof ValueTemplate)) return [value, ranges];
+  if (valueLeaves(value).length === 0) {
+    // Only tagged literals, already checked against their tags: a literal layer.
+    return [literalPart(value.value), ranges];
+  }
   return [withKeyOrigins(value, cursor, sitePath, catalogBuilder), ranges];
 }
 
@@ -360,7 +361,7 @@ export function checkLlmConfigValue(
  * @param at The location of a top-level field by its key.
  * @throws LoadError at the block.
  */
-export function checkResponsesBlock(
+function checkResponsesBlock(
   provider: unknown,
   model: unknown,
   tree: Readonly<Record<string, unknown>>,
@@ -379,8 +380,7 @@ export function checkResponsesBlock(
  * @param cfg The literal fields; a field holding a value is `null`.
  * @param prefix Message prefix naming the layer.
  * @param sourceRange The layer's location, when retained.
- * @param fieldRange The location of a top-level field by its key; `null` locates every error at
- *   the layer.
+ * @param fieldRange The location of a top-level field by its key.
  * @throws LoadError when a field violates `LLMConfig`: a text field YAML read as non-text is named
  *   by `notTextError`, any other violation keeps the `LLMConfig` message.
  */
@@ -389,7 +389,7 @@ function checkLiteralFields(
   prefix: string,
   sourceRange: SourceRange | null,
   diagnostics: LoadDiagnostics,
-  fieldRange: ((key: string) => SourceRange | null) | null = null,
+  fieldRange: (key: string) => SourceRange | null,
 ): void {
   try {
     new LLMConfig(cfg);
@@ -397,7 +397,7 @@ function checkLiteralFields(
     if (!(error instanceof ValidationError)) throw error;
     const detail = notTextDetail(error, cfg);
     const key = error.issues[0]?.loc[0];
-    const range = fieldRange !== null && typeof key === "string" ? fieldRange(key) : sourceRange;
+    const range = typeof key === "string" ? fieldRange(key) : sourceRange;
     throw diagnostics.error(`${prefix}: ` + (detail !== null ? notTextError(...detail) : error.message), {
       range,
       cause: error,
@@ -416,38 +416,59 @@ function checkLiteralFields(
  * @param cfg The authored layer, or `null` for defaults.
  * @param prefix Message prefix naming the layer, such as `node 'a': llm_config`.
  * @param sourceRange The layer's location, when retained.
- * @param fieldRanges For a layer holding values, the value range of each key written in it, by
- *   dotted path.
+ * @param diagnostics Factory for located load errors.
+ * @param fieldRanges The value range of each key written in the layer, by dotted path.
+ * @param options.allowInherit Whether the layer may set `inherit` (an AGENT's own layer; the
+ *   default); elsewhere it is an unknown field.
  * @returns The layer without `inherit`, then `inherit`.
- * @throws LoadError when the layer is not a mapping, sets a non-boolean `inherit`, sets a
- *   host-only field (`api_key`, `organization`, `project`, `headers`, or `base_url` other than
- *   beside `provider: azure`), violates `LLMConfig`, or writes a block its model can't take
- *   (`checkResponsesBlock`).
+ * @throws LoadError, located at the offending field when its range is known, when the layer is not
+ *   a mapping, sets a non-boolean `inherit`, sets a host-only field (`api_key`, `organization`,
+ *   `project`, `headers`, or `base_url` other than beside `provider: azure`), violates
+ *   `LLMConfig`, or writes a block its model can't take (`checkResponsesBlock`).
  */
-function validateLlmConfig(
+export function validateLlmConfig(
   cfg: unknown,
   prefix: string,
   sourceRange: SourceRange | null,
   diagnostics: LoadDiagnostics,
   fieldRanges: ReadonlyMap<string, SourceRange>,
+  options: { allowInherit?: boolean } = {},
 ): [Readonly<Record<string, unknown>> | ValueTemplate | Binding, boolean] {
+  const { allowInherit = true } = options;
   if (cfg === null) return [{}, true];
   if (cfg instanceof ValueTemplate || cfg instanceof Binding) {
-    return checkLlmConfigValue(cfg, prefix, sourceRange, diagnostics, fieldRanges);
+    return checkLlmConfigValue(cfg, prefix, sourceRange, diagnostics, fieldRanges, { allowInherit });
   }
   if (!isRecord(cfg)) throw diagnostics.error(`${prefix} must be a mapping`, { range: sourceRange });
-  const { inherit = true, ...rest } = cfg;
+  const at = (path: string) => fieldRanges.get(path) ?? sourceRange;
+  let rest: Readonly<Record<string, unknown>> = cfg;
+  let inherit: unknown = true;
+  if (allowInherit) ({ inherit = true, ...rest } = cfg);
   if (typeof inherit !== "boolean") {
     throw diagnostics.error(
       `${prefix} \`inherit:\` must be true or false, got ${valueRepr(inherit)}${formerBooleanHint(inherit)}`,
-      { range: sourceRange },
+      { range: at("inherit") },
     );
   }
   const hostOnly = hostOnlyFieldError(rest);
-  if (hostOnly !== null) throw diagnostics.error(hostOnlyMessage(prefix, hostOnly[1]), { range: sourceRange });
-  checkLiteralFields(rest, prefix, sourceRange, diagnostics);
-  checkResponsesBlock(rest["provider"], rest["model"], rest, prefix, diagnostics, () => sourceRange);
+  if (hostOnly !== null) throw diagnostics.error(hostOnlyMessage(prefix, hostOnly[1]), { range: at(hostOnly[0]) });
+  checkLiteralFields(rest, prefix, sourceRange, diagnostics, at);
+  checkResponsesBlock(rest["provider"], rest["model"], rest, prefix, diagnostics, at);
   return [rest, inherit];
+}
+
+/**
+ * Return why an `env:` mapping's `max_tool_iterations` isn't one an AGENT accepts, or `null` when
+ * it is valid or absent.
+ *
+ * Example: `{max_tool_iterations: 0}` gives ``"`env.max_tool_iterations` must be a positive int or
+ * -1 (no cap), got 0"``.
+ */
+export function maxToolIterationsError(env: Readonly<Record<string, unknown>>): string | null {
+  if (!Object.hasOwn(env, "max_tool_iterations")) return null;
+  const value = env["max_tool_iterations"];
+  if (isMaxToolIterations(value)) return null;
+  return `\`env.max_tool_iterations\` must be a positive int or -1 (no cap), got ${valueRepr(value)}`;
 }
 
 /** The roles a prompt list message may take; `system` is `system_prompt:`. */
@@ -807,9 +828,8 @@ export class AgentDescriptor extends NodeDescriptor {
    *
    * @throws LoadError for a bad `env.max_tool_iterations`, a bad variable declaration, a tool or
    *   skill grant the node refuses, an `output:` nesting deeper than
-   *   `current().maxAgentOutputNesting` or holding a type a model can't produce, a steer inbox with
-   *   non-text output, a variable named like an input, or an input or variable named
-   *   `__llm_config` or `__steer_inbox`.
+   *   `current().maxAgentOutputNesting` or holding a type a model can't produce, a variable named
+   *   like an input, or an input or variable named `__llm_config` or `__steer_inbox`.
    * @throws TypeError when `ctx.variableDeclarationReader` returns anything but an array of exact
    *   `Parameter`s or `null`.
    */
@@ -829,12 +849,11 @@ export class AgentDescriptor extends NodeDescriptor {
       llmFieldRanges,
     );
     const steerInboxRange = this.fieldRanges.get(siteKey("field", "steer_inbox")) ?? this.range;
-    if (Object.hasOwn(this.env, "max_tool_iterations") && !isMaxToolIterations(this.env["max_tool_iterations"])) {
-      throw ctx.diagnostics.error(
-        `node ${id}: \`env.max_tool_iterations\` must be a positive int or -1 (no cap), ` +
-          `got ${valueRepr(this.env["max_tool_iterations"])}`,
-        { range: this.fieldRanges.get(siteKey("field", "env")) ?? this.range },
-      );
+    const maxToolIterations = maxToolIterationsError(this.env);
+    if (maxToolIterations !== null) {
+      throw ctx.diagnostics.error(`node ${id}: ${maxToolIterations}`, {
+        range: this.fieldRanges.get(siteKey("field", "env")) ?? this.range,
+      });
     }
     const variables = this.readVariables(ctx);
     const memories = this.memories.map(

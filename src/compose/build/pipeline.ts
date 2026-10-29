@@ -811,10 +811,11 @@ export function splitTypedInputs(
  * Read each AGENT's and adaptive asking node's `llm_config:` with the values and tags in it.
  *
  * An AGENT's own layer and the `adaptive_questions.llm_config` of a TOOL `ask` are read. A layer
- * holding values becomes a `ValueTemplate` (a `Binding` for a whole record written as one value),
- * and the value range of each key in it lands in the descriptor's `fieldRanges` under
+ * holding values becomes a `ValueTemplate` (a `Binding` for a whole record written as one value);
+ * a layer without values stays a plain record. The value range of each key in a mapping layer,
+ * literal or not, lands in the descriptor's `fieldRanges` under
  * `siteKey("llm_config", "<dotted.path>")`, so its errors point at the field; the adaptive desugar
- * copies both to the composer agent. A layer without values stays a plain record.
+ * copies both to the composer agent.
  *
  * @param descriptors Located descriptors keyed by node id.
  * @param nodesCursor Retained view of the flow's node mapping.

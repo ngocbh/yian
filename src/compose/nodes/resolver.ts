@@ -1,9 +1,9 @@
 /**
  * Child resolution and signature: the load-time callable seam shared by `call`, `map` and `loop`.
  *
- * A `call`/`map`/`loop` node names a callable (a `defs:` entry or an external flow). The child
- * resolver is the load-time seam, `(flowId, version) -> ResolvedChild`; the loader composes the
- * defs-first resolution. From the resolved child the kind builder derives its `ChildSignature`
+ * A `call`/`map`/`loop` node names a callable (a `defs:` entry or an external flow). The callable
+ * resolver is the load-time seam, `flowId -> ResolvedChild`; the loader composes the defs-first
+ * resolution. From the resolved child the kind builder derives its `ChildSignature`
  * (canonical parameters and the exact-or-partial codomain contract) to stamp a CALL's
  * `outputContract` (a LOOP's, or the returned fields of its merged carried contract) and to check
  * the bindings' names, arity and types. Each kind's own `build` bakes the resolved child's
@@ -26,7 +26,6 @@ import {
   type OutputContract,
   type Parameter,
   PartialRecordContract,
-  sameOutputContract,
   ValueContract,
 } from "../../nodes/contracts.ts";
 import { EndNode } from "../../nodes/end/node.ts";
@@ -41,100 +40,21 @@ function isOutputContract(contract: unknown): contract is OutputContract {
 }
 
 /**
- * A child flow's compile-time signature: canonical parameters, the single codomain
- * `OutputContract` and its declared terminal outputs. Frozen.
+ * A child flow's compile-time signature; frozen.
  *
  * `inputs` are the child's canonical `Parameter`s (the name and arity check reads their names
- * and required/default policy). `declaredOutputs` keeps one `[name, contract | null]` pair per
- * terminal declaration, so absent, opaque and proven results stay distinct without a separate
- * names list. `returnsRecord` says whether the child's END is in record mode (`output: {...}`).
- * `output` is the child's single codomain: a record child's is an exact or partial closed record
- * keyed by every declared name (even one or none); a value child's re-exports its one declared
- * output's exact or partial contract; `null` means no output or no statically known shape.
+ * and required/default policy). `output` is the child's single codomain: a record child's is an
+ * exact or partial closed record keyed by every declared name (even one or none); a value child's
+ * re-exports its one declared output's exact or partial contract; `null` means no output or no
+ * statically known shape. `outputNames` are the declared terminal names, in order.
  */
-export class ChildSignature {
+export interface ChildSignature {
   /** The child's canonical parameters. */
   readonly inputs: readonly Parameter[];
   /** The child's codomain contract; `null` when it has no output or no known shape. */
   readonly output: OutputContract | null;
-  /** One `[name, contract | null]` pair per declared terminal output, in order. */
-  readonly declaredOutputs: readonly (readonly [string, OutputContract | null])[];
-  /** Whether the child's END is in record mode. */
-  readonly returnsRecord: boolean;
-
-  /**
-   * Build the signature, checking `output` against the declared evidence when any is given
-   * (`declaredOutputs` non-empty or `returnsRecord`).
-   *
-   * @throws TypeError for a non-contract `output` or declared contract, a non-array
-   *   `declaredOutputs`, a malformed pair or an empty name.
-   * @throws RangeError for a duplicate name, more than one output on a child that doesn't return
-   *   a record, or an `output` that contradicts the declared evidence.
-   */
-  constructor(options: {
-    inputs: readonly Parameter[];
-    output: OutputContract | null;
-    declaredOutputs?: readonly (readonly [string, OutputContract | null])[];
-    returnsRecord?: boolean;
-  }) {
-    const { inputs, output, declaredOutputs = [], returnsRecord = false } = options;
-    if (output !== null && !isOutputContract(output)) {
-      throw new TypeError(
-        `child output must be ValueContract, PartialRecordContract, or null, got ${jsTypeName(output)}`,
-      );
-    }
-    if (!Array.isArray(declaredOutputs)) throw new TypeError("declared child outputs must be an array");
-    if (declaredOutputs.length > 0 || returnsRecord) checkEvidence(output, declaredOutputs, returnsRecord);
-    this.inputs = Object.freeze([...inputs]);
-    this.output = output;
-    this.declaredOutputs = Object.freeze(
-      declaredOutputs.map(([name, contract]) => Object.freeze([name, contract] as const)),
-    );
-    this.returnsRecord = returnsRecord;
-    Object.freeze(this);
-  }
-
-  /** The declared terminal names, derived from the declared output pairs. */
-  get outputNames(): readonly string[] {
-    return this.declaredOutputs.map(([name]) => name);
-  }
-}
-
-/** Reject declared output evidence that is malformed or that `output` contradicts. */
-function checkEvidence(
-  output: OutputContract | null,
-  declaredOutputs: readonly (readonly [string, OutputContract | null])[],
-  returnsRecord: boolean,
-): void {
-  const names = new Set<string>();
-  for (const pair of declaredOutputs as readonly unknown[]) {
-    if (!Array.isArray(pair) || pair.length !== 2) {
-      throw new TypeError("declared child outputs must be (name, optional contract) tuples");
-    }
-    const [name, contract] = pair as unknown[];
-    if (typeof name !== "string" || !name) {
-      throw new TypeError("declared child output names must be non-empty strings");
-    }
-    if (names.has(name)) throw new RangeError(`duplicate declared child output ${reprText(name)}`);
-    names.add(name);
-    if (contract !== null && !isOutputContract(contract)) {
-      throw new TypeError(
-        "declared child output contracts must be ValueContract, PartialRecordContract, or null, " +
-          `got ${jsTypeName(contract)} for ${reprText(name)}`,
-      );
-    }
-  }
-  let expected: OutputContract | null;
-  if (returnsRecord) {
-    expected = combineOutputContracts(new Map(declaredOutputs));
-  } else if (declaredOutputs.length > 1) {
-    throw new RangeError("a child that does not return a record declares at most one output");
-  } else {
-    expected = declaredOutputs[0]![1];
-  }
-  if (!sameOutputContract(output, expected)) {
-    throw new RangeError("child output contract contradicts its declared output evidence");
-  }
+  /** The declared terminal output names, in order. */
+  readonly outputNames: readonly string[];
 }
 
 /** A resolved child flow; structural, so this module need not import the pipeline. */
@@ -146,10 +66,10 @@ export interface ResolvedChild {
 }
 
 /**
- * Resolves a child flow by id and version for call, map and loop. `version` is an opaque tag
- * (a `uses:` ref's `@<version>`); an in-file def passes `null`.
+ * Resolves a callable by id for call, map and loop: a `defs:` entry, a compiler-generated body,
+ * or a `uses:` alias already loaded with its own ref's version.
  */
-export type ChildResolver = (flowId: string, version: string | null) => ResolvedChild;
+export type CallableResolver = (flowId: string) => ResolvedChild;
 
 /** The shape `callNesting` walks: a flow's nodes and each node's static child flows. */
 interface NestingFlow {
@@ -165,7 +85,7 @@ interface NestingFlow {
  * type table, which holds the child's own typedefs the outputs use.
  *
  * @param loaded The resolved child, read through `compiled` and `input`.
- * @returns The child's parameters, codomain contract and declared outputs.
+ * @returns The child's parameters, codomain contract and declared output names.
  * @throws TypeError when the child's END isn't an `EndNode`, or a producer's contract isn't an
  *   exact `ValueContract`, `PartialRecordContract` or `null`.
  */
@@ -201,11 +121,10 @@ export function childSignature(loaded: ResolvedChild): ChildSignature {
   let output: OutputContract | null;
   if (end.returnsRecord) output = combineOutputContracts(new Map(declaredOutputs));
   else output = declaredOutputs.length > 0 ? declaredOutputs[0]![1] : null;
-  return new ChildSignature({
-    inputs: loaded.input,
+  return Object.freeze({
+    inputs: Object.freeze([...loaded.input]),
     output,
-    declaredOutputs,
-    returnsRecord: end.returnsRecord,
+    outputNames: Object.freeze(declaredOutputs.map(([name]) => name)),
   });
 }
 
@@ -281,9 +200,12 @@ export function callNesting(flow: NestingFlow): number {
 /**
  * Resolve a callable to its child flow through the resolver, loud on failure.
  *
+ * A `LoadError` from the resolver passes through unchanged; any other error is an engine bug and
+ * propagates as is.
+ *
  * @param nodeId The calling node's id, named in messages.
  * @param flowId The callable the node names.
- * @param resolver The load-time child resolver; `null` when none was given, which fails as an
+ * @param resolver The load-time callable resolver; `null` when none was given, which fails as an
  *   unresolvable callable.
  * @param childLabel Author-facing name of the callable; `null` names it by `flowId`.
  * @param options.diagnostics The context errors are raised in; a fresh one when not given.
@@ -297,7 +219,7 @@ export function callNesting(flow: NestingFlow): number {
 export function resolveChild(
   nodeId: string,
   flowId: string,
-  resolver: ChildResolver | null,
+  resolver: CallableResolver | null,
   childLabel: string | null = null,
   options: { diagnostics?: LoadDiagnostics | null; range?: SourceRange | null; kind?: string } = {},
 ): ResolvedChild {
@@ -318,19 +240,13 @@ export function resolveChild(
   const depth = activeCalls;
   // Checked before resolving: building the callee would recurse another level.
   if (depth >= limit) throw tooDeep(`more than ${limit} levels`);
+  if (resolver === null) {
+    throw diagnostics.error(`${subject}: could not resolve ${display}: no child resolver was given`, { range });
+  }
   activeCalls = depth + 1;
   let child: ResolvedChild;
   try {
-    if (resolver === null) throw new Error("no child resolver was given");
-    child = resolver(flowId, null);
-  } catch (error) {
-    if (error instanceof LoadError) throw error;
-    // Any other resolver failure means the callable is unknown.
-    const text = error instanceof Error ? error.message : String(error);
-    throw diagnostics.error(`${subject}: could not resolve ${display}: ${text}`, {
-      range,
-      cause: error,
-    });
+    child = resolver(flowId);
   } finally {
     activeCalls = depth;
   }

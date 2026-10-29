@@ -12,7 +12,7 @@ import { MapDescriptor } from "../../src/compose/nodes/map.ts";
 import {
   callNesting,
   callNestingScope,
-  type ChildResolver,
+  type CallableResolver,
   type ResolvedChild,
   resolveChild,
 } from "../../src/compose/nodes/resolver.ts";
@@ -94,7 +94,7 @@ function thrown(fn: () => unknown): unknown {
 function nestedCalls<T>(depth: number, fn: () => T): T {
   if (depth === 0) return fn();
   let result!: T;
-  const resolver: ChildResolver = () => {
+  const resolver: CallableResolver = () => {
     result = nestedCalls(depth - 1, fn);
     return resolved(0);
   };
@@ -126,15 +126,15 @@ test("call nesting counts levels, not paths", () => {
 });
 
 describe("resolveChild", () => {
-  test("returns the resolved child, asking for no version", () => {
+  test("returns the resolved child", () => {
     const child = resolved(3);
-    const asked: [string, string | null][] = [];
-    const got = resolveChild("n", "c", (flowId, version) => {
-      asked.push([flowId, version]);
+    const asked: unknown[][] = [];
+    const got = resolveChild("n", "c", (...args) => {
+      asked.push(args);
       return child;
     });
     expect(got).toBe(child);
-    expect(asked).toEqual([["c", null]]);
+    expect(asked).toEqual([["c"]]);
   });
 
   test("a LoadError from the resolver passes through", () => {
@@ -147,25 +147,14 @@ describe("resolveChild", () => {
     expect(error).toBe(inner);
   });
 
-  test("another error becomes could not resolve, with the error as its cause", () => {
-    const inner = new Error("no such flow");
+  test("an error that isn't a LoadError propagates unchanged, as an engine bug", () => {
+    const inner = new TypeError("undefined is not an object");
     const error = thrown(() =>
       resolveChild("n", "c", () => {
         throw inner;
       }),
     );
-    expect(error).toBeInstanceOf(LoadError);
-    expect((error as LoadError).message).toBe("call node 'n': could not resolve callable 'c': no such flow");
-    expect((error as LoadError).cause).toBe(inner);
-  });
-
-  test("a thrown non-Error is named by its text", () => {
-    const error = thrown(() =>
-      resolveChild("n", "c", () => {
-        throw "gone";
-      }),
-    );
-    expect((error as LoadError).message).toBe("call node 'n': could not resolve callable 'c': gone");
+    expect(error).toBe(inner);
   });
 
   test("a null resolver can't resolve the callable", () => {
@@ -177,17 +166,10 @@ describe("resolveChild", () => {
   });
 
   test("a child label names the callable", () => {
-    const error = thrown(() =>
-      resolveChild(
-        "n",
-        "c",
-        () => {
-          throw new Error("x");
-        },
-        "the def 'c'",
-      ),
+    const error = thrown(() => resolveChild("n", "c", null, "the def 'c'"));
+    expect((error as LoadError).message).toBe(
+      "call node 'n': could not resolve the def 'c': no child resolver was given",
     );
-    expect((error as LoadError).message).toBe("call node 'n': could not resolve the def 'c': x");
   });
 
   test("the count at the limit fails before resolving", () => {

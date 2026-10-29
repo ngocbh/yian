@@ -32,7 +32,7 @@ import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
-import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
+import { childSignature } from "../../src/compose/nodes/resolver.ts";
 import { checkCallMapTypes } from "../../src/compose/validate/call_types.ts";
 import { checkLoopTypeContract } from "../../src/compose/validate/loop_types.ts";
 import { validateReferences } from "../../src/compose/validate/references.ts";
@@ -1007,12 +1007,8 @@ test("childSignature retains a partial contract when one field is opaque", () =>
   expect(output.names).toEqual(["n", "done"]);
   expect(output.fields[0]).toEqual(["n", null]);
   expect(output.fields[1]![1]).not.toBeNull();
+  expect(typeEquals((output.fields[1]![1] as ValueContract).type, Type.scalar(ValueKind.BOOLEAN))).toBe(true);
   expect(signature.outputNames).toEqual(["n", "done"]);
-  expect(signature.declaredOutputs[0]).toEqual(["n", null]);
-  expect(signature.declaredOutputs[1]![0]).toBe("done");
-  expect(typeEquals((signature.declaredOutputs[1]![1] as ValueContract).type, Type.scalar(ValueKind.BOOLEAN))).toBe(
-    true,
-  );
 });
 
 test("childSignature keeps a nested partial output opaque at a record field", () => {
@@ -1028,24 +1024,12 @@ test("childSignature keeps a nested partial output opaque at a record field", ()
 
   const signature = childSignature(loaded);
 
-  expect(signature.declaredOutputs[0]![0]).toBe("nested");
-  expect(signature.declaredOutputs[0]![1]).toBe(nested);
+  expect(signature.outputNames).toEqual(["nested", "done"]);
   expect(isExactly(signature.output, PartialRecordContract)).toBe(true);
   const output = signature.output as PartialRecordContract;
   expect(output.fields[0]).toEqual(["nested", null]);
   expect(output.fields[1]![0]).toBe("done");
   expect(output.fields[1]![1]).not.toBeNull();
-});
-
-test("childSignature rejects contradictory declared output evidence", () => {
-  // The exported signature can't carry two incompatible output authorities.
-  const boolean = new ValueContract(Type.scalar(ValueKind.BOOLEAN));
-
-  expectError(
-    () => new ChildSignature({ inputs: [], output: boolean, declaredOutputs: [["result", null]] }),
-    RangeError,
-    "child output contract contradicts its declared output evidence",
-  );
 });
 
 test("composite builders preserve or deliberately wrap the child contract", () => {

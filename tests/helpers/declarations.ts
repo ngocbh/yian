@@ -281,8 +281,7 @@ function resolveFrom(scope: CallableScope, children: ChildFlows = {}): AssemblyS
   return {
     catalogBuilder: scope.catalogBuilder,
     registerPrivate: (flowId, owner, label, build) => scope.registerPrivate(flowId, owner, label, build),
-    resolve: (flowId, version) =>
-      Object.hasOwn(children, flowId) ? children[flowId]! : scope.resolve(flowId, version),
+    resolve: (flowId) => (Object.hasOwn(children, flowId) ? children[flowId]! : scope.resolve(flowId)),
   };
 }
 

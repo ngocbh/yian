@@ -930,6 +930,50 @@ describe("the input box while a reply runs", () => {
   );
 });
 
+describe("the input box after a line is entered while a reply runs", () => {
+  test(
+    "/exit there takes the box down, and keys after it go nowhere",
+    async () => {
+      const { io, stdin, output, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      stdin.write(`/exit${ENTER}`);
+      await until(() => rows().includes("> /exit") && !rows().includes(HINT));
+      stdin.write(`abc${ENTER}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      model.open();
+      expect(await chatting).toBe(0);
+      expect(output.text).not.toContain("abc");
+      expect(rows().at(-1)).toBe("session ended");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "Esc takes a line just entered back into the box, and the reply never reads it",
+    async () => {
+      const { io, stdin, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      stdin.write(`make it short${ENTER}${ESCAPE}`);
+      await until(() => rows().includes("(withdrew 1 message; back in the prompt)"));
+      expect(rows()).toContain(row("> make it short"));
+      model.open();
+      await until(() => rows().at(-1) === HINT && !rows().some((line) => line.includes("Thinking")));
+      expect(model.requests.some((request) => asked(request, "make it short"))).toBe(false);
+      stdin.write(`\x15/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+});
+
 describe("a paste into the input box while a reply runs", () => {
   test(
     "is one line, sent once on Enter, even when it holds /exit",

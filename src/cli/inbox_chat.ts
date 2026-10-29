@@ -417,6 +417,8 @@ export async function inboxChat(
   // The sends of lines typed in the input box while a turn ran, in order, and their seqs.
   let liveSends: Promise<void> = Promise.resolve();
   const liveSeqs: number[] = [];
+  // Set once `/exit` or `/quit` was entered in the box: it takes no more keys.
+  let exiting = false;
   const move = deps.advance ?? advance;
   const view = host.view ?? null;
   // The chat's own notes, styled when it draws its look.
@@ -476,7 +478,12 @@ export async function inboxChat(
     const path = log;
     flusher?.interrupted(turning);
     const done = (async () => {
+      // A line entered in the box just before is in the log first, so Esc takes it back too.
+      await liveSends;
       let back = await withdraw(path, inbox.name, { env: env.read });
+      // What was taken back is no longer for the run to read: it moves the run no more.
+      const gone = new Set(back.map((event) => event.seq));
+      liveSeqs.splice(0, liveSeqs.length, ...liveSeqs.filter((seq) => !gone.has(seq)));
       // The child events among them go back to the queue (or, after /exit, are printed).
       if (flusher !== null) back = await flusher.reclaim(back, closed);
       // Kept before the interrupt, which may be refused.
@@ -617,7 +624,10 @@ export async function inboxChat(
       view?.echo(line);
       const exit = EXIT_LINES.has(line.trim());
       // No line comes after it: the box goes.
-      if (exit) view?.input(null);
+      if (exit) {
+        exiting = true;
+        view?.input(null);
+      }
       else pressedAt = null;
       liveSends = liveSends
         .then(async () => {
@@ -640,6 +650,8 @@ export async function inboxChat(
     };
     /** A key at the input box while a turn runs; false for one it leaves to `watchKeys` (Esc). */
     const liveKey = (key: Key): boolean => {
+      // Once the inbox is closing, no prompt comes back: the keys go to no box.
+      if (closed || exiting) return false;
       const action = editor!.key(key);
       if (action !== null && "escape" in action) return false;
       if (action !== null && "value" in action) {
@@ -659,7 +671,7 @@ export async function inboxChat(
     const turn = async (step: () => Promise<RunResult>): Promise<RunResult> => {
       turning = true;
       const keys = new AbortController();
-      const live = editor !== null && !closed;
+      const live = editor !== null && !closed && !exiting;
       if (live) editor.set(draft);
       const onKey = (key: "escape" | "interrupt") => (key === "escape" ? escape() : interrupt());
       terminal.watchKeys(keys.signal, onKey, live ? liveKey : null);

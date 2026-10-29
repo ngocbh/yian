@@ -290,8 +290,9 @@ and Esc work as they do between replies. An approval card or a question takes th
 until you answer it.
 
 Under the box, the chat lists the flows the assistant started that are still running or waiting,
-one row each, such as `r1  color.yaml  ● asks · 12s`. A flow drops off the list once it ends; its
-result stays in the chat. The list's keys:
+one row each, such as `r1  color.yaml  ● asks · 12s`, and the hint under the box adds `↓ runs`
+when there is room. A flow drops off the list once it ends; its result stays in the chat. The
+list's keys:
 
 | Key | What it does |
 |---|---|
@@ -303,7 +304,8 @@ result stays in the chat. The list's keys:
 A flow's view fills the screen with the flow, its run id, where it stands and its log, then what
 it has done so far, as `yian run` draws it, and the question it waits on, if any. It updates as
 the flow goes on. It only shows the flow: you still answer through the assistant. Press Esc to go
-back to the chat, which kept going meanwhile.
+back to the chat, which kept going meanwhile. When the chat needs you (an approval card or a
+question), the view says so in its last line, and Esc takes you to it.
 
 ### What the assistant can do
 

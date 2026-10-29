@@ -55,6 +55,7 @@ const ALLOWED: Record<string, string> = {
   "llm/framing.ts: ASCII_SPACE": "the ASCII whitespace bytes",
   "llm/testing.ts: NULL_BODY_STATUSES": "HTTP statuses whose response has no body",
   // Display and message formatting.
+  "cli/bundled_skill.ts: HASH_DIGITS": "hex digits of the content hash that names the bundled skill's cache folder",
   "cli/chat_events.ts: EVENT_BODY_CHARS": "size of a child event's line the chat's model reads",
   "cli/chat_events.ts: LIST_ITEMS": "asks or waits a child event or status lists for the chat's model",
   "cli/chat_run_tools.ts: STATUS_TEXT_CHARS": "size of each text field of a child run's status the chat's model reads",

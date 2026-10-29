@@ -6,6 +6,7 @@
 import { emitKeypressEvents } from "node:readline";
 
 import { reprText } from "../diagnostics.ts";
+import { coerceParam } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import type { QuestionSpec } from "../nodes/tool/questions.ts";
 import type { ToolContext } from "../tools/context.ts";
@@ -1029,8 +1030,8 @@ async function choose(run: RunWidget, label: string, choices: readonly Choice[],
 
 /**
  * Run the text editor for one open input. A list/object editor validates JSON in place and returns
- * the native value; a scalar editor returns the raw text, coerced later at the run boundary. An
- * optional blank answer is `OMIT_INPUT`.
+ * the native value; a scalar editor checks its text as START would and returns it raw, coerced
+ * later at the run boundary. An optional blank answer is `OMIT_INPUT`.
  */
 async function promptOpenValue(
   run: RunWidget,
@@ -1058,7 +1059,22 @@ async function promptOpenValue(
     );
     return blankOmits(value) ? OMIT_INPUT : parseStructuredInput(value, type, decl.name);
   }
-  const value = await run(textWidget({ label }));
+  const value = await run(
+    textWidget({
+      label,
+      validate: (text) => {
+        if (blankOmits(text) || type === undefined) return undefined;
+        // START's own check: the input's string coercion, then its contract.
+        try {
+          buildValueAs(type, coerceParam(decl, text));
+        } catch (error) {
+          if (error instanceof TypeCheckError) return error.message;
+          throw error;
+        }
+        return undefined;
+      },
+    }),
+  );
   return blankOmits(value) ? OMIT_INPUT : value;
 }
 

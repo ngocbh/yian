@@ -1100,6 +1100,27 @@ async function aRequiredListEditorRefusesABlank(): Promise<void> {
   assert.deepEqual(await answer, { items: [] });
 }
 
+async function aScalarEditorChecksItsTextAsTheRunWouldAndStaysOpen(): Promise<void> {
+  const cases: [Type, string, string, string][] = [
+    [Type.scalar(ValueKind.INTEGER), "abc", '"abc" does not match declared type int', " 1_000 "],
+    [Type.scalar(ValueKind.NUMBER), "1e999", "number is too large for a float", "inf"],
+    [Type.scalar(ValueKind.DATE), "21/05/2026", '"21/05/2026" does not match declared type date: date must look like 2026-05-21', "2026-05-21"],
+    [nullable(ValueKind.INTEGER), "", '"" does not match declared type int', "7"],
+  ];
+  for (const [type, bad, error, good] of cases) {
+    const { input, terminal, view } = setup();
+    const answer = terminal.promptInputs([decl("value", type, { required: true })], {});
+    if (type.nullable) await choose(input, view, "Enter value");
+    await tick();
+    input.write(bad + ENTER);
+    await tick();
+    assert.deepEqual(view().rows.at(-1), error, bad);
+    input.write(CTRL_E + CTRL_U + good + ENTER);
+    // The text goes back as typed; the run reads it at START.
+    assert.deepEqual(await answer, { value: good });
+  }
+}
+
 // test_structured_prompt_cancellation_bypasses_validation
 async function ctrlCInAListEditorReturnsNull(): Promise<void> {
   const stops: string[] = [];
@@ -2365,6 +2386,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an object editor returns the native object": anObjectEditorReturnsTheNativeObject,
   "an optional or defaulted direct editor omits on a blank": anOptionalOrDefaultedDirectEditorOmitsOnABlank,
   "a required list editor refuses a blank": aRequiredListEditorRefusesABlank,
+  "a scalar editor checks its text as the run would and stays open":
+    aScalarEditorChecksItsTextAsTheRunWouldAndStaysOpen,
   "Ctrl-C in a list editor returns null": ctrlCInAListEditorReturnsNull,
   "a nullable list or object editor refuses a textual null": aNullableListOrObjectEditorRefusesATextualNull,
   "the text null in a nullable string editor stays a string": theTextNullInANullableStringEditorStaysAString,

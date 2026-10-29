@@ -942,9 +942,11 @@ export interface RunFlowOptions {
  * @param options See `RunFlowOptions`.
  * @returns The terminal success or failure, with this call's post-durable observers.
  * @throws TypeError when `flow` isn't a `ComposedFlow`, `learnable` isn't a boolean, `signal`
- *   isn't an `AbortSignal`, `inputs` isn't a record (a Proxy included), `llmConfig` is a primitive
- *   or an array, a `tools` entry is malformed, `skills` isn't a `Map` of `Skill`s each keyed by its
- *   name, `scheduler` lacks `now` or `sleep`, `random` isn't a function, `models` lacks `env` or `createModel`, or `memory` isn't a `Map` of memories.
+ *   isn't an `AbortSignal`, `live` isn't a `LiveChannel`, `onEvent` or `onStream` isn't a
+ *   function, `inputs` isn't a record (a Proxy included), `llmConfig` is a primitive or an array, a
+ *   `tools` entry is malformed, `skills` isn't a `Map` of `Skill`s each keyed by its name,
+ *   `scheduler` lacks `now` or `sleep`, `random` isn't a function, `models` lacks `env` or
+ *   `createModel`, or `memory` isn't a `Map` of memories.
  * @throws ExpressionError when a condition, binding or prompt set in code can't run.
  * @throws TypeCheckError when an input holds an accessor, NaN, a lone surrogate, a cycle or
  *   another non-yian value, nests deeper than `YIAN_MAX_VALUE_NESTING` levels, or has text that
@@ -991,6 +993,7 @@ export async function runFlow(
     checkConditions(flow.compiled);
     checkTemplates(flow.compiled);
     const skills = checkSkills(flow.compiled, options.skills ?? null);
+    checkCallbacks(options);
     checkTestOptions(options);
     const runServers = await openRunServers(unopened, signal);
     try {
@@ -999,6 +1002,17 @@ export async function runFlow(
       await closeRunServers(runServers);
     }
   });
+}
+
+/**
+ * Check the run's callbacks before anything is created, as the engine checks them.
+ *
+ * @throws TypeError when `onEvent` or `onStream` is set and isn't a function.
+ */
+function checkCallbacks(options: Pick<RunFlowOptions, "onEvent" | "onStream">): void {
+  const { onEvent = null, onStream = null } = options;
+  if (onEvent !== null && typeof onEvent !== "function") throw new TypeError("onEvent must be a function or null");
+  if (onStream !== null && typeof onStream !== "function") throw new TypeError("onStream must be a function or null");
 }
 
 /**
@@ -1605,8 +1619,8 @@ export interface AdvanceOptions {
  * @param options See `AdvanceOptions`.
  * @returns The recorded terminal result, or the terminal or waiting result of the new segment with
  *   its post-durable observers; a waiting run that couldn't move returns `waiting` with none.
- * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`, a `tools`
- *   entry is malformed, `skills`, `scheduler`, `random` or `models` is malformed, a
+ * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`,
+ *   `onEvent` or `onStream` isn't a function, a `tools` entry is malformed, `skills`, `scheduler`, `random` or `models` is malformed, a
  *   worker count isn't an integer, or a recorded carrier has the wrong type.
  * @throws ExpressionError as `runFlow`, for an unfinished run.
  * @throws RangeError when the log's prefix is invalid, the run's flow was built in code and no
@@ -1666,6 +1680,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     const { apiKey: rawKey = null, headers: rawHeaders = null } = options;
     let apiKey = rawKey === null ? null : secretKey(rawKey);
     let headers = rawHeaders === null ? null : secretHeaders(rawHeaders);
+    checkCallbacks(options);
     checkTestOptions(options);
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);

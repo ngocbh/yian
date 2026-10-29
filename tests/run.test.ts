@@ -437,6 +437,17 @@ test.each([
   expect(existsSync(path)).toBe(false);
 });
 
+test.each([
+  [{ onEvent: 5 }, "onEvent must be a function or null"],
+  [{ onStream: 5 }, "onStream must be a function or null"],
+])("a callback that isn't a function is refused before the log exists (%#)", async (option, message) => {
+  const path = join(dir, "run.jsonl");
+  const flow = await load(PLAN_FLOW);
+  const options = { log: path, ...option } as unknown as RunFlowOptions;
+  await expect(run(flow, { topic: "ACME" }, options)).rejects.toThrow(new TypeError(message));
+  expect(existsSync(path)).toBe(false);
+});
+
 test("an existing log path is refused and left unchanged", async () => {
   const path = join(dir, "run.jsonl");
   writeFileSync(path, "keep\n");

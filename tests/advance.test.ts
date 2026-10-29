@@ -152,6 +152,18 @@ test("advance with another worker count writes run_resumed", async () => {
   expect(kinds(log).slice(-2)).toEqual(["run_resumed", "run_waiting"]);
 });
 
+test.each([
+  [{ onEvent: 5 }, "onEvent must be a function or null"],
+  [{ onStream: 5 }, "onStream must be a function or null"],
+])("a callback that isn't a function is refused before the log changes (%#)", async (option, message) => {
+  const { log, flow, tools } = await waitingRun();
+  const before = readFileSync(log);
+  // Another worker count would write run_resumed.
+  const options = { log, flow, tools, env: NO_ENV, numWorkers: 2, ...option } as never;
+  expect(await rejected(advance(options))).toEqual(new TypeError(message));
+  expect(readFileSync(log).equals(before)).toBe(true);
+});
+
 test("advance after a stop while a node waits retries only the running node", async () => {
   const log = freshLog();
   const flow = new ComposedFlow(

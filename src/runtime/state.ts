@@ -5841,7 +5841,6 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, pendi
   const outgoingEdgeIds: string[] = [];
   const edgeHeads: string[] = [];
   const newlyReadyIds: string[] = [];
-  const settledEdgeIds = new Set<string>();
   const seenOutgoingEdgeIds = new Set<string>();
   const remainingBySuccessor = new Map<string, number>();
   const edgeIdsBySuccessor = new Map<string, string[]>();
@@ -5875,18 +5874,18 @@ function prepareSuccessDelta(state: RunState, record: NodeSucceededRecord, pendi
   }
 
   for (const edge of outgoing) {
-    settledEdgeIds.add(edge.id);
     const successor = edge.to;
     const remaining = remainingBySuccessor.get(successor)! - 1;
     remainingBySuccessor.set(successor, remaining);
     if (remaining) continue;
-    const required = new Set(edgeIdsBySuccessor.get(successor));
-    // Another UNKNOWN incoming edge means the scan can only return "wait" or "dead", never
-    // "ready", and a success skips both. So the running count can skip the scan, which would be
-    // quadratic for a wide join. The scan still classifies and validates the join once it can be
-    // ready.
-    if ((state.unknownIncoming.get(successor) ?? 0) > required.size) continue;
-    if (sparseDisposition(state.flow, state.edgeState, settledEdgeIds, successor, required) !== "ready") continue;
+    const settling = edgeIdsBySuccessor.get(successor)!;
+    // Another UNKNOWN incoming edge means the join can only be "wait" or "dead", never "ready",
+    // and a success skips both. So the running count can skip the scan, which would be quadratic
+    // for a wide join. The scan still classifies and validates the join once it can be ready.
+    if ((state.unknownIncoming.get(successor) ?? 0) > settling.length) continue;
+    const scratch = scanJoin(state, successor);
+    for (const edgeId of settling) settleJoinEdge(scratch, edgeId, NodeState.TAKEN, successor);
+    if (classifyJoin(scratch) !== "ready") continue;
     if (state.nodeState.get(successor) !== NodeState.UNKNOWN) {
       throw new RangeError(`newly-ready successor ${reprText(successor)} must have UNKNOWN disposition`);
     }
@@ -5962,69 +5961,6 @@ function prepareTerminalDelta(
 
 /** Every `NodeState` value, for checking a disposition read from a state map. */
 const NODE_STATES: ReadonlySet<unknown> = new Set(Object.values(NodeState));
-
-/**
- * Classify one touched join over the live edge states plus the sparse TAKEN overlay
- * `takenEdgeIds`; `requiredEdgeIds` are the settling edges that must be among its incoming ones.
- */
-function sparseDisposition(
-  flow: CompiledFlow,
-  edgeState: ReadonlyMap<string, NodeState>,
-  takenEdgeIds: ReadonlySet<string>,
-  nodeId: string,
-  requiredEdgeIds: ReadonlySet<string>,
-): "ready" | "wait" | "dead" {
-  const absent = (ids: Iterable<string>) =>
-    `success edges ${writeAsText([...ids].sort(compareCodeUnits))} are absent from successor ` +
-    `${reprText(nodeId)} incoming adjacency`;
-  const incoming = flow.incoming(nodeId);
-  if (incoming.length === 0) throw new RangeError(absent(requiredEdgeIds));
-
-  const foundRequired = new Set<string>();
-  let sawControl = false;
-  let allControlSkipped = true;
-  let requiredOrderingSkipped = false;
-  let anyUnknown = false;
-  const dataGroups = new Map<string | null, readonly [boolean, boolean]>();
-  const seenIncomingIds = new Set<string>();
-  for (const edge of incoming) {
-    if (!(edge instanceof Edge) || edge.to !== nodeId) {
-      throw new RangeError(`successor ${reprText(nodeId)} has an invalid incoming adjacency`);
-    }
-    const edgeId: unknown = edge.id;
-    if (typeof edgeId !== "string" || !edgeId || seenIncomingIds.has(edgeId)) {
-      throw new RangeError(`successor ${reprText(nodeId)} has invalid incoming edge IDs`);
-    }
-    seenIncomingIds.add(edgeId);
-    if (requiredEdgeIds.has(edgeId)) foundRequired.add(edgeId);
-    if (!edgeState.has(edgeId)) throw new RangeError(`successor incoming edge ${reprText(edgeId)} has no disposition`);
-    const disposition = takenEdgeIds.has(edgeId) ? NodeState.TAKEN : edgeState.get(edgeId);
-    if (!NODE_STATES.has(disposition)) {
-      throw new RangeError(`successor incoming edge ${reprText(edgeId)} has an invalid disposition`);
-    }
-    anyUnknown ||= disposition === NodeState.UNKNOWN;
-    if (edge.sourceHandle !== null) {
-      sawControl = true;
-      allControlSkipped &&= disposition === NodeState.SKIPPED;
-    } else if (edge.ordering) {
-      requiredOrderingSkipped ||= !edge.optional && disposition === NodeState.SKIPPED;
-    } else {
-      const [optional, allSkipped] = dataGroups.get(edge.inputGroup) ?? [edge.optional, true];
-      dataGroups.set(edge.inputGroup, [optional, allSkipped && disposition === NodeState.SKIPPED]);
-    }
-  }
-
-  if (foundRequired.size !== requiredEdgeIds.size) {
-    throw new RangeError(absent([...requiredEdgeIds].filter((id) => !foundRequired.has(id))));
-  }
-  if (sawControl && allControlSkipped) return "dead";
-  for (const [optional, allSkipped] of dataGroups.values()) {
-    if (!optional && allSkipped) return "dead";
-  }
-  if (requiredOrderingSkipped) return "dead";
-  if (anyUnknown) return "wait";
-  return "ready";
-}
 
 /** Incremental counts for one data-input group of a touched join. */
 interface DataGroupScratch {
@@ -6439,10 +6375,13 @@ function requireRouteEdge(state: RunState, edge: Edge, edgeUpdates: ReadonlyMap<
   }
 }
 
-/** Scan one touched head's incoming adjacency into incremental gate counts. */
+/**
+ * Scan one touched head's incoming adjacency into incremental gate counts, the one join rule a
+ * success and a route both settle edges through.
+ */
 function scanJoin(state: RunState, nodeId: string): JoinScratch {
   const incoming = state.flow.incoming(nodeId);
-  if (incoming.length === 0) throw new RangeError(`route successor ${reprText(nodeId)} has no incoming adjacency`);
+  if (incoming.length === 0) throw new RangeError(`successor ${reprText(nodeId)} has no incoming adjacency`);
   const scratch: JoinScratch = {
     states: new Map(),
     classes: new Map(),
@@ -6455,18 +6394,18 @@ function scanJoin(state: RunState, nodeId: string): JoinScratch {
   };
   for (const edge of incoming) {
     if (!(edge instanceof Edge) || edge.to !== nodeId) {
-      throw new RangeError(`route successor ${reprText(nodeId)} has invalid incoming adjacency`);
+      throw new RangeError(`successor ${reprText(nodeId)} has invalid incoming adjacency`);
     }
     const edgeId: unknown = edge.id;
     if (typeof edgeId !== "string" || !edgeId || scratch.states.has(edgeId)) {
-      throw new RangeError(`route successor ${reprText(nodeId)} has invalid incoming edge IDs`);
+      throw new RangeError(`successor ${reprText(nodeId)} has invalid incoming edge IDs`);
     }
     if (!state.edgeState.has(edgeId)) {
-      throw new RangeError(`route incoming edge ${reprText(edgeId)} has no disposition`);
+      throw new RangeError(`incoming edge ${reprText(edgeId)} has no disposition`);
     }
     const disposition = state.edgeState.get(edgeId)!;
     if (!NODE_STATES.has(disposition)) {
-      throw new RangeError(`route incoming edge ${reprText(edgeId)} has invalid disposition`);
+      throw new RangeError(`incoming edge ${reprText(edgeId)} has invalid disposition`);
     }
     scratch.states.set(edgeId, disposition);
     if (disposition === NodeState.UNKNOWN) scratch.unknown += 1;
@@ -6499,11 +6438,11 @@ function scanJoin(state: RunState, nodeId: string): JoinScratch {
 function settleJoinEdge(scratch: JoinScratch, edgeId: string, disposition: NodeState, nodeId: string): void {
   if (!scratch.states.has(edgeId)) {
     throw new RangeError(
-      `route edge ${reprText(edgeId)} is absent from successor ${reprText(nodeId)} incoming adjacency`,
+      `edge ${reprText(edgeId)} is absent from successor ${reprText(nodeId)} incoming adjacency`,
     );
   }
   if (scratch.states.get(edgeId) !== NodeState.UNKNOWN) {
-    throw new RangeError(`route edge ${reprText(edgeId)} must be UNKNOWN in its incoming join`);
+    throw new RangeError(`edge ${reprText(edgeId)} must be UNKNOWN in its incoming join`);
   }
   scratch.states.set(edgeId, disposition);
   scratch.unknown -= 1;

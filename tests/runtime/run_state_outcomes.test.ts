@@ -679,7 +679,7 @@ test("a success commit uses only the prevalidated delta", () => {
 test.each([
   ["edge-state", "success target outgoing edge 'baked-after' has no disposition"],
   ["successor", "success target outgoing edge 'baked-after' has unknown successor 'after-baked'"],
-  ["incoming", `success edges ["baked-after"] are absent from successor 'after-baked' incoming adjacency`],
+  ["incoming", "successor 'after-baked' has no incoming adjacency"],
 ] as const)("a success refuses a broken touched topology: %s", (broken, message) => {
   const { state, log } = redirectReady();
   if (broken === "edge-state") state.edgeState.delete("baked-after");

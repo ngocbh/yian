@@ -191,7 +191,8 @@ output:
 - **Bodies are TypeScript or JavaScript**: the body of an async function that reads `inputs.x`
   and ends with `return`. Return `null` for no value; `undefined` fails the node.
 - **A file reference starts with `./` or `../`**: `code: ./text.ts:countWords`, resolved against
-  the flow's folder. `module:function` without `./` fails at load.
+  the flow's folder. The file is `.ts`, `.js` or `.mjs`, and the path has no whitespace.
+  `module:function` without `./`, or a reference that breaks these rules, fails at load.
 - **Only erasable TypeScript**: annotations, `as`, interfaces and type aliases; `enum` and
   `namespace` fail at load. A body runs on a worker thread and is not a sandbox.
 

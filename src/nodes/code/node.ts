@@ -17,7 +17,8 @@
  * All modes read the node's bound typed input record (only its declared inputs, not the pool) and
  * return the node's one output value. Nothing is compiled or imported at construction; the
  * awaited load step's `check()` builds an inline body without calling it, refuses a
- * `module:function` value, and requires a reference's file to exist (and, when the load has a code
+ * `module:function` value and one that looks like a file reference but breaks the reference rule,
+ * and requires a reference's file to exist (and, when the load has a code
  * root, to resolve inside it); it runs no code.
  *
  * A reference or an inline body runs on a worker thread (`nodes/code/worker`), one call at a time
@@ -32,7 +33,8 @@
  * included, and a late timer throw or unhandled rejection while it runs) rejects as a `CodeError`
  * reading `<name>: <message>`; an inline body's is located at the authored line of its first body
  * frame when it has one, a reference's at the whole `code:` value. Its stack names an inline
- * body's frames after the node's `sourceFile` (the flow's file label) and the body's own line. A
+ * body's frames after the node's `sourceFile` (the flow's file label) and the file line when the
+ * node knows where its body lines start, else the node and the body's own line. A
  * result of `undefined` fails; a result goes through host intake in the worker, and a value intake
  * refuses fails `contract.output`. A worker that exits before the body returns rejects with its
  * exit code: a `process.exit`, or a body awaiting a promise nothing can resolve when no earlier
@@ -96,6 +98,20 @@ const REFERENCE_RE = /^\.\.?\/[^\s:]+\.(?:ts|js|mjs):[A-Za-z_$][A-Za-z0-9_$]*$/;
 // statement, so the load check refuses it rather than run it as a body.
 const MODULE_REFERENCE_RE = /^[A-Za-z_][\w.]*:[A-Za-z_]\w*$/;
 
+/**
+ * Whether `code`, which `REFERENCE_RE` refuses, was still meant as a file reference: one line
+ * ending in `.<ext>:<name>` that starts like a path (`./`, `../`, or a `/` that opens no comment),
+ * or has no whitespace and holds a `/` or ends in a JS or TS extension (`h.ts:fn`). Some bodies
+ * that build have this shape too, so the load check asks only once a body fails to build.
+ */
+function looksLikeReference(code: string): boolean {
+  const match = /^([^\n]*)\.(\w+):[A-Za-z_$][\w$]*$/.exec(code);
+  if (match === null) return false;
+  const stem = match[1]!;
+  if (/^(?:\.\.?\/|\/(?![*/]))/.test(stem)) return true;
+  return !/\s/.test(stem) && (/[/\\]/.test(stem) || /^[cm]?[jt]sx?$/.test(match[2]!));
+}
+
 // Mirrors the CLI's `leavesRoot` in `cli/run.ts`; nodes may not import the CLI.
 /**
  * Whether a path relative to a root (`relative(root, file)`) leaves that root: `..`, a `../`
@@ -155,6 +171,12 @@ function isMissingPath(error: unknown): boolean {
 /** Whether `error` is a system error with `code`. */
 function isSystemCode(error: unknown, code: string): boolean {
   return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
+}
+
+/** Where one line of an inline body starts in its flow file: a 1-based line and column. */
+export interface CodeLineStart {
+  readonly line: number;
+  readonly column: number;
 }
 
 /** The built-in identity operation: return the input named `field` unchanged. */
@@ -269,12 +291,19 @@ function bodyLine(error: unknown, nodeId: string): number | null {
 }
 
 /**
- * Return `stack` with each `yian-code:<nodeId>:<line>:<column>` location renamed
- * `<sourceFile>:<body line>:<body column>`: the line less the constructor's header, and a
- * first-line column less the strict prologue sharing that line. A message holding that text is
- * renamed too when its numbers read as a body location.
+ * Return `stack` with each `yian-code:<nodeId>:<line>:<column>` location renamed after the body
+ * location it reads as: the line less the constructor's header, and a first-line column less the
+ * strict prologue sharing that line. A body line with a known start reads as
+ * `<sourceFile>:<file line>:<file column>`; any other as `<sourceFile>#<nodeId>:<body line>:<body
+ * column>`, which can't pass for a line of the file. A message holding that text is renamed too
+ * when its numbers read as a body location.
  */
-function labelBodyFrames(stack: string, nodeId: string, sourceFile: string): string {
+function labelBodyFrames(
+  stack: string,
+  nodeId: string,
+  sourceFile: string,
+  lineStarts: readonly CodeLineStart[],
+): string {
   const marker = `yian-code:${nodeId}:`;
   const [head, ...rest] = stack.split(marker);
   return rest.reduce((text, part) => {
@@ -284,7 +313,12 @@ function labelBodyFrames(stack: string, nodeId: string, sourceFile: string): str
     const column = Number(match[2]) - (line === 1 ? STRICT_PROLOGUE.length : 0);
     // Not a body location (a message holding the marker text): leave it.
     if (line < 1 || column < 1) return text + marker + part;
-    return `${text}${sourceFile}:${line}:${column}${part.slice(match[0].length)}`;
+    const start = lineStarts[line - 1];
+    const where =
+      start === undefined
+        ? `${sourceFile}#${nodeId}:${line}:${column}`
+        : `${sourceFile}:${start.line}:${start.column + column - 1}`;
+    return `${text}${where}${part.slice(match[0].length)}`;
   }, head!);
 }
 
@@ -506,6 +540,11 @@ export class CodeNode extends Node {
   baseDir: string | null;
   /** The flow's file label an inline body's stack frames are named after. Not fingerprinted. */
   sourceFile: string;
+  /**
+   * Where each body line starts in `sourceFile`, in order; empty when not known exactly. Not
+   * fingerprinted.
+   */
+  codeLineStarts: readonly CodeLineStart[];
   /** The authored identity of the whole `code:` scalar. Diagnostic-only. */
   codeOrigin: OriginRef | null;
   /** The authored identities of the exact constructed body lines, in order. Diagnostic-only. */
@@ -522,6 +561,9 @@ export class CodeNode extends Node {
    * @param options.baseDir The directory a reference resolves against.
    * @param options.sourceFile The flow's file label a failing inline body's stack frames are named
    *   after (default `"<inline-code>"`).
+   * @param options.codeLineStarts Where each body line starts in `sourceFile`, in order, so a frame
+   *   names a file line; empty (the default) names frames by node and body line instead. The node
+   *   keeps a frozen copy.
    * @param options.codeOrigin The authored identity of the whole `code:` scalar.
    * @param options.codeLineOrigins The authored identities of the exact constructed body lines in
    *   order; empty when line-level provenance is unavailable. The node keeps a frozen copy.
@@ -537,6 +579,7 @@ export class CodeNode extends Node {
       code: string | BuiltinCode;
       baseDir?: string | null;
       sourceFile?: string;
+      codeLineStarts?: readonly CodeLineStart[];
       codeOrigin?: OriginRef | null;
       codeLineOrigins?: readonly OriginRef[];
       title?: string | null;
@@ -546,6 +589,7 @@ export class CodeNode extends Node {
       code,
       baseDir = null,
       sourceFile = "<inline-code>",
+      codeLineStarts = [],
       codeOrigin = null,
       codeLineOrigins = [],
       title = null,
@@ -555,6 +599,7 @@ export class CodeNode extends Node {
     validateCodeOrigins(codeOrigin, codeLineOrigins);
     this.baseDir = baseDir;
     this.sourceFile = sourceFile;
+    this.codeLineStarts = Object.freeze(codeLineStarts.map((start) => Object.freeze({ ...start })));
     this.codeOrigin = codeOrigin;
     this.codeLineOrigins = Object.freeze([...codeLineOrigins]);
     this.mode = typeof this.code === "string" ? classifyCodeSource(this.code) : "builtin";
@@ -605,8 +650,9 @@ export class CodeNode extends Node {
    *
    * A built-in passes. A reference's file, resolved against `baseDir` (the current directory
    * when `null`), must be a regular file; its module isn't imported, so a missing export is
-   * found when the node runs. An inline body that has the `module:function` shape is
-   * refused; otherwise it is stripped of its types and built, never called.
+   * found when the node runs. An inline body that has the `module:function` shape is refused;
+   * otherwise it is stripped of its types and built, never called. A body that fails to build
+   * but looks like a file reference (`looksLikeReference`) is refused as a broken reference.
    *
    * @param options.codeRoot The real path of the directory a reference's file must resolve
    *   inside, symlinks followed (a file names only itself); `null` (the default) confines nothing.
@@ -614,7 +660,7 @@ export class CodeNode extends Node {
    *   under it, no message names an absolute path.
    * @throws RangeError when a reference's file resolves outside `options.codeRoot`, can't be
    *   resolved under it, or isn't a regular file, or an inline body looks like a `module:function`
-   *   reference.
+   *   reference, or fails to build and looks like a file reference.
    * @throws TypeStripError when the body doesn't parse or strip.
    * @throws SyntaxError when the function constructor refuses the stripped body.
    */
@@ -646,12 +692,24 @@ export class CodeNode extends Node {
       }
       return;
     }
-    if (MODULE_REFERENCE_RE.test(code)) {
+    const meantAsReference = looksLikeReference(code);
+    // `h.ts:fn` has the module shape too, but its own message fits it better.
+    if (MODULE_REFERENCE_RE.test(code) && !meantAsReference) {
       throw new RangeError(
         `\`code:\` value ${reprText(code)} looks like a Python \`module:function\` reference; use \`./file.ts:fn\``,
       );
     }
-    await compileBody(this.id, code);
+    try {
+      await compileBody(this.id, code);
+    } catch (error) {
+      if (!meantAsReference) throw error;
+      throw new RangeError(
+        `\`code:\` value ${reprText(code)} looks like a file reference, but a reference is a relative ` +
+          "`./` or `../` path to a `.ts`, `.js` or `.mjs` file, with no whitespace, then `:` and an export " +
+          "name, like `./file.ts:fn`",
+        { cause: error },
+      );
+    }
   }
 
   /**
@@ -661,9 +719,10 @@ export class CodeNode extends Node {
    * inline body runs on a worker thread and gets `inputs`, a frozen host copy (ints as
    * `number`s, big ones as `bigint`s) behind a proxy that throws on an undeclared name; what it
    * throws rejects as a `CodeError` (an inline body's frames in its stack named after
-   * `sourceFile` and the body line), its `console` calls go to this thread's `console`, and its
-   * result goes through host intake (a top-level `return inputs` returns the record). The worker
-   * runs with the caller's `current()` values and goes back to the idle pool after its reply.
+   * `sourceFile` and the file line, else the node and the body line), its `console` calls go to
+   * this thread's `console`, and its result goes through host intake (a top-level `return inputs`
+   * returns the record). The worker runs with the caller's `current()` values and goes back to the
+   * idle pool after its reply.
    *
    * @param caps.signal Aborting it terminates the worker, then rejects with its reason. A body
    *   blocked in a synchronous system call (`execSync`, a blocking read) ends when that call
@@ -703,7 +762,7 @@ export class CodeNode extends Node {
       const error = replyError(reply);
       // The failure's traceback shows this stack; `original` keeps the raw frames `bodyLine` reads.
       if (error instanceof CodeError && typeof error.stack === "string") {
-        error.stack = labelBodyFrames(error.stack, this.id, this.sourceFile);
+        error.stack = labelBodyFrames(error.stack, this.id, this.sourceFile, this.codeLineStarts);
       }
       throw error;
     }

@@ -1217,9 +1217,8 @@ class PrivateCallable {
  * neither authored mapping is rejected instead of reaching the external resolver. Private
  * declarations, local defs and external aliases share one memo table. The in-progress set makes
  * recursive private and def construction loud; cross-file recursion is outside this scope and
- * belongs to the selected external resolver. A failed callable construction drops its new private
- * declarations, nested cache entries and source-catalog sites together, so a later retry can't
- * see a stale partial attempt.
+ * belongs to the selected external resolver. A failed callable construction is never retried: its
+ * error aborts the load, so what it added to the memo and the source catalog is never read.
  *
  * Aliases resolve asynchronously, through `resolveAlias`, before assembly; the synchronous
  * `resolve` assembly calls only reads them from the memo.
@@ -1347,29 +1346,12 @@ export class CallableScope implements AssemblyScope {
     return finalizeComposedFlow(staged, this.#catalogBuilder.freeze(), tables, this.#diagnostics);
   }
 
-  /**
-   * Build one callable without caching origins from a failed attempt: when `builder` throws, the
-   * memo entries and private declarations it added are dropped with the catalog sites the
-   * builder's transaction rolls back.
-   */
-  #buildTransactionally(builder: () => ComposedFlow): ComposedFlow {
-    const cachedBefore = new Set(this.#built.keys());
-    const privateBefore = new Set(this.#private.keys());
-    try {
-      return this.#catalogBuilder.transaction(builder);
-    } catch (error) {
-      for (const flowId of [...this.#built.keys()]) if (!cachedBefore.has(flowId)) this.#built.delete(flowId);
-      for (const flowId of [...this.#private.keys()]) if (!privateBefore.has(flowId)) this.#private.delete(flowId);
-      throw error;
-    }
-  }
-
-  /** Build callable `flowId` transactionally, marked in progress while it builds, and cache it. */
+  /** Build callable `flowId`, marked in progress while it builds, and cache it. */
   #buildOnce(flowId: string, builder: () => ComposedFlow): ComposedFlow {
     this.#inProgress.add(flowId);
     let loaded: ComposedFlow;
     try {
-      loaded = this.#buildTransactionally(builder);
+      loaded = builder();
     } finally {
       this.#inProgress.delete(flowId);
     }

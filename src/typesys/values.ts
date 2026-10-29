@@ -2005,7 +2005,7 @@ const OPTIONAL_STR = new Type({ kind: ValueKind.STRING, nullable: true });
  * The record a file's JSON form satisfies; a record overlapping it overlaps `file`. Its
  * fields also type a file's dotted reads.
  */
-export const FILE_FORM = new Type({
+const FILE_FORM = new Type({
   kind: ValueKind.OBJECT,
   fields: new Map([
     ["uri", Type.scalar(ValueKind.STRING)],

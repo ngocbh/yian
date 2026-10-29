@@ -1825,7 +1825,7 @@ function fieldReadType(typ: Type, name: string): Type | null {
 }
 
 /** Return the type name of a validated `isinstance(x, T)` call suffix. */
-export function isinstanceTypeName(callSuffix: Tree): string {
+function isinstanceTypeName(callSuffix: Tree): string {
   const typeArg = callSuffix.children[1] as Tree;
   return String((typeArg.children[0] as Tree).children[0]);
 }

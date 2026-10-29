@@ -24,7 +24,9 @@ import {
   readRunLog,
   RecordEnvelope,
   RunLogChangedError,
+  RunLogLineTooLongError,
   RunLogSchemaError,
+  runRecordOffsets,
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
@@ -1037,6 +1039,178 @@ test("iterRunRecords reads in bounded chunks, and reads only as far as it is ask
     readSpy.mockRestore();
     wholeFile.mockRestore();
   }
+});
+
+/** The fields a `RunLogLineTooLongError` carries besides its message. */
+function tooLongFields(error: Error) {
+  const { offset, end, length, limit, seq, runId, kind, nodeId } = error as RunLogLineTooLongError;
+  return { offset, end, length, limit, seq, runId, kind, nodeId };
+}
+
+test("iterRunRecords with maxLineBytes reads a line at the cap and refuses one a byte over, naming the line and the limit", () => {
+  const file = path.join(dir, "run.jsonl");
+  const first = wireLine();
+  const cap = byteLength(first);
+  const over = wireLine({ seq: 1, nodeId: "worky" });
+  expect(byteLength(over)).toBe(cap + 1);
+  fs.writeFileSync(file, `${first}\n${over}\n${wireLine({ seq: 2 })}\n`);
+
+  const reader = iterRunRecords(file, { maxLineBytes: cap });
+  expect(reader.next().value!.seq).toBe(0);
+  const message = `run log ${file} line 2 (seq 1): the line is ${cap + 1} bytes, over maxLineBytes ${cap}`;
+  const error = expectError(() => reader.next(), RunLogLineTooLongError, message);
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.name).toBe("RunLogLineTooLongError");
+  const end = cap + 1 + cap + 2;
+  expect(tooLongFields(error)).toEqual({
+    offset: cap + 1,
+    end,
+    length: cap + 1,
+    limit: cap,
+    seq: 1,
+    runId: "run",
+    kind: "node_started",
+    nodeId: "worky",
+  });
+
+  // A host reads on past the line from what the error names.
+  const rest = [...iterRunRecords(file, { afterOffset: end, runId: "run", afterSeq: 1, maxLineBytes: cap })];
+  expect(rest.map((entry) => entry.seq)).toEqual([2]);
+  expect([...iterRunRecords(file, { maxLineBytes: cap + 1 })].map((entry) => entry.seq)).toEqual([0, 1, 2]);
+});
+
+test("iterRunRecords with maxLineBytes keeps no more than the cap of a long line, and still reads its node id", () => {
+  const file = path.join(dir, "run.jsonl");
+  const big = "x".repeat(1_000_000);
+  // The failure's node id sorts after its long message; a nested node_id must not be taken for it.
+  const failure = `{"code":"tool_error","details":{"node_id":"inner"},"message":"${big}\\"","node_id":"tail\\u00e9"}`;
+  const long = kindLine("node_failed", `{"failure":${failure},"forward_capture":null}`, { seq: 1 });
+  fs.writeFileSync(file, `${wireLine()}\n${long}\n`);
+  const sizes: number[] = [];
+  const realConcat = Buffer.concat;
+  const concatSpy = spyOn(Buffer, "concat").mockImplementation(((list: readonly Uint8Array[], ...rest: any[]) => {
+    const joined = Reflect.apply(realConcat, Buffer, [list, ...rest]) as Buffer;
+    sizes.push(joined.length);
+    return joined;
+  }) as typeof Buffer.concat);
+  let error: Error;
+  try {
+    error = expectError(
+      () => [...iterRunRecords(file, { maxLineBytes: 100_000 })],
+      RunLogLineTooLongError,
+      `run log ${file} line 2 (seq 1): the line is ${byteLength(long)} bytes, over maxLineBytes 100000`,
+    );
+  } finally {
+    concatSpy.mockRestore();
+  }
+  expect(Math.max(0, ...sizes)).toBeLessThanOrEqual(100_000);
+  expect(tooLongFields(error)).toMatchObject({ seq: 1, runId: "run", kind: "node_failed", nodeId: "tail\u00e9" });
+});
+
+test("iterRunRecords with maxLineBytes names a long line's node id as its kind does, and null for what it can't read", () => {
+  const file = path.join(dir, "run.jsonl");
+  const pad = "y".repeat(200);
+  const lines = [
+    kindLine("node_expanded", `{"forward_capture":"${pad}","prune_ids":[],"spawner_id":"grow","topology_digest":"${DIGEST}"}`),
+    kindLine("run_failed", `{"failure":{"message":"${pad}","node_id":"bad"}}`, { seq: 1 }),
+    `{"at":"${AT}","kind":"node_started","payload":{"node_id":["${pad}"]},"run_id":"run","schema":${SCHEMA_VERSION},"seq":"2"}`,
+  ];
+  fs.writeFileSync(file, `${lines.join("\n")}\n`);
+  const read = (afterOffset: number) => {
+    try {
+      [...iterRunRecords(file, { afterOffset, maxLineBytes: 100 })];
+    } catch (error) {
+      expect(error).toBeInstanceOf(RunLogLineTooLongError);
+      return tooLongFields(error as Error);
+    }
+    throw new Error("expected a RunLogLineTooLongError");
+  };
+  const first = read(0);
+  expect(first).toMatchObject({ seq: 0, kind: "node_expanded", nodeId: "grow" });
+  const second = read(first.end);
+  expect(second).toMatchObject({ seq: 1, kind: "run_failed", nodeId: null });
+  expect(read(second.end)).toMatchObject({ seq: null, runId: "run", kind: "node_started", nodeId: null });
+});
+
+test("iterRunRecords with maxLineBytes still checks a long line's seq and run id", () => {
+  const file = path.join(dir, "run.jsonl");
+  const pad = "z".repeat(200);
+  fs.writeFileSync(file, `${wireLine()}\n${wireLine({ seq: 2, nodeId: pad })}\n`);
+  expectError(
+    () => [...iterRunRecords(file, { maxLineBytes: 150 })],
+    RangeError,
+    `run log ${file} line 2 (seq 1): run-log sequence mismatch: expected 1, found 2`,
+  );
+  const end = byteLength(wireLine()) + 1;
+  expectError(
+    () => [...iterRunRecords(file, { afterOffset: end, runId: "other", maxLineBytes: 100 })],
+    RunLogChangedError,
+    `run log ${file} doesn't continue the records read before byte ${end}: expected run 'other', found seq 2 of run 'run'; it was truncated or replaced`,
+  );
+});
+
+test("iterRunRecords with maxLineBytes stops at a torn long last line, and refuses it once it's complete", () => {
+  const file = path.join(dir, "run.jsonl");
+  const long = wireLine({ seq: 1, nodeId: "w".repeat(500) });
+  fs.writeFileSync(file, `${wireLine()}\n${long.slice(0, 400)}`);
+  expect([...iterRunRecords(file, { maxLineBytes: 200 })].map((entry) => entry.seq)).toEqual([0]);
+  fs.appendFileSync(file, `${long.slice(400)}\n`);
+  const error = expectError(
+    () => [...iterRunRecords(file, { maxLineBytes: 200 })],
+    RunLogLineTooLongError,
+    `run log ${file} line 2 (seq 1): the line is ${byteLength(long)} bytes, over maxLineBytes 200`,
+  );
+  expect((error as RunLogLineTooLongError).end).toBe(fs.statSync(file).size);
+});
+
+test("iterRunRecords with maxLineBytes keeps no stack for a deeply nested long line", () => {
+  const file = path.join(dir, "run.jsonl");
+  const depth = 8_000_000;
+  fs.writeFileSync(file, `${"[".repeat(depth)}\n`);
+  Bun.gc(true);
+  const before = process.memoryUsage().heapUsed;
+  let peak = before;
+  const realRead = fs.readSync;
+  // Sampled between reads, while the scan is part way through the line.
+  const readSpy = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+    peak = Math.max(peak, process.memoryUsage().heapUsed);
+    return Reflect.apply(realRead, fs, args) as number;
+  }) as typeof fs.readSync);
+  let error: Error;
+  try {
+    error = expectError(
+      () => [...iterRunRecords(file, { maxLineBytes: 1 << 20 })],
+      RunLogLineTooLongError,
+      `run log ${file} line 1 (seq 0): the line is ${depth} bytes, over maxLineBytes ${1 << 20}`,
+    );
+  } finally {
+    readSpy.mockRestore();
+  }
+  // A frame per bracket would take hundreds of MB here.
+  expect(peak - before).toBeLessThan(32 * 1024 * 1024);
+  expect(tooLongFields(error)).toMatchObject({ seq: null, runId: null, kind: null, nodeId: null });
+});
+
+test("readRunLog and runRecordOffsets pass maxLineBytes on", () => {
+  const file = path.join(dir, "run.jsonl");
+  fs.writeFileSync(file, `${wireLine()}\n${wireLine({ seq: 1, nodeId: "w".repeat(200) })}\n`);
+  const message = `run log ${file} line 2 (seq 1): the line is ${byteLength(wireLine({ seq: 1, nodeId: "w".repeat(200) }))} bytes, over maxLineBytes 150`;
+  expectError(() => readRunLog(file, { maxLineBytes: 150 }), RunLogLineTooLongError, message);
+  expectError(() => runRecordOffsets(file, { maxLineBytes: 150 }), RunLogLineTooLongError, message);
+  expect(runRecordOffsets(file, { maxLineBytes: 400 })).toEqual([0, byteLength(wireLine()) + 1]);
+});
+
+test("iterRunRecords refuses a maxLineBytes that isn't a positive integer", () => {
+  const file = path.join(dir, "run.jsonl");
+  fs.writeFileSync(file, `${wireLine()}\n`);
+  for (const [value, shown] of [[0, "0"], [1.5, "1.5"], ["10", '"10"']] as const) {
+    expectError(
+      () => [...iterRunRecords(file, { maxLineBytes: value as number })],
+      RangeError,
+      `maxLineBytes must be a positive integer, got ${shown}`,
+    );
+  }
+  expect([...iterRunRecords(file, { maxLineBytes: null })].map((entry) => entry.seq)).toEqual([0]);
 });
 
 const LOG_URL = new URL("../../src/runtime/log.ts", import.meta.url).href;

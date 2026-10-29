@@ -74,6 +74,8 @@ const ALLOWED: Record<string, string> = {
   "expr/lineage.ts: MAX_SNAPSHOT_DEPTH": "diagnostic retention depth, internal",
   "llm/executor.ts: MAX_ERROR_BODY": "bytes of an error response read, internal",
   "runtime/log.ts: READ_CHUNK_BYTES": "bytes of a run log read at a time, internal",
+  "runtime/log.ts: HEADER_DEPTH": "containers a long line's header scan tracks, fixed by the paths it reads",
+  "runtime/log.ts: HEADER_TOKEN_BYTES": "bytes a long line's header scan keeps of a key or number, internal",
   "llm/testing.ts: MIN_BASE64_FRAGMENT": "shortest base64 fragment a cassette check matches, internal",
   "nodes/code/worker.ts: COPY_DEPTH": "depth a CODE result is copied back from its worker, above any value limit",
   "compose/source/scalars.ts: PARSER_DEPTH_STOP":

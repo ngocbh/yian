@@ -21,6 +21,7 @@ import { openSqlite, type Sqlite, type SqliteRow, sqliteErrorCode, warn } from "
 import { logJson } from "../typesys/json.ts";
 import { isRecord, valueRepr } from "../typesys/values.ts";
 import {
+  checkMaxLineBytes,
   isRunLogLocked,
   iterRunRecords,
   NodeExpandedRecord,
@@ -348,7 +349,8 @@ function checkedTimeout(timeoutMs: unknown): number {
  * replaced (`RunLogChangedError`) is read again from the start. A run folder with no log, or a log
  * with no complete record yet, has no row; a row whose log is gone is deleted. A log that can't be
  * read (an old schema, a damaged line, a first record that isn't `run_started` of the folder's run,
- * or a file error such as no permission) raises a warning through `warn` and keeps its row as it
+ * a line over `maxLineBytes`, or a file error such as no permission) raises a warning through
+ * `warn` and keeps its row as it
  * was. A row whose stored scan can't be read is built again from the start of its log. An index
  * of another layout version is dropped and built again.
  *
@@ -358,13 +360,22 @@ function checkedTimeout(timeoutMs: unknown): number {
  *
  * @param runsDir The runs folder.
  * @param options.timeoutMs How long to wait for the index's lock, in milliseconds; 5000 by default.
+ * @param options.maxLineBytes The most bytes a log line may hold, as `iterRunRecords` takes it;
+ *   no limit by default.
  * @throws RunIndexBusyError when another update holds the lock longer than `timeoutMs`.
- * @throws RangeError when `timeoutMs` isn't a non-negative integer.
+ * @throws RangeError when `timeoutMs` isn't a non-negative integer, or `maxLineBytes` isn't a
+ *   positive integer.
  * @throws Error (code `ENOENT`) when `runsDir` doesn't exist, and SQLite's error when the index
  *   file isn't a database.
  */
-export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } = {}): void {
+export function updateRunIndex(
+  runsDir: string,
+  options: { timeoutMs?: number; maxLineBytes?: number | null } = {},
+): void {
   const timeoutMs = checkedTimeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const maxLineBytes = options.maxLineBytes ?? null;
+  // Checked here: a log's read errors become warnings, and a bad option must not.
+  checkMaxLineBytes(maxLineBytes);
   const path = join(runsDir, INDEX_FILE);
   createPrivate(path);
   const db = openSqlite(path);
@@ -401,10 +412,10 @@ export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } 
             continue;
           }
           try {
-            built = readRun(log, runId, saved);
+            built = readRun(log, runId, saved, maxLineBytes);
           } catch (error) {
             if (!(error instanceof RunLogChangedError) || saved === null) throw error;
-            built = readRun(log, runId, null);
+            built = readRun(log, runId, null, maxLineBytes);
           }
         } catch (error) {
           const code = (error as NodeJS.ErrnoException | null)?.code;
@@ -550,12 +561,13 @@ function busyOr(error: unknown, path: string, timeoutMs: number): unknown {
  * Fold the records of `log` after `saved` (from the start without it) into `saved` itself, a row
  * fresh from the index that a failed read leaves to be discarded, or into a new row; return the
  * row (`saved` unchanged when nothing new was read), or `null` for a log with no complete record.
+ * Lines are read with `maxLineBytes`.
  *
  * @throws RunLogChangedError when the log no longer continues `saved`.
  * @throws RangeError when the log can't be read or isn't the run `runId`.
  */
-function readRun(log: string, runId: string, saved: StoredRow | null): StoredRow | null {
-  const continuing = saved === null ? {} : { afterOffset: saved.offset, runId, afterSeq: saved.lastSeq };
+function readRun(log: string, runId: string, saved: StoredRow | null, maxLineBytes: number | null): StoredRow | null {
+  const continuing = saved === null ? { maxLineBytes } : { afterOffset: saved.offset, runId, afterSeq: saved.lastSeq, maxLineBytes };
   let row = saved;
   let lastAt: string | null = null;
   // The values of the top-level END's commits read in this pass, by seq; one read earlier is
@@ -594,7 +606,7 @@ function readRun(log: string, runId: string, saved: StoredRow | null): StoredRow
     } else if (record instanceof PoolCommitRecord) {
       if (record.nodeId === END_ID) endCommits.set(entry.seq, record.value === null ? null : logJson(record.value.value));
     } else if (record instanceof NodeSucceededRecord && record.nodeId === END_ID) {
-      row.result = endCommits.has(record.commit) ? endCommits.get(record.commit)! : committedValue(log, record.commit);
+      row.result = endCommits.has(record.commit) ? endCommits.get(record.commit)! : committedValue(log, record.commit, maxLineBytes);
     }
   }
   if (row !== null && lastAt !== null) {
@@ -623,11 +635,14 @@ function addUsage(row: StoredRow, step: Readonly<Record<string, unknown>>): void
   row.reasoningTokens += count("reasoning_tokens");
 }
 
-/** Return the value (`logJson`) of the `pool_commit` at `seq` in `log`, `null` for a derived one. */
-function committedValue(log: string, seq: number): string | null {
-  const offset = runRecordOffsets(log)[seq];
+/**
+ * Return the value (`logJson`) of the `pool_commit` at `seq` in `log`, `null` for a derived one,
+ * reading lines with `maxLineBytes`.
+ */
+function committedValue(log: string, seq: number, maxLineBytes: number | null): string | null {
+  const offset = runRecordOffsets(log, { maxLineBytes })[seq];
   if (offset === undefined) throw new RangeError(`the log has no record at seq ${seq}`);
-  for (const entry of iterRunRecords(log, { afterOffset: offset })) {
+  for (const entry of iterRunRecords(log, { afterOffset: offset, maxLineBytes })) {
     const record = entry.envelope.record;
     if (!(record instanceof PoolCommitRecord)) throw new RangeError(`the record at seq ${seq} isn't a pool_commit`);
     return record.value === null ? null : logJson(record.value.value);

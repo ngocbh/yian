@@ -1500,6 +1500,55 @@ export class RunLogChangedError extends RangeError {
   override name = "RunLogChangedError";
 }
 
+/**
+ * A run-log line is longer than the `maxLineBytes` a reader was given, so it wasn't parsed. It
+ * names where the line sits and what a bounded scan of its bytes read of its envelope, so a host
+ * can index the record and read on from `end`. A `RangeError`.
+ */
+export class RunLogLineTooLongError extends RangeError {
+  override name = "RunLogLineTooLongError";
+  /** The byte offset where the line starts. */
+  readonly offset: number;
+  /** The byte offset just past the line's newline, where a reader can go on. */
+  readonly end: number;
+  /** The line's length in bytes, without its newline. */
+  readonly length: number;
+  /** The `maxLineBytes` the line is over. */
+  readonly limit: number;
+  /** The line's `seq`, or `null` when the scan didn't find a non-negative integer. */
+  readonly seq: number | null;
+  /** The line's `run_id`, or `null` when the scan didn't find a non-empty string. */
+  readonly runId: string | null;
+  /** The line's wire kind, or `null` when the scan didn't find a known kind. */
+  readonly kind: string | null;
+  /** The node the record is about, as `RunLogEntry.nodeId`; `null` too when the scan didn't find it. */
+  readonly nodeId: string | null;
+
+  constructor(
+    message: string,
+    fields: {
+      offset: number;
+      end: number;
+      length: number;
+      limit: number;
+      seq: number | null;
+      runId: string | null;
+      kind: string | null;
+      nodeId: string | null;
+    },
+  ) {
+    super(message);
+    this.offset = fields.offset;
+    this.end = fields.end;
+    this.length = fields.length;
+    this.limit = fields.limit;
+    this.seq = fields.seq;
+    this.runId = fields.runId;
+    this.kind = fields.kind;
+    this.nodeId = fields.nodeId;
+  }
+}
+
 /** The error for a retired schema. */
 function retiredSchema(schema: number): RunLogSchemaError {
   return new RunLogSchemaError(`run log schema ${schema} predates schema ${SCHEMA_VERSION} and is not supported`, schema);
@@ -2157,13 +2206,15 @@ export class JsonlRunLog implements RunLog {
  * lock and without changing the file. An incomplete last line is ignored; an empty file or one
  * without a complete line gives no records.
  *
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it.
  * @throws RunLogSchemaError when a record's schema isn't `SCHEMA_VERSION`.
  * @throws RunLogChangedError when the file shrank while it was read.
+ * @throws RunLogLineTooLongError when a complete line is longer than `maxLineBytes`.
  * @throws RangeError when a complete line isn't a valid record, or the records don't share one
  *   run id with contiguous sequences from 0; the message names `path`, the line and its seq.
  */
-export function readRunLog(path: string): RecordEnvelope[] {
-  return Array.from(iterRunRecords(path), (entry) => entry.envelope);
+export function readRunLog(path: string, options: Pick<IterRunRecordsOptions, "maxLineBytes"> = {}): RecordEnvelope[] {
+  return Array.from(iterRunRecords(path, { maxLineBytes: options.maxLineBytes ?? null }), (entry) => entry.envelope);
 }
 
 /** The bytes `iterRunRecords` asks for in one read. */
@@ -2214,13 +2265,23 @@ export interface IterRunRecordsOptions {
   runId?: string | null;
   /** The seq of the record that ends at `afterOffset`; the next record must be `afterSeq + 1`. */
   afterSeq?: number | null;
+  /**
+   * The most bytes a line may hold, without its newline; a longer line throws
+   * `RunLogLineTooLongError` instead of being parsed. `null` (the default) sets no limit.
+   */
+  maxLineBytes?: number | null;
 }
 
 /**
  * Stream the records of the run log at `path`, without taking the writer's lock and without
  * changing the file, so a host can read a log another process is writing.
  *
- * The file is read in chunks of 64 KiB, so memory is bounded by the largest line. Reading stops
+ * The file is read in chunks of 64 KiB, so memory is bounded by the largest line, or, given
+ * `maxLineBytes`, by a small multiple of that limit: a longer line is read up to its newline
+ * but not kept, its nesting only counted past the few levels the scan needs, and
+ * throws `RunLogLineTooLongError`, which names it and what a scan of its bytes read of its seq,
+ * run id, kind and node id. The seq and run id it names are checked as any record's are. To go
+ * on, read from its `end`, passing its `runId` and `seq` as `runId` and `afterSeq`. Reading stops
  * at the end of the file; an unterminated last line, which a writer may still be finishing, is
  * not yielded, and a later call reads on from the last entry: a host saves its `end`, `runId`
  * and `seq` and passes them as `afterOffset`, `runId` and `afterSeq`.
@@ -2243,13 +2304,16 @@ export interface IterRunRecordsOptions {
  * @param options.payloads Whether to build and validate each record.
  * @param options.runId The run id of the record that ends at `afterOffset`.
  * @param options.afterSeq The seq of the record that ends at `afterOffset`.
+ * @param options.maxLineBytes The most bytes a line may hold.
  * @returns A generator of `{ seq, offset, end, runId, at, kind, nodeId, envelope }`.
  * @throws RunLogSchemaError when a record's schema isn't `SCHEMA_VERSION`; the message names the
  *   line.
  * @throws RunLogChangedError when the file is shorter than where the reader got to (`afterOffset`
  *   or the end of the last line read), or, given `runId` or `afterSeq`, the offset no longer ends
  *   a line or the first record read doesn't continue the saved one.
- * @throws RangeError when `afterOffset`, `afterSeq` or `runId` isn't valid, `runId` or `afterSeq`
+ * @throws RunLogLineTooLongError when a complete line is longer than `maxLineBytes`; the message
+ *   names `path`, the line (or, after an offset, the byte) and the limit.
+ * @throws RangeError when `afterOffset`, `afterSeq`, `runId` or `maxLineBytes` isn't valid, `runId` or `afterSeq`
  *   is given without an `afterOffset`, `afterOffset` isn't the end of a line, `kinds` names a kind
  *   no record has, or a complete line isn't a valid record, breaks the seq count or names another
  *   run id; the message names `path` and the line (or, after an offset, the byte).
@@ -2271,7 +2335,14 @@ export function* iterRunRecords(
   path: string,
   options: IterRunRecordsOptions = {},
 ): Generator<RunLogEntry<RecordEnvelope | null>, void, undefined> {
-  const { afterOffset = 0, kinds = null, payloads = true, runId: afterRunId = null, afterSeq = null } = options;
+  const {
+    afterOffset = 0,
+    kinds = null,
+    payloads = true,
+    runId: afterRunId = null,
+    afterSeq = null,
+    maxLineBytes = null,
+  } = options;
   if (!Number.isSafeInteger(afterOffset) || afterOffset < 0) {
     throw new RangeError(`afterOffset must be a non-negative integer, got ${valueRepr(afterOffset)}`);
   }
@@ -2282,6 +2353,7 @@ export function* iterRunRecords(
     const shown = typeof afterRunId === "string" ? reprText(afterRunId) : valueRepr(afterRunId);
     throw new RangeError(`runId must be a non-empty string, got ${shown}`);
   }
+  checkMaxLineBytes(maxLineBytes);
   const continuing = afterRunId !== null || afterSeq !== null;
   if (continuing && afterOffset === 0) {
     throw new RangeError("runId and afterSeq describe the record before afterOffset, so they need one");
@@ -2309,14 +2381,39 @@ export function* iterRunRecords(
         throw new RangeError(`afterOffset ${afterOffset} isn't the end of a line in run log ${path}`);
       }
     }
-    // `lineStart` is the end of the last complete line; `parts` hold the bytes read past it.
+    // `lineStart` is the end of the last complete line; `parts` hold the bytes read past it, and
+    // `pending` counts them. Past `maxLineBytes`, `parts` are dropped and `scanner` reads on.
     let lineStart = afterOffset;
     let position = afterOffset;
     let parts: Uint8Array[] = [];
+    let pending = 0;
+    let scanner: LineHeaderScanner | null = null;
     let expected: number | null = afterOffset === 0 ? 0 : afterSeq === null ? null : afterSeq + 1;
     let runId: string | null = afterRunId;
     // Whether the next record is the first after a saved offset, which must continue it.
     let checkContinues = continuing;
+    const gather = (bytes: Uint8Array) => {
+      pending += bytes.length;
+      if (scanner !== null) {
+        scanner.feed(bytes);
+      } else if (maxLineBytes !== null && pending > maxLineBytes) {
+        scanner = new LineHeaderScanner(maxLineBytes);
+        for (const part of parts) scanner.feed(part);
+        scanner.feed(bytes);
+        parts = [];
+      } else {
+        parts.push(bytes);
+      }
+    };
+    /** Check that `record`, the first read after a saved offset, continues the saved one. */
+    const checkContinued = (record: { readonly seq: number; readonly runId: string }) => {
+      checkContinues = false;
+      if ((afterSeq !== null && record.seq !== expected) || (afterRunId !== null && record.runId !== afterRunId)) {
+        const saved = [afterSeq === null ? null : `seq ${expected}`, afterRunId === null ? null : `run ${reprText(afterRunId)}`];
+        const found = `seq ${record.seq} of run ${reprText(record.runId)}`;
+        throw discontinued(`expected ${saved.filter((part) => part !== null).join(" of ")}, found ${found}`);
+      }
+    };
     for (;;) {
       const chunk = new Uint8Array(READ_CHUNK_BYTES);
       const count = fs.readSync(fd, chunk, 0, READ_CHUNK_BYTES, position);
@@ -2331,15 +2428,35 @@ export function* iterRunRecords(
       const data = chunk.subarray(0, count);
       let start = 0;
       for (let newline = data.indexOf(0x0a); newline !== -1; newline = data.indexOf(0x0a, start)) {
-        parts.push(data.subarray(start, newline));
-        const line = parts.length === 1 ? parts[0]! : Buffer.concat(parts);
-        parts = [];
+        gather(data.subarray(start, newline));
         start = newline + 1;
         const offset = lineStart;
-        lineStart += line.length + 1;
+        const length = pending;
+        lineStart += length + 1;
+        pending = 0;
         let where = `run log ${path} byte ${offset}`;
         if (afterOffset === 0) where = lineWhere(path, expected!);
         else if (expected !== null) where += ` (seq ${expected})`;
+        if (scanner !== null) {
+          // A cast: TypeScript doesn't see `gather` set `scanner`.
+          const header = (scanner as LineHeaderScanner).header();
+          scanner = null;
+          const { seq, runId: lineRunId } = header;
+          if (seq !== null && lineRunId !== null) {
+            if (checkContinues) checkContinued({ seq, runId: lineRunId });
+            checkedLine(where, { seq, runId: lineRunId }, expected, runId);
+          }
+          const limit = maxLineBytes!;
+          throw new RunLogLineTooLongError(`${where}: the line is ${length} bytes, over maxLineBytes ${limit}`, {
+            offset,
+            end: lineStart,
+            length,
+            limit,
+            ...header,
+          });
+        }
+        const line = parts.length === 1 ? parts[0]! : Buffer.concat(parts);
+        parts = [];
         let wire: WireEnvelope;
         let nodeId: string | null;
         let envelope: RecordEnvelope | null = null;
@@ -2353,20 +2470,13 @@ export function* iterRunRecords(
         } catch (error) {
           throw locatedError(where, error);
         }
-        if (checkContinues) {
-          checkContinues = false;
-          if ((afterSeq !== null && wire.seq !== expected) || (afterRunId !== null && wire.runId !== afterRunId)) {
-            const saved = [afterSeq === null ? null : `seq ${expected}`, afterRunId === null ? null : `run ${reprText(afterRunId)}`];
-            const found = `seq ${wire.seq} of run ${reprText(wire.runId)}`;
-            throw discontinued(`expected ${saved.filter((part) => part !== null).join(" of ")}, found ${found}`);
-          }
-        }
+        if (checkContinues) checkContinued(wire);
         runId = checkedLine(where, wire, expected, runId);
         expected = wire.seq + 1;
         if (wanted !== null && !wanted.has(wire.kind)) continue;
         yield { seq: wire.seq, offset, end: lineStart, runId, at: wire.at!, kind: wire.kind, nodeId, envelope };
       }
-      if (start < data.length) parts.push(data.subarray(start));
+      if (start < data.length) gather(data.subarray(start));
     }
   } finally {
     fs.closeSync(fd);
@@ -2379,10 +2489,222 @@ export function* iterRunRecords(
  * is writing. A reader reads the record at seq `k` with `iterRunRecords(path, {afterOffset:
  * offsets[k]})`.
  *
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it.
  * @throws the errors of `iterRunRecords`.
  */
-export function runRecordOffsets(path: string): number[] {
-  return Array.from(iterRunRecords(path, { payloads: false }), (entry) => entry.offset);
+export function runRecordOffsets(path: string, options: Pick<IterRunRecordsOptions, "maxLineBytes"> = {}): number[] {
+  const maxLineBytes = options.maxLineBytes ?? null;
+  return Array.from(iterRunRecords(path, { payloads: false, maxLineBytes }), (entry) => entry.offset);
+}
+
+/** The keys a header scan wants a value of, each as the object keys leading to it. */
+const HEADER_PATHS = new Set(["kind", "run_id", "seq", "payload/node_id", "payload/spawner_id", "payload/failure/node_id"]);
+/** The most containers a header scan tracks: the depth of `payload/failure/node_id`'s object. */
+const HEADER_DEPTH = 3;
+/** The most bytes a header scan keeps of a key or a number; the keys and seqs it wants are shorter. */
+const HEADER_TOKEN_BYTES = 32;
+
+/**
+ * Reads a run-log line's seq, run id, kind and node id from its bytes, fed in pieces, without
+ * parsing it, for a line too long to parse. It tracks the keys of the outer `HEADER_DEPTH`
+ * containers and only counts deeper ones, and keeps only the values `HEADER_PATHS` names, at
+ * most `limit` bytes of them in all.
+ */
+class LineHeaderScanner {
+  /** Each tracked container: an object's current key (`null` in an array) and whether a key comes next. */
+  readonly #open: { key: string | null; object: boolean; keyNext: boolean }[] = [];
+  /** How many containers are open past the tracked ones. */
+  #deeper = 0;
+  /** The wanted strings and numbers read, by path, kept apart so only a number counts as a seq. */
+  readonly #strings = new Map<string, string>();
+  readonly #numbers = new Map<string, string>();
+  /** The bytes still allowed for wanted string values. */
+  #budget: number;
+  #inString = false;
+  #escaped = false;
+  #inScalar = false;
+  /** Whether the string or scalar being read is kept, its bytes so far and their cap. */
+  #keeping = false;
+  #kept = new Uint8Array(HEADER_TOKEN_BYTES);
+  #keptLength = 0;
+  #keptCap = 0;
+  #keptPath: string | null = null;
+
+  constructor(limit: number) {
+    this.#budget = limit;
+  }
+
+  /** Read the next bytes of the line. */
+  feed(bytes: Uint8Array): void {
+    for (const byte of bytes) {
+      if (this.#inString) {
+        if (this.#escaped) this.#escaped = false;
+        else if (byte === 0x5c) this.#escaped = true;
+        else if (byte === 0x22) {
+          this.#endString();
+          continue;
+        }
+        if (this.#keeping) this.#keep(byte);
+        continue;
+      }
+      if (this.#deeper > 0) {
+        if (byte === 0x22) this.#inString = true;
+        else if (byte === 0x7b || byte === 0x5b) this.#deeper++;
+        else if (byte === 0x7d || byte === 0x5d) this.#deeper--;
+        continue;
+      }
+      const top = this.#open.at(-1);
+      switch (byte) {
+        case 0x22:
+          this.#endScalar();
+          this.#inString = true;
+          if (top?.object && top.keyNext) this.#start(true, null, HEADER_TOKEN_BYTES);
+          else this.#start(false, this.#valuePath(), this.#budget);
+          break;
+        case 0x7b:
+        case 0x5b:
+          this.#endScalar();
+          if (this.#open.length < HEADER_DEPTH) this.#open.push({ key: null, object: byte === 0x7b, keyNext: byte === 0x7b });
+          else this.#deeper = 1;
+          break;
+        case 0x7d:
+        case 0x5d:
+          this.#endScalar();
+          this.#open.pop();
+          break;
+        case 0x2c:
+          this.#endScalar();
+          if (top?.object) {
+            top.key = null;
+            top.keyNext = true;
+          }
+          break;
+        case 0x3a:
+        case 0x20:
+        case 0x09:
+        case 0x0a:
+        case 0x0d:
+          this.#endScalar();
+          break;
+        default:
+          if (!this.#inScalar) {
+            this.#inScalar = true;
+            this.#start(false, this.#valuePath(), HEADER_TOKEN_BYTES);
+          }
+          if (this.#keeping) this.#keep(byte);
+      }
+    }
+  }
+
+  /** What the scan read, each checked; `null` for what it didn't find or isn't valid. */
+  header(): { seq: number | null; runId: string | null; kind: string | null; nodeId: string | null } {
+    this.#endScalar();
+    const text = (path: string) => {
+      const value = this.#strings.get(path);
+      return value === undefined || value === "" ? null : value;
+    };
+    const digits = this.#numbers.get("seq");
+    const counted = digits !== undefined && /^(0|[1-9][0-9]*)$/.test(digits) ? Number(digits) : null;
+    const seq = counted !== null && Number.isSafeInteger(counted) ? counted : null;
+    let kind = text("kind");
+    if (kind !== null && !CODEC_BY_KIND.has(kind)) kind = null;
+    let nodeId: string | null = null;
+    if (kind !== null) {
+      // The kind's own rule picks the node id, from just the members the scan kept.
+      const payload: JsonObject = {};
+      const failure: JsonObject = {};
+      for (const [key, path] of [["node_id", "payload/node_id"], ["spawner_id", "payload/spawner_id"]] as const) {
+        const value = this.#strings.get(path);
+        if (value !== undefined) payload[key] = value;
+      }
+      const failed = this.#strings.get("payload/failure/node_id");
+      if (failed !== undefined) failure["node_id"] = failed;
+      payload["failure"] = failure;
+      try {
+        nodeId = wireNodeId(kind, payload);
+      } catch {
+        nodeId = null;
+      }
+    }
+    return { seq, runId: text("run_id"), kind, nodeId };
+  }
+
+  /** The keys leading to a value that starts now, joined, or `null` when one is in an array. */
+  #valuePath(): string | null {
+    const keys: string[] = [];
+    for (const entry of this.#open) {
+      if (entry.key === null) return null;
+      keys.push(entry.key);
+    }
+    return keys.join("/");
+  }
+
+  /**
+   * Begin a string or scalar: keep up to `cap` bytes of it when it is a key, or a value at a
+   * wanted `path` (`null` for a value with no path, as in an array).
+   */
+  #start(isKey: boolean, path: string | null, cap: number): void {
+    this.#keeping = isKey || (path !== null && HEADER_PATHS.has(path));
+    this.#keptLength = 0;
+    this.#keptCap = cap;
+    this.#keptPath = path;
+  }
+
+  #keep(byte: number): void {
+    if (this.#keptLength === this.#keptCap) {
+      this.#keeping = false;
+      return;
+    }
+    if (this.#keptLength === this.#kept.length) {
+      const grown = new Uint8Array(Math.min(this.#kept.length * 2, this.#keptCap));
+      grown.set(this.#kept);
+      this.#kept = grown;
+    }
+    this.#kept[this.#keptLength++] = byte;
+  }
+
+  #endString(): void {
+    this.#inString = false;
+    if (this.#deeper > 0) return;
+    const top = this.#open.at(-1);
+    const isKey = top?.object === true && top.keyNext;
+    let value: string | null = null;
+    if (this.#keeping) {
+      try {
+        value = JSON.parse(`"${UTF8.decode(this.#kept.subarray(0, this.#keptLength))}"`) as string;
+      } catch {
+        value = null;
+      }
+    }
+    if (isKey) {
+      top!.key = value;
+      top!.keyNext = false;
+    } else if (value !== null && this.#keptPath !== null) {
+      this.#strings.set(this.#keptPath, value);
+      this.#budget -= this.#keptLength;
+    }
+    this.#keeping = false;
+  }
+
+  #endScalar(): void {
+    if (!this.#inScalar) return;
+    this.#inScalar = false;
+    if (this.#keeping && this.#keptPath !== null) {
+      this.#numbers.set(this.#keptPath, String.fromCharCode(...this.#kept.subarray(0, this.#keptLength)));
+    }
+    this.#keeping = false;
+  }
+}
+
+/**
+ * Check a reader's `maxLineBytes` option: a positive integer, or `null` for no limit.
+ *
+ * @throws RangeError when it is neither.
+ */
+export function checkMaxLineBytes(maxLineBytes: unknown): void {
+  if (maxLineBytes !== null && (typeof maxLineBytes !== "number" || !Number.isSafeInteger(maxLineBytes) || maxLineBytes <= 0)) {
+    throw new RangeError(`maxLineBytes must be a positive integer, got ${valueRepr(maxLineBytes)}`);
+  }
 }
 
 /** Where the record of seq `seq` sits in the run log at `path`, read from the start, for errors. */

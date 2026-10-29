@@ -363,6 +363,28 @@ abort its `signal` instead: the run records a stop, rejects with the signal's re
 `inspectRun(log).wakeAt` is the earliest deadline of a waiting run: a host that keeps runs
 waiting calls `advance` then.
 
+`iterRunRecords` holds one line in memory at a time, so a huge line takes that much. Pass
+`maxLineBytes` to cap it. A longer line isn't parsed or kept: it throws `RunLogLineTooLongError`,
+whose message names the line and the limit. The error holds the line's `offset`, `end` and
+`length`, plus its `seq`, `runId`, `kind` and `nodeId`, read by a scan that keeps no more than
+the limit (`null` for one the scan can't read). To go on past it:
+
+```ts check=fragment
+import { iterRunRecords, RunLogLineTooLongError } from "@ngocbh/yian/run";
+
+let from = {};
+for (let done = false; !done; ) {
+  try {
+    for (const entry of iterRunRecords(log, { ...from, maxLineBytes: 1 << 20 })) index(entry);
+    done = true;
+  } catch (error) {
+    if (!(error instanceof RunLogLineTooLongError)) throw error;
+    skipped(error);
+    from = { afterOffset: error.end, runId: error.runId, afterSeq: error.seq };
+  }
+}
+```
+
 ## Environment and stopping
 
 - `env` is a function `(name) => string | undefined`. `loadFlow`, `runFlow`, `advance`,

@@ -15,8 +15,8 @@
  * and `pendingCalls`; their errors are `RunBusyError` and the re-exported `DeliveryRefused`
  * (`runtime/state.ts`). For hosts that show runs it also exports `inspectRun`, which reads
  * where a run log stands, and `staticNodes`, which names each node of a flow, and re-exports
- * `staticPathOf` (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError` and
- * `RunLogSchemaError` (`runtime/log.ts`). `runLogPath` gives a fresh run a folder of its own under
+ * `staticPathOf` (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError`,
+ * `RunLogLineTooLongError` and `RunLogSchemaError` (`runtime/log.ts`). `runLogPath` gives a fresh run a folder of its own under
  * the host's runs folder and names its log there, and `updateRunIndex` and `readRunIndex`
  * (`runtime/run_index.ts`) keep and read the runs folder's rebuildable `index.sqlite`, one row per
  * run. For hosts that read run-log values it re-exports
@@ -236,6 +236,7 @@ export {
   PoolCommitRecord,
   RunLogChangedError,
   type RunLogEntry,
+  RunLogLineTooLongError,
   RunLogSchemaError,
   runRecordOffsets,
 } from "./runtime/log.ts";

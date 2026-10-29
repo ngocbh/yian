@@ -567,6 +567,21 @@ async function aPlainTerminalSetsRawModeForASecretPrompt(): Promise<void> {
   assert.equal(output.text, "? Key: \n");
 }
 
+async function aPlainTerminalWritesARefusedLinesErrorAndReadsTheNextLineAfresh(): Promise<void> {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const terminal = new Terminal({ input, output, plain: true });
+  const answer = terminal.promptInputs([decl("items", LIST_STR, { required: true })], {});
+  // The cooked tty already echoed each line, so only the prompt and the error are written.
+  input.write("[\n");
+  input.write('["b"]\n');
+  assert.deepEqual(await answer, { items: ["b"] });
+  assert.equal(
+    output.text,
+    "? items (list(str)) * Enter a JSON array \nInvalid JSON at line 1, column 2: Expecting value\n",
+  );
+}
+
 async function aNonTtyReadLineReadsOneLinePerCall(): Promise<void> {
   const { input, terminal } = setup({ tty: false });
   input.write("a\nb\n");
@@ -2357,6 +2372,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "watchKeys on a plain or non-TTY terminal does nothing": watchKeysOnAPlainOrNonTtyTerminalDoesNothing,
   "a plain terminal writes no escapes and sets no raw mode": aPlainTerminalWritesNoEscapesAndSetsNoRawMode,
   "a plain terminal sets raw mode for a secret prompt": aPlainTerminalSetsRawModeForASecretPrompt,
+  "a plain terminal writes a refused line's error and reads the next line afresh":
+    aPlainTerminalWritesARefusedLinesErrorAndReadsTheNextLineAfresh,
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,
   "wide characters redraw without stale rows": wideCharactersRedrawWithoutStaleRows,
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,

@@ -98,6 +98,11 @@ interface Widget<T> {
   key(key: Key): { value: T } | { stop: "interrupt" | "eof" } | undefined;
   /** The one line the frame collapses to once the widget has ended; null erases it and leaves none. */
   done(outcome: Outcome<T>): string | null;
+  /**
+   * For a plain terminal, after a key: the error a refused answer drew, with the typed text
+   * dropped so the next line is a fresh answer; undefined when nothing was refused.
+   */
+  refused?(): string | undefined;
 }
 
 const ESC = "\x1b[";
@@ -291,6 +296,12 @@ function textWidget(options: {
     },
     done: (outcome) =>
       collapsed(mark, options.label, "value" in outcome && !options.mask ? shown(Array.from(outcome.value)) : ""),
+    refused() {
+      if (error === undefined) return undefined;
+      chars.length = 0;
+      pos = 0;
+      return error;
+    },
     text: () => chars.join(""),
   };
 }
@@ -831,8 +842,13 @@ export class Terminal {
     let cursorRow = 0;
     const erase = (): string => `\r${cursorRow > 0 ? `${ESC}${cursorRow}A` : ""}${ESC}J`;
     const draw = (): void => {
-      // A plain prompt is written once, as it opens.
-      if (this.#plain) return;
+      // A plain prompt is written once, as it opens; a refused line adds only its error, since
+      // the cooked tty already echoed the line.
+      if (this.#plain) {
+        const refused = widget.refused?.();
+        if (refused !== undefined) output.write(`${refused}\n`);
+        return;
+      }
       const columns = output.columns || 80;
       const lines = widget.lines();
       const cursor = widget.cursor();

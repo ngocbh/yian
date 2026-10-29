@@ -37,6 +37,7 @@ import {
   stringArguments,
 } from "./chat_tools.ts";
 import { loadConfinedText } from "./confined_load.ts";
+import { loadReportFlow } from "./report_issue.ts";
 
 /** The longest `wait_flow` waits, in seconds. */
 const WAIT_FLOW_MAX_S = 120;
@@ -46,6 +47,16 @@ const STATUS_TEXT_CHARS = 4000;
 
 /** The approval answers `start_flow` offers: the first two start, the last (Ctrl-C's) doesn't. */
 const START_CHOICES = ["Approve", "Approve this flow for this chat", "Reject"] as const;
+
+/** What `report_issue` starts its run with, beside what the model passes. */
+export interface ReportOptions {
+  /** The chat's own facts (`hostFacts`), first in the report's context. */
+  facts: string;
+  /** The home folder, which the report shows as `~`. */
+  home: string;
+  /** The `file_issue` tool the report flow files with; no other run gets it. */
+  fileIssue: FunctionTool;
+}
 
 /** What the run tools need beside the file tools' host. */
 export interface ChatRunToolsOptions {
@@ -57,6 +68,8 @@ export interface ChatRunToolsOptions {
   seen?: { markSeen(run: string, seq: number): void; seen(run: string): number } | null;
   /** The clock `wait_flow` times out on; the real one by default. */
   scheduler?: Scheduler;
+  /** What `report_issue` needs; without it, there is no `report_issue`. */
+  report?: ReportOptions | null;
 }
 
 /** `text` cut to `STATUS_TEXT_CHARS` characters, with a note when it was cut. */
@@ -244,10 +257,12 @@ async function loadForStart(
  * read a child's status; and `answer_flow`, `message_flow`, `close_inbox` and `stop_flow`, which
  * relay to it. Each returns the child's status as JSON, its text fields cut at
  * `STATUS_TEXT_CHARS`, and marks it read (`runs.markRead`, `options.seen`). An unknown run, or an
- * argument of the wrong type, is a `ReportedToolError`.
+ * argument of the wrong type, is a `ReportedToolError`. With `options.report`, also
+ * `report_issue`, which starts the bundled report flow as a child run without asking: only that
+ * run gets `file_issue`, whose own approval card guards anything that leaves the machine.
  */
 export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatRunToolsOptions = {}): FunctionTool[] {
-  const { seen = null, scheduler = realScheduler } = options;
+  const { seen = null, scheduler = realScheduler, report = null } = options;
   // The approvals given "for this chat", by real path: the digest of what was approved.
   const approved = new Map<string, string>();
   // By child, the last seq a tool showed the model; with `seen`'s, what `wait_flow` waits past.
@@ -389,7 +404,42 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
       parameters: runArgument(RUN),
       execute: async (args) => show(await runs.stop(knownRun(runs, args))),
     }),
+    ...(report === null ? [] : [reportTool(report)]),
   ];
+
+  /** The `report_issue` tool over `report`. */
+  function reportTool(options: ReportOptions): FunctionTool {
+    return tool({
+      name: "report_issue",
+      description:
+        "Help the user report something unexpected yian did, as an issue for its maintainers at " +
+        "github.com/ngocbh/yian. Starts a background run that drafts the report, may ask the user for " +
+        "missing facts (relay its questions as for any run), redacts what looks like a secret, then shows " +
+        "the user the report on their terminal to file (gh, GITHUB_TOKEN or a browser link) or only save. " +
+        "The chat adds yian's version, the runtime, the platform and this chat's log path. In context, give " +
+        "what you know: the command or flow run, the error text and a run's log path; never a log's " +
+        `contents, a token or a password. ${STATUS}`,
+      parameters: stringArguments(
+        ["problem", "What went wrong, in a sentence or two.", true],
+        ["context", "What you know about it: the command or flow, the error text, a run's log path.", false],
+      ),
+      execute: async (args, ctx) => {
+        const problem = stringArg(args, "problem");
+        const known = args["context"] === undefined ? "" : stringArg(args, "context");
+        const context = [options.facts, known].filter((part) => part !== "").join("\n");
+        let id: string;
+        try {
+          const flow = await loadReportFlow(host.env);
+          const tools = { file_issue: options.fileIssue };
+          ({ id } = await runs.start(flow, { problem, context, home: options.home }, { signal: ctx.signal, tools }));
+        } catch (error) {
+          if (error instanceof Error) return `not started: ${error.message}`;
+          throw error;
+        }
+        return show(runs.status(id));
+      },
+    });
+  }
 
   /**
    * Start the flow at `path` with `inputs` once the user approves it, as `start_flow` describes.

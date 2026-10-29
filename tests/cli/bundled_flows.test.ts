@@ -81,6 +81,7 @@ test("the reply agent gets the tools, the skill and steering, with no tool-call 
     "message_flow",
     "close_inbox",
     "stop_flow",
+    "report_issue",
   ]);
   expect(reply.skills).toEqual(["composing-agents"]);
   expect(reply.steerInbox).toBe(true);
@@ -96,6 +97,8 @@ test("the prompt reads before explaining, checks before runs, and relays inbox r
     "message_flow",
     "close_inbox when the user is done with it",
     "what a run said",
+    "offer to report it with report_issue",
+    "if the user pastes one, tell them to revoke it",
   ]) {
     expect(text).toContain(phrase);
   }

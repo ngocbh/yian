@@ -9,11 +9,13 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventQueue } from "../../src/cli/chat_events.ts";
 import { chatRunTools, shownStatus } from "../../src/cli/chat_run_tools.ts";
 import { ChildRuns } from "../../src/cli/chat_runs.ts";
-import { type ChatToolHost, chatFileTools, ToolRefused } from "../../src/cli/chat_tools.ts";
+import { type ChatToolHost, chatFileTools, stringArguments, ToolRefused } from "../../src/cli/chat_tools.ts";
 import type { ApproveRequest } from "../../src/cli/terminal.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { isReportedToolError } from "../../src/tools/errors.ts";
-import { NO_ENV } from "../helpers/run_state_fixtures.ts";
+import { tool } from "../../src/tools/function_tools.ts";
+import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 import { heldScheduler } from "../helpers/schedulers.ts";
 
 let tmp: string;
@@ -502,3 +504,72 @@ output: done
 async function until(check: () => boolean): Promise<void> {
   while (!check()) await new Promise((resolve) => setTimeout(resolve, 1));
 }
+
+describe("report_issue", () => {
+  const TIMEOUT = 10_000;
+  let runs: ChildRuns | null = null;
+
+  afterEach(async () => {
+    await runs?.dispose();
+    runs = null;
+  });
+
+  test(
+    "starts the bundled report flow with no start card, the chat's facts first in its context",
+    async () => {
+      const env = (name: string) => (name === "XAI_API_KEY" ? "test-xai-key" : NO_ENV(name));
+      const report = { title: "check crashes", body: "It crashed." };
+      const model = new ScriptedModel([textReply("Drafted."), textReply(JSON.stringify(report))], {
+        provider: "xai",
+        model: "grok-4.3",
+      });
+      runs = new ChildRuns({
+        root,
+        logDir: join(tmp, "runs"),
+        env,
+        llmConfig: { provider: "xai", model: "grok-4.3" },
+        models: serving(model, env),
+        scheduler: heldScheduler().scheduler,
+        chatRunId: "chat-1",
+        skillsFor: () => null,
+      });
+      const filed: Record<string, unknown>[] = [];
+      const fileIssue = tool({
+        name: "file_issue",
+        description: "Take the report.",
+        parameters: stringArguments(["title", "", true], ["body", "", true]),
+        execute: (args) => {
+          filed.push(args);
+          return "not filed: saved only";
+        },
+      });
+      const tools = chatRunTools(host({ env }), runs, {
+        report: { facts: "yian version: 0.0.4\nchat run log: ~/c.jsonl", home: "/home/ada", fileIssue },
+      });
+      const reportIssue = tools.find((each) => each.name === "report_issue")!;
+      const ctx = new ToolContext({
+        callId: "chat-1/reply",
+        attempt: 1,
+        toolName: "report_issue",
+        runId: "chat-1",
+        node: "reply",
+        context: undefined,
+        signal: new AbortController().signal,
+      });
+      const args = { problem: "yian check crashed", context: "ran: yian check a.yaml" };
+      const started = JSON.parse(String(await reportIssue.execute(args, ctx)));
+      expect(started).toMatchObject({ run: "r1" });
+      let status = runs.status("r1");
+      while (status.status === "running") status = await runs.next("r1", status.seq);
+      expect(status).toMatchObject({ status: "succeeded", output: "not filed: saved only" });
+      expect(filed).toEqual([report]);
+      const prompt = model.requests[0]!.messages.at(-1)!.text();
+      expect(prompt).toContain("The problem: yian check crashed");
+      expect(prompt).toContain("yian version: 0.0.4\nchat run log: ~/c.jsonl\nran: yian check a.yaml");
+      expect(runs.live()).toEqual([]);
+      // Without its options, the chat's run tools have no report_issue.
+      expect(chatRunTools(host(), runs).some((each) => each.name === "report_issue")).toBe(false);
+    },
+    TIMEOUT,
+  );
+});

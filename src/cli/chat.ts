@@ -24,7 +24,7 @@ import { AuthError } from "../llm_clients/auth/index.ts";
 import { connectionSnapshot, type ConnectionSnapshot } from "../llm_clients/connection.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import { coerceInputs } from "../nodes/binding.ts";
-import { isSystemError, leavesRoot, realScheduler, type Scheduler } from "../platform.ts";
+import { homeDir, isSystemError, leavesRoot, realScheduler, type Scheduler } from "../platform.ts";
 import { hostInputs, runStartLlm, skillGrants } from "../run.ts";
 import { type Skill, SkillError } from "../skills/catalog.ts";
 import { DOCS, FLOWS } from "./bundled.ts";
@@ -45,6 +45,7 @@ import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_to
 import { columnsOf } from "./cells.ts";
 import { inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { type Colored, paint, printStyled, type Style } from "./render.ts";
+import { type FileIssueHost, fileIssueTool, hostFacts } from "./report_issue.ts";
 import { CHAT_FLOW_FILE, removeEmptyDir, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import { RunProgress, runScreen } from "./run_view.ts";
@@ -86,6 +87,8 @@ export interface ChatDeps {
   children?: Pick<ChildRunsOptions, "advance" | "cancel">;
   /** The clock the spinner ticks on, apart from `scheduler`, which a test may hold. */
   ticker?: Scheduler;
+  /** How `file_issue` runs gh and sends to GitHub, for a test that mustn't file a real issue. */
+  filing?: Pick<FileIssueHost, "run" | "send">;
 }
 
 /**
@@ -284,7 +287,8 @@ function waitingLines(children: readonly WaitingChild[], out: Colored, env: Env)
  * and the flow in focus; when that flow has an `Inbox` input, a hint says `yian run` chats with
  * it. The assistant gets the file tools (`chatFileTools`, over the docs bundle) and the run tools
  * (`chatRunTools`) over the chat's child runs, whose logs go in new run folders under
- * `~/.yian/runs` and whose CODE console output goes to a file beside the chat's log; and the
+ * `~/.yian/runs` and whose CODE console output goes to a file beside the chat's log, `report_issue`
+ * among them, its report filed through `file_issue` (`fileIssueTool`, on `deps.filing`); and the
  * bundled `composing-agents` skill (`bundledSkill`). When stdin, stdout and stderr are a terminal
  * and `NO_COLOR` is unset (`richChat`), all of it is drawn through the chat's view (`ChatView`)
  * instead: a banner box naming the model, how it is reached, the folder and the focus; the reply
@@ -410,8 +414,11 @@ export async function chat(
     // On a terminal, the approval is drawn as a framed card.
     const approve: ChatToolHost["approve"] = (request) => terminal.approve({ ...request, frame: view !== null });
     const host: ChatToolHost = { root, approve, env, docs };
+    const home = homeDir(env);
+    const fileIssue = fileIssueTool({ approve, env, now: () => scheduler.now(), ...deps.filing });
+    const report = { facts: hostFacts(fresh.path, home), home, fileIssue };
     const all = trackInFlight(
-      [...chatFileTools(host), ...chatRunTools(host, runs, { seen: queue, scheduler })],
+      [...chatFileTools(host), ...chatRunTools(host, runs, { seen: queue, scheduler, report })],
       inFlight,
     );
     return Object.fromEntries(all.map((each) => [each.name, each]));

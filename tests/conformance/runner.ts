@@ -2561,7 +2561,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const shared: RunFlowOptions = { env, tools, random, models, scheduler };
   const { logs, traces } = await beforeRuns(case_, ctx, flow, shared, memories);
   const inputs = get(case_, "inputs", {}) as Case;
-  const signal = stop === null ? {} : { signal: stop.signal };
+  let signal: { signal?: AbortSignal } = stop === null ? {} : { signal: stop.signal };
   const runArguments = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
   let start = (memory: MemoryRegistry | null) =>
     runFlow(flow, inputs, { ...runArguments, ...hooks, ...signal, memory });
@@ -2588,6 +2588,8 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       } finally {
         await cutMemory?.close();
       }
+      // The stop ended the first run; aborted for good, it would stop each later advance at once.
+      signal = {};
       // The sends a host makes while the run is down.
       for (const item of get(spec, "sends", []) as Case[]) {
         if (item["down"] === true) await send(log, item["inbox"] as string, item["event"], { env });

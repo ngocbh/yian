@@ -9,10 +9,16 @@ on:
 permissions:
   contents: read
 
+# A newer push to a PR supersedes its run in progress; every push to main runs to the end.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     name: Typecheck, tests and conformance
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 

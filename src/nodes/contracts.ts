@@ -910,7 +910,7 @@ function memberOnlyFieldError(
     which = `only union members with ${tag} ${tags} have`;
     fix = `read it inside a case on \${${unionPath}.${tag}}`;
   } else {
-    which = `only ${having.length} of ${union.variants!.length} union members have`;
+    which = `only ${having.length} of ${union.members!.length} union members have`;
     fix = `check the member with isinstance(${unionPath}, <Type>) in a case first`;
   }
   if (tagHint && tag !== undefined) {
@@ -1006,7 +1006,7 @@ export function outputContractFieldError(
   const walked = unionRoot === null ? [...readWalked] : [unionRoot];
   const start = walked.length;
   for (const fieldName of fields) {
-    if (typ.variants !== undefined) {
+    if (typ.members !== undefined) {
       const read = unionField(typ, fieldName);
       if (read.kind === "absent") {
         return `reference \${${path}} reads unknown field ${reprText(fieldName)} on record`;

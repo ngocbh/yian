@@ -106,7 +106,7 @@ import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
  * can when every member can.
  */
 function holdsMessages(typ: Type, list: boolean): boolean {
-  if (typ.variants !== undefined) return typ.variants.every((variant) => holdsMessages(variant, list));
+  if (typ.members !== undefined) return typ.members.every((variant) => holdsMessages(variant, list));
   if (typ.kind === ValueKind.ANY) return true;
   if (typ.kind === ValueKind.OBJECT) {
     // Compared without `nullable`, as a nullable `{role, text}` record loads: the render refuses a spliced null.

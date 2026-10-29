@@ -10,5 +10,5 @@ value:
 expect:
   raises:
     class: TypeCheckError
-    message: '"sell" is not a member of variant ["buy"]'
+    message: '"sell" is not one of Literal(buy)'
     path: [action]

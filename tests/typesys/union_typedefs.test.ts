@@ -121,8 +121,8 @@ describe("resolution", () => {
     const decision = typeFor("Decision", reg);
     expect(decision.kind).toBe(ValueKind.OBJECT);
     expect(decision.nullable).toBe(false);
-    expect(tags(decision.variants!)).toEqual(["buy", "hold", "sell"]);
-    expect(typeEquals(decision.variants![0]!, typeFor("Buy", reg))).toBe(true);
+    expect(tags(decision.members!)).toEqual(["buy", "hold", "sell"]);
+    expect(typeEquals(decision.members![0]!, typeFor("Buy", reg))).toBe(true);
     expect(unionTagFields(decision)).toEqual(["action"]);
   });
 
@@ -132,7 +132,7 @@ describe("resolution", () => {
 
     const optional = typeFor("Optional(Decision)", reg);
     expect(optional.nullable).toBe(true);
-    expectTypesEqual(optional.variants!, decision.variants!);
+    expectTypesEqual(optional.members!, decision.members!);
 
     const listed = typeFor("list(Decision)", reg);
     expect(listed.kind).toBe(ValueKind.LIST_OBJECT);
@@ -144,7 +144,7 @@ describe("resolution", () => {
 
     expect(typeFor("Optional(Union(Buy, Sell))", reg).nullable).toBe(true);
 
-    expect(tags(typeFor("Union(Buy, Sell)", reg).variants!)).toEqual(["buy", "sell"]);
+    expect(tags(typeFor("Union(Buy, Sell)", reg).members!)).toEqual(["buy", "sell"]);
   });
 
   test("an Optional union field is not required", () => {
@@ -159,7 +159,7 @@ describe("resolution", () => {
       Decision: "Union(Trade, Purchase, Hold, Union(Sell, Hold))",
     });
     const decision = typeFor("Decision", reg);
-    expect(tags(decision.variants!)).toEqual(["buy", "hold", "sell"]);
+    expect(tags(decision.members!)).toEqual(["buy", "hold", "sell"]);
     expect(typeEquals(decision, typeFor("Union(Buy, Sell, Hold)", reg))).toBe(true);
   });
 
@@ -185,8 +185,8 @@ describe("resolution", () => {
     const reply = typeFor("Reply", reg);
     expect(unionTagFields(reply)).toEqual([]);
     const members = [typeFor("Text", reg), typeFor("Call", reg)];
-    expectTypesEqual(reply.variants!, canonicalUnionOrder(members));
-    expect(new Set(reply.variants!.map(canonicalTypeLabel))).toEqual(
+    expectTypesEqual(reply.members!, canonicalUnionOrder(members));
+    expect(new Set(reply.members!.map(canonicalTypeLabel))).toEqual(
       new Set(members.map(canonicalTypeLabel)),
     );
   });
@@ -202,7 +202,7 @@ describe("resolution", () => {
       },
       trades(),
     );
-    expect(tags(union.variants!)).toEqual(["buy", "sell"]);
+    expect(tags(union.members!)).toEqual(["buy", "sell"]);
   });
 
   test("the canonical label uses the canonical order", () => {

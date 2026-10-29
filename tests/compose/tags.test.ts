@@ -68,7 +68,7 @@ describe("readTagType", () => {
     expect(rt("int").kind).toBe(ValueKind.INTEGER);
     expect(rt("Optional(str)").nullable).toBe(true);
     expect(rt("int(1..12)").bounds).toEqual([1n, 12n]);
-    expect(rt("Decision").variants).toBeTruthy();
+    expect(rt("Decision").members).toBeTruthy();
     expect(rt("list(Buy)").element?.fields).toBeTruthy();
   });
 

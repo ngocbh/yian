@@ -269,7 +269,7 @@ class Checker {
       throw fail(`must be a record of ${owner}'s fields, but the value is ${label}`);
     }
     const declared = [...(inferred.fields?.keys() ?? [])];
-    for (const member of inferred.variants ?? []) {
+    for (const member of inferred.members ?? []) {
       for (const name of member.fields?.keys() ?? []) if (!declared.includes(name)) declared.push(name);
     }
     const hostOnly = owner === "llm_config" ? declaredHostOnlyError(declared) : null;

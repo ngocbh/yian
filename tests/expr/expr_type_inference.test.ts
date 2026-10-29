@@ -127,7 +127,7 @@ test.each([
   [new Type({ kind: listKindForElement(str) }), null, false],
   [null, null, false],
   // A union's members are records, never lists, so iterating one has no element type.
-  [new Type({ kind: ValueKind.OBJECT, variants: [Msg, Other] }), null, false],
+  [new Type({ kind: ValueKind.OBJECT, members: [Msg, Other] }), null, false],
 ] as [Type | null, Type | null, boolean][])("elementType(%#)", (iterable, element, nullable) => {
   const got = elementType(iterable);
   if (element === null) expect(got).toBeNull();

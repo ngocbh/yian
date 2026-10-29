@@ -261,7 +261,7 @@ function hostOnlyMessage(prefix: string, message: string): string {
 /** Return the field names a record type, or any member of a record union, declares. */
 function declaredFields(typ: Type): Set<string> {
   const names = new Set(typ.fields?.keys() ?? []);
-  for (const member of typ.variants ?? []) {
+  for (const member of typ.members ?? []) {
     for (const name of member.fields?.keys() ?? []) names.add(name);
   }
   return names;

@@ -273,7 +273,7 @@ test("a whole record shields block fields through its type", () => {
 test("typeNullable walks records and unions", () => {
   const one = record({ kind: new Type({ kind: ValueKind.STRING, tags: new Set(["a"]) }), model: STR });
   const two = record({ kind: new Type({ kind: ValueKind.STRING, tags: new Set(["b"]) }), model: OPT_STR });
-  const union = new Type({ kind: ValueKind.OBJECT, variants: [one, two] });
+  const union = new Type({ kind: ValueKind.OBJECT, members: [one, two] });
 
   expect(typeNullable(one, ["model"])).toBe(false);
   expect(typeNullable(one, ["provider"])).toBe(true);

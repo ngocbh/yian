@@ -1142,7 +1142,7 @@ function resolveUnion(t: UnionExpr, registry: TypeRegistry, seen: ReadonlySet<st
   if (members.length === 1) return members[0]![2];
   const union = new Type({
     kind: ValueKind.OBJECT,
-    variants: canonicalUnionOrder(members.map(([, , member]) => member)),
+    members: canonicalUnionOrder(members.map(([, , member]) => member)),
   });
   if (unionTagFields(union).length === 0) {
     for (const [i, [aName, , a]] of members.entries()) {
@@ -1163,7 +1163,7 @@ function resolveUnion(t: UnionExpr, registry: TypeRegistry, seen: ReadonlySet<st
 function holdsFile(t: Type): boolean {
   if (t.kind === ValueKind.FILE) return true;
   if (t.fields !== undefined) return [...t.fields.values()].some(holdsFile);
-  return t.variants !== undefined && t.variants.some(holdsFile);
+  return t.members !== undefined && t.members.some(holdsFile);
 }
 
 /**

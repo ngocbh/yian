@@ -481,7 +481,7 @@ function tagTextOf(typ: Type, registry: TypeRegistry): string | null {
  */
 function directTagText(typ: Type, registry: TypeRegistry): string | null {
   // An inbox is only ever a flow input's type, so no other slot is told to tag one.
-  if (typ.variants !== undefined || typ.fields !== undefined || isInboxType(typ)) return null;
+  if (typ.members !== undefined || typ.fields !== undefined || isInboxType(typ)) return null;
   let text: string;
   if (typ.tags !== undefined) {
     if (typ.tags.size !== 1) return null;
@@ -517,7 +517,7 @@ function namedRecord(typ: Type, registry: TypeRegistry): string | null {
   if (isListKind(typ.kind) && typ.element !== undefined) {
     const inner = namedRecord(typ.element, registry);
     text = inner === null ? null : `list(${inner})`;
-  } else if (typ.fields !== undefined || typ.variants !== undefined) {
+  } else if (typ.fields !== undefined || typ.members !== undefined) {
     text = typedefName(typ.replace({ nullable: false }), registry);
   } else {
     text = null;

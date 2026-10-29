@@ -172,7 +172,7 @@ export function typeNullable(typ: Type | null, inner: ValuePath = []): boolean {
   let current = typ;
   for (const segment of inner) {
     if (admitsNone(current)) return true;
-    if (current.variants !== undefined) {
+    if (current.members !== undefined) {
       const read = unionField(current, String(segment));
       if (read.kind !== "read" || read.type === null) return true;
       current = read.type;

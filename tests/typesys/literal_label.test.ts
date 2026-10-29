@@ -115,8 +115,8 @@ describe("literal labels", () => {
   test("the order key keeps the bracket spelling", () => {
     // By label `{"a":Literal("b c")}` sorts first (`"` < `a`); by the bracket key
     // `{"a":Literal["a","z"]}` does, and the members are ordered by that key.
-    const variants = [rec(lit("b c")), rec(lit("a", "z"))];
-    const union = new Type({ kind: ValueKind.OBJECT, variants });
+    const members = [rec(lit("b c")), rec(lit("a", "z"))];
+    const union = new Type({ kind: ValueKind.OBJECT, members });
     expect(canonicalTypeLabel(union)).toBe('Union({"a":Literal(a, z)},{"a":Literal("b c")})');
   });
 });

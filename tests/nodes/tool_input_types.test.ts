@@ -136,7 +136,7 @@ output: \${t.output | hold.output}
 `);
 
   const stamped = (nodes.get("t") as ToolNode).inputTypes.get("order")!;
-  expect(stamped.variants).toBeUndefined();
+  expect(stamped.members).toBeUndefined();
   expect(new Set(stamped.fields!.keys())).toStrictEqual(new Set(["action", "qty", "price"]));
 });
 

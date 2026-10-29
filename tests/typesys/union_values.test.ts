@@ -58,7 +58,7 @@ function rec(fields: Record<string, Type>): Type {
 }
 
 function union(members: Type[], nullable = false): Type {
-  return new Type({ kind: ValueKind.OBJECT, variants: members, nullable });
+  return new Type({ kind: ValueKind.OBJECT, members: members, nullable });
 }
 
 const buy = rec({ action: lit("buy"), qty: INT });
@@ -80,13 +80,13 @@ describe("union shape", () => {
   test.each([
     [
       "kind",
-      new Type({ kind: ValueKind.STRING, variants: [buy, sell] }),
+      new Type({ kind: ValueKind.STRING, members: [buy, sell] }),
       RangeError,
-      /only object types may declare union variants/,
+      /only object types may declare union members/,
     ],
     [
       "other-refinement",
-      new Type({ kind: ValueKind.OBJECT, fields: new Map([["a", INT]]), variants: [buy, sell] }),
+      new Type({ kind: ValueKind.OBJECT, fields: new Map([["a", INT]]), members: [buy, sell] }),
       RangeError,
       /a type may declare only one structural refinement/,
     ],
@@ -101,9 +101,9 @@ describe("union shape", () => {
     ],
     [
       "not-an-array",
-      new Type({ kind: ValueKind.OBJECT, variants: new Set([buy, sell]) } as never),
+      new Type({ kind: ValueKind.OBJECT, members: new Set([buy, sell]) } as never),
       TypeError,
-      /type variants must be an array/,
+      /type members must be an array/,
     ],
   ] as const)("rejects %s", (_id, typ, cls, message) => {
     expect(() => typ.validateShape()).toThrow(cls);

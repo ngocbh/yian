@@ -291,7 +291,7 @@ test("run error multi frame on nested human input failure", async () => {
   expect(out).toContain("source locations:");
   expect(out).toContain("25-nested-suspension.yaml:41"); // frame 0: the `gate:` call node
   expect(out).toContain("25-nested-suspension.yaml:31"); // frame 1: the precise `output:` line
-  expect(out).toContain("is not a member of variant");
+  expect(out).toContain("is not one of Literal(");
 });
 
 test("run error unavailable presentation stays unlocated", async () => {

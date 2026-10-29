@@ -276,7 +276,7 @@ describe("declared-type write boundary", () => {
     expect(buildValueAs(action, "Approve").value).toBe("Approve");
     expectTypeCheckError(
       () => buildValueAs(action, "approve"),
-      '"approve" is not a member of variant ["Approve","Defer","Reject"]',
+      '"approve" is not one of Literal(Approve, Defer, Reject)',
       [],
     );
   });

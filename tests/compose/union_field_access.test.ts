@@ -157,7 +157,7 @@ test("a shared field one member does not require reads as optional", () => {
   const tag = (value: string) => new Type({ kind: ValueKind.STRING, tags: new Set([value]) });
   const union = new Type({
     kind: ValueKind.OBJECT,
-    variants: [
+    members: [
       new Type({
         kind: ValueKind.OBJECT,
         fields: new Map([
@@ -254,7 +254,7 @@ test("a map over a union output gives a list of objects", () => {
     .outputContract as ValueContract;
 
   expect(contract.type.kind).toBe(ValueKind.LIST_OBJECT);
-  expect(contract.type.element!.variants).toBeDefined();
+  expect(contract.type.element!.members).toBeDefined();
 });
 
 test("a non-exhaustive on over the tag names the missing member", () => {
@@ -330,10 +330,10 @@ test("runtime growth allows member-only fields", () => {
   expect(() => grow("zzz")).toThrow("reads unknown field 'zzz' on record");
 });
 
-test("canonicalizeInlineType keeps variants", () => {
+test("canonicalizeInlineType keeps union members", () => {
   const canonical = canonicalizeInlineType(decision());
   expect(typeEquals(canonical, decision())).toBe(true);
-  expect(canonical.variants).toBeDefined();
+  expect(canonical.members).toBeDefined();
 });
 
 // ---------- member-only reads at load ----------

@@ -6,5 +6,5 @@ value: approve
 expect:
   raises:
     class: TypeCheckError
-    message: '"approve" is not a member of variant ["Approve","Defer","Reject"]'
+    message: '"approve" is not one of Literal(Approve, Defer, Reject)'
     path: []

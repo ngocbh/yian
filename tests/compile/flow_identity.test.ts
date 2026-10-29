@@ -213,7 +213,7 @@ function member(tag: string, fields: Record<string, ValueKind> = {}): Type {
 
 /** A union of record members. */
 function union(...members: Type[]): Type {
-  return new Type({ kind: ValueKind.OBJECT, variants: members });
+  return new Type({ kind: ValueKind.OBJECT, members: members });
 }
 
 /** `fragment()` with `type` as the body's output contract. */

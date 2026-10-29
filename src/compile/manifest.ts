@@ -205,7 +205,7 @@ const PARAMETER_FIELDS = new Set([
 const VALUE_CONTRACT_FIELDS = new Set(["type", "origins"]);
 const PARTIAL_RECORD_CONTRACT_FIELDS = new Set(["fields"]);
 const CONTRACT_ORIGINS_IGNORED_FIELDS = new Set(["default", "entries"]);
-const TYPE_FIELDS = new Set(["kind", "fields", "required", "tags", "element", "nullable", "bounds", "variants"]);
+const TYPE_FIELDS = new Set(["kind", "fields", "required", "tags", "element", "nullable", "bounds", "members"]);
 const MEMORY_DECL_FIELDS = new Set(["name", "type", "config", "site", "origin"]);
 const CASE_FIELDS = new Set(["handle", "when", "origin"]);
 const FLOW_FIELDS = ["nodes", "edges", "wiring", "startId", "endId", "inputConnections", "childBoundaries"];
@@ -529,9 +529,9 @@ function typeManifest(value: Type | null | undefined, ctx: ManifestContext, path
       // Each end is a typed value: a bound may be a float or an int past 2^53.
       manifest.bounds = value.bounds.map((end, index) => canonicalValue(end, ctx, `${path}.bounds[${index}]`));
     }
-    if (value.variants !== undefined) {
+    if (value.members !== undefined) {
       value.validateShape();
-      manifest.union = canonicalUnionOrder(value.variants).map((item, index) =>
+      manifest.union = canonicalUnionOrder(value.members).map((item, index) =>
         typeManifest(item, ctx, `${path}.union[${index}]`),
       );
     }

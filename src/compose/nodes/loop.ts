@@ -624,7 +624,7 @@ function nonNullBases(guard: Guard): Set<string> {
 export function nullableAt(typ: Type, path: readonly string[]): Type {
   const [head, ...rest] = path;
   let changed = typ;
-  if (head !== undefined && typ.variants === undefined && typ.fields?.has(head)) {
+  if (head !== undefined && typ.members === undefined && typ.fields?.has(head)) {
     const fields = new Map(typ.fields);
     fields.set(head, nullableAt(typ.fields.get(head)!, rest));
     const required = new Set(typ.required);

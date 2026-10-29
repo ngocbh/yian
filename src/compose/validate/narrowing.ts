@@ -140,7 +140,7 @@ export function narrowType(typ: Type, path: readonly string[], narrowed: Type): 
   if (path.length === 0) return narrowed;
   const [name, ...rest] = path as [string, ...string[]];
   // A union is never entered: rewriting its members would break member identity.
-  if (typ.fields === undefined || typ.variants !== undefined || !typ.fields.has(name)) return null;
+  if (typ.fields === undefined || typ.members !== undefined || !typ.fields.has(name)) return null;
   const inner = narrowType(typ.fields.get(name)!, rest, narrowed);
   if (inner === null) return null;
   const fields = new Map(typ.fields).set(name, inner);
@@ -261,13 +261,13 @@ function buildViews(
 
 /** The union type of an exact contract, else `null`. */
 function unionType(contract: OutputContract | null): Type | null {
-  if (isExactly(contract, ValueContract) && contract.type.variants !== undefined) return contract.type;
+  if (isExactly(contract, ValueContract) && contract.type.members !== undefined) return contract.type;
   return null;
 }
 
 /** The sorted tag values of a tagged union's tag field. */
 function tags(union: Type, tagField: string): string[] {
-  return union.variants!.flatMap((member) => [...member.fields!.get(tagField)!.tags!]).sort(compareCodeUnits);
+  return union.members!.flatMap((member) => [...member.fields!.get(tagField)!.tags!]).sort(compareCodeUnits);
 }
 
 /** The fact that a value is one of `members`, relative to the base's own union. */
@@ -316,7 +316,7 @@ function onCaseFacts(
     if (members === undefined) byHandle.set(then, (members = []));
     if (typeof value === "string" && tagValues.includes(value)) {
       listed.add(value);
-      members.push(...union.variants!.filter((member) => member.fields!.get(tagField)!.tags!.has(value)));
+      members.push(...union.members!.filter((member) => member.fields!.get(tagField)!.tags!.has(value)));
     }
   }
   const facts = new Map<string, Env>();
@@ -324,7 +324,7 @@ function onCaseFacts(
     facts.set(handle, new Map([[base, membersFact(reference, members, false)]]));
   }
   if (desc.else_ !== null) {
-    const unlisted = union.variants!.filter(
+    const unlisted = union.members!.filter(
       (member) => ![...member.fields!.get(tagField)!.tags!].some((tag) => listed.has(tag)),
     );
     facts.set(ELSE_HANDLE, new Map([[base, membersFact(reference, unlisted, union.nullable)]]));

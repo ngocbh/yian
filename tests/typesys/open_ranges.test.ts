@@ -137,9 +137,9 @@ describe("open range values", () => {
     expect(buildError(new Type({ kind: INT, bounds: [null, 100n] }), 101n)).toBe(
       "101 is above the inclusive int maximum 100",
     );
-    // Values in messages use the text form: the float bound 0.0 shows as `0`.
+    // A float bound is spelled as the type label spells it.
     expect(buildError(new Type({ kind: NUM, bounds: [0.0, null] }), -0.5)).toBe(
-      "-0.5 is below the inclusive float minimum 0",
+      "-0.5 is below the inclusive float minimum 0.0",
     );
     // The two-sided message is unchanged.
     expect(buildError(new Type({ kind: INT, bounds: [1n, 12n] }), 13n)).toBe(

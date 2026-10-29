@@ -284,7 +284,7 @@ test("a union of large records shows a bounded no-member message", () => {
       fields: new Map(Array.from({ length: 100 }, (_, i) => [`${prefix}${i}`, Type.scalar(ValueKind.INTEGER)])),
       required: new Set(Array.from({ length: 100 }, (_, i) => `${prefix}${i}`)),
     });
-  const union = new Type({ kind: ValueKind.OBJECT, variants: [member("a"), member("b"), member("c")] });
+  const union = new Type({ kind: ValueKind.OBJECT, members: [member("a"), member("b"), member("c")] });
   let message = "";
   try {
     buildValueAs(union, { z: 1n });

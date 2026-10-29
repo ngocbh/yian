@@ -38,11 +38,11 @@ export type ErrorKind = (typeof ERROR_KINDS)[number];
 /** The kinds a `ProviderError` is retryable for when the caller doesn't say. */
 const RETRYABLE_KINDS: ReadonlySet<ErrorKind> = new Set(["rate_limit", "overloaded", "server", "timeout", "connection"]);
 
-/** openai's MAX_RETRY_AFTER_DELAY: the longest retry-after, in seconds, that still allows a retry by default. */
+/** openai's MAX_RETRY_AFTER_DELAY: the longest retry-after, in seconds, that still allows a retry. */
 export const MAX_RETRY_AFTER_SECONDS = 120;
 
-// openai's MAX_RETRY_AFTER_DELAY + 1: an overflowing delay stays finite, so the default
-// 120 s refusal still applies to it.
+// openai's MAX_RETRY_AFTER_DELAY + 1: an overflowing delay stays finite, so the 120 s refusal
+// still applies to it.
 const OVERFLOW_RETRY_AFTER = 121;
 const DECIMAL = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
 const FLOAT_LITERAL = /^([+-]?)(inf|infinity|nan)$/i;
@@ -251,8 +251,6 @@ function field(value: unknown, name: string): unknown {
 export interface ErrorFromResponseOptions {
   /** The provider name, used in the message. */
   provider: string;
-  /** The longest retry-after in seconds that still allows a retry; `null` allows any. Defaults to 120. */
-  maxRetryAfter?: number | null;
   /** Current time in epoch seconds for an HTTP-date retry-after. */
   now?: number;
   /** Secrets replaced in the body's detail after it is decoded and before it is capped. */
@@ -262,7 +260,7 @@ export interface ErrorFromResponseOptions {
 /**
  * Build the error for a non-2xx HTTP reply; `body` must already be stripped of
  * credentials. The kind comes from `kindForStatus`. `retryable` follows openai's
- * `_should_retry`: a finite retry-after over `maxRetryAfter` refuses, then
+ * `_should_retry`: a finite retry-after over `MAX_RETRY_AFTER_SECONDS` refuses, then
  * `x-should-retry` decides, then a quota or refused error refuses, then 408, 409, 429 and 5xx
  * retry.
  */
@@ -270,7 +268,7 @@ export function errorFromResponse(
   status: number,
   headers: Headers,
   body: string,
-  { provider, maxRetryAfter = MAX_RETRY_AFTER_SECONDS, now, credentials = [] }: ErrorFromResponseOptions,
+  { provider, now, credentials = [] }: ErrorFromResponseOptions,
 ): ProviderError {
   const kind = kindForStatus(status, body);
   const retryAfter = parseRetryAfter(headers, now);
@@ -278,22 +276,14 @@ export function errorFromResponse(
   return new ProviderError(kind, `${provider} returned HTTP ${status} (${kind}): ${detail}`, {
     status,
     retryAfter,
-    retryable: isRetryable(status, kind, headers, retryAfter, maxRetryAfter),
+    retryable: isRetryable(status, kind, headers, retryAfter),
     provider,
   });
 }
 
 /** Return whether a reply allows a retry, in the order openai checks. */
-function isRetryable(
-  status: number,
-  kind: ErrorKind,
-  headers: Headers,
-  retryAfter: number | null,
-  maxRetryAfter: number | null,
-): boolean {
-  if (maxRetryAfter !== null && retryAfter !== null && Number.isFinite(retryAfter) && retryAfter > maxRetryAfter) {
-    return false;
-  }
+function isRetryable(status: number, kind: ErrorKind, headers: Headers, retryAfter: number | null): boolean {
+  if (retryAfter !== null && Number.isFinite(retryAfter) && retryAfter > MAX_RETRY_AFTER_SECONDS) return false;
   const shouldRetry = headers.get("x-should-retry");
   if (shouldRetry === "true") return true;
   if (shouldRetry === "false") return false;

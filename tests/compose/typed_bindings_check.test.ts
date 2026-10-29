@@ -12,9 +12,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { LoadError } from "../../src/compose/helpers/errors.ts";
+import { type LoadError, shownLiteral } from "../../src/compose/helpers/errors.ts";
 import { BuildResult } from "../../src/compose/nodes/base.ts";
-import { LocalInput, localInputContracts, shownLiteral } from "../../src/compose/validate/typed_bindings.ts";
+import { LocalInput, localInputContracts } from "../../src/compose/validate/typed_bindings.ts";
 import { forget } from "../../src/defaults.ts";
 import { Binding, type OutputContract, PartialRecordContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";

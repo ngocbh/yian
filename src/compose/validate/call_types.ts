@@ -15,10 +15,9 @@
  *
  * Knows about: `compile/validation` (the type comparator), `expr` (the binding-null analysis and
  * escape parsing), `compose/helpers` (shared output-contract inference, the `Any` source hint, YAML
- * 1.1 boolean words and load diagnostics), `compose/nodes/loop` (a LOOP body's inputs as its seeds
- * enter them, and its carried field types), `compose/validate/typed_bindings` (literal and
- * `${item}` helpers), and `nodes/binding` (the run boundary's string conversion, named in a hint
- * only).
+ * 1.1 boolean words, load diagnostics and the text form of a literal), `compose/nodes/loop` (a LOOP
+ * body's inputs as its seeds enter them, and its carried field types), and `nodes/binding` (the run
+ * boundary's string conversion, named in a hint only).
  * Never imports: the loader or the compose package facade; only they import this back.
  */
 
@@ -58,7 +57,7 @@ import {
   TypeCheckError,
   type Value,
 } from "../../typesys/values.ts";
-import { LoadDiagnostics } from "../helpers/errors.ts";
+import { LoadDiagnostics, shownLiteral } from "../helpers/errors.ts";
 import {
   assertExactContracts,
   directReferenceParts,
@@ -75,7 +74,6 @@ import { formerBooleanFix } from "../helpers/yaml_words.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
 import type { Narrowing } from "./narrowing.ts";
-import { shownLiteral } from "./typed_bindings.ts";
 
 /**
  * Cross-flow type check for every `call`/`map` binding and `loop` seed (a loader pass).

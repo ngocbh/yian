@@ -29,7 +29,7 @@
  * Knows about: `diagnostics` (`SourceRange`), `expr` (the ref scan), `nodes/contracts` (the
  * output-contract sum), `typesys` (`Type` and the strict value check), `compile/output_contracts`,
  * and the compose peers `helpers/errors`, `helpers/tags`, `helpers/yaml_words`,
- * `nodes/case`, `source`, `validate/narrowing` and `validate/typed_bindings`.
+ * `nodes/case`, `source` and `validate/narrowing`.
  * Never imports: build, the loader, or the runtime; nothing in the engine imports this back.
  */
 
@@ -44,7 +44,7 @@ import {
   ValueKind,
   writeAsText,
 } from "../../typesys/values.ts";
-import { LoadDiagnostics, sourceText } from "../helpers/errors.ts";
+import { LoadDiagnostics, shownLiteral, sourceText } from "../helpers/errors.ts";
 import { assertExactContracts, resolveOutputBindingContract } from "../../compile/output_contracts.ts";
 import { valueFits, yamlQuoted } from "../helpers/tags.ts";
 import { formerBooleanFix } from "../helpers/yaml_words.ts";
@@ -52,7 +52,6 @@ import type { NodeDescriptor } from "../nodes/base.ts";
 import { CaseDescriptor, onMatchKey } from "../nodes/case.ts";
 import { parseYamlLiteral, SourceSyntaxError } from "../source/index.ts";
 import type { Narrowing } from "./narrowing.ts";
-import { shownLiteral } from "./typed_bindings.ts";
 
 /** A matchable `on:`-form `when:` value: text, a bool, an int or a float. */
 type WhenValue = string | boolean | bigint | number;

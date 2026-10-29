@@ -40,10 +40,10 @@
  * `v != null and v.qty > 0`), and a check that can never be true is a load error
  * (`helpers/condition_guards.ts`, `helpers/narrowing_facts.ts`).
  *
- * Knows about: `compile/validation`, `expr`, `typesys`, the `helpers` peers (`condition_guards`,
- * `isinstance_types`, `narrowing_facts`, `output_contracts`, `errors`, `tags`, `value_nesting`),
- * `nodes`, `compose/nodes/base`,
- * `desugar/inline_calls` (inline-call rejection) and `LocalInput` from `typed_bindings`.
+ * Knows about: `compile/validation`, `compile/output_contracts`, `expr`, `typesys`, the `helpers`
+ * peers (`errors`, `isinstance_types`, `value_nesting`), `nodes`, `compose/nodes/base`,
+ * `desugar/inline_calls` (inline-call rejection), the field-read walk of `field_reads`, `SkipModel`
+ * from `skips` and `LocalInput` from `typed_bindings`.
  * Never imports: build, the loader, or the runtime; nothing in helpers, nodes, parse, desugar or
  * edges imports this back.
  */
@@ -52,7 +52,6 @@ import { classifyPath } from "../../compile/validation.ts";
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import type { ExprNode } from "../../expr/grammar.ts";
 import {
-  conditionRefs,
   ExpressionError,
   exprRefs,
   optionalInsideRoot,
@@ -67,18 +66,17 @@ import {
   isExactly,
   type OutputContract,
   Parameter,
-  PartialRecordContract,
   ValueContract,
 } from "../../nodes/contracts.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isInboxType, jsTypeName, ValueKind } from "../../typesys/values.ts";
+import { isInboxType, ValueKind } from "../../typesys/values.ts";
 import { desugarCallDirectives } from "../desugar/inline_calls.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { collectConstructorNames, collectIsinstanceNames } from "../helpers/isinstance_types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
-import { contractType } from "../../compile/output_contracts.ts";
+import { assertExactContracts, contractType } from "../../compile/output_contracts.ts";
 import { fieldReadErrors, isUntyped, ReadSite } from "./field_reads.ts";
 import type { SkipModel } from "./skips.ts";
 import type { LocalInput } from "./typed_bindings.ts";
@@ -201,14 +199,7 @@ export function lowerFlowAsserts(
   const registry = options.registry ?? new Map();
   // Retain exact and partial carriers so a closed partial root can reject an unknown field without
   // inventing a semantic Type for opaque siblings.
-  for (const [nodeId, contract] of producers) {
-    if (!isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
-      throw new TypeError(
-        "producer contracts must be ValueContract or PartialRecordContract values, " +
-          `got ${jsTypeName(contract)} for ${reprText(nodeId)}`,
-      );
-    }
-  }
+  assertExactContracts(producers);
   // Indexed by loop position, never keyed by assert text, so two identical flow asserts get
   // distinct carets.
   const ranges = assertRanges ?? [];
@@ -224,23 +215,11 @@ export function lowerFlowAsserts(
   // Names already handed out, to guard the (near-impossible) collision case.
   const allocated = new Set<string>();
 
-  // A synth name must be a legal ref path (defensive; the prefix and author id components are
-  // always parseable in practice).
-  const parseable = (name: string): boolean => {
-    try {
-      conditionRefs("${" + name + "}");
-      return true;
-    } catch (error) {
-      if (!(error instanceof ExpressionError)) throw error;
-      return false;
-    }
-  };
-
-  /** Allocate a collision-proof synth name from `base`, verified parseable as a ref. */
+  /** Allocate a collision-proof synth name from `base`. */
   const alloc = (base: string): string => {
     let name = base;
     let i = 1;
-    while (flowInputs.has(name) || validTargets.has(name) || allocated.has(name) || !parseable(name)) {
+    while (flowInputs.has(name) || validTargets.has(name) || allocated.has(name)) {
       name = `${base}_${i}`;
       i += 1;
     }
@@ -342,7 +321,6 @@ export function lowerFlowAsserts(
         const path = qualifyFlowInput(ref);
         // A bare input name is one name of the read; `input.<k>` is two.
         const used = path === ref ? 2 : 1;
-        if (path === "input") return { text: "output", used: 1 }; // defensive; a bare `${input}` head shouldn't appear
         if (path.startsWith("input.")) return { text: `output.${path.split(".")[1]}`, used };
         return null;
       };
@@ -355,7 +333,6 @@ export function lowerFlowAsserts(
     const postRename = (ref: string): RefRenamed | null => {
       const segs = qualifyFlowInput(ref).split(".");
       const head = segs[0]!;
-      if (head === "output") return null; // the node's own output, kept (defensive)
       if (head === "input" && segs.length >= 2) {
         const x = segs[1]!;
         let synth = synthForInput.get(x);
@@ -595,13 +572,10 @@ export function validateNodeAsserts(
         if (head === "output") {
           readsOutput = true;
           const contract = node.outputContract;
-          if (contract !== null && !isExactly(contract, ValueContract) && !isExactly(contract, PartialRecordContract)) {
-            throw new TypeError(
-              `node ${reprText(nid)} output_contract must be an exact ValueContract, ` +
-                `PartialRecordContract, or null, got ${jsTypeName(contract)}`,
-            );
+          if (contract !== null) {
+            assertExactContracts(new Map([[nid, contract]]));
+            roots.set("output", [contract]);
           }
-          if (contract !== null) roots.set("output", [contract]);
           // A file output reaches the shared walk, which types its `uri`, `mime` and `name` and
           // rejects any other field.
           if (

@@ -2152,7 +2152,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 
   // Wiring/params key parity over EVERY node (catches an orphan/missing source or a node absent
   // from the wiring). Runs once the wiring is complete.
-  checkWiringParity(buildResults, flowWiring, { diagnostics });
+  checkWiringParity(buildResults, flowWiring);
 
   const reconciled = [...dataEdges, ...caseEdges, ...hostEdges];
 

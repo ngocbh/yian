@@ -46,7 +46,7 @@ import {
 } from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isRecord, Type, ValueKind } from "../../typesys/values.ts";
-import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
+import { LoadDiagnostics, type LoadError, locatedError } from "../helpers/errors.ts";
 import { collectConstructorNames, collectIsinstanceNames } from "../helpers/isinstance_types.ts";
 import type { TypeFn } from "../../compile/output_contracts.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
@@ -164,11 +164,8 @@ class Checker {
             : layer instanceof ValueTemplate
               ? layer.originAt(path)
               : null;
-      const frame = this.resolveOrigin !== null && origin !== null ? this.resolveOrigin(origin) : null;
       const fail: Fail = (message) =>
-        frame !== null
-          ? this.diagnostics.error(`${where}: ${message}`, { frames: [frame] })
-          : this.diagnostics.error(`${where}: ${message}`, { range: fallback });
+        locatedError(`${where}: ${message}`, { origin }, fallback, this.resolveOrigin, this.diagnostics);
       this.names(leaf, options.checkRefs, fail);
       this.tag(path, leaf, fail);
       this.type(path, leaf, tree, fail);

@@ -4,7 +4,8 @@
  * These operate on bare `Type`/edge/path-set inputs, not a built flow, so the Compose loader
  * reuses them directly:
  *
- * - `rejectCycles`: Kahn's-algorithm cycle check over a bare edge list + node-id set.
+ * - `topologicalOrder`: Kahn's order over a node list and its edges.
+ * - `rejectCycles`: a cycle check over a bare edge list + node-id set, through that order.
  * - `classifyPath`: head-resolution for one dotted `${...}` ref. Field reads are checked by the
  *   shared output-contract walk in `nodes/contracts.ts`.
  * - `typesCompatible`: whether every value of a source type fits a sink type.
@@ -67,6 +68,40 @@ export class FlowValidationError extends RangeError {
 }
 
 /**
+ * Order `nodes` so each comes after every node with an edge into it (Kahn's algorithm).
+ *
+ * Ready nodes are taken first in, first out, starting in `nodes` order; a node waits for every
+ * edge into it, a repeated edge included.
+ *
+ * @param nodes The nodes; every edge must name two of them.
+ * @param edges The edges between them.
+ * @returns `order`, the nodes in topological order, and `rest`, the nodes on or behind a cycle
+ *   (in `nodes` order), which `order` leaves out.
+ */
+export function topologicalOrder(
+  nodes: Iterable<string>,
+  edges: Iterable<{ readonly from: string; readonly to: string }>,
+): { order: string[]; rest: string[] } {
+  const all = [...nodes];
+  const indegree = new Map<string, number>(all.map((node) => [node, 0]));
+  const successors = new Map<string, string[]>(all.map((node) => [node, []]));
+  for (const edge of edges) {
+    indegree.set(edge.to, indegree.get(edge.to)! + 1);
+    successors.get(edge.from)!.push(edge.to);
+  }
+  const ready = all.filter((node) => indegree.get(node) === 0);
+  // `ready` is a queue: nodes are taken from the front as they are appended at the back.
+  for (let next = 0; next < ready.length; next++) {
+    for (const successor of successors.get(ready[next]!)!) {
+      const count = indegree.get(successor)! - 1;
+      indegree.set(successor, count);
+      if (count === 0) ready.push(successor);
+    }
+  }
+  return { order: ready, rest: all.filter((node) => indegree.get(node)! > 0) };
+}
+
+/**
  * Throw if the real-node graph has a directed cycle (Kahn's algorithm).
  *
  * Edges touching `__start__`/`__end__` can't be part of a cycle (the sentinels have no
@@ -81,12 +116,7 @@ export function rejectCycles(
   edges: Iterable<{ readonly from: string; readonly to: string }>,
   nodeIds: ReadonlySet<string>,
 ): void {
-  const adjacency = new Map<string, string[]>();
-  const inDegree = new Map<string, number>();
-  for (const nid of nodeIds) {
-    adjacency.set(nid, []);
-    inDegree.set(nid, 0);
-  }
+  const real: { readonly from: string; readonly to: string }[] = [];
   for (const edge of edges) {
     if (edge.from === START_ID || edge.from === END_ID) continue;
     if (edge.to === START_ID || edge.to === END_ID) continue;
@@ -94,24 +124,11 @@ export function rejectCycles(
     for (const end of [edge.from, edge.to]) {
       if (!nodeIds.has(end)) throw new Error(`edge names unknown node ${reprText(end)}`);
     }
-    adjacency.get(edge.from)!.push(edge.to);
-    inDegree.set(edge.to, inDegree.get(edge.to)! + 1);
+    real.push(edge);
   }
-
-  const queue = [...nodeIds].filter((nid) => inDegree.get(nid) === 0);
-  let visited = 0;
-  while (queue.length > 0) {
-    const nid = queue.pop()!;
-    visited += 1;
-    for (const next of adjacency.get(nid)!) {
-      const degree = inDegree.get(next)! - 1;
-      inDegree.set(next, degree);
-      if (degree === 0) queue.push(next);
-    }
-  }
-
-  if (visited !== nodeIds.size) {
-    const stuck = [...nodeIds].filter((nid) => inDegree.get(nid)! > 0).sort(compareCodeUnits);
+  const { rest } = topologicalOrder(nodeIds, real);
+  if (rest.length > 0) {
+    const stuck = rest.sort(compareCodeUnits);
     throw new FlowValidationError(
       `flow has a cycle involving ${writeAsText(stuck)}; flows must be acyclic`,
     );

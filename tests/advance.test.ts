@@ -365,7 +365,7 @@ test("a memory-close failure releases the hold and the lock", async () => {
 });
 
 /** Write, in a fresh folder, a flow whose CODE node runs `./fn.ts:up`, then a TOOL `ask` calling `lookup`. */
-async function codeHostFlow(root: string): Promise<{ dir: string; flow: ComposedFlow }> {
+async function codeHostFlow(root: string, codeRoot: string | null = null): Promise<{ dir: string; flow: ComposedFlow }> {
   const dir = join(root, "flows");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "fn.ts"), "export function up(inputs: Record<string, any>): string {\n  return `up:${inputs.q}`;\n}\n");
@@ -388,7 +388,7 @@ async function codeHostFlow(root: string): Promise<{ dir: string; flow: Composed
     "",
   ].join("\n");
   writeFileSync(join(dir, "flow.yaml"), text);
-  return { dir, flow: await loadFlow(text, { searchPaths: [dir], sourceLabel: "flow.yaml" }) };
+  return { dir, flow: await loadFlow(text, { searchPaths: [dir], sourceLabel: "flow.yaml", codeRoot }) };
 }
 
 /** `lookup` taking `q`, whose handler returns `pending()`. */
@@ -416,24 +416,39 @@ test("a waiting run's registry entry saves the recompile until the log changes",
   expect(await rejected(advance({ log, tools, env: NO_ENV }))).toBeInstanceOf(LoadError);
 });
 
-test("advance with codeRoot refuses a CODE file outside it; runFlow's entry has no code root, so it recompiles", async () => {
+test("runFlow's entry of a run started under codeRoot serves an advance passing that root, or none", async () => {
   const root = mkdtempSync(join(ROOT, "root-"));
-  const out = mkdtempSync(join(ROOT, "out-"));
-  const { dir, flow } = await codeHostFlow(root);
+  const { dir, flow } = await codeHostFlow(root, root);
   const log = freshLog();
   const tools = { lookup: lookupQ() };
   expect((await runFlow(flow, {}, { log, env: NO_ENV, tools })).status).toBe("waiting");
+  unlinkSync(join(dir, "fn.ts"));
+  // Hits: nothing recompiles, so the missing CODE file isn't read.
+  expect((await advance({ log, tools, env: NO_ENV, codeRoot: root })).status).toBe("waiting");
+  expect((await advance({ log, tools, env: NO_ENV })).status).toBe("waiting");
+});
+
+test("advance of a run started under codeRoot refuses a CODE file outside it with no codeRoot passed", async () => {
+  const root = mkdtempSync(join(ROOT, "root-"));
+  const out = mkdtempSync(join(ROOT, "out-"));
+  const { dir, flow } = await codeHostFlow(root, root);
+  const log = freshLog();
+  const tools = { lookup: lookupQ() };
+  const first = await runFlow(flow, {}, { log, env: NO_ENV, tools });
+  expect(first.status).toBe("waiting");
   const code = readFileSync(join(dir, "fn.ts"));
   renameSync(join(dir, "fn.ts"), join(out, "fn.ts"));
   symlinkSync(join(out, "fn.ts"), join(dir, "fn.ts"));
+  // The outside append changed the log, so the next advance recompiles.
+  completeByHand(log, flow, `${first.runId}/ask`, { output: "yes" });
   const before = readFileSync(log);
-  const error = await rejected(advance({ log, tools, env: NO_ENV, codeRoot: root }));
+  const error = await rejected(advance({ log, tools, env: NO_ENV }));
   expect(error).toBeInstanceOf(LoadError);
   expect((error as Error).message).toEndWith(" is outside the code root");
   expect(readFileSync(log).equals(before)).toBe(true);
   unlinkSync(join(dir, "fn.ts"));
   writeFileSync(join(dir, "fn.ts"), code);
-  expect((await advance({ log, tools, env: NO_ENV, codeRoot: root })).status).toBe("waiting");
+  expect((await advance({ log, tools, env: NO_ENV })).status).toBe("succeeded");
 });
 
 test("an advance passing an API key the flow doesn't use still hits the registry with that key", async () => {

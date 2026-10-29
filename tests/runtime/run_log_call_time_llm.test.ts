@@ -78,11 +78,11 @@ const GOLDEN =
   '"start_wiring_override":{"name":"${input.name}"},"tool_groups":{},"tools":{},"yian_version":"' +
   VERSION +
   '"},"run_id":"r1",' +
-  '"schema":24,"seq":0}';
+  '"schema":25,"seq":0}';
 
-test("the schema is twenty-four", () => {
-  expect(SCHEMA_VERSION).toBe(24);
-  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(24n);
+test("the schema is twenty-five", () => {
+  expect(SCHEMA_VERSION).toBe(25);
+  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(25n);
 });
 
 test("call_time_llm round trips", () => {

@@ -163,12 +163,12 @@ The log is append-only:
 Every line has the same envelope. This is the record that stores `greet`'s value:
 
 ```json
-{"at":"2026-10-27T08:43:00.746Z","kind":"pool_commit","payload":{"key":"greet","kind":"str","node_id":"greet","value":"hi Ada"},"run_id":"281f84a4cdb54f26a59aaa23c0f1b593","schema":24,"seq":9}
+{"at":"2026-10-27T08:43:00.746Z","kind":"pool_commit","payload":{"key":"greet","kind":"str","node_id":"greet","value":"hi Ada"},"run_id":"281f84a4cdb54f26a59aaa23c0f1b593","schema":25,"seq":9}
 ```
 
 | Field | Meaning |
 |---|---|
-| `schema` | The log format version. This yian reads and writes only schema 24 |
+| `schema` | The log format version. This yian reads and writes only schema 25 |
 | `run_id` | The run's id; the same on every line |
 | `seq` | The record's place in the log, from 0 with no gaps |
 | `at` | When the record was written (UTC). Use `seq` for order, since clocks can move |
@@ -196,7 +196,7 @@ The `run_started` record holds everything the run needs to be rebuilt later:
 
 | Recorded | Not recorded |
 |---|---|
-| The flow's fingerprint and the text of every flow file it loaded | API keys and header values |
+| The flow's fingerprint, the text of every flow file it loaded, and its code root | API keys and header values |
 | Each agent's resolved model settings | The host's own objects (a tool's `ctx.context`) |
 | The worker count and whether the run is learnable | |
 | The `YIAN_*` settings that differ from the defaults | |

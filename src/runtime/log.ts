@@ -73,10 +73,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 24;
+export const SCHEMA_VERSION = 25;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -184,6 +184,11 @@ export interface FlowSource {
   readonly root: string;
   /** The real path of the folder the root was loaded from. */
   readonly dir: string;
+  /**
+   * The real path of the folder every CODE reference's file had to resolve inside (the load's
+   * `codeRoot`), which a load from the source holds them to again; `null` for none.
+   */
+  readonly codeRoot: string | null;
   /** Each flow file the load read, by key. */
   readonly files: Readonly<Record<string, FlowSourceFile>>;
 }
@@ -420,13 +425,14 @@ function validatedToolGroups(
  * Return a frozen copy of a `RunStarted.flow` value.
  *
  * @throws TypeError when a part has the wrong type.
- * @throws RangeError when the root or folder is empty, or `files` doesn't hold the root or a file a
- *   ref names.
+ * @throws RangeError when the root, folder or code root is empty, or `files` doesn't hold the root
+ *   or a file a ref names.
  */
 function validatedFlowSource(flow: FlowSource): FlowSource {
   if (!isRecord(flow)) throw new TypeError("RunStarted flow must be an object or null");
   const root = requireName(flow.root, "RunStarted flow root");
   const dir = requireName(flow.dir, "RunStarted flow dir");
+  const codeRoot = flow.codeRoot === null ? null : requireName(flow.codeRoot, "RunStarted flow codeRoot");
   const files = validatedEntries(flow.files, "flow files", (file, label) => {
     const refs = file["refs"];
     if (!isRecord(refs)) throw new TypeError(`${label} refs must be an object`);
@@ -440,7 +446,7 @@ function validatedFlowSource(flow: FlowSource): FlowSource {
     return { text, refs: freezeParsed(canonicalCopy(refs)) as Record<string, string> };
   });
   if (!Object.hasOwn(files, root)) throw new RangeError(`RunStarted flow files must hold the root ${reprText(root)}`);
-  return Object.freeze({ root, dir, files });
+  return Object.freeze({ root, dir, codeRoot, files });
 }
 
 /**
@@ -2536,7 +2542,7 @@ function memorySpecFromPayload(value: unknown, label: string): MemorySpec {
 
 /** Encode a `run_started` flow. */
 function flowPayload(flow: FlowSource): JsonObject {
-  return { root: flow.root, dir: flow.dir, files: flow.files };
+  return { root: flow.root, dir: flow.dir, code_root: flow.codeRoot, files: flow.files };
 }
 
 /**
@@ -2546,10 +2552,11 @@ function flowPayload(flow: FlowSource): JsonObject {
  * @throws TypeError when a field has the wrong JSON type.
  */
 function flowFromPayload(value: unknown, label: string): FlowSource {
-  const wire = wireObject(value, label, ["root", "dir", "files"]);
+  const wire = wireObject(value, label, ["root", "dir", "code_root", "files"]);
   return {
     root: requireText(wire["root"], `${label} root`),
     dir: requireText(wire["dir"], `${label} dir`),
+    codeRoot: wire["code_root"] === null ? null : requireText(wire["code_root"], `${label} code_root`),
     files: wireEntries<FlowSourceFile>(wire["files"], `${label} files`, ["text", "refs"]),
   };
 }

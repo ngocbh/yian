@@ -80,7 +80,8 @@ console.log(result.status, result.output); // succeeded total: 7.5
 `LoadError`, whose `diagnostic` points into the source. A CODE reference outside `codeRoot` is
 named as the flow wrote it (`'../x.ts:fn' is outside the code root`) and reads the same whether
 or not its file exists. Under `codeRoot` no CODE error names an absolute path, so you can show it
-to the flow's author.
+to the flow's author. A run records the flow's `codeRoot`, and every later call on its log holds
+the CODE files to it ([Keep runs on disk](#keep-runs-on-disk)).
 
 A flow that fails still resolves, with `status: "failed"`. `runFlow` rejects for problems in your
 program or setup: a bad option, a tool, provider or model the flow needs but the run lacks, an MCP
@@ -146,8 +147,10 @@ holds media fails if `media` is a symlink, another user's, or writable by others
 model settings. Pass again what the log doesn't hold: `tools`, `skills`, `memory`, `context`, and
 the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`.
 
-The log doesn't hold `codeRoot` either. Pass `codeRoot` again on every `advance` and every host
-call below; a call without it doesn't confine the recorded flow's CODE files at all.
+The log holds the `codeRoot` the flow was loaded under, so `advance` and the host calls below
+confine the recorded flow's CODE files to it without being told. Passing `codeRoot` is optional; one
+that names another folder is refused with a `RangeError`, and so is any `codeRoot` passed for a run
+started without one.
 [How yian works](/how-it-works/#crash-recovery) explains replay and what can run twice.
 
 Only one writer holds a log at a time. A call on a log another process holds, or an `advance` of a

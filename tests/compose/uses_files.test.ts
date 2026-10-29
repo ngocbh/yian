@@ -8,7 +8,7 @@
  * an importer doesn't check a `uses:` child's CODE again, so a host's cached child whose CODE file
  * was removed after its load still imports. With `codeRoot`, every CODE reference of the root, its
  * defs, its inline bodies and its search-path children must resolve (symlinks followed) inside it,
- * or the load fails at the `code:` value; a `childResolver`'s flow isn't checked again.
+ * or the load fails at the `code:` value; a `childResolver`'s flow is checked against it too.
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -536,12 +536,15 @@ test("loadFlow with codeRoot checks a search-path child file's CODE references",
   expect(childOf(loaded.compiled, "a").flowId).toBe("p");
 });
 
-test("loadFlow with codeRoot leaves a childResolver's flow to the host", async () => {
+test("loadFlow with codeRoot holds a childResolver's flow to it too, however the host loaded it", async () => {
   const { root, out } = codeDirs();
-  const hosted = await loadFlow(codeFlow("./h.ts:fn"), { baseDir: out });
   const parent = flowText("q", { call: "ch", uses: { ch: "child" } });
+  const outside = await loadFlow(codeFlow("./h.ts:fn"), { baseDir: out });
+  const inside = await loadFlow(codeFlow("./h.ts:fn"), { baseDir: root });
 
-  const loaded = await loadFlow(parent, { childResolver: () => hosted, baseDir: root, codeRoot: root });
+  const error = await loadErrorAsync(loadFlow(parent, { childResolver: () => outside, baseDir: root, codeRoot: root }));
+  expect(error.message).toBe("node 'a': `code:` reference './h.ts:fn' is outside the code root");
+  const loaded = await loadFlow(parent, { childResolver: () => inside, baseDir: root, codeRoot: root });
   expect(childOf(loaded.compiled, "a").flowId).toBe("p");
 });
 

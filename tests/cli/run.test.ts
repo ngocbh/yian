@@ -1428,7 +1428,7 @@ describe("check", () => {
           diagnostics: [
             {
               code: "compose.load",
-              message: "system.paths is not supported with --root; use a relative uses: path",
+              message: "system.paths is not supported when loading confined to a folder; use a relative uses: path",
             },
           ],
         },

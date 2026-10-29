@@ -309,6 +309,11 @@ time and flow file. It first updates the run index, `~/.yian/runs/index.sqlite`,
 from the logs and safe to delete. With `--json`, each run also has its end time, result and token
 counts.
 
+A run whose log yian can't read shows `unreadable at seq N` as its status: N is the first record
+it couldn't read, such as a damaged line. The update warns once, and again only after the log
+changes. `yian status LOG` says what is wrong. With `--json`, such a run has `unreadable` with
+`seq` and `reason` (`null` for other runs), and its other fields describe the records before seq N.
+
 ## yian auth
 
 `yian auth` saves the provider login a run uses when no `llm_config` names one. See

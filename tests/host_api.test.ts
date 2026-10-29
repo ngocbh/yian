@@ -319,6 +319,40 @@ test("an offline delivery leaves an entry the next delivery reuses", async () =>
   expect(await complete(log, `${result.runId}/ask`, { output: "yes" }, { env })).toBeNull();
 });
 
+test("a delivery given the API key and headers leaves an entry an advance with them reuses", async () => {
+  const { dir, flow } = await codeAskFlow();
+  const log = freshLog();
+  const tools = { ask: pendingAsk() };
+  const credentials = { apiKey: "sk-test", headers: { "x-team": "a" } };
+  const result = await runFlow(flow, {}, { log, env, tools });
+  // runFlow's entry holds no key, so this one replays and leaves an entry holding the given ones.
+  await complete(log, `${result.runId}/ask`, { output: "yes" }, { env, ...credentials });
+  unlinkSync(join(dir, "fn.ts"));
+  // A hit: nothing recompiles, so the missing CODE file isn't read.
+  expect((await advance({ log, env, tools, ...credentials })).status).toBe("succeeded");
+});
+
+test("a delivery given no API key keeps the entry's, so an advance with it still reuses the entry", async () => {
+  const { dir, flow } = await codeAskFlow();
+  const log = freshLog();
+  const tools = { ask: pendingAsk() };
+  const llmConfig = { provider: "openai", api_key: "sk-test" };
+  const result = await runFlow(flow, {}, { log, env, tools, llmConfig });
+  await complete(log, `${result.runId}/ask`, { output: "yes" }, { env });
+  unlinkSync(join(dir, "fn.ts"));
+  // A hit: nothing recompiles, so the missing CODE file isn't read.
+  expect((await advance({ log, env, tools, apiKey: "sk-test" })).status).toBe("succeeded");
+});
+
+test("a delivery refuses a header value that can't be sent, appending nothing", async () => {
+  const { log, flow } = await waitingChat();
+  const before = readFileSync(log);
+  const error = await rejected(send(log, "m", "hi", { env, flow, apiKey: "sk-test", headers: { "x-team": "a\nb" } }));
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).not.toContain("a\nb");
+  expect(readFileSync(log).equals(before)).toBe(true);
+});
+
 describe("bad arguments and logs, for every host call", () => {
   const calls = {
     send: (log: string, options = {}) => send(log, "m", "hi", options),

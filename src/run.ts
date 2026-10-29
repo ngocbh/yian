@@ -415,11 +415,7 @@ export class RunResult {
     const { apiKey = null, headers = null, onEvent = null } = options;
     handle.busy = true;
     try {
-      return await handle.backward(taken as FeedbackValue, {
-        apiKey: apiKey === null ? null : secretKey(apiKey),
-        headers: headers === null ? null : validateHeaders(headers, null),
-        onEvent,
-      });
+      return await handle.backward(taken as FeedbackValue, { ...hostCredentials(apiKey, headers), onEvent });
     } finally {
       this.#backwardOutcome = handle.outcome;
       handle.busy = false;
@@ -590,8 +586,8 @@ async function liveOrHold<T>(
 
 /**
  * Return `idle` when the log is the same file, ends where it left it, and this call would rebuild
- * the same state; else `null`. Credentials matter only to `advance`, since deliveries call no
- * model.
+ * the same state; else `null`. Credentials matter only when given: `advance` always gives them,
+ * and a delivery, which calls no model, only when its caller does.
  */
 function reusable(
   idle: IdleRun | null,
@@ -1155,6 +1151,17 @@ function secretKey(raw: string): string {
   return new LLMConfig({ api_key: raw }).apiKey!;
 }
 
+/** Validate a host key and the headers sent with it, without echoing a value; a missing one is `null`. */
+function hostCredentials(
+  apiKey: string | null | undefined,
+  headers: Readonly<Record<string, string>> | null | undefined,
+): { apiKey: string | null; headers: Record<string, string> | null } {
+  return {
+    apiKey: apiKey == null ? null : secretKey(apiKey),
+    headers: headers == null ? null : validateHeaders(headers, null),
+  };
+}
+
 /**
  * Reject any agent config its model call would reject, before the run starts.
  *
@@ -1668,9 +1675,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       throw new TypeError("advance's flow must be a ComposedFlow or null");
     }
     const unopened = checkDriveOptions(options);
-    const { apiKey: rawKey = null, headers: rawHeaders = null } = options;
-    let apiKey = rawKey === null ? null : secretKey(rawKey);
-    let headers = rawHeaders === null ? null : validateHeaders(rawHeaders, null);
+    let { apiKey, headers } = hostCredentials(options.apiKey, options.headers);
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);
     // The registry's key: the file itself, however the path names it (throws ENOENT when missing).
@@ -1952,7 +1957,10 @@ function checkRecordedToolGroups(
   }
 }
 
-/** The options of a host call on a run log. A live delivery ignores them, except `codeRoot`'s check. */
+/**
+ * The options of a host call on a run log. A live delivery ignores them, except `codeRoot`'s check
+ * and the checks of `apiKey` and `headers`.
+ */
 export interface DeliveryOptions {
   /**
    * As `advance`'s `env`: the environment the call reads `YIAN_*` values from, which must be the
@@ -1967,6 +1975,15 @@ export interface DeliveryOptions {
   codeRoot?: string | null;
   /** The flow of a run built in code (`RunStarted` recorded no flow files), as `advance`'s. */
   flow?: ComposedFlow | null;
+  /**
+   * As `advance`'s, never recorded. A delivery calls no model, but the waiting state it leaves for
+   * the next `advance` holds them: pass the ones that `advance` will, and it reuses that state
+   * instead of replaying the log. With both `null` (the default), the call reuses this process's
+   * state whatever credentials it holds, and keeps them.
+   */
+  apiKey?: string | null;
+  /** As `advance`'s, never recorded; sent with `apiKey`, as above. */
+  headers?: Readonly<Record<string, string>> | null;
 }
 
 /**
@@ -1987,10 +2004,11 @@ async function deliverTo(
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
-    const { flow: hostFlow = null } = options;
+    const { flow: hostFlow = null, apiKey = null, headers = null } = options;
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
       throw new TypeError("a host call's flow must be a ComposedFlow or null");
     }
+    const given = apiKey === null && headers === null ? null : hostCredentials(apiKey, headers);
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);
     // The registry's key: the file itself, however the path names it (throws ENOENT when missing).
@@ -2013,11 +2031,12 @@ async function deliverTo(
       const opened = authority;
       const start = startRecord(authority[Symbol.iterator]().next().value);
       checkRecorded(start.defaults);
-      const kept = reusable(runHold.idle, authority, key, { hostFlow });
+      const want = given === null ? { hostFlow } : { hostFlow, credentials: given };
+      const kept = reusable(runHold.idle, authority, key, want);
       const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow));
-      const state = kept?.state ?? replayRunLog(flow, authority);
+      const state = kept?.state ?? replayRunLog(flow, authority, given ?? {});
       // Set before preparing: a refused delivery changes nothing, so the state stays reusable.
-      const credentials = { apiKey: kept?.apiKey ?? null, headers: kept?.headers ?? null };
+      const credentials = given ?? { apiKey: kept?.apiKey ?? null, headers: kept?.headers ?? null };
       keep = () => idleRun(state, flow, key, opened, { hostFlow, ...credentials });
       before(state);
       const prepared = prepareDelivery(state, op);
@@ -2046,8 +2065,8 @@ async function deliverTo(
  * it next takes from the inbox.
  *
  * Through this process's engine when it is moving the run (the options are ignored then, though a
- * `codeRoot` other than the recorded one is still refused); else under the log's lock, taken
- * without blocking, reusing the state of a waiting run this process left while the log is
+ * `codeRoot` other than the recorded one, or a refused `apiKey` or `headers`, is still refused);
+ * else under the log's lock, taken without blocking, reusing the state of a waiting run this process left while the log is
  * unchanged, or compiling the recorded flow and replaying the log as `advance` does. A send doesn't move the run: `advance` does (or the live engine).
  *
  * @param log The run's JSONL log.
@@ -2061,8 +2080,9 @@ async function deliverTo(
  *   or `too_large` (over the run's `YIAN_MAX_EVENT_BYTES`).
  * @throws RunBusyError when another writer holds the log.
  * @throws RangeError when the log is empty or doesn't start with `RunStarted`, the run's flow was
- *   built in code and `options.flow` is missing (or was recorded and it is given), or
- *   `options.codeRoot` isn't the recorded code root.
+ *   built in code and `options.flow` is missing (or was recorded and it is given),
+ *   `options.codeRoot` isn't the recorded code root, or `options.apiKey` or `options.headers` is
+ *   refused (the message never echoes a value).
  * @throws LoadError when the recorded flow no longer loads (a CODE file gone, or outside the
  *   recorded code root), before anything is appended.
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
@@ -2874,8 +2894,7 @@ export async function agentCall(
 ): Promise<AgentCallView> {
   const { nodeId, n } = call;
   const missing = () => new RangeError(`run log ${log} has no model call ${n} of node ${reprText(nodeId)}`);
-  const apiKey = options.apiKey == null ? null : secretKey(options.apiKey);
-  const headers = options.headers == null ? null : validateHeaders(options.headers, null);
+  const { apiKey, headers } = hostCredentials(options.apiKey, options.headers);
   const env = options.env ?? processEnv;
   const root = resolvedRoot(options.codeRoot);
   const entries = [...iterRunRecords(log, { maxLineBytes: options.maxLineBytes ?? null })];

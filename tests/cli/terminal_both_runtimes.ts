@@ -519,7 +519,8 @@ async function aYieldingReadLineGivesWayToAPromptQueuedBehindIt(): Promise<void>
 
 async function approvePreselectsTheChoiceItNames(): Promise<void> {
   const { input, terminal, view } = setup();
-  const answer = terminal.approve({ ...approval(), choices: ["Go", "Save", "Cancel"], preselect: "Save" });
+  const choices = ["Go", "Save", "Cancel"];
+  const answer = terminal.approve({ ...approval(), choices, preselect: "Save" });
   await tick();
   assert.deepEqual(view().rows.slice(-3), ["   Go", " » Save", "   Cancel"]);
   input.write(ENTER);
@@ -3160,7 +3161,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an aborted readLine keeps later keys": anAbortedReadLineKeepsLaterKeys,
   "a non-TTY readLine reads one line per call": aNonTtyReadLineReadsOneLinePerCall,
   "an aborted readLine returns its draft for the next prompt": anAbortedReadLineReturnsItsDraftForTheNextPrompt,
-  "a yielding readLine gives way to a prompt queued behind it": aYieldingReadLineGivesWayToAPromptQueuedBehindIt,
+  "a yielding readLine gives way to a prompt queued behind it":
+    aYieldingReadLineGivesWayToAPromptQueuedBehindIt,
   "approve preselects the choice it names": approvePreselectsTheChoiceItNames,
   "onActive says whether a turn left rows on the screen": onActiveSaysWhetherATurnLeftRows,
   "Escape at readLine with escape returns the draft": escapeAtReadLineReturnsTheDraft,

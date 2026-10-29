@@ -9,7 +9,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventQueue } from "../../src/cli/chat_events.ts";
 import { chatRunTools, shownStatus } from "../../src/cli/chat_run_tools.ts";
 import { ChildRuns } from "../../src/cli/chat_runs.ts";
-import { type ChatToolHost, chatFileTools, stringArguments, ToolRefused } from "../../src/cli/chat_tools.ts";
+import {
+  type ChatToolHost,
+  chatFileTools,
+  stringArguments,
+  ToolRefused,
+} from "../../src/cli/chat_tools.ts";
 import type { ApproveRequest } from "../../src/cli/terminal.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { ToolContext } from "../../src/tools/context.ts";
@@ -544,7 +549,11 @@ describe("report_issue", () => {
         },
       });
       const tools = chatRunTools(host({ env }), runs, {
-        report: { facts: "yian version: 0.0.4\nchat run log: ~/c.jsonl", homes: ["/home/ada"], fileIssue },
+        report: {
+          facts: "yian version: 0.0.4\nchat run log: ~/c.jsonl",
+          homes: ["/home/ada"],
+          fileIssue,
+        },
       });
       const reportIssue = tools.find((each) => each.name === "report_issue")!;
       const ctx = new ToolContext({
@@ -565,7 +574,9 @@ describe("report_issue", () => {
       expect(filed).toEqual([report]);
       const prompt = model.requests[0]!.messages.at(-1)!.text();
       expect(prompt).toContain("The problem: yian check crashed");
-      expect(prompt).toContain("yian version: 0.0.4\nchat run log: ~/c.jsonl\nran: yian check a.yaml");
+      expect(prompt).toContain(
+        "yian version: 0.0.4\nchat run log: ~/c.jsonl\nran: yian check a.yaml",
+      );
       expect(runs.live()).toEqual([]);
       // Without its options, the chat's run tools have no report_issue.
       expect(chatRunTools(host(), runs).some((each) => each.name === "report_issue")).toBe(false);

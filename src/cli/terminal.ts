@@ -1050,7 +1050,9 @@ export class Terminal {
     };
     this.#onWaiting.add(onWaiting);
     const signal =
-      options.signal === undefined ? yielding.signal : AbortSignal.any([options.signal, yielding.signal]);
+      options.signal === undefined
+        ? yielding.signal
+        : AbortSignal.any([options.signal, yielding.signal]);
     try {
       const read = await this.#readLine(label, { ...options, signal, initial }, () => {
         up = true;

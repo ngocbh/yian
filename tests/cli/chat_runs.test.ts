@@ -138,7 +138,11 @@ output: \${loud.output}
       shout: tool({
         name: "shout",
         description: "Shout the text.",
-        parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+        parameters: {
+          type: "object",
+          properties: { text: { type: "string" } },
+          required: ["text"],
+        },
         execute: (args) => String(args["text"]).toUpperCase(),
       }),
     };
@@ -326,7 +330,8 @@ test(
     await children.start(await loadFlow(ASK, { sourceLabel: "ask.yaml", env: NO_ENV }), {});
     const waiting = await settled(children, "r1");
     expect((await children.answer("r1", `${CHAT}-r1/sure`, "yes")).status).toBe("running");
-    expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded", output: "yes" });
+    const done = await settled(children, "r1", waiting.seq);
+    expect(done).toMatchObject({ status: "succeeded", output: "yes" });
   },
   TIMEOUT,
 );

@@ -610,7 +610,9 @@ test(
     const { io, stdin, stdout, screen } = chatIo({ tty: true });
     const report = {
       title: "yian check crashes",
-      body: `What I ran: yian check a.yaml with password=hunter2\nRun log: ${join(home, "r", "log.jsonl")}`,
+      body:
+        "What I ran: yian check a.yaml with password=hunter2\n" +
+        `Run log: ${join(home, "r", "log.jsonl")}`,
     };
     // The report run's draft asks once, then writes; the assistant relays the question.
     let drafts = 0;
@@ -618,14 +620,19 @@ test(
     const model = new AnsweringModel((request) => {
       if (request.messages[0]!.text().startsWith("You write a bug report about yian")) {
         drafts += 1;
-        if (drafts === 1) return callReply(["ask_user", { question: "What did you expect?" }, "q1"]);
+        if (drafts === 1) {
+          return callReply(["ask_user", { question: "What did you expect?" }, "q1"]);
+        }
         return drafts === 2 ? textReply("Drafted.") : textReply(JSON.stringify(report));
       }
       const reported = request.messages.some((message) =>
-        message.parts.some((part) => part instanceof ToolResultPart && part.name === "report_issue"),
+        message.parts.some(
+          (part) => part instanceof ToolResultPart && part.name === "report_issue",
+        ),
       );
       if (!reported) {
-        return callReply(["report_issue", { problem: "yian check crashed", context: "ran yian check a.yaml" }, "c1"]);
+        const args = { problem: "yian check crashed", context: "ran yian check a.yaml" };
+        return callReply(["report_issue", args, "c1"]);
       }
       const asked = request.messages
         .filter((message) => message.author === "yian")
@@ -633,7 +640,8 @@ test(
         .find((match) => match !== null);
       if (!answered && asked) {
         answered = true;
-        return callReply(["answer_flow", { run: "r1", call: asked[1]!, answer: "an error message" }, "c2"]);
+        const args = { run: "r1", call: asked[1]!, answer: "an error message" };
+        return callReply(["answer_flow", args, "c2"]);
       }
       return textReply(shown(request).includes("succeeded with output") ? "saved it" : "on it");
     });
@@ -668,7 +676,8 @@ test(
     const [file] = readdirSync(reports);
     const text = readFileSync(join(reports, file!), "utf8");
     expect(text).toBe(
-      "# yian check crashes\n\nWhat I ran: yian check a.yaml with password=[redacted]\nRun log: ~/r/log.jsonl\n",
+      "# yian check crashes\n\nWhat I ran: yian check a.yaml with password=[redacted]\n" +
+        "Run log: ~/r/log.jsonl\n",
     );
     const child = inspectRun(join(home, ".yian", "runs", "chat-9-r1", "log.jsonl"));
     expect(child.status).toBe("succeeded");
@@ -676,7 +685,8 @@ test(
     const draft = model.requests.filter((request) =>
       request.messages[0]!.text().startsWith("You write a bug report about yian"),
     );
-    expect(shown(draft[0]!)).toContain(`chat run log: ${join(tmp, "chat.jsonl")}\\nran yian check a.yaml`);
+    const facts = `chat run log: ${join(tmp, "chat.jsonl")}\\nran yian check a.yaml`;
+    expect(shown(draft[0]!)).toContain(facts);
     expect(shown(draft.at(-1)!)).toContain("an error message");
   },
   TIMEOUT,

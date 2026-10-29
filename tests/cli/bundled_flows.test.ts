@@ -109,7 +109,10 @@ test("the prompt reads before explaining, checks before runs, and relays inbox r
  * scripted model; return what reached file_issue and the flow's output.
  */
 async function runReport(report: { title: string; body: string }, homes: string[] = []) {
-  const flow = await loadFlow(flowText("report_issue.yaml"), { sourceLabel: "report_issue.yaml", env: NO_ENV });
+  const flow = await loadFlow(flowText("report_issue.yaml"), {
+    sourceLabel: "report_issue.yaml",
+    env: NO_ENV,
+  });
   const filed: Record<string, unknown>[] = [];
   const fileIssue = tool({
     name: "file_issue",

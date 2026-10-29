@@ -571,7 +571,7 @@ function checkMemory(value: Value | undefined): void {
 
 /**
  * Throw unless `value`, at `where`, is a point: `{model_call: n, chunk: k}`, `{model_call: n}` or
- * `{tool_call: i}`, counted from 1.
+ * `{tool_call: i}`, counted from 1 (`chunk` from 0).
  */
 function checkPoint(where: string, value: Value | undefined): void {
   const point = mapping(where, value);
@@ -579,8 +579,10 @@ function checkPoint(where: string, value: Value | undefined): void {
   if (!["chunk,model_call", "model_call", "tool_call"].includes(names)) {
     throw new Error(`\`${where}\` is \`{model_call, chunk}\`, \`{model_call}\` or \`{tool_call}\``);
   }
-  if (Object.values(point).some((count) => typeof count !== "bigint" || count < 1n)) {
-    throw new Error(`\`${where}\` counts must be ints from 1`);
+  const counted = ([name, count]: [string, Value]) =>
+    typeof count === "bigint" && count >= (name === "chunk" ? 0n : 1n);
+  if (!Object.entries(point).every(counted)) {
+    throw new Error(`\`${where}\` counts must be ints from 1, \`chunk\` from 0`);
   }
 }
 
@@ -1676,8 +1678,9 @@ class Inbox {
 
 /**
  * Yield `events`, a scripted call's, reaching its `inbox` points at `[node, number]`, its model
- * call: chunk `k` once its events are delivered (a `reply`, whose events are one chunk, after all
- * of them; a `chunks` entry's, one event each), then the end of the call when it doesn't raise.
+ * call: chunk 0 as its first event is asked for, before it is sent; chunk `k` once its events are
+ * delivered (a `reply`, whose events are one chunk, after all of them; a `chunks` entry's, one
+ * event each), then the end of the call when it doesn't raise.
  */
 async function* reaching(
   events: EventStream,
@@ -1686,6 +1689,7 @@ async function* reaching(
   [node, number]: [string, bigint],
 ): AsyncGenerator<Event> {
   let chunk = 0n;
+  inbox.reached(node, { model_call: number, chunk });
   while (true) {
     const result = await events.next();
     if (result.done) break;

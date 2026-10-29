@@ -172,7 +172,8 @@ const AT = "host.models.n.agent[0]";
 const SENDS =
   "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?} or {complete, output | error}; " +
   "`hold: true` marks an item sent while the run waits that isn't followed by an advance";
-const COUNTS = "`host.sends[0].after` counts must be ints from 1";
+const COUNTS = "`host.sends[0].after` counts must be ints from 1, `chunk` from 0";
+const STOP_COUNTS = "`host.stop.a.after` counts must be ints from 1, `chunk` from 0";
 const USAGE = "{input_tokens: 1, output_tokens: 2, total_tokens: 3}";
 const CONSUMER_LIST = "agent, structured_retry, compose, backward, summary";
 const MEMORY_CONSUMER = "consumers go under `__memory__`, and `__memory__` holds only them";
@@ -525,7 +526,8 @@ describe("checkCase", () => {
       `${RUN}host: {stop: {a: {after: {chunk: 1}}}}`,
       "`host.stop.a.after` is `{model_call, chunk}`, `{model_call}` or `{tool_call}`",
     ],
-    [`${RUN}host: {stop: {a: {after: {model_call: 0}}}}`, "`host.stop.a.after` counts must be ints from 1"],
+    [`${RUN}host: {stop: {a: {after: {model_call: 0}}}}`, STOP_COUNTS],
+    [`${RUN}host: {stop: {a: {after: {model_call: 1, chunk: -1}}}}`, STOP_COUNTS],
     [
       `${BARE_BACKWARD}backward: [{feedback: f}]`,
       "a `backward` case needs `run.learnable: true`",

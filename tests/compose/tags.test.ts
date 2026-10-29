@@ -435,8 +435,8 @@ describe("readTaggedValue", () => {
     }
   });
 
-  test.each(["x: {a: call(f)}\n", "x: {a: 'call(f, b=1)'}\n", "x: [' call(f)']\n"])(
-    "a nested call is an error: %p",
+  test.each(["x: {a: call(f)}\n", "x: [call (f, b=1)]\n"])(
+    "an unquoted nested call is an error: %p",
     (text) => {
       fails(
         text,
@@ -445,6 +445,14 @@ describe("readTaggedValue", () => {
       );
     },
   );
+
+  test("a quoted nested call is text", () => {
+    expect(read("x:\n  a: 'call(f, b=1)'\n  b: [\" call(f)\"]\n  c: |\n    call(f)\n").value).toEqual({
+      a: "call(f, b=1)",
+      b: [" call(f)"],
+      c: "call(f)\n",
+    });
+  });
 
   test("nested spans make a template with raw leaf strings", () => {
     const template = templateOf(read('x: {a: "${n.output}", b: [1, "${m.output}"], c: "$$x"}\n'));

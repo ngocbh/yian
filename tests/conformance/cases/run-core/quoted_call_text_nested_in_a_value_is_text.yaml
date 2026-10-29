@@ -1,0 +1,39 @@
+kind: run
+flow: |
+  id: p
+  name: p
+  input:
+    name: !str
+  nodes:
+    v: !object {note: "call (555) 123-4567 tomorrow"}
+    c:
+      kind: code
+      input:
+        fixed: {msg: 'call(me) maybe', items: [" call(f)"]}
+        live: {msg: "call(me) maybe", who: "${input.name}"}
+        tagged: {msg: !str 'call(me) maybe', who: "${input.name}"}
+        block:
+          msg: |
+            call(me) maybe
+          who: ${input.name}
+        note: ${v.output}
+      code: |
+        return inputs
+  output:
+    got: ${c.output}
+    text: 'call(me) later'
+    nested: {text: 'call(me) later', who: "${input.name}"}
+inputs: {name: Ada}
+run: {num_workers: 0}
+expect:
+  output:
+    status: succeeded
+    output:
+      got:
+        fixed: {msg: call(me) maybe, items: [" call(f)"]}
+        live: {msg: call(me) maybe, who: Ada}
+        tagged: {msg: call(me) maybe, who: Ada}
+        block: {msg: "call(me) maybe\n", who: Ada}
+        note: {note: call (555) 123-4567 tomorrow}
+      text: call(me) later
+      nested: {text: call(me) later, who: Ada}

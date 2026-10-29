@@ -318,6 +318,15 @@ describe("parseCommand", () => {
 
   test("int options are checked", () => {
     expect(usage(RUN, [flow, "-w", "x"])).toBe("Invalid value for '--num-workers' / '-w': 'x' is not a valid integer.");
+    // Past 2^53 a Number loses digits, and 309 digits or more read as Infinity.
+    for (const text of ["9007199254740992", "99999999999999999999", "9".repeat(400)]) {
+      expect(usage(RUN, [flow, "-w", text])).toBe(
+        `Invalid value for '--num-workers' / '-w': '${text}' is not a valid integer.`,
+      );
+    }
+    expect(parseCommand(RUN, [flow, "-w", "9007199254740991"])).toMatchObject({
+      options: { "num-workers": 9007199254740991 },
+    });
     for (const argv of [["--num-workers=-1"], ["-w-1"]]) {
       expect(usage(RUN, [flow, ...argv])).toBe("Invalid value for '--num-workers' / '-w': -1 is not in the range x>=0.");
     }

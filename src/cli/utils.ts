@@ -270,12 +270,13 @@ function checkPath(hint: string, value: string, check: PathCheck): void {
   if (check.writable && !can(constants.W_OK)) fail("is not writable");
 }
 
-/** Return `text` as an int `option` accepts, or throw a `UsageError`. */
+/** Return `text` as a safe int `option` accepts, or throw a `UsageError`. */
 function toInt(option: OptionSpec, text: string): number {
-  if (!/^-?[0-9]+$/.test(text)) {
+  const value = Number(text);
+  // Past 2^53 a Number no longer holds the digits given.
+  if (!/^-?[0-9]+$/.test(text) || !Number.isSafeInteger(value)) {
     throw new UsageError(`Invalid value for ${optionHint(option)}: ${reprText(text)} is not a valid integer.`);
   }
-  const value = Number(text);
   if (option.min !== undefined && value < option.min) {
     throw new UsageError(`Invalid value for ${optionHint(option)}: ${value} is not in the range x>=${option.min}.`);
   }

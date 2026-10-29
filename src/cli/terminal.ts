@@ -6,6 +6,7 @@
 import { emitKeypressEvents } from "node:readline";
 
 import { reprText } from "../diagnostics.ts";
+import { coerceParam } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import type { QuestionSpec } from "../nodes/tool/questions.ts";
 import type { ToolContext } from "../tools/context.ts";
@@ -97,6 +98,11 @@ interface Widget<T> {
   key(key: Key): { value: T } | { stop: "interrupt" | "eof" } | undefined;
   /** The one line the frame collapses to once the widget has ended; null erases it and leaves none. */
   done(outcome: Outcome<T>): string | null;
+  /**
+   * For a plain terminal, after a key: the error a refused answer drew, with the typed text
+   * dropped so the next line is a fresh answer; undefined when nothing was refused.
+   */
+  refused?(): string | undefined;
 }
 
 const ESC = "\x1b[";
@@ -290,6 +296,12 @@ function textWidget(options: {
     },
     done: (outcome) =>
       collapsed(mark, options.label, "value" in outcome && !options.mask ? shown(Array.from(outcome.value)) : ""),
+    refused() {
+      if (error === undefined) return undefined;
+      chars.length = 0;
+      pos = 0;
+      return error;
+    },
     text: () => chars.join(""),
   };
 }
@@ -830,8 +842,13 @@ export class Terminal {
     let cursorRow = 0;
     const erase = (): string => `\r${cursorRow > 0 ? `${ESC}${cursorRow}A` : ""}${ESC}J`;
     const draw = (): void => {
-      // A plain prompt is written once, as it opens.
-      if (this.#plain) return;
+      // A plain prompt is written once, as it opens; a refused line adds only its error, since
+      // the cooked tty already echoed the line.
+      if (this.#plain) {
+        const refused = widget.refused?.();
+        if (refused !== undefined) output.write(`${refused}\n`);
+        return;
+      }
       const columns = output.columns || 80;
       const lines = widget.lines();
       const cursor = widget.cursor();
@@ -1029,8 +1046,8 @@ async function choose(run: RunWidget, label: string, choices: readonly Choice[],
 
 /**
  * Run the text editor for one open input. A list/object editor validates JSON in place and returns
- * the native value; a scalar editor returns the raw text, coerced later at the run boundary. An
- * optional blank answer is `OMIT_INPUT`.
+ * the native value; a scalar editor checks its text as START would and returns it raw, coerced
+ * later at the run boundary. An optional blank answer is `OMIT_INPUT`.
  */
 async function promptOpenValue(
   run: RunWidget,
@@ -1058,7 +1075,22 @@ async function promptOpenValue(
     );
     return blankOmits(value) ? OMIT_INPUT : parseStructuredInput(value, type, decl.name);
   }
-  const value = await run(textWidget({ label }));
+  const value = await run(
+    textWidget({
+      label,
+      validate: (text) => {
+        if (blankOmits(text) || type === undefined) return undefined;
+        // START's own check: the input's string coercion, then its contract.
+        try {
+          buildValueAs(type, coerceParam(decl, text));
+        } catch (error) {
+          if (error instanceof TypeCheckError) return error.message;
+          throw error;
+        }
+        return undefined;
+      },
+    }),
+  );
   return blankOmits(value) ? OMIT_INPUT : value;
 }
 

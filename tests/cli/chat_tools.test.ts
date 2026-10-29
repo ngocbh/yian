@@ -368,3 +368,24 @@ describe("write_flow", () => {
     expect(existsSync(join(tmp, "x.yaml"))).toBe(false);
   });
 });
+
+describe("read_docs", () => {
+  const docs = new Map([
+    ["writing-flows", "# Writing flows\n"],
+    ["agents", "# Agents\n"],
+  ]);
+
+  test("without a page, lists the page names, sorted", async () => {
+    expect(await call("read_docs", {}, host({ docs }))).toBe("agents\nwriting-flows");
+  });
+
+  test("returns a page's text", async () => {
+    expect(await call("read_docs", { page: "agents" }, host({ docs }))).toBe("# Agents\n");
+  });
+
+  test("an unknown page is an error naming the known ones", async () => {
+    const error = await rejection(call("read_docs", { page: "nope" }, host({ docs })));
+    expect(isReportedToolError(error)).toBe(true);
+    expect(error.message).toBe("no docs page 'nope'; the pages are: agents, writing-flows");
+  });
+});

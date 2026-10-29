@@ -26,7 +26,7 @@ import { basename, dirname, extname, join, relative, resolve, sep } from "node:p
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import type { Env } from "../defaults.ts";
-import { compareCodeUnits, type Diagnostic } from "../diagnostics.ts";
+import { compareCodeUnits, type Diagnostic, reprText } from "../diagnostics.ts";
 import { isSystemError, leavesRoot } from "../platform.ts";
 import { resolvedPath } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
@@ -328,7 +328,8 @@ function stringArguments(...fields: [name: string, description: string, required
 
 /**
  * The chat assistant's file tools over `host`: `list_flows`, `read_flow`, `check_flow` and
- * `write_flow`, which asks the user through `host.approve` before it writes.
+ * `write_flow`, which asks the user through `host.approve` before it writes; and `read_docs`, over
+ * `host.docs`.
  */
 export function chatFileTools(host: ChatToolHost): FunctionTool[] {
   const { root } = host;
@@ -384,6 +385,21 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
         additionalProperties: false,
       },
       execute: (args, ctx) => writeFlow(host, String(args["path"]), String(args["content"]), ctx.signal),
+    }),
+    tool({
+      name: "read_docs",
+      description: "Read a page of yian's docs; without a page, list the pages there are.",
+      parameters: stringArguments(["page", "The page's name, as the list gives it.", false]),
+      execute: (args) => {
+        const names = Array.from(host.docs.keys()).sort(compareCodeUnits);
+        const page = args["page"];
+        if (typeof page !== "string") return names.join("\n");
+        const text = host.docs.get(page);
+        if (text === undefined) {
+          throw new ReportedToolError(`no docs page ${reprText(page)}; the pages are: ${names.join(", ")}`);
+        }
+        return text;
+      },
     }),
   ];
 }

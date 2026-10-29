@@ -324,7 +324,6 @@ async function driveOpenedBackward(
       state.memories ?? [],
       state.memoryStacks ?? [],
       started.feedback,
-      root,
       attributed,
       { cache, materials },
     );

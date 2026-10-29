@@ -40,8 +40,8 @@ import {
   MemoryMutation,
   MemoryOperationFailure,
   type MemoryScope,
-  MemorySpec,
-  MemoryStack,
+  type MemorySpec,
+  type MemoryStack,
   PolicyCommitOutcome,
   sameLearningResult,
   sameMemoryMutation,
@@ -489,7 +489,7 @@ function structuralParents(
 /**
  * Derive exact transfers from accepted routes without invoking or formatting.
  *
- * @param lookup Resolves accepted sources while routing; defaults to `trace.lookupSource`.
+ * @param lookup Resolves accepted sources while routing.
  * @returns Each target and its message.
  * @throws RangeError when an input with feedback has no captured route, or for the structural
  *   walk's and `routeFeedback`'s errors.
@@ -500,7 +500,7 @@ function transferBackward(
   context: BackwardContext,
   messages: readonly BackwardMessage[],
   result: BackwardResult,
-  lookup: (source: SourceRef) => unknown = (source) => trace.lookupSource(source),
+  lookup: (source: SourceRef) => unknown,
 ): Transfer[] {
   const structural = structuralParents(context, messages, result, trace.sources.has(sourceKey(occurrence.source)));
   const route = occurrence.inputRoute;
@@ -596,6 +596,9 @@ export function validateAttributedBackward(
   if (!sameItems(sources(attributedResults), sources(occurrences), sameSource)) {
     throw new RangeError("backward results must match the complete accepted occurrence order");
   }
+  // Many routes read the same source, and each uncached lookup parses its whole value again.
+  const cache = new ContextCache(trace);
+  const lookup = (source: SourceRef) => cache.lookup(source);
   let rootInputs: Readonly<Record<string, readonly FeedbackValue[]>> = {};
   for (let index = occurrences.length - 1; index >= 0; index--) {
     const occurrence = occurrences[index]!;
@@ -617,7 +620,7 @@ export function validateAttributedBackward(
     if (trace.rootStartSource !== null && sameSource(occurrence.source, trace.rootStartSource)) {
       rootInputs = item.result.inputFeedback;
     }
-    for (const [source, transfer] of transferBackward(trace, occurrence, context, messages, item.result)) {
+    for (const [source, transfer] of transferBackward(trace, occurrence, context, messages, item.result, lookup)) {
       addMessage(pending, source, transfer);
     }
   }
@@ -1302,24 +1305,27 @@ function rootOwnerFeedback(result: BackwardResult): JsonObject[] {
 }
 
 /**
- * Build every enabled memory's context from a validated complete backward result.
+ * Build every enabled memory's context from a complete backward result.
  *
  * A memory receives an occurrence when the occurrence's recorded scope names its key. The
- * source-free root channel goes to every memory owned by the root flow.
+ * source-free root channel goes to every memory owned by the root flow. The inputs aren't
+ * checked again: the table and stacks come from the run's start record, which checked them, and
+ * the results from `computeBackward` over the same trace and feedback; the Ready record's
+ * reducer validates those results before anything is committed.
  *
  * @param trace Accepted terminal executions and historical scopes.
  * @param memories The complete recorded key table, including keys without executed nodes.
  * @param stacks The recorded per-target key stacks.
  * @param submittedFeedback The original ordinary root message.
- * @param rootResult The completed root projection.
- * @param attributedResults The complete accepted occurrence inventory and validated local results.
+ * @param attributedResults `computeBackward`'s results: every accepted occurrence in outcome
+ *   order, with its local result.
  * @param options `cache` is the backward pass's route-context cache over `trace`, shared with the
  *   backward driver; without one a new one starts.
  * @returns Detached episode and feedback batches in table order. Feedback keeps the accepted
  *   execution coordinates; the memory scope selects receivers and episode ownership without
  *   relabeling that feedback.
- * @throws TypeError or RangeError for an invalid table, stacks, trace or backward authority, or
- *   missing accepted source authority while materializing.
+ * @throws RangeError when an occurrence's memory scope disagrees with its recorded stack or names
+ *   a key absent from the table, or an accepted source is missing while materializing.
  * @throws OwnerContextError when validated material can't satisfy a receiving memory's JSON
  *   contract. It names the occurrence whose episode or feedback failed, or none when only the root
  *   feedback failed. No callback or backend is invoked.
@@ -1329,24 +1335,11 @@ export function projectOwnerContexts(
   memories: readonly MemorySpec[],
   stacks: readonly MemoryStack[],
   submittedFeedback: FeedbackValue,
-  rootResult: BackwardResult,
   attributedResults: readonly AttributedBackwardResult[],
   options: { cache?: ContextCache | null; materials?: ReadonlyMap<string, LearningMaterial> | null } = {},
 ): readonly LearnContext[] {
-  if (!isList(memories) || memories.some((spec) => !isExactly(spec, MemorySpec))) {
-    throw new TypeError("owner contexts require the complete recorded memory table");
-  }
-  if (!isList(stacks) || stacks.some((stack) => !isExactly(stack, MemoryStack))) {
-    throw new TypeError("owner contexts require the recorded memory stacks");
-  }
-  const keys = memories.map((spec) => spec.key);
-  if (!sameItems(keys, [...new Set(keys)].sort(compareCodeUnits))) {
-    throw new RangeError("owner contexts require a memory table sorted by unique key");
-  }
-  const known = new Set(keys);
+  const known = new Set(memories.map((spec) => spec.key));
   const recorded = new Map(stacks.map((stack) => [JSON.stringify(stack.locator), stack.memories]));
-  if (recorded.size !== stacks.length) throw new RangeError("recorded memory stacks must have unique locators");
-  validateAttributedBackward(trace, submittedFeedback, rootResult, attributedResults);
   const occurrences = trace.occurrences;
   const scopes = new Map<string, MemoryScope>();
   for (const occurrence of occurrences) {

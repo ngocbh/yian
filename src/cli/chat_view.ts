@@ -168,7 +168,9 @@ function jsonFields(text: string): string[] | null {
     return null;
   }
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-  return Object.entries(parsed).map(([key, value]) => `${key}: ${typeof value === "string" ? value : shortValue(value)}`);
+  return Object.entries(parsed).map(
+    ([key, value]) => `${key}: ${typeof value === "string" ? value : shortValue(value)}`,
+  );
 }
 
 /**
@@ -325,7 +327,8 @@ export class ChatView {
     if (block === null || block.node !== chunk.nodeId || block.n !== chunk.n) {
       this.#finishBlock();
       this.#gap("text");
-      block = { node: chunk.nodeId, n: chunk.n, markdown: new MarkdownLines(this.#width() - 2, this.#output, this.#env), rows: [], printed: 0, partial: "" };
+      const markdown = new MarkdownLines(this.#width() - 2, this.#output, this.#env);
+      block = { node: chunk.nodeId, n: chunk.n, markdown, rows: [], printed: 0, partial: "" };
       this.#block = block;
       this.#streamed = true;
     }
@@ -362,9 +365,10 @@ export class ChatView {
       const args = fit(sanitize(shortArgs(event.arguments)), Math.max(1, this.#width() - cells(name) - 4));
       this.#commit([`${this.#paint("⏺", "cyan")} ${this.#paint(name, "bold")}(${args})`]);
     } else if (event instanceof ToolCallFinished) {
-      const failed = event.error !== null;
-      const text = failed ? (event.error === "interrupted" ? "interrupted" : `error: ${event.error}`) : (event.result ?? "");
-      this.#result(summary(text, this.#width() - 5), failed ? (event.error === "interrupted" ? "yellow" : "red") : "dim");
+      const { error, result } = event;
+      const text = error === null ? (result ?? "") : error === "interrupted" ? error : `error: ${error}`;
+      const style = error === null ? "dim" : error === "interrupted" ? "yellow" : "red";
+      this.#result(summary(text, this.#width() - 5), style);
       this.#last = "tool";
     } else if (event instanceof NodeSucceeded) this.#finishBlock();
   }
@@ -427,7 +431,13 @@ export class ChatView {
     const rows: string[] = [];
     const block = this.#block;
     if (block !== null) {
-      const partial = block.partial === "" ? [] : wrapSpans([[sanitize(block.partial), null]], this.#width() - 2, this.#output, this.#env).map(([, printed]) => printed);
+      // The line still coming is shown as written; it is drawn as Markdown once it ends.
+      const partial =
+        block.partial === ""
+          ? []
+          : wrapSpans([[sanitize(block.partial), null]], this.#width() - 2, this.#output, this.#env).map(
+              ([, printed]) => printed,
+            );
       rows.push(...this.#prefixed([...block.rows, ...partial], block.printed));
     }
     if (this.#turn !== null && !this.#paused) {

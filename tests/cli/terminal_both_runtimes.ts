@@ -649,7 +649,8 @@ async function aFramedReadLineFoldsALongLineInsideTheBox(): Promise<void> {
   // 54 cells fit a row: the 55th character starts the next, and a wide one that doesn't fit too.
   input.write(`${"a".repeat(53)}日本`);
   await tick();
-  assert.deepEqual(view().rows, [FRAME_TOP, framed(`> ${"a".repeat(53)}`), `│   日本${" ".repeat(50)} │`, FRAME_BOTTOM, `  ${HINT}`]);
+  const wide = `│   日本${" ".repeat(50)} │`;
+  assert.deepEqual(view().rows, [FRAME_TOP, framed(`> ${"a".repeat(53)}`), wide, FRAME_BOTTOM, `  ${HINT}`]);
   assert.deepEqual(view().cursor, { row: 2, col: 8 });
   input.write(BACKSPACE.repeat(2) + "b");
   await tick();
@@ -2479,7 +2480,9 @@ async function approveShowsItsTextSanitized(): Promise<void> {
 
 async function aFramedApprovalNumbersTheDiffAndColoursItsLines(): Promise<void> {
   const { input, output, terminal, view } = setup({ columns: 60 });
-  const diff = "--- a.yaml\n+++ a.yaml\n@@ -1,3 +1,3 @@\n id: a\n-name: old\n+name: new\n nodes:\n@@ -12 +12,2 @@\n-x\x1b[2J\n+y\n+z\n";
+  const diff =
+    "--- a.yaml\n+++ a.yaml\n@@ -1,3 +1,3 @@\n id: a\n-name: old\n+name: new\n nodes:\n" +
+    "@@ -12 +12,2 @@\n-x\x1b[2J\n+y\n+z\n";
   const answer = terminal.approve({ ...approval({ diff }), frame: true });
   await tick();
   const row = (text: string) => `│ ${text}${" ".repeat(56 - text.length)} │`;

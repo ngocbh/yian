@@ -295,9 +295,11 @@ describe("the chat's view", () => {
     view.turn(true);
     const call = { nodeId: REPLY, n: 1, callIndex: 0, toolCallId: "c1" };
     view.onEvent(new ToolCallStarted({ ...call, name: "check_flow", arguments: { path: "examples/hello.yaml" } }));
-    view.onEvent(new ToolCallFinished({ ...call, name: "check_flow", result: "ok\nname: hello\ninputs:\n  name: str\n" }));
+    const checked = "ok\nname: hello\ninputs:\n  name: str\n";
+    view.onEvent(new ToolCallFinished({ ...call, name: "check_flow", result: checked }));
     const start = { ...call, callIndex: 1, toolCallId: "c2", name: "start_flow" };
-    view.onEvent(new ToolCallStarted({ ...start, arguments: { path: "examples/hello.yaml", inputs: { name: "Ada" } } }));
+    const args = { path: "examples/hello.yaml", inputs: { name: "Ada" } };
+    view.onEvent(new ToolCallStarted({ ...start, arguments: args }));
     view.onEvent(new ToolCallFinished({ ...start, result: `invalid: \x1b[31m${"word ".repeat(40)}` }));
     view.onEvent(new ToolCallStarted({ ...call, toolCallId: "c3", name: "wait_flow", arguments: { run: "r1" } }));
     view.onEvent(new ToolCallFinished({ ...call, toolCallId: "c3", name: "wait_flow", error: "interrupted" }));
@@ -319,7 +321,8 @@ describe("the chat's view", () => {
     const status = (fields: object) => ({ run: "r1", seq: 1, log: "r1.jsonl", status: "waiting" as const, ...fields });
     view.childEvent(childEvent(status({ status: "succeeded", output: "Hi Ada" }))!);
     view.childEvent(childEvent(status({ asks: [{ call: "c1", question: "Which region?" }] }))!);
-    view.childEvent(childEvent(status({ status: "failed", failure: { code: "code.error", message: "kaboom", node: "x" } }))!);
+    const failure = { code: "code.error", message: "kaboom", node: "x" };
+    view.childEvent(childEvent(status({ status: "failed", failure }))!);
     view.childEvent({ run: null, seq: 0, text: "run r9 was cancelled" });
     expect(rows()).toEqual([
       "",
@@ -336,7 +339,7 @@ describe("the chat's view", () => {
     expect(output.text).toContain("\x1b[31m⏺");
   });
 
-  test("the spinner counts seconds on its own clock, keeps clear of lines printed, and goes at the turn's end", async () => {
+  test("the spinner ticks on its own clock, keeps clear of lines printed, and goes when the turn ends", async () => {
     const { view, clock, rows } = viewOn();
     view.turn(true);
     expect(rows()).toEqual(["· Thinking… (0s · esc to interrupt)"]);
@@ -382,7 +385,8 @@ describe("the view's helpers", () => {
 /** A reply streamed in `chunks`. */
 function streamed(...chunks: string[]): ScriptedReply {
   const text = chunks.join("");
-  return [...chunks.map((chunk) => new TextDelta(0, chunk)), new PartDone(0, new TextPart(text)), new Finish({ reason: "stop" })];
+  const deltas = chunks.map((chunk) => new TextDelta(0, chunk));
+  return [...deltas, new PartDone(0, new TextPart(text)), new Finish({ reason: "stop" })];
 }
 
 const HELLO = `id: hello

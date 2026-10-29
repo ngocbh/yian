@@ -35,11 +35,11 @@ import { chatBanner, ChatView, homePath, loginLabel, richChat } from "./chat_vie
 import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
 import { inboxChat, type InboxChatHost } from "./inbox_chat.ts";
-import { paint, printStyled, type Style } from "./render.ts";
+import { type Colored, paint, printStyled, type Style } from "./render.ts";
 import { CHAT_FLOW_FILE, removeEmptyDir, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
-import type { CliIo, Writer } from "./utils.ts";
+import type { CliIo } from "./utils.ts";
 
 /** The label the bundled flow's diagnostics and recorded source go by. */
 const CHAT_LABEL = CHAT_FLOW_FILE;
@@ -153,11 +153,13 @@ function consoleFileFor(log: string): string {
  * The lines telling the user how each child left waiting can go on, the first of each in yellow
  * and the next dim when `out` takes colour (`paint`).
  */
-function waitingLines(children: readonly WaitingChild[], out: Writer, env: Env): string {
+function waitingLines(children: readonly WaitingChild[], out: Colored, env: Env): string {
   const shown = (text: string, style: Style) => `${paint(text, style, out, env)}\n`;
   return children
     .map((child) => {
-      if (child.kind === "halted") return shown(`run ${child.run} was stopped while it ran; its log: ${child.log}`, "yellow");
+      if (child.kind === "halted") {
+        return shown(`run ${child.run} was stopped while it ran; its log: ${child.log}`, "yellow");
+      }
       const what = { question: "an answer to its question", inbox: "a message", timer: "a timer" }[child.kind];
       const next =
         child.kind === "timer"
@@ -182,7 +184,11 @@ function waitingLines(children: readonly WaitingChild[], out: Writer, env: Env):
  * it. The assistant gets the file tools (`chatFileTools`, over the docs bundle) and the run tools
  * (`chatRunTools`) over the chat's child runs, whose logs go in new run folders under
  * `~/.yian/runs` and whose CODE console output goes to a file beside the chat's log; and the
- * bundled `composing-agents` skill (`bundledSkill`). A child granted skills gets them as
+ * bundled `composing-agents` skill (`bundledSkill`). When stdin, stdout and stderr are a terminal
+ * and `NO_COLOR` is unset (`richChat`), all of it is drawn through the chat's view (`ChatView`)
+ * instead: a banner box naming the model, how it is reached, the folder and the focus; the reply
+ * streamed as Markdown; tool calls, child events and approvals as cards; a spinner on
+ * `deps.ticker`; a framed prompt. A child granted skills gets them as
  * `yian run` reads them from the chat's folder.
  *
  * When the chat ends, the children still running are cancelled, and each child left waiting is
@@ -335,7 +341,8 @@ export async function chat(
     signals.on("SIGINT", halt);
     try {
       const waiting = await runs.dispose();
-      await io.stderr.write(waitingLines(waiting, view === null ? { write: io.stderr.write } : io.stderr, env));
+      // The plain lines stay plain.
+      await io.stderr.write(waitingLines(waiting, view === null ? { isTTY: false } : io.stderr, env));
       if (fresh.runDir !== null) removeEmptyDir(fresh.runDir);
     } finally {
       signals.off("SIGINT", halt);

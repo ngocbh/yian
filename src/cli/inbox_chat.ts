@@ -311,6 +311,11 @@ function inboxClosed(log: string, inbox: string): boolean {
  * run that ends waiting after the inbox closed, with no deadline to wake it, prints what it waits
  * on and exits 0.
  *
+ * With `host.view`, the chat draws its look through it (`InboxChatView`): it gets the run's events,
+ * its stream and the reply instead of stdout, the turns, the child events sent and the times a
+ * prompt has the terminal; the chat's own notes are styled by it, and the prompt is framed with its
+ * hint.
+ *
  * With `host.events`, each child event queued is sent to the inbox as a message authored `yian`
  * (as text to an `Inbox(str)`): while a turn runs, at once, unless a tool call is in flight, then
  * when the last one ends; while the prompt is up, the prompt is taken down, the events are sent

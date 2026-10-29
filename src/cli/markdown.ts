@@ -134,8 +134,9 @@ export class MarkdownLines {
   /** A line of code inside the frame, folded to fit it. */
   #code(text: string): string[] {
     const inner = Math.max(1, this.#width - 4);
+    const edge = this.#dim("│");
     return wrapSpans([[text, null]], inner, this.#out, this.#env).map(
-      ([plain, printed]) => `${this.#dim("│")} ${printed}${" ".repeat(Math.max(0, inner - cells(plain)))} ${this.#dim("│")}`,
+      ([plain, printed]) => `${edge} ${printed}${" ".repeat(Math.max(0, inner - cells(plain)))} ${edge}`,
     );
   }
 

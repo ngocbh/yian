@@ -637,18 +637,6 @@ export function hostOnlyFieldError(config: unknown): readonly [field: string, me
 }
 
 /**
- * Whether `value` counts as empty: unset, `false`, `""`, zero, or an empty list or record
- * (a record whose values are all `undefined` counts as empty).
- */
-function isFalsy(value: unknown): boolean {
-  if (value === undefined || value === null || value === false || value === "" || value === 0n || value === 0) {
-    return true;
-  }
-  if (Array.isArray(value)) return value.length === 0;
-  return isRecord(value) && Object.values(value).every((item) => item === undefined);
-}
-
-/**
  * Remove a host `api_key` from one mutable config layer and return it validated, or `null` when the
  * layer has none.
  *
@@ -661,7 +649,7 @@ export function popApiKey(config: Record<string, unknown>): string | null {
   delete config["api_key"];
   if (raw === null || raw === undefined) return null;
   const provider = own(config, "provider");
-  if (isFalsy(provider)) {
+  if (provider === null || provider === undefined) {
     throw new RangeError("llm_config.api_key needs llm_config.provider, so the key goes only to that provider");
   }
   return new LLMConfig({ provider, api_key: raw }).apiKey;

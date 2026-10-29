@@ -806,8 +806,7 @@ export function validateHeaderNames(value: unknown, provider: unknown): string[]
  */
 function checkHostHeaders(raw: Readonly<AgentConfig>, names: readonly string[]): void {
   const value = raw["headers"];
-  // An absent or empty value means no headers.
-  const headers = !value || (Array.isArray(value) && value.length === 0) ? {} : value;
+  const headers = value === null || value === undefined ? {} : value;
   // `LLMConfig` names the malformed field.
   if (!isRecord(headers)) return;
   const diff = headerNameDiff(names, Object.keys(headers));

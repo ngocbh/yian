@@ -578,8 +578,8 @@ describe("edge cases", () => {
     expect(hostOnlyFieldError(null)).toBeNull();
   });
 
-  test("popApiKey needs a truthy provider", () => {
-    for (const provider of [undefined, null, false, "", 0n, 0, [], {}]) {
+  test("popApiKey needs a provider", () => {
+    for (const provider of [undefined, null]) {
       const layer: Record<string, unknown> = { provider, api_key: SENTINEL };
       const error = caught(() => popApiKey(layer));
       expect(error).toBeInstanceOf(RangeError);
@@ -589,6 +589,22 @@ describe("edge cases", () => {
       );
       expect(Object.hasOwn(layer, "api_key")).toBe(false);
     }
+  });
+
+  test("popApiKey names a provider that is set but not a provider", () => {
+    for (const provider of [false, "", 0n, 0, [], {}]) {
+      const layer: Record<string, unknown> = { provider, api_key: SENTINEL };
+      const error = caught(() => popApiKey(layer));
+      expect(error).toBeInstanceOf(ValidationError);
+      expect((error as ValidationError).issues.map(({ loc, type }) => [loc, type])).toEqual([
+        [["provider"], "literal_error"],
+      ]);
+      expect(error.message).not.toContain(SENTINEL);
+      expect(Object.hasOwn(layer, "api_key")).toBe(false);
+    }
+  });
+
+  test("popApiKey returns a valid key and refuses a bad one", () => {
     const layer: Record<string, unknown> = { provider: "openai", api_key: SENTINEL };
     expect(popApiKey(layer)).toBe(SENTINEL);
     expect(layer).toEqual({ provider: "openai" });

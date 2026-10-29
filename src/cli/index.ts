@@ -226,9 +226,9 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       ],
     },
     load: async () => {
-      const { chat } = await import("./chat.ts");
+      const { inboxChat } = await import("./inbox_chat.ts");
       return ({ args, options: o }, io) =>
-        chat(
+        inboxChat(
           args["flow"] as string | undefined,
           {
             inbox: o["inbox"] as string | undefined,

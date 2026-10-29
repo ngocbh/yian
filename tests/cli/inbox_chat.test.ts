@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { chat, type ChatDeps, type ChatOptions } from "../../src/cli/chat.ts";
+import { inboxChat, type InboxChatDeps, type InboxChatOptions } from "../../src/cli/inbox_chat.ts";
 import { main } from "../../src/cli/index.ts";
 import { type CliIo, HostStop, type Writer } from "../../src/cli/utils.ts";
 import { FileLockError, lockFile, type Scheduler, virtualScheduler } from "../../src/platform.ts";
@@ -97,11 +97,11 @@ function chatIo({
 async function runChat(
   flow: string,
   io: CliIo,
-  options: Partial<ChatOptions> = {},
-  deps: ChatDeps = {},
+  options: Partial<InboxChatOptions> = {},
+  deps: InboxChatDeps = {},
 ): Promise<{ code: number; log: string }> {
   const log = join(tmp, "run.jsonl");
-  const code = await chat(
+  const code = await inboxChat(
     flow,
     { inputValues: [], engineTrace: false, log, ...options },
     io,
@@ -529,7 +529,7 @@ test(
         if (text.startsWith("Run log: ")) stop.abort(new HostStop("SIGTERM"));
       },
     };
-    const code = await chat(
+    const code = await inboxChat(
       flowFile(ECHO),
       { inputValues: [], engineTrace: false },
       { ...io, stderr: stderrOut, stop: stop.signal },
@@ -550,7 +550,7 @@ test(
     mkdirSync(home);
     const { io, stdin } = chatIo({ env: { HOME: home } });
     stdin.write("hi\n/exit\n");
-    const code = await chat(
+    const code = await inboxChat(
       flowFile(ECHO),
       { inputValues: [], engineTrace: false },
       io,
@@ -1498,8 +1498,8 @@ describe("yian chat's skills", () => {
 
 describe("yian chat --resume", () => {
   /** `chat --resume log` with the virtual clock and the test's signals. */
-  function resumeChat(log: string, io: CliIo, options: Partial<ChatOptions> = {}, deps: ChatDeps = {}) {
-    return chat(
+  function resumeChat(log: string, io: CliIo, options: Partial<InboxChatOptions> = {}, deps: InboxChatDeps = {}) {
+    return inboxChat(
       undefined,
       { inputValues: [], engineTrace: false, resume: log, ...options },
       io,

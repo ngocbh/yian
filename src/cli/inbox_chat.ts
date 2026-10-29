@@ -63,7 +63,7 @@ import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, shellQuote, 
  * The options `chat` reads; an absent option is `undefined`, an absent repeatable one an empty
  * list, an absent flag `false`.
  */
-export interface ChatOptions {
+export interface InboxChatOptions {
   inbox?: string | undefined;
   inputValues: readonly string[];
   inputs?: string | undefined;
@@ -79,7 +79,7 @@ export interface ChatOptions {
  * @internal Test seams: the clock the run and the chat's timers share, the source of the process
  * signals, and host tools added to the registered ones.
  */
-export interface ChatDeps {
+export interface InboxChatDeps {
   scheduler?: Scheduler;
   signals?: Pick<NodeJS.EventEmitter, "on" | "off">;
   tools?: Readonly<Record<string, ToolEntry>>;
@@ -255,11 +255,11 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
  *   one `Inbox(str)` or `Inbox(Message)` input to pick; for an input the flow doesn't declare
  *   (the inbox included); off a TTY, for missing required inputs.
  */
-export async function chat(
+export async function inboxChat(
   flowPath: string | undefined,
-  options: ChatOptions,
+  options: InboxChatOptions,
   io: CliIo,
-  deps: ChatDeps = {},
+  deps: InboxChatDeps = {},
 ): Promise<number> {
   validateRunLogOptions({ ...options, flow: flowPath });
   const resumed = options.resume ?? null;

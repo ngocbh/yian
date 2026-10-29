@@ -42,7 +42,7 @@ async function failure(fn: () => unknown): Promise<unknown> {
   throw new Error("expected a failure");
 }
 
-/** Assert `error` has a Node system error's shape (`isSystemError` in `sqlite.ts`). */
+/** Assert `error` has a Node system error's shape (`isSystemError` in `platform.ts`). */
 function expectSystemError(error: unknown): asserts error is NodeJS.ErrnoException {
   expect(error).toBeInstanceOf(Error);
   const { code, syscall, errno } = error as NodeJS.ErrnoException;

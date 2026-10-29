@@ -19,8 +19,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   type FileLock,
   FileLockError,
+  homeDir,
   insecureTlsWarning,
   isLocked,
+  isSystemError,
+  leavesRoot,
   lockFile,
   openSqlite,
   realScheduler,
@@ -33,6 +36,7 @@ import {
   SLEEP_CHUNK_MS,
   type Sqlite,
   sqliteErrorCode,
+  statOrNull,
   stripTypes,
   syncFolder,
   TypeStripError,
@@ -813,6 +817,86 @@ describe("syncFolder", () => {
     const close = spyOn(fs, "closeSync");
     expect(thrown(() => syncFolder(dir))).toBe(failure);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("isSystemError", () => {
+  test("holds for an fs error and a code with a syscall or errno", () => {
+    expect(isSystemError(thrown(() => fs.statSync(path.join(dir, "missing"))))).toBe(true);
+    expect(isSystemError(Object.assign(new Error("x"), { code: "EIO", syscall: "read" }))).toBe(true);
+    expect(isSystemError(Object.assign(new Error("x"), { code: "EIO", errno: -5 }))).toBe(true);
+  });
+
+  test("fails for a code alone, a non-string code and a non-Error", () => {
+    expect(isSystemError(Object.assign(new Error("x"), { code: "EIO" }))).toBe(false);
+    expect(isSystemError(Object.assign(new Error("x"), { code: 5, syscall: "read" }))).toBe(false);
+    expect(isSystemError({ code: "EIO", syscall: "read", errno: -5 })).toBe(false);
+    expect(isSystemError(null)).toBe(false);
+  });
+});
+
+describe("statOrNull", () => {
+  test("returns a file's stats", () => {
+    fs.writeFileSync(file, "x");
+    expect(statOrNull(file)?.isFile()).toBe(true);
+    expect(statOrNull(dir)?.isDirectory()).toBe(true);
+  });
+
+  test("returns null for a missing path, a file as a folder and a symlink loop", () => {
+    fs.writeFileSync(file, "x");
+    expect(statOrNull(path.join(dir, "missing"))).toBeNull();
+    expect(statOrNull(path.join(file, "child"))).toBeNull();
+    if (process.platform !== "win32") {
+      fs.symlinkSync("loop", path.join(dir, "loop"));
+      expect(statOrNull(path.join(dir, "loop"))).toBeNull();
+    }
+  });
+
+  test.each(["EBADF", "ENOENT"])("returns null for %s", (code) => {
+    spyOn(fs, "statSync").mockImplementation(() => {
+      throw Object.assign(new Error(code), { code, syscall: "stat" });
+    });
+    expect(statOrNull(file)).toBeNull();
+  });
+
+  test("throws any other error", () => {
+    const failure = Object.assign(new Error("EACCES"), { code: "EACCES", syscall: "stat" });
+    spyOn(fs, "statSync").mockImplementation(() => {
+      throw failure;
+    });
+    expect(thrown(() => statOrNull(file))).toBe(failure);
+  });
+});
+
+describe("leavesRoot", () => {
+  test.each(["..", `..${path.sep}x`, path.resolve("/elsewhere")])("%s leaves the root", (rel) => {
+    expect(leavesRoot(rel)).toBe(true);
+  });
+
+  test.each(["", "x", `x${path.sep}..`, "..x", `...${path.sep}x`])("%j stays inside", (rel) => {
+    expect(leavesRoot(rel)).toBe(false);
+  });
+});
+
+describe("homeDir", () => {
+  /** An `Env` reading only `vars`. */
+  const envOf = (vars: Record<string, string>) => (name: string) => (Object.hasOwn(vars, name) ? vars[name] : undefined);
+
+  test("is HOME from the env", () => {
+    expect(homeDir(envOf({ HOME: "/home/me" }))).toBe("/home/me");
+  });
+
+  test.each<Record<string, string>>([{}, { HOME: "" }])("falls back to the account's home (%j)", (vars) => {
+    spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: "/account" });
+    expect(homeDir(envOf(vars))).toBe("/account");
+  });
+
+  test("throws the account lookup's error when the account has no home", () => {
+    const failure = Object.assign(new Error("no passwd entry"), { code: "ENOENT", syscall: "uv_os_get_passwd" });
+    spyOn(os, "userInfo").mockImplementation(() => {
+      throw failure;
+    });
+    expect(thrown(() => homeDir(envOf({})))).toBe(failure);
   });
 });
 

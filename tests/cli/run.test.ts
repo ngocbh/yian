@@ -2,16 +2,17 @@
 // and prompted runs, `--json` documents, setup errors, stops and warnings, `check`, `status`, and
 // the run-log checks that run before the flow is read.
 
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import {
+  defaultRunsDir,
   diagnosticJson,
   flowBanner,
   jsonValue,
@@ -22,6 +23,9 @@ import {
 } from "../../src/cli/run.ts";
 import { childCommand, main } from "../../src/cli/index.ts";
 import { LICENSES } from "../../src/cli/licenses.ts";
+import { userMcpConfig } from "../../src/cli/mcp_config.ts";
+import { defaultSkillRoots } from "../../src/compose/skills.ts";
+import { AuthStore } from "../../src/llm_clients/auth/index.ts";
 import {
   abortOnSignal,
   type CliIo,
@@ -329,6 +333,39 @@ describe("flowBanner", () => {
     expect(text).toContain("\x1b[1mRunning flow: \x1b[0m");
     expect(text).toContain("\x1b[1mDescription: \x1b[0m");
     expect(text).toContain("\x1b[36m╭");
+  });
+});
+
+describe("the home fallback", () => {
+  afterEach(() => {
+    mock.restore();
+  });
+
+  const env = () => undefined;
+  /** Each `~` path of the CLI with `HOME` unset: runs, MCP config, a skill root, logins. */
+  const homePaths = [
+    () => defaultRunsDir(env),
+    () => userMcpConfig(env),
+    () => defaultSkillRoots({ cwd: tmp, env })[0],
+    () => new AuthStore(null, { env }).path,
+  ];
+
+  test("every ~ path falls back to the account's home when HOME is unset", () => {
+    spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: "/account" });
+    expect(homePaths.map((path) => path())).toEqual([
+      join("/account", ".yian", "runs"),
+      join("/account", ".yian", "mcp.json"),
+      join("/account", ".claude", "skills"),
+      join("/account", ".config", "yian", "auth.json"),
+    ]);
+  });
+
+  test("every ~ path throws the same error when the account has no home either", () => {
+    const failure = Object.assign(new Error("no passwd entry"), { code: "ENOENT", syscall: "uv_os_get_passwd" });
+    spyOn(os, "userInfo").mockImplementation(() => {
+      throw failure;
+    });
+    for (const path of homePaths) expect(path).toThrow(failure);
   });
 });
 

@@ -2,7 +2,8 @@
  * The one module holding runtime-specific APIs, so the rest of yian runs unchanged
  * on Node and Bun: runtime detection, whether this is a compiled binary, a SQLite
  * wrapper over `bun:sqlite` or `node:sqlite`, loaded lazily for the runtime in use,
- * an exclusive file lock built on it, `syncFolder` for durable folder entries, the
+ * an exclusive file lock built on it, `syncFolder` for durable folder entries, the OS
+ * error, missing-path, path-confinement and home-directory helpers, the
  * scheduler that clocks and timed waits go through, the TypeScript stripper for CODE
  * bodies, loaded lazily too, `safeFetch`, the one way out to the network: no redirects,
  * yian's User-Agent, and a warning when TLS checks are off, and `warn`, the path every
@@ -14,9 +15,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 // The default import keeps calls patchable by test spies.
 import fs from "node:fs";
 import { createRequire } from "node:module";
+// Default import, like `fs`, so tests can spy on `userInfo`.
+import os from "node:os";
+import { isAbsolute, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
-import { processEnv } from "./defaults.ts";
+import { type Env, processEnv } from "./defaults.ts";
 
 /** The JavaScript runtime yian is running on, detected once at load. */
 export const runtime: "bun" | "node" = typeof Bun !== "undefined" ? "bun" : "node";
@@ -436,6 +440,42 @@ export function syncFolder(path: string): void {
   } finally {
     fs.closeSync(fd);
   }
+}
+
+/** @internal Whether `error` is a Node SystemError (an OS error). */
+export function isSystemError(error: unknown): error is NodeJS.ErrnoException & { code: string } {
+  if (!(error instanceof Error)) return false;
+  const { code, syscall, errno } = error as NodeJS.ErrnoException;
+  return typeof code === "string" && (typeof syscall === "string" || typeof errno === "number");
+}
+
+/** The errors that make a path read as missing, so neither a file nor a directory. */
+const MISSING_PATH_CODES = new Set(["ENOENT", "ENOTDIR", "ELOOP", "EBADF"]);
+
+/** @internal `fs.statSync`, or `null` for the errors that make a path read as missing. */
+export function statOrNull(path: string): fs.Stats | null {
+  try {
+    return fs.statSync(path);
+  } catch (error) {
+    if (isSystemError(error) && MISSING_PATH_CODES.has(error.code)) return null;
+    throw error;
+  }
+}
+
+/**
+ * @internal Whether a path relative to a root (`relative(root, file)`) leaves that root: `..`, a
+ * `../` prefix, or an absolute path (another drive).
+ */
+export function leavesRoot(rel: string): boolean {
+  return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+}
+
+/**
+ * @internal Return the user's home directory: `HOME` from `env` when set and non-empty, else the
+ * account's home directory (`os.userInfo().homedir`), which throws when the account has none.
+ */
+export function homeDir(env: Env): string {
+  return env("HOME") || os.userInfo().homedir;
 }
 
 /** A clock and a cancellable relative sleep; tests swap in `virtualScheduler`. */

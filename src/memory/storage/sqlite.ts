@@ -9,7 +9,7 @@
 // The default import keeps calls patchable by test spies.
 import fs from "node:fs";
 
-import { openSqlite, type Sqlite, sqliteErrorCode } from "../../platform.ts";
+import { isSystemError, openSqlite, type Sqlite, sqliteErrorCode } from "../../platform.ts";
 import { JSONDecodeError, type JsonObject, logJson, parseJson } from "../../typesys/json.ts";
 import { freezeJsonObject, MemoryOperationError } from "../contracts.ts";
 
@@ -20,16 +20,6 @@ const SCHEMA = "CREATE TABLE memory_state (id INTEGER PRIMARY KEY CHECK (id = 1)
 /** Return one storage failure; only `busy` is retryable. */
 function storageError(reason: string, message: string): MemoryOperationError {
   return new MemoryOperationError("storage", `storage.${reason}`, message, reason === "busy");
-}
-
-/**
- * Whether `error` is a Node SystemError (an OS error). A copy of `skills/catalog.ts`'s
- * predicate: memory doesn't import skills. Also used by the markdown store.
- */
-export function isSystemError(error: unknown): error is NodeJS.ErrnoException & { code: string } {
-  if (!(error instanceof Error)) return false;
-  const { code, syscall, errno } = error as NodeJS.ErrnoException;
-  return typeof code === "string" && (typeof syscall === "string" || typeof errno === "number");
 }
 
 /** Whether `error` is an I/O failure (a system error or an SQLite error). */

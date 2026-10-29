@@ -27,8 +27,7 @@
  */
 
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { knownCallTimeBaseUrls, knownCallTimeProviders } from "../compile/llm_cascade.ts";
@@ -41,7 +40,7 @@ import { defaultSkillRoots, loadSkillDir, loadSkills } from "../compose/skills.t
 import { current, type Env } from "../defaults.ts";
 import { compareCodeUnits, Diagnostic, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
-import { isSystemError, resolvedPath, type Skill, SkillError, statOrNull } from "../skills/catalog.ts";
+import { resolvedPath, type Skill, SkillError } from "../skills/catalog.ts";
 import { LOAD_SKILL } from "../skills/tool.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import {
@@ -67,7 +66,15 @@ import { MemoryOperationError } from "../memory/contracts.ts";
 import { type MemoryRegistry, noteCleanup } from "../memory_host.ts";
 import { checkInputNames, coerceInputs } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import { FileLockError, sqliteErrorCode, withWarnings } from "../platform.ts";
+import {
+  FileLockError,
+  homeDir,
+  isSystemError,
+  leavesRoot,
+  sqliteErrorCode,
+  statOrNull,
+  withWarnings,
+} from "../platform.ts";
 import {
   advance,
   hostInputs,
@@ -727,7 +734,7 @@ export function validateRunLogOptions(options: {
 /**
  * Create the private CLI directories and the run's folder, and return a fresh run's default log
  * path, `~/.yian/runs/<runId>/log.jsonl` (`runLogPath` under `~/.yian/runs`), with `HOME` from
- * `env` (the process user's home directory, `os.homedir()`, when it is unset or empty).
+ * `env` (the account's home directory when it is unset or empty).
  *
  * `~/.yian` and `~/.yian/runs` are created with mode 0700, or set to it if they exist; the run's
  * folder must be new and is created with mode 0700. The file itself is not created: the run log
@@ -762,7 +769,7 @@ export function removeEmptyDir(dir: string): void {
 
 /** Return the CLI's runs folder, `~/.yian/runs`, with `HOME` from `env` as `defaultRunLogPath` reads it. */
 export function defaultRunsDir(env: Env): string {
-  return join(env("HOME") || homedir(), ".yian", "runs");
+  return join(homeDir(env), ".yian", "runs");
 }
 
 /**
@@ -1708,11 +1715,6 @@ function resolveFlowPath(path: string): string {
     if (!isSystemError(error) || error.code === "ELOOP") throw error;
     return resolvedPath(path);
   }
-}
-
-/** Whether `shown`, a path relative to the root, leaves it. */
-function leavesRoot(shown: string): boolean {
-  return shown === ".." || shown.startsWith(`..${sep}`) || isAbsolute(shown);
 }
 
 /**

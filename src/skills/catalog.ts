@@ -6,17 +6,16 @@
  * lives in `compose/skills.ts`, because only Compose parses YAML.
  */
 
-import { readFileSync, realpathSync, statSync, type Stats } from "node:fs";
+import { readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
+import { isSystemError, statOrNull } from "../platform.ts";
 import { valueRepr } from "../typesys/values.ts";
 
 export const SKILL_FILE = "SKILL.md";
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-// These errors mean the path isn't a file, rather than a failure.
-const IGNORED_CODES = new Set(["ENOENT", "ENOTDIR", "ELOOP", "EBADF"]);
 
 /** A skill package, grant, or resource request is invalid. */
 export class SkillError extends RangeError {
@@ -156,21 +155,4 @@ export function resolvedPath(path: string): string {
       candidate = parent;
     }
   }
-}
-
-/** @internal `statSync`, or `null` for the errors that mean the path isn't a file. */
-export function statOrNull(path: string): Stats | null {
-  try {
-    return statSync(path);
-  } catch (error) {
-    if (isSystemError(error) && IGNORED_CODES.has(error.code)) return null;
-    throw error;
-  }
-}
-
-/** @internal Whether `error` is a Node SystemError (an OS error). */
-export function isSystemError(error: unknown): error is NodeJS.ErrnoException & { code: string } {
-  if (!(error instanceof Error)) return false;
-  const { code, syscall, errno } = error as NodeJS.ErrnoException;
-  return typeof code === "string" && (typeof syscall === "string" || typeof errno === "number");
 }

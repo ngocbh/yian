@@ -13,11 +13,19 @@ import { basename, dirname, join } from "node:path";
 
 import { current as currentDefaults } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
-import { type FileLock, FileLockError, sqliteErrorCode, syncFolder, waitForLock } from "../../platform.ts";
+import {
+  type FileLock,
+  FileLockError,
+  isSystemError,
+  sqliteErrorCode,
+  statOrNull,
+  syncFolder,
+  waitForLock,
+} from "../../platform.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { floatText } from "../../typesys/values.ts";
 import { freezeJsonObject } from "../contracts.ts";
-import { checkStoragePath, isSystemError, realStoragePath } from "./sqlite.ts";
+import { checkStoragePath, realStoragePath } from "./sqlite.ts";
 
 /** A compare-and-set write named a base version that is no longer current. */
 export class MarkdownVersionMismatch extends Error {
@@ -88,19 +96,6 @@ export interface MarkdownStore {
 export function markdownVersion(text: string): string {
   if (!text.isWellFormed()) throw new RangeError("text holds a lone surrogate, which has no UTF-8 encoding");
   return `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
-}
-
-/** The errors that make a path read as missing, so neither a file nor a directory. */
-const IGNORED_CODES = new Set(["ENOENT", "ENOTDIR", "EBADF", "ELOOP"]);
-
-/** `fs.statSync`, or `null` for the errors that make a path read as missing. */
-function statOrNull(file: string): fs.Stats | null {
-  try {
-    return fs.statSync(file);
-  } catch (error) {
-    if (isSystemError(error) && IGNORED_CODES.has(error.code)) return null;
-    throw error;
-  }
 }
 
 /** Compare two strings by code point. */

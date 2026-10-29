@@ -9,7 +9,7 @@
 import { type ResolvedMemory, resolveMemoryLayout } from "./compile/memory_layout.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { type Env, processEnv } from "./defaults.ts";
-import { addNote, compareCodeUnits, reprText } from "./diagnostics.ts";
+import { compareCodeUnits, noteCleanup, reprText } from "./diagnostics.ts";
 import { ModelCallRetried, ReplayDegraded } from "./events.ts";
 import type { RetryInfo } from "./llm/executor.ts";
 import type { ModelAccess } from "./llm_clients/factory.ts";
@@ -66,20 +66,6 @@ function learnerOptions(key: string, { env, models, onEvent }: Learners) {
       : ({ attempt, error: { kind, message }, retryIn }: RetryInfo) =>
           onEvent(new ModelCallRetried({ nodeId: LEARNER_NODE, consumer, attempt, error: { kind, message }, retryIn }));
   return { env: models === null ? env : models.env, createModel, onRetry };
-}
-
-/**
- * @internal Attach one cleanup failure to `target` as the note `<label> <name>: <message>`, then
- * the notes the failure carries.
- */
-export function noteCleanup(target: unknown, cleanup: unknown, label: string): void {
-  addNote(target, () => {
-    const [name, message] =
-      cleanup instanceof Error ? [cleanup.name, cleanup.message] : [jsTypeName(cleanup), String(cleanup)];
-    return `${label} ${name}: ${message}`;
-  });
-  const notes = (cleanup as { notes?: unknown } | null | undefined)?.notes;
-  if (Array.isArray(notes)) for (const note of notes) addNote(target, () => String(note));
 }
 
 /**

@@ -427,7 +427,8 @@ export function resolvePlain(text: string): string {
 /**
  * Build a scalar's value from its text under its resolved or explicit tag.
  *
- * Explicit `!!int`, `!!float` and `!!bool` tags accept only the forms the table resolves.
+ * Explicit `!!null`, `!!int`, `!!float` and `!!bool` tags accept only the forms the table
+ * resolves.
  * A timestamp is checked with yian's date grammar and kept as its text. `plain` means the
  * scalar was written unquoted, so a refused value says to quote it. Under an explicit tag the
  * quoting hint is still given, although quoting doesn't remove the tag.
@@ -446,6 +447,7 @@ export function constructScalar(tag: string, text: string, plain: boolean): Scal
     case STR_TAG:
       return text;
     case NULL_TAG:
+      coreCheck(text, NULL, "null");
       return null;
     case BOOL_TAG:
       coreCheck(text, BOOL, "boolean");

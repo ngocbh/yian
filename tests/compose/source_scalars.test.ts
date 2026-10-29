@@ -176,7 +176,8 @@ describe("constructScalar", () => {
     [INT_TAG, "017", true, 17n],
     [FLOAT_TAG, "1", true, 1],
     [STR_TAG, "1", false, "1"],
-    [NULL_TAG, "x", true, null],
+    [NULL_TAG, "~", true, null],
+    [NULL_TAG, "", true, null],
   ])("under an explicit tag reads a core form: %p %p", (tag, text, plain, expected) => {
     expect(constructScalar(tag, text, plain)).toBe(expected);
   });
@@ -187,6 +188,7 @@ describe("constructScalar", () => {
     [BOOL_TAG, "yes"],
     [BOOL_TAG, "true\n"],
     [FLOAT_TAG, ".inf\n"],
+    [NULL_TAG, "x"],
   ])("under an explicit tag rejects a non-core form: %p %p", (tag, found) => {
     const error = thrown(FlowLoaderError, () => constructScalar(tag, found, true));
     expect(error).not.toBeInstanceOf(ScalarValueError);
@@ -274,6 +276,8 @@ describe.each(READERS)("both entry points: %s", (name, read) => {
     ["!!float 1", 1],
     ["!!str 1", "1"],
     ["!!bool true", true],
+    ["!!null ~", null],
+    ["!!null", null],
   ])("an explicit core tag reads a core form: %p", (text, expected) => {
     expect(read("value: " + text + "\n")).toEqual({ value: expected });
   });
@@ -284,6 +288,8 @@ describe.each(READERS)("both entry points: %s", (name, read) => {
     ["!!bool yes", "yes"],
     ["!!bool |\n  true\n", "true\n"],
     ['!!float ".inf\\n"', ".inf\n"],
+    ["!!null hello world", "hello world"],
+    ["!!null 'keep me'", "keep me"],
   ])("an explicit core tag rejects a non-core form: %p", (text, found) => {
     const error = thrown(SourceSyntaxError, () => read("value: " + text + "\n"));
 

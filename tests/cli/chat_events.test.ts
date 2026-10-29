@@ -18,9 +18,10 @@ import {
   toMessage,
   trackInFlight,
 } from "../../src/cli/chat_events.ts";
+import type { ChatEvents } from "../../src/cli/chat_flush.ts";
 import { ChildRuns, type ChildStatus } from "../../src/cli/chat_runs.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
-import { type ChatEvents, inboxChat } from "../../src/cli/inbox_chat.ts";
+import { inboxChat } from "../../src/cli/inbox_chat.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { advance, send } from "../../src/run.ts";
@@ -350,10 +351,10 @@ output: done
   }
 
   /**
-   * A chat on CHAT over a fake TTY, with child events, the `echo` tool (its call `held` held) and
-   * `advanceStep` for the turns after the first.
+   * A chat on CHAT over a fake TTY, with child events, the `echo` tool (its call `held` held; with
+   * `track`, counted in flight by `trackInFlight`) and `advanceStep` for the turns after the first.
    */
-  function chat({ held = null as number | null, advanceStep = advance } = {}) {
+  function chat({ held = null as number | null, advanceStep = advance, track = false } = {}) {
     const tty = true;
     stdin = new FakeInput({ tty });
     const out = sink();
@@ -375,7 +376,7 @@ output: done
     const done = inboxChat(path, { inputValues: [], engineTrace: false, log }, io, {
       scheduler: virtualScheduler(Date.parse("2026-01-01T00:00:00Z")),
       signals,
-      tools: { echo },
+      tools: { echo: track ? trackInFlight([echo], events.inFlight as InFlight)[0]! : echo },
       events,
       advance: advanceStep,
     });
@@ -447,22 +448,21 @@ output: done
   );
 
   test(
-    "an event queued while a tool call is in flight waits for it, and one it showed is dropped",
+    "an event queued while a tracked tool call is in flight waits for it, and one it showed is dropped",
     async () => {
-      const c = chat({ held: 1 });
+      // The echo call itself is counted in flight.
+      const c = chat({ held: 1, track: true });
       c.stdin.write("hi" + ENTER);
       await c.started;
-      const inFlight = c.events.inFlight as InFlight;
-      inFlight.enter();
       c.events.queue.push(CANCELLED("r1", 5));
       c.events.queue.push(CANCELLED("r2", 6));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(c.sends()).toBe(1);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // Nothing was taken to be sent.
+      expect(c.events.queue.size).toBe(2);
       // The call returned r1's status: r1's event is seen; r2's goes once the call ends.
       c.events.queue.markSeen("r1", 5);
-      inFlight.leave();
-      await until(() => c.sends() === 2);
       c.release();
+      await until(() => c.sends() === 2);
       await until(() => c.stdout().includes("run r2"));
       c.stdin.write("/exit" + ENTER);
       expect(await c.done).toBe(0);
@@ -510,9 +510,9 @@ output: done
       expect(c.stderr()).toContain("(withdrew 1 child event; sent again before your next message)\n");
       expect(c.interrupts()).toBe(1);
       c.release();
+      // Held for the next line: the prompt comes back with the event still queued.
       await until(() => c.lastRow() === "> You: second");
-      // Held for the next line: the prompt stays up.
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(c.events.queue.size).toBe(1);
       expect(c.stdout()).toBe("echo: hi\n");
       c.stdin.write(ENTER);
       await until(() => c.stdout().includes("second"));
@@ -532,7 +532,7 @@ output: done
       c.stdin.write(ESCAPE);
       await new Promise((resolve) => setTimeout(resolve, 600));
       c.events.queue.push(CANCELLED());
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await until(() => c.stderr().includes(WAITING("run r1 was cancelled")));
       expect(c.sends()).toBe(0);
       c.stdin.write("/exit" + ENTER);
       expect(await c.done).toBe(0);
@@ -618,11 +618,9 @@ output: done
       expect(c.interrupts()).toBe(1);
       c.events.queue.push(CANCELLED());
       c.release();
-      await until(() => c.stdout().includes("echo: hi"));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(c.sends()).toBe(1);
       // Held events are announced when the prompt opens.
       await until(() => c.stderr().includes(WAITING("run r1 was cancelled")));
+      expect(c.sends()).toBe(1);
       c.stdin.write("next" + ENTER);
       await until(() => c.stdout().includes("next"));
       c.stdin.write("/exit" + ENTER);

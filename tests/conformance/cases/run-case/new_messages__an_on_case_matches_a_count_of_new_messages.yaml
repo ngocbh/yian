@@ -6,7 +6,7 @@ flow: |
   name: routed
   llm_config: {provider: anthropic, model: claude-test}
   nodes:
-    route:
+    gate:
       kind: case
       on: ${len(reply.new_messages)}
       cases:
@@ -20,7 +20,7 @@ flow: |
       output: str
     one: !str one message
     more: !str more messages
-  output: ${route.output}
+  output: ${gate.output}
 run: {run_id: r1, num_workers: 0}
 host:
   models:
@@ -47,8 +47,8 @@ expect:
     - [pool_commit, reply, {value: done}]
     - [pool_commit, reply, {key: reply.new_messages, steps: [9]}]
     - [node_succeeded, reply, {commit: 10, messages: 11}]
-    - [node_started, route]
-    - [node_routed, route, {handle: one}]
+    - [node_started, gate]
+    - [node_routed, gate, {handle: one}]
     - [node_started, one]
     - [pool_commit, one, {value: one message}]
     - [node_succeeded, one, {commit: 16}]

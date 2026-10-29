@@ -378,13 +378,17 @@ interface Lowering {
   paramLabels: Map<string, string>;
 }
 
+/** The reserved heads that name no node, whatever field follows them. */
+const NON_NODE_HEADS: ReadonlySet<string> = new Set(["input", "system", "item"]);
+
 /**
  * Return the producing node id of reference path `<id>.output[...]` or an AGENT's
- * `<id>.new_messages[...]`, else `null`.
+ * `<id>.new_messages[...]`, else `null` (also for `input.output`, a flow input so named).
  */
 function nodeProducer(ref: string): string | null {
   const parts = ref.split(".");
-  return parts.length >= 2 && (parts[1] === "output" || parts[1] === NEW_MESSAGES) ? parts[0]! : null;
+  if (parts.length < 2 || NON_NODE_HEADS.has(parts[0]!)) return null;
+  return parts[1] === "output" || parts[1] === NEW_MESSAGES ? parts[0]! : null;
 }
 
 /**

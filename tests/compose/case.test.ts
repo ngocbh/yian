@@ -622,3 +622,12 @@ test("on: an agent's new_messages takes a data edge from the agent", () => {
 
   expect(edgeStances(result)).toEqual([["reply", "__on", false]]);
 });
+
+test.each(["input.new_messages", "input.output", "item.new_messages", "system.output"])(
+  "a read of %s names no producer node, so it takes no data edge",
+  (ref) => {
+    const result = searched(`${ref} == []`, `(${ref} :- []) == []`, `(${ref} | input.other) == []`);
+    expect(edgeStances(result)).toEqual([]);
+    expect([...result.wiring.values()]).not.toContain(`\${${ref} :- null}`);
+  },
+);

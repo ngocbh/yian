@@ -297,6 +297,18 @@ output: \${a.output :- b.output}`,
   ]);
 });
 
+test("a CASE reading a flow input named new_messages or output loads, with no edge from a node", async () => {
+  for (const name of ["new_messages", "output"]) {
+    const flow = await loadFlow(
+      ROUTED(`  gate:\n    kind: case\n    cases:\n      - when: "\${input.${name} == []}"\n        then: a\n    else: b`).replace(
+        "nodes:",
+        `input:\n  ${name}: !list(str)\nnodes:`,
+      ),
+    );
+    expect(edgesInto(flow, "gate").filter(([from]) => from !== "__start__")).toEqual([]);
+  }
+});
+
 test("a reader behind a CASE branch reads new_messages", async () => {
   const flow = await loadFlow(
     ROUTED(`  gate:\n    kind: case\n    cases:\n      - when: "\${reply.output == 'x'}"\n        then: a\n    else: b`).replace(

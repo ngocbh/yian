@@ -373,13 +373,13 @@ output: done
     const path = join(tmp, "chat.yaml");
     writeFileSync(path, CHAT);
     const log = join(tmp, "run.jsonl");
-    const done = inboxChat(path, { inputValues: [], engineTrace: false, log }, io, {
-      scheduler: virtualScheduler(Date.parse("2026-01-01T00:00:00Z")),
-      signals,
-      tools: { echo: track ? trackInFlight([echo], events.inFlight as InFlight)[0]! : echo },
-      events,
-      advance: advanceStep,
-    });
+    const done = inboxChat(
+      path,
+      { inputValues: [], engineTrace: false, log },
+      io,
+      { scheduler: virtualScheduler(Date.parse("2026-01-01T00:00:00Z")), signals, advance: advanceStep },
+      { tools: { echo: track ? trackInFlight([echo], events.inFlight as InFlight)[0]! : echo }, events },
+    );
     const sends = () =>
       readRunLog(log).filter(
         (envelope) => envelope.record instanceof PoolCommitRecord && envelope.record.key === "__start__.messages",

@@ -11,7 +11,7 @@
  * run at its `wakeAt`, so `sleep` and `ask`/`take` timeouts fire on time. With `--resume`, the chat
  * picks up a run a chat left (stopped or waiting) by advancing it, then goes on the same way.
  *
- * Given child events (`InboxChatDeps.events`), the chat also sends each into the inbox as a message
+ * Given child events (`InboxChatHost.events`), the chat also sends each into the inbox as a message
  * authored `yian`, through its flusher (`chat_flush.ts`), which it tells when turns begin and end,
  * when the prompt is up and when the user interrupts or sends a line.
  *
@@ -91,27 +91,32 @@ export interface InboxChatOptions {
 
 /**
  * @internal Test seams: the clock the run and the chat's timers share, the source of the process
- * signals, host tools added to the registered ones and the model builder; and, for `yian chat`'s
- * assistant, the child events the chat sends, the inputs and skills it supplies and its run id.
+ * signals, the model builder AGENT nodes use, and the `advance` each turn after the first calls.
  */
 export interface InboxChatDeps {
   scheduler?: Scheduler;
   signals?: Pick<NodeJS.EventEmitter, "on" | "off">;
-  /** Host tools added to the registered ones; a function gets the chat's terminal, to ask through. */
-  tools?: Readonly<Record<string, ToolEntry>> | ((terminal: Terminal) => Readonly<Record<string, ToolEntry>>);
-  events?: ChatEvents;
+  models?: ModelAccess | null;
+  advance?: typeof advance;
+}
+
+/**
+ * What a host running a flow through the chat gives it beside the command line, as `yian chat`
+ * runs its bundled assistant: the flow itself, inputs, skills, tools, child events and a run id.
+ */
+export interface InboxChatHost {
+  /** The flow at `flowPath`, already loaded; read from the file when absent. */
+  flow?: ComposedFlow;
   /** Inputs the host supplies itself, beside those given on the command line; never prompted for. */
   inputs?: Readonly<Record<string, unknown>>;
   /** The skills the run gets, instead of those read from the skill folders. */
   skills?: ReadonlyMap<string, Skill> | null;
   /** The run's id; a fresh one when absent. */
   runId?: string;
-  /** The model builder AGENT nodes use. */
-  models?: ModelAccess | null;
-  /** Whether a reply's text is printed through `sanitize`, its escape sequences and controls dropped. */
-  sanitizeReplies?: boolean;
-  /** @internal For tests: the `advance` each turn after the first calls. */
-  advance?: typeof advance;
+  /** Host tools added to the registered ones; a function gets the chat's terminal, to ask through. */
+  tools?: Readonly<Record<string, ToolEntry>> | ((terminal: Terminal) => Readonly<Record<string, ToolEntry>>);
+  /** The child events the chat sends into the inbox. */
+  events?: ChatEvents;
 }
 
 const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
@@ -256,7 +261,8 @@ function inboxClosed(log: string, inbox: string): boolean {
  * Chat with the flow at `flowPath`: start it, send each line typed at the `You:` prompt to its
  * one `Inbox(str)` or `Inbox(Message)` input (or `options.inbox`; a `Message` inbox gets the line
  * as a user message holding it as text), and advance the run after each send, printing the
- * output of each node named `reply` on stdout as it finishes; returns the exit code.
+ * output of each node named `reply` on stdout as it finishes, through `sanitize`; returns the exit
+ * code.
  *
  * `/exit`, `/quit` or the end of input closes the inbox; the run finishes, `session ended` goes to
  * stderr and the chat exits 0. Ctrl-C (SIGINT) while a turn runs interrupts the agents reading the
@@ -280,7 +286,7 @@ function inboxClosed(log: string, inbox: string): boolean {
  * run that ends waiting after the inbox closed, with no deadline to wake it, prints what it waits
  * on and exits 0.
  *
- * With `deps.events`, each child event queued is sent to the inbox as a message authored `yian`
+ * With `host.events`, each child event queued is sent to the inbox as a message authored `yian`
  * (as text to an `Inbox(str)`): while a turn runs, at once, unless a tool call is in flight, then
  * when the last one ends; while the prompt is up, the prompt is taken down, the events are sent
  * in a turn of their own and what was typed comes back. A turn that leaves the run waiting with an
@@ -294,7 +300,7 @@ function inboxClosed(log: string, inbox: string): boolean {
  *
  * The flow loads, inputs, provider keys, log path and run index are handled as `yian run`'s
  * (`--engine-trace` included), except that the inbox input is never asked for or supplied and
- * `deps.inputs` are supplied beside the given ones. Skills are `deps.skills`, or else read as `yian
+ * `host.inputs` are supplied beside the given ones. Skills are `host.skills`, or else read as `yian
  * run` reads them, once per chat, before any input prompt. The chat opens no MCP servers and builds
  * no memories. A host failure prints `chat failed: <message>`, its stack below under
  * `engineTrace`, and exits 1.
@@ -309,7 +315,7 @@ function inboxClosed(log: string, inbox: string): boolean {
  * ended (<status>); ...`, appends nothing and exits 1, as do a log that can't be read and a flow
  * built in code; a recorded flow that no longer loads is reported located.
  *
- * @param loaded The flow at `flowPath`, already loaded; read from the file when absent.
+ * @param host What a host running a flow through the chat supplies (`InboxChatHost`).
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a flow without exactly
  *   one `Inbox(str)` or `Inbox(Message)` input to pick; for an input the flow doesn't declare
  *   (the inbox included); off a TTY, for missing required inputs.
@@ -319,17 +325,17 @@ export async function inboxChat(
   options: InboxChatOptions,
   io: CliIo,
   deps: InboxChatDeps = {},
-  loaded?: ComposedFlow,
+  host: InboxChatHost = {},
 ): Promise<number> {
   validateRunLogOptions({ ...options, flow: flowPath });
   const resumed = options.resume ?? null;
   const flow =
     resumed === null
-      ? (loaded ?? (await loadFlowFile(flowPath!, io, { engineTrace: options.engineTrace })))
+      ? (host.flow ?? (await loadFlowFile(flowPath!, io, { engineTrace: options.engineTrace })))
       : await recordedFlow(resumed, options.engineTrace, io);
   if (flow === null || flow instanceof Diagnostic) return 1;
   const inbox = pickInbox(flow, options.inbox);
-  const supplied = { ...mergeInputs(options.inputs, options.inputValues), ...deps.inputs };
+  const supplied = { ...mergeInputs(options.inputs, options.inputValues), ...host.inputs };
   checkSuppliedInputs(flow.input, supplied);
 
   const scheduler = deps.scheduler ?? realScheduler;
@@ -360,9 +366,9 @@ export async function inboxChat(
   const move = deps.advance ?? advance;
   // Sends the child events, once the run's log exists (`started`).
   const flusher =
-    deps.events === undefined
+    host.events === undefined
       ? null
-      : new ChatFlusher(deps.events, {
+      : new ChatFlusher(host.events, {
           message: inbox.message,
           send: (value) => send(log!, inbox.name, value, { env: env.read }),
           write: (text) => io.stderr.write(text),
@@ -463,7 +469,7 @@ export async function inboxChat(
 
   try {
     // Read once: every `advance` must pass the skills the run recorded at its start.
-    const skills = deps.skills !== undefined ? deps.skills : await readGrantedSkills(flow, env.read, io);
+    const skills = host.skills !== undefined ? host.skills : await readGrantedSkills(flow, env.read, io);
     const prompter = io.stdin.isTTY === true ? terminal : null;
     const cliCfg = cliLayer(options);
     let path: string;
@@ -485,7 +491,7 @@ export async function inboxChat(
       if (keyRefusal !== null) return 1;
       stop.signal.throwIfAborted();
       const fresh = freshLog(options.log, io.env);
-      runId = deps.runId ?? fresh.runId;
+      runId = host.runId ?? fresh.runId;
       path = fresh.path;
       runDir = fresh.runDir;
     } else {
@@ -508,13 +514,15 @@ export async function inboxChat(
       if (event.interrupted) return io.stderr.write("(interrupted)\n");
       if (event.output === null) return;
       const text = writeAsText(event.output as Value);
-      return io.stdout.write(`${deps.sanitizeReplies === true ? sanitize(text) : forTerminal(text, io.stdout)}\n`);
+      // A reply is the model's or the flow's text: on a terminal its escape sequences are dropped and
+      // its control characters shown; piped, it keeps every byte.
+      return io.stdout.write(`${io.stdout.isTTY === true ? sanitize(text) : text}\n`);
     };
     const shared = {
       onEvent,
       tools: {
         ...registeredTools(),
-        ...(typeof deps.tools === "function" ? deps.tools(terminal) : deps.tools),
+        ...(typeof host.tools === "function" ? host.tools(terminal) : host.tools),
         ask: terminal.askUser,
       },
       models: deps.models,
@@ -730,8 +738,7 @@ export async function inboxChat(
  * a run that has ended, or a log that can't be read, goes to `run` to report.
  *
  * The chat's start-up comes before `run` sets anything up, so the two never share the terminal,
- * the signals or stderr. `deps.tools` reaches only the chat's run: whether the flow needs MCP
- * tools is judged by the registered tools alone, as `run` judges it.
+ * the signals or stderr.
  *
  * @throws {UsageError} As `run` or `inboxChat` does; for an `inbox` that isn't one of the
  *   `Inbox(str)` or `Inbox(Message)` inputs of a flow the chat could otherwise take.
@@ -751,7 +758,7 @@ export async function runOrChat(
   if (flow === null) return run(flowPath, options, io);
   const { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace } = options;
   const chatOptions = { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace };
-  return inboxChat(flowPath!, chatOptions, io, deps, flow);
+  return inboxChat(flowPath!, chatOptions, io, deps, { flow });
 }
 
 /**

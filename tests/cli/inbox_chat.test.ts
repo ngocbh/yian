@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import {
   inboxChat,
   type InboxChatDeps,
+  type InboxChatHost,
   type InboxChatOptions,
   runOrChat,
   type RunOrChatOptions,
@@ -100,19 +101,24 @@ function chatIo({
   return { io, stdin, stdout: out.text, stderr: err.text };
 }
 
-/** `chat` on `flow` with a fresh log, the virtual clock and the test's signals. */
+/**
+ * `chat` on `flow` with a fresh log, the virtual clock and the test's signals; `extra` holds test
+ * seams and what a host supplies, split between the two.
+ */
 async function runChat(
   flow: string,
   io: CliIo,
   options: Partial<InboxChatOptions> = {},
-  deps: InboxChatDeps = {},
+  extra: InboxChatDeps & InboxChatHost = {},
 ): Promise<{ code: number; log: string }> {
   const log = join(tmp, "run.jsonl");
+  const { tools, events, inputs, skills, runId, flow: loaded, ...deps } = extra;
   const code = await inboxChat(
     flow,
     { inputValues: [], engineTrace: false, log, ...options },
     io,
     { scheduler: virtualScheduler(Date.parse("2026-01-01T00:00:00Z")), signals, ...deps },
+    { tools, events, inputs, skills, runId, flow: loaded },
   );
   return { code, log };
 }
@@ -525,6 +531,23 @@ describe("yian chat", () => {
     TIMEOUT,
   );
 });
+
+test(
+  "a reply's escape sequences are dropped on a TTY stdout, and its control characters shown",
+  async () => {
+    const reply = `      reply:
+        kind: code
+        output: str
+        code: |
+          return "\\u001b[31mred\\u001b[0m\\u0007 text";
+`;
+    const { io, stdin, stdout } = chatIo({ outTty: true, env: { NO_COLOR: "1" } });
+    stdin.write("hi\n/exit\n");
+    const { code } = await runChat(flowFile(turnFlow(reply)), io);
+    expect([code, stdout()]).toEqual([0, "red^G text\nred^G text\n"]);
+  },
+  TIMEOUT,
+);
 
 test(
   "a chat on the default log path stopped before its run starts leaves no run folder",
@@ -1704,12 +1727,13 @@ describe("yian chat's skills", () => {
 
 describe("the inbox chat's resume (yian run --resume on a terminal)", () => {
   /** `inboxChat` resuming `log` with the virtual clock and the test's signals. */
-  function resumeChat(log: string, io: CliIo, options: Partial<InboxChatOptions> = {}, deps: InboxChatDeps = {}) {
+  function resumeChat(log: string, io: CliIo, options: Partial<InboxChatOptions> = {}, host: InboxChatHost = {}) {
     return inboxChat(
       undefined,
       { inputValues: [], engineTrace: false, resume: log, ...options },
       io,
-      { scheduler: virtualScheduler(Date.parse("2026-01-01T00:00:00Z")), signals, ...deps },
+      { scheduler: virtualScheduler(Date.parse("2026-01-01T00:00:00Z")), signals },
+      host,
     );
   }
 

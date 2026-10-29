@@ -23,7 +23,7 @@ import type { Env } from "../defaults.ts";
 import { connectionSnapshot } from "../llm_clients/connection.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import { coerceInputs } from "../nodes/binding.ts";
-import { isSystemError, leavesRoot, realScheduler } from "../platform.ts";
+import { isSystemError, leavesRoot, realScheduler, type Scheduler } from "../platform.ts";
 import { hostInputs, runStartLlm, skillGrants } from "../run.ts";
 import { type Skill } from "../skills/catalog.ts";
 import { DOCS, FLOWS } from "./bundled.ts";
@@ -32,7 +32,7 @@ import { EventQueue, InFlight, trackInFlight } from "./chat_events.ts";
 import { chatRunTools } from "./chat_run_tools.ts";
 import { ChildRuns, type WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
-import { inboxChat, type InboxChatDeps } from "./inbox_chat.ts";
+import { inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { printStyled } from "./render.ts";
 import { removeEmptyDir, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
@@ -54,10 +54,17 @@ export interface ChatOptions {
 }
 
 /**
- * @internal Test seams: the inbox chat's, the folder the chat works in (the current directory by
- * default), and the model builder the chat's and its children's agents use.
+ * @internal Test seams: the folder the chat works in (the current directory by default), its run
+ * id, the clock and signals the chat and its children use, and the model builder their agents use.
  */
-export type ChatDeps = InboxChatDeps & { root?: string; models?: ModelAccess | null };
+export interface ChatDeps {
+  root?: string;
+  /** The chat's run id; its children's are `<runId>-r<n>`. */
+  runId?: string;
+  scheduler?: Scheduler;
+  signals?: Pick<NodeJS.EventEmitter, "on" | "off">;
+  models?: ModelAccess | null;
+}
 
 /**
  * Load the bundled chat flow, its `uses:` resolved to the bundled compaction flow.
@@ -130,7 +137,7 @@ function waitingLines(children: readonly WaitingChild[]): string {
  * exit code.
  *
  * The chat runs the bundled flow as `inboxChat` runs a flow (the prompt, Ctrl-C, Esc and `/exit`
- * work as there; replies are printed on stdout through `sanitize`), its log at `options.log` or
+ * work as there; replies are printed on stdout), its log at `options.log` or
  * in a new run folder under `~/.yian/runs`. Without a provider and model for the assistant, it
  * prints `chat failed: ...` and exits 1. A banner line on stderr names the assistant's model
  * and the flow in focus; when that flow has an `Inbox` input, a hint says `yian run` chats with
@@ -221,7 +228,7 @@ export async function chat(
   const queue = new EventQueue({ wake, markRead: runs.markRead.bind(runs) });
   const inFlight = new InFlight(wake);
   const docs = new Map(Object.entries(DOCS));
-  const tools: InboxChatDeps["tools"] = (terminal) => {
+  const tools: InboxChatHost["tools"] = (terminal) => {
     const host: ChatToolHost = { root, approve: (request) => terminal.approve(request), env, docs };
     const all = trackInFlight(
       [...chatFileTools(host), ...chatRunTools(host, runs, { seen: queue, scheduler })],
@@ -240,16 +247,15 @@ export async function chat(
         engineTrace: options.engineTrace,
       },
       io,
+      { scheduler, signals: deps.signals, models: deps.models },
       {
-        ...deps,
+        flow,
         runId: deps.runId ?? fresh.runId,
         inputs,
         skills: new Map([[skill.name, skill]]),
         tools,
         events: { queue, inFlight, wake, onInterrupt: () => runs.cancelWaits() },
-        sanitizeReplies: true,
       },
-      flow,
     );
   } finally {
     // The chat's own listener is gone: another Ctrl-C mustn't end the process mid-cleanup, leaving

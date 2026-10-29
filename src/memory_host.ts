@@ -333,7 +333,8 @@ export async function buildMemories(
       );
     }
   } catch (primary) {
-    // Construction is effect-free, so this cleanup does no I/O.
+    // Built-in construction does no I/O, but `owned` also holds what host factories built, and
+    // closing those can.
     const cleanup = await closeAll([...owned].reverse());
     if (cleanup !== null) noteCleanup(primary, cleanup.error, "Memory cleanup failed:");
     throw primary;

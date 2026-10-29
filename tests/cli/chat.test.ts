@@ -655,6 +655,10 @@ test(
     expect(screen()).not.toContain("hunter2");
     expect(screen()).toContain("Open a prefilled link in the browser");
     expect(screen()).not.toContain("File it with gh");
+    // An Enter meant for the input box, typed as the card takes its place, files nothing.
+    stdin.write(ENTER);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(existsSync(join(home, ".yian", "reports"))).toBe(false);
     stdin.write(DOWN + ENTER);
     await until(() => stdout().includes("saved it"));
     stdin.write(`/exit${ENTER}`);

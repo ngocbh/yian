@@ -185,11 +185,20 @@ export function tick(): Promise<void> {
 
 /** A fresh fake terminal: its input, output and the `Terminal` over them. */
 function setup(
-  options: { tty?: boolean; columns?: number; throwOn?: number } & Pick<TerminalOptions, "onStop" | "onActive"> = {},
+  options: { tty?: boolean; columns?: number; throwOn?: number } & Pick<
+    TerminalOptions,
+    "onStop" | "onActive" | "now"
+  > = {},
 ): { input: FakeInput; output: FakeOutput; terminal: Terminal; view: () => Screen; exitHooks: number } {
   const input = new FakeInput({ tty: options.tty });
   const output = new FakeOutput({ columns: options.columns, throwOn: options.throwOn });
-  const terminal = new Terminal({ input, output, onStop: options.onStop, onActive: options.onActive });
+  const terminal = new Terminal({
+    input,
+    output,
+    onStop: options.onStop,
+    onActive: options.onActive,
+    ...(options.now === undefined ? {} : { now: options.now }),
+  });
   const exitHooks = process.listenerCount("exit");
   return { input, output, terminal, view: () => screen(output.text, output.columns), exitHooks };
 }
@@ -457,16 +466,24 @@ async function anAbortedReadLineReturnsItsDraftForTheNextPrompt(): Promise<void>
 }
 
 async function aYieldingReadLineGivesWayToAPromptQueuedBehindIt(): Promise<void> {
-  const { input, terminal, view } = setup({ tty: true });
+  let clock = 0;
+  const { input, terminal, view } = setup({ tty: true, now: () => clock });
   const line = terminal.readLine("You:", { yields: true });
   input.write("half");
   await tick();
   const answer = terminal.approve(approval());
+  // An Enter typed as the prompt gives way, meant for the line, answers nothing.
+  input.write(ENTER);
   assert.deepEqual(await line, { yielded: true, draft: "half" });
   await tick();
   assert.equal(view().rows.at(-3), "? Write a.yaml (Use arrow keys)");
   // The next prompt waits behind the approval, which was queued first.
   const next = terminal.readLine("You:", { initial: "half", yields: true });
+  // Keys just after the card opens are dropped too; once it has been up a while, they count.
+  input.write(ENTER);
+  await tick();
+  assert.equal(view().rows.at(-3), "? Write a.yaml (Use arrow keys)");
+  clock += 1000;
   input.write(ENTER);
   assert.equal(await answer, "Approve");
   await tick();
@@ -495,8 +512,18 @@ async function aYieldingReadLineGivesWayToAPromptQueuedBehindIt(): Promise<void>
   input.write("bo" + ENTER);
   assert.equal(await ahead, "bo");
   assert.deepEqual(await queued, { yielded: true, draft: "kept" });
+  clock += 1000;
   input.write(ENTER);
   assert.equal(await later, "Approve");
+}
+
+async function approvePreselectsTheChoiceItNames(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const answer = terminal.approve({ ...approval(), choices: ["Go", "Save", "Cancel"], preselect: "Save" });
+  await tick();
+  assert.deepEqual(view().rows.slice(-3), ["   Go", " » Save", "   Cancel"]);
+  input.write(ENTER);
+  assert.equal(await answer, "Save");
 }
 
 async function onActiveSaysWhetherATurnLeftRows(): Promise<void> {
@@ -3132,6 +3159,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a non-TTY readLine reads one line per call": aNonTtyReadLineReadsOneLinePerCall,
   "an aborted readLine returns its draft for the next prompt": anAbortedReadLineReturnsItsDraftForTheNextPrompt,
   "a yielding readLine gives way to a prompt queued behind it": aYieldingReadLineGivesWayToAPromptQueuedBehindIt,
+  "approve preselects the choice it names": approvePreselectsTheChoiceItNames,
   "onActive says whether a turn left rows on the screen": onActiveSaysWhetherATurnLeftRows,
   "Escape at readLine with escape returns the draft": escapeAtReadLineReturnsTheDraft,
   "Escape at readLine without escape is ignored": escapeAtReadLineWithoutTheOptionIsIgnored,

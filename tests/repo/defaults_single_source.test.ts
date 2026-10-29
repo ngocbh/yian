@@ -74,6 +74,7 @@ const ALLOWED: Record<string, string> = {
   "cli/report_issue.ts: LINK_CHARS": "longest prefilled new-issue link, so the chat's model reads it whole",
   "cli/report_issue.ts: SAME_SECOND_REPORTS": "reports saved in one second before file_issue finds no free name",
   "cli/run_view.ts: KEPT_ROWS": "rows of a child run's progress the chat's run view keeps",
+  "cli/terminal.ts: YIELD_GRACE_MS": "how long a prompt that took a chat line's place drops keys",
   "cli/terminal.ts: LIST_MARGIN": "screen rows a prompt's list leaves for what is drawn above the box",
   "cli/terminal.ts: PASTE_LINES": "lines of a paste the input box shows as text, not a token",
   "cli/terminal.ts: PASTE_CHARS": "characters of a paste the input box shows as text, not a token",

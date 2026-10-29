@@ -44,6 +44,8 @@ type Input = NodeJS.ReadableStream & {
 type Output = Pick<NodeJS.WritableStream, "write"> & { columns?: number; rows?: number };
 
 export interface TerminalOptions {
+  /** The clock the keys after a prompt gives way are timed on, in milliseconds; `Date.now`. */
+  now?: () => number;
   /** Where keys come from; defaults to process.stdin. Raw mode is set only when it is a TTY. */
   input?: Input;
   /** Where prompts are drawn; defaults to process.stderr (stdout stays the run's result). */
@@ -76,6 +78,8 @@ export interface ApproveRequest {
   signal?: AbortSignal;
   /** Draw the body and diff as a framed card (`diffCard`), rather than as plain lines. */
   frame?: boolean;
+  /** The choice preselected, one of `choices`; the first when absent. */
+  preselect?: string;
 }
 
 /** A prompt ended because the terminal closed (Ctrl-C, end of input, or close()). */
@@ -507,6 +511,12 @@ export type EditorAction =
 
 /** The screen rows a prompt's list leaves for what is drawn above the box. */
 const LIST_MARGIN = 4;
+
+/**
+ * How long a prompt that took a yielding `readLine`'s place drops keys, in milliseconds: an Enter
+ * meant for the line mustn't answer it.
+ */
+const YIELD_GRACE_MS = 400;
 
 /**
  * A line typed in a framed box `columns()` wide: a box holding `> ` and the text, folded onto as
@@ -945,6 +955,11 @@ export class Terminal {
   #waiting = 0;
   /** Told each time `#waiting` changes. */
   readonly #onWaiting = new Set<() => void>();
+  readonly #now: () => number;
+  /** Set when a `readLine` yields: the next turn to start took its place. */
+  #yielded = false;
+  /** Until when keys are dropped (`#now` time), after a prompt took a yielding line's place. */
+  #graceUntil = 0;
 
   /** Build a terminal over `options.input` and `options.output`; touches neither stream. */
   constructor(options: TerminalOptions = {}) {
@@ -954,6 +969,7 @@ export class Terminal {
     this.#output = this.#plain ? plainOutput(output) : output;
     this.#onStop = options.onStop;
     this.#onActive = options.onActive;
+    this.#now = options.now ?? Date.now;
   }
 
   /** A `LineEditor` as wide as this terminal's output. */
@@ -995,7 +1011,9 @@ export class Terminal {
    *
    * With `yields`, the prompt gives way to a prompt that wants an answer (any but a `readLine`)
    * queued behind it while it is up: it ends as `{yielded}` with the draft, erased as an abort
-   * erases it, and a `readLine` called next waits behind that prompt.
+   * erases it, and a `readLine` called next waits behind that prompt. The prompt that took its
+   * place drops the keys typed before it opened, and those of its first `YIELD_GRACE_MS` but
+   * Ctrl-C.
    */
   async readLine<E extends boolean = false>(
     label: string,
@@ -1034,6 +1052,7 @@ export class Terminal {
         onWaiting();
       });
       if ("aborted" in read && yielding.signal.aborted && options.signal?.aborted !== true) {
+        this.#yielded = true;
         return { yielded: true, draft: read.draft };
       }
       return read;
@@ -1180,8 +1199,8 @@ export class Terminal {
 
   /**
    * Ask the user to approve an action: write `body` and the unified `diff` when there is one (with
-   * `frame`, as a card: `diffCard`), then select among `choices` under `title`, the first
-   * preselected. All the text is drawn through
+   * `frame`, as a card: `diffCard`), then select among `choices` under `title`, `preselect` (or
+   * the first) preselected. All the text is drawn through
    * `sanitize`, its escape sequences shown rather than dropped. Returns the chosen choice; the
    * last one (the reject) for Ctrl-C, which leaves the terminal open; null without drawing or
    * reading when the terminal is plain, closed or its input isn't a TTY, and null when the input
@@ -1206,13 +1225,18 @@ export class Terminal {
         ]
       : [request.body, request.diff ?? ""].filter((text) => text !== "").map(shown);
     const titles = choices.map(shown);
+    if (request.preselect !== undefined && !choices.includes(request.preselect)) {
+      const named = JSON.stringify(request.preselect);
+      throw new RangeError(`approve's preselect ${named} is not one of the choices`);
+    }
+    const initial = request.preselect === undefined ? 0 : choices.indexOf(request.preselect);
     let ended: { value: number } | { stop: StopReason };
     try {
       ended = await this.#runTurn(
         signal,
         (run) => {
           for (const text of card) this.#output.write(crlf(text.replace(/\n$/, "")) + "\r\n");
-          return run(selectWidget({ label, titles }));
+          return run(selectWidget({ label, titles, initial }));
         },
         { keepOpen: true },
       );
@@ -1397,6 +1421,9 @@ export class Terminal {
   /** Hand `key` to the active widget or the watch, or buffer it for the next widget. */
   #dispatch(key: Key): void {
     const watch = this.#turn === undefined ? this.#watch : undefined;
+    // Ctrl-C still works in the grace after a prompt took a line's place.
+    const graced = this.#turn !== undefined && this.#now() < this.#graceUntil;
+    if (graced && !(key.ctrl && key.name === "c")) return;
     if (this.#active) this.#active.key(key);
     else if (watch !== undefined && key.ctrl && key.name === "c") watch.onKey("interrupt");
     else if (watch?.edit?.(key) === true) return;
@@ -1491,6 +1518,12 @@ export class Terminal {
       if (turn.ending === undefined) {
         started = true;
         this.#turn = turn;
+        if (this.#yielded) {
+          // The user may have been typing in the line: what they typed for it answers nothing here.
+          this.#yielded = false;
+          this.#buffer = [];
+          this.#graceUntil = this.#now() + YIELD_GRACE_MS;
+        }
         this.#printed = false;
         quietly(() => this.#onActive?.(true, false));
         this.#attach();

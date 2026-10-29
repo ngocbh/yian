@@ -333,7 +333,9 @@ function inboxClosed(log: string, inbox: string): boolean {
  * which comes back after it. A line sent once the engine stopped moves the run again, as a child
  * event does. With `host.rows`, their list is drawn under the box's hint: Down on the box's last
  * row moves into it, Up and Down move along it, Up from its top row or Esc goes back to the box
- * (an Esc there withdraws nothing), and Enter on a row calls `host.rows.open`.
+ * (an Esc there withdraws nothing), and Enter on a row calls `host.rows.open`, which the chat
+ * doesn't wait for: its turns, deadlines and child events go on while the row is open, and the
+ * next prompt waits behind it.
  *
  * With `host.events`, each child event queued is sent to the inbox as a message authored `yian`
  * (as text to an `Inbox(str)`): while a turn runs, at once, unless a tool call is in flight, then
@@ -515,8 +517,10 @@ export async function inboxChat(
   // With the chat's look on a terminal, the prompt's box stays up while a turn runs.
   const editor =
     view !== null && atTerminal(io) ? terminal.lineEditor({ hint: view.hint, list: host.rows?.list }) : null;
-  const openRow = async (index: number): Promise<void> => {
-    if (host.rows) await host.rows.open(index, terminal);
+  // Opens a row of `host.rows` without waiting for the user to leave it: the chat goes on meanwhile
+  // (its prompt queues behind the row's screen), and only a failure stops it.
+  const openRow = (index: number): void => {
+    host.rows?.open(index, terminal).catch((error: unknown) => stop.abort(error));
   };
   const onStopSignal = (signal: NodeJS.Signals) => () => stop.abort(new HostStop(signal));
   const listeners = [
@@ -642,7 +646,7 @@ export async function inboxChat(
         editor!.set("");
         sendLive(action.value);
       } else if (action !== null && "open" in action) {
-        void openRow(action.open).catch((error: unknown) => stop.abort(error));
+        openRow(action.open);
       }
       view?.refresh();
       return true;
@@ -799,7 +803,7 @@ export async function inboxChat(
         continue;
       }
       if ("open" in read) {
-        await openRow(read.open);
+        openRow(read.open);
         continue;
       }
       // A run that ended under the chat (a cancel from outside) refuses the line or the close as

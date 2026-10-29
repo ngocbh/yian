@@ -1019,6 +1019,24 @@ nodes:
 output: \${say.output}
 `;
 
+const NAP_FLOW = `id: nap
+name: nap
+nodes:
+  nap:
+    kind: tool
+    tool_id: sleep
+    input:
+      for: "2s"
+  done:
+    kind: code
+    input:
+      slept: \${nap.output}
+    output: str
+    code: |
+      return "rested";
+output: \${done.output}
+`;
+
 describe("a run's view while the chat goes on", () => {
   test(
     "opens from the list while a reply runs; Esc in the list withdraws nothing; an approval behind it is said",
@@ -1077,6 +1095,43 @@ describe("a run's view while the chat goes on", () => {
       expect(call).toBeLessThan(shown.findIndex((line) => line.startsWith("╭─ Write blue.yaml")));
       stdin.write(ENTER);
       await until(() => rows().includes("⏺ done.") && idle());
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "opened from the prompt, lets the chat take a run's event in a turn of its own before Esc",
+    async () => {
+      writeFileSync(join(root, "nap.yaml"), NAP_FLOW);
+      const { io, stdin, output, rows } = terminalIo();
+      let started = false;
+      const model = new StepModel((request) => {
+        if (afterTool(request)) return textReply("Started.");
+        if (!started && asked(request, "start nap")) {
+          started = true;
+          return callReply(["start_flow", { path: "nap.yaml", inputs: {} }, "c1"]);
+        }
+        return asked(request, "run r1 succeeded") ? textReply("r1 is done.") : textReply("noted.");
+      });
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`start nap${ENTER}`);
+      await until(() => output.text.includes("Run nap.yaml"));
+      stdin.write(ENTER);
+      await until(() => rows().at(-1)!.includes("● waits") && !rows().some((line) => line.includes("Thinking")));
+      stdin.write(DOWN);
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      stdin.write(ENTER);
+      await until(() => rows()[0]?.startsWith("r1  nap.yaml") === true);
+      // The run ends while its view is up, and the chat's turn for that runs meanwhile.
+      await until(() => model.requests.some((request) => asked(request, "run r1 succeeded")));
+      expect(rows()[0]).toStartWith("r1  nap.yaml");
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().includes("⏺ r1 is done.") && rows().at(-1) === HINT);
+      expect(rows()).toContain("⏺ r1 succeeded");
       stdin.write(`/exit${ENTER}`);
       expect(await chatting).toBe(0);
     },

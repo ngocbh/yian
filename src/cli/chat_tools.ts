@@ -206,6 +206,8 @@ export function listFlows(
 ): string {
   const found: string[] = [];
   let visited = 0;
+  // Set only where the walk leaves an entry unvisited, so a tree of exactly the limit is whole.
+  let truncated = false;
   const walk = (folder: string): void => {
     let entries: Dirent[];
     try {
@@ -217,7 +219,10 @@ export function listFlows(
     }
     entries.sort((a, b) => compareCodeUnits(a.name, b.name));
     for (const entry of entries) {
-      if (visited === limits.entries) return;
+      if (visited === limits.entries) {
+        truncated = true;
+        return;
+      }
       visited++;
       const path = join(folder, entry.name);
       if (entry.isDirectory()) {
@@ -228,13 +233,13 @@ export function listFlows(
     }
   };
   walk(dir);
-  if (found.length === 0 && visited < limits.entries) return "no flows";
+  if (found.length === 0 && !truncated) return "no flows";
   found.sort(compareCodeUnits);
   const lines = found.slice(0, limits.flows);
   if (found.length > limits.flows) {
     lines.push(`(${found.length - limits.flows} more not shown; pass dir to list one folder)`);
   }
-  if (visited === limits.entries) {
+  if (truncated) {
     lines.push(`(stopped after ${limits.entries} files and folders; pass dir to list one folder)`);
   }
   return lines.join("\n");

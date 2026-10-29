@@ -221,6 +221,13 @@ describe("list_flows", () => {
     );
   });
 
+  test("a tree of exactly the entry limit is listed whole, with no note", () => {
+    // The root holds sub/ and sub/a.yaml: two entries.
+    expect(listFlows(root, root, { flows: 10, entries: 2 })).toBe("sub/a.yaml");
+    mkdirSync(join(root, "empty"));
+    expect(listFlows(root, join(root, "empty"), { flows: 10, entries: 0 })).toBe("no flows");
+  });
+
   test("stops walking after the entry limit, with a note", () => {
     for (const name of ["a.yaml", "b.yaml", "c.yaml"]) writeFileSync(join(root, name), "");
     expect(listFlows(root, root, { flows: 10, entries: 2 })).toBe(

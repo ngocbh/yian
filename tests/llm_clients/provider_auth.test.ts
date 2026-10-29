@@ -2917,6 +2917,34 @@ describe("browser callback listener", () => {
     await expectCallbackPortFree();
   });
 
+  test("a callback with the wrong or no state gets 400 and the login waits for the real one", async () => {
+    const http = new FakeHttp(new HttpResponse(200, tokens()));
+    const mismatch = callbackAnswer("400 Bad Request", "Callback state did not match this login.");
+    const replies: [string, string][] = [];
+    const auth = new OpenAIAuth({ request: http.request, scheduler: realScheduler });
+    const credentials = await auth.browserLogin(
+      async (url) => {
+        const state = new URL(url).searchParams.get("state");
+        const cases: [string, string][] = [
+          ["GET /auth/callback?code=old&state=stale HTTP/1.1\r\n\r\n", mismatch],
+          ["GET /auth/callback?code=old HTTP/1.1\r\n\r\n", mismatch],
+          [`GET /auth/callback?code=old&state=${state}&state=${state} HTTP/1.1\r\n\r\n`, mismatch],
+          [callbackRequest(url), callbackAnswer("200 OK", "Authorization received. Return to Yian.")],
+        ];
+        for (const [data, expected] of cases) {
+          replies.push([(await callbackExchange(data)).toString("latin1"), expected]);
+        }
+      },
+      { timeoutMs: 3000 },
+    );
+    for (const [reply, expected] of replies) expect(reply).toBe(expected);
+    expect(replies).toHaveLength(4);
+    expect(credentials.accountId).toBe("account-test");
+    expect(http.calls).toHaveLength(1);
+    expect(http.calls[0]![2].form!.code).toBe("code");
+    await expectCallbackPortFree();
+  });
+
   test("a taken port is refused before the browser opens", async () => {
     const blocker = net.createServer();
     await new Promise<void>((resolve, reject) => {

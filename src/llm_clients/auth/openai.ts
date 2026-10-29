@@ -37,8 +37,30 @@ interface CallbackListener {
   close(): Promise<void>;
 }
 
-/** Return the status, body and, for a valid callback, the callback URL answering `received`. */
-function callbackAnswer(received: Buffer, limit: number): { status: string; body: string; target?: string } {
+/** Return the query parameters of a callback URL that starts with `REDIRECT_URI`, ignoring any fragment. */
+function callbackParams(url: string): URLSearchParams {
+  const rest = url.slice(REDIRECT_URI.length).split("#", 1)[0]!;
+  // URLSearchParams drops one leading "?", which parse_qs keeps as part of the first key.
+  return new URLSearchParams("&" + rest.slice(1));
+}
+
+/** Whether `params` hold exactly one `state`, equal to `state`. */
+function stateMatches(params: URLSearchParams, state: string): boolean {
+  const states = params.getAll("state");
+  return states.length === 1 && sameText(states[0]!, state);
+}
+
+/**
+ * Return the status, body and, for a valid callback, the callback URL answering `received`.
+ *
+ * A callback is valid only when it carries this login's `state`: a stale tab or another local
+ * process gets a 400, and the login keeps waiting.
+ */
+function callbackAnswer(
+  received: Buffer,
+  limit: number,
+  state: string,
+): { status: string; body: string; target?: string } {
   const bad = { status: "400 Bad Request", body: "Invalid callback request." };
   const lineEnd = received.indexOf("\r\n");
   const line = lineEnd === -1 ? received : received.subarray(0, lineEnd);
@@ -50,18 +72,21 @@ function callbackAnswer(received: Buffer, limit: number): { status: string; body
   if (method !== "GET" || (version !== "HTTP/1.0" && version !== "HTTP/1.1")) return bad;
   if (!received.includes("\r\n\r\n") || received.length > limit) return bad;
   if (!/^\/auth\/callback(?:$|[?#])/.test(target)) return { status: "404 Not Found", body: "Unknown callback path." };
-  const body = "Authorization received. Return to Yian.";
-  return { status: "200 OK", body, target: "http://localhost:1455" + target };
+  const url = "http://localhost:1455" + target;
+  if (!stateMatches(callbackParams(url), state)) {
+    return { status: "400 Bad Request", body: "Callback state did not match this login." };
+  }
+  return { status: "200 OK", body: "Authorization received. Return to Yian.", target: url };
 }
 
 /**
  * Start the local login callback listener on 127.0.0.1:1455.
  *
  * Each connection is answered once, after its request headers, the size cap, or the peer's end;
- * `callbackUrl` resolves with the first valid callback and never rejects. Rejects with
- * `AuthError` if the port can't be bound.
+ * `callbackUrl` resolves with the first valid callback carrying `state` and never rejects.
+ * Rejects with `AuthError` if the port can't be bound.
  */
-async function listen(): Promise<CallbackListener> {
+async function listen(state: string): Promise<CallbackListener> {
   let found!: (url: string) => void;
   // Created now, so a callback arriving while the browser still opens isn't lost.
   const callbackUrl = new Promise<string>((resolve) => (found = resolve));
@@ -77,7 +102,7 @@ async function listen(): Promise<CallbackListener> {
       if (answered) return;
       answered = true;
       waiting.delete(socket);
-      const { status, body, target } = callbackAnswer(received, limit);
+      const { status, body, target } = callbackAnswer(received, limit, state);
       if (target !== undefined) found(target);
       const head =
         `HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\n` +
@@ -377,7 +402,7 @@ export class OpenAIAuth {
       });
       const url = ISSUER + "/oauth/authorize?" + query.toString();
       // Started before the browser opens, so a fast callback isn't lost.
-      const listener = awaitCallback === undefined ? await listen() : undefined;
+      const listener = awaitCallback === undefined ? await listen(state) : undefined;
       try {
         signal.throwIfAborted();
         await untilStopped(openUrl(url), signal);
@@ -393,13 +418,8 @@ export class OpenAIAuth {
         ) {
           throw new AuthError("OpenAI returned an invalid callback location");
         }
-        const rest = result.slice(REDIRECT_URI.length).split("#", 1)[0]!;
-        // URLSearchParams drops one leading "?", which parse_qs keeps as part of the first key.
-        const params = new URLSearchParams("&" + rest.slice(1));
-        const states = params.getAll("state");
-        if (states.length !== 1 || !sameText(states[0]!, state)) {
-          throw new AuthError("OpenAI login state did not match");
-        }
+        const params = callbackParams(result);
+        if (!stateMatches(params, state)) throw new AuthError("OpenAI login state did not match");
         if (params.has("error")) throw new AuthError("OpenAI browser authorization was denied");
         const codes = params.getAll("code");
         if (codes.length !== 1 || !codes[0]) {

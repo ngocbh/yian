@@ -643,7 +643,8 @@ function idleRun(
 /**
  * Close what a run call opened and hand the run on, whatever fails.
  *
- * 1. Servers close, then memory.
+ * 1. Servers close, then memory. Server close never rejects (`closeRunServers`), so only memory and
+ *    log close errors are noted.
  * 2. Then, in one synchronous step: the next idle entry is built (after every await, so it holds
  *    every record appended under this hold), the log closes, and the hold is released.
  *
@@ -2219,8 +2220,9 @@ export function pendingCalls(log: string): readonly PendingCall[] {
   const waits = new WaitsState();
   // Each unsettled call's recorded arguments; a settled node's calls leave the fold, so theirs go.
   const args = new Map<string, JsonObject | null>();
-  // Each running node's steps, by index, which an agent call's `reply` points into.
-  const steps = new Map<string, Readonly<JsonObject>[]>();
+  // Each running node's step count and latest `model_call` step with its number: an agent call's
+  // `reply` must name that step, so the earlier ones needn't be kept.
+  const nodes = new Map<string, { count: number; replyN: number; reply: Readonly<JsonObject> | undefined }>();
   let first = true;
   for (const { envelope } of iterRunRecords(log)) {
     if (first && !(envelope.record instanceof RunStartedRecord)) {
@@ -2230,16 +2232,21 @@ export function pendingCalls(log: string): readonly PendingCall[] {
     applyWaitsRecord(waits, envelope);
     const record = envelope.record;
     if (record instanceof NodeStepRecord) {
-      const nodeSteps = steps.get(record.nodeId) ?? [];
-      nodeSteps.push(record.step);
-      steps.set(record.nodeId, nodeSteps);
-      if (record.step["kind"] === "pending") {
-        args.set(String(record.step["call_id"]), pendingArguments(nodeSteps, record.step));
+      const node = nodes.get(record.nodeId) ?? { count: 0, replyN: 0, reply: undefined };
+      nodes.set(record.nodeId, node);
+      node.count += 1;
+      const step = record.step;
+      if (step["kind"] === "model_call") {
+        node.replyN = node.count;
+        node.reply = step;
+      } else if (step["kind"] === "pending") {
+        const replyAt = (n: number) => (n === node.replyN ? node.reply : undefined);
+        args.set(String(step["call_id"]), pendingArguments(replyAt, step));
       }
     } else {
       const settled = settledNodeId(record);
       if (settled === null) continue;
-      steps.delete(settled);
+      nodes.delete(settled);
       for (const callId of args.keys()) if (!waits.calls.has(callId)) args.delete(callId);
     }
   }
@@ -2279,15 +2286,18 @@ function openHostCalls(waits: WaitsState, argumentsOf: (call: Call) => JsonObjec
 function stateArguments(state: RunState, call: Call): JsonObject | null {
   const steps = state.nodeSteps.get(call.nodeId) ?? [];
   const step = steps.find((entry) => entry["kind"] === "pending" && entry["call_id"] === call.callId);
-  return step === undefined ? null : pendingArguments(steps, step);
+  return step === undefined ? null : pendingArguments((n) => steps[n - 1], step);
 }
 
 /**
- * The arguments `pending` step `step` among its node's `steps` registered (for an agent's call,
- * those of the tool call in the reply its `reply` names), or `null`.
+ * The arguments `pending` step `step` registered (for an agent's call, those of the tool call in
+ * the reply its `reply` names, which `stepAt` returns by step number), or `null`.
  */
-function pendingArguments(steps: readonly Readonly<JsonObject>[], step: Readonly<JsonObject>): JsonObject | null {
-  if (Object.hasOwn(step, "reply")) return agentCallArguments(steps[Number(step["reply"]) - 1], Number(step["index"]));
+function pendingArguments(
+  stepAt: (n: number) => Readonly<JsonObject> | undefined,
+  step: Readonly<JsonObject>,
+): JsonObject | null {
+  if (Object.hasOwn(step, "reply")) return agentCallArguments(stepAt(Number(step["reply"])), Number(step["index"]));
   return (step["arguments"] as JsonObject | undefined) ?? null;
 }
 

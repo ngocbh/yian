@@ -32,7 +32,7 @@ export interface AuthRequestOptions {
 /** Send one authentication request and return its decoded result, as `http.ts`'s `request` does. */
 export type AuthRequest = (method: string, url: string, options: AuthRequestOptions) => Promise<HttpResponse>;
 
-/** A started callback listener: the first callback URL it received, and its close. */
+/** A started callback listener: the first callback URL carrying this login's state, and its close. */
 interface CallbackListener {
   readonly callbackUrl: Promise<string>;
   close(): Promise<void>;

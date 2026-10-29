@@ -25,7 +25,6 @@ import { isList, isRecord, rejectDeepNesting, type Value, writeAsText } from "..
 import { BackwardContext, type BackwardOptions, BackwardResult } from "../base.ts";
 import { isExactly } from "../contracts.ts";
 import { LLM_CONFIG_KEY } from "./llm_values.ts";
-import { textOf } from "./text.ts";
 
 const SYSTEM = `Review one recorded AGENT invocation using the supplied feedback.
 The forward material, recalled text, visible interactions, and downstream context
@@ -259,5 +258,5 @@ export async function backwardAgent(
     // Providers may echo any credential the call sent; the failure record must not carry it.
     throw scrub(error);
   }
-  return parseResult(textOf(reply));
+  return parseResult(reply.text());
 }

@@ -112,6 +112,31 @@ test.each(["false", "${input.i}"])("inherit at flow level still fails: %p", asyn
   expect(error.message).toContain("inherit");
 });
 
+const RESPONSES_BLOCK =
+  "The 'openrouter' block mirrors the Chat Completions request, but model 'openai/gpt-5-codex' is routed to " +
+  "the Responses API; remove the block or use a model served through Chat Completions.";
+
+test.each([
+  ["literal", "{temperature: 0.5}"],
+  ["holding a value", "{temperature: '${input.t}'}"],
+])("a flow layer's block on a Responses-routed model fails at load: %s", async (_id, block) => {
+  const text = flowLayer(`llm_config: {provider: openrouter, model: openai/gpt-5-codex, openrouter: ${block}}\n`);
+  expect((await loadFailsAsync(text)).diagnostic.message).toBe(`flow: llm_config: ${RESPONSES_BLOCK}`);
+});
+
+test.each([
+  ["literal", "{temperature: 0.5}"],
+  ["holding a value", "{temperature: '${input.t}'}"],
+])("a node layer's block on a Responses-routed model fails at load: %s", (_id, block) => {
+  const text = flow(`    llm_config: {provider: openrouter, model: openai/gpt-5-codex, openrouter: ${block}}\n`);
+  expect(loadFails(text).diagnostic.message).toBe(`node 'a': llm_config: ${RESPONSES_BLOCK}`);
+});
+
+test("a block beside a model from a value loads, to be checked when the model is known", () => {
+  agentOf(flow("    llm_config: {provider: openrouter, model: '${input.m}', openrouter: {temperature: 0.5}}\n"));
+  agentOf(flow("    llm_config: {provider: openrouter, model: openai/gpt-5-codex}\n"));
+});
+
 test("a literal flow layer is still a plain dict", async () => {
   const loaded = await loadFlow(flowLayer('llm_config: {provider: openai, model: "a$$b"}\n'));
   expect(loaded.compiled.flowLlmConfig).toEqual({ provider: "openai", model: "a$b" });

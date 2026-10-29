@@ -20,7 +20,7 @@ import { current } from "../../defaults.ts";
 import { MISSING_ROOT } from "../../expr/expressions.ts";
 import { wholeSpanInterior } from "../../expr/grammar.ts";
 import { evalBinding } from "../../expr/template.ts";
-import { hostOnlyFieldError, LLMConfig } from "../../llm_clients/config.ts";
+import { hostOnlyFieldError, LLMConfig, responsesBlockError } from "../../llm_clients/config.ts";
 import { locatedBlockProblems, PROVIDER_BLOCKS, ValidationError } from "../../llm_clients/provider_blocks.ts";
 import { DeclSite, MemoryDecl } from "../../memory/contracts.ts";
 import { isValue, LLM_CONFIG_KEY, valueLeaves } from "../../nodes/agent/llm_values.ts";
@@ -272,7 +272,8 @@ function declaredFields(typ: Type): Set<string> {
  * Fields that only the host sets may not appear, from a value or not, and a whole-record type may
  * not declare them; `base_url` beside a literal `provider: azure` must itself be literal.
  * `inherit` must be a literal boolean. The literal top-level fields are checked as `LLMConfig`
- * fields, and the literal parts of a provider block holding values against that block.
+ * fields, the literal parts of a provider block holding values against that block, and a literal
+ * provider and model against the block (`checkResponsesBlock`).
  *
  * @param cfg The layer, or the whole-record value.
  * @param prefix Message prefix naming the layer.
@@ -356,7 +357,30 @@ export function checkLlmConfigValue(
       });
     }
   }
+  checkResponsesBlock(literal["provider"], literal["model"], tree, prefix, diagnostics, at);
   return [cfg, inherit];
+}
+
+/**
+ * Refuse a layer whose literal `provider` and `model` send the call to the Responses API while it
+ * writes that provider's block (`responsesBlockError`); a provider or model from a value is
+ * checked when it resolves.
+ *
+ * @param tree The layer as written; the block may hold values.
+ * @param at The location of a top-level field by its key.
+ * @throws LoadError at the block.
+ */
+export function checkResponsesBlock(
+  provider: unknown,
+  model: unknown,
+  tree: Readonly<Record<string, unknown>>,
+  prefix: string,
+  diagnostics: LoadDiagnostics,
+  at: (key: string) => SourceRange | null,
+): void {
+  if (typeof provider !== "string" || typeof model !== "string") return;
+  const message = responsesBlockError(provider, model, Object.hasOwn(tree, provider) ? tree[provider] : null);
+  if (message !== null) throw diagnostics.error(`${prefix}: ${message}`, { range: at(provider) });
 }
 
 /**
@@ -407,7 +431,8 @@ function checkLiteralFields(
  * @returns The layer without `inherit`, then `inherit`.
  * @throws LoadError when the layer is not a mapping, sets a non-boolean `inherit`, sets a
  *   host-only field (`api_key`, `organization`, `project`, `headers`, or `base_url` other than
- *   beside `provider: azure`), or violates `LLMConfig`.
+ *   beside `provider: azure`), violates `LLMConfig`, or writes a block its model can't take
+ *   (`checkResponsesBlock`).
  */
 function validateLlmConfig(
   cfg: unknown,
@@ -431,6 +456,7 @@ function validateLlmConfig(
   const hostOnly = hostOnlyFieldError(rest);
   if (hostOnly !== null) throw diagnostics.error(hostOnlyMessage(prefix, hostOnly), { range: sourceRange });
   checkLiteralFields(rest, prefix, sourceRange, diagnostics);
+  checkResponsesBlock(rest["provider"], rest["model"], rest, prefix, diagnostics, () => sourceRange);
   return [rest, inherit];
 }
 

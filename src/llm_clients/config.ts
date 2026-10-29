@@ -10,10 +10,12 @@
 import { isIPv6 } from "node:net";
 
 import { current } from "../defaults.ts";
+import { reprText } from "../diagnostics.ts";
 import { isRecord } from "../typesys/index.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost as hostValue } from "../typesys/values.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
+import { PROVIDER_BASE_URL, prefersResponses } from "./endpoints.ts";
 import { blockSchema, checkBlock, choices, type Issue, PROVIDER_BLOCKS, ValidationError } from "./provider_blocks.ts";
 
 /**
@@ -46,6 +48,23 @@ export const AZURE_NEEDS_BASE_URL =
   "provider azure needs llm_config.base_url, the Azure OpenAI resource endpoint " +
   "(https://<resource>.openai.azure.com/); set llm_config.base_url beside " +
   "provider: azure. AZURE_OPENAI_ENDPOINT is not read";
+
+/**
+ * Return why `provider`'s `block` can't be sent with `model`, or `null`.
+ *
+ * A Chat Completions vendor (any OpenAI-compatible provider but `openai`) or Azure sends a model
+ * that `prefersResponses` to the Responses API, while its block mirrors the Chat Completions
+ * request, so such a model needs the block empty. A block that is not a record is left to the
+ * block's own check.
+ */
+export function responsesBlockError(provider: string, model: string, block: unknown): string | null {
+  const chat = provider === "azure" || Object.hasOwn(PROVIDER_BASE_URL, provider);
+  if (!chat || !prefersResponses(model) || !isRecord(block) || Object.keys(block).length === 0) return null;
+  return (
+    `The ${reprText(provider)} block mirrors the Chat Completions request, but model ${reprText(model)} ` +
+    "is routed to the Responses API; remove the block or use a model served through Chat Completions."
+  );
+}
 
 const CODEX_REMOVED =
   "Native Codex configuration has been removed. Run 'yian auth openai', use provider: openai, " +

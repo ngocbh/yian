@@ -45,6 +45,7 @@ import {
   azureResourceEndpoint,
   type HostConnection,
   LLMConfig,
+  responsesBlockError,
   RETIRED_LLM_CONFIG_KEYS,
   splitOllamaBaseUrl,
   SUPPORTED_LLM_PROVIDERS,
@@ -942,12 +943,18 @@ export function splitModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LL
  * Throws `AuthError` if the config carries `HOST_KEY_MARKER` but no `api_key`. Throws `RangeError`
  * if a field is invalid, the connection rejects a set field, an `azure` config has no `base_url`,
  * or the provider's block does not fit the API the call actually reaches (e.g. an `openai` block
- * with `temperature` on a ChatGPT subscription connection).
+ * with `temperature` on a ChatGPT subscription connection, or any block on a model routed to the
+ * Responses API, `responsesBlockError`).
  */
 export function checkModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LLMConfig, Connection | null] {
   const [validated, connection] = splitModelConfig(config);
   if (validated.provider === "azure" && validated.baseUrl === null) throw new RangeError(AZURE_NEEDS_BASE_URL);
-  if (validated.provider !== null) checkProviderBlock(validated, validated.provider, connection);
+  const { provider, model } = validated;
+  if (provider !== null) {
+    checkProviderBlock(validated, provider, connection);
+    const routed = model === null ? null : responsesBlockError(provider, model, validated.blockFor(provider));
+    if (routed !== null) throw new RangeError(routed);
+  }
   return [validated, connection];
 }
 

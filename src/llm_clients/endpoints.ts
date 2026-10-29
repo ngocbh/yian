@@ -57,3 +57,14 @@ export const PROVIDER_BASE_URL: Readonly<Record<string, string>> = Object.freeze
   openrouter: "https://openrouter.ai/api/v1",
   vllm: "http://localhost:8000/v1",
 });
+
+const RESPONSES_PREFIXES = ["gpt-5-pro", "gpt-5.2-pro", "gpt-5.4-pro", "gpt-5.5-pro", "gpt-5.6-sol"];
+
+/**
+ * Whether an OpenAI-compatible or Azure `model` is served through the Responses API rather than
+ * Chat Completions: it starts with `gpt-5-pro`, `gpt-5.2-pro`, `gpt-5.4-pro`, `gpt-5.5-pro` or
+ * `gpt-5.6-sol`, or contains `codex`.
+ */
+export function prefersResponses(model: string): boolean {
+  return RESPONSES_PREFIXES.some((prefix) => model.startsWith(prefix)) || model.includes("codex");
+}

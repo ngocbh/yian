@@ -1652,6 +1652,13 @@ export class RecordEnvelope {
 }
 
 /**
+ * The envelope a log built for its last append, with the line it encoded it from. A live channel
+ * encodes each envelope an append returns, so `encodeRecord` gives back that line instead of
+ * encoding the record again. One slot, so a log's records don't each keep their text.
+ */
+let lastAppended: { readonly envelope: RecordEnvelope; readonly line: string } | null = null;
+
+/**
  * Encode one envelope as its canonical run-log line: compact JSON, keys in code-unit order, no
  * trailing newline (a JSONL log adds it). The frozen record is trusted as constructed. An
  * envelope without a time encodes without `at`: that text is a prepared transition's, not a
@@ -1661,6 +1668,7 @@ export class RecordEnvelope {
  */
 export function encodeRecord(envelope: RecordEnvelope): string {
   if (!isExactly(envelope, RecordEnvelope)) throw new TypeError("encodeRecord expects a RecordEnvelope");
+  if (envelope === lastAppended?.envelope) return lastAppended.line;
   const codec = codecForRecord(envelope.record);
   return logJson({
     schema: BigInt(envelope.schema),
@@ -1765,6 +1773,31 @@ function decodeWire(data: string | Uint8Array, requireAt: boolean): WireEnvelope
  */
 function wireNodeId(kind: string, payload: JsonObject): string | null {
   return CODEC_BY_KIND.get(kind)?.nodeId?.(payload, `${kind} payload`) ?? null;
+}
+
+/** What `decodeRecordHeader` reads of a run-log line. */
+export interface RecordHeader {
+  /** The record's sequence number. */
+  readonly seq: number;
+  /** The record's wire kind, such as `node_step`. */
+  readonly kind: string;
+  /** A `node_step`'s node and step number; `null` for every other kind. */
+  readonly step: { readonly node: string; readonly n: number } | null;
+}
+
+/**
+ * Read one run-log line's seq and kind, and a step's node and number, without building its
+ * record: the envelope is checked as `decodeRecord` checks it, and of the payload only what is
+ * read.
+ *
+ * @throws RunLogSchemaError, RangeError, TypeError as `decodeRecord` does for the envelope, and
+ *   when a step's node id or number isn't valid.
+ */
+export function decodeRecordHeader(data: string | Uint8Array): RecordHeader {
+  const { seq, kind, payload } = decodeWire(data, false);
+  if (kind !== "node_step") return { seq, kind, step: null };
+  const label = "node_step payload";
+  return { seq, kind, step: { node: payloadNodeId(payload, label), n: wireInt(payload["n"], `${label} n`) } };
 }
 
 /**
@@ -3890,7 +3923,9 @@ function canonicalEnvelope(
 ): [string, RecordEnvelope] {
   const at = formatRecordTime(clock());
   const line = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, seq, record, at));
-  return [line, decodeRecord(line)];
+  const envelope = decodeRecord(line);
+  lastAppended = { envelope, line };
+  return [line, envelope];
 }
 
 /**

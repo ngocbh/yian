@@ -20,6 +20,7 @@ import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
+import { ModelCallFinished, ModelCallStarted, type RunEvent } from "../../src/events.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, EventStream, Finish, TextDelta, UsageReport } from "../../src/llm/events.ts";
 import {
@@ -392,8 +393,10 @@ test("a reply whose media can't be stored writes a failed model_call and ends it
   const media = new Message({ role: "assistant", parts: [new MediaPart({ mime: "image/png", data: "ab-_" })] });
   const model = new ScriptedModel([new Response({ message: media, finishReason: "stop" })], CONFIG);
   const events: string[] = [];
-  const onEvent = (event: { type: string; error?: string | null }) =>
-    void (event.type.startsWith("ModelCall") && events.push(`${event.type} ${event.error ?? "-"}`));
+  const onEvent = (event: RunEvent) => {
+    if (event instanceof ModelCallStarted) events.push(event.type);
+    if (event instanceof ModelCallFinished) events.push(`${event.type} ${event.error}`);
+  };
   const { log, result } = await run(model, { flow: flowText([]), onEvent });
   expect([result.status, result.failure?.code]).toEqual(["failed", "node.execute"]);
   expect(shape(log)).toEqual(["NodeStartedRecord", "model_call 1", "NodeFailedRecord"]);
@@ -402,7 +405,7 @@ test("a reply whose media can't be stored writes a failed model_call and ends it
     retry_in: null,
     output: null,
   });
-  expect(events).toEqual(["ModelCallStarted -", "ModelCallFinished RangeError"]);
+  expect(events).toEqual(["ModelCallStarted", "ModelCallFinished RangeError"]);
 });
 
 test("a failed call writes what arrived and the usage reported before it failed", async () => {

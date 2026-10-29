@@ -34,7 +34,8 @@ Before a command reads its flags, yian checks every `YIAN_*` variable in the env
 ## yian run
 
 `yian run` loads a flow, asks for any inputs still missing, runs it, and prints its output. Every
-run writes a durable run log, so you can resume a run that stopped.
+run writes a durable run log, so you can resume a run that stopped. On a terminal, a flow with an
+inbox input becomes a chat (see [Chatting on a terminal](#chatting-on-a-terminal)).
 
 ```console
 $ yian run brief.yaml --input topic=climate
@@ -47,6 +48,7 @@ $ yian run --resume ~/.yian/runs/4f1c/log.jsonl
 | `FLOW` | path | The flow `.yaml` to run. Leave it out with `--resume` |
 | `-i`, `--input` | `k=v` | One input. Repeat it for more |
 | `--inputs` | file | A JSON file of inputs |
+| `--inbox` | name | On a terminal, the inbox input to send typed lines to, when the flow has several |
 | `--log` | path | Write the run log here instead of the default location. The path must not exist |
 | `--resume` | path | Resume the run recorded in this run log, with the flow it recorded |
 | `-q`, `--quiet` | | Print no banner and no per-node progress |
@@ -139,6 +141,20 @@ continue with: yian run --resume /home/ada/.yian/runs/4f1c/log.jsonl
 otherwise it appends nothing and prints the same lines again. It doesn't wait for a deadline
 itself. An `ask` never waits in `yian run`: it prompts at the terminal. See
 [Inboxes and waiting](/inboxes/).
+
+### Chatting on a terminal
+
+When stdin and stderr are a terminal, `yian run FLOW` chats with a flow that has an `Inbox(str)`
+or `Inbox(Message)` input, as [`yian chat`](#yian-chat) does: each line you type goes to the inbox,
+and the output of each node named `reply` prints on stdout. It chats when all of these hold:
+
+- The flow has one such input, or `--inbox NAME` picks one of several.
+- The flow declares no memory and grants or calls no MCP tool.
+- The run is fresh, with no `--resume`, `--json` or `--memory-storage`.
+
+Otherwise the run goes as above, and a `take` on the inbox leaves it waiting. A chat takes
+`--input`, `--inputs`, `--log`, `-w`, `--provider`, `--model` and `--engine-trace`, and shows no
+banner or per-node progress.
 
 ### Memory
 

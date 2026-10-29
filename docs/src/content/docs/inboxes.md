@@ -192,15 +192,16 @@ A host program moves messages and answers into a run through its log:
 None of these moves the run; the host then calls `advance`. [Embedding yian](/embedding/) covers
 the calls in full.
 
-`yian chat` does this for you. It runs a flow with one `Inbox(str)` or `Inbox(Message)` input
-(pick one with `--inbox NAME` when there are several), sends each line you type, and prints the
-output of each node named `reply`:
+On a terminal, `yian run` does this for you. It runs a flow with one `Inbox(str)` or
+`Inbox(Message)` input (pick one with `--inbox NAME` when there are several), sends each line you
+type, and prints the output of each node named `reply`. `yian chat` does the same:
 
 ```console
+$ yian run collect.yaml
 $ yian chat collect.yaml
 ```
 
-| You do | `yian chat` calls |
+| You do | The chat calls |
 |---|---|
 | Type a line | `send`, then `advance` |
 | Type `/exit` or `/quit`, or press Ctrl-D | `close`, then `advance` until the run ends |
@@ -210,13 +211,14 @@ $ yian chat collect.yaml
 A message larger than `YIAN_MAX_EVENT_BYTES` (1 MiB by default) is refused, and the chat prints
 `not sent: <reason>`. While the prompt is up, the chat moves the run on when a `sleep` or a
 `timeout` comes due. A chat that stopped goes on with `yian chat --resume LOG`, which calls
-`advance` and then reads your lines again.
+`advance` and then reads your lines again. [Chatting on a terminal](/cli/#chatting-on-a-terminal)
+lists when `yian run` chats.
 
 ## Suspend and resume
 
 When every node that can still run is waiting, the run stops with the status `waiting`. Its log
-holds everything it needs to go on. `yian run` exits 0 and prints, on stderr, what it waits on and
-how to continue:
+holds everything it needs to go on. Off a terminal, or whenever it doesn't chat, `yian run` exits 0
+and prints, on stderr, what it waits on and how to continue:
 
 ```text
 run waiting: gather#0/heard (take)

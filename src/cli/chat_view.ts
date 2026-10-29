@@ -717,8 +717,10 @@ export class ChatView {
       rows.push(`${this.#paint(frame, "cyan")} ${this.#paint(`Thinking… (${seconds}s · esc to interrupt)`, "dim")}`);
       if (this.#input !== null) rows.push(...this.#input.lines());
     }
-    // Each row fits the width, so each takes one row of the screen.
-    return rows.map((row) => clip(row, this.#width()));
+    // Each row fits the width, so each takes one row of the screen; and no more rows than the
+    // screen has, less one, are drawn, or each redraw would leave a copy above in the scrollback.
+    const kept = rows.slice(Math.max(0, rows.length - (rowsOf(this.#output) - 1)));
+    return kept.map((row) => clip(row, this.#width()));
   }
 
   /** The text that erases the live rows, leaving the cursor at the start of where they began. */
@@ -752,8 +754,9 @@ export class ChatView {
     this.#drawn = rows.length;
     this.#cursorRow = Math.max(0, rows.length - 1);
     const cursor = this.#turn !== null && !this.#paused ? (this.#input?.cursor() ?? null) : null;
-    if (cursor !== null) {
-      const target = rows.length - this.#input!.lines().length + cursor.row;
+    const target = cursor === null ? -1 : rows.length - this.#input!.lines().length + cursor.row;
+    // A cursor on a row cut off the top isn't shown.
+    if (cursor !== null && target >= 0) {
       const col = Math.min(cells(cursor.before.replace(ANSI, "")), this.#width() - 1);
       if (this.#cursorRow > target) text += `\x1b[${this.#cursorRow - target}A`;
       text += `\r\x1b[${col + 1}G${SHOW_CURSOR}`;

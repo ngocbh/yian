@@ -675,6 +675,35 @@ describe("the input box during a turn", () => {
     view.turn(false);
   });
 
+  test("keeps within the screen with a paste taller than it, the box cut around its cursor", () => {
+    const { view, output, rows } = viewOn(12);
+    const editor = new LineEditor({ columns: () => COLUMNS, rows: () => 12, hint: HINT.trim() });
+    editor.set("word ".repeat(300));
+    view.turn(true);
+    view.input(editor);
+    view.onStream(chunk(1, "1\n2\n3\n4\nfive"));
+    const ups = [...output.text.matchAll(/\x1b\[(\d+)A/g)].map((match) => Number(match[1]));
+    expect(Math.max(0, ...ups)).toBeLessThanOrEqual(11);
+    expect(rows().at(-8)).toStartWith("╭─ ↑ ");
+    expect(rows().slice(-2)).toEqual([BOTTOM, HINT]);
+    view.turn(false);
+  });
+
+  test("keeps its live rows within the screen when the box alone is taller, dropping its top", () => {
+    const { view, output } = viewOn(12);
+    // No height given: the box folds onto every row it needs.
+    const editor = new LineEditor({ columns: () => COLUMNS, hint: HINT.trim() });
+    editor.set("word ".repeat(300));
+    view.turn(true);
+    view.input(editor);
+    const ups = [...output.text.matchAll(/\x1b\[(\d+)A/g)].map((match) => Number(match[1]));
+    expect(Math.max(0, ...ups)).toBeLessThanOrEqual(10);
+    view.refresh();
+    const later = [...output.text.matchAll(/\x1b\[(\d+)A/g)].map((match) => Number(match[1]));
+    expect(Math.max(0, ...later)).toBeLessThanOrEqual(10);
+    view.turn(false);
+  });
+
   test("while held, nothing is written; let go, all of it is, in order", () => {
     const { view, output, rows } = viewOn();
     view.turn(true);

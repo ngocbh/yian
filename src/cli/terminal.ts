@@ -470,20 +470,27 @@ export class LineEditor {
   /** The rows, styled: the box, the hint and the list. */
   lines(): string[] {
     const { rows, width } = this.#fold();
-    const edge = "─".repeat(width + 4);
+    const { start, end } = this.#window();
     const border = (part: string): string => style("2", part);
-    const list = this.#listRows(rows.length + 2);
+    // A box cut to fit says on its edge how many rows it leaves out.
+    const edge = (count: number, arrow: string): string => {
+      if (count === 0) return "─".repeat(width + 4);
+      const label = `─ ${arrow} ${count} more `;
+      return label + "─".repeat(Math.max(0, width + 4 - cells(label)));
+    };
+    const list = this.#listRows(end - start + 2);
     const extra = list.length > 0 ? this.list?.hint : undefined;
     const both = extra ? `${this.#hint} · ${extra}` : this.#hint;
     // The list's hint only when it fits on the row: the box's hint matters more.
     const hint = cells(both) + 2 <= this.#columns() ? both : this.#hint;
     return [
-      border(`╭${edge}╮`),
-      ...rows.map((each, i) => {
+      border(`╭${edge(start, "↑")}╮`),
+      ...rows.slice(start, end).map((each, i) => {
         const body = each.chars.join("");
-        return `${border("│")} ${lead(i)}${body}${" ".repeat(width - cells(body))} ${border("│")}`;
+        const pad = " ".repeat(width - cells(body));
+        return `${border("│")} ${lead(start + i)}${body}${pad} ${border("│")}`;
       }),
-      border(`╰${edge}╯`),
+      border(`╰${edge(rows.length - end, "↓")}╯`),
       `  ${style("2", hint)}`,
       ...list,
     ];
@@ -494,7 +501,20 @@ export class LineEditor {
     if (this.focus() !== null) return null;
     const { rows, row } = this.#fold();
     const before = rows[row]!.chars.slice(0, this.#text.caret() - rows[row]!.start).join("");
-    return { row: row + 1, before: `│ ${lead(row)}${before}` };
+    return { row: row - this.#window().start + 1, before: `│ ${lead(row)}${before}` };
+  }
+
+  /**
+   * The text rows the box draws, `start` to `end`: all of them, or on a short screen as many as
+   * fit (`rows()` high, leaving `LIST_MARGIN` rows above it and three for its edges and the hint),
+   * the cursor's row among them.
+   */
+  #window(): { start: number; end: number } {
+    const { rows, row } = this.#fold();
+    const room = Math.max(1, this.#rows() - LIST_MARGIN - 3);
+    if (rows.length <= room) return { start: 0, end: rows.length };
+    const start = Math.min(Math.max(0, row - room + 1), rows.length - room);
+    return { start, end: start + room };
   }
 
   /** Apply one key. */

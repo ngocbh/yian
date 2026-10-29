@@ -181,7 +181,7 @@ export async function writeEngineTrace(error: Error, engineTrace: boolean, io: C
 }
 
 /**
- * @internal Return `ms` as a bracketed elapsed time in whole units: `[5s]`, `[1m05s]`, `[1h02m]`.
+ * Return `ms` as a bracketed elapsed time in whole units: `[5s]`, `[1m05s]`, `[1h02m]`.
  */
 export function elapsedTag(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));

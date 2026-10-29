@@ -824,6 +824,51 @@ async function aLongListShowsWhatFitsTheFocusedRowAmongThem(): Promise<void> {
   assert.deepEqual(await line, { open: "r5", draft: "" });
 }
 
+async function aPasteTallerThanTheScreenShowsTheRowsAroundTheCursor(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  // Twelve rows high: five rows of text fit in the box, under four left above it.
+  const editor = new LineEditor({ columns: () => 60, rows: () => 12, hint: "hint" });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  const text = Array.from({ length: 8 }, (_, i) => String(i).repeat(54)).join("");
+  input.write(PASTE_START + text + PASTE_END);
+  await tick();
+  const rows = view().rows;
+  assert.equal(rows.length, 8);
+  assert.equal(rows[0], `╭─ ↑ 4 more ${"─".repeat(47)}╮`);
+  assert.equal(rows[1], framed(`  ${"4".repeat(54)}`));
+  assert.equal(rows[5], framed(""));
+  assert.deepEqual(rows.slice(-2), [FRAME_BOTTOM, "  hint"]);
+  // The cursor stays on its row, and the window follows it.
+  assert.deepEqual(view().cursor, { row: 5, col: 4 });
+  input.write(HOME);
+  await tick();
+  assert.equal(view().rows[1], framed(`> ${"0".repeat(54)}`));
+  // Eight rows now: the cursor needs no row of its own after the last.
+  assert.equal(view().rows[6], `╰─ ↓ 3 more ${"─".repeat(47)}╯`);
+  assert.deepEqual(view().cursor, { row: 1, col: 4 });
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: text });
+}
+
+async function anEnterAfterTheListShiftedOpensTheRunItsPointerIsOn(): Promise<void> {
+  const { input, terminal } = setup({ columns: 60 });
+  const rows = ["r1  a.yaml", "r2  b.yaml", "r3  c.yaml"];
+  const list = rowList(rows);
+  const editor = new LineEditor({ columns: () => 60, hint: "", list });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  input.write(DOWN + DOWN);
+  await tick();
+  assert.equal(editor.focus(), 1);
+  // r1 ends and r4 starts at the head: the pointer stays on r2, now the second row again.
+  rows.splice(0, 1, "r4  d.yaml");
+  rows.splice(1, 0, "r5  e.yaml");
+  list.changed();
+  await tick();
+  assert.equal(editor.focus(), 2);
+  input.write(ENTER);
+  assert.deepEqual(await line, { open: "r2", draft: "" });
+}
+
 async function downOnAFoldedLineMovesIntoTheListOnlyFromItsLastRow(): Promise<void> {
   const { input, terminal } = setup({ columns: 20 });
   const editor = new LineEditor({ columns: () => 20, hint: "", list: rowList(["r1"]) });
@@ -2915,6 +2960,10 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a list row that goes gives the keys back, and the list redraws on its own":
     aListRowThatGoesGivesTheKeysBackAndTheListRedrawsOnItsOwn,
   "a long list shows what fits, the focused row among them": aLongListShowsWhatFitsTheFocusedRowAmongThem,
+  "a paste taller than the screen shows the rows around the cursor":
+    aPasteTallerThanTheScreenShowsTheRowsAroundTheCursor,
+  "an Enter after the list shifted opens the run its pointer is on":
+    anEnterAfterTheListShiftedOpensTheRunItsPointerIsOn,
   "Down on a folded line moves into the list only from its last row":
     downOnAFoldedLineMovesIntoTheListOnlyFromItsLastRow,
   "watchKeys with an editor gives it the keys but Ctrl-C": watchKeysWithAnEditorGivesItTheKeysButCtrlC,

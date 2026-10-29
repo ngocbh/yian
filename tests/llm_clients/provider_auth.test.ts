@@ -18,12 +18,14 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { ENTRIES } from "../../src/defaults.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
+import { OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
 import {
   ApiKeyCredentials,
   AuthError,
   type Credentials,
   HttpResponse,
   isAuthFailure,
+  isUsableLogin,
   OAuthCredentials,
   ProviderSelection,
 } from "../../src/llm_clients/auth/common.ts";
@@ -385,6 +387,16 @@ function wrapped401(depth: number): Error {
   for (let n = 0; n < depth; n += 1) error = new Error(`wrapper ${n}`, { cause: error });
   return error;
 }
+
+describe("isUsableLogin", () => {
+  test("a login without a key is usable exactly for the providers the key list calls keyless", () => {
+    for (const provider of Object.keys(PROVIDER_API_KEY_ENV)) {
+      const keyless = PROVIDER_API_KEY_ENV[provider] === null || OPTIONAL_API_KEY_PROVIDERS.has(provider);
+      const selection = new ProviderSelection({ provider, method: "none", model: "m", credentialId: "c".repeat(32) });
+      expect([provider, isUsableLogin(selection)]).toEqual([provider, keyless]);
+    }
+  });
+});
 
 describe("isAuthFailure", () => {
   const rows: [string, unknown, boolean][] = [

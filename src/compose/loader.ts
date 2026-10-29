@@ -647,8 +647,8 @@ interface LoadOptions {
  * @param options.codeRoot A directory every CODE reference's file must resolve inside (a relative
  *   one against the current directory); symlinks are resolved on both sides. A reference outside
  *   it is a `LoadError` at its `code:` value. The files read through the search path are checked
- *   too; a `childResolver`'s flow is the host's to load with its own `codeRoot`. An inline `code:`
- *   body is not confined. `null` or absent confines nothing. The flow's `source` keeps the root's
+ *   too, and so is each flow a `childResolver` returns, however the host loaded it. An inline
+ *   `code:` body is not confined. `null` or absent confines nothing. The flow's `source` keeps the root's
  *   real path, so a run records it and a resume confines the recorded files to it again.
  * @param options.env The environment this load reads the `YIAN_*` values from; default
  *   `processEnv`, which keeps the values in effect, so a `childResolver` that calls `loadFlow`
@@ -687,8 +687,31 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
           return child;
         };
   const loaded = await loadFlowFile(document, resolver, searchPaths, ctx, ownDir, rootFile);
+  if (ctx.codeRoot !== null) await checkHostedCode(hosted, document, ctx.codeRoot);
   const flow = replaceFlow(loaded, { source: await flowSource(ctx, rootFile, hosted, sourceLabel, ownDir) });
   return checkRoot(flow);
+}
+
+/**
+ * Check each CODE reference of every flow a host resolver returned, its own children included,
+ * against `codeRoot`: the host may have loaded it under no root, and a run records the root for
+ * all of the flow's files, so the loaded flow and a load from its recorded source agree.
+ *
+ * @throws LoadError at the first CODE node whose file resolves outside `codeRoot`, or can't be read.
+ */
+async function checkHostedCode(
+  hosted: ReadonlyMap<string, unknown>,
+  document: SourceDocument,
+  codeRoot: string,
+): Promise<void> {
+  const diagnostics = LoadDiagnostics.fromDocument(document);
+  const seen = new Set<object>();
+  for (const child of hosted.values()) {
+    if (!(child instanceof ComposedFlow)) continue;
+    const resolver = child.originResolver;
+    const resolveOrigin = resolver === null ? null : (origin: OriginRef) => resolver.resolve(origin);
+    await checkFlowCode(child.compiled, { diagnostics, resolveOrigin, seen, codeRoot });
+  }
 }
 
 /**

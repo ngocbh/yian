@@ -149,7 +149,8 @@ the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`.
 
 The log holds the `codeRoot` the flow was loaded under, so `advance` and the host calls below
 confine the recorded flow's CODE files to it without being told. Passing `codeRoot` is optional; one
-that names another folder is refused with a `RangeError`.
+that names another folder is refused with a `RangeError`, and so is any `codeRoot` passed for a run
+started without one.
 [How yian works](/how-it-works/#crash-recovery) explains replay and what can run twice.
 
 Only one writer holds a log at a time. A call on a log another process holds, or an `advance` of a

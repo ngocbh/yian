@@ -1876,7 +1876,22 @@ export async function loadRecordedFlow(
 ): Promise<ComposedFlow | null> {
   const env = options.env ?? processEnv;
   const root = resolvedRoot(options.codeRoot);
-  // Only the first record is read.
+  const start = readStart(log);
+  return withEnv(env, () => {
+    checkRecorded(start.defaults);
+    checkCodeRoot(log, start, root);
+    return start.flow === null ? null : loadFlowSource(start.flow);
+  });
+}
+
+/**
+ * Return the `RunStarted` record of the log at `log`, reading only its first line, without the
+ * lock: the first line of an append-only log never changes.
+ *
+ * @throws RangeError when the log holds no complete line or doesn't start with `RunStarted`,
+ *   besides `iterRunRecords`' errors.
+ */
+function readStart(log: string): RunStartedRecord {
   const records = iterRunRecords(log);
   let first: RecordEnvelope | undefined;
   try {
@@ -1885,12 +1900,7 @@ export async function loadRecordedFlow(
     records.return();
   }
   if (first === undefined) throw new RangeError(`cannot resume an empty run log: ${log}`);
-  const start = startRecord(first);
-  return withEnv(env, () => {
-    checkRecorded(start.defaults);
-    checkCodeRoot(log, start, root);
-    return start.flow === null ? null : loadFlowSource(start.flow);
-  });
+  return startRecord(first);
 }
 
 /**
@@ -1939,7 +1949,7 @@ function checkRecordedToolGroups(
   }
 }
 
-/** The options of a host call on a run log. A live delivery ignores them. */
+/** The options of a host call on a run log. A live delivery ignores them, except `codeRoot`'s check. */
 export interface DeliveryOptions {
   /**
    * As `advance`'s `env`: the environment the call reads `YIAN_*` values from, which must be the
@@ -1947,9 +1957,9 @@ export interface DeliveryOptions {
    */
   env?: Env | null;
   /**
-   * As `advance`'s: the recorded code root, refused when it names another folder; `null` (the
-   * default) uses the recorded one. Recompiling the recorded flow refuses a CODE file outside it,
-   * before any append.
+   * As `advance`'s: the recorded code root, refused when it names another folder, a live delivery
+   * included; `null` (the default) uses the recorded one. Recompiling the recorded flow refuses a
+   * CODE file outside it, before any append.
    */
   codeRoot?: string | null;
   /** The flow of a run built in code (`RunStarted` recorded no flow files), as `advance`'s. */
@@ -1983,6 +1993,8 @@ async function deliverTo(
     // The registry's key: the file itself, however the path names it (throws ENOENT when missing).
     const key = realpathSync(locator);
     const root = resolvedRoot(options.codeRoot);
+    // Checked before a live engine can take the delivery, since it reads no log.
+    if (root !== null) checkCodeRoot(log, readStart(locator), root);
     const found = await liveOrHold(key, (engine) => {
       before(engine.state);
       return engine.deliver(op);
@@ -1998,7 +2010,6 @@ async function deliverTo(
       const opened = authority;
       const start = startRecord(authority[Symbol.iterator]().next().value);
       checkRecorded(start.defaults);
-      checkCodeRoot(log, start, root);
       const kept = reusable(runHold.idle, authority, key, { hostFlow });
       const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow));
       const state = kept?.state ?? replayRunLog(flow, authority);
@@ -2031,10 +2042,10 @@ async function deliverTo(
  * Send `event` to the top-level inbox `inbox` of the run at `log`: a take reads it, now or when
  * it next takes from the inbox.
  *
- * Through this process's engine when it is moving the run (the options are ignored then); else
- * under the log's lock, taken without blocking, reusing the state of a waiting run this process
- * left while the log is unchanged, or compiling the recorded flow and replaying the log as
- * `advance` does. A send doesn't move the run: `advance` does (or the live engine).
+ * Through this process's engine when it is moving the run (the options are ignored then, though a
+ * `codeRoot` other than the recorded one is still refused); else under the log's lock, taken
+ * without blocking, reusing the state of a waiting run this process left while the log is
+ * unchanged, or compiling the recorded flow and replaying the log as `advance` does. A send doesn't move the run: `advance` does (or the live engine).
  *
  * @param log The run's JSONL log.
  * @param inbox The name of one of the flow's `Inbox(T)` inputs.

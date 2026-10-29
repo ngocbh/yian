@@ -411,22 +411,20 @@ test("loadFlowSource checks a recorded child file outside flow.dir against the s
   expect((await loadFlowSource(underRoot(source, tmp))).compiled.flowId).toBe("root");
 });
 
-test("a host child outside codeRoot loads, but loadFlowSource refuses its recorded file", async () => {
+test("a host child loaded with no root is held to its parent's codeRoot at load, as in its recorded source", async () => {
   const dir = freshDir("code-root");
   const other = freshDir("code-out");
   writeTree(other, { "child.yaml": codeFlow("child", "./h.ts:up"), "h.ts": UP });
   const childResolver = async () =>
     loadFlow(readFileSync(join(other, "child.yaml"), "utf8"), { baseDir: other, sourceLabel: "child.yaml" });
+  const options = { childResolver, baseDir: dir, sourceLabel: "flow.yaml" };
 
-  const loaded = await loadFlow(caller("root", "child", "child"), {
-    childResolver,
-    baseDir: dir,
-    sourceLabel: "flow.yaml",
-    codeRoot: dir,
-  });
-
-  const error = await loadErrorAsync(loadFlowSource(loaded.source!));
+  // Loaded flows a later call on the run's log reuses must agree with a recompile: both refuse.
+  const error = await loadErrorAsync(loadFlow(caller("root", "child", "child"), { ...options, codeRoot: dir }));
   expect(error.message).toEndWith(" is outside the code root");
+  const free = await loadFlow(caller("root", "child", "child"), options);
+  const sourceError = await loadErrorAsync(loadFlowSource(underRoot(free.source!, dir)));
+  expect(sourceError.message).toEndWith(" is outside the code root");
 });
 
 // ---------- the run start ----------

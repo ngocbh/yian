@@ -32,7 +32,7 @@ import { FileLockError, lockFile } from "../src/platform.ts";
 import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { DefaultsMismatchError } from "../src/defaults.ts";
-import { CallClosed, NodeSucceeded, NodeWaiting, type RunEvent, RunStarted, RunWaiting } from "../src/events.ts";
+import { CallClosed, NodeStarted, NodeSucceeded, NodeWaiting, type RunEvent, RunStarted, RunWaiting } from "../src/events.ts";
 import {
   advance,
   cancel,
@@ -678,6 +678,25 @@ test("a host call passing another codeRoot than the recorded one is refused befo
     expect(readFileSync(log).equals(before)).toBe(true);
   }
   expect(typeof (await send(log, "m", "hi", { env, codeRoot: join(dir, "..") }))).toBe("number");
+});
+
+test("a send to a running run passing another codeRoot than the recorded one is refused too", async () => {
+  const { dir, flow } = await codeTakeFlow(true);
+  const log = freshLog();
+  let wrong: Promise<unknown> | null = null;
+  const result = await runFlow(flow, {}, {
+    log,
+    env,
+    onEvent: (event: RunEvent) => {
+      if (event instanceof NodeStarted && event.nodeId === "up") wrong = rejected(send(log, "m", "hi", { env, codeRoot: dir }));
+    },
+  });
+  expect(result.status).toBe("waiting");
+  const error = await wrong!;
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toContain("isn't the run's code root");
+  // Nothing was sent: no record holds the event.
+  expect(readFileSync(log, "utf8")).not.toContain('"hi"');
 });
 
 test("a relative codeRoot resolves before a call waits on another holder, so a directory change can't move it", async () => {

@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, posix, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,9 +22,8 @@ interface Source {
   text: string;
 }
 
-/** Return every `.ts` file below `src`, or `[]` while `src` doesn't exist. */
+/** Return every `.ts` file below `src`. */
 function sources(): Source[] {
-  if (!existsSync(SRC)) return [];
   return readdirSync(SRC, { recursive: true, encoding: "utf8" })
     .filter((name) => name.endsWith(".ts"))
     .sort()

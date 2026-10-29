@@ -1,12 +1,23 @@
 // The chat assistant's file tools, confined to the folder the chat started in.
 
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { type ChatToolHost, chatFileTools, checkFocus, confine, ToolRefused } from "../../src/cli/chat_tools.ts";
+import type { ApproveRequest } from "../../src/cli/terminal.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { isReportedToolError } from "../../src/tools/errors.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
@@ -265,5 +276,95 @@ describe("checkFocus", () => {
     const focus = await checkFocus(path, NO_ENV);
     expect(focus.text).toBe("id: [\n");
     expect(focus.check).toStartWith("invalid:\n");
+  });
+});
+
+/**
+ * A host whose approvals `answer` gives, after running `during` (to change the files meanwhile);
+ * `requests` collects each approval asked for.
+ */
+function approving(answer: string | null, during: () => void = () => {}) {
+  const requests: ApproveRequest[] = [];
+  const chatHost = host({
+    approve: async (request) => {
+      requests.push(request);
+      during();
+      return answer;
+    },
+  });
+  return { chatHost, requests };
+}
+
+describe("write_flow", () => {
+  test("content that doesn't load is invalid and never asks", async () => {
+    const { chatHost, requests } = approving("Approve");
+    const result = String(await call("write_flow", { path: "a.yaml", content: "id: [\n" }, chatHost));
+    expect(result).toStartWith("invalid:\n");
+    expect(requests).toEqual([]);
+    expect(existsSync(join(root, "a.yaml"))).toBe(false);
+  });
+
+  test("an approved new file is written, its folders created", async () => {
+    const { chatHost, requests } = approving("Approve");
+    expect(await call("write_flow", { path: "a.yaml", content: FLOW }, chatHost)).toBe("wrote a.yaml");
+    expect(readFileSync(join(root, "a.yaml"), "utf8")).toBe(FLOW);
+    expect(requests).toHaveLength(1);
+    expect(requests[0]!.title).toBe("Write a.yaml");
+    expect(requests[0]!.choices).toEqual(["Approve", "Reject"]);
+    expect(requests[0]!.diff).toStartWith("--- /dev/null\n+++ a.yaml\n@@ -0,0 +1,6 @@\n+id: f\n");
+    const deep = await call("write_flow", { path: "new/deep/b.yaml", content: FLOW }, chatHost);
+    expect(deep).toBe("wrote new/deep/b.yaml");
+    expect(readFileSync(join(root, "new", "deep", "b.yaml"), "utf8")).toBe(FLOW);
+  });
+
+  test("a rejected write is not written", async () => {
+    const { chatHost } = approving("Reject");
+    expect(await call("write_flow", { path: "a.yaml", content: FLOW }, chatHost)).toBe("not written: rejected");
+    expect(existsSync(join(root, "a.yaml"))).toBe(false);
+  });
+
+  test("an overwrite shows the diff and replaces the file, leaving no temporary file", async () => {
+    writeFileSync(join(root, "sub", "f.yaml"), FLOW.replace("name: f", "name: old"));
+    const { chatHost, requests } = approving("Approve");
+    const content = FLOW.replace("name: f", "name: new");
+    expect(await call("write_flow", { path: "sub/f.yaml", content }, chatHost)).toBe("wrote sub/f.yaml");
+    expect(requests[0]!.diff).toContain("\n-name: old\n+name: new\n");
+    expect(readFileSync(join(root, "sub", "f.yaml"), "utf8")).toBe(content);
+    expect(readdirSync(join(root, "sub")).toSorted()).toEqual(["a.yaml", "f.yaml"]);
+  });
+
+  test("a file changed during approval is not written", async () => {
+    const path = join(root, "sub", "f.yaml");
+    writeFileSync(path, FLOW);
+    const { chatHost } = approving("Approve", () => writeFileSync(path, FLOW + "# edited\n"));
+    const content = FLOW.replace("name: f", "name: new");
+    const result = await call("write_flow", { path: "sub/f.yaml", content }, chatHost);
+    expect(result).toBe("not written: changed during approval");
+    expect(readFileSync(path, "utf8")).toBe(FLOW + "# edited\n");
+  });
+
+  test("a file created during approval is not overwritten", async () => {
+    const path = join(root, "a.yaml");
+    const { chatHost } = approving("Approve", () => writeFileSync(path, "theirs\n"));
+    const result = await call("write_flow", { path: "a.yaml", content: FLOW }, chatHost);
+    expect(result).toBe("not written: changed during approval");
+    expect(readFileSync(path, "utf8")).toBe("theirs\n");
+  });
+
+  test("without a terminal to approve, nothing is written", async () => {
+    const { chatHost } = approving(null);
+    const result = await call("write_flow", { path: "a.yaml", content: FLOW }, chatHost);
+    expect(result).toBe("not written: needs a terminal to approve");
+    expect(existsSync(join(root, "a.yaml"))).toBe(false);
+  });
+
+  test("refuses a path outside the root or not a YAML file, without asking", async () => {
+    const { chatHost, requests } = approving("Approve");
+    expect(await rejection(call("write_flow", { path: "../x.yaml", content: FLOW }, chatHost))).toBeInstanceOf(
+      ToolRefused,
+    );
+    expect(await rejection(call("write_flow", { path: ".env", content: FLOW }, chatHost))).toBeInstanceOf(ToolRefused);
+    expect(requests).toEqual([]);
+    expect(existsSync(join(tmp, "x.yaml"))).toBe(false);
   });
 });

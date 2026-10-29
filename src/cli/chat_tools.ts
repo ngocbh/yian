@@ -8,8 +8,20 @@
  * terminal's approval prompt.
  */
 
-import { type Dirent, lstatSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { dirname, extname, join, relative, resolve, sep } from "node:path";
+import {
+  type Dirent,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  type Stats,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
@@ -21,6 +33,7 @@ import { ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
 import { canonicalTypeLabel } from "../typesys/values.ts";
 import { loadConfinedText } from "./confined_load.ts";
+import { unifiedDiff } from "./diff.ts";
 import { renderDiagnostic } from "./render.ts";
 import { NotUtf8Error, readFlowText } from "./startup.ts";
 import type { ApproveRequest } from "./terminal.ts";
@@ -214,6 +227,95 @@ export async function checkFocus(path: string, env: Env): Promise<{ text: string
   return { text: focusText(text), check: await checkText(dirname(real), real, text, env) };
 }
 
+/** The approval answers `write_flow` offers: the first writes, the last (Ctrl-C's) doesn't. */
+const WRITE_CHOICES = ["Approve", "Reject"] as const;
+
+/** A file as it was when its approval was asked: its bytes and identity, or null when absent. */
+type Snapshot = { bytes: Buffer; dev: number; ino: number } | null;
+
+/** The file at `real` now, as a `Snapshot`; a folder or another non-file is refused. */
+function snapshot(path: string, real: string): Snapshot {
+  let stats: Stats;
+  try {
+    stats = statSync(real);
+  } catch (error) {
+    if (isSystemError(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) return null;
+    throw readFailure(path, error);
+  }
+  if (!stats.isFile()) throw new ToolRefused(`${path} is not a file`);
+  try {
+    return { bytes: readFileSync(real), dev: stats.dev, ino: stats.ino };
+  } catch (error) {
+    throw readFailure(path, error);
+  }
+}
+
+/** Whether two snapshots are the same file with the same bytes, or both absent. */
+function sameSnapshot(a: Snapshot, b: Snapshot): boolean {
+  if (a === null || b === null) return a === b;
+  return a.dev === b.dev && a.ino === b.ino && a.bytes.equals(b.bytes);
+}
+
+/**
+ * Write `content` to the flow file `path` inside `host.root` once it loads there and the user
+ * approves it on the terminal, with a diff against the file it replaces. Returns what happened, for
+ * the model: `wrote <path>`, `invalid:` and the diagnostic, or `not written: <why>`. A file that
+ * changed during the approval is left alone; a new file is created only if still absent, and an
+ * existing one is replaced through a temporary file in its folder.
+ */
+async function writeFlow(host: ChatToolHost, path: string, content: string, signal: AbortSignal): Promise<string> {
+  const root = realpathSync(host.root);
+  const real = confine(root, path);
+  if (!isFlowFile(real)) throw new ToolRefused(`${path} is not a .yaml or .yml file`);
+  if (Buffer.byteLength(content) > READ_FLOW_BYTES) {
+    throw new ToolRefused(`the content is over ${READ_FLOW_BYTES} bytes, the most write_flow writes`);
+  }
+  const shown = slashed(relative(root, real));
+  const check = await checkText(root, real, content, host.env);
+  if (check.startsWith("invalid:")) return check;
+  const before = snapshot(path, real);
+  const diff = unifiedDiff(before === null ? "" : before.bytes.toString("utf8"), content, {
+    oldLabel: before === null ? "/dev/null" : shown,
+    newLabel: shown,
+  });
+  const answer = await host.approve({
+    title: `Write ${shown}`,
+    body: before === null ? "A new flow file." : "Replaces the flow file.",
+    diff,
+    choices: WRITE_CHOICES,
+    signal,
+  });
+  if (answer === null) return "not written: needs a terminal to approve";
+  if (answer !== WRITE_CHOICES[0]) return "not written: rejected";
+  const changed = "not written: changed during approval";
+  // The path is resolved again: a folder on it may have become a symlink meanwhile.
+  if (confine(root, path) !== real || !sameSnapshot(before, snapshot(path, real))) return changed;
+  const folder = dirname(real);
+  if (before === null) {
+    mkdirSync(folder, { recursive: true });
+    if (realpathSync(folder) !== folder) return changed;
+    try {
+      // `wx` fails on any file there, a symlink included, so nothing created meanwhile is replaced.
+      writeFileSync(real, content, { flag: "wx" });
+    } catch (error) {
+      if (isSystemError(error) && error.code === "EEXIST") return changed;
+      throw error;
+    }
+    return `wrote ${shown}`;
+  }
+  const temporary = join(folder, `.${basename(real)}.yian-tmp-${process.pid}`);
+  // A leftover from an earlier write goes first; `wx` then refuses anything put there since.
+  rmSync(temporary, { force: true });
+  try {
+    writeFileSync(temporary, content, { flag: "wx", mode: statSync(real).mode & 0o777 });
+    if (realpathSync(folder) !== folder) return changed;
+    renameSync(temporary, real);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+  return `wrote ${shown}`;
+}
+
 /** A tool's JSON Schema for string arguments, each `[name, description, required]`. */
 function stringArguments(...fields: [name: string, description: string, required: boolean][]) {
   return {
@@ -225,7 +327,8 @@ function stringArguments(...fields: [name: string, description: string, required
 }
 
 /**
- * The chat assistant's file tools over `host`: `list_flows`, `read_flow` and `check_flow`.
+ * The chat assistant's file tools over `host`: `list_flows`, `read_flow`, `check_flow` and
+ * `write_flow`, which asks the user through `host.approve` before it writes.
  */
 export function chatFileTools(host: ChatToolHost): FunctionTool[] {
   const { root } = host;
@@ -265,6 +368,22 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
         const real = confine(root, path);
         return checkText(realpathSync(root), real, readFlow(path, real), host.env);
       },
+    }),
+    tool({
+      name: "write_flow",
+      description:
+        "Write a flow file (.yaml, .yml) in the chat's folder, creating it or replacing it whole. The content " +
+        "must load (as check_flow checks it), and the user approves the write on their terminal first.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "The flow file, relative to the chat's folder." },
+          content: { type: "string", description: "The whole new text of the file." },
+        },
+        required: ["path", "content"],
+        additionalProperties: false,
+      },
+      execute: (args, ctx) => writeFlow(host, String(args["path"]), String(args["content"]), ctx.signal),
     }),
   ];
 }

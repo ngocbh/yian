@@ -24,6 +24,7 @@ import {
   ValueKind,
   writeAsText,
 } from "../typesys/values.ts";
+import { sanitize } from "./sanitize.ts";
 
 /** Why a prompt stopped without an answer. */
 type StopReason = "interrupt" | "eof" | "closed";
@@ -1134,17 +1135,13 @@ async function promptInput(run: RunWidget, decl: Parameter): Promise<unknown> {
 const OTHER = "✎ Other (write your own)";
 
 /**
- * `text` safe to draw: `\r\n` read as `\n`, then each control character but `\n` (C0, DEL and
- * C1, ESC included) shown as `^X` (`^[` for ESC, `^?` for DEL) or, for C1, U+FFFD. An ask's text
- * comes from the flow or a model, and a raw escape sequence in it could move the cursor, set the
- * clipboard or forge a link.
+ * `text` safe to draw, through `sanitize`: escape sequences are shown rather than dropped (`^[`
+ * for ESC), a tab as `^I`, and BIDI and zero-width characters kept. An ask's text comes from the
+ * flow or a model, and a raw escape sequence in it could move the cursor, set the clipboard or
+ * forge a link.
  */
 function visible(text: string): string {
-  return text.replaceAll("\r\n", "\n").replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, (char) => {
-    const code = char.charCodeAt(0);
-    if (code === 0x7f) return "^?";
-    return code < 0x20 ? `^${String.fromCharCode(code + 64)}` : "\uFFFD";
-  });
+  return sanitize(text, { sequences: "show", tabs: "show", invisible: "keep" });
 }
 
 /**

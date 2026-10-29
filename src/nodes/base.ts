@@ -827,15 +827,26 @@ export function failureMessage(error: unknown): string {
 }
 
 /**
- * @internal Return an `Error`'s stack followed by its string `notes`, one per line, cut to
- * `YIAN_MAX_FAILURE_CHARS` code points by `cutText`, else `null`; the notes in the text keep a
- * cleanup note durable. Used for a failure's traceback.
+ * @internal Return an `Error`'s stack followed by its string `notes`, one per line, else `null`;
+ * the notes in the text keep a cleanup note durable. Used for a failure's traceback.
+ *
+ * The stack's header (the error's name and message, before its first `at` frame), its frames
+ * and each note are each cut to `YIAN_MAX_FAILURE_CHARS` code points by `cutText`, so a huge
+ * message can't push the frames and notes out.
  */
 export function tracebackText(error: unknown): string | null {
   if (!(error instanceof Error)) return null;
+  const cap = current().maxFailureChars;
   const notes: unknown = (error as { notes?: unknown }).notes;
-  const lines = [error.stack, ...(Array.isArray(notes) ? notes : [])].filter((line) => typeof line === "string");
-  return lines.length > 0 ? cutText(lines.join("\n"), current().maxFailureChars) : null;
+  const lines: string[] = [];
+  if (typeof error.stack === "string") {
+    const frames = /\n[ \t]+at /.exec(error.stack)?.index ?? error.stack.length;
+    lines.push(cutText(error.stack.slice(0, frames), cap) + cutText(error.stack.slice(frames), cap));
+  }
+  for (const note of Array.isArray(notes) ? notes : []) {
+    if (typeof note === "string") lines.push(cutText(note, cap));
+  }
+  return lines.length > 0 ? lines.join("\n") : null;
 }
 
 /** A stage marker retaining one value thrown by a node's body. Used by the evaluator. */

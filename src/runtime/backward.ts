@@ -340,7 +340,7 @@ async function driveOpenedBackward(
       // A trace's backward context always names its occurrence's node.
       if (context !== null) message += ` for node ${reprText(context.nodeId!)}`;
       // A MemoryOperationFailure refuses a lone surrogate, which the original's text may hold.
-      const text = `${message}: ${error.original.message}`.toWellFormed();
+      const text = `${message}: ${failureMessage(error.original)}`.toWellFormed();
       cause = new MemoryOperationFailure("learn", "memory.invalid_context", text, false);
     } else if (error instanceof LearningProposalError) {
       key = error.memory;

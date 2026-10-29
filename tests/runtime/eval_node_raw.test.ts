@@ -123,10 +123,24 @@ test("a failure's message and traceback are cut to the failure cap, saying how m
   );
   const { message, traceback } = (raised as EvaluationFailure).failure;
   expect(message).toBe("😀".repeat(50) + "… (2950 more characters)");
-  // The stack starts with `Error: ` and the message; its frames are cut too.
-  const cut = /^Error: (?:😀){43}… \((\d+) more characters\)$/u.exec(traceback!);
-  expect(cut).not.toBeNull();
-  expect(Number(cut![1])).toBeGreaterThan(2_957);
+  // The stack's header, `Error: ` and the message, is cut on its own, and its frames follow.
+  const [header, frame] = traceback!.split("\n");
+  expect(header).toBe("Error: " + "😀".repeat(43) + "… (2957 more characters)");
+  expect(frame).toStartWith("    at ");
+});
+
+test("a failure's traceback keeps the frames and notes after a message over the failure cap", async () => {
+  const raised = await drive(
+    new FuncNode("raise", () => {
+      throw Object.assign(new Error("x".repeat(20_000)), { notes: ["cleanup failed: lock kept"] });
+    }),
+  );
+  const { message, traceback } = (raised as EvaluationFailure).failure;
+  expect(message).toBe("x".repeat(10_000) + "… (10000 more characters)");
+  const lines = traceback!.split("\n");
+  expect(lines[0]).toBe(`Error: ${"x".repeat(9_993)}… (10007 more characters)`);
+  expect(lines[1]).toStartWith("    at ");
+  expect(lines.at(-1)).toBe("cleanup failed: lock kept");
 });
 
 test("a failure's message and traceback within the failure cap are kept whole", async () => {

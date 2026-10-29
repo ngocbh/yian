@@ -51,6 +51,8 @@ import {
   ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { poolRootLength } from "../../typesys/pool.ts";
+import type { TypeRegistry } from "../../typesys/types.ts";
+import { TypeCheckError } from "../../typesys/values.ts";
 import { bindingProducers, refProducer } from "../edges/producers.ts";
 import {
   conjuncts,
@@ -62,6 +64,7 @@ import {
   NotNullCheck,
 } from "../helpers/condition_guards.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
+import { resolveIsinstanceType } from "../helpers/isinstance_types.ts";
 import { directReferenceParts, directReferencePath } from "../../compile/output_contracts.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { locatedError, type ResolveOrigin } from "./typed_bindings.ts";
@@ -372,6 +375,8 @@ export function nullSkippedOutputs(flowOutputs: readonly FlowOutput[], model: Sk
  * @param model The skip model of the same level.
  * @param buildResults The level's built nodes keyed by id, for the binding site names and fallback
  *   ranges.
+ * @param options.registry The flow's typedefs, which an `isinstance` guard's type name resolves
+ *   against.
  * @param options.valueMode Whether the flow has a single `output:` value, named `output` in errors
  *   (default `false`).
  * @param options.outputsRange The authored `output:` range, the fallback location of an output
@@ -392,22 +397,23 @@ export function checkSkippedArithmetic(
   model: SkipModel,
   buildResults: ReadonlyMap<string, BuildResult>,
   options: {
+    registry: TypeRegistry;
     valueMode?: boolean;
     outputsRange?: SourceRange | null;
     resolveOrigin?: ResolveOrigin | null;
     diagnostics?: LoadDiagnostics | null;
     searchedWhens?: ReadonlyMap<string, readonly SearchedWhen[]> | null;
-  } = {},
+  },
 ): void {
   if (!model.hasCases) return;
-  const { valueMode = false, outputsRange = null, resolveOrigin = null, searchedWhens = null } = options;
+  const { registry, valueMode = false, outputsRange = null, resolveOrigin = null, searchedWhens = null } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const known = model.nodes;
   for (const [nodeId, wiring] of flowWiring) {
     const result = buildResults.get(nodeId) ?? null;
     const reserved = result !== null ? result.node.reservedWiringKeys() : new Set<string>();
     for (const [param, binding] of wiring) {
-      const found = skippedOperand(binding, model, nodeId, known);
+      const found = skippedOperand(binding, model, nodeId, known, registry);
       if (found === null) continue;
       const [site, operand, producers] = found;
       let where = `node ${reprText(nodeId)} input ${reprText(param)}`;
@@ -447,7 +453,7 @@ export function checkSkippedArithmetic(
         if (error instanceof ExpressionError) continue;
         throw error;
       }
-      const found = skippedOperandIn(tree, model, nodeId, known);
+      const found = skippedOperandIn(tree, model, nodeId, known, registry);
       if (found === null) continue;
       throw locatedError(
         `node ${reprText(nodeId)} cases[${index}].when: ${arithmeticText(when.trim(), ...found)}`,
@@ -459,7 +465,7 @@ export function checkSkippedArithmetic(
     }
   }
   for (const output of flowOutputs) {
-    const found = skippedOperand(output.binding, model, null, known);
+    const found = skippedOperand(output.binding, model, null, known, registry);
     if (found === null) continue;
     const [site, operand, producers] = found;
     const label = valueMode ? "output" : `output ${reprText(output.name)}`;
@@ -496,6 +502,7 @@ type SkippedOperand = [operand: ExprNode, producers: string[]];
  * @param model The level's skip model.
  * @param consumer The node that evaluates the binding, or `null` for END.
  * @param known The level's node ids.
+ * @param registry The flow's typedefs, for an `isinstance` guard's type name.
  * @returns The string that does the arithmetic (as a binding located at its own site), the
  *   operand, and the producers whose skip makes it null (in source order), or `null` when no
  *   operand may be null while `consumer` runs.
@@ -505,6 +512,7 @@ function skippedOperand(
   model: SkipModel,
   consumer: string | null,
   known: ReadonlySet<string>,
+  registry: TypeRegistry,
 ): [site: Binding, ...SkippedOperand] | null {
   for (const site of stringSites(binding)) {
     let segments;
@@ -517,7 +525,7 @@ function skippedOperand(
     }
     for (const segment of segments) {
       if (!(segment instanceof Span)) continue;
-      const found = skippedOperandIn(segment.tree, model, consumer, known);
+      const found = skippedOperandIn(segment.tree, model, consumer, known, registry);
       if (found !== null) return [site, ...found];
     }
   }
@@ -531,6 +539,7 @@ function skippedOperand(
  * @param model The level's skip model.
  * @param consumer The node that evaluates the expression, or `null` for END.
  * @param known The level's node ids.
+ * @param registry The flow's typedefs, for an `isinstance` guard's type name.
  * @returns The operand and the producers whose skip makes it null (in source order), or `null`
  *   when no operand may be null while `consumer` runs.
  */
@@ -539,6 +548,7 @@ function skippedOperandIn(
   model: SkipModel,
   consumer: string | null,
   known: ReadonlySet<string>,
+  registry: TypeRegistry,
 ): SkippedOperand | null {
   // A lone token has no operator.
   if (!(expression instanceof Tree)) return null;
@@ -548,7 +558,7 @@ function skippedOperandIn(
     if (!ARITHMETIC.has(tree.data)) continue;
     for (const operand of tree.children) {
       const guard = reads.find((read) => read.node === operand)?.guard ?? NOTHING;
-      if (operand instanceof Tree && provesNotNull(guard, referencePath(operand))) continue;
+      if (operand instanceof Tree && provesNotNull(guard, referencePath(operand), registry)) continue;
       for (const group of nullGroups(operand, known)) {
         if (group.size > 0 && model.maySkipWhileRunning(group, consumer)) {
           const producers = new Set(exprRefs(operand).map(refProducer));
@@ -564,7 +574,7 @@ function skippedOperandIn(
  * Return whether `guard` proves the root of the read `path` not null: a `!= null` check on it, or
  * an `isinstance` of it to a type that excludes null, holds whenever the read runs.
  */
-function provesNotNull(guard: Guard, path: string): boolean {
+function provesNotNull(guard: Guard, path: string, registry: TypeRegistry): boolean {
   const names = path.split(".");
   const root = names.slice(0, poolRootLength(names)).join(".");
   return conjuncts(guard).some(
@@ -572,13 +582,20 @@ function provesNotNull(guard: Guard, path: string): boolean {
       part instanceof Holds &&
       part.value &&
       part.check.base === root &&
-      (part.check instanceof NotNullCheck || (part.check instanceof IsinstanceCheck && !admitsNull(part.check.typeName))),
+      (part.check instanceof NotNullCheck ||
+        (part.check instanceof IsinstanceCheck && excludesNull(part.check.typeName, registry))),
   );
 }
 
-/** Whether an `isinstance` type name admits null. */
-function admitsNull(typeName: string): boolean {
-  return typeName === "None" || typeName.startsWith("Optional(");
+/** Whether the type an `isinstance` names excludes null; an unknown name proves nothing. */
+function excludesNull(typeName: string, registry: TypeRegistry): boolean {
+  try {
+    return !resolveIsinstanceType(typeName, registry).nullable;
+  } catch (error) {
+    // The expression checks report the unknown name.
+    if (error instanceof TypeCheckError) return false;
+    throw error;
+  }
 }
 
 /**

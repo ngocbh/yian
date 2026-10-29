@@ -2302,6 +2302,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   outputs = nullSkippedOutputs(outputs, skips);
   // Arithmetic on such a value would fail at runtime with null; ask for a `:-` default.
   checkSkippedArithmetic(flowWiring, outputs, skips, buildResults, {
+    registry,
     valueMode,
     outputsRange,
     resolveOrigin,

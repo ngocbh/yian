@@ -977,47 +977,40 @@ export async function runFlow(
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     const runDefaults = current();
-    const { learnable = false, tools = null, context, signal = null } = options;
+    const { learnable = false } = options;
     if (!(flow instanceof ComposedFlow)) throw new TypeError("runFlow expects a ComposedFlow");
     if (typeof learnable !== "boolean") throw new TypeError("learnable must be a boolean");
-    if (signal !== null && !(signal instanceof AbortSignal)) {
-      throw new TypeError("signal must be an AbortSignal or null");
-    }
-    if (options.live != null && !(options.live instanceof LiveChannel)) {
-      throw new TypeError("live must be a LiveChannel or null");
-    }
-    signal?.throwIfAborted();
-    const [otherTools, unopened] = splitRunServers(tools);
-    // The other entries' errors, and the checks that need no tools, come before any server starts.
-    new ToolSet(otherTools, { context });
-    checkConditions(flow.compiled);
-    checkTemplates(flow.compiled);
-    const skills = checkSkills(flow.compiled, options.skills ?? null);
-    checkCallbacks(options);
-    checkTestOptions(options);
+    const unopened = checkDriveOptions(options);
+    const skills = checkFlowBeforeServers(flow.compiled, options.skills ?? null);
     return await startRun(flow, inputs, { ...options, skills }, unopened, runDefaults, env);
   });
 }
 
-/**
- * Check the run's callbacks before anything is created, as the engine checks them.
- *
- * @throws TypeError when `onEvent` or `onStream` is set and isn't a function.
- */
-function checkCallbacks(options: Pick<RunFlowOptions, "onEvent" | "onStream">): void {
-  const { onEvent = null, onStream = null } = options;
-  if (onEvent !== null && typeof onEvent !== "function") throw new TypeError("onEvent must be a function or null");
-  if (onStream !== null && typeof onStream !== "function") throw new TypeError("onStream must be a function or null");
-}
+/** The options `runFlow` and `advance` share, which drive the engine. */
+type DriveOptions = Pick<
+  RunFlowOptions,
+  "tools" | "context" | "signal" | "live" | "onEvent" | "onStream" | "scheduler" | "random" | "models"
+>;
 
 /**
- * Check the options for tests before anything is created, as the engine checks them.
+ * Check the options `runFlow` and `advance` share before anything is opened or created, as the
+ * engine checks them, and split off the servers the call opens.
  *
- * @throws TypeError when `scheduler` lacks `now` or `sleep`, `random` isn't a function, or
- *   `models` lacks `env` or `createModel`.
+ * @returns The unopened `tools` servers, as `splitRunServers` returns them.
+ * @throws TypeError when `signal` isn't an `AbortSignal`, `live` isn't a `LiveChannel`, `onEvent`
+ *   or `onStream` isn't a function, `scheduler` lacks `now` or `sleep`, `random` isn't a function,
+ *   `models` lacks `env` or `createModel`, or a `tools` entry is malformed.
+ * @throws RangeError when a `tools` key is reserved, or a server was opened by another run in
+ *   progress.
+ * @throws The signal's reason when it has aborted.
  */
-function checkTestOptions(options: Pick<RunFlowOptions, "scheduler" | "random" | "models">): void {
+function checkDriveOptions(options: DriveOptions): [string, McpServer][] {
+  const { tools = null, context, signal = null, live = null, onEvent = null, onStream = null } = options;
   const { scheduler = null, random = null, models = null } = options;
+  if (signal !== null && !(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal or null");
+  if (live !== null && !(live instanceof LiveChannel)) throw new TypeError("live must be a LiveChannel or null");
+  if (onEvent !== null && typeof onEvent !== "function") throw new TypeError("onEvent must be a function or null");
+  if (onStream !== null && typeof onStream !== "function") throw new TypeError("onStream must be a function or null");
   if (
     scheduler !== null &&
     (typeof scheduler !== "object" || typeof scheduler.now !== "function" || typeof scheduler.sleep !== "function")
@@ -1026,6 +1019,26 @@ function checkTestOptions(options: Pick<RunFlowOptions, "scheduler" | "random" |
   }
   if (random !== null && typeof random !== "function") throw new TypeError("random must be a function or null");
   requireModels(models);
+  signal?.throwIfAborted();
+  const [otherTools, unopened] = splitRunServers(tools);
+  // The other entries' errors come before anything is opened.
+  new ToolSet(otherTools, { context });
+  return unopened;
+}
+
+/**
+ * Run the checks of `flow` that need no tools, so they fail before any server starts.
+ *
+ * @returns The skills the run grants, as `checkSkills` returns them.
+ * @throws What `checkConditions`, `checkTemplates` and `checkSkills` throw.
+ */
+function checkFlowBeforeServers(
+  flow: CompiledFlow,
+  skills: ReadonlyMap<string, Skill> | null,
+): Map<string, Skill> | null {
+  checkConditions(flow);
+  checkTemplates(flow);
+  return checkSkills(flow, skills);
 }
 
 /**
@@ -1266,10 +1279,9 @@ async function startRun(
   runDefaults: Defaults,
   env: Env,
 ): Promise<RunResult> {
-  const { log = null, runId = null, numWorkers = 8, onEvent = null, onStream = null, memory = null } = options;
+  const { log = null, runId = null, numWorkers = 8, memory = null } = options;
   const live = options.live ?? null;
   const { learnable = false, tools = null, skills = null, context, signal = null } = options;
-  const random = options.random ?? null;
   const scheduler = options.scheduler ?? realScheduler;
   const models = options.models ?? defaultModelAccess(env);
   let runServers: McpServer[] = [];
@@ -1409,33 +1421,17 @@ async function startRun(
     // intake has already rejected bad values, before any file exists, so a failure here is not an
     // input error.
     commitInitialPool(appender, state, pool);
-    const runtime = memoryRuntime;
-    // Built before publishing so a callback's rejected promise can stop it.
-    const engine = new FlowEngine(state, appender, {
-      growBuilder: buildGrow,
+    const events = await driveSegment(state, appender, observers, {
+      options,
       numWorkers,
-      onEvent,
-      onStream,
-      live,
-      // A bare `runtime.openContext` would lose its `this`.
-      memoryContextOpener:
-        runtime === null ? null : (scope, recall, opts) => runtime.openContext(scope, recall, opts),
       tools: runTools,
       skills,
       models,
-      signal,
       scheduler,
-      random,
+      memoryRuntime,
       runDir: locator === null ? null : dirname(locator),
-      // Nothing could answer a pending call in a run with no log.
-      durable: locator !== null,
+      hold: runHold,
     });
-    const events: RunEvent[] = [];
-    publishBoundaryObservers(observers, events, onEvent, (error) => engine.stopForCallback(error));
-    const running = engine.run();
-    // Deliveries waiting on the hold reach the engine from here on.
-    runHold?.live(engine);
-    events.push(...(await running));
     const handle = retainedHandle(retainedProgram, state, authority, memory, {
       locator,
       apiKey,
@@ -1623,8 +1619,9 @@ export interface AdvanceOptions {
  * @returns The recorded terminal result, or the terminal or waiting result of the new segment with
  *   its post-durable observers; a waiting run that couldn't move returns `waiting` with none.
  * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`,
- *   `onEvent` or `onStream` isn't a function, a `tools` entry is malformed, `skills`, `scheduler`, `random` or `models` is malformed, a
- *   worker count isn't an integer, or a recorded carrier has the wrong type.
+ *   `live` isn't a `LiveChannel`, `onEvent` or `onStream` isn't a function, a `tools` entry is
+ *   malformed, `skills`, `scheduler`, `random` or `models` is malformed, a worker count isn't an
+ *   integer, or a recorded carrier has the wrong type.
  * @throws ExpressionError as `runFlow`, for an unfinished run.
  * @throws RangeError when the log's prefix is invalid, the run's flow was built in code and no
  *   `flow` was passed, or its flow files were recorded and one was, the flow fingerprint differs,
@@ -1659,32 +1656,14 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
-    const {
-      log,
-      tools = null,
-      context,
-      signal = null,
-      flow: hostFlow = null,
-      codeRoot = null,
-    } = options;
+    const { log, tools = null, context, signal = null, flow: hostFlow = null, codeRoot = null } = options;
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
       throw new TypeError("advance's flow must be a ComposedFlow or null");
     }
-    if (signal !== null && !(signal instanceof AbortSignal)) {
-      throw new TypeError("signal must be an AbortSignal or null");
-    }
-    if (options.live != null && !(options.live instanceof LiveChannel)) {
-      throw new TypeError("live must be a LiveChannel or null");
-    }
-    signal?.throwIfAborted();
-    const [otherTools, unopened] = splitRunServers(tools);
-    // The other entries' errors come before the log is opened.
-    new ToolSet(otherTools, { context });
+    const unopened = checkDriveOptions(options);
     const { apiKey: rawKey = null, headers: rawHeaders = null } = options;
     let apiKey = rawKey === null ? null : secretKey(rawKey);
     let headers = rawHeaders === null ? null : secretHeaders(rawHeaders);
-    checkCallbacks(options);
-    checkTestOptions(options);
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);
     // The registry's key: the file itself, however the path names it (throws ENOENT when missing).
@@ -1750,10 +1729,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       if (start.yianVersion !== VERSION) {
         warn(`run log ${log} was started by yian ${start.yianVersion}; resuming it with yian ${VERSION}`);
       }
-      // The checks that need no tools come before any server starts.
-      checkConditions(flow.compiled);
-      checkTemplates(flow.compiled);
-      const skills = checkSkills(flow.compiled, options.skills ?? null);
+      const skills = checkFlowBeforeServers(flow.compiled, options.skills ?? null);
       // A started call-time agent resumes with the config it recorded; one not yet started is
       // checked when it resolves.
       const inFlight = inFlightLlmConfigs(state.flow.nodes, state.nodeSteps);
@@ -1786,33 +1762,19 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       const live = options.live ?? null;
       const appender = live === null ? authority : live.wrap(authority);
       const observers = prepared === null ? [] : commitPrepared(appender, state, prepared);
-      const runtime = memoryRuntime;
-      // Built before publishing so a callback's rejected promise can stop it.
-      const engine = new FlowEngine(state, appender, {
-        growBuilder: buildGrow,
+      const lead =
+        prepared === null ? [] : [...observers, ...resumedAttemptEvents(state, prepared.record as RunResumedRecord)];
+      const events = await driveSegment(state, appender, lead, {
+        options,
         numWorkers,
-        onEvent: options.onEvent ?? null,
-        onStream: options.onStream ?? null,
-        live,
-        // A bare `runtime.openContext` would lose its `this`.
-        memoryContextOpener:
-          runtime === null ? null : (scope, recall, opts) => runtime.openContext(scope, recall, opts),
         tools: runTools,
         skills,
         models,
-        signal,
         scheduler,
-        random: options.random ?? null,
+        memoryRuntime,
         runDir: dirname(locator),
+        hold: runHold,
       });
-      const events: RunEvent[] = [];
-      const lead =
-        prepared === null ? [] : [...observers, ...resumedAttemptEvents(state, prepared.record as RunResumedRecord)];
-      publishBoundaryObservers(lead, events, options.onEvent ?? null, (error) => engine.stopForCallback(error));
-      const running = engine.run();
-      // Deliveries waiting on the hold reach the engine from here on.
-      runHold.live(engine);
-      events.push(...(await running));
       return resultFromState(state, log, events, retain());
     } catch (error) {
       primary = { error };
@@ -3686,6 +3648,62 @@ function checkRecordedMemoryTable(
   ) {
     throw new RangeError(`recorded memory table or stacks do not match the ${subject}`);
   }
+}
+
+/**
+ * Drive one segment of a run whose log is open and whose lead is committed: build the engine,
+ * publish the lead, and run it. Calls waiting on `hold` reach the engine once it runs.
+ *
+ * @param lead The segment's post-durable observers, committed before the engine runs.
+ * @returns The segment's observers, the lead's first.
+ * @throws What the engine's constructor or loop throws, and the error of an `onEvent` that throws
+ *   on the lead.
+ */
+async function driveSegment(
+  state: RunState,
+  appender: RunLog,
+  lead: readonly RunEvent[],
+  parts: {
+    options: Pick<RunFlowOptions, "onEvent" | "onStream" | "live" | "signal" | "random">;
+    numWorkers: number;
+    tools: ToolSet;
+    skills: ReadonlyMap<string, Skill> | null;
+    models: ModelAccess;
+    scheduler: Scheduler;
+    memoryRuntime: MemoryRuntime | null;
+    /** The log's folder, or `null` for a process-local log. */
+    runDir: string | null;
+    hold: RunHold | null;
+  },
+): Promise<RunEvent[]> {
+  const { options, memoryRuntime: runtime } = parts;
+  const onEvent = options.onEvent ?? null;
+  // Built before publishing so a callback's rejected promise can stop it.
+  const engine = new FlowEngine(state, appender, {
+    growBuilder: buildGrow,
+    numWorkers: parts.numWorkers,
+    onEvent,
+    onStream: options.onStream ?? null,
+    live: options.live ?? null,
+    // A bare `runtime.openContext` would lose its `this`.
+    memoryContextOpener: runtime === null ? null : (scope, recall, opts) => runtime.openContext(scope, recall, opts),
+    tools: parts.tools,
+    skills: parts.skills,
+    models: parts.models,
+    signal: options.signal ?? null,
+    scheduler: parts.scheduler,
+    random: options.random ?? null,
+    runDir: parts.runDir,
+    // Nothing could answer a pending call in a run with no log.
+    durable: parts.runDir !== null,
+  });
+  const events: RunEvent[] = [];
+  publishBoundaryObservers(lead, events, onEvent, (error) => engine.stopForCallback(error));
+  const running = engine.run();
+  // Deliveries waiting on the hold reach the engine from here on.
+  parts.hold?.live(engine);
+  events.push(...(await running));
+  return events;
 }
 
 /**

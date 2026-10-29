@@ -24,17 +24,7 @@
  */
 
 import { warn } from "../platform.ts";
-import {
-  decodeRecord,
-  encodeRecord,
-  NodeFailedRecord,
-  NodeStepRecord,
-  type RecordEnvelope,
-  type RunLog,
-  RunCancelledRecord,
-  type RunRecord,
-  RunStoppedRecord,
-} from "./log.ts";
+import { decodeRecordHeader, encodeRecord, NodeStepRecord, type RecordEnvelope, type RunLog } from "./log.ts";
 
 /** One live frame: a record the log appended, or the start, a chunk or the end of a model call. */
 export type LiveFrame =
@@ -176,7 +166,7 @@ export class LiveChannel {
       if (record instanceof NodeStepRecord) deleteCall(this.#calls, record.nodeId, record.n);
       // A node failure, a stop or a cancel ends the run: its calls get no record, and their nodes
       // settle only later, so a snapshot taken in between would list calls that nothing ever drops.
-      else if (endsRun(record)) this.#calls.clear();
+      else if (RUN_ENDING_KINDS.has(envelope.kind)) this.#calls.clear();
       this.#send({ type: "record", seq, line: encodeRecord(envelope) });
     };
     return {
@@ -305,17 +295,18 @@ export class LiveView {
    * Apply one frame; returns false on a gap, meaning "follow again", and true otherwise, for a
    * duplicate and a frame of a type it doesn't know too.
    *
-   * @throws what `decodeRecord` throws when a new record frame's `line` isn't a valid record.
+   * @throws what `decodeRecordHeader` throws when a new record frame's `line` isn't a valid
+   *   envelope; only the envelope and a step's node and number are read, not the payload.
    */
   apply(frame: LiveFrame): boolean {
     switch (frame.type) {
       case "record": {
         if (frame.seq <= this.#lastSeq) return true;
         if (frame.seq !== this.#lastSeq + 1) return false;
-        const { record } = decodeRecord(frame.line);
+        const { kind, step } = decodeRecordHeader(frame.line);
         this.#lastSeq = frame.seq;
-        if (record instanceof NodeStepRecord) deleteCall(this.#calls, record.nodeId, record.n);
-        else if (endsRun(record)) this.#calls.clear();
+        if (step !== null) deleteCall(this.#calls, step.node, step.n);
+        else if (RUN_ENDING_KINDS.has(kind)) this.#calls.clear();
         return true;
       }
       case "start":
@@ -349,10 +340,11 @@ function setCall<V>(calls: Map<string, Map<number, V>>, node: string, n: number,
   byN.set(n, value);
 }
 
-/** Whether `record` ends the run, so no call in flight gets a step record: a node failure, a stop or a cancel. */
-function endsRun(record: RunRecord): boolean {
-  return record instanceof NodeFailedRecord || record instanceof RunStoppedRecord || record instanceof RunCancelledRecord;
-}
+/**
+ * The kinds of the records that end the run, so no call in flight gets a step record: a node
+ * failure, a stop or a cancel.
+ */
+const RUN_ENDING_KINDS: ReadonlySet<string> = new Set(["node_failed", "run_stopped", "run_cancelled"]);
 
 /** Delete the call of `node`'s step `n` from `calls`, and its node's map once empty. */
 function deleteCall<V>(calls: Map<string, Map<number, V>>, node: string, n: number): void {

@@ -237,6 +237,20 @@ test("a node's failure, a run stop or a cancel drops every call", () => {
   }
 });
 
+test("a view reads a record frame's kind and step without decoding its payload", () => {
+  const { frame } = recording();
+  const view = LiveView.from([], { last_seq: -1, calls: [] });
+  view.apply(start("a", 1));
+  const step = frame(new NodeStepRecord("a", 1, { kind: "model_call" })) as Extract<LiveFrame, { type: "record" }>;
+  const line = step.line.replace('"step":{"kind":"model_call"}', '"step":"unread"');
+  expect(() => decodeRecord(line)).toThrow(new TypeError("node_step payload step must be an object"));
+  expect(view.apply({ ...step, line })).toBe(true);
+  expect(view.calls()).toEqual([]);
+  // The envelope is still checked.
+  const unknown = { type: "record", seq: 1, line: line.replace('"kind":"node_step"', '"kind":"nope"') } as const;
+  expect(() => view.apply(unknown)).toThrow(RangeError);
+});
+
 // ---------- LiveView following a run ----------
 
 /** What a viewer that joined a run through `follow` saw. */

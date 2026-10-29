@@ -788,6 +788,13 @@ test("the envelope refuses an unsupported record", () => {
   );
 });
 
+test("the encoder refuses a record of a class that isn't a run-record kind", () => {
+  // The constructor refuses such a record, so the envelope is forged to reach the encoder.
+  class StrayRecord {}
+  const forged = Object.create(RecordEnvelope.prototype, { record: { value: new StrayRecord() } }) as RecordEnvelope;
+  expectError(() => forged.payload, TypeError, "unsupported run record: StrayRecord");
+});
+
 test("a run-stopped record keeps its reason, message and in-flight node ids", () => {
   const record = new RunStoppedRecord("callback", "the host callback threw", ["b", "a"]);
   expect(RUN_STOP_REASONS).toEqual(["signal", "callback"]);

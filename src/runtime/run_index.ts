@@ -42,7 +42,7 @@ import {
   RunStoppedRecord,
 } from "./log.ts";
 import { addCrashedAttempts } from "./state.ts";
-import { applyWaitsRecord, type WaitInfo, type WaitsJson, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
+import { applyWaitsRecord, type WaitInfo, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
 
 /** The index file's name in the runs folder. */
 const INDEX_FILE = "index.sqlite";
@@ -230,7 +230,7 @@ export function runScanFromJson(text: string): RunScan {
     unreachableSeq: seqOrNull("unreachableSeq"),
     runFailureSeq: seqOrNull("runFailureSeq"),
     cancelled: flag("cancelled"),
-    waits: WaitsState.fromJSON(raw["waits"] as unknown as WaitsJson),
+    waits: WaitsState.fromJSON(raw["waits"]),
   };
 }
 

@@ -172,7 +172,7 @@ export class WaitsState {
    *
    * @throws RangeError when `json` isn't such a form.
    */
-  static fromJSON(json: WaitsJson): WaitsState {
+  static fromJSON(json: unknown): WaitsState {
     if (!isObject(json)) throw new RangeError("waits JSON must be an object");
     const keys = Object.keys(json);
     if (keys.length !== WAITS_JSON_KEYS.length || !WAITS_JSON_KEYS.every((key) => json[key] !== undefined)) {

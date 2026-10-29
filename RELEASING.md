@@ -11,7 +11,8 @@ a trusted publisher only on an existing package):
    `bun run typecheck && bun run build && bun test ./tests && bun run test:node && bun tests/conformance/runner.ts`
    and `YIAN_TEST_PACK=1 bun test tests/repo/packaging.test.ts -t "npm tarball"`.
 3. `npm login` (account `ngocbh`, 2FA on), then `npm publish --access public --dry-run`: check the
-   file list has `README.md`, `LICENSE`, `NOTICE` and no `tests/`.
+   file list has `README.md`, `LICENSE`, `NOTICE` and no `tests/`. For a prerelease (a version
+   with a `-`), add `--tag next` here and in step 4: npm refuses a prerelease on `latest`.
 4. `npm publish --access public` (it asks for the one-time password).
 5. `gh release create v<version> --target <merge sha> --title "yian <version>"`. Once Actions
    run, this starts `npm-publish.yml`, which fails harmlessly: the version already exists.

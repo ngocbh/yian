@@ -215,11 +215,12 @@ export class OpenAIResponses implements SseProtocol {
    * @returns The deltas and parts, then `UsageReport` (when the reply has usage) and `Finish` on
    *   `response.completed` (or `response.done`) or a length-truncated `response.incomplete` (or
    *   `response.done`).
-   * @throws {ProviderError} For `response.failed` or an `error` event (kind from the error code,
-   *   else its type), a stream that ends without a terminal event or a reply that did not
-   *   complete (kind `incomplete`, or `refused` for a content filter), or an event that is not
-   *   JSON, lacks the output index it needs, or holds an item or usage that cannot be read (kind
-   *   `protocol`). The message holds the provider's text uncapped.
+   * @throws {ProviderError} For `response.failed`, a failed `response.done` that carries an error,
+   *   or an `error` event (kind from the error code, else its type), a stream that ends without a
+   *   terminal event or a reply that did not complete (kind `incomplete`, or `refused` for a
+   *   content filter), or an event that is not JSON, lacks the output index it needs, or holds an
+   *   item or usage that cannot be read (kind `protocol`). The message holds the provider's text
+   *   uncapped.
    */
   async *parse(frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
     // Part index by output index, then content index.
@@ -420,14 +421,16 @@ export class OpenAIResponses implements SseProtocol {
    * or `incomplete`. Among incomplete replies only a stop at `max_output_tokens` signalled by
    * `response.incomplete`, or by `response.done` with status `incomplete`, counts as finished;
    * it finishes with `length` even when the reply has calls, since a truncated call cannot be
-   * trusted.
+   * trusted. A reply with status `failed` that carries an `error` object fails as
+   * `response.failed` does.
    *
    * @param response The terminal event's response.
    * @param hasCalls Whether the reply holds a function call.
    * @param responseId The id to use when `response` has none.
    * @param type The terminal event type.
-   * @throws {ProviderError} The reply did not complete (kind `incomplete`, or `refused` for a
-   *   content filter), or its usage cannot be read (kind `protocol`).
+   * @throws {ProviderError} The reply failed with an error (kind from its code, else its type),
+   *   did not complete (kind `incomplete`, or `refused` for a content filter), or its usage
+   *   cannot be read (kind `protocol`).
    */
   #finish(response: JsonObject, hasCalls: boolean, responseId: string | null, type: string): Event[] {
     const status = type === "response.incomplete" ? "incomplete" : response["status"];
@@ -438,6 +441,8 @@ export class OpenAIResponses implements SseProtocol {
       finishReason = hasCalls ? "tool_calls" : "stop";
     } else if (status === "incomplete" && reason === "max_output_tokens" && type !== "response.completed") {
       finishReason = "length";
+    } else if (status === "failed" && isPlainObject(response["error"])) {
+      throw this.#streamFailure(response["error"]);
     } else {
       const prefix = this.subscription ? "OpenAI subscription response" : "openai response";
       const shown = typeof reason === "string" && reason ? reason : "unknown";
@@ -458,7 +463,10 @@ export class OpenAIResponses implements SseProtocol {
     return events;
   }
 
-  /** Return the error for `response.failed` or an `error` event; its kind from the error's code, else its type. */
+  /**
+   * Return the error for `response.failed`, a failed `response.done` or an `error` event; its
+   * kind from the error's code, else its type.
+   */
   #streamFailure(error: JsonObject): ProviderError {
     // An error without a string code may still name its kind in `type` (`invalid_request_error`).
     const code = typeof error["code"] === "string" ? error["code"] : error["type"];

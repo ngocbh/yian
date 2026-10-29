@@ -1139,6 +1139,10 @@ describe("stream failures", () => {
   // The ways a stream reports a failure, each given the error's code and message.
   const SOURCES: [string, (code: string | null, message: JsonValue | null) => JsonObject][] = [
     ["a failed response", failed],
+    [
+      "a done response with status failed",
+      (code, message) => ({ type: "response.done", response: reply([], { status: "failed", error: { code, message } }) }),
+    ],
     ["an error event", (code, message) => ({ type: "error", code, message, param: null })],
     ["an error event with a nested error", (code, message) => ({ type: "error", error: { code, message } })],
   ];

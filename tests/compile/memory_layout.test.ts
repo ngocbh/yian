@@ -402,6 +402,21 @@ test("stamp scope mismatch is atomic", async () => {
   expect(final.node.memoryScope).toEqual(new MemoryScope(["different"]));
 });
 
+test.each([
+  ["an object", {}],
+  ["a string", "notes"],
+])("stamp refuses an existing memory scope that is %s", async (_name, value) => {
+  const flow = await compiled(NESTED);
+  const layout = resolveMemoryLayout(flow);
+  const final = layout.targets.at(-1)!;
+  Object.assign(final.node, { memoryScope: value });
+
+  setupError(() => stampMemoryLayout(flow), /already has a different memory scope/);
+
+  expect(layout.targets.slice(0, -1).every((item) => item.node.memoryScope === null)).toBe(true);
+  expect(final.node.memoryScope as unknown).toBe(value);
+});
+
 test("stamp rejects shared child targets before stamping", async () => {
   const child = await compiled(`id: child
 name: child

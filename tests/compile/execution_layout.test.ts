@@ -135,6 +135,20 @@ test("a different existing scope is rejected before any scope is stamped", () =>
   expect(last.executionScope).toBe(other);
 });
 
+test.each([
+  ["an object", {}],
+  ["a string", "last"],
+])("an existing scope that is %s is rejected before stamping", (_name, value) => {
+  const first = code("first");
+  const last = new CodeNode("last", { code: "return 2" });
+  const flow = new CompiledFlow(new Map<string, Node>([["first", first], ["last", last]]), []);
+  Object.assign(last, { executionScope: value });
+
+  expectError(() => stampExecutionScopes(flow), RangeError, 'node at ["last"] already has a different execution scope');
+  expect(first.executionScope).toBeNull();
+  expect(last.executionScope as unknown).toBe(value);
+});
+
 test("recursive static child cycle is rejected without mutation", () => {
   const flow = new Flow(new Map(), []);
   const node = new CallNode("recurse", { flowId: "child", child: flow });

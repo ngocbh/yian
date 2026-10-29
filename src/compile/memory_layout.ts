@@ -540,8 +540,9 @@ export function stampMemoryLayout(flow: CompiledFlow): ResolvedMemoryLayout {
   const layout = resolveMemoryLayout(flow);
   validateUniqueTargets(layout.targets, "memory layout", memoryWalkError);
   for (const { locator, scope, node } of layout.targets) {
-    const existing = node.memoryScope;
-    if (existing !== null && (scope === null || !sameMemoryScope(existing, scope))) {
+    const existing: unknown = node.memoryScope;
+    const same = scope !== null && isExactly(existing, MemoryScope) && sameMemoryScope(existing, scope);
+    if (existing !== null && !same) {
       throw setupError(`node at ${writeAsText([...locator])} already has a different memory scope`, {
         origin: node.origin,
       });

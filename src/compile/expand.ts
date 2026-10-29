@@ -42,6 +42,7 @@ import {
   ChildFlowBoundary,
   ExecutionPosition,
   ExecutionScope,
+  isExactly,
   mapSourceStrings,
   Parameter,
   sameExecutionPosition,
@@ -228,7 +229,8 @@ export function cloneChild(
     clone.id = ns(callsite, nid);
     clone.originContext = [...originContext, ...clone.originContext];
     if (clone.executionScope !== null) {
-      const scope = clone.executionScope;
+      const scope: unknown = clone.executionScope;
+      if (!isExactly(scope, ExecutionScope)) throw new TypeError("child execution scope must be an ExecutionScope");
       const { staticPath, flowPath, boundary } = scope;
       const local = clone.isLoop ? [new ExecutionPosition("loop_driver", staticPath, 0)] : [];
       if (!sameItems(scope.occurrencePath, local, sameExecutionPosition)) {
@@ -241,6 +243,11 @@ export function cloneChild(
       });
     }
     if (clone.memoryScope !== null) {
+      if (!isExactly(clone.memoryScope, MemoryScope)) {
+        throw new MemorySetupError(`node ${reprText(nid)} has a noncanonical static memory scope`, {
+          origin: clone.origin,
+        });
+      }
       if (clone.memoryScope.occurrencePath.length > 0) {
         throw new MemorySetupError(`node ${reprText(nid)} static memory template has a dynamic occurrence`, {
           origin: clone.origin,

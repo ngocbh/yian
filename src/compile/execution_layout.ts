@@ -38,7 +38,8 @@ function* walkTargets(flow: Flow, flowPath: readonly string[], activeFlows: Set<
       let boundary: "start" | "end" | null = null;
       if (nodeId === flow.startId && isExactly(node, StartNode)) boundary = "start";
       else if (nodeId === flow.endId && isExactly(node, EndNode)) boundary = "end";
-      const scope = new ExecutionScope(locator, { flowPath, boundary, occurrencePath: initialOccurrence(node, locator) });
+      const occurrencePath = initialOccurrence(node, locator);
+      const scope = new ExecutionScope(locator, { flowPath, boundary, occurrencePath });
       yield { locator, scope, node };
       const child = nodeChild(node);
       if (child !== null) yield* walkTargets(child, locator, activeFlows);
@@ -63,7 +64,8 @@ export function stampExecutionScopes(flow: Flow): void {
   const targets = [...walkTargets(flow, [], new Set())];
   validateUniqueTargets(targets, "execution layout");
   for (const { locator, scope, node } of targets) {
-    if (node.executionScope !== null && !sameExecutionScope(node.executionScope, scope)) {
+    const existing: unknown = node.executionScope;
+    if (existing !== null && (!isExactly(existing, ExecutionScope) || !sameExecutionScope(existing, scope))) {
       throw new RangeError(`node at ${writeAsText([...locator])} already has a different execution scope`);
     }
   }

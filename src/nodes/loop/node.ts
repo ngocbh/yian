@@ -57,7 +57,6 @@ import {
   type OriginMapper,
   Parameter,
   PartialRecordContract,
-  revalidateScope,
   rewriteOriginCarrier,
   sameExecutionPosition,
   ValueContract,
@@ -365,8 +364,8 @@ export class LoopNode extends Node {
     clone.originContext = this.originContext;
     clone.memoryScope = this.memoryScope;
     if (this.executionScope !== null) {
-      const scope = this.executionScope;
-      revalidateScope(scope, "loop execution scope");
+      const scope: unknown = this.executionScope;
+      if (!isExactly(scope, ExecutionScope)) throw new TypeError("loop execution scope must be an ExecutionScope");
       const { staticPath, flowPath, occurrencePath, boundary } = scope;
       const current = new ExecutionPosition("loop_driver", staticPath, this.iteration);
       const last = occurrencePath.at(-1);

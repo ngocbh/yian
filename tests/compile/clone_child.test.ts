@@ -69,7 +69,7 @@ function child(outputs: readonly FlowOutput[]): CompiledFlow {
     [START_ID, new Map(parameters.map((p) => [p.name, `\${input.${p.name}}`]))],
     [END_ID, new Map(outputs.map((output) => [output.name, output.binding]))],
   ]);
-  return CompiledFlow.fromParts(nodes, edges, { outputs, wiring });
+  return new CompiledFlow(nodes, edges, { outputs, wiring });
 }
 
 /** A child with one declared output. */
@@ -128,6 +128,19 @@ test("clone child rejects a dynamic static memory template atomically", () => {
   expect(() => cloneChild(flow, "call", { topic: "ACME" })).toThrow(MemorySetupError);
   expect(() => cloneChild(flow, "call", { topic: "ACME" })).toThrow(/static memory template/);
   expect(flow.nodes.get("head")!.memoryScope!.occurrencePath).toEqual([occurrence]);
+});
+
+test("clone child refuses a template scope that isn't a scope", () => {
+  const flow = single();
+  Object.assign(flow.nodes.get("head")!, { executionScope: {} });
+  expect(() => cloneChild(flow, "call", { topic: "ACME" })).toThrow(
+    new TypeError("child execution scope must be an ExecutionScope"),
+  );
+
+  const other = single();
+  Object.assign(other.nodes.get("head")!, { memoryScope: "notes" });
+  expect(() => cloneChild(other, "call", { topic: "ACME" })).toThrow(MemorySetupError);
+  expect(() => cloneChild(other, "call", { topic: "ACME" })).toThrow(/'head' has a noncanonical static memory scope/);
 });
 
 test("clone child rewrites one binding layer and preserves its origin", () => {

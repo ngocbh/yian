@@ -590,8 +590,8 @@ async function liveOrHold<T>(
 
 /**
  * Return `idle` when the log is the same file, ends where it left it, and this call would rebuild
- * the same state; else `null`. Credentials matter only to `advance`, since deliveries call no
- * model.
+ * the same state; else `null`. Credentials matter only when given: `advance` always gives them,
+ * and a delivery, which calls no model, only when its caller does.
  */
 function reusable(
   idle: IdleRun | null,
@@ -1952,7 +1952,10 @@ function checkRecordedToolGroups(
   }
 }
 
-/** The options of a host call on a run log. A live delivery ignores them, except `codeRoot`'s check. */
+/**
+ * The options of a host call on a run log. A live delivery ignores them, except `codeRoot`'s check
+ * and the checks of `apiKey` and `headers`.
+ */
 export interface DeliveryOptions {
   /**
    * As `advance`'s `env`: the environment the call reads `YIAN_*` values from, which must be the
@@ -1967,6 +1970,15 @@ export interface DeliveryOptions {
   codeRoot?: string | null;
   /** The flow of a run built in code (`RunStarted` recorded no flow files), as `advance`'s. */
   flow?: ComposedFlow | null;
+  /**
+   * As `advance`'s, never recorded. A delivery calls no model, but the waiting state it leaves for
+   * the next `advance` holds them: pass the ones that `advance` will, and it reuses that state
+   * instead of replaying the log. With both `null` (the default), the call reuses this process's
+   * state whatever credentials it holds, and keeps them.
+   */
+  apiKey?: string | null;
+  /** As `advance`'s, never recorded; sent with `apiKey`, as above. */
+  headers?: Readonly<Record<string, string>> | null;
 }
 
 /**
@@ -1987,10 +1999,17 @@ async function deliverTo(
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
-    const { flow: hostFlow = null } = options;
+    const { flow: hostFlow = null, apiKey = null, headers = null } = options;
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
       throw new TypeError("a host call's flow must be a ComposedFlow or null");
     }
+    const given =
+      apiKey === null && headers === null
+        ? null
+        : {
+            apiKey: apiKey === null ? null : secretKey(apiKey),
+            headers: headers === null ? null : validateHeaders(headers, null),
+          };
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);
     // The registry's key: the file itself, however the path names it (throws ENOENT when missing).
@@ -2013,11 +2032,12 @@ async function deliverTo(
       const opened = authority;
       const start = startRecord(authority[Symbol.iterator]().next().value);
       checkRecorded(start.defaults);
-      const kept = reusable(runHold.idle, authority, key, { hostFlow });
+      const want = given === null ? { hostFlow } : { hostFlow, credentials: given };
+      const kept = reusable(runHold.idle, authority, key, want);
       const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow));
-      const state = kept?.state ?? replayRunLog(flow, authority);
+      const state = kept?.state ?? replayRunLog(flow, authority, given ?? {});
       // Set before preparing: a refused delivery changes nothing, so the state stays reusable.
-      const credentials = { apiKey: kept?.apiKey ?? null, headers: kept?.headers ?? null };
+      const credentials = given ?? { apiKey: kept?.apiKey ?? null, headers: kept?.headers ?? null };
       keep = () => idleRun(state, flow, key, opened, { hostFlow, ...credentials });
       before(state);
       const prepared = prepareDelivery(state, op);
@@ -2061,8 +2081,9 @@ async function deliverTo(
  *   or `too_large` (over the run's `YIAN_MAX_EVENT_BYTES`).
  * @throws RunBusyError when another writer holds the log.
  * @throws RangeError when the log is empty or doesn't start with `RunStarted`, the run's flow was
- *   built in code and `options.flow` is missing (or was recorded and it is given), or
- *   `options.codeRoot` isn't the recorded code root.
+ *   built in code and `options.flow` is missing (or was recorded and it is given),
+ *   `options.codeRoot` isn't the recorded code root, or `options.apiKey` or `options.headers` is
+ *   refused (the message never echoes a value).
  * @throws LoadError when the recorded flow no longer loads (a CODE file gone, or outside the
  *   recorded code root), before anything is appended.
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.

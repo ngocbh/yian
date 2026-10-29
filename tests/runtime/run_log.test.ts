@@ -26,6 +26,7 @@ import {
   RunLogChangedError,
   RunLogLineTooLongError,
   RunLogSchemaError,
+  runRecordOffsets,
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
@@ -1160,6 +1161,43 @@ test("iterRunRecords with maxLineBytes stops at a torn long last line, and refus
     `run log ${file} line 2 (seq 1): the line is ${byteLength(long)} bytes, over maxLineBytes 200`,
   );
   expect((error as RunLogLineTooLongError).end).toBe(fs.statSync(file).size);
+});
+
+test("iterRunRecords with maxLineBytes keeps no stack for a deeply nested long line", () => {
+  const file = path.join(dir, "run.jsonl");
+  const depth = 8_000_000;
+  fs.writeFileSync(file, `${"[".repeat(depth)}\n`);
+  Bun.gc(true);
+  const before = process.memoryUsage().heapUsed;
+  let peak = before;
+  const realRead = fs.readSync;
+  // Sampled between reads, while the scan is part way through the line.
+  const readSpy = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+    peak = Math.max(peak, process.memoryUsage().heapUsed);
+    return Reflect.apply(realRead, fs, args) as number;
+  }) as typeof fs.readSync);
+  let error: Error;
+  try {
+    error = expectError(
+      () => [...iterRunRecords(file, { maxLineBytes: 1 << 20 })],
+      RunLogLineTooLongError,
+      `run log ${file} line 1 (seq 0): the line is ${depth} bytes, over maxLineBytes ${1 << 20}`,
+    );
+  } finally {
+    readSpy.mockRestore();
+  }
+  // A frame per bracket would take hundreds of MB here.
+  expect(peak - before).toBeLessThan(32 * 1024 * 1024);
+  expect(tooLongFields(error)).toMatchObject({ seq: null, runId: null, kind: null, nodeId: null });
+});
+
+test("readRunLog and runRecordOffsets pass maxLineBytes on", () => {
+  const file = path.join(dir, "run.jsonl");
+  fs.writeFileSync(file, `${wireLine()}\n${wireLine({ seq: 1, nodeId: "w".repeat(200) })}\n`);
+  const message = `run log ${file} line 2 (seq 1): the line is ${byteLength(wireLine({ seq: 1, nodeId: "w".repeat(200) }))} bytes, over maxLineBytes 150`;
+  expectError(() => readRunLog(file, { maxLineBytes: 150 }), RunLogLineTooLongError, message);
+  expectError(() => runRecordOffsets(file, { maxLineBytes: 150 }), RunLogLineTooLongError, message);
+  expect(runRecordOffsets(file, { maxLineBytes: 400 })).toEqual([0, byteLength(wireLine()) + 1]);
 });
 
 test("iterRunRecords refuses a maxLineBytes that isn't a positive integer", () => {

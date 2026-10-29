@@ -430,6 +430,23 @@ describe("updateRunIndex and readRunIndex", () => {
     });
   });
 
+  test("maxLineBytes skips a log with a longer line with a warning, and a bad one throws", () => {
+    const runs = freshRuns();
+    writeRun(runs, "good", succeededRun);
+    writeRun(runs, "big", (log) => {
+      start(log);
+      log.append(new NodeStartedRecord("agent"));
+      log.append(new NodeStepRecord("agent", 1, { kind: "note", text: "x".repeat(10_000) }));
+    });
+    const warnings: string[] = [];
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs, { maxLineBytes: 4096 }));
+    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["good"]);
+    expect(warnings).toEqual([
+      expect.stringMatching(/^run index skipped .*big\/log\.jsonl: run log .* line 4 \(seq 3\): the line is \d+ bytes, over maxLineBytes 4096$/),
+    ]);
+    expect(() => updateRunIndex(runs, { maxLineBytes: 0 })).toThrow("maxLineBytes must be a positive integer, got 0");
+  });
+
   test("a log that turns unreadable keeps the row it had", () => {
     const runs = freshRuns();
     writeRun(runs, "run-1", stoppedRun);

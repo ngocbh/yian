@@ -364,10 +364,15 @@ abort its `signal` instead: the run records a stop, rejects with the signal's re
 waiting calls `advance` then.
 
 `iterRunRecords` holds one line in memory at a time, so a huge line takes that much. Pass
-`maxLineBytes` to cap it. A longer line isn't parsed or kept: it throws `RunLogLineTooLongError`,
-whose message names the line and the limit. The error holds the line's `offset`, `end` and
-`length`, plus its `seq`, `runId`, `kind` and `nodeId`, read by a scan that keeps no more than
-the limit (`null` for one the scan can't read). To go on past it:
+`maxLineBytes` to cap it. `inspectRun`, `loadRecordedFlow`, `foldRunLog`, `agentCalls`,
+`agentCall`, `pendingCalls` and `updateRunIndex` take it in their options too. A longer line isn't
+parsed: it is read through to its newline, in memory that stays within a small multiple of the
+limit however the line nests, and throws `RunLogLineTooLongError`, whose message names the line
+and the limit. The error holds the line's `offset`, `end` and `length`, and its `seq`, `runId`,
+`kind` and `nodeId`. A scan of the line's bytes reads those four, keeping at most the limit of
+their values, and gives `null` for one it can't read. `updateRunIndex` doesn't throw it: it skips
+that log with a warning, as it skips any log it can't read. To read on past a long line with
+`iterRunRecords`:
 
 ```ts check=fragment
 import { iterRunRecords, RunLogLineTooLongError } from "@ngocbh/yian/run";

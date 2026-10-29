@@ -2206,13 +2206,15 @@ export class JsonlRunLog implements RunLog {
  * lock and without changing the file. An incomplete last line is ignored; an empty file or one
  * without a complete line gives no records.
  *
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it.
  * @throws RunLogSchemaError when a record's schema isn't `SCHEMA_VERSION`.
  * @throws RunLogChangedError when the file shrank while it was read.
+ * @throws RunLogLineTooLongError when a complete line is longer than `maxLineBytes`.
  * @throws RangeError when a complete line isn't a valid record, or the records don't share one
  *   run id with contiguous sequences from 0; the message names `path`, the line and its seq.
  */
-export function readRunLog(path: string): RecordEnvelope[] {
-  return Array.from(iterRunRecords(path), (entry) => entry.envelope);
+export function readRunLog(path: string, options: Pick<IterRunRecordsOptions, "maxLineBytes"> = {}): RecordEnvelope[] {
+  return Array.from(iterRunRecords(path, { maxLineBytes: options.maxLineBytes ?? null }), (entry) => entry.envelope);
 }
 
 /** The bytes `iterRunRecords` asks for in one read. */
@@ -2275,7 +2277,8 @@ export interface IterRunRecordsOptions {
  * changing the file, so a host can read a log another process is writing.
  *
  * The file is read in chunks of 64 KiB, so memory is bounded by the largest line, or, given
- * `maxLineBytes`, by that limit: a longer line is counted up to its newline but not kept, and
+ * `maxLineBytes`, by a small multiple of that limit: a longer line is read up to its newline
+ * but not kept, its nesting only counted past the few levels the scan needs, and
  * throws `RunLogLineTooLongError`, which names it and what a scan of its bytes read of its seq,
  * run id, kind and node id. The seq and run id it names are checked as any record's are. To go
  * on, read from its `end`, passing its `runId` and `seq` as `runId` and `afterSeq`. Reading stops
@@ -2350,9 +2353,7 @@ export function* iterRunRecords(
     const shown = typeof afterRunId === "string" ? reprText(afterRunId) : valueRepr(afterRunId);
     throw new RangeError(`runId must be a non-empty string, got ${shown}`);
   }
-  if (maxLineBytes !== null && (!Number.isSafeInteger(maxLineBytes) || maxLineBytes <= 0)) {
-    throw new RangeError(`maxLineBytes must be a positive integer, got ${valueRepr(maxLineBytes)}`);
-  }
+  checkMaxLineBytes(maxLineBytes);
   const continuing = afterRunId !== null || afterSeq !== null;
   if (continuing && afterOffset === 0) {
     throw new RangeError("runId and afterSeq describe the record before afterOffset, so they need one");
@@ -2488,39 +2489,49 @@ export function* iterRunRecords(
  * is writing. A reader reads the record at seq `k` with `iterRunRecords(path, {afterOffset:
  * offsets[k]})`.
  *
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it.
  * @throws the errors of `iterRunRecords`.
  */
-export function runRecordOffsets(path: string): number[] {
-  return Array.from(iterRunRecords(path, { payloads: false }), (entry) => entry.offset);
+export function runRecordOffsets(path: string, options: Pick<IterRunRecordsOptions, "maxLineBytes"> = {}): number[] {
+  const maxLineBytes = options.maxLineBytes ?? null;
+  return Array.from(iterRunRecords(path, { payloads: false, maxLineBytes }), (entry) => entry.offset);
 }
 
 /** The keys a header scan wants a value of, each as the object keys leading to it. */
 const HEADER_PATHS = new Set(["kind", "run_id", "seq", "payload/node_id", "payload/spawner_id", "payload/failure/node_id"]);
+/** The most containers a header scan tracks: the depth of `payload/failure/node_id`'s object. */
+const HEADER_DEPTH = 3;
 /** The most bytes a header scan keeps of a key or a number; the keys and seqs it wants are shorter. */
 const HEADER_TOKEN_BYTES = 32;
 
 /**
  * Reads a run-log line's seq, run id, kind and node id from its bytes, fed in pieces, without
- * parsing it: it tracks only the keys leading to each value and keeps only the values
- * `HEADER_PATHS` names, each up to `limit` bytes. For a line too long to parse.
+ * parsing it, for a line too long to parse. It tracks the keys of the outer `HEADER_DEPTH`
+ * containers and only counts deeper ones, and keeps only the values `HEADER_PATHS` names, at
+ * most `limit` bytes of them in all.
  */
 class LineHeaderScanner {
-  readonly #limit: number;
-  /** Each open container: an object's current key (`null` in an array) and whether a key comes next. */
+  /** Each tracked container: an object's current key (`null` in an array) and whether a key comes next. */
   readonly #open: { key: string | null; object: boolean; keyNext: boolean }[] = [];
+  /** How many containers are open past the tracked ones. */
+  #deeper = 0;
   /** The wanted strings and numbers read, by path, kept apart so only a number counts as a seq. */
   readonly #strings = new Map<string, string>();
   readonly #numbers = new Map<string, string>();
+  /** The bytes still allowed for wanted string values. */
+  #budget: number;
   #inString = false;
   #escaped = false;
   #inScalar = false;
-  /** The bytes kept of the string or scalar being read, or `null` when it isn't kept. */
-  #kept: number[] | null = null;
+  /** Whether the string or scalar being read is kept, its bytes so far and their cap. */
+  #keeping = false;
+  #kept = new Uint8Array(HEADER_TOKEN_BYTES);
+  #keptLength = 0;
+  #keptCap = 0;
   #keptPath: string | null = null;
-  #keptLimit = 0;
 
   constructor(limit: number) {
-    this.#limit = limit;
+    this.#budget = limit;
   }
 
   /** Read the next bytes of the line. */
@@ -2533,7 +2544,13 @@ class LineHeaderScanner {
           this.#endString();
           continue;
         }
-        this.#keep(byte);
+        if (this.#keeping) this.#keep(byte);
+        continue;
+      }
+      if (this.#deeper > 0) {
+        if (byte === 0x22) this.#inString = true;
+        else if (byte === 0x7b || byte === 0x5b) this.#deeper++;
+        else if (byte === 0x7d || byte === 0x5d) this.#deeper--;
         continue;
       }
       const top = this.#open.at(-1);
@@ -2541,13 +2558,14 @@ class LineHeaderScanner {
         case 0x22:
           this.#endScalar();
           this.#inString = true;
-          if (top?.object && top.keyNext) this.#start(null, HEADER_TOKEN_BYTES);
-          else this.#start(this.#valuePath(), this.#limit);
+          if (top?.object && top.keyNext) this.#start(true, null, HEADER_TOKEN_BYTES);
+          else this.#start(false, this.#valuePath(), this.#budget);
           break;
         case 0x7b:
         case 0x5b:
           this.#endScalar();
-          this.#open.push({ key: null, object: byte === 0x7b, keyNext: byte === 0x7b });
+          if (this.#open.length < HEADER_DEPTH) this.#open.push({ key: null, object: byte === 0x7b, keyNext: byte === 0x7b });
+          else this.#deeper = 1;
           break;
         case 0x7d:
         case 0x5d:
@@ -2571,9 +2589,9 @@ class LineHeaderScanner {
         default:
           if (!this.#inScalar) {
             this.#inScalar = true;
-            this.#start(this.#valuePath(), HEADER_TOKEN_BYTES);
+            this.#start(false, this.#valuePath(), HEADER_TOKEN_BYTES);
           }
-          this.#keep(byte);
+          if (this.#keeping) this.#keep(byte);
       }
     }
   }
@@ -2621,28 +2639,39 @@ class LineHeaderScanner {
     return keys.join("/");
   }
 
-  /** Begin a string or scalar: keep it when it is a key (`path` `null`) or a wanted value. */
-  #start(path: string | null, limit: number): void {
-    const wanted = path === null || HEADER_PATHS.has(path);
-    this.#kept = wanted ? [] : null;
+  /**
+   * Begin a string or scalar: keep up to `cap` bytes of it when it is a key, or a value at a
+   * wanted `path` (`null` for a value with no path, as in an array).
+   */
+  #start(isKey: boolean, path: string | null, cap: number): void {
+    this.#keeping = isKey || (path !== null && HEADER_PATHS.has(path));
+    this.#keptLength = 0;
+    this.#keptCap = cap;
     this.#keptPath = path;
-    this.#keptLimit = limit;
   }
 
   #keep(byte: number): void {
-    if (this.#kept === null) return;
-    if (this.#kept.length < this.#keptLimit) this.#kept.push(byte);
-    else this.#kept = null;
+    if (this.#keptLength === this.#keptCap) {
+      this.#keeping = false;
+      return;
+    }
+    if (this.#keptLength === this.#kept.length) {
+      const grown = new Uint8Array(Math.min(this.#kept.length * 2, this.#keptCap));
+      grown.set(this.#kept);
+      this.#kept = grown;
+    }
+    this.#kept[this.#keptLength++] = byte;
   }
 
   #endString(): void {
     this.#inString = false;
+    if (this.#deeper > 0) return;
     const top = this.#open.at(-1);
     const isKey = top?.object === true && top.keyNext;
     let value: string | null = null;
-    if (this.#kept !== null) {
+    if (this.#keeping) {
       try {
-        value = JSON.parse(`"${UTF8.decode(new Uint8Array(this.#kept))}"`) as string;
+        value = JSON.parse(`"${UTF8.decode(this.#kept.subarray(0, this.#keptLength))}"`) as string;
       } catch {
         value = null;
       }
@@ -2652,17 +2681,29 @@ class LineHeaderScanner {
       top!.keyNext = false;
     } else if (value !== null && this.#keptPath !== null) {
       this.#strings.set(this.#keptPath, value);
+      this.#budget -= this.#keptLength;
     }
-    this.#kept = null;
+    this.#keeping = false;
   }
 
   #endScalar(): void {
     if (!this.#inScalar) return;
     this.#inScalar = false;
-    if (this.#kept !== null && this.#keptPath !== null) {
-      this.#numbers.set(this.#keptPath, String.fromCharCode(...this.#kept));
+    if (this.#keeping && this.#keptPath !== null) {
+      this.#numbers.set(this.#keptPath, String.fromCharCode(...this.#kept.subarray(0, this.#keptLength)));
     }
-    this.#kept = null;
+    this.#keeping = false;
+  }
+}
+
+/**
+ * Check a reader's `maxLineBytes` option: a positive integer, or `null` for no limit.
+ *
+ * @throws RangeError when it is neither.
+ */
+export function checkMaxLineBytes(maxLineBytes: unknown): void {
+  if (maxLineBytes !== null && (typeof maxLineBytes !== "number" || !Number.isSafeInteger(maxLineBytes) || maxLineBytes <= 0)) {
+    throw new RangeError(`maxLineBytes must be a positive integer, got ${valueRepr(maxLineBytes)}`);
   }
 }
 

@@ -16,10 +16,10 @@
  * (`runtime/state.ts`). For hosts that show runs it also exports `inspectRun`, which reads
  * where a run log stands, and `staticNodes`, which names each node of a flow, and re-exports
  * `staticPathOf` (`nodes/ids.ts`), the lock-free reader `iterRunRecords`, `RunLogChangedError`,
- * `RunLogLineTooLongError` and `RunLogSchemaError` (`runtime/log.ts`). `runLogPath` gives a fresh run a folder of its own under
- * the host's runs folder and names its log there, and `updateRunIndex` and `readRunIndex`
- * (`runtime/run_index.ts`) keep and read the runs folder's rebuildable `index.sqlite`, one row per
- * run. For hosts that read run-log values it re-exports
+ * `RunLogLineTooLongError` and `RunLogSchemaError` (`runtime/log.ts`). `runLogPath` gives a fresh
+ * run a folder of its own under the host's runs folder and names its log there, and
+ * `updateRunIndex` and `readRunIndex` (`runtime/run_index.ts`) keep and read the runs folder's
+ * rebuildable `index.sqlite`, one row per run. For hosts that read run-log values it re-exports
  * yian's JSON form of them: `TypedValue` (the `{kind, value}` wire of a `pool_commit`,
  * `toWire`/`fromWire`), `FileRef` and `InboxRef`, the handle an `Inbox(T)` input holds
  * (`typesys/values.ts`), and `logJson`, `parseJson` and
@@ -1863,6 +1863,8 @@ function checkCodeRoot(log: string, start: RunStartedRecord, root: string | null
  * @param options.env The environment the load reads the `YIAN_*` values from (default
  *   `processEnv`).
  * @param options.codeRoot As `advance`'s: the recorded code root, or `null` (the default) for it.
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a longer
+ *   line throws `RunLogLineTooLongError`.
  * @returns The recorded flow, or `null` when the run's flow was built in code.
  * @throws RangeError when the log holds no complete line or doesn't start with `RunStarted`, or
  *   `codeRoot` isn't the recorded code root, besides `iterRunRecords`' errors.
@@ -1873,11 +1875,11 @@ function checkCodeRoot(log: string, start: RunStartedRecord, root: string | null
  */
 export async function loadRecordedFlow(
   log: string,
-  options: { env?: Env | null; codeRoot?: string | null } = {},
+  options: { env?: Env | null; codeRoot?: string | null; maxLineBytes?: number | null } = {},
 ): Promise<ComposedFlow | null> {
   const env = options.env ?? processEnv;
   const root = resolvedRoot(options.codeRoot);
-  const start = readStart(log);
+  const start = readStart(log, options.maxLineBytes ?? null);
   return withEnv(env, () => {
     checkRecorded(start.defaults);
     checkCodeRoot(log, start, root);
@@ -1887,13 +1889,13 @@ export async function loadRecordedFlow(
 
 /**
  * Return the `RunStarted` record of the log at `log`, reading only its first line, without the
- * lock: the first line of an append-only log never changes.
+ * lock: the first line of an append-only log never changes. Lines are read with `maxLineBytes`.
  *
  * @throws RangeError when the log holds no complete line or doesn't start with `RunStarted`,
  *   besides `iterRunRecords`' errors.
  */
-function readStart(log: string): RunStartedRecord {
-  const records = iterRunRecords(log);
+function readStart(log: string, maxLineBytes: number | null): RunStartedRecord {
+  const records = iterRunRecords(log, { maxLineBytes });
   let first: RecordEnvelope | undefined;
   try {
     first = records.next().value?.envelope;
@@ -1995,7 +1997,7 @@ async function deliverTo(
     const key = realpathSync(locator);
     const root = resolvedRoot(options.codeRoot);
     // Checked before a live engine can take the delivery, since it reads no log.
-    if (root !== null) checkCodeRoot(log, readStart(locator), root);
+    if (root !== null) checkCodeRoot(log, readStart(locator, null), root);
     const found = await liveOrHold(key, (engine) => {
       before(engine.state);
       return engine.deliver(op);
@@ -2260,11 +2262,13 @@ export interface PendingCall {
  * call leaves the list once it is answered, timed out or closed. Hosts rebuild their open asks
  * from it.
  *
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a longer
+ *   line throws `RunLogLineTooLongError`.
  * @throws RangeError when the log is empty or doesn't start with `RunStarted`, besides
  *   `iterRunRecords`' errors.
  * @throws Error (code `ENOENT`) when `log` doesn't exist.
  */
-export function pendingCalls(log: string): readonly PendingCall[] {
+export function pendingCalls(log: string, options: { maxLineBytes?: number | null } = {}): readonly PendingCall[] {
   const waits = new WaitsState();
   // Each unsettled call's recorded arguments; a settled node's calls leave the fold, so theirs go.
   const args = new Map<string, JsonObject | null>();
@@ -2272,7 +2276,7 @@ export function pendingCalls(log: string): readonly PendingCall[] {
   // `reply` must name that step, so the earlier ones needn't be kept.
   const nodes = new Map<string, { count: number; replyN: number; reply: Readonly<JsonObject> | undefined }>();
   let first = true;
-  for (const { envelope } of iterRunRecords(log)) {
+  for (const { envelope } of iterRunRecords(log, { maxLineBytes: options.maxLineBytes ?? null })) {
     if (first && !(envelope.record instanceof RunStartedRecord)) {
       throw new RangeError(`run log ${log} doesn't start with run_started`);
     }
@@ -2490,6 +2494,8 @@ export interface RunInspection {
  * @param options.env The environment whose `YIAN_*` values the replay with `flow` checks the
  *   recorded ones against, as `advance`'s `env`; without one, the values already in effect.
  *   Reading without `flow` doesn't use it.
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a longer
+ *   line throws `RunLogLineTooLongError`.
  * @returns The status, the nodes in flight, the crashed counts, the run's id, schema, flow
  *   fingerprint, learnable flag, last seq, start time and (once ended) end time, a failed run's
  *   failure, and a waiting run's waits, readiness and wake time.
@@ -2505,14 +2511,15 @@ export interface RunInspection {
  */
 export function inspectRun(
   log: string,
-  options: { flow?: ComposedFlow | null; env?: Env | null } = {},
+  options: { flow?: ComposedFlow | null; env?: Env | null; maxLineBytes?: number | null } = {},
 ): RunInspection {
   const lockedBefore = isRunLogLocked(log);
   const flow = options.flow ?? null;
+  const maxLineBytes = options.maxLineBytes ?? null;
   // The replay needs every record at once; reading without it streams them.
   const read = () => {
-    const envelopes = flow === null ? null : readRunLog(log);
-    return { envelopes, scan: scanRunRecords(envelopes ?? streamedEnvelopes(log)) };
+    const envelopes = flow === null ? null : readRunLog(log, { maxLineBytes });
+    return { envelopes, scan: scanRunRecords(envelopes ?? streamedEnvelopes(log, maxLineBytes)) };
   };
   let records: ReturnType<typeof read>;
   try {
@@ -2594,6 +2601,8 @@ export interface FoldedRecord {
  * @param options.codeRoot As `advance`'s: the recorded code root, or `null` (the default) for it. A
  *   recorded CODE reference whose file's real path is outside it rejects with `LoadError` before
  *   the replay; not used for a flow built in code.
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a longer
+ *   line throws `RunLogLineTooLongError`.
  * @throws RangeError when the log is empty, ends inside its run start, or the replay refuses it;
  *   when the run's flow was built in code and `options.flow` is missing, or the log holds its
  *   flow files and `options.flow` is given, or `codeRoot` isn't the recorded code root.
@@ -2603,11 +2612,11 @@ export interface FoldedRecord {
  */
 export async function foldRunLog(
   log: string,
-  options: { env?: Env | null; flow?: ComposedFlow | null; codeRoot?: string | null } = {},
+  options: { env?: Env | null; flow?: ComposedFlow | null; codeRoot?: string | null; maxLineBytes?: number | null } = {},
 ): Promise<FoldedRun> {
   const env = options.env ?? processEnv;
   const root = resolvedRoot(options.codeRoot);
-  const entries = [...iterRunRecords(log)];
+  const entries = [...iterRunRecords(log, { maxLineBytes: options.maxLineBytes ?? null })];
   const start = startRecord(entries[0]?.envelope);
   const flow = await withEnv(env, () => {
     checkRecorded(start.defaults);
@@ -2763,16 +2772,18 @@ function agentStepCalls(steps: readonly ValueRecord[]): { calls: StepExchange[];
  * call too. Reads only the `node_step` records, with `iterRunRecords`; no flow is loaded.
  *
  * @param log The JSONL run log.
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a longer
+ *   line throws `RunLogLineTooLongError`.
  * @returns Each call's node, `n`, purpose, model, start, attempt count and finish.
  * @throws `iterRunRecords`' errors.
  *
  * @example
  * for (const call of agentCalls(log)) show(call.nodeId, call.n, call.model, call.finish);
  */
-export function agentCalls(log: string): AgentCallEntry[] {
+export function agentCalls(log: string, options: { maxLineBytes?: number | null } = {}): AgentCallEntry[] {
   // Each node's steps in order, and the seq of each.
   const nodes = new Map<string, { steps: ValueRecord[]; seqs: number[] }>();
-  for (const { envelope, seq } of iterRunRecords(log, { kinds: ["node_step"] })) {
+  for (const { envelope, seq } of iterRunRecords(log, { kinds: ["node_step"], maxLineBytes: options.maxLineBytes ?? null })) {
     const { nodeId, step } = envelope!.record as NodeStepRecord;
     let node = nodes.get(nodeId);
     if (node === undefined) nodes.set(nodeId, (node = { steps: [], seqs: [] }));
@@ -2831,6 +2842,8 @@ export function agentCalls(log: string): AgentCallEntry[] {
  * @param options.models Builds a structured call's model to read its plan off; never called
  *   (default `defaultModelAccess(env)`).
  * @param options.memory The run's memory mapping, as `advance` takes it, to recall sections.
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a longer
+ *   line throws `RunLogLineTooLongError`.
  * @returns The call's view.
  * @throws RangeError when the log has no model call `n` of `nodeId`, or the node's binding, which
  *   finished in the run, no longer does (the `BindingError` is its cause); `foldRunLog`'s errors.
@@ -2856,6 +2869,7 @@ export async function agentCall(
     headers?: Readonly<Record<string, string>> | null;
     models?: ModelAccess | null;
     memory?: ReadonlyMap<string, Memory> | null;
+    maxLineBytes?: number | null;
   } = {},
 ): Promise<AgentCallView> {
   const { nodeId, n } = call;
@@ -2864,7 +2878,7 @@ export async function agentCall(
   const headers = options.headers == null ? null : validateHeaders(options.headers, null);
   const env = options.env ?? processEnv;
   const root = resolvedRoot(options.codeRoot);
-  const entries = [...iterRunRecords(log)];
+  const entries = [...iterRunRecords(log, { maxLineBytes: options.maxLineBytes ?? null })];
   const start = startRecord(entries[0]?.envelope);
   const flow = await withEnv(env, () => {
     checkRecorded(start.defaults);
@@ -3042,9 +3056,9 @@ function toolResults(reply: Message, results: StepExchange["results"]): AgentToo
     });
 }
 
-/** Yield the envelope of each record of the log at `log`, read by `iterRunRecords`. */
-function* streamedEnvelopes(log: string): Generator<RecordEnvelope, void, undefined> {
-  for (const entry of iterRunRecords(log)) yield entry.envelope;
+/** Yield the envelope of each record of the log at `log`, read by `iterRunRecords` with `maxLineBytes`. */
+function* streamedEnvelopes(log: string, maxLineBytes: number | null): Generator<RecordEnvelope, void, undefined> {
+  for (const entry of iterRunRecords(log, { maxLineBytes })) yield entry.envelope;
 }
 
 /**

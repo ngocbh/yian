@@ -36,14 +36,20 @@ import type { ModelAccess } from "../src/llm_clients/factory.ts";
 import type { CaseNode } from "../src/nodes/case/node.ts";
 import { Binding } from "../src/nodes/contracts.ts";
 import {
+  agentCall,
+  agentCalls,
+  foldRunLog,
   inspectRun,
   iterRunRecords,
+  loadRecordedFlow,
+  pendingCalls,
   type AdvanceOptions,
   RunResult,
   type RunInspection,
   advance,
   runFlow,
   type RunFlowOptions,
+  RunLogLineTooLongError,
   RunLogSchemaError,
   runLogPath,
   staticNodes,
@@ -233,6 +239,35 @@ afterEach(() => {
 });
 
 // ---- a CODE-only flow runs end-to-end ----
+
+test("the readers built on iterRunRecords pass maxLineBytes on, and a longer line throws", async () => {
+  const flow = await load(PLAN_FLOW);
+  const log = join(dir, "run.jsonl");
+  await run(flow, { topic: "ACME" }, { log });
+  const limit = 100;
+  const message = `run log ${log} line 1 (seq 0): the line is ${readFileSync(log).indexOf(0x0a)} bytes, over maxLineBytes ${limit}`;
+  const env = hostEnv(dir);
+  const readers: [string, () => unknown][] = [
+    ["inspectRun", () => inspectRun(log, { maxLineBytes: limit })],
+    ["inspectRun with flow", () => inspectRun(log, { flow, env, maxLineBytes: limit })],
+    ["pendingCalls", () => pendingCalls(log, { maxLineBytes: limit })],
+    ["agentCalls", () => agentCalls(log, { maxLineBytes: limit })],
+    ["loadRecordedFlow", () => loadRecordedFlow(log, { env, maxLineBytes: limit })],
+    ["foldRunLog", () => foldRunLog(log, { env, maxLineBytes: limit })],
+    ["agentCall", () => agentCall(log, { nodeId: "plan", n: 1 }, { env, maxLineBytes: limit })],
+  ];
+  for (const [name, read] of readers) {
+    let caught: unknown;
+    try {
+      await read();
+    } catch (error) {
+      caught = error;
+    }
+    expect([name, caught]).toEqual([name, expect.any(RunLogLineTooLongError)]);
+    expect((caught as Error).message).toBe(message);
+  }
+  expect(inspectRun(log, { maxLineBytes: 1 << 20 }).status).toBe("succeeded");
+});
 
 test("code flow runs to declared output", async () => {
   const result = await run(await load(PLAN_FLOW), { topic: "ACME" });

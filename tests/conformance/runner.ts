@@ -106,6 +106,7 @@ import {
 } from "../../src/run.ts";
 import {
   MemoryRunLog,
+  NodeStepRecord,
   readRunLog,
   type RunLog,
   type RunStartedRecord,
@@ -1698,7 +1699,8 @@ async function* reaching(
  * Return a builder of chat models that serve each call the next `host.models` entry of its node
  * and consumer, taken through `take` when the call is made: the consumer the model was built for
  * (`backward`, `memory:<key>`), else the call's own (`consumerOf`). A call's request that
- * differs from its entry's `request` is added to `problems`. A call `take` refuses fails at its
+ * differs from its entry's `request` is added to `problems`, naming the entry by its index,
+ * `taken` entries of its script before it. A call `take` refuses fails at its
  * stream's first read, as a provider's failure does. An `agent` call reaches its `inbox` points
  * (`reaching`).
  */
@@ -1706,8 +1708,8 @@ function scriptedModels(
   take: (label: string, what: string) => Value,
   problems: string[],
   inbox: Inbox,
+  taken: (label: string) => number,
 ): (provider: string, model: string, nodeId: string, builtFor?: string) => ChatModel {
-  const served = new Map<string, number>();
   return (provider, model, nodeId, builtFor) => ({
     provider,
     model,
@@ -1724,8 +1726,8 @@ function scriptedModels(
           },
         });
       }
-      const index = (served.get(label) ?? -1) + 1;
-      served.set(label, index);
+      // Counted from what is still taken, so an entry put back is named by its place again.
+      const index = taken(label) - 1;
       if (Object.hasOwn(entry, "request")) {
         const what = `\`${label}[${index}].request\``;
         // By value: TS holds a JSON number as a JS `number` whether it is written `1` or `1.0`.
@@ -1936,7 +1938,7 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
       scripts.set(`host.models.${node}.${consumer}`, [...(script as Value[])]);
     }
   }
-  const scripted = scriptedModels(take, problems, inbox);
+  const scripted = scriptedModels(take, problems, inbox, (label) => taken.filter((item) => item.label === label).length);
   // Installed even without `host.models`, so an unscripted model call never reaches a provider.
   const models: ModelAccess = {
     env,
@@ -3010,7 +3012,9 @@ export function sweepable(case_: Case): boolean {
  * cut right after a node's commit puts back from the node's last record before it, since the node
  * runs again), the invariants are checked at the cut, `beforeResume` (for a test, to damage the log) runs, and
  * the run is resumed. A cut inside the run start (before the START inputs' commit) must instead be
- * refused by the resume, leaving the log as it is. The resume must end with a result whose invariants hold. With no
+ * refused by the resume, leaving the log as it is. The resume must end with a result whose invariants hold,
+ * pass its host's `check()` with no entry left (unless it closed an AGENT's tool call `crashed`), and
+ * leave no filled secret in its log, as the uncut run's log must not. With no
  * `host.human` or `host.jitter` and only `return` entries in its tool scripts, the strong oracle
  * also holds: the same output, and the same node outcome entries in the trace, in order, with a
  * capture's source named by its record's kind and node rather than its seq.
@@ -3038,6 +3042,7 @@ export async function crashSweep(
   const uncutLog = join(ctx.dir, "sweep.jsonl");
   const uncutHooks = runHooks(case_, uncutLog, env, host(case_, uncutLog, env, flow), start);
   const uncut = await runFlow(flow, inputs, { ...args, ...uncutHooks });
+  checkSecrets(case_, { "the uncut run log (crash sweep)": readFileSync(uncutLog, "utf8") });
   const outcomes = (log: string) => {
     const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
     return sourcesByRecord(trace(lines, flow));
@@ -3089,6 +3094,23 @@ export async function crashSweep(
     } catch (error) {
       throw new CaseFailure(`the resume raised${at}\n${failureText(error)}`);
     }
+    // An AGENT's tool call cut before its result is closed `crashed`, not made again: the entry
+    // it took stays taken, and the next request reads the closer, so the script no longer fits.
+    const crashed = readRunLog(log)
+      .slice(k + 1)
+      .some(({ record }) => record instanceof NodeStepRecord && record.step["closed"] === "crashed");
+    if (!crashed) {
+      // Given back what it took after the cut, the resume takes every entry with the requests
+      // scripted, as the uncut run did.
+      let left: string[];
+      try {
+        left = scripted.check();
+      } catch (error) {
+        throw new CaseFailure(`the resume's host calls differ from the script${at}\n${(error as Error).message}`);
+      }
+      if (left.length > 0) throw new CaseFailure(left.map((message) => `${message}${at}`).join("\n"));
+    }
+    checkSecrets(case_, { [`the run log${at}`]: readFileSync(log, "utf8") });
     if (strong) {
       compare(`output${at}`, output(resumed, flow), output(uncut, flow), { byValue: true });
       compare(`node outcomes${at}`, outcomes(log), expected);

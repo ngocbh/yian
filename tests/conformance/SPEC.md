@@ -687,7 +687,12 @@ of the `pool_commit` it names (a `from` seq by the kind and node of the record i
 cut right after its `pool_commit` runs again, so what it took from the host scripts goes back from
 its last record before the commit (its steps replay). A cut inside the run start (before the START
 inputs' commit) can't be resumed: the sweep expects the resume to refuse it (`run log <path> ends
-inside its run start; start the run again`) and leave the log as it is.
+inside its run start; start the run again`) and leave the log as it is. Each resume is held to
+the host scripts as the uncut run is: a model request that differs from its entry's `request`, a
+call past a script's end, or an entry left unused fails the sweep. A resume that closes an AGENT's
+tool call `crashed` (the cut fell after the reply that made the call, before its result) is
+exempt: the call isn't made again, so what it took stays taken and the next request reads the
+closer. A filled secret in the uncut run's log or in a resumed log fails the sweep too.
 
 A `run`, `resume` or `backward` case may have a **golden log**, `<name>.log.jsonl` beside it: the
 run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`

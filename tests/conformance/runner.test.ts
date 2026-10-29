@@ -1927,6 +1927,91 @@ expect:
     expect(cuts.length).toBeGreaterThan(0);
   }, SWEEP);
 
+  test("fails a resume whose model request differs from its scripted one, though its reply is the same", async () => {
+    // The agent's second request carries lookup's result. A cut right after that result is
+    // recorded makes the resume send the request again, now with the rewritten result; the
+    // scripted reply hides it from the output and the node outcomes.
+    const text = `kind: run
+flow: |
+  id: m
+  name: m
+  nodes:
+    research:
+      kind: agent
+      tools: [lookup]
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      system_prompt: Help.
+      prompt: "Look up x."
+  output: \${research.output}
+env: {OPENAI_API_KEY: "<key:1>"}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters: {type: object, properties: {q: {type: string}}, required: [q]}
+      results:
+      - return: X1
+  models:
+    research:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: c1, name: lookup, arguments: {q: x}}]
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: found X1}]}
+        request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - {format: yian.message.v1, role: user, parts: [{type: text, text: Look up x.}]}
+          - format: yian.message.v1
+            role: assistant
+            parts: [{type: tool_call, id: c1, name: lookup, arguments: {q: x}}]
+          - format: yian.message.v1
+            role: tool
+            parts: [{type: tool_result, call_id: c1, name: lookup, content: X1}]
+          tools:
+          - name: lookup
+            description: ""
+            parameters: {type: object, properties: {q: {type: string}}, required: [q]}
+expect:
+  output: {status: succeeded, output: found X1}
+`;
+    const case_ = prepare(checkCase(readCase(text)));
+    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
+    made.push(ctx.dir);
+    const rewrite = (log: string) => {
+      writeFileSync(log, readFileSync(log, "utf8").replace('"output":"X1"', '"output":"X9"'));
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: rewrite });
+    await expect(failure).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failure).rejects.toThrow(
+      "the resume's host calls differ from the script (crash sweep, cut after record 10)\n" +
+        "`host.models.research.agent[1].request` differs",
+    );
+  }, SWEEP);
+
+  test("fails a resume that leaves a script entry unused", async () => {
+    // An entry nothing calls: the uncut run leaves it too, so each resume must report it.
+    const spare = "host:\n  tools:\n    spare:\n      parameters: {type: object, properties: {}}\n      results: [{return: s}]\n";
+    const case_ = prepare(checkCase(readCase(TWO_NODES.replace("expect:", `${spare}expect:`))));
+    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
+    made.push(ctx.dir);
+    const failure = crashSweep(case_, ctx);
+    await expect(failure).rejects.toThrow("`host.tools.spare.results` has 1 entry left (crash sweep, cut after record 4)");
+  }, SWEEP);
+
+  test("fails a filled secret in a sweep's run log", async () => {
+    const case_ = prepare(checkCase(readCase(TWO_NODES.replace("expect:", 'env: {OPENAI_API_KEY: "<key:1>"}\nexpect:'))));
+    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
+    made.push(ctx.dir);
+    const leak = (log: string) => {
+      writeFileSync(log, readFileSync(log, "utf8").replace('"value":"x"', '"value":"sk-conformance-1"'));
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: leak });
+    await expect(failure).rejects.toThrow("secret sk-conformance-1 appears in the run log (crash sweep, cut after record 9)");
+  }, SWEEP);
+
   test("fails the strong oracle when a recorded value changes before the resume", async () => {
     const [case_, ctx] = twoNodes();
     const rewrite = (log: string) => {

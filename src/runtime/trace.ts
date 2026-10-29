@@ -15,7 +15,7 @@
  * Typed values (source entries, terminal output, system values) are held as their canonical log
  * text, and each read decodes a fresh value.
  *
- * Knows about:   diagnostics, expr/expressions, expr/lineage, memory, nodes/base, nodes/binding,
+ * Knows about:   diagnostics, expr/lineage, memory, nodes/base, nodes/binding,
  *                nodes/contracts, runtime/contracts, runtime/log, typesys.
  * Never imports: runtime state, learning or backward, engine or run, compile, compose, or the CLI.
  */

@@ -38,7 +38,6 @@ import {
   type WaitEntry,
 } from "./log.ts";
 
-export { CLOSE_REASONS, type CloseReason } from "../events.ts";
 import { CLOSE_REASONS, type CloseReason } from "../events.ts";
 
 /** Where a registered call stands. */

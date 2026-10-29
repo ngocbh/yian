@@ -3,7 +3,14 @@
  * driver, which is the only caller of `runFlow` and `advance` on its log, and publishes the
  * child's status each time a pass of it settles differently.
  *
- * Knows about: the run boundary (`runFlow`, `runLogPath`), compose, the tool registry and the
+ * A child moves only when its driver runs a pass (`runFlow`, then `advance`): `advance` refuses a
+ * run whose engine still loops, so a second caller would race the first. A delivery reaches a
+ * live engine directly or is appended to the log offline; either way the deliverer then nudges
+ * the driver, which runs one more pass once the current one ends. Nothing else wakes a waiting
+ * run at its `wakeAt`, so between passes the driver sleeps until then.
+ *
+ * Knows about: the run boundary (`runFlow`, `advance`, `runLogPath`), the waits' `wakeAt` and the
+ * record-time reader, compose, the tool registry and the
  * `pending` marker, skills, the CLI's key preflight (`startup.ts`).
  */
 
@@ -13,10 +20,13 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import type { Env } from "../defaults.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { Scheduler } from "../platform.ts";
-import { type RunResult, runFlow, runLogPath } from "../run.ts";
+import { advance, type RunResult, runFlow, runLogPath } from "../run.ts";
+import { recordTimeMs } from "../runtime/log.ts";
+import { wakeAt } from "../runtime/waits.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { pending } from "../tools/context.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
+import { sleepUntil } from "./utils.ts";
 
 /** Where a child run stands, as the chat's assistant is told. */
 export interface ChildStatus {
@@ -63,6 +73,8 @@ export interface ChildRunsOptions {
   chatRunId: string;
   /** The skills a child's flow grants, as `yian run` reads them, or `null` for none. */
   skillsFor: (flow: ComposedFlow) => ReadonlyMap<string, Skill> | null;
+  /** @internal For tests: the `advance` the drivers call. */
+  advance?: typeof advance;
 }
 
 /** One child and its driver's state. */
@@ -74,6 +86,10 @@ interface Child {
   status: ChildStatus;
   /** The `next` calls waiting for a status after the given number. */
   readonly waiters: { after: number; resolve: (status: ChildStatus) => void }[];
+  /** Set by a nudge: the driver runs one more pass before it rests. */
+  dirty: boolean;
+  /** The driver's rest between passes, which a nudge ends; `null` while a pass runs. */
+  rest: AbortController | null;
 }
 
 /** The terminal statuses: no pass follows them. */
@@ -99,7 +115,15 @@ export class ChildRuns {
     const id = `r${this.#children.size + 1}`;
     const runId = `${this.#options.chatRunId}-${id}`;
     const log = runLogPath(this.#options.logDir, runId);
-    const child: Child = { id, flow, log, status: { run: id, status: "running", log, seq: ++this.#seq }, waiters: [] };
+    const child: Child = {
+      id,
+      flow,
+      log,
+      status: { run: id, status: "running", log, seq: ++this.#seq },
+      waiters: [],
+      dirty: false,
+      rest: null,
+    };
     this.#children.set(id, child);
     void this.#drive(child, runId, inputs);
     return { id, log };
@@ -129,6 +153,18 @@ export class ChildRuns {
     return promise;
   }
 
+  /**
+   * Have child `id`'s driver move it again: at once when it rests, else once its current pass
+   * ends. Call it after each delivery to the child's log.
+   *
+   * @throws {RangeError} When no child has the id.
+   */
+  nudge(id: string): void {
+    const child = this.#child(id);
+    child.dirty = true;
+    child.rest?.abort();
+  }
+
   /** Wait for every child's driver to stop. */
   async dispose(): Promise<void> {}
 
@@ -139,20 +175,65 @@ export class ChildRuns {
     return child;
   }
 
-  /** Drive `child` from its start to an end. */
+  /**
+   * Drive `child` from its start to an end: a pass, then, while it waits, one more pass after
+   * each nudge and at each `wakeAt`.
+   */
   async #drive(child: Child, runId: string, inputs: Readonly<Record<string, unknown>>): Promise<void> {
-    const { env, llmConfig, models = null, scheduler, chatRunId } = this.#options;
-    const result = await runFlow(child.flow, inputs, {
+    const { env, llmConfig, models = null, scheduler, chatRunId, advance: move = advance } = this.#options;
+    const common = { ...this.#shared(child), env, scheduler, models };
+    let result = await runFlow(child.flow, inputs, {
       log: child.log,
       runId,
       parent: { runId: chatRunId },
       llmConfig: Object.keys(llmConfig).length > 0 ? llmConfig : null,
-      ...this.#shared(child),
-      env,
-      scheduler,
-      models,
+      ...common,
     });
-    this.#publish(child, this.#settledStatus(child, result));
+    // The deadline the run was last moved at. A node is due once any of its calls passes its
+    // deadline, so that pass times it out and `wakeAt` comes later; were it to stay, resting until
+    // it would only spin.
+    let spent: string | null = null;
+    for (;;) {
+      this.#publish(child, this.#settledStatus(child, result));
+      if (result.status !== "waiting") return;
+      const next = wakeAt(result.waits);
+      const wake: string | null = next === spent ? null : next;
+      if (await this.#rest(child, wake)) spent = wake;
+      result = await move({
+        log: child.log,
+        // A flow built in code is the run's; one loaded from files is compiled again from the log.
+        flow: child.flow.source === null ? child.flow : null,
+        codeRoot: this.#options.root,
+        ...common,
+      });
+    }
+  }
+
+  /**
+   * Rest until a nudge or `wake` (a record time; `null` waits for a nudge only), at once when a
+   * nudge came during the pass. Returns whether `wake` ended it.
+   */
+  async #rest(child: Child, wake: string | null): Promise<boolean> {
+    if (child.dirty) {
+      child.dirty = false;
+      return false;
+    }
+    const rest = new AbortController();
+    child.rest = rest;
+    try {
+      if (wake === null) {
+        await new Promise<void>((resolve) => rest.signal.addEventListener("abort", () => resolve(), { once: true }));
+        return false;
+      }
+      return await sleepUntil(this.#options.scheduler, recordTimeMs(wake, "wakeAt"), rest.signal).then(
+        () => true,
+        // A nudge.
+        () => false,
+      );
+    } finally {
+      child.rest = null;
+      child.dirty = false;
+    }
   }
 
   /** The options every pass of `child` passes. */
@@ -169,7 +250,8 @@ export class ChildRuns {
       const failure = result.failure!;
       return { ...base, status: "failed", failure: { code: failure.code, message: failure.message, node: failure.nodeId } };
     }
-    return { ...base, status: result.status };
+    if (result.status === "cancelled") return { ...base, status: "cancelled" };
+    return { ...base, status: "waiting", waits: result.waits.map((wait) => ({ ...wait })), wake_at: wakeAt(result.waits) };
   }
 
   /** Make `status` `child`'s, numbered, unless it says what the last one did; wake its readers. */

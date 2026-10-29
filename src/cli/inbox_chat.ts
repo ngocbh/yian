@@ -21,7 +21,7 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { Diagnostic } from "../diagnostics.ts";
 import { NodeSucceeded, type RunEvent } from "../events.ts";
-import { realScheduler, type Scheduler, SLEEP_CHUNK_MS } from "../platform.ts";
+import { realScheduler, type Scheduler } from "../platform.ts";
 import {
   advance,
   cancel,
@@ -62,7 +62,7 @@ import {
 } from "./run.ts";
 import { cliLayer, freshLog, loadFlowFile, preflightKeys } from "./startup.ts";
 import { Terminal, TerminalStopped } from "./terminal.ts";
-import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, shellQuote, UsageError } from "./utils.ts";
+import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, shellQuote, sleepUntil, UsageError } from "./utils.ts";
 
 /**
  * The options `inboxChat` reads, for `yian chat` and for the chats `runOrChat` hands over; an
@@ -219,18 +219,6 @@ function inboxClosed(log: string, inbox: string): boolean {
     if ((entry.envelope.record as InboxClosedRecord).inbox === inbox) return true;
   }
   return false;
-}
-
-/**
- * Resolve once `scheduler`'s clock reaches `at` (epoch milliseconds), re-reading it after each
- * chunk, so a laptop that slept still wakes on time.
- *
- * @throws `signal.reason` once it aborts.
- */
-async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal): Promise<void> {
-  for (let left = at - scheduler.now(); left > 0; left = at - scheduler.now()) {
-    await scheduler.sleep(Math.min(left, SLEEP_CHUNK_MS), signal);
-  }
 }
 
 /**

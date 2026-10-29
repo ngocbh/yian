@@ -17,6 +17,7 @@
  *   without one it returns the ambient key, or throws for a required key that is missing, so
  *   non-interactive runs stay scriptable. It reads the environment through a `CommandEnv`, and
  *   records a prompted key there rather than in the process environment.
+ * - `sleepUntil` waits for a wall-clock time on a scheduler, as the chat waits for a run's `wakeAt`.
  */
 
 import { accessSync, constants, statSync } from "node:fs";
@@ -25,6 +26,7 @@ import { parseArgs } from "node:util";
 import { current, type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
+import { type Scheduler, SLEEP_CHUNK_MS } from "../platform.ts";
 import { logJson } from "../typesys/json.ts";
 import type { Terminal } from "./terminal.ts";
 
@@ -629,4 +631,16 @@ export function osReason(error: NodeJS.ErrnoException): string {
   const at = error.syscall === undefined ? -1 : reason.indexOf(`, ${error.syscall}`);
   if (at !== -1) reason = reason.slice(0, at);
   return reason.charAt(0).toUpperCase() + reason.slice(1);
+}
+
+/**
+ * Resolve once `scheduler`'s clock reaches `at` (epoch milliseconds), re-reading it after each
+ * chunk, so a laptop that slept still wakes on time.
+ *
+ * @throws `signal.reason` once it aborts.
+ */
+export async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal): Promise<void> {
+  for (let left = at - scheduler.now(); left > 0; left = at - scheduler.now()) {
+    await scheduler.sleep(Math.min(left, SLEEP_CHUNK_MS), signal);
+  }
 }

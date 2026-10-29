@@ -49,6 +49,11 @@ describe("parseUsesRef", () => {
     expect(parseUsesRef("a@b@c")).toEqual(new UsesRef(null, "a@b", "c"));
   });
 
+  test("an @ in a directory is part of the path", () => {
+    expect(parseUsesRef("./vendor/@acme/flow.yaml")).toEqual(new UsesRef(null, "./vendor/@acme/flow.yaml", null));
+    expect(parseUsesRef("./vendor/@acme/flow.yaml@v1")).toEqual(new UsesRef(null, "./vendor/@acme/flow.yaml", "v1"));
+  });
+
   test("extracts a drive letter as the scheme", () => {
     // Parsing only extracts the scheme (lowercased); the resolver rejects an unknown one, so
     // a Windows-drive-looking ref never touches the disk.
@@ -168,6 +173,14 @@ describe("resolving a uses: alias", () => {
       childResolver: fakeResolver(seen),
     });
     expect(seen).toEqual([["library/relevance", "v1"]]);
+  });
+
+  test("an alias whose path has an @ in a directory", async () => {
+    const seen: [string, string | null][] = [];
+    await loadConformanceFlow(withCall("c") + "uses:\n  c: ./vendor/@acme/child.yaml\n", {
+      childResolver: fakeResolver(seen),
+    });
+    expect(seen).toEqual([["./vendor/@acme/child.yaml", null]]);
   });
 
   test("an alias without a version", async () => {

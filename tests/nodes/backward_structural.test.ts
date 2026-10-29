@@ -215,7 +215,7 @@ test.each([
     const result = node.backward(context, feedback);
 
     expect(context.inputNames).toEqual(names);
-    expect(context.nodeData).toEqual({ input_output_paths: paths });
+    expect<unknown>(context.nodeData).toEqual({ input_output_paths: paths });
     expect(result.inputFeedback).toEqual(expected);
     validateBackwardResult(result, context);
   },

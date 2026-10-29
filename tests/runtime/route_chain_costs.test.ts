@@ -396,7 +396,7 @@ test("downstream context reads are unaliased", () => {
   const context = new BackwardContext({}, { downstreamContext: items });
 
   const read = context.downstreamContext;
-  expect(read).toEqual(items);
+  expect<unknown>(read).toEqual(items);
   expect(read[0]!.first).toBe(read[0]!.again!);
   expect(read[0]!.first).toBe(read[1]!.second!);
   expect(read[0]!.first).not.toBe(shared);

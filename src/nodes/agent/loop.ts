@@ -86,7 +86,7 @@ import {
   type ToolCallIdentity,
 } from "./live.ts";
 import { type CloserReason, closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
-import { type SteerRender, steerMessages, steerValues } from "./messages.ts";
+import { foldSteps, type SteerRender, steerMessages, steerValues } from "./messages.ts";
 import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
 import { pushVisible } from "./text.ts";
 
@@ -350,8 +350,9 @@ function steerReads(steps: AgentSteps, inbox: SteerInbox | undefined): (readonly
  * is left out); then the structured calls as `structuredMaterial` shows them. A failed attempt,
  * a reply a host interrupt cut, and a reply whose tool call arguments nest too deep (it failed
  * the node) show nothing. Steer steps add their messages where they were read; a steer step
- * without its values fails the check. Steps of another kind are skipped. A
- * request's digest leaves recalled memory out, as the writer does, so it doesn't break the check.
+ * without its values fails the check. The steps are grouped as `foldSteps` groups them; steps of
+ * another kind are skipped. A request's digest leaves recalled memory out, as the writer does, so
+ * it doesn't break the check.
  *
  * @param steps The invocation's steps across its starts.
  * @param options `messages` are the system message (memory sections included) and the prompt's
@@ -380,12 +381,62 @@ export async function stepsMaterial(
   const interactions: VisibleInteraction[] = [];
   const requests = new Map<number, RebuiltRequest>();
   let digestOk = true;
-  // The latest reply's runnable calls and the results recorded for them, by call id.
-  let calls: ToolCallPart[] = [];
-  let results = new Map<string, ValueRecord>();
-  const commit = () => {
+  const { exchanges, open } = foldSteps(steps);
+  const turns = [...exchanges, open];
+  for (const [turn, exchange] of turns.entries()) {
+    for (const { step } of exchange.steers) {
+      let values: readonly unknown[];
+      try {
+        values = steerValues(step);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        return { interactions, requests, digestOk: false };
+      }
+      messages.push(...steerMessages(values, { render: options.renderSteer ?? null }));
+    }
+    // The call's reply's runnable calls, which its results answer.
+    let calls: ToolCallPart[] = [];
+    for (const [at, { n, step }] of exchange.attempts.entries()) {
+      if (step["purpose"] !== "chat") {
+        const rest = [...exchange.attempts.slice(at), ...turns.slice(turn + 1).flatMap((later) => later.attempts)];
+        const structured = await options.structured();
+        if (structured === null) {
+          for (const later of rest) requests.set(later.n - 1, { request: null, digestOk: false });
+          return { interactions, requests, digestOk: false };
+        }
+        const material = structuredMaterial(
+          structured.model,
+          messages,
+          structured.typ,
+          rest.map((later) => later.step),
+          options.baseSystemPrompt,
+        );
+        material.requests.forEach((rebuilt, index) => requests.set(rest[index]!.n - 1, rebuilt));
+        interactions.push(...material.interactions);
+        return { interactions, requests, digestOk: digestOk && material.digestOk };
+      }
+      const request = options.tools === null ? null : new Request({ messages, tools: options.tools });
+      const digest = request === null ? null : requestSha256(digestRequest(request, options.baseSystemPrompt));
+      const matched = digest !== null && step["request_sha256"] === digest;
+      requests.set(n - 1, { request, digestOk: matched });
+      if (!matched) digestOk = false;
+      if (Object.hasOwn(step, "error")) continue;
+      const reply = recordedResponse(step).message;
+      messages.push(reply);
+      if (step["finish"] === "interrupted") continue;
+      try {
+        rejectInvalidReply(reply);
+      } catch (error) {
+        // The run failed the node at this reply before acting on it.
+        if (error instanceof TypeCheckError) return { interactions, requests, digestOk };
+        throw error;
+      }
+      calls = reply.parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null);
+      if (calls.length === 0) pushVisible(interactions, () => new ModelTextInteraction(reply.text()));
+      for (const call of calls) pushVisible(interactions, () => new ToolCallInteraction(call.name, call.arguments));
+    }
     for (const call of calls) {
-      const result = results.get(call.id);
+      const result = exchange.results.get(call.id)?.step;
       if (result === undefined) continue;
       const content = result["output"] as string;
       if (result["closed"] !== "skipped") {
@@ -395,68 +446,7 @@ export async function stepsMaterial(
       const part = new ToolResultPart({ callId: call.id, name: call.name, content, isError });
       messages.push(new Message({ role: "tool", parts: [part] }));
     }
-    calls = [];
-    results = new Map();
-  };
-  for (const [index, step] of steps.entries()) {
-    if (step["kind"] === "tool_result") {
-      results.set(step["call_id"] as string, step);
-      continue;
-    }
-    if (step["kind"] === "steer") {
-      commit();
-      let values: readonly unknown[];
-      try {
-        values = steerValues(step);
-      } catch (error) {
-        if (!(error instanceof RangeError)) throw error;
-        digestOk = false;
-        break;
-      }
-      messages.push(...steerMessages(values, { render: options.renderSteer ?? null }));
-      continue;
-    }
-    if (step["kind"] !== "model_call") continue;
-    commit();
-    if (step["purpose"] !== "chat") {
-      const rest = [...steps.entries()].slice(index).filter(([, later]) => later["kind"] === "model_call");
-      const structured = await options.structured();
-      if (structured === null) {
-        for (const [at] of rest) requests.set(at, { request: null, digestOk: false });
-        return { interactions, requests, digestOk: false };
-      }
-      const material = structuredMaterial(
-        structured.model,
-        messages,
-        structured.typ,
-        rest.map(([, later]) => later),
-        options.baseSystemPrompt,
-      );
-      material.requests.forEach((rebuilt, at) => requests.set(rest[at]![0], rebuilt));
-      interactions.push(...material.interactions);
-      return { interactions, requests, digestOk: digestOk && material.digestOk };
-    }
-    const request = options.tools === null ? null : new Request({ messages, tools: options.tools });
-    const digest = request === null ? null : requestSha256(digestRequest(request, options.baseSystemPrompt));
-    const matched = digest !== null && step["request_sha256"] === digest;
-    requests.set(index, { request, digestOk: matched });
-    if (!matched) digestOk = false;
-    if (Object.hasOwn(step, "error")) continue;
-    const reply = recordedResponse(step).message;
-    messages.push(reply);
-    if (step["finish"] === "interrupted") continue;
-    try {
-      rejectInvalidReply(reply);
-    } catch (error) {
-      // The run failed the node at this reply before acting on it.
-      if (error instanceof TypeCheckError) break;
-      throw error;
-    }
-    calls = reply.parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null);
-    if (calls.length === 0) pushVisible(interactions, () => new ModelTextInteraction(reply.text()));
-    for (const call of calls) pushVisible(interactions, () => new ToolCallInteraction(call.name, call.arguments));
   }
-  commit();
   return { interactions, requests, digestOk };
 }
 

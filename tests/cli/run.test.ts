@@ -39,7 +39,7 @@ import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { readRunIndex } from "../../src/run.ts";
-import { JsonlRunLog, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
+import { JsonlRunLog, NodeStartedRecord, NodeStepRecord, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 import { compiled, VERSION } from "../../src/platform.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
@@ -1507,6 +1507,9 @@ describe("status", () => {
     held.append(
       new RunStartedRecord({ flowFingerprint: "a".repeat(64), startWiringOverride: {}, effectiveLlmByStaticPath: {}, numWorkers: 0 }),
     );
+    held.append(new NodeStartedRecord("agent"));
+    const usage = { input_tokens: 9n, output_tokens: 2n, cache_read_tokens: 3n, cache_creation_tokens: 5n, reasoning_tokens: 1n };
+    held.append(new NodeStepRecord("agent", 1, { kind: "model_call", usage }));
     try {
       const text = testIo({ HOME: join(tmp, "home") });
       expect(await main(["status"], text.io)).toBe(0);
@@ -1540,11 +1543,22 @@ describe("status", () => {
         input_tokens: 0,
         output_tokens: 0,
         cache_read_tokens: 0,
+        cache_creation_tokens: 0,
         reasoning_tokens: 0,
         ready: false,
         wake_at: null,
       });
-      expect(document.runs[2]).toMatchObject({ run_id: "held", flow: null, status: "running", result: null });
+      expect(document.runs[2]).toMatchObject({
+        run_id: "held",
+        flow: null,
+        status: "running",
+        result: null,
+        input_tokens: 9,
+        output_tokens: 2,
+        cache_read_tokens: 3,
+        cache_creation_tokens: 5,
+        reasoning_tokens: 1,
+      });
     } finally {
       held.close();
     }

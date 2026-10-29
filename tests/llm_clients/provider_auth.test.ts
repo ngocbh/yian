@@ -18,12 +18,14 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { ENTRIES } from "../../src/defaults.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
+import { OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
 import {
   ApiKeyCredentials,
   AuthError,
   type Credentials,
   HttpResponse,
   isAuthFailure,
+  isUsableLogin,
   OAuthCredentials,
   ProviderSelection,
 } from "../../src/llm_clients/auth/common.ts";
@@ -385,6 +387,16 @@ function wrapped401(depth: number): Error {
   for (let n = 0; n < depth; n += 1) error = new Error(`wrapper ${n}`, { cause: error });
   return error;
 }
+
+describe("isUsableLogin", () => {
+  test("a login without a key is usable exactly for the providers the key list calls keyless", () => {
+    for (const provider of Object.keys(PROVIDER_API_KEY_ENV)) {
+      const keyless = PROVIDER_API_KEY_ENV[provider] === null || OPTIONAL_API_KEY_PROVIDERS.has(provider);
+      const selection = new ProviderSelection({ provider, method: "none", model: "m", credentialId: "c".repeat(32) });
+      expect([provider, isUsableLogin(selection)]).toEqual([provider, keyless]);
+    }
+  });
+});
 
 describe("isAuthFailure", () => {
   const rows: [string, unknown, boolean][] = [
@@ -2125,6 +2137,39 @@ describe("OpenAIAuth", () => {
     expect(error.message).toMatch(/account/);
   });
 
+  const refusedRefreshes: [string, HttpResponse, string][] = [
+    [
+      "an OAuth error string",
+      new HttpResponse(400, { error: "invalid_grant", error_description: "token old-refresh was revoked" }),
+      "OpenAI authentication request failed (HTTP 400, invalid_grant); sign in again",
+    ],
+    [
+      "an error record's code",
+      new HttpResponse(401, { error: { code: "refresh_token_expired", message: "old-refresh expired" } }),
+      "OpenAI authentication request failed (HTTP 401, refresh_token_expired); sign in again",
+    ],
+    [
+      "a known code that leaves the grant usable",
+      new HttpResponse(400, { error: "invalid_scope" }),
+      "OpenAI authentication request failed (HTTP 400, invalid_scope)",
+    ],
+    [
+      "a code off the known list",
+      new HttpResponse(400, { error: "old-refresh" }),
+      "OpenAI authentication request failed (HTTP 400)",
+    ],
+    ["no body", new HttpResponse(502, null), "OpenAI authentication request failed (HTTP 502)"],
+  ];
+  for (const [label, response, message] of refusedRefreshes) {
+    test(`a refused refresh names the token endpoint's error code: ${label}`, async () => {
+      const error = await rejected(new OpenAIAuth({ request: new FakeHttp(response).request }).refresh(OLD()));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(message);
+      expect((error as AuthError).status).toBe(response.status);
+      expect(error.cause).toBeUndefined();
+    });
+  }
+
   const invalidExpiries: [string, unknown][] = [
     ["10n ** 1000n", 10n ** 1000n],
     ["NaN", NaN],
@@ -2290,6 +2335,22 @@ describe("OpenAIAuth", () => {
     expect(asyncError.message).toBe("OpenAI authentication request failed");
     expect(asyncError.cause).toBeUndefined();
   });
+
+  const transportKinds: [ProviderError, string][] = [
+    [new ProviderError("timeout", "HTTP request failed (timeout): sensitive"), "timed out"],
+    [new ProviderError("connection", "HTTP request failed (connection): sensitive"), "could not connect"],
+    [new ProviderError("protocol", "HTTP response is larger than 10 bytes: sensitive"), "reply too large"],
+  ];
+  for (const [transport, words] of transportKinds) {
+    test(`a transport failure keeps its kind but not its text: ${transport.kind}`, async () => {
+      const auth = new OpenAIAuth({ request: async () => Promise.reject(transport) });
+      const error = await rejected(auth.apiModels(new ApiKeyCredentials("key")));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(`OpenAI authentication request failed (${words})`);
+      expect(error.cause).toBeUndefined();
+      expect(error.stack).not.toContain("sensitive");
+    });
+  }
 
   test("the subscription catalog uses account routing and visibility order", async () => {
     const http = new FakeHttp(
@@ -2704,7 +2765,7 @@ describe("OpenAIAuth", () => {
             expect(error).toBe(reason);
           } else {
             expect(error).toBeInstanceOf(AuthError);
-            expect(error.message).toBe("OpenAI authentication request failed");
+            expect(error.message).toBe("OpenAI authentication request failed (timed out)");
           }
           expect(performance.now() - start).toBeLessThan(700);
           const peer = await Promise.race([
@@ -2914,6 +2975,34 @@ describe("browser callback listener", () => {
     expect(replies).toHaveLength(8);
     expect(credentials.accountId).toBe("account-test");
     expect(http.calls).toHaveLength(1);
+    await expectCallbackPortFree();
+  });
+
+  test("a callback with the wrong or no state gets 400 and the login waits for the real one", async () => {
+    const http = new FakeHttp(new HttpResponse(200, tokens()));
+    const mismatch = callbackAnswer("400 Bad Request", "Callback state did not match this login.");
+    const replies: [string, string][] = [];
+    const auth = new OpenAIAuth({ request: http.request, scheduler: realScheduler });
+    const credentials = await auth.browserLogin(
+      async (url) => {
+        const state = new URL(url).searchParams.get("state");
+        const cases: [string, string][] = [
+          ["GET /auth/callback?code=old&state=stale HTTP/1.1\r\n\r\n", mismatch],
+          ["GET /auth/callback?code=old HTTP/1.1\r\n\r\n", mismatch],
+          [`GET /auth/callback?code=old&state=${state}&state=${state} HTTP/1.1\r\n\r\n`, mismatch],
+          [callbackRequest(url), callbackAnswer("200 OK", "Authorization received. Return to Yian.")],
+        ];
+        for (const [data, expected] of cases) {
+          replies.push([(await callbackExchange(data)).toString("latin1"), expected]);
+        }
+      },
+      { timeoutMs: 3000 },
+    );
+    for (const [reply, expected] of replies) expect(reply).toBe(expected);
+    expect(replies).toHaveLength(4);
+    expect(credentials.accountId).toBe("account-test");
+    expect(http.calls).toHaveLength(1);
+    expect(http.calls[0]![2].form!.code).toBe("code");
     await expectCallbackPortFree();
   });
 

@@ -5,6 +5,7 @@ import net from "node:net";
 
 import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
+import { ProviderError } from "../../llm/errors.ts";
 import { realScheduler, type Scheduler, USER_AGENT } from "../../platform.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { openaiIdHeaders, validateHeaders } from "../connection_settings.ts";
@@ -31,14 +32,36 @@ export interface AuthRequestOptions {
 /** Send one authentication request and return its decoded result, as `http.ts`'s `request` does. */
 export type AuthRequest = (method: string, url: string, options: AuthRequestOptions) => Promise<HttpResponse>;
 
-/** A started callback listener: the first callback URL it received, and its close. */
+/** A started callback listener: the first callback URL carrying this login's state, and its close. */
 interface CallbackListener {
   readonly callbackUrl: Promise<string>;
   close(): Promise<void>;
 }
 
-/** Return the status, body and, for a valid callback, the callback URL answering `received`. */
-function callbackAnswer(received: Buffer, limit: number): { status: string; body: string; target?: string } {
+/** Return the query parameters of a callback URL that starts with `REDIRECT_URI`, ignoring any fragment. */
+function callbackParams(url: string): URLSearchParams {
+  const rest = url.slice(REDIRECT_URI.length).split("#", 1)[0]!;
+  // URLSearchParams drops one leading "?", which parse_qs keeps as part of the first key.
+  return new URLSearchParams("&" + rest.slice(1));
+}
+
+/** Whether `params` hold exactly one `state`, equal to `state`. */
+function stateMatches(params: URLSearchParams, state: string): boolean {
+  const states = params.getAll("state");
+  return states.length === 1 && sameText(states[0]!, state);
+}
+
+/**
+ * Return the status, body and, for a valid callback, the callback URL answering `received`.
+ *
+ * A callback is valid only when it carries this login's `state`: a stale tab or another local
+ * process gets a 400, and the login keeps waiting.
+ */
+function callbackAnswer(
+  received: Buffer,
+  limit: number,
+  state: string,
+): { status: string; body: string; target?: string } {
   const bad = { status: "400 Bad Request", body: "Invalid callback request." };
   const lineEnd = received.indexOf("\r\n");
   const line = lineEnd === -1 ? received : received.subarray(0, lineEnd);
@@ -50,18 +73,21 @@ function callbackAnswer(received: Buffer, limit: number): { status: string; body
   if (method !== "GET" || (version !== "HTTP/1.0" && version !== "HTTP/1.1")) return bad;
   if (!received.includes("\r\n\r\n") || received.length > limit) return bad;
   if (!/^\/auth\/callback(?:$|[?#])/.test(target)) return { status: "404 Not Found", body: "Unknown callback path." };
-  const body = "Authorization received. Return to Yian.";
-  return { status: "200 OK", body, target: "http://localhost:1455" + target };
+  const url = "http://localhost:1455" + target;
+  if (!stateMatches(callbackParams(url), state)) {
+    return { status: "400 Bad Request", body: "Callback state did not match this login." };
+  }
+  return { status: "200 OK", body: "Authorization received. Return to Yian.", target: url };
 }
 
 /**
  * Start the local login callback listener on 127.0.0.1:1455.
  *
  * Each connection is answered once, after its request headers, the size cap, or the peer's end;
- * `callbackUrl` resolves with the first valid callback and never rejects. Rejects with
- * `AuthError` if the port can't be bound.
+ * `callbackUrl` resolves with the first valid callback carrying `state` and never rejects.
+ * Rejects with `AuthError` if the port can't be bound.
  */
-async function listen(): Promise<CallbackListener> {
+async function listen(state: string): Promise<CallbackListener> {
   let found!: (url: string) => void;
   // Created now, so a callback arriving while the browser still opens isn't lost.
   const callbackUrl = new Promise<string>((resolve) => (found = resolve));
@@ -77,7 +103,7 @@ async function listen(): Promise<CallbackListener> {
       if (answered) return;
       answered = true;
       waiting.delete(socket);
-      const { status, body, target } = callbackAnswer(received, limit);
+      const { status, body, target } = callbackAnswer(received, limit, state);
       if (target !== undefined) found(target);
       const head =
         `HTTP/1.1 ${status}\r\nContent-Type: text/plain; charset=utf-8\r\n` +
@@ -146,10 +172,51 @@ function sameText(a: string, b: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-/** Return a 2xx response's body record, or throw `AuthError`. */
+/** What a transport failure of each kind reads as; its own text can hold request values. */
+const TRANSPORT_FAILURES: Readonly<Partial<Record<string, string>>> = {
+  timeout: "timed out",
+  connection: "could not connect",
+  protocol: "reply too large",
+};
+
+/**
+ * The token endpoint's error codes a failure message may name, each mapped to whether it means
+ * the grant is unusable and the user must sign in again: OAuth's (RFC 6749) and OpenAI's
+ * refresh-token codes. A code off this list isn't shown, since a reply's text can echo
+ * request values.
+ */
+const ERROR_CODES: ReadonlyMap<string, boolean> = new Map([
+  ["invalid_request", false],
+  ["invalid_client", false],
+  ["invalid_grant", true],
+  ["unauthorized_client", false],
+  ["unsupported_grant_type", false],
+  ["invalid_scope", false],
+  ["refresh_token_expired", true],
+  ["refresh_token_reused", true],
+  ["refresh_token_invalidated", true],
+]);
+
+/** Return a failed reply's known error code: the OAuth `error` string or an `error` record's `code`. */
+function errorCode(data: unknown): string | null {
+  if (!isRecord(data)) return null;
+  let code = get(data, "error");
+  if (isRecord(code)) code = get(code, "code");
+  return typeof code === "string" && ERROR_CODES.has(code) ? code : null;
+}
+
+/**
+ * Return a 2xx response's body record, or throw `AuthError`.
+ *
+ * A failure's message names the status and a known error code (`ERROR_CODES`), and says to sign
+ * in again when the code means the grant is unusable.
+ */
 function responseData(response: HttpResponse): Record<string, unknown> {
   if (!(response.status >= 200 && response.status < 300)) {
-    throw new AuthError(`OpenAI authentication request failed (HTTP ${response.status})`, {
+    const code = errorCode(response.data);
+    const detail = code === null ? "" : `, ${code}`;
+    const hint = code !== null && ERROR_CODES.get(code) ? "; sign in again" : "";
+    throw new AuthError(`OpenAI authentication request failed (HTTP ${response.status}${detail})${hint}`, {
       status: response.status,
     });
   }
@@ -256,10 +323,11 @@ export class OpenAIAuth {
     let response: unknown;
     try {
       response = await untilStopped(this.#request(method, url, sent), signal);
-    } catch {
+    } catch (error) {
       if (signal.aborted) throw signal.reason;
-      // The transport's error can hold request values, so none of it is kept.
-      throw new AuthError("OpenAI authentication request failed");
+      // The transport's error can hold request values, so only its kind is kept.
+      const failure = error instanceof ProviderError ? TRANSPORT_FAILURES[error.kind] : undefined;
+      throw new AuthError(`OpenAI authentication request failed${failure === undefined ? "" : ` (${failure})`}`);
     }
     signal.throwIfAborted();
     if (
@@ -377,7 +445,7 @@ export class OpenAIAuth {
       });
       const url = ISSUER + "/oauth/authorize?" + query.toString();
       // Started before the browser opens, so a fast callback isn't lost.
-      const listener = awaitCallback === undefined ? await listen() : undefined;
+      const listener = awaitCallback === undefined ? await listen(state) : undefined;
       try {
         signal.throwIfAborted();
         await untilStopped(openUrl(url), signal);
@@ -393,13 +461,8 @@ export class OpenAIAuth {
         ) {
           throw new AuthError("OpenAI returned an invalid callback location");
         }
-        const rest = result.slice(REDIRECT_URI.length).split("#", 1)[0]!;
-        // URLSearchParams drops one leading "?", which parse_qs keeps as part of the first key.
-        const params = new URLSearchParams("&" + rest.slice(1));
-        const states = params.getAll("state");
-        if (states.length !== 1 || !sameText(states[0]!, state)) {
-          throw new AuthError("OpenAI login state did not match");
-        }
+        const params = callbackParams(result);
+        if (!stateMatches(params, state)) throw new AuthError("OpenAI login state did not match");
         if (params.has("error")) throw new AuthError("OpenAI browser authorization was denied");
         const codes = params.getAll("code");
         if (codes.length !== 1 || !codes[0]) {

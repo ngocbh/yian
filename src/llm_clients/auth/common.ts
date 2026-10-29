@@ -3,6 +3,7 @@
 import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
 import { isRecord } from "../../typesys/index.ts";
+import { OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../api_key_env.ts";
 import { validateBaseUrl } from "../config.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "../connection_settings.ts";
 
@@ -310,16 +311,18 @@ export class ProviderSelection {
   }
 }
 
-// Providers whose saved login may hold no credential: Ollama sends none, and vLLM runs keyless
-// unless its server was started with a key.
-const KEYLESS_LOGINS: ReadonlySet<string> = new Set(["ollama", "vllm"]);
+/** Providers whose saved login may hold no credential: those that take no key or may run without one. */
+const KEYLESS_LOGINS: ReadonlySet<string> = new Set([
+  ...Object.keys(PROVIDER_API_KEY_ENV).filter((provider) => PROVIDER_API_KEY_ENV[provider] === null),
+  ...OPTIONAL_API_KEY_PROVIDERS,
+]);
 
 /**
  * Whether a supported provider's login is a kind it can use.
  *
- * It isn't if a provider other than Ollama or vLLM has no credential; a provider other than
- * OpenAI has a subscription; a provider other than Azure has an endpoint; Azure has no valid
- * endpoint; or Ollama has a key.
+ * It isn't if a provider that needs a key (per `api_key_env.ts`) has no credential; a provider
+ * other than OpenAI has a subscription; a provider other than Azure has an endpoint; Azure has no
+ * valid endpoint; or Ollama has a key.
  */
 export function isUsableLogin(selection: ProviderSelection): boolean {
   const { provider, method, endpoint } = selection;

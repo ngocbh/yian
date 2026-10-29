@@ -992,6 +992,10 @@ export class Terminal {
    * all, when it holds pasted tokens) when it differs, and Enter on a row of its list answers
    * `{open}` with the row's key and the draft. An answer and a draft are text, each token
    * expanded; the editor's `draft()` keeps the tokens.
+   *
+   * With `yields`, the prompt gives way to a prompt that wants an answer (any but a `readLine`)
+   * queued behind it while it is up: it ends as `{yielded}` with the draft, erased as an abort
+   * erases it, and a `readLine` called next waits behind that prompt.
    */
   async readLine<E extends boolean = false>(
     label: string,
@@ -1002,7 +1006,54 @@ export class Terminal {
       frame?: boolean;
       hint?: string;
       editor?: LineEditor;
+      yields?: boolean;
     } = {},
+  ): Promise<
+    | { value: string }
+    | { eof: true }
+    | { interrupt: true }
+    | { aborted: true; draft: string }
+    | { yielded: true; draft: string }
+    | { open: string; draft: string }
+    | (E extends true ? Escaped : never)
+  > {
+    const { initial = "" } = options;
+    if (options.yields !== true) return this.#readLine(label, options);
+    // Only prompts queued while this one is up are behind it; one counted before may be ahead.
+    let up = false;
+    const yielding = new AbortController();
+    const onWaiting = () => {
+      if (up && this.#waiting > 0) yielding.abort(new Error("a prompt waits behind the line"));
+    };
+    this.#onWaiting.add(onWaiting);
+    const signal =
+      options.signal === undefined ? yielding.signal : AbortSignal.any([options.signal, yielding.signal]);
+    try {
+      const read = await this.#readLine(label, { ...options, signal, initial }, () => {
+        up = true;
+        onWaiting();
+      });
+      if ("aborted" in read && yielding.signal.aborted && options.signal?.aborted !== true) {
+        return { yielded: true, draft: read.draft };
+      }
+      return read;
+    } finally {
+      this.#onWaiting.delete(onWaiting);
+    }
+  }
+
+  /** `readLine` without `yields`; `onUp` is called once the prompt holds the terminal. */
+  async #readLine<E extends boolean = false>(
+    label: string,
+    options: {
+      signal?: AbortSignal;
+      initial?: string | Draft;
+      escape?: E;
+      frame?: boolean;
+      hint?: string;
+      editor?: LineEditor;
+    },
+    onUp?: () => void,
   ): Promise<
     | { value: string }
     | { eof: true }
@@ -1037,7 +1088,14 @@ export class Terminal {
     if (signal?.aborted) return { aborted: true, draft: textOf(initial) };
     let ended: { value: string | typeof ESCAPED | Opened } | { stop: StopReason };
     try {
-      ended = await this.#runTurn(signal, (run) => run(widget), { keepOpen: true, wants: false });
+      ended = await this.#runTurn(
+        signal,
+        (run) => {
+          onUp?.();
+          return run(widget);
+        },
+        { keepOpen: true, wants: false },
+      );
     } catch (error) {
       if (signal?.aborted && error === signal.reason) return { aborted: true, draft: draft() };
       throw error;

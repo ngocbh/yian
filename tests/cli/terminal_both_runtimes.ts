@@ -456,6 +456,49 @@ async function anAbortedReadLineReturnsItsDraftForTheNextPrompt(): Promise<void>
   assert.deepEqual(await early, { aborted: true, draft: "kept" });
 }
 
+async function aYieldingReadLineGivesWayToAPromptQueuedBehindIt(): Promise<void> {
+  const { input, terminal, view } = setup({ tty: true });
+  const line = terminal.readLine("You:", { yields: true });
+  input.write("half");
+  await tick();
+  const answer = terminal.approve(approval());
+  assert.deepEqual(await line, { yielded: true, draft: "half" });
+  await tick();
+  assert.equal(view().rows.at(-3), "? Write a.yaml (Use arrow keys)");
+  // The next prompt waits behind the approval, which was queued first.
+  const next = terminal.readLine("You:", { initial: "half", yields: true });
+  input.write(ENTER);
+  assert.equal(await answer, "Approve");
+  await tick();
+  input.write(" done" + ENTER);
+  assert.deepEqual(await next, { value: "half done" });
+  // A line prompt behind it doesn't take it down, and neither does one without `yields`.
+  const kept = terminal.readLine("You:", { yields: true });
+  const behind = terminal.readLine("You:");
+  await tick();
+  input.write("one" + ENTER);
+  assert.deepEqual(await kept, { value: "one" });
+  const plain = terminal.readLine("You:");
+  const asked = terminal.askText("Name:");
+  input.write("two" + ENTER);
+  assert.deepEqual(await behind, { value: "two" });
+  input.write("three" + ENTER);
+  assert.deepEqual(await plain, { value: "three" });
+  input.write("ada" + ENTER);
+  assert.equal(await asked, "ada");
+  // A prompt queued behind it before it is up takes it down as it comes up; one ahead doesn't.
+  const ahead = terminal.askText("Name:");
+  await tick();
+  const queued = terminal.readLine("You:", { initial: "kept", yields: true });
+  const later = terminal.approve(approval());
+  await tick();
+  input.write("bo" + ENTER);
+  assert.equal(await ahead, "bo");
+  assert.deepEqual(await queued, { yielded: true, draft: "kept" });
+  input.write(ENTER);
+  assert.equal(await later, "Approve");
+}
+
 async function onActiveSaysWhetherATurnLeftRows(): Promise<void> {
   const calls: [boolean, boolean][] = [];
   const { input, terminal } = setup({ onActive: (on, printed) => calls.push([on, printed]) });
@@ -3088,6 +3131,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an aborted readLine keeps later keys": anAbortedReadLineKeepsLaterKeys,
   "a non-TTY readLine reads one line per call": aNonTtyReadLineReadsOneLinePerCall,
   "an aborted readLine returns its draft for the next prompt": anAbortedReadLineReturnsItsDraftForTheNextPrompt,
+  "a yielding readLine gives way to a prompt queued behind it": aYieldingReadLineGivesWayToAPromptQueuedBehindIt,
   "onActive says whether a turn left rows on the screen": onActiveSaysWhetherATurnLeftRows,
   "Escape at readLine with escape returns the draft": escapeAtReadLineReturnsTheDraft,
   "Escape at readLine without escape is ignored": escapeAtReadLineWithoutTheOptionIsIgnored,

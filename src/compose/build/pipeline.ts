@@ -172,6 +172,42 @@ function locateSourceAccess<T>(diagnostics: LoadDiagnostics, fn: () => T): T {
   }
 }
 
+// Each `nodes:` cursor's node entries, normalized. A cursor never changes, so the passes of one
+// assembly share one normalization per node.
+const normalizedNodes = new WeakMap<SourceCursor, Map<string, SourceCursor>>();
+
+/**
+ * Return the value at `path` inside one authored node's normalized entry (`input:` read as
+ * `inputs`), or the entry itself for an empty `path`.
+ *
+ * A text step selects a mapping key; an index step selects a sequence item the caller knows is
+ * there. Don't call it for a value entry, which has no node body.
+ *
+ * @param nodesCursor Retained view of the flow's node mapping.
+ * @param nodeId The node whose entry is read.
+ * @param path The steps inside the entry.
+ * @returns The cursor, or `null` when the node or a key along `path` is absent.
+ * @throws SourceAccessError when the retained source can't be traversed.
+ */
+function authoredField(nodesCursor: SourceCursor, nodeId: string, ...path: (string | number)[]): SourceCursor | null {
+  if (!nodesCursor.has(nodeId)) return null;
+  let entries = normalizedNodes.get(nodesCursor);
+  if (entries === undefined) {
+    entries = new Map();
+    normalizedNodes.set(nodesCursor, entries);
+  }
+  let cursor = entries.get(nodeId);
+  if (cursor === undefined) {
+    cursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+    entries.set(nodeId, cursor);
+  }
+  for (const step of path) {
+    if (typeof step === "string" && !cursor.has(step)) return null;
+    cursor = cursor.child(step);
+  }
+  return cursor;
+}
+
 /** One active descriptor build and the dependency edge that requested it; frozen. */
 class BuildRequest {
   /** The node being built. */
@@ -611,7 +647,7 @@ export function stampNodeWiringOrigins(
       if (isValueEntry(descriptor)) {
         inputCursors = new Map([[nodeId, nodesCursor.child(nodeId)]]);
       } else {
-        const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+        const nodeCursor = authoredField(nodesCursor, nodeId)!;
 
         for (const key of [...node.reservedWiringKeys()].sort(compareCodeUnits)) {
           if (!wiring.has(key) || !nodeCursor.has(key)) continue;
@@ -622,8 +658,8 @@ export function stampNodeWiringOrigins(
           if (bindingOrigin !== null) wiring.set(key, withOrigin(wiring.get(key), bindingOrigin));
         }
 
-        if (Object.keys(descriptor.inputs).length === 0 || !nodeCursor.has("inputs")) return;
-        const inputsCursor = nodeCursor.child("inputs");
+        const inputsCursor = authoredField(nodesCursor, nodeId, "inputs");
+        if (Object.keys(descriptor.inputs).length === 0 || inputsCursor === null) return;
         inputCursors = new Map();
         for (const name of Object.keys(descriptor.inputs)) {
           if (inputsCursor.has(name)) inputCursors.set(name, inputsCursor.child(name));
@@ -772,11 +808,7 @@ export function splitTypedInputs(
     const inputTypes = new Map(descriptor.inputTypes);
     const changed = locateSourceAccess(diagnostics, () => {
       let changed = false;
-      let inputsCursor: SourceCursor | null = null;
-      if (nodesCursor.has(nodeId)) {
-        const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-        if (nodeCursor.has("inputs")) inputsCursor = nodeCursor.child("inputs");
-      }
+      const inputsCursor = authoredField(nodesCursor, nodeId, "inputs");
       for (const [name, value] of Object.entries(descriptor.inputs)) {
         const cursor = inputsCursor !== null && inputsCursor.has(name) ? inputsCursor.child(name) : null;
         const typed = splitTypedValue(value, cursor, {
@@ -832,7 +864,6 @@ function splitTypedLlmConfig(
   const split = new Map(descriptors);
   locateSourceAccess(diagnostics, () => {
     for (const [nodeId, descriptor] of descriptors) {
-      if (!nodesCursor.has(nodeId)) continue;
       let path: readonly string[];
       let written: unknown;
       let prefix: string;
@@ -851,11 +882,7 @@ function splitTypedLlmConfig(
       } else {
         continue;
       }
-      let cursor: SourceCursor | null = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-      for (const key of path) {
-        cursor = cursor.has(key) ? cursor.child(key) : null;
-        if (cursor === null) break;
-      }
+      const cursor = authoredField(nodesCursor, nodeId, ...path);
       if (cursor === null || !cursor.holds(written as Value)) continue;
       const [layer, ranges] = readLlmConfig(cursor, registry, {
         prefix,
@@ -975,14 +1002,8 @@ function bindingStyle(
       if (field !== "inputs" || key !== nodeId) return null;
       return styleAlong(nodesCursor.child(nodeId), path);
     }
-    let cursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-    if (!cursor.has(field)) return null;
-    cursor = cursor.child(field);
-    if (key !== field) {
-      if (!cursor.has(key)) return null;
-      cursor = cursor.child(key);
-    }
-    return styleAlong(cursor, path);
+    const cursor = authoredField(nodesCursor, nodeId, ...(key === field ? [field] : [field, key]));
+    return cursor === null ? null : styleAlong(cursor, path);
   });
 }
 
@@ -1041,11 +1062,7 @@ function caseOutputCursor(
   options: { diagnostics: LoadDiagnostics },
 ): SourceCursor | null {
   const { diagnostics } = options;
-  return locateSourceAccess(diagnostics, () => {
-    if (!nodesCursor.has(nodeId)) return null;
-    const cursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-    return cursor.has("outputs") ? cursor.child("outputs") : null;
-  });
+  return locateSourceAccess(diagnostics, () => authoredField(nodesCursor, nodeId, "outputs"));
 }
 
 /**
@@ -1267,22 +1284,17 @@ function stampInlineCallOrigins(
   /** Register and return the origin of one CASE `then:` or `else:` branch. */
   const branchOrigin = (address: readonly (string | number | null)[]): OriginRef | null => {
     const caseId = address[1] as string;
-    if (!nodesCursor.has(caseId)) return null;
-    let cursor = normalizeNodeSignatureCursor(nodesCursor.child(caseId));
+    let cursor: SourceCursor | null;
     let path: SourceSitePath;
     if (address[0] === "else") {
-      if (!cursor.has("else")) return null;
+      cursor = authoredField(nodesCursor, caseId, "else");
       path = [...owner, "node", caseId, "field", "else"];
-      cursor = cursor.child("else");
     } else {
       const index = address[2] as number;
-      if (!cursor.has("cases")) return null;
-      const item = cursor.child("cases").child(index);
-      if (!item.has("then")) return null;
+      cursor = authoredField(nodesCursor, caseId, "cases", index, "then");
       path = [...owner, "node", caseId, "case", index, "then"];
-      cursor = item.child("then");
     }
-    return catalogBuilder.register(path, cursor);
+    return cursor === null ? null : catalogBuilder.register(path, cursor);
   };
 
   /** Return the origin of the authored binding at one `callSite` address. */
@@ -1690,10 +1702,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     index: number,
   ): readonly [OriginRef | null, SourceRange | null] | null => {
     const cursor = locateSourceAccess(diagnostics, () => {
-      if (valueEntries.has(nodeId) || !authoredNodesCursor.has(nodeId)) return null;
-      const nodeCursor = normalizeNodeSignatureCursor(authoredNodesCursor.child(nodeId));
-      if (!nodeCursor.has("asserts")) return null;
-      return nodeCursor.child("asserts").child(index);
+      if (valueEntries.has(nodeId)) return null;
+      return authoredField(authoredNodesCursor, nodeId, "asserts", index);
     });
     if (cursor === null) return null;
     return [
@@ -1712,11 +1722,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
    */
   const readAuthoredNodeOutput = (nodeId: string, outputSpec: unknown): ValueContract | null => {
     return locateSourceAccess(diagnostics, () => {
-      if (valueEntries.has(nodeId) || !nodesCursor.has(nodeId)) return null;
-      const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-      if (!nodeCursor.has("outputs")) return null;
-      const outputCursor = nodeCursor.child("outputs");
-      if (outputCursor.range === null) return null;
+      if (valueEntries.has(nodeId)) return null;
+      const outputCursor = authoredField(nodesCursor, nodeId, "outputs");
+      if (outputCursor === null || outputCursor.range === null) return null;
       // `withValue` refuses a non-YAML value itself.
       return readValueContract(outputCursor.withValue(outputSpec as Value), registry, {
         sitePath: [...owner, "node", nodeId, "output", "contract"],
@@ -1729,11 +1737,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   /** Compile one physical node's variables through its normalized cursor. */
   const readAuthoredNodeVariables = (nodeId: string, declarations: unknown): Parameter[] | null => {
     return locateSourceAccess(diagnostics, () => {
-      if (valueEntries.has(nodeId) || !nodesCursor.has(nodeId)) return null;
-      const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-      if (!nodeCursor.has("variables")) return null;
-      const variablesCursor = nodeCursor.child("variables");
-      if (variablesCursor.range === null) return null;
+      if (valueEntries.has(nodeId)) return null;
+      const variablesCursor = authoredField(nodesCursor, nodeId, "variables");
+      if (variablesCursor === null || variablesCursor.range === null) return null;
       return readSourceParameters(variablesCursor.withValue(declarations as Value), registry, {
         sitePath: [...owner, "node", nodeId],
         catalogBuilder,
@@ -1799,7 +1805,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       }
       locatedDescriptors.set(
         nodeId,
-        located.withSourceOrigins(normalizeNodeSignatureCursor(authoredCursor), { sitePath: nodePath, catalogBuilder }),
+        located.withSourceOrigins(authoredField(nodesCursor, nodeId)!, { sitePath: nodePath, catalogBuilder }),
       );
     }
     return locatedDescriptors;
@@ -1844,10 +1850,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   locateSourceAccess(diagnostics, () => {
     for (const [nodeId, descriptor] of descriptors) {
       if (descriptor.kind === "case") continue;
-      if (!valueEntries.has(nodeId) && nodesCursor.has(nodeId)) {
-        const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-        if (nodeCursor.has("outputs")) rejectTaggedOutput(nodeCursor.child("outputs"), diagnostics);
-      }
+      if (valueEntries.has(nodeId)) continue;
+      const outputCursor = authoredField(nodesCursor, nodeId, "outputs");
+      if (outputCursor !== null) rejectTaggedOutput(outputCursor, diagnostics);
     }
   });
 

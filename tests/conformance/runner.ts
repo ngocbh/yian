@@ -596,9 +596,9 @@ function checkStop(stop: Value | undefined): void {
 /**
  * Throw unless `value`, a `host.sends` list, holds only `{inbox, event}` items, optionally with
  * `after: {node, <point>}` (sent live when the run reaches the point) or, in a `resume` case,
- * `down: true` (sent after the crash, before the resume), `{close}` items, `{interrupt}` items
- * (`interrupt(run, inbox)`), optionally with `after`, and `{complete, output}` or
- * `{complete, error}` items.
+ * `down: true` (sent after the crash, before the resume), `{close}` items, `{withdraw}` items
+ * (`withdraw(run, inbox)`) and `{interrupt}` items (`interrupt(run, inbox)`), each optionally
+ * with `after`, and `{complete, output}` or `{complete, error}` items.
  */
 function checkSends(value: Value | undefined, kind: Kind): void {
   if (!Array.isArray(value)) throw new Error("`host.sends` must be a list");
@@ -2421,10 +2421,9 @@ async function cutFirstRun(
  * `events` and `chunks` collecting what it publishes.
  */
 function runHooks(
-  case_: Case,
   log: string,
   env: Env,
-  { tools, random, models, inbox }: Host,
+  { tools, random, models }: Host,
   start: number,
   events: RunEvent[] = [],
   chunks: StreamChunk[] = [],
@@ -2592,7 +2591,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       : null;
   // One clock for every run of the case. `env` scopes the case's YIAN_* values to each run, so
   // nothing is installed around it.
-  const hooks = runHooks(case_, log, env, scripted, Date.now(), events, chunks);
+  const hooks = runHooks(log, env, scripted, Date.now(), events, chunks);
   // The `before` runs share the clock, but not the log, the run points or the observers.
   const { random, scheduler } = hooks;
   const shared: RunFlowOptions = { env, tools, random, models, scheduler };
@@ -3126,7 +3125,7 @@ export async function crashSweep(
   const args = runOptions<RunFlowOptions>(get(case_, "run", {}) as Case, RUN_OPTIONS);
   const uncutLog = join(ctx.dir, "sweep.jsonl");
   const uncutHost = host(case_, uncutLog, env, flow);
-  const uncutHooks = runHooks(case_, uncutLog, env, uncutHost, start);
+  const uncutHooks = runHooks(uncutLog, env, uncutHost, start);
   const uncut = await runFlow(flow, inputs, { ...args, ...uncutHooks });
   const made = new Set([...uncutHost.calls.values()].flatMap((list) => list.map(({ call_id }) => call_id as string)));
   checkSecrets(case_, { "the uncut run log (crash sweep)": readFileSync(uncutLog, "utf8") });
@@ -3146,7 +3145,7 @@ export async function crashSweep(
     const at = ` (crash sweep, cut after record ${k})`;
     const log = join(ctx.dir, `sweep-${k}.jsonl`);
     const scripted = host(case_, log, env, flow);
-    const hooks = runHooks(case_, log, env, scripted, start);
+    const hooks = runHooks(log, env, scripted, start);
     // The uncut run's id, so the runs agree on it when the case gives none.
     const cut = () => runFlow(flow, inputs, { ...args, ...hooks, runId: uncut.runId });
     await cutAt(k, cut, at);

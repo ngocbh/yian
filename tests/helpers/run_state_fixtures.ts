@@ -1907,9 +1907,6 @@ export function progressOf({ status, inFlight, crashedAttempts }: RunInspection)
 
 // ---- Runs of one-AGENT flows over a scripted model, and `yian run` over a fake chat endpoint ----
 
-// Cloned snapshots and nested test values are edited freely.
-export type Mutable = any;
-
 /** The model config `PLAIN_FLOW` names. */
 export const PLAIN_CONFIG = { provider: "openai", model: "test-model" };
 

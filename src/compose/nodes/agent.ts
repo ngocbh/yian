@@ -457,6 +457,20 @@ export function validateLlmConfig(
   return [rest, inherit];
 }
 
+/**
+ * Return why an `env:` mapping's `max_tool_iterations` isn't one an AGENT accepts, or `null` when
+ * it is valid or absent.
+ *
+ * Example: `{max_tool_iterations: 0}` gives ``"`env.max_tool_iterations` must be a positive int or
+ * -1 (no cap), got 0"``.
+ */
+export function maxToolIterationsError(env: Readonly<Record<string, unknown>>): string | null {
+  if (!Object.hasOwn(env, "max_tool_iterations")) return null;
+  const value = env["max_tool_iterations"];
+  if (isMaxToolIterations(value)) return null;
+  return `\`env.max_tool_iterations\` must be a positive int or -1 (no cap), got ${valueRepr(value)}`;
+}
+
 /** The roles a prompt list message may take; `system` is `system_prompt:`. */
 const PROMPT_ROLES: ReadonlySet<string> = new Set(["user", "assistant"]);
 
@@ -836,12 +850,11 @@ export class AgentDescriptor extends NodeDescriptor {
       llmFieldRanges,
     );
     const steerInboxRange = this.fieldRanges.get(siteKey("field", "steer_inbox")) ?? this.range;
-    if (Object.hasOwn(this.env, "max_tool_iterations") && !isMaxToolIterations(this.env["max_tool_iterations"])) {
-      throw ctx.diagnostics.error(
-        `node ${id}: \`env.max_tool_iterations\` must be a positive int or -1 (no cap), ` +
-          `got ${valueRepr(this.env["max_tool_iterations"])}`,
-        { range: this.fieldRanges.get(siteKey("field", "env")) ?? this.range },
-      );
+    const maxToolIterations = maxToolIterationsError(this.env);
+    if (maxToolIterations !== null) {
+      throw ctx.diagnostics.error(`node ${id}: ${maxToolIterations}`, {
+        range: this.fieldRanges.get(siteKey("field", "env")) ?? this.range,
+      });
     }
     const variables = this.readVariables(ctx);
     const memories = this.memories.map(

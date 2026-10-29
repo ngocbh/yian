@@ -56,7 +56,6 @@ import {
   type SourceRange,
 } from "../diagnostics.ts";
 import { DeclSite, MemorySetupError } from "../memory/contracts.ts";
-import { isMaxToolIterations } from "../nodes/agent/node.ts";
 import type { Node } from "../nodes/base.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { typeName, readTypedefs, type TypeRegistry } from "../typesys/types.ts";
@@ -79,7 +78,7 @@ import { boundaryFieldRanges, pathText } from "./helpers/source.ts";
 import { rejectUnreadTags } from "./helpers/tags.ts";
 import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
-import { readLlmConfig, validateLlmConfig } from "./nodes/agent.ts";
+import { maxToolIterationsError, readLlmConfig, validateLlmConfig } from "./nodes/agent.ts";
 import { notTextError, valueTypeError } from "./nodes/base.ts";
 import { KINDS, REMOVED_KINDS } from "./nodes/index.ts";
 import { checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
@@ -332,6 +331,28 @@ export class LoadCtx {
   constructor(codeRoot: string | null = null) {
     this.codeRoot = codeRoot;
   }
+
+  /**
+   * Return the flow loaded for `key`, loading it with `load` the first time.
+   *
+   * @param key The file's real path (or recorded key).
+   * @param load Loads the file's flow.
+   * @throws LoadError when `key` is already being loaded: a reference cycle across files.
+   */
+  async loadOnce(key: string, load: () => Promise<ComposedFlow>): Promise<ComposedFlow> {
+    const cached = this.flows.get(key);
+    if (cached !== undefined) return cached;
+    if (this.loading.has(key)) throw UNLOCATED_DIAGNOSTICS.error(`flow-reference cycle across files: ${key}`);
+    this.loading.add(key);
+    let child: ComposedFlow;
+    try {
+      child = await load();
+    } finally {
+      this.loading.delete(key);
+    }
+    this.flows.set(key, child);
+    return child;
+  }
 }
 
 /** Return a fresh `LoadCtx` whose `codeRoot` is `codeRoot` made absolute and real, or `null`. */
@@ -436,23 +457,36 @@ function validateExternalChild(alias: string, child: unknown): OriginRef[] {
   }
 
   for (const origin of origins) {
-    let frame: unknown;
-    try {
-      frame = resolve.call(resolver, origin);
-    } catch (error) {
-      throw UNLOCATED_DIAGNOSTICS.error(
-        `uses: alias ${reprText(alias)} child origin resolver failed for ${reprText(origin.key)}: ${errorText(error)}`,
-        { cause: error },
-      );
-    }
-    if (!(frame instanceof DiagnosticFrame)) {
-      const detail = frame === null ? "no frame" : jsTypeName(frame);
-      throw UNLOCATED_DIAGNOSTICS.error(
-        `uses: alias ${reprText(alias)} child origin resolver returned ${detail} for ${reprText(origin.key)}`,
-      );
-    }
+    checkFrame(
+      () => resolve.call(resolver, origin),
+      `uses: alias ${reprText(alias)} child origin resolver`,
+      reprText(origin.key),
+      UNLOCATED_DIAGNOSTICS,
+    );
   }
   return origins;
+}
+
+/**
+ * Throw unless `resolve` returns a `DiagnosticFrame`.
+ *
+ * @param resolve Resolves one origin through a resolver.
+ * @param subject The resolver, as messages name it.
+ * @param target The origin, as messages name it.
+ * @param diagnostics Factory for the load error.
+ * @throws LoadError when `resolve` throws or returns anything but a frame.
+ */
+function checkFrame(resolve: () => unknown, subject: string, target: string, diagnostics: LoadDiagnostics): void {
+  let frame: unknown;
+  try {
+    frame = resolve();
+  } catch (error) {
+    throw diagnostics.error(`${subject} failed for ${target}: ${errorText(error)}`, { cause: error });
+  }
+  if (!(frame instanceof DiagnosticFrame)) {
+    const detail = frame === null ? "no frame" : jsTypeName(frame);
+    throw diagnostics.error(`${subject} returned ${detail} for ${target}`);
+  }
 }
 
 /**
@@ -528,18 +562,7 @@ export function finalizeComposedFlow(
       throw diagnostics.error(`reachable origin ${reprText(origin.key)} has multiple resolver routes`);
     }
     const authority = authorities[0]!;
-    let frame: unknown;
-    try {
-      frame = authority.resolve(origin);
-    } catch (error) {
-      throw diagnostics.error(`resolver route failed for origin ${reprText(origin.key)}: ${errorText(error)}`, {
-        cause: error,
-      });
-    }
-    if (!(frame instanceof DiagnosticFrame)) {
-      const detail = frame === null ? "no frame" : jsTypeName(frame);
-      throw diagnostics.error(`resolver route returned ${detail} for origin ${reprText(origin.key)}`);
-    }
+    checkFrame(() => authority.resolve(origin), "resolver route", `origin ${reprText(origin.key)}`, diagnostics);
     entries.push([origin, authority, origin]);
   }
   return replaceFlow(staged, { originResolver: ResolverTable.fromEntries(entries) });
@@ -578,24 +601,13 @@ export function makeFileResolver(
         throw error;
       }
       from?.refs.set(usesRef(path, version), real);
-      const cached = ctx.flows.get(real);
-      if (cached !== undefined) return cached;
-      if (ctx.loading.has(real)) {
-        throw UNLOCATED_DIAGNOSTICS.error(`flow-reference cycle across files: ${real}`);
-      }
-      ctx.loading.add(real);
-      let child: ComposedFlow;
-      try {
+      return ctx.loadOnce(real, async () => {
         const text = UTF8.decode(await fsp.readFile(real)).replace(/\r\n?/g, "\n");
         const file: ReadFile = { text, refs: new Map() };
         ctx.read.set(real, file);
         const own = dirname(real);
-        child = await loadFlowFile(parseSourceDocument(text, basename(real)), null, [own], ctx, own, file);
-      } finally {
-        ctx.loading.delete(real);
-      }
-      ctx.flows.set(real, child);
-      return child;
+        return loadFlowFile(parseSourceDocument(text, basename(real)), null, [own], ctx, own, file);
+      });
     }
     throw UNLOCATED_DIAGNOSTICS.error(
       `flow ${reprText(path)} not found on search path ${writeAsText([...searchPaths])}`,
@@ -719,18 +731,7 @@ function sourceResolver(source: FlowSource, from: string, ctx: LoadCtx): ChildRe
       throw UNLOCATED_DIAGNOSTICS.error(`flow ${reprText(ref)} is not among the recorded flow files`);
     }
     const key = refs[ref]!;
-    const cached = ctx.flows.get(key);
-    if (cached !== undefined) return cached;
-    if (ctx.loading.has(key)) throw UNLOCATED_DIAGNOSTICS.error(`flow-reference cycle across files: ${key}`);
-    ctx.loading.add(key);
-    let child: ComposedFlow;
-    try {
-      child = await loadSourceFile(source, key, ctx);
-    } finally {
-      ctx.loading.delete(key);
-    }
-    ctx.flows.set(key, child);
-    return child;
+    return ctx.loadOnce(key, () => loadSourceFile(source, key, ctx));
   };
 }
 
@@ -1033,12 +1034,11 @@ function validateEnv(
   diagnostics: LoadDiagnostics,
 ): void {
   checkEnvValues(env, prefix, envCursor, diagnostics);
-  if (Object.hasOwn(env, "max_tool_iterations") && !isMaxToolIterations(env["max_tool_iterations"])) {
-    throw diagnostics.error(
-      `${prefix}\`env.max_tool_iterations\` must be a positive int or -1 (no cap), ` +
-        `got ${valueRepr(env["max_tool_iterations"])}`,
-      { range: envCursor?.rangeOf("max_tool_iterations") ?? null },
-    );
+  const maxToolIterations = maxToolIterationsError(env);
+  if (maxToolIterations !== null) {
+    throw diagnostics.error(prefix + maxToolIterations, {
+      range: envCursor?.rangeOf("max_tool_iterations") ?? null,
+    });
   }
 }
 

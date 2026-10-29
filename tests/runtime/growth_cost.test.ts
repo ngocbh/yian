@@ -1,14 +1,25 @@
 /**
- * Growth cost scales with the fragment and its prunes, not the run's graph so far. Each test makes
- * one unmeasured warm-up run first, so the first timed size doesn't pay the JIT's warm-up.
+ * Growth cost scales with the fragment and its prunes, not the run's graph so far, and a wide
+ * map's records cost about the same each at any width. Each timed test makes one unmeasured
+ * warm-up run first, so the first timed size doesn't pay the JIT's warm-up.
  */
 
-import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { afterAll, expect, spyOn, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { RunEvent } from "../../src/events.ts";
-import { runFlow } from "../../src/run.ts";
+import { replayRunLog, runFlow } from "../../src/run.ts";
+import { MemoryRunLog, readRunLog, type RecordEnvelope } from "../../src/runtime/log.ts";
+import type { RunState } from "../../src/runtime/state.ts";
+import * as json from "../../src/typesys/json.ts";
 import { loadConformanceFlow } from "../helpers/declarations.ts";
+
+const dir = mkdtempSync(join(tmpdir(), "yian-growth-cost-"));
+afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 const MAP_OVER_CALL = `
 id: map-over-call
@@ -107,6 +118,28 @@ nodes:
 output: \${each.output}
 `;
 
+const MAP_OF_TEXT = `
+id: map-of-text
+name: map-of-text
+input:
+  values: !list(str)
+nodes:
+  each:
+    kind: map
+    over: \${input.values}
+    input:
+      value: \${item}
+    nodes:
+      work:
+        kind: code
+        input: {v: "\${input.value}"}
+        output: int
+        code: |
+          return inputs.v.length
+    output: \${work.output}
+output: \${each.output}
+`;
+
 /** `[0n, ..., items - 1n]`. */
 function range(items: number): bigint[] {
   return Array.from({ length: items }, (_, i) => BigInt(i));
@@ -174,3 +207,102 @@ test("a loop iteration costs about the same after a large map", async () => {
 
   expect(afterLargeMap).toBeLessThan(2 * afterEmptyMap);
 });
+
+/** The records of a serial run of `loaded` over `values`. */
+async function runRecords(
+  loaded: ComposedFlow,
+  values: readonly string[],
+  options: { learnable?: boolean } = {},
+): Promise<readonly RecordEnvelope[]> {
+  const path = join(mkdtempSync(join(dir, "run-")), "log.jsonl");
+  const result = await runFlow(loaded, { values }, { numWorkers: 0, log: path, ...options });
+  expect(result.status).toBe("succeeded");
+  return readRunLog(path);
+}
+
+/** The per-node inventories of `state` that grow with a map's width. */
+function inventories(state: RunState): (Map<unknown, unknown> | Set<unknown>)[] {
+  return [
+    state.acceptedStarts,
+    state.inFlight,
+    state.nodeStarts,
+    state.nodeSteps,
+    state.nodeStepSeqs,
+    state.pendingCommits,
+    state.pendingMessages,
+    state.crashedAttempts,
+    state.waits.waiting,
+    ...(state.trace === null ? [] : [state.trace._parked]),
+  ];
+}
+
+/** Count the entries a replay of `records` iterates over the run state's per-node inventories. */
+function inventoryReads(loaded: ComposedFlow, records: readonly RecordEnvelope[]): number {
+  let reads = 0;
+  const counted = new WeakSet<object>();
+  /** Make each iterator over `container` count the entries it yields; the container stays a `Map` or `Set`. */
+  const count = (container: Map<unknown, unknown> | Set<unknown>) => {
+    if (counted.has(container)) return;
+    counted.add(container);
+    for (const name of ["keys", "values", "entries", Symbol.iterator] as const) {
+      const iterate = (container[name] as () => Iterator<unknown>).bind(container);
+      Object.defineProperty(container, name, {
+        value: () => {
+          const iterator = iterate();
+          return {
+            next: () => {
+              reads += 1;
+              return iterator.next();
+            },
+            [Symbol.iterator]() {
+              return this;
+            },
+          };
+        },
+      });
+    }
+  };
+  replayRunLog(loaded, MemoryRunLog.fromRecords(records), {
+    onPrepared: (_prepared, state) => inventories(state).forEach(count),
+  });
+  return reads;
+}
+
+test("a wide map's records don't each read every unsettled node's inventory", async () => {
+  const loaded = await loadConformanceFlow(MAP_OF_TEXT);
+  const values = (items: number) => Array.from({ length: items }, (_, i) => `v${i}`);
+
+  const small = inventoryReads(loaded, await runRecords(loaded, values(50)));
+  const large = inventoryReads(loaded, await runRecords(loaded, values(200)));
+
+  // A map's items stay unsettled across its records, so a check that scanned them on each record
+  // read about 16x as many entries for 4x the items; reads that each record makes for itself, 4x.
+  expect(large / small).toBeLessThan(6);
+});
+
+// Under Bun only: the Node runner can't spy on a module's export.
+test.if(process.versions.bun !== undefined)(
+  "a learnable wide map's replay parses about the same text per item at any width",
+  async () => {
+    const loaded = await loadConformanceFlow(MAP_OF_TEXT);
+    const values = (items: number) => Array.from({ length: items }, (_, i) => "x".repeat(200) + i);
+    /** The characters a replay of a learnable run over `items` items parses. */
+    const parsed = async (items: number): Promise<number> => {
+      const records = await runRecords(loaded, values(items), { learnable: true });
+      const parse = spyOn(json, "parseJson");
+      try {
+        replayRunLog(loaded, MemoryRunLog.fromRecords(records));
+        return parse.mock.calls.reduce((total, [text]) => total + text.length, 0);
+      } finally {
+        parse.mockRestore();
+      }
+    };
+
+    const small = await parsed(50);
+    const large = await parsed(200);
+
+    // Each item's route checks a path into the whole list; parsing the list for each check read
+    // about 16x the text for 4x the items.
+    expect(large / small).toBeLessThan(6);
+  },
+);

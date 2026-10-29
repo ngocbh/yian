@@ -21,7 +21,15 @@
  */
 
 import { compareCodeUnits, Failure, reprText } from "../diagnostics.ts";
-import { type FeedbackValue, type RootRead, SourceRef, sameSource, sourceKey, ValueRoute } from "../expr/lineage.ts";
+import {
+  type FeedbackValue,
+  type RootRead,
+  type RoutePath,
+  SourceRef,
+  sameSource,
+  sourceKey,
+  ValueRoute,
+} from "../expr/lineage.ts";
 import {
   type MemoryOccurrenceSegment,
   MemoryScope,
@@ -178,6 +186,11 @@ export class SourceEntry {
   readonly valueJson: string;
   /** The type the value is read through to restore its files, or `null`. */
   readonly files: Type | null;
+  /**
+   * The value's JSON, parsed on the first `requirePath` and kept: each item of a wide MAP checks
+   * a path into the same list, which parsing per check made quadratic.
+   */
+  #json: { value: JsonValue } | null = null;
 
   /** Hold the entry's fields as given. */
   constructor(source: SourceRef | null, outcomeSeq: number, valueJson: string, files: Type | null = null) {
@@ -197,6 +210,34 @@ export class SourceEntry {
   get storedValue(): Value {
     return decodeTyped(this.valueJson).toObject();
   }
+
+  /**
+   * Require `path` inside the value.
+   *
+   * @throws RangeError when the path is absent.
+   */
+  requirePath(path: RoutePath): void {
+    this.#json ??= parseJson(this.valueJson, "codec") as { value: JsonValue };
+    atPath(this.#json.value, path);
+  }
+}
+
+/**
+ * The JSON at `path` inside `value`.
+ *
+ * @throws RangeError when the path is absent.
+ */
+function atPath(value: JsonValue, path: RoutePath): JsonValue {
+  for (const part of path) {
+    if (typeof part === "string" && isRecord(value) && Object.hasOwn(value, part)) {
+      value = value[part] as JsonValue;
+    } else if (typeof part === "number" && isList(value) && part >= 0 && part < value.length) {
+      value = value[part] as JsonValue;
+    } else {
+      throw new RangeError("source path is absent from its accepted value");
+    }
+  }
+  return value;
 }
 
 /** Whether two entries have the same source (by key), outcome sequence, value text and files type. */
@@ -289,8 +330,8 @@ export class TraceOccurrence {
   readonly outcomeSeq: number;
   /** The outcome envelope's canonical log line. */
   readonly recordJson: string;
-  /** The envelope decoded from `recordJson`, a frozen copy independent of the caller's. */
-  readonly envelope: RecordEnvelope;
+  /** The envelope decoded from `recordJson`, once read. */
+  #envelope: RecordEnvelope | null = null;
   /** The effective input route as accepted; `inputRoute` reads it with its text rebuilt. */
   readonly #inputRoute: ValueRoute;
   /** The receiver's memory keys and occurrence path, if it has memory. */
@@ -317,8 +358,9 @@ export class TraceOccurrence {
   #nodeData: JsonObject | null = null;
 
   /**
-   * Encode `envelope` (which validates it, as an append does) and keep its decoded copy.
+   * Keep the outcome's log line; its envelope is decoded on the first read.
    *
+   * @param recordJson The outcome envelope's canonical log line, as the log holds it.
    * @param inputRoute The effective input route: the captured route joined with pending seed
    *   routes.
    * @param options.memoryScope The receiver's memory scope; defaults to `null`.
@@ -333,15 +375,15 @@ export class TraceOccurrence {
    *   which `capture` and `inputRoute` then read; defaults to `false` (they give it as held).
    * @param options.nodeDataRebuilder Rebuilds the node data from the node and its bound inputs;
    *   `null` (the default) leaves `nodeData` unreadable.
-   * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope`, `memoryScope` isn't
-   *   `null` or exactly a `MemoryScope`, or there is no capture.
+   * @throws TypeError when `memoryScope` isn't `null` or exactly a `MemoryScope`, or there is no
+   *   capture.
    * @throws RangeError when `fillsText` is given without `rebind`.
    */
   constructor(
     source: SourceRef,
     nodeId: string,
     outcomeSeq: number,
-    envelope: RecordEnvelope,
+    recordJson: string,
     inputRoute: ValueRoute,
     options: {
       memoryScope?: MemoryScope | null;
@@ -370,9 +412,8 @@ export class TraceOccurrence {
     this.source = source;
     this.nodeId = nodeId;
     this.outcomeSeq = outcomeSeq;
-    this.recordJson = encodeRecord(envelope);
-    this.envelope = decodeRecord(this.recordJson);
-    const held = capture ?? (this.envelope.record as OutcomeRecord).forwardCapture;
+    this.recordJson = recordJson;
+    const held = capture ?? this.record.forwardCapture;
     if (!isExactly(held, ForwardCapture)) throw new TypeError("a trace occurrence requires its forward capture");
     this.#capture = held;
     this.#rebind = rebind;
@@ -385,6 +426,11 @@ export class TraceOccurrence {
     this.steps = Object.freeze([...steps]);
     this.messagesSource = messagesSource;
     Object.freeze(this);
+  }
+
+  /** The envelope decoded from `recordJson` on the first read, a frozen copy independent of the caller's. */
+  get envelope(): RecordEnvelope {
+    return (this.#envelope ??= decodeRecord(this.recordJson));
   }
 
   /** The accepted outcome record, read from the decoded envelope. */
@@ -667,9 +713,17 @@ export function selectSeedRoute(
   let route = inputRoute ?? capture.route;
   const path = connection.seedPath;
   if (path.length === 2) {
-    const binding = capture.items.find(([index]) => index === path[0]);
-    if (binding === undefined) return null;
-    route = binding[1].route;
+    // Items are in increasing index order, and a MAP's growth selects one per item.
+    const items = capture.items;
+    let low = 0;
+    let high = items.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (items[middle]![0] < (path[0] as number)) low = middle + 1;
+      else high = middle;
+    }
+    if (items[low]?.[0] !== path[0]) return null;
+    route = items[low]![1].route;
   }
   const position = route.names.indexOf(path[path.length - 1] as string);
   return position < 0 ? null : route.children[position]!;
@@ -792,17 +846,7 @@ export class RetainedTrace {
     const key = sourceKey(new SourceRef(source.runId, source.executionSeq));
     const entry = this._sources.get(key);
     if (entry === undefined) throw new RangeError(`no accepted source for ${key}`);
-    let value = (parseJson(entry.valueJson, "codec") as { value: JsonValue }).value;
-    for (const part of source.path) {
-      if (typeof part === "string" && isRecord(value) && Object.hasOwn(value, part)) {
-        value = value[part] as JsonValue;
-      } else if (typeof part === "number" && isList(value) && part >= 0 && part < value.length) {
-        value = value[part] as JsonValue;
-      } else {
-        throw new RangeError("source path is absent from its accepted value");
-      }
-    }
-    return value;
+    return atPath((parseJson(entry.valueJson, "codec") as { value: JsonValue }).value, source.path);
   }
 
   /**
@@ -1245,6 +1289,8 @@ export interface PrepareTraceOptions {
   seed?: JsonValue | null;
   /** The executing node's recorded steps across its starts, which a learnable occurrence keeps. */
   steps?: readonly ValueRecord[];
+  /** The envelope's canonical log line, when the caller has encoded it; defaults to encoding it. */
+  envelopeJson?: string | null;
   /** A derived record's forward capture, rebuilt from its sources, which the record leaves out. */
   capture?: ForwardCapture | null;
   /** Binds the executing node again, which rebuilds the occurrence's bound inputs. */
@@ -1300,6 +1346,7 @@ export function prepareTrace(
     initialCommit = false,
     seed = null,
     steps = [],
+    envelopeJson = null,
     capture: rebuilt = null,
     rebinder = null,
     nodeDataRebuilder: rebuildNodeData = null,
@@ -1406,7 +1453,8 @@ export function prepareTrace(
     const filled = withInterpolationText(capture, rebound.capture);
     return { inputs, capture: filled, inputRoute: filled === capture ? inputRoute : joinSeedRoutes(filled, candidates) };
   };
-  const occurrence = new TraceOccurrence(source, node.id, envelope.seq, envelope, inputRoute, {
+  const recordJson = envelopeJson ?? encodeRecord(envelope);
+  const occurrence = new TraceOccurrence(source, node.id, envelope.seq, recordJson, inputRoute, {
     memoryScope: node.memoryScope,
     hiddenInputs: node.modelHiddenInputs(),
     seed,
@@ -1543,7 +1591,7 @@ function validateSources(trace: RetainedTrace, route: ValueRoute, outcomeSeq: nu
       throw new RangeError("route source must name an earlier accepted producer");
     }
     try {
-      trace.lookupSource(source);
+      entry.requirePath(source.path);
     } catch (error) {
       throw new RangeError("route source path is absent from its accepted value", { cause: error });
     }

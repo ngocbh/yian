@@ -420,6 +420,19 @@ export class RunState {
    */
   pendingMessages = new Map<string, PendingMessages>();
   /**
+   * @internal The number of unadmitted `pendingCommits` that each node must stay in flight for:
+   * a commit's spawner, or the node itself. `setPendingCommit` and `deletePendingCommit` keep it.
+   */
+  unadmittedCommits = new Map<string, number>();
+  /**
+   * @internal The nodes whose entries in `nodeState` or a per-node inventory (`inFlight`,
+   * `acceptedStarts`, `nodeStarts`, `nodeSteps`, `nodeStepSeqs`, `pendingCommits`,
+   * `pendingMessages`, `crashedAttempts`) changed since a transition last checked them. Each
+   * write adds its node, and the next transition checks those nodes before its append
+   * (`requireTouchedInventories`).
+   */
+  readonly touched = new Set<string>();
+  /**
    * The seq of the accepted `PoolCommitRecord` that last wrote each pool name: a store key, or
    * `system.<name>` for a system value. Set when a commit is applied, deleted with its pool entry,
    * so it holds exactly the pool's names and never grows past them.
@@ -2163,7 +2176,7 @@ function planAnchors(
     startNode: state.flow.nodes.get(startId)!,
     endId,
     endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope, traceOptions),
+    traceDelta: prepareRecordTrace(state, envelope, { ...traceOptions, envelopeJson }),
   };
 }
 
@@ -2831,7 +2844,8 @@ function prepareRecordTrace(
     ...options,
     rebinder: state.trace === null || node === null ? null : nodeRebinder(state, node),
     nodeDataRebuilder: state.trace === null || node === null ? null : nodeDataRebuilder(state, node),
-    steps: nodeId === null ? [] : stepsWithSteerValues(state, nodeId),
+    // Only learning reads the steps, so a run that doesn't learn doesn't copy them.
+    steps: state.trace === null || nodeId === null ? [] : stepsWithSteerValues(state, nodeId),
     rootStartId: started ? state.flow.startId : null,
     rootEndId: started ? state.flow.endId : null,
     rootInputNames: started && record.learnable ? state.flow.nodes.get(state.flow.startId)!.backwardInputNames() : null,
@@ -2949,8 +2963,7 @@ function requireOutcomeTraceTerminal(state: RunState, prepared: PreparedTransiti
     typeof occurrence.nodeId !== "string" ||
     occurrence.nodeId !== nodeId ||
     !Number.isSafeInteger(occurrence.outcomeSeq) ||
-    occurrence.outcomeSeq !== prepared.expectedSequence ||
-    occurrence.recordJson !== plan.envelopeJson
+    occurrence.outcomeSeq !== prepared.expectedSequence
   ) {
     throw new RangeError("physical trace occurrence disagrees with the accepted outcome");
   }
@@ -3140,6 +3153,7 @@ export function replayRecords(
   if (cursor.nextSequence !== canonical.length) {
     throw new RangeError("replay did not consume the complete historical prefix");
   }
+  requireInventories(state);
   return state;
 }
 
@@ -3188,6 +3202,7 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   } else if (plan.commitKind === "messages") {
     const pending: PendingMessages = { seq: prepared.expectedSequence, key: plan.key, valueJson: plan.messagesJson! };
     state.pendingMessages.set(plan.nodeId, Object.freeze(pending));
+    state.touched.add(plan.nodeId);
   } else if (!initial) {
     const expansion = plan.commitKind === "expansion";
     const pending: PendingCommit = {
@@ -3200,7 +3215,7 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
       admitted: false,
     };
     // An expansion commit waits under the child START it fills, whose success accepts it.
-    state.pendingCommits.set(expansion ? plan.key : plan.nodeId, Object.freeze(pending));
+    setPendingCommit(state, expansion ? plan.key : plan.nodeId, Object.freeze(pending));
   } else if (input === null) {
     state.pool.system.set(plan.key.slice(SYSTEM_PREFIX.length), value!);
     state.producers.set(plan.key, prepared.expectedSequence);
@@ -3266,12 +3281,14 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
   switch (delta.kind) {
     case "started":
       state.ready.shift();
+      state.touched.add(delta.nodeId);
       state.inFlight.add(delta.nodeId);
       state.acceptedStarts.set(delta.nodeId, prepared.expectedSequence);
       state.nodeStarts.set(delta.nodeId, (state.nodeStarts.get(delta.nodeId) ?? 0) + 1);
       break;
     case "resumed":
       // The retries are exactly the in-flight nodes, which `acceptedStarts` holds in start order.
+      for (const nodeId of state.inFlight) state.touched.add(nodeId);
       addCrashedAttempts(state.crashedAttempts, state.acceptedStarts, state.lastStopSequence);
       state.lastStopSequence = null;
       // Steps and start counts outlive the segment: a retried node reads them back. One `unshift`
@@ -3284,13 +3301,15 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       // A retried node runs again and writes a new commit; its orphan stays in the log, unread. An
       // admitted expansion commit stays: its spawner settled, and the child START still names it.
       for (const [nodeId, pending] of state.pendingCommits) {
-        if (!pending.admitted) state.pendingCommits.delete(nodeId);
+        if (!pending.admitted) deletePendingCommit(state, nodeId);
       }
       // A retried node writes its messages commit again; the orphan stays in the log, unread.
+      for (const nodeId of state.pendingMessages.keys()) state.touched.add(nodeId);
       state.pendingMessages.clear();
       state.numWorkers = delta.numWorkers;
       break;
     case "step":
+      state.touched.add(delta.nodeId);
       state.nodeSteps.set(
         delta.nodeId,
         Object.freeze([...(state.nodeSteps.get(delta.nodeId) ?? []), delta.step]),
@@ -3305,12 +3324,14 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       break;
     case "waiting":
       // The waits fold moves it to the waiting set; its start count, steps and calls stay.
+      state.touched.add(delta.nodeId);
       state.inFlight.delete(delta.nodeId);
       state.acceptedStarts.delete(delta.nodeId);
       break;
     case "woken":
       // The wake is the invocation's start from here on, so a later crash counts; the start count
       // doesn't move, since no new start was recorded.
+      state.touched.add(delta.nodeId);
       state.inFlight.add(delta.nodeId);
       state.acceptedStarts.set(delta.nodeId, prepared.expectedSequence);
       break;
@@ -3353,7 +3374,8 @@ function commitSuccess(log: RunLog, state: RunState, prepared: PreparedTransitio
   appendAndVerify(log, prepared);
   state.pool.store.set(delta.commitTarget, apply.value);
   state.producers.set(delta.commitTarget, record.commit);
-  state.pendingCommits.delete(delta.nodeId);
+  state.touched.add(delta.nodeId);
+  deletePendingCommit(state, delta.nodeId);
   if (delta.messages !== null) {
     state.pool.store.set(delta.messages.key, apply.messagesValue!);
     state.producers.set(delta.messages.key, delta.messages.seq);
@@ -3398,13 +3420,15 @@ function commitRoute(log: RunLog, state: RunState, prepared: PreparedTransition)
   const apply = materializeRoute(plan);
 
   appendAndVerify(log, prepared);
+  state.touched.add(delta.nodeId);
   state.nodeState.set(delta.nodeId, NodeState.TAKEN);
   for (const [edgeId, disposition] of delta.edgeUpdates) state.edgeState.set(edgeId, disposition);
   for (const nodeId of delta.edgeHeads) dropUnknownIncoming(state, nodeId);
   for (const nodeId of delta.skippedNodeIds) {
+    state.touched.add(nodeId);
     state.nodeState.set(nodeId, NodeState.SKIPPED);
     // A skipped child START never runs, so no success names its expansion commit.
-    state.pendingCommits.delete(nodeId);
+    deletePendingCommit(state, nodeId);
   }
   state.inFlight.delete(delta.nodeId);
   state.acceptedStarts.delete(delta.nodeId);
@@ -3434,10 +3458,11 @@ function commitFailure(log: RunLog, state: RunState, prepared: PreparedTransitio
   const apply = materializeFailure(plan.failure, plan.closedCalls);
 
   appendAndVerify(log, prepared);
+  state.touched.add(nodeId);
   state.nodeState.set(nodeId, NodeState.TAKEN);
   state.inFlight.delete(nodeId);
   state.acceptedStarts.delete(nodeId);
-  state.pendingCommits.delete(nodeId);
+  deletePendingCommit(state, nodeId);
   forgetNodeSteps(state, nodeId);
   state.result = apply.result;
   state.nextSequence = prepared.expectedSequence + 1;
@@ -3774,7 +3799,11 @@ function appendAndVerify(log: RunLog, prepared: PreparedTransition): void {
   }
 }
 
-/** Check the initialized reducer roots. */
+/**
+ * Check the initialized reducer roots, and the inventory entries of the nodes written since the
+ * last check (`requireTouchedInventories`), in time that doesn't grow with the run: every
+ * transition pays it.
+ */
 function requireInitialized(state: RunState): void {
   const exactContainers =
     isExactly(state.pool, VariablePool) &&
@@ -3788,6 +3817,8 @@ function requireInitialized(state: RunState): void {
     isExactly(state.nodeStepSeqs, Map) &&
     isExactly(state.pendingCommits, Map) &&
     isExactly(state.pendingMessages, Map) &&
+    isExactly(state.unadmittedCommits, Map) &&
+    isExactly(state.touched, Set) &&
     isExactly(state.producers, Map) &&
     isExactly(state.crashedAttempts, Map) &&
     isExactly(state.depth, Map) &&
@@ -3807,45 +3838,6 @@ function requireInitialized(state: RunState): void {
   }
   if (!Number.isSafeInteger(state.nextSequence) || state.nextSequence < 1) {
     throw new RangeError("run state is not initialized with a valid sequence");
-  }
-  const sequences = [...state.acceptedStarts.values()];
-  if (
-    !sameIds(state.acceptedStarts, state.inFlight) ||
-    sequences.some((sequence) => !Number.isSafeInteger(sequence) || !(0 < sequence && sequence < state.nextSequence)) ||
-    new Set(sequences).size !== sequences.length
-  ) {
-    throw new RangeError("accepted starts must match the unfinished invocation inventory");
-  }
-  // Every apply path indexes these maps by node, so a broken map must fail here, before the
-  // append, rather than between append and apply. The checks are per node, not per step: a step is
-  // checked once, when its record is validated, so a node's S steps don't cost O(S) per record.
-  if (
-    [...state.inFlight].some((nodeId) => !state.nodeStarts.has(nodeId)) ||
-    [...state.nodeStarts.values()].some((count) => !Number.isSafeInteger(count) || count < 1) ||
-    [...state.nodeSteps.keys()].some((nodeId) => !state.nodeStarts.has(nodeId)) ||
-    [...state.nodeSteps.values()].some((steps) => !Array.isArray(steps) || steps.length === 0) ||
-    [...state.pendingCommits].some(([nodeId, pending]) =>
-      pending.admitted ? state.nodeState.get(nodeId) !== NodeState.UNKNOWN : !state.inFlight.has(pending.spawner ?? nodeId),
-    ) ||
-    state.nodeStepSeqs.size !== state.nodeSteps.size ||
-    [...state.nodeStepSeqs].some(([nodeId, seqs]) => state.nodeSteps.get(nodeId)?.length !== seqs.length) ||
-    // A messages commit follows its node's own output commit, which its success accepts with it.
-    [...state.pendingMessages.keys()].some((nodeId) => {
-      const output = state.pendingCommits.get(nodeId);
-      return !state.inFlight.has(nodeId) || output === undefined || output.spawner !== null;
-    })
-  ) {
-    throw new RangeError("node starts, steps and pending commits must match the unsettled invocations");
-  }
-  if ([...state.waits.waiting.keys()].some((nodeId) => state.inFlight.has(nodeId) || !state.nodeStarts.has(nodeId))) {
-    throw new RangeError("a waiting node must have a start count and not be in flight");
-  }
-  if (
-    [...state.crashedAttempts].some(
-      ([nodeId, count]) => typeof nodeId !== "string" || !Number.isSafeInteger(count) || count < 1,
-    )
-  ) {
-    throw new RangeError("crashed attempt counts must be positive integers by node");
   }
   const lastStop = state.lastStopSequence;
   if (lastStop !== null && !(Number.isSafeInteger(lastStop) && 1 <= lastStop && lastStop < state.nextSequence)) {
@@ -3881,11 +3873,114 @@ function requireInitialized(state: RunState): void {
     ) {
       throw new RangeError("run-state trace disagrees with recorded authority");
     }
-    if (!sameIds(state.trace._parked, state.waits.waiting.keys())) {
-      throw new RangeError("run-state trace parks other starts than the waiting nodes");
-    }
   } else if (state.trace !== null) {
     throw new RangeError("trace requires recorded learning");
+  }
+  requireTouchedInventories(state);
+}
+
+/**
+ * Why `nodeId`'s entries in the per-node inventories disagree, or `null` when they agree: its
+ * accepted start, start count, steps, pending commits, wait, crashed-attempt count and parked start.
+ */
+function inventoryFault(state: RunState, nodeId: string): string | null {
+  const inFlight = state.inFlight.has(nodeId);
+  const accepted = state.acceptedStarts.get(nodeId);
+  if (
+    (accepted !== undefined) !== inFlight ||
+    (accepted !== undefined && !(Number.isSafeInteger(accepted) && 0 < accepted && accepted < state.nextSequence))
+  ) {
+    return "accepted starts must match the unfinished invocation inventory";
+  }
+  // The checks are per node, not per step: a step is checked once, when its record is validated.
+  const starts = state.nodeStarts.get(nodeId);
+  const steps = state.nodeSteps.get(nodeId);
+  const pending = state.pendingCommits.get(nodeId);
+  const output = pending === undefined || pending.admitted ? undefined : pending;
+  if (
+    (inFlight && starts === undefined) ||
+    (starts !== undefined && !(Number.isSafeInteger(starts) && starts >= 1)) ||
+    (steps !== undefined && (starts === undefined || !Array.isArray(steps) || steps.length === 0)) ||
+    state.nodeStepSeqs.get(nodeId)?.length !== steps?.length ||
+    (pending !== undefined &&
+      (pending.admitted
+        ? state.nodeState.get(nodeId) !== NodeState.UNKNOWN
+        : !state.inFlight.has(pending.spawner ?? nodeId))) ||
+    // A commit that waits for a node's success goes before that node leaves flight.
+    (!inFlight && (state.unadmittedCommits.get(nodeId) ?? 0) > 0) ||
+    // A messages commit follows its node's own output commit, which its success accepts with it.
+    (state.pendingMessages.has(nodeId) && (!inFlight || output === undefined || output.spawner !== null))
+  ) {
+    return "node starts, steps and pending commits must match the unsettled invocations";
+  }
+  if (state.waits.waiting.has(nodeId) && (inFlight || starts === undefined)) {
+    return "a waiting node must have a start count and not be in flight";
+  }
+  const crashed = state.crashedAttempts.get(nodeId);
+  if (crashed !== undefined && (typeof nodeId !== "string" || !Number.isSafeInteger(crashed) || crashed < 1)) {
+    return "crashed attempt counts must be positive integers by node";
+  }
+  if (state.trace !== null && state.trace._parked.has(nodeId) !== state.waits.waiting.has(nodeId)) {
+    return "run-state trace parks other starts than the waiting nodes";
+  }
+  return null;
+}
+
+/**
+ * Check the inventories' sizes, then the entries of each node a write touched since the last
+ * check (`RunState.touched`), and forget those nodes.
+ *
+ * Every apply path indexes these maps by node, so a broken map must fail here, before the append,
+ * rather than between append and apply. Checking only the touched nodes keeps a transition's cost
+ * to what the last ones wrote: scanning every unsettled node cost O(width^2) for a wide MAP.
+ *
+ * @throws RangeError when an inventory size or a touched node's entries disagree.
+ */
+function requireTouchedInventories(state: RunState): void {
+  if (state.acceptedStarts.size !== state.inFlight.size) {
+    throw new RangeError("accepted starts must match the unfinished invocation inventory");
+  }
+  if (state.nodeStepSeqs.size !== state.nodeSteps.size) {
+    throw new RangeError("node starts, steps and pending commits must match the unsettled invocations");
+  }
+  if (state.trace !== null && state.trace._parked.size !== state.waits.waiting.size) {
+    throw new RangeError("run-state trace parks other starts than the waiting nodes");
+  }
+  for (const nodeId of state.touched) {
+    const fault = inventoryFault(state, nodeId);
+    if (fault !== null) throw new RangeError(fault);
+  }
+  state.touched.clear();
+}
+
+/**
+ * Check every node's inventory entries (`inventoryFault`) and that no two accepted starts share a
+ * sequence. A replay runs it once, when it ends, behind the per-transition checks of the touched
+ * nodes.
+ *
+ * @throws RangeError when they disagree.
+ */
+function requireInventories(state: RunState): void {
+  const sequences = [...state.acceptedStarts.values()];
+  if (new Set(sequences).size !== sequences.length) {
+    throw new RangeError("accepted starts must match the unfinished invocation inventory");
+  }
+  const nodeIds = new Set<string>([
+    ...state.inFlight,
+    ...state.acceptedStarts.keys(),
+    ...state.nodeStarts.keys(),
+    ...state.nodeSteps.keys(),
+    ...state.nodeStepSeqs.keys(),
+    ...state.pendingCommits.keys(),
+    ...state.unadmittedCommits.keys(),
+    ...state.pendingMessages.keys(),
+    ...state.waits.waiting.keys(),
+    ...state.crashedAttempts.keys(),
+    ...(state.trace === null ? [] : state.trace._parked.keys()),
+  ]);
+  for (const nodeId of nodeIds) {
+    const fault = inventoryFault(state, nodeId);
+    if (fault !== null) throw new RangeError(fault);
   }
 }
 
@@ -4492,11 +4587,39 @@ function pendingStepOf(state: RunState, call: Call): Readonly<JsonObject> | unde
 }
 
 /**
+ * Set `key`'s pending commit, replacing any, and count it against the node that must stay in
+ * flight for it while it is unadmitted (`RunState.unadmittedCommits`).
+ */
+function setPendingCommit(state: RunState, key: string, pending: PendingCommit): void {
+  deletePendingCommit(state, key);
+  state.touched.add(key);
+  state.pendingCommits.set(key, pending);
+  if (!pending.admitted) countUnadmitted(state, pending.spawner ?? key, 1);
+}
+
+/** Delete `key`'s pending commit, if any, and its count (`setPendingCommit`). */
+function deletePendingCommit(state: RunState, key: string): void {
+  const pending = state.pendingCommits.get(key);
+  if (pending === undefined) return;
+  state.touched.add(key);
+  state.pendingCommits.delete(key);
+  if (!pending.admitted) countUnadmitted(state, pending.spawner ?? key, -1);
+}
+
+/** Add `by` to the unadmitted commits `nodeId` must stay in flight for, dropping a zero count. */
+function countUnadmitted(state: RunState, nodeId: string, by: number): void {
+  const count = (state.unadmittedCommits.get(nodeId) ?? 0) + by;
+  if (count === 0) state.unadmittedCommits.delete(nodeId);
+  else state.unadmittedCommits.set(nodeId, count);
+}
+
+/**
  * Drop a settled node's start count and recorded steps, and the values its steer reads consumed.
  *
  * @throws RangeError when the node has no start count.
  */
 function forgetNodeSteps(state: RunState, nodeId: string): void {
+  state.touched.add(nodeId);
   if (!state.nodeStarts.delete(nodeId)) throw new RangeError(`node ${reprText(nodeId)} has no start count`);
   for (const step of state.nodeSteps.get(nodeId) ?? []) {
     if (step["kind"] === "steer") for (const seq of seqList(step["from"]) ?? []) state.inboxEvents.delete(seq);
@@ -6863,7 +6986,8 @@ function applyGrowth(
       state.depth.delete(nodeId);
       state.wiringOverrides.delete(nodeId);
       state.growthOwner.delete(nodeId);
-      state.pendingCommits.delete(nodeId);
+      state.touched.add(nodeId);
+      deletePendingCommit(state, nodeId);
     }
   }
 
@@ -6874,12 +6998,16 @@ function applyGrowth(
     setDefault(flow.outgoingEdges, edge.from, () => []).push(edge);
     setDefault(flow.incomingEdges, edge.to, () => []).push(edge);
   }
-  for (const nodeId of delta.newNodeIds) state.nodeState.set(nodeId, NodeState.UNKNOWN);
+  for (const nodeId of delta.newNodeIds) {
+    state.touched.add(nodeId);
+    state.nodeState.set(nodeId, NodeState.UNKNOWN);
+  }
+  state.touched.add(delta.spawnerId);
   if (!retired.has(delta.spawnerId)) state.nodeState.set(delta.spawnerId, NodeState.EXPANDED);
   for (const edgeId of delta.newEdgeIds) state.edgeState.set(edgeId, NodeState.UNKNOWN);
   // `topology.edges` are the edges of `newEdgeIds`, which the delta carries as ids only.
   for (const edge of topology.edges) addUnknownIncoming(state, edge.to);
-  for (const commit of delta.admitted) state.pendingCommits.set(commit.key, commit);
+  for (const commit of delta.admitted) setPendingCommit(state, commit.key, commit);
   state.inFlight.delete(delta.spawnerId);
   state.acceptedStarts.delete(delta.spawnerId);
   forgetNodeSteps(state, delta.spawnerId);

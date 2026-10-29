@@ -76,6 +76,7 @@ import {
   forwardCapture,
   FuncNode,
   nodeFailure,
+  reducerWrite,
   RUN_ID,
   snapshot,
   startData,
@@ -334,12 +335,16 @@ describe("node_waiting, node_woken and run_waiting", () => {
     const { log, state } = started(waitFlow(tool("heard", "take")));
     start(log, state, "heard");
     const seq = wait(log, state, "heard", takeEntry("heard"));
-    state.inFlight.add("heard");
-    state.acceptedStarts.set("heard", seq);
+    reducerWrite(state, "heard", () => {
+      state.inFlight.add("heard");
+      state.acceptedStarts.set("heard", seq);
+    });
     expect(() => prepareRunWaiting(state)).toThrow(/waiting node must have a start count and not be in flight/);
-    state.inFlight.delete("heard");
-    state.acceptedStarts.delete("heard");
-    state.nodeStarts.delete("heard");
+    reducerWrite(state, "heard", () => {
+      state.inFlight.delete("heard");
+      state.acceptedStarts.delete("heard");
+      state.nodeStarts.delete("heard");
+    });
     expect(() => prepareRunWaiting(state)).toThrow(/waiting node must have a start count/);
   });
 

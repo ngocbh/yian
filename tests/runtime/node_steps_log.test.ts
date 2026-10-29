@@ -2,7 +2,7 @@
  * Node steps: the `NodeStepRecord` a running node appends and how the run-state reducer folds it.
  */
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import { buildGrow } from "../../src/compile/expand.ts";
 import { copyGraph, START_ID } from "../../src/compile/model.ts";
@@ -44,6 +44,7 @@ import {
   nodeFailure,
   parentFlow,
   prepareOutput,
+  reducerWrite,
   routeInFlight,
   prepareGrowth,
 } from "../helpers/run_state_fixtures.ts";
@@ -350,6 +351,18 @@ test("a failure deletes the node's steps and starts", () => {
   expect(state.ready).toEqual(["second"]);
 });
 
+test("an outcome in a run that doesn't learn copies none of its node's steps", () => {
+  const { state, log } = firstInFlight();
+  commitPrepared(log, state, prepareNodeStep(state, "first", FAILED));
+  const clone = spyOn(globalThis, "structuredClone");
+  try {
+    prepareNodeFailed(state, nodeFailure("first"));
+    expect(clone).not.toHaveBeenCalled();
+  } finally {
+    clone.mockRestore();
+  }
+});
+
 test("a route deletes the node's steps and starts", () => {
   const { state, log } = routeInFlight();
   commitPrepared(log, state, prepareNodeStep(state, "router", FAILED));
@@ -536,14 +549,14 @@ test("a frontier commit refuses a step record with a start delta", () => {
 });
 
 test.each(["missing-start", "orphan-steps", "zero-count"] as const)(
-  "broken step state is refused before append: %s",
+  "broken step state is refused before the next append: %s",
   (corrupt) => {
     const { state, log } = firstInFlight();
     commitPrepared(log, state, prepareNodeStep(state, "first", FAILED));
     const prepared = prepareOutput(log, state, "first", { done: true });
-    if (corrupt === "missing-start") state.nodeStarts.delete("first");
-    else if (corrupt === "orphan-steps") state.nodeSteps.set("second", [FAILED]);
-    else state.nodeStarts.set("first", 0);
+    if (corrupt === "missing-start") reducerWrite(state, "first", () => state.nodeStarts.delete("first"));
+    else if (corrupt === "orphan-steps") reducerWrite(state, "second", () => state.nodeSteps.set("second", [FAILED]));
+    else reducerWrite(state, "first", () => state.nodeStarts.set("first", 0));
     const before = log.nextSequence;
 
     expectError(

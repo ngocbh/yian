@@ -27,6 +27,7 @@ import {
   memoryStacks as layoutStacks,
   resolveMemoryLayout,
 } from "../../src/compile/memory_layout.ts";
+import { buildGrow } from "../../src/compile/expand.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import type { Env } from "../../src/defaults.ts";
@@ -116,6 +117,7 @@ import {
   type PreparedTransition,
   prepareRunStarted,
   rebuildCommit,
+  replayRecords,
   type RunStartData,
   RunState,
 } from "../../src/runtime/state.ts";
@@ -1413,6 +1415,31 @@ export function traceSnapshot(trace: RetainedTrace): Record<string, unknown> {
  */
 export function replayTraceSnapshot(trace: RetainedTrace): Record<string, unknown> {
   return { ...traceSnapshot(trace), backwardHandlers: [...trace.backwardHandlers.keys()] };
+}
+
+/**
+ * Run `write` on `state`'s inventories as the reducer writes them: marking `nodeId` for the next
+ * transition's check (`RunState.touched`).
+ */
+export function reducerWrite(state: RunState, nodeId: string, write: () => void): void {
+  write();
+  state.touched.add(nodeId);
+}
+
+/**
+ * Replay `log` over `flow`, letting `corrupt` break the state just before the last record applies.
+ * A write that doesn't mark its node (`reducerWrite`) is found only when the replay ends.
+ */
+export function replayCorrupted(flow: CompiledFlow, log: RunLog, corrupt: (state: RunState) => void): RunState {
+  const records = log.records();
+  // `onPrepared` sees every record after the run start.
+  let left = records.length - 1;
+  return replayRecords(new RunState(flow), records, {
+    growBuilder: buildGrow,
+    onPrepared: (_prepared, state) => {
+      if (--left === 0) corrupt(state);
+    },
+  });
 }
 
 /**

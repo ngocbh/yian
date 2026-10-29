@@ -12,7 +12,16 @@ import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { diagnosticJson } from "../../src/cli/render.ts";
-import { flowBanner, jsonValue, mergeInputs, parseKv, readInputsJson, skillsCheck } from "../../src/cli/run.ts";
+import {
+  flowBanner,
+  jsonValue,
+  mergeInputs,
+  parseKv,
+  readInputsJson,
+  run,
+  type RunOptions,
+  skillsCheck,
+} from "../../src/cli/run.ts";
 import { defaultRunsDir } from "../../src/cli/startup.ts";
 import { childCommand, main } from "../../src/cli/index.ts";
 import { LICENSES } from "../../src/cli/licenses.ts";
@@ -34,9 +43,10 @@ import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { readRunIndex } from "../../src/run.ts";
 import { JsonlRunLog, NodeStartedRecord, NodeStepRecord, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
-import { compiled, VERSION } from "../../src/platform.ts";
+import { compiled, VERSION, virtualScheduler } from "../../src/platform.ts";
+import { ECHO, turnFlow } from "../helpers/chat_fixtures.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
-import { FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
+import { ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 import { parseJson } from "../../src/typesys/json.ts";
 import { type Schema, validate } from "../helpers/schema.ts";
 
@@ -1034,6 +1044,121 @@ describe("run's input prompts on a TTY", () => {
         error: { code: "run.cancelled", message: "run cancelled" },
       });
     }
+  });
+});
+
+describe("run hands an inbox flow on a terminal to a chat", () => {
+  let signals: EventEmitter;
+  let input: FakeInput | undefined;
+  let runs = 0;
+
+  beforeEach(() => {
+    signals = new EventEmitter();
+  });
+
+  afterEach(() => {
+    input?.end();
+    input = undefined;
+    signals.removeAllListeners();
+  });
+
+  /**
+   * `run` on `flow` with a fresh log in `tmp` (`flow` undefined under `--resume`), stdin and
+   * stderr fake TTYs when `tty`, `typed` written ahead, the chat's clock virtual and its signals
+   * the test's.
+   */
+  async function runOn(
+    flow: string | undefined,
+    { tty = true, typed = "", ...options }: Partial<RunOptions> & { tty?: boolean; typed?: string } = {},
+  ) {
+    const { io, stdout, stderr } = testIo();
+    const log = join(tmp, `run-${(runs += 1)}.jsonl`);
+    input = new FakeInput({ tty });
+    input.write(typed);
+    const code = await run(
+      flow,
+      {
+        inputValues: [],
+        quiet: true,
+        memoryStorage: [],
+        verbose: false,
+        engineTrace: false,
+        mcpConfig: [],
+        json: false,
+        ...(options.resume === undefined ? { log } : {}),
+        ...options,
+      },
+      { ...io, stdin: input, stderrStream: Object.assign(new FakeOutput(), { isTTY: tty }) },
+      { scheduler: virtualScheduler(Date.parse("2026-01-01T00:00:00Z")), signals },
+    );
+    return { code, stdout: stdout(), stderr: stderr(), log };
+  }
+
+  /** Today's run of a chat flow: it waits at the take, prints nothing on stdout, exits 0. */
+  const waited = (result: { code: number; stdout: string; stderr: string }) => {
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("run waiting: ");
+    expect(result.stderr).not.toContain("session ended");
+  };
+
+  test("each typed line is sent and answered; /exit ends the session", async () => {
+    const result = await runOn(file("chat.yaml", ECHO), { typed: "hi" + ENTER + "/exit" + ENTER });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toBe("echo: hi\necho: \n");
+    expect(result.stderr).toContain("session ended");
+  });
+
+  test("-i supplies the chat's other inputs", async () => {
+    const topic = `      reply:
+        kind: code
+        input:
+          topic: \${input.topic}
+          events: \${heard.output.events}
+        output: str
+        code: |
+          return inputs["topic"] + ": " + inputs["events"].join(" | ");
+`;
+    const flow = file("topic.yaml", turnFlow(topic, { input: "  topic: !str\n" }));
+    const result = await runOn(flow, { inputValues: ["topic=x"], typed: "hi" + ENTER + "/exit" + ENTER });
+    expect([result.code, result.stdout]).toEqual([0, "x: hi\nx: \n"]);
+  });
+
+  test("off a terminal, or under --json, the run waits as before", async () => {
+    const flow = file("chat.yaml", ECHO);
+    waited(await runOn(flow, { tty: false, typed: "hi" + ENTER }));
+    const json = await runOn(flow, { json: true, typed: "hi" + ENTER });
+    expect(json.code).toBe(0);
+    expect(JSON.parse(json.stdout).status).toBe("waiting");
+    expect(json.stderr).not.toContain("session ended");
+  });
+
+  test("--resume recovers the run as before", async () => {
+    const first = await runOn(file("chat.yaml", ECHO), { tty: false });
+    waited(first);
+    waited(await runOn(undefined, { resume: first.log, typed: "hi" + ENTER }));
+  });
+
+  test("several inboxes run as before unless --inbox picks one", async () => {
+    const flow = file(
+      "two.yaml",
+      ECHO.replace("  messages: !Inbox(str)\n", "  messages: !Inbox(str)\n  other: !Inbox(str)\n").replace(
+        "nodes:\n  chat:",
+        "nodes:\n  other:\n    kind: tool\n    tool_id: take\n    input:\n      from: \${input.other}\n  chat:",
+      ),
+    );
+    waited(await runOn(flow, { typed: "hi" + ENTER }));
+    const picked = await runOn(flow, { inbox: "messages", typed: "hi" + ENTER + "/exit" + ENTER });
+    expect(picked.code).toBe(0);
+    expect(picked.stdout).toBe("echo: hi\necho: \n");
+    // The other inbox, which nothing sends to, leaves the run waiting.
+    expect(picked.stderr).toContain("run waiting: other (take)");
+  });
+
+  test("a flow that declares memory runs as before", async () => {
+    const memory = ECHO.replace("name: echo_chat\n", "name: echo_chat\nlong_term_memory: episodic\n");
+    const flow = file("memory.yaml", memory);
+    waited(await runOn(flow, { typed: "hi" + ENTER }));
   });
 });
 

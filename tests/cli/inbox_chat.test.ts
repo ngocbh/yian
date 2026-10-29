@@ -30,6 +30,7 @@ import {
 } from "../../src/runtime/log.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
+import { ECHO, ECHO_REPLY, turnFlow } from "../helpers/chat_fixtures.ts";
 import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../helpers/run_state_fixtures.ts";
 import { CTRL_C, CTRL_U, ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
 
@@ -125,52 +126,6 @@ async function until(check: () => boolean): Promise<void> {
 function pastEscapeTimeout(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 600));
 }
-
-/** A chat turn per line: take everything sent, reply with `reply` (YAML lines, 6 spaces in). */
-function turnFlow(reply: string, { input = "", nodes = "" } = {}): string {
-  return `id: echo_chat
-name: echo_chat
-input:
-  messages: !Inbox(str)
-${input}defs:
-  turn:
-    input:
-      said: !list(str)
-      closed: !bool
-      messages: !Inbox(str)
-${input.replace(/^ {2}/gm, "      ")}    nodes:
-      heard:
-        kind: tool
-        tool_id: take
-        input:
-          from: \${input.messages}
-          take: all
-${nodes}${reply}    output:
-      said: \${input.said + heard.output.events}
-      closed: \${heard.output.closed}
-nodes:
-  chat:
-    kind: loop
-    call: turn
-    input:
-      said: []
-      closed: false
-      messages: \${input.messages}
-${input.replace(/^ {2}(\w+):.*$/gm, "      $1: ${input.$1}")}    while: not closed
-output: \${chat.output.said}
-`;
-}
-
-const ECHO_REPLY = `      reply:
-        kind: code
-        input:
-          events: \${heard.output.events}
-        output: str
-        code: |
-          return "echo: " + inputs["events"].join(" | ");
-`;
-
-const ECHO = turnFlow(ECHO_REPLY);
 
 /** One turn: take a line, ask about it, reply. */
 const ASK_ONCE = `id: once

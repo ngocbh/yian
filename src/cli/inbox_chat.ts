@@ -279,6 +279,7 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
  * ended (<status>); ...`, appends nothing and exits 1, as do a log that can't be read and a flow
  * built in code; a recorded flow that no longer loads is reported located.
  *
+ * @param loaded The flow at `flowPath`, already loaded; read from the file when absent.
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a flow without exactly
  *   one `Inbox(str)` or `Inbox(Message)` input to pick; for an input the flow doesn't declare
  *   (the inbox included); off a TTY, for missing required inputs.
@@ -288,12 +289,13 @@ export async function inboxChat(
   options: InboxChatOptions,
   io: CliIo,
   deps: InboxChatDeps = {},
+  loaded?: ComposedFlow,
 ): Promise<number> {
   validateRunLogOptions({ ...options, flow: flowPath });
   const resumed = options.resume ?? null;
   const flow =
     resumed === null
-      ? await loadFlowFile(flowPath!, io, { engineTrace: options.engineTrace })
+      ? (loaded ?? (await loadFlowFile(flowPath!, io, { engineTrace: options.engineTrace })))
       : await recordedFlow(resumed, options.engineTrace, io);
   if (flow === null || flow instanceof Diagnostic) return 1;
   const inbox = pickInbox(flow, options.inbox);

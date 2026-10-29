@@ -17,7 +17,8 @@
  * All modes read the node's bound typed input record (only its declared inputs, not the pool) and
  * return the node's one output value. Nothing is compiled or imported at construction; the
  * awaited load step's `check()` builds an inline body without calling it, refuses a
- * `module:function` value, and requires a reference's file to exist (and, when the load has a code
+ * `module:function` value and one that looks like a file reference but breaks the reference rule,
+ * and requires a reference's file to exist (and, when the load has a code
  * root, to resolve inside it); it runs no code.
  *
  * A reference or an inline body runs on a worker thread (`nodes/code/worker`), one call at a time
@@ -95,6 +96,20 @@ const REFERENCE_RE = /^\.\.?\/[^\s:]+\.(?:ts|js|mjs):[A-Za-z_$][A-Za-z0-9_$]*$/;
 // A module reference (`pkg.mod:fn`), which yian doesn't run. Read as TS it is a labeled
 // statement, so the load check refuses it rather than run it as a body.
 const MODULE_REFERENCE_RE = /^[A-Za-z_][\w.]*:[A-Za-z_]\w*$/;
+
+/**
+ * Whether `code`, which `REFERENCE_RE` refuses, was still meant as a file reference: one line
+ * ending in `.<ext>:<name>` that starts like a path (`./`, `../`, or a `/` that opens no comment),
+ * or has no whitespace and holds a `/` or ends in a JS or TS extension (`h.ts:fn`). Some bodies
+ * that build have this shape too, so the load check asks only once a body fails to build.
+ */
+function looksLikeReference(code: string): boolean {
+  const match = /^([^\n]*)\.(\w+):[A-Za-z_$][\w$]*$/.exec(code);
+  if (match === null) return false;
+  const stem = match[1]!;
+  if (/^(?:\.\.?\/|\/(?![*/]))/.test(stem)) return true;
+  return !/\s/.test(stem) && (/[/\\]/.test(stem) || /^[cm]?[jt]sx?$/.test(match[2]!));
+}
 
 // Mirrors the CLI's `leavesRoot` in `cli/run.ts`; nodes may not import the CLI.
 /**
@@ -605,8 +620,9 @@ export class CodeNode extends Node {
    *
    * A built-in passes. A reference's file, resolved against `baseDir` (the current directory
    * when `null`), must be a regular file; its module isn't imported, so a missing export is
-   * found when the node runs. An inline body that has the `module:function` shape is
-   * refused; otherwise it is stripped of its types and built, never called.
+   * found when the node runs. An inline body that has the `module:function` shape is refused;
+   * otherwise it is stripped of its types and built, never called. A body that fails to build
+   * but looks like a file reference (`looksLikeReference`) is refused as a broken reference.
    *
    * @param options.codeRoot The real path of the directory a reference's file must resolve
    *   inside, symlinks followed (a file names only itself); `null` (the default) confines nothing.
@@ -614,7 +630,7 @@ export class CodeNode extends Node {
    *   under it, no message names an absolute path.
    * @throws RangeError when a reference's file resolves outside `options.codeRoot`, can't be
    *   resolved under it, or isn't a regular file, or an inline body looks like a `module:function`
-   *   reference.
+   *   reference, or fails to build and looks like a file reference.
    * @throws TypeStripError when the body doesn't parse or strip.
    * @throws SyntaxError when the function constructor refuses the stripped body.
    */
@@ -646,12 +662,24 @@ export class CodeNode extends Node {
       }
       return;
     }
-    if (MODULE_REFERENCE_RE.test(code)) {
+    const meantAsReference = looksLikeReference(code);
+    // `h.ts:fn` has the module shape too, but its own message fits it better.
+    if (MODULE_REFERENCE_RE.test(code) && !meantAsReference) {
       throw new RangeError(
         `\`code:\` value ${reprText(code)} looks like a Python \`module:function\` reference; use \`./file.ts:fn\``,
       );
     }
-    await compileBody(this.id, code);
+    try {
+      await compileBody(this.id, code);
+    } catch (error) {
+      if (!meantAsReference) throw error;
+      throw new RangeError(
+        `\`code:\` value ${reprText(code)} looks like a file reference, but a reference is a relative ` +
+          "`./` or `../` path to a `.ts`, `.js` or `.mjs` file, with no whitespace, then `:` and an export " +
+          "name, like `./file.ts:fn`",
+        { cause: error },
+      );
+    }
   }
 
   /**

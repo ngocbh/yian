@@ -903,6 +903,31 @@ test("the load check refuses a module:function reference", async () => {
   }
 });
 
+test("the load check refuses a value that looks like a file reference but breaks the rule", async () => {
+  for (const code of ["./h.mts:fn", "./h x.ts:fn", "/abs/h.ts:fn", "h.ts:fn", "lib/h.py:fn"]) {
+    const error = await rejected(new CodeNode("p", { code }).check());
+
+    expect((error as Error).constructor).toBe(RangeError);
+    expect((error as Error).message).toBe(
+      `\`code:\` value '${code}' looks like a file reference, but a reference is a relative \`./\` or \`../\` ` +
+        "path to a `.ts`, `.js` or `.mjs` file, with no whitespace, then `:` and an export name, like `./file.ts:fn`",
+    );
+  }
+});
+
+test("the load check still builds a body that ends like a reference", async () => {
+  for (const code of [
+    "return inputs.c ? inputs.o.ts:inputs.b",
+    "/* note */ return inputs.c ? inputs.o.a:inputs.b",
+    "return!inputs.ok?inputs.ts:null",
+    'return"a/b"===inputs.p?inputs.x.y:null',
+    "return(inputs.url.includes('/'))?inputs.a.b:null",
+    "return[inputs.a][0]?inputs.x.js:undefined",
+  ]) {
+    await new CodeNode("p", { code }).check();
+  }
+});
+
 test("the load check refuses a reference to a missing file", async () => {
   const error = await rejected(new CodeNode("m", { code: "./missing.ts:fn", baseDir: helpers }).check());
 

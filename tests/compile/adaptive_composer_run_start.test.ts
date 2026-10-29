@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
-import { applyEffectiveLlmMap, resolveLlmCascade, staticAgentLabels } from "../../src/compile/llm_cascade.ts";
+import { applyEffectiveLlmMap, resolveRunLlm, staticAgentLabels } from "../../src/compile/llm_cascade.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { copyGraph } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -49,7 +49,7 @@ output: \${w.output}
 /** Replay `text`'s resolved map with a base_url added at `path`; return the error message. */
 async function replayWithBaseUrl(text: string, path: string): Promise<string> {
   const flow = (await loadFlow(text)).compiled;
-  const effective = resolveLlmCascade(copyGraph(flow), {}, { defaults: { provider: "openai", model: "m" } });
+  const effective = resolveRunLlm(copyGraph(flow), {}, { defaults: { provider: "openai", model: "m" } }).effective;
   effective[path]!["base_url"] = "https://x.example.com/v1";
   try {
     applyEffectiveLlmMap(copyGraph(flow), effective);

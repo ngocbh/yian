@@ -70,32 +70,6 @@ interface CascadeFlow {
 /** One agent's configuration record. */
 type Config = Record<string, unknown>;
 
-/**
- * Bake and return every AGENT node's complete effective configuration.
- *
- * This is `resolveRunLlm` for a run given no inputs; its `effective` map is returned.
- *
- * @param flow The flow whose complete static call tree is resolved in place.
- * @param parentConfig The outermost gap-fill layer (the CLI/host layer).
- * @param options.defaults Lowest-precedence host defaults, possibly empty.
- * @param options.providerModels Saved models by provider.
- * @param options.strayModel Whether `YIAN_DEFAULT_MODEL` was set without a default provider;
- *   defaults to `false`.
- * @returns Complete effective configurations keyed by unambiguous static agent path.
- * @throws {RangeError} As `resolveRunLlm` throws it.
- */
-export function resolveLlmCascade(
-  flow: CascadeFlow,
-  parentConfig: Readonly<Config>,
-  options: {
-    defaults: Readonly<Config>;
-    providerModels?: Readonly<Record<string, string>> | null;
-    strayModel?: boolean;
-  },
-): Record<string, Config> {
-  return resolveRunLlm(flow, parentConfig, options).effective;
-}
-
 /** The configurations a run start resolves for its agents. Frozen. */
 export class RunLLM {
   /** Each agent resolved at run start, its complete effective configuration keyed by static path. */

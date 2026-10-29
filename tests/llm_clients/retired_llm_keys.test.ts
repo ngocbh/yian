@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
-import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { LLMConfig, retiredKeyError } from "../../src/llm_clients/config.ts";
 import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
@@ -141,7 +141,7 @@ test.each(Object.keys(RETIRED))("a retired key in a host layer fails the cascade
   const flow = (await loadFlow(FLOW)).compiled;
   let caught: unknown;
   try {
-    resolveLlmCascade(flow, { [key]: RETIRED[key]![0] }, { defaults: { provider: "vllm", model: "served-model" } });
+    resolveRunLlm(flow, { [key]: RETIRED[key]![0] }, { defaults: { provider: "vllm", model: "served-model" } });
   } catch (error) {
     caught = error;
   }

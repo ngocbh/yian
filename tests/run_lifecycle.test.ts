@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { resolveLlmCascade } from "../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../src/compile/llm_cascade.ts";
 import { flowFingerprint } from "../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, START_ID } from "../src/compile/model.ts";
 import { rebaseFlowOrigins } from "../src/compile/origins.ts";
@@ -450,9 +450,9 @@ function scripted(built: Record<string, unknown>[], reply = "recorded reply"): M
 /** Leave the one-agent flow's `answer` in flight with a recorded pre-connection map. */
 async function agentResumePrefix(path: string): Promise<Record<string, Record<string, unknown>>> {
   const loaded = await load(AGENT_FLOW);
-  const effective = resolveLlmCascade(copyGraph(loaded.compiled), {}, {
+  const effective = resolveRunLlm(copyGraph(loaded.compiled), {}, {
     defaults: { provider: "openai", model: "recorded-model" },
-  });
+  }).effective;
   writeNonterminalPrefix(path, loaded, { topic: "Ada" }, { started: ["answer"], numWorkers: 0, effective });
   return effective;
 }

@@ -1,10 +1,10 @@
-{"at":"<masked>","kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{},"flow":{"dir":"<masked>","files":{"flow.yaml":{"refs":{},"text":"id: fetch-once\nname: fetch_once\nnodes:\n  fetch:\n    kind: tool\n    tool_id: lookup\noutput: ${fetch.output}\n"}},"root":"flow.yaml"},"flow_fingerprint":"84b06c9d3403ef8adec5bb9536acccffb10c75f1fd3ab3c859257fca5cd48fbf","learnable":false,"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,"parent":null,"skills":{},"start_wiring_override":{},"tool_groups":{},"tools":{},"yian_version":"<masked>"},"run_id":"r1","schema":24,"seq":0}
-{"at":"<masked>","kind":"pool_commit","payload":{"key":"system.now","kind":"datetime","node_id":"__start__","value":"<masked>"},"run_id":"r1","schema":24,"seq":1}
-{"at":"<masked>","kind":"pool_commit","payload":{"key":"system.run_id","kind":"str","node_id":"__start__","value":"r1"},"run_id":"r1","schema":24,"seq":2}
-{"at":"<masked>","kind":"pool_commit","payload":{"key":"system.today","kind":"date","node_id":"__start__","value":"<masked>"},"run_id":"r1","schema":24,"seq":3}
-{"at":"<masked>","kind":"pool_commit","payload":{"key":"__start__","kind":"object","node_id":"__start__","value":{}},"run_id":"r1","schema":24,"seq":4}
-{"at":"<masked>","kind":"node_started","payload":{"node_id":"__start__"},"run_id":"r1","schema":24,"seq":5}
-{"at":"<masked>","kind":"pool_commit","payload":{"key":"__start__","kind":"object","node_id":"__start__","value":{}},"run_id":"r1","schema":24,"seq":6}
-{"at":"<masked>","kind":"node_succeeded","payload":{"commit":6,"forward_capture":null,"messages":null,"node_id":"__start__"},"run_id":"r1","schema":24,"seq":7}
-{"at":"<masked>","kind":"node_started","payload":{"node_id":"fetch"},"run_id":"r1","schema":24,"seq":8}
-{"at":"<masked>","kind":"run_stopped","payload":{"message":"conformance stop","node_ids":["fetch"],"reason":"signal"},"run_id":"r1","schema":24,"seq":9}
+{"at":"<masked>","kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{},"flow":{"code_root":null,"dir":"<masked>","files":{"flow.yaml":{"refs":{},"text":"id: fetch-once\nname: fetch_once\nnodes:\n  fetch:\n    kind: tool\n    tool_id: lookup\noutput: ${fetch.output}\n"}},"root":"flow.yaml"},"flow_fingerprint":"84b06c9d3403ef8adec5bb9536acccffb10c75f1fd3ab3c859257fca5cd48fbf","learnable":false,"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":0,"parent":null,"skills":{},"start_wiring_override":{},"tool_groups":{},"tools":{},"yian_version":"<masked>"},"run_id":"r1","schema":25,"seq":0}
+{"at":"<masked>","kind":"pool_commit","payload":{"key":"system.now","kind":"datetime","node_id":"__start__","value":"<masked>"},"run_id":"r1","schema":25,"seq":1}
+{"at":"<masked>","kind":"pool_commit","payload":{"key":"system.run_id","kind":"str","node_id":"__start__","value":"r1"},"run_id":"r1","schema":25,"seq":2}
+{"at":"<masked>","kind":"pool_commit","payload":{"key":"system.today","kind":"date","node_id":"__start__","value":"<masked>"},"run_id":"r1","schema":25,"seq":3}
+{"at":"<masked>","kind":"pool_commit","payload":{"key":"__start__","kind":"object","node_id":"__start__","value":{}},"run_id":"r1","schema":25,"seq":4}
+{"at":"<masked>","kind":"node_started","payload":{"node_id":"__start__"},"run_id":"r1","schema":25,"seq":5}
+{"at":"<masked>","kind":"pool_commit","payload":{"key":"__start__","kind":"object","node_id":"__start__","value":{}},"run_id":"r1","schema":25,"seq":6}
+{"at":"<masked>","kind":"node_succeeded","payload":{"commit":6,"forward_capture":null,"messages":null,"node_id":"__start__"},"run_id":"r1","schema":25,"seq":7}
+{"at":"<masked>","kind":"node_started","payload":{"node_id":"fetch"},"run_id":"r1","schema":25,"seq":8}
+{"at":"<masked>","kind":"run_stopped","payload":{"message":"conformance stop","node_ids":["fetch"],"reason":"signal"},"run_id":"r1","schema":25,"seq":9}

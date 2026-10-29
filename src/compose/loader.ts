@@ -648,7 +648,8 @@ interface LoadOptions {
  *   one against the current directory); symlinks are resolved on both sides. A reference outside
  *   it is a `LoadError` at its `code:` value. The files read through the search path are checked
  *   too; a `childResolver`'s flow is the host's to load with its own `codeRoot`. An inline `code:`
- *   body is not confined. `null` or absent confines nothing.
+ *   body is not confined. `null` or absent confines nothing. The flow's `source` keeps the root's
+ *   real path, so a run records it and a resume confines the recorded files to it again.
  * @param options.env The environment this load reads the `YIAN_*` values from; default
  *   `processEnv`, which keeps the values in effect, so a `childResolver` that calls `loadFlow`
  *   without `env` loads under the caller's.
@@ -694,24 +695,24 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
  * Compile the flow files `source` holds, as a run recorded them, without reading them from disk:
  * the load starts at `source.root` and resolves each `uses:` ref through the file's `refs`. Each
  * file is labelled with its key's file name, and its CODE references resolve on disk in its key's
- * folder below `source.dir`.
+ * folder below `source.dir`, inside `source.codeRoot` when it has one (a host child's recorded
+ * file included), as `loadFlow`'s `codeRoot`.
  *
  * @param source A loaded flow's `source`, or a run's recorded `flow`.
  * @param options.env The environment the load reads the `YIAN_*` values from, as `loadFlow`'s.
- * @param options.codeRoot A directory every recorded file's CODE references must resolve inside,
- *   as `loadFlow`'s; a host child's recorded file is checked too. `null` or absent confines
- *   nothing.
  * @returns The flow, whose `source` is `source`.
- * @throws LoadError for a flow that doesn't load, or a `uses:` ref its file's `refs` lacks.
+ * @throws LoadError for a flow that doesn't load, a `uses:` ref its file's `refs` lacks, or a CODE
+ *   reference resolving outside `source.codeRoot`.
  * @throws DefaultsError when a `YIAN_<NAME>` value in `env` isn't accepted.
  */
 export async function loadFlowSource(
   source: FlowSource,
-  options: { env?: Env; codeRoot?: string | null } = {},
+  options: { env?: Env } = {},
 ): Promise<ComposedFlow> {
-  const { env = processEnv, codeRoot = null } = options;
+  const { env = processEnv } = options;
   return withEnv(env, async () => {
-    const loaded = await loadSourceFile(source, source.root, await newLoadCtx(codeRoot));
+    // Already a real path, as the load that made the source resolved it.
+    const loaded = await loadSourceFile(source, source.root, new LoadCtx(source.codeRoot));
     return checkRoot(replaceFlow(loaded, { source }));
   });
 }
@@ -794,7 +795,7 @@ async function flowSource(
     if (!(child instanceof ComposedFlow) || child.source === null) return null;
     root.refs.set(ref, sourceNodes(child.source));
   }
-  return sourceOf(root, dir);
+  return sourceOf(root, dir, ctx.codeRoot);
 }
 
 /** Return the graph of `source`'s files, from its root, each at its path below `source.dir`. */
@@ -814,10 +815,11 @@ function sourceNodes(source: FlowSource): SourceNode {
 }
 
 /**
- * Key each file of the graph at `root` by its path relative to `dir`, and return the source. Two
- * different files claiming one path (texts a host gave) get keys of their own, `<key>~1`, ...
+ * Key each file of the graph at `root` by its path relative to `dir`, and return the source, whose
+ * code root is `codeRoot`. Two different files claiming one path (texts a host gave) get keys of
+ * their own, `<key>~1`, ...
  */
-function sourceOf(root: SourceNode, dir: string): FlowSource {
+function sourceOf(root: SourceNode, dir: string, codeRoot: string | null): FlowSource {
   // Two nodes are one file when their paths, texts and the files their refs reach are; each
   // distinct file gets a number, so a long chain compares in linear time.
   const ids = new Map<string, number>();
@@ -854,7 +856,7 @@ function sourceOf(root: SourceNode, dir: string): FlowSource {
     return key;
   };
   const rootKey = visit(root);
-  return Object.freeze({ root: rootKey, dir, files: Object.freeze(Object.fromEntries(files)) });
+  return Object.freeze({ root: rootKey, dir, codeRoot, files: Object.freeze(Object.fromEntries(files)) });
 }
 
 /** Return `path`'s real path, or `path` itself when it doesn't exist. */

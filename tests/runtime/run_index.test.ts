@@ -84,7 +84,7 @@ function runStarted(parent: { runId: string; node: string | null } | null = null
     startWiringOverride: {},
     effectiveLlmByStaticPath: {},
     numWorkers: 0,
-    flow: { root: "flow.yaml", dir: "/flows", files: { "flow.yaml": { text: "id: f\n", refs: {} } } },
+    flow: { root: "flow.yaml", dir: "/flows", codeRoot: null, files: { "flow.yaml": { text: "id: f\n", refs: {} } } },
     parent,
   });
 }

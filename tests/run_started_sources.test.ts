@@ -1,8 +1,9 @@
 /**
  * A loaded flow keeps the text of every flow file the loader read, and `run_started` records it,
  * with the skills, the tool specs, the yian version and the parent run; resume compiles the recorded
- * flow, never the files on disk. With `codeRoot`, `loadFlowSource`, `advance`, `loadRecordedFlow`
- * and `foldRunLog` check every recorded file's CODE references, a host child's included, against it.
+ * flow, never the files on disk. A flow loaded with `codeRoot` records it, and `loadFlowSource`,
+ * `advance`, `loadRecordedFlow` and `foldRunLog` check every recorded file's CODE references, a host
+ * child's included, against it; they refuse a `codeRoot` naming another folder.
  */
 
 import {
@@ -16,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
@@ -33,7 +34,7 @@ import {
   type RunFlowOptions,
   runFlow,
 } from "../src/run.ts";
-import { PoolCommitRecord, readRunLog, RunStartedRecord } from "../src/runtime/log.ts";
+import { type FlowSource, PoolCommitRecord, readRunLog, RunStartedRecord } from "../src/runtime/log.ts";
 import { Skill } from "../src/skills/catalog.ts";
 import { type FunctionTool, tool } from "../src/tools/function_tools.ts";
 import { mcpServer } from "../src/tools/mcp.ts";
@@ -139,10 +140,13 @@ function writeShape(dir: string, shape: (typeof SHAPES)[string]): void {
   }
 }
 
-/** Load `<dir>/flow.yaml` as the CLI does: its folder searched first, named by its file name. */
-async function loadRoot(dir: string): Promise<ComposedFlow> {
+/**
+ * Load `<dir>/flow.yaml` as the CLI does: its folder searched first, named by its file name, under
+ * `codeRoot` when given.
+ */
+async function loadRoot(dir: string, codeRoot: string | null = null): Promise<ComposedFlow> {
   const path = join(dir, "flow.yaml");
-  return loadFlow(readFileSync(path, "utf8"), { searchPaths: [dir], sourceLabel: basename(path) });
+  return loadFlow(readFileSync(path, "utf8"), { searchPaths: [dir], sourceLabel: basename(path), codeRoot });
 }
 
 /** A flow's source as plain data. */
@@ -156,7 +160,12 @@ for (const [name, shape] of Object.entries(SHAPES)) {
     writeShape(dir, shape);
     const root = join(dir, shape.root);
 
-    expect(sourceOf(await loadRoot(root))).toEqual({ root: "flow.yaml", dir: realpathSync(root), files: shape.keys });
+    expect(sourceOf(await loadRoot(root))).toEqual({
+      root: "flow.yaml",
+      dir: realpathSync(root),
+      codeRoot: null,
+      files: shape.keys,
+    });
   });
 }
 
@@ -187,6 +196,7 @@ test("one file reached by two paths is recorded once", async () => {
   expect(sourceOf(loaded)).toEqual({
     root: "flow.yaml",
     dir: realpathSync(join(dir, "real")),
+    codeRoot: null,
     files: { "flow.yaml": file(root, { b: "b.yaml", "../real/b": "b.yaml" }), "b.yaml": file(leafOut("b")) },
   });
 });
@@ -202,6 +212,7 @@ test("a root given as text that uses the file on disk under its own name records
   expect(sourceOf(loaded)).toEqual({
     root: "flow.yaml",
     dir: realpathSync(dir),
+    codeRoot: null,
     files: { "flow.yaml": file(root, { flow: "flow.yaml~1" }), "flow.yaml~1": file(leafOut("old")) },
   });
   const again = await loadFlowSource(loaded.source!);
@@ -264,6 +275,7 @@ test("a folder reached through a symlink keys its files from its real folder", a
   expect(sourceOf(loaded)).toEqual({
     root: "flow.yaml",
     dir: realpathSync(join(dir, "real")),
+    codeRoot: null,
     files: SHAPES["one level"]!.keys,
   });
 });
@@ -280,7 +292,12 @@ test("a host resolver's loaded children join the root's files, keyed from the ro
 
   const loaded = await loadFlow(ROOT, { childResolver: hostResolver(dir), baseDir: dir, sourceLabel: "flow.yaml" });
 
-  expect(sourceOf(loaded)).toEqual({ root: "flow.yaml", dir: realpathSync(dir), files: SHAPES["two levels"]!.keys });
+  expect(sourceOf(loaded)).toEqual({
+    root: "flow.yaml",
+    dir: realpathSync(dir),
+    codeRoot: null,
+    files: SHAPES["two levels"]!.keys,
+  });
 });
 
 test("a host child read from outside the root's folder is keyed from the root's folder", async () => {
@@ -299,6 +316,7 @@ test("a host child read from outside the root's folder is keyed from the root's 
   expect(sourceOf(loaded)).toEqual({
     root: "flow.yaml",
     dir: realpathSync(rootDir),
+    codeRoot: null,
     files: {
       "flow.yaml": file(ROOT, { "lib/child": "../other/lib/child.yaml" }),
       "../other/lib/child.yaml": file(CHILD),
@@ -319,6 +337,7 @@ test("host children given as texts in one folder get keys of their own", async (
   expect(sourceOf(loaded)).toEqual({
     root: "flow.yaml",
     dir: realpathSync(dir),
+    codeRoot: null,
     files: {
       "flow.yaml": file(two, { a: "<flow>", b: "<flow>~1" }),
       "<flow>": file(texts["a"]!),
@@ -343,7 +362,22 @@ test("a flow built in code, or loaded over one, has no source", async () => {
   expect(over.source).toBeNull();
 });
 
-test("loadFlowSource with codeRoot refuses a recorded file whose CODE reference resolves outside it", async () => {
+/** `source` with the code root `root`, as a load under `root` would have recorded it. */
+const underRoot = (source: FlowSource, root: string): FlowSource => ({ ...source, codeRoot: realpathSync(root) });
+
+test("a load under codeRoot keeps the root's real path in its source; one without keeps null", async () => {
+  const root = freshDir("code-root");
+  symlinkSync(root, `${root}-link`);
+  writeTree(root, { "flows/flow.yaml": ROOT, "flows/lib/child.yaml": CODE_CHILD, "flows/lib/fn.ts": UP });
+  const flows = join(root, "flows");
+
+  for (const codeRoot of [root, `${root}-link`, relative(process.cwd(), root)]) {
+    expect((await loadRoot(flows, codeRoot)).source!.codeRoot).toBe(realpathSync(root));
+  }
+  expect((await loadRoot(flows)).source!.codeRoot).toBeNull();
+});
+
+test("loadFlowSource refuses a recorded file whose CODE reference resolves outside its code root", async () => {
   const dir = freshDir("code-root");
   const other = freshDir("code-out");
   writeTree(other, { "h.ts": UP });
@@ -354,12 +388,12 @@ test("loadFlowSource with codeRoot refuses a recorded file whose CODE reference 
     sourceLabel: "flow.yaml",
   });
 
-  const error = await loadErrorAsync(loadFlowSource(loaded.source!, { codeRoot: dir }));
+  const error = await loadErrorAsync(loadFlowSource(underRoot(loaded.source!, dir)));
   expect(error.message).toEndWith(" is outside the code root");
-  expect((await loadFlowSource(loaded.source!, { codeRoot: tmp })).compiled.flowId).toBe("root");
+  expect((await loadFlowSource(underRoot(loaded.source!, tmp))).compiled.flowId).toBe("root");
 });
 
-test("loadFlowSource with codeRoot checks a recorded child file outside flow.dir", async () => {
+test("loadFlowSource checks a recorded child file outside flow.dir against the source's code root", async () => {
   const dir = freshDir("code-root");
   const other = freshDir("code-out");
   writeTree(other, { "child.yaml": codeFlow("child", "./h.ts:up"), "h.ts": UP });
@@ -372,9 +406,9 @@ test("loadFlowSource with codeRoot checks a recorded child file outside flow.dir
   const source = loaded.source!;
   expect(Object.keys(source.files).sort()).toEqual([`${ref}.yaml`, "flow.yaml"]);
 
-  const error = await loadErrorAsync(loadFlowSource(source, { codeRoot: dir }));
+  const error = await loadErrorAsync(loadFlowSource(underRoot(source, dir)));
   expect(error.message).toEndWith(" is outside the code root");
-  expect((await loadFlowSource(source, { codeRoot: tmp })).compiled.flowId).toBe("root");
+  expect((await loadFlowSource(underRoot(source, tmp))).compiled.flowId).toBe("root");
 });
 
 test("a host child outside codeRoot loads, but loadFlowSource refuses its recorded file", async () => {
@@ -391,7 +425,7 @@ test("a host child outside codeRoot loads, but loadFlowSource refuses its record
     codeRoot: dir,
   });
 
-  const error = await loadErrorAsync(loadFlowSource(loaded.source!, { codeRoot: dir }));
+  const error = await loadErrorAsync(loadFlowSource(loaded.source!));
   expect(error.message).toEndWith(" is outside the code root");
 });
 
@@ -459,7 +493,12 @@ test("run_started records the flow files, the yian version and no parent", async
 
   const record = started(await runInto(await loadRoot(dir)));
 
-  expect(record.flow).toEqual({ root: "flow.yaml", dir: realpathSync(dir), files: SHAPES["two levels"]!.keys });
+  expect(record.flow).toEqual({
+    root: "flow.yaml",
+    dir: realpathSync(dir),
+    codeRoot: null,
+    files: SHAPES["two levels"]!.keys,
+  });
   expect(record.yianVersion).toBe(VERSION);
   expect(record.parent).toBeNull();
   // A TOOL node's tool is not one an AGENT grants.
@@ -473,7 +512,12 @@ test.each(["", ".", "..", "/"])("a source label %p with no file name keys the ro
 
   const loaded = await loadFlow(text, { baseDir: dir, sourceLabel: label });
 
-  expect(sourceOf(loaded)).toEqual({ root: "<flow>", dir: realpathSync(dir), files: { "<flow>": file(text) } });
+  expect(sourceOf(loaded)).toEqual({
+    root: "<flow>",
+    dir: realpathSync(dir),
+    codeRoot: null,
+    files: { "<flow>": file(text) },
+  });
   await runInto(loaded, {}, {});
 });
 
@@ -589,11 +633,17 @@ test("a symlinked child's CODE node resolves beside the link's target on resume 
   expect(resumed.output).toBe("up:x");
 });
 
-/** Write, in `root/flows`, a flow whose child runs the CODE file `lib/fn.ts`; return the flow. */
-async function writeCodeFlow(root: string): Promise<{ flows: string; flow: ComposedFlow }> {
+/**
+ * Write, in `root/flows`, a flow whose child runs the CODE file `lib/fn.ts`; return the flow,
+ * loaded under `codeRoot` when given.
+ */
+async function writeCodeFlow(
+  root: string,
+  codeRoot: string | null = null,
+): Promise<{ flows: string; flow: ComposedFlow }> {
   const flows = join(root, "flows");
   writeTree(flows, { "flow.yaml": ROOT, "lib/child.yaml": CODE_CHILD, "lib/fn.ts": UP });
-  return { flows, flow: await loadRoot(flows) };
+  return { flows, flow: await loadRoot(flows, codeRoot) };
 }
 
 /** Replace `flows/lib/fn.ts` by a symlink to a copy in `out`. */
@@ -603,16 +653,25 @@ function linkCodeFileOut(flows: string, out: string): void {
   symlinkSync(join(out, "fn.ts"), join(flows, "lib", "fn.ts"));
 }
 
-test("resume with codeRoot runs a recorded flow whose CODE files stay inside it", async () => {
+test("run_started records the code root the flow was loaded under", async () => {
   const root = freshDir("code-root");
-  const { flow } = await writeCodeFlow(root);
-  const log = await cutRun(flow, 9);
+  const { flow } = await writeCodeFlow(root, root);
 
-  expect((await loadRecordedFlow(log, { env: hostEnv(logs), codeRoot: root }))!.compiled.flowId).toBe("root");
-  const resumed = await advance({ log, env: hostEnv(logs), codeRoot: root });
+  expect(started(await runInto(flow)).flow!.codeRoot).toBe(realpathSync(root));
+});
 
-  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-  expect(resumed.output).toBe("up:x");
+test("a run started under codeRoot resumes under it, with or without codeRoot passed again", async () => {
+  const root = freshDir("code-root");
+  symlinkSync(root, `${root}-link`);
+  const { flow } = await writeCodeFlow(root, root);
+
+  for (const codeRoot of [undefined, root, `${root}-link`]) {
+    const log = await cutRun(flow, 9);
+    expect((await loadRecordedFlow(log, { env: hostEnv(logs), codeRoot }))!.compiled.flowId).toBe("root");
+    const resumed = await advance({ log, env: hostEnv(logs), codeRoot });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(resumed.output).toBe("up:x");
+  }
 });
 
 /** The two ways a recorded CODE file comes to resolve outside the root, each run on `flows` with `out`. */
@@ -628,40 +687,81 @@ const MOVED_OUT: [string, (flows: string, out: string) => void][] = [
 ];
 
 test.each(MOVED_OUT)(
-  "resume with codeRoot refuses a recorded CODE file that now resolves outside it, before appending anything: %s",
+  "resume refuses a CODE file that now resolves outside the recorded code root, before appending anything: %s",
+  async (_name, change) => {
+    const root = freshDir("code-root");
+    const out = freshDir("code-out");
+    const { flows, flow } = await writeCodeFlow(root, root);
+    const log = await cutRun(flow, 9);
+    change(flows, out);
+    const before = readFileSync(log);
+
+    for (const codeRoot of [undefined, root]) {
+      const error = await loadErrorAsync(advance({ log, env: hostEnv(logs), codeRoot }));
+      expect(error.message).toEndWith(" is outside the code root");
+      expect(readFileSync(log).equals(before)).toBe(true);
+      const loadError = await loadErrorAsync(loadRecordedFlow(log, { env: hostEnv(logs), codeRoot }));
+      expect(loadError.message).toEndWith(" is outside the code root");
+    }
+  },
+);
+
+test.each(MOVED_OUT)(
+  "a run started without codeRoot resumes unconfined after its CODE file moves: %s",
   async (_name, change) => {
     const root = freshDir("code-root");
     const out = freshDir("code-out");
     const { flows, flow } = await writeCodeFlow(root);
     const log = await cutRun(flow, 9);
     change(flows, out);
-    const before = readFileSync(log);
 
-    const error = await loadErrorAsync(advance({ log, env: hostEnv(logs), codeRoot: root }));
-    expect(error.message).toEndWith(" is outside the code root");
-    expect(readFileSync(log).equals(before)).toBe(true);
-    const loadError = await loadErrorAsync(loadRecordedFlow(log, { env: hostEnv(logs), codeRoot: root }));
-    expect(loadError.message).toEndWith(" is outside the code root");
-
-    // Unconfined, the same log resumes: the moved file still exports `up`.
+    // The moved file still exports `up`.
     const resumed = await advance({ log, env: hostEnv(logs) });
     expect(resumed.status, resumed.failure?.message).toBe("succeeded");
     expect(resumed.output).toBe("up:x");
   },
 );
 
-test("a finished log is refused with codeRoot too when its CODE file resolves outside it", async () => {
+test("a finished log is refused too when its CODE file resolves outside the recorded code root", async () => {
   const root = freshDir("code-root");
   const out = freshDir("code-out");
-  const { flows, flow } = await writeCodeFlow(root);
+  const { flows, flow } = await writeCodeFlow(root, root);
   const log = await runInto(flow);
   linkCodeFileOut(flows, out);
   const before = readFileSync(log);
 
-  const error = await loadErrorAsync(advance({ log, env: hostEnv(logs), codeRoot: root }));
+  const error = await loadErrorAsync(advance({ log, env: hostEnv(logs) }));
 
   expect(error.message).toEndWith(" is outside the code root");
   expect(readFileSync(log).equals(before)).toBe(true);
+});
+
+test("a codeRoot other than the recorded one is refused before anything is appended", async () => {
+  const root = freshDir("code-root");
+  const other = freshDir("code-other");
+  const confined = await writeCodeFlow(root, root);
+  const free = await writeCodeFlow(freshDir("code-free"));
+  const cases: [string, string, string][] = [
+    [await cutRun(confined.flow, 9), other, `(the run recorded '${realpathSync(root)}')`],
+    [await cutRun(free.flow, 9), root, "(the run recorded none)"],
+  ];
+
+  for (const [log, codeRoot, recorded] of cases) {
+    const before = readFileSync(log);
+    const given = realpathSync(codeRoot);
+    const message = `run log ${log}: codeRoot '${given}' isn't the run's code root ${recorded}; leave out codeRoot`;
+    const options = { env: hostEnv(logs), codeRoot };
+    for (const call of [
+      () => advance({ log, ...options }),
+      () => loadRecordedFlow(log, options),
+      () => foldRunLog(log, options),
+    ]) {
+      const error = await rejected(call());
+      expect(error).toBeInstanceOf(RangeError);
+      expect((error as Error).message).toBe(message);
+    }
+    expect(readFileSync(log).equals(before)).toBe(true);
+  }
 });
 
 /** The value the folded run's top `__end__` commit writes: the run's output. */
@@ -672,12 +772,12 @@ function foldedOutput(folded: FoldedRun): unknown {
   return end?.value?.toObject();
 }
 
-test("foldRunLog with codeRoot folds a recorded flow whose CODE files stay inside it", async () => {
+test("foldRunLog folds a run started under codeRoot whose CODE files stay inside it", async () => {
   const root = freshDir("code-root");
-  const { flow } = await writeCodeFlow(root);
+  const { flow } = await writeCodeFlow(root, root);
   const log = await runInto(flow);
 
-  const folded = await foldRunLog(log, { env: hostEnv(logs), codeRoot: root });
+  const folded = await foldRunLog(log, { env: hostEnv(logs) });
 
   expect(folded.flow.compiled.flowId).toBe("root");
   expect(folded.records).toHaveLength(readRunLog(log).length);
@@ -685,21 +785,18 @@ test("foldRunLog with codeRoot folds a recorded flow whose CODE files stay insid
 });
 
 test.each(MOVED_OUT)(
-  "foldRunLog with codeRoot refuses a recorded CODE file that now resolves outside it: %s",
+  "foldRunLog refuses a CODE file that now resolves outside the recorded code root: %s",
   async (_name, change) => {
     const root = freshDir("code-root");
     const out = freshDir("code-out");
-    const { flows, flow } = await writeCodeFlow(root);
+    const { flows, flow } = await writeCodeFlow(root, root);
     const log = await runInto(flow);
     change(flows, out);
     const before = readFileSync(log);
 
-    const error = await loadErrorAsync(foldRunLog(log, { env: hostEnv(logs), codeRoot: root }));
+    const error = await loadErrorAsync(foldRunLog(log, { env: hostEnv(logs) }));
     expect(error.message).toEndWith(" is outside the code root");
     expect(readFileSync(log).equals(before)).toBe(true);
-
-    // Unconfined, the same log folds: the moved file still exports `up`.
-    expect(foldedOutput(await foldRunLog(log, { env: hostEnv(logs) }))).toBe("up:x");
   },
 );
 

@@ -128,7 +128,7 @@ import {
   sameItems,
   sameOptional,
 } from "./nodes/contracts.ts";
-import { FileLockError, realScheduler, type Scheduler, syncFolder, VERSION, warn } from "./platform.ts";
+import { FileLockError, isMissingPath, realScheduler, type Scheduler, syncFolder, VERSION, warn } from "./platform.ts";
 import { driveBackward, recordedGrants } from "./runtime/backward.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { type DeliveryOp, FlowEngine, prepareDelivery, resumedAttemptEvents } from "./runtime/engine.ts";
@@ -453,8 +453,6 @@ interface IdleRun {
   readonly flow: ComposedFlow;
   /** The code-built flow the run was given, or `null` for one recompiled from its recorded files. */
   readonly hostFlow: ComposedFlow | null;
-  /** The resolved code root the flow was compiled under, or `null` for none. */
-  readonly codeRoot: string | null;
   readonly apiKey: string | null;
   readonly headers: Readonly<Record<string, string>> | null;
   /** The seq of the log's last record when the run was left. */
@@ -599,7 +597,6 @@ function reusable(
   authority: JsonlRunLog,
   key: string,
   want: {
-    codeRoot: string | null;
     hostFlow: ComposedFlow | null;
     credentials?: { apiKey: string | null; headers: Readonly<Record<string, string>> | null };
   },
@@ -608,7 +605,7 @@ function reusable(
   const stat = statSync(key, { bigint: true });
   if (idle.state.runId !== authority.runId || idle.lastSeq !== authority.nextSequence - 1) return null;
   if (idle.size !== stat.size || idle.dev !== stat.dev || idle.ino !== stat.ino) return null;
-  if (idle.codeRoot !== want.codeRoot || idle.hostFlow !== want.hostFlow) return null;
+  if (idle.hostFlow !== want.hostFlow) return null;
   const credentials = want.credentials;
   if (
     credentials !== undefined &&
@@ -630,7 +627,7 @@ function idleRun(
   flow: ComposedFlow,
   key: string,
   authority: JsonlRunLog,
-  keep: Pick<IdleRun, "hostFlow" | "codeRoot" | "apiKey" | "headers">,
+  keep: Pick<IdleRun, "hostFlow" | "apiKey" | "headers">,
 ): IdleRun | null {
   if (state.result !== null || state.waits.waiting.size === 0) return null;
   const stat = statSync(key, { bigint: true });
@@ -1419,7 +1416,7 @@ async function startRun(
       runHold = hold(key, null);
       const opened = authority as JsonlRunLog;
       const hostFlow = flow.source === null ? flow : null;
-      keep = () => idleRun(state, flow, key, opened, { hostFlow, codeRoot: null, ...credentials });
+      keep = () => idleRun(state, flow, key, opened, { hostFlow, ...credentials });
     }
     // Every append goes through the live channel's wrapper; the authority itself is kept and closed.
     const appender = live === null ? authority : live.wrap(authority);
@@ -1520,9 +1517,10 @@ export interface AdvanceOptions {
    */
   flow?: ComposedFlow | null;
   /**
-   * A directory every CODE reference of the recorded flow files must resolve inside, symlinks
-   * followed on both sides, as `loadFlow`'s `codeRoot`; a reference outside it rejects with
-   * `LoadError` before anything is appended. `null` (the default) confines nothing. Not used for
+   * The code root the run recorded: the `codeRoot` its flow was loaded under, which the recorded
+   * flow files' CODE references must still resolve inside (a reference outside it rejects with
+   * `LoadError` before anything is appended). Given, it must name the same folder once symlinks
+   * are resolved, or the call is refused; `null` (the default) uses the recorded one. Not used for
    * a flow built in code: the host confines it when it loads it.
    */
   codeRoot?: string | null;
@@ -1617,7 +1615,7 @@ export interface AdvanceOptions {
  *
  * When the run ends waiting, the log's lock is released and its state stays in an in-process
  * registry keyed by the log's real path, so a later `advance` (or delivery) in this process reuses
- * it while the log is the file it left, with the same code root, code-built flow and credentials.
+ * it while the log is the file it left, with the same code-built flow and credentials.
  * An `advance` of a run this process's engine is moving (its loop running) rejects with
  * `RunBusyError`; one of a run another call is setting up, or closing after its loop ended, waits
  * for it.
@@ -1631,7 +1629,8 @@ export interface AdvanceOptions {
  *   integer, or a recorded carrier has the wrong type.
  * @throws ExpressionError as `runFlow`, for an unfinished run.
  * @throws RangeError when the log's prefix is invalid, the run's flow was built in code and no
- *   `flow` was passed, or its flow files were recorded and one was, the flow fingerprint differs,
+ *   `flow` was passed, or its flow files were recorded and one was, `codeRoot` isn't the recorded
+ *   code root, the flow fingerprint differs,
  *   the worker count is negative, `apiKey` or `headers` is refused or their header names aren't the recorded
  *   ones (the message never echoes a value), a recorded agent config has an invalid field, the
  *   recorded memory table doesn't match the flow, or, for an unfinished run, a tool or skill
@@ -1650,7 +1649,7 @@ export interface AdvanceOptions {
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
  * @throws LoadError when the recorded flow files no longer load (a CODE reference's file gone, or
- *   resolving outside `codeRoot`), before anything is appended.
+ *   resolving outside the recorded code root), before anything is appended.
  * @throws The signal's reason when it aborts.
  * @throws RunBusyError when another writer holds the log: another process or outside holder (the
  *   busy `FileLockError` is its cause), or a run this process's engine is moving (no cause).
@@ -1663,7 +1662,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
-    const { log, tools = null, context, signal = null, flow: hostFlow = null, codeRoot = null } = options;
+    const { log, tools = null, context, signal = null, flow: hostFlow = null } = options;
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
       throw new TypeError("advance's flow must be a ComposedFlow or null");
     }
@@ -1677,8 +1676,8 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     const key = realpathSync(locator);
     const scheduler = options.scheduler ?? realScheduler;
     const clock = () => scheduler.now();
-    // Resolved before the hold is awaited, like the log, and used for both the compile and the entry.
-    const root = codeRoot === null ? null : resolve(codeRoot);
+    // Resolved before the hold is awaited, like the log.
+    const root = resolvedRoot(options.codeRoot);
     const runHold = await holdForAdvance(key, locator);
     let authority: JsonlRunLog | null = null;
     let memoryRuntime: MemoryRuntime | null = null;
@@ -1691,13 +1690,14 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       const start = startRecord(authority[Symbol.iterator]().next().value);
       // Values like AGENT_RETRIES change the loaded flow, so they are checked before it loads.
       checkRecorded(start.defaults);
+      checkCodeRoot(log, start, root);
       const credentials = { apiKey, headers };
-      const kept = reusable(runHold.idle, authority, key, { codeRoot: root, hostFlow, credentials });
-      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, root));
+      const kept = reusable(runHold.idle, authority, key, { hostFlow, credentials });
+      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow));
       const state = kept?.state ?? replayRunLog(flow, authority, credentials);
       // The caller's credentials, which the replay used, before a flow that sends no host key
       // drops them below: a later call passing the same ones then reuses the entry.
-      keep = () => idleRun(state, flow, key, opened, { hostFlow, codeRoot: root, ...credentials });
+      keep = () => idleRun(state, flow, key, opened, { hostFlow, ...credentials });
       const callTime = state.callTimeLlm as CallTimeLlm | null;
       if (!usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
         apiKey = null;
@@ -1809,15 +1809,10 @@ function startRecord(first: RecordEnvelope | undefined): RunStartedRecord {
  *
  * @throws RangeError when the run's flow was built in code and `hostFlow` is `null`, or its files
  *   were recorded and `hostFlow` isn't `null`.
- * @throws LoadError when the recorded files don't load, a CODE reference resolving outside
- *   `codeRoot` included.
+ * @throws LoadError when the recorded files don't load, a CODE reference resolving outside the
+ *   recorded code root included.
  */
-async function resumedFlow(
-  log: string,
-  start: RunStartedRecord,
-  hostFlow: ComposedFlow | null,
-  codeRoot: string | null,
-): Promise<ComposedFlow> {
+async function resumedFlow(log: string, start: RunStartedRecord, hostFlow: ComposedFlow | null): Promise<ComposedFlow> {
   if (start.flow === null) {
     if (hostFlow === null) {
       throw new RangeError(`run log ${log}: this run's flow was built in code; resume it with advance({log, flow})`);
@@ -1827,7 +1822,35 @@ async function resumedFlow(
   if (hostFlow !== null) {
     throw new RangeError(`run log ${log} holds its flow files, which resume compiles; leave out flow`);
   }
-  return loadFlowSource(start.flow, { codeRoot });
+  return loadFlowSource(start.flow);
+}
+
+/** Return `codeRoot` made absolute, or `null` when it is absent. */
+function resolvedRoot(codeRoot: string | null | undefined): string | null {
+  return codeRoot == null ? null : resolve(codeRoot);
+}
+
+/**
+ * Refuse `root`, a call's absolute `codeRoot`, unless it names the code root the run recorded once
+ * symlinks are resolved; `null` asks for the recorded one. A run built in code records no flow
+ * files, so any root passes: its host confined the flow when it loaded it.
+ *
+ * @throws RangeError when the run recorded flow files under another code root, or under none.
+ */
+function checkCodeRoot(log: string, start: RunStartedRecord, root: string | null): void {
+  if (root === null || start.flow === null) return;
+  const recorded = start.flow.codeRoot;
+  let real = root;
+  try {
+    real = realpathSync(root);
+  } catch (error) {
+    if (!isMissingPath(error)) throw error;
+  }
+  if (real === recorded) return;
+  const was = recorded === null ? "the run recorded none" : `the run recorded ${reprText(recorded)}`;
+  throw new RangeError(
+    `run log ${log}: codeRoot ${reprText(real)} isn't the run's code root (${was}); leave out codeRoot`,
+  );
 }
 
 /**
@@ -1838,12 +1861,12 @@ async function resumedFlow(
  * @param log The JSONL run log.
  * @param options.env The environment the load reads the `YIAN_*` values from (default
  *   `processEnv`).
- * @param options.codeRoot As `advance`'s.
+ * @param options.codeRoot As `advance`'s: the recorded code root, or `null` (the default) for it.
  * @returns The recorded flow, or `null` when the run's flow was built in code.
- * @throws RangeError when the log holds no complete line or doesn't start with `RunStarted`,
- *   besides `iterRunRecords`' errors.
- * @throws LoadError when the files no longer load (a CODE reference's file gone, or outside
- *   `codeRoot`).
+ * @throws RangeError when the log holds no complete line or doesn't start with `RunStarted`, or
+ *   `codeRoot` isn't the recorded code root, besides `iterRunRecords`' errors.
+ * @throws LoadError when the files no longer load (a CODE reference's file gone, or outside the
+ *   recorded code root).
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
  */
@@ -1852,7 +1875,7 @@ export async function loadRecordedFlow(
   options: { env?: Env | null; codeRoot?: string | null } = {},
 ): Promise<ComposedFlow | null> {
   const env = options.env ?? processEnv;
-  const { codeRoot = null } = options;
+  const root = resolvedRoot(options.codeRoot);
   // Only the first record is read.
   const records = iterRunRecords(log);
   let first: RecordEnvelope | undefined;
@@ -1865,7 +1888,8 @@ export async function loadRecordedFlow(
   const start = startRecord(first);
   return withEnv(env, () => {
     checkRecorded(start.defaults);
-    return start.flow === null ? null : loadFlowSource(start.flow, { codeRoot });
+    checkCodeRoot(log, start, root);
+    return start.flow === null ? null : loadFlowSource(start.flow);
   });
 }
 
@@ -1922,7 +1946,11 @@ export interface DeliveryOptions {
    * ones the run recorded (default `processEnv`).
    */
   env?: Env | null;
-  /** As `advance`'s: recompiling the recorded flow refuses a CODE file outside it, before any append. */
+  /**
+   * As `advance`'s: the recorded code root, refused when it names another folder; `null` (the
+   * default) uses the recorded one. Recompiling the recorded flow refuses a CODE file outside it,
+   * before any append.
+   */
   codeRoot?: string | null;
   /** The flow of a run built in code (`RunStarted` recorded no flow files), as `advance`'s. */
   flow?: ComposedFlow | null;
@@ -1946,7 +1974,7 @@ async function deliverTo(
   const env = options.env ?? processEnv;
   return withEnv(env, async () => {
     current();
-    const { codeRoot = null, flow: hostFlow = null } = options;
+    const { flow: hostFlow = null } = options;
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
       throw new TypeError("a host call's flow must be a ComposedFlow or null");
     }
@@ -1954,7 +1982,7 @@ async function deliverTo(
     const locator = resolve(log);
     // The registry's key: the file itself, however the path names it (throws ENOENT when missing).
     const key = realpathSync(locator);
-    const want = { codeRoot: codeRoot === null ? null : resolve(codeRoot), hostFlow };
+    const root = resolvedRoot(options.codeRoot);
     const found = await liveOrHold(key, (engine) => {
       before(engine.state);
       return engine.deliver(op);
@@ -1970,12 +1998,13 @@ async function deliverTo(
       const opened = authority;
       const start = startRecord(authority[Symbol.iterator]().next().value);
       checkRecorded(start.defaults);
-      const kept = reusable(runHold.idle, authority, key, want);
-      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow, want.codeRoot));
+      checkCodeRoot(log, start, root);
+      const kept = reusable(runHold.idle, authority, key, { hostFlow });
+      const flow = kept?.flow ?? (await resumedFlow(log, start, hostFlow));
       const state = kept?.state ?? replayRunLog(flow, authority);
       // Set before preparing: a refused delivery changes nothing, so the state stays reusable.
       const credentials = { apiKey: kept?.apiKey ?? null, headers: kept?.headers ?? null };
-      keep = () => idleRun(state, flow, key, opened, { ...want, ...credentials });
+      keep = () => idleRun(state, flow, key, opened, { hostFlow, ...credentials });
       before(state);
       const prepared = prepareDelivery(state, op);
       if (prepared === null) return { seq: null, events: [], record: null };
@@ -2017,10 +2046,11 @@ async function deliverTo(
  *   result, `unknown_inbox`, `inbox_closed`, `invalid_value` (the `TypeCheckError` is the cause)
  *   or `too_large` (over the run's `YIAN_MAX_EVENT_BYTES`).
  * @throws RunBusyError when another writer holds the log.
- * @throws RangeError when the log is empty or doesn't start with `RunStarted`, or the run's flow
- *   was built in code and `options.flow` is missing (or was recorded and it is given).
- * @throws LoadError when the recorded flow no longer loads (a CODE file gone, or outside
- *   `codeRoot`), before anything is appended.
+ * @throws RangeError when the log is empty or doesn't start with `RunStarted`, the run's flow was
+ *   built in code and `options.flow` is missing (or was recorded and it is given), or
+ *   `options.codeRoot` isn't the recorded code root.
+ * @throws LoadError when the recorded flow no longer loads (a CODE file gone, or outside the
+ *   recorded code root), before anything is appended.
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
  * @throws Error (code `ENOENT`) when `log` doesn't exist; the log's open, append and close errors.
  */
@@ -2549,13 +2579,14 @@ export interface FoldedRecord {
  *   `processEnv`).
  * @param options.flow The flow, required when the run's flow was built in code (`flow: null`),
  *   refused otherwise.
- * @param options.codeRoot As `advance`'s: a recorded CODE reference whose file's real path is
- *   outside it rejects with `LoadError` before the replay; not used for a flow built in code.
+ * @param options.codeRoot As `advance`'s: the recorded code root, or `null` (the default) for it. A
+ *   recorded CODE reference whose file's real path is outside it rejects with `LoadError` before
+ *   the replay; not used for a flow built in code.
  * @throws RangeError when the log is empty, ends inside its run start, or the replay refuses it;
  *   when the run's flow was built in code and `options.flow` is missing, or the log holds its
- *   flow files and `options.flow` is given.
+ *   flow files and `options.flow` is given, or `codeRoot` isn't the recorded code root.
  * @throws LoadError when the recorded files no longer load (a CODE reference's file gone, or
- *   outside `codeRoot`).
+ *   outside the recorded code root).
  * @throws DefaultsError, DefaultsMismatchError as `loadRecordedFlow`, and `iterRunRecords`' errors.
  */
 export async function foldRunLog(
@@ -2563,11 +2594,13 @@ export async function foldRunLog(
   options: { env?: Env | null; flow?: ComposedFlow | null; codeRoot?: string | null } = {},
 ): Promise<FoldedRun> {
   const env = options.env ?? processEnv;
+  const root = resolvedRoot(options.codeRoot);
   const entries = [...iterRunRecords(log)];
   const start = startRecord(entries[0]?.envelope);
   const flow = await withEnv(env, () => {
     checkRecorded(start.defaults);
-    return resumedFlow(log, start, options.flow ?? null, options.codeRoot ?? null);
+    checkCodeRoot(log, start, root);
+    return resumedFlow(log, start, options.flow ?? null);
   });
   const values = new Map<number, TypedValue>();
   withEnv(env, () =>
@@ -2797,7 +2830,7 @@ export function agentCalls(log: string): AgentCallEntry[] {
  *
  * @example
  * const [first] = agentCalls(log);
- * const view = await agentCall(log, first, { codeRoot });
+ * const view = await agentCall(log, first);
  * show(view.request?.system, view.request?.messages, view.reply, view.toolResults);
  */
 export async function agentCall(
@@ -2818,11 +2851,13 @@ export async function agentCall(
   const apiKey = options.apiKey == null ? null : secretKey(options.apiKey);
   const headers = options.headers == null ? null : validateHeaders(options.headers, null);
   const env = options.env ?? processEnv;
+  const root = resolvedRoot(options.codeRoot);
   const entries = [...iterRunRecords(log)];
   const start = startRecord(entries[0]?.envelope);
   const flow = await withEnv(env, () => {
     checkRecorded(start.defaults);
-    return resumedFlow(log, start, options.flow ?? null, options.codeRoot ?? null);
+    checkCodeRoot(log, start, root);
+    return resumedFlow(log, start, options.flow ?? null);
   });
   const isStep = (record: RunRecord): record is NodeStepRecord =>
     record instanceof NodeStepRecord && record.nodeId === nodeId;

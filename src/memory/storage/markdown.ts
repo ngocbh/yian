@@ -164,10 +164,10 @@ function replace(target: string, text: string): void {
   syncFolder(dirname(target));
 }
 
-/** Make directory `path` unless it exists, and sync its parent when it was made. */
+/** Make private directory `path` unless it exists, and sync its parent when it was made. */
 function makeDirectory(path: string): void {
   try {
-    fs.mkdirSync(path);
+    fs.mkdirSync(path, { mode: 0o700 });
   } catch (error) {
     if (isSystemError(error) && error.code === "EEXIST") return;
     throw error;
@@ -185,6 +185,8 @@ const VERSION = /^sha256:[0-9a-f]{64}$/;
  * is kept under `.<name>.versions/` next to it, so recorded runs can reopen it later. Each write
  * appends its versions and provenance to `.<name>.writes.jsonl` as one JSON line: keys sorted by
  * code point, separators `, ` and `: `, non-ASCII as `\uXXXX`, floats with a fraction digit.
+ * The write log and kept copies are made private to their owner (mode 0600, the versions folder
+ * 0700), since provenance can hold a learner's feedback.
  * Writers on one host take turns through `.<name>.lock`. Files and the directory entries naming
  * them are synced before a call returns, so a version it handed out survives a power loss.
  * Nothing on disk is touched until the first read or write. A
@@ -279,13 +281,16 @@ export class FileMarkdownStore implements MarkdownStore {
       let created = true;
       let fd: number;
       try {
-        fd = fs.openSync(this.#writes, O_CREAT | O_EXCL | O_WRONLY | O_APPEND);
+        // Private like the document: provenance can hold the learner's feedback.
+        fd = fs.openSync(this.#writes, O_CREAT | O_EXCL | O_WRONLY | O_APPEND, 0o600);
       } catch (error) {
         if (!isSystemError(error) || error.code !== "EEXIST") throw error;
         created = false;
         fd = fs.openSync(this.#writes, O_WRONLY | O_APPEND);
       }
       try {
+        // The open's mode is masked by the umask; fchmod isn't.
+        if (created) fs.fchmodSync(fd, 0o600);
         fs.appendFileSync(fd, line);
         fs.fsyncSync(fd);
       } finally {

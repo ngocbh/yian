@@ -450,6 +450,13 @@ test("a written document is private", async () => {
   expect(fs.statSync(keptPath(dir, version)).mode & 0o777).toBe(0o600);
 });
 
+test("the write log and the versions folder are private", async () => {
+  const store = new FileMarkdownStore(path.join(dir, "ada.md"));
+  await store.write("# Ada\n", { baseVersion: markdownVersion(""), provenance: { feedback: "private feedback" } });
+  expect(fs.statSync(path.join(dir, ".ada.md.writes.jsonl")).mode & 0o777).toBe(0o600);
+  expect(fs.statSync(path.join(dir, ".ada.md.versions")).mode & 0o777).toBe(0o700);
+});
+
 test.each(["kept copy", "document"])(
   "a failed rename of the %s rejects the write, leaves no temporary file and releases the lock",
   async (failing) => {

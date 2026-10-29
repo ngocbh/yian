@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { HOST_KEY_MARKER, missingModelMessage } from "../../src/llm_clients/connection.ts";
 import { requireConcreteSelection, resolveAgentConfig, validateLayer } from "../../src/llm_clients/layers.ts";
@@ -114,7 +114,8 @@ nodes:
 output: \${chat.output}
 `;
   const flow = (await loadFlow(text)).compiled;
-  const expected = resolveLlmCascade(flow, {}, { defaults: DEFAULTS, providerModels: { openai: "gpt-saved" } })["chat"];
+  const { effective } = resolveRunLlm(flow, {}, { defaults: DEFAULTS, providerModels: { openai: "gpt-saved" } });
+  const expected = effective["chat"];
   const authored = { provider: "openai", openai: { temperature: 0.3, max_output_tokens: 5n } };
 
   const config = resolve(authored, { providerModels: { openai: "gpt-saved" } });

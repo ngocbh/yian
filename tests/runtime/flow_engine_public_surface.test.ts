@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { buildGrow } from "../../src/compile/expand.ts";
-import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import {
@@ -257,7 +257,7 @@ test("direct agent uses the run's model factory", async () => {
   const reply = new Response({ message, finishReason: "stop" });
   const model = new ScriptedModel([reply], { provider: "openai", model: "fake-direct" });
   const flow = (await loadFlow(AGENT_FLOW)).compiled;
-  const effective = resolveLlmCascade(flow, {}, { defaults: { provider: "openai", model: "fake-direct" } });
+  const effective = resolveRunLlm(flow, {}, { defaults: { provider: "openai", model: "fake-direct" } }).effective;
   const models = {
     env: NO_ENV,
     createModel: (config: Readonly<Record<string, unknown>>) => {

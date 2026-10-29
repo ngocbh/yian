@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { buildGrow, callSubgraph, cloneChild } from "../../src/compile/expand.ts";
-import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { expansionDigest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -4145,7 +4145,7 @@ output: {left: '\${left.output}', right: '\${right.output}'}
     },
   };
   const built = growing(loaded, {
-    effectiveLlmByStaticPath: resolveLlmCascade(loaded, {}, { defaults: { provider: "test", model: "test" } }),
+    effectiveLlmByStaticPath: resolveRunLlm(loaded, {}, { defaults: { provider: "test", model: "test" } }).effective,
     models,
   });
   const original = copyGraph(built.state.flow);

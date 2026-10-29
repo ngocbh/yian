@@ -9,7 +9,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
-import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { copyGraph } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -47,11 +47,11 @@ function flow(llmConfig: string | null = null): Promise<ComposedFlow> {
 /** Resolve a copy of `loaded` under the host layer `layer` and this test's connection snapshot. */
 function resolve(loaded: ComposedFlow, layer: Record<string, unknown> = {}): Record<string, Record<string, unknown>> {
   const snapshot = connectionSnapshot({ env });
-  return resolveLlmCascade(copyGraph(loaded.compiled), { ...layer }, {
+  return resolveRunLlm(copyGraph(loaded.compiled), { ...layer }, {
     defaults: snapshot.defaults,
     providerModels: snapshot.providerModels,
     strayModel: snapshot.strayModel,
-  });
+  }).effective;
 }
 
 test.each<[Record<string, string>, Record<string, unknown>, string | null, [string, string]]>([

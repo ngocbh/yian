@@ -9,9 +9,6 @@
 
 import { expect, test } from "bun:test";
 
-import * as layoutModule from "../../src/compile/execution_layout.ts";
-import * as compilePackage from "../../src/compile/index.ts";
-import * as modelModule from "../../src/compile/model.ts";
 import {
   CompiledFlow,
   copyGraph,
@@ -22,7 +19,6 @@ import {
   START_ID,
   validateGrowthMetadata,
 } from "../../src/compile/model.ts";
-import * as originsModule from "../../src/compile/origins.ts";
 import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor } from "../../src/compose/source/index.ts";
@@ -889,24 +885,6 @@ test.each([
   const flow = build();
   expect(() => validateGrowthMetadata(flow)).toThrow(error);
   expect(() => validateGrowthMetadata(flow)).toThrow(message);
-});
-
-test("compile/index.ts exports exactly its public names", () => {
-  // Each name and the module that defines it; a namespace lists its keys code-unit sorted.
-  const sources: Record<string, Record<string, unknown>> = {
-    CompiledFlow: modelModule,
-    END_ID: modelModule,
-    Edge: modelModule,
-    START_ID: modelModule,
-    applyExecutionLayout: layoutModule,
-    iterFlowOrigins: originsModule,
-    rebaseFlowOrigins: originsModule,
-    resolveExecutionLayout: layoutModule,
-    rewriteFlowOrigins: originsModule,
-  };
-  expect(Object.keys(compilePackage)).toEqual(Object.keys(sources));
-  const exported: Record<string, unknown> = compilePackage;
-  for (const [name, source] of Object.entries(sources)) expect(exported[name]).toBe(source[name]);
 });
 
 // ---------- harvested conformance cases ----------

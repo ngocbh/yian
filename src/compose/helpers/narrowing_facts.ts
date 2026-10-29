@@ -440,8 +440,82 @@ function baseTypeUnder(base: string, baseTypeOf: BaseTypeOf, outer: Env): Type |
   return null;
 }
 
-/** The facts `guard` proves, given that the facts in `outer` already hold. */
-function guardEnvUnder(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry, outer: Env): Env {
+/**
+ * What `guardEnvUnder` has worked out for one `baseTypeOf` and registry, by guard identity.
+ *
+ * `proves` shares a sub-guard between the guards that contain it, so a guard is a small graph
+ * whose tree grows exponentially with alternating `and`/`or` nesting; walking each sub-guard
+ * once keeps the work linear in the graph.
+ */
+interface GuardEnvMemo {
+  /** Each guard's outer bases: the bases whose facts in `outer` its facts can depend on. */
+  readonly bases: Map<Guard, readonly string[]>;
+  /** Each guard's facts, per `outer` seen, keyed by that `outer`'s facts for its outer bases. */
+  readonly envs: Map<Guard, [readonly (Fact | undefined)[], Env][]>;
+}
+
+/** Return a new, empty `GuardEnvMemo`. */
+function guardEnvMemo(): GuardEnvMemo {
+  return { bases: new Map(), envs: new Map() };
+}
+
+/**
+ * The bases whose facts in `outer` can change what `guard` proves: each strict prefix of a base
+ * `baseTypeOf` leaves unproven, which takes its type through `outer` (`baseTypeUnder`).
+ */
+function outerBases(guard: Guard, baseTypeOf: BaseTypeOf, memo: GuardEnvMemo): readonly string[] {
+  const known = memo.bases.get(guard);
+  if (known !== undefined) return known;
+  const found = new Set<string>();
+  if (guard instanceof Holds) {
+    const base = guard.check.base;
+    if (baseTypeOf(base) === null) {
+      const parts = base.split(".");
+      for (let cut = 1; cut < parts.length; cut++) found.add(parts.slice(0, cut).join("."));
+    }
+  } else {
+    for (const part of guard.parts) for (const base of outerBases(part, baseTypeOf, memo)) found.add(base);
+  }
+  const bases = [...found];
+  memo.bases.set(guard, bases);
+  return bases;
+}
+
+/** Whether two optional facts are both absent, or both present and equal. */
+function sameOptionalFact(a: Fact | undefined, b: Fact | undefined): boolean {
+  if (a === b) return true;
+  return a !== undefined && b !== undefined && sameFact(a, b);
+}
+
+/** The facts `guard` proves, given that the facts in `outer` already hold; never mutate the result. */
+function guardEnvUnder(
+  guard: Guard,
+  baseTypeOf: BaseTypeOf,
+  registry: TypeRegistry,
+  outer: Env,
+  memo: GuardEnvMemo,
+): Env {
+  const key = outerBases(guard, baseTypeOf, memo).map((base) => outer.get(base));
+  let seen = memo.envs.get(guard);
+  if (seen === undefined) {
+    seen = [];
+    memo.envs.set(guard, seen);
+  }
+  const hit = seen.find(([facts]) => facts.every((fact, i) => sameOptionalFact(fact, key[i])));
+  if (hit !== undefined) return hit[1];
+  const env = guardEnvUncached(guard, baseTypeOf, registry, outer, memo);
+  seen.push([key, env]);
+  return env;
+}
+
+/** `guardEnvUnder` for a guard and `outer` not in `memo` yet. */
+function guardEnvUncached(
+  guard: Guard,
+  baseTypeOf: BaseTypeOf,
+  registry: TypeRegistry,
+  outer: Env,
+  memo: GuardEnvMemo,
+): Env {
   if (guard instanceof Holds) {
     const base = guard.check.base;
     const typ = baseTypeUnder(base, baseTypeOf, outer);
@@ -459,12 +533,12 @@ function guardEnvUnder(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegis
   if (guard instanceof AllOf) {
     let env: Env = new Map();
     for (const part of guard.parts) {
-      const partEnv = guardEnvUnder(part, baseTypeOf, registry, intersectEnvs([outer, env]));
+      const partEnv = guardEnvUnder(part, baseTypeOf, registry, intersectEnvs([outer, env]), memo);
       env = intersectEnvs([env, partEnv]);
     }
     return env;
   }
-  return unionEnvs(guard.parts.map((part) => guardEnvUnder(part, baseTypeOf, registry, outer)));
+  return unionEnvs(guard.parts.map((part) => guardEnvUnder(part, baseTypeOf, registry, outer, memo)));
 }
 
 /**
@@ -489,7 +563,7 @@ function guardEnvUnder(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegis
  * `{"d.output": new Members([Buy]), "d.output.leg": new Members([Limit])}`.
  */
 export function guardEnv(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry): Env {
-  return guardEnvUnder(guard, baseTypeOf, registry, new Map());
+  return guardEnvUnder(guard, baseTypeOf, registry, new Map(), guardEnvMemo());
 }
 
 /**
@@ -535,11 +609,16 @@ export function unresolvedType(guard: Guard, registry: TypeRegistry): boolean {
  * the null check alone says nothing of `T`).
  */
 export function candidateEnvs(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry): Env[] {
-  const met = guardEnv(guard, baseTypeOf, registry);
+  return candidateEnvsWith(guard, baseTypeOf, registry, guardEnvMemo());
+}
+
+/** `candidateEnvs`, reusing and adding to `memo`, which holds facts for `baseTypeOf` and `registry`. */
+function candidateEnvsWith(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry, memo: GuardEnvMemo): Env[] {
+  const met = guardEnvUnder(guard, baseTypeOf, registry, new Map(), memo);
   const envs: Env[] = [met];
   for (const part of conjuncts(guard)) {
     const env = new Map(met);
-    for (const [base, fact] of guardEnv(part, baseTypeOf, registry)) {
+    for (const [base, fact] of guardEnvUnder(part, baseTypeOf, registry, new Map(), memo)) {
       if (!env.has(base)) env.set(base, fact);
     }
     if (!envs.some((seen) => sameEnv(seen, env))) envs.push(env);
@@ -554,10 +633,16 @@ export function candidateEnvs(guard: Guard, baseTypeOf: BaseTypeOf, registry: Ty
  * The known type is the declared type met with `routing`. Such a check, always true or always
  * false where it is evaluated, is no error by itself.
  */
-function decidedLiterals(tree: ExprNode, baseTypeOf: BaseTypeOf, registry: TypeRegistry, routing: Env): ExprNode[] {
+function decidedLiterals(
+  tree: ExprNode,
+  baseTypeOf: BaseTypeOf,
+  registry: TypeRegistry,
+  routing: Env,
+  memo: GuardEnvMemo,
+): ExprNode[] {
   const decided: ExprNode[] = [];
   for (const literal of literalsInContext(tree)) {
-    const contextEnv = intersectEnvs([routing, guardEnv(literal.context, baseTypeOf, registry)]);
+    const contextEnv = intersectEnvs([routing, guardEnvUnder(literal.context, baseTypeOf, registry, new Map(), memo)]);
     if (envUnsatisfiable(contextEnv)) continue;
     const base = literal.check.base;
     const typ = baseTypeUnder(base, baseTypeOf, contextEnv);
@@ -581,8 +666,14 @@ function decidedLiterals(tree: ExprNode, baseTypeOf: BaseTypeOf, registry: TypeR
 }
 
 /** Whether some value satisfies `guard`'s facts and each top-level conjunct's, with `routing`. */
-function satisfiable(guard: Guard, baseTypeOf: BaseTypeOf, registry: TypeRegistry, routing: Env): boolean {
-  const envs = candidateEnvs(guard, baseTypeOf, registry);
+function satisfiable(
+  guard: Guard,
+  baseTypeOf: BaseTypeOf,
+  registry: TypeRegistry,
+  routing: Env,
+  memo: GuardEnvMemo,
+): boolean {
+  const envs = candidateEnvsWith(guard, baseTypeOf, registry, memo);
   return !envs.some((env) => envUnsatisfiable(intersectEnvs([routing, env])));
 }
 
@@ -622,7 +713,9 @@ export function checkedRefs(
   const { routing = null } = options;
   const known: Env = routing !== null && !envUnsatisfiable(routing) ? routing : new Map();
   const refs = guardedRefs(tree);
-  const reported = reportedLiterals(tree, baseTypeOf, registry, known);
+  // Each read's guard shares sub-guards with the others', so their facts are worked out once.
+  const memo = guardEnvMemo();
+  const reported = reportedLiterals(tree, baseTypeOf, registry, known, memo);
   // `literalsInContext` gives every literal its sub-tree.
   const reportedNodes = reported.map(([literal]) => literal.node!);
   let unreported = refs;
@@ -642,17 +735,17 @@ export function checkedRefs(
     const live = needing[index]![1];
     if (sameGuard(live, NEVER)) {
       checked.push([ref, null]);
-    } else if (satisfiable(guard, baseTypeOf, registry, known)) {
+    } else if (satisfiable(guard, baseTypeOf, registry, known, memo)) {
       checked.push([ref, guard]);
-    } else if (satisfiable(withoutReported, baseTypeOf, registry, known)) {
+    } else if (satisfiable(withoutReported, baseTypeOf, registry, known, memo)) {
       checked.push([ref, null]);
     } else {
       if (undecided === null) {
-        const decided = decidedLiterals(tree, baseTypeOf, registry, known);
+        const decided = decidedLiterals(tree, baseTypeOf, registry, known, memo);
         undecided = guardedRefs(masked(tree, [...reportedNodes, ...decided]));
       }
       const trimmed = undecided[index]![1];
-      checked.push([ref, satisfiable(trimmed, baseTypeOf, registry, known) ? trimmed : NOTHING]);
+      checked.push([ref, satisfiable(trimmed, baseTypeOf, registry, known, memo) ? trimmed : NOTHING]);
     }
   }
   return checked;
@@ -977,7 +1070,7 @@ export function impossibleChecks(
 ): ImpossibleCheck[] {
   const { routing = null } = options;
   const found: ImpossibleCheck[] = [];
-  for (const [, impossible] of reportedLiterals(tree, baseTypeOf, registry, routing ?? new Map())) {
+  for (const [, impossible] of reportedLiterals(tree, baseTypeOf, registry, routing ?? new Map(), guardEnvMemo())) {
     if (found.every((seen) => impossible.text !== seen.text)) found.push(impossible);
   }
   return found;
@@ -989,11 +1082,12 @@ function reportedLiterals(
   baseTypeOf: BaseTypeOf,
   registry: TypeRegistry,
   routing: Env,
+  memo: GuardEnvMemo,
 ): [CheckLiteral, ImpossibleCheck][] {
   if (envUnsatisfiable(routing)) return [];
   const found: [CheckLiteral, ImpossibleCheck][] = [];
   for (const literal of literalsInContext(tree)) {
-    const contextEnv = guardEnv(literal.context, baseTypeOf, registry);
+    const contextEnv = guardEnvUnder(literal.context, baseTypeOf, registry, new Map(), memo);
     const routedEnv = intersectEnvs([routing, contextEnv]);
     const base = literal.check.base;
     const typ = baseTypeUnder(base, baseTypeOf, contextEnv);
@@ -1004,7 +1098,7 @@ function reportedLiterals(
       impossible = declaredImpossible(literal, typ, declared, registry);
     }
     if (impossible === null && !(envUnsatisfiable(contextEnv) || envUnsatisfiable(routedEnv))) {
-      impossible = contextImpossible(literal, typ, contextEnv, routedEnv, baseTypeOf, registry, routing);
+      impossible = contextImpossible(literal, typ, contextEnv, routedEnv, baseTypeOf, registry, routing, memo);
     }
     if (impossible !== null) found.push([literal, impossible]);
   }
@@ -1020,11 +1114,12 @@ function contextImpossible(
   baseTypeOf: BaseTypeOf,
   registry: TypeRegistry,
   routing: Env,
+  memo: GuardEnvMemo,
 ): ImpossibleCheck | null {
   const base = literal.check.base;
   const own = new Holds(literal.check, literal.value);
   const text = literalText(literal);
-  const met = intersectEnvs([contextEnv, guardEnvUnder(own, baseTypeOf, registry, contextEnv)]);
+  const met = intersectEnvs([contextEnv, guardEnvUnder(own, baseTypeOf, registry, contextEnv, memo)]);
   if (isEmptyMembers(met.get(base))) {
     const label = factLabel(contextEnv.get(base) ?? null, baseType, registry);
     return new ImpossibleCheck(text, base, ImpossibleReason.CONTEXT, {
@@ -1033,7 +1128,7 @@ function contextImpossible(
     });
   }
   if (!isEmptyMembers(intersectEnvs([routing, met]).get(base))) return null;
-  const routedOwn = intersectEnvs([routing, guardEnvUnder(own, baseTypeOf, registry, routing)]);
+  const routedOwn = intersectEnvs([routing, guardEnvUnder(own, baseTypeOf, registry, routing, memo)]);
   let label: string;
   let reason: ImpossibleReason;
   if (isEmptyMembers(routedOwn.get(base))) {

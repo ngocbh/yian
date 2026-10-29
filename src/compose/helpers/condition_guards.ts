@@ -168,6 +168,8 @@ export const NEVER: Guard = new AnyOf([]);
 
 /** Return whether two guards are the same formula (the same kinds, checks and parts, in order). */
 export function sameGuard(a: Guard, b: Guard): boolean {
+  // Guards share sub-guards, so comparing a shared one by identity skips its whole subtree.
+  if (a === b) return true;
   if (a instanceof Holds) return b instanceof Holds && a.value === b.value && sameCheck(a.check, b.check);
   if (a instanceof AllOf) return b instanceof AllOf && sameParts(a.parts, b.parts);
   return b instanceof AnyOf && sameParts(a.parts, b.parts);
@@ -667,8 +669,12 @@ export function literalText(literal: CheckLiteral): string {
  */
 export function guardChecks(guard: Guard): readonly Check[] {
   const found: Check[] = [];
+  // `proves` shares sub-guards, so visiting each once keeps the walk linear in the guard's graph.
+  const visited = new Set<Guard>();
 
   const walk = (node: Guard): void => {
+    if (visited.has(node)) return;
+    visited.add(node);
     if (node instanceof Holds) {
       if (!found.some((check) => sameCheck(check, node.check))) found.push(node.check);
       return;

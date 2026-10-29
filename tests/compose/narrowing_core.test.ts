@@ -83,7 +83,7 @@ import {
   ValueKind,
 } from "../../src/typesys/values.ts";
 import type { Case } from "../conformance/runner.ts";
-import { caseDocument, caseRegistry, cursorAt, loadError } from "../helpers/declarations.ts";
+import { assembleText, caseDocument, caseRegistry, cursorAt, loadError } from "../helpers/declarations.ts";
 
 // `caseDocument` reloads the defaults from each case's `env:`.
 afterEach(forget);
@@ -1687,3 +1687,50 @@ test.each<NarrowingRow>([
     read: "d.output.nosuch",
   },
 ])("narrowing message: $id", runNarrowingRow);
+
+// --------------------------------------------------------------------------- //
+// Deep conditions
+// --------------------------------------------------------------------------- //
+
+/**
+ * A flow whose CASE `route` routes on `inner` nested in `depth` levels of alternating `and`/`or`,
+ * each level checking its own `Decision` input `x1`, `x2`, ...
+ */
+function deeplyNestedCaseFlow(inner: string, depth: number): string {
+  let when = `(${inner})`;
+  for (let i = 1; i <= depth; i++) {
+    const check = i % 2 === 0 ? `input.x${i}.action == 'sell'` : `isinstance(input.x${i}, Buy)`;
+    when = `(${when} ${i % 2 === 1 ? "and" : "or"} ${check})`;
+  }
+  const inputs = Array.from({ length: depth + 1 }, (_, i) => `  x${i}: !Decision\n`).join("");
+  const typedefs = Object.entries(TYPEDEFS)
+    .map(([name, def]) => `  ${name}: ${JSON.stringify(def)}\n`)
+    .join("");
+  return (
+    `id: deep\nname: deep\ntypedefs:\n${typedefs}input:\n${inputs}nodes:\n` +
+    `  route:\n    kind: case\n    cases:\n      - when: "${when}"\n        then: a\n    else: b\n` +
+    `  a:\n    kind: code\n    code: |\n      return 1\n` +
+    `  b:\n    kind: code\n    code: |\n      return 2\n` +
+    "output: ${a.output | b.output}\n"
+  );
+}
+
+test("a case condition with deeply alternating and/or nesting loads quickly, its facts kept", () => {
+  // The guard's tree grows about 1.6x per level while `proves` keeps its graph linear; facts are
+  // worked out once per sub-guard, so this takes milliseconds rather than minutes.
+  const depth = 40;
+  const start = performance.now();
+  // Below the innermost `isinstance`, `qty` and `leg` (a field only `Buy` has) read as `Buy`.
+  const valid = "isinstance(input.x0, Buy) and input.x0.qty > 0 and input.x0.leg.type == 'limit'";
+  expect(assembleText(deeplyNestedCaseFlow(valid, depth)).flow.compiled.nodes.has("route")).toBe(true);
+  // The innermost checks still rule out `sell`, and a narrowed read still names its type.
+  const contradiction = "isinstance(input.x0, Buy) and input.x0.action == 'sell'";
+  expect(loadError(() => assembleText(deeplyNestedCaseFlow(contradiction, depth))).message).toContain(
+    "`input.x0.action == \"sell\"` can never be true here: input.x0 is Buy, by the checks before it",
+  );
+  const misread = "isinstance(input.x0, Buy) and input.x0.price > 0";
+  expect(loadError(() => assembleText(deeplyNestedCaseFlow(misread, depth))).message).toContain(
+    "reads field 'price', which Buy doesn't have",
+  );
+  expect(performance.now() - start).toBeLessThan(5000);
+});

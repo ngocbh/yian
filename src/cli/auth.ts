@@ -513,7 +513,9 @@ async function setupOpenai(
     const apiCredentials = new ApiKeyCredentials(key, values);
     credentials = apiCredentials;
     try {
-      models = await service.apiModels(apiCredentials, { organization, project });
+      // Runs with this login go to OPENAI_BASE_URL when it is set, so the key must go there too.
+      const endpoint = ctx.io.env("OPENAI_BASE_URL") || undefined;
+      models = await service.apiModels(apiCredentials, { organization, project, endpoint });
     } catch (error) {
       // The messages are fixed today; scrubbed so no sent secret can reach output.
       if (!(error instanceof AuthError)) throw error;
@@ -1026,9 +1028,10 @@ async function subscriptionModels(
  * `yian models --auth-file F` lists the models the openai subscription login saved in F offers, in
  * its order, refreshing an expiring token first. `yian models --provider P` lists the model ids
  * P's host gives the key read from stdin (none when stdin is empty or a terminal), sorted;
- * `--base-url` lists another host. azure has no model listing. `--timeout` (default 8) bounds the
- * whole listing, in seconds. Prints a `yian.cli.v1` document `{models}` or `{error: {code,
- * message, status}}` with `--json`, else one id per line, or the failure on stderr.
+ * `--base-url` lists another host, and for openai `OPENAI_BASE_URL` does when it is set. azure has
+ * no model listing. `--timeout` (default 8) bounds the whole listing, in seconds. Prints a
+ * `yian.cli.v1` document `{models}` or `{error: {code, message, status}}` with `--json`, else one
+ * id per line, or the failure on stderr.
  *
  * @returns 0, or 1 when the listing fails.
  * @throws {UsageError} Not exactly one of `--auth-file` and `--provider` is given, `--base-url`
@@ -1065,7 +1068,9 @@ export async function models(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}
       key = text.trim() || null;
     }
     try {
-      listed = await (deps.listModels ?? listModels)(provider, { apiKey: key, baseUrl: baseUrl ?? null, timeout });
+      // Runs with an openai key go to OPENAI_BASE_URL when it is set, so its key must not go to OpenAI's host.
+      const listedUrl = baseUrl ?? ((provider === "openai" && io.env("OPENAI_BASE_URL")) || null);
+      listed = await (deps.listModels ?? listModels)(provider, { apiKey: key, baseUrl: listedUrl, timeout });
     } catch (failure) {
       if (!(failure instanceof ModelListError)) throw failure;
       error = {

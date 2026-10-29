@@ -321,6 +321,9 @@ Setup changes nothing until sign-in and a check of the model succeed. The first 
 becomes the default. Listing never prints a secret. Off a terminal, give every value the setup
 would ask for.
 
+An OpenAI API key is checked by listing the models at `OPENAI_BASE_URL` when it is set, else at
+OpenAI's API, so the key goes only to the host runs use.
+
 ## yian providers
 
 `yian providers` lists each supported provider, the login kinds `yian auth` can save for it, and
@@ -365,7 +368,8 @@ $ printf '%s' "$OPENROUTER_API_KEY" | yian models --provider openrouter
 | `--json` | | Print one JSON document |
 
 Give exactly one of `--auth-file` and `--provider`. The key comes from stdin, never from the
-command line or the environment; an empty stdin, or a terminal, sends none. Azure has no model
+command line or the environment; an empty stdin, or a terminal, sends none. Without `--base-url`,
+`--provider openai` lists `OPENAI_BASE_URL` when it is set, the host runs use. Azure has no model
 listing. A failed listing exits 1.
 
 ## yian config check

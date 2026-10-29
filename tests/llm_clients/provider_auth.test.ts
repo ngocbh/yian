@@ -2282,6 +2282,36 @@ describe("OpenAIAuth", () => {
     });
   });
 
+  test("API key validation lists models at the given endpoint and never at OpenAI's host", async () => {
+    const http = new FakeHttp(new HttpResponse(200, { data: [{ id: "gateway-model" }] }));
+    const credentials = new ApiKeyCredentials("secret", { "X-Gateway": GATEWAY });
+    const auth = new OpenAIAuth({ request: http.request });
+    const models = await auth.apiModels(credentials, { endpoint: "https://gateway.example.com/v1/" });
+    expect(models).toEqual(["gateway-model"]);
+    expect(http.calls.map((call) => call.slice(0, 2))).toEqual([["GET", "https://gateway.example.com/v1/models"]]);
+    expect(http.calls[0]![2].headers).toMatchObject({ Authorization: "Bearer secret", "X-Gateway": GATEWAY });
+  });
+
+  const invalidEndpoints: [string, unknown][] = [
+    ["credentials", "https://user:pw@gateway.example.com/v1"],
+    ["query", "https://gateway.example.com/v1?x=1"],
+    ["scheme", "ftp://gateway.example.com/v1"],
+    ["not a URL", "gateway.example.com"],
+    ["empty", ""],
+    ["number", 5],
+  ];
+  for (const [label, endpoint] of invalidEndpoints) {
+    test(`an invalid endpoint is refused before the key is sent anywhere: ${label}`, async () => {
+      const http = new FakeHttp();
+      const auth = new OpenAIAuth({ request: http.request });
+      const error = await rejected(auth.apiModels(new ApiKeyCredentials("secret"), { endpoint }));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toStartWith("Invalid OPENAI_BASE_URL: base_url ");
+      expect(error.message).not.toContain("secret");
+      expect(http.calls).toEqual([]);
+    });
+  }
+
   test("an organization mismatch is an HTTP error without values", async () => {
     const body = { error: { code: "mismatched_organization", message: `${ORG} ${PROJECT}` } };
     const http = new FakeHttp(new HttpResponse(401, body));

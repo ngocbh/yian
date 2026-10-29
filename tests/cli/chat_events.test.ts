@@ -1,9 +1,11 @@
 /**
- * The chat's child events, queued from child statuses, and the count of the assistant's tool
- * calls in flight.
+ * The chat's child events, queued from child statuses, the count of the assistant's tool calls
+ * in flight, and the chat sending the events into its flow's inbox: at once mid-turn, held while a
+ * tool call is in flight, in a turn of their own while the prompt is up.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -18,10 +20,16 @@ import {
 } from "../../src/cli/chat_events.ts";
 import { ChildRuns, type ChildStatus } from "../../src/cli/chat_runs.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
+import { type ChatEvents, inboxChat } from "../../src/cli/inbox_chat.ts";
+import type { CliIo, Writer } from "../../src/cli/utils.ts";
+import { virtualScheduler } from "../../src/platform.ts";
+import { advance, send } from "../../src/run.ts";
+import { PoolCommitRecord, readRunLog } from "../../src/runtime/log.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 import { heldScheduler } from "../helpers/schedulers.ts";
+import { ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 10_000;
 
@@ -229,4 +237,300 @@ describe("trackInFlight", () => {
     expect(await Promise.resolve(tracked!.execute({}, context())).catch((error: Error) => error.message)).toBe("now");
     expect(counter.busy).toBe(false);
   });
+});
+
+describe("the chat's flusher", () => {
+  /** Each turn takes every message and replies through the `echo` tool, once that returns. */
+  const CHAT = `id: events_chat
+name: events_chat
+input:
+  messages: !Inbox(Message)
+defs:
+  turn:
+    input:
+      closed: !bool
+      said: !str
+      messages: !Inbox(Message)
+    nodes:
+      heard:
+        kind: tool
+        tool_id: take
+        input:
+          from: \${input.messages}
+          take: all
+      reply:
+        kind: tool
+        tool_id: echo
+        input:
+          events: \${heard.output.events}
+        output: str
+    output:
+      closed: \${heard.output.closed}
+      said: \${reply.output}
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input:
+      closed: false
+      said: ""
+      messages: \${input.messages}
+    while: not closed
+output: done
+`;
+
+  let stdin: FakeInput | null = null;
+  const signals = new EventEmitter();
+
+  afterEach(() => {
+    stdin?.end();
+    stdin = null;
+    signals.removeAllListeners();
+  });
+
+  /** A writer collecting what it is given. */
+  function sink() {
+    const chunks: string[] = [];
+    const out: Writer = { write: async (text) => void chunks.push(text) };
+    return { out, text: () => chunks.join("") };
+  }
+
+  /**
+   * The `echo` tool: it says each message it got (`author: text`); the call numbered `held` (from
+   * 1) waits until `release`. `started` settles when that call begins.
+   */
+  function echoTool(held: number | null = null) {
+    const { promise: started, resolve: start } = Promise.withResolvers<void>();
+    const { promise: gate, resolve: release } = Promise.withResolvers<void>();
+    let calls = 0;
+    const echo = new FunctionTool({
+      name: "echo",
+      description: "echoes the messages",
+      parametersJsonSchema: { type: "object", properties: { events: { type: "array" } } },
+      execute: async (args: { events?: { author?: string; parts: { text: string }[] }[] }) => {
+        calls += 1;
+        if (calls === held) {
+          start();
+          await gate;
+        }
+        const said = (args.events ?? []).map((m) => `${m.author === undefined ? "" : `${m.author}: `}${m.parts[0]!.text}`);
+        return `echo: ${said.join(" | ")}`;
+      },
+    });
+    return { echo, started, release };
+  }
+
+  /**
+   * A chat on CHAT over a fake TTY, with child events, the `echo` tool (its call `held` held) and
+   * `advanceStep` for the turns after the first.
+   */
+  function chat({ held = null as number | null, advanceStep = advance } = {}) {
+    const tty = true;
+    stdin = new FakeInput({ tty });
+    const out = sink();
+    const err = sink();
+    const stderrStream = Object.assign(new FakeOutput(), { isTTY: tty });
+    const io: CliIo = { stdout: out.out, stderr: err.out, stdin, stderrStream, env: NO_ENV };
+    const wake = new EventTarget();
+    let interrupts = 0;
+    const events: ChatEvents = {
+      queue: new EventQueue({ wake }),
+      inFlight: new InFlight(wake),
+      wake,
+      onInterrupt: () => void (interrupts += 1),
+    };
+    const { echo, started, release } = echoTool(held);
+    const path = join(tmp, "chat.yaml");
+    writeFileSync(path, CHAT);
+    const log = join(tmp, "run.jsonl");
+    const done = inboxChat(path, { inputValues: [], engineTrace: false, log }, io, {
+      scheduler: virtualScheduler(Date.parse("2026-01-01T00:00:00Z")),
+      signals,
+      tools: { echo },
+      events,
+      advance: advanceStep,
+    });
+    const sends = () =>
+      readRunLog(log).filter(
+        (envelope) => envelope.record instanceof PoolCommitRecord && envelope.record.key === "__start__.messages",
+      ).length;
+    const lastRow = () => screen(stderrStream.text).rows.at(-1);
+    return {
+      stdin,
+      done,
+      events,
+      log,
+      started,
+      release,
+      sends,
+      lastRow,
+      interrupts: () => interrupts,
+      stdout: out.text,
+      stderr: err.text,
+    };
+  }
+
+  /** Resolve once `check` holds, polling each turn of the event loop. */
+  async function until(check: () => boolean): Promise<void> {
+    while (!check()) await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+
+  const CANCELLED = (run = "r1", seq = 5) => status(run, seq, { status: "cancelled" });
+
+  test(
+    "an event queued at the prompt wakes it: it is sent, authored yian, in a turn of its own, and the draft comes back",
+    async () => {
+      const c = chat();
+      await until(() => c.lastRow() === "> You:");
+      c.stdin.write("draft");
+      await until(() => c.lastRow() === "> You: draft");
+      c.events.queue.push(CANCELLED());
+      await until(() => c.stdout().includes("echo: yian: run r1 was cancelled\n"));
+      await until(() => c.lastRow() === "> You: draft");
+      c.stdin.write(ENTER);
+      await until(() => c.stdout().includes("echo: draft\n"));
+      c.stdin.write("/exit" + ENTER);
+      expect(await c.done).toBe(0);
+      expect(c.stdout()).toBe("echo: yian: run r1 was cancelled\necho: draft\necho: \n");
+      expect(c.events.queue.size).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "an event queued mid-reply with no tool call in flight is sent at once",
+    async () => {
+      const c = chat({ held: 1 });
+      c.stdin.write("hi" + ENTER);
+      await c.started;
+      c.events.queue.push(CANCELLED());
+      // Sent while the reply still runs: the live engine takes it.
+      await until(() => c.sends() === 2);
+      expect(c.stdout()).toBe("");
+      c.release();
+      await until(() => c.stdout().includes("run r1"));
+      c.stdin.write("/exit" + ENTER);
+      expect(await c.done).toBe(0);
+      expect(c.stdout()).toBe("echo: hi\necho: yian: run r1 was cancelled\necho: \n");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "an event queued while a tool call is in flight waits for it, and one it showed is dropped",
+    async () => {
+      const c = chat({ held: 1 });
+      c.stdin.write("hi" + ENTER);
+      await c.started;
+      const inFlight = c.events.inFlight as InFlight;
+      inFlight.enter();
+      c.events.queue.push(CANCELLED("r1", 5));
+      c.events.queue.push(CANCELLED("r2", 6));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(c.sends()).toBe(1);
+      // The call returned r1's status: r1's event is seen; r2's goes once the call ends.
+      c.events.queue.markSeen("r1", 5);
+      inFlight.leave();
+      await until(() => c.sends() === 2);
+      c.release();
+      await until(() => c.stdout().includes("run r2"));
+      c.stdin.write("/exit" + ENTER);
+      expect(await c.done).toBe(0);
+      expect(c.stdout()).toBe("echo: hi\necho: yian: run r2 was cancelled\necho: \n");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "an event sent after the engine's loop ended has the run advanced again before the prompt",
+    async () => {
+      let advances = 0;
+      let queue: EventQueue | null = null;
+      const c = chat({
+        advanceStep: async (options) => {
+          const result = await advance(options);
+          // Pushed once the loop has ended but before the turn does: the send is appended offline.
+          if (++advances === 1) queue!.push(CANCELLED());
+          return result;
+        },
+      });
+      queue = c.events.queue;
+      c.stdin.write("hi" + ENTER);
+      await until(() => c.stdout().includes("run r1"));
+      expect(advances).toBe(2);
+      c.stdin.write("/exit" + ENTER);
+      expect(await c.done).toBe(0);
+      expect(c.stdout()).toBe("echo: hi\necho: yian: run r1 was cancelled\necho: \n");
+      expect(advances).toBe(3);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "Esc during a turn puts sent events back in the queue and typed lines in the prompt; they go with the next line",
+    async () => {
+      const c = chat({ held: 1 });
+      c.stdin.write("hi" + ENTER);
+      await c.started;
+      c.events.queue.push(CANCELLED());
+      await until(() => c.sends() === 2);
+      await send(c.log, "messages", { role: "user", parts: [{ type: "text", text: "second" }] }, { env: NO_ENV });
+      c.stdin.write(ESCAPE);
+      await until(() => c.stderr().includes("(withdrew 1 message; back in the prompt)"));
+      expect(c.stderr()).toContain("(withdrew 1 child event; sent again before your next message)\n");
+      expect(c.interrupts()).toBe(1);
+      c.release();
+      await until(() => c.lastRow() === "> You: second");
+      // Held for the next line: the prompt stays up.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(c.stdout()).toBe("echo: hi\n");
+      c.stdin.write(ENTER);
+      await until(() => c.stdout().includes("second"));
+      c.stdin.write("/exit" + ENTER);
+      expect(await c.done).toBe(0);
+      expect(c.stdout()).toBe("echo: hi\necho: yian: run r1 was cancelled | second\necho: \n");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "/exit prints the events still queued",
+    async () => {
+      const c = chat();
+      await until(() => c.lastRow() === "> You:");
+      // Esc at the prompt holds the events for the next line.
+      c.stdin.write(ESCAPE);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      c.events.queue.push(CANCELLED());
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(c.sends()).toBe(0);
+      c.stdin.write("/exit" + ENTER);
+      expect(await c.done).toBe(0);
+      expect(c.stderr()).toContain("(not sent: run r1 was cancelled)\n");
+      expect(c.stdout()).toBe("echo: \n");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "Ctrl-C during a turn calls onInterrupt, and holds the events for the next line",
+    async () => {
+      const c = chat({ held: 1 });
+      c.stdin.write("hi" + ENTER);
+      await c.started;
+      signals.emit("SIGINT");
+      expect(c.interrupts()).toBe(1);
+      c.events.queue.push(CANCELLED());
+      c.release();
+      await until(() => c.stdout().includes("echo: hi"));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(c.sends()).toBe(1);
+      c.stdin.write("next" + ENTER);
+      await until(() => c.stdout().includes("next"));
+      c.stdin.write("/exit" + ENTER);
+      expect(await c.done).toBe(0);
+      expect(c.stdout()).toBe("echo: hi\necho: yian: run r1 was cancelled | next\necho: \n");
+    },
+    TIMEOUT,
+  );
 });

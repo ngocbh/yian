@@ -388,6 +388,23 @@ test("a failure with no retry left writes a failed model_call before node_failed
   expect(steps(log)[0]).toMatchObject({ error: { kind: "server", message: "boom" }, retry_in: null, output: null });
 });
 
+test("a reply whose media can't be stored writes a failed model_call and ends its call's bracket", async () => {
+  const media = new Message({ role: "assistant", parts: [new MediaPart({ mime: "image/png", data: "ab-_" })] });
+  const model = new ScriptedModel([new Response({ message: media, finishReason: "stop" })], CONFIG);
+  const events: string[] = [];
+  const onEvent = (event: { type: string; error?: string | null }) =>
+    void (event.type.startsWith("ModelCall") && events.push(`${event.type} ${event.error ?? "-"}`));
+  const { log, result } = await run(model, { flow: flowText([]), onEvent });
+  expect([result.status, result.failure?.code]).toEqual(["failed", "node.execute"]);
+  expect(shape(log)).toEqual(["NodeStartedRecord", "model_call 1", "NodeFailedRecord"]);
+  expect(steps(log)[0]).toMatchObject({
+    error: { kind: "RangeError", message: "image/png media data isn't base64" },
+    retry_in: null,
+    output: null,
+  });
+  expect(events).toEqual(["ModelCallStarted -", "ModelCallFinished RangeError"]);
+});
+
 test("a failed call writes what arrived and the usage reported before it failed", async () => {
   const usage = new Usage({ inputTokens: 7, outputTokens: 2, totalTokens: 9, cacheReadTokens: 3 });
   const cut = [new TextDelta(0, "half"), new UsageReport(usage), new ProviderError("server", "cut", { status: 500 })];

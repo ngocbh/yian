@@ -749,6 +749,10 @@ async function aFramedReadLineWithAListMovesIntoItAndOpensARow(): Promise<void> 
   const line = terminal.readLine("You:", { frame: true, escape: true, editor, initial: "hi" });
   await tick();
   assert.deepEqual(view().rows, [...box, "  r1  a.yaml", "  r2  b.yaml"]);
+  // Arrows and Escape inside a paste move nothing.
+  input.write(PASTE_START + DOWN + ESCAPE + PASTE_END);
+  await tick();
+  assert.equal(editor.focus(), null);
   input.write(DOWN);
   await tick();
   assert.deepEqual(view().rows, [...box, "» r1  a.yaml", "  r2  b.yaml"]);
@@ -909,6 +913,53 @@ async function showScreenSaysWhenAPromptWaitsBehindItAndClosesFirst(): Promise<v
   assert.deepEqual(await line, { value: "" });
   input.write("ada" + ENTER);
   assert.equal(await answer, "ada");
+}
+
+async function aWatchWithAnEditorTurnsBracketedPasteOnAndAPasteStaysOneLine(): Promise<void> {
+  const { input, output, terminal } = setup({ columns: 60 });
+  const modes = () => screen(output.text).modes.filter((mode) => mode.startsWith("?2004"));
+  const editor = new LineEditor({ columns: () => 60, hint: "" });
+  const sent: string[] = [];
+  const watch = new AbortController();
+  terminal.watchKeys(
+    watch.signal,
+    () => {},
+    (key) => {
+      const action = editor.key(key);
+      if (action !== null && "value" in action) sent.push(action.value);
+      return action === null || !("escape" in action);
+    },
+  );
+  // The terminal brackets a paste only while bracketed paste is on.
+  assert.deepEqual(modes(), ["?2004h"]);
+  input.write(PASTE_START + "one\r/exit\r" + UP + "three" + PASTE_END);
+  await tick();
+  assert.deepEqual(sent, []);
+  assert.equal(editor.text(), "one\n/exit\nthree");
+  // A prompt meanwhile leaves it on for the watch.
+  const answer = terminal.askText("Name:");
+  await tick();
+  input.write("x" + ENTER);
+  assert.equal(await answer, "x");
+  assert.equal(modes().at(-1), "?2004h");
+  input.write(ENTER);
+  await tick();
+  assert.deepEqual(sent, ["one\n/exit\nthree"]);
+  watch.abort();
+  assert.equal(modes().at(-1), "?2004l");
+}
+
+async function theExitHookLeavesTheAlternateScreen(): Promise<void> {
+  const { input, output, terminal } = setup();
+  const before = process.listeners("exit");
+  const screenUp = terminal.showScreen({ draw: () => ["x"] });
+  await tick();
+  const added = process.listeners("exit").filter((listener) => !before.includes(listener));
+  assert.equal(added.length, 1);
+  added[0]!(0);
+  assert.equal(screen(output.text).modes.at(-1), "?1049l");
+  input.write("q");
+  await screenUp;
 }
 
 async function showScreenOffATtyDoesNothing(): Promise<void> {
@@ -2851,6 +2902,9 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "showScreen says when a prompt waits behind it, and closes before that prompt":
     showScreenSaysWhenAPromptWaitsBehindItAndClosesFirst,
   "showScreen off a TTY does nothing": showScreenOffATtyDoesNothing,
+  "a watch with an editor turns bracketed paste on, and a paste stays one line":
+    aWatchWithAnEditorTurnsBracketedPasteOnAndAPasteStaysOneLine,
+  "the exit hook leaves the alternate screen": theExitHookLeavesTheAlternateScreen,
   "wide characters redraw without stale rows": wideCharactersRedrawWithoutStaleRows,
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,
   "a long line redraws without stale rows": aLongLineRedrawsWithoutStaleRows,

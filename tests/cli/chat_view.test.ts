@@ -42,7 +42,16 @@ import { Finish, PartDone, TextDelta } from "../../src/llm/events.ts";
 import { TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { callReply, serving, textReply } from "../helpers/run_state_fixtures.ts";
-import { DOWN, ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
+import {
+  DOWN,
+  ENTER,
+  ESCAPE,
+  FakeInput,
+  FakeOutput,
+  PASTE_END,
+  PASTE_START,
+  screen,
+} from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 20_000;
 const COLUMNS = 60;
@@ -916,6 +925,34 @@ describe("the input box while a reply runs", () => {
         "> /exit",
         "session ended",
       ]);
+    },
+    TIMEOUT,
+  );
+});
+
+describe("a paste into the input box while a reply runs", () => {
+  test(
+    "is one line, sent once on Enter, even when it holds /exit",
+    async () => {
+      const { io, stdin, output, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      // Bracketed paste is on while the box is up under the spinner.
+      expect(screen(output.text, COLUMNS).modes.filter((mode) => mode.startsWith("?2004")).at(-1)).toBe("?2004h");
+      stdin.write(`${PASTE_START}one\r/exit\rthree${PASTE_END}`);
+      await until(() => rows().includes(row("> one⏎/exit⏎three")));
+      expect(output.text).not.toContain("> one");
+      stdin.write(ENTER);
+      await until(() => rows().includes("> one⏎/exit⏎three"));
+      model.open();
+      await until(() => model.requests.length === 2 && rows().at(-1) === HINT);
+      const said = model.requests[1]!.messages.filter((message) => message.role === "user").at(-1)!.text();
+      expect(said).toBe("one\n/exit\nthree");
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
     },
     TIMEOUT,
   );

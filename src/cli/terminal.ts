@@ -450,6 +450,12 @@ export class LineEditor {
 
   /** Apply one key. */
   key(key: Key): EditorAction {
+    // A paste is text, whatever keys it holds: it goes into the box, its newlines kept.
+    if (key.paste) {
+      this.#focus = null;
+      this.#text.key(key);
+      return null;
+    }
     const focus = this.focus();
     const count = this.list?.rows().length ?? 0;
     const enter = (key.name === "return" || key.name === "enter") && !key.paste;
@@ -709,6 +715,8 @@ export class Terminal {
   #pasting = false;
   /** Whether the turn holding the terminal left rows on the screen. */
   #printed = false;
+  /** Whether a widget has the whole (alternate) screen, which an exit must give back. */
+  #onScreen = false;
   /** How many turns that want an answer (any prompt but a line prompt) wait in the queue. */
   #waiting = 0;
   /** Told each time `#waiting` changes. */
@@ -996,7 +1004,8 @@ export class Terminal {
    * Watch the keys while no prompt is up, until `signal` aborts: Escape calls `onKey("escape")`
    * and Ctrl-C `onKey("interrupt")`, rather than raising SIGINT, since the input is raw; other keys
    * wait for the next prompt. Given `edit`, every key but Ctrl-C goes to it first, and only one it
-   * doesn't take (returns false for) goes on as above. A prompt meanwhile takes the keys as usual,
+   * doesn't take (returns false for) goes on as above; bracketed paste is then on while the watch
+   * runs, so a paste reaches it as typed text, its newlines kept. A prompt meanwhile takes the keys as usual,
    * and the watch goes on after it. Does nothing on a plain terminal or an input that isn't a TTY.
    */
   watchKeys(
@@ -1010,10 +1019,15 @@ export class Terminal {
     this.#attach();
     const watch = { onKey, edit, wasRaw: input.isRaw === true };
     this.#watch = watch;
+    const output = this.#output;
     // A `process.exit()` elsewhere skips the restore below.
-    const onExit = (): void => quietly(() => input.setRawMode!(false));
+    const onExit = (): void => {
+      quietly(() => input.setRawMode!(false));
+      if (edit !== null) quietly(() => output.write(PASTE_OFF));
+    };
     process.once("exit", onExit);
     quietly(() => input.setRawMode!(true));
+    if (edit !== null && this.#turn === undefined) quietly(() => output.write(PASTE_ON));
     input.resume();
     const end = (): void => {
       if (this.#watch === watch) this.#watch = undefined;
@@ -1021,6 +1035,7 @@ export class Terminal {
       // A turn holding the terminal restores it when it ends.
       if (this.#turn !== undefined) return;
       quietly(() => input.setRawMode!(watch.wasRaw));
+      if (edit !== null) quietly(() => output.write(PASTE_OFF));
       quietly(() => input.pause());
     };
     signal.addEventListener("abort", end, { once: true });
@@ -1128,7 +1143,7 @@ export class Terminal {
     // A `process.exit()` elsewhere skips the `finally` below.
     const onExit = (): void => {
       if (setsRaw) quietly(() => input.setRawMode!(false));
-      quietly(() => output.write(SHOW_CURSOR + PASTE_OFF));
+      quietly(() => output.write(SHOW_CURSOR + PASTE_OFF + (this.#onScreen ? ALT_OFF : "")));
     };
     let started = false;
     let result: { value: R } | { error: unknown } | undefined;
@@ -1170,7 +1185,8 @@ export class Terminal {
         const watch = this.#watch;
         if (watch !== undefined) watch.wasRaw = wasRaw;
         if (setsRaw) quietly(() => input.setRawMode!(watch !== undefined || wasRaw));
-        quietly(() => output.write(SHOW_CURSOR + PASTE_OFF));
+        // A watch with an editor still takes pastes.
+        quietly(() => output.write(SHOW_CURSOR + (watch?.edit ? PASTE_ON : PASTE_OFF)));
         quietly(() => process.removeListener("exit", onExit));
         if (watch === undefined) quietly(() => input.pause());
         if (this.#closed) quietly(() => this.#detach());
@@ -1279,6 +1295,7 @@ export class Terminal {
       if (this.#plain) output.write(`${widget.preface}${widget.lines().join("\n")}\n`);
       else {
         const screen = widget.screen ? ALT_ON : "";
+        this.#onScreen = widget.screen === true;
         output.write(screen + widget.preface + PASTE_ON + (shown ? SHOW_CURSOR : HIDE_CURSOR));
       }
       draw();
@@ -1312,6 +1329,7 @@ export class Terminal {
       this.#active = undefined;
       quietly(unwatch);
       if (widget.screen && !this.#plain) quietly(() => output.write(ALT_OFF));
+      if (widget.screen) this.#onScreen = false;
       if (widget.closed) quietly(widget.closed);
     }
     const ended = outcome!;

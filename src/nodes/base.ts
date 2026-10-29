@@ -52,7 +52,7 @@ import type {
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { ToolSet } from "../tools/registry.ts";
-import type { JsonObject } from "../typesys/json.ts";
+import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
 import {
   cutText,
@@ -507,13 +507,13 @@ export function retainFailure(failure: Failure): Failure {
  */
 export class BackwardContext {
   /** The bound JSON input record, or `null` when no usable record was retained. */
-  readonly inputs: Readonly<Record<string, unknown>> | null;
+  readonly inputs: Readonly<JsonObject> | null;
   /** Authored input names this owner may address, including defaults. */
   readonly inputNames: readonly string[];
   /** Declared local variables; an empty inventory rejects all targets. */
   readonly variableNames: readonly string[];
   /** The recorded JSON output, when the forward invocation produced one. */
-  readonly output: unknown;
+  readonly output: JsonValue;
   /** The recorded forward failure, independent of backward's outcome. */
   readonly failure: Failure | null;
   /** The authored path and structured child position, when available. */
@@ -525,9 +525,9 @@ export class BackwardContext {
   /** The positive accepted node-start sequence, paired with the run id. */
   readonly nodeStartedSeq: number | null;
   /** Node-owned JSON material retained for backward. */
-  readonly nodeData: Readonly<Record<string, unknown>>;
+  readonly nodeData: Readonly<JsonObject>;
   /** Ordered JSON attribution accompanying feedback messages. */
-  readonly downstreamContext: readonly Readonly<Record<string, unknown>>[];
+  readonly downstreamContext: readonly Readonly<JsonObject>[];
 
   /**
    * Validate the invocation metadata and retain frozen copies of its values.
@@ -602,7 +602,7 @@ export class BackwardContext {
     this.inputs = copyBackwardValue(inputs, "inputs") as typeof this.inputs;
     this.inputNames = Object.freeze([...inputNames]);
     this.variableNames = Object.freeze([...variableNames]);
-    this.output = copyBackwardValue(output, "output");
+    this.output = copyBackwardValue(output, "output") as JsonValue;
     this.failure = failure;
     this.scope = scope;
     this.runId = runId;
@@ -745,7 +745,7 @@ export function projectStructuralFeedback(
     if (!Object.hasOwn(inputs, name) || !Object.hasOwn(paths, name)) continue;
     const path = paths[name]!;
     if (context.failure === null) {
-      let value = output;
+      let value: unknown = output;
       for (const part of path) {
         if (typeof part === "string" && isRecord(value) && Object.hasOwn(value, part)) value = value[part];
         else if (typeof part !== "string" && isList(value) && Number(part) < value.length) value = value[Number(part)];

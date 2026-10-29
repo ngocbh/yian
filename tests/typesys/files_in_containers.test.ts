@@ -1307,7 +1307,7 @@ test("the backward context holds the files of a typed output as JSON", async () 
   const [occurrence, ...others] = trace.occurrences.filter((item) => item.nodeId === "a");
   expect(others).toEqual([]);
 
-  expect(trace.backwardContext(occurrence!.source).output).toEqual([form(), form()]);
+  expect(trace.backwardContext(occurrence!.source).output as Value).toEqual([form(), form()]);
   expect(trace.lookupSource(occurrence!.source) as Value).toEqual([form(), form()]);
   expect(trace.currentWriters.get("a")!.value).toEqual([REF, REF]);
 });

@@ -527,7 +527,7 @@ function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
  * await runTools.invoke(call, { node: "buy" }); // runs either way
  */
 export class ToolSet {
-  // Plain private fields, not `#` ones, so `forRun` can fill a copy of a subclass instance.
+  // Plain private fields, not `#` ones, so `forRun` can copy them into a subclass instance.
   private toolMap: ReadonlyMap<string, FunctionTool> | null;
   private groupMap: ReadonlyMap<string, readonly string[]>;
   private boundRunId: string;
@@ -658,16 +658,13 @@ export class ToolSet {
    *   default `callId`.
    * @param options `signal` is the run's abort signal, aborted when the run stops. The copy holds
    *   exactly this value: none gives no signal, even when this set was bound to one.
-   * @returns A new tool set of the same class; this one stays as it was.
+   * @returns A new tool set of the same class holding this one's own fields, a subclass's
+   *   included, with the run bound; this one stays as it was.
    */
   forRun(runId: string, options?: { signal?: AbortSignal }): this {
-    const bound = Object.create(Object.getPrototypeOf(this)) as this;
-    bound.toolMap = this.toolMap;
-    bound.groupMap = this.groupMap;
+    const bound = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as this;
     bound.boundRunId = runId;
     bound.boundSignal = options?.signal;
-    bound.hostContext = this.hostContext;
-    bound.trustedSchemas = this.trustedSchemas;
     return bound;
   }
 

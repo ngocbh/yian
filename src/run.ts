@@ -183,7 +183,7 @@ import {
   stepsWithSteerValues,
 } from "./runtime/state.ts";
 import { Skill } from "./skills/catalog.ts";
-import { AlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
+import { isAlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
 import { RESERVED_TOOL_NAMES, type ToolEntry, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
@@ -3914,7 +3914,7 @@ async function openRunServers(
       try {
         await server.openForRun(token, signal === null ? {} : { signal });
       } catch (error) {
-        if (error instanceof AlreadyOpenError) throw otherRunError(key, { cause: error });
+        if (isAlreadyOpenError(error)) throw otherRunError(key, { cause: error });
         throw error;
       }
       opened.push(server);

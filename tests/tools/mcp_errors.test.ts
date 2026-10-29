@@ -278,7 +278,9 @@ describe("errors that end a call", () => {
     async () => {
       install({ ...BUILTIN, maxMcpMessageBytes: 1024 });
       const server = await fake(["--only", "echo", "--flood", "2048"]).open();
-      expect(await rejection(tools(server).invoke("echo", { text: "x" }))).toBeInstanceOf(McpServerClosed);
+      const error = await rejection(tools(server).invoke("echo", { text: "x" }));
+      expect(error).toBeInstanceOf(McpServerClosed);
+      expect(error.message).toMatch(/ is closed: it sent a message over 1024 bytes \(YIAN_MAX_MCP_MESSAGE_BYTES\)$/);
       expect(server.isClosed).toBe(true);
     },
     SLOW,
@@ -426,6 +428,33 @@ describe("errors over HTTP", () => {
       expect(server.isClosed).toBe(false);
     }, SLOW);
   }
+
+  // The fake answers a modern client's calls with JSON bodies and a legacy one's with SSE streams.
+  for (const mode of ["auto", "legacy"] as const) {
+    test(`a reply over the message cap closes the server and names the cap (${mode})`, async () => {
+      install({ ...BUILTIN, maxMcpMessageBytes: 4096 });
+      const http = await serveHttp({ only: ["echo"] });
+      const server = await httpServer({ url: http.url }, mode).open();
+      const set = tools(server);
+      expect(await set.invoke("echo", { text: "small" })).toBe("small");
+      const error = await rejection(set.invoke("echo", { text: "x".repeat(100_000) }));
+      expect(error).toBeInstanceOf(McpServerClosed);
+      expect(error.message).toBe(
+        "MCP server 'localhost' is closed: it sent a message over 4096 bytes (YIAN_MAX_MCP_MESSAGE_BYTES)",
+      );
+      expect(server.isClosed).toBe(true);
+    }, SLOW);
+  }
+
+  test("a tool listing over the message cap fails the open and names the cap", async () => {
+    install({ ...BUILTIN, maxMcpMessageBytes: 64 });
+    const http = await serveHttp({ only: ["echo"] });
+    const error = await rejection(httpServer({ url: http.url }).open());
+    expect(error).toBeInstanceOf(McpConnectError);
+    expect(error.message).toBe(
+      "MCP server 'localhost' didn't start: it sent a message over 64 bytes (YIAN_MAX_MCP_MESSAGE_BYTES)",
+    );
+  }, SLOW);
 
   test("a stopped http server is a transport error and a restart recovers", async () => {
     const http = await serveHttp();

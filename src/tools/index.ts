@@ -19,8 +19,8 @@
  * which describes a Model Context Protocol server, the `McpServer` it returns, whose opened tools
  * a `ToolSet` takes as one group, and the `McpError` classes its calls throw.
  *
- * Knows about: `defaults`, `diagnostics`, typesys, `llm/messages` (the JSON check) and the skills
- * leaf (`skills/tool`).
+ * Knows about: `defaults`, `diagnostics`, `platform`, typesys, `llm/messages` (the JSON check),
+ * `llm/auth`, `llm/body` and `llm/errors` (for MCP servers) and the skills leaf (`skills/tool`).
  * Never imports: nodes, compile, compose, runtime, run, or cli.
  */
 

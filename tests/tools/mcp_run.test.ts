@@ -324,6 +324,28 @@ test(
   SLOW,
 );
 
+test(
+  "a server from another copy of yian that is still opening is rejected as opened by another run",
+  async () => {
+    // A second instance of the module stands in for another installed copy of yian.
+    const specifier: string = "../../src/tools/mcp.ts?copy=2";
+    const copy = (await import(specifier)) as typeof import("../../src/tools/mcp.ts");
+    expect(copy.McpServer).not.toBe(McpServer);
+    const server = copy.mcpServer(stdioOptions());
+    const opening = server.open();
+    try {
+      const error = await rejection(run(await toolFlow("echo", '{text: "hi"}'), { shared: server }));
+      expect(error).toBeInstanceOf(RangeError);
+      expect(error.message).toBe(otherRun("shared"));
+      expect((error.cause as Error).name).toBe("AlreadyOpenError");
+    } finally {
+      await opening.catch(() => undefined);
+      await server.close();
+    }
+  },
+  SLOW,
+);
+
 for (const [key, kind, message] of [
   ["ask_user", TypeError, 'tools["ask_user"] must be a handler function'],
   ["ask", TypeError, 'tools["ask"] must be a handler function'],

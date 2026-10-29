@@ -452,6 +452,22 @@ describe("ToolSet.forRun", () => {
     expect(Object.getPrototypeOf(bound)).toBe(Sub.prototype);
     expect(bound.runId).toBe("r");
   });
+
+  test("for run keeps the subclass's own fields", () => {
+    class Audited extends ToolSet {
+      readonly log: string[] = [];
+      note(entry: string): void {
+        this.log.push(entry);
+      }
+    }
+    const set = new Audited({ place: tool("place") });
+    const bound = set.forRun("r");
+    bound.note("x");
+    expect(bound.log).toEqual(["x"]);
+    expect(bound.log).toBe(set.log);
+    expect(bound.runId).toBe("r");
+    expect(set.runId).toBe("");
+  });
 });
 
 describe("ask_user invocation", () => {

@@ -44,10 +44,12 @@ import { FunctionTool } from "./function_tools.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
 
 /**
- * The brands of `McpError` and `McpServer`. yian checks them rather than `instanceof`, so an error
- * or server from another copy of yian (an npm install beside a workspace one) is still known.
+ * The brands of `McpError`, `AlreadyOpenError` and `McpServer`. yian checks them rather than
+ * `instanceof`, so an error or server from another copy of yian (an npm install beside a workspace
+ * one) is still known.
  */
 const MCP_ERROR = Symbol.for("yian.mcp_error");
+const ALREADY_OPEN = Symbol.for("yian.mcp_already_open");
 const MCP_SERVER = Symbol.for("yian.mcp_server");
 
 const REPORTED: readonly ToolErrorKind[] = Object.freeze(["reported"]);
@@ -158,7 +160,8 @@ export class McpTransportError extends McpError {
 }
 
 /**
- * The MCP server is gone: yian closed it, or its process, connection or session ended.
+ * The MCP server is gone: yian closed it, its process, connection or session ended, or it sent a
+ * message over `YIAN_MAX_MCP_MESSAGE_BYTES`, which the message then names.
  *
  * Later calls to the same server throw it at once; the host still closes it.
  */
@@ -178,6 +181,8 @@ export class AlreadyOpenError extends Error {
   override name = "AlreadyOpenError";
 }
 
+Object.defineProperty(AlreadyOpenError.prototype, ALREADY_OPEN, { value: true });
+
 /** Return whether `value` carries `brand`; never throws, so a hostile object has no brand. */
 function hasBrand(value: unknown, brand: symbol): boolean {
   if (value === null || (typeof value !== "object" && typeof value !== "function")) return false;
@@ -191,6 +196,11 @@ function hasBrand(value: unknown, brand: symbol): boolean {
 /** Return whether `value` is an `McpError` from any copy of yian. */
 export function isMcpError(value: unknown): value is McpError {
   return hasBrand(value, MCP_ERROR);
+}
+
+/** Return whether `value` is an `AlreadyOpenError` from any copy of yian. */
+export function isAlreadyOpenError(value: unknown): value is AlreadyOpenError {
+  return hasBrand(value, ALREADY_OPEN);
 }
 
 /** The options of `mcpServer`. */
@@ -426,6 +436,58 @@ function remember(error: unknown, init: RequestInit | undefined): never {
   throw error;
 }
 
+const CR = 0x0d;
+const LF = 0x0a;
+
+/**
+ * Return `response` with a body that fails once one message passes `max` bytes: one event of a
+ * `text/event-stream` body (its bytes other than line ends, up to the blank line that ends it),
+ * else the whole body. On the failure `onOverflow` runs and the body errors with a message that
+ * names only the cap, never the bytes read.
+ */
+export function capResponse(response: Response, max: number, onOverflow: () => void): Response {
+  // A 204 or 205 answer can't be rebuilt with a body.
+  if (response.body === null || response.status === 204 || response.status === 205) return response;
+  const type = response.headers.get("content-type")?.split(";")[0]!.trim().toLowerCase();
+  const sse = type === "text/event-stream";
+  let size = 0;
+  // Whether the current line has no bytes yet, so a line end there is a blank line.
+  let blank = true;
+  // Whether the last byte was a CR, so an LF right after it ends no second line.
+  let afterCr = false;
+  const fail = (controller: TransformStreamDefaultController<Uint8Array>) => {
+    onOverflow();
+    controller.error(new Error(`MCP server sent a message over ${max} bytes`));
+  };
+  const capped = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      if (!sse) {
+        size += chunk.length;
+        if (size > max) return fail(controller);
+      } else {
+        for (let i = 0; i < chunk.length; i++) {
+          const byte = chunk[i]!;
+          if (byte === LF && afterCr) {
+            afterCr = false;
+            continue;
+          }
+          afterCr = byte === CR;
+          if (byte === CR || byte === LF) {
+            if (blank) size = 0;
+            blank = true;
+          } else {
+            blank = false;
+            if (++size > max) return fail(controller);
+          }
+        }
+      }
+      controller.enqueue(chunk);
+    },
+  });
+  const { status, statusText, headers } = response;
+  return new Response(response.body.pipeThrough(capped), { status, statusText, headers });
+}
+
 /** One connection of a server: what one `open()` started, and what `close()` ends. */
 interface Generation {
   /** Aborted when the open fails, times out or is closed; ends a pending connect or listing. */
@@ -448,6 +510,8 @@ interface Generation {
   closed: boolean;
   /** Whether the server is known gone: its transport closed. */
   gone: boolean;
+  /** The cap in bytes a message from the server passed, which closed the connection. */
+  overflow: number | undefined;
   /** The calls in flight, which `close()` aborts. */
   readonly calls: Set<AbortController>;
   /** The shutdown, once started. */
@@ -587,6 +651,7 @@ export class McpServer {
       callTimeout: 0,
       closed: false,
       gone: false,
+      overflow: undefined,
       calls: new Set(),
       closing: undefined,
     };
@@ -653,7 +718,20 @@ export class McpServer {
       const { sdk, defaultEnv } = await loadSdk(!http);
       check();
       generation.sdk = sdk;
-      const transport = (generation.transport = this.createTransport(sdk, defaultEnv, settings.maxMcpMessageBytes));
+      // As the stdio transport does on a line past the cap: the call in flight then fails as
+      // closed, naming the cap, rather than waiting out its timeout.
+      const overflow = (max: number) => {
+        if (generation.overflow !== undefined) return;
+        generation.overflow = max;
+        generation.gone = true;
+        void generation.transport?.close();
+      };
+      const transport = (generation.transport = this.createTransport(
+        sdk,
+        defaultEnv,
+        settings.maxMcpMessageBytes,
+        overflow,
+      ));
       const client = new sdk.Client(
         { name: "yian", version: VERSION },
         { capabilities: {}, versionNegotiation: http ? { mode: this.mode } : undefined, listMaxPages: MAX_PAGES },
@@ -687,6 +765,9 @@ export class McpServer {
       const late = `MCP server '${label}' didn't start within ${secondsText(connectTimeout)} s` + tail;
       if (timedOut) throw new McpConnectError(late);
       if (generation.closed) throw new McpConnectError(`MCP server '${label}' was closed while starting`);
+      if (generation.overflow !== undefined) {
+        throw new McpConnectError(`MCP server '${label}' didn't start: it ${overflowText(generation.overflow)}`);
+      }
       if (signal?.aborted) throw signal.reason;
       if (!started || error instanceof McpConnectError) throw error;
       const root = http ? leaf(error, generation.sdk!) : error;
@@ -708,17 +789,25 @@ export class McpServer {
 
   /**
    * Return the transport for this server: yian's stdio transport, or the SDK's streamable HTTP
-   * transport sending every request through `safeFetch`, which follows no redirect.
+   * transport sending every request through `safeFetch`, which follows no redirect, and reading
+   * every reply through `capResponse`. Either calls `onOverflow` with `maxMessageBytes` when a
+   * message passes it.
    */
   private createTransport(
     sdk: typeof Sdk,
     defaultEnv: Readonly<Record<string, string>>,
     maxMessageBytes: number,
+    onOverflow: (max: number) => void,
   ): StdioTransport | Sdk.StreamableHTTPClientTransport {
     const { command, args, env, cwd, url, headers } = this.spec;
-    if (command !== undefined) return new StdioTransport({ command, args, env, cwd, maxMessageBytes, defaultEnv });
+    if (command !== undefined) {
+      return new StdioTransport({ command, args, env, cwd, maxMessageBytes, defaultEnv, onOverflow });
+    }
     return new sdk.StreamableHTTPClientTransport(new URL(url!), {
-      fetch: (input, init) => safeFetch(input, init).catch((error: unknown) => remember(error, init)),
+      fetch: async (input, init) => {
+        const response = await safeFetch(input, init).catch((error: unknown) => remember(error, init));
+        return capResponse(response, maxMessageBytes, () => onOverflow(maxMessageBytes));
+      },
       requestInit: { headers },
     });
   }
@@ -871,10 +960,15 @@ export class McpServer {
     return new McpToolError(`MCP server '${label}' tool '${name}' failed (${errorName(error)})`, { cause: error });
   }
 
-  /** Mark `generation` gone, when given, and return the `McpServerClosed` a call throws. */
+  /**
+   * Mark `generation` gone, when given, and return the `McpServerClosed` a call throws; it names
+   * the message cap when a message past it closed the connection.
+   */
   private closedError(generation?: Generation): McpServerClosed {
     if (generation !== undefined) generation.gone = true;
-    return new McpServerClosed(`MCP server '${this.label}' is closed`);
+    const overflow = (generation ?? this.generation)?.overflow;
+    const reason = overflow === undefined ? "" : `: it ${overflowText(overflow)}`;
+    return new McpServerClosed(`MCP server '${this.label}' is closed${reason}`);
   }
 
   /**
@@ -902,6 +996,11 @@ export class McpServer {
 /** The `McpCallCancelled` for a call to `name`. */
 function cancelledError(name: string): McpCallCancelled {
   return new McpCallCancelled(`MCP call to '${name}' cancelled by a run stop`);
+}
+
+/** Why a server's connection closed when one of its messages passed the `max` bytes cap. */
+function overflowText(max: number): string {
+  return `sent a message over ${max} bytes (YIAN_MAX_MCP_MESSAGE_BYTES)`;
 }
 
 /** `seconds` in `%g` form: six significant digits, `0.5`, `300`, `1e-05`. */
@@ -1267,6 +1366,8 @@ export interface StdioTransportOptions {
   cwd?: string;
   /** The longest line read from the server, in bytes. */
   maxMessageBytes: number;
+  /** Called with `maxMessageBytes` when a line passes it, before the transport closes. */
+  onOverflow?: (max: number) => void;
   /** The MCP SDK's `getDefaultEnvironment()`, the base of the server's environment. */
   defaultEnv: Readonly<Record<string, string>>;
 }
@@ -1482,6 +1583,7 @@ export class StdioTransport {
     this.pending = [];
     this.pendingBytes = 0;
     this.report(new Error(`MCP server sent a message over ${max} bytes`));
+    this.options.onOverflow?.(max);
     void this.close();
   }
 

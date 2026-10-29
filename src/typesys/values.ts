@@ -9,7 +9,8 @@
  * JSON, so the log can rebuild the same pool on replay. The write boundary wraps a value in
  * its natural kind or checks it against a declared `Type`; host intake reads a value a host
  * hands in (a tool or CODE result, an input) into a fresh yian value. Messages show a value
- * with `valueRepr`, cut to the shown-value cap.
+ * with `valueRepr`, cut to the shown-value cap; write-check and decode messages spell a float
+ * with its fraction digit (`2.0`), so it reads apart from an int.
  *
  * `ValueKind` is the closed set of storage tags, and `Type` the resolved structure of a
  * declared type (records, `Literal` tags, typed lists, numeric ranges and unions), with its
@@ -127,11 +128,27 @@ export function shownNames(names: readonly string[]): string {
  * @throws DefaultsError when a `YIAN_*` variable holds a value its entry does not accept.
  */
 export function valueRepr(value: unknown): string {
+  return shownForm(value, String);
+}
+
+/**
+ * Return a value's text form for a message as `valueRepr` does, but with every float spelled
+ * by `floatText` (`2.0` for the float 2), so an int and a float with the same digits read
+ * apart. Write-check and wire-decode messages show the value they refuse this way.
+ *
+ * @throws DefaultsError when a `YIAN_*` variable holds a value its entry does not accept.
+ */
+function floatSpelledRepr(value: unknown): string {
+  return shownForm(value, floatText);
+}
+
+/** Return `valueRepr`'s cut text form of `value`, spelling each float with `spellFloat`. */
+function shownForm(value: unknown, spellFloat: (x: number) => string): string {
   // Read before the `try`, so a bad `YIAN_*` value is thrown, not turned into a placeholder.
   const cap = current().maxShownValueChars;
   let text: string;
   try {
-    text = textForm(value, 2 * cap + 2);
+    text = textForm(value, 2 * cap + 2, spellFloat);
   } catch {
     // A getter or proxy trap is user code; a broken one must not crash the message.
     try {
@@ -151,10 +168,11 @@ interface TextCursor {
 }
 
 /**
- * Return the text form of `root` (see `valueRepr`), stopping once it holds at least `budget`
- * code units. The walk uses an explicit stack and reads an array's items as it writes them.
+ * Return the text form of `root` (see `valueRepr`), spelling each float with `spellFloat` and
+ * stopping once it holds at least `budget` code units. The walk uses an explicit stack and
+ * reads an array's items as it writes them.
  */
-function textForm(root: unknown, budget: number): string {
+function textForm(root: unknown, budget: number, spellFloat: (x: number) => string): string {
   let out = "";
   const stack: ({ value: unknown } | TextCursor)[] = [{ value: root }];
   while (stack.length > 0 && out.length < budget) {
@@ -179,8 +197,10 @@ function textForm(root: unknown, budget: number): string {
     }
     stack.pop();
     const value = step.value;
-    if (value === null || typeof value === "boolean" || typeof value === "number") {
+    if (value === null || typeof value === "boolean") {
       out += String(value);
+    } else if (typeof value === "number") {
+      out += spellFloat(value);
     } else if (typeof value === "bigint") {
       out += bigintText(value);
     } else if (typeof value === "string") {
@@ -1055,9 +1075,14 @@ export class TypedValue {
       if (holds) return new TypedValue(storage, value);
     }
     const expected = KIND_HOLDS.get(storage)!;
-    throw new RangeError(
-      `invalid ${storage} typed value: expected ${expected}, got ${valueRepr(value)}`,
-    );
+    // A number is named by its kind, since `expected` speaks of bigints and numbers.
+    const got =
+      typeof value === "bigint"
+        ? `int ${bigintText(value)}`
+        : typeof value === "number"
+          ? `float ${floatText(value)}`
+          : floatSpelledRepr(value);
+    throw new RangeError(`invalid ${storage} typed value: expected ${expected}, got ${got}`);
   }
 }
 
@@ -2385,11 +2410,11 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
           const bounds = `(${boundText(low)}, ${boundText(high)})`;
           message = `is outside inclusive ${typ.kind} bounds ${bounds}`;
         } else if (below) {
-          message = `is below the inclusive ${typ.kind} minimum ${valueRepr(low)}`;
+          message = `is below the inclusive ${typ.kind} minimum ${boundText(low)}`;
         } else {
-          message = `is above the inclusive ${typ.kind} maximum ${valueRepr(high)}`;
+          message = `is above the inclusive ${typ.kind} maximum ${boundText(high)}`;
         }
-        throw new TypeCheckError(`${valueRepr(value)} ${message}`, { path });
+        throw new TypeCheckError(`${floatSpelledRepr(value)} ${message}`, { path });
       }
     }
   }
@@ -2401,7 +2426,9 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
   if (typ.tags !== undefined) {
     if (typeof value !== "string" || !typ.tags.has(value)) {
       const tags = writeAsText([...typ.tags].sort(compareCodeUnits));
-      throw new TypeCheckError(`${valueRepr(value)} is not a member of variant ${tags}`, { path });
+      throw new TypeCheckError(`${floatSpelledRepr(value)} is not a member of variant ${tags}`, {
+        path,
+      });
     }
     return new TypedValue(ValueKind.STRING, value);
   }
@@ -2409,7 +2436,9 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
   if (typ.fields !== undefined) {
     const fields = typ.fields;
     if (!isRecord(value)) {
-      throw new TypeCheckError(`${valueRepr(value)} is not an object for a record type`, { path });
+      throw new TypeCheckError(`${floatSpelledRepr(value)} is not an object for a record type`, {
+        path,
+      });
     }
     const missing = [...(typ.required ?? [])]
       .filter((name) => !Object.hasOwn(value, name))
@@ -2437,7 +2466,7 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
   if (isListKind(typ.kind) && typ.element !== undefined) {
     if (!isList(value)) {
       const label = canonicalTypeLabel(typ);
-      throw new TypeCheckError(`${valueRepr(value)} is not a list for declared ${label}`, {
+      throw new TypeCheckError(`${floatSpelledRepr(value)} is not a list for declared ${label}`, {
         path,
       });
     }
@@ -2460,7 +2489,9 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
   // Named by its label, since the bare kind `inbox` isn't a type an author can write.
   if (typ.kind === ValueKind.INBOX && !scalarMatches(typ.kind, value)) {
     const label = canonicalTypeLabel(typ);
-    throw new TypeCheckError(`${valueRepr(value)} does not match declared type ${label}`, { path });
+    throw new TypeCheckError(`${floatSpelledRepr(value)} does not match declared type ${label}`, {
+      path,
+    });
   }
 
   return buildScalarOrList(typ.kind, value, path);
@@ -2478,7 +2509,9 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
  */
 function buildForUnion(typ: Type, value: unknown, path: ValuePath): TypedValue {
   if (!isRecord(value)) {
-    throw new TypeCheckError(`${valueRepr(value)} is not an object for a union type`, { path });
+    throw new TypeCheckError(`${floatSpelledRepr(value)} is not an object for a union type`, {
+      path,
+    });
   }
   const members = typ.variants!;
   const tagged = taggedMember(members, value);
@@ -2494,7 +2527,7 @@ function buildForUnion(typ: Type, value: unknown, path: ValuePath): TypedValue {
     if (member === null) {
       const expected = writeAsText(tagValues(members, field));
       throw new TypeCheckError(
-        `${valueRepr(value[field])} is not a tag of the union (expected one of ${expected})`,
+        `${floatSpelledRepr(value[field])} is not a tag of the union (expected one of ${expected})`,
         { path: [...path, field] },
       );
     }
@@ -2565,7 +2598,7 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
   if (isListKind(declared)) {
     const label = kindLabel(declared);
     if (!isList(value)) {
-      throw new TypeCheckError(`${valueRepr(value)} is not a list for declared ${label}`, {
+      throw new TypeCheckError(`${floatSpelledRepr(value)} is not a list for declared ${label}`, {
         path,
       });
     }
@@ -2578,7 +2611,7 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
       rejectNonValue(item, [...path, index]);
       if (!scalarMatches(element, item)) {
         throw new TypeCheckError(
-          `list element ${valueRepr(item)} is not ${element} (declared ${label})`,
+          `list element ${floatSpelledRepr(item)} is not ${element} (declared ${label})`,
           { path: [...path, index] },
         );
       }
@@ -2591,7 +2624,7 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
   }
 
   if (!scalarMatches(declared, value)) {
-    let message = `${valueRepr(value)} does not match declared type ${declared}`;
+    let message = `${floatSpelledRepr(value)} does not match declared type ${declared}`;
     const temporal = declared === ValueKind.DATE || declared === ValueKind.DATETIME;
     if (temporal && typeof value === "string") message += `: ${temporalError(declared, value)}`;
     throw new TypeCheckError(message, { path });

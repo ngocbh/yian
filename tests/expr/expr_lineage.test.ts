@@ -145,6 +145,17 @@ test("projection over unavailable composition uses recorded bounds", () => {
   );
 });
 
+test("a concat child without a recorded size is a shape fault, not dropped feedback", () => {
+  const route = new ValueRoute("concat", { children: [sourceRoute(1), sourceRoute(2)], sizes: [1] });
+  const lookup = lookupFrom([
+    [new SourceRef("run", 1), [1n]],
+    [new SourceRef("run", 2), [2n]],
+  ]);
+  const error = thrown(() => routeFeedback(route, "Review.", lookup, { recordedValue: [1n, 2n] }));
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toBe("concat route has 1 recorded sizes for its 2 children");
+});
+
 test("literal snapshots use the codec form", () => {
   expect(ValueRoute.literal(1n).valueJson).toBe("1");
   expect(ValueRoute.literal(1.0).valueJson).toBe("1.0");

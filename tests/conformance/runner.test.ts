@@ -1927,11 +1927,16 @@ expect:
     expect(cuts.length).toBeGreaterThan(0);
   }, SWEEP);
 
-  test("fails a resume whose model request differs from its scripted one, though its reply is the same", async () => {
-    // The agent's second request carries lookup's result. A cut right after that result is
-    // recorded makes the resume send the request again, now with the rewritten result; the
-    // scripted reply hides it from the output and the node outcomes.
-    const text = `kind: run
+  /** Return the prepared case `text` and its set-up directory. */
+  function sweepCase(text: string): [Case, CaseContext] {
+    const case_ = prepare(checkCase(readCase(text)));
+    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
+    made.push(ctx.dir);
+    return [case_, ctx];
+  }
+
+  // An agent that calls `lookup` once and answers, its second request scripted.
+  const LOOKUP = `kind: run
 flow: |
   id: m
   name: m
@@ -1977,9 +1982,44 @@ host:
 expect:
   output: {status: succeeded, output: found X1}
 `;
-    const case_ = prepare(checkCase(readCase(text)));
-    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
-    made.push(ctx.dir);
+
+  test("a cut between a reply and its tool results expects the crashed closer in the next request", async () => {
+    // Cut after the reply (record 9), the resume closes `lookup`'s call `crashed` instead of
+    // calling it: its entry stays unused, and the next request reads the closer for its result.
+    const [case_, ctx] = sweepCase(LOOKUP);
+    const cuts: string[] = [];
+    await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
+    expect(cuts.length).toBeGreaterThan(0);
+  }, SWEEP);
+
+  test("fails a resume whose replayed reply changed, though the call it made closes crashed", async () => {
+    const [case_, ctx] = sweepCase(LOOKUP);
+    const damage = (log: string) => {
+      writeFileSync(log, readFileSync(log, "utf8").replace('"arguments":{"q":"x"}', '"arguments":{"q":"DAMAGED"}'));
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: damage });
+    await expect(failure).rejects.toThrow(
+      "the resume's host calls differ from the script (crash sweep, cut after record 9)\n" +
+        "`host.models.research.agent[1].request` differs",
+    );
+  }, SWEEP);
+
+  test("fails a resume that closes other calls crashed than the cut cut off", async () => {
+    const [case_, ctx] = sweepCase(LOOKUP);
+    const rename = (log: string) => {
+      writeFileSync(log, readFileSync(log, "utf8").replace('"id":"c1"', '"id":"c2"'));
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: rename });
+    await expect(failure).rejects.toThrow(
+      "the resume closed [research c2] crashed, but the cut cut off [research c1] (crash sweep, cut after record 9)",
+    );
+  }, SWEEP);
+
+  test("fails a resume whose model request differs from its scripted one, though its reply is the same", async () => {
+    // The agent's second request carries lookup's result. A cut right after that result is
+    // recorded makes the resume send the request again, now with the rewritten result; the
+    // scripted reply hides it from the output and the node outcomes.
+    const [case_, ctx] = sweepCase(LOOKUP);
     const rewrite = (log: string) => {
       writeFileSync(log, readFileSync(log, "utf8").replace('"output":"X1"', '"output":"X9"'));
     };

@@ -201,11 +201,24 @@ output: done
       expect(requests[0]!.diff).toBeNull();
       expect(requests[0]!.body).toBe(
         'Starts greet.yaml in the background.\ninputs: {"who":"ada"}\nnode kinds: code\n' +
-          "runs code on this machine (CODE nodes)",
+          "runs code on this machine (CODE nodes)\n" +
+          "an approval for this chat doesn't cover changes to the files the code imports",
       );
       expect(await settledJson(json, "r1")).toMatchObject({ run: "r1", status: "succeeded", output: "hi ada" });
       expect(seen.length).toBeGreaterThan(0);
       expect(seen.every(([run]) => run === "r1")).toBe(true);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "the approval card cuts long inputs",
+    async () => {
+      writeFileSync(join(root, "greet.yaml"), GREET);
+      const { requests, invoke } = runTools("Reject");
+      await invoke("start_flow", { path: "greet.yaml", inputs: { who: "x".repeat(5000) } });
+      const inputs = requests[0]!.body.split("\n")[1]!;
+      expect(inputs).toBe(`inputs: {"who":"${"x".repeat(4000 - '{"who":"'.length)}... (cut at 4000 characters)`);
     },
     TIMEOUT,
   );

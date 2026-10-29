@@ -95,8 +95,9 @@ export function shownStatus(status: ChildStatus): Record<string, unknown> {
 }
 
 /**
- * The real paths of the files the CODE references of `flow` and the flows it uses import, sorted:
- * each resolved in its flow's folder, as the CODE worker resolves it.
+ * The resolved path of each CODE reference file of `flow` and the flows it uses, sorted: each
+ * resolved in its flow's folder, as the CODE worker resolves it. The files those import aren't
+ * among them.
  */
 function codeFiles(flow: ComposedFlow): string[] {
   const files = new Set<string>();
@@ -192,6 +193,7 @@ function capabilities(flow: ComposedFlow, files: readonly string[]): string[] {
   if (kinds.has("code")) {
     const named = files.length > 0 ? `; files: ${files.join(", ")}` : "";
     lines.push(`runs code on this machine (CODE nodes${named})`);
+    lines.push("an approval for this chat doesn't cover changes to the files the code imports");
   }
   return lines;
 }
@@ -346,7 +348,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
         properties: {
           run: { type: "string", description: RUN },
           call: { type: "string", description: "The question's call id, from the status's asks." },
-          answer: { description: "The answer." },
+          answer: { description: "Any JSON value; text for a plain question." },
         },
         required: ["run", "call", "answer"],
         additionalProperties: false,
@@ -403,7 +405,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
     if (approved.get(real) !== digest) {
       const answer = await host.approve({
         title: `Run ${file}`,
-        body: [`Starts ${file} in the background.`, `inputs: ${JSON.stringify(inputs)}`, ...can].join("\n"),
+        body: [`Starts ${file} in the background.`, `inputs: ${cutText(JSON.stringify(inputs))}`, ...can].join("\n"),
         diff: null,
         choices: START_CHOICES,
         signal,

@@ -387,6 +387,14 @@ export class LoopDescriptor extends NodeDescriptor {
             `never updates; return ${fix} from the body, or add \`max:\``,
         );
       }
+      // Builtins are pure, so a predicate that reads no carried field has the same value on every
+      // check: without `max:`, one that doesn't stop the loop at once never will.
+      if (present.length === 1 && this.max === null && tree !== null && heads.size === 0) {
+        errors.push(
+          `${subject}: \`${key}: ${predicate}\` reads no carried field, so it never changes; read one, ` +
+            "or add `max:`",
+        );
+      }
     }
     if (errors.length > 0) throw ctx.diagnostics.error(errors.join("\n  "), { range: this.range });
     return this._finish(node, wiring);

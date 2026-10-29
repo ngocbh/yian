@@ -182,7 +182,8 @@ output:
 - **`loop`** takes exactly one driver: `while:` (checked before each run), `until:` (after each
   run) or `times: N`. `max:` guards `while:` and `until:`, and is a load error with `times:`.
   The body reads carried fields as `${input.<name>}`, and the condition reads them bare
-  (`while: not done`). The body returns only carried fields, at least one; a field it leaves out
+  (`while: not done`). Without `max:`, the condition must read a carried field the body
+  returns. The body returns only carried fields, at least one; a field it leaves out
   keeps its value. See [Repeat with loop](https://yian.readthedocs.io/control-flow/#repeat-with-loop).
 
 ### Code nodes

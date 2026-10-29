@@ -1,0 +1,22 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    body:
+      input:
+        xs: !list(int)
+      nodes: {}
+      output:
+        xs: ${input.xs + [1]}
+  nodes:
+    l:
+      kind: loop
+      call: body
+      input:
+        xs: []
+      until: 1 > 2
+      max: 3
+  output: ${l.output}
+expect:
+  load: ok

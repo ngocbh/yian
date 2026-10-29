@@ -743,13 +743,23 @@ test(
   TIMEOUT,
 );
 
-describe("yian chat's inbox and inputs", () => {
-  /** Run `yian chat <args>` through `main` on a stdin that has ended. */
-  async function cli(args: readonly string[]) {
+describe("the chat's inbox and inputs", () => {
+  let calls = 0;
+
+  /**
+   * Chat with `flow` given `options` on a stdin that has ended: its exit code, or 2 and the message
+   * of the usage error it throws, as the command line reports one.
+   */
+  async function cli(flow: string, options: Partial<InboxChatOptions> = {}) {
     const { io, stdin, stdout, stderr } = chatIo();
     stdin.end();
-    const code = await main(["chat", ...args, "--log", join(tmp, "cli.jsonl")], io);
-    return { code, stdout: stdout(), stderr: stderr() };
+    try {
+      const { code } = await runChat(flow, io, { log: join(tmp, `cli-${(calls += 1)}.jsonl`), ...options });
+      return { code, stdout: stdout(), stderr: stderr() };
+    } catch (error) {
+      if (!(error instanceof UsageError)) throw error;
+      return { code: 2, stdout: stdout(), stderr: `${stderr()}${error.message}\n` };
+    }
   }
 
   /** A flow `f` whose inputs are `inboxes` (name to element type), each read by a take. */
@@ -766,13 +776,13 @@ describe("yian chat's inbox and inputs", () => {
   test(
     "a flow with no Inbox(str) or Inbox(Message) input is a usage error",
     async () => {
-      const none = await cli([flowFile(bare({}))]);
+      const none = await cli(flowFile(bare({})));
       expect(none.code).toBe(2);
       expect(none.stderr).toContain(
-        "flow 'f' has no Inbox(str) or Inbox(Message) input; yian chat sends each line to one",
+        "flow 'f' has no Inbox(str) or Inbox(Message) input; the chat sends each line to one",
       );
       // An Inbox(int) isn't a candidate.
-      const ints = await cli([flowFile(bare({ n: "int" }))]);
+      const ints = await cli(flowFile(bare({ n: "int" })));
       expect(ints.code).toBe(2);
       expect(ints.stderr).toContain("flow 'f' has no Inbox(str) or Inbox(Message) input");
     },
@@ -783,17 +793,17 @@ describe("yian chat's inbox and inputs", () => {
     "several Inbox(str) or Inbox(Message) inputs need --inbox, which must name one",
     async () => {
       const flow = flowFile(bare({ a: "str", b: "Message", c: "int" }));
-      const several = await cli([flow]);
+      const several = await cli(flow);
       expect(several.code).toBe(2);
       expect(several.stderr).toContain(
         "flow 'f' has several Inbox(str) or Inbox(Message) inputs (a, b); pick one with --inbox",
       );
-      const wrong = await cli([flow, "--inbox", "c"]);
+      const wrong = await cli(flow, { inbox: "c" });
       expect(wrong.code).toBe(2);
       expect(wrong.stderr).toContain("--inbox 'c' is not one of the flow's Inbox(str) or Inbox(Message) inputs (a, b)");
       // A chosen inbox goes on to the run. The end of input closes it, and the takes of the other
       // inboxes, which nothing can send to, leave the run waiting.
-      const picked = await cli([flow, "--inbox", "b"]);
+      const picked = await cli(flow, { inbox: "b" });
       expect(picked.code).toBe(0);
       expect(picked.stderr).toContain("run waiting: take_a (take), take_c (take)");
     },
@@ -834,11 +844,11 @@ describe("yian chat's inbox and inputs", () => {
       stdin.write("hi\n/exit\n");
       const { code } = await runChat(path, io, { inputValues: ["topic=x"] });
       expect([code, stdout()]).toEqual([0, "x: hi\nx: \n"]);
-      const missing = await cli([path]);
+      const missing = await cli(path);
       expect(missing.code).toBe(2);
       expect(missing.stderr).toContain("missing required flow input: topic");
       expect(missing.stderr).not.toContain("messages");
-      const inbox = await cli([path, "-i", "topic=x", "-i", "messages=hi"]);
+      const inbox = await cli(path, { inputValues: ["topic=x", "messages=hi"] });
       expect(inbox.code).toBe(2);
       expect(inbox.stderr).toContain('input "messages" is an inbox; it takes messages through send, not a value');
     },
@@ -942,12 +952,15 @@ describe("runOrChat", () => {
   );
 
   test(
-    "--resume recovers the run; with FLOW too it stays run's usage error",
+    "--resume on a terminal goes on with the chat, and off one recovers the run; with FLOW too it stays run's usage error",
     async () => {
       const flow = flowFile(ECHO);
       const first = await runOn(flow, { tty: false });
       waited(first);
-      waited(await runOn(undefined, { resume: first.log, typed: BYE }));
+      waited(await runOn(undefined, { resume: first.log, tty: false, typed: BYE }));
+      const resumed = await runOn(undefined, { resume: first.log, typed: BYE });
+      expect([resumed.code, resumed.stdout]).toEqual([0, "echo: hi\necho: \n"]);
+      expect(resumed.stderr).toContain("session ended");
       await expect(runOn(flow, { resume: first.log })).rejects.toThrow(
         new UsageError("Invalid value: --resume runs the flow recorded in the log; leave out <flow>"),
       );
@@ -1512,13 +1525,27 @@ test(
   TIMEOUT,
 );
 
-describe("the entry's chat, signalled", () => {
-  const ENTRY = fileURLToPath(new URL("../../src/cli/index.ts", import.meta.url));
+describe("a chat in its own process, signalled", () => {
+  const SRC = fileURLToPath(new URL("../../src/cli/", import.meta.url));
 
-  /** Start `yian chat <flow> --log <log>` in a child on a piped stdin, collecting its streams. */
+  /**
+   * Start a chat on `flow` with its log at `log` in a child on a piped stdin, as the command line
+   * runs it (`yian run` hands a chat over only on a terminal), collecting its streams.
+   */
   function spawnChat(flow: string, log: string) {
+    const script = join(tmp, "chat-entry.ts");
+    writeFileSync(
+      script,
+      `import { inboxChat } from ${JSON.stringify(join(SRC, "inbox_chat.ts"))};\n` +
+        `import { flush, processIo } from ${JSON.stringify(join(SRC, "utils.ts"))};\n` +
+        "const [flow, log] = process.argv.slice(2);\n" +
+        "const io = processIo();\n" +
+        "const code = await inboxChat(flow!, { inputValues: [], engineTrace: false, log }, io);\n" +
+        "await flush(io);\n" +
+        "process.exit(code);\n",
+    );
     const runtime = process.versions.bun !== undefined ? ["--no-install", "--no-env-file"] : [];
-    const child = spawn(process.execPath, [...runtime, ENTRY, "chat", flow, "--log", log], {
+    const child = spawn(process.execPath, [...runtime, script, flow, log], {
       cwd: tmp,
       env: { HOME: tmp, PATH: process.env.PATH ?? "" },
     });
@@ -1675,8 +1702,8 @@ describe("yian chat's skills", () => {
   );
 });
 
-describe("yian chat --resume", () => {
-  /** `chat --resume log` with the virtual clock and the test's signals. */
+describe("the inbox chat's resume (yian run --resume on a terminal)", () => {
+  /** `inboxChat` resuming `log` with the virtual clock and the test's signals. */
   function resumeChat(log: string, io: CliIo, options: Partial<InboxChatOptions> = {}, deps: InboxChatDeps = {}) {
     return inboxChat(
       undefined,
@@ -1708,7 +1735,7 @@ describe("yian chat --resume", () => {
       const { code, log } = await chatting;
       expect(code).toBe(130);
       expect(first.stderr()).toContain(
-        `chat stopped; the run is in ${log}\ncontinue with: yian chat --resume ${log}\n`,
+        `chat stopped; the run is in ${log}\ncontinue with: yian run --resume ${log}\n`,
       );
 
       const second = chatIo();
@@ -1805,7 +1832,7 @@ output: \${reply.output}
       await until(() => existsSync(log) && records(log).at(-1) instanceof RunWaitingRecord);
       signals.emit("SIGTERM");
       expect((await chatting).code).toBe(130);
-      expect(first.stderr()).toContain(`continue with: yian chat --resume '${log}' --inbox messages\n`);
+      expect(first.stderr()).toContain(`continue with: yian run --resume '${log}' --inbox messages\n`);
 
       const second = chatIo();
       second.stdin.write("hi\n/exit\n");
@@ -1870,24 +1897,22 @@ output: \${reply.output}
   );
 
   test(
-    "--resume takes no FLOW, inputs, provider, model or log, and needs FLOW without it",
+    "yian run --resume on a terminal chats only with no FLOW or fresh flags, which stay run's usage errors",
     async () => {
       const first = chatIo();
       first.stdin.write("/exit\n");
       const { log } = await runChat(flowFile(ECHO), first.io);
-      /** Run `yian chat <args>` through `main` on a stdin that has ended. */
+      /** Run `yian run <args>` through `main` on a terminal whose stdin has ended. */
       const cli = async (args: readonly string[]) => {
-        const { io, stdin, stderr } = chatIo();
+        const { io, stdin, stderr } = chatIo({ tty: true });
         stdin.end();
-        return { code: await main(["chat", ...args], io), stderr: stderr() };
+        return { code: await main(["run", ...args], io), stderr: stderr() };
       };
       const withFlow = await cli([flowFile(ECHO, "other.yaml"), "--resume", log]);
       expect([withFlow.code, withFlow.stderr]).toEqual([2, expect.stringContaining("leave out <flow>")]);
       const fresh = await cli(["--resume", log, "-i", "x=1", "--model", "m", "--log", join(tmp, "new.jsonl")]);
       expect(fresh.code).toBe(2);
       expect(fresh.stderr).toContain("--resume cannot be combined with --input, --model, --log");
-      const none = await cli([]);
-      expect([none.code, none.stderr]).toEqual([2, expect.stringContaining("Missing argument 'FLOW'.")]);
     },
     TIMEOUT,
   );

@@ -40,18 +40,17 @@ describe("yian help", () => {
     expect(stdout()).toContain("Usage: yian [OPTIONS] COMMAND [ARGS]...");
     expect(stdout()).toContain("Run agent flows from the command line.");
     expect(stdout()).toMatch(/^ {2}skills +Check skill directories\.$/m);
-    expect(stdout()).toMatch(/^ {2}chat +Chat with a flow: each line you type is sent to its Inbox\(str\) or Inbox\(Message\) input\./m);
+    expect(stdout()).toMatch(/^ {2}chat +Chat with yian's assistant: it helps you find, read, check, write and run/m);
   });
 
   test("yian chat --help prints its usage and options", async () => {
     const { io, stdout } = testIo();
     expect(await main(["chat", "--help"], io)).toBe(0);
     expect(stdout()).toContain("Usage: yian chat [OPTIONS] [FLOW]");
-    expect(stdout()).toContain("Opens no MCP servers and loads no skills.");
-    const options = ["--inbox", "--input", "--inputs", "--log", "--resume", "--num-workers", "--provider", "--model"];
-    for (const option of options) {
-      expect(stdout()).toContain(option);
-    }
+    expect(stdout()).toContain("With FLOW, the chat is about that flow.");
+    for (const option of ["--log", "--provider", "--model", "--engine-trace"]) expect(stdout()).toContain(option);
+    // The flow's inputs and inbox are `yian run`'s: the chat runs its own assistant.
+    for (const option of ["--inbox", "--input", "--inputs", "--num-workers"]) expect(stdout()).not.toContain(option);
   });
 
   test("a group alone prints its help and exits 2", async () => {

@@ -184,67 +184,35 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
     spec: {
       name: "chat",
       summary:
-        "Chat with a flow: each line you type is sent to its Inbox(str) or Inbox(Message) input. " +
-        "Opens no MCP servers and loads no skills.",
+        "Chat with yian's assistant: it helps you find, read, check, write and run the flows in this " +
+        "folder, and runs them for you. With FLOW, the chat is about that flow.",
       positionals: [
         {
           name: "flow",
-          help: "Path to a flow .yaml with an Inbox(str) or Inbox(Message) input; left out with --resume",
+          help: "A flow .yaml you want help with; the assistant reads and checks it first",
           optional: true,
           path: { exists: true, dir: false, readable: true },
         },
       ],
       options: [
         {
-          name: "inbox",
-          type: "string",
-          help: "The Inbox(str) or Inbox(Message) input to send lines to, when the flow has several.",
-        },
-        { name: "input", short: "i", type: "string", multiple: true, help: "Another input as k=v (repeatable)." },
-        {
-          name: "inputs",
-          type: "string",
-          path: { exists: true, dir: false, readable: true },
-          help: "A JSON file of the other inputs.",
-        },
-        {
           name: "log",
           type: "string",
           path: { dir: false },
-          help: "Create the run log at PATH instead of the default location.",
+          help: "Create the chat's run log at PATH instead of the default location.",
         },
-        {
-          name: "resume",
-          type: "string",
-          path: { exists: true, dir: false, readable: true, writable: true },
-          help:
-            "Continue the chat recorded at PATH with the flow it recorded; FLOW and fresh input, " +
-            "provider/model, and log flags are forbidden.",
-        },
-        {
-          name: "num-workers",
-          short: "w",
-          type: "int",
-          min: 0,
-          help: "Worker pool size (default 8; 0 for serial). Omitted on resume, keeps the recorded value.",
-        },
-        { name: "provider", type: "string", help: "Provider for agents that set none (cascade)." },
-        { name: "model", type: "string", help: "Model for agents that set none (cascade)." },
+        { name: "provider", type: "string", help: "Provider for the assistant and the flows it runs (cascade)." },
+        { name: "model", type: "string", help: "Model for the assistant and the flows it runs (cascade)." },
         { name: "engine-trace", type: "boolean", help: "On a failure, also print the engine traceback." },
       ],
     },
     load: async () => {
-      const { inboxChat } = await import("./inbox_chat.ts");
+      const { chat } = await import("./chat.ts");
       return ({ args, options: o }, io) =>
-        inboxChat(
+        chat(
           args["flow"] as string | undefined,
           {
-            inbox: o["inbox"] as string | undefined,
-            inputValues: o["input"] as string[],
-            inputs: o["inputs"] as string | undefined,
             log: o["log"] as string | undefined,
-            resume: o["resume"] as string | undefined,
-            numWorkers: o["num-workers"] as number | undefined,
             provider: o["provider"] as string | undefined,
             model: o["model"] as string | undefined,
             engineTrace: o["engine-trace"] === true,

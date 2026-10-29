@@ -219,18 +219,16 @@ line you type to it.
 
 ```console
 $ yian chat chat.yaml
-$ yian chat support.yaml --inbox questions --input team=billing
-$ yian chat --resume ~/.yian/runs/4f1c/log.jsonl
+$ yian chat support.yaml
 ```
 
 | Flag | Value | What it does |
 |---|---|---|
-| `FLOW` | path | The flow `.yaml` to chat with. Leave it out with `--resume` |
+| `FLOW` | path | The flow `.yaml` to chat with |
 | `--inbox` | name | The inbox input to send lines to, when the flow has several |
 | `-i`, `--input` | `k=v` | Another input. Repeat it for more |
 | `--inputs` | file | A JSON file of the other inputs |
 | `--log` | path | Write the run log here instead of the default location. The path must not exist |
-| `--resume` | path | Continue the chat recorded in this run log, with the flow it recorded |
 | `-w`, `--num-workers` | int | How many nodes may run at once (default 8; `0` for one at a time). A resume keeps the recorded count unless you give it |
 | `--provider` | name | Provider for agents that set none |
 | `--model` | name | Model for agents that set none |
@@ -244,7 +242,7 @@ $ yian chat --resume ~/.yian/runs/4f1c/log.jsonl
 - Ctrl-C while a reply runs interrupts it, and the prompt comes back. A second Ctrl-C within 2
   seconds, or Ctrl-C at the prompt, cancels the run: `chat cancelled`, exit 130.
 - SIGTERM, SIGHUP, or Ctrl-C at an `ask` prompt stops the run: `chat stopped; the run is in LOG`
-  and `continue with: yian chat --resume LOG` (with `--inbox NAME` when the flow has several), exit
+  and `continue with: yian run --resume LOG` (with `--inbox NAME` when the flow has several), exit
   130.
 - On a terminal, Esc takes back the lines the run hasn't read yet into the prompt and stops the
   reply. It never cancels the run.
@@ -252,8 +250,8 @@ $ yian chat --resume ~/.yian/runs/4f1c/log.jsonl
 - While the prompt is up, the chat wakes the run when a `sleep` or a timeout is due.
 - A failed run prints its error and exits 1; `yian status LOG` shows where it stands.
 
-`--resume LOG` picks up a chat that stopped, or that was waiting for your next line when it ended.
-It runs the flow the log recorded, as `yian run --resume` does, so you leave out `FLOW`, `-i`,
+On a terminal, `yian run --resume LOG` picks up a chat that stopped, or that was waiting for your
+next line when it ended. It runs the flow the log recorded, so you leave out `FLOW`, `-i`,
 `--inputs`, `--provider`, `--model` and `--log`. Pass `--inbox` again if the flow has several.
 
 - The chat first moves the run on. A reply the stop cut runs again and prints; replies printed

@@ -181,7 +181,8 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       positionals: [
         {
           name: "flow",
-          help: "Path to a flow .yaml with an Inbox(str) or Inbox(Message) input",
+          help: "Path to a flow .yaml with an Inbox(str) or Inbox(Message) input; left out with --resume",
+          optional: true,
           path: { exists: true, dir: false, readable: true },
         },
       ],
@@ -204,7 +205,21 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
           path: { dir: false },
           help: "Create the run log at PATH instead of the default location.",
         },
-        { name: "num-workers", short: "w", type: "int", min: 0, help: "Worker pool size (default 8; 0 for serial)." },
+        {
+          name: "resume",
+          type: "string",
+          path: { exists: true, dir: false, readable: true, writable: true },
+          help:
+            "Continue the chat recorded at PATH with the flow it recorded; FLOW and fresh input, " +
+            "provider/model, and log flags are forbidden.",
+        },
+        {
+          name: "num-workers",
+          short: "w",
+          type: "int",
+          min: 0,
+          help: "Worker pool size (default 8; 0 for serial). Omitted on resume, keeps the recorded value.",
+        },
         { name: "provider", type: "string", help: "Provider for agents that set none (cascade)." },
         { name: "model", type: "string", help: "Model for agents that set none (cascade)." },
         { name: "engine-trace", type: "boolean", help: "On a failure, also print the engine traceback." },
@@ -214,12 +229,13 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       const { chat } = await import("./chat.ts");
       return ({ args, options: o }, io) =>
         chat(
-          args["flow"] as string,
+          args["flow"] as string | undefined,
           {
             inbox: o["inbox"] as string | undefined,
             inputValues: o["input"] as string[],
             inputs: o["inputs"] as string | undefined,
             log: o["log"] as string | undefined,
+            resume: o["resume"] as string | undefined,
             numWorkers: o["num-workers"] as number | undefined,
             provider: o["provider"] as string | undefined,
             model: o["model"] as string | undefined,

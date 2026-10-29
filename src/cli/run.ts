@@ -1191,8 +1191,8 @@ export async function ensureProviderKeys(
   }
 }
 
-/** A resumed run's recorded provider credentials are not available. */
-class ResumeKeyError extends Error {
+/** @internal A resumed run's recorded provider credentials are not available. */
+export class ResumeKeyError extends Error {
   override name = "ResumeKeyError";
 }
 
@@ -1342,6 +1342,14 @@ async function checkResumeCredentials(
     if (OPTIONAL_API_KEY_PROVIDERS.has(provider) && !envVars.some((name) => context.env.read(name))) continue;
     await resumeEnvKey(provider, envVars, null, context);
   }
+}
+
+/**
+ * @internal Return the `checkLlmConfigs` a resume from the CLI passes to `advance`:
+ * `checkResumeCredentials` with `context`.
+ */
+export function resumeKeyCheck(context: ResumeKeyContext): LlmConfigsCheck {
+  return (effective, { callTimeHost }) => checkResumeCredentials(effective, callTimeHost, context);
 }
 
 /**
@@ -1628,8 +1636,7 @@ async function startRun(
           terminal: io.stdin.isTTY === true ? terminal : null,
           signal: controller.signal,
         };
-        const checkLlmConfigs: LlmConfigsCheck = (effective, { callTimeHost }) =>
-          checkResumeCredentials(effective, callTimeHost, keyContext);
+        const checkLlmConfigs = resumeKeyCheck(keyContext);
         return startLogged(log, (tools) =>
           advance({
             log,

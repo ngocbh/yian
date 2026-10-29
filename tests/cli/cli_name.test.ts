@@ -46,9 +46,10 @@ describe("yian help", () => {
   test("yian chat --help prints its usage and options", async () => {
     const { io, stdout } = testIo();
     expect(await main(["chat", "--help"], io)).toBe(0);
-    expect(stdout()).toContain("Usage: yian chat [OPTIONS] FLOW");
+    expect(stdout()).toContain("Usage: yian chat [OPTIONS] [FLOW]");
     expect(stdout()).toContain("Opens no MCP servers and loads no skills.");
-    for (const option of ["--inbox", "--input", "--inputs", "--log", "--num-workers", "--provider", "--model"]) {
+    const options = ["--inbox", "--input", "--inputs", "--log", "--resume", "--num-workers", "--provider", "--model"];
+    for (const option of options) {
       expect(stdout()).toContain(option);
     }
   });

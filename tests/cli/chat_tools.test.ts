@@ -1,12 +1,14 @@
 // The chat assistant's file tools, confined to the folder the chat started in.
 
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -371,6 +373,96 @@ describe("write_flow", () => {
     const result = await call("write_flow", { path: "a.yaml", content: FLOW }, chatHost);
     expect(result).toBe("not written: changed during approval");
     expect(readFileSync(path, "utf8")).toBe("theirs\n");
+  });
+
+  test("the same bytes under a new file are a change", async () => {
+    const path = join(root, "sub", "f.yaml");
+    writeFileSync(path, FLOW);
+    // Written beside it and renamed over it, as an editor saves, so the old inode isn't reused.
+    const { chatHost } = approving("Approve", () => {
+      writeFileSync(`${path}.new`, FLOW);
+      renameSync(`${path}.new`, path);
+    });
+    const result = await call("write_flow", { path: "sub/f.yaml", content: FLOW + "# new\n" }, chatHost);
+    expect(result).toBe("not written: changed during approval");
+    expect(readFileSync(path, "utf8")).toBe(FLOW);
+  });
+
+  test("a folder swapped for a symlink out during approval is refused", async () => {
+    writeFileSync(join(root, "sub", "f.yaml"), FLOW);
+    mkdirSync(join(tmp, "out"));
+    writeFileSync(join(tmp, "out", "f.yaml"), FLOW);
+    const swap = (): void => {
+      renameSync(join(root, "sub"), join(root, "moved"));
+      symlinkSync(join(tmp, "out"), join(root, "sub"));
+    };
+    for (const path of ["sub/f.yaml", "sub/new.yaml"]) {
+      if (existsSync(join(root, "moved"))) {
+        rmSync(join(root, "sub"));
+        renameSync(join(root, "moved"), join(root, "sub"));
+      }
+      const { chatHost } = approving("Approve", swap);
+      expect(await rejection(call("write_flow", { path, content: FLOW + "# new\n" }, chatHost))).toBeInstanceOf(
+        ToolRefused,
+      );
+    }
+    expect(readdirSync(join(tmp, "out"))).toEqual(["f.yaml"]);
+    expect(readFileSync(join(tmp, "out", "f.yaml"), "utf8")).toBe(FLOW);
+  });
+
+  test("a file swapped for a symlink out during approval is refused", async () => {
+    const path = join(root, "sub", "f.yaml");
+    writeFileSync(path, FLOW);
+    writeFileSync(join(tmp, "out.yaml"), FLOW);
+    const { chatHost } = approving("Approve", () => {
+      rmSync(path);
+      symlinkSync(join(tmp, "out.yaml"), path);
+    });
+    const content = FLOW + "# new\n";
+    expect(await rejection(call("write_flow", { path: "sub/f.yaml", content }, chatHost))).toBeInstanceOf(ToolRefused);
+    expect(readFileSync(join(tmp, "out.yaml"), "utf8")).toBe(FLOW);
+  });
+
+  // Root reads and writes a read-only folder anyway.
+  test.skipIf(process.getuid?.() === 0)("a folder that can't be written is reported, not thrown", async () => {
+    const folder = join(root, "ro");
+    mkdirSync(folder);
+    writeFileSync(join(folder, "a.yaml"), FLOW);
+    chmodSync(folder, 0o555);
+    try {
+      const { chatHost } = approving("Approve");
+      const overwrite = await call("write_flow", { path: "ro/a.yaml", content: FLOW + "# x\n" }, chatHost);
+      expect(overwrite).toBe("not written: Permission denied");
+      expect(await call("write_flow", { path: "ro/b.yaml", content: FLOW }, chatHost)).toBe(
+        "not written: Permission denied",
+      );
+      expect(await call("write_flow", { path: "ro/deep/c.yaml", content: FLOW }, chatHost)).toBe(
+        "not written: Permission denied",
+      );
+      expect(readdirSync(folder)).toEqual(["a.yaml"]);
+    } finally {
+      chmodSync(folder, 0o755);
+    }
+  });
+
+  test("a folder at the temporary file's name is reported and left alone", async () => {
+    writeFileSync(join(root, "t.yaml"), FLOW);
+    const temporary = join(root, `.t.yaml.yian-tmp-${process.pid}`);
+    mkdirSync(temporary);
+    const { chatHost } = approving("Approve");
+    const result = String(await call("write_flow", { path: "t.yaml", content: FLOW + "# y\n" }, chatHost));
+    expect(result).toStartWith("not written: ");
+    expect(readFileSync(join(root, "t.yaml"), "utf8")).toBe(FLOW);
+    expect(existsSync(temporary)).toBe(true);
+  });
+
+  test("a leftover temporary file is replaced and removed", async () => {
+    writeFileSync(join(root, "t.yaml"), FLOW);
+    writeFileSync(join(root, `.t.yaml.yian-tmp-${process.pid}`), "stale\n");
+    const { chatHost } = approving("Approve");
+    expect(await call("write_flow", { path: "t.yaml", content: FLOW + "# y\n" }, chatHost)).toBe("wrote t.yaml");
+    expect(readFileSync(join(root, "t.yaml"), "utf8")).toBe(FLOW + "# y\n");
+    expect(readdirSync(root).toSorted()).toEqual(["sub", "t.yaml"]);
   });
 
   test("without a terminal to approve, nothing is written", async () => {

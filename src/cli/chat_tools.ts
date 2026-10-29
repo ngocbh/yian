@@ -9,16 +9,19 @@
  */
 
 import {
+  closeSync,
   type Dirent,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
-  rmSync,
   type Stats,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
@@ -292,7 +295,8 @@ function sameSnapshot(a: Snapshot, b: Snapshot): boolean {
  * approves it on the terminal, with a diff against the file it replaces. Returns what happened, for
  * the model: `wrote <path>`, `invalid:` and the diagnostic, or `not written: <why>`. A file that
  * changed during the approval is left alone; a new file is created only if still absent, and an
- * existing one is replaced through a temporary file in its folder.
+ * existing one is replaced through a temporary file in its folder, flushed to disk before the
+ * rename. A write that fails (a read-only folder, a full disk) is `not written: <why>` too.
  */
 async function writeFlow(host: ChatToolHost, path: string, content: string, signal: AbortSignal): Promise<string> {
   const root = realpathSync(host.root);
@@ -318,16 +322,35 @@ async function writeFlow(host: ChatToolHost, path: string, content: string, sign
   });
   if (answer === null) return "not written: needs a terminal to approve";
   if (answer !== WRITE_CHOICES[0]) return "not written: rejected";
+  try {
+    return writeApproved(root, path, real, before, content);
+  } catch (error) {
+    // The model reads why the write failed (a read-only folder, a full disk) as the outcome.
+    if (isSystemError(error)) return `not written: ${osReason(error)}`;
+    throw error;
+  }
+}
+
+/**
+ * Write `content` to `real` (`path` as the model gave it) once approved, as `writeFlow` describes,
+ * unless the file is no longer as `before` saw it.
+ *
+ * @throws {ToolRefused} When the path now leaves `root`.
+ * @throws {Error} A system error when a write fails; the temporary file is gone either way.
+ */
+function writeApproved(root: string, path: string, real: string, before: Snapshot, content: string): string {
   const changed = "not written: changed during approval";
+  const shown = slashed(relative(root, real));
   // The path is resolved again: a folder on it may have become a symlink meanwhile.
   if (confine(root, path) !== real || !sameSnapshot(before, snapshot(path, real))) return changed;
   const folder = dirname(real);
   if (before === null) {
     mkdirSync(folder, { recursive: true });
-    if (realpathSync(folder) !== folder) return changed;
+    // Again after the folders exist, so one swapped for a symlink meanwhile can't steer the write.
+    if (confine(root, path) !== real || realpathSync(folder) !== folder) return changed;
     try {
       // `wx` fails on any file there, a symlink included, so nothing created meanwhile is replaced.
-      writeFileSync(real, content, { flag: "wx" });
+      writeDurably(real, content, null);
     } catch (error) {
       if (isSystemError(error) && error.code === "EEXIST") return changed;
       throw error;
@@ -335,16 +358,57 @@ async function writeFlow(host: ChatToolHost, path: string, content: string, sign
     return `wrote ${shown}`;
   }
   const temporary = join(folder, `.${basename(real)}.yian-tmp-${process.pid}`);
-  // A leftover from an earlier write goes first; `wx` then refuses anything put there since.
-  rmSync(temporary, { force: true });
+  // A leftover from an earlier write goes first; a folder there is left alone and fails the write.
   try {
-    writeFileSync(temporary, content, { flag: "wx", mode: statSync(real).mode & 0o777 });
+    unlinkSync(temporary);
+  } catch (error) {
+    if (!isSystemError(error) || error.code !== "ENOENT") throw error;
+  }
+  let created = false;
+  try {
+    writeDurably(temporary, content, statSync(real).mode & 0o777, () => (created = true));
     if (realpathSync(folder) !== folder) return changed;
     renameSync(temporary, real);
+    created = false;
+    syncFolder(folder);
   } finally {
-    rmSync(temporary, { force: true });
+    if (created) quietly(() => unlinkSync(temporary));
   }
   return `wrote ${shown}`;
+}
+
+/**
+ * Create `path` (`wx`: failing if anything is there, a symlink included) with `content` and flush
+ * it to disk; `mode` sets its permissions, null the default. `onCreated` runs once the file exists.
+ */
+function writeDurably(path: string, content: string, mode: number | null, onCreated?: () => void): void {
+  const fd = openSync(path, "wx", mode ?? undefined);
+  onCreated?.();
+  try {
+    writeFileSync(fd, content);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Flush `folder`'s entries to disk, so a rename in it survives a crash; best effort. */
+function syncFolder(folder: string): void {
+  quietly(() => {
+    const fd = openSync(folder, "r");
+    try {
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+  });
+}
+
+/** Run `action`, dropping what it throws: a cleanup step never replaces an outcome. */
+function quietly(action: () => unknown): void {
+  try {
+    action();
+  } catch {}
 }
 
 /** A tool's JSON Schema for string arguments, each `[name, description, required]`. */

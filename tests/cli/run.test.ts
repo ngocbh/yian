@@ -1617,7 +1617,7 @@ describe("status", () => {
         `${id.padEnd(width)}  ${status.padEnd(9)}  ${started.padEnd(24)}  ${shown}\n`;
       expect(text.stdout()).toBe(
         line("run id", "status", "started", "flow") +
-          rows.map((row) => line(row.runId, row.status, row.startedAt, flow)).join("") +
+          rows.map((row) => line(row.runId, row.status, row.startedAt!, flow)).join("") +
           line("held", "running", "2999-01-01T00:00:00.000Z", "-"),
       );
       expect(text.stderr()).toBe("");
@@ -1646,6 +1646,7 @@ describe("status", () => {
         reasoning_tokens: 0,
         ready: false,
         wake_at: null,
+        unreadable: null,
       });
       expect(document.runs[2]).toMatchObject({
         run_id: "held",
@@ -1663,7 +1664,7 @@ describe("status", () => {
     }
   });
 
-  test("with no log and no runs folder, lists nothing; a run logged elsewhere isn't indexed; a bad log warns", async () => {
+  test("with no log and no runs folder, lists nothing; a run logged elsewhere isn't indexed; a bad log warns once and is listed unreadable", async () => {
     const empty = testIo({ HOME: join(tmp, "home") });
     expect(await main(["status"], empty.io)).toBe(0);
     expect([empty.stdout(), empty.stderr()]).toEqual(["", ""]);
@@ -1674,14 +1675,31 @@ describe("status", () => {
     const log = join(tmp, "elsewhere", "run-1", "log.jsonl");
     expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds", "--log", log])).code).toBe(0);
     expect(existsSync(join(tmp, "elsewhere", "index.sqlite"))).toBe(false);
-    // A log the update can't read is a warning.
+    // A log the update can't read is a warning, and a row unreadable at its first record.
     const damaged = join(tmp, "home", ".yian", "runs", "damaged");
     mkdirSync(damaged, { recursive: true });
     writeFileSync(join(damaged, "log.jsonl"), "not a run log\n");
+    const listed = `run id   status               started  flow\ndamaged  unreadable at seq 0  -        -\n`;
     const warned = testIo({ HOME: join(tmp, "home") });
     expect(await main(["status"], warned.io)).toBe(0);
-    expect(warned.stdout()).toBe("");
+    expect(warned.stdout()).toBe(listed);
     expect(warned.stderr()).toStartWith(`warning: run index skipped ${join(damaged, "log.jsonl")}: run log `);
+    // Until the log changes, the next update doesn't warn again.
+    const again = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", "--json"], again.io)).toBe(0);
+    expect(again.stderr()).toBe("");
+    const schema = JSON.parse(readFileSync(fileURLToPath(new URL("../conformance/schema/cli.schema.json", import.meta.url)), "utf8")) as Schema;
+    const runsDocument = (schema["$defs"] as Record<string, Schema>)["runs_document"]!;
+    expect(validate(schema, runsDocument, parseJson(again.stdout(), "plain"))).toEqual([]);
+    expect(JSON.parse(again.stdout()).runs).toEqual([
+      expect.objectContaining({
+        run_id: "damaged",
+        status: "crashed",
+        started_at: null,
+        last_seq: null,
+        unreadable: { seq: 0, reason: expect.stringMatching(/^run log .*line 1/) },
+      }),
+    ]);
   });
 
   /** Run `ECHO_FLOW` to the end with its log at `tmp/<name>`, and return the log's path. */

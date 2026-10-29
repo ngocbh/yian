@@ -1963,11 +1963,14 @@ export async function status(log: string | undefined, { json }: { json: boolean 
  * Update the run index of `~/.yian/runs` (`updateRunIndex`) and list its rows (`readRunIndex`), by
  * start time; returns the exit code. A missing runs folder lists nothing.
  *
- * As text, a header and one line per run on stdout, in aligned columns: run id, status, start time
- * and flow file (`-` for a flow built in code); nothing when there are no runs. With `json`, one
- * document whose `runs` holds each row: `run_id`, `flow`, `status`, `started_at`, `ended_at`,
- * `parent_run_id`, `last_seq`, `result` (the run's output, `null` until it succeeded), the
- * token sums, and for a waiting run `ready` and `wake_at` (`false` and `null` otherwise). A log the update skips is a `warning:` line on stderr. An index that can't be
+ * As text, a header and one line per run on stdout, in aligned columns: run id, status (`unreadable
+ * at seq N` for a log yian can't read from seq N), start time and flow file (`-` for none, or a
+ * flow built in code); nothing when there are no runs. With `json`, one document whose `runs` holds
+ * each row: `run_id`, `flow`, `status`, `started_at`, `ended_at`, `parent_run_id`, `last_seq`,
+ * `result` (the run's output, `null` until it succeeded), the token sums, for a waiting run `ready`
+ * and `wake_at` (`false` and `null` otherwise), and `unreadable` (`seq` and `reason`, or `null`). A
+ * log the update can't read is a `warning:` line on stderr: once until it changes, or on every
+ * update for a file error such as no permission, which leaves the run's row as it was. An index that can't be
  * updated (another update held it too long, or it isn't a database) prints its message on stderr
  * and exits 1 (`run.setup`).
  */
@@ -1997,7 +2000,7 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
       started_at: row.startedAt,
       ended_at: row.endedAt,
       parent_run_id: row.parentRunId,
-      last_seq: BigInt(row.lastSeq),
+      last_seq: row.lastSeq === null ? null : BigInt(row.lastSeq),
       result: row.result === null ? null : parseJson(row.result, "codec"),
       input_tokens: BigInt(row.inputTokens),
       output_tokens: BigInt(row.outputTokens),
@@ -2006,6 +2009,7 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
       reasoning_tokens: BigInt(row.reasoningTokens),
       ready: row.ready,
       wake_at: row.wakeAt,
+      unreadable: row.unreadable === null ? null : { seq: BigInt(row.unreadable.seq), reason: row.unreadable.reason },
     }));
     await printJson({ runs }, io.stdout);
     return 0;
@@ -2013,7 +2017,12 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
   if (rows.length === 0) return 0;
   const table = [
     ["run id", "status", "started", "flow"],
-    ...rows.map((row) => [row.runId, row.status, row.startedAt, row.flow ?? "-"]),
+    ...rows.map((row) => [
+      row.runId,
+      row.unreadable === null ? row.status : `unreadable at seq ${row.unreadable.seq}`,
+      row.startedAt ?? "-",
+      row.flow ?? "-",
+    ]),
   ];
   const widths = [0, 1, 2].map((column) => Math.max(...table.map((cells) => cells[column]!.length)));
   const lines = table.map((cells) => cells.map((cell, column) => (column < 3 ? cell.padEnd(widths[column]!) : cell)).join("  "));

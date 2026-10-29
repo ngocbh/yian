@@ -70,6 +70,48 @@ export function shownText(text: string): string {
 }
 
 /**
+ * Cut text to its first `cap` code points, followed by `… (N more characters)` naming how many
+ * code points the cut left out.
+ *
+ * Returns `text` when it fits. A surrogate pair is never split.
+ *
+ * Example: `cutText("abcdef", 4)` gives `abcd… (2 more characters)`.
+ */
+export function cutText(text: string, cap: number): string {
+  // A string has at least as many code units as code points.
+  if (text.length <= cap) return text;
+  let index = 0;
+  for (let count = 0; count < cap && index < text.length; count++) {
+    index += text.codePointAt(index)! > 0xffff ? 2 : 1;
+  }
+  let dropped = 0;
+  for (let rest = index; rest < text.length; rest += text.codePointAt(rest)! > 0xffff ? 2 : 1) dropped++;
+  return dropped === 0 ? text : `${text.slice(0, index)}… (${dropped} more characters)`;
+}
+
+/**
+ * Return `names` JSON-quoted in a compact JSON list for a message, the list's text cut by
+ * `shownText`. A cut list is followed by how many names it doesn't show in full.
+ *
+ * Example: `shownNames(["a", "b"])` gives `["a","b"]`, and the 5000 names `f0` to `f4999` give
+ * `["f0","f1",…,"f34"…] (4965 more)`.
+ */
+export function shownNames(names: readonly string[]): string {
+  const quoted = names.map((name) => JSON.stringify(name));
+  const joined = quoted.join(",");
+  const shown = shownText(joined);
+  if (shown === joined) return `[${joined}]`;
+  // The cut keeps the code units before its one-unit `…`.
+  const kept = shown.length - 1;
+  let whole = 0;
+  for (let end = -1; whole < quoted.length; whole++) {
+    end += quoted[whole]!.length + 1;
+    if (end > kept) break;
+  }
+  return `[${shown}] (${quoted.length - whole} more)`;
+}
+
+/**
  * Return a value's text form for a message, cut to the shown-value cap (see `shownText`).
  *
  * The text form is compact JSON with JS number spelling: `true`, `null`, `2.5`, `2` for the
@@ -1034,7 +1076,7 @@ function decodedAs<T>(label: string, build: () => T): T {
 /**
  * Require `record`'s own keys to be exactly `expected`.
  *
- * @throws RangeError listing the missing and extra keys, each sorted.
+ * @throws RangeError listing the missing and extra keys, each sorted and cut by `shownNames`.
  */
 export function requireFields(
   record: ValueRecord,
@@ -1045,9 +1087,7 @@ export function requireFields(
   const missing = expected.filter((key) => !Object.hasOwn(record, key)).sort(compareCodeUnits);
   const extra = actual.filter((key) => !expected.includes(key)).sort(compareCodeUnits);
   if (missing.length > 0 || extra.length > 0) {
-    throw new RangeError(
-      `invalid ${label} fields; missing=${writeAsText(missing)}, extra=${writeAsText(extra)}`,
-    );
+    throw new RangeError(`invalid ${label} fields; missing=${shownNames(missing)}, extra=${shownNames(extra)}`);
   }
 }
 
@@ -2375,15 +2415,14 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
       .filter((name) => !Object.hasOwn(value, name))
       .sort(compareCodeUnits);
     if (missing.length > 0) {
-      throw new TypeCheckError(`record missing required fields: ${writeAsText(missing)}`, {
+      throw new TypeCheckError(`record missing required fields: ${shownNames(missing)}`, {
         path: [...path, missing[0]!],
       });
     }
     const names = Object.keys(value);
     const unknown = names.filter((name) => !fields.has(name)).sort(compareCodeUnits);
     if (unknown.length > 0) {
-      const shown = shownText(unknown.map((name) => JSON.stringify(name)).join(","));
-      throw new TypeCheckError(`record has unknown fields: [${shown}]`, {
+      throw new TypeCheckError(`record has unknown fields: ${shownNames(unknown)}`, {
         path: [...path, unknown[0]!],
       });
     }
@@ -2467,13 +2506,19 @@ function buildForUnion(typ: Type, value: unknown, path: ValuePath): TypedValue {
       return buildForType(member, value, path);
     } catch (error) {
       if (!(error instanceof TypeCheckError)) throw error;
-      // A nested union contributes its summary, so the message stays bounded.
+      // A nested union contributes its summary and each label is cut, so the message grows only
+      // with the number of members.
       const reason = error instanceof NoUnionMember ? error.summary : error.message;
-      reasons.push(`${canonicalTypeLabel(member)}: ${reason}`);
+      reasons.push(`${shownLabel(member)}: ${reason}`);
     }
   }
-  const summary = `value matches no member of ${canonicalTypeLabel(typ)}`;
+  const summary = `value matches no member of ${shownLabel(typ)}`;
   throw new NoUnionMember(`${summary}: ${reasons.join("; ")}`, summary, path);
+}
+
+/** Return `typ`'s canonical label for a message, cut to the shown-value cap by `cutText`. */
+function shownLabel(typ: Type): string {
+  return cutText(canonicalTypeLabel(typ), current().maxShownValueChars);
 }
 
 /**

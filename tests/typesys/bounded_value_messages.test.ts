@@ -15,8 +15,11 @@ import { outputContractOrigin, Parameter } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
 import {
   buildValueAs,
+  cutText,
   FileRef,
   renderValuePath,
+  requireFields,
+  shownNames,
   shownText,
   Type,
   TypeCheckError,
@@ -144,6 +147,36 @@ describe("shownText", () => {
   });
 });
 
+describe("cutText", () => {
+  test("keeps text that fits", () => {
+    expect(cutText("abcd", 4)).toBe("abcd");
+  });
+
+  test("keeps the first code points and says how many it cut", () => {
+    expect(cutText("abcdef", 4)).toBe("abcd… (2 more characters)");
+  });
+
+  test("counts code points and never splits a surrogate pair", () => {
+    expect(cutText("😀".repeat(4), 4)).toBe("😀".repeat(4));
+    expect(cutText("😀".repeat(7), 4)).toBe("😀".repeat(4) + "… (3 more characters)");
+    expect(cutText("ab😀😀", 3)).toBe("ab😀… (1 more characters)");
+  });
+});
+
+describe("shownNames", () => {
+  test("lists names that fit as JSON", () => {
+    expect(shownNames(["a", "b"])).toBe('["a","b"]');
+  });
+
+  test("cuts a long list to the cap and says how many names it doesn't show in full", () => {
+    const names = Array.from({ length: 100 }, (_, i) => `n${i}`);
+    const shown = shownNames(names);
+    // The cut keeps 199 code points: `"n0"` to `"n9"` and their commas take 49, and `"n10"` to
+    // `"n34"` 6 each with the comma before them, so 35 names show in full.
+    expect(shown).toBe(`[${shownText(names.map((name) => JSON.stringify(name)).join(","))}] (65 more)`);
+  });
+});
+
 describe("renderValuePath", () => {
   test.each<[string, (string | number)[], string]>([
     ["a list index", ["a", 1], "a[1]"],
@@ -204,6 +237,64 @@ describe("unknown record fields", () => {
     expect(error.message.length).toBeLessThanOrEqual(MESSAGE_BOUND);
     expect(error.path).toEqual([earlier]);
   });
+});
+
+describe("missing record fields", () => {
+  const names = Array.from({ length: 5000 }, (_, i) => `field${i}`);
+  const record = new Type({
+    kind: ValueKind.OBJECT,
+    fields: new Map(names.map((name) => [name, Type.scalar(ValueKind.INTEGER)])),
+    required: new Set(names),
+  });
+
+  test("a record lists many missing fields within the cap and counts the rest", () => {
+    let error: unknown;
+    try {
+      buildValueAs(record, {});
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(TypeCheckError);
+    const { message, path } = error as TypeCheckError;
+    expect(message.startsWith('record missing required fields: ["field0","field1",')).toBe(true);
+    expect(message).toMatch(/…\] \(\d+ more\)$/);
+    expect(message.length).toBeLessThanOrEqual(MESSAGE_BOUND);
+    expect(path).toEqual(["field0"]);
+  });
+
+  test("requireFields lists many missing and extra keys within the cap", () => {
+    const extra: Record<string, bigint> = {};
+    for (const name of names) extra[`x${name}`] = 1n;
+    let message = "";
+    try {
+      requireFields(extra, names, "test");
+    } catch (error) {
+      expect(error).toBeInstanceOf(RangeError);
+      message = (error as RangeError).message;
+    }
+    expect(message).toMatch(/^invalid test fields; missing=\["field0",.*…\] \(\d+ more\), extra=\["xfield0",.*…\] \(\d+ more\)$/);
+    expect(message.length).toBeLessThanOrEqual(MESSAGE_BOUND);
+  });
+});
+
+test("a union of large records shows a bounded no-member message", () => {
+  const member = (prefix: string): Type =>
+    new Type({
+      kind: ValueKind.OBJECT,
+      fields: new Map(Array.from({ length: 100 }, (_, i) => [`${prefix}${i}`, Type.scalar(ValueKind.INTEGER)])),
+      required: new Set(Array.from({ length: 100 }, (_, i) => `${prefix}${i}`)),
+    });
+  const union = new Type({ kind: ValueKind.OBJECT, variants: [member("a"), member("b"), member("c")] });
+  let message = "";
+  try {
+    buildValueAs(union, { z: 1n });
+  } catch (error) {
+    expect(error).toBeInstanceOf(TypeCheckError);
+    message = (error as TypeCheckError).message;
+  }
+  expect(message.startsWith("value matches no member of ")).toBe(true);
+  expect(message).toContain(" more characters)");
+  expect(message.length).toBeLessThanOrEqual(2 * MESSAGE_BOUND);
 });
 
 test("unknown inputs list within the cap", () => {

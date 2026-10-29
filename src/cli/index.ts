@@ -155,9 +155,9 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       ],
     },
     load: async () => {
-      const { run } = await import("./run.ts");
+      const { runOrChat } = await import("./inbox_chat.ts");
       return ({ args, options: o }, io) =>
-        run(
+        runOrChat(
           args["flow"] as string | undefined,
           {
             inbox: o["inbox"] as string | undefined,

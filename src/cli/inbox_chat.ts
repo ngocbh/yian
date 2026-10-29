@@ -1,6 +1,7 @@
 /**
  * `yian chat`: a terminal host that sends each typed line to a flow's `Inbox(str)` or
- * `Inbox(Message)` input and advances the run.
+ * `Inbox(Message)` input and advances the run. `yian run` comes here first too (`runOrChat`): on a
+ * terminal, a flow the chat can take is chatted with, and any other goes on to `run`.
  *
  * The chat starts the flow, then loops while the run waits: read a line, `send` it, `advance`.
  * The engine holds no prompt and the run holds no worker between turns, and an `advance` finishes
@@ -54,6 +55,8 @@ import {
   reportRunLog,
   ResumeKeyError,
   resumeKeyCheck,
+  run,
+  type RunOptions,
   validateRunLogOptions,
   waitingText,
 } from "./run.ts";
@@ -102,6 +105,19 @@ export interface LineInbox {
   several: boolean;
 }
 
+/**
+ * Whether the chat provides all `flow` needs: it declares no memories and needs no MCP tools.
+ * Never throws.
+ */
+function chattable(flow: ComposedFlow): boolean {
+  try {
+    return !resolveMemoryLayout(flow.compiled).enabled && !needsMcp(flow);
+  } catch {
+    // A memory layout that doesn't resolve is left to `yian run` to report.
+    return false;
+  }
+}
+
 /** Return `flow`'s `Inbox(str)` and `Inbox(Message)` inputs, in declaration order. */
 function lineInboxes(flow: ComposedFlow): Omit<LineInbox, "several">[] {
   return flow.input.flatMap((param): Omit<LineInbox, "several">[] => {
@@ -118,12 +134,7 @@ function lineInboxes(flow: ComposedFlow): Omit<LineInbox, "several">[] {
  * flow declares memories or needs MCP tools, which the chat doesn't provide. Never throws.
  */
 export function inboxTarget(flow: ComposedFlow, chosen: string | undefined): LineInbox | null {
-  try {
-    if (resolveMemoryLayout(flow.compiled).enabled || needsMcp(flow)) return null;
-  } catch {
-    // A memory layout that doesn't resolve is left to `yian run` to report.
-    return null;
-  }
+  if (!chattable(flow)) return null;
   const inboxes = lineInboxes(flow);
   const several = inboxes.length > 1;
   if (chosen !== undefined) {
@@ -627,4 +638,52 @@ export async function inboxChat(
     if (log !== null) await indexRun(log, io);
     if (runDir !== null) removeEmptyDir(runDir);
   }
+}
+
+/**
+ * `yian run`: chat with the flow at `flowPath` (`inboxChat`, given `deps`) when stdin and stderr
+ * are a TTY, the run is fresh (no `resume`, `json`, `memoryRoot` or `memoryStorage`), and the flow
+ * loads and has an `Inbox(str)` or `Inbox(Message)` input to type into (`inboxTarget`: its only
+ * one, or `inbox`). Otherwise hand the command to `run`, which reads the flow again and reports
+ * what is wrong with it; checking writes nothing. Returns the exit code.
+ *
+ * The chat's start-up comes before `run` sets anything up, so the two never share the terminal,
+ * the signals or stderr.
+ *
+ * @throws {UsageError} As `run` or `inboxChat` does; for an `inbox` that isn't one of the
+ *   `Inbox(str)` or `Inbox(Message)` inputs of a flow the chat could otherwise take.
+ */
+export async function runOrChat(
+  flowPath: string | undefined,
+  options: RunOptions,
+  io: CliIo,
+  deps: InboxChatDeps = {},
+): Promise<number> {
+  const flow = await chatFlow(flowPath, options, io);
+  if (flow === null) return run(flowPath, options, io);
+  const { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace } = options;
+  const chatOptions = { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace };
+  return inboxChat(flowPath!, chatOptions, io, deps, flow);
+}
+
+/**
+ * Return the flow at `flowPath` when `runOrChat` chats with it, else `null`, writing nothing. A
+ * flow the chat could take whose `inbox` names none of its inboxes is returned too, so that
+ * `inboxChat` refuses the name.
+ */
+async function chatFlow(flowPath: string | undefined, options: RunOptions, io: CliIo): Promise<ComposedFlow | null> {
+  if (flowPath === undefined || options.resume !== undefined || options.json || !atTerminal(io)) return null;
+  // `run` checks the memory flags against the flow and reports what they can't take.
+  if (options.memoryRoot !== undefined || options.memoryStorage.length > 0) return null;
+  const silent: CliIo = { ...io, stderr: { write: async () => {} } };
+  let flow: ComposedFlow | Diagnostic;
+  try {
+    flow = await loadFlowFile(flowPath, silent, { engineTrace: false });
+  } catch {
+    return null;
+  }
+  if (flow instanceof Diagnostic) return null;
+  if (inboxTarget(flow, options.inbox) !== null) return flow;
+  const misnamed = options.inbox !== undefined && chattable(flow) && lineInboxes(flow).length > 0;
+  return misnamed ? flow : null;
 }

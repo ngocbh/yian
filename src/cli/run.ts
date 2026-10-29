@@ -4,11 +4,10 @@
  * The start-up it shares with `yian chat` is in `startup.ts`, and the rendering both use in
  * `render.ts`.
  *
- * - `run` hands a fresh run of a flow with an inbox to type into, on a terminal, to `yian chat`'s
- *   code (`inboxChat`). Otherwise it checks the run-log options, loads the flow, builds its
- *   memories, reads skills and MCP servers when it needs them, runs it on a fresh log or
- *   recovers the run recorded on a `--resume` log, checking its recorded keys, and prints its
- *   output or its failure;
+ * - `run` checks the run-log options, loads the flow, builds its memories, reads skills and MCP
+ *   servers when it needs them, runs it on a fresh log or recovers the run recorded on a
+ *   `--resume` log, checking its recorded keys, and prints its output or its failure; `yian run`
+ *   reaches it through `runOrChat` in `inbox_chat.ts`, which hands a terminal chat to `inboxChat`;
  *   `check` loads each flow, or confined to `--root`, and reports each as text or one `--json`
  *   document; `status` reports where the run in a run log stands, or, given no log, updates and
  *   lists the run index of `~/.yian/runs`, as text or a `--json` document. A run whose log is in
@@ -83,7 +82,6 @@ import { ASK_USER, BUILTIN_TOOL_IDS } from "../tools/context.ts";
 import { McpConnectError, McpSdkMissingError, type McpServer } from "../tools/mcp.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
-import type { InboxChatDeps } from "./inbox_chat.ts";
 import { buildCliMemories, MemoryOptionError } from "./memory.ts";
 import {
   box,
@@ -1006,11 +1004,7 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * Start a durable run of the flow at `flowPath`, or recover the one recorded at `resume`; returns
  * the exit code.
  *
- * On a TTY stdin and stderr, a fresh run (no `resume`, `json` or `memoryStorage`) of a flow that
- * loads and has an `Inbox(str)` or `Inbox(Message)` input to type into (`inboxTarget`: its only
- * one, or `inbox`; no memories, no MCP tools) is a chat: the whole command goes to `inboxChat`,
- * with `deps`, before `run` sets up anything, and what follows doesn't apply. Otherwise `inbox` is
- * ignored.
+ * `inbox` is ignored: `runOrChat` reads it before it hands the command here.
  *
  * The run-log options are checked before the flow is read. A flow that isn't UTF-8 text or doesn't
  * load is reported on stderr (a load error located, with its stack under `engineTrace`) and exits
@@ -1059,22 +1053,9 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  *
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a memory flag value
  *   the flow can't take; for an input the flow doesn't declare (or an inbox); off a TTY, for
- *   missing required inputs; as `inboxChat` does, for a chat.
+ *   missing required inputs.
  */
-export async function run(
-  flowPath: string | undefined,
-  options: RunOptions,
-  io: CliIo,
-  deps: InboxChatDeps = {},
-): Promise<number> {
-  // Before run builds anything of its own: the chat owns the terminal, the signals and stderr.
-  const chatting = await chatFlow(flowPath, options, io);
-  if (chatting !== null) {
-    const { inboxChat } = await import("./inbox_chat.ts");
-    const { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace } = options;
-    const chatOptions = { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace };
-    return inboxChat(flowPath!, chatOptions, io, deps, chatting);
-  }
+export async function run(flowPath: string | undefined, options: RunOptions, io: CliIo): Promise<number> {
   const controller = new AbortController();
   // From the command's start, so a signal during the load or the prompts stops the run too.
   const disposeSignals = stopOnSignals(controller);
@@ -1124,28 +1105,6 @@ export async function run(
     stop?.removeEventListener("abort", forwardStop);
     reporter?.stop();
   }
-}
-
-/**
- * Return the flow at `flowPath` when `run` hands it to a chat (`inboxChat`): a fresh run, not
- * under `json`, with no `memoryStorage`, on a TTY stdin and stderr, of a flow that loads and that
- * `inboxTarget` takes. Otherwise return `null`, writing nothing, and `run` reads the flow itself and
- * reports what is wrong with it.
- */
-async function chatFlow(flowPath: string | undefined, options: RunOptions, io: CliIo): Promise<ComposedFlow | null> {
-  if (flowPath === undefined || options.resume !== undefined || options.json || !atTerminal(io)) return null;
-  // A `--memory-storage` key the flow doesn't declare is a usage error `run` reports.
-  if (options.memoryStorage.length > 0) return null;
-  const silent: CliIo = { ...io, stderr: { write: async () => {} } };
-  let flow: ComposedFlow | Diagnostic;
-  try {
-    flow = await loadFlowFile(flowPath, silent, { engineTrace: false });
-  } catch {
-    return null;
-  }
-  if (flow instanceof Diagnostic) return null;
-  const { inboxTarget } = await import("./inbox_chat.ts");
-  return inboxTarget(flow, options.inbox) === null ? null : flow;
 }
 
 /** What `run` builds for its body: the terminal, the run's stop, progress, whether it started. */

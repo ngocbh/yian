@@ -864,6 +864,13 @@ export function isSetupError(error: unknown): error is Error {
 }
 
 /**
+ * The lines `openMcpServers` adds below a server failure it throws: the ids no started server
+ * supplies and the other servers that failed. Kept apart from the error's `notes`, which a memory
+ * cleanup failure also writes to.
+ */
+const selectionNotes = new WeakMap<Error, readonly string[]>();
+
+/**
  * Return the tool ids `flow`'s static TOOL nodes call, which name single tools, and the ids its
  * static AGENT nodes grant, which name tools or tool groups.
  */
@@ -886,12 +893,12 @@ function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
  * after its own checks and closes it. A TOOL node's id names one tool, never a group, so it counts
  * as unresolved unless it is in `known`; so does a grant that is neither in `known` nor a server
  * name. When some id is unresolved, the granted servers open here instead, and if their tools don't
- * supply every unresolved id, every other server opens to show its tools; those that list a
- * still-unresolved id stay open and the rest close before the run, so an unused server's tool
- * names can't collide with another's. A server opened only to show its tools that fails to start is
- * skipped with a `warn` call, unless the flow still lacks a needed id afterwards. Once `signal`
- * aborts, no further server opens, and only the servers already open are selected. Nothing is
- * selected when the flow needs no tools.
+ * supply every unresolved id, the other servers open in turn to show their tools until every id is
+ * supplied; those that list a still-unresolved id stay open and the rest close before the run, so
+ * an unused server's tool names can't collide with another's. A server opened only to show its
+ * tools that fails to start is skipped with a `warn` call, unless the flow still lacks a needed id
+ * afterwards. Once `signal` aborts, no further server opens, and only the servers already open are
+ * selected. Nothing is selected when the flow needs no tools.
  *
  * @param servers The configured servers by name, none of them open.
  * @param toolIds The tool ids the flow's static TOOL nodes call.
@@ -903,8 +910,8 @@ function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
  * @param body Called with the selected servers by name, as tool groups for the run.
  * @returns What `body` resolves to.
  * @throws {McpConnectError} A server the flow names doesn't start or lists bad tools; or a needed
- *   id is still missing and some server failed to start, the first failure then noting the missing
- *   ids and each other failure.
+ *   id is still missing and some server failed to start: the first failure, with lines naming the
+ *   missing ids and each other failure that `run` prints below it.
  * @throws {Error} A server must open here and the MCP SDK is not installed.
  * @throws The signal's reason, when it aborts while a server opens.
  */
@@ -944,21 +951,26 @@ export async function openMcpServers<T>(
           failed.push(error);
           continue;
         }
-        if (server.tools.some((tool) => unresolved.has(tool.name))) selected[name] = server;
-        else await server.close();
+        if (server.tools.some((tool) => unresolved.has(tool.name))) {
+          selected[name] = server;
+          // A later server that lists the same id would collide with this one.
+          for (const tool of server.tools) unresolved.delete(tool.name);
+        } else {
+          await server.close();
+        }
       }
       if (signal.aborted) {
         // The run throws the stop; only what is already open goes to it.
         selected = Object.fromEntries(Object.entries(selected).filter(([, server]) => server.isOpen));
       } else {
-        const supplied = toolNames(selected);
-        const missing = [...unresolved].filter((id) => !supplied.has(id)).sort(compareCodeUnits);
+        const missing = [...unresolved].sort(compareCodeUnits);
         if (missing.length > 0 && failed.length > 0) {
           // A server that failed to start may be the one that supplies them.
           const [error, ...others] = failed as [McpConnectError, ...McpConnectError[]];
-          const notes = ((error as { notes?: string[] }).notes ??= []);
-          notes.push(`the flow needs ${writeAsText(missing)}, which no started server supplies`);
-          for (const other of others) notes.push(other.message);
+          selectionNotes.set(error, [
+            `the flow needs ${writeAsText(missing)}, which no started server supplies`,
+            ...others.map((other) => other.message),
+          ]);
           throw error;
         }
       }
@@ -1254,8 +1266,9 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * stderr and exits 1. A run that ends waiting prints `run waiting: <node> (<tool>), ...` and the
  * `yian run --resume <log>` that continues it on stderr and exits 0; a cancelled one prints
  * `run cancelled` and exits 1 (`run.cancelled`). An inbox input is never asked for. A host failure (a bad option value, a log that can't be created, an MCP
- * server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr, an
- * `McpConnectError`'s notes on the lines below, and exits 1.
+ * server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr, and
+ * when no started server supplies a needed tool the missing ids and the other failed servers on the
+ * lines below, and exits 1.
  *
  * With `resume` there is no `flowPath`: the flow the log recorded is compiled (`loadRecordedFlow`),
  * never a file on disk, and its memories, skills and MCP config are read as for a fresh run; then
@@ -1365,10 +1378,10 @@ async function startRun(
     if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
   };
   const action = options.resume === undefined ? "run" : "resume";
-  // An McpConnectError's notes (the ids no started server supplies, the other servers that
-  // failed) follow its message; other notes, such as a cleanup failure, stay out of it.
+  // Only the MCP selection's lines follow the message; the error's own notes, such as a memory
+  // cleanup failure, stay out of it.
   const setupFailed = async (error: Error) => {
-    const notes = error instanceof McpConnectError ? ((error as { notes?: string[] }).notes ?? []) : [];
+    const notes = selectionNotes.get(error) ?? [];
     const label = paint(`${action} failed: `, "red bold", io.stderr, io.env);
     const text = [error.message, ...notes].map((line) => paint(line, "red", io.stderr, io.env));
     await io.stderr.write(`${label}${text.join("\n")}\n`);

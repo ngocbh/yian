@@ -210,6 +210,7 @@ The file uses the `mcpServers` format other MCP clients use:
 | `disabled` | `true` turns the server off, even one an earlier file defines |
 
 - An entry has exactly one of `command` and `url`. SSE servers aren't supported.
+- A key set to `null` counts as absent.
 - A server can't share a name with a registered tool or a built-in: `take`, `sleep`, `ask`,
   `ask_user`, `load_skill`.
 - In `command`, `args`, `cwd`, `url` and the values of `env` and `headers`, `${VAR}` reads an

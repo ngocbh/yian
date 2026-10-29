@@ -16,6 +16,7 @@ import { openMcpServers } from "../../src/cli/run.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { loadSkills } from "../../src/compose/skills.ts";
+import { MemoryRegistry } from "../../src/memory_host.ts";
 import { runFlow } from "../../src/run.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { McpServer, mcpServer } from "../../src/tools/mcp.ts";
@@ -239,6 +240,27 @@ test(
     expect(lastLine(result.stdout)).toBe("hi");
     // No server is named `echo`, so every server opened to find it; a and b then closed.
     expect(Object.values(files).map((file) => pids(file).length)).toEqual([1, 1, 1]);
+    await expectNoChildren(...Object.values(files));
+  },
+  SLOW,
+);
+
+test(
+  "probing stops at the first server that supplies the tool",
+  async () => {
+    const files = { none: marker("none.pid"), a: marker("a.pid"), b: marker("b.pid") };
+    const cfg = config(join(tmp, "cfg.json"), {
+      none: stdio("--only", "add", "--marker", files.none),
+      a: stdio("--marker", files.a),
+      b: stdio("--marker", files.b),
+    });
+
+    const result = await run([toolFlow(), "--mcp-config", cfg]);
+
+    expect(result.code, result.output).toBe(0);
+    expect(lastLine(result.stdout)).toBe("hi");
+    // `a` supplies `echo`, so `b`, which lists it too, never starts.
+    expect(Object.values(files).map((file) => pids(file).length)).toEqual([1, 1, 0]);
     await expectNoChildren(...Object.values(files));
   },
   SLOW,
@@ -537,6 +559,38 @@ test(
     expect(error.notes).toHaveLength(2);
     expect(error.notes[0]).toBe('the flow needs ["echo"], which no started server supplies');
     expect(error.notes[1]).toContain("MCP server 'gone'");
+  },
+  SLOW,
+);
+
+test(
+  "a memory cleanup failure stays out of a failed server's notes",
+  async () => {
+    const cfg = config(join(tmp, "cfg.json"), {
+      broken: { command: join(tmp, "missing") },
+      gone: { command: join(tmp, "also-missing") },
+    });
+    const flow = flowFile(
+      "id: mcp_memory\nname: mcp_memory\nlong_term_memory: {notes: episodic}\nnodes:\n  call:\n" +
+        '    kind: tool\n    tool_id: echo\n    input: {text: "hi"}\noutput: ${call.output}\n',
+    );
+    const close = MemoryRegistry.prototype.close;
+    MemoryRegistry.prototype.close = async () => {
+      throw new Error("close failed");
+    };
+    let result;
+    try {
+      result = await run([flow, "--mcp-config", cfg, "--json"]);
+    } finally {
+      MemoryRegistry.prototype.close = close;
+    }
+
+    expect(result.code).toBe(1);
+    const { error } = JSON.parse(result.stdout) as { error: { notes: string[] } };
+    expect(error.notes).toHaveLength(2);
+    expect(error.notes[0]).toBe('the flow needs ["echo"], which no started server supplies');
+    expect(error.notes[1]).toContain("MCP server 'gone'");
+    expect(result.stderr).not.toContain("close failed");
   },
   SLOW,
 );

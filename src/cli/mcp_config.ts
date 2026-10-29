@@ -16,6 +16,7 @@ import { reprText } from "../diagnostics.ts";
 import { warn as platformWarn } from "../platform.ts";
 import { isSystemError } from "../skills/catalog.ts";
 import { type McpServer, mcpServer } from "../tools/mcp.ts";
+import { RESERVED_TOOL_NAMES } from "../tools/registry.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../typesys/json.ts";
 import { type Value, writeAsJson, writeAsText } from "../typesys/values.ts";
 import { osReason } from "./utils.ts";
@@ -55,10 +56,11 @@ export function userMcpConfig(env: Env): string {
  * A later file's entry replaces an earlier entry of the same name whole; an entry with
  * `"disabled": true` drops the server, so `{"disabled": true}` alone turns off a server an earlier
  * file defines. Entry keys read are `command`, `args`, `env`, `cwd`, `url`, `headers`, `type`
- * (`"stdio"`, `"http"` or `"streamable-http"`) and `disabled`; any other key is ignored with a
- * warning. In `command`, each `args` item, `cwd`, `url`, and the values of `env` and `headers`,
- * `${VAR}` expands to `env(VAR)`, `${VAR:-default}` to `default` when `VAR` is unset or empty, and
- * `$$` to `$`; a default can't contain `$`, and any other `$` stays as written.
+ * (`"stdio"`, `"http"` or `"streamable-http"`) and `disabled`, each absent when `null`; any other
+ * key is ignored with a warning. In `command`, each `args` item, `cwd`, `url`, and the values of
+ * `env` and `headers`, `${VAR}` expands to `env(VAR)`, `${VAR:-default}` to `default` when `VAR`
+ * is unset or empty, and `$$` to `$`; a default can't contain `$`, and any other `$` stays as
+ * written.
  *
  * @param paths The config files to read, each of which must exist. Later files win.
  * @param env The variables `${VAR}` references expand from.
@@ -103,7 +105,7 @@ export function loadMcpConfig(
     if (taken.has(name)) {
       throw new McpConfigError(
         `${sources[name]}: server ${reprText(name)}: the name is reserved (a registered tool or a yian` +
-          " built-in: take, sleep, ask, ask_user, load_skill); rename the server",
+          ` built-in: ${[...RESERVED_TOOL_NAMES].join(", ")}); rename the server`,
       );
     }
   }
@@ -161,7 +163,7 @@ function build(
   for (const key of Object.keys(entry)) {
     if (!KNOWN_KEYS.has(key)) warn(`${where}: ignoring unknown key ${reprText(key)}`);
   }
-  const disabled = Object.hasOwn(entry, "disabled") ? (entry.disabled as JsonValue) : false;
+  const disabled = Object.hasOwn(entry, "disabled") ? ((entry.disabled as JsonValue) ?? false) : false;
   if (typeof disabled !== "boolean") {
     throw new McpConfigError(`${where}: 'disabled' must be true or false, got ${kind(disabled)}`);
   }
@@ -187,7 +189,7 @@ function build(
     }
   }
 
-  const args = Object.hasOwn(entry, "args") ? entry.args : [];
+  const args = Object.hasOwn(entry, "args") ? (entry.args ?? []) : [];
   if (!Array.isArray(args) || !args.every((arg) => typeof arg === "string")) {
     throw new McpConfigError(`${where}: 'args' must be a list of strings`);
   }

@@ -22,6 +22,7 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
+  readFileSync,
   readSync,
   realpathSync,
   renameSync,
@@ -37,12 +38,14 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import type { Env } from "../defaults.ts";
 import { compareCodeUnits, type Diagnostic, reprText } from "../diagnostics.ts";
+import { coerceInputs } from "../nodes/binding.ts";
+import { splitReference } from "../nodes/code/worker.ts";
 import { isSystemError, leavesRoot, realScheduler, type Scheduler } from "../platform.ts";
 import { hostInputs, skillGrants, staticNodes } from "../run.ts";
 import { resolvedPath } from "../skills/catalog.ts";
 import { isReportedToolError, ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
-import { canonicalTypeLabel } from "../typesys/values.ts";
+import { buildValueAs, canonicalTypeLabel, isInboxType } from "../typesys/values.ts";
 import type { ChildRuns, ChildStatus } from "./chat_runs.ts";
 import { loadConfinedText } from "./confined_load.ts";
 import { unifiedDiff } from "./diff.ts";
@@ -637,11 +640,81 @@ function shownStatus(status: ChildStatus): Record<string, unknown> {
 }
 
 /**
+ * The real paths of the files the CODE references of `flow` and the flows it uses import, sorted:
+ * each resolved in its flow's folder, as the CODE worker resolves it.
+ */
+function codeFiles(flow: ComposedFlow): string[] {
+  const files = new Set<string>();
+  for (const [, node] of staticNodes(flow)) {
+    // Read kind-blind, as the run boundary reads a grant: only a CODE node has these fields.
+    const code = node as { mode?: unknown; code?: unknown; baseDir?: unknown };
+    if (node.kind !== "code" || code.mode !== "reference" || typeof code.code !== "string") continue;
+    const base = typeof code.baseDir === "string" ? code.baseDir : ".";
+    files.add(resolve(base, splitReference(code.code).path));
+  }
+  return Array.from(files).sort(compareCodeUnits);
+}
+
+/**
+ * The sha256 of everything that runs when `flow` starts: its flow files (`text`, the root's, and
+ * each file it was loaded from), the bytes of each of its CODE reference `files` (or why one
+ * can't be read), and `can`, what the approval card says it can do.
+ */
+function startDigest(flow: ComposedFlow, text: string, files: readonly string[], can: readonly string[]): string {
+  const hash = createHash("sha256").update(text).update("\0");
+  const sources = flow.source?.files ?? {};
+  for (const key of Object.keys(sources).sort(compareCodeUnits)) {
+    hash.update(key).update("\0").update(sources[key]!.text).update("\0");
+  }
+  for (const file of files) {
+    hash.update(file).update("\0");
+    try {
+      hash.update(readFileSync(file));
+    } catch (error) {
+      if (!isSystemError(error)) throw error;
+      hash.update(`unreadable: ${error.code}`);
+    }
+    hash.update("\0");
+  }
+  return hash.update(can.join("\n")).digest("hex");
+}
+
+/**
+ * Check `inputs` against `flow`'s inputs before it starts, as its start would: no unknown names,
+ * every required one given, each value of its declared type.
+ *
+ * @throws {ReportedToolError} `bad inputs: <why>`.
+ */
+function checkStartInputs(flow: ComposedFlow, inputs: unknown): void {
+  try {
+    const coerced = coerceInputs(flow.input, hostInputs(flow.input, inputs));
+    for (const param of flow.input) {
+      if (isInboxType(param.contract?.type ?? null)) continue;
+      if (!Object.hasOwn(coerced, param.name)) {
+        if (!param.required || param.hasDefault) continue;
+        throw new RangeError(`required input ${reprText(param.name)} is missing`);
+      }
+      if (param.contract === null) continue;
+      try {
+        buildValueAs(param.contract.type, coerced[param.name]);
+      } catch (error) {
+        if (error instanceof Error) throw new TypeError(`input ${reprText(param.name)}: ${error.message}`);
+        throw error;
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error) throw new ReportedToolError(`bad inputs: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
  * What the flow `flow` can do, over its own nodes and the flows it uses: the node kinds, the
  * tools its TOOL nodes call, the tools and skills its agents are granted, and whether it runs
- * code; one line each, for the approval card.
+ * code, with the files its CODE references import (`files`, as shown); one line each, for the
+ * approval card.
  */
-function capabilities(flow: ComposedFlow): string[] {
+function capabilities(flow: ComposedFlow, files: readonly string[]): string[] {
   const kinds = new Set<string>();
   const called = new Set<string>();
   const granted = new Set<string>();
@@ -661,7 +734,10 @@ function capabilities(flow: ComposedFlow): string[] {
   if (called.size > 0) lines.push(`tools it calls: ${listed(called)}`);
   if (granted.size > 0) lines.push(`tools its agents may call: ${listed(granted)}`);
   if (skills.size > 0) lines.push(`skills its agents get: ${listed(skills)}`);
-  if (kinds.has("code")) lines.push("runs code on this machine (CODE nodes)");
+  if (kinds.has("code")) {
+    const named = files.length > 0 ? `; files: ${files.join(", ")}` : "";
+    lines.push(`runs code on this machine (CODE nodes${named})`);
+  }
   return lines;
 }
 
@@ -863,14 +939,11 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
    */
   async function startFlow(path: string, inputs: unknown, signal: AbortSignal): Promise<string> {
     const { real, shown: file, text, flow } = await loadForStart(host, path);
-    try {
-      hostInputs(flow.input, inputs);
-    } catch (error) {
-      if (error instanceof Error) throw new ReportedToolError(`bad inputs: ${error.message}`);
-      throw error;
-    }
-    const can = capabilities(flow);
-    const digest = createHash("sha256").update(text).update("\0").update(can.join("\n")).digest("hex");
+    checkStartInputs(flow, inputs);
+    const files = codeFiles(flow);
+    const root = resolveRoot(host.root);
+    const can = capabilities(flow, files.map((each) => slashed(relative(root, each))));
+    const digest = startDigest(flow, text, files, can);
     if (approved.get(real) !== digest) {
       const answer = await host.approve({
         title: `Run ${file}`,

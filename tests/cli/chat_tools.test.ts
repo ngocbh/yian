@@ -851,21 +851,63 @@ output: done
   );
 
   test(
-    "inputs a flow doesn't declare are refused before asking; a value its start refuses fails the run",
+    "an approval for this chat is asked again after a used flow or a referenced code file changes",
+    async () => {
+      writeFileSync(join(root, "child.yaml"), GREET.replace("id: greet", "id: child"));
+      writeFileSync(join(root, "lib.ts"), 'export function run() { return "one"; }\n');
+      writeFileSync(
+        join(root, "main.yaml"),
+        "id: main\nname: main\nnodes:\n  work:\n    kind: call\n    call: child\n    input:\n      who: x\n" +
+          "  lib:\n    kind: code\n    output: str\n    code: ./lib.ts:run\noutput: ${work.output}\nuses:\n  child: ./child\n",
+      );
+      const { requests, json } = runTools("Approve this flow for this chat");
+      const start = () => json("start_flow", { path: "main.yaml", inputs: {} });
+      await start();
+      expect(requests[0]!.body).toContain("runs code on this machine (CODE nodes; files: lib.ts)");
+      await start();
+      expect(requests).toHaveLength(1);
+      // The used flow's inline code changes.
+      writeFileSync(join(root, "child.yaml"), GREET.replace("id: greet", "id: child").replace('"hi "', '"yo "'));
+      await start();
+      expect(requests).toHaveLength(2);
+      await start();
+      expect(requests).toHaveLength(2);
+      // The referenced file changes.
+      writeFileSync(join(root, "lib.ts"), 'export function run() { return "two"; }\n');
+      await start();
+      expect(requests).toHaveLength(3);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "inputs of the wrong type, or a required input missing, are refused before asking",
     async () => {
       writeFileSync(join(root, "greet.yaml"), GREET);
-      const { requests, invoke, json } = runTools();
+      const { requests, invoke } = runTools();
+      const typed = await rejection(Promise.resolve(invoke("start_flow", { path: "greet.yaml", inputs: { who: 3 } })));
+      expect(isReportedToolError(typed)).toBe(true);
+      expect(typed.message).toStartWith("bad inputs: ");
+      expect(typed.message).toContain("who");
+      const missing = await rejection(Promise.resolve(invoke("start_flow", { path: "greet.yaml", inputs: {} })));
+      expect(missing.message).toStartWith("bad inputs: ");
+      expect(missing.message).toContain("who");
+      expect(requests).toHaveLength(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "inputs a flow doesn't declare, or not a record, are refused before asking",
+    async () => {
+      writeFileSync(join(root, "greet.yaml"), GREET);
+      const { requests, invoke } = runTools();
       const error = await rejection(Promise.resolve(invoke("start_flow", { path: "greet.yaml", inputs: { whom: "a" } })));
       expect(isReportedToolError(error)).toBe(true);
       expect(error.message).toStartWith('bad inputs: unknown input "whom"');
       const notRecord = await rejection(Promise.resolve(invoke("start_flow", { path: "greet.yaml", inputs: [] })));
       expect(isReportedToolError(notRecord)).toBe(true);
       expect(requests).toHaveLength(0);
-      await json("start_flow", { path: "greet.yaml", inputs: { who: 3 } });
-      expect(requests).toHaveLength(1);
-      const failed = await settledJson(json, "r1");
-      expect(failed).toMatchObject({ status: "failed", failure: { node: "__start__" } });
-      expect((failed["failure"] as { message: string }).message).toContain("who");
     },
     TIMEOUT,
   );

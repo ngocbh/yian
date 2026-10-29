@@ -45,6 +45,8 @@ import {
   flow,
   initializedAndStarted,
   pool,
+  reducerWrite,
+  replayCorrupted,
   ReturningLog,
   RUN_ID,
   startData,
@@ -774,10 +776,14 @@ test.each([
     },
     /^transition requires initialized reducer containers$/,
   ],
-  ["a zero count", (state: RunState) => state.crashedAttempts.set("work", 0), COUNTS],
-  ["a negative count", (state: RunState) => state.crashedAttempts.set("work", -1), COUNTS],
-  ["a fractional count", (state: RunState) => state.crashedAttempts.set("work", 1.5), COUNTS],
-  ["a non-string node id", (state: RunState) => state.crashedAttempts.set(1 as never, 1), COUNTS],
+  ["a zero count", (state: RunState) => reducerWrite(state, "work", () => state.crashedAttempts.set("work", 0)), COUNTS],
+  ["a negative count", (state: RunState) => reducerWrite(state, "work", () => state.crashedAttempts.set("work", -1)), COUNTS],
+  ["a fractional count", (state: RunState) => reducerWrite(state, "work", () => state.crashedAttempts.set("work", 1.5)), COUNTS],
+  [
+    "a non-string node id",
+    (state: RunState) => reducerWrite(state, 1 as never, () => state.crashedAttempts.set(1 as never, 1)),
+    COUNTS,
+  ],
   [
     "a zero stop sequence",
     (state: RunState): void => {
@@ -804,6 +810,12 @@ test.each([
   mutate(state);
 
   expectError(() => prepareRunStopped(state, "signal", ""), RangeError, message);
+});
+
+test("a replay refuses, when it ends, a broken count no write marked", () => {
+  const { log } = initializedAndStarted(flow());
+
+  expectError(() => replayCorrupted(flow(), log, (state) => state.crashedAttempts.set("work", 0)), RangeError, COUNTS);
 });
 
 test("an initialized state accepts counts by node and an earlier stop sequence", () => {

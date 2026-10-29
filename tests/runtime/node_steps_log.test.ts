@@ -44,6 +44,7 @@ import {
   nodeFailure,
   parentFlow,
   prepareOutput,
+  reducerWrite,
   routeInFlight,
   prepareGrowth,
 } from "../helpers/run_state_fixtures.ts";
@@ -536,14 +537,14 @@ test("a frontier commit refuses a step record with a start delta", () => {
 });
 
 test.each(["missing-start", "orphan-steps", "zero-count"] as const)(
-  "broken step state is refused before append: %s",
+  "broken step state is refused before the next append: %s",
   (corrupt) => {
     const { state, log } = firstInFlight();
     commitPrepared(log, state, prepareNodeStep(state, "first", FAILED));
     const prepared = prepareOutput(log, state, "first", { done: true });
-    if (corrupt === "missing-start") state.nodeStarts.delete("first");
-    else if (corrupt === "orphan-steps") state.nodeSteps.set("second", [FAILED]);
-    else state.nodeStarts.set("first", 0);
+    if (corrupt === "missing-start") reducerWrite(state, "first", () => state.nodeStarts.delete("first"));
+    else if (corrupt === "orphan-steps") reducerWrite(state, "second", () => state.nodeSteps.set("second", [FAILED]));
+    else reducerWrite(state, "first", () => state.nodeStarts.set("first", 0));
     const before = log.nextSequence;
 
     expectError(

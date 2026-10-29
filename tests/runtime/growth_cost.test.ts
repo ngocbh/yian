@@ -8,13 +8,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, spyOn, test } from "bun:test";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import type { RunEvent } from "../../src/events.ts";
 import { replayRunLog, runFlow } from "../../src/run.ts";
 import { MemoryRunLog, readRunLog, type RecordEnvelope } from "../../src/runtime/log.ts";
 import type { RunState } from "../../src/runtime/state.ts";
+import * as json from "../../src/typesys/json.ts";
 import { loadConformanceFlow } from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-growth-cost-"));
@@ -278,3 +279,30 @@ test("a wide map's records don't each read every unsettled node's inventory", as
   // read about 16x as many entries for 4x the items; reads that each record makes for itself, 4x.
   expect(large / small).toBeLessThan(6);
 });
+
+// Under Bun only: the Node runner can't spy on a module's export.
+test.if(process.versions.bun !== undefined)(
+  "a learnable wide map's replay parses about the same text per item at any width",
+  async () => {
+    const loaded = await loadConformanceFlow(MAP_OF_TEXT);
+    const values = (items: number) => Array.from({ length: items }, (_, i) => "x".repeat(200) + i);
+    /** The characters a replay of a learnable run over `items` items parses. */
+    const parsed = async (items: number): Promise<number> => {
+      const records = await runRecords(loaded, values(items), { learnable: true });
+      const parse = spyOn(json, "parseJson");
+      try {
+        replayRunLog(loaded, MemoryRunLog.fromRecords(records));
+        return parse.mock.calls.reduce((total, [text]) => total + text.length, 0);
+      } finally {
+        parse.mockRestore();
+      }
+    };
+
+    const small = await parsed(50);
+    const large = await parsed(200);
+
+    // Each item's route checks a path into the whole list; parsing the list for each check read
+    // about 16x the text for 4x the items.
+    expect(large / small).toBeLessThan(6);
+  },
+);

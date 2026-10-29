@@ -1050,6 +1050,19 @@ test("selectSeedRoute selects a seed field by name, or by item index and name", 
   expect(selectSeedRoute(capture, new SeedConnection("child", "w", ["w"]))).toBeNull();
 });
 
+test("selectSeedRoute finds each captured item among sparse indices, and no other", () => {
+  const routes = [0, 2, 5].map((index) => [index, sourceRoute(0, [`n${index}`])] as const);
+  const items = routes.map(([index, route]) => [index, new ForwardCapture(ValueRoute.record([["n", route]]))] as const);
+  const capture = new ForwardCapture(ValueRoute.record([]), { items });
+
+  for (const [index, route] of routes) {
+    expect(selectSeedRoute(capture, new SeedConnection("child", "n", [index, "n"]))).toBe(route);
+  }
+  for (const index of [1, 3, 4, 6]) {
+    expect(selectSeedRoute(capture, new SeedConnection("child", "n", [index, "n"]))).toBeNull();
+  }
+});
+
 test("a retained trace starts empty and checks its root input names", () => {
   const trace = new RetainedTrace(RUN, "__start__");
   expect(trace.endId).toBeNull();

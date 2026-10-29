@@ -382,7 +382,7 @@ export class SQLiteStorage {
       encoded = encode(this.#backend, freezeJsonObject(state, "state", { limitNesting: false, valueNumbers: true }));
     } catch (error) {
       if (error instanceof TypeError || error instanceof RangeError) {
-        throw storageError("invalid_state", "Memory storage requires a finite JSON object.");
+        throw storageError("invalid_state", "Memory storage requires a JSON object (no NaN).");
       }
       throw error;
     }

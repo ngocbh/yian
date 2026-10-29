@@ -12,25 +12,14 @@ import {
   buildValueAs,
   fromHost,
   Type,
-  TypeCheckError,
   type Value,
   ValueKind,
 } from "../../src/typesys/values.ts";
+import { typeCheckError } from "../helpers/type_errors.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));
 afterEach(forget);
-
-/** Return the `TypeCheckError` `call()` throws. */
-function typeCheckError(call: () => unknown): TypeCheckError {
-  try {
-    call();
-  } catch (error) {
-    expect(error).toBeInstanceOf(TypeCheckError);
-    return error as TypeCheckError;
-  }
-  throw new Error("expected a TypeCheckError");
-}
 
 describe("NaN at intake", () => {
   // Infinity is a float value; NaN is not a yian value.

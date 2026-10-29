@@ -29,7 +29,6 @@ import {
   normalizeFiles,
   normalizeTypedFiles,
   Type,
-  TypeCheckError,
   TypedValue,
   typesOverlap,
   type Value,
@@ -39,6 +38,7 @@ import {
 import { loadConformanceFlow } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { engine, rejected } from "../helpers/run_state_fixtures.ts";
+import { typeCheckError } from "../helpers/type_errors.ts";
 
 const REGISTRY = readTypedefs({
   Rec: { f: "file", n: "int" },
@@ -64,17 +64,6 @@ const REF = new FileRef({ uri: "f" });
 /** A fresh copy of a file's JSON form, `{uri: "f", mime: null, name: null}`. */
 function form(): Value {
   return { uri: "f", mime: null, name: null };
-}
-
-/** Return the `TypeCheckError` `run` throws. */
-function typeCheckError(run: () => unknown): TypeCheckError {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(TypeCheckError);
-    return error as TypeCheckError;
-  }
-  throw new Error("expected a TypeCheckError");
 }
 
 describe("a file slot", () => {

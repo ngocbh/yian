@@ -29,7 +29,7 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import { Binding, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
-import { type Type, TypeCheckError, typeEquals } from "../../src/typesys/values.ts";
+import { type Type, typeEquals } from "../../src/typesys/values.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
   assembled,
@@ -40,6 +40,7 @@ import {
   loadErrorAsync,
   runCase,
 } from "../helpers/declarations.ts";
+import { typeCheckError } from "../helpers/type_errors.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-isinstance-load-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -58,17 +59,6 @@ const REG = readTypedefs({
   Decision: "Union(Buy, Hold, Sell)",
 });
 const BUY = typeFor("Buy", REG);
-
-/** Return the `TypeCheckError` `run` throws. */
-function typeCheckError(run: () => unknown): TypeCheckError {
-  try {
-    run();
-  } catch (error) {
-    if (error instanceof TypeCheckError) return error;
-    throw error;
-  }
-  throw new Error("expected a TypeCheckError");
-}
 
 describe("collecting names", () => {
   test.each<[unknown, boolean, string[]]>([

@@ -7,6 +7,7 @@ import { describe, expect, test } from "bun:test";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { readTypedefs, type RecordDef, typeFor } from "../../src/typesys/types.ts";
 import { buildValueAs, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
+import { typeCheckError } from "../helpers/type_errors.ts";
 
 /** Return the `TypeCheckError` `readTypedefs(raw)` throws. */
 function typedefsError(raw: Readonly<Record<string, unknown>>): TypeCheckError {
@@ -17,17 +18,6 @@ function typedefsError(raw: Readonly<Record<string, unknown>>): TypeCheckError {
     return error as TypeCheckError;
   }
   throw new Error("readTypedefs did not throw");
-}
-
-/** Return the `TypeCheckError` `run` throws. */
-function typeCheckError(run: () => unknown): TypeCheckError {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(TypeCheckError);
-    return error as TypeCheckError;
-  }
-  throw new Error("expected a TypeCheckError");
 }
 
 /** Expect `readTypedefs(raw)` to throw exactly `message` at `path`. */

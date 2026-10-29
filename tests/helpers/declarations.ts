@@ -1,4 +1,8 @@
-/** Read authored `input:` or `variables:` declarations straight from YAML text. */
+/**
+ * Helpers for the Compose tests: read authored `input:` or `variables:` declarations straight from
+ * YAML text, load conformance flows, hand-build child flows, catch load errors, and run case rows
+ * that parse a flow's nodes or assemble its root as the loader does.
+ */
 
 import { existsSync, readFileSync, symlinkSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -9,24 +13,21 @@ import { expect } from "bun:test";
 import { CompiledFlow, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { assemble, type CallableScope as AssemblyScope, ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
-import { boundaryFieldRanges } from "../../src/compose/helpers/source.ts";
 import { readSourceParameters } from "../../src/compose/helpers/types.ts";
-import { checkLlmConfigValue, readLlmConfig } from "../../src/compose/nodes/agent.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
-import { CallableScope, loadFlow } from "../../src/compose/loader.ts";
+import { CallableScope, loadFlow, readAuthoredLlmConfig, rootAssembleOptions } from "../../src/compose/loader.ts";
 import { flowNodesCursor, parseFile, parseSourceDocument } from "../../src/compose/parse/file.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
-import { SourceAccessError, type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
+import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { reload } from "../../src/defaults.ts";
 import { Node } from "../../src/nodes/base.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { Binding, type OutputContract, type Parameter, ValueTemplate } from "../../src/nodes/contracts.ts";
+import { Binding, type OutputContract, type Parameter } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
-import { isRecord } from "../../src/typesys/values.ts";
 import { type Case, prepare, readCase } from "../conformance/runner.ts";
 import { withKinds } from "./stand_ins.ts";
 
@@ -286,50 +287,10 @@ function resolveFrom(scope: CallableScope, children: ChildFlows = {}): AssemblyS
 }
 
 /**
- * Read the root's `llm_config:` (`authored`, as `parseFile` read it) as the loader reads a flow
- * layer: a layer holding values is read through its tags and checked (`readLlmConfig`,
- * `checkLlmConfigValue`); a plain record is returned as is (the loader's `LLMConfig`, host-only
- * and not-text checks run only through `loadFlow`); an absent or untagged `null` layer is `{}`.
- *
- * @throws LoadError when the layer is malformed or is not a mapping.
- */
-function readAuthoredLlmConfig(
-  root: SourceCursor,
-  authored: unknown,
-  registry: TypeRegistry,
-  builder: SourceCatalogBuilder,
-  diagnostics: LoadDiagnostics,
-): Readonly<Record<string, unknown>> | ValueTemplate | Binding {
-  if (!root.has("llm_config")) return {};
-  const cursor = root.child("llm_config");
-  // `llm_config: !T` with nothing after the tag reads as null; the reader rejects it.
-  if (authored === null && cursor.tag === null) return {};
-  let read: ReturnType<typeof readLlmConfig>;
-  try {
-    read = readLlmConfig(cursor, registry, {
-      prefix: "flow: llm_config",
-      sitePath: ["root", "llm_config"],
-      catalogBuilder: builder,
-      diagnostics,
-    });
-  } catch (error) {
-    if (!(error instanceof SourceAccessError)) throw error;
-    throw diagnostics.error(error.message, { range: error.range, cause: error });
-  }
-  const [layer, ranges] = read;
-  const range = root.rangeOf("llm_config");
-  if (layer instanceof ValueTemplate || layer instanceof Binding) {
-    return checkLlmConfigValue(layer, "flow: llm_config", range, diagnostics, ranges, { allowInherit: false })[0];
-  }
-  if (!isRecord(layer)) throw diagnostics.error("flow: llm_config must be a mapping", { range });
-  return layer;
-}
-
-/**
- * Assemble the root flow of `document` as the loader calls `assemble` on it, through the loader's
- * `CallableScope` over the file's `defs:` (no `uses:`), whose catalog is `builder`, with the
- * hand-built `children` (default none) looked up in front of it. Defs resolve lazily, as calls
- * reach them. The flow's `llm_config:` is read by `readAuthoredLlmConfig`; the loader's `uses:`
+ * Assemble the root flow of `document` with the loader's own `assemble` options
+ * (`rootAssembleOptions`) and `llm_config:` reader, through the loader's `CallableScope` over the
+ * file's `defs:` (no `uses:`), whose catalog is `builder`, with the hand-built `children` (default
+ * none) looked up in front of it. Defs resolve lazily, as calls reach them. The loader's `uses:`
  * aliases, root memories and CODE checks are left out.
  *
  * @param diagnostics The case's factory for located load errors.
@@ -351,31 +312,20 @@ function assembleRoot(
     catalogBuilder: builder,
     diagnostics,
   });
-  const scope = resolveFrom(realScope, children);
-  // A compact flow (no `nodes:`) lends its top-level `output:` to its one synthesized node, so the
-  // loader locates the flow's `asserts:` and `output:` only in a full flow.
-  const childOf = (key: string, flowOnly = false) =>
-    (!flowOnly || root.has("nodes")) && root.has(key) ? root.child(key) : null;
-  return assemble({
-    inputsSection: inputParameters === null ? file.inputs : null,
-    inputParameters,
-    inputsCursor: inputParameters === null ? childOf("input") : null,
-    nodesCursor: flowNodesCursor(document, file.nodes),
-    outputsSection: file.outputs,
-    assertsSection: file.asserts,
+  const flowLlmConfig = readAuthoredLlmConfig(file.llmConfig, "flow", {
     registry,
-    scope,
-    owner: ["root"],
-    version: file.version,
-    name: file.name,
-    description: file.description,
-    flowEnv: file.env,
-    flowLlmConfig: readAuthoredLlmConfig(root, file.llmConfig, registry, builder, diagnostics),
-    boundaryFieldRanges: boundaryFieldRanges(root),
-    assertsCursor: childOf("asserts", true),
-    outputsCursor: childOf("output", true),
-    flowId: file.id,
+    sitePath: ["root", "llm_config"],
+    catalogBuilder: builder,
+    diagnostics,
+    cursor: root,
   });
+  const options = rootAssembleOptions(document, file, {
+    registry,
+    scope: resolveFrom(realScope, children),
+    flowLlmConfig,
+  });
+  if (inputParameters === null) return assemble(options);
+  return assemble({ ...options, inputsSection: null, inputsCursor: null, inputParameters });
 }
 
 /** Assemble the case's root flow as the loader calls `assemble` on it. */

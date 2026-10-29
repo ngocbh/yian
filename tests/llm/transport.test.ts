@@ -1,8 +1,7 @@
 /** Tests for `openExchange` and `shortRequest` in `src/llm/transport.ts`: timers, stops and error mapping; and the exit scenarios of `both_runtimes.ts`, on Bun and, with `YIAN_TEST_NODE`, built on Node. */
 
 import { describe, expect, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
-import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import path from "node:path";
 
 import { RedirectError, type Scheduler, type Send, virtualScheduler } from "../../src/platform.ts";
@@ -16,6 +15,7 @@ import {
   type ShortRequestOptions,
 } from "../../src/llm/transport.ts";
 import { SCENARIOS } from "./both_runtimes.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 const ENDPOINT = "https://api.example.test/v1/chat";
 const S = 1000;
@@ -802,28 +802,7 @@ describe("shortRequest", () => {
 
 const BUILT = path.resolve(import.meta.dirname, "../../dist/tests/llm/both_runtimes.js");
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/platform.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 describe("the exit scenarios", () => {
   for (const [name, run] of Object.entries(SCENARIOS)) test(name, run, 20_000);

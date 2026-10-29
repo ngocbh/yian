@@ -8,7 +8,6 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -30,6 +29,7 @@ import { registeredTools, registerTool, TOOL_REGISTRY, ToolSet } from "../../src
 import { toolTypes } from "../../src/tools/types.ts";
 import { type JsonObject, parseJson } from "../../src/typesys/json.ts";
 import { canonicalTypeLabel, Type, TypeCheckError, typeEquals, ValueKind } from "../../src/typesys/values.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 const ECHO_SCHEMA: JsonObject = {
   type: "object",
@@ -1489,28 +1489,7 @@ describe("Standard Schema libraries", () => {
 const ROOT = resolve(import.meta.dirname, "../..");
 const BUILT = join(ROOT, "dist/src/tools/index.js");
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/platform.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 test.skipIf(!NODE)(
   "the built tools code runs on Node beside a second copy of its leaves, and a zod tool() there",

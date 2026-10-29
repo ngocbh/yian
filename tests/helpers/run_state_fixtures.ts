@@ -905,7 +905,8 @@ export const noGrowth: GrowBuilder = () => {
 /**
  * Return a direct engine over a fresh in-memory authority for `flow`: `RunStarted` is prepared and committed on a `MemoryRunLog`, so START
  * is ready. The run's id is `runId` (`RUN_ID` by default). The pool primes START with `inputs`,
- * START's wiring reads each as `${input.<name>}`, and the run records `effectiveLlmByStaticPath`
+ * START's wiring is `startWiringOverride`, by default reading each input as `${input.<name>}`, and
+ * the run records `effectiveLlmByStaticPath`
  * (none by default), the memory configuration given and the `yian.defaults` values in `defaults`
  * (none by default). A learnable flow gets its execution layout first. The other options go to
  * `FlowEngine`.
@@ -916,6 +917,7 @@ export function engine(
     inputs?: Readonly<Record<string, unknown>>;
     runId?: string;
     learnable?: boolean;
+    startWiringOverride?: RunStartData["startWiringOverride"];
     effectiveLlmByStaticPath?: RunStartData["effectiveLlmByStaticPath"];
     memories?: readonly MemorySpec[] | null;
     memoryStacks?: readonly MemoryStack[] | null;
@@ -929,6 +931,7 @@ export function engine(
     learnable = false,
     numWorkers = 0,
     growBuilder = noGrowth,
+    startWiringOverride = Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
     effectiveLlmByStaticPath = {},
     memories = null,
     memoryStacks = null,
@@ -945,7 +948,7 @@ export function engine(
   const prepared = prepareRunStarted(state, {
     runId,
     flowFingerprint: FINGERPRINT,
-    startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
+    startWiringOverride,
     effectiveLlmByStaticPath,
     numWorkers,
     learnable,
@@ -1903,9 +1906,6 @@ export function progressOf({ status, inFlight, crashedAttempts }: RunInspection)
 }
 
 // ---- Runs of one-AGENT flows over a scripted model, and `yian run` over a fake chat endpoint ----
-
-// Cloned snapshots and nested test values are edited freely.
-export type Mutable = any;
 
 /** The model config `PLAIN_FLOW` names. */
 export const PLAIN_CONFIG = { provider: "openai", model: "test-model" };

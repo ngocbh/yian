@@ -6,10 +6,9 @@
  */
 
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { getEventListeners } from "node:events";
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -38,6 +37,7 @@ import { FileRef, Type, TypeCheckError, ValueKind } from "../../src/typesys/valu
 import { loadConformanceFlow } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { drive, engine, graph, rejected } from "../helpers/run_state_fixtures.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 /** Run a CODE node `n` with `code` on the bound `inputs` and return its result's value. */
 async function run(code: string, inputs: Record<string, unknown> = {}): Promise<unknown> {
@@ -820,28 +820,7 @@ test("an already-aborted signal rejects before a worker starts", async () => {
 
 const BUILT_NODE = join(import.meta.dirname, "..", "..", "dist", "src", "nodes", "code", "node.js");
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set value that
- * can't run, a Node older than the `engines` floor, or a missing build fails the whole file, so a
- * typo can't pass as a run with the Node case skipped. A copy of `terminal.test.ts`'s: importing a
- * test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!existsSync(BUILT_NODE)) throw new Error(`${BUILT_NODE} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT_NODE);
 
 /**
  * Run a script with `command` that loads the CODE node from `module`, aborts a spinning body

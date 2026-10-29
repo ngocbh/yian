@@ -542,7 +542,8 @@ export class ChildRuns {
   #deliveryOptions(child: Child): DeliveryOptions {
     return {
       env: this.#options.env,
-      codeRoot: this.#options.root,
+      // A flow confined to the chat's folder is held to it; a bundled one was loaded with no root.
+      codeRoot: child.flow.source?.codeRoot == null ? null : this.#options.root,
       // A flow built in code is the run's; one loaded from files is compiled again from the log.
       flow: child.flow.source === null ? child.flow : null,
     };

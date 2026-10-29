@@ -11,6 +11,7 @@ import { ChildRuns, type ChildRunsOptions, type ChildStatus } from "../../src/cl
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
 import { MissingKeyError } from "../../src/cli/utils.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { advance, inspectRun } from "../../src/run.ts";
 import { readRunLog, type RunStartedRecord } from "../../src/runtime/log.ts";
 import { tool } from "../../src/tools/function_tools.ts";
@@ -313,6 +314,18 @@ test(
     const answered = await children.answer("r1", call, "yes");
     expect(answered).toEqual({ run: "r1", status: "running", log: waiting.log, seq: waiting.seq + 1 });
     expect(children.status("r1")).toBe(answered);
+    expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded", output: "yes" });
+  },
+  TIMEOUT,
+);
+
+test(
+  "a child loaded with no code root, as a bundled flow is, takes its answer too",
+  async () => {
+    const children = childRuns();
+    await children.start(await loadFlow(ASK, { sourceLabel: "ask.yaml", env: NO_ENV }), {});
+    const waiting = await settled(children, "r1");
+    expect((await children.answer("r1", `${CHAT}-r1/sure`, "yes")).status).toBe("running");
     expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded", output: "yes" });
   },
   TIMEOUT,

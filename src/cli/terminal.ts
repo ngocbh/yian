@@ -24,6 +24,8 @@ import {
   ValueKind,
   writeAsText,
 } from "../typesys/values.ts";
+import { ANSI, cells, charCells, columnsOf, fit, wrapLine } from "./cells.ts";
+import { box } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 
 /** Why a prompt stopped without an answer. */
@@ -69,6 +71,8 @@ export interface ApproveRequest {
   choices: readonly string[];
   /** Ends the prompt, with no answer, when it aborts. */
   signal?: AbortSignal;
+  /** Draw the body and diff as a framed card (`diffCard`), rather than as plain lines. */
+  frame?: boolean;
 }
 
 /** A prompt ended because the terminal closed (Ctrl-C, end of input, or close()). */
@@ -125,7 +129,6 @@ const SHOW_CURSOR = `${ESC}?25h`;
 const HIDE_CURSOR = `${ESC}?25l`;
 const PASTE_ON = `${ESC}?2004h`;
 const PASTE_OFF = `${ESC}?2004l`;
-const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 
 /**
  * `output` for a plain terminal: what is written loses its escape codes and carriage returns, and
@@ -144,6 +147,59 @@ function plainOutput(output: Output): Output {
   };
 }
 
+/** A unified diff's hunk header: where its old and new lines start. */
+const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+/**
+ * The lines of an approval's card, `columns` wide: a box titled `title` holding `body` and then
+ * `diff` (a unified diff) without its `---`/`+++` header, each line numbered (an old line's number
+ * for a `-` line, the new one's otherwise), `-` lines red and `+` lines green, a dim `⋯` between
+ * hunks; a title too long for the edge is cut with `…`. Long lines wrap at their spaces inside the
+ * box (`wrapLine`). The text is drawn as it is given: sanitize it first.
+ */
+export function diffCard(title: string, body: string, diff: string, columns: number): string[] {
+  const inner = Math.max(1, columns - 4);
+  const rows: [string, string][] = [];
+  const add = (text: string, codes: string | null, gutter = "") => {
+    const lead = cells(gutter);
+    for (const [i, [start, end]] of wrapLine(text, Math.max(1, inner - lead)).entries()) {
+      const part = (i === 0 ? gutter : " ".repeat(lead)) + text.slice(start, end);
+      rows.push([part, codes === null ? part : style(codes, part)]);
+    }
+  };
+  if (body !== "") for (const line of body.replace(/\n$/, "").split("\n")) add(line, null);
+  const lines = diff === "" ? [] : diff.replace(/\n$/, "").split("\n").filter((line) => !/^(---|\+\+\+) /.test(line));
+  // The widest line number, for the gutter.
+  let widest = 1;
+  let oldLine = 0;
+  let newLine = 0;
+  for (const line of lines) {
+    const hunk = HUNK.exec(line);
+    if (hunk !== null) [oldLine, newLine] = [Number(hunk[1]), Number(hunk[2])];
+    else if (line.startsWith("-")) widest = Math.max(widest, String(oldLine++).length);
+    else if (line.startsWith("+") || line.startsWith(" ")) widest = Math.max(widest, String(newLine++).length);
+  }
+  if (body !== "" && lines.length > 0) add("", null);
+  let hunks = 0;
+  for (const line of lines) {
+    const hunk = HUNK.exec(line);
+    if (hunk !== null) {
+      if (hunks++ > 0) add("⋯", "2");
+      [oldLine, newLine] = [Number(hunk[1]), Number(hunk[2])];
+    } else if (line.startsWith("-")) {
+      add(line.slice(1), "31", `${String(oldLine++).padStart(widest)} - `);
+    } else if (line.startsWith("+")) {
+      add(line.slice(1), "32", `${String(newLine++).padStart(widest)} + `);
+    } else if (line.startsWith(" ")) {
+      oldLine++;
+      add(line.slice(1), null, `${String(newLine++).padStart(widest)}   `);
+    } else add(line, "2");
+  }
+  // The terminal's widgets draw in colour whatever the environment says, and so does the card.
+  const card = box(rows, "cyan", { isTTY: true }, () => undefined, fit(title, Math.max(1, inner - 2)), inner);
+  return card.split("\n");
+}
+
 /** `text` with each `\n` written as `\r\n`, since raw mode may not translate it. */
 function crlf(text: string): string {
   return text.replaceAll("\n", "\r\n");
@@ -152,44 +208,6 @@ function crlf(text: string): string {
 /** Wrap `text` in the SGR `codes`. */
 function style(codes: string, text: string): string {
   return `${ESC}${codes}m${text}${ESC}0m`;
-}
-
-/** Whether `code` is an East Asian Wide or Fullwidth character or an emoji, two columns wide. */
-function isWide(code: number): boolean {
-  return (
-    (code >= 0x1100 && code <= 0x115f) ||
-    (code >= 0x2e80 && code <= 0x303e) ||
-    (code >= 0x3041 && code <= 0x33ff) ||
-    (code >= 0x3400 && code <= 0x4dbf) ||
-    (code >= 0x4e00 && code <= 0x9fff) ||
-    (code >= 0xa000 && code <= 0xa4cf) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe30 && code <= 0xfe4f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1f64f) ||
-    (code >= 0x1f680 && code <= 0x1f6ff) ||
-    (code >= 0x1f900 && code <= 0x1f9ff) ||
-    (code >= 0x1fa70 && code <= 0x1faff) ||
-    (code >= 0x20000 && code <= 0x3fffd)
-  );
-}
-
-/** A combining mark, a zero-width joiner or a variation selector: drawn on the character before it. */
-const ZERO_WIDTH = /^[\p{Mn}\p{Me}\u200d\ufe00-\ufe0f]$/u;
-
-/** The columns one character takes: 0 for a zero-width one, 2 for a wide one, else 1. */
-export function charCells(char: string): number {
-  if (ZERO_WIDTH.test(char)) return 0;
-  return isWide(char.codePointAt(0)!) ? 2 : 1;
-}
-
-/** The columns `text` takes on a terminal, ANSI sequences not counted. */
-export function cells(text: string): number {
-  let width = 0;
-  for (const char of text.replace(ANSI, "")) width += charCells(char);
-  return width;
 }
 
 /**
@@ -269,7 +287,7 @@ function textWidget(options: {
   mark?: string;
   instruction?: string;
   validate?: (text: string) => string | undefined;
-}): Widget<string> & { text(): string } {
+}): Widget<string> & { text(): string; caret(): number } {
   const mark = options.mark ?? "?";
   const chars = Array.from(options.initial ?? "");
   let pos = chars.length;
@@ -318,6 +336,67 @@ function textWidget(options: {
       return error;
     },
     text: () => chars.join(""),
+    caret: () => pos,
+  };
+}
+
+/**
+ * `text` drawn as a framed prompt `columns()` wide: a box holding `> ` and the text, folded onto
+ * as many rows as it needs, and the dim `hint` below it. Once entered it collapses to `> <text>`;
+ * any other ending erases it.
+ */
+function framedWidget(
+  text: ReturnType<typeof textWidget>,
+  columns: () => number,
+  hint: string,
+): Widget<string> & { text(): string } {
+  // The rows the text folds onto, each with the index of its first character, and the cursor's.
+  const fold = (): { rows: { start: number; chars: string[] }[]; row: number; width: number } => {
+    const width = Math.max(1, columns() - 6);
+    const chars = Array.from(text.text()).map((char) => (char === "\n" ? "⏎" : char));
+    const rows = [{ start: 0, chars: [] as string[], used: 0 }];
+    for (const [i, char] of chars.entries()) {
+      let last = rows[rows.length - 1]!;
+      const size = charCells(char);
+      if (last.used + size > width && last.chars.length > 0) {
+        last = { start: i, chars: [], used: 0 };
+        rows.push(last);
+      }
+      last.chars.push(char);
+      last.used += size;
+    }
+    const caret = text.caret();
+    // A full last row leaves no cell for the cursor after it: it gets a row of its own.
+    const last = rows[rows.length - 1]!;
+    if (caret === chars.length && last.used >= width) rows.push({ start: chars.length, chars: [], used: 0 });
+    const row = rows.findLastIndex((each) => each.start <= caret);
+    return { rows, row, width };
+  };
+  const border = (part: string): string => style("2", part);
+  const lead = (row: number): string => (row === 0 ? `${style("1", ">")} ` : "  ");
+  return {
+    preface: "",
+    lines() {
+      const { rows, width } = fold();
+      const edge = "─".repeat(width + 4);
+      return [
+        border(`╭${edge}╮`),
+        ...rows.map((each, i) => {
+          const body = each.chars.join("");
+          return `${border("│")} ${lead(i)}${body}${" ".repeat(width - cells(body))} ${border("│")}`;
+        }),
+        border(`╰${edge}╯`),
+        `  ${style("2", hint)}`,
+      ];
+    },
+    cursor() {
+      const { rows, row } = fold();
+      const before = rows[row]!.chars.slice(0, text.caret() - rows[row]!.start).join("");
+      return { row: row + 1, before: `│ ${lead(row)}${before}` };
+    },
+    key: (key) => text.key(key),
+    done: (outcome) => ("value" in outcome ? `${style("1", ">")} ${text.text().replaceAll("\n", "⏎")}` : null),
+    text: () => text.text(),
   };
 }
 
@@ -525,10 +604,14 @@ export class Terminal {
    * `escape`, Escape ends the prompt as `{escape}` with the draft, erasing it the same way;
    * elsewhere Escape is ignored. Ctrl-C and Escape leave the terminal open, so the next
    * `readLine` works; keys typed after the prompt ends wait for the next one.
+   *
+   * With `frame`, on a terminal that isn't plain, the prompt is a box across the terminal holding
+   * `> ` and the text, the dim `hint` below it, instead of the label; once entered it collapses
+   * to `> <line>`.
    */
   async readLine<E extends boolean = false>(
     label: string,
-    options: { signal?: AbortSignal; initial?: string; escape?: E } = {},
+    options: { signal?: AbortSignal; initial?: string; escape?: E; frame?: boolean; hint?: string } = {},
   ): Promise<
     | { value: string }
     | { eof: true }
@@ -537,7 +620,11 @@ export class Terminal {
     | (E extends true ? Escaped : never)
   > {
     const { signal, initial = "" } = options;
-    const text = textWidget({ label, mark: ">", initial });
+    const typed = textWidget({ label, mark: ">", initial });
+    const text =
+      options.frame === true && !this.#plain
+        ? framedWidget(typed, () => columnsOf(this.#output), options.hint ?? "")
+        : typed;
     const widget: Widget<string | typeof ESCAPED> = options.escape
       ? {
           ...text,
@@ -582,8 +669,9 @@ export class Terminal {
   }
 
   /**
-   * Ask the user to approve an action: write `body` and the unified `diff` when there is one, then
-   * select among `choices` under `title`, the first preselected. All the text is drawn through
+   * Ask the user to approve an action: write `body` and the unified `diff` when there is one (with
+   * `frame`, as a card: `diffCard`), then select among `choices` under `title`, the first
+   * preselected. All the text is drawn through
    * `sanitize`, its escape sequences shown rather than dropped. Returns the chosen choice; the
    * last one (the reject) for Ctrl-C, which leaves the terminal open; null without drawing or
    * reading when the terminal is plain, closed or its input isn't a TTY, and null when the input
@@ -597,7 +685,16 @@ export class Terminal {
     // A sequence is shown, not dropped: what the user approves must not hide anything it holds.
     const shown = (text: string): string => sanitize(text, { sequences: "show" });
     const label = shown(request.title);
-    const card = [request.body, request.diff ?? ""].filter((text) => text !== "").map(shown);
+    const card = request.frame
+      ? [
+          diffCard(
+            label,
+            shown(request.body).replaceAll("\t", "    "),
+            shown(request.diff ?? "").replaceAll("\t", "    "),
+            columnsOf(this.#output),
+          ).join("\n"),
+        ]
+      : [request.body, request.diff ?? ""].filter((text) => text !== "").map(shown);
     const titles = choices.map(shown);
     let ended: { value: number } | { stop: StopReason };
     try {
@@ -903,7 +1000,7 @@ export class Terminal {
         if (refused !== undefined) output.write(`${refused}\n`);
         return;
       }
-      const columns = output.columns || 80;
+      const columns = columnsOf(output);
       const lines = widget.lines();
       const cursor = widget.cursor();
       const at = cursor === null ? -1 : Array.from(cursor.before.replace(ANSI, "")).length;
@@ -1220,7 +1317,7 @@ function writePanel(output: Output, title: string, prompt: string, count: number
 /** Write a blank line and the `Question i of N · <header>` rule across the terminal. */
 function writeRule(output: Output, index: number, total: number, header: string): void {
   const title = style("1", `Question ${index} of ${total}`) + (header ? ` ${style("2", `· ${header}`)}` : "");
-  const fill = Math.max(0, (output.columns || 80) - cells(title) - 1);
+  const fill = Math.max(0, columnsOf(output) - cells(title) - 1);
   output.write(`\r\n${title} ${style("36", "─".repeat(fill))}\r\n`);
 }
 

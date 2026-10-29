@@ -32,6 +32,7 @@ function flusher({ message = true, refuse = "", fail = "", gate = Promise.resolv
   const sent: unknown[] = [];
   const lines: string[] = [];
   const faults: unknown[] = [];
+  const shown: string[] = [];
   const textOf = (value: unknown) =>
     typeof value === "string" ? value : (value as { parts: { text: string }[] }).parts[0]!.text;
   const flush = new ChatFlusher(
@@ -48,13 +49,24 @@ function flusher({ message = true, refuse = "", fail = "", gate = Promise.resolv
       },
       write: async (text) => void lines.push(text),
       fault: (error) => void faults.push(error),
+      sent: (event) => void shown.push(event.text),
     },
   );
   const texts = () => sent.map(textOf);
-  return { flush, queue, inFlight, sent, texts, lines, faults, interrupts: () => interrupts };
+  return { flush, queue, inFlight, sent, texts, lines, faults, shown, interrupts: () => interrupts };
 }
 
 describe("ChatFlusher", () => {
+  test("each event sent is shown once its send is appended; one refused isn't", async () => {
+    const f = flusher({ refuse: "r2" });
+    f.flush.started();
+    f.queue.push(cancelled("r1", 1));
+    f.queue.push(cancelled("r2", 1));
+    await f.flush.sendQueued();
+    expect(f.shown).toEqual(["run r1 was cancelled"]);
+    expect(f.lines).toEqual(["(not sent: run r2 was cancelled)\n"]);
+  });
+
   test("nothing goes before the run has started; starting sends nothing outside a turn or prompt", async () => {
     const f = flusher();
     f.queue.push(cancelled("r1", 1));
@@ -185,7 +197,12 @@ describe("ChatFlusher", () => {
     expect(await f.flush.reclaim(back, false)).toEqual([{ seq: 101, value: typed }]);
     expect(f.lines).toEqual(["(withdrew 2 child events; sent again before your next message)\n"]);
     expect(f.queue.peek()).toEqual([
-      { run: "r1", seq: 4, text: "run r1 was cancelled" },
+      {
+        run: "r1",
+        seq: 4,
+        text: "run r1 was cancelled",
+        card: { status: "cancelled", verb: "was cancelled", body: "" },
+      },
       { run: null, seq: 0, text: "run r9 was cancelled" },
     ]);
   });

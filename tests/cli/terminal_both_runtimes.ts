@@ -619,6 +619,69 @@ async function aBracketedPasteKeepsItsNewlines(): Promise<void> {
   assert.equal(await answer, "x\ny");
 }
 
+const HINT = "/exit to leave · ctrl-c interrupts · esc withdraws";
+const FRAME_TOP = `╭${"─".repeat(58)}╮`;
+const FRAME_BOTTOM = `╰${"─".repeat(58)}╯`;
+
+/** A framed prompt's row holding `text`, of one-cell characters, 60 columns wide. */
+const framed = (text: string) => `│ ${text.padEnd(56)} │`;
+
+async function aFramedReadLineDrawsABoxAndAHintThenCollapsesToTheLine(): Promise<void> {
+  const { input, output, terminal, view, exitHooks } = setup({ columns: 60 });
+  output.write("above\r\n");
+  const line = terminal.readLine("You:", { frame: true, hint: HINT });
+  await tick();
+  assert.deepEqual(view().rows, ["above", FRAME_TOP, framed(">"), FRAME_BOTTOM, `  ${HINT}`]);
+  assert.deepEqual(view().cursor, { row: 2, col: 4 });
+  input.write("run hello");
+  await tick();
+  assert.deepEqual(view().rows, ["above", FRAME_TOP, framed("> run hello"), FRAME_BOTTOM, `  ${HINT}`]);
+  assert.deepEqual(view().cursor, { row: 2, col: 13 });
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "run hello" });
+  assert.deepEqual(view().rows, ["above", "> run hello"]);
+  assertRestored(input, output, exitHooks);
+}
+
+async function aFramedReadLineFoldsALongLineInsideTheBox(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const line = terminal.readLine("You:", { frame: true, hint: HINT });
+  // 54 cells fit a row: the 55th character starts the next, and a wide one that doesn't fit too.
+  input.write(`${"a".repeat(53)}日本`);
+  await tick();
+  const wide = `│   日本${" ".repeat(50)} │`;
+  assert.deepEqual(view().rows, [FRAME_TOP, framed(`> ${"a".repeat(53)}`), wide, FRAME_BOTTOM, `  ${HINT}`]);
+  assert.deepEqual(view().cursor, { row: 2, col: 8 });
+  input.write(BACKSPACE.repeat(2) + "b");
+  await tick();
+  // A full row leaves the cursor a row of its own.
+  assert.deepEqual(view().rows, [FRAME_TOP, framed(`> ${"a".repeat(53)}b`), framed(""), FRAME_BOTTOM, `  ${HINT}`]);
+  assert.deepEqual(view().cursor, { row: 2, col: 4 });
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: `${"a".repeat(53)}b` });
+}
+
+async function aBracketedPasteKeepsItsNewlinesFramed(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  input.write(PASTE_START + "x\ny" + PASTE_END);
+  await tick();
+  assert.deepEqual(view().rows, [FRAME_TOP, framed("> x⏎y"), FRAME_BOTTOM, `  ${HINT}`]);
+  input.write(ENTER);
+  assert.deepEqual(await answer, { value: "x\ny" });
+}
+
+async function escapeErasesAFramedReadLine(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 60 });
+  output.write("above\r\n");
+  const line = terminal.readLine("You:", { frame: true, hint: HINT, escape: true });
+  input.write("half");
+  await tick();
+  input.write(ESCAPE);
+  assert.deepEqual(await line, { escape: true, draft: "half" });
+  assert.deepEqual(view().rows, ["above"]);
+}
+
 async function wideCharactersRedrawWithoutStaleRows(): Promise<void> {
   const { input, output, terminal, view } = setup({ columns: 10 });
   output.write("above\r\n");
@@ -2415,6 +2478,61 @@ async function approveShowsItsTextSanitized(): Promise<void> {
   }
 }
 
+async function aFramedApprovalNumbersTheDiffAndColoursItsLines(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 60 });
+  const diff =
+    "--- a.yaml\n+++ a.yaml\n@@ -1,3 +1,3 @@\n id: a\n-name: old\n+name: new\n nodes:\n" +
+    "@@ -12 +12,2 @@\n-x\x1b[2J\n+y\n+z\n";
+  const answer = terminal.approve({ ...approval({ diff }), frame: true });
+  await tick();
+  const row = (text: string) => `│ ${text}${" ".repeat(56 - text.length)} │`;
+  assert.deepEqual(view().rows, [
+    `╭─ Write a.yaml ${"─".repeat(43)}╮`,
+    row("a new flow"),
+    row(""),
+    row(" 1   id: a"),
+    row(" 2 - name: old"),
+    row(" 2 + name: new"),
+    row(" 3   nodes:"),
+    row("⋯"),
+    row("12 - x^[[2J"),
+    row("12 + y"),
+    row("13 + z"),
+    `╰${"─".repeat(58)}╯`,
+    "? Write a.yaml (Use arrow keys)",
+    " » Approve",
+    "   Reject",
+  ]);
+  // Removed lines red, added green; an escape sequence shown, never sent.
+  assert.ok(output.text.includes("\x1b[31m 2 - name: old"));
+  assert.ok(output.text.includes("\x1b[32m 2 + name: new"));
+  assert.ok(!output.text.includes("\x1b[2J"));
+  input.write(ENTER);
+  assert.equal(await answer, "Approve");
+}
+
+async function aFramedApprovalFoldsALongLineInsideTheCard(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 30 });
+  const answer = terminal.approve({ ...approval({ diff: `@@ -1 +1 @@\n+${"y".repeat(30)}\n` }), frame: true });
+  await tick();
+  assert.deepEqual(view().rows.slice(3, 6), [
+    `│ 1 + ${"y".repeat(22)} │`,
+    `│     ${"y".repeat(8)}${" ".repeat(14)} │`,
+    `╰${"─".repeat(28)}╯`,
+  ]);
+  input.write(ENTER);
+  assert.equal(await answer, "Approve");
+}
+
+async function aFramedApprovalCutsALongTitle(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 30 });
+  const answer = terminal.approve({ ...approval(), title: `Write ${"deep/".repeat(10)}a.yaml`, frame: true });
+  await tick();
+  assert.equal(view().rows[0], "╭─ Write deep/deep/deep/de… ─╮");
+  input.write(ENTER);
+  assert.equal(await answer, "Approve");
+}
+
 async function approveOffATtyReturnsNullWithoutReading(): Promise<void> {
   const { input, output, terminal } = setup({ tty: false });
   input.write(ENTER);
@@ -2481,6 +2599,11 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a plain terminal writes a refused line's error and reads the next line afresh":
     aPlainTerminalWritesARefusedLinesErrorAndReadsTheNextLineAfresh,
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,
+  "a framed readLine draws a box and a hint, then collapses to the line":
+    aFramedReadLineDrawsABoxAndAHintThenCollapsesToTheLine,
+  "a framed readLine folds a long line inside the box": aFramedReadLineFoldsALongLineInsideTheBox,
+  "a bracketed paste keeps its newlines in a framed readLine": aBracketedPasteKeepsItsNewlinesFramed,
+  "Escape erases a framed readLine": escapeErasesAFramedReadLine,
   "wide characters redraw without stale rows": wideCharactersRedrawWithoutStaleRows,
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,
   "a long line redraws without stale rows": aLongLineRedrawsWithoutStaleRows,
@@ -2581,6 +2704,9 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a child exits on its own after Ctrl-C with stdin open": aChildExitsOnItsOwnAfterCtrlCWithStdinOpen,
   "approve: Enter picks the first choice and Down the next": approveEnterPicksTheFirstChoiceAndDownTheNext,
   "approve shows its text sanitized": approveShowsItsTextSanitized,
+  "a framed approval numbers the diff and colours its lines": aFramedApprovalNumbersTheDiffAndColoursItsLines,
+  "a framed approval folds a long line inside the card": aFramedApprovalFoldsALongLineInsideTheCard,
+  "a framed approval cuts a long title": aFramedApprovalCutsALongTitle,
   "approve off a TTY returns null without reading": approveOffATtyReturnsNullWithoutReading,
   "Ctrl-C in approve rejects and keeps the terminal open": ctrlCInApproveRejectsAndKeepsTheTerminalOpen,
   "an aborted approve returns null": anAbortedApproveReturnsNull,

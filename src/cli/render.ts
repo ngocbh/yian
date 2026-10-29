@@ -10,19 +10,22 @@
 
 import type { Env } from "../defaults.ts";
 import type { Diagnostic } from "../diagnostics.ts";
-import { cells, charCells } from "./terminal.ts";
+import { cells, wrapLine } from "./cells.ts";
 import { type CliIo, forTerminal, type Writer } from "./utils.ts";
 
-const SGR = { bold: 1, dim: 2, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
+const SGR = { bold: 1, dim: 2, italic: 3, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
 
 /** @internal A text style: a colour or weight, or two of them (`"red bold"`). */
 export type Style = keyof typeof SGR | `${keyof typeof SGR} ${keyof typeof SGR}`;
+
+/** @internal What `paint` reads of an output: whether it is a TTY. */
+export type Colored = Pick<Writer, "isTTY">;
 
 /**
  * @internal Return `text` in `style` when `out` is a TTY and `NO_COLOR` is unset or empty, else as
  * is.
  */
-export function paint(text: string, style: Style, out: Writer, env: Env): string {
+export function paint(text: string, style: Style, out: Colored, env: Env): string {
   if (!out.isTTY || env("NO_COLOR")) return text;
   const codes = style.split(" ").map((word) => SGR[word as keyof typeof SGR]);
   return `\x1b[${codes.join(";")}m${text}\x1b[0m`;
@@ -50,7 +53,7 @@ export function splitLines(text: string): string[] {
 export function box(
   rows: readonly (readonly [string, string])[],
   border: Style,
-  out: Writer,
+  out: Colored,
   env: Env,
   title = "",
   width = 0,
@@ -66,44 +69,24 @@ export function box(
   return lines.join("\n");
 }
 
+/** @internal One piece of a line: its text and its style, or `null` for none. */
+export type Span = readonly [text: string, style: Style | null];
+
 /**
- * @internal Return the UTF-16 ranges of `text`'s rows wrapped to `width` cells, each ending
- * before its row's trailing whitespace; an empty line is one empty row. Follows rich's
- * `divide_line`: a word keeps its trailing spaces, moves to a new row when it doesn't fit the rest
- * of this one, and is folded by characters when it is wider than a row.
+ * @internal Return the line `spans` make wrapped to `width` cells (`wrapLine`), as `box` rows:
+ * each row's plain text and its text with each span's piece painted in its style.
  */
-export function wrapLine(text: string, width: number): [start: number, end: number][] {
-  const starts = [0];
-  let used = 0;
-  for (const match of text.matchAll(/\s*\S+\s*/g)) {
-    const word = match[0];
-    const length = cells(word.trimEnd());
-    if (length <= width - used) {
-      used += cells(word);
-    } else if (length > width) {
-      // Folded: each chunk of at most `width` cells starts a row; a character that doesn't fit
-      // starts the next chunk.
-      if (match.index > 0) starts.push(match.index);
-      let at = match.index;
-      let chunk = 0;
-      for (const char of word) {
-        const size = charCells(char);
-        if (chunk > 0 && chunk + size > width) {
-          starts.push(at);
-          chunk = 0;
-        }
-        chunk += size;
-        at += char.length;
-      }
-      used = chunk;
-    } else {
-      starts.push(match.index);
-      used = cells(word);
+export function wrapSpans(spans: readonly Span[], width: number, out: Colored, env: Env): [string, string][] {
+  const plain = spans.map(([text]) => text).join("");
+  return wrapLine(plain, width).map(([start, end]) => {
+    let printed = "";
+    let at = 0;
+    for (const [text, style] of spans) {
+      const piece = text.slice(Math.max(0, start - at), Math.max(0, end - at));
+      if (piece) printed += style === null ? piece : paint(piece, style, out, env);
+      at += text.length;
     }
-  }
-  return starts.map((start, i) => {
-    const row = text.slice(start, starts[i + 1] ?? text.length);
-    return [start, start + row.trimEnd().length];
+    return [plain.slice(start, end), printed];
   });
 }
 

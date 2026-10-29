@@ -54,12 +54,22 @@ const INBOX_WAIT = { node: "chat/heard", callId: "c", tool: "take", inbox: "mess
 describe("childEvent", () => {
   test("a question names its call and quotes the child's text", () => {
     const asked = status("r1", 3, { asks: [{ call: "c1", question: 'Which "region"?\nEU?' }] });
-    expect(childEvent(asked)).toEqual({ run: "r1", seq: 3, text: 'run r1 asks (call c1): "Which \\"region\\"?\\nEU?"' });
+    expect(childEvent(asked)).toEqual({
+      run: "r1",
+      seq: 3,
+      text: 'run r1 asks (call c1): "Which \\"region\\"?\\nEU?"',
+      card: { status: "waiting", verb: "asks", body: '(call c1): "Which \\"region\\"?\\nEU?"' },
+    });
   });
 
   test("an inbox wait, with what the run said", () => {
     const waiting = status("r2", 4, { waits: [INBOX_WAIT], replies: ["hi", "there"] });
     expect(childEvent(waiting)?.text).toBe('run r2 waits for a message on inbox "messages"; said "hi", "there"');
+    expect(childEvent(waiting)?.card).toEqual({
+      status: "waiting",
+      verb: "waits for a message",
+      body: 'on inbox "messages"; said "hi", "there"',
+    });
   });
 
   test("an end: succeeded, failed or cancelled", () => {
@@ -74,6 +84,18 @@ describe("childEvent", () => {
       'run r1 failed: "the log went"',
     );
     expect(childEvent(status("r1", 1, { status: "cancelled" }))?.text).toBe("run r1 was cancelled");
+    // The card holds the verb apart from what follows it.
+    expect(childEvent(status("r1", 1, { status: "succeeded", output: "Hi" }))?.card).toEqual({
+      status: "succeeded",
+      verb: "succeeded",
+      body: 'with output "Hi"',
+    });
+    expect(childEvent(status("r1", 1, { status: "failed", failure }))?.card?.body).toBe('(code.error at boom): "kaboom"');
+    expect(childEvent(status("r1", 1, { status: "cancelled" }))?.card).toEqual({
+      status: "cancelled",
+      verb: "was cancelled",
+      body: "",
+    });
   });
 
   test("a run running, or waiting for a timer with nothing said, is no event", () => {
@@ -81,6 +103,7 @@ describe("childEvent", () => {
     const timer = { ...INBOX_WAIT, tool: "sleep", inbox: null };
     expect(childEvent(status("r1", 1, { waits: [timer] }))).toBeNull();
     expect(childEvent(status("r1", 1, { waits: [timer], replies: ["z"] }))?.text).toBe('run r1 said "z"');
+    expect(childEvent(status("r1", 1, { waits: [timer], replies: ["z"] }))?.card?.body).toBe('"z"');
   });
 
   test("a question list is cut at 20, with a note", () => {

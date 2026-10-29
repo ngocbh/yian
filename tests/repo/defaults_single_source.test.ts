@@ -50,6 +50,8 @@ const ALLOWED: Record<string, string> = {
   "tools/mcp.ts: INVALID_REQUEST": "JSON-RPC error code",
   "tools/mcp.ts: INVALID_REQUEST_CODES": "JSON-RPC error codes",
   "llm/framing.ts: LF": "the line feed byte",
+  "tools/mcp.ts: CR": "the carriage return byte",
+  "tools/mcp.ts: LF": "the line feed byte",
   "llm/framing.ts: ASCII_SPACE": "the ASCII whitespace bytes",
   "llm/testing.ts: NULL_BODY_STATUSES": "HTTP statuses whose response has no body",
   // Display and message formatting.

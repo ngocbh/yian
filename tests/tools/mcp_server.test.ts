@@ -23,6 +23,7 @@ import {
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import {
   AlreadyOpenError,
+  capResponse,
   isMcpError,
   isMcpServer,
   McpCallCancelled,
@@ -581,6 +582,69 @@ describe("StdioTransport", () => {
       }),
     );
     await expect(t.start()).rejects.toThrow(/ENOENT/);
+  });
+});
+
+describe("capResponse", () => {
+  /** A 200 response of `type` whose body arrives as `chunks`. */
+  function reply(type: string, ...chunks: string[]): Response {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    });
+    return new Response(body, { status: 200, headers: { "content-type": type } });
+  }
+
+  /** The body of `response` capped at `max` bytes, and how often the cap fired. */
+  async function read(response: Response, max: number): Promise<{ text?: string; error?: Error; overflows: number }> {
+    let overflows = 0;
+    const capped = capResponse(response, max, () => (overflows += 1));
+    try {
+      return { text: await capped.text(), overflows };
+    } catch (error) {
+      return { error: error as Error, overflows };
+    }
+  }
+
+  test("a JSON body is capped as a whole, across chunks", async () => {
+    expect(await read(reply("application/json", "x".repeat(10), "x".repeat(6)), 16)).toEqual({
+      text: "x".repeat(16),
+      overflows: 0,
+    });
+    const over = await read(reply("application/json", "x".repeat(10), "secret".repeat(2)), 16);
+    expect(over.overflows).toBe(1);
+    expect(over.error?.message).toBe("MCP server sent a message over 16 bytes");
+  });
+
+  test("an SSE body is capped per event, so many small events pass", async () => {
+    const event = `data: ${"x".repeat(10)}\n\n`;
+    const body = event.repeat(5);
+    expect(await read(reply("text/event-stream; charset=utf-8", body), 16)).toEqual({ text: body, overflows: 0 });
+  });
+
+  test("an SSE event's lines add up until its blank line, whatever the line ends", async () => {
+    for (const end of ["\n", "\r", "\r\n"]) {
+      const lines = `data: ${"x".repeat(5)}${end}`.repeat(3);
+      const over = await read(reply("text/event-stream", lines, end), 32);
+      expect(over.overflows).toBe(1);
+      const split = `data: ${"x".repeat(10)}${end}${end}`;
+      // A CRLF split across chunks still ends one line, not two.
+      const passing = end === "\r\n" ? [split.slice(0, -1), "\n", split] : [split, split];
+      expect(await read(reply("text/event-stream", ...passing), 16)).toEqual({
+        text: passing.join(""),
+        overflows: 0,
+      });
+    }
+  });
+
+  test("a body-less answer passes as is", () => {
+    const empty = new Response(null, { status: 202 });
+    expect(capResponse(empty, 1, () => {})).toBe(empty);
+    const noContent = new Response(null, { status: 204 });
+    expect(capResponse(noContent, 1, () => {})).toBe(noContent);
   });
 });
 

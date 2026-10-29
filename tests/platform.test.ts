@@ -778,7 +778,7 @@ describe("syncFolder", () => {
     expect(closed).toEqual([...opened.keys()]);
   });
 
-  test.each(["EINVAL", "ENOTSUP", "EOPNOTSUPP", "EISDIR", "EPERM"])(
+  test.each(["EINVAL", "ENOTSUP", "EOPNOTSUPP"])(
     "does nothing where a folder sync fails %s, open or sync",
     (code) => {
       const open = spyOn(fs, "openSync").mockImplementation(() => {
@@ -790,6 +790,17 @@ describe("syncFolder", () => {
         throw systemError(code);
       });
       expect(syncFolder(dir)).toBeUndefined();
+    },
+  );
+
+  test.skipIf(process.platform === "win32").each(["EISDIR", "EPERM"])(
+    "a folder sync failing %s off Windows propagates",
+    (code) => {
+      const failure = systemError(code);
+      spyOn(fs, "fsyncSync").mockImplementation(() => {
+        throw failure;
+      });
+      expect(thrown(() => syncFolder(dir))).toBe(failure);
     },
   );
 

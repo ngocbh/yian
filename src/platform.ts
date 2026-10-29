@@ -406,10 +406,15 @@ export function isLocked(path: string): boolean {
 
 /**
  * The errors that mean this file system or platform can't sync a folder: Linux gives `EINVAL` for
- * a file system without directory sync, some file systems give `ENOTSUP` or `EOPNOTSUPP`, and
- * Windows can't open a folder (`EISDIR`, `EPERM`).
+ * a file system without directory sync, and some file systems give `ENOTSUP` or `EOPNOTSUPP`.
+ * Windows can't open a folder (`EISDIR`, `EPERM`); elsewhere those are real failures.
  */
-const FOLDER_SYNC_UNSUPPORTED = new Set(["EINVAL", "ENOTSUP", "EOPNOTSUPP", "EISDIR", "EPERM"]);
+const FOLDER_SYNC_UNSUPPORTED = new Set([
+  "EINVAL",
+  "ENOTSUP",
+  "EOPNOTSUPP",
+  ...(process.platform === "win32" ? ["EISDIR", "EPERM"] : []),
+]);
 
 /**
  * Flush the entries of folder `path` to disk, so a file created, renamed or removed in it

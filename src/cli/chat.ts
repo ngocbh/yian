@@ -21,7 +21,7 @@ import { loadFlow } from "../compose/loader.ts";
 import { defaultSkillRoots, loadSkills } from "../compose/skills.ts";
 import type { Env } from "../defaults.ts";
 import { AuthError } from "../llm_clients/auth/index.ts";
-import { connectionSnapshot } from "../llm_clients/connection.ts";
+import { connectionSnapshot, type ConnectionSnapshot } from "../llm_clients/connection.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import { coerceInputs } from "../nodes/binding.ts";
 import { isSystemError, leavesRoot, realScheduler, type Scheduler } from "../platform.ts";
@@ -31,6 +31,7 @@ import { DOCS, FLOWS } from "./bundled.ts";
 import { bundledSkill } from "./bundled_skill.ts";
 import { EventQueue, InFlight, trackInFlight } from "./chat_events.ts";
 import { chatRunTools } from "./chat_run_tools.ts";
+import { chatBanner, ChatView, homePath, loginLabel, richChat } from "./chat_view.ts";
 import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
 import { inboxChat, type InboxChatHost } from "./inbox_chat.ts";
@@ -83,23 +84,33 @@ export async function loadChatFlow(env: Env): Promise<ComposedFlow> {
 const NO_MODEL = /has no (provider or model|model for provider)/;
 
 /**
- * `provider/model` the assistant's replies use under `layer`, or `null` when no layer gives them.
+ * `provider/model` the assistant's replies use under `layer` and how it is reached (`loginLabel`),
+ * or `null` when no layer gives them.
  *
  * @throws {RangeError} As the LLM cascade does for anything else, a bad default in `env` say.
  * @throws {AuthError} When the saved logins can't be read.
  */
-function replyModel(flow: ComposedFlow, layer: Readonly<Record<string, string>>, env: Env): string | null {
+function replyModel(
+  flow: ComposedFlow,
+  layer: Readonly<Record<string, string>>,
+  env: Env,
+): { model: string; login: string | null } | null {
   let config: Readonly<Record<string, unknown>> | undefined;
+  let snapshot: ConnectionSnapshot;
   try {
     const inputs = coerceInputs(flow.input, hostInputs(flow.input, {}));
-    const resolved = runStartLlm(copyGraph(flow.compiled), inputs, { ...layer }, connectionSnapshot({ env }));
+    snapshot = connectionSnapshot({ env });
+    const resolved = runStartLlm(copyGraph(flow.compiled), inputs, { ...layer }, snapshot);
     config = resolved.effective[REPLY_PATH];
   } catch (error) {
     if (error instanceof RangeError && NO_MODEL.test(error.message)) return null;
     throw error;
   }
   if (typeof config?.["provider"] !== "string" || typeof config["model"] !== "string") return null;
-  return `${config["provider"]}/${config["model"]}`;
+  const connection = Object.hasOwn(snapshot.connections, config["provider"])
+    ? snapshot.connections[config["provider"]]
+    : null;
+  return { model: `${config["provider"]}/${config["model"]}`, login: loginLabel(connection) };
 }
 
 /**
@@ -185,6 +196,9 @@ export async function chat(
   validateRunLogOptions({ flow: CHAT_LABEL, inputValues: [], log: options.log });
   const root = deps.root ?? process.cwd();
   const env = io.env;
+  // On a terminal, everything the chat prints goes through its view.
+  const view = richChat(io) ? new ChatView(io.stderrStream) : null;
+  if (view !== null) io = { ...io, stdout: view.writer, stderr: view.writer };
   const flow = await loadChatFlow(env);
   let skill: Skill;
   try {
@@ -217,7 +231,7 @@ export async function chat(
     }
     if (focus.inbox) hint += `to chat with this flow itself, run yian run ${shellWord(flowPath)}\n`;
   }
-  let model: string | null;
+  let model: { model: string; login: string | null } | null;
   try {
     model = replyModel(flow, cliLayer(options), env);
   } catch (error) {
@@ -232,10 +246,16 @@ export async function chat(
     await printStyled(io, message, "red");
     return 1;
   }
-  const banner = [`yian chat`, model, flowPath === undefined ? null : `focus: ${inputs["flow"]}`]
-    .filter((part) => part !== null)
-    .join(" · ");
-  await io.stderr.write(`${sanitize(banner)}\n${sanitize(hint)}`);
+  const focus = flowPath === undefined ? null : (inputs["flow"] as string);
+  if (view !== null) {
+    const info = { ...model, cwd: homePath(root, env("HOME")), focus };
+    await io.stderr.write(`${chatBanner(info, io.stderrStream, env)}${sanitize(hint)}`);
+  } else {
+    const banner = [`yian chat`, model.model, focus === null ? null : `focus: ${focus}`]
+      .filter((part) => part !== null)
+      .join(" · ");
+    await io.stderr.write(`${sanitize(banner)}\n${sanitize(hint)}`);
+  }
 
   const fresh = freshLog(options.log, env);
   const logDir = defaultRunsDir(env);
@@ -296,6 +316,7 @@ export async function chat(
         skills: new Map([[skill.name, skill]]),
         tools,
         events: { queue, inFlight, wake, onInterrupt: () => runs.cancelWaits() },
+        view,
       },
     );
   } finally {

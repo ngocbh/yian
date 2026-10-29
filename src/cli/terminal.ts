@@ -144,6 +144,11 @@ function plainOutput(output: Output): Output {
   };
 }
 
+/** The columns `output` is wide: as it reports, else 80. */
+function columnsOf(output: Output): number {
+  return output.columns || 80;
+}
+
 /** `text` with each `\n` written as `\r\n`, since raw mode may not translate it. */
 function crlf(text: string): string {
   return text.replaceAll("\n", "\r\n");
@@ -269,7 +274,7 @@ function textWidget(options: {
   mark?: string;
   instruction?: string;
   validate?: (text: string) => string | undefined;
-}): Widget<string> & { text(): string } {
+}): Widget<string> & { text(): string; caret(): number } {
   const mark = options.mark ?? "?";
   const chars = Array.from(options.initial ?? "");
   let pos = chars.length;
@@ -318,6 +323,67 @@ function textWidget(options: {
       return error;
     },
     text: () => chars.join(""),
+    caret: () => pos,
+  };
+}
+
+/**
+ * `text` drawn as a framed prompt `columns()` wide: a box holding `> ` and the text, folded onto
+ * as many rows as it needs, and the dim `hint` below it. Once entered it collapses to `> <text>`;
+ * any other ending erases it.
+ */
+function framedWidget(
+  text: ReturnType<typeof textWidget>,
+  columns: () => number,
+  hint: string,
+): Widget<string> & { text(): string } {
+  // The rows the text folds onto, each with the index of its first character, and the cursor's.
+  const fold = (): { rows: { start: number; chars: string[] }[]; row: number; width: number } => {
+    const width = Math.max(1, columns() - 6);
+    const chars = Array.from(text.text()).map((char) => (char === "\n" ? "⏎" : char));
+    const rows = [{ start: 0, chars: [] as string[], used: 0 }];
+    for (const [i, char] of chars.entries()) {
+      let last = rows[rows.length - 1]!;
+      const size = charCells(char);
+      if (last.used + size > width && last.chars.length > 0) {
+        last = { start: i, chars: [], used: 0 };
+        rows.push(last);
+      }
+      last.chars.push(char);
+      last.used += size;
+    }
+    const caret = text.caret();
+    // A full last row leaves no cell for the cursor after it: it gets a row of its own.
+    const last = rows[rows.length - 1]!;
+    if (caret === chars.length && last.used >= width) rows.push({ start: chars.length, chars: [], used: 0 });
+    const row = rows.findLastIndex((each) => each.start <= caret);
+    return { rows, row, width };
+  };
+  const border = (part: string): string => style("2", part);
+  const lead = (row: number): string => (row === 0 ? `${style("1", ">")} ` : "  ");
+  return {
+    preface: "",
+    lines() {
+      const { rows, width } = fold();
+      const edge = "─".repeat(width + 4);
+      return [
+        border(`╭${edge}╮`),
+        ...rows.map((each, i) => {
+          const body = each.chars.join("");
+          return `${border("│")} ${lead(i)}${body}${" ".repeat(width - cells(body))} ${border("│")}`;
+        }),
+        border(`╰${edge}╯`),
+        `  ${style("2", hint)}`,
+      ];
+    },
+    cursor() {
+      const { rows, row } = fold();
+      const before = rows[row]!.chars.slice(0, text.caret() - rows[row]!.start).join("");
+      return { row: row + 1, before: `│ ${lead(row)}${before}` };
+    },
+    key: (key) => text.key(key),
+    done: (outcome) => ("value" in outcome ? `${style("1", ">")} ${text.text().replaceAll("\n", "⏎")}` : null),
+    text: () => text.text(),
   };
 }
 
@@ -525,10 +591,14 @@ export class Terminal {
    * `escape`, Escape ends the prompt as `{escape}` with the draft, erasing it the same way;
    * elsewhere Escape is ignored. Ctrl-C and Escape leave the terminal open, so the next
    * `readLine` works; keys typed after the prompt ends wait for the next one.
+   *
+   * With `frame`, on a terminal that isn't plain, the prompt is a box across the terminal holding
+   * `> ` and the text, the dim `hint` below it, instead of the label; once entered it collapses
+   * to `> <line>`.
    */
   async readLine<E extends boolean = false>(
     label: string,
-    options: { signal?: AbortSignal; initial?: string; escape?: E } = {},
+    options: { signal?: AbortSignal; initial?: string; escape?: E; frame?: boolean; hint?: string } = {},
   ): Promise<
     | { value: string }
     | { eof: true }
@@ -537,7 +607,11 @@ export class Terminal {
     | (E extends true ? Escaped : never)
   > {
     const { signal, initial = "" } = options;
-    const text = textWidget({ label, mark: ">", initial });
+    const typed = textWidget({ label, mark: ">", initial });
+    const text =
+      options.frame === true && !this.#plain
+        ? framedWidget(typed, () => columnsOf(this.#output), options.hint ?? "")
+        : typed;
     const widget: Widget<string | typeof ESCAPED> = options.escape
       ? {
           ...text,

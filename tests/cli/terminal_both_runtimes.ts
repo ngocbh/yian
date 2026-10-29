@@ -619,6 +619,68 @@ async function aBracketedPasteKeepsItsNewlines(): Promise<void> {
   assert.equal(await answer, "x\ny");
 }
 
+const HINT = "/exit to leave · ctrl-c interrupts · esc withdraws";
+const FRAME_TOP = `╭${"─".repeat(58)}╮`;
+const FRAME_BOTTOM = `╰${"─".repeat(58)}╯`;
+
+/** A framed prompt's row holding `text`, of one-cell characters, 60 columns wide. */
+const framed = (text: string) => `│ ${text.padEnd(56)} │`;
+
+async function aFramedReadLineDrawsABoxAndAHintThenCollapsesToTheLine(): Promise<void> {
+  const { input, output, terminal, view, exitHooks } = setup({ columns: 60 });
+  output.write("above\r\n");
+  const line = terminal.readLine("You:", { frame: true, hint: HINT });
+  await tick();
+  assert.deepEqual(view().rows, ["above", FRAME_TOP, framed(">"), FRAME_BOTTOM, `  ${HINT}`]);
+  assert.deepEqual(view().cursor, { row: 2, col: 4 });
+  input.write("run hello");
+  await tick();
+  assert.deepEqual(view().rows, ["above", FRAME_TOP, framed("> run hello"), FRAME_BOTTOM, `  ${HINT}`]);
+  assert.deepEqual(view().cursor, { row: 2, col: 13 });
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "run hello" });
+  assert.deepEqual(view().rows, ["above", "> run hello"]);
+  assertRestored(input, output, exitHooks);
+}
+
+async function aFramedReadLineFoldsALongLineInsideTheBox(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const line = terminal.readLine("You:", { frame: true, hint: HINT });
+  // 54 cells fit a row: the 55th character starts the next, and a wide one that doesn't fit too.
+  input.write(`${"a".repeat(53)}日本`);
+  await tick();
+  assert.deepEqual(view().rows, [FRAME_TOP, framed(`> ${"a".repeat(53)}`), `│   日本${" ".repeat(50)} │`, FRAME_BOTTOM, `  ${HINT}`]);
+  assert.deepEqual(view().cursor, { row: 2, col: 8 });
+  input.write(BACKSPACE.repeat(2) + "b");
+  await tick();
+  // A full row leaves the cursor a row of its own.
+  assert.deepEqual(view().rows, [FRAME_TOP, framed(`> ${"a".repeat(53)}b`), framed(""), FRAME_BOTTOM, `  ${HINT}`]);
+  assert.deepEqual(view().cursor, { row: 2, col: 4 });
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: `${"a".repeat(53)}b` });
+}
+
+async function aBracketedPasteKeepsItsNewlinesFramed(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  input.write(PASTE_START + "x\ny" + PASTE_END);
+  await tick();
+  assert.deepEqual(view().rows, [FRAME_TOP, framed("> x⏎y"), FRAME_BOTTOM, `  ${HINT}`]);
+  input.write(ENTER);
+  assert.deepEqual(await answer, { value: "x\ny" });
+}
+
+async function escapeErasesAFramedReadLine(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 60 });
+  output.write("above\r\n");
+  const line = terminal.readLine("You:", { frame: true, hint: HINT, escape: true });
+  input.write("half");
+  await tick();
+  input.write(ESCAPE);
+  assert.deepEqual(await line, { escape: true, draft: "half" });
+  assert.deepEqual(view().rows, ["above"]);
+}
+
 async function wideCharactersRedrawWithoutStaleRows(): Promise<void> {
   const { input, output, terminal, view } = setup({ columns: 10 });
   output.write("above\r\n");
@@ -2481,6 +2543,11 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a plain terminal writes a refused line's error and reads the next line afresh":
     aPlainTerminalWritesARefusedLinesErrorAndReadsTheNextLineAfresh,
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,
+  "a framed readLine draws a box and a hint, then collapses to the line":
+    aFramedReadLineDrawsABoxAndAHintThenCollapsesToTheLine,
+  "a framed readLine folds a long line inside the box": aFramedReadLineFoldsALongLineInsideTheBox,
+  "a bracketed paste keeps its newlines in a framed readLine": aBracketedPasteKeepsItsNewlinesFramed,
+  "Escape erases a framed readLine": escapeErasesAFramedReadLine,
   "wide characters redraw without stale rows": wideCharactersRedrawWithoutStaleRows,
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,
   "a long line redraws without stale rows": aLongLineRedrawsWithoutStaleRows,

@@ -117,6 +117,14 @@ export interface InboxChatHost {
   tools?: Readonly<Record<string, ToolEntry>> | ((terminal: Terminal) => Readonly<Record<string, ToolEntry>>);
   /** The child events the chat sends into the inbox. */
   events?: ChatEvents;
+  /** How the chat draws itself on a terminal (`yian chat`'s look); its plain lines when null or absent. */
+  view?: InboxChatView | null;
+}
+
+/** What a host drawing the chat's look gives it. */
+export interface InboxChatView {
+  /** The hint under the framed prompt. */
+  readonly hint: string;
 }
 
 const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
@@ -630,7 +638,8 @@ export async function inboxChat(
         );
       }
       if (stop.signal.aborted) prompt.abort();
-      const read = await terminal.readLine("You:", { signal: prompt.signal, initial: draft, escape: true });
+      const framing = host.view ? { frame: true, hint: host.view.hint } : {};
+      const read = await terminal.readLine("You:", { signal: prompt.signal, initial: draft, escape: true, ...framing });
       draft = "aborted" in read || "escape" in read ? read.draft : "";
       timer.abort();
       line = null;

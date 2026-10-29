@@ -961,8 +961,8 @@ export class EpisodicSession implements MemorySession {
    * batch is a no-op, and retention keeps the newest `maxEpisodes` entries.
    *
    * @throws MemoryOperationError `episodic.invalid_commit_id`, `episodic.invalid_batch`,
-   *   `episodic.commit_collision`, `episodic.stale_generation`, `episodic.config_conflict`; the
-   *   session or backend is closed; durable state can't be saved.
+   *   `episodic.commit_collision`, `episodic.stale_generation`; the session or backend is closed;
+   *   durable state can't be saved.
    */
   commit(commitId: string, mutations: readonly MemoryMutation[]): void {
     const memory = this.memory;
@@ -983,12 +983,6 @@ export class EpisodicSession implements MemorySession {
       }
       this.assertCurrent("commit");
       let state = memory["state"];
-      if (
-        state.limits.maxEpisodes !== this.state.limits.maxEpisodes ||
-        state.limits.recallLimit !== this.state.limits.recallLimit
-      ) {
-        throw operationError("commit", "episodic.config_conflict", "current memory limits changed");
-      }
       try {
         const seen = new Set<string>();
         const additions = mutations.map((mutation, index) => {

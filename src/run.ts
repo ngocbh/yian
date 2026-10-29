@@ -40,7 +40,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { chmodSync, mkdirSync, realpathSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, rmdirSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { types } from "node:util";
 
@@ -122,7 +122,7 @@ import {
   sameItems,
   sameOptional,
 } from "./nodes/contracts.ts";
-import { FileLockError, realScheduler, type Scheduler, VERSION, warn } from "./platform.ts";
+import { FileLockError, realScheduler, type Scheduler, syncFolder, VERSION, warn } from "./platform.ts";
 import { driveBackward, recordedGrants } from "./runtime/backward.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { type DeliveryOp, FlowEngine, prepareDelivery, resumedAttemptEvents } from "./runtime/engine.ts";
@@ -2316,24 +2316,42 @@ function agentCallArguments(reply: Readonly<JsonObject> | undefined, index: numb
  *
  * A run's folder is the folder that holds its log, and the run's other files go only there, so
  * each run gets a folder of its own. `runsDir` is made when missing. The run folder must not
- * exist yet; it is made with mode 0700. The log file is not created: the run log creates it
- * exclusively, owner-only.
+ * exist yet; it is made with mode 0700. The folder above each one made is synced, so the run
+ * folder survives a power loss; when a sync fails, the run folder is removed if it can be. The log
+ * file is not created: the run log creates it exclusively, owner-only.
  *
  * @throws {RangeError} When `runId` isn't one folder name: empty, `.`, `..`, or holding `/`, `\`
  *   or NUL.
  * @throws {Error} `EEXIST` when anything (a folder, a file, a symlink) already holds the run
- *   folder's path, or another error when a folder can't be made or changed.
+ *   folder's path, or another error when a folder can't be made, changed or synced.
  */
 export function runLogPath(runsDir: string, runId: string): string {
   if (runId === "" || runId === "." || runId === ".." || /[/\\\0]/.test(runId)) {
     throw new RangeError(`run id is not one folder name: ${reprText(runId)}`);
   }
-  mkdirSync(runsDir, { recursive: true, mode: 0o700 });
-  const runDir = join(runsDir, runId);
+  // Resolved, so the first folder `mkdirSync` reports making is `runsDir` or above it.
+  const absoluteRunsDir = resolve(runsDir);
+  const first = mkdirSync(absoluteRunsDir, { recursive: true, mode: 0o700 });
+  const runDir = join(absoluteRunsDir, runId);
   mkdirSync(runDir, { mode: 0o700 });
   // The umask can narrow mkdir's mode.
   chmodSync(runDir, 0o700);
-  return join(runDir, "log.jsonl");
+  try {
+    // Each new folder's entry lives in its parent: sync the run folder's and, when `runsDir` was
+    // made, each made folder's up to the first. The walk ends at the root whatever `first` holds.
+    const stop = first === undefined ? absoluteRunsDir : dirname(resolve(first));
+    for (let made = runDir; made !== stop && made !== dirname(made); made = dirname(made)) {
+      syncFolder(dirname(made));
+    }
+  } catch (error) {
+    try {
+      rmdirSync(runDir);
+    } catch {
+      // The original error is the one to report.
+    }
+    throw error;
+  }
+  return join(runsDir, runId, "log.jsonl");
 }
 
 /** Where a run log stands, as `inspectRun` reads it. */

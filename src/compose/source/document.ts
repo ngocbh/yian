@@ -76,6 +76,8 @@ export interface RepeatedKey {
   readonly key: string;
   readonly first: SourceRange;
   readonly second: SourceRange;
+  /** The front of a type a `{...}` mapping's comma split before the repeat, if one did. */
+  readonly cutType?: string;
 }
 
 /** The first mapping key, in document order, that YAML read as non-text. */
@@ -83,6 +85,8 @@ export interface NonTextKey {
   readonly key: Exclude<ScalarValue, string>;
   readonly text: string;
   readonly range: SourceRange;
+  /** The front of a type a `{...}` mapping's comma split before the key, if one did. */
+  readonly cutType?: string;
 }
 
 // YAML's printable characters; with the `u` flag a lone surrogate is one code point,
@@ -125,6 +129,8 @@ type SpanOf = (node: Node) => Span;
  */
 interface PairSequence {
   readonly pairs: readonly MapPair[];
+  /** Whether a leaf's pairs are written in a `{...}` mapping. */
+  readonly flow: boolean;
   readonly parts: readonly PairSequence[];
   readonly partOffsets: readonly number[];
   readonly flatPairCount: number;
@@ -144,6 +150,7 @@ interface ArcRope {
 
 const EMPTY_PAIRS: PairSequence = {
   pairs: NO_PARTS,
+  flow: false,
   parts: NO_PARTS,
   partOffsets: NO_PARTS,
   flatPairCount: 0,
@@ -484,7 +491,7 @@ function build(
   const ownLeaf = (map: YAMLMap.Parsed): PairSequence => {
     let leaf = ownLeaves.get(map);
     if (leaf === undefined) {
-      leaf = pairLeaf(ownPairs(map, targetOf));
+      leaf = pairLeaf(ownPairs(map, targetOf), map.flow === true);
       ownLeaves.set(map, leaf);
     }
     return leaf;
@@ -531,9 +538,9 @@ function build(
    *
    * @throws SourceSyntaxError at a list or mapping key, or at a node that can't be built.
    */
-  const leafArcs = (pairs: readonly MapPair[]): ArcSequence => {
+  const leafArcs = ({ pairs, flow }: PairSequence): ArcSequence => {
     const arcs: MapArc[] = [];
-    for (const pair of pairs) {
+    for (const [index, pair] of pairs.entries()) {
       const keyNode = target(aliasTargets, pair.key);
       // An alias key is located where it is written, not at its anchor: the fix goes on the
       // key, and quoting the anchored node would change its value instead.
@@ -561,7 +568,13 @@ function build(
           keyAlias === null
             ? keyScalar.range!
             : toRange(starts, keyAlias.range![0], keyAlias.range![1]);
-        nonTextKey = Object.freeze({ key: keyValue, text: key, range });
+        const cutType = flow ? cutTypeBefore(pairs, index) : null;
+        nonTextKey = Object.freeze({
+          key: keyValue,
+          text: key,
+          range,
+          ...(cutType === null ? {} : { cutType }),
+        });
         nonTextKeyAt = keyAt;
       }
       arcs.push(Object.freeze({ key, keyDefinition, valueDefinition }));
@@ -586,7 +599,7 @@ function build(
       const [current, ready] = stack.pop()!;
       if (arcRopes.has(current)) continue;
       if (current.parts.length === 0) {
-        const sequence = leafArcs(current.pairs);
+        const sequence = leafArcs(current);
         arcRopes.set(current, { sequence, summary: leafSummary(sequence.arcs) });
       } else if (!ready) {
         stack.push([current, true]);
@@ -708,10 +721,37 @@ function build(
   return { definitions: built, ids, nonTextKey };
 }
 
-/** Return `pairs` as a leaf rope; no pairs is the empty rope. */
-function pairLeaf(pairs: readonly MapPair[]): PairSequence {
+/**
+ * Return `pairs`, written in a `{...}` mapping when `flow`, as a leaf rope; no pairs is the
+ * empty rope.
+ */
+function pairLeaf(pairs: readonly MapPair[], flow: boolean): PairSequence {
   if (pairs.length === 0) return EMPTY_PAIRS;
-  return { pairs, parts: NO_PARTS, partOffsets: NO_PARTS, flatPairCount: pairs.length };
+  return { pairs, flow, parts: NO_PARTS, partOffsets: NO_PARTS, flatPairCount: pairs.length };
+}
+
+/** Return how many more `(` than `)` `text` holds. */
+function openParens(text: string): number {
+  return text.split("(").length - text.split(")").length;
+}
+
+/**
+ * Return the front of a type a `{...}` mapping's comma split before `pairs[index]`, or null.
+ *
+ * YAML reads `{role: Literal(a, true, b)}` as the value `Literal(a` and the keys `true` and
+ * `b)` with no value. The front is the nearest earlier plain value, past plain keys with no
+ * value; it is a split type's when it and those keys open more `(` than they close.
+ */
+function cutTypeBefore(pairs: readonly MapPair[], index: number): string | null {
+  let open = 0;
+  for (let i = index - 1; i >= 0; i--) {
+    const { key, value } = pairs[i]!;
+    const piece = value ?? key;
+    if (!isScalar(piece) || piece.type !== Scalar.PLAIN) return null;
+    open += openParens(piece.source);
+    if (value !== null) return open > 0 ? piece.source : null;
+  }
+  return null;
 }
 
 /** Return the concatenation of `parts` without the empty ones: the only one, when one is left. */
@@ -725,7 +765,7 @@ function concat(parts: readonly PairSequence[]): PairSequence {
     partOffsets.push(count);
     count += part.flatPairCount;
   }
-  return { pairs: NO_PARTS, parts: kept, partOffsets, flatPairCount: count };
+  return { pairs: NO_PARTS, flow: false, parts: kept, partOffsets, flatPairCount: count };
 }
 
 /** Return an arc leaf's summary: its keys by first occurrence, and each key's last arc. */
@@ -796,7 +836,7 @@ function firstRepeatedKey(
     }
     if (!isMap(node)) continue;
     const firstKeys = new Map<string, SourceRange>();
-    for (const pair of node.items) {
+    for (const [index, pair] of node.items.entries()) {
       const keyNode = target(aliasTargets, pair.key);
       // Keys a merge brings in override; only a mapping's own pairs count.
       if (isMergeKey(keyNode)) continue;
@@ -809,7 +849,15 @@ function firstRepeatedKey(
         ? toRange(starts, written.range![0], written.range![1])
         : keyScalar.range!;
       const first = firstKeys.get(key);
-      if (first !== undefined) return Object.freeze({ key, first, second: range });
+      if (first !== undefined) {
+        const cutType = node.flow === true ? cutTypeBefore(node.items, index) : null;
+        return Object.freeze({
+          key,
+          first,
+          second: range,
+          ...(cutType === null ? {} : { cutType }),
+        });
+      }
       firstKeys.set(key, range);
     }
     for (let i = node.items.length - 1; i >= 0; i--) {

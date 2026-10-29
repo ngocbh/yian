@@ -526,8 +526,11 @@ function readComposeFile(
   });
 }
 
-/** Explain that a key YAML read as non-text can't name anything, and the fix. */
-function nonTextKeyMessage(key: Value, text: string): string {
+/**
+ * Explain that a key YAML read as non-text can't name anything, and the fix; `cutType` is the
+ * front of a type a `{...}` mapping's comma split before the key, if one did.
+ */
+function nonTextKeyMessage(key: Value, text: string, cutType: string | undefined): string {
   const readAs = yamlReadAs(key);
   if (!text) {
     return (
@@ -541,10 +544,17 @@ function nonTextKeyMessage(key: Value, text: string): string {
     /[\u007f-\uffff]/g,
     (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
-  return (
-    `the key \`${text}\` was read by YAML as ${readAs}, but names in a flow must be text. ` +
-    `Quote it (${quoted}) or choose another name.`
-  );
+  const problem =
+    `the key \`${text}\` was read by YAML as ${readAs}, but names in a flow must be text. `;
+  // The key is a piece of the split type, so quoting the key alone wouldn't fix the type.
+  if (cutType !== undefined) {
+    return (
+      problem +
+      `This \`{...}\` mapping's comma split the type that starts \`${cutType}\`; quote the ` +
+      "type or use block style."
+    );
+  }
+  return `${problem}Quote it (${quoted}) or choose another name.`;
 }
 
 /**
@@ -568,14 +578,20 @@ export function parseSourceDocument(text: string, label: string): SourceDocument
     });
   }
   if (document.nonTextKey !== null) {
-    const { key, text: keyText, range } = document.nonTextKey;
-    throw new LoadDiagnostics(label, text).error(nonTextKeyMessage(key, keyText), { range });
+    const { key, text: keyText, range, cutType } = document.nonTextKey;
+    throw new LoadDiagnostics(label, text).error(nonTextKeyMessage(key, keyText, cutType), {
+      range,
+    });
   }
   if (document.repeatedKey !== null) {
-    const { key, first, second } = document.repeatedKey;
+    const { key, first, second, cutType } = document.repeatedKey;
+    const fix =
+      cutType === undefined
+        ? "a YAML mapping's keys must be unique, so remove or rename one"
+        : `this \`{...}\` mapping's comma split the type that starts \`${cutType}\`, so ` +
+          "quote the type or use block style";
     throw new LoadDiagnostics(label, text).error(
-      `duplicate key ${reprText(key)} (first at line ${first.startLine}); a YAML mapping's keys ` +
-        "must be unique, so remove or rename one",
+      `duplicate key ${reprText(key)} (first at line ${first.startLine}); ${fix}`,
       { range: second },
     );
   }

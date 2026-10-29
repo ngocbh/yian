@@ -179,6 +179,41 @@ output: \${a.output}
   expect(SourceDocument.parse(text).root.child("x-meta").value).toEqual({ on: "a", true: "b" });
 });
 
+/** A flow's `nodes:` section, after the part a test writes. */
+const NODES = "nodes:\n  a:\n    kind: code\n    code: return 1\n    output: int\n";
+
+test.each([
+  ["{a: Dict(str, int), b: Dict(str, int)}", "int)", "Dict(str", 4],
+  ["{a: Dict(str, List(int)), b: Dict(str, List(int))}", "List(int))", "Dict(str", 4],
+  ["{a: Union(A, B, C), b: Union(A, B, C)}", "B", "Union(A", 4],
+])("a repeat a flow mapping's comma made names the split type: %s", (written, key, cut, at) => {
+  // YAML splits `{a: Dict(str, int), ...}` at each comma, so the type's tail `int)` becomes a
+  // key that the next split type repeats.
+  const text = `id: f\nname: f\ntypedefs:\n  R: ${written}\n${NODES}`;
+
+  const error = loadError(() => parseSourceDocument(text, "dup.yaml"));
+
+  expect(error.message).toBe(
+    `duplicate key '${key}' (first at line ${at}); this \`{...}\` mapping's comma split the type ` +
+      `that starts \`${cut}\`, so quote the type or use block style`,
+  );
+  // The second key, after the space before it, in 1-based columns.
+  const column = text.split("\n")[3]!.lastIndexOf(` ${key}`) + 2;
+  expect(error.diagnostic.frames.at(-1)!.range.startCol).toBe(column);
+});
+
+test.each([
+  ["a block mapping", "x-meta:\n  a: Dict(str\n  b: 1\n  b: 2\n"],
+  ["a quoted value", "x-meta: {a: 'Dict(str', b: 1, b: 2}\n"],
+  ["a balanced value", "x-meta: {a: Dict(str, int), b: 1, b: 2}\n"],
+])("a repeat after %s keeps the plain message", (_label, block) => {
+  const text = `id: f\nname: f\n${block}${NODES}`;
+
+  const error = loadError(() => parseSourceDocument(text, "dup.yaml"));
+
+  expect(error.message).toEndWith("a YAML mapping's keys must be unique, so remove or rename one");
+});
+
 test.each([
   "yaml/compose_duplicate_keys__on_and_true_are_two_keys_and_true_is_not_text",
   "yaml/compose_duplicate_keys__repeated_node_id",

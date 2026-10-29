@@ -1,0 +1,24 @@
+# In a `{...}` record typedef, YAML splits each `Dict(str, int)` at its comma, so the tail `int)`
+# becomes a key the second split type repeats; the error names the split type.
+kind: load
+flow: |
+  id: err-split-typedef-repeat
+  name: err_split_typedef_repeat
+  typedefs:
+    Pair: {a: Dict(str, int), b: Dict(str, int)}   # ERROR: quote the types or use block style
+  input:
+    pair: !Pair
+  nodes:
+    echo:
+      kind: code
+      input:
+        pair: ${input.pair}
+      output: str
+      code: ./fixtures/seeds.ts:echo_value
+  output: ${echo.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "duplicate key 'int)' (first at line 4); this `{...}` mapping's comma split the type that starts `Dict(str`, so quote the type or use block style"
+        frames: [{label: flow.yaml, range: [4, 42, 4, 46]}]

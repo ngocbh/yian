@@ -1495,3 +1495,221 @@ describe("yian chat's skills", () => {
     TIMEOUT,
   );
 });
+
+describe("yian chat --resume", () => {
+  /** `chat --resume log` with the virtual clock and the test's signals. */
+  function resumeChat(log: string, io: CliIo, options: Partial<ChatOptions> = {}, deps: ChatDeps = {}) {
+    return chat(
+      undefined,
+      { inputValues: [], engineTrace: false, resume: log, ...options },
+      io,
+      { scheduler: virtualScheduler(Date.parse("2026-01-01T00:00:00Z")), signals, ...deps },
+    );
+  }
+
+  /** A `hold` tool that answers at once, for the resumed side of a `HOLD` chat. */
+  const instantHold = {
+    hold: new FunctionTool({
+      name: "hold",
+      description: "answers at once",
+      parametersJsonSchema: { type: "object", properties: { events: { type: "array", items: { type: "string" } } } },
+      execute: async () => "released",
+    }),
+  };
+
+  test(
+    "a chat stopped mid-reply continues: the cut reply prints, then lines go on as usual",
+    async () => {
+      const { started, tools } = holdTool();
+      const first = chatIo();
+      first.stdin.write("hi\n");
+      const chatting = runChat(flowFile(HOLD), first.io, {}, { tools });
+      await started;
+      signals.emit("SIGTERM");
+      const { code, log } = await chatting;
+      expect(code).toBe(130);
+      expect(first.stderr()).toContain(
+        `chat stopped; the run is in ${log}\ncontinue with: yian chat --resume ${log}\n`,
+      );
+
+      const second = chatIo();
+      second.stdin.write("again\n/exit\n");
+      expect(await resumeChat(log, second.io, {}, { tools: instantHold })).toBe(0);
+      // The stopped turn's reply, then one per line; the closing turn replies too.
+      expect(second.stdout()).toBe("released\nreleased\nreleased\n");
+      expect(second.stderr()).toContain(`Run log: ${log}`);
+      expect(second.stderr()).toContain("session ended");
+      expect(inspectRun(log).status).toBe("succeeded");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a chat stopped at the prompt continues with no reply printed twice",
+    async () => {
+      const first = chatIo();
+      first.stdin.write("hi\n");
+      const chatting = runChat(flowFile(ECHO), first.io);
+      await until(() => first.stdout().includes("echo: hi"));
+      await until(() => (first.io.stderrStream as FakeOutput).text.split("You:").length - 1 >= 2);
+      signals.emit("SIGTERM");
+      const { code, log } = await chatting;
+      expect(code).toBe(130);
+
+      const second = chatIo();
+      second.stdin.write("there\n/exit\n");
+      expect(await resumeChat(log, second.io)).toBe(0);
+      expect(second.stdout()).toBe("echo: there\necho: \n");
+      expect(inspectRun(log).status).toBe("succeeded");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a resumed chat whose inbox was closed shows no prompt and waits only for deadlines",
+    async () => {
+      const { scheduler } = heldScheduler();
+      const first = chatIo();
+      first.stdin.write("hi\n/exit\n");
+      const chatting = runChat(flowFile(NAP), first.io, {}, { scheduler });
+      const log = join(tmp, "run.jsonl");
+      await until(
+        () =>
+          existsSync(log) &&
+          records(log).some((record) => record instanceof InboxClosedRecord) &&
+          records(log).at(-1) instanceof RunWaitingRecord,
+      );
+      signals.emit("SIGTERM");
+      expect((await chatting).code).toBe(130);
+
+      const second = chatIo();
+      expect(await resumeChat(log, second.io)).toBe(0);
+      expect(second.stdout()).toBe("echo: hi\necho: \n");
+      expect(second.stderr()).toContain("session ended");
+      expect((second.io.stderrStream as FakeOutput).text).not.toContain("You:");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "the printed command quotes the log path and names the inbox when the flow has several",
+    async () => {
+      const flow = flowFile(`id: two
+name: two
+input:
+  messages: !Inbox(str)
+  other: !Inbox(str)
+nodes:
+  heard:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.messages}
+  side:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.other}
+  reply:
+    kind: code
+    input:
+      events: \${heard.output.events}
+    output: str
+    code: |
+      return "echo: " + inputs["events"].join(" | ");
+output: \${reply.output}
+`);
+      mkdirSync(join(tmp, "my runs"));
+      const log = join(tmp, "my runs", "run.jsonl");
+      const first = chatIo();
+      const chatting = runChat(flow, first.io, { inbox: "messages", log });
+      await until(() => existsSync(log) && records(log).at(-1) instanceof RunWaitingRecord);
+      signals.emit("SIGTERM");
+      expect((await chatting).code).toBe(130);
+      expect(first.stderr()).toContain(`continue with: yian chat --resume '${log}' --inbox messages\n`);
+
+      const second = chatIo();
+      second.stdin.write("hi\n/exit\n");
+      expect(await resumeChat(log, second.io, { inbox: "messages" })).toBe(0);
+      expect(second.stdout()).toBe("echo: hi\n");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a finished run is refused and nothing is appended",
+    async () => {
+      const first = chatIo();
+      first.stdin.write("/exit\n");
+      const { code, log } = await runChat(flowFile(ECHO), first.io);
+      expect(code).toBe(0);
+      const before = records(log).length;
+
+      const second = chatIo();
+      expect(await resumeChat(log, second.io)).toBe(1);
+      expect(second.stderr()).toContain(`chat failed: the run in ${log} has already ended (succeeded)`);
+      expect(records(log).length).toBe(before);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "the recorded keys are checked before the run moves; with them the queued line gets its reply first",
+    async () => {
+      const first = chatIo({ env: XAI });
+      const chatting = runChat(EXAMPLE_CHAT, first.io);
+      const log = join(tmp, "run.jsonl");
+      await until(() => existsSync(log) && records(log).at(-1) instanceof RunWaitingRecord);
+      signals.emit("SIGTERM");
+      expect((await chatting).code).toBe(130);
+
+      const { XAI_API_KEY: _, ...keyless } = XAI;
+      const second = chatIo({ env: keyless });
+      second.stdin.write("hi\n");
+      expect(await resumeChat(log, second.io)).toBe(1);
+      expect(second.stderr()).toContain("$XAI_API_KEY is not set; set it and resume again");
+
+      let calls = 0;
+      const original = globalThis.fetch;
+      globalThis.fetch = (async () => {
+        calls += 1;
+        return new Response(SEVEN, { headers: { "content-type": "text/event-stream" } });
+      }) as unknown as typeof fetch;
+      try {
+        const third = chatIo({ env: XAI });
+        third.stdin.write("/exit\n");
+        expect(await resumeChat(log, third.io)).toBe(0);
+        // "hi" was sent before the refused move; it is answered before the prompt shows.
+        expect(third.stdout()).toBe("7\n");
+        expect(calls).toBe(1);
+        expect(inspectRun(log).status).toBe("succeeded");
+      } finally {
+        globalThis.fetch = original;
+      }
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "--resume takes no FLOW, inputs, provider, model or log, and needs FLOW without it",
+    async () => {
+      const first = chatIo();
+      first.stdin.write("/exit\n");
+      const { log } = await runChat(flowFile(ECHO), first.io);
+      /** Run `yian chat <args>` through `main` on a stdin that has ended. */
+      const cli = async (args: readonly string[]) => {
+        const { io, stdin, stderr } = chatIo();
+        stdin.end();
+        return { code: await main(["chat", ...args], io), stderr: stderr() };
+      };
+      const withFlow = await cli([flowFile(ECHO, "other.yaml"), "--resume", log]);
+      expect([withFlow.code, withFlow.stderr]).toEqual([2, expect.stringContaining("leave out <flow>")]);
+      const fresh = await cli(["--resume", log, "-i", "x=1", "--model", "m", "--log", join(tmp, "new.jsonl")]);
+      expect(fresh.code).toBe(2);
+      expect(fresh.stderr).toContain("--resume cannot be combined with --input, --model, --log");
+      const none = await cli([]);
+      expect([none.code, none.stderr]).toEqual([2, expect.stringContaining("Missing argument 'FLOW'.")]);
+    },
+    TIMEOUT,
+  );
+});

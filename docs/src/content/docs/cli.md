@@ -201,16 +201,18 @@ line you type to it.
 ```console
 $ yian chat chat.yaml
 $ yian chat support.yaml --inbox questions --input team=billing
+$ yian chat --resume ~/.yian/runs/4f1c/log.jsonl
 ```
 
 | Flag | Value | What it does |
 |---|---|---|
-| `FLOW` | path | The flow `.yaml` to chat with |
+| `FLOW` | path | The flow `.yaml` to chat with. Leave it out with `--resume` |
 | `--inbox` | name | The inbox input to send lines to, when the flow has several |
 | `-i`, `--input` | `k=v` | Another input. Repeat it for more |
 | `--inputs` | file | A JSON file of the other inputs |
 | `--log` | path | Write the run log here instead of the default location. The path must not exist |
-| `-w`, `--num-workers` | int | How many nodes may run at once (default 8; `0` for one at a time) |
+| `--resume` | path | Continue the chat recorded in this run log, with the flow it recorded |
+| `-w`, `--num-workers` | int | How many nodes may run at once (default 8; `0` for one at a time). A resume keeps the recorded count unless you give it |
 | `--provider` | name | Provider for agents that set none |
 | `--model` | name | Model for agents that set none |
 | `--engine-trace` | | On a failure, also print the engine's stack trace |
@@ -222,13 +224,27 @@ $ yian chat support.yaml --inbox questions --input team=billing
 - `/exit`, `/quit` or Ctrl-D closes the inbox; once the flow finishes: `session ended`, exit 0.
 - Ctrl-C while a reply runs interrupts it, and the prompt comes back. A second Ctrl-C within 2
   seconds, or Ctrl-C at the prompt, cancels the run: `chat cancelled`, exit 130.
-- SIGTERM, SIGHUP, or Ctrl-C at an `ask` prompt stops the run: `chat stopped; the run is in LOG`,
-  exit 130.
+- SIGTERM, SIGHUP, or Ctrl-C at an `ask` prompt stops the run: `chat stopped; the run is in LOG`
+  and `continue with: yian chat --resume LOG` (with `--inbox NAME` when the flow has several), exit
+  130.
 - On a terminal, Esc takes back the lines the run hasn't read yet into the prompt and stops the
   reply. It never cancels the run.
 - A line the inbox refuses prints `not sent: REASON`, and the chat goes on.
 - While the prompt is up, the chat wakes the run when a `sleep` or a timeout is due.
 - A failed run prints its error and exits 1; `yian status LOG` shows where it stands.
+
+`--resume LOG` picks up a chat that stopped, or that was waiting for your next line when it ended.
+It runs the flow the log recorded, as `yian run --resume` does, so you leave out `FLOW`, `-i`,
+`--inputs`, `--provider`, `--model` and `--log`. Pass `--inbox` again if the flow has several.
+
+- The chat first moves the run on. A reply the stop cut runs again and prints; replies printed
+  before don't print again. Then the `> You:` prompt comes back as usual.
+- If the inbox was closed before the stop, no prompt comes back: the chat waits for the run to
+  finish.
+- Before the run calls a model, the chat checks the provider keys the run started with, as
+  `yian run --resume` does. A missing, changed or declined key prints why and exits 1.
+- A run that has ended can't be continued: `chat failed: the run in LOG has already ended
+  (STATUS); start a new chat`, exit 1, and nothing is written to the log.
 
 `yian chat` reads skills as `yian run` does (see [Skills and MCP servers](#skills-and-mcp-servers)),
 once when it starts, so a skill edited during the chat takes effect in the next one. It opens no MCP

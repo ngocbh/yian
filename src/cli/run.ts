@@ -112,6 +112,7 @@ import {
   osReason,
   printJson,
   type PromptContext,
+  shellQuote,
   stopOnSignals,
   UsageError,
   type Writer,
@@ -1191,8 +1192,8 @@ export async function ensureProviderKeys(
   }
 }
 
-/** A resumed run's recorded provider credentials are not available. */
-class ResumeKeyError extends Error {
+/** @internal A resumed run's recorded provider credentials are not available. */
+export class ResumeKeyError extends Error {
   override name = "ResumeKeyError";
 }
 
@@ -1342,6 +1343,14 @@ async function checkResumeCredentials(
     if (OPTIONAL_API_KEY_PROVIDERS.has(provider) && !envVars.some((name) => context.env.read(name))) continue;
     await resumeEnvKey(provider, envVars, null, context);
   }
+}
+
+/**
+ * @internal Return the `checkLlmConfigs` a resume from the CLI passes to `advance`:
+ * `checkResumeCredentials` with `context`.
+ */
+export function resumeKeyCheck(context: ResumeKeyContext): LlmConfigsCheck {
+  return (effective, { callTimeHost }) => checkResumeCredentials(effective, callTimeHost, context);
 }
 
 /**
@@ -1628,8 +1637,7 @@ async function startRun(
           terminal: io.stdin.isTTY === true ? terminal : null,
           signal: controller.signal,
         };
-        const checkLlmConfigs: LlmConfigsCheck = (effective, { callTimeHost }) =>
-          checkResumeCredentials(effective, callTimeHost, keyContext);
+        const checkLlmConfigs = resumeKeyCheck(keyContext);
         return startLogged(log, (tools) =>
           advance({
             log,
@@ -1736,7 +1744,7 @@ export function waitingDocument(result: RunResult): Record<string, JsonValue> {
 /** @internal Return the text a waiting result prints on stderr: what it waits on and how to go on. */
 export function waitingText(result: RunResult): string {
   const waits = result.waits.map((wait) => `${wait.node} (${wait.tool})`).join(", ");
-  return `run waiting: ${waits}\ncontinue with: yian run --resume ${result.log}\n`;
+  return `run waiting: ${waits}\ncontinue with: yian run --resume ${shellQuote(result.log!)}\n`;
 }
 
 /**

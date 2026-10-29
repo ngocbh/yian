@@ -4,7 +4,6 @@
  * clock the test drives. The reducer recognises a TOOL node by `hostToolCall()`, so these run only
  * through `engine()`/`inboxEngine()`, which never build a manifest.
  */
-import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
 import { CompiledFlow, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import { type CompleteResult, Node, NodeKind, type NodeCaps, type NodeResult, Output, Pending } from "../../src/nodes/base.ts";
 import { type CallView, HostToolCall, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
@@ -14,14 +13,13 @@ import type { Scheduler } from "../../src/platform.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { replayRunLog, startWiring } from "../../src/run.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
-import { formatRecordTime, JsonlRunLog, MemoryRunLog, type RunLog } from "../../src/runtime/log.ts";
-import { commitInitialPool, commitPrepared, prepareComplete, prepareRunStarted, RunState } from "../../src/runtime/state.ts";
+import { formatRecordTime, JsonlRunLog, type RunLog } from "../../src/runtime/log.ts";
+import { commitPrepared, prepareComplete } from "../../src/runtime/state.ts";
 import { toolCallId } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { VariablePool } from "../../src/typesys/pool.ts";
 import { inboxType, Type, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
-import { type engine, FINGERPRINT, FIXED_CLOCK, noGrowth, RUN_ID } from "./run_state_fixtures.ts";
+import { engine, RUN_ID } from "./run_state_fixtures.ts";
 
 /** A TOOL `take` on `inbox`: the engine decides it at commit. */
 export class FakeTake extends Node {
@@ -176,41 +174,11 @@ export function inboxFlow(
 
 /**
  * As `engine()` (run_state_fixtures.ts), with START wired by `startWiring(params, inputs)`, so each
- * inbox binds its handle. The run records the constant `FINGERPRINT`, so any node class runs.
+ * inbox binds its handle.
  */
 export function inboxEngine(flow: CompiledFlow, options: Parameters<typeof engine>[1] = {}): FlowEngine {
-  const {
-    inputs = {},
-    runId = RUN_ID,
-    learnable = false,
-    numWorkers = 0,
-    growBuilder = noGrowth,
-    defaults = {},
-    effectiveLlmByStaticPath = {},
-    memories: _memories,
-    memoryStacks: _memoryStacks,
-    memorySnapshots: _memorySnapshots,
-    ...rest
-  } = options;
-  if (learnable) applyExecutionLayout(flow, resolveExecutionLayout(flow));
-  const state = new RunState(flow);
-  const initialPool = new VariablePool(flow.startId);
-  initialPool.set(flow.startId, { ...inputs });
-  initialPool.addSystem("run_id", runId);
-  const log = new MemoryRunLog(runId, { clock: FIXED_CLOCK });
   const params = flow.nodes.get(flow.startId)!.params ?? [];
-  const prepared = prepareRunStarted(state, {
-    runId,
-    flowFingerprint: FINGERPRINT,
-    startWiringOverride: startWiring(params, inputs),
-    effectiveLlmByStaticPath,
-    numWorkers,
-    learnable,
-    defaults,
-  });
-  commitPrepared(log, state, prepared);
-  commitInitialPool(log, state, initialPool);
-  return new FlowEngine(state, log, { ...rest, growBuilder, numWorkers });
+  return engine(flow, { ...options, startWiringOverride: startWiring(params, options.inputs ?? {}) });
 }
 
 /** A `Scheduler` the test drives, with `set` to move its time and `pending` to count live sleepers. */

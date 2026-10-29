@@ -288,6 +288,33 @@ test(
 );
 
 test(
+  "live lists the children still running or waiting, by id, with the name each was started by",
+  async () => {
+    const children = childRuns();
+    await children.start(await flow(ASK), {}, { name: "ask.yaml" });
+    await children.start(await flow(GREET), { who: "ada" });
+    await settled(children, "r2");
+    const waiting = await settled(children, "r1");
+    // The finished one is gone; the one waiting on its question stays.
+    expect(children.live()).toEqual([{ id: "r1", name: "ask.yaml", since: expect.any(Number), status: waiting }]);
+    await children.answer("r1", `${CHAT}-r1/sure`, "yes");
+    await settled(children, "r1", waiting.seq);
+    expect(children.live()).toEqual([]);
+  },
+  TIMEOUT,
+);
+
+test(
+  "a child started with no name is listed by its flow's name",
+  async () => {
+    const children = childRuns();
+    await children.start(await flow(ASK), {});
+    expect(children.live().map((child) => child.name)).toEqual(["ask"]);
+  },
+  TIMEOUT,
+);
+
+test(
   "an answer the run refuses is a note, not a throw",
   async () => {
     const children = childRuns();

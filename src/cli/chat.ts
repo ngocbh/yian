@@ -20,12 +20,13 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { loadFlow } from "../compose/loader.ts";
 import { defaultSkillRoots, loadSkills } from "../compose/skills.ts";
 import type { Env } from "../defaults.ts";
+import { AuthError } from "../llm_clients/auth/index.ts";
 import { connectionSnapshot } from "../llm_clients/connection.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import { coerceInputs } from "../nodes/binding.ts";
 import { isSystemError, leavesRoot, realScheduler, type Scheduler } from "../platform.ts";
 import { hostInputs, runStartLlm, skillGrants } from "../run.ts";
-import { type Skill } from "../skills/catalog.ts";
+import { type Skill, SkillError } from "../skills/catalog.ts";
 import { DOCS, FLOWS } from "./bundled.ts";
 import { bundledSkill } from "./bundled_skill.ts";
 import { EventQueue, InFlight, trackInFlight } from "./chat_events.ts";
@@ -78,18 +79,27 @@ export async function loadChatFlow(env: Env): Promise<ComposedFlow> {
   return loadFlow(FLOWS[CHAT_LABEL]!, { sourceLabel: CHAT_LABEL, env, childResolver: async () => compaction });
 }
 
-/** `provider/model` the assistant's replies use under `layer`, or `null` when no layer sets them. */
+/** The message the LLM cascade's `RangeError` has for an agent no layer gives a provider and model. */
+const NO_MODEL = /has no (provider or model|model for provider)/;
+
+/**
+ * `provider/model` the assistant's replies use under `layer`, or `null` when no layer gives them.
+ *
+ * @throws {RangeError} As the LLM cascade does for anything else, a bad default in `env` say.
+ * @throws {AuthError} When the saved logins can't be read.
+ */
 function replyModel(flow: ComposedFlow, layer: Readonly<Record<string, string>>, env: Env): string | null {
+  let config: Readonly<Record<string, unknown>> | undefined;
   try {
     const inputs = coerceInputs(flow.input, hostInputs(flow.input, {}));
     const resolved = runStartLlm(copyGraph(flow.compiled), inputs, { ...layer }, connectionSnapshot({ env }));
-    const config = resolved.effective[REPLY_PATH];
-    if (typeof config?.["provider"] !== "string" || typeof config["model"] !== "string") return null;
-    return `${config["provider"]}/${config["model"]}`;
-  } catch {
-    // The bundled flow sets no model, so only a missing provider or model fails to resolve.
-    return null;
+    config = resolved.effective[REPLY_PATH];
+  } catch (error) {
+    if (error instanceof RangeError && NO_MODEL.test(error.message)) return null;
+    throw error;
   }
+  if (typeof config?.["provider"] !== "string" || typeof config["model"] !== "string") return null;
+  return `${config["provider"]}/${config["model"]}`;
 }
 
 /**
@@ -180,8 +190,8 @@ export async function chat(
   try {
     skill = bundledSkill(env);
   } catch (error) {
-    if (!isSystemError(error)) throw error;
-    await printStyled(io, `chat failed: can't write the bundled skill: ${error.message}`, "red");
+    if (!isSystemError(error) && !(error instanceof SkillError)) throw error;
+    await printStyled(io, `chat failed: can't set up the bundled skill: ${(error as Error).message}`, "red");
     return 1;
   }
 
@@ -206,7 +216,14 @@ export async function chat(
     }
     if (focus.inbox) hint += `to chat with this flow itself, run yian run ${shellWord(flowPath)}\n`;
   }
-  const model = replyModel(flow, cliLayer(options), env);
+  let model: string | null;
+  try {
+    model = replyModel(flow, cliLayer(options), env);
+  } catch (error) {
+    if (!(error instanceof RangeError || error instanceof AuthError)) throw error;
+    await printStyled(io, `chat failed: ${error.message}`, "red");
+    return 1;
+  }
   if (model === null) {
     const message =
       "chat failed: the assistant has no provider or model; run 'yian auth <provider>', or pass " +
@@ -221,7 +238,8 @@ export async function chat(
 
   const fresh = freshLog(options.log, env);
   const logDir = defaultRunsDir(env);
-  // `freshLog` made it for a default log; a child's run folder goes in it either way.
+  // The children's run folders go under `~/.yian/runs` even when `--log` puts the chat's log
+  // elsewhere, and `freshLog` makes that folder only for a default log.
   mkdirSync(logDir, { recursive: true, mode: 0o700 });
   let rootSkills: Map<string, Skill> | null = null;
   const skillsFor = (child: ComposedFlow): ReadonlyMap<string, Skill> | null => {

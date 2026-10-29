@@ -215,6 +215,20 @@ test(
 );
 
 test(
+  "a default provider yian doesn't know fails the chat with its message",
+  async () => {
+    const { io, stdin, stderr } = chatIo({
+      environment: (name) => ({ HOME: home, YIAN_DEFAULT_PROVIDER: "nope", YIAN_DEFAULT_MODEL: "x" })[name],
+    });
+    stdin.end();
+    const { code } = await runChat(io, new AnsweringModel(() => textReply("hello")));
+    expect(code).toBe(1);
+    expect(stderr()).toContain("chat failed: YIAN_DEFAULT_PROVIDER='nope' is not a supported provider");
+  },
+  TIMEOUT,
+);
+
+test(
   "yian chat FLOW shows the model the flow's text and its check",
   async () => {
     writeFileSync(join(root, "hello.yaml"), HELLO);

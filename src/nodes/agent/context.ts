@@ -3,8 +3,8 @@
  * replies' media go to.
  *
  * Knows about:   diagnostics, events, llm errors, llm messages, llm_clients factory, memory
- *                contracts, nodes/base, nodes/contracts, platform, skills, tools, typesys, node's
- *                crypto and node's fs.
+ *                contracts, nodes/base, nodes/contracts, platform, skills, tools, typesys, peer
+ *                AGENT modules, node's crypto and node's fs.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -27,7 +27,7 @@ import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesy
 import { CapabilityFault, type NodeCaps, type SteerInbox } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
 import type { CloserReason } from "./memory.ts";
-import type { SteerRender } from "./messages.ts";
+import { type SteerRender, steerValues } from "./messages.ts";
 
 /** The system prompt of an AGENT that authors none. */
 export const DEFAULT_SYSTEM =
@@ -326,20 +326,19 @@ export class AgentSteps {
    *
    * @returns Each one's step `n` and the values the engine attached to the step's copy; empty when
    *   none was recorded there, or they were taken.
-   * @throws CapabilityFault carrying a RangeError when a step's copy has no values: the steps
-   *   came from somewhere other than the engine.
+   * @throws CapabilityFault carrying a RangeError naming the node and the step when a step's copy
+   *   has no values (`steerValues`): the steps came from somewhere other than the engine.
    */
   takeRecordedSteers(): RecordedSteer[] {
     const recorded = this.#steers.get(this.#taken) ?? [];
     this.#steers.delete(this.#taken);
     return recorded.map(({ n, step }) => {
-      const values = step["values"];
-      if (!Array.isArray(values)) {
-        throw new CapabilityFault(
-          new RangeError(`node ${reprText(this.#nodeId)} step ${n}: a steer step without its values; resume through the engine`),
-        );
+      try {
+        return { n, values: steerValues(step) };
+      } catch (error) {
+        const message = `node ${reprText(this.#nodeId)} step ${n}: ${(error as RangeError).message}; resume through the engine`;
+        throw new CapabilityFault(new RangeError(message, { cause: error }));
       }
-      return { n, values };
     });
   }
 

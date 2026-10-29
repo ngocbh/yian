@@ -795,7 +795,7 @@ test("a steer copy without values is a host fault", () => {
   const error = thrownBy(() => steps.takeRecordedSteers());
   expect(error).toBeInstanceOf(CapabilityFault);
   expect(((error as CapabilityFault).original as Error).message).toBe(
-    "node 'writer' step 1: a steer step without its values; resume through the engine",
+    "node 'writer' step 1: a steer step without its values, which only the engine's copy of the step carries; resume through the engine",
   );
 });
 

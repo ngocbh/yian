@@ -86,7 +86,7 @@ import {
   type ToolCallIdentity,
 } from "./live.ts";
 import { type CloserReason, closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
-import { type SteerRender, steerMessages } from "./messages.ts";
+import { type SteerRender, steerMessages, steerValues } from "./messages.ts";
 import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
 import { pushVisible, textOf } from "./text.ts";
 
@@ -405,8 +405,11 @@ export async function stepsMaterial(
     }
     if (step["kind"] === "steer") {
       commit();
-      const values = step["values"];
-      if (!Array.isArray(values)) {
+      let values: readonly unknown[];
+      try {
+        values = steerValues(step);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
         digestOk = false;
         break;
       }

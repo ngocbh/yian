@@ -728,8 +728,8 @@ const MEDIA_EXTENSIONS: ReadonlyMap<string, string> = new Map([
  *
  * @returns The file's reference: its path relative to the run folder (`media/<sha256>.<ext>`) as
  *   `uri`, so it still holds when the folder is copied elsewhere; `mime`; and its file name as `name`.
- * @throws Error, writing no file, when `media` exists but isn't a folder (a symlink included), or is
- *   another user's, or its group or others can write it.
+ * @throws Error, writing no file, when `media` exists but isn't a folder (a symlink included), or,
+ *   on POSIX, is another user's or its group or others can write it.
  */
 export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): FileRef {
   const media = resolve(dir, "media");
@@ -740,11 +740,15 @@ export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): File
   }
   // A `media` already there may not be ours (a log in a shared folder such as /tmp): a symlink
   // would lead writes out, which `fileToInline` then refuses to read, and another writer could
-  // swap the bytes a step names. `getuid` exists only on POSIX, like the run log's lock.
+  // swap the bytes a step names.
   const info = fs.lstatSync(media);
   const refused = (why: string) => new Error(`the run's media folder ${media} ${why}; give the run a folder of its own`);
   if (!info.isDirectory()) throw refused("is not a folder");
-  if (info.uid !== process.getuid!() || (info.mode & 0o022) !== 0) throw refused("is another user's or others can write it");
+  // Owner and mode are checked only on POSIX: Windows has no `getuid`, and its modes read 0o666.
+  const uid = process.getuid?.();
+  if (uid !== undefined && (info.uid !== uid || (info.mode & 0o022) !== 0)) {
+    throw refused("is another user's or others can write it");
+  }
   // A new `media` entry is durable only once the run folder holding it is synced. Synced every
   // time: a crash after an earlier call made `media` may have left the folder unsynced.
   syncFolder(resolve(dir));

@@ -20,7 +20,7 @@ import { END_ID } from "../compile/model.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { openSqlite, type Sqlite, type SqliteRow, sqliteErrorCode, warn } from "../platform.ts";
 import { logJson } from "../typesys/json.ts";
-import { isRecord, valueRepr } from "../typesys/values.ts";
+import { isRecord, shownText, valueRepr } from "../typesys/values.ts";
 import {
   checkMaxLineBytes,
   isRunLogLocked,
@@ -382,11 +382,11 @@ function checkedTimeout(timeoutMs: unknown): number {
  * with no complete record yet, has no row; a row whose log is gone is deleted. A log that can't be
  * read (an old schema, a damaged line, a first record that isn't `run_started` of the folder's run,
  * a line over `maxLineBytes`, or a file error such as no permission) raises a warning through
- * `warn`, and its row holds the records before the one that failed, marked unreadable at it
- * (`RunIndexRow.unreadable`). Such a log is read again only once its size or mtime changed, or
- * with a higher `maxLineBytes` than it was read with. A log that can't even be looked up (`stat`
- * fails) keeps its row as it was, with a warning. A row whose stored scan can't be read is built again from the
- * start of its log. An index of another layout version is dropped and built again.
+ * `warn`. A log whose content can't be read gets a row of the records before the one that failed,
+ * marked unreadable at it (`RunIndexRow.unreadable`), and is read again only once its size or
+ * mtime changed, or with a higher `maxLineBytes` than it was read with. A file error keeps the row
+ * as it was, and the next update tries again. A row whose stored scan can't be read is built
+ * again from the start of its log. An index of another layout version is dropped and built again.
  *
  * The update is one SQLite transaction (`BEGIN IMMEDIATE`), so builders in any process take turns.
  * It waits at most `timeoutMs` for another builder's lock, then throws. Synchronous: it blocks its
@@ -456,14 +456,15 @@ export function updateRunIndex(
           // No log: a file such as the index, a folder whose run hasn't started, or a run removed since.
           if (code === "ENOENT" || code === "ENOTDIR") continue;
           if (typeof code !== "string") throw error;
-          // A log that can't even be looked up must not stop the others; its row stays as it was.
+          // One log yian can't read as a file must not stop the others; its row stays as it was, and
+          // the next update tries again.
           warn(`run index skipped ${log}: ${(error as Error).message}`);
           if (saved !== null) kept.add(runId);
           continue;
         }
         // A log with no complete record (one emptied since its last update included) has no row.
         if (built === null) continue;
-        if (built.unreadable !== null) warn(`run index can't read ${log}: ${built.unreadable.reason}`);
+        if (built.unreadable !== null) warn(`run index skipped ${log}: ${built.unreadable.reason}`);
         kept.add(runId);
         upsert.run(...toColumns(built));
       }
@@ -611,11 +612,12 @@ function readUpTo(saved: StoredRow, stat: fs.Stats, maxLineBytes: number | null)
  * new row; return the row (`saved` unchanged when nothing new was read), or `null` for a log with
  * no complete record. Lines are read with `maxLineBytes`.
  *
- * A log that can't be read past some record (`RangeError` or a file error) gives the row of the
- * records before it, marked `unreadable` at it with `stat`, the log as it was before the read.
+ * A log whose content can't be read past some record (a `RangeError`) gives the row of the records
+ * before it, marked `unreadable` at it with `stat`, the log as it was before the read, and the
+ * error's message cut by `shownText`.
  *
  * @throws RunLogChangedError when the log no longer continues `saved`.
- * @throws Error (code `ENOENT` or `ENOTDIR`) when the log is gone.
+ * @throws Error (a file error, such as `ENOENT` or `EACCES`) when the log can't be read as a file.
  */
 function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.Stats, maxLineBytes: number | null): StoredRow | null {
   const continuing = saved !== null && saved.lastSeq !== null;
@@ -654,13 +656,13 @@ function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.S
       if (record instanceof NodeStepRecord) addUsage(row, record.step);
     }
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | null)?.code;
-    // The caller reads a replaced log again from the start, and drops the row of a log that is gone.
-    if ((error instanceof RunLogChangedError && continuing) || code === "ENOENT" || code === "ENOTDIR") throw error;
-    if (!(error instanceof RangeError || typeof code === "string")) throw error;
+    // The caller reads a replaced log again from the start. A file error isn't marked: a change
+    // that fixes it (a chmod) may leave the size and mtime as they were.
+    if (!(error instanceof RangeError) || (error instanceof RunLogChangedError && continuing)) throw error;
     row ??= emptyRow(runId);
     const seq = row.lastSeq === null ? 0 : row.lastSeq + 1;
-    row.unreadable = { seq, reason: (error as Error).message, size: stat.size, mtimeMs: stat.mtimeMs, maxLineBytes };
+    // The message quotes the line's fields, which may be of any length.
+    row.unreadable = { seq, reason: shownText(error.message), size: stat.size, mtimeMs: stat.mtimeMs, maxLineBytes };
   }
   if (row !== null && lastAt !== null) {
     const status = scanStatus(row.scan);

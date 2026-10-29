@@ -380,14 +380,14 @@ describe("updateRunIndex and readRunIndex", () => {
     expect(readRunIndex(runs)[0]!.status).toBe("stopped");
   });
 
-  test("an unreadable log keeps a row marked unreadable, with a warning; a gone run loses its row; no index reads as []", () => {
+  test("a log of unreadable content keeps a row marked unreadable, a file error is skipped, each with a warning; a gone run loses its row; no index reads as []", () => {
     const runs = freshRuns();
     expect(readRunIndex(runs)).toEqual([]);
     writeRun(runs, "good", succeededRun);
     writeRun(runs, "gone", failedRun);
     mkdirSync(join(runs, "damaged"));
     writeFileSync(join(runs, "damaged", "log.jsonl"), "not a run log\n");
-    // A file error is marked the same way.
+    // A file error is skipped, not marked.
     mkdirSync(join(runs, "folder-log", "log.jsonl"), { recursive: true });
     // A run folder reached through a symlink is a run folder.
     const elsewhere = freshRuns();
@@ -396,23 +396,22 @@ describe("updateRunIndex and readRunIndex", () => {
     const warnings: string[] = [];
     withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
     const rows = byId(readRunIndex(runs));
-    expect(Object.keys(rows).sort()).toEqual(["damaged", "folder-log", "gone", "good", "linked"]);
+    expect(Object.keys(rows).sort()).toEqual(["damaged", "gone", "good", "linked"]);
     expect(warnings).toHaveLength(2);
-    expect(warnings[0]).toStartWith(`run index can't read ${join(runs, "damaged", "log.jsonl")}: run log `);
-    expect(warnings[1]).toStartWith(`run index can't read ${join(runs, "folder-log", "log.jsonl")}: `);
+    expect(warnings[0]).toStartWith(`run index skipped ${join(runs, "damaged", "log.jsonl")}: run log `);
+    expect(warnings[1]).toStartWith(`run index skipped ${join(runs, "folder-log", "log.jsonl")}: `);
     // No record was read, so the row knows nothing but where the log stops being readable.
     expect(rows["damaged"]).toMatchObject({ flow: null, startedAt: null, endedAt: null, lastSeq: null, offset: 0, result: null });
     expect(rows["damaged"]!.unreadable).toEqual({ seq: 0, reason: warnings[0]!.slice(warnings[0]!.indexOf(": ") + 2) });
-    expect(rows["folder-log"]!.unreadable).toMatchObject({ seq: 0 });
     expect(rows["good"]!.unreadable).toBeNull();
     // The index holds every run's result, so it is as private as the run folders.
     expect(statSync(join(runs, "index.sqlite")).mode & 0o777).toBe(0o600);
     rmSync(join(runs, "gone"), { recursive: true });
     warnings.length = 0;
     withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
-    // An unreadable log that hasn't changed isn't read or warned about again.
-    expect(warnings).toEqual([]);
-    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["damaged", "folder-log", "good", "linked"]);
+    // An unreadable log that hasn't changed isn't read or warned about again; a file error is tried again.
+    expect(warnings).toEqual([expect.stringContaining(join(runs, "folder-log", "log.jsonl"))]);
+    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["damaged", "good", "linked"]);
     // A log fixed since is read again.
     rmSync(join(runs, "damaged"), { recursive: true });
     writeRun(runs, "damaged", failedRun);
@@ -457,7 +456,7 @@ describe("updateRunIndex and readRunIndex", () => {
     const warnings: string[] = [];
     withWarnings((message) => warnings.push(message), () => updateRunIndex(runs, { maxLineBytes: 4096 }));
     const tooLong = /^run log .* line 4 \(seq 3\): the line is \d+ bytes, over maxLineBytes 4096$/;
-    expect(warnings).toEqual([expect.stringMatching(/^run index can't read .*big\/log\.jsonl: run log /)]);
+    expect(warnings).toEqual([expect.stringMatching(/^run index skipped .*big\/log\.jsonl: run log /)]);
     // The row holds the records before the long line, and where it stopped.
     const big = byId(readRunIndex(runs))["big"]!;
     expect(big).toMatchObject({ status: "crashed", startedAt: timeAt(0), lastSeq: 2, endedAt: null });
@@ -488,6 +487,46 @@ describe("updateRunIndex and readRunIndex", () => {
     expect(warnings).toHaveLength(1);
     expect(byId(readRunIndex(runs))["big"]).toMatchObject({ lastSeq: 3, unreadable: { seq: 4 } });
     expect(() => updateRunIndex(runs, { maxLineBytes: 0 })).toThrow("maxLineBytes must be a positive integer, got 0");
+  });
+
+  test.skipIf(process.getuid?.() === 0)("a log yian may not open keeps the row it had, and is read once it may, with its size and mtime unchanged", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", stoppedRun);
+    updateRunIndex(runs);
+    const [before] = readRunIndex(runs);
+    const path = join(runs, "run-1", "log.jsonl");
+    const reopened = JsonlRunLog.resume(path, { clock: steppingClock() });
+    reopened.append(new RunResumedRecord(["agent"], 0));
+    reopened.close();
+    fs.chmodSync(path, 0o000);
+    const warnings: string[] = [];
+    try {
+      withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+      expect(warnings).toEqual([expect.stringMatching(new RegExp(`^run index skipped ${path}: .*EACCES`))]);
+      expect(readRunIndex(runs)).toEqual([before!]);
+    } finally {
+      // A chmod changes neither the size nor the mtime.
+      fs.chmodSync(path, 0o600);
+    }
+    warnings.length = 0;
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    expect(warnings).toEqual([]);
+    expect(readRunIndex(runs)[0]).toMatchObject({ lastSeq: 4, unreadable: null });
+  });
+
+  test("the reason stored for an unreadable log is cut to 200 characters", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", stoppedRun);
+    const path = join(runs, "run-1", "log.jsonl");
+    // A kind of 300 characters, which the error message quotes.
+    writeFileSync(path, readFileSync(path, "utf8").replace('"kind":"run_started"', `"kind":"${"k".repeat(300)}"`));
+    const warnings: string[] = [];
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    const { reason } = readRunIndex(runs)[0]!.unreadable!;
+    expect([...reason]).toHaveLength(200);
+    expect(reason).toStartWith(`run log ${path} line 1 (seq 0): run-record kind 'kkk`);
+    expect(reason).toEndWith("k…");
+    expect(warnings).toEqual([`run index skipped ${path}: ${reason}`]);
   });
 
   test("a log that turns unreadable keeps the row it had, marked unreadable at the bad line", () => {

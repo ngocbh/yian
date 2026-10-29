@@ -1969,7 +1969,8 @@ export async function status(log: string | undefined, { json }: { json: boolean 
  * each row: `run_id`, `flow`, `status`, `started_at`, `ended_at`, `parent_run_id`, `last_seq`,
  * `result` (the run's output, `null` until it succeeded), the token sums, for a waiting run `ready`
  * and `wake_at` (`false` and `null` otherwise), and `unreadable` (`seq` and `reason`, or `null`). A
- * log the update can't read is a `warning:` line on stderr, once until it changes. An index that can't be
+ * log the update can't read is a `warning:` line on stderr: once until it changes, or on every
+ * update for a file error such as no permission, which leaves the run's row as it was. An index that can't be
  * updated (another update held it too long, or it isn't a database) prints its message on stderr
  * and exits 1 (`run.setup`).
  */

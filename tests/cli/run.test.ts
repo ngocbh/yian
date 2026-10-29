@@ -1683,7 +1683,7 @@ describe("status", () => {
     const warned = testIo({ HOME: join(tmp, "home") });
     expect(await main(["status"], warned.io)).toBe(0);
     expect(warned.stdout()).toBe(listed);
-    expect(warned.stderr()).toStartWith(`warning: run index can't read ${join(damaged, "log.jsonl")}: run log `);
+    expect(warned.stderr()).toStartWith(`warning: run index skipped ${join(damaged, "log.jsonl")}: run log `);
     // Until the log changes, the next update doesn't warn again.
     const again = testIo({ HOME: join(tmp, "home") });
     expect(await main(["status", "--json"], again.io)).toBe(0);

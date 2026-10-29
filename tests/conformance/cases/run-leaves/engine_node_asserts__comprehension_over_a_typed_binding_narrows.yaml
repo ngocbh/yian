@@ -1,0 +1,27 @@
+# A node assert narrows a comprehension variable over a typed local whose declared and inferred
+# types agree, so a read of an Optional field after isinstance loads and runs.
+kind: run
+flow: |
+  id: p
+  name: p
+  typedefs:
+    T: {k: str, f: Optional(str)}
+  nodes:
+    a:
+      kind: code
+      output: list(T)
+      code: "return [{k: 'x', f: 'y'}]"
+    use:
+      kind: code
+      input:
+        xs: !list(T) ${a.output}
+      asserts:
+        - len([p.f for p in xs if isinstance(p, T)]) == 1
+      output: int
+      code: "return inputs.xs.length"
+  output: ${use.output}
+inputs: {}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output: {status: succeeded, output: 1}
+  trace: [[run_started, null, {learnable: false, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, a], [pool_commit, a, {value: [{f: y, k: x}]}], [node_succeeded, a, {commit: 9}], [node_started, use], [pool_commit, use, {value: 1}], [node_succeeded, use, {commit: 12}], [node_started, __end__], [pool_commit, __end__, {value: 1}], [node_succeeded, __end__, {commit: 15}]]

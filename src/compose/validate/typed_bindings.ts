@@ -62,7 +62,6 @@ import {
   isRecord,
   type Type,
   TypeCheckError,
-  type Value,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics, locatedError, shownLiteral } from "../helpers/errors.ts";
 import {

@@ -404,14 +404,13 @@ export function checkSkippedArithmetic(
   }
   for (const [nodeId, whens] of searchedWhens ?? new Map<string, readonly SearchedWhen[]>()) {
     for (const [index, when, origin, whenRange] of whens) {
-      if (typeof when !== "string") continue;
       // The CASE build reports a malformed condition.
       const tree = parsedWhen(when);
       if (tree === null) continue;
       const found = skippedOperandIn(tree, model, nodeId, known, registry);
       if (found === null) continue;
       throw locatedError(
-        `node ${reprText(nodeId)} cases[${index}].when: ${arithmeticText(when.trim(), ...found)}`,
+        `node ${reprText(nodeId)} cases[${index}].when: ${arithmeticText(String(when).trim(), ...found)}`,
         new Binding(when, { origin }),
         whenRange,
         resolveOrigin,

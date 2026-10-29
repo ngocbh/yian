@@ -29,7 +29,7 @@ import { LoadDiagnostics } from "../helpers/errors.ts";
 import { isExtensionKey } from "../helpers/source.ts";
 import { yamlReadAs } from "../helpers/yaml_words.ts";
 import { notTextError, rejectInfinityName, valueTypeError } from "../nodes/base.ts";
-import { REMOVED_KINDS } from "../nodes/index.ts";
+import { KINDS, REMOVED_KINDS } from "../nodes/index.ts";
 import {
   SourceAccessError,
   SourceCursor,
@@ -86,13 +86,16 @@ const ALLOWED_TOP_MESSAGE = [...TOP_SURFACE_KEYS].sort(compareCodeUnits).join(",
 const COMPACT_FLOW_KEYS: readonly string[] = ["id", "name", "description", "version", "typedefs"];
 
 /** The kinds a compact flow may use: the value-producing leaf kinds. */
-const COMPACT_KINDS: ReadonlySet<string> = new Set([
-  // case/call/map reference other nodes or callables that a one-node flow has none of, so an
-  // author who needs them writes `nodes:`.
-  "agent",
-  "code",
-  "tool",
-]);
+const COMPACT_KINDS: ReadonlySet<string> = new Set(["agent", "code", "tool"]);
+
+/**
+ * The kinds a compact flow refuses: they reference other nodes or callables that a one-node flow
+ * has none of, so an author who needs them writes `nodes:`.
+ */
+const NON_COMPACT_KINDS: readonly string[] = [...KINDS.keys()].filter((kind) => !COMPACT_KINDS.has(kind));
+
+/** The flow-level keys a compact flow can't hold, which would otherwise read as node fields. */
+const NON_COMPACT_FLOW_KEYS: readonly string[] = ["uses", "defs"];
 
 /** The fields of a `ComposeFile`; an absent optional field takes its default. */
 interface ComposeFileFields {
@@ -340,8 +343,9 @@ export function signatureNodeBody(
  *
  * @returns The canonical body, with a `nodes:` mapping, for the schema check.
  * @throws LoadError for a `kind:` YAML read as non-text (`null` included), a removed kind, a
- *   non-leaf kind, a flow `id:` YAML read as non-text, a missing, null, empty or non-identifier
- *   flow `id:`, an `input:` that isn't a mapping, or a flow input named `inf`.
+ *   non-leaf kind, a `uses:` or `defs:` key, a flow `id:` YAML read as non-text, a missing, null,
+ *   empty or non-identifier flow `id:`, an `input:` that isn't a mapping, or a flow input named
+ *   `inf`.
  */
 function desugarCompact(body: ValueRecord, root: SourceCursor): ValueRecord {
   const diagnostics = LoadDiagnostics.fromCursor(root);
@@ -363,9 +367,16 @@ function desugarCompact(body: ValueRecord, root: SourceCursor): ValueRecord {
   if (!COMPACT_KINDS.has(kind)) {
     throw diagnostics.error(
       `compact (single-node) flow: kind ${reprText(kind)} is not allowed inline ` +
-        `(allowed: ${allowed}); case/call/map reference other nodes a one-node flow has none ` +
-        "of — write a full `nodes:` map instead",
+        `(allowed: ${allowed}); ${NON_COMPACT_KINDS.join("/")} reference other nodes a one-node flow ` +
+        "has none of — write a full `nodes:` map instead",
       { range: root.rangeOf("kind") },
+    );
+  }
+  const flowKey = NON_COMPACT_FLOW_KEYS.find((key) => Object.hasOwn(body, key));
+  if (flowKey !== undefined) {
+    throw diagnostics.error(
+      "compact (single-node) flow: a compact flow has no `uses:`/`defs:`; write the full `nodes:` form",
+      { range: root.keyRangeOf(flowKey) },
     );
   }
   const flowId = Object.hasOwn(body, "id") ? body["id"]! : null;

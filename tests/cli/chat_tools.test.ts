@@ -604,3 +604,46 @@ describe("read_docs", () => {
     expect(error.message).toBe("no docs page 'nope'; the pages are: agents, writing-flows");
   });
 });
+
+describe("arguments and the root", () => {
+  test("a required argument that isn't a string is an error the model reads", async () => {
+    for (const [name, args, message] of [
+      ["read_flow", {}, "path must be a string"],
+      ["check_flow", { path: 1 }, "path must be a string"],
+      ["write_flow", { path: "a.yaml" }, "content must be a string"],
+      ["write_flow", { content: FLOW }, "path must be a string"],
+    ] as const) {
+      const error = await rejection(call(name, args));
+      expect(isReportedToolError(error)).toBe(true);
+      expect(error.message).toBe(message);
+    }
+  });
+
+  test("an optional argument given but not a string is an error the model reads", async () => {
+    for (const [name, args, message] of [
+      ["list_flows", { dir: 3 }, "dir must be a string"],
+      ["read_docs", { page: null }, "page must be a string"],
+    ] as const) {
+      const error = await rejection(call(name, args));
+      expect(isReportedToolError(error)).toBe(true);
+      expect(error.message).toBe(message);
+    }
+  });
+
+  test("read_docs without pages says so", async () => {
+    expect(await call("read_docs", {})).toBe("no docs pages");
+  });
+
+  test("a root that has gone is an error the model reads", async () => {
+    rmSync(root, { recursive: true });
+    for (const [name, args] of [
+      ["list_flows", {}],
+      ["read_flow", { path: "a.yaml" }],
+      ["write_flow", { path: "a.yaml", content: FLOW }],
+    ] as const) {
+      const error = await rejection(call(name, args));
+      expect(isReportedToolError(error)).toBe(true);
+      expect(error.message).toStartWith(`the chat's folder ${root} can't be used: `);
+    }
+  });
+});

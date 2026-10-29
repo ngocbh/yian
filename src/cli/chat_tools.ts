@@ -1,8 +1,9 @@
 /**
  * The host tools `yian chat`'s assistant works on flow files with (`chatFileTools`), each confined
  * to the folder the chat started in (the root): a path that leaves it, through `..`, an absolute
- * path or a symlink, is refused. A refusal or a failure is a `ReportedToolError`, which the model
- * reads as the call's result.
+ * path or a symlink, is refused. The model always gets text back: a tool returns its result, or
+ * throws a `ReportedToolError` (a refusal, a bad argument, a failed read) that the model reads as
+ * the call's result, and `write_flow` returns every outcome once it has asked the user.
  *
  * Knows about: the file system, the host tool API and its errors, confined loading and the
  * terminal's approval prompt.
@@ -88,7 +89,7 @@ export function confine(root: string, path: string): string {
   // A NUL makes the file system calls throw, and any control character could forge what the
   // approval card shows.
   if (CONTROL.test(path)) throw new ToolRefused(`${reprText(path)} has a control character, which a path can't`);
-  const realRoot = realpathSync(root);
+  const realRoot = resolveRoot(root);
   const target = resolve(realRoot, path);
   let real: string;
   try {
@@ -104,6 +105,40 @@ export function confine(root: string, path: string): string {
     throw new ToolRefused(`${path} is outside the folder the chat started in`);
   }
   return real;
+}
+
+/**
+ * The real path of the chat's folder `root`.
+ *
+ * @throws {ReportedToolError} When it can't be resolved, removed since the chat started say.
+ */
+function resolveRoot(root: string): string {
+  try {
+    return realpathSync(root);
+  } catch (error) {
+    if (!isSystemError(error)) throw error;
+    throw new ReportedToolError(`the chat's folder ${root} can't be used: ${osReason(error)}`);
+  }
+}
+
+/**
+ * The string argument `name` of a tool call.
+ *
+ * @throws {ReportedToolError} When it isn't a string.
+ */
+function stringArg(args: Record<string, unknown>, name: string): string {
+  const value = args[name];
+  if (typeof value !== "string") throw new ReportedToolError(`${name} must be a string`);
+  return value;
+}
+
+/**
+ * The optional string argument `name` of a tool call, undefined when not given.
+ *
+ * @throws {ReportedToolError} When it is given but isn't a string.
+ */
+function optionalStringArg(args: Record<string, unknown>, name: string): string | undefined {
+  return args[name] === undefined ? undefined : stringArg(args, name);
 }
 
 /**
@@ -339,7 +374,7 @@ function sameSnapshot(a: Snapshot, b: Snapshot): boolean {
  * @throws {ReportedToolError} Before asking, for a file that can't be read.
  */
 async function writeFlow(host: ChatToolHost, path: string, content: string, signal: AbortSignal): Promise<string> {
-  const root = realpathSync(host.root);
+  const root = resolveRoot(host.root);
   const real = confine(root, path);
   if (!isFlowFile(real)) throw new ToolRefused(`${path} is not a .yaml or .yml file`);
   if (Buffer.byteLength(content) > READ_FLOW_BYTES) {
@@ -477,15 +512,16 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
       name: "list_flows",
       description:
         "List the flow files (.yaml, .yml) under the chat's folder, or under one folder in it, as paths " +
-        "relative to the chat's folder. Skips node_modules and dot-folders.",
+        `relative to the chat's folder. Skips node_modules and dot-folders, and lists at most ${LIST_FLOWS_LIMIT}; ` +
+        "when there are more, pass dir to list one folder.",
       parameters: stringArguments([
         "dir",
         "A folder to list, relative to the chat's folder; all of it when omitted.",
         false,
       ]),
       execute: (args) => {
-        const dir = typeof args["dir"] === "string" ? args["dir"] : ".";
-        return listFlows(realpathSync(root), confine(root, dir));
+        const dir = optionalStringArg(args, "dir") ?? ".";
+        return listFlows(resolveRoot(root), confine(root, dir));
       },
     }),
     tool({
@@ -493,7 +529,7 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
       description: `Read a flow file (.yaml, .yml) in the chat's folder, up to ${READ_FLOW_BYTES} bytes.`,
       parameters: stringArguments(["path", "The flow file, relative to the chat's folder.", true]),
       execute: (args) => {
-        const path = String(args["path"]);
+        const path = stringArg(args, "path");
         return readFlow(path, confine(root, path));
       },
     }),
@@ -501,19 +537,22 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
       name: "check_flow",
       description:
         "Check that a flow file in the chat's folder loads, running nothing: ok with its name and inputs, " +
-        "or invalid with the error. Its uses: flows and code files must be in the chat's folder too.",
+        "or invalid with the error. Flows it imports (uses:) and code files it references must also be " +
+        "inside the chat's folder; system.paths isn't supported.",
       parameters: stringArguments(["path", "The flow file, relative to the chat's folder.", true]),
       execute: async (args) => {
-        const path = String(args["path"]);
+        const path = stringArg(args, "path");
         const real = confine(root, path);
-        return checkText(realpathSync(root), real, readFlow(path, real), host.env);
+        return checkText(resolveRoot(root), real, readFlow(path, real), host.env);
       },
     }),
     tool({
       name: "write_flow",
       description:
-        "Write a flow file (.yaml, .yml) in the chat's folder, creating it or replacing it whole. The content " +
-        "must load (as check_flow checks it), and the user approves the write on their terminal first.",
+        "Write a flow file (.yaml, .yml) in the chat's folder, creating it (and any missing folders) or " +
+        "replacing it whole; read the file first when replacing it. The content must load (as check_flow " +
+        "checks it), and the user approves the write on their terminal first. Returns `wrote <path>`, " +
+        "`invalid:` and the error, or `not written: <why>`; don't retry a rejected write unchanged.",
       parameters: {
         type: "object",
         properties: {
@@ -523,7 +562,7 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
         required: ["path", "content"],
         additionalProperties: false,
       },
-      execute: (args, ctx) => writeFlow(host, String(args["path"]), String(args["content"]), ctx.signal),
+      execute: (args, ctx) => writeFlow(host, stringArg(args, "path"), stringArg(args, "content"), ctx.signal),
     }),
     tool({
       name: "read_docs",
@@ -531,8 +570,8 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
       parameters: stringArguments(["page", "The page's name, as the list gives it.", false]),
       execute: (args) => {
         const names = Array.from(host.docs.keys()).sort(compareCodeUnits);
-        const page = args["page"];
-        if (typeof page !== "string") return names.join("\n");
+        const page = optionalStringArg(args, "page");
+        if (page === undefined) return names.length === 0 ? "no docs pages" : names.join("\n");
         const text = host.docs.get(page);
         if (text === undefined) {
           throw new ReportedToolError(`no docs page ${reprText(page)}; the pages are: ${names.join(", ")}`);

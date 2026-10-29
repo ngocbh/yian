@@ -72,6 +72,10 @@ import {
 import { sanitize } from "./sanitize.ts";
 import { cliLayer, freshLog, loadFlowFile, preflightKeys } from "./startup.ts";
 import {
+  type Draft,
+  draftLabel,
+  draftText,
+  joinDrafts,
   type Key,
   type LineEditor,
   type PromptList,
@@ -244,6 +248,11 @@ function lastWaitingSeq(path: string): number {
   return last;
 }
 
+/** Whether `draft` holds a pasted token. */
+function holdsPaste(draft: Draft): boolean {
+  return draft.some((part) => typeof part !== "string");
+}
+
 /** Return the text a withdrawn event holds: a `str` as it is, a message's text parts joined. */
 function valueText(value: unknown, message: boolean): string {
   if (!message) return String(value);
@@ -338,7 +347,9 @@ function inboxClosed(log: string, inbox: string): boolean {
  * line is not sent), and the keys are kept for no later prompt. Ctrl-C and Esc keep their
  * meanings there; a prompt the run shows (an ask, an approval) takes the terminal from the box,
  * which comes back after it. A line sent once the engine stopped moves the run again, as a child
- * event does. With `host.rows`, their list is drawn under the box's hint: Down on the box's last
+ * event does. A long paste is a token in the box (`LineEditor`): the inbox gets the text it
+ * stands for, the line echoed shows the token, and Esc puts a line it withdraws back with its
+ * tokens. With `host.rows`, their list is drawn under the box's hint: Down on the box's last
  * row moves into it, Up and Down move along it, Up from its top row or Esc goes back to the box
  * (an Esc there withdraws nothing), and Enter on a row calls `host.rows.open`, which the chat
  * doesn't wait for: its turns, deadlines and child events go on while the row is open, and the
@@ -418,7 +429,9 @@ export async function inboxChat(
   let interrupting: Promise<void> | null = null;
   // What was typed at a prompt a deadline or Esc took down, plus what Esc withdrew, shown again at
   // the next prompt.
-  let draft = "";
+  let draft: Draft = [];
+  // The lines sent holding pasted tokens, by seq: Esc puts one it withdraws back with its tokens.
+  const pasted = new Map<number, Draft>();
   // Set once the inbox is closed (`/exit`, `/quit`, the end of input): no prompt comes back.
   let closed = false;
   // The sends of lines typed in the input box while a turn ran, in order, and their seqs.
@@ -503,7 +516,10 @@ export async function inboxChat(
           // Sent before the draft was typed, so it goes first. While a turn runs, the draft is
           // what the input box holds.
           const box = turning ? editor : null;
-          draft = [...texts, box?.text() ?? draft].filter(Boolean).join(" ");
+          const drafts = back.map(
+            (event) => pasted.get(event.seq) ?? [valueText(event.value, inbox.message)],
+          );
+          draft = joinDrafts([...drafts, box?.draft() ?? draft]);
           if (box !== null) {
             box.set(draft);
             view?.refresh();
@@ -624,13 +640,15 @@ export async function inboxChat(
       scheduler,
     };
     /**
-     * Send `line`, entered in the input box while a turn runs, after the lines entered before it:
-     * to the inbox at once (an agent reading it as its steer inbox reads it), or, for `/exit` or
-     * `/quit`, close the inbox as the prompt does. A blank line isn't sent.
+     * Send `entered`, entered in the input box while a turn runs, after the lines entered before
+     * it: to the inbox at once (an agent reading it as its steer inbox reads it), its tokens
+     * expanded, or, for `/exit` or `/quit`, close the inbox as the prompt does. A blank line isn't
+     * sent. The echo shows the tokens.
      */
-    const sendLive = (line: string): void => {
+    const sendLive = (entered: Draft): void => {
+      const line = draftText(entered);
       if (line.trim() === "") return;
-      view?.echo(line);
+      view?.echo(draftLabel(entered));
       const exit = EXIT_LINES.has(line.trim());
       // No line comes after it: the box goes.
       if (exit) {
@@ -651,7 +669,9 @@ export async function inboxChat(
           // The hold ends with this line: held events, and those withdrawn, go before it.
           await flusher?.lineSent();
           const event = lineEvent(line, inbox.message);
-          liveSeqs.push(await send(path, inbox.name, event, { env: env.read }));
+          const seq = await send(path, inbox.name, event, { env: env.read });
+          liveSeqs.push(seq);
+          if (holdsPaste(entered)) pasted.set(seq, entered);
         })
         .catch(async (error: unknown) => {
           if (!(error instanceof DeliveryRefused)) return stop.abort(error);
@@ -666,8 +686,9 @@ export async function inboxChat(
       const action = editor!.key(key);
       if (action !== null && "escape" in action) return false;
       if (action !== null && "value" in action) {
+        const entered = editor!.draft();
         editor!.set("");
-        sendLive(action.value);
+        sendLive(entered);
       } else if (action !== null && "open" in action) {
         openRow(action.open);
       }
@@ -695,7 +716,7 @@ export async function inboxChat(
         view?.input(null);
         view?.turn(false);
         keys.abort();
-        if (live) draft = editor.text();
+        if (live) draft = editor.draft();
         turning = false;
         // An interrupt sent during the turn lands before the next line is sent, and so do the
         // lines sent during it.
@@ -798,7 +819,9 @@ export async function inboxChat(
         ...framing,
         ...(editor === null ? {} : { editor }),
       });
-      draft = "aborted" in read || "escape" in read || "open" in read ? read.draft : "";
+      // The box keeps the tokens a draft holds; a plain prompt has none.
+      const typed = editor?.draft() ?? ("draft" in read ? [read.draft] : []);
+      draft = "aborted" in read || "escape" in read || "open" in read ? typed : [];
       timer.abort();
       line = null;
       const flushed = flusher?.promptDown() ?? false;
@@ -846,7 +869,9 @@ export async function inboxChat(
         // The hold ends with this line: held events, and those withdrawn, go before it.
         await flusher?.lineSent();
         try {
-          await send(path, inbox.name, lineEvent(read.value, inbox.message), { env: env.read });
+          const event = lineEvent(read.value, inbox.message);
+          const seq = await send(path, inbox.name, event, { env: env.read });
+          if (holdsPaste(typed)) pasted.set(seq, typed);
         } catch (error) {
           if (!(error instanceof DeliveryRefused)) throw error;
           if (error.reason !== "ended") {

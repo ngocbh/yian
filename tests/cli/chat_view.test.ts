@@ -1031,6 +1031,88 @@ describe("a paste into the input box while a reply runs", () => {
   );
 });
 
+/** A paste of `count` lines, as a terminal sends it, and the text it reaches the chat as. */
+const pastedLines = (count: number) =>
+  Array.from({ length: count }, (_, i) => `line ${i + 1}\r`).join("");
+const pastedText = (count: number) =>
+  Array.from({ length: count }, (_, i) => `line ${i + 1}\n`).join("");
+
+/** Whether the chat waits at its prompt again, the reply done. */
+const prompting = (rows: string[]) =>
+  rows.at(-1) === HINT && !rows.some((line) => line.includes("Thinking"));
+
+/** The text of the last user message of `request`. */
+const lastSaid = (request: Request) =>
+  request.messages.filter((message) => message.role === "user").at(-1)!.text();
+
+describe("a long paste in the input box", () => {
+  test(
+    "is a token at the prompt, echoed as the token, and the model gets the whole text",
+    async () => {
+      const { io, stdin, rows } = terminalIo();
+      const model = new AnsweringModel(() => textReply("got it"));
+      const chatting = runChat(io, model);
+      await until(() => rows().includes(HINT));
+      stdin.write(`look ${PASTE_START}${pastedLines(40)}${PASTE_END}`);
+      await until(() => rows().includes(row("> look [Pasted text #1 +40 lines]")));
+      stdin.write(ENTER);
+      await until(() => rows().includes("⏺ got it") && rows().at(-1) === HINT);
+      expect(rows()).toContain("> look [Pasted text #1 +40 lines]");
+      expect(lastSaid(model.requests[0]!)).toBe(`look ${pastedText(40)}`);
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "is a token in the box while a reply runs, sent whole on Enter and echoed as the token",
+    async () => {
+      const { io, stdin, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      stdin.write(`${PASTE_START}${pastedLines(40)}${PASTE_END}`);
+      await until(() => rows().includes(row("> [Pasted text #1 +40 lines]")));
+      stdin.write(ENTER);
+      await until(() => rows().includes("> [Pasted text #1 +40 lines]"));
+      model.open();
+      await until(() => model.requests.length === 2 && rows().at(-1) === HINT);
+      expect(lastSaid(model.requests[1]!)).toBe(pastedText(40));
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "comes back as the token when Esc withdraws it, and is sent whole from there",
+    async () => {
+      const { io, stdin, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      stdin.write(`see ${PASTE_START}${pastedLines(40)}${PASTE_END}${ENTER}${ESCAPE}`);
+      await until(() => rows().includes("(withdrew 1 message; back in the prompt)"));
+      expect(rows()).toContain(row("> see [Pasted text #1 +40 lines]"));
+      model.open();
+      await until(() => prompting(rows()));
+      expect(rows()).toContain(row("> see [Pasted text #1 +40 lines]"));
+      stdin.write(ENTER);
+      await until(() => model.requests.some((request) => asked(request, "line 40")));
+      expect(lastSaid(model.requests.at(-1)!)).toBe(`see ${pastedText(40)}`);
+      await until(() => prompting(rows()));
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+});
+
 const COLOR_FLOW = `id: color
 name: color
 nodes:

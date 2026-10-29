@@ -592,15 +592,26 @@ export function whileNonNullPaths(kind: string | null, predicate: string | null)
   return [...nonNullBases(proves(tree, true))].map((base) => base.split(".")).toSorted(comparePaths);
 }
 
-/** Return the dotted paths `guard` proves not null (see `whileNonNullPaths`). */
-function nonNullBases(guard: Guard): Set<string> {
+/**
+ * Return the dotted paths `guard` proves not null (see `whileNonNullPaths`).
+ *
+ * `memo` holds each sub-guard's paths by identity: `proves` shares sub-guards, so the guard's
+ * tree grows exponentially with alternating `and`/`or` nesting while its graph stays small.
+ */
+function nonNullBases(guard: Guard, memo: Map<Guard, Set<string>> = new Map()): Set<string> {
+  const known = memo.get(guard);
+  if (known !== undefined) return known;
+  let bases: Set<string>;
   if (guard instanceof Holds) {
-    return guard.check instanceof NotNullCheck && guard.value ? new Set([guard.check.base]) : new Set();
+    bases = guard.check instanceof NotNullCheck && guard.value ? new Set([guard.check.base]) : new Set();
+  } else {
+    const parts = guard.parts.map((part) => nonNullBases(part, memo));
+    if (guard instanceof AllOf) bases = new Set(parts.flatMap((part) => [...part]));
+    else if (parts.length === 0) bases = new Set();
+    else bases = new Set([...parts[0]!].filter((base) => parts.every((part) => part.has(base))));
   }
-  const parts = guard.parts.map(nonNullBases);
-  if (guard instanceof AllOf) return new Set(parts.flatMap((part) => [...part]));
-  if (parts.length === 0) return new Set();
-  return new Set([...parts[0]!].filter((base) => parts.every((part) => part.has(base))));
+  memo.set(guard, bases);
+  return bases;
 }
 
 /**

@@ -72,6 +72,15 @@ test("a path checked twice is given once, the paths in order", () => {
   ]);
 });
 
+test("a while with deeply alternating and/or nesting proves its paths in well under a second", () => {
+  // Its guard's tree grows about 1.6x per level while the graph `proves` builds stays linear.
+  let predicate = "c0 != null";
+  for (let i = 1; i <= 41; i++) predicate = `(${predicate} ${i % 2 === 1 ? "and" : "or"} c${i} != null)`;
+  const start = performance.now();
+  expect(whileNonNullPaths("while", predicate)).toEqual([["c41"]]);
+  expect(performance.now() - start).toBeLessThan(1000);
+});
+
 test("a while that doesn't parse proves nothing", () => {
   expect(whileNonNullPaths("while", "cursor != null and")).toEqual([]);
 });

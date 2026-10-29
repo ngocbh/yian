@@ -458,6 +458,8 @@ test("guards of deeply alternating and/or nesting take time linear in the depth"
   const start = performance.now();
   expect(proves(tree, true)).not.toStrictEqual(NOTHING);
   expect(proves(tree, false)).not.toStrictEqual(NOTHING);
+  // The guard's tree grows about 1.6x per level; `guardChecks` visits each shared sub-guard once.
+  expect(guardChecks(proves(tree, true))).toHaveLength(41);
   expect(guardedRefs(tree)).toHaveLength(41);
   expect(literalsInContext(tree)).toHaveLength(41);
   expect(performance.now() - start).toBeLessThan(1000);

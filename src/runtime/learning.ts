@@ -1432,8 +1432,6 @@ export function projectOwnerContexts(
     }
     try {
       if (spec.owners.some((site) => DeclSite.compare(site, ROOT_FLOW_SITE) === 0)) {
-        // A fresh context checks its run, key and episodes before its feedback.
-        LearnContext.fromFrozen(trace.runId, spec.key, episodes, []);
         frozen.push(...freezeFeedback(fallback, memo, frozen.length));
       }
       contexts.push(LearnContext.fromFrozen(trace.runId, spec.key, episodes, Object.freeze(frozen)));

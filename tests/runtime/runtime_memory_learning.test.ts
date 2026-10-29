@@ -992,7 +992,7 @@ test("an owner context error identifies the receiver without changing forward ac
 
 test("a root fallback context failure names no node", async () => {
   const { state, log, memories } = await startOnlyRun();
-  // The second call checks the root fallback: the first checks START's occurrence.
+  // The second call builds the context with the root fallback: the first checks START's occurrence.
   const original = new RangeError("boom");
   const fromFrozen = LearnContext.fromFrozen;
   let calls = 0;

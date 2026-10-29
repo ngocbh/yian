@@ -64,7 +64,8 @@ import { eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
 export const PROTOCOL = "anthropic_messages";
 const NO_MEDIA = "the anthropic_messages route does not send media parts yet";
 // The default `max_tokens` by exact model id, from langchain-anthropic 1.7.5's model profiles;
-// any other model gets 4096.
+// any other model gets 4096. Those profiles carry no limits for the Mythos models (not on
+// models.dev), so theirs are the 128K max output from Anthropic's model docs.
 const MAX_TOKENS: ReadonlyMap<string, bigint> = new Map([
   ...[
     "claude-haiku-4-5",
@@ -77,6 +78,8 @@ const MAX_TOKENS: ReadonlyMap<string, bigint> = new Map([
   ...[
     "claude-fable-5",
     "claude-fable-5-1",
+    "claude-mythos-5",
+    "claude-mythos-5-1",
     "claude-opus-4-6",
     "claude-opus-4-7",
     "claude-opus-4-8",

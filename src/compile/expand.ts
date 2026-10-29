@@ -22,8 +22,7 @@
  * Templates are copied with `copyGraph`, which shares arrays, records and carriers with the
  * original, so this module assigns fresh values and never changes a copied node's field in place.
  *
- * Knows about:   compile/model, compile/memory_layout, expr, nodes,
- *                memory contracts, diagnostics and typesys.
+ * Knows about:   compile/model, expr, nodes, memory contracts, diagnostics and typesys.
  * Never imports: compose, runtime, or the package-root run boundary.
  */
 
@@ -45,7 +44,6 @@ import {
   ExecutionScope,
   mapSourceStrings,
   Parameter,
-  revalidateScope,
   sameExecutionPosition,
   sameItems,
   SeedConnection,
@@ -58,7 +56,6 @@ import { StartNode } from "../nodes/start/node.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import { NEW_MESSAGES } from "../typesys/pool.ts";
 import { isList, isRecord, jsTypeName, type Value } from "../typesys/values.ts";
-import { revalidateMemoryOccurrencePath, revalidateMemoryScope } from "./memory_layout.ts";
 import { copyGraph, Edge, END_ID, Flow, GrowthRejected, START_ID, validateGrowthMetadata } from "./model.ts";
 
 // Reserved prefix for END params synthesized from a lowered spawner post-assert. It mirrors the
@@ -177,7 +174,8 @@ function lowerSpawnerPostAsserts(
  * seeded with `record` as constants and the child END is the alias filler. Pure: the growth
  * reducer applies the returned fragment.
  *
- * @param child The child flow template.
+ * @param child The child flow template; the CALL, MAP and LOOP builders have checked its growth
+ *   metadata.
  * @param callsite The namespace, the spawner id or a MAP element's callsite.
  * @param record The resolved call-args seeding the child START.
  * @param options.originContext The enclosing spawner's ordered failure trace, prefixed to each
@@ -191,9 +189,9 @@ function lowerSpawnerPostAsserts(
  * @param options.inputNames The CALL spawner's declared input names.
  * @returns A `Flow` whose `startId` is the namespaced child START and whose `endId` is the
  *   namespaced child END.
- * @throws TypeError or RangeError for a noncanonical occurrence path, execution path, seed prefix,
- *   execution scope or growth metadata.
- * @throws MemorySetupError for a noncanonical or dynamic static memory scope on a child node.
+ * @throws TypeError or RangeError for a seed prefix that isn't empty or one item index, a child
+ *   execution template with a dynamic occurrence, or an occurrence path a clone's scope refuses.
+ * @throws MemorySetupError for a dynamic static memory scope on a child node.
  */
 export function cloneChild(
   child: Flow,
@@ -216,9 +214,6 @@ export function cloneChild(
     postAsserts = null,
     inputNames = null,
   } = options;
-  revalidateMemoryOccurrencePath(occurrencePath, "occurrence_path");
-  validateGrowthMetadata(child);
-  new ExecutionScope([], { occurrencePath: executionPath });
   if (
     !isList(seedPrefix) ||
     seedPrefix.length > 1 ||
@@ -233,8 +228,7 @@ export function cloneChild(
     clone.id = ns(callsite, nid);
     clone.originContext = [...originContext, ...clone.originContext];
     if (clone.executionScope !== null) {
-      const scope: unknown = clone.executionScope;
-      revalidateScope(scope, "child execution scope");
+      const scope = clone.executionScope;
       const { staticPath, flowPath, boundary } = scope;
       const local = clone.isLoop ? [new ExecutionPosition("loop_driver", staticPath, 0)] : [];
       if (!sameItems(scope.occurrencePath, local, sameExecutionPosition)) {
@@ -247,15 +241,6 @@ export function cloneChild(
       });
     }
     if (clone.memoryScope !== null) {
-      try {
-        revalidateMemoryScope(clone.memoryScope, `node ${reprText(nid)} memory_scope`);
-      } catch (error) {
-        if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-        throw new MemorySetupError(`node ${reprText(nid)} has a noncanonical static memory scope`, {
-          origin: clone.origin,
-          cause: error,
-        });
-      }
       if (clone.memoryScope.occurrencePath.length > 0) {
         throw new MemorySetupError(`node ${reprText(nid)} static memory template has a dynamic occurrence`, {
           origin: clone.origin,
@@ -356,7 +341,7 @@ export function cloneChild(
  * `executionScope` appends the authored CALL position. The seed recipes select parent seed
  * parameter names directly.
  *
- * @throws TypeError or RangeError for a noncanonical memory or execution scope, or as `cloneChild`.
+ * @throws TypeError or RangeError when `child` has malformed growth metadata, or as `cloneChild`.
  */
 export function callSubgraph(
   child: Flow,
@@ -372,8 +357,7 @@ export function callSubgraph(
 ): Flow {
   const { originContext = [], memoryScope = null, executionScope = null, postAsserts = null, inputNames = null } =
     options;
-  if (memoryScope !== null) revalidateMemoryScope(memoryScope);
-  if (executionScope !== null) revalidateScope(executionScope);
+  validateGrowthMetadata(child);
   const cloned = cloneChild(child, callsite, record, {
     originContext,
     occurrencePath: memoryScope === null ? [] : memoryScope.occurrencePath,
@@ -405,7 +389,7 @@ export function callSubgraph(
  * index and parameter name. Only actual item START/END pairs become child boundaries.
  *
  * @returns A `Flow` from the synthetic START to the list-END.
- * @throws TypeError or RangeError for a noncanonical memory or execution scope, or as `cloneChild`.
+ * @throws TypeError or RangeError when `child` has malformed growth metadata, or as `cloneChild`.
  */
 export function mapSubgraph(
   child: Flow,
@@ -429,9 +413,7 @@ export function mapSubgraph(
   const connections: SeedConnection[] = [];
   const boundaries: ChildFlowBoundary[] = [];
 
-  if (memoryScope !== null) revalidateMemoryScope(memoryScope);
-  if (executionScope !== null) revalidateScope(executionScope);
-
+  validateGrowthMetadata(child);
   for (const [i, record] of records.entries()) {
     const occurrencePath =
       memoryScope === null
@@ -513,7 +495,7 @@ export function mapSubgraph(
  * scope. The execution path replaces the current driver position with body `k`.
  *
  * @returns A `Flow` from body `k`'s START to its END.
- * @throws TypeError or RangeError for a noncanonical memory or execution scope, or as `cloneChild`.
+ * @throws TypeError or RangeError when `child` has malformed growth metadata, or as `cloneChild`.
  * @throws RangeError when the execution scope doesn't end in driver `k`'s position.
  */
 export function loopContinueSubgraph(
@@ -529,11 +511,9 @@ export function loopContinueSubgraph(
   } = {},
 ): Flow {
   const { originContext = [], memoryScope = null, executionScope = null } = options;
-  if (memoryScope !== null) revalidateMemoryScope(memoryScope);
-  if (driver.memoryScope !== null) revalidateMemoryScope(driver.memoryScope, "loop driver memory_scope");
+  validateGrowthMetadata(child);
   let executionPath: ExecutionPosition[] = [];
   if (executionScope !== null) {
-    revalidateScope(executionScope);
     const current = new ExecutionPosition("loop_driver", executionScope.staticPath, k);
     const last = executionScope.occurrencePath.at(-1);
     if (last === undefined || !sameExecutionPosition(last, current)) {

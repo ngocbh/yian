@@ -45,7 +45,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { types } from "node:util";
 
 import { localTypes } from "./compile/declared_types.ts";
-import { applyExecutionLayout, resolveExecutionLayout } from "./compile/execution_layout.ts";
+import { stampExecutionScopes } from "./compile/execution_layout.ts";
 import { buildGrow } from "./compile/expand.ts";
 import {
   applyEffectiveLlmMap,
@@ -61,10 +61,10 @@ import {
 } from "./compile/llm_cascade.ts";
 import { flowFingerprint } from "./compile/manifest.ts";
 import {
-  applyMemoryLayout,
   memoryStacks,
   type ResolvedMemoryLayout,
   resolveMemoryLayout,
+  stampMemoryLayout,
 } from "./compile/memory_layout.ts";
 import { type CompiledFlow, copyGraph, type Flow } from "./compile/model.ts";
 import { typeRelation } from "./compile/validation.ts";
@@ -1357,7 +1357,7 @@ async function startRun(
     if (apiKey !== null) bindHostCredentials(privateFlow, apiKey, headers);
     checkEffectiveLlm(effectiveLlm, apiKey, headers, staticAgentLabels(privateFlow), valueConfigSubjects(privateFlow));
 
-    if (learnable) applyExecutionLayout(privateFlow, resolveExecutionLayout(privateFlow));
+    if (learnable) stampExecutionScopes(privateFlow);
 
     const canonicalRunId = runId ?? defaultRunId();
     const pool = new VariablePool(privateFlow.startId);
@@ -3481,7 +3481,7 @@ export function replayCompiledRunLog(
     // only when its resolved config is marked.
     bindHostCredentials(privateFlow, apiKey, headers);
   }
-  if (first.learnable) applyExecutionLayout(privateFlow, resolveExecutionLayout(privateFlow));
+  if (first.learnable) stampExecutionScopes(privateFlow);
   if (first.memories !== null) {
     const replayed = resolveRuntimeMemoryLayout(privateFlow);
     checkRecordedMemoryTable(first.memories, first.memoryStacks, replayed.memories, replayed.stacks, "supplied flow");
@@ -3603,9 +3603,7 @@ type MemoryLayoutParts = {
  * @throws MemorySetupError when the layout breaks a rule.
  */
 function resolveRuntimeMemoryLayout(flow: CompiledFlow): MemoryLayoutParts {
-  const resolved = resolveMemoryLayout(flow);
-  applyMemoryLayout(flow, resolved);
-  return memoryLayoutParts(resolved);
+  return memoryLayoutParts(stampMemoryLayout(flow));
 }
 
 /** Return one layout's record-facing key table, per-key origins and stacks. */

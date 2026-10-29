@@ -1,5 +1,5 @@
 /**
- * Pure static memory-layout derivation and atomic scope application (`compile/memory_layout.ts`),
+ * Pure static memory-layout derivation and atomic scope stamping (`compile/memory_layout.ts`),
  * over flows built by hand.
  */
 
@@ -7,13 +7,13 @@ import { expect, test } from "bun:test";
 
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import {
-  applyMemoryLayout,
   memoryStacks,
   memoryTable,
   type ResolvedMemoryLayout,
   resolveMemoryLayout,
+  stampMemoryLayout,
 } from "../../src/compile/memory_layout.ts";
-import { CompiledFlow, copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
+import { CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { DeclSite, MemoryDecl, MemoryScope, MemorySetupError, MemoryStack } from "../../src/memory/contracts.ts";
@@ -65,7 +65,7 @@ test("disabled layout needs no flow id and leaves every scope null", () => {
   expect(layout.targets.map((item) => [item.locator, item.scope])).toEqual([[["plain"], null]]);
   // Resolution is pure and ignores an existing derived scope.
   expect(flow.nodes.get("plain")!.memoryScope).toEqual(new MemoryScope(["plain"]));
-  setupError(() => applyMemoryLayout(flow, layout), /different memory scope/);
+  setupError(() => stampMemoryLayout(flow), /different memory scope/);
 });
 
 test.each([
@@ -291,16 +291,6 @@ async function compiled(text: string, sourceLabel?: string): Promise<CompiledFlo
     .compiled;
 }
 
-/** Return an unfrozen object of `value`'s class carrying its fields with `changes` applied. */
-function forged<T extends object>(value: T, changes: Record<string, unknown>): T {
-  return Object.assign(Object.create(Object.getPrototypeOf(value)) as T, value, changes);
-}
-
-/** Return each key wrapped as a `String` object: equal as text, but not a string. */
-function boxed(keys: readonly string[]): string[] {
-  return keys.map((key) => new String(key) as unknown as string);
-}
-
 test("flow START and END scopes carry the enclosing keys", async () => {
   const withoutChildPolicy = await compiled(
     NESTED.replace("    long_term_memory:\n      inner: {type: inner, config: {limit: 3}}\n", ""),
@@ -383,88 +373,36 @@ output: \${right.output}
   ]);
 });
 
-test("apply is idempotent and does not change authored identity", async () => {
+test("stamp is idempotent and does not change authored identity", async () => {
   const flow = await compiled(NESTED);
   const manifest = flowManifest(flow);
   const fingerprint = flowFingerprint(flow);
   const layout = resolveMemoryLayout(flow);
 
-  expect(resolveMemoryLayout(flow)).toEqual(layout);
-  applyMemoryLayout(flow, layout);
+  expect(stampMemoryLayout(flow)).toEqual(layout);
   expect(resolveMemoryLayout(flow)).toEqual(layout);
   const firstScopes = layout.targets.map((item) => item.node.memoryScope);
-  applyMemoryLayout(flow, layout);
+  expect(firstScopes).toEqual(layout.targets.map((item) => item.scope));
+  stampMemoryLayout(flow);
 
   expect(layout.targets.map((item) => item.node.memoryScope)).toEqual(firstScopes);
   expect(flowManifest(flow)).toEqual(manifest);
   expect(flowFingerprint(flow)).toBe(fingerprint);
 });
 
-test("apply scope mismatch is atomic", async () => {
+test("stamp scope mismatch is atomic", async () => {
   const flow = await compiled(NESTED);
   const layout = resolveMemoryLayout(flow);
   const final = layout.targets.at(-1)!;
   final.node.memoryScope = new MemoryScope(["different"]);
 
-  setupError(() => applyMemoryLayout(flow, layout), /different memory scope/);
+  setupError(() => stampMemoryLayout(flow), /different memory scope/);
 
   expect(layout.targets.slice(0, -1).every((item) => item.node.memoryScope === null)).toBe(true);
   expect(final.node.memoryScope).toEqual(new MemoryScope(["different"]));
 });
 
-test("apply revalidates a forged nested layout scope before stamping", async () => {
-  const flow = await compiled(NESTED);
-  const layout = resolveMemoryLayout(flow);
-  const final = layout.targets.at(-1)!;
-  const scope = forged(final.scope!, { memories: boxed(final.scope!.memories) });
-  const forgedLayout = forged(layout, { targets: [...layout.targets.slice(0, -1), forged(final, { scope })] });
-
-  const error = caught(() => applyMemoryLayout(flow, forgedLayout));
-  expect(error).toBeInstanceOf(TypeError);
-  expect((error as Error).message).toMatch(/memories.*must be a string/);
-
-  expect(layout.targets.every((item) => item.node.memoryScope === null)).toBe(true);
-});
-
-test("apply revalidates a forged key table before stamping", async () => {
-  const flow = await compiled(NESTED);
-  const layout = resolveMemoryLayout(flow);
-  const memory = forged(layout.memories[0]!, { key: new String("inner") });
-  const forgedLayout = forged(layout, { memories: [memory, ...layout.memories.slice(1)] });
-
-  const error = caught(() => applyMemoryLayout(flow, forgedLayout));
-  expect(error).toBeInstanceOf(TypeError);
-  expect((error as Error).message).toMatch(/key must be a string/);
-
-  expect(layout.targets.every((item) => item.node.memoryScope === null)).toBe(true);
-});
-
-test("apply revalidates a forged equal existing scope atomically", async () => {
-  const flow = await compiled(NESTED);
-  const layout = resolveMemoryLayout(flow);
-  const final = layout.targets.at(-1)!;
-  const scope = forged(final.scope!, { memories: boxed(final.scope!.memories) });
-  final.node.memoryScope = scope;
-
-  setupError(() => applyMemoryLayout(flow, layout), /noncanonical memory scope/);
-
-  expect(layout.targets.slice(0, -1).every((item) => item.node.memoryScope === null)).toBe(true);
-  expect(final.node.memoryScope).toBe(scope);
-});
-
-test("apply stale object target is atomic", async () => {
-  const flow = await compiled(NESTED);
-  const layout = resolveMemoryLayout(flow);
-  const replacement = copyGraph(flow.nodes.get("invoke")!);
-  flow.nodes.set("invoke", replacement);
-
-  setupError(() => applyMemoryLayout(flow, layout), /same node/);
-
-  expect(replacement.memoryScope).toBeNull();
-  expect(layout.targets.every((item) => item.node.memoryScope === null)).toBe(true);
-});
-
-test("apply rejects shared child targets before stamping", async () => {
+test("stamp rejects shared child targets before stamping", async () => {
   const child = await compiled(`id: child
 name: child
 long_term_memory: reflective
@@ -486,7 +424,7 @@ output: \${answer.output}
   );
   const layout = resolveMemoryLayout(flow);
 
-  setupError(() => applyMemoryLayout(flow, layout), /multiple static paths/);
+  setupError(() => stampMemoryLayout(flow), /multiple static paths/);
 
   expect(layout.targets.every((item) => item.node.memoryScope === null)).toBe(true);
 });

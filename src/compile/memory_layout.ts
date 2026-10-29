@@ -4,8 +4,8 @@
  * Memory declarations remain authored identity on `CompiledFlow` and `AgentNode`. This module
  * resolves them into a sorted memory key table and one exact `MemoryScope` for every statically
  * reachable node. A scope names the node's root-relative locator and the keys it recalls and learns
- * into, outermost first. Resolution is pure; applying a resolved layout is a separate,
- * all-or-nothing mutation over a private compiled graph.
+ * into, outermost first. Resolution is pure; stamping resolves and then assigns every scope, all or
+ * nothing, on a private compiled graph.
  *
  * Knows about:   compile/model, memory/contracts, nodes (base, contracts, agent, start, end),
  *                diagnostics and typesys.
@@ -18,17 +18,15 @@ import {
   type JsonObject,
   MEMORY_IDENTIFIER_PATTERN,
   MemoryDecl,
-  MemoryOccurrenceSegment,
   MemoryScope,
   MemorySetupError,
   MemorySpec,
   MemoryStack,
   sameMemoryScope,
-  sameMemorySpec,
 } from "../memory/contracts.ts";
 import { AgentNode } from "../nodes/agent/node.ts";
 import { Node } from "../nodes/base.ts";
-import { comparePaths, isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
+import { comparePaths, isExactly, sameItems } from "../nodes/contracts.ts";
 import { EndNode } from "../nodes/end/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import { logJson } from "../typesys/json.ts";
@@ -47,49 +45,6 @@ import {
 /** Return a key no two unequal sites share; never shown. */
 function siteKey(site: DeclSite): string {
   return JSON.stringify([site.scope, site.owner, site.node]);
-}
-
-/**
- * Encode one JSON value for exact comparison, so `1n`, `1` (a float) and `true` differ.
- * Log JSON marks a float with `.0` and writes any float, where the JCS writer spells `1n` and `1`
- * alike and refuses a fraction.
- */
-function exactJson(value: JsonObject): string {
-  return logJson(value);
-}
-
-/**
- * Replay every exact nested invariant of one occurrence path.
- *
- * @throws TypeError when `value` isn't a plain array of exact `MemoryOccurrenceSegment`s, or as
- *   the segment constructor does.
- * @throws RangeError as the segment constructor does.
- */
-export function revalidateMemoryOccurrencePath(value: unknown, name: string): readonly MemoryOccurrenceSegment[] {
-  if (!isList(value)) throw new TypeError(`${name} must be an exact array`);
-  for (const [index, segment] of value.entries()) {
-    if (!isExactly(segment, MemoryOccurrenceSegment)) {
-      throw new TypeError(`${name}[${index}] must be an exact MemoryOccurrenceSegment`);
-    }
-    new MemoryOccurrenceSegment(segment.kind, segment.staticPath, segment.index);
-  }
-  return value as readonly MemoryOccurrenceSegment[];
-}
-
-/**
- * Replay every exact invariant nested below one frozen memory scope.
- *
- * A value can bypass the constructor (an object of the class's prototype), so rebuilding each
- * layer keeps a noncanonical key or occurrence index from crossing the compile boundary.
- *
- * @throws TypeError when `value` isn't an exact `MemoryScope`, or as its constructor does.
- * @throws RangeError as its constructor does.
- */
-export function revalidateMemoryScope(value: unknown, name = "memory_scope"): MemoryScope {
-  if (!isExactly(value, MemoryScope)) throw new TypeError(`${name} must be an exact MemoryScope`);
-  revalidateMemoryOccurrencePath(value.occurrencePath, `${name}.occurrence_path`);
-  new MemoryScope(value.staticPath, { memories: value.memories, occurrencePath: value.occurrencePath });
-  return value;
 }
 
 /**
@@ -160,7 +115,7 @@ export class ResolvedMemoryTarget {
    *
    * @throws TypeError for a locator component that isn't a non-empty string, a scope that is
    *   neither `null` nor an exact `MemoryScope`, or a node that isn't a `Node`.
-   * @throws RangeError for an empty or non-array locator, or as the scope constructor does.
+   * @throws RangeError for an empty or non-array locator.
    */
   constructor(locator: readonly string[], scope: MemoryScope | null, node: Node) {
     if (!isList(locator) || locator.length === 0) throw new RangeError("target locator must be a non-empty array");
@@ -170,7 +125,6 @@ export class ResolvedMemoryTarget {
     if (scope !== null && !isExactly(scope, MemoryScope)) {
       throw new TypeError("target scope must be an exact MemoryScope or null");
     }
-    if (scope !== null) revalidateMemoryScope(scope, "target scope");
     if (!(node instanceof Node)) throw new TypeError("target node must be a Node");
     this.locator = Object.freeze([...locator]);
     this.scope = scope;
@@ -180,7 +134,7 @@ export class ResolvedMemoryTarget {
 }
 
 /**
- * Immutable static memory layout ready for atomic application. Frozen.
+ * Immutable static memory layout. Frozen.
  *
  * `enabled` is true when a reachable flow or AGENT declares a memory. Then every target has a
  * scope whose `staticPath` is its locator and whose keys are all in `memories`. A disabled layout
@@ -194,11 +148,10 @@ export class ResolvedMemoryLayout {
   readonly memories: readonly ResolvedMemory[];
 
   /**
-   * Validate exact containers, replay every target and memory, and check that every scope agrees
-   * with the table.
+   * Validate exact containers and check that every scope agrees with the table.
    *
-   * @throws TypeError for a non-boolean `enabled`, containers that aren't arrays of exact targets
-   *   or memories, or as their constructors do.
+   * @throws TypeError for a non-boolean `enabled`, or containers that aren't arrays of exact
+   *   targets or memories.
    * @throws RangeError for keys out of order, a disabled layout with memories or scopes, an
    *   enabled layout without memories, or a scope that is missing, doesn't match its locator or
    *   names a key outside the table.
@@ -210,10 +163,6 @@ export class ResolvedMemoryLayout {
     }
     if (!isList(memories) || memories.some((memory) => !isExactly(memory, ResolvedMemory))) {
       throw new TypeError("memories must be an array of ResolvedMemory values");
-    }
-    for (const target of targets) new ResolvedMemoryTarget(target.locator, target.scope, target.node);
-    for (const memory of memories) {
-      new ResolvedMemory(memory.key, memory.type, memory.config, memory.owners, memory.origins);
     }
     const keys = memories.map((memory) => memory.key);
     if (keys.some((key, i) => i > 0 && compareCodeUnits(keys[i - 1]!, key) >= 0)) {
@@ -244,24 +193,6 @@ export class ResolvedMemoryLayout {
   }
 }
 
-/**
- * Whether two layouts are equal by value, leaving out each
- * target's node and each memory's origins.
- */
-function sameLayout(a: ResolvedMemoryLayout, b: ResolvedMemoryLayout): boolean {
-  return (
-    a.enabled === b.enabled &&
-    sameItems(
-      a.targets,
-      b.targets,
-      (x, y) =>
-        sameItems(x.locator, y.locator) &&
-        sameOptional(x.scope, y.scope, sameMemoryScope),
-    ) &&
-    sameItems(a.memories, b.memories, (x, y) => sameMemorySpec(x.spec, y.spec))
-  );
-}
-
 /** Build one layout failure with its first authored site, any others and its notes. */
 function setupError(
   message: string,
@@ -281,18 +212,9 @@ function setupError(
   });
 }
 
-/** Replay the complete frozen layout contract on a layout that may have bypassed it. */
-function revalidateResolvedLayout(layout: ResolvedMemoryLayout): void {
-  if (!isExactly(layout, ResolvedMemoryLayout)) throw new TypeError("layout must be an exact ResolvedMemoryLayout");
-  new ResolvedMemoryLayout(layout.enabled, layout.targets, layout.memories);
-}
-
-/** Require exact direct START/END targets before a flow owns memory. */
+/** Require exact direct START/END targets before a flow owns memory; `flowNodes` has checked the node map. */
 function validateMemoryFlowBoundaries(flow: Flow, decl: MemoryDecl): void {
   const origin = decl.origin;
-  if (!isExactly(flow.nodes, Map)) {
-    throw setupError("a memory-owning flow requires an exact node dictionary", { origin });
-  }
   if (flow.startId !== START_ID) {
     throw setupError(`a memory-owning flow start_id must be canonical ${reprText(START_ID)}`, { origin });
   }
@@ -445,16 +367,19 @@ export function memoryTable(declared: readonly MemoryDecl[]): readonly ResolvedM
     // Stable sort: declarations at one site keep walk order.
     const declarations = [...entries].sort((a, b) => DeclSite.compare(a.site, b.site));
     const first = declarations[0]!;
-    const firstConfig = exactJson(first.config);
+    // Log JSON compares configs exactly, so `1n`, `1` (a float) and `true` differ: it marks a
+    // float with `.0` and writes any float, where the JCS writer spells `1n` and `1` alike and
+    // refuses a fraction.
+    const firstConfig = logJson(first.config);
     const conflicts = declarations
       .slice(1)
-      .filter((decl) => decl.type !== first.type || exactJson(decl.config) !== firstConfig);
+      .filter((decl) => decl.type !== first.type || logJson(decl.config) !== firstConfig);
     if (conflicts.length > 0) {
       // A def called from several nodes repeats its declaration, as one object or as per-call
       // copies; list each other declaration once, compared by site and value, not identity.
       const distinct = new Map<string, MemoryDecl>();
       for (const decl of declarations) {
-        const identity = JSON.stringify([siteKey(decl.site), decl.type, exactJson(decl.config)]);
+        const identity = JSON.stringify([siteKey(decl.site), decl.type, logJson(decl.config)]);
         if (!distinct.has(identity)) distinct.set(identity, decl);
       }
       const others = [...distinct.values()].slice(1);
@@ -518,13 +443,8 @@ function checkKeyCase(memories: readonly ResolvedMemory[]): void {
   }
 }
 
-/**
- * Return every scoped target's key stack, sorted by locator.
- *
- * @throws TypeError or RangeError when `layout` breaks its contract.
- */
+/** Return every scoped target's key stack, sorted by locator. */
 export function memoryStacks(layout: ResolvedMemoryLayout): readonly MemoryStack[] {
-  revalidateResolvedLayout(layout);
   if (!layout.enabled) return Object.freeze([]);
   return Object.freeze(
     layout.targets
@@ -548,6 +468,7 @@ function resolveFlow(
   }
   activeFlows.add(flow);
   try {
+    const nodes = flowNodes(flow, memoryWalkError, ownerOrigin);
     const decls = flowDecls(flow);
     if (decls.length > 0) {
       validateMemoryFlowBoundaries(flow, decls[0]!);
@@ -555,7 +476,7 @@ function resolveFlow(
     }
     const stack = extendStack(inherited, decls);
 
-    for (const [nodeId, node] of flowNodes(flow, memoryWalkError, ownerOrigin)) {
+    for (const [nodeId, node] of nodes) {
       const nodeLocator = [...locator, nodeId];
       const ownDecls = agentDecls(node);
       declared.push(...ownDecls);
@@ -603,45 +524,29 @@ export function resolveMemoryLayout(flow: CompiledFlow): ResolvedMemoryLayout {
 }
 
 /**
- * Atomically apply one previously resolved layout to its exact graph.
+ * Resolve `flow`'s memory layout and stamp every target's scope on its node, all or nothing.
  *
- * The complete graph, semantic paths, the key table, exact node identities, duplicate targets,
- * and every existing scope are validated first. Only after that pass succeeds are scopes
- * assigned, so a stale or partially stamped graph cannot receive a partial layout. Reapplying the
- * same layout is a no-op.
+ * Duplicate targets and every existing scope are checked before any scope is assigned, so a
+ * partially stamped graph can't receive a partial layout. Stamping the same graph again is a
+ * no-op.
  *
- * @throws TypeError when `flow` isn't an exact `CompiledFlow` or `layout` breaks its contract.
- * @throws MemorySetupError when the layout no longer matches the graph, targets are aliased, or a
- *   node already has a noncanonical or different scope.
+ * @param flow The private graph whose nodes get their memory scopes.
+ * @returns The resolved layout.
+ * @throws TypeError when `flow` isn't an exact `CompiledFlow`.
+ * @throws MemorySetupError when the layout breaks a rule, targets are aliased, or a node already
+ *   has a different scope.
  */
-export function applyMemoryLayout(flow: CompiledFlow, layout: ResolvedMemoryLayout): void {
-  if (!isExactly(flow, CompiledFlow)) throw new TypeError("applyMemoryLayout expects an exact CompiledFlow");
-  revalidateResolvedLayout(layout);
-
+export function stampMemoryLayout(flow: CompiledFlow): ResolvedMemoryLayout {
+  const layout = resolveMemoryLayout(flow);
   validateUniqueTargets(layout.targets, "memory layout", memoryWalkError);
-  const current = resolveMemoryLayout(flow);
-  validateUniqueTargets(current.targets, "memory layout", memoryWalkError);
-  if (!sameLayout(current, layout)) throw setupError("memory layout no longer matches the compiled flow");
-
-  // Equal layouts list the same locators in the same order.
-  for (const [i, target] of layout.targets.entries()) {
-    const actual = current.targets[i]!;
-    const where = writeAsText([...target.locator]);
-    if (actual.node !== target.node) {
-      throw setupError(`memory layout target ${where} no longer names the same node`, { origin: actual.node.origin });
-    }
-    const existing = actual.node.memoryScope;
-    if (existing === null) continue;
-    try {
-      revalidateMemoryScope(existing, `node at ${where} memory_scope`);
-    } catch (error) {
-      if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-      throw setupError(`node at ${where} has a noncanonical memory scope`, { origin: actual.node.origin, cause: error });
-    }
-    if (target.scope === null || !sameMemoryScope(existing, target.scope)) {
-      throw setupError(`node at ${where} already has a different memory scope`, { origin: actual.node.origin });
+  for (const { locator, scope, node } of layout.targets) {
+    const existing = node.memoryScope;
+    if (existing !== null && (scope === null || !sameMemoryScope(existing, scope))) {
+      throw setupError(`node at ${writeAsText([...locator])} already has a different memory scope`, {
+        origin: node.origin,
+      });
     }
   }
-
-  for (const target of layout.targets) target.node.memoryScope = target.scope;
+  for (const { scope, node } of layout.targets) node.memoryScope = scope;
+  return layout;
 }

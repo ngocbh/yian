@@ -21,12 +21,8 @@ import { expect } from "bun:test";
 
 import { main } from "../../src/cli/index.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
-import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
-import {
-  applyMemoryLayout,
-  memoryStacks as layoutStacks,
-  resolveMemoryLayout,
-} from "../../src/compile/memory_layout.ts";
+import { stampExecutionScopes } from "../../src/compile/execution_layout.ts";
+import { memoryStacks as layoutStacks, stampMemoryLayout } from "../../src/compile/memory_layout.ts";
 import { buildGrow } from "../../src/compile/expand.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
@@ -875,7 +871,7 @@ export function learnableStarted(
   } = {},
 ): { state: RunState; log: MemoryRunLog } {
   const inputs = options.inputs ?? {};
-  applyExecutionLayout(flow, resolveExecutionLayout(flow));
+  stampExecutionScopes(flow);
   const state = new RunState(flow);
   const initialPool = new VariablePool(flow.startId);
   initialPool.set(flow.startId, { ...inputs });
@@ -939,7 +935,7 @@ export function engine(
     defaults = {},
     ...rest
   } = options;
-  if (learnable) applyExecutionLayout(flow, resolveExecutionLayout(flow));
+  if (learnable) stampExecutionScopes(flow);
   const state = new RunState(flow);
   const initialPool = new VariablePool(flow.startId);
   initialPool.set(flow.startId, { ...inputs });
@@ -1035,8 +1031,7 @@ export const POLICY = "reflective";
 
 /**
  * Return a learnable engine over `flow` whose root flow owns one memory, `POLICY`, with the recorded table and stacks: the flow's
- * `memories` become one root-owned `POLICY` declaration, `resolveMemoryLayout` and
- * `applyMemoryLayout` scope every node, the table and stacks are the layout's, and each snapshot
+ * `memories` become one root-owned `POLICY` declaration, `stampMemoryLayout` scopes every node, the table and stacks are the layout's, and each snapshot
  * is `{}`. It leaves `flow.flowId` at its default (`null`), which the runtime
  * never reads, and applies no effective LLM map.
  */
@@ -1045,8 +1040,7 @@ export function ownerEngine(
   options: { inputs?: Readonly<Record<string, unknown>> } & Partial<FlowEngineOptions> = {},
 ): { engine: FlowEngine; memories: MemorySpec[]; stacks: MemoryStack[] } {
   flow.memories = [new MemoryDecl(POLICY, POLICY, {}, new DeclSite([], ["root"]))];
-  const layout = resolveMemoryLayout(flow);
-  applyMemoryLayout(flow, layout);
+  const layout = stampMemoryLayout(flow);
   const memories = layout.memories.map((memory) => memory.spec);
   const memoryStacks = [...layoutStacks(layout)];
   const memorySnapshots = memories.map((spec) => new MemorySnapshotEnvelope(spec.key, {}));
@@ -1844,7 +1838,7 @@ export function startedRun(
 ): RunState {
   const { inputs = {}, numWorkers = 0, effective = {}, learnable = false } = options;
   const privateFlow = options.privateFlow ?? copyGraph(loaded.compiled);
-  if (learnable) applyExecutionLayout(privateFlow, resolveExecutionLayout(privateFlow));
+  if (learnable) stampExecutionScopes(privateFlow);
   const pool = new VariablePool(privateFlow.startId);
   pool.set(privateFlow.startId, structuredClone(inputs));
   seedSystemClock(pool, Date.UTC(2026, 7, 14, 12));

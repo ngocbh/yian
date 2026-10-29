@@ -1,24 +1,19 @@
 /**
- * Memory-independent static execution paths and atomic scope application
- * (`compile/execution_layout.ts`): layouts with and without memory, rejected targets stamping
+ * Memory-independent static execution paths and atomic scope stamping
+ * (`compile/execution_layout.ts`): scopes with and without memory, rejected graphs stamping
  * nothing, static children and loops, and authored agent-variable owners.
  */
 
 import { describe, expect, test } from "bun:test";
 
-import {
-  applyExecutionLayout,
-  ResolvedExecutionLayout,
-  ResolvedExecutionTarget,
-  resolveExecutionLayout,
-} from "../../src/compile/execution_layout.ts";
+import { stampExecutionScopes } from "../../src/compile/execution_layout.ts";
 import { callSubgraph, loopContinueSubgraph, mapSubgraph } from "../../src/compile/expand.ts";
 import { applyEffectiveLlmMap } from "../../src/compile/llm_cascade.ts";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
-import { applyMemoryLayout, resolveMemoryLayout } from "../../src/compile/memory_layout.ts";
-import { CompiledFlow, copyGraph, END_ID, Flow, START_ID } from "../../src/compile/model.ts";
+import { resolveMemoryLayout, stampMemoryLayout } from "../../src/compile/memory_layout.ts";
+import { CompiledFlow, END_ID, Flow, nodeChild, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { compareCodeUnits, OriginRef } from "../../src/diagnostics.ts";
+import { OriginRef } from "../../src/diagnostics.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node, NodeKind } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
@@ -29,30 +24,9 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 
-/** Make an object of `proto`'s class holding `fields`, without running its constructor. */
-function forge<T extends object>(proto: T, fields: object): T {
-  return Object.assign(Object.create(proto), fields) as T;
-}
-
-/** A layout's comparable part: each target's locator and scope, in order. */
-function view(layout: ResolvedExecutionLayout): unknown[] {
-  return layout.targets.map((target) => [target.locator, target.scope]);
-}
-
 /** A CODE node returning 1. */
 function code(id: string): CodeNode {
   return new CodeNode(id, { code: "return 1" });
-}
-
-/** Expect `fn` to throw a `TypeError` or `RangeError`. */
-function expectRejected(fn: () => void): void {
-  let caught: unknown = null;
-  try {
-    fn();
-  } catch (error) {
-    caught = error;
-  }
-  expect(caught instanceof TypeError || caught instanceof RangeError).toBe(true);
 }
 
 /** Expect `fn` to throw exactly `cls` with exactly `message`. */
@@ -68,16 +42,15 @@ function expectError(fn: () => unknown, cls: typeof Error, message: string): voi
   expect((caught as Error).message).toBe(message);
 }
 
-/** A two-node flow and its resolved layout. */
-function twoNodeLayout(): [CompiledFlow, ResolvedExecutionLayout] {
-  const flow = new CompiledFlow(
-    new Map<string, Node>([
-      ["first", code("first")],
-      ["last", new CodeNode("last", { code: "return 2" })],
-    ]),
-    [],
-  );
-  return [flow, resolveExecutionLayout(flow)];
+/** Return every statically reachable node by its locator, joined with `/`. */
+function nodesByLocator(flow: Flow, path: readonly string[] = [], found = new Map<string, Node>()): Map<string, Node> {
+  for (const [nodeId, node] of flow.nodes) {
+    const locator = [...path, nodeId];
+    found.set(locator.join("/"), node);
+    const child = nodeChild(node);
+    if (child !== null) nodesByLocator(child, locator, found);
+  }
+  return found;
 }
 
 test("execution scope has an explicit manifest policy", () => {
@@ -102,8 +75,8 @@ test("execution scope has an explicit manifest policy", () => {
 describe.each([
   ["Flow", (nodes: Map<string, Node>) => new Flow(nodes, [])],
   ["CompiledFlow", (nodes: Map<string, Node>) => new CompiledFlow(nodes, [])],
-])("execution layout exists without memory policies (%s)", (_name, makeFlow) => {
-  test("resolves and applies", () => {
+])("execution scopes exist without memory policies (%s)", (_name, makeFlow) => {
+  test("stamps every node", () => {
     const node = new CodeNode("authored~3/step", { code: "return 1", title: "display name" });
     node.origin = new OriginRef("unrelated:source");
     const flow = makeFlow(
@@ -113,29 +86,26 @@ describe.each([
         [END_ID, EndNode.value(END_ID, { outputName: null })],
       ]),
     );
-    const layout = resolveExecutionLayout(flow);
     const expected = new Map<string, ExecutionScope>([
       [END_ID, new ExecutionScope([END_ID], { boundary: "end" })],
       [START_ID, new ExecutionScope([START_ID], { boundary: "start" })],
       [node.id, new ExecutionScope([node.id])],
     ]);
-    const sortedIds = [...expected.keys()].sort(compareCodeUnits);
-    expect(view(layout)).toEqual(sortedIds.map((id) => [[id], expected.get(id)]));
-    expect(layout.targets.every((target) => target.node.executionScope === null)).toBe(true);
+
+    stampExecutionScopes(flow);
+    const stamped = new Map([...flow.nodes].map(([id, item]) => [id, item.executionScope]));
+    expect(stamped).toEqual(expected);
+    expect([...flow.nodes.values()].every((item) => item.memoryScope === null)).toBe(true);
+    // Titles and origins aren't part of a scope, so stamping again changes nothing.
     node.title = "another display name";
     node.origin = new OriginRef("different:source");
-    expect(view(resolveExecutionLayout(flow))).toEqual(view(layout));
-
-    applyExecutionLayout(flow, layout);
-    expect(layout.targets.every((target) => target.node.executionScope === target.scope)).toBe(true);
-    expect(layout.targets.every((target) => target.node.memoryScope === null)).toBe(true);
-    applyExecutionLayout(flow, layout);
-    expect(view(resolveExecutionLayout(flow))).toEqual(view(layout));
+    stampExecutionScopes(flow);
+    expect(new Map([...flow.nodes].map(([id, item]) => [id, item.executionScope]))).toEqual(stamped);
 
     const plain = makeFlow(new Map<string, Node>([["plain", code("plain")]]));
-    applyExecutionLayout(plain, resolveExecutionLayout(plain));
+    stampExecutionScopes(plain);
     expect(plain.nodes.get("plain")!.executionScope).toEqual(new ExecutionScope(["plain"]));
-    expect(resolveExecutionLayout(makeFlow(new Map())).targets).toEqual([]);
+    expect(() => stampExecutionScopes(makeFlow(new Map()))).not.toThrow();
   });
 });
 
@@ -148,81 +118,29 @@ test("aliased child targets are rejected before any scope is stamped", () => {
     ]),
     [],
   );
-  const layout = resolveExecutionLayout(flow);
-  expect(() => applyExecutionLayout(flow, layout)).toThrow(RangeError);
-  expect(() => applyExecutionLayout(flow, layout)).toThrow(/multiple static paths/);
-  expect(layout.targets.every((target) => target.node.executionScope === null)).toBe(true);
+  expect(() => stampExecutionScopes(flow)).toThrow(RangeError);
+  expect(() => stampExecutionScopes(flow)).toThrow(/multiple static paths/);
+  expect([...flow.nodes.values(), ...child.nodes.values()].every((node) => node.executionScope === null)).toBe(true);
 });
 
-test.each(["new-target", "replaced-target", "invalid-key"])(
-  "stale graph is rejected without stamping any target (%s)",
-  (change) => {
-    const [flow, layout] = twoNodeLayout();
-    if (change === "new-target") {
-      flow.nodes.set("new", new CodeNode("new", { code: "return 3" }));
-    } else if (change === "replaced-target") {
-      flow.nodes.set("last", copyGraph(flow.nodes.get("last")!));
-    } else {
-      const last = flow.nodes.get("last")!;
-      flow.nodes.delete("last");
-      flow.nodes.set("bad-key", last);
-    }
-    expect(() => applyExecutionLayout(flow, layout)).toThrow(RangeError);
-    expect([...flow.nodes.values()].every((node) => node.executionScope === null)).toBe(true);
-    expect(layout.targets.every((target) => target.node.executionScope === null)).toBe(true);
-  },
-);
+test("a different existing scope is rejected before any scope is stamped", () => {
+  const first = code("first");
+  const last = new CodeNode("last", { code: "return 2" });
+  const flow = new CompiledFlow(new Map<string, Node>([["first", first], ["last", last]]), []);
+  const other = new ExecutionScope(["other"]);
+  last.executionScope = other;
 
-test.each(["missing-target", "duplicate-target", "mutable-targets"])(
-  "invalid layout is rejected without stamping any target (%s)",
-  (change) => {
-    const [flow, real] = twoNodeLayout();
-    let layout: ResolvedExecutionLayout;
-    if (change === "missing-target") {
-      layout = new ResolvedExecutionLayout(real.targets.slice(0, -1));
-    } else if (change === "duplicate-target") {
-      layout = new ResolvedExecutionLayout([...real.targets, real.targets.at(-1)!]);
-    } else {
-      layout = forge(ResolvedExecutionLayout.prototype, { targets: new Set(real.targets) });
-    }
-    expectRejected(() => applyExecutionLayout(flow, layout));
-    expect([...flow.nodes.values()].every((node) => node.executionScope === null)).toBe(true);
-  },
-);
-
-describe.each(["layout", "existing"])("scope validation is atomic even for forged frozen values (%s)", (location) => {
-  test.each(["different-path", "path-subclass", "position-index"])("%s", (change) => {
-    const [flow, layout] = twoNodeLayout();
-    const [first, final] = layout.targets as [ResolvedExecutionTarget, ResolvedExecutionTarget];
-    let fields: object;
-    if (change === "different-path") {
-      fields = { staticPath: ["other"] };
-    } else if (change === "path-subclass") {
-      fields = { staticPath: [new String("last")] };
-    } else {
-      const position = forge(ExecutionPosition.prototype, { kind: "map_item", staticPath: ["map"], index: true });
-      fields = { occurrencePath: [position] };
-    }
-    const scope = forge(ExecutionScope.prototype, { ...final.scope, ...fields });
-    let applied = layout;
-    if (location === "layout") {
-      const target = forge(ResolvedExecutionTarget.prototype, { ...final, scope });
-      applied = forge(ResolvedExecutionLayout.prototype, { targets: [first, target] });
-    } else {
-      final.node.executionScope = scope;
-    }
-    expectRejected(() => applyExecutionLayout(flow, applied));
-    expect(flow.nodes.get("first")!.executionScope).toBeNull();
-    expect(final.node.executionScope).toBe(location === "existing" ? scope : null);
-  });
+  expectError(() => stampExecutionScopes(flow), RangeError, 'node at ["last"] already has a different execution scope');
+  expect(first.executionScope).toBeNull();
+  expect(last.executionScope).toBe(other);
 });
 
 test("recursive static child cycle is rejected without mutation", () => {
   const flow = new Flow(new Map(), []);
   const node = new CallNode("recurse", { flowId: "child", child: flow });
   flow.nodes.set(node.id, node);
-  expect(() => resolveExecutionLayout(flow)).toThrow(RangeError);
-  expect(() => resolveExecutionLayout(flow)).toThrow(/recursive child-flow cycle/);
+  expect(() => stampExecutionScopes(flow)).toThrow(RangeError);
+  expect(() => stampExecutionScopes(flow)).toThrow(/recursive child-flow cycle/);
   expect(node.executionScope).toBeNull();
 });
 
@@ -238,7 +156,7 @@ test("static children are discovered through the node-owned hook", () => {
   }
 
   const flow = new Flow(new Map<string, Node>([["wrapper", new Wrapper("wrapper")]]), []);
-  applyExecutionLayout(flow, resolveExecutionLayout(flow));
+  stampExecutionScopes(flow);
   expect(child.nodes.get("leaf")!.executionScope).toEqual(
     new ExecutionScope(["wrapper", "leaf"], { flowPath: ["wrapper"] }),
   );
@@ -254,46 +172,23 @@ test("only the containing flow's actual boundaries are marked", () => {
     [],
     { startId: "entry", endId: "result" },
   );
-  const layout = resolveExecutionLayout(flow);
-  expect(layout.targets.map((target) => [target.locator, target.scope.boundary])).toEqual([
-    [["entry"], "start"],
-    [["helper"], null],
-    [["result"], "end"],
+  stampExecutionScopes(flow);
+  expect([...flow.nodes].map(([id, node]) => [id, node.executionScope!.boundary])).toEqual([
+    ["entry", "start"],
+    ["result", "end"],
+    ["helper", null],
   ]);
 });
 
-test("static loop scope starts at driver zero and reapplies atomically", () => {
+test("static loop scope starts at driver zero and restamps idempotently", () => {
   const node = new LoopNode("loop", { flowId: "body", times: 0, maxIters: 0, predicateKind: "times" });
   const flow = new Flow(new Map<string, Node>([["first", code("first")], ["loop", node]]), []);
-  const layout = resolveExecutionLayout(flow);
-  const target = layout.targets.find((item) => item.node === node)!;
-  expect(target.scope.occurrencePath).toEqual([new ExecutionPosition("loop_driver", ["loop"], 0)]);
-  expect(flow.nodes.get("first")!.executionScope).toBeNull();
-  applyExecutionLayout(flow, layout);
-  applyExecutionLayout(flow, layout);
-  expect(view(resolveExecutionLayout(flow))).toEqual(view(layout));
+  stampExecutionScopes(flow);
+  const scope = node.executionScope;
+  expect(scope!.occurrencePath).toEqual([new ExecutionPosition("loop_driver", ["loop"], 0)]);
+  stampExecutionScopes(flow);
+  expect(node.executionScope).toEqual(scope);
   expect(flow.nodes.get("first")!.executionScope!.occurrencePath).toEqual([]);
-});
-
-test.each([
-  ["empty", []],
-  ["driver one", [new ExecutionPosition("loop_driver", ["loop"], 1)]],
-  ["other driver", [new ExecutionPosition("loop_driver", ["other"], 0)]],
-  ["body zero", [new ExecutionPosition("loop_body", ["loop"], 0)]],
-  ["nested driver", [new ExecutionPosition("call", ["outer"]), new ExecutionPosition("loop_driver", ["loop"], 0)]],
-])("static loop layout rejects nonbootstrap positions before stamping (%s)", (_name, position) => {
-  const node = new LoopNode("loop", { flowId: "body" });
-  const flow = new Flow(new Map<string, Node>([["first", code("first")], ["loop", node]]), []);
-  const layout = resolveExecutionLayout(flow);
-  const target = layout.targets.find((item) => item.node === node)!;
-  const scope = forge(ExecutionScope.prototype, { ...target.scope, occurrencePath: position });
-  const forged = forge(ResolvedExecutionTarget.prototype, { ...target, scope });
-  const applied = forge(ResolvedExecutionLayout.prototype, {
-    targets: layout.targets.map((item) => (item === target ? forged : item)),
-  });
-  expect(() => applyExecutionLayout(flow, applied)).toThrow(RangeError);
-  expect(() => applyExecutionLayout(flow, applied)).toThrow(/initial driver position/);
-  expect([...flow.nodes.values()].every((item) => item.executionScope === null)).toBe(true);
 });
 
 // ---------- loaded flows ----------
@@ -318,27 +213,18 @@ output: \${right.output}
 const AGENT_ANSWER = "kind: agent\n        variables: {instruction: !str Summarize clearly}\n" +
   "        prompt: \${instruction}\n        output: str";
 
-/** Return the layout's targets by locator, joined with `/`. */
-function targetsByLocator(layout: ResolvedExecutionLayout): Map<string, ResolvedExecutionTarget> {
-  return new Map(layout.targets.map((target) => [target.locator.join("/"), target]));
-}
-
 test("callsites to one definition have distinct paths", async () => {
   const flow = (await loadFlow(REPEATED_DEFINITION)).compiled;
   applyEffectiveLlmMap(flow, {});
-  const layout = resolveExecutionLayout(flow);
-  const targets = targetsByLocator(layout);
-  const left = targets.get("left/answer")!;
-  const right = targets.get("right/answer")!;
-  expect(left.node).not.toBe(right.node);
-  expect(left.scope).toEqual(new ExecutionScope(["left", "answer"], { flowPath: ["left"] }));
-  expect(right.scope).toEqual(new ExecutionScope(["right", "answer"], { flowPath: ["right"] }));
-  expect(targets.get(`left/${START_ID}`)!.scope.boundary).toBe("start");
-  expect(targets.get(`right/${END_ID}`)!.scope.boundary).toBe("end");
-
-  applyExecutionLayout(flow, layout);
-  expect(left.node.executionScope).toEqual(left.scope);
-  expect(right.node.executionScope).toEqual(right.scope);
+  stampExecutionScopes(flow);
+  const nodes = nodesByLocator(flow);
+  const left = nodes.get("left/answer")!;
+  const right = nodes.get("right/answer")!;
+  expect(left).not.toBe(right);
+  expect(left.executionScope).toEqual(new ExecutionScope(["left", "answer"], { flowPath: ["left"] }));
+  expect(right.executionScope).toEqual(new ExecutionScope(["right", "answer"], { flowPath: ["right"] }));
+  expect(nodes.get(`left/${START_ID}`)!.executionScope!.boundary).toBe("start");
+  expect(nodes.get(`right/${END_ID}`)!.executionScope!.boundary).toBe("end");
 });
 
 test("agent variable owners are authored callsites and survive call cloning", async () => {
@@ -351,16 +237,14 @@ test("agent variable owners are authored callsites and survive call cloning", as
     flow,
     Object.fromEntries(["left/answer", "right/answer"].map((path) => [path, { provider: "test", model: "test" }])),
   );
-  const layout = resolveExecutionLayout(flow);
+  stampExecutionScopes(flow);
   const owners = new Set(
-    layout.targets.flatMap((target) =>
-      target.node.declaredVariables().map((variable) => `${target.scope.staticPath.join("/")}:${variable.name}`),
+    [...nodesByLocator(flow).values()].flatMap((node) =>
+      node.declaredVariables().map((variable) => `${node.executionScope!.staticPath.join("/")}:${variable.name}`),
     ),
   );
   expect(owners).toEqual(new Set(["left/answer:instruction", "right/answer:instruction"]));
-  expect(layout.targets.every((target) => target.node.executionScope === null)).toBe(true);
 
-  applyExecutionLayout(flow, layout);
   for (const callsite of ["left", "right"]) {
     const spawner = flow.nodes.get(callsite) as CallNode;
     const child = spawner.child as Flow;
@@ -415,11 +299,10 @@ output: \${outer.output}
 `)
   ).compiled;
   applyEffectiveLlmMap(flow, { "outer/repeat/writer": { provider: "test", model: "test" } });
-  const layout = resolveExecutionLayout(flow);
-  const authored = layout.targets.find((target) => target.node instanceof AgentNode)!;
-  const owner = [authored.scope.staticPath, authored.node.declaredVariables()[0]!.name];
+  stampExecutionScopes(flow);
+  const authored = [...nodesByLocator(flow).values()].find((node) => node instanceof AgentNode)!;
+  const owner = [authored.executionScope!.staticPath, authored.declaredVariables()[0]!.name];
   expect(owner).toEqual([["outer", "repeat", "writer"], "instruction"]);
-  applyExecutionLayout(flow, layout);
   const spawner = flow.nodes.get("outer") as MapNode;
   const fragment = mapSubgraph(spawner.child as Flow, spawner.id, [{ n: 3n }, { n: 3n }], {
     executionScope: spawner.executionScope,
@@ -454,8 +337,8 @@ output: \${outer.output}
   });
   expect(occurrences.size).toBe(4);
   expect(variables.size).toBe(1);
-  expect(variables.has(authored.node.declaredVariables()[0])).toBe(true);
-  expect(authored.node.executionScope!.occurrencePath).toEqual([]);
+  expect(variables.has(authored.declaredVariables()[0])).toBe(true);
+  expect(authored.executionScope!.occurrencePath).toEqual([]);
 });
 
 test.each([true, false])("execution scope agrees with existing memory ownership paths (child policy %p)", async (childPolicy) => {
@@ -471,21 +354,21 @@ test.each([true, false])("execution scope agrees with existing memory ownership 
       ["left/answer", "right/answer"].map((path) => [path, { provider: "openai", model: "test-model" }]),
     ),
   );
-  const memoryLayout = resolveMemoryLayout(flow);
-  applyMemoryLayout(flow, memoryLayout);
+  const memoryLayout = stampMemoryLayout(flow);
   const oldMemory = new Map(memoryLayout.targets.map((target) => [target.locator.join("/"), target.node.memoryScope]));
-  const executionLayout = resolveExecutionLayout(flow);
-  applyExecutionLayout(flow, executionLayout);
+  stampExecutionScopes(flow);
 
   expect(resolveMemoryLayout(flow)).toEqual(memoryLayout);
-  for (const target of executionLayout.targets) {
-    const memoryScope = oldMemory.get(target.locator.join("/"))!;
-    expect(target.node.memoryScope).toBe(memoryScope);
-    expect(memoryScope.staticPath).toEqual(target.scope.staticPath);
+  const nodes = nodesByLocator(flow);
+  expect(new Set(nodes.keys())).toEqual(new Set(oldMemory.keys()));
+  for (const [locator, node] of nodes) {
+    const memoryScope = oldMemory.get(locator)!;
+    expect(node.memoryScope).toBe(memoryScope);
+    expect(memoryScope.staticPath).toEqual(node.executionScope!.staticPath);
     expect(memoryScope.memories[0]).toBe("outer");
-    expect(target.scope.occurrencePath).toEqual([]);
+    expect(node.executionScope!.occurrencePath).toEqual([]);
   }
-  const childStart = executionLayout.targets.find((target) => target.locator.join("/") === `left/${START_ID}`)!;
-  expect(childStart.scope.flowPath).toEqual(["left"]);
-  expect(childStart.scope.boundary).toBe("start");
+  const childStart = nodes.get(`left/${START_ID}`)!.executionScope!;
+  expect(childStart.flowPath).toEqual(["left"]);
+  expect(childStart.boundary).toBe("start");
 });

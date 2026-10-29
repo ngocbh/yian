@@ -1604,12 +1604,17 @@ const OPAQUE_OVER = `id: inline-map-opaque-over-no-item
 name: inline_map_opaque_over_no_item
 input:
   primary: !list(str)
-  fallback: !list(str)
   prefix: !str
 nodes:
+  rows:
+    kind: code
+    code: |
+      return inputs["primary"]
+    input:
+      primary: \${input.primary}
   each:
     kind: map
-    over: \${input.primary | input.fallback}
+    over: \${rows.output}
     input:
       constant: fixed
       parent: \${input.prefix}
@@ -1653,7 +1658,7 @@ test("an inline MAP over an opaque list loads when no binding walks the item dir
 });
 
 test("an inline MAP over an opaque list runs when no binding walks the item directly", async () => {
-  const output = await runOutput(OPAQUE_OVER, { primary: ["first", "second"], fallback: ["unused"], prefix: "P" });
+  const output = await runOutput(OPAQUE_OVER, { primary: ["first", "second"], prefix: "P" });
 
   expect(output).toEqual([
     { constant: "fixed", parent: "P", template: "item first", literal: { nested: "P" } },
@@ -1668,11 +1673,16 @@ test.each(["${item}", "${item.name}", "{nested: '${item}'}"])(
 name: inline_map_opaque_over_item
 input:
   primary: !list(str)
-  fallback: !list(str)
 nodes:
+  rows:
+    kind: code
+    code: |
+      return inputs["primary"]
+    input:
+      primary: \${input.primary}
   each:
     kind: map
-    over: \${input.primary | input.fallback}
+    over: \${rows.output}
     input:
       row: ${itemSource}
     nodes:
@@ -1689,13 +1699,41 @@ output: \${each.output}
     const error = loadError(() => assembleText(source));
 
     expect(error.message).toBe(
-      "cannot infer type for inline binding 'each.input.row': a whole-value expression has no supported " +
-        "static scalar type; declare its type with a tag (`row: !<type> ...`) or use an explicitly typed " +
-        "named `defs:` body",
+      "cannot infer type for inline binding 'each.input.row': producer 'rows' has no available static " +
+        "type; declare its type with a tag (`row: !<type> ...`) or use an explicitly typed named `defs:` body",
     );
     expect(error.diagnostic.frames.at(-1)!.range).toEqual(inputRange(source, "each", "row"));
   },
 );
+
+test("an inline MAP over a computed list types its item", async () => {
+  const source = `id: inline-map-computed-over
+name: inline_map_computed_over
+input:
+  primary: !Optional(list(str))
+  fallback: !list(str)
+nodes:
+  each:
+    kind: map
+    over: \${input.primary | input.fallback}
+    input:
+      row: \${item}
+    nodes:
+      echo:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo_x
+        input:
+          x: \${input.row}
+        output: str
+    output: \${echo.output}
+output: \${each.output}
+`;
+
+  expect(driver<MapNode>(assembleText(source).flow, "each").childInputs).toEqual([
+    parameter("row", Type.scalar(ValueKind.STRING)),
+  ]);
+  expect(await runOutput(source, { fallback: ["a", "b"] })).toEqual(["a", "b"]);
+});
 
 // Spies on a module export, which only Bun allows (Node's ESM namespaces are frozen); the proof
 // path calls the function directly, with no object or option to observe it through.

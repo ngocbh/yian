@@ -118,9 +118,8 @@ export function synthesizeBoundaryGraph(
     // asserts read `${output.X}`, so the node's `run` wrapper fires them against START's bound
     // (defaulted) record. END fires its POST asserts through the same seam; any
     // `${producer.output}` head is lowered to a synth END param that binds the producer's value
-    // into END's record, so the assert fires record-only. START carries no `postAsserts` today,
-    // but append rather than assign so a future START-owned post-assert is not clobbered.
-    start.postAsserts = [...start.postAsserts, ...lowered.startPre];
+    // into END's record, so the assert fires record-only.
+    start.postAsserts = [...lowered.startPre];
     end.postAsserts = [...lowered.endPost];
     // Each synthesized END input is an extra param, a wiring source and a producer edge, so the
     // value the post-assert reads is present when END's `run` wrapper evaluates it. END's

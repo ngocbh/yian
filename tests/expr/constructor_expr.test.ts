@@ -460,7 +460,6 @@ test("inference reads optional record fields, file fields and nullable aliases",
 
 test("inference without types leaves a call unknown", () => {
   expect(inferExprType(parseExpr("Buy(d.output)"), noRefs)).toBeNull();
-  expect(inferExprType(parseExpr("upper(x)"), noRefs, typeFn)).toBeNull();
 });
 
 test("feedback on a built field reaches its argument", () => {

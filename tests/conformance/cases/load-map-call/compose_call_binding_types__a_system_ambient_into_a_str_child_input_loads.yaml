@@ -1,0 +1,65 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    xs: !list(str)
+  defs:
+    child:
+      input:
+        s: !str
+      nodes:
+        echo:
+          kind: code
+          input:
+            s: ${input.s}
+          output: str
+          code: return inputs.s
+      output: ${echo.output}
+    maybe:
+      input:
+        s: !Optional(str)
+      nodes:
+        echo:
+          kind: code
+          input:
+            s: ${input.s}
+          output: Optional(str)
+          code: return inputs.s
+      output: ${echo.output}
+    stamp:
+      nodes: {}
+      output:
+        at: ${system.now}
+  nodes:
+    day:
+      kind: call
+      call: child
+      input:
+        s: ${system.today}
+    now:
+      kind: call
+      call: maybe
+      input:
+        s: ${system.now}
+    st:
+      kind: call
+      call: stamp
+    at:
+      kind: call
+      call: child
+      input:
+        s: ${st.output.at}
+    each:
+      kind: map
+      over: ${input.xs}
+      call: child
+      input:
+        s: ${system.today}
+  output:
+    day: ${day.output}
+    now: ${now.output}
+    at: ${at.output}
+    each: ${each.output}
+expect:
+  load: ok

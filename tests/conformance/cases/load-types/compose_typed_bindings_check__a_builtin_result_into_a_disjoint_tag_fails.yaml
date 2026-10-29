@@ -1,0 +1,17 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  input:
+    xs: !list(str)
+  nodes:
+    n: !str ${len(input.xs)}
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "value entry 'n': declared str, but the value is int"
+      frames:
+      - label: flow.yaml
+        range: [6, 6, 6, 27]

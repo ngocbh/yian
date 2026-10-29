@@ -27,7 +27,7 @@ import {
   TypeCheckError,
   ValueKind,
 } from "../../src/typesys/values.ts";
-import { assembled, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
 
 const LIST_VALUE_KINDS = Object.values(ValueKind).filter(isListKind);
 
@@ -97,7 +97,7 @@ function record(
   });
 }
 
-const NOT_SCALAR = "a whole-value expression has no supported static scalar type";
+const NOT_PROVEN = "a whole-value expression has no statically proven type";
 
 describe("inline input inference", () => {
   test.each([
@@ -134,19 +134,57 @@ describe("inline input inference", () => {
   });
 
   test.each([
-    "${[1, 2]}",
+    ["${[1, 2]}", new Type({ kind: ValueKind.LIST_INTEGER, element: INT })],
+    ["${1 == 2}", Type.scalar(ValueKind.BOOLEAN)],
+    ["${true and false}", Type.scalar(ValueKind.BOOLEAN)],
+    ["${not true}", Type.scalar(ValueKind.BOOLEAN)],
+    ['${upper("x")}', STR],
+    ["${inf}", Type.scalar(ValueKind.NUMBER)],
+  ])("a whole-value expression has the type the shared inference proves: %s", (source, expected) => {
+    expect(infer(source)).toEqual(expected);
+  });
+
+  test.each([
+    ["${input.k > 1}", Type.scalar(ValueKind.BOOLEAN)],
+    ["${not input.k}", Type.scalar(ValueKind.BOOLEAN)],
+    ["${input.s :- null}", new Type({ kind: ValueKind.STRING, nullable: true })],
+    ["${input.s :- 'x'}", STR],
+    ["${input.s | 'x'}", STR],
+    ["${[input.k, 1]}", new Type({ kind: ValueKind.LIST_INTEGER, element: INT })],
+    ["${len(input.s :- '')}", INT],
+  ])("an expression over parent inputs is inferred: %s", (source, expected) => {
+    const parentInputTypes = new Map([
+      ["k", INT],
+      ["s", new Type({ kind: ValueKind.STRING, nullable: true })],
+    ]);
+    expect(infer(source, { parentInputTypes })).toEqual(expected);
+  });
+
+  test("an expression over a producer reads its contract, and an untyped producer leaves it unproven", () => {
+    const requests: string[] = [];
+    const producerType = (key: string) => {
+      requests.push(key);
+      return key === "typed" ? new ValueContract(record({ n: INT })) : null;
+    };
+    const inferAt = (source: string) =>
+      inferInlineBindingType(source, { parentInputTypes: new Map(), producerType, bindingLabel: "call.input.value" });
+
+    expect(inferAt("${typed.output.n > 0}")).toEqual(Type.scalar(ValueKind.BOOLEAN));
+    expect(inferAt("${len(untyped.output)}")).toEqual(INT);
+    expect(loadError(() => inferAt("${untyped.output :- 1}")).message).toBe(message("call.input.value", NOT_PROVEN));
+    expect(requests).toEqual(["typed", "untyped", "untyped"]);
+  });
+
+  test.each([
     "${1 + 2}",
-    "${1 == 2}",
-    "${true and false}",
-    "${not true}",
-    '${upper("x")}',
     "${left | right}",
     "${left :- 1}",
     '${left :? "required"}',
     "${-1}",
-  ])("a lone non-scalar expression is rejected: %s", (source) => {
+    "${[1, 2.5]}",
+  ])("an unproven whole-value expression is rejected: %s", (source) => {
     const error = loadError(() => infer(source, { label: "call.input.payload" }));
-    expect(error.message).toBe(message("call.input.payload", NOT_SCALAR));
+    expect(error.message).toBe(message("call.input.payload", NOT_PROVEN));
   });
 
   test("a mapping literal is a sorted closed record", () => {
@@ -234,21 +272,28 @@ describe("inline input inference", () => {
     expect(loadError(() => infer(value)).message).toBe(message("each.input.value", reason));
   });
 
-  test.each(["mapping", "list"])("an active literal cycle is rejected: %s", (containerKind) => {
-    let value: unknown;
-    let at: string;
-    if (containerKind === "mapping") {
-      const mapping: Record<string, unknown> = {};
-      mapping["self"] = mapping;
-      [value, at] = [mapping, 'each.input.value["self"]'];
-    } else {
-      const list: unknown[] = [];
-      list.push(list);
-      [value, at] = [list, "each.input.value[0]"];
-    }
-
-    expect(loadError(() => infer(value)).message).toBe(
-      message("each.input.value", `cyclic literal container encountered at ${at}`),
+  test("a recursive alias in an inline input is refused before inference", () => {
+    const source = `id: cyc
+name: cyc
+input:
+  k: !int
+nodes:
+  wrap:
+    kind: call
+    input:
+      xs: &a ["\${input.k}", *a]
+    nodes:
+      echo:
+        kind: code
+        input:
+          xs: \${input.xs}
+        output: int
+        code: return 1
+    output: \${echo.output}
+output: \${wrap.output}
+`;
+    expect(loadError(() => assembleText(source)).message).toBe(
+      "'xs': cannot descend through a recursive alias occurrence",
     );
   });
 
@@ -263,16 +308,23 @@ describe("inline input inference", () => {
     expect(infer("${input.record.value}", { parentInputTypes: new Map([["record", declared]]) })).toEqual(INT);
   });
 
-  test("a whole unrefined object reference is allowed but copied", () => {
+  test.each([
+    ["${system.today}", ValueKind.DATE],
+    ["${system.now}", ValueKind.DATETIME],
+    ["${system.run_id}", ValueKind.STRING],
+  ])("a system ambient has its scalar type: %s", (source, kind) => {
+    expect(infer(source)).toEqual(Type.scalar(kind));
+  });
+
+  test("a whole unrefined object reference is allowed", () => {
     const declared = Type.scalar(ValueKind.OBJECT);
 
     const inferred = infer("${input.payload}", { parentInputTypes: new Map([["payload", declared]]) });
 
     expect(inferred).toEqual(declared);
-    expect(inferred).not.toBe(declared);
   });
 
-  test("a direct producer reference passes the request context and returns a copy", () => {
+  test("a direct producer reference passes the request context", () => {
     const sourceRange = new SourceRange(31, 8, 31, 32);
     const outputType = record({ result: STR });
     const calls: [string, string, SourceRange | null][] = [];
@@ -289,7 +341,6 @@ describe("inline input inference", () => {
 
     expect(calls).toEqual([["prepare", "call.input.payload", sourceRange]]);
     expect(inferred).toEqual(outputType);
-    expect(inferred).not.toBe(outputType);
   });
 
   test("a direct item reference passes the request context and walks fields", () => {
@@ -312,7 +363,7 @@ describe("inline input inference", () => {
     expect(inferred).toEqual(STR);
   });
 
-  test("a whole item reference returns a fresh nullable type without mutation", () => {
+  test("a whole item reference keeps its nullable type without mutation", () => {
     const sourceRange = new SourceRange(47, 6, 47, 13);
     const makeItem = () => record({ name: STR }, { nullable: true });
     const item = makeItem();
@@ -331,7 +382,6 @@ describe("inline input inference", () => {
 
     expect(calls).toEqual([["each.input.row", sourceRange]]);
     expect(inferred).toEqual(item);
-    expect(inferred).not.toBe(item);
     expect(inferred.nullable).toBe(true);
     expect(item).toEqual(makeItem());
   });
@@ -351,7 +401,7 @@ describe("inline input inference", () => {
       }),
     );
 
-    expect(error.message).toBe(message("each.input.computed", NOT_SCALAR));
+    expect(error.message).toBe(message("each.input.computed", NOT_PROVEN));
     expect(calls).toBe(0);
   });
 
@@ -405,7 +455,6 @@ describe("inline input inference", () => {
       const inferred = infer("${input.record.middle.value}", { parentInputTypes: new Map([["record", root]]) });
 
       expect(inferred).toEqual(new Type({ kind: ValueKind.INTEGER, nullable: expectedNullable }));
-      expect(inferred).not.toBe(valueType);
       expect(root).toEqual(makeRoot());
     },
   );
@@ -481,27 +530,24 @@ describe("inline input inference", () => {
     expect(inferred).toEqual(new Type({ kind: ValueKind.INTEGER, nullable: true }));
   });
 
-  test("a zero-step direct walk always returns a fresh type", () => {
+  test("a zero-step direct walk keeps the declared type", () => {
     const sourceType = new Type({ kind: ValueKind.INTEGER, nullable: true });
 
     const inferred = infer("${input.value}", { parentInputTypes: new Map([["value", sourceType]]) });
 
     expect(inferred).toEqual(sourceType);
-    expect(inferred).not.toBe(sourceType);
   });
 
   test.each([
     ["${input}", "reference ${input} must be input.<name>[.field]"],
     ["${input.missing}", "reference ${input.missing} points to unknown parent input 'missing'"],
-    ["${input.opaque.value}", "reference ${input.opaque.value} traverses 'value' without proven record fields"],
-    ["${input.record.missing}", "reference ${input.record.missing} reads unknown record field 'missing'"],
+    ["${input.opaque.value}", "reference ${input.opaque.value} has no statically proven exact type"],
+    ["${input.record.missing}", "reference ${input.record.missing} reads unknown field 'missing' on record"],
     ["${item.value}", "reference ${item.value} is only typed inside an outer MAP input"],
-    ["${system.now}", "reference ${system.now} has no statically proven system type"],
+    ["${system.nope}", "reference ${system.nope} has no statically proven system type"],
     ["${producer}", "reference ${producer} must select producer.output[.field] or an AGENT's producer.new_messages"],
     ["${producer.value}", "reference ${producer.value} must select producer.output[.field] or an AGENT's producer.new_messages"],
-    ["${producer()}", NOT_SCALAR],
-    ["${producer.output + 1}", NOT_SCALAR],
-    ['${upper("x")}', NOT_SCALAR],
+    ["${producer()}", NOT_PROVEN],
   ])("an unproven direct reference is a located named-def error: %s", (source, reason) => {
     const sourceRange = new SourceRange(51, 4, 51, 28);
     const inputs = new Map([
@@ -632,7 +678,7 @@ describe("inline input inference", () => {
     expect(requireProvenType(opaque, { bindingLabel: "call.input.payload" })).toBe(opaque);
     expect(infer("${input.payload}", { parentInputTypes })).toEqual(opaque);
     expect(loadError(() => infer("${input.payload.value}", { parentInputTypes })).message).toBe(
-      message("each.input.value", "reference ${input.payload.value} traverses 'value' without proven record fields"),
+      message("each.input.value", "reference ${input.payload.value} has no statically proven exact type"),
     );
   });
 

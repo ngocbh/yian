@@ -1927,15 +1927,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       // `messagesKey(id)` names an AGENT's new messages.
       const messages = producerKey.endsWith(`.${NEW_MESSAGES}`);
       const producerId = messages ? producerKey.slice(0, -`.${NEW_MESSAGES}`.length) : producerKey;
-      const unavailableType = (): LoadError =>
-        diagnostics.error(
-          `cannot infer type for inline binding ${reprText(bindingLabel)}: ` +
-            `producer ${reprText(producerId)} has no available static type; ` +
-            explicitTypeHint(bindingLabel),
-          { range: bindingRange },
-        );
-
-      if (!descriptors.has(producerId)) throw unavailableType();
+      if (!descriptors.has(producerId)) return null;
 
       const cache = descriptorCache;
       if (cache === null) throw new Error("descriptor cache was not initialized before inline child resolution");
@@ -1948,7 +1940,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
           { range: bindingRange },
         );
       }
-      if (node.outputContract === null) throw unavailableType();
+      if (node.outputContract === null) return null;
       assertExactContracts(new Map([[producerId, node.outputContract]]));
       return node.outputContract;
     };

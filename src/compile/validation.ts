@@ -34,13 +34,15 @@ import {
 } from "../typesys/values.ts";
 import { END_ID, START_ID } from "./model.ts";
 
-// The ONLY valid ${system.X} ambients, each with its scalar type label:
-//   today=date / now=datetime: the host clock seam; run_id=str: the run-scoped id
-//   (a host-injected ambient, like the clock; seeded once at the boundary, child-inherited)
-const SYSTEM_AMBIENTS: ReadonlyMap<string, string> = new Map([
-  ["today", "date"],
-  ["now", "datetime"],
-  ["run_id", "str"],
+/**
+ * The only valid `${system.X}` ambients, each with its scalar kind: `today` (date) and `now`
+ * (datetime) read the host clock, `run_id` (str) is the run's id. The run seeds each once at its
+ * boundary and a child inherits them.
+ */
+export const SYSTEM_AMBIENTS: ReadonlyMap<string, ValueKind> = new Map([
+  ["today", ValueKind.DATE],
+  ["now", ValueKind.DATETIME],
+  ["run_id", ValueKind.STRING],
 ]);
 
 /**
@@ -139,7 +141,8 @@ function intervalWithin(source: Type, sink: Type): boolean {
 /**
  * Return structural compatibility of a source value type with a sink slot.
  *
- * Same `kind` (with int->number widening, mirroring `coerceScalar`); the singleton `None`
+ * Same `kind` (with int->number widening, mirroring `coerceScalar`, and a date or datetime
+ * fitting `str`, since each is stored as an ISO string, as `typeRelation` counts it); the singleton `None`
  * source may fill any nullable sink; records match structurally (every field the sink REQUIRES
  * is present + compatible); enums by tag-subset (source tags within the sink's accepted tags,
  * so an untagged source cannot fill an enum sink); list elements recurse, treating a bare
@@ -174,7 +177,11 @@ export function typesCompatible(source: Type, sink: Type): boolean {
     if (!(sourceIsList && sinkIsList)) return false;
     return typesCompatible(listElement(source), listElement(sink));
   }
-  if (source.kind !== sink.kind && !(sink.kind === ValueKind.NUMBER && source.kind === ValueKind.INTEGER)) {
+  if (
+    source.kind !== sink.kind &&
+    !(sink.kind === ValueKind.NUMBER && source.kind === ValueKind.INTEGER) &&
+    !(sink.kind === ValueKind.STRING && STRING_STORED.has(source.kind))
+  ) {
     return false;
   }
   if (sink.bounds !== undefined && !intervalWithin(source, sink)) return false;

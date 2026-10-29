@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  nodes:
+    e:
+      kind: code
+      input:
+        day: !date ${system.today}
+        day_text: !str ${system.today}
+        maybe_day: !Optional(date) ${system.today}
+        any_day: !Any ${system.today}
+        now: !datetime ${system.now}
+        now_text: !str ${system.now}
+        run: !str ${system.run_id}
+      output: str
+      code: return String(inputs.day)
+  output: ${e.output}
+expect:
+  load: ok

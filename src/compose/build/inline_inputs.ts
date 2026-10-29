@@ -2,28 +2,27 @@
  * Strict type inference for generated inline-composite input declarations.
  *
  * Inline composite bodies become private child flows, so every outer binding must produce a
- * concrete child-parameter type. This module infers only types that the Compose source proves
- * structurally; it never falls back to the runtime value builder's lenient `Any` behavior.
+ * concrete child-parameter type. This module infers only types that the Compose source proves:
+ * an expression's type comes from the shared output-contract inference, and a literal's from its
+ * structure. It never falls back to the runtime value builder's lenient `Any` behavior.
  * Top-level strings and the leaf strings of a value template are binding templates; a span-free
  * literal container's strings are ordinary strings.
  *
  * Knows about: `expr` template syntax, node-owned semantic binding/output-contract carriers,
- * `typesys` structural types, and Compose source ranges/errors.
- * Never imports: the loader, `compile`, the runtime, or node kinds.
+ * `typesys` structural types, the shared output-contract inference in `compile`, and Compose
+ * source ranges/errors.
+ * Never imports: the loader, the runtime, or node kinds.
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
-import { TEMPLATE_FNS } from "../../expr/builtins.ts";
-import { ExpressionError, ISINSTANCE, type RefStep, splitReference, stepsText } from "../../expr/expressions.ts";
-import { type ExprNode, Token, Tree } from "../../expr/grammar.ts";
-import { scanTemplate, Span } from "../../expr/template.ts";
+import { ExpressionError } from "../../expr/expressions.ts";
+import type { Tree } from "../../expr/grammar.ts";
+import { scanTemplate, Span, templateRefs } from "../../expr/template.ts";
 import {
   Binding,
   bindingSource,
-  fileFieldError,
   isExactly,
   type OutputContract,
-  PartialRecordContract,
   ValueContract,
   ValueTemplate,
 } from "../../nodes/contracts.ts";
@@ -31,13 +30,11 @@ import { messagesKey, NEW_MESSAGES } from "../../typesys/pool.ts";
 import { typeName } from "../../typesys/types.ts";
 import {
   canonicalTypeLabel,
-  fileFieldType,
   isListKind,
   isRecord,
   listKindForElement,
   Type,
   typeEquals,
-  unionField,
   ValueKind,
   writeAsJson,
   writeAsText,
@@ -48,8 +45,10 @@ import {
   hasOptionalStep,
   outputContractPathError,
   projectOutputContract,
+  resolveOutputBindingContract,
   type TypeFn,
 } from "../../compile/output_contracts.ts";
+import { SYSTEM_AMBIENTS } from "../../compile/validation.ts";
 
 /**
  * Return the advice for an inline binding whose type can't be proven.
@@ -64,24 +63,22 @@ export function explicitTypeHint(bindingLabel: string): string {
 }
 
 /**
- * Resolves a producer key to its output type or canonical output contract: a node id for its
- * output, or `messagesKey(id)` for an AGENT's new messages. It receives the requesting binding
- * label and range so lazy-build failures keep their source site.
+ * Resolves a producer key to its output type or canonical output contract, or `null` when the
+ * producer has no static type: a node id for its output, or `messagesKey(id)` for an AGENT's new
+ * messages. It receives the requesting binding label and range so lazy-build failures keep their
+ * source site.
  */
 export type ProducerType = (
   producerKey: string,
   bindingLabel: string,
   bindingRange: SourceRange | null,
-) => Type | OutputContract;
+) => Type | OutputContract | null;
 
 /** Lazily supplies a MAP element type for a direct `${item...}` read. */
 export type ItemType = (bindingLabel: string, bindingRange: SourceRange | null) => Type;
 
-const SCALAR_TOKEN_KINDS: ReadonlyMap<string, ValueKind> = new Map([
-  ["NULL", ValueKind.NONE],
-  ["BOOL", ValueKind.BOOLEAN],
-  ["STRING", ValueKind.STRING],
-]);
+// The reference heads that never name a producer, even before `.output`.
+const NON_PRODUCER_HEADS: ReadonlySet<string> = new Set(["input", "item", "system", "inputs", "outputs"]);
 
 /** The shared context of one binding's inference walk. */
 interface Walk {
@@ -101,9 +98,11 @@ interface Walk {
  * passed directly as `value` and each leaf string of a `ValueTemplate` are scanned as binding
  * templates; a typed binding nested in a template gives its declared type. A plain record/list
  * value is a literal, so its strings infer as `str` without scanning. A lone direct reference
- * obtains its root type from the parent signature or an injected producer/MAP-item provider, then
- * strictly walks record fields. A whole-value `T(...)` constructor has type `T` (`typeFn` resolves
- * it), with field reads on the result walked the same way.
+ * obtains its root type from the parent signature, a system ambient, or an injected producer/MAP-
+ * item provider, then projects its fields with the shared output-contract walk. Any other
+ * whole-value expression (an operator, a builtin, a `T(...)` constructor that `typeFn` resolves)
+ * has the exact type `resolveOutputBindingContract` proves over the parent inputs and the
+ * producers it reads; a `${item}` read inside such an expression stays unproven.
  *
  * @example
  * `inferInlineBindingType(3n, { parentInputTypes: new Map(), producerType, bindingLabel:
@@ -113,7 +112,7 @@ interface Walk {
  * @param options.parentInputTypes Parent flow input declarations available through
  *   `${input.<name>}`.
  * @param options.producerType Resolves a node id, or `messagesKey(id)` for an AGENT's new
- *   messages, to its output type or canonical output contract.
+ *   messages, to its output type or canonical output contract, or `null` when it has none.
  * @param options.itemType Lazily supplies a MAP element type for a direct `${item...}` read;
  *   `null` (the default) rejects item references outside an outer MAP input.
  * @param options.typeFn Resolves a constructor name to its type; `null` (the default) leaves
@@ -153,7 +152,7 @@ export function inferInlineBindingType(
   } else if (source instanceof ValueTemplate) {
     inferred = inferTemplate(source.value, walk.bindingLabel, walk);
   } else {
-    inferred = inferLiteral(source, walk.bindingLabel, new Set(), walk);
+    inferred = inferLiteral(source, walk.bindingLabel, walk);
   }
   return requireProvenType(inferred, walk);
 }
@@ -251,7 +250,11 @@ export function canonicalizeInlineType(typ: Type): Type {
   });
 }
 
-/** Infer a top-level string using binding-template semantics. */
+/**
+ * Infer a top-level string using binding-template semantics: text, embedded or several spans are
+ * `str`, a direct reference is resolved by `inferDirectReference`, and any other whole-value
+ * expression has the exact type `resolveOutputBindingContract` proves.
+ */
 function inferBindingString(source: string, walk: Walk): Type {
   let segments;
   try {
@@ -278,52 +281,44 @@ function inferBindingString(source: string, walk: Walk): Type {
     return hasOptionalStep(expression as Tree) ? typ.replace({ nullable: true }) : typ;
   }
 
-  const constructed = constructorType(expression, walk.typeFn);
-  if (constructed !== null) {
-    const [typ, name, steps] = constructed;
-    const field = walkRecordType(
-      typ,
-      steps.map((step) => step.name),
-      `${name}(...)` + stepsText(steps),
-      walk,
+  const inputs = new Map([...walk.parentInputTypes].map(([name, typ]) => [name, new ValueContract(typ)]));
+  const contract = resolveOutputBindingContract(source, readProducers(templateRefs(segments), walk), inputs, {
+    typeFn: walk.typeFn,
+  });
+  if (!isExactly(contract, ValueContract)) {
+    throw inferenceError(
+      walk.bindingLabel,
+      walk.bindingRange,
+      "a whole-value expression has no statically proven type",
+      walk.diagnostics,
     );
-    return steps.some((step) => step.optional) ? field.replace({ nullable: true }) : field;
   }
-
-  if (expression instanceof Token) {
-    if (expression.type === "NUMBER") {
-      return Type.scalar(expression.value.includes(".") ? ValueKind.NUMBER : ValueKind.INTEGER);
-    }
-    const kind = SCALAR_TOKEN_KINDS.get(expression.type);
-    if (kind !== undefined) return Type.scalar(kind);
-  }
-
-  throw inferenceError(
-    walk.bindingLabel,
-    walk.bindingRange,
-    "a whole-value expression has no supported static scalar type",
-    walk.diagnostics,
-  );
+  return contract.type;
 }
 
-/** Return `[T, name, steps]` for a whole-value `T(...)` or `T(...).f`, else `null`. */
-function constructorType(expression: ExprNode, typeFn: TypeFn | null): [Type, string, RefStep[]] | null {
-  if (typeFn === null || !(expression instanceof Tree) || expression.data !== "refcall") return null;
-  const children = expression.children;
-  if (!children.some((child) => child instanceof Tree && child.data === "call_suffix")) return null;
-  const name = String(children[0]);
-  if (name === ISINSTANCE || TEMPLATE_FNS.has(name)) return null;
-  const typ = typeFn(name);
-  if (typ === null) return null;
-  return [typ, name, splitReference(expression).steps];
+/**
+ * Return the output contracts of the producers that `refs` read, by producer key; a producer with
+ * no static type is left out, so an expression over it stays unproven.
+ */
+function readProducers(refs: readonly string[], walk: Walk): Map<string, OutputContract> {
+  const producers = new Map<string, OutputContract>();
+  for (const path of refs) {
+    const [head, second] = path.split(".") as [string, string | undefined];
+    if (NON_PRODUCER_HEADS.has(head) || (second !== "output" && second !== NEW_MESSAGES)) continue;
+    const key = second === NEW_MESSAGES ? messagesKey(head) : head;
+    if (producers.has(key)) continue;
+    const produced = walk.producerType(key, walk.bindingLabel, walk.bindingRange);
+    if (produced !== null) producers.set(key, produced instanceof Type ? new ValueContract(produced) : produced);
+  }
+  return producers;
 }
 
-/** Resolve one direct reference root, then apply the shared strict field walk. */
+/** Resolve one direct reference root, then project its fields with the shared output-contract walk. */
 function inferDirectReference(parts: readonly string[], walk: Walk): Type {
   const path = parts.join(".");
   const head = parts[0]!;
   const fail = (reason: string) => inferenceError(walk.bindingLabel, walk.bindingRange, reason, walk.diagnostics);
-  let root: Type | OutputContract;
+  let root: OutputContract;
   let fields: readonly string[];
 
   if (head === "input") {
@@ -333,72 +328,35 @@ function inferDirectReference(parts: readonly string[], walk: Walk): Type {
     if (declared === undefined) {
       throw fail(`reference \${${path}} points to unknown parent input ${reprText(inputName)}`);
     }
-    root = declared;
+    root = new ValueContract(requireProvenType(declared, walk));
     fields = parts.slice(2);
   } else if (head === "item") {
     if (walk.itemType === null) throw fail(`reference \${${path}} is only typed inside an outer MAP input`);
-    root = walk.itemType(walk.bindingLabel, walk.bindingRange);
+    root = new ValueContract(requireProvenType(walk.itemType(walk.bindingLabel, walk.bindingRange), walk));
     fields = parts.slice(1);
   } else if (head === "inputs" || head === "outputs") {
     throw fail(`reference \${${path}} uses retired plural head ${reprText(head)}`);
   } else if (head === "system") {
-    throw fail(`reference \${${path}} has no statically proven system type`);
+    const kind = parts.length >= 2 ? SYSTEM_AMBIENTS.get(parts[1]!) : undefined;
+    if (kind === undefined) throw fail(`reference \${${path}} has no statically proven system type`);
+    root = new ValueContract(Type.scalar(kind));
+    fields = parts.slice(2);
   } else {
     if (parts.length < 2 || (parts[1] !== "output" && parts[1] !== NEW_MESSAGES)) {
       throw fail(`reference \${${path}} must select ${head}.output[.field] or an AGENT's ${head}.${NEW_MESSAGES}`);
     }
     const key = parts[1] === NEW_MESSAGES ? messagesKey(head) : head;
-    root = walk.producerType(key, walk.bindingLabel, walk.bindingRange);
+    const produced = walk.producerType(key, walk.bindingLabel, walk.bindingRange);
+    if (produced === null) throw fail(`producer ${reprText(head)} has no available static type`);
+    root = produced instanceof Type ? new ValueContract(requireProvenType(produced, walk)) : produced;
     fields = parts.slice(2);
-
-    if (isExactly(root, ValueContract) || isExactly(root, PartialRecordContract)) {
-      const pathError = outputContractPathError(root, fields, path);
-      if (pathError !== null) throw fail(pathError);
-      const projected = projectOutputContract(root, fields);
-      if (!isExactly(projected, ValueContract)) {
-        throw fail(`reference \${${path}} has no statically proven exact type`);
-      }
-      root = projected.type;
-      fields = [];
-    }
   }
 
-  return walkRecordType(requireProvenType(root, walk), fields, path, walk);
-}
-
-/**
- * Walk proven record fields and return a fresh result with path nullability.
- *
- * A union field is read through the shared output-contract walk, so its rules and messages match
- * every other reference check. A file's `uri`, `mime` and `name` are typed by `fileFieldType`.
- */
-function walkRecordType(root: Type, fields: readonly string[], path: string, walk: Walk): Type {
-  const fail = (reason: string) => inferenceError(walk.bindingLabel, walk.bindingRange, reason, walk.diagnostics);
-  let current = root;
-  let pathNullable = root.nullable;
-  for (const [index, field] of fields.entries()) {
-    if (current.variants !== undefined) {
-      const unionError = outputContractPathError(new ValueContract(current), fields.slice(index), path);
-      if (unionError !== null) throw fail(unionError);
-      const read = unionField(current, field);
-      const readType = read.kind === "read" ? read.type : null;
-      if (readType === null) throw fail(`reference \${${path}} has no statically proven exact type`);
-      current = readType;
-    } else if (current.fields === undefined && current.kind === ValueKind.FILE) {
-      const readType = fileFieldType(field);
-      if (readType === null) throw fail(fileFieldError(path, field));
-      current = readType;
-    } else if (current.fields === undefined) {
-      throw fail(`reference \${${path}} traverses ${reprText(field)} without proven record fields`);
-    } else {
-      const fieldType = current.fields.get(field);
-      if (fieldType === undefined) throw fail(`reference \${${path}} reads unknown record field ${reprText(field)}`);
-      current = fieldType;
-    }
-    pathNullable = pathNullable || current.nullable;
-  }
-
-  return current.replace({ nullable: pathNullable });
+  const pathError = outputContractPathError(root, fields, path);
+  if (pathError !== null) throw fail(pathError);
+  const projected = projectOutputContract(root, fields);
+  if (!isExactly(projected, ValueContract)) throw fail(`reference \${${path}} has no statically proven exact type`);
+  return projected.type;
 }
 
 /** Infer one node of a value template: strings are templates, typed bindings declared. */
@@ -434,19 +392,19 @@ function inferTemplate(node: unknown, path: string, walk: Walk): Type {
     );
     return new Type({ kind: listKindForElement(element), element });
   }
-  return inferLiteral(node, path, new Set(), walk);
+  return inferLiteral(node, path, walk);
 }
 
 /** Infer a recursive literal; nested strings never enter the template parser. */
-function inferLiteral(value: unknown, path: string, activeContainers: Set<object>, walk: Walk): Type {
+function inferLiteral(value: unknown, path: string, walk: Walk): Type {
   if (value === null) return Type.scalar(ValueKind.NONE);
   if (typeof value === "boolean") return Type.scalar(ValueKind.BOOLEAN);
   if (typeof value === "bigint") return Type.scalar(ValueKind.INTEGER);
   if (typeof value === "number") return Type.scalar(ValueKind.NUMBER);
   if (typeof value === "string") return Type.scalar(ValueKind.STRING);
 
-  if (isRecord(value)) return inferMapping(value, path, activeContainers, walk);
-  if (Array.isArray(value)) return inferList(value, path, activeContainers, walk);
+  if (isRecord(value)) return inferMapping(value, path, walk);
+  if (Array.isArray(value)) return inferList(value, path, walk);
 
   throw inferenceError(
     walk.bindingLabel,
@@ -460,46 +418,31 @@ function inferLiteral(value: unknown, path: string, activeContainers: Set<object
  * Infer a sorted closed record from one literal mapping. A record key is always text, so no
  * key needs checking.
  */
-function inferMapping(
-  value: Readonly<Record<string, unknown>>,
-  path: string,
-  activeContainers: Set<object>,
-  walk: Walk,
-): Type {
-  enterContainer(value, path, activeContainers, walk);
-  try {
-    const fields = new Map(
-      Object.keys(value)
-        .sort(compareCodeUnits)
-        .map((key) => [key, inferLiteral(value[key], `${path}[${writeAsJson(key)}]`, activeContainers, walk)]),
-    );
-    return new Type({ kind: ValueKind.OBJECT, fields, required: new Set(fields.keys()) });
-  } finally {
-    activeContainers.delete(value);
-  }
+function inferMapping(value: Readonly<Record<string, unknown>>, path: string, walk: Walk): Type {
+  const fields = new Map(
+    Object.keys(value)
+      .sort(compareCodeUnits)
+      .map((key) => [key, inferLiteral(value[key], `${path}[${writeAsJson(key)}]`, walk)]),
+  );
+  return new Type({ kind: ValueKind.OBJECT, fields, required: new Set(fields.keys()) });
 }
 
 /** Infer one homogeneous structural list, widening only int/float scalars. */
-function inferList(value: readonly unknown[], path: string, activeContainers: Set<object>, walk: Walk): Type {
-  enterContainer(value, path, activeContainers, walk);
-  try {
-    if (value.length === 0) {
-      throw inferenceError(
-        walk.bindingLabel,
-        walk.bindingRange,
-        `empty literal list at ${path} has no provable element type`,
-        walk.diagnostics,
-      );
-    }
-    const element = commonElementType(
-      value.map((item, index) => inferLiteral(item, `${path}[${index}]`, activeContainers, walk)),
-      path,
-      walk,
+function inferList(value: readonly unknown[], path: string, walk: Walk): Type {
+  if (value.length === 0) {
+    throw inferenceError(
+      walk.bindingLabel,
+      walk.bindingRange,
+      `empty literal list at ${path} has no provable element type`,
+      walk.diagnostics,
     );
-    return new Type({ kind: listKindForElement(element), element });
-  } finally {
-    activeContainers.delete(value);
   }
+  const element = commonElementType(
+    value.map((item, index) => inferLiteral(item, `${path}[${index}]`, walk)),
+    path,
+    walk,
+  );
+  return new Type({ kind: listKindForElement(element), element });
 }
 
 /** Return the common type up to `Optional`, or the scalar numeric widening, for a list. */
@@ -521,19 +464,6 @@ function commonElementType(elementTypes: readonly Type[], path: string, walk: Wa
     `${noun} at ${path} has heterogeneous element types`,
     walk.diagnostics,
   );
-}
-
-/** Add one container to the active recursion path and reject true cycles. */
-function enterContainer(value: object, path: string, activeContainers: Set<object>, walk: Walk): void {
-  if (activeContainers.has(value)) {
-    throw inferenceError(
-      walk.bindingLabel,
-      walk.bindingRange,
-      `cyclic literal container encountered at ${path}`,
-      walk.diagnostics,
-    );
-  }
-  activeContainers.add(value);
 }
 
 /** Create the one located error shape used by strict inline inference. */

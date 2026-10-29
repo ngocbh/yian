@@ -1,0 +1,65 @@
+kind: run
+flow: |
+  id: computed-inline-inputs
+  name: computed_inline_inputs
+  input:
+    k: !int
+    s: !Optional(str)
+    xs: !list(str)
+  nodes:
+    p:
+      kind: code
+      code: |
+        return {"a": 4}
+      output:
+        a: int
+    q:
+      kind: code
+      code: |
+        return ["a", "b"]
+    wrap:
+      kind: call
+      input:
+        positive: ${p.output.a > 0}
+        listed: ${len(q.output)}
+        big: ${input.k > 1}
+        small: ${not input.k}
+        t: ${input.s :- null}
+        named: ${input.s :- 'x'}
+        either: ${input.s | 'y'}
+        count: ${len(input.xs)}
+        pair: ${[input.k, 1]}
+      nodes:
+        echo:
+          kind: code
+          input:
+            positive: !bool ${input.positive}
+            listed: !int ${input.listed}
+            big: !bool ${input.big}
+            small: !bool ${input.small}
+            t: !Optional(str) ${input.t}
+            named: !str ${input.named}
+            either: !str ${input.either}
+            count: !int ${input.count}
+            pair: !list(int) ${input.pair}
+          code: |
+            return inputs
+          output:
+            positive: bool
+            listed: int
+            big: bool
+            small: bool
+            t: Optional(str)
+            named: str
+            either: str
+            count: int
+            pair: list(int)
+      output: ${echo.output}
+  output: ${wrap.output}
+inputs: {k: 2, xs: [a, b, c]}
+run:
+  num_workers: 0
+expect:
+  output:
+    status: succeeded
+    output: {positive: true, listed: 2, big: true, small: false, t: null, named: x, either: y, count: 3, pair: [2, 1]}

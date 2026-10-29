@@ -639,10 +639,7 @@ function cutLogAfter(log: string, nodeId: string): (string | undefined)[] {
 
 // ---------- an inline body ----------
 
-test("an inline body cannot take a whole-value isinstance argument", () => {
-  // Inline bodies infer each argument's type while the parent builds, and a whole-value
-  // expression has no static type there; a named `defs:` body declares it instead.
-  const text = flow(`  c:
+const INLINE_ISINSTANCE = flow(`  c:
     kind: call
     input:
       is_buy: \${isinstance(d.output, Buy)}
@@ -657,14 +654,16 @@ test("an inline body cannot take a whole-value isinstance argument", () => {
 output: \${c.output}
 `);
 
-  const error = loadError(() => assembleText(text));
+test("an inline body takes a whole-value isinstance argument as a bool (loads)", () => {
+  const params = (loadedNodes(INLINE_ISINSTANCE).get("c") as CallNode).childInputs;
+  expect(params.map((param) => [param.name, param.contract!.type])).toEqual([["is_buy", BOOL]]);
+});
 
-  expect(error.message).toBe(
-    "cannot infer type for inline binding 'c.input.is_buy': a whole-value expression has no supported " +
-      "static scalar type; declare its type with a tag (`is_buy: !<type> ...`) or use an explicitly typed " +
-      "named `defs:` body",
-  );
-  expect(errorLine(error)).toBe(lineOf(text, "is_buy: ${isinstance"));
+test.each<[string, object, boolean]>([
+  ["a buy", A_BUY, true],
+  ["a sell", A_SELL, false],
+])("an inline body takes a whole-value isinstance argument (runs): %s", async (_name, order, expected) => {
+  expect(await ok(INLINE_ISINSTANCE, { order })).toBe(expected);
 });
 
 // ---------- `uses:` children ----------
@@ -913,7 +912,7 @@ output: \${ask.output}
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
-  { id: "load-types/compose_isinstance_load__an_inline_body_cannot_take_a_whole_value_isinstance", call: assembled },
+  { id: "load-types/compose_isinstance_load__an_inline_body_takes_a_whole_value_isinstance", call: assembled },
   { id: "load-types/compose_isinstance_load__an_unknown_type_name_in_a_case_when", call: assembled },
   { id: "load-types/compose_isinstance_load__an_unknown_type_name_in_a_flow_assert", call: assembled },
   { id: "load-types/compose_isinstance_load__an_unknown_type_name_in_a_flow_output", call: assembled },

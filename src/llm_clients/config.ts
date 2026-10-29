@@ -266,9 +266,9 @@ export function splitOllamaBaseUrl(value: unknown): [baseUrl: string, credential
   // LangChain lowercases the scheme only when it rebuilds the URL, which it does for credentials.
   let suffix = port ? `:${Number(port)}` : "";
   if (!port && scheme !== scheme.toLowerCase() && credentials === null) suffix = ":11434";
-  let trimmed = path.replace(/\/+$/, "");
+  let trimmed = stripTrailingSlashes(path);
   if (trimmed.endsWith("/v1")) trimmed = trimmed.slice(0, -3);
-  trimmed = trimmed.replace(/^\/+|\/+$/g, "");
+  trimmed = stripTrailingSlashes(trimmed).replace(/^\/+/, "");
   if (trimmed) suffix += `/${trimmed}`;
   return [`${scheme.toLowerCase()}://${host.toLowerCase()}${suffix}`, credentials];
 }
@@ -567,7 +567,7 @@ export class LLMConfig {
 }
 
 /** Return `url` without its trailing slashes. */
-function stripTrailingSlashes(url: string): string {
+export function stripTrailingSlashes(url: string): string {
   // A loop, not `/\/+$/`: that regex backtracks quadratically on a long run of inner slashes.
   let end = url.length;
   while (end > 0 && url[end - 1] === "/") end -= 1;

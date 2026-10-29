@@ -450,6 +450,13 @@ test.each<[string, string, [string, string] | null]>([
   expect(splitOllamaBaseUrl(value)).toEqual([url, credentials]);
 });
 
+test("ollama base url with a long run of inner slashes splits in linear time", () => {
+  // `/\/+$/` backtracks quadratically here: about 6 s for this input.
+  const started = performance.now();
+  expect(splitOllamaBaseUrl(`http://h${"/".repeat(100_000)}a/`)).toEqual([`http://h/a`, null]);
+  expect(performance.now() - started).toBeLessThan(1000);
+});
+
 test("ollama userinfo decodes like unquote", () => {
   const user = (userinfo: string) => splitOllamaBaseUrl(`http://${userinfo}@h`)[1];
   expect(user("u%zz:p")).toEqual(["u%zz", "p"]);

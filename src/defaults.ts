@@ -310,6 +310,13 @@ export const ENTRIES = Object.freeze([
     group: "input cap",
     minimum: 1,
   }),
+  // At Anthropic's and Google's largest page size, 100 pages hold 100,000 models.
+  entry("MAX_MODEL_LIST_PAGES", {
+    default: 100,
+    description: "Most pages read from a provider's model listing",
+    group: "input cap",
+    minimum: 1,
+  }),
   entry("MAX_MCP_MESSAGE_BYTES", {
     default: 16 * 1024 * 1024,
     description: "Largest message read from a stdio MCP server",

@@ -178,7 +178,7 @@ export function constructorTypeFn(registry: TypeRegistry): (name: string) => Typ
  */
 export function checkedMembers(typ: Type): readonly Type[] {
   const strict = typ.replace({ nullable: false });
-  return strict.variants?.length ? strict.variants : [strict];
+  return strict.members?.length ? strict.members : [strict];
 }
 
 /**
@@ -198,7 +198,7 @@ export function checkedMembers(typ: Type): readonly Type[] {
  * `[Buy]`; a `typ` whose member admits some `Buy` values but is no base member gives `null`.
  */
 export function isinstanceMembers(baseType: Type, typ: Type): Type[] | null {
-  const members = baseType.variants;
+  const members = baseType.members;
   if (members === undefined) return null;
   const strict = typ.replace({ nullable: false });
   const wanted = checkedMembers(typ);

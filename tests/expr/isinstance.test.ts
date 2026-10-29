@@ -62,7 +62,7 @@ const SELL = member("sell", { price: ValueKind.NUMBER });
 const TYPES = new Map([
   ["Buy", BUY],
   ["Sell", SELL],
-  ["Order", new Type({ kind: ValueKind.OBJECT, variants: [BUY, SELL] })],
+  ["Order", new Type({ kind: ValueKind.OBJECT, members: [BUY, SELL] })],
 ]);
 
 const A_BUY: ValueRecord = { action: "buy", qty: 3n };

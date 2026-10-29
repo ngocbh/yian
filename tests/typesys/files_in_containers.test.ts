@@ -204,7 +204,7 @@ describe("normalizeFiles", () => {
     ["XObject first", ["XObject", "XFile"], { x: form() }],
   ])("picks an untagged union member like the write check: %s", (_id, members, expected) => {
     // Both members admit `{x: form}`, so the first one decides how `x` reads.
-    const union = new Type({ kind: ValueKind.OBJECT, variants: members.map(t) });
+    const union = new Type({ kind: ValueKind.OBJECT, members: members.map(t) });
     const value = { x: form() };
     expect(normalizeFiles(union, value)).toStrictEqual(expected);
     expect(buildValueAs(union, value).toObject()).toStrictEqual(expected);

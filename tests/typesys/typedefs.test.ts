@@ -272,7 +272,7 @@ describe("typedefs naming Message", () => {
     });
     expect(typeFor("Turn", registry).fields!.get("message")).toBe(typeFor("Message", new Map()));
     expect(typeFor("History", registry).element).toBe(typeFor("Message", new Map()));
-    expect(typeFor("Entry", registry).variants).toHaveLength(2);
+    expect(typeFor("Entry", registry).members).toHaveLength(2);
   });
 
   test("Message's levels count toward a typedef's nesting", () => {

@@ -167,7 +167,7 @@ function joinedAlternatives(types: readonly Type[]): Type | null {
   if (types.length <= 1) return types[0] ?? null;
   const joined = joinedType(types);
   if (joined !== null) return joined;
-  if (types.every((typ) => typ.fields !== undefined)) return new Type({ kind: ValueKind.OBJECT, variants: types });
+  if (types.every((typ) => typ.fields !== undefined)) return new Type({ kind: ValueKind.OBJECT, members: types });
   return types[0]!;
 }
 

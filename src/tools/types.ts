@@ -371,7 +371,7 @@ function union(members: readonly (Type | null)[]): Type | null {
       nullable = true;
       continue;
     }
-    for (const variant of member.variants ?? [member]) {
+    for (const variant of member.members ?? [member]) {
       const part = variant.replace({ nullable: false });
       if (!others.some((other) => typeEquals(other, part))) others.push(part);
     }
@@ -388,7 +388,7 @@ function union(members: readonly (Type | null)[]): Type | null {
   if (others.some((other) => other.fields === undefined)) {
     return new Type({ kind: ValueKind.OBJECT, nullable });
   }
-  return new Type({ kind: ValueKind.OBJECT, variants: canonicalUnionOrder(others), nullable });
+  return new Type({ kind: ValueKind.OBJECT, members: canonicalUnionOrder(others), nullable });
 }
 
 /** Return the smallest range of the members' kind that holds every member's range. */

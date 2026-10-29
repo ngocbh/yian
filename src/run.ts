@@ -3193,7 +3193,7 @@ const LITERAL_LABEL_WIDTH = 40;
 function bindingLabel(typ: Type): string {
   const [low, high] = typ.bounds ?? [null, null];
   if (typ.kind === ValueKind.INTEGER && low !== null && low === high && !typ.nullable) return `${low} (int)`;
-  if (typ.kind === ValueKind.STRING && typ.tags?.size === 1 && typ.variants === undefined && !typ.nullable) {
+  if (typ.kind === ValueKind.STRING && typ.tags?.size === 1 && typ.members === undefined && !typ.nullable) {
     // Code points, so a cut never splits a surrogate pair.
     let chars = [...[...typ.tags][0]!];
     if (chars.length > LITERAL_LABEL_WIDTH) chars = [...chars.slice(0, LITERAL_LABEL_WIDTH - 3), "..."];

@@ -139,11 +139,11 @@ export type DeclaredTypes = (names: readonly string[]) => Type | null;
 
 /**
  * A value's declared members, each non-null: none for an untyped type (`Any`, `object`, a file,
- * or unknown), a union's variants, else the type itself.
+ * or unknown), a union's members, else the type itself.
  */
 function declaredOf(typ: Type | null): readonly Type[] {
   if (typ === null || typ.kind === ValueKind.ANY || typ.kind === ValueKind.FILE) return [];
-  if (typ.variants !== undefined) return typ.variants.flatMap(declaredOf);
+  if (typ.members !== undefined) return typ.members.flatMap(declaredOf);
   if (typ.kind === ValueKind.OBJECT && typ.fields === undefined) return [];
   return [typ.nullable ? typ.replace({ nullable: false }) : typ];
 }
@@ -179,7 +179,7 @@ export function declaredAt(typ: Type | null, names: readonly string[]): Type | n
   if (members.length === 0) return null;
   if (members.length === 1) return members[0]!;
   if (members.every((member) => member.fields !== undefined)) {
-    return new Type({ kind: ValueKind.OBJECT, variants: members });
+    return new Type({ kind: ValueKind.OBJECT, members: members });
   }
   return joinedType(members);
 }
@@ -1815,7 +1815,7 @@ export function elementType(iterable: Type | null): Type | null {
  */
 function fieldReadType(typ: Type, name: string): Type | null {
   let field: Type;
-  if (typ.variants !== undefined) {
+  if (typ.members !== undefined) {
     const read = unionField(typ, name);
     if (read.kind !== "read" || read.type === null) return null;
     field = read.type;

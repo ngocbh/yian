@@ -198,7 +198,7 @@ export function requireProvenType(
     }
   }
 
-  for (const member of typ.variants ?? []) prove(member);
+  for (const member of typ.members ?? []) prove(member);
 
   if (isListKind(typ.kind)) {
     if (typ.element === undefined) {
@@ -237,7 +237,7 @@ export function canonicalizeInlineType(typ: Type): Type {
   const tags = typ.tags === undefined ? undefined : new Set([...typ.tags].sort(compareCodeUnits));
   const element = typ.element === undefined ? undefined : canonicalizeInlineType(typ.element);
   // Union members are already in canonical order; only their contents are copied.
-  const variants = typ.variants?.map(canonicalizeInlineType);
+  const members = typ.members?.map(canonicalizeInlineType);
   return new Type({
     kind: typ.kind,
     fields,
@@ -246,7 +246,7 @@ export function canonicalizeInlineType(typ: Type): Type {
     element,
     nullable: typ.nullable,
     bounds: typ.bounds,
-    variants,
+    members,
   });
 }
 

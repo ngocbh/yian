@@ -296,7 +296,7 @@ describe("typeEquals", () => {
     expect(typeEquals(req("a"), req("b"))).toBe(false);
     const buy = record({ qty: INT });
     const sell = record({ price: FLOAT });
-    const union = (...variants: Type[]) => new Type({ kind: ValueKind.OBJECT, variants });
+    const union = (...members: Type[]) => new Type({ kind: ValueKind.OBJECT, members });
     expect(typeEquals(union(buy, sell), union(record({ qty: INT }), sell))).toBe(true);
     expect(typeEquals(union(buy, sell), union(sell, buy))).toBe(false);
   });
@@ -343,7 +343,7 @@ describe("typeLevels", () => {
   test("counts a union as its deepest member", () => {
     const shallow = record({ a: INT });
     const deep = record({ b: record({ c: record({ d: INT }) }) });
-    expect(typeLevels(new Type({ kind: ValueKind.OBJECT, variants: [shallow, deep] }))).toBe(3);
+    expect(typeLevels(new Type({ kind: ValueKind.OBJECT, members: [shallow, deep] }))).toBe(3);
   });
 
   test("measures a shared type once", () => {
@@ -385,7 +385,7 @@ describe("canonicalTypeLabel", () => {
     [[0.0, 1.5], [0n, 1.5], 'Union({"a":float(0..1.5)},{"a":float(0.0..1.5)})'],
   ] as const)("orders members by the key's float ends: %p, %p", (first, second, label) => {
     const member = (bounds: Bounds) => record({ a: new Type({ kind: ValueKind.NUMBER, bounds }) });
-    const union = new Type({ kind: ValueKind.OBJECT, variants: [member(first), member(second)] });
+    const union = new Type({ kind: ValueKind.OBJECT, members: [member(first), member(second)] });
     expect(canonicalTypeLabel(union)).toBe(label);
   });
 });
@@ -1166,7 +1166,7 @@ describe("typeFor", () => {
     // `{"a":int,"b":str}` does. Keeping the bracket order keeps manifests stable.
     const reg = readTypedefs({ A: { a: "int(1..2)" }, B: { a: "int", b: "str" } });
     const union = typeFor("Union(A, B)", reg);
-    const [first, second] = union.variants!;
+    const [first, second] = union.members!;
     expect(new Set(first!.fields!.keys())).toEqual(new Set(["a", "b"]));
     const order = canonicalUnionOrder([second!, first!]);
     expect(order[0]).toBe(first!);
@@ -1181,8 +1181,8 @@ describe("typeFor", () => {
       Count: { n: "int" },
       Score: { n: "float", label: "str" },
     });
-    expect(typeFor("Union(Buy, Sell)", reg).variants).toHaveLength(2);
-    expect(typeFor("Union(Count, Score)", reg).variants).toHaveLength(2);
+    expect(typeFor("Union(Buy, Sell)", reg).members).toHaveLength(2);
+    expect(typeFor("Union(Count, Score)", reg).members).toHaveLength(2);
     const tagged = buildValueAs(typeFor("Union(Buy, Sell)", reg), { action: "sell", price: 3n });
     expect((tagged.toObject() as Record<string, unknown>)["price"]).toBe(3n);
     const untagged = buildValueAs(typeFor("Union(Count, Score)", reg), { n: 3n, label: "x" });

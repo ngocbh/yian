@@ -185,22 +185,22 @@ export function typesCompatible(source: Type, sink: Type): boolean {
     return false;
   }
   if (sink.bounds !== undefined && !intervalWithin(source, sink)) return false;
-  if (sink.variants !== undefined) {
+  if (sink.members !== undefined) {
     let members: readonly Type[];
-    if (source.variants !== undefined) {
-      members = source.variants;
+    if (source.members !== undefined) {
+      members = source.members;
     } else if (source.fields !== undefined) {
       // Members are non-nullable; the union's own nullability was checked above.
       members = [source.replace({ nullable: false })];
     } else {
       return false;
     }
-    const options = sink.variants;
+    const options = sink.members;
     return members.every((member) => options.some((option) => typesCompatible(member, option)));
   }
   if (sink.fields !== undefined) {
     // A union may hold a member other than this record, and load can't tell which.
-    if (source.variants !== undefined) return false;
+    if (source.members !== undefined) return false;
     const sourceFields = source.fields;
     if (sourceFields === undefined) return false;
     for (const fname of sink.required ?? []) {
@@ -314,7 +314,7 @@ function relateNonNull(inferred: Type, declared: Type): TypeRelation {
     return requiresFile(inferred) ? "disjoint" : "narrower";
   }
   if (inferred.kind === ValueKind.ANY) return requiresFile(declared) ? "disjoint" : "narrower";
-  if (inferred.variants !== undefined || declared.variants !== undefined) {
+  if (inferred.members !== undefined || declared.members !== undefined) {
     return relateUnion(inferred, declared);
   }
   const inferredIsList = isListKind(inferred.kind);
@@ -344,8 +344,8 @@ function relateNonNull(inferred: Type, declared: Type): TypeRelation {
  * fits, disjoint when every member is disjoint, and narrower otherwise.
  */
 function relateUnion(inferred: Type, declared: Type): TypeRelation {
-  const inferredMembers = inferred.variants ?? [inferred];
-  const declaredMembers = declared.variants ?? [declared];
+  const inferredMembers = inferred.members ?? [inferred];
+  const declaredMembers = declared.members ?? [declared];
   const relations = new Set(
     inferredMembers.map((member) =>
       strongest(...declaredMembers.map((option) => relateNonNull(member, option))),

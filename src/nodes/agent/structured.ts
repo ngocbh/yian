@@ -162,10 +162,10 @@ function nonNullSchema(typ: Type, defs: Defs, position: string, closed: boolean)
     if (typ.bounds !== undefined) typ.validateShape();
     return scalarSchema(kind, typ.bounds);
   }
-  if (kind === ValueKind.OBJECT && typ.variants !== undefined) {
+  if (kind === ValueKind.OBJECT && typ.members !== undefined) {
     const names = memberNames(typ, position);
     return {
-      anyOf: typ.variants.map((member, index) => {
+      anyOf: typ.members.map((member, index) => {
         const name = names[index]!;
         return define(defs, name, recordSchema(member, defs, name, true));
       }),
@@ -225,7 +225,7 @@ function nested(position: string, segment: string): string {
  */
 function memberNames(typ: Type, position: string): string[] {
   const [tagField] = unionTagFields(typ);
-  const tags = typ.variants!.map((member) =>
+  const tags = typ.members!.map((member) =>
     tagField === undefined ? undefined : [...member.fields!.get(tagField)!.tags!][0]!,
   );
   const named = tags.every((tag) => tag !== undefined && IDENTIFIER.test(tag));
@@ -241,7 +241,7 @@ function recordName(position: string): string {
 function isRecord(typ: Type): boolean {
   return (
     typ.kind === ValueKind.OBJECT &&
-    typ.variants === undefined &&
+    typ.members === undefined &&
     typ.fields !== undefined &&
     typ.fields.size > 0
   );
@@ -599,7 +599,7 @@ export function checkReply(data: JsonObject, typ: Type): Value {
  * field-less `object`, a flat list and a value of the wrong shape are kept as given.
  */
 function normalize(value: Value, typ: Type, closed = false): Value {
-  if (typ.variants !== undefined) return isValueRecord(value) ? normalizeUnion(value, typ) : value;
+  if (typ.members !== undefined) return isValueRecord(value) ? normalizeUnion(value, typ) : value;
   if (isRecord(typ)) {
     if (!isValueRecord(value)) return value;
     const fields = typ.fields!;
@@ -625,7 +625,7 @@ function normalize(value: Value, typ: Type, closed = false): Value {
 
 /** `normalize` for a record `value` of the union `typ`; `value` itself when no member fits. */
 function normalizeUnion(value: ValueRecord, typ: Type): Value {
-  const members = typ.variants!;
+  const members = typ.members!;
   const [tagField] = unionTagFields(typ);
   if (tagField !== undefined) {
     const tag = value[tagField];
@@ -668,7 +668,7 @@ function outputPath(error: Error, typ: Type): ValuePath | null {
  */
 export function isContractPath(path: ValuePath, typ: Type): boolean {
   if (path.length === 0) return true;
-  if (typ.variants !== undefined) return typ.variants.some((member) => isContractPath(path, member));
+  if (typ.members !== undefined) return typ.members.some((member) => isContractPath(path, member));
   const [head, ...tail] = path;
   if (isRecord(typ)) {
     const field = typeof head === "string" ? typ.fields!.get(head) : undefined;

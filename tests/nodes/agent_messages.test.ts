@@ -119,7 +119,7 @@ test("a Message and a list of them survive the run log's codec; checkMessage res
 describe("agreement with message.schema.json", () => {
   const SCHEMA = loadSchema("message.schema.json") as { properties: Record<string, unknown>; $defs: Record<string, { properties: Record<string, unknown> }> };
   const message = typeFor("Message", new Map());
-  const parts = message.fields!.get("parts")!.element!.variants!;
+  const parts = message.fields!.get("parts")!.element!.members!;
   const partFields = (tag: string) =>
     [...parts.find((p) => p.fields!.get("type")!.tags!.has(tag))!.fields!.keys()].sort();
 

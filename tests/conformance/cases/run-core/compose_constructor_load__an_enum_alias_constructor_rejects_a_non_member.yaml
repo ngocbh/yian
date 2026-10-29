@@ -41,7 +41,7 @@ expect:
       frames:
       - label: flow.yaml
         range: [22, 13, 22, 35]
-      message: 'Size(...): "xl" is not a member of variant ["l","m","s"]'
+      message: 'Size(...): "xl" is not one of Literal(l, m, s)'
       node: c
   trace:
   - - run_started
@@ -94,7 +94,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [22, 13, 22, 35]
-        message: 'Size(...): "xl" is not a member of variant ["l","m","s"]'
+        message: 'Size(...): "xl" is not one of Literal(l, m, s)'
         node: c
   events:
   - [RunStarted]
@@ -127,7 +127,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [22, 13, 22, 35]
-        message: 'Size(...): "xl" is not a member of variant ["l","m","s"]'
+        message: 'Size(...): "xl" is not one of Literal(l, m, s)'
         node: c
   - - RunFailed
     - failure:
@@ -135,5 +135,5 @@ expect:
         frames:
         - label: flow.yaml
           range: [22, 13, 22, 35]
-        message: 'Size(...): "xl" is not a member of variant ["l","m","s"]'
+        message: 'Size(...): "xl" is not one of Literal(l, m, s)'
         node: c

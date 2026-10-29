@@ -136,7 +136,7 @@ export function isUntyped(typ: Type | null): boolean {
   return (
     typ === null ||
     typ.kind === ValueKind.ANY ||
-    (typ.kind === ValueKind.OBJECT && typ.fields === undefined && typ.variants === undefined)
+    (typ.kind === ValueKind.OBJECT && typ.fields === undefined && typ.members === undefined)
   );
 }
 
@@ -345,7 +345,7 @@ function walk(
       // The name checks report a field a typed value lacks; below an untyped value they stop.
       if (!guarded || !roots.untyped(read.root, fields)) return null;
       const ref = prefix + (step.optional ? "?." : ".") + step.name;
-      const names = [...(typ.fields?.keys() ?? []), ...(typ.variants ?? []).flatMap((m) => [...m.fields!.keys()])];
+      const names = [...(typ.fields?.keys() ?? []), ...(typ.members ?? []).flatMap((m) => [...m.fields!.keys()])];
       const label = narrowedTypeLabel(typ.replace({ nullable: false }), registry);
       return { message: narrowedReadMessage(ref, step.name, label, prefix, new Set(names)), code: "compose.load" };
     }
@@ -380,7 +380,7 @@ function provesBelow(env: Env, path: string): boolean {
  * and whether that is because it is `Optional`; `null` when `typ` has no such field.
  */
 function fieldRead(typ: Type, name: string): { type: Type | null; nullable: boolean; optional: boolean } | null {
-  if (typ.variants !== undefined) {
+  if (typ.members !== undefined) {
     const read = unionField(typ, name);
     if (read.kind === "absent") return null;
     if (read.kind === "read") {
@@ -688,7 +688,7 @@ export function narrows(
     const typ = projected.type;
     if (check instanceof NotNullCheck) {
       if (typ.nullable) return true;
-    } else if (typ.variants !== undefined && unionTagFields(typ).includes(check.field)) {
+    } else if (typ.members !== undefined && unionTagFields(typ).includes(check.field)) {
       return true;
     }
   }

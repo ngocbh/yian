@@ -1,7 +1,8 @@
 /**
  * How write-check and wire-decode messages show the value they refuse: a float keeps its
- * fraction digit (`2.0`), so an int and a float with the same digits read apart, and numeric
- * bounds are spelled as the type label spells them.
+ * fraction digit (`2.0`), so an int and a float with the same digits read apart; numeric
+ * bounds are spelled as the type label spells them; and a refused `Literal` tag names the
+ * `Literal` type.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -88,6 +89,15 @@ describe("a numeric bound in a write-check message", () => {
     const typ = new Type({ kind: ValueKind.INTEGER, bounds: [1n, null] });
     expect(typeCheckMessage(() => buildValueAs(typ, 0n))).toBe(
       "0 is below the inclusive int minimum 1",
+    );
+  });
+});
+
+describe("a refused Literal tag", () => {
+  test("names the Literal type", () => {
+    const typ = new Type({ kind: ValueKind.STRING, tags: new Set(["go", "no go"]) });
+    expect(typeCheckMessage(() => buildValueAs(typ, "maybe"))).toBe(
+      '"maybe" is not one of Literal(go, "no go")',
     );
   });
 });

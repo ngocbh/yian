@@ -150,7 +150,7 @@ test("an enum alias checks a scalar", () => {
   expect(evaluate("Size(x)", { x: "m" })).toBe("m");
   expectError(
     () => evaluate("Size(x)", { x: "xl" }),
-    `Size(...): "xl" is not a member of variant ["l","m","s"]`,
+    `Size(...): "xl" is not one of Literal(l, m, s)`,
     ConstructorTypeError,
   );
 });

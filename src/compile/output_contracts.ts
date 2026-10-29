@@ -90,7 +90,7 @@ export function projectOutputContract(contract: OutputContract, fields: readonly
   let typ = contract.type;
   let pathNullable = typ.nullable;
   for (const field of fields) {
-    if (typ.variants !== undefined) {
+    if (typ.members !== undefined) {
       const read = unionField(typ, field);
       if (read.kind !== "read" || read.type === null) return null;
       // The shared type is already nullable when any member's field may be absent.

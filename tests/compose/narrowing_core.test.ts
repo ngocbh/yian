@@ -1152,7 +1152,7 @@ test("else keeps nullability from a nullable path segment", () => {
   const narrowing = compute(nodes, [], produced(new ValueContract(holder)));
 
   expect(narrowing.environment("h")).toStrictEqual(new Map([["d.output.dec", new Members([HOLD, SELL], true)]]));
-  const restOrNull = new Type({ kind: ValueKind.OBJECT, variants: [HOLD, SELL], nullable: true });
+  const restOrNull = new Type({ kind: ValueKind.OBJECT, members: [HOLD, SELL], nullable: true });
   expect(typeEquals(viewType(narrowing, "h").fields!.get("dec")!, restOrNull)).toBe(true);
   expect(typeEquals(viewType(narrowing, "b").fields!.get("dec")!, BUY)).toBe(true);
 });

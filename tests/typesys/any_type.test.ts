@@ -628,7 +628,7 @@ describe("requiresFile and hasFile", () => {
     ["a record with a file field", FILE_RECORD],
     [
       "a union of records with a file field",
-      new Type({ kind: ValueKind.OBJECT, variants: [FILE_RECORD, FILE_RECORD] }),
+      new Type({ kind: ValueKind.OBJECT, members: [FILE_RECORD, FILE_RECORD] }),
     ],
   ])("requires a file when every non-null value holds one: %s", (_id, typ) => {
     expect(requiresFile(typ)).toBe(true);

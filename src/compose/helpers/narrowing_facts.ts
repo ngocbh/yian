@@ -219,7 +219,7 @@ export function isinstanceFact(baseType: Type, typ: Type): Fact | null {
  * gives `null`.
  */
 export function notIsinstanceFact(baseType: Type, typ: Type): Fact | null {
-  const members = baseType.variants;
+  const members = baseType.members;
   if (members === undefined) return null;
   const wanted = checkedMembers(typ);
   const kept = members.filter((member) => !contains(wanted, member));
@@ -247,7 +247,7 @@ export function notIsinstanceFact(baseType: Type, typ: Type): Fact | null {
  * `new Members([Buy])` and `("action", "buy", false)` gives `new Members([Hold, Sell])`.
  */
 export function tagFact(baseType: Type, field: string, value: string, holds: boolean): Fact | null {
-  const members = baseType.variants;
+  const members = baseType.members;
   if (members === undefined || !unionTagFields(baseType).includes(field)) return null;
   // `unionTagFields` checked that every member has `field` with tags.
   const tagsOf = (member: Type): ReadonlySet<string> => member.fields!.get(field)!.tags!;
@@ -273,7 +273,7 @@ export function tagFact(baseType: Type, field: string, value: string, holds: boo
  */
 export function notNullFact(baseType: Type): Fact | null {
   if (!baseType.nullable || baseType.kind === ValueKind.NONE) return null;
-  if (baseType.variants !== undefined) return new Members(baseType.variants, false);
+  if (baseType.members !== undefined) return new Members(baseType.members, false);
   return new Exact(baseType.replace({ nullable: false }));
 }
 
@@ -360,7 +360,7 @@ export function intersectEnvs(envs: readonly Env[]): Env {
 export function membersType(members: readonly Type[], nullable: boolean): Type | null {
   if (members.length === 0) return nullable ? Type.scalar(ValueKind.NONE) : null;
   if (members.length === 1) return members[0]!.replace({ nullable });
-  return new Type({ kind: ValueKind.OBJECT, variants: canonicalUnionOrder(members), nullable });
+  return new Type({ kind: ValueKind.OBJECT, members: canonicalUnionOrder(members), nullable });
 }
 
 /**
@@ -847,8 +847,8 @@ export class ImpossibleCheck {
  *   the structural label for an anonymous type.
  */
 export function narrowedTypeLabel(typ: Type, registry: TypeRegistry): string {
-  if (typ.variants === undefined) return namedTypeLabel(typ, registry);
-  const label = typ.variants.map((member) => namedTypeLabel(member, registry)).join(" | ");
+  if (typ.members === undefined) return namedTypeLabel(typ, registry);
+  const label = typ.members.map((member) => namedTypeLabel(member, registry)).join(" | ");
   return typ.nullable ? `Optional(${label})` : label;
 }
 
@@ -861,7 +861,7 @@ function factLabel(fact: Fact | null, fallback: Type | null, registry: TypeRegis
 /** Whether every value fits `typ`'s kind: `Any`, or a plain `object`. */
 function isOpen(typ: Type): boolean {
   if (typ.kind === ValueKind.ANY) return true;
-  return typ.kind === ValueKind.OBJECT && typ.fields === undefined && typ.variants === undefined;
+  return typ.kind === ValueKind.OBJECT && typ.fields === undefined && typ.members === undefined;
 }
 
 /** The check that is always true when `literal` can never be true, if it needs it false. */
@@ -892,7 +892,7 @@ export function declaredImpossible(
   }
   // The labels are built only for a report: a typedef's label parses and resolves its type.
   if (check instanceof TagCheck) {
-    const members = baseType.variants;
+    const members = baseType.members;
     if (members === undefined || !unionTagFields(baseType).includes(check.field)) return null;
     // `unionTagFields` checked that every member has the field with tags.
     const tags = members.flatMap((member) => [...member.fields!.get(check.field)!.tags!]).sort(compareCodeUnits);
@@ -1111,9 +1111,9 @@ export function narrowedReadMessage(
 
 /** The fields a record has, or any member of a union has; `null` for other types. */
 function fieldNames(typ: Type): Set<string> | null {
-  if (typ.variants !== undefined) {
+  if (typ.members !== undefined) {
     const names = new Set<string>();
-    for (const member of typ.variants) {
+    for (const member of typ.members) {
       if (member.fields === undefined) return null;
       for (const name of member.fields.keys()) names.add(name);
     }

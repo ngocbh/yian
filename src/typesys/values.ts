@@ -1145,7 +1145,7 @@ const LIST_ELEMENT_KIND: ReadonlyMap<ValueKind, ValueKind | null> = new Map([
 ]);
 
 // --------------------------------------------------------------------------------------- //
-// Structural type (records / variants / typed lists)
+// Structural type (records / Literal tags / typed lists / unions)
 // --------------------------------------------------------------------------------------- //
 
 /** One inclusive numeric range end: a `bigint` or `number`, or `null` for an open end. */
@@ -1166,7 +1166,7 @@ export interface TypeInit {
   readonly element?: Type | undefined;
   readonly nullable?: boolean | undefined;
   readonly bounds?: Bounds | undefined;
-  readonly variants?: readonly Type[] | undefined;
+  readonly members?: readonly Type[] | undefined;
 }
 
 /**
@@ -1179,15 +1179,14 @@ export interface TypeInit {
  *   - list:    kind=LIST_*, element=<element Type>
  *   - number:  kind=INTEGER/NUMBER, bounds=[inclusive minimum, maximum]; `null` for an
  *              open end
- *   - union:   kind=OBJECT, variants=[record member, ...] (a `Union(...)` of records)
+ *   - union:   kind=OBJECT, members=[record member, ...] (a `Union(...)` of records)
  * A refined specialized list uses the element's matching storage tag; `LIST_ANY` is the
  * generic carrier and may refine any element type. A plain scalar or flat list uses only
  * `kind` (see `Type.scalar`). A `LIST_ANY` with no `element` is a list whose items
  * weren't proven (a tool's untyped array, a mixed or empty literal); it is labelled
  * `list(Optional(Any))` and its items read as `Optional(Any)`. `kind=ANY` is type-only:
  * an `Any` value is stored under its natural kind.
- * Despite the name, `variants` holds union members, not the string tags of a "variant"
- * above. Members are non-nullable records; a nullable union sets `nullable` on the
+ * Union members are non-nullable records; a nullable union sets `nullable` on the
  * union itself. `nullable` marks an `Optional(X)` slot, which accepts null.
  * A `Type` must not be changed after it is built (its `fields` map included), so copies
  * of a flow share it.
@@ -1200,7 +1199,7 @@ export class Type {
   readonly element: Type | undefined;
   readonly nullable: boolean;
   readonly bounds: Bounds | undefined;
-  readonly variants: readonly Type[] | undefined;
+  readonly members: readonly Type[] | undefined;
 
   /** Build a type from `init` as given; `validateShape` checks it. */
   constructor(init: TypeInit) {
@@ -1212,7 +1211,7 @@ export class Type {
     // Not `??`: a forged `null` must reach validateShape's bool check.
     this.nullable = init.nullable === undefined ? false : init.nullable;
     this.bounds = init.bounds;
-    this.variants = init.variants;
+    this.members = init.members;
   }
 
   /** Build a plain `Type` carrying only a storage tag, without refinements. */
@@ -1270,7 +1269,7 @@ export function typeLevels(typ: Type): number {
     const children = [
       ...(node.fields?.values() ?? []),
       ...(node.element !== undefined ? [node.element] : []),
-      ...(node.variants ?? []),
+      ...(node.members ?? []),
     ];
     if (!expanded) {
       stack.push([node, true]);
@@ -1359,16 +1358,16 @@ function validateTypeShape(typ: unknown, active: Set<Type>, validated: Set<Type>
       }
     }
 
-    const variants = typ.variants;
-    if (variants !== undefined) {
-      if (!Array.isArray(variants)) {
-        throw new TypeError("type variants must be an array or undefined");
+    const members = typ.members;
+    if (members !== undefined) {
+      if (!Array.isArray(members)) {
+        throw new TypeError("type members must be an array or undefined");
       }
       if (typ.kind !== ValueKind.OBJECT) {
-        throw new RangeError("only object types may declare union variants");
+        throw new RangeError("only object types may declare union members");
       }
-      if (variants.length < 2) throw new RangeError("a union needs at least two members");
-      for (const member of variants) {
+      if (members.length < 2) throw new RangeError("a union needs at least two members");
+      for (const member of members) {
         validateTypeShape(member, active, validated);
         if (member.fields === undefined) {
           throw new RangeError("every union member must be a record type");
@@ -1377,7 +1376,7 @@ function validateTypeShape(typ: unknown, active: Set<Type>, validated: Set<Type>
       }
     }
 
-    const refinements = [fields, tags, element, typ.bounds, variants].filter(
+    const refinements = [fields, tags, element, typ.bounds, members].filter(
       (value) => value !== undefined,
     ).length;
     if (refinements > 1) {
@@ -1452,7 +1451,7 @@ export function listKindForElement(element: Type): ValueKind {
   let semanticKind = element.kind;
   if (element.tags !== undefined) {
     semanticKind = ValueKind.STRING;
-  } else if (element.fields !== undefined || element.variants !== undefined) {
+  } else if (element.fields !== undefined || element.members !== undefined) {
     semanticKind = ValueKind.OBJECT;
   }
   for (const [listKind, elementKind] of LIST_ELEMENT_KIND) {
@@ -1492,8 +1491,8 @@ export function typeEquals(a: Type, b: Type): boolean {
       (x, y) => boundEquals(x[0], y[0]) && boundEquals(x[1], y[1]),
     ) &&
     optionalEquals(
-      a.variants,
-      b.variants,
+      a.members,
+      b.members,
       (x, y) => x.length === y.length && x.every((member, i) => typeEquals(member, y[i]!)),
     )
   );
@@ -1563,8 +1562,8 @@ function labels(typ: Type): [string, string] {
 
 /** Return `[label, order key]` for `typ` without its outer nullable wrapper. */
 function canonicalNonnullableLabel(typ: Type): [string, string] {
-  if (typ.variants !== undefined) {
-    const ordered = orderedMemberLabels(typ.variants);
+  if (typ.members !== undefined) {
+    const ordered = orderedMemberLabels(typ.members);
     return [
       "Union(" + ordered.map(([, label]) => label).join(",") + ")",
       "Union[" + ordered.map(([, , key]) => key).join(",") + "]",
@@ -1762,8 +1761,8 @@ function membersTagFields(members: readonly Type[]): string[] {
  * `{action: Literal(sell), price: float}` gives `["action"]`.
  */
 export function unionTagFields(typ: Type): readonly string[] {
-  if (typ.variants === undefined) return [];
-  return membersTagFields(typ.variants);
+  if (typ.members === undefined) return [];
+  return membersTagFields(typ.members);
 }
 
 /**
@@ -1830,7 +1829,7 @@ function tagField(typ: Type, field: string | undefined): string {
  * @throws RangeError when `typ` is not a tagged union, or `field` is not one of its tag fields.
  */
 export function unionMemberForTag(typ: Type, tag: unknown, field?: string): Type | null {
-  return memberWithTag(typ.variants!, tagField(typ, field), tag);
+  return memberWithTag(typ.members!, tagField(typ, field), tag);
 }
 
 /** Return the member whose single-value tag field `field` equals `tag`, or `null`. */
@@ -1867,8 +1866,8 @@ export function restrictUnion(typ: Type, keep: Iterable<string | Type>, field?: 
   if (typeof keep === "string") {
     throw new TypeError("restrictUnion keeps a collection of tags, not a bare string");
   }
-  if (typ.variants === undefined) throw new RangeError("only a union can be restricted");
-  const members = typ.variants;
+  if (typ.members === undefined) throw new RangeError("only a union can be restricted");
+  const members = typ.members;
   let selectedField: string | null = null;
   const selected = new Set<number>();
   for (const item of keep) {
@@ -1889,7 +1888,7 @@ export function restrictUnion(typ: Type, keep: Iterable<string | Type>, field?: 
   const indexes = [...selected].sort((a, b) => a - b);
   if (indexes.length === 1) return members[indexes[0]!]!.replace({ nullable: typ.nullable });
   const kept = canonicalUnionOrder(indexes.map((index) => members[index]!));
-  return new Type({ kind: ValueKind.OBJECT, variants: kept, nullable: typ.nullable });
+  return new Type({ kind: ValueKind.OBJECT, members: kept, nullable: typ.nullable });
 }
 
 /**
@@ -1904,10 +1903,10 @@ export function restrictUnion(typ: Type, keep: Iterable<string | Type>, field?: 
  * @throws RangeError when `typ` is not a union.
  */
 export function unionField(typ: Type, name: string): FieldRead | FieldPartial | FieldAbsent {
-  if (typ.variants === undefined) throw new RangeError("unionField needs a union type");
-  const having = typ.variants.filter((member) => member.fields!.has(name));
+  if (typ.members === undefined) throw new RangeError("unionField needs a union type");
+  const having = typ.members.filter((member) => member.fields!.has(name));
   if (having.length === 0) return { kind: "absent" };
-  if (having.length < typ.variants.length) return { kind: "partial", members: having };
+  if (having.length < typ.members.length) return { kind: "partial", members: having };
   const fieldTypes = having.map((member) => member.fields!.get(name)!);
   const nullable = having.some(
     (member, i) => fieldTypes[i]!.nullable || !member.required?.has(name),
@@ -1937,7 +1936,7 @@ export function hasFile(typ: Type): boolean {
   if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
   if (typ.element !== undefined && hasFile(typ.element)) return true;
   if (typ.fields !== undefined && [...typ.fields.values()].some(hasFile)) return true;
-  return typ.variants !== undefined && typ.variants.some(hasFile);
+  return typ.members !== undefined && typ.members.some(hasFile);
 }
 
 /**
@@ -1952,7 +1951,7 @@ export function hasFile(typ: Type): boolean {
  */
 export function requiresFile(typ: Type): boolean {
   if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
-  if (typ.variants !== undefined) return typ.variants.every(requiresFile);
+  if (typ.members !== undefined) return typ.members.every(requiresFile);
   if (isListKind(typ.kind)) {
     const element = typ.element;
     return element !== undefined && !element.nullable && requiresFile(element);
@@ -1967,7 +1966,7 @@ export function requiresFile(typ: Type): boolean {
 
 /** Whether `typ` is `object` with no record or union refinement. */
 function isPlainObject(typ: Type): boolean {
-  return typ.kind === ValueKind.OBJECT && typ.fields === undefined && typ.variants === undefined;
+  return typ.kind === ValueKind.OBJECT && typ.fields === undefined && typ.members === undefined;
 }
 
 /** Whether two closed records can match the same value. */
@@ -2036,8 +2035,8 @@ export function typesOverlap(a: Type, b: Type): boolean {
     const other = a.kind === ValueKind.ANY ? b : a;
     return other.kind !== ValueKind.NONE;
   }
-  if (a.variants !== undefined) return a.variants.some((member) => typesOverlap(member, b));
-  if (b.variants !== undefined) return b.variants.some((member) => typesOverlap(a, member));
+  if (a.members !== undefined) return a.members.some((member) => typesOverlap(member, b));
+  if (b.members !== undefined) return b.members.some((member) => typesOverlap(a, member));
   if (a.fields !== undefined && b.fields !== undefined) return recordsOverlap(a, b);
   if (a.kind === ValueKind.OBJECT && b.kind === ValueKind.OBJECT) {
     // Only plain `object` remains on at least one side, and it accepts any record.
@@ -2378,7 +2377,7 @@ function inferList(items: Value[]): TypedValue {
  * Example: `buildValueAs(ValueKind.NUMBER, 7n)` gives an `int` holding `7n`.
  *
  * @throws TypeCheckError at the failing value's path when the value does not satisfy
- *   `declared`: a wrong scalar, a non-member variant tag, an out-of-range number, a record
+ *   `declared`: a wrong scalar, a value outside a `Literal`, an out-of-range number, a record
  *   with missing or unknown fields, a union value with a missing or unknown tag or matching no
  *   member, a bad list element, or a part that is not a JSON value where one is required.
  */
@@ -2420,14 +2419,12 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
 
   if (value === null && typ.nullable) return new TypedValue(ValueKind.NONE, null);
 
-  if (typ.variants !== undefined) return buildForUnion(typ, value, path);
+  if (typ.members !== undefined) return buildForUnion(typ, value, path);
 
   if (typ.tags !== undefined) {
     if (typeof value !== "string" || !typ.tags.has(value)) {
-      const tags = writeAsText([...typ.tags].sort(compareCodeUnits));
-      throw new TypeCheckError(`${floatSpelledRepr(value)} is not a member of variant ${tags}`, {
-        path,
-      });
+      const label = literalLabel([...typ.tags].sort(compareCodeUnits));
+      throw new TypeCheckError(`${floatSpelledRepr(value)} is not one of ${label}`, { path });
     }
     return new TypedValue(ValueKind.STRING, value);
   }
@@ -2512,7 +2509,7 @@ function buildForUnion(typ: Type, value: unknown, path: ValuePath): TypedValue {
       path,
     });
   }
-  const members = typ.variants!;
+  const members = typ.members!;
   const tagged = taggedMember(members, value);
   if (tagged !== null) {
     const [field, member] = tagged;
@@ -2658,7 +2655,7 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
  */
 export function normalizeFiles(typ: Type, value: Value): Value {
   if (value === null || !readsFiles(typ)) return value;
-  if (typ.variants !== undefined) {
+  if (typ.members !== undefined) {
     const member = unionMemberOf(typ, value);
     return member === null ? value : normalizeFiles(member, value);
   }
@@ -2732,7 +2729,7 @@ function readsFiles(typ: Type): boolean {
   if (typ.kind === ValueKind.LIST_OBJECT && typ.element === undefined) return true;
   if (typ.element !== undefined && readsFiles(typ.element)) return true;
   if (typ.fields !== undefined && [...typ.fields.values()].some(readsFiles)) return true;
-  return typ.variants !== undefined && typ.variants.some(readsFiles);
+  return typ.members !== undefined && typ.members.some(readsFiles);
 }
 
 /**
@@ -2745,9 +2742,9 @@ function readsFiles(typ: Type): boolean {
  */
 function unionMemberOf(typ: Type, value: Value): Type | null {
   if (!isRecord(value)) return null;
-  const tagged = taggedMember(typ.variants!, value);
+  const tagged = taggedMember(typ.members!, value);
   if (tagged !== null) return tagged[1];
-  for (const member of typ.variants!) {
+  for (const member of typ.members!) {
     try {
       buildForType(member, value, []);
     } catch (error) {

@@ -23,11 +23,13 @@
  * `checkSkippedArithmetic` rejects arithmetic over a value that may be null because its producers
  * were skipped while the reading node (or END) still runs.
  *
- * Knows about: compiled edges, flow outputs, node wiring, binding producers, and expression trees.
+ * Knows about: compiled edges and their topological order, flow outputs, node wiring, binding
+ * producers, and expression trees.
  * Never imports: the runtime.
  */
 
 import { type Edge, FlowOutput } from "../../compile/model.ts";
+import { topologicalOrder } from "../../compile/validation.ts";
 import { current } from "../../defaults.ts";
 import { compareCodeUnits, type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import {
@@ -35,7 +37,6 @@ import {
   ExpressionError,
   exprRefs,
   optionalAfterRoots,
-  parseCondition,
   referencePath,
   referenceText,
   scanTemplate,
@@ -67,6 +68,7 @@ import { LoadDiagnostics, locatedError } from "../helpers/errors.ts";
 import { resolveIsinstanceType } from "../helpers/isinstance_types.ts";
 import { directReferenceParts, directReferencePath } from "../../compile/output_contracts.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
+import { parsedWhen } from "./narrowing.ts";
 import type { ResolveOrigin } from "./typed_bindings.ts";
 
 /** The grammar's arithmetic trees: the `+ -`, `* / %` and `**` chains and unary minus. */
@@ -171,7 +173,9 @@ export class SkipModel {
     for (const node of this.nodeIds) {
       for (const [caseId] of this.joins.get(node)!.control) this.skipTargets.get(caseId)?.add(node);
     }
-    this.order = this.topologicalOrder(graphParents);
+    const graphEdges = [...graphParents].flatMap(([node, sources]) => [...sources].map((from) => ({ from, to: node })));
+    const { order, rest } = topologicalOrder(this.nodeIds, graphEdges);
+    this.order = rest.length === 0 ? order : null;
   }
 
   /** The level's node ids. */
@@ -215,33 +219,6 @@ export class SkipModel {
   /** Return whether `targets` is a non-empty set of the level's nodes and the level is acyclic. */
   private queryable(targets: ReadonlySet<string>): boolean {
     return targets.size > 0 && [...targets].every((target) => this.known.has(target)) && this.order !== null;
-  }
-
-  /**
-   * Return the level's nodes in topological order, or `null` when the edges cycle.
-   *
-   * @param parents Node id to the level's nodes with an edge into it.
-   * @returns The nodes, each after all of its parents, or `null` for a cyclic level.
-   */
-  private topologicalOrder(parents: ReadonlyMap<string, ReadonlySet<string>>): string[] | null {
-    const indegree = new Map(this.nodeIds.map((node) => [node, parents.get(node)!.size]));
-    const children = new Map<string, string[]>(this.nodeIds.map((node) => [node, []]));
-    for (const [node, sources] of parents) {
-      for (const parent of sources) children.get(parent)!.push(node);
-    }
-    const ready = this.nodeIds.filter((node) => indegree.get(node) === 0);
-    const order: string[] = [];
-    // `ready` is a FIFO queue: `head` is its front.
-    for (let head = 0; head < ready.length; head++) {
-      const node = ready[head]!;
-      order.push(node);
-      for (const child of children.get(node)!) {
-        const left = indegree.get(child)! - 1;
-        indegree.set(child, left);
-        if (left === 0) ready.push(child);
-      }
-    }
-    return order.length === this.nodeIds.length ? order : null;
   }
 
   /**
@@ -428,14 +405,9 @@ export function checkSkippedArithmetic(
   for (const [nodeId, whens] of searchedWhens ?? new Map<string, readonly SearchedWhen[]>()) {
     for (const [index, when, origin, whenRange] of whens) {
       if (typeof when !== "string") continue;
-      let tree: ExprNode;
-      try {
-        tree = parseCondition(when);
-      } catch (error) {
-        // The CASE build reports a malformed condition.
-        if (error instanceof ExpressionError) continue;
-        throw error;
-      }
+      // The CASE build reports a malformed condition.
+      const tree = parsedWhen(when);
+      if (tree === null) continue;
       const found = skippedOperandIn(tree, model, nodeId, known, registry);
       if (found === null) continue;
       throw locatedError(

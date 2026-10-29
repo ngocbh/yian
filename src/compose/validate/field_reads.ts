@@ -29,7 +29,6 @@ import {
   elementType,
   ExpressionError,
   inferExprType,
-  parseCondition,
   type RefStep,
   splitReference,
   stepsText,
@@ -90,7 +89,7 @@ import { LoadDiagnostics, locatedError } from "../helpers/errors.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
 import { bindingProducers } from "../edges/producers.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
-import type { Narrowing } from "./narrowing.ts";
+import { type Narrowing, parsedWhen } from "./narrowing.ts";
 import { ARITHMETIC, bindingSite, type SearchedWhen, type SkipModel, stringSites } from "./skips.ts";
 import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
@@ -1174,15 +1173,9 @@ export function checkFieldReads(
   for (const [caseId, whens] of level.searchedWhens ?? []) {
     const roots = poolRoots(level, caseId, flowWiring.get(caseId) ?? new Map());
     for (const [index, when, origin, range] of whens) {
-      if (typeof when !== "string") continue;
-      let tree: ExprNode;
-      try {
-        tree = parseCondition(when);
-      } catch (error) {
-        // The CASE build reports a malformed `when:`.
-        if (error instanceof ExpressionError) continue;
-        throw error;
-      }
+      // The CASE build reports a malformed `when:`.
+      const tree = parsedWhen(when);
+      if (tree === null) continue;
       const error = firstTreeError(tree, roots, registry, typeFn);
       if (error === null) continue;
       throw locatedError(
@@ -1258,14 +1251,9 @@ function loopPredicateError(
   if (!(node instanceof LoopNode) || node.predicate === null || node.predicateKind === "times") return null;
   const carried = node.outputContract;
   if (carried === null) return null;
-  let tree: ExprNode;
-  try {
-    tree = parseCondition(node.predicate);
-  } catch (error) {
-    // The LOOP build reports a malformed predicate.
-    if (error instanceof ExpressionError) return null;
-    throw error;
-  }
+  // The LOOP build reports a malformed predicate.
+  const tree = parsedWhen(node.predicate);
+  if (tree === null) return null;
   const field = (name: string) => projectOutputContract(carried, [name]);
   const roots: ReadRoots = {
     contracts: (name) => {

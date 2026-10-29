@@ -44,7 +44,6 @@ import {
   ExpressionError,
   exprRefsOf,
   optionalInsideRoot,
-  parseCondition,
   promptRefs,
   referencePath,
   referenceText,
@@ -96,7 +95,7 @@ import { type CaseRead, caseReadsAsWritten } from "../desugar/case_outputs.ts";
 import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { builtinFieldErrors, constructorErrors } from "./constructors.ts";
-import { Narrowing, searchedWhenReads } from "./narrowing.ts";
+import { Narrowing, parsedWhen, searchedWhenReads } from "./narrowing.ts";
 import type { SearchedWhen } from "./skips.ts";
 import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
@@ -734,15 +733,9 @@ export function validateReferences(
       // checked as written, at its own `when:`, under the checks before it.
       const views = narrowing ?? new Narrowing({ producers, inputs: inputContracts });
       for (const [index, when, , whenRange] of whens) {
-        if (typeof when !== "string") continue;
-        let tree: ExprNode;
-        try {
-          tree = parseCondition(when);
-        } catch (error) {
-          // The CASE build reports a malformed `when:`.
-          if (error instanceof ExpressionError) continue;
-          throw error;
-        }
+        // The CASE build reports a malformed `when:`.
+        const tree = parsedWhen(when);
+        if (tree === null) continue;
         const where = `${result.siteName(nodeId, `cases[${index}].when`)} from`;
         for (const read of searchedWhenReads(views, nodeId, tree, registry ?? new Map())) {
           scan(`\${${referenceText(read.node)}}`, where, whenRange ?? inputRng, {

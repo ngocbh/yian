@@ -15,8 +15,12 @@ export function heldScheduler(): { scheduler: Scheduler; open: () => void } {
     async sleep(ms, signal) {
       await new Promise<void>((resolve, reject) => {
         if (signal?.aborted) return reject(signal.reason);
-        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
-        void gate.then(resolve);
+        const onAbort = () => reject(signal!.reason);
+        signal?.addEventListener("abort", onAbort, { once: true });
+        void gate.then(() => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        });
       });
       return base.sleep(ms, signal);
     },

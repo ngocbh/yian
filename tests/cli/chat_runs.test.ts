@@ -3,7 +3,7 @@
  * loaded confined to a temporary root.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -47,9 +47,14 @@ function childRuns(options: Partial<ChildRunsOptions> = {}): ChildRuns {
   return runs;
 }
 
-/** Load `text` as the flow `<root>/<name>`. */
+/** Load `text` as the flow `<root>/<name>`, its busy nodes held by the gate file `<root>/gate`. */
 function flow(text: string, name = "child.yaml"): Promise<ComposedFlow> {
-  return loadConfinedText(root, join(root, name), text, NO_ENV);
+  return loadConfinedText(root, join(root, name), text.replaceAll("@GATE@", join(root, "gate")), NO_ENV);
+}
+
+/** Let every busy node finish. */
+function openGate(): void {
+  writeFileSync(join(root, "gate"), "");
 }
 
 /** Resolve once `check` holds, polling each turn of the event loop. */
@@ -112,7 +117,7 @@ test(
   TIMEOUT,
 );
 
-test("next on an id that names no child throws", () => {
+test("the status of an id that names no child throws", () => {
   expect(() => childRuns().status("r9")).toThrow(new RangeError("no run 'r9' in this chat"));
 });
 
@@ -135,13 +140,17 @@ nodes:
 output: \${done.output}
 `;
 
-/** A CODE node that keeps its worker busy for 300 ms, so the engine loops meanwhile. */
+/**
+ * A CODE node that runs until the test opens the gate (`openGate`), so the engine loops meanwhile;
+ * at most 5 s, so a test that never opens it still ends.
+ */
 const BUSY_NODE = `  busy:
     kind: code
     output: str
     code: |
-      const until = Date.now() + 300;
-      while (Date.now() < until) {}
+      const fs = await import("node:fs");
+      const cap = Date.now() + 5000;
+      while (!fs.existsSync("@GATE@") && Date.now() < cap) await new Promise((wake) => setTimeout(wake, 5));
       return "1m";
 `;
 
@@ -185,6 +194,8 @@ test(
     await children.start(await flow(BUSY_NAP), {});
     children.nudge("r1");
     children.nudge("r1");
+    expect(children.status("r1").status).toBe("running");
+    openGate();
     expect(await settled(children, "r1")).toMatchObject({ status: "waiting" });
     // The pass the nudges asked for runs once the start's pass has ended.
     await until(() => advances === 1);
@@ -304,9 +315,11 @@ test(
     expect(await settled(children, "r1", seen)).toMatchObject({ status: "waiting", replies: ["echo: hi"] });
     // The same reply again is a new status.
     seen = children.status("r1").seq;
+    children.markRead("r1", seen);
     await children.message("r1", "messages", "hi");
     expect(await settled(children, "r1", seen)).toMatchObject({ status: "waiting", replies: ["echo: hi"] });
     seen = children.status("r1").seq;
+    children.markRead("r1", seen);
     await children.closeInbox("r1", "messages");
     expect(await settled(children, "r1", seen)).toMatchObject({
       status: "succeeded",
@@ -343,6 +356,7 @@ test(
     expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "cancelled" });
     await children.start(await flow(BUSY_NAP), {});
     await children.stop("r2");
+    openGate();
     expect(await settled(children, "r2")).toMatchObject({ status: "cancelled" });
     expect(inspectRun(children.status("r2").log).status).toBe("cancelled");
     expect((await children.stop("r2")).note).toContain("ended");
@@ -357,6 +371,8 @@ test(
     const caller = new AbortController();
     await children.start(await flow(BUSY), {}, { signal: caller.signal });
     caller.abort(new Error("the tool call ended"));
+    expect(children.status("r1").status).toBe("running");
+    openGate();
     expect(await settled(children, "r1")).toMatchObject({ status: "succeeded", output: "1m" });
   },
   TIMEOUT,
@@ -373,7 +389,9 @@ test(
     for (const id of ["r1", "r2", "r3", "r4"]) await settled(children, id);
     await children.start(await flow(BUSY_NAP), {});
     const logs = ["r1", "r2", "r3", "r4", "r5"].map((id) => children.status(id).log);
-    expect(await children.dispose()).toEqual([
+    const disposing = children.dispose();
+    openGate();
+    expect(await disposing).toEqual([
       { run: "r1", kind: "question", log: logs[0]! },
       { run: "r2", kind: "inbox", log: logs[1]! },
       { run: "r3", kind: "timer", log: logs[2]! },
@@ -430,7 +448,7 @@ test(
 );
 
 test(
-  "a child is started once the caller's signal has aborted only if it hadn't before the start",
+  "a start whose signal has already aborted throws and writes nothing",
   async () => {
     const children = childRuns();
     const caller = new AbortController();
@@ -537,16 +555,133 @@ test(
     expect(asked.asks).toHaveLength(1);
     expect(await settled(children, "r1")).toMatchObject({ status: "waiting", wake_at: expect.any(String) });
     expect((await children.answer("r2", asked.asks![0]!.call, "yes")).status).toBe("running");
-    // r1's wake pass runs its busy node while r2's status still says waiting.
-    open();
-    await until(() => advances >= 2);
-    expect(children.status("r1").status).toBe("waiting");
     const logs = ["r1", "r2"].map((id) => children.status(id).log);
-    expect(await children.dispose()).toEqual([{ run: "r1", kind: "timer", log: logs[0]! }]);
+    // r1's wake pass runs its busy node while its status still says waiting.
+    open();
+    await until(() => advances >= 2 && inspectRun(logs[0]!).inFlight.includes("busy"));
+    expect(children.status("r1").status).toBe("waiting");
+    const disposing = children.dispose();
+    openGate();
+    expect(await disposing).toEqual([{ run: "r1", kind: "timer", log: logs[0]! }]);
     expect(children.status("r2").status).toBe("cancelled");
     expect(inspectRun(logs[1]!).status).toBe("cancelled");
     // The halted wake pass leaves the run to resume.
-    expect(["waiting", "stopped"]).toContain(inspectRun(logs[0]!).status);
+    expect(inspectRun(logs[0]!).status).toBe("stopped");
   },
   TIMEOUT,
 );
+
+test(
+  "replies stay on each status until marked read",
+  async () => {
+    const children = childRuns();
+    await children.start(await flow(ECHO), {});
+    let seen = (await settled(children, "r1")).seq;
+    await children.message("r1", "messages", "a");
+    seen = (await settled(children, "r1", seen)).seq;
+    const sent = await children.message("r1", "messages", "b");
+    // Unread, a's reply rides along on every status, the delivery's own included.
+    expect(sent).toMatchObject({ status: "running", replies: ["echo: a"] });
+    const both = await settled(children, "r1", seen);
+    expect(both.replies).toEqual(["echo: a", "echo: b"]);
+    children.markRead("r1", both.seq);
+    expect((await children.message("r1", "messages", "c")).replies).toBeUndefined();
+    expect((await settled(children, "r1", both.seq)).replies).toEqual(["echo: c"]);
+  },
+  TIMEOUT,
+);
+
+test(
+  "a next whose signal aborts resolves with the current status and stops waiting",
+  async () => {
+    const children = childRuns();
+    await children.start(await flow(ASK), {});
+    const waiting = await settled(children, "r1");
+    for (let round = 0; round < 3; round++) {
+      const reader = new AbortController();
+      const next = children.next("r1", undefined, { signal: reader.signal });
+      expect(children.waitingNexts()).toBe(1);
+      reader.abort();
+      expect(await next).toBe(waiting);
+      expect(children.waitingNexts()).toBe(0);
+    }
+    const gone = new AbortController();
+    gone.abort();
+    expect(await children.next("r1", undefined, { signal: gone.signal })).toBe(waiting);
+    expect(children.waitingNexts()).toBe(0);
+  },
+  TIMEOUT,
+);
+
+test(
+  "onStatus sees every published status of every child, and a throw in it changes nothing",
+  async () => {
+    const seen: string[] = [];
+    const children = childRuns({
+      onStatus: (status) => {
+        seen.push(`${status.run} ${status.status}`);
+        throw new Error("a reader's bug");
+      },
+    });
+    await children.start(await flow(GREET), { who: "a" });
+    await children.start(await flow(ASK), {});
+    expect(await settled(children, "r1")).toMatchObject({ status: "succeeded" });
+    const asked = await settled(children, "r2");
+    await children.answer("r2", asked.asks![0]!.call, "yes");
+    expect(await settled(children, "r2", asked.seq)).toMatchObject({ status: "succeeded" });
+    expect(seen.filter((line) => line.startsWith("r1"))).toEqual(["r1 succeeded"]);
+    expect(seen.filter((line) => line.startsWith("r2"))).toEqual(["r2 waiting", "r2 running", "r2 succeeded"]);
+  },
+  TIMEOUT,
+);
+
+test(
+  "a start that never begins publishes nothing",
+  async () => {
+    const statuses: ChildStatus[] = [];
+    const children = childRuns({ onStatus: (status) => void statuses.push(status) });
+    const fake = "id: fake\nname: fake\nnodes:\n  f: {kind: tool, tool_id: fake}\noutput: ${f.output}\n";
+    await expect(children.start(await flow(fake, "fake.yaml"), {})).rejects.toThrow("fake");
+    expect(statuses).toEqual([]);
+  },
+  TIMEOUT,
+);
+
+test(
+  "concurrent starts take ids in call order, and one whose signal aborts while queued throws",
+  async () => {
+    const children = childRuns();
+    const greet = await flow(GREET);
+    const queued = new AbortController();
+    const first = children.start(greet, { who: "a" });
+    const second = children.start(greet, { who: "b" }, { signal: queued.signal });
+    const third = children.start(greet, { who: "c" });
+    queued.abort(new Error("gone"));
+    expect((await first).id).toBe("r1");
+    await expect(second).rejects.toThrow("gone");
+    expect((await third).id).toBe("r2");
+    expect((await settled(children, "r2")).output).toBe("hi c");
+  },
+  TIMEOUT,
+);
+
+test(
+  "after dispose a delivery changes nothing and says the chat has ended",
+  async () => {
+    const children = childRuns();
+    await children.start(await flow(ASK), {});
+    const waiting = await settled(children, "r1");
+    await children.dispose();
+    const answered = await children.answer("r1", asked(waiting), "yes");
+    expect(answered).toEqual({ ...waiting, note: "the chat has ended" });
+    expect((await children.stop("r1")).note).toBe("the chat has ended");
+    expect(children.status("r1")).toBe(waiting);
+    expect(inspectRun(waiting.log).status).toBe("waiting");
+  },
+  TIMEOUT,
+);
+
+/** The call id of `status`'s one question. */
+function asked(status: ChildStatus): string {
+  return status.asks![0]!.call;
+}

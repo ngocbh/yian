@@ -9,6 +9,9 @@
  * the driver, which runs one more pass once the current one ends. Nothing else wakes a waiting
  * run at its `wakeAt`, so between passes the driver sleeps until then.
  *
+ * Every status a child publishes carries the replies no reader has marked read (`markRead`), so a
+ * reader that falls behind loses none; asks are always the run's open ones.
+ *
  * A child's `ask` returns `pending()`, so the child waits durably for the user's answer, which the
  * chat relays with `answer`. The children's stop is their own, tied to the chat's exit by
  * `dispose`, never to the call that started them.
@@ -24,9 +27,9 @@ import { format, isDeepStrictEqual } from "node:util";
 
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import type { Env } from "../defaults.ts";
+import { NodeSucceeded, type RunEvent, RunStarted } from "../events.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { Scheduler } from "../platform.ts";
-import { NodeSucceeded, type RunEvent, RunStarted } from "../events.ts";
 import {
   advance,
   cancel,
@@ -54,42 +57,49 @@ import { CommandEnv, sleepUntil } from "./utils.ts";
 /** Where a child run stands, as the chat's assistant is told. */
 export interface ChildStatus {
   /** The child's id in the chat (`r1`, `r2`, ...). */
-  run: string;
+  readonly run: string;
   /**
    * `running` from the start and from each delivery the run took until the pass it causes
    * settles; `waiting`, `succeeded`, `failed` or `cancelled` as a pass leaves it. A pass at a
    * `wakeAt` publishes only where it settles.
    */
-  status: "running" | "waiting" | "succeeded" | "failed" | "cancelled";
+  readonly status: "running" | "waiting" | "succeeded" | "failed" | "cancelled";
   /** The flow's output, once it succeeded. */
-  output?: unknown;
+  readonly output?: unknown;
   /**
    * Why it failed, once the run failed. A child whose driver a host fault stopped (the log
    * unreadable, another writer holding it) is `failed` with only a `note`: such a fault has no
    * failure code, the codes being the run's closed list.
    */
-  failure?: { code: string; message: string; node: string | null };
+  readonly failure?: { readonly code: string; readonly message: string; readonly node: string | null };
   /** What a waiting child waits on (`WaitInfo`s). */
-  waits?: unknown[];
+  readonly waits?: readonly unknown[];
   /** When a waiting child next wakes by itself, as a record time, or `null` when only a delivery wakes it. */
-  wake_at?: string | null;
+  readonly wake_at?: string | null;
   /** The questions a waiting child asks, each answered by its call id. */
-  asks?: { call: string; question: string }[];
-  /** What the child's nodes named `reply` said during the pass this status ends. */
-  replies?: string[];
+  readonly asks?: readonly { readonly call: string; readonly question: string }[];
   /**
-   * Something the chat couldn't do with the run, in words: a delivery the run refused (only on the
-   * status that call returns), or the error that stopped the driver of a failed child.
+   * What the child's nodes named `reply` said and no reader has marked read (`markRead`), oldest
+   * first.
    */
-  note?: string;
+  readonly replies?: readonly string[];
+  /**
+   * Something the chat couldn't do with the run, in words: a delivery the run refused or one made
+   * after the chat ended (only on the status that call returns), or the error that stopped the
+   * driver of a failed child.
+   */
+  readonly note?: string;
   /** The child's run log. */
-  log: string;
+  readonly log: string;
   /**
    * The status's number: every status any child publishes gets the next one, so a reader marks
    * the statuses it has seen by the last number it read.
    */
-  seq: number;
+  readonly seq: number;
 }
+
+/** A status before it is numbered. */
+type Unnumbered = Omit<ChildStatus, "seq">;
 
 /** What a `ChildRuns` needs from the chat. */
 export interface ChildRunsOptions {
@@ -113,16 +123,27 @@ export interface ChildRunsOptions {
    * so it doesn't land on the chat's terminal; `null` (the default) leaves it on the console.
    */
   consoleFile?: string | null;
+  /**
+   * Sees each status any child publishes, once it is the child's (not a child's first `running`,
+   * which `start` returns). What it throws is dropped.
+   */
+  onStatus?: ((status: ChildStatus) => void) | null;
   /** @internal For tests: the `advance` the drivers call. */
   advance?: typeof advance;
 }
 
 /** A child left waiting when the chat ends, and what it waits on. */
 export interface WaitingChild {
-  run: string;
+  readonly run: string;
   /** `question` when it asks something, else `inbox` when it waits for a message, else `timer`. */
-  kind: "question" | "inbox" | "timer";
-  log: string;
+  readonly kind: "question" | "inbox" | "timer";
+  readonly log: string;
+}
+
+/** A `next` call waiting for a status numbered after `after`. */
+interface Waiter {
+  readonly after: number;
+  readonly resolve: (status: ChildStatus) => void;
 }
 
 /** One child and its driver's state. */
@@ -130,20 +151,26 @@ interface Child {
   readonly id: string;
   readonly flow: ComposedFlow;
   readonly log: string;
+  /** The tools and skills every pass of the child is given. */
+  readonly tools: Record<string, ToolEntry>;
+  readonly skills: ReadonlyMap<string, Skill> | null;
   /** The last published status. */
   status: ChildStatus;
-  /** The `next` calls waiting for a status after the given number. */
-  readonly waiters: { after: number; resolve: (status: ChildStatus) => void }[];
+  readonly waiters: Set<Waiter>;
   /** Set by a nudge: the driver runs one more pass before it rests. */
   dirty: boolean;
   /** The driver's rest between passes, which a nudge ends; `null` while it doesn't rest. */
   rest: AbortController | null;
   /** What the child's `reply` nodes said during the current pass. */
-  readonly replies: string[];
+  readonly fresh: string[];
+  /** The replies published and not marked read, each with the seq of the status that first held it. */
+  unread: { readonly seq: number; readonly text: string }[];
+  /** Whether the run's log holds its start. */
+  started: boolean;
   /** The child's own stop: it stops the driver and leaves the log as it is. */
   readonly halt: AbortController;
-  /** Settles once the driver has stopped; `null` until it starts. */
-  done: Promise<void> | null;
+  /** Settles once the driver has stopped. */
+  done: Promise<void>;
 }
 
 /** The console methods a CODE worker's output is replayed through. */
@@ -166,6 +193,31 @@ function questionText(args: Readonly<Record<string, unknown>> | null): string {
 }
 
 /**
+ * Append the console methods' output to `file` instead, and return what puts them back as they
+ * were at this call (undoing any change made to them meanwhile).
+ *
+ * A CODE worker's console lines are replayed through this process's `console` with no run named,
+ * so routing the whole console while a child runs is the only way to keep them off the chat's
+ * terminal; a sink per run would replace this. A CODE error reported after its body returned can
+ * still arrive once the last pass has ended, and then reaches the terminal.
+ */
+function routeConsole(file: string): () => void {
+  const saved = new Map(CONSOLE_METHODS.map((method) => [method, console[method]] as const));
+  for (const method of CONSOLE_METHODS) {
+    console[method] = (...args: unknown[]) => {
+      try {
+        appendFileSync(file, `${format(...args)}\n`);
+      } catch {
+        // A line that can't be kept mustn't fail the node that printed it.
+      }
+    };
+  }
+  return () => {
+    for (const [method, original] of saved) console[method] = original;
+  };
+}
+
+/**
  * The chat's child runs: start each in the background, read its status as it changes, and relay
  * the user's answers and messages to it.
  */
@@ -174,12 +226,12 @@ export class ChildRuns {
   readonly #children = new Map<string, Child>();
   #seq = 0;
   #started = 0;
-  /** The start in progress: starts take their ids one at a time, each once its run has started. */
+  /** The start in progress: starts run one at a time, in call order. */
   #starting: Promise<unknown> = Promise.resolve();
   #disposed = false;
-  /** The passes running, and the console methods their start replaced. */
+  /** The passes running, and what puts the console back once none does. */
   #passes = 0;
-  #console: Pick<Console, (typeof CONSOLE_METHODS)[number]> | null = null;
+  #restoreConsole: (() => void) | null = null;
 
   constructor(options: ChildRunsOptions) {
     this.#options = options;
@@ -187,57 +239,65 @@ export class ChildRuns {
 
   /**
    * Start `flow` with `inputs` as the next child (`r1`, `r2`, ...): return its id, its log and the
-   * `seq` of its first status (`running`) once the log holds the run's start, while the run goes on
-   * in the background; `next(id, seq)` then sees every later status. `options.signal` is the
-   * caller's: aborting it before the start rejects, and after it, does nothing to the child.
+   * `seq` of its first status (`running`) once the log holds the run's start, while the run goes
+   * on in the background; `next(id, seq)` then sees every later status.
    *
-   * A provider key the flow's agents need is checked first, without a prompt.
+   * Starts run one at a time in call order, so ids follow it, and an id is taken only by a start
+   * that succeeds. Each first checks the provider keys the flow's agents need, without a prompt.
+   * `options.signal` is the caller's: aborting it before the start begins rejects, and after it
+   * does nothing to the child.
    *
    * @throws {MissingKeyError} When an agent's provider needs a key that isn't set, before anything
    *   is written; `ensureProviderKeys`' other errors likewise.
    * @throws {Error} When the chat was disposed; the signal's reason once it aborted; what `runFlow`
-   *   throws before the run starts (an input it doesn't declare, say), with no log left behind.
+   *   throws before the run starts (a tool the flow names that the run lacks, say), with no log
+   *   left behind.
    */
-  async start(
+  start(
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
     options: { signal?: AbortSignal | null } = {},
   ): Promise<{ id: string; log: string; seq: number }> {
-    if (this.#disposed) throw new Error("the chat's runs were disposed");
-    options.signal?.throwIfAborted();
-    const { env, llmConfig } = this.#options;
-    // No terminal: a missing key is reported to the assistant rather than prompted for mid-chat.
-    await ensureProviderKeys(flow, llmConfig, inputs, { env: new CommandEnv(env), terminal: null });
-    options.signal?.throwIfAborted();
-    const turn = this.#starting.then(() => this.#begin(flow, inputs));
+    const turn = this.#starting.then(() => this.#begin(flow, inputs, options.signal ?? null));
     this.#starting = turn.catch(() => {});
     return turn;
   }
 
-  /**
-   * Start `flow` as the next child once the starts before it are done, taking its id only once its
-   * run has started, so a failed start leaves no gap.
-   */
+  /** Start `flow` as the next child, once the starts called before it are done. */
   async #begin(
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
+    signal: AbortSignal | null,
   ): Promise<{ id: string; log: string; seq: number }> {
-    if (this.#disposed) throw new Error("the chat's runs were disposed");
+    const check = () => {
+      if (this.#disposed) throw new Error("the chat's runs were disposed");
+      signal?.throwIfAborted();
+    };
+    check();
+    const { env, llmConfig, logDir, chatRunId, skillsFor } = this.#options;
+    // No terminal: a missing key is reported to the assistant rather than prompted for mid-chat.
+    await ensureProviderKeys(flow, llmConfig, inputs, { env: new CommandEnv(env), terminal: null });
+    check();
     const id = `r${this.#started + 1}`;
-    const runId = `${this.#options.chatRunId}-${id}`;
-    const log = runLogPath(this.#options.logDir, runId);
+    const runId = `${chatRunId}-${id}`;
+    const log = runLogPath(logDir, runId);
     const seq = ++this.#seq;
     const child: Child = {
       id,
       flow,
       log,
+      // One handler serves `ask` and `ask_user` (passing both is refused).
+      tools: { ...registeredTools(), ask: () => pending() },
+      skills: skillsFor(flow),
       status: { run: id, status: "running", log, seq },
-      waiters: [],
+      waiters: new Set(),
       dirty: false,
       rest: null,
-      replies: [],
+      fresh: [],
+      unread: [],
+      started: false,
       halt: new AbortController(),
-      done: null,
+      done: Promise.resolve(),
     };
     this.#children.set(id, child);
     const started = Promise.withResolvers<void>();
@@ -262,25 +322,56 @@ export class ChildRuns {
   }
 
   /**
-   * Resolve with child `id`'s first status numbered after `after` (without it, after its current
-   * status, so a status published before the call isn't seen; pass the `seq` read before), or
-   * with its current status once its driver has stopped and none will follow, or `cancelWaits`
-   * is called.
+   * Resolve with child `id`'s latest status once its seq is past `after` (without it, past the
+   * current status's, so a status published before the call isn't seen; pass the `seq` read
+   * before). Resolve with its current status instead once its driver has stopped and none will
+   * follow, `cancelWaits` is called, or `options.signal` aborts (at once when it already has).
    *
    * @throws {RangeError} When no child has the id.
    */
-  next(id: string, after?: number): Promise<ChildStatus> {
+  next(id: string, after?: number, options: { signal?: AbortSignal | null } = {}): Promise<ChildStatus> {
     const child = this.#child(id);
     const since = after ?? child.status.seq;
-    if (child.status.seq > since || !this.#driving(child)) return Promise.resolve(child.status);
+    const signal = options.signal ?? null;
+    if (child.status.seq > since || !this.#driving(child) || signal?.aborted) return Promise.resolve(child.status);
     const { promise, resolve } = Promise.withResolvers<ChildStatus>();
-    child.waiters.push({ after: since, resolve });
+    const onAbort = () => {
+      child.waiters.delete(waiter);
+      resolve(child.status);
+    };
+    const waiter: Waiter = {
+      after: since,
+      resolve: (status) => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve(status);
+      },
+    };
+    child.waiters.add(waiter);
+    signal?.addEventListener("abort", onAbort, { once: true });
     return promise;
+  }
+
+  /** @internal For tests: how many `next` calls wait, over all children. */
+  waitingNexts(): number {
+    let count = 0;
+    for (const child of this.#children.values()) count += child.waiters.size;
+    return count;
   }
 
   /** Resolve every waiting `next` call with its child's current status. */
   cancelWaits(): void {
     for (const child of this.#children.values()) this.#release(child);
+  }
+
+  /**
+   * Mark child `id`'s replies published at or before status `seq` read: later statuses leave them
+   * out. Call it when a status is handed to the model.
+   *
+   * @throws {RangeError} When no child has the id.
+   */
+  markRead(id: string, seq: number): void {
+    const child = this.#child(id);
+    child.unread = child.unread.filter((reply) => reply.seq > seq);
   }
 
   /**
@@ -297,7 +388,7 @@ export class ChildRuns {
 
   /**
    * Answer child `id`'s open question `call` with `value` (any JSON but `null`). Returns its
-   * current status, with a `note` when the run refused the answer.
+   * status: `running` once the run took the answer, else the current one with a `note`.
    *
    * @throws {RangeError} When no child has the id.
    * @throws {TypeError} When `value` is `undefined`.
@@ -308,7 +399,7 @@ export class ChildRuns {
 
   /**
    * Send `text` to child `id`'s inbox `inbox`: as is to an `Inbox(str)`, as a user message holding
-   * it to an `Inbox(Message)`. Returns its current status, with a `note` when the run refused it.
+   * it to an `Inbox(Message)`. Returns its status as `answer` does.
    *
    * @throws {RangeError} When no child has the id.
    */
@@ -322,8 +413,7 @@ export class ChildRuns {
   }
 
   /**
-   * Close child `id`'s inbox `inbox`, so its turns end. Returns its current status, with a `note`
-   * when the run refused the close.
+   * Close child `id`'s inbox `inbox`, so its turns end. Returns its status as `answer` does.
    *
    * @throws {RangeError} When no child has the id.
    */
@@ -332,7 +422,7 @@ export class ChildRuns {
   }
 
   /**
-   * Cancel child `id`. Returns its current status, with a `note` when it had already ended.
+   * Cancel child `id`. Returns its status as `answer` does; the note says when it had ended.
    *
    * @throws {RangeError} When no child has the id.
    */
@@ -344,7 +434,7 @@ export class ChildRuns {
    * End the chat's hold on its children, by each one's published status: cancel each `running`
    * one; stop the driver of each `waiting` one, a pass at its `wakeAt` included, leaving its log to
    * resume; and resolve every waiting `next`. Returns the waiting children, by id. Later starts
-   * throw.
+   * throw, and later deliveries change nothing.
    */
   async dispose(): Promise<WaitingChild[]> {
     this.#disposed = true;
@@ -367,8 +457,7 @@ export class ChildRuns {
     });
     await Promise.all(stopping);
     this.cancelWaits();
-    // Listed before any await, so in id order.
-    return left;
+    return left.sort((a, b) => Number(a.run.slice(1)) - Number(b.run.slice(1)));
   }
 
   /** @throws {RangeError} When no child has the id. */
@@ -386,7 +475,7 @@ export class ChildRuns {
   /** What waiting `child` waits on, by its last status. */
   #waitKind(child: Child): WaitingChild["kind"] {
     if ((child.status.asks ?? []).length > 0) return "question";
-    const waits = (child.status.waits ?? []) as { tool: string; settled: boolean }[];
+    const waits = (child.status.waits ?? []) as readonly { tool: string; settled: boolean }[];
     return waits.some((wait) => wait.tool === TAKE && !wait.settled) ? "inbox" : "timer";
   }
 
@@ -402,12 +491,15 @@ export class ChildRuns {
 
   /**
    * Make `deliver`'s delivery to `child`'s log, publish the child `running` and nudge its driver;
-   * return its status. A refusal is a note on the status returned, and publishes nothing.
+   * return its status. A refusal, or the chat having ended, is a note on the status returned, and
+   * changes nothing.
    */
   async #deliver(
     child: Child,
     deliver: (log: string, options: DeliveryOptions) => Promise<unknown>,
   ): Promise<ChildStatus> {
+    // Its runs are left as they were, to resume later.
+    if (this.#disposed) return { ...child.status, note: "the chat has ended" };
     try {
       await deliver(child.log, this.#deliveryOptions(child));
     } catch (error) {
@@ -433,13 +525,24 @@ export class ChildRuns {
   ): Promise<void> {
     const { env, llmConfig, models = null, scheduler, chatRunId, advance: move = advance } = this.#options;
     const onEvent = (event: RunEvent) => {
-      if (event instanceof RunStarted) started.resolve();
+      if (event instanceof RunStarted) {
+        child.started = true;
+        started.resolve();
+      }
       // An interrupted reply succeeds with null when its output is `Optional(...)`.
       if (isReply(event) && !event.interrupted && event.output !== null) {
-        child.replies.push(writeAsText(event.output as Value));
+        child.fresh.push(writeAsText(event.output as Value));
       }
     };
-    const common = { ...this.#shared(child), onEvent, signal: child.halt.signal, env, scheduler, models };
+    const common = {
+      tools: child.tools,
+      skills: child.skills,
+      onEvent,
+      signal: child.halt.signal,
+      env,
+      scheduler,
+      models,
+    };
     try {
       let result = await this.#pass(() =>
         runFlow(child.flow, inputs, {
@@ -463,15 +566,13 @@ export class ChildRuns {
         const wake: string | null = next === spent ? null : next;
         if (await this.#rest(child, wake)) spent = wake;
         if (child.halt.signal.aborted) return;
-        result = await this.#pass(() =>
-          move({ log: child.log, ...this.#deliveryOptions(child), ...common }),
-        );
+        result = await this.#pass(() => move({ log: child.log, ...this.#deliveryOptions(child), ...common }));
       }
     } catch (error) {
       // Before the start, `start` throws it; after, it is the child's failure.
       started.reject(error);
-      // A halted driver leaves the run as it is.
-      if (child.halt.signal.aborted) return;
+      // A halted driver leaves the run as it is, and a child that never started has no status.
+      if (child.halt.signal.aborted || !child.started) return;
       this.#publish(child, {
         run: child.id,
         status: "failed",
@@ -487,43 +588,16 @@ export class ChildRuns {
 
   /** Run `move` as a pass, the console routed to the console file meanwhile. */
   async #pass(move: () => Promise<RunResult>): Promise<RunResult> {
-    if (this.#passes++ === 0) this.#routeConsole();
+    const file = this.#options.consoleFile ?? null;
+    if (this.#passes++ === 0 && file !== null) this.#restoreConsole = routeConsole(file);
     try {
       return await move();
     } finally {
-      if (--this.#passes === 0) this.#restoreConsole();
+      if (--this.#passes === 0) {
+        this.#restoreConsole?.();
+        this.#restoreConsole = null;
+      }
     }
-  }
-
-  /**
-   * Send the console methods to the console file, if there is one. A CODE worker's console lines
-   * are replayed through this process's `console` with no run named, so routing the whole console
-   * while a child runs is the only way to keep them off the chat's terminal; a sink per run would
-   * replace this. `#restoreConsole` puts back the methods as they were here, so a change made to
-   * them meanwhile is undone.
-   */
-  #routeConsole(): void {
-    const file = this.#options.consoleFile ?? null;
-    if (file === null) return;
-    const saved = { log: console.log, info: console.info, warn: console.warn, error: console.error, debug: console.debug };
-    this.#console = saved;
-    for (const method of CONSOLE_METHODS) {
-      console[method] = (...args: unknown[]) => {
-        try {
-          appendFileSync(file, `${format(...args)}\n`);
-        } catch {
-          // A line that can't be kept mustn't fail the node that printed it.
-        }
-      };
-    }
-  }
-
-  /** Put back the console methods `#routeConsole` replaced. */
-  #restoreConsole(): void {
-    const saved = this.#console;
-    if (saved === null) return;
-    this.#console = null;
-    for (const method of CONSOLE_METHODS) console[method] = saved[method];
   }
 
   /**
@@ -559,23 +633,20 @@ export class ChildRuns {
     }
   }
 
-  /** The options every pass of `child` passes. */
-  #shared(child: Child): { tools: Record<string, ToolEntry>; skills: ReadonlyMap<string, Skill> | null } {
-    // One handler serves `ask` and `ask_user` (passing both is refused).
-    return { tools: { ...registeredTools(), ask: () => pending() }, skills: this.#options.skillsFor(child.flow) };
-  }
-
-  /** The status `result` leaves `child` in, with the replies of the pass that ended. */
-  #settledStatus(child: Child, result: RunResult): Omit<ChildStatus, "seq"> {
-    const replies = child.replies.splice(0);
-    const base = { run: child.id, log: child.log, ...(replies.length > 0 ? { replies } : {}) };
+  /** The status `result` leaves `child` in. */
+  #settledStatus(child: Child, result: RunResult): Unnumbered {
+    const base = { run: child.id, log: child.log };
     if (result.status === "succeeded") return { ...base, status: "succeeded", output: result.output };
     if (result.status === "failed") {
       const failure = result.failure!;
       return { ...base, status: "failed", failure: { code: failure.code, message: failure.message, node: failure.nodeId } };
     }
     if (result.status === "cancelled") return { ...base, status: "cancelled" };
-    const asks = pendingCalls(child.log).map((call) => ({ call: call.callId, question: questionText(call.arguments) }));
+    // A pass over the whole log, once per settled pass: the asks are what the log says is open.
+    const asks = pendingCalls(child.log).map((call) => ({
+      call: call.callId,
+      question: questionText(call.arguments),
+    }));
     return {
       ...base,
       status: "waiting",
@@ -586,22 +657,37 @@ export class ChildRuns {
   }
 
   /**
-   * Make `status` `child`'s, numbered, unless it says what the last one did and has no replies;
-   * wake its readers.
+   * Make `status` `child`'s, numbered and with its unread replies, unless it says what the last
+   * one did and the pass said nothing new; tell `onStatus`, and wake its readers.
    */
-  #publish(child: Child, status: Omit<ChildStatus, "seq">): void {
+  #publish(child: Child, status: Unnumbered): void {
+    const fresh = child.fresh.splice(0);
+    const seq = this.#seq + 1;
+    const unread = [...child.unread, ...fresh.map((text) => ({ seq, text }))];
+    const replies = unread.map((reply) => reply.text);
+    const next: Unnumbered = { ...status, ...(replies.length > 0 ? { replies } : {}) };
     const { seq: _, ...last } = child.status;
-    if (status.replies === undefined && isDeepStrictEqual(last, status)) return;
-    child.status = { ...status, seq: ++this.#seq };
-    const waiting = child.waiters.splice(0);
-    for (const waiter of waiting) {
-      if (child.status.seq > waiter.after) waiter.resolve(child.status);
-      else child.waiters.push(waiter);
+    if (fresh.length === 0 && isDeepStrictEqual(last, next)) return;
+    this.#seq = seq;
+    child.unread = unread;
+    child.status = { ...next, seq };
+    try {
+      this.#options.onStatus?.(child.status);
+    } catch {
+      // A reader's fault mustn't stop the child's driver.
+    }
+    for (const waiter of [...child.waiters]) {
+      if (seq > waiter.after) {
+        child.waiters.delete(waiter);
+        waiter.resolve(child.status);
+      }
     }
   }
 
   /** Resolve every waiting `next` call on `child` with its current status. */
   #release(child: Child): void {
-    for (const waiter of child.waiters.splice(0)) waiter.resolve(child.status);
+    const waiting = [...child.waiters];
+    child.waiters.clear();
+    for (const waiter of waiting) waiter.resolve(child.status);
   }
 }

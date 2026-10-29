@@ -199,7 +199,8 @@ test("azure takes its resource endpoint as base_url with or without a key", () =
 test("an authored layer may set base_url only beside provider azure", () => {
   expect(hostOnlyFieldError({ provider: "azure", base_url: AZURE_RESOURCE })).toBeNull();
   for (const layer of [{ base_url: AZURE_RESOURCE }, { provider: "openai", base_url: AZURE_V1 }]) {
-    expect(hostOnlyFieldError(layer)).toContain("provider: azure");
+    expect(hostOnlyFieldError(layer)?.[0]).toBe("base_url");
+    expect(hostOnlyFieldError(layer)?.[1]).toContain("provider: azure");
   }
   expect(hostOnlyFieldError({ provider: "azure", api_key: SENTINEL })).not.toBeNull();
 });
@@ -556,13 +557,15 @@ describe("edge cases", () => {
   });
 
   test("hostOnlyFieldError counts a null value and follows the field order", () => {
-    expect(hostOnlyFieldError({ api_key: null })).toBe(
+    expect(hostOnlyFieldError({ api_key: null })).toEqual([
+      "api_key",
       "llm_config.api_key is a host credential; pass it in the run's llm_config, not in a flow file",
-    );
-    expect(hostOnlyFieldError({ headers: {}, project: "p" })).toBe(
+    ]);
+    expect(hostOnlyFieldError({ headers: {}, project: "p" })).toEqual([
+      "project",
       "llm_config.project goes wherever the host's api_key is sent; pass it with that key in the run's " +
         "llm_config, or save it with the login by `yian auth`, not in a flow file",
-    );
+    ]);
     expect(hostOnlyFieldError({ api_key: undefined, model: "m" })).toBeNull();
     expect(hostOnlyFieldError(["api_key"])).toBeNull();
     expect(hostOnlyFieldError(null)).toBeNull();

@@ -163,7 +163,7 @@ export function validateLayer(config: Readonly<AgentConfig>): void {
   if (hostOnly !== null) {
     // Every layer here ends up in the recorded effective map, and a lower layer's base_url would
     // redirect the host key.
-    throw new RangeError(hostOnly);
+    throw new RangeError(hostOnly[1]);
   }
   rejectInternalKeys(config);
   const provider = own(config, "provider");

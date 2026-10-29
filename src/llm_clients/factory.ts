@@ -13,7 +13,6 @@
  */
 
 import { type Env, processEnv } from "../defaults.ts";
-import { reprText } from "../diagnostics.ts";
 import {
   type Auth,
   BasicAuth,
@@ -65,6 +64,7 @@ import {
   OLLAMA_ENDPOINT,
   OPENAI_API_ENDPOINT,
   OPENAI_COMPATIBLE,
+  prefersResponses,
   PROVIDER_BASE_URL,
 } from "./endpoints.ts";
 import { validateModel } from "./validators.ts";
@@ -88,17 +88,6 @@ const ROUTED_PROVIDERS = [...OPENAI_COMPATIBLE, ...DEDICATED_PROVIDERS];
   ) {
     throw new Error("LLM factory routes and LLMConfig provider vocabulary are out of sync");
   }
-}
-
-const RESPONSES_PREFIXES = ["gpt-5-pro", "gpt-5.2-pro", "gpt-5.4-pro", "gpt-5.5-pro", "gpt-5.6-sol"];
-
-/**
- * Whether an OpenAI-compatible or Azure `model` is served through the Responses API rather than
- * Chat Completions: it starts with `gpt-5-pro`, `gpt-5.2-pro`, `gpt-5.4-pro`, `gpt-5.5-pro` or
- * `gpt-5.6-sol`, or contains `codex`.
- */
-export function prefersResponses(model: string): boolean {
-  return RESPONSES_PREFIXES.some((prefix) => model.startsWith(prefix)) || model.includes("codex");
 }
 
 /**
@@ -227,32 +216,13 @@ function openaiModel(resolved: Resolved, wiring: Wiring): RouteModel {
 }
 
 /**
- * Return whether `model` goes to the Responses API (`prefersResponses`) on a Chat Completions
- * `provider` or Azure.
- *
- * Throws `RangeError` if it does and `block`, which mirrors the Chat Completions request, is not
- * empty.
- */
-function routedToResponses(provider: string, model: string, block: JsonObject): boolean {
-  if (!prefersResponses(model)) return false;
-  if (Object.keys(block).length > 0) {
-    throw new RangeError(
-      `The ${reprText(provider)} block mirrors the Chat Completions request, but model ` +
-        `${reprText(model)} is routed to the Responses API; remove the block or use a model ` +
-        "served through Chat Completions.",
-    );
-  }
-  return true;
-}
-
-/**
  * Build a Chat Completions vendor's route (xAI, DeepSeek, Qwen, GLM, MiniMax, OpenRouter, vLLM):
  * `chat/completions`, or `responses` for a name-routed model, with a bearer key.
  *
  * The key is the resolved one, else the provider's non-empty key variable, else `"EMPTY"` for
  * vLLM; the base URL the resolved one, else (vLLM) a non-empty `VLLM_BASE_URL` as written, else
  * `PROVIDER_BASE_URL`; each variable is read only when no earlier source matched. Throws
- * `RangeError` naming the key variable if no key is found, or if a name-routed model has a block.
+ * `RangeError` naming the key variable if no key is found.
  */
 function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): RouteModel {
   const { model, block } = resolved;
@@ -262,7 +232,8 @@ function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): Rout
   if (key === null && !OPTIONAL_API_KEY_PROVIDERS.has(provider)) {
     throw missingKey(provider, [variable]);
   }
-  const responses = routedToResponses(provider, model, block);
+  // `checkModelConfig` refused a block on a name-routed model.
+  const responses = prefersResponses(model);
   const envBaseUrl =
     resolved.baseUrl === null && provider === "vllm" ? wiring.env("VLLM_BASE_URL") : undefined;
   const route = new Route({
@@ -311,7 +282,7 @@ function azureAuth(key: string | null, endpoint: string, env: Env): [Auth, strin
  * `openai/responses` for a name-routed deployment, with `api-version` from `OPENAI_API_VERSION`.
  *
  * Auth comes from `azureAuth`. Throws `RangeError` if it finds no credential, then if
- * `OPENAI_API_VERSION` is unset or empty, then if a name-routed deployment has a block.
+ * `OPENAI_API_VERSION` is unset or empty.
  */
 function azureModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const { model, block } = resolved;
@@ -326,7 +297,8 @@ function azureModel(resolved: Resolved, wiring: Wiring): RouteModel {
         "2025-03-01-preview)",
     );
   }
-  const responses = routedToResponses("azure", model, block);
+  // `checkModelConfig` refused a block on a name-routed deployment.
+  const responses = prefersResponses(model);
   const route = new Route({
     provider: "azure",
     baseUrl: endpoint,
@@ -502,9 +474,9 @@ async function subscriptionModel(
  * `signal` to every credential read, and `onReplayDegraded` to the protocol.
  *
  * Throws `RangeError` if `checkModelConfig` rejects the config (e.g. a block the API it reaches
- * refuses), a vendor, Anthropic or Google key is missing, `OLLAMA_BASE_URL` is malformed, Azure
- * has no credential or no `OPENAI_API_VERSION`, or a model routed to the Responses API has a Chat
- * Completions block; `AuthError` if a pinned login changed or was removed, an OpenAI key is
+ * refuses, or a Chat Completions block on a model routed to the Responses API), a vendor,
+ * Anthropic or Google key is missing, `OLLAMA_BASE_URL` is malformed, or Azure has no credential
+ * or no `OPENAI_API_VERSION`; `AuthError` if a pinned login changed or was removed, an OpenAI key is
  * missing or changed, or saved header names differ from the recorded ones; a `TypeCheckError` for
  * a record that holds a non-yian value.
  */

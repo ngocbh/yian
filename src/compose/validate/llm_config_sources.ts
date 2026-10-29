@@ -31,9 +31,9 @@ import { classifyPath, typeRelation } from "../../compile/validation.ts";
 import { compareCodeUnits, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError } from "../../expr/index.ts";
 import { exprRefsOf } from "../../expr/template.ts";
-import { hostOnlyFieldError, LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS } from "../../llm_clients/config.ts";
+import { LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS } from "../../llm_clients/config.ts";
 import { blockFieldAnnotation, type BlockFieldType, PROVIDER_BLOCKS } from "../../llm_clients/provider_blocks.ts";
-import { valueLeaves } from "../../nodes/agent/llm_values.ts";
+import { declaredHostOnlyError, valueLeaves } from "../../nodes/agent/llm_values.ts";
 import { AgentNode } from "../../nodes/agent/node.ts";
 import { NEW_MESSAGES } from "../../typesys/pool.ts";
 import {
@@ -175,7 +175,7 @@ class Checker {
     }
   }
 
-  /** Reject an unknown reference (when asked), `isinstance` or a constructor. */
+  /** Reject an unknown reference (when asked), a read of new messages, `isinstance` or a constructor. */
   private names(leaf: unknown, checkRefs: boolean, fail: Fail): void {
     let isinstanceNames: string[];
     let constructors: string[];
@@ -197,9 +197,15 @@ class Checker {
     }
     const inputNames = new Set(this.flowInputs.keys());
     for (const ref of refs) {
+      const [head, second] = ref.split(".");
       // The reference pass accepts an AGENT's new messages for the node's other reads, so a
-      // node layer refuses them here too: its node-id targets have no `<id>.new_messages`.
-      if (!checkRefs && ref.split(".")[1] !== NEW_MESSAGES) continue;
+      // node layer refuses them here too.
+      if (second === NEW_MESSAGES && this.nodeIds.has(head!)) {
+        throw fail(
+          `reference \${${ref}} reads new_messages, which an llm_config value can't read; read it in a node input`,
+        );
+      }
+      if (!checkRefs) continue;
       const problem = classifyPath(ref, this.nodeIds, inputNames);
       if (problem !== null) throw fail(problem);
     }
@@ -266,12 +272,8 @@ class Checker {
     for (const member of inferred.variants ?? []) {
       for (const name of member.fields?.keys() ?? []) if (!declared.includes(name)) declared.push(name);
     }
-    // A null value counts as set, as each declared field may be.
-    const hostOnly = hostOnlyFieldError(Object.fromEntries(declared.map((name) => [name, null])));
-    if (hostOnly !== null && owner === "llm_config") {
-      const field = hostOnly.replace(/^llm_config\./, "").split(" ", 1)[0];
-      throw fail(`its type declares \`${field}\`; ${hostOnly}`);
-    }
+    const hostOnly = owner === "llm_config" ? declaredHostOnlyError(declared) : null;
+    if (hostOnly !== null) throw fail(hostOnly);
     for (const name of declared) {
       if (name === "inherit" && owner === "llm_config") {
         throw fail(

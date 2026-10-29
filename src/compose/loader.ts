@@ -81,7 +81,7 @@ import { boundaryFieldRanges, pathText } from "./helpers/source.ts";
 import { rejectUnreadTags } from "./helpers/tags.ts";
 import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
-import { checkLlmConfigValue, readLlmConfig } from "./nodes/agent.ts";
+import { checkLlmConfigValue, checkResponsesBlock, readLlmConfig } from "./nodes/agent.ts";
 import { notTextDetail, notTextError, valueTypeError } from "./nodes/base.ts";
 import { KINDS, REMOVED_KINDS } from "./nodes/index.ts";
 import { checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
@@ -966,7 +966,8 @@ function refuseInheritedLlmValues(flow: ComposedFlow): void {
  * checked by `checkLlmConfigValue`. Otherwise it must be a mapping of `LLMConfig` fields without
  * `api_key`, `organization`, `project`, `headers`, or `base_url` other than beside
  * `provider: azure`, which only the host sets. A text field YAML read as non-text (such as
- * `model: 5`) is named by `notTextError`; any other violation keeps the `LLMConfig` message.
+ * `model: 5`) is named by `notTextError`; any other violation keeps the `LLMConfig` message. A
+ * provider block beside a model routed to the Responses API is refused (`checkResponsesBlock`).
  * `inherit` is an AGENT-only key.
  *
  * @param llmConfig The authored layer; `null` means absent.
@@ -1019,8 +1020,8 @@ function readAuthoredLlmConfig(
     })[0];
   }
   if (!isRecord(llmConfig)) throw diagnostics.error(`${where}: llm_config must be a mapping`, { range: sourceRange });
-  const message = hostOnlyFieldError(llmConfig);
-  if (message !== null) throw diagnostics.error(`${where}: ${message}`, { range: sourceRange });
+  const hostOnly = hostOnlyFieldError(llmConfig);
+  if (hostOnly !== null) throw diagnostics.error(`${where}: ${hostOnly[1]}`, { range: sourceRange });
   try {
     new LLMConfig(llmConfig);
   } catch (error) {
@@ -1033,6 +1034,8 @@ function readAuthoredLlmConfig(
     }
     throw diagnostics.error(`${where}: llm_config: ${errorText(error)}`, { range: sourceRange, cause: error });
   }
+  const { provider, model } = llmConfig;
+  checkResponsesBlock(provider, model, llmConfig, `${where}: llm_config`, diagnostics, () => sourceRange);
   return llmConfig;
 }
 

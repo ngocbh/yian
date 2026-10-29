@@ -546,6 +546,22 @@ describe("edge cases", () => {
     checkModelConfig({ ...subscription, api_key: "host-key" });
   });
 
+  test("checkModelConfig refuses a Chat Completions block on a model routed to the Responses API", () => {
+    const routed = { provider: "openrouter", model: "openai/gpt-5-codex", openrouter: { temperature: 0.5 } };
+    expect(rangeError(() => checkModelConfig(routed)).message).toBe(
+      "The 'openrouter' block mirrors the Chat Completions request, but model 'openai/gpt-5-codex' is routed " +
+        "to the Responses API; remove the block or use a model served through Chat Completions.",
+    );
+    expect(refusedBlock(routed)).toBe(".openrouter");
+    const azure = { provider: "azure", model: "prod-codex", base_url: "https://r.openai.azure.com", azure: { seed: 1n } };
+    expect(rangeError(() => checkModelConfig(azure)).message).toContain("model 'prod-codex' is routed to the Responses API");
+    // No block, a model on Chat Completions, and OpenAI (always the Responses API) are fine.
+    checkModelConfig({ provider: "openrouter", model: "openai/gpt-5-codex" });
+    checkModelConfig({ ...routed, openrouter: { temperature: null } });
+    checkModelConfig({ ...routed, model: "openai/gpt-5" });
+    checkModelConfig({ provider: "openai", model: "gpt-5-codex", openai: { temperature: 0.5 } });
+  });
+
   test("validateLayer ignores undefined values", () => {
     validateLayer({
       provider: "anthropic",

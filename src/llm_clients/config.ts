@@ -10,10 +10,12 @@
 import { isIPv6 } from "node:net";
 
 import { current } from "../defaults.ts";
+import { reprText } from "../diagnostics.ts";
 import { isRecord } from "../typesys/index.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost as hostValue } from "../typesys/values.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
+import { PROVIDER_BASE_URL, prefersResponses } from "./endpoints.ts";
 import { blockSchema, checkBlock, choices, type Issue, PROVIDER_BLOCKS, ValidationError } from "./provider_blocks.ts";
 
 /**
@@ -46,6 +48,25 @@ export const AZURE_NEEDS_BASE_URL =
   "provider azure needs llm_config.base_url, the Azure OpenAI resource endpoint " +
   "(https://<resource>.openai.azure.com/); set llm_config.base_url beside " +
   "provider: azure. AZURE_OPENAI_ENDPOINT is not read";
+
+/**
+ * Return why `provider`'s `block` can't be sent with `model`, or `null`.
+ *
+ * A Chat Completions vendor (any OpenAI-compatible provider but `openai`) or Azure sends a model
+ * that `prefersResponses` to the Responses API, while its block mirrors the Chat Completions
+ * request, so such a model needs the block empty; a field set to `null` counts as unset. A block
+ * that is not a record is left to the block's own check.
+ */
+export function responsesBlockError(provider: string, model: string, block: unknown): string | null {
+  const chat = provider === "azure" || Object.hasOwn(PROVIDER_BASE_URL, provider);
+  if (!chat || !prefersResponses(model) || !isRecord(block)) return null;
+  // A null field is unset, as `LLMConfig` reads it, so a block of only nulls is empty.
+  if (!Object.values(block).some((value) => value !== null && value !== undefined)) return null;
+  return (
+    `The ${reprText(provider)} block mirrors the Chat Completions request, but model ${reprText(model)} ` +
+    "is routed to the Responses API; remove the block or use a model served through Chat Completions."
+  );
+}
 
 const CODEX_REMOVED =
   "Native Codex configuration has been removed. Run 'yian auth openai', use provider: openai, " +
@@ -597,19 +618,20 @@ const HOST_ONLY_FIELDS: ReadonlyMap<string, string> = new Map([
 ]);
 
 /**
- * Return why an authored `llm_config` layer may not be used, or `null`.
+ * Return the first host-only field an authored `llm_config` layer sets and why it may not, or
+ * `null`.
  *
- * Gives the message for the first host-only field the layer sets (`api_key`, `base_url`,
- * `organization`, `project`, `headers`; a `null` value counts). A `base_url` beside
- * `provider: azure` is allowed: it is the Azure resource endpoint, and the Azure key comes from
- * the environment, which flow code can already read, while a host `api_key` for Azure must bring
- * its own `base_url` (see `popHostCredentials`). A non-record has no host-only field.
+ * The fields are `api_key`, `base_url`, `organization`, `project` and `headers`; a `null` value
+ * counts. A `base_url` beside `provider: azure` is allowed: it is the Azure resource endpoint,
+ * and the Azure key comes from the environment, which flow code can already read, while a host
+ * `api_key` for Azure must bring its own `base_url` (see `popHostCredentials`). A non-record has no
+ * host-only field.
  */
-export function hostOnlyFieldError(config: unknown): string | null {
+export function hostOnlyFieldError(config: unknown): readonly [field: string, message: string] | null {
   if (!isRecord(config)) return null;
   for (const [field, message] of HOST_ONLY_FIELDS) {
     if (field === "base_url" && own(config, "provider") === "azure") continue;
-    if (has(config, field)) return message;
+    if (has(config, field)) return [field, message];
   }
   return null;
 }

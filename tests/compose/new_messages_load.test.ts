@@ -121,7 +121,7 @@ test("a second agent splices the first's new_messages into its prompt list", asy
     output: str`));
 });
 
-test("an llm_config source reading reply.new_messages is refused with the same message", async () => {
+test("an llm_config source reading reply.new_messages is refused, naming the llm_config rule", async () => {
   const flow = FLOW(`  reader:
     kind: agent
     prompt: hi
@@ -130,8 +130,19 @@ test("an llm_config source reading reply.new_messages is refused with the same m
       model: \${reply.new_messages}
     output: str`);
   const message = (await loadErrorAsync(loadFlow(flow))).message;
-  expect(message).toContain("llm_config");
-  expect(message).toContain("reads new_messages, which only an AGENT node has");
+  expect(message).toContain(
+    "node 'reader' llm_config.model: reference ${reply.new_messages} reads new_messages, which an llm_config " +
+      "value can't read; read it in a node input",
+  );
+  expect(message).not.toContain("isn't one there");
+  const flowLayer = FLOW("  reader:\n    kind: agent\n    prompt: hi\n    output: str").replace(
+    "nodes:",
+    "llm_config: {provider: anthropic, model: '${reply.new_messages}'}\nnodes:",
+  );
+  expect((await loadErrorAsync(loadFlow(flowLayer))).message).toContain(
+    "flow llm_config.model: reference ${reply.new_messages} reads new_messages, which an llm_config value " +
+      "can't read; read it in a node input",
+  );
 });
 
 /** A flow whose agent `reply` runs only when `input.go`, with output `${output}`. */

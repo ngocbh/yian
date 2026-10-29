@@ -332,7 +332,8 @@ Exactly one driver decides how often the body runs:
 - `max:` is a runaway guard. A loop that would run more than `max` times fails with
   `loop.max_exceeded`. Without `max:`, a loop runs until its condition ends it.
 - A condition that reads only fields the body never returns can't change, so it is a load error
-  unless you give `max:`.
+  unless you give `max:`. So is one that reads no carried field and doesn't end the loop at once
+  (`until: 1 > 2`).
 - The body returns at least one carried field, and only carried fields. A returned field keeps its
   carried type.
 - Returning `null` sets the field to `null`; leaving it out keeps its value.

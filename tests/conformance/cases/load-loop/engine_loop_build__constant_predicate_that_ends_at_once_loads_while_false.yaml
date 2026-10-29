@@ -1,0 +1,21 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    body:
+      input:
+        xs: !list(int)
+      nodes: {}
+      output:
+        xs: ${input.xs + [1]}
+  nodes:
+    l:
+      kind: loop
+      call: body
+      input:
+        xs: []
+      while: "false"
+  output: ${l.output}
+expect:
+  load: ok

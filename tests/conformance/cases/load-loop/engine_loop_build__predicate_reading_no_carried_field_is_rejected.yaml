@@ -1,0 +1,29 @@
+# A predicate that reads no carried field never changes, so without `max:` an `until:` that starts
+# false runs forever.
+kind: load
+flow: |
+  id: f
+  name: f
+  defs:
+    body:
+      input:
+        xs: !list(int)
+      nodes: {}
+      output:
+        xs: ${input.xs + [1]}
+  nodes:
+    l:
+      kind: loop
+      call: body
+      input:
+        xs: []
+      until: 1 > 2
+  output: ${l.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''l'': `until: 1 > 2` reads no carried field, so it never changes; read one, or add `max:`'
+      frames:
+      - label: flow.yaml
+        range: [11, 3, 11, 4]

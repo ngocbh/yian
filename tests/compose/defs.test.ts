@@ -348,6 +348,52 @@ output: \${go.output}
   expect(error.message).toContain("nodes");
 });
 
+test.each([
+  ["false", "`input:` must be a mapping, but YAML read it as a boolean; write a mapping"],
+  ["", "`input:` must be a mapping, but it is empty; write a mapping"],
+])("a multi-node def's input: %p is refused like a flow's", async (value, message) => {
+  const text = `
+id: f
+name: f
+defs:
+  d:
+    input: ${value}
+    nodes:
+      c:
+        kind: code
+        code: return 1
+        output: int
+    output: \${c.output}
+nodes:
+  x:
+    kind: call
+    call: d
+output: \${x.output}
+`;
+  const error = await loadErrorAsync(loadConformanceFlow(text));
+  expect(error.message).toContain(`defs entry 'd': ${message}`);
+});
+
+test.each(["false", ""])("a single-node def's input: %p is not a param map", async (value) => {
+  const text = `
+id: f
+name: f
+defs:
+  d:
+    input: ${value}
+    kind: code
+    code: return 1
+    output: int
+nodes:
+  x:
+    kind: call
+    call: d
+output: \${x.output}
+`;
+  const error = await loadErrorAsync(loadConformanceFlow(text));
+  expect(error.message).toContain("defs entry 'd': single-node `input:` must be a param map");
+});
+
 test("a def-internal error names the def", async () => {
   const text = `
 id: dd

@@ -395,17 +395,21 @@ ${body}nodes: {}
 });
 
 test.each(["null", "[]", "false", "0", "''"])(
-  "falsy definition input keeps existing empty normalization (%s)",
+  "a falsy definition input is a located load error, as at the root (%s)",
   async (empty) => {
-    // Located compilation preserves the loader's established empty-def shorthand.
-    await loadConformanceFlow(`id: empty-definition-input
+    const text = `id: empty-definition-input
 name: empty-definition-input
 defs:
   child:
     input: ${empty}
     nodes: {}
 nodes: {}
-`);
+`;
+    const error = await loadErrorAsync(loadConformanceFlow(text));
+
+    expect(error.message).toContain("defs entry 'child': `input:` must be a mapping");
+    const childCursor = SourceDocument.parse(text).root.child("defs").child("child");
+    expect(error.diagnostic.frames.at(-1)!.range).toEqual(childCursor.rangeOf("input")!);
   },
 );
 

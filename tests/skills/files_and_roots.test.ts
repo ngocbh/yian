@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -15,6 +15,7 @@ import { defaultSkillRoots, loadSkills } from "../../src/compose/skills.ts";
 import { current } from "../../src/defaults.ts";
 import { readSkillFile, readSkillText, resolvedPath } from "../../src/skills/catalog.ts";
 import { Skill, SkillError } from "../../src/skills/index.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 let tmp: string;
 let root: string;
@@ -192,28 +193,7 @@ test("resolved path resolves a symlink above a missing path", () => {
 const ROOT = resolve(import.meta.dirname, "../..");
 const BUILT = join(ROOT, "dist/src/compose/skills.js");
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/platform.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 test.skipIf(!NODE)(
   "the built skills code runs on Node",

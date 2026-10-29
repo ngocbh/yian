@@ -3,8 +3,8 @@
  * built on Node; and the pure prompt helpers (input labels, structured input parsing).
  */
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -15,31 +15,11 @@ import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { AskUserHandler } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { SCENARIOS } from "./terminal_both_runtimes.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 const BUILT = join(import.meta.dirname, "..", "..", "dist", "tests", "cli", "terminal_both_runtimes.js");
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set value that
- * can't run, a Node older than the `engines` floor, or a missing build fails the whole file, so a
- * typo can't pass as a run with the Node case skipped. A copy of `provider_auth.test.ts`'s:
- * importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 describe("the terminal scenarios", () => {
   for (const [name, run] of Object.entries(SCENARIOS)) test(name, run, 30_000);

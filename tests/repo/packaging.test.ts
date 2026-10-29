@@ -58,6 +58,7 @@ import type {
   ValueRecord,
 } from "../../src/run.ts";
 import { stdioOptions } from "../helpers/mcp_helpers.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const PACKAGE = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
@@ -958,28 +959,7 @@ describe.skipIf(!BINARY)("the compiled binary", () => {
 const CODE_WORKER = "@ngocbh/yian/code-worker";
 const WORKER_BUILT = join(ROOT, "dist/src/nodes/code/worker.js");
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/llm_clients/llm_clients.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!existsSync(WORKER_BUILT)) throw new Error(`${WORKER_BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(WORKER_BUILT);
 
 /** How long compiling a host may take before it is killed. */
 const COMPILE_LIMIT = 30_000;

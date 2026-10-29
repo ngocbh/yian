@@ -4,11 +4,12 @@
  */
 
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { type AddressInfo, createServer } from "node:net";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { testNode } from "./test_node.ts";
 
 // Built, this file runs as `dist/tests/helpers/mcp_helpers.js`, one directory deeper.
 const BUILT = import.meta.url.endsWith(".js");
@@ -20,29 +21,8 @@ const FAKE_BUILT = join(ROOT, "dist", "tests", "fixtures", "mcp", "fake_server.j
 /** The fake server script: the source on Bun, the built file on Node. */
 export const FAKE = BUILT ? FAKE_BUILT : FAKE_SOURCE;
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set value that
- * can't run, a Node older than the `engines` floor, or a missing build fails the importing test
- * file, so a typo can't pass as a run with the Node rows skipped. A copy of
- * `function_tool.test.ts`'s.
- */
-export const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  const built = join(ROOT, "dist", "src", "tools", "index.js");
-  if (!existsSync(built)) throw new Error(`${built} is missing; run bun run build first`);
-  return node;
-})();
+/** The Node binary named by `YIAN_TEST_NODE`, checked against the built tools entry. */
+export const NODE = testNode(join(ROOT, "dist", "src", "tools", "index.js"));
 
 /** The command and arguments that start the fake server over stdio with `flags`. */
 export function stdioOptions(...flags: string[]): { command: string; args: string[] } {

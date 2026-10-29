@@ -1,7 +1,7 @@
 /** Single-owner SQLite storage for memory-backend state. */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -12,6 +12,7 @@ import { MemoryOperationError } from "../../src/memory/contracts.ts";
 import { checkStoragePath, realStoragePath, SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
 import { openSqlite, type Sqlite } from "../../src/platform.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 /** Assert `fn` throws a storage `MemoryOperationError` with code `storage.<code>`, and return it. */
 function expectStorageError(fn: () => unknown, code: string): MemoryOperationError {
@@ -740,28 +741,7 @@ test("realStoragePath resolves links and applies missing components lexically", 
   expect(realStoragePath(`${dir}//./link/`)).toBe(`${real}/target`);
 });
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/platform.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 describe.skipIf(!NODE)("the built storage on Node", () => {
   const node: ChildRuntime = { argv: [NODE!, "--input-type=module", "-e"], module: pathToFileURL(BUILT).href };

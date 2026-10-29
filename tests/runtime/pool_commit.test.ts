@@ -9,8 +9,8 @@
  * built package.
  */
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -47,6 +47,7 @@ import {
 } from "../../src/runtime/log.ts";
 import { TypedValue as RuntimeTypedValue } from "../../src/typesys/values.ts";
 import { crashAfter, NO_ENV, rejected } from "../helpers/run_state_fixtures.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-pool-commit-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -146,28 +147,7 @@ const BUILT = join(ROOT, "dist/src/run.js");
  */
 const ENTRY: string = "@ngocbh/yian/run";
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/llm_clients/llm_clients.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 test("the run start writes its system values, then the START inputs, as commits after run_started", async () => {
   const log = freshLog();

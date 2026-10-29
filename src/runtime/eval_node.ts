@@ -528,61 +528,34 @@ async function evaluateNode(
   const { emitStream, emitEvent, skills, tools, models, steps, steerInbox, scheduler, random, runDir } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
-  const nodeWiring: ReadonlyMap<string, unknown> =
-    wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow?.wiring.get(node.id) ?? new Map());
-  // The declared types field reads go through: a declared field that is absent reads null.
-  const declared = flow !== null ? poolDeclaredTypes(flow) : null;
-  const itemType = flow !== null && node.itemSourceKey !== null ? itemDeclaredType(flow, node) : null;
-  const reservedSources = new Set<string>();
-  const reservedBinder: ReservedBinder | null =
-    collector === null
-      ? null
-      : (name, source, normalize) => {
-          // Retain the route of the value the node delivers, after its normalization.
-          const value = normalize(resolveSource(source, pool, { collector, name, sourceResolver }));
-          reservedSources.add(name);
-          return value;
-        };
-
-  let record: ValueRecord;
+  const nodeWiring = wiringFor(node, flow, wiringOverride);
+  let bound: BoundNode;
   try {
-    record = node.bindsPerItem
-      ? {}
-      : bindParams(node.params ?? [], nodeWiring, pool, {
-          collector,
-          sourceResolver,
-          types: node.types,
-          labels: node.bindingLabels,
-          finishCapture: false,
-          declared,
-        });
-    let reserved: Record<string, unknown>;
-    try {
-      reserved = node.bindReserved(nodeWiring, pool, { bind: reservedBinder });
-    } catch (error) {
-      if (error instanceof BindingError && steps !== null && node.needsSteps === true && steps.prior.length > 0) {
-        // A start records steps only after binding, and resume restores the pool, so the code
-        // that resolves these keys changed since then.
-        throw new RangeError(
-          `${error.message}; an earlier start of this node resolved it, so resume the run with the flow and ` +
-            "yian version that started it",
-        );
-      }
-      throw error;
-    }
-    for (const name of Object.keys(reserved)) {
-      const value = reserved[name] as Value;
-      setField(record, name, value);
-      // A hook that materialized its value without the binder has no evaluated source.
-      if (collector !== null && !reservedSources.has(name)) {
-        collector.recordSource(name, ValueRoute.literal(value), false);
-      }
-    }
+    bound = bindNode(node, flow, nodeWiring, pool, {
+      collector,
+      sourceResolver,
+      bindReserved: (bind) => {
+        try {
+          return node.bindReserved(nodeWiring, pool, { bind });
+        } catch (error) {
+          if (error instanceof BindingError && steps !== null && node.needsSteps === true && steps.prior.length > 0) {
+            // A start records steps only after binding, and resume restores the pool, so the code
+            // that resolves these keys changed since then.
+            throw new RangeError(
+              `${error.message}; an earlier start of this node resolved it, so resume the run with the flow and ` +
+                "yian version that started it",
+            );
+          }
+          throw error;
+        }
+      },
+    });
   } catch (error) {
     if (!(error instanceof BindingError)) throw error;
     collector?.invalidate();
     return withAuthoredRoots(evaluationFailure(node, error.failureCode, error, error.origin), nodeWiring);
   }
+  const { record } = bound;
 
   const scoped = memoryScope !== null && memoryScope.memories.length > 0;
   if (scoped && memoryContextOpener === null) {
@@ -631,26 +604,11 @@ async function evaluateNode(
   if (scheduler !== null) caps.scheduler = scheduler;
   if (random !== null) caps.random = random;
   if (runDir !== null) caps.runDir = runDir;
-  if (node.bindsPerItem) {
-    const params = node.params ?? [];
+  const { bindItem } = bound;
+  if (bindItem !== null) {
     caps.bindItem = (element, index) => {
       try {
-        let item: Value | ResolvedValue = element;
-        let itemCollector: BindingCollector | null = null;
-        if (collector !== null) {
-          itemCollector = collector.forItem(index);
-          const key = node.itemSourceKey;
-          item = new ResolvedValue(element, true, key !== null ? collector.routeFor(key).project([index]) : null);
-        }
-        return bindParams(params, nodeWiring, pool, {
-          item,
-          collector: itemCollector,
-          sourceResolver,
-          types: node.types,
-          labels: node.bindingLabels,
-          declared,
-          itemType,
-        });
+        return bindItem(element, index);
       } catch (error) {
         if (error instanceof BindingError) {
           collector?.invalidate();
@@ -904,48 +862,92 @@ function bindPool(
   collector: BindingCollector | null,
   reserved: Readonly<Record<string, unknown>> | null,
 ): Rebound {
-  const nodeWiring: ReadonlyMap<string, unknown> =
-    wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow.wiring.get(node.id) ?? new Map());
-  const params = node.params ?? [];
-  const declared = poolDeclaredTypes(flow);
-  const itemType = node.itemSourceKey !== null ? itemDeclaredType(flow, node) : null;
-  const bindOptions = { sourceResolver, types: node.types, labels: node.bindingLabels, declared };
-  const record: Record<string, unknown> = node.bindsPerItem
-    ? {}
-    : bindParams(params, nodeWiring, pool, { ...bindOptions, collector, finishCapture: false });
-  const reservedSources = new Set<string>();
-  const bound =
-    reserved ??
-    node.bindReserved(nodeWiring, pool, {
-      bind:
-        collector === null
-          ? null
-          : (name, source, normalize) => {
-              reservedSources.add(name);
-              return normalize(resolveSource(source, pool, { collector, name, sourceResolver }));
-            },
-    });
-  for (const name of Object.keys(bound)) {
-    const value = bound[name] as Value;
-    setField(record as ValueRecord, name, value);
-    if (collector !== null && !reservedSources.has(name)) collector.recordSource(name, ValueRoute.literal(value), false);
-  }
-  const inputs = applyDefaults(params, record);
+  const nodeWiring = wiringFor(node, flow, wiringOverride);
+  const { record, bindItem } = bindNode(node, flow, nodeWiring, pool, {
+    collector,
+    sourceResolver,
+    bindReserved: reserved === null ? null : () => reserved,
+  });
+  const inputs = applyDefaults(node.params ?? [], record);
   collector?.finish(inputs as ValueRecord);
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = {
     signal: new AbortController().signal,
     localTypes: localTypes(flow, node),
   };
-  if (node.bindsPerItem) {
-    caps.bindItem = (element, index) => {
-      if (collector === null) return bindParams(params, nodeWiring, pool, { ...bindOptions, item: element, itemType });
-      const key = node.itemSourceKey;
-      const item = new ResolvedValue(element, true, key !== null ? collector.routeFor(key).project([index]) : null);
-      const itemCollector = collector.forItem(index);
-      return bindParams(params, nodeWiring, pool, { ...bindOptions, item, itemType, collector: itemCollector });
-    };
-  }
+  if (bindItem !== null) caps.bindItem = bindItem;
   return { inputs, caps };
+}
+
+/** The wiring `node` binds from: `wiringOverride` when given, else the flow's; `null` flow is empty. */
+function wiringFor(node: Node, flow: Flow | null, wiringOverride: JsonObject | null): ReadonlyMap<string, unknown> {
+  return wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow?.wiring.get(node.id) ?? new Map());
+}
+
+/** One node's bound record and per-item binder (`bindNode`). */
+interface BoundNode {
+  /** The bound params (none for a node that binds per item) and reserved values, defaults not filled. */
+  readonly record: ValueRecord;
+  /** Binds one element's record for a node that binds per item, else `null`. */
+  readonly bindItem: ((element: Value, index: number) => ValueRecord) | null;
+}
+
+/**
+ * Bind `node`'s params and reserved values from `pool` through `wiring`: the one binding both the
+ * evaluator and the run reducer's rebuild run, so a rebuilt capture is the one the evaluator
+ * collected. With a `collector`, each route is collected too; a reserved value its hook made
+ * without the binder gets a literal route. Defaults aren't filled and the capture isn't finished.
+ *
+ * @param flow The flow whose declared types the reads go through; `null` declares none.
+ * @param options.bindReserved Gives the reserved values from the binder (`null` when not
+ *   collecting) in place of `node.bindReserved(wiring, pool, { bind })`.
+ * @returns The record, and a per-item binder that throws what binding an item throws.
+ * @throws BindingError when a source doesn't evaluate, and what the reserved hook throws.
+ */
+function bindNode(
+  node: Node,
+  flow: Flow | null,
+  wiring: ReadonlyMap<string, unknown>,
+  pool: VariablePool,
+  options: {
+    collector: BindingCollector | null;
+    sourceResolver: SourceResolver | null;
+    bindReserved?: ((bind: ReservedBinder | null) => Record<string, unknown>) | null;
+  },
+): BoundNode {
+  const { collector, sourceResolver, bindReserved = null } = options;
+  const params = node.params ?? [];
+  // The declared types field reads go through: a declared field that is absent reads null.
+  const declared = flow !== null ? poolDeclaredTypes(flow) : null;
+  const itemType = flow !== null && node.itemSourceKey !== null ? itemDeclaredType(flow, node) : null;
+  const bindOptions = { sourceResolver, types: node.types, labels: node.bindingLabels, declared };
+  const record = node.bindsPerItem
+    ? {}
+    : bindParams(params, wiring, pool, { ...bindOptions, collector, finishCapture: false });
+  const reservedSources = new Set<string>();
+  const binder: ReservedBinder | null =
+    collector === null
+      ? null
+      : (name, source, normalize) => {
+          // Retain the route of the value the node delivers, after its normalization.
+          const value = normalize(resolveSource(source, pool, { collector, name, sourceResolver }));
+          reservedSources.add(name);
+          return value;
+        };
+  const reserved = bindReserved !== null ? bindReserved(binder) : node.bindReserved(wiring, pool, { bind: binder });
+  for (const name of Object.keys(reserved)) {
+    const value = reserved[name] as Value;
+    setField(record, name, value);
+    if (collector !== null && !reservedSources.has(name)) collector.recordSource(name, ValueRoute.literal(value), false);
+  }
+  if (!node.bindsPerItem) return { record, bindItem: null };
+  const bindItem = (element: Value, index: number): ValueRecord => {
+    if (collector === null) return bindParams(params, wiring, pool, { ...bindOptions, item: element, itemType });
+    const itemCollector = collector.forItem(index);
+    const key = node.itemSourceKey;
+    const item = new ResolvedValue(element, true, key !== null ? collector.routeFor(key).project([index]) : null);
+    return bindParams(params, wiring, pool, { ...bindOptions, item, itemType, collector: itemCollector });
+  };
+  return { record, bindItem };
 }
 
 /**

@@ -1,0 +1,24 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  typedefs:
+    AB: Literal(a, b)
+  input:
+    xs: !list(str)
+    s: !str
+  nodes:
+    e:
+      kind: code
+      input:
+        count: !int ${len(input.xs)}
+        ratio: !float ${len(input.s)}
+        shout: !str ${upper(input.s)}
+        quiet: !AB ${lower(input.s)}
+        joined: !str ${join(input.xs, ", ")}
+        shown: !Optional(str) ${render_as_json(input.xs)}
+      output: int
+      code: return inputs.count
+  output: ${e.output}
+expect:
+  load: ok

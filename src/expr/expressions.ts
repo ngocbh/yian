@@ -43,7 +43,7 @@ import {
   listKindForElement,
   valueRepr,
 } from "../typesys/values.ts";
-import { bindArguments, kindName, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
+import { bindArguments, builtinResultType, kindName, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
 import { ResolvedValue, type RootRead, SourceRef, type TracedValue, ValueRoute } from "./lineage.ts";
 // grammar.ts imports this module too, so its exports are used only inside functions here.
 import {
@@ -1677,9 +1677,10 @@ const BOOLEAN_NODES: ReadonlySet<string> = new Set([
  * Return the statically proven type of one parsed expression, if any.
  *
  * Inference is deliberately conservative: literal tokens, exact references, comparisons,
- * boolean combinators, and `isinstance(x, T)` have fixed result types, and a `T(...)`
- * constructor has type `T` (its value is checked against `T`), with field reads on the result
- * typed through `T`. A read with a `?.` step (`a?.b`) is `Optional` of the field. Also typed:
+ * boolean combinators, `isinstance(x, T)` and each shipped builtin (`builtinResultType`) have
+ * fixed result types, and a `T(...)` constructor has type `T` (its value is checked against
+ * `T`), with field reads on the result typed through `T`. A read with a `?.` step (`a?.b`) is
+ * `Optional` of the field. Also typed:
  *
  * - a comprehension variable: its element type in scope (`elementType`), with field reads typed
  *   through it;
@@ -1733,7 +1734,8 @@ export function inferExprType(
     if (callSuffixOf(tree) !== undefined) {
       // `parseExpr` rejects dotted access on an `isinstance(...)` result.
       if (name === ISINSTANCE) return Type.scalar(ValueKind.BOOLEAN);
-      return stepsType(typeFn === null || TEMPLATE_FNS.has(name) ? null : typeFn(name), steps);
+      if (TEMPLATE_FNS.has(name)) return stepsType(builtinResultType(name), steps);
+      return stepsType(typeFn === null ? null : typeFn(name), steps);
     }
     const typ = refTypeFn(referencePath(tree));
     return typ !== null && steps.some((step) => step.optional) ? typ.replace({ nullable: true }) : typ;

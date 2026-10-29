@@ -1812,8 +1812,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   });
 
   // A `uses:` alias shares the callable namespace, so it must not collide with a node id (the
-  // resolver only sees a bare name; the author conflates them). The loader checks the authored
-  // node ids before it resolves aliases; this covers the assembled ids.
+  // resolver only sees a bare name; the author conflates them). The loader already checks the
+  // authored node ids before it resolves aliases; this runs before any desugar, so it repeats
+  // that check for a caller of `assemble` that skips the loader.
   const collide = [...new Set(usesAliases)].filter((alias) => descriptors.has(alias)).sort(compareCodeUnits);
   if (collide.length > 0) throw diagnostics.error(`uses: alias ${writeAsText(collide)} collides with a node id`);
 
@@ -1830,7 +1831,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       }
     } catch (error) {
       if (!(error instanceof SourceAccessError)) throw error;
-      // Swallowed: a bare `output:` value has no named children, so the whole range stands in.
+      // Swallowed: an `output:` at a recursive alias can't be walked, so the whole range stands in.
     }
     return outputsRange;
   };
@@ -1877,10 +1878,10 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     diagnostics,
   });
 
-  // Desugar inline `${ f(...) }` call expressions: each becomes a synth `call` node
+  // Desugar each whole-value `call(<flow>, ...)` binding: it becomes a synth `call` node
   // (CallDescriptor, over=null) and its host binding is rewritten to `${<synth>.output}`. Pure
   // sugar — the rest of the pipeline treats the synth nodes as ordinary `call` nodes
-  // (build/edges/validate/DAG run unchanged).
+  // (build/edges/validate/DAG run unchanged). The retired `${ f(...) }` form is refused here.
   const mint = synthIdGen(); // ONE synth-id minter shared by both inline-call desugars (no collision)
   let assertsSection: Assertion[];
   [descriptors, outputsSection, assertsSection] = desugarInlineCalls(descriptors, outputsSection, {
@@ -1906,8 +1907,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // wiring like any author-written agent.
   descriptors = desugarAdaptiveQuestions(descriptors, { diagnostics });
 
-  // `then:/else: ${call}`: a `case` branch target that is an inline call becomes a synth `call`
-  // node, the then:/else: rewritten to its id. Runs BEFORE expandCaseOutputs (so the synth args +
+  // `then:/else: call(...)`: a `case` branch target that is a call directive becomes a synth
+  // `call` node, the then:/else: rewritten to its id. Runs BEFORE expandCaseOutputs (so the synth args +
   // the rewritten then-targets are visible to it) and shares `mint`.
   descriptors = desugarCaseCallTargets(descriptors, mint, { diagnostics });
 

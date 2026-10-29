@@ -1216,6 +1216,11 @@ describe("run setup errors", () => {
 const ESCAPED_JS = String.raw`"x\u001b]52;c;aGk=\u0007y\u001b]8;;https://e.example\u001b\\z\u001b[2J"`;
 const ESCAPED = "x\x1b]52;c;aGk=\x07y\x1b]8;;https://e.example\x1b\\z\x1b[2J";
 
+/** Return `text` with each progress line's elapsed time (` [0s]`) taken out. */
+function untimed(text: string): string {
+  return text.replace(/ \[\d+s\]\n/g, "\n");
+}
+
 /** Run `yian run` on `body` with stdout and stderr TTYs or not, colour off. */
 async function runAt(body: string, argv: readonly string[], isTTY: boolean) {
   const flow = file("flow.yaml", body);
@@ -1243,21 +1248,21 @@ describe("run's model and tool text with escape sequences", () => {
   });
 
   test("a verbose node output is stripped on a TTY and kept exactly when piped", async () => {
-    expect((await runAt(output, ["-v"], true)).stderr).toContain("✓ a\n    xyz\n");
-    expect((await runAt(output, ["-v"], false)).stderr).toContain(`✓ a\n    ${ESCAPED}\n`);
+    expect(untimed((await runAt(output, ["-v"], true)).stderr)).toContain("✓ a\n    xyz\n");
+    expect(untimed((await runAt(output, ["-v"], false)).stderr)).toContain(`✓ a\n    ${ESCAPED}\n`);
   });
 
   test("a failure's message and traceback are stripped on a TTY and kept exactly when piped", async () => {
     const tty = await runAt(failing, ["--engine-trace"], true);
     expect(tty.code).toBe(1);
-    expect(tty.stderr).toContain("✗ a\n    Error: xyz\n");
+    expect(untimed(tty.stderr)).toContain("✗ a\n    Error: xyz\n");
     expect(tty.stderr).toContain("\nError: xyz\n╭─ traceback ");
     expect(tty.stderr).toContain("│ Error: xyz ");
     expect(tty.stderr).not.toContain("\x1b]");
     expect(tty.stderr).not.toContain("\x07");
     const piped = await runAt(failing, [], false);
     expect(piped.code).toBe(1);
-    expect(piped.stderr).toContain(`✗ a\n    Error: ${ESCAPED}\n`);
+    expect(untimed(piped.stderr)).toContain(`✗ a\n    Error: ${ESCAPED}\n`);
     expect(piped.stderr).toContain(`\nError: ${ESCAPED}\n`);
   });
 

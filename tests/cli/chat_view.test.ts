@@ -328,17 +328,109 @@ describe("the chat's view", () => {
     expect(narrow.rows()).toEqual(["· Thinking… (0s · es"]);
   });
 
-  test("on a resize, the live rows are erased as the terminal reflowed them and drawn at the new width", () => {
+  test("on a resize, the live rows are erased from as high as they were drawn, and drawn at the new width", () => {
     const { view, output } = viewOn();
     view.turn(true);
     const before = output.text.length;
     output.columns = 20;
     output.emit("resize");
-    // The 36-cell spinner row reflowed onto two rows of 20.
-    expect(output.text.slice(before)).toBe("\r\x1b[1A\x1b[J\x1b[36m·\x1b[0m \x1b[2mThinking… (0s · es\x1b[0m");
-    view.close();
-    output.emit("resize");
+    // One row was drawn: the cursor never goes up past it, whatever the terminal did to it.
+    expect(output.text.slice(before)).toBe("\r\x1b[J\x1b[36m·\x1b[0m \x1b[2mThinking… (0s · es\x1b[0m");
+    view.turn(false);
+    // It listens only while a turn draws live rows, and not at all once closed.
     expect(output.listenerCount("resize")).toBe(0);
+    view.turn(true);
+    view.close();
+    expect(output.listenerCount("resize")).toBe(0);
+  });
+
+  test("a resize while a reply streams keeps the live rows within the smaller screen", () => {
+    const { view, output, rows } = viewOn(30);
+    view.turn(true);
+    view.onStream(chunk(1, "1\n2\n3\n4\n5\n6\n7\n8\n9\nten"));
+    output.rows = 8;
+    output.emit("resize");
+    // Four rows stay live, above the spinner; the rest are printed for good.
+    expect(rows().slice(-5)).toEqual(["  7", "  8", "  9", "  ten", "· Thinking… (0s · esc to interrupt)"]);
+    const before = output.text.length;
+    view.onStream(chunk(1, "!"));
+    const ups = [...output.text.slice(before).matchAll(/\x1b\[(\d+)A/g)].map((match) => Number(match[1]));
+    expect(ups).toEqual([4]);
+    view.turn(false);
+    expect(rows()).toEqual(["", "⏺ 1", "  2", "  3", "  4", "  5", "  6", "  7", "  8", "  9", "  ten!"]);
+  });
+
+  test("a prompt taking the terminal while a reply streams hides it, and gives it back below", () => {
+    const { view, output, rows } = viewOn();
+    view.turn(true);
+    view.onStream(chunk(1, "a\nb"));
+    view.active(true);
+    expect(rows()).toEqual([]);
+    output.write("? Run hello.yaml Approve\r\n");
+    view.active(false);
+    expect(rows()).toEqual(["", "? Run hello.yaml Approve", "⏺ a", "  b", "· Thinking… (0s · esc to interrupt)"]);
+  });
+
+  test("the cursor is hidden while a turn runs and shown after it, a prompt or close", () => {
+    const { view, output } = viewOn();
+    const modes = () => screen(output.text, COLUMNS).modes;
+    view.turn(true);
+    expect(modes()).toEqual(["?25l"]);
+    view.active(true);
+    view.active(false);
+    // A prompt shows the cursor as it ends; the turn hides it again.
+    expect(modes().at(-1)).toBe("?25l");
+    view.turn(false);
+    expect(modes().at(-1)).toBe("?25h");
+    view.turn(true);
+    view.close();
+    expect(modes().at(-1)).toBe("?25h");
+  });
+
+  test("a child event between two chunks of a reply prints above it, and the reply goes on as it was", () => {
+    const { view, rows } = viewOn();
+    view.turn(true);
+    view.onEvent(started(1));
+    view.onStream(chunk(1, "Here:\n```py\nx = 1\ny = "));
+    const status = { run: "r1", seq: 1, log: "r1.jsonl", status: "succeeded" as const, output: "ok" };
+    view.childEvent(childEvent(status)!);
+    view.onStream(chunk(1, "2\n```\nDone **now**.\n"));
+    view.onEvent(finished(1));
+    view.turn(false);
+    const frame = (text: string) => `  │ ${text.padEnd(54)} │`;
+    expect(rows()).toEqual([
+      "",
+      "⏺ Here:",
+      `  ╭─ py ${"─".repeat(51)}╮`,
+      frame("x = 1"),
+      "",
+      "⏺ r1 succeeded",
+      '  ⎿  with output "ok"',
+      frame("y = 2"),
+      `  ╰${"─".repeat(56)}╯`,
+      "  Done now.",
+    ]);
+  });
+
+  test("a line printed in pieces is printed once whole", () => {
+    const { view, rows } = viewOn();
+    view.print("partial ");
+    expect(rows()).toEqual([]);
+    view.print("rest\nnext\n");
+    expect(rows()).toEqual(["partial rest", "next"]);
+    view.print("left");
+    view.close();
+    expect(rows()).toEqual(["partial rest", "next", "left"]);
+  });
+
+  test("a long line printed in part keeps its raw tail: a sequence or a \\r\\n split across chunks", () => {
+    const { view, output, rows } = viewOn(10);
+    view.onStream(chunk(1, `${"word ".repeat(100)}\x1b[3`));
+    view.onStream(chunk(1, "1mred\x1b[0m end\r"));
+    view.onStream(chunk(1, "\nnext"));
+    view.onEvent(finished(1));
+    expect(output.text).not.toContain("^[");
+    expect(rows().slice(-2)).toEqual([expect.stringMatching(/word red end$/), "  next"]);
   });
 
   test("streamed text is sanitized", () => {

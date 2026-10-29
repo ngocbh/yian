@@ -9,6 +9,7 @@
  */
 
 import { current } from "../defaults.ts";
+import { checkConnectionHeaderValue } from "../llm/auth.ts";
 import { isRecord } from "../typesys/index.ts";
 
 const CREDENTIAL = "yian sends the credential itself";
@@ -50,10 +51,6 @@ export const OPENAI_REFUSED_HEADER_NAMES: Readonly<Record<string, string>> = Obj
 
 // RFC 9110 token characters.
 const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
-// RFC 9110 field-value restricted to visible ASCII: no surrounding whitespace, controls or
-// non-ASCII, which an HTTP client would otherwise reject at request time with the value in the
-// error.
-const FIELD_VALUE = /^[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*$/;
 const VISIBLE_ASCII = /^[\x21-\x7e]+$/;
 
 /** Return `table`'s own entry for `key`, so inherited names such as `constructor` are absent. */
@@ -92,22 +89,15 @@ export function validateHeaderName(name: unknown, provider: string | null): stri
 /**
  * Return a header value unchanged if it may be sent.
  *
- * `name` is the header's name, already checked; messages name it. Throws `RangeError` if the
- * value is not a string, is longer than `maxHeaderValueChars` characters, or is not non-empty
- * visible ASCII with spaces or tabs only between characters.
+ * `name` is the header's name, already checked; messages name it. Throws `RangeError` with
+ * `checkConnectionHeaderValue`'s message if that check refuses the value.
  */
 export function validateHeaderValue(name: string, value: unknown): string {
-  if (typeof value !== "string") throw new RangeError(`header ${name} value must be a string`);
-  const limit = current().maxHeaderValueChars;
-  if (codePoints(value) > limit) {
-    throw new RangeError(`header ${name} value must be at most ${limit} characters`);
+  try {
+    return checkConnectionHeaderValue(name, value);
+  } catch (error) {
+    throw new RangeError((error as Error).message);
   }
-  if (!FIELD_VALUE.test(value)) {
-    throw new RangeError(
-      `header ${name} value must be non-empty visible ASCII, with spaces or tabs only between characters`,
-    );
-  }
-  return value;
 }
 
 /**

@@ -545,13 +545,38 @@ async function aPromptOpeningWhileTheLiveBoxTakesKeysDropsThemForAWhile(): Promi
   input.write(ENTER);
   assert.equal(await answer, "Approve");
   assert.deepEqual(sent, []);
-  // Long after the last key in the box, a card takes keys at once.
+  // Long after the last key in the box, while it is still up, a card drops keys at first too.
   clock += 1000;
   const later = terminal.approve(approval());
   await tick();
   input.write(ENTER);
-  assert.equal(await later, "Approve");
+  await tick();
+  assert.equal(view().rows.at(-3), "? Write a.yaml (Use arrow keys)");
+  // Ctrl-C still reaches it, as the reject.
+  input.write(CTRL_C);
+  assert.equal(await later, "Reject");
   watch.abort();
+  // With the box down, a card takes keys at once.
+  const after = terminal.approve(approval());
+  await tick();
+  input.write(ENTER);
+  assert.equal(await after, "Approve");
+}
+
+async function aLinePromptAfterAWithdrawnCardTakesKeysAtOnce(): Promise<void> {
+  const { input, terminal } = setup({ tty: true, now: () => 0 });
+  const line = terminal.readLine("You:", { yields: true });
+  await tick();
+  const withdrawn = new AbortController();
+  const card = terminal.approve({ ...approval(), signal: withdrawn.signal });
+  assert.deepEqual(await line, { yielded: true, draft: "" });
+  // The card is withdrawn before it opens; the line comes back and takes the first keys.
+  withdrawn.abort();
+  assert.equal(await card, null);
+  const next = terminal.readLine("You:", { yields: true });
+  await tick();
+  input.write("hi" + ENTER);
+  assert.deepEqual(await next, { value: "hi" });
 }
 
 async function approvePreselectsTheChoiceItNames(): Promise<void> {
@@ -3205,6 +3230,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "approve preselects the choice it names": approvePreselectsTheChoiceItNames,
   "a prompt opening while the live box takes keys drops them for a while":
     aPromptOpeningWhileTheLiveBoxTakesKeysDropsThemForAWhile,
+  "a line prompt after a withdrawn card takes keys at once":
+    aLinePromptAfterAWithdrawnCardTakesKeysAtOnce,
   "onActive says whether a turn left rows on the screen": onActiveSaysWhetherATurnLeftRows,
   "Escape at readLine with escape returns the draft": escapeAtReadLineReturnsTheDraft,
   "Escape at readLine without escape is ignored": escapeAtReadLineWithoutTheOptionIsIgnored,

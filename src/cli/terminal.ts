@@ -514,8 +514,7 @@ const LIST_MARGIN = 4;
 
 /**
  * How long a prompt drops keys, in milliseconds, once it takes a yielding `readLine`'s place or
- * opens this soon after a key reached a watch's editor (the live box): an Enter meant for the line
- * mustn't answer it.
+ * opens over a watch's editor (the live box): an Enter meant for the line mustn't answer it.
  */
 const YIELD_GRACE_MS = 400;
 
@@ -959,10 +958,9 @@ export class Terminal {
   readonly #now: () => number;
   /** Set when a `readLine` yields: the next turn to start took its place. */
   #yielded = false;
-  /** Until when keys are dropped (`#now` time), after a prompt took a line's place. */
+  /** The turn that drops keys until `#graceUntil` (`#now` time), having taken a line's place. */
+  #graced: Turn | undefined = undefined;
   #graceUntil = 0;
-  /** When a watch's editor last took a key (`#now` time). */
-  #editedAt = Number.NEGATIVE_INFINITY;
 
   /** Build a terminal over `options.input` and `options.output`; touches neither stream. */
   constructor(options: TerminalOptions = {}) {
@@ -1021,8 +1019,7 @@ export class Terminal {
    * queued behind it while it is up: it ends as `{yielded}` with the draft, erased as an abort
    * erases it, and a `readLine` called next waits behind that prompt. The prompt that took its
    * place drops the keys typed before it opened, and those of its first `YIELD_GRACE_MS` but
-   * Ctrl-C; so does any other prompt that opens within `YIELD_GRACE_MS` of a key a watch's
-   * editor took.
+   * Ctrl-C; so does any other prompt that opens while a watch's editor (the live box) is up.
    */
   async readLine<E extends boolean = false>(
     label: string,
@@ -1202,7 +1199,8 @@ export class Terminal {
       closed: options.onClose,
     };
     try {
-      await this.#runTurn(options.signal, (run) => run(widget), { keepOpen: true });
+      // The user opened it, so no key of theirs is dropped.
+      await this.#runTurn(options.signal, (run) => run(widget), { keepOpen: true, grace: false });
     } catch (error) {
       if (!(options.signal?.aborted && error === options.signal.reason)) throw error;
     }
@@ -1433,14 +1431,12 @@ export class Terminal {
   #dispatch(key: Key): void {
     const watch = this.#turn === undefined ? this.#watch : undefined;
     // Ctrl-C still works in the grace after a prompt took a line's place.
-    const graced = this.#turn !== undefined && this.#now() < this.#graceUntil;
+    const graced =
+      this.#graced !== undefined && this.#turn === this.#graced && this.#now() < this.#graceUntil;
     if (graced && !(key.ctrl && key.name === "c")) return;
     if (this.#active) this.#active.key(key);
     else if (watch !== undefined && key.ctrl && key.name === "c") watch.onKey("interrupt");
-    else if (watch?.edit?.(key) === true) {
-      this.#editedAt = this.#now();
-      return;
-    }
+    else if (watch?.edit?.(key) === true) return;
     else if (watch !== undefined && key.name === "escape") watch.onKey("escape");
     else this.#buffer.push(key);
   }
@@ -1482,16 +1478,18 @@ export class Terminal {
    * Run `fn` as one turn of the FIFO: wait for the turns before it, take the terminal (raw mode,
    * listeners, input flowing), let `fn` run widgets, then restore the terminal on every outcome.
    * A plain terminal sets raw mode only with `raw`. While it waits behind another, it counts as
-   * wanting an answer (`showScreen` says so) unless `wants` is false.
+   * wanting an answer (`showScreen` says so) unless `wants` is false. One that wants an answer
+   * and opens over the live box or in a yielded line's place drops keys for `YIELD_GRACE_MS`
+   * unless `grace` is false.
    * Returns `fn`'s value, or the stop that ended the turn (Ctrl-C, end of input, a closed
    * terminal); throws `signal`'s reason when it aborted first, else `fn`'s error.
    */
   async #runTurn<R>(
     signal: AbortSignal | undefined,
     fn: (run: RunWidget) => Promise<R>,
-    options: { keepOpen?: boolean; raw?: boolean; wants?: boolean } = {},
+    options: { keepOpen?: boolean; raw?: boolean; wants?: boolean; grace?: boolean } = {},
   ): Promise<{ value: R } | { stop: StopReason }> {
-    const { keepOpen = false, raw = false, wants = true } = options;
+    const { keepOpen = false, raw = false, wants = true, grace = true } = options;
     if (this.#closed) return { stop: "closed" };
     signal?.throwIfAborted();
     const ahead = this.#tail;
@@ -1532,12 +1530,14 @@ export class Terminal {
       if (turn.ending === undefined) {
         started = true;
         this.#turn = turn;
-        // A line prompt after the live box is the same box going on, not a prompt taking its place.
-        const afterEdit = wants && this.#now() - this.#editedAt < YIELD_GRACE_MS;
-        if (this.#yielded || afterEdit) {
-          // The user may have been typing in the line: what they typed for it answers nothing here.
-          this.#yielded = false;
+        // A prompt over the live box (a watch's editor) or in a yielded line's place: the user
+        // may have been typing in the line, and what they typed for it answers nothing here. A
+        // line prompt is the line itself coming back, so it takes its keys.
+        const overLine = this.#yielded || (this.#watch?.edit ?? null) !== null;
+        this.#yielded = false;
+        if (wants && grace && overLine) {
           this.#buffer = [];
+          this.#graced = turn;
           this.#graceUntil = this.#now() + YIELD_GRACE_MS;
         }
         this.#printed = false;

@@ -33,7 +33,7 @@
 
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError } from "../../expr/expressions.ts";
-import type { InlineCall } from "../../expr/template.ts";
+import type { InlineCall } from "../helpers/directives.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { nth } from "../helpers/source.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";

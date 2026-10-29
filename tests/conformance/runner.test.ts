@@ -44,6 +44,7 @@ import {
 import type { Case, CaseContext, Kind, KindRunner } from "./runner.ts";
 import { lintSchema, loadSchema, validate } from "../helpers/schema.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import { current, forget, read, reload } from "../../src/defaults.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import {
   decodeRecord,
@@ -937,6 +938,36 @@ describe("setUp", () => {
     const bare = setUp({ kind: "cli" }, temp());
     made.push(bare.dir);
     expect(bare.env).toEqual({});
+  });
+});
+
+describe("expr and value", () => {
+  const made: string[] = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+    forget();
+  });
+
+  test("a case's env applies to its own reads and leaves the defaults a caller installed", async () => {
+    const outer = (name: string) => (name === "YIAN_MAX_VALUE_NESTING" ? "5" : undefined);
+    reload(outer);
+    const message =
+      "expression nests deeper than 2 levels, the limit for a yian expression (each call, list, unary operator, " +
+      "comparison, and chain of operators is a level); split it into smaller bindings or steps";
+    const cases = [
+      // Raises only under the case's limit of 2, not the caller's 5.
+      'kind: expr\nexpr: "[[[x]] for x in xs]"\nvalues: {xs: [1, 2]}\nenv: {YIAN_MAX_VALUE_NESTING: "2"}\n' +
+        `expect: {raises: {class: ExpressionError, message: "${message}"}}\n`,
+      "kind: value\nenv: {YIAN_MAX_VALUE_NESTING: '3'}\ntype: Any\nvalue: [[1]]\n" +
+        "expect: {value: [[1]], kind: \"list[Any]\"}\n",
+    ];
+    for (const text of cases) {
+      const case_ = prepare(checkCase(readCase(text)));
+      const ctx = setUp(case_, join(tmpdir(), "none"));
+      made.push(ctx.dir);
+      await RUNNERS[case_["kind"] as Kind]!(case_, ctx);
+      expect(current()).toEqual(read(outer));
+    }
   });
 });
 

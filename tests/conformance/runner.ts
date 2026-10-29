@@ -41,7 +41,7 @@ import { END_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { ENTRIES, forget, nonDefaults, read, reload, withEnv } from "../../src/defaults.ts";
+import { ENTRIES, nonDefaults, read, withEnv } from "../../src/defaults.ts";
 import type { Env } from "../../src/defaults.ts";
 import {
   compareCodeUnits,
@@ -3311,11 +3311,10 @@ async function runExpr(case_: Case, ctx: CaseContext): Promise<void> {
   const text = case_["expr"] as string;
   const values = get(case_, "values", {}) as ValueRecord;
   const item = get(case_, "item", null) as YianValue;
-  await results(case_["expect"] as Case, () => {
-    // Read inside the result, so a bad variable is raised as the case's error; forgotten
-    // after, so a later case reads its own.
-    try {
-      reload(caseEnv(ctx));
+  // Read inside the result, so a bad variable is raised as the case's error; scoped, not
+  // installed, so neither a later case nor the caller reads the case's values.
+  await results(case_["expect"] as Case, () =>
+    withEnv(caseEnv(ctx), () => {
       if (template !== null && mode === "strict") return { value: renderTemplateRecord(template, values) };
       const trees: ExprNode[] =
         template !== null
@@ -3337,10 +3336,8 @@ async function runExpr(case_: Case, ctx: CaseContext): Promise<void> {
       }
       const resolveMode = mode === "strict" ? ResolveMode.STRICT_RAISE : ResolveMode.BINDING_NONE;
       return { value: dataForm(evalExpr(trees[0]!, resolve, { item, mode: resolveMode, types })) };
-    } finally {
-      forget();
-    }
-  });
+    }),
+  );
 }
 
 // ---- value ----
@@ -3350,20 +3347,17 @@ async function runExpr(case_: Case, ctx: CaseContext): Promise<void> {
  * stored value and its kind.
  */
 async function runValue(case_: Case, ctx: CaseContext): Promise<void> {
-  await results(case_["expect"] as Case, () => {
-    // Read inside the result, so a bad variable is raised as the case's error; forgotten
-    // after, so a later case reads its own.
-    try {
-      reload(caseEnv(ctx));
+  // Read inside the result, so a bad variable is raised as the case's error; scoped, not
+  // installed, so neither a later case nor the caller reads the case's values.
+  await results(case_["expect"] as Case, () =>
+    withEnv(caseEnv(ctx), () => {
       const typedefs = (case_["typedefs"] ?? {}) as Record<string, unknown>;
       const typ = typeFor(case_["type"] as string, readTypedefs(typedefs));
       const typed = buildValueAs(typ, case_["value"]);
       // A file in the value is compared in data form.
       return { value: typed.toWire().value, kind: typed.kind };
-    } finally {
-      forget();
-    }
-  });
+    }),
+  );
 }
 
 // ---- defaults ----

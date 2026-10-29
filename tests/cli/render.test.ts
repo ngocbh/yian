@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { renderDiagnostic } from "../../src/cli/run.ts";
+import { renderDiagnostic } from "../../src/cli/render.ts";
 import type { Writer } from "../../src/cli/utils.ts";
 import type { Env } from "../../src/defaults.ts";
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";

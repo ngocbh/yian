@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { main } from "../../src/cli/index.ts";
-import { renderDiagnostic } from "../../src/cli/run.ts";
+import { renderDiagnostic } from "../../src/cli/render.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
 import { SourceRange } from "../../src/diagnostics.ts";

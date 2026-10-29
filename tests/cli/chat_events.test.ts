@@ -29,7 +29,7 @@ import { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 import { heldScheduler } from "../helpers/schedulers.ts";
-import { ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
+import { CTRL_C, ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 10_000;
 
@@ -393,6 +393,7 @@ output: done
   }
 
   const CANCELLED = (run = "r1", seq = 5) => status(run, seq, { status: "cancelled" });
+  const WAITING = (text: string) => `(child event waiting; sent with your next message: ${text})\n`;
 
   test(
     "an event queued at the prompt wakes it: it is sent, authored yian, in a turn of its own, and the draft comes back",
@@ -530,6 +531,72 @@ output: done
   );
 
   test(
+    "Esc at the prompt holds events: each push is announced above the prompt, the draft kept, and sent with the next line",
+    async () => {
+      const c = chat();
+      await until(() => c.lastRow() === "> You:");
+      c.stdin.write(ESCAPE);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      c.stdin.write("draft");
+      await until(() => c.lastRow() === "> You: draft");
+      c.events.queue.push(CANCELLED("r1", 5));
+      await until(() => c.stderr().includes(WAITING("run r1 was cancelled")));
+      await until(() => c.lastRow() === "> You: draft");
+      c.events.queue.push(CANCELLED("r2", 6));
+      await until(() => c.stderr().includes(WAITING("run r2 was cancelled")));
+      expect(c.stderr().split("child event waiting").length).toBe(3);
+      expect(c.sends()).toBe(0);
+      await until(() => c.lastRow() === "> You: draft");
+      c.stdin.write(ENTER);
+      await until(() => c.stdout().includes("draft"));
+      c.stdin.write("/exit" + ENTER);
+      expect(await c.done).toBe(0);
+      expect(c.stdout()).toBe("echo: yian: run r1 was cancelled | yian: run r2 was cancelled | draft\necho: \n");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "Esc during a turn tells a message authored yian from a typed one by its author",
+    async () => {
+      const c = chat({ held: 1 });
+      c.stdin.write("hi" + ENTER);
+      await c.started;
+      // Not one the chat sent: its author says what it is.
+      const forged = { role: "user", author: "yian", parts: [{ type: "text", text: "run r9 was cancelled" }] };
+      await send(c.log, "messages", forged, { env: NO_ENV });
+      c.stdin.write(ESCAPE);
+      await until(() => c.stderr().includes("(withdrew 1 child event; sent again before your next message)"));
+      expect(c.stderr()).not.toContain("back in the prompt");
+      c.release();
+      await until(() => c.lastRow() === "> You:");
+      c.stdin.write("next" + ENTER);
+      await until(() => c.stdout().includes("next"));
+      c.stdin.write("/exit" + ENTER);
+      expect(await c.done).toBe(0);
+      expect(c.stdout()).toBe("echo: hi\necho: yian: run r9 was cancelled | next\necho: \n");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "events still queued when the chat ends otherwise are printed too",
+    async () => {
+      const c = chat();
+      await until(() => c.lastRow() === "> You:");
+      c.stdin.write(ESCAPE);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      c.events.queue.push(CANCELLED());
+      await until(() => c.stderr().includes(WAITING("run r1 was cancelled")));
+      // Ctrl-C at the prompt cancels the run.
+      c.stdin.write(CTRL_C);
+      expect(await c.done).toBe(130);
+      expect(c.stderr()).toContain("(not sent: run r1 was cancelled)\n");
+    },
+    TIMEOUT,
+  );
+
+  test(
     "Ctrl-C during a turn calls onInterrupt, and holds the events for the next line",
     async () => {
       const c = chat({ held: 1 });
@@ -542,6 +609,8 @@ output: done
       await until(() => c.stdout().includes("echo: hi"));
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(c.sends()).toBe(1);
+      // Held events are announced when the prompt opens.
+      await until(() => c.stderr().includes(WAITING("run r1 was cancelled")));
       c.stdin.write("next" + ENTER);
       await until(() => c.stdout().includes("next"));
       c.stdin.write("/exit" + ENTER);

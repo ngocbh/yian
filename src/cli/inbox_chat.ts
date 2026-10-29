@@ -39,6 +39,7 @@ import {
   runFlow,
   send,
   withdraw,
+  type WithdrawnEvent,
 } from "../run.ts";
 import { type InboxClosedRecord, iterRunRecords, recordTimeMs } from "../runtime/log.ts";
 import { wakeAt } from "../runtime/waits.ts";
@@ -286,8 +287,11 @@ function inboxClosed(log: string, inbox: string): boolean {
  * in a turn of their own and what was typed comes back. A turn that leaves the run waiting with an
  * event sent after its engine stopped is advanced again. Ctrl-C or Esc during a turn calls
  * `events.onInterrupt`; it, or Esc at the prompt, holds the queue until the next line, which the
- * queued events go before; Esc puts the events it takes back at the front of the queue, not in
- * the prompt. `/exit` prints the events still queued (`(not sent: <event>)`).
+ * queued events go before, and each event held is announced above the prompt (`(child event
+ * waiting; sent with your next message: <event>)`). Esc puts the events it takes back (messages
+ * authored `yian`; to an `Inbox(str)`, the chat's own sends) at the front of the queue, not in the
+ * prompt. The events still queued when the inbox closes or the chat ends are printed (`(not sent:
+ * <event>)`).
  *
  * The flow loads, inputs, provider keys, log path and run index are handled as `yian run`'s
  * (`--engine-trace` included), except that the inbox input is never asked for or supplied. Skills
@@ -358,8 +362,11 @@ export async function inboxChat(
   // Set once Ctrl-C or Esc interrupts a turn, or Esc is pressed at the prompt: queued events then
   // wait for the user's next line, so the assistant doesn't take the turn straight back.
   let held = false;
-  // The events sent, by their send's seq, so that Esc tells them from typed lines.
+  // The events sent and not yet read, by their send's seq: Esc puts them back as they were (and,
+  // to an `Inbox(str)`, tells them from typed lines by it).
   const sentEvents = new Map<number, ChildEvent>();
+  // The held events already announced above the prompt.
+  const announced = new WeakSet<ChildEvent>();
   // The sends of events made while the current turn runs, each resolving with the seqs it appended.
   let turnSends: Promise<number[]>[] = [];
   // The last batch of event sends: batches go one after another, so events keep their order.
@@ -417,12 +424,20 @@ export async function inboxChat(
     if (turning) events?.onInterrupt?.();
     const done = (async () => {
       let back = await withdraw(path, inbox.name, { env: env.read });
-      // The events among them go back to the front of the queue, sent again before the next line;
-      // after /exit, they are printed with the rest.
-      const relayed = back.filter((event) => sentEvents.has(event.seq));
-      if (relayed.length > 0 && !closed) {
-        events!.queue.requeueFront(relayed.map((event) => sentEvents.get(event.seq)!));
-        back = back.filter((event) => !sentEvents.has(event.seq));
+      // The events among them (a message authored `yian`; to an `Inbox(str)`, a send the chat
+      // made) go back to the front of the queue, sent again before the next line; after /exit,
+      // they are printed with the rest.
+      const isEvent = (event: WithdrawnEvent) =>
+        inbox.message ? (event.value as { author?: unknown }).author === "yian" : sentEvents.has(event.seq);
+      const relayed = back.filter(isEvent);
+      if (relayed.length > 0 && !closed && events !== null) {
+        events.queue.requeueFront(
+          relayed.map(
+            // One the chat didn't send is put back under no run.
+            (event) => sentEvents.get(event.seq) ?? { run: "", seq: 0, text: valueText(event.value, true) },
+          ),
+        );
+        back = back.filter((event) => !isEvent(event));
         const count = `${relayed.length} child event${relayed.length === 1 ? "" : "s"}`;
         await io.stderr.write(`(withdrew ${count}; sent again before your next message)\n`);
       }
@@ -491,7 +506,16 @@ export async function inboxChat(
   // An event was queued, or the last tool call in flight ended: send what is queued now if a turn
   // runs with no tool call in flight; take the prompt down to send it if the prompt is up.
   const onWake = (): void => {
-    if (events === null || log === null || !runStarted || closed || held || events.queue.size === 0) return;
+    if (events === null || log === null || !runStarted || closed || events.queue.size === 0) return;
+    if (held) {
+      // At the prompt, a new held event is announced: the prompt comes down for it and back.
+      const fresh = events.queue.peek().some((event) => !announced.has(event));
+      if (!turning && line !== null && !flushing && fresh) {
+        flushing = true;
+        line.abort();
+      }
+      return;
+    }
     if (turning) {
       if (events.inFlight.busy) return;
       turnSends.push(
@@ -610,7 +634,17 @@ export async function inboxChat(
         settled = await turn(() => move({ log: path, checkLlmConfigs, ...shared }));
       }
     };
-    const moveOn = () => settle(() => move({ log: path, checkLlmConfigs, ...shared }));
+    /** Forget the sent events the run had read by its last `run_waiting`: Esc can't take them back. */
+    const pruneSent = (): void => {
+      if (sentEvents.size === 0) return;
+      const last = lastWaitingSeq(path);
+      for (const seq of sentEvents.keys()) if (seq <= last) sentEvents.delete(seq);
+    };
+    const moveOn = async () => {
+      const settled = await settle(() => move({ log: path, checkLlmConfigs, ...shared }));
+      pruneSent();
+      return settled;
+    };
     let result: RunResult = await settle(() =>
       resumed === null
         ? runFlow(flow, supplied, {
@@ -662,6 +696,13 @@ export async function inboxChat(
         }
         continue;
       }
+      if (held && events !== null) {
+        for (const event of events.queue.peek()) {
+          if (announced.has(event)) continue;
+          announced.add(event);
+          await io.stderr.write(`(child event waiting; sent with your next message: ${sanitize(event.text)})\n`);
+        }
+      }
       const prompt = new AbortController();
       line = prompt;
       const timer = new AbortController();
@@ -689,7 +730,7 @@ export async function inboxChat(
         continue;
       }
       if ("aborted" in read) {
-        // A queued event took the prompt down: the loop sends it.
+        // A queued event took the prompt down: the loop sends it, or announces it when held.
         if (flushed) continue;
         // A deadline passed.
         spent = wake;
@@ -760,6 +801,10 @@ export async function inboxChat(
     await interrupting;
     events?.wake.removeEventListener(CHAT_WAKE, onWake);
     await sending;
+    // Pushed after /exit, or held when the run was cancelled: printed, as /exit prints them.
+    for (const event of events?.queue.takeAll() ?? []) {
+      await io.stderr.write(`(not sent: ${sanitize(event.text)})\n`);
+    }
     stop.signal.removeEventListener("abort", takeDown);
     terminal.close();
     for (const [name, listener] of listeners) signals.off(name, listener);

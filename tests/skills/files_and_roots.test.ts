@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
 import * as compose from "../../src/compose/index.ts";
 import { defaultSkillRoots, loadSkills } from "../../src/compose/skills.ts";
 import { current } from "../../src/defaults.ts";
+import { openFilePath } from "../../src/platform.ts";
 import { readSkillFile, readSkillText, resolvedPath } from "../../src/skills/catalog.ts";
 import { Skill, SkillError } from "../../src/skills/index.ts";
 import { testNode } from "../helpers/test_node.ts";
@@ -110,6 +111,72 @@ test("read skill file rejects symlinks to hidden files", () => {
   for (const path of ["docs/creds", "notes.txt", "hop.txt", "via.txt"]) {
     expectSkillError(() => readSkillFile(skill, path), "hidden files and folders are not readable");
   }
+});
+
+describe("read skill file checks the file it opened", () => {
+  const notes = () => join(root, "pub", "notes.md");
+  // Another process turns `pub/` into a link to `.secret/` after the path checks, before the open.
+  const swapToHidden = () => {
+    renameSync(join(root, "pub"), join(root, "pub-old"));
+    symlinkSync(".secret", join(root, "pub"));
+  };
+  const undoSwap = () => {
+    rmSync(join(root, "pub"));
+    renameSync(join(root, "pub-old"), join(root, "pub"));
+  };
+
+  beforeEach(() => {
+    mkdirSync(join(root, "pub"));
+    writeFileSync(notes(), "public\n");
+    mkdirSync(join(root, ".secret"));
+    writeFileSync(join(root, ".secret", "notes.md"), "token=abc\n");
+  });
+
+  test("an unchanged file reads through the hook", () => {
+    const seen: string[] = [];
+    expect(readSkillFile(skill, "pub/notes.md", { beforeOpen: (path) => seen.push(path) })).toBe("public\n");
+    expect(seen).toEqual([notes()]);
+  });
+
+  test("a folder swapped for a link to a hidden folder is refused", () => {
+    expectSkillError(
+      () => readSkillFile(skill, "pub/notes.md", { beforeOpen: swapToHidden }),
+      "hidden files and folders are not readable",
+    );
+  });
+
+  test("where the descriptor's path is unknown, the path resolved again refuses the swap", () => {
+    expectSkillError(
+      () => readSkillFile(skill, "pub/notes.md", { beforeOpen: swapToHidden, openedPath: () => null }),
+      "hidden files and folders are not readable",
+    );
+  });
+
+  test("a swap undone before the recheck is refused by the file's identity", () => {
+    const openedPath = () => {
+      undoSwap();
+      return null;
+    };
+    expectSkillError(
+      () => readSkillFile(skill, "pub/notes.md", { beforeOpen: swapToHidden, openedPath }),
+      "changed while it was read",
+    );
+  });
+
+  test("a file that vanishes before the open does not exist", () => {
+    expectSkillError(() => readSkillFile(skill, "pub/notes.md", { beforeOpen: (path) => rmSync(path) }), "does not exist");
+  });
+
+  test.each([
+    ["the descriptor's path", openFilePath],
+    ["no descriptor path", () => null],
+  ])("a file removed after the open does not exist, with %s", (_, read) => {
+    const openedPath = (fd: number) => {
+      rmSync(notes());
+      return read(fd);
+    };
+    expectSkillError(() => readSkillFile(skill, "pub/notes.md", { openedPath }), "does not exist");
+  });
 });
 
 test("read skill file rejects missing, directories, binary and large", () => {
@@ -241,6 +308,13 @@ test.skipIf(!NODE)(
         assert.equal(readSkillFile(loaded, "references/api.md"), "GET /items\n");
         assert.throws(() => readSkillFile(loaded, "leak.txt"), /outside/);
         assert.throws(() => readSkillFile(loaded, "blob.bin"), /not UTF-8/);
+        write(join(api, "pub", "notes.md"), "public\n");
+        write(join(api, ".secret", "notes.md"), "token=abc\n");
+        const swap = () => {
+          rmSync(join(api, "pub"), { recursive: true });
+          symlinkSync(".secret", join(api, "pub"));
+        };
+        assert.throws(() => readSkillFile(loaded, "pub/notes.md", { beforeOpen: swap }), /hidden files/);
         assert.equal(invokeLoadSkill(skills, { name: "api" }), "Read references/api.md.\n");
 
         const repo = join(tmp, "outer", "repo");

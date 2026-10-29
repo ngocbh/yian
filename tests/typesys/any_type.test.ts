@@ -31,6 +31,7 @@ import {
   ValueKind,
 } from "../../src/typesys/values.ts";
 import { assembled, assembleText, loadError, loadErrorAsync, runCase } from "../helpers/declarations.ts";
+import { typeCheckError } from "../helpers/type_errors.ts";
 
 const ANY = Type.scalar(ValueKind.ANY);
 const OPTIONAL_ANY = new Type({ kind: ValueKind.ANY, nullable: true });
@@ -207,17 +208,6 @@ describe("Any in untagged unions", () => {
     );
   });
 });
-
-/** Return the `TypeCheckError` `run` throws. */
-function typeCheckError(run: () => unknown): TypeCheckError {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(TypeCheckError);
-    return error as TypeCheckError;
-  }
-  throw new Error("expected a TypeCheckError");
-}
 
 /** Return `leaf` wrapped in `n` lists. */
 function nest(n: number, leaf: Value = 1n): Value {

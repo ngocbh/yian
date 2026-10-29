@@ -48,6 +48,7 @@ import {
 } from "../../src/typesys/values.ts";
 import { caseDocument, parametersFromYaml } from "../helpers/declarations.ts";
 import type { Case } from "../conformance/runner.ts";
+import { typeCheckError } from "../helpers/type_errors.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));
@@ -1235,17 +1236,6 @@ describe("typedef names", () => {
     expect(readTypedefs({ [name]: "int" }).has(name)).toBe(true);
   });
 });
-
-/** Return the `TypeCheckError` `run` throws. */
-function typeCheckError(run: () => unknown): TypeCheckError {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(TypeCheckError);
-    return error as TypeCheckError;
-  }
-  throw new Error("expected a TypeCheckError");
-}
 
 describe("bounded numeric values", () => {
   test.each<[string, Bounds, unknown[], unknown[]]>([

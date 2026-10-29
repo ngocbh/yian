@@ -17,7 +17,6 @@ import {
   type FieldRead,
   restrictUnion,
   Type,
-  TypeCheckError,
   typeEquals,
   typesOverlap,
   unionField,
@@ -25,6 +24,7 @@ import {
   unionTagFields,
   ValueKind,
 } from "../../src/typesys/values.ts";
+import { typeCheckError } from "../helpers/type_errors.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const INT = Type.scalar(ValueKind.INTEGER);
@@ -250,17 +250,6 @@ describe("typesOverlap", () => {
     expect(typesOverlap(b, a)).toBe(expected);
   });
 });
-
-/** Return the `TypeCheckError` `run` throws. */
-function typeCheckError(run: () => unknown): TypeCheckError {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(TypeCheckError);
-    return error as TypeCheckError;
-  }
-  throw new Error("expected a TypeCheckError");
-}
 
 function deepUntaggedUnion(depth: number): Type {
   let typ = union([rec({ a: STR }), rec({ b: INT })]);

@@ -18,6 +18,7 @@ import {
   type Value,
   ValueKind,
 } from "../../src/typesys/values.ts";
+import { typeCheckError } from "../helpers/type_errors.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));
@@ -39,17 +40,6 @@ function message(path: string, limit = 100): string {
     `output at ${path}: value nests deeper than ${limit} levels, ` +
     "the limit for a yian value (each record and list is a level)"
   );
-}
-
-/** Return the `TypeCheckError` `call()` throws. */
-function typeCheckError(call: () => unknown): TypeCheckError {
-  try {
-    call();
-  } catch (error) {
-    expect(error).toBeInstanceOf(TypeCheckError);
-    return error as TypeCheckError;
-  }
-  throw new Error("expected a TypeCheckError");
 }
 
 /** Return the error `rejectDeepNesting(value, "output", {enclosingLevels})` throws. */

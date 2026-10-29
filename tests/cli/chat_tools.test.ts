@@ -134,6 +134,11 @@ describe("confine", () => {
     expect(thrown(() => confine(root, "dangling.yaml"))).toBeInstanceOf(ToolRefused);
   });
 
+  test("a symlink loop is an error the model reads", () => {
+    symlinkSync(join(root, "loop.yaml"), join(root, "loop.yaml"));
+    expect(isReportedToolError(thrown(() => confine(root, "loop.yaml")))).toBe(true);
+  });
+
   test("accepts a new file whose nearest existing folder is inside", () => {
     expect(confine(root, "sub/new/b.yaml")).toBe(join(root, "sub", "new", "b.yaml"));
   });

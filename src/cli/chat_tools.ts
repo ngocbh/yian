@@ -70,7 +70,7 @@ export class ToolRefused extends ReportedToolError {
  * `root`. A path that doesn't exist yet resolves through its nearest existing folder.
  *
  * @throws {ToolRefused} When the path leaves `root`, or is a symlink whose target doesn't exist.
- * @throws {Error} A system error other than a missing file, such as a symlink loop.
+ * @throws {ReportedToolError} When the path can't be resolved, through a symlink loop say.
  */
 export function confine(root: string, path: string): string {
   const realRoot = realpathSync(root);
@@ -79,17 +79,22 @@ export function confine(root: string, path: string): string {
   try {
     real = realpathSync(target);
   } catch (error) {
-    if (!isSystemError(error) || (error.code !== "ENOENT" && error.code !== "ENOTDIR")) throw error;
+    if (!isSystemError(error)) throw error;
+    if (error.code !== "ENOENT" && error.code !== "ENOTDIR") {
+      throw new ReportedToolError(`can't resolve ${path}: ${osReason(error)}`);
+    }
     // A dangling symlink would create its target, wherever that is.
     if (lstatOrNull(target)?.isSymbolicLink()) throw new ToolRefused(`${path} is a symlink to a missing file`);
     real = resolvedPath(target);
   }
-  if (leavesRoot(relative(realRoot, real))) throw new ToolRefused(`${path} is outside the folder the chat started in`);
+  if (leavesRoot(relative(realRoot, real))) {
+    throw new ToolRefused(`${path} is outside the folder the chat started in`);
+  }
   return real;
 }
 
 /** `path`'s own status, a symlink not followed, or null when it doesn't exist. */
-function lstatOrNull(path: string): ReturnType<typeof lstatSync> | null {
+function lstatOrNull(path: string): Stats | null {
   try {
     return lstatSync(path);
   } catch (error) {

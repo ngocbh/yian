@@ -397,8 +397,9 @@ export class ComposedFlow {
   /**
    * Resolve one semantic failure through this flow's source authority.
    *
-   * Resolution is presentation-only. A missing, incomplete, malformed, or failing resolver
-   * produces an unlocated diagnostic without changing the semantic failure fields.
+   * Resolution is presentation-only. A missing resolver, or one that throws or answers an origin
+   * with anything but a `DiagnosticFrame`, produces an unlocated diagnostic without changing the
+   * semantic failure fields. Each frame is kept as the resolver returns it.
    *
    * @param failure Valid source-neutral failure whose trace is ordered outermost to innermost.
    * @returns The unchanged semantic fields plus every resolved frame in trace order, or no
@@ -424,34 +425,9 @@ export class ComposedFlow {
     const frames: DiagnosticFrame[] = [];
     for (const origin of failure.trace) {
       try {
-        const frame: unknown = resolver.resolve(origin);
+        const frame = resolver.resolve(origin);
         if (!(frame instanceof DiagnosticFrame)) return unavailable;
-
-        const { label, text, range, note } = frame;
-        if (
-          typeof label !== "string" ||
-          typeof text !== "string" ||
-          (note !== null && typeof note !== "string") ||
-          !(range instanceof SourceRange)
-        ) {
-          return unavailable;
-        }
-
-        const { startLine, startCol, endLine, endCol } = range;
-        const coordinates = [startLine, startCol, endLine, endCol];
-        if (coordinates.some((coordinate) => !Number.isInteger(coordinate) || coordinate <= 0)) {
-          return unavailable;
-        }
-        if (endLine < startLine || (endLine === startLine && endCol < startCol)) return unavailable;
-
-        frames.push(
-          new DiagnosticFrame({
-            label,
-            text,
-            range: new SourceRange(startLine, startCol, endLine, endCol),
-            note,
-          }),
-        );
+        frames.push(frame);
       } catch {
         return unavailable;
       }

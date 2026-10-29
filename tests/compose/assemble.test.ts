@@ -656,18 +656,16 @@ describe("ComposedFlow", () => {
     expect([diagnostic.frames, diagnostic.notes]).toEqual([[], UNAVAILABLE]);
   });
 
-  test("diagnose copies each resolved frame", () => {
+  test("diagnose keeps each resolved frame", () => {
     const diagnostic = resolving(() => frame).diagnose(failure([origin, origin]));
     expect(diagnostic.frames).toEqual([frame, frame]);
-    expect(diagnostic.frames[0]).not.toBe(frame);
+    expect(diagnostic.frames[0]).toBe(frame);
     expect(diagnostic.notes).toEqual([]);
   });
 
   test.each([
     ["no frame", () => null],
-    ["a zero coordinate", () => new DiagnosticFrame({ ...frame, range: new SourceRange(0, 1, 1, 5) })],
-    ["an end before the start", () => new DiagnosticFrame({ ...frame, range: new SourceRange(2, 1, 1, 5) })],
-    ["a non-text note", () => new DiagnosticFrame({ ...frame, note: 5 as unknown as string })],
+    ["a value that isn't a frame", () => ({ ...frame })],
     [
       "a throwing resolver",
       () => {

@@ -366,19 +366,6 @@ export function readVariables(
   return [];
 }
 
-/** Compile authored flow inputs using the shared located declaration reader. */
-export function readSourceFlowInputs(
-  cursor: SourceCursor,
-  registry: TypeRegistry,
-  options: {
-    sitePath: SourceSitePath;
-    catalogBuilder: SourceCatalogBuilder;
-    diagnostics?: LoadDiagnostics | null;
-  },
-): Parameter[] {
-  return readSourceParameters(cursor, registry, options);
-}
-
 /**
  * Read one tagged declaration: the tag is its type, a value after it its default.
  *

@@ -212,6 +212,22 @@ test("nested call directive is not lifted", () => {
   );
 });
 
+test("a quoted nested call is text, and refused when it holds a span", () => {
+  const descriptors = (a: string) =>
+    new Map([
+      ["c", new CodeDescriptor({ id: "c", code: "return 1", inputs: { x: new ValueTemplate({ a, b: "${n}" }) } })],
+    ]);
+  const quoted = (_node: string, _field: string, _key: string, path: readonly (string | number)[]) =>
+    path[0] === "a" ? "single" : null;
+
+  const [desugared] = desugarInlineCalls(descriptors("call(sub, x=1)"), null, { bindingStyleAt: quoted });
+  expect((desugared.get("c")!.inputs["x"] as ValueTemplate).value).toEqual({ a: "call(sub, x=1)", b: "${n}" });
+  expect([...desugared.keys()]).toEqual(["c"]);
+  expect(() => desugarInlineCalls(descriptors("call(sub, x=${n})"), null, { bindingStyleAt: quoted })).toThrow(
+    "c: a quoted `call(...)` is text, so it can't hold `${...}` here",
+  );
+});
+
 // ---------- loaded flows ----------
 
 const dir = mkdtempSync(join(tmpdir(), "yian-nested-walkers-"));

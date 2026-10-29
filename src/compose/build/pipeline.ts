@@ -77,7 +77,7 @@ import {
   suggestTag,
   yamlQuoted,
 } from "../helpers/tags.ts";
-import { readFlowInputs, readSourceFlowInputs, readSourceParameters, readValueContract } from "../helpers/types.ts";
+import { readFlowInputs, readSourceParameters, readValueContract } from "../helpers/types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import {
   BuildContext,
@@ -954,7 +954,7 @@ function llmValueTypes(
 }
 
 /**
- * Return the authored YAML scalar style of one node binding.
+ * Return the authored YAML scalar style of one node binding, or of the leaf at `path` inside it.
  *
  * A value entry's one binding is the entry itself, so its style is the entry's.
  *
@@ -962,9 +962,10 @@ function llmValueTypes(
  * @param nodeId The node that owns the binding.
  * @param field The binding field (`inputs`, or a scalar field such as `over`).
  * @param key The binding name in a mapping field; equals `field` for a scalar one.
+ * @param path The leaf's path inside the binding; `[]` for the binding itself.
  * @param options.valueEntries The ids of the flow's value entries.
  * @param options.diagnostics Factory for located load errors.
- * @returns The style, or `null` for a synthesized node or binding.
+ * @returns The style, or `null` for a synthesized node, binding or leaf.
  * @throws LoadError when the retained cursor cannot be traversed.
  */
 function bindingStyle(
@@ -972,6 +973,7 @@ function bindingStyle(
   nodeId: string,
   field: string,
   key: string,
+  path: ValuePath,
   options: { valueEntries: ReadonlySet<string>; diagnostics: LoadDiagnostics },
 ): ScalarStyle | null {
   const { valueEntries, diagnostics } = options;
@@ -979,7 +981,7 @@ function bindingStyle(
     if (!nodesCursor.has(nodeId)) return null;
     if (valueEntries.has(nodeId)) {
       if (field !== "inputs" || key !== nodeId) return null;
-      return nodesCursor.child(nodeId).scalarStyle;
+      return styleAlong(nodesCursor.child(nodeId), path);
     }
     let cursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
     if (!cursor.has(field)) return null;
@@ -988,30 +990,47 @@ function bindingStyle(
       if (!cursor.has(key)) return null;
       cursor = cursor.child(key);
     }
-    return cursor.scalarStyle;
+    return styleAlong(cursor, path);
   });
 }
 
 /**
- * Return the authored YAML scalar style of one flow output binding.
+ * Return the YAML scalar style of the value at `path` under `cursor`, or `null` when the path
+ * leaves the authored value.
+ */
+function styleAlong(cursor: SourceCursor, path: ValuePath): ScalarStyle | null {
+  for (const part of path) {
+    const held =
+      typeof part === "string" ? cursor.has(part) : Array.isArray(cursor.value) && part < cursor.value.length;
+    if (!held) return null;
+    cursor = cursor.child(part);
+  }
+  return cursor.scalarStyle;
+}
+
+/**
+ * Return the authored YAML scalar style of one flow output binding, or of the leaf at `path`
+ * inside it.
  *
  * @param outputsCursor Retained authored `output:` value.
  * @param key The output's record field name, or `null` for a single output.
+ * @param path The leaf's path inside the binding; `[]` for the binding itself.
  * @param options.diagnostics Factory for located load errors.
- * @returns The style, or `null` for a generated section.
+ * @returns The style, or `null` for a generated section or leaf.
  * @throws LoadError when the retained cursor cannot be traversed.
  */
 function outputStyle(
   outputsCursor: SourceCursor | null,
   key: string | null,
+  path: ValuePath,
   options: { diagnostics: LoadDiagnostics },
 ): ScalarStyle | null {
   const { diagnostics } = options;
   if (outputsCursor === null) return null;
   return locateSourceAccess(diagnostics, () => {
-    if (key === null) return outputsCursor.scalarStyle;
+    if (key === null) return styleAlong(outputsCursor, path);
     if (!outputsCursor.has(key)) return null;
-    return outputsCursor.child(key).scalarStyle;
+    return styleAlong(outputsCursor.child(key), path);
   });
 }
 
@@ -1739,7 +1758,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   let inputs: Parameter[];
   if (inputsSection !== null) {
     if (inputsCursor !== null) {
-      inputs = readSourceFlowInputs(inputsCursor.withValue(inputsSection as Value), registry, {
+      inputs = readSourceParameters(inputsCursor.withValue(inputsSection as Value), registry, {
         sitePath: owner,
         catalogBuilder,
         diagnostics,
@@ -1871,9 +1890,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     outputsRange,
     assertionRangeAt: flowAssertionRangeAt,
     assertionOriginAt: flowAssertionOriginAt,
-    bindingStyleAt: (nodeId, field, key) =>
-      bindingStyle(nodesCursor, nodeId, field, key, { valueEntries, diagnostics }),
-    outputStyleAt: (key) => outputStyle(outputsCursor, key, { diagnostics }),
+    bindingStyleAt: (nodeId, field, key, path) =>
+      bindingStyle(nodesCursor, nodeId, field, key, path, { valueEntries, diagnostics }),
+    outputStyleAt: (key, path) => outputStyle(outputsCursor, key, path, { diagnostics }),
     typedOutputs:
       outputTypes.size > 0
         ? new Set<string | null>(isRecord(outputsSection) ? outputTypes.keys() : [null])

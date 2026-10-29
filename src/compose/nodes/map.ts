@@ -85,13 +85,14 @@ export class MapDescriptor extends CallDescriptor {
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
+    cursor: SourceCursor,
   ): void {
     const over = fields["over"] ?? null;
     const site = ranges.get(siteKey("field", "over")) ?? ownRange;
     // Before the span walk, which recurses through the value.
     checkWrittenValue(over, `node ${reprText(nodeId)} field 'over'`, site, diagnostics);
     rejectContainerSpans(this.kind, nodeId, "over", over, site, diagnostics);
-    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
   /**

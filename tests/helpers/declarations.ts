@@ -10,7 +10,7 @@ import { CompiledFlow, END_ID, FlowOutput, START_ID } from "../../src/compile/mo
 import { assemble, type CallableScope as AssemblyScope, ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
 import { boundaryFieldRanges } from "../../src/compose/helpers/source.ts";
-import { readSourceFlowInputs, readSourceParameters } from "../../src/compose/helpers/types.ts";
+import { readSourceParameters } from "../../src/compose/helpers/types.ts";
 import { checkLlmConfigValue, readLlmConfig } from "../../src/compose/nodes/agent.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import type { DescriptorClass } from "../../src/compose/nodes/index.ts";
@@ -246,7 +246,7 @@ export interface CaseRow {
 export const inputsAt =
   (path: readonly string[], sitePath: readonly string[] = []): CaseCall =>
   (document, registry, diagnostics, builder) =>
-    readSourceFlowInputs(cursorAt(document, path), registry, {
+    readSourceParameters(cursorAt(document, path), registry, {
       sitePath,
       catalogBuilder: builder,
       diagnostics,

@@ -51,12 +51,12 @@ describe("NodeDescriptor", () => {
 
   test("_validateFields rejects bad asserts by default", () => {
     const fields = { asserts: [1n, 2n] };
-    const error = loadError(() => D._validateFields("n", fields, new Map(), null, new LoadDiagnostics()));
+    const error = loadError(() => D._validateFields("n", fields, new Map(), null, new LoadDiagnostics(), SourceCursor.virtual(fields)));
     expect(error.diagnostic.message).toBe("node 'n' (kind=d): `asserts:` must be a list of strings");
   });
 
   test("_validateFields skips absent asserts by default", () => {
-    D._validateFields("n", {}, new Map(), null, new LoadDiagnostics());
+    D._validateFields("n", {}, new Map(), null, new LoadDiagnostics(), SourceCursor.virtual({}));
   });
 
   test("_normalizeCursor returns the cursor unchanged by default", () => {

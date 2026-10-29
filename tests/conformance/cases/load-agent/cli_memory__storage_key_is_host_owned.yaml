@@ -16,4 +16,4 @@ expect:
       message: 'long_term_memory ''notes'': config key ''storage'' is not allowed: storage belongs to the host (build_memories storage=/root= or yian run --memory-root)'
       frames:
       - label: flow.yaml
-        range: [6, 23, 6, 77]
+        range: [6, 31, 6, 76]

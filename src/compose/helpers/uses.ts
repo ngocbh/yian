@@ -8,8 +8,9 @@
  *   (this module only extracts the scheme, it does not judge which are known, so a
  *   Windows-drive-looking `C:/x` parses to scheme `c` and never touches the disk).
  * - `<path>`: the (relative) flow path, possibly nested. Required.
- * - `@<version>`: an optional opaque tag, split at the last `@` (`a@b@c` gives path `a@b`,
- *   version `c`); a trailing `@` (empty version) is an error.
+ * - `@<version>`: an optional opaque tag, split at the last `@` of the last path segment
+ *   (`a@b@c` gives path `a@b`, version `c`; the `@` in `./vendor/@acme/flow.yaml` is part of
+ *   the path); a trailing `@` (empty version) is an error.
  *
  * Imports only `diagnostics` and `compose/helpers/errors` (the lowest layers, so the loader
  * and the resolver can both import this without a cycle).
@@ -60,7 +61,9 @@ export function parseUsesRef(
     rest = raw.slice(match[0].length);
   }
 
-  const at = rest.lastIndexOf("@");
+  // An `@` in a directory (an npm-style `@scope/`) is part of the path, not a version.
+  const last = rest.lastIndexOf("@");
+  const at = last > rest.lastIndexOf("/") ? last : -1;
   const path = at === -1 ? rest : rest.slice(0, at);
   const version = at === -1 ? null : rest.slice(at + 1);
 

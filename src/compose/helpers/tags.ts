@@ -118,7 +118,17 @@ export function readTagType(
     }
     throw diagnostics.error(message, { range });
   }
-  if (tag.endsWith(",") || tag.split("(").length > tag.split(")").length) {
+  let resolved: Type | TypeCheckError;
+  try {
+    resolved = typeFor(tag, registry);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    resolved = error;
+  }
+  // Parens are counted only for a tag that names no type, so one inside a quoted `Literal`
+  // member (`!Literal('(')`) doesn't read as cut short.
+  const unclosed = tag.split("(").length > tag.split(")").length;
+  if (tag.endsWith(",") || (resolved instanceof TypeCheckError && unclosed)) {
     throw diagnostics.error(
       `${reprText(label)}: \`!${tag}\` is not a complete type: a YAML tag ends at the first ` +
         "space and can't contain `,`; name a type with several arguments in " +
@@ -133,15 +143,13 @@ export function readTagType(
       { range },
     );
   }
-  try {
-    return typeFor(tag, registry);
-  } catch (error) {
-    if (!(error instanceof TypeCheckError)) throw error;
-    let message = `${reprText(label)}: \`!${tag}\` is not a type (${error.message})`;
+  if (resolved instanceof TypeCheckError) {
+    let message = `${reprText(label)}: \`!${tag}\` is not a type (${resolved.message})`;
     const match = closeTypeName(tag, registry);
     if (match !== null) message += `. Did you mean \`${match}\`?`;
     throw diagnostics.error(message, { range });
   }
+  return resolved;
 }
 
 /**
@@ -587,8 +595,8 @@ export interface TaggedValueOptions {
    */
   literalOnly?: boolean;
   /**
-   * The fix a nested string starting with `call(` is told to make; defaults to binding it at
-   * the top level.
+   * The fix an unquoted nested string starting with `call(` is told to make; defaults to binding
+   * it at the top level.
    */
   nestedCallFix?: string;
   /** Whether the slot may be an `Inbox(...)`: a flow or def input; defaults to `false`. */
@@ -613,9 +621,9 @@ export interface TaggedValueOptions {
  * @param registry The flow's typedefs the tags resolve against.
  * @returns The value, the top-level contract, and whether a value follows the tag.
  * @throws LoadError when a tag is malformed or names no type, a value is missing after a nested
- *   tag, a space splits a tag from its arguments, a nested string starts with `call(`, a
- *   span-free tagged literal does not fit its tag, or the value can't be walked (a recursive
- *   alias).
+ *   tag, a space splits a tag from its arguments, an unquoted nested string starts with
+ *   `call(`, a span-free tagged literal does not fit its tag, or the value can't be walked (a
+ *   recursive alias).
  */
 export function readTaggedValue(
   cursor: SourceCursor,
@@ -763,7 +771,8 @@ class TaggedValueReader {
   walkValue(cursor: SourceCursor, value: unknown, path: ValuePath): Walked {
     if (typeof value === "string") {
       if (this.literalOnly || path.length === 0) return new Walked(value);
-      if (CALL_HEAD.test(value.trim())) {
+      // Quoted, it is text, as at the top level (`isTemplateText`).
+      if (!QUOTED_STYLES.has(cursor.scalarStyle) && CALL_HEAD.test(value.trim())) {
         throw this.diagnostics.error(
           `${reprText(pathLabel(this.label, path))}: a \`call(...)\` inside a value isn't ` +
             `supported; ${this.nestedCallFix}`,

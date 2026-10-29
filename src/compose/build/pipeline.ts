@@ -2366,9 +2366,11 @@ function checkReferences(
     typeFn: constructorType,
   });
 
+  // The ordering edges and the skip model live in this phase, not in edge routing, because
+  // keeping the old error order puts an ordering error after the type checks and before references.
   // Run-ordering edges: depends_on (co-skip) / runs_after (pure order). Folded in BEFORE root
-  // synthesis so an ordering-only dependent is demoted from root, and into the cycle check below
-  // so an ordering cycle is loud.
+  // synthesis (`closeFlow`) so an ordering-only dependent is demoted from root, and into the cycle
+  // check (`checkGraph`) so an ordering cycle is loud.
   const orderingEdges = inferOrderingEdges(descriptors, new Set(descriptors.keys()), { diagnostics });
 
   // Which nodes may be skipped while a reader runs: the field-read checks need it, so it is built

@@ -16,7 +16,13 @@
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import type { Node } from "../../nodes/base.ts";
-import { type BuiltinCode, CodeNode, selectInlineCodeOrigin, validateCodeOrigins } from "../../nodes/code/node.ts";
+import {
+  type BuiltinCode,
+  type CodeLineStart,
+  CodeNode,
+  selectInlineCodeOrigin,
+  validateCodeOrigins,
+} from "../../nodes/code/node.ts";
 import { TypeStripError } from "../../platform.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
@@ -148,7 +154,8 @@ export class CodeDescriptor extends NodeDescriptor {
    *
    * The node takes the body as text, or a value entry's built-in identity form, `ctx.baseDir` as
    * the directory a reference resolves against, `ctx.sourceFile` as the label a failing body's
-   * stack frames are named after, and the descriptor's code origins unchanged; nothing is
+   * stack frames are named after, where each body line starts in that file (`codeLineStarts`),
+   * and the descriptor's code origins unchanged; nothing is
    * compiled. Sets the node's `params` from the authored `input:` and its output contract from
    * `output:`; `_finish` stamps the descriptor origin.
    *
@@ -159,6 +166,7 @@ export class CodeDescriptor extends NodeDescriptor {
       code: this.code,
       baseDir: ctx.baseDir,
       sourceFile: ctx.sourceFile,
+      codeLineStarts: codeLineStarts(this.codeLineOrigins, ctx),
       codeOrigin: this.codeOrigin,
       codeLineOrigins: this.codeLineOrigins,
       title: this.nodeName,
@@ -167,6 +175,22 @@ export class CodeDescriptor extends NodeDescriptor {
     node.params = this.sinkParams();
     return this._finish(node, this.sinkWiring());
   }
+}
+
+/**
+ * Return where each body line starts in `ctx.sourceFile`, read from the exact line origins.
+ *
+ * @returns One start per line, or none when a line has no exact origin, `ctx` presents none, or a
+ *   line's frame is in another file than the one a failing body's frames are named after.
+ */
+function codeLineStarts(lineOrigins: readonly OriginRef[], ctx: BuildContext): CodeLineStart[] {
+  const starts: CodeLineStart[] = [];
+  for (const origin of lineOrigins) {
+    const frame = ctx.resolveOrigin?.(origin) ?? null;
+    if (frame === null || frame.label !== ctx.sourceFile) return [];
+    starts.push({ line: frame.range.startLine, column: frame.range.startCol });
+  }
+  return starts;
 }
 
 /** What the CODE load check needs: where errors are raised and how an origin is presented. */

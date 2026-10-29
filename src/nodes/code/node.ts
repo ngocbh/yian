@@ -33,7 +33,8 @@
  * included, and a late timer throw or unhandled rejection while it runs) rejects as a `CodeError`
  * reading `<name>: <message>`; an inline body's is located at the authored line of its first body
  * frame when it has one, a reference's at the whole `code:` value. Its stack names an inline
- * body's frames after the node's `sourceFile` (the flow's file label) and the body's own line. A
+ * body's frames after the node's `sourceFile` (the flow's file label) and the file line when the
+ * node knows where its body lines start, else the node and the body's own line. A
  * result of `undefined` fails; a result goes through host intake in the worker, and a value intake
  * refuses fails `contract.output`. A worker that exits before the body returns rejects with its
  * exit code: a `process.exit`, or a body awaiting a promise nothing can resolve when no earlier
@@ -172,6 +173,12 @@ function isSystemCode(error: unknown, code: string): boolean {
   return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
 }
 
+/** Where one line of an inline body starts in its flow file: a 1-based line and column. */
+export interface CodeLineStart {
+  readonly line: number;
+  readonly column: number;
+}
+
 /** The built-in identity operation: return the input named `field` unchanged. */
 export interface BuiltinCode {
   readonly builtin: "identity";
@@ -284,12 +291,19 @@ function bodyLine(error: unknown, nodeId: string): number | null {
 }
 
 /**
- * Return `stack` with each `yian-code:<nodeId>:<line>:<column>` location renamed
- * `<sourceFile>:<body line>:<body column>`: the line less the constructor's header, and a
- * first-line column less the strict prologue sharing that line. A message holding that text is
- * renamed too when its numbers read as a body location.
+ * Return `stack` with each `yian-code:<nodeId>:<line>:<column>` location renamed after the body
+ * location it reads as: the line less the constructor's header, and a first-line column less the
+ * strict prologue sharing that line. A body line with a known start reads as
+ * `<sourceFile>:<file line>:<file column>`; any other as `<sourceFile>#<nodeId>:<body line>:<body
+ * column>`, which can't pass for a line of the file. A message holding that text is renamed too
+ * when its numbers read as a body location.
  */
-function labelBodyFrames(stack: string, nodeId: string, sourceFile: string): string {
+function labelBodyFrames(
+  stack: string,
+  nodeId: string,
+  sourceFile: string,
+  lineStarts: readonly CodeLineStart[],
+): string {
   const marker = `yian-code:${nodeId}:`;
   const [head, ...rest] = stack.split(marker);
   return rest.reduce((text, part) => {
@@ -299,7 +313,12 @@ function labelBodyFrames(stack: string, nodeId: string, sourceFile: string): str
     const column = Number(match[2]) - (line === 1 ? STRICT_PROLOGUE.length : 0);
     // Not a body location (a message holding the marker text): leave it.
     if (line < 1 || column < 1) return text + marker + part;
-    return `${text}${sourceFile}:${line}:${column}${part.slice(match[0].length)}`;
+    const start = lineStarts[line - 1];
+    const where =
+      start === undefined
+        ? `${sourceFile}#${nodeId}:${line}:${column}`
+        : `${sourceFile}:${start.line}:${start.column + column - 1}`;
+    return `${text}${where}${part.slice(match[0].length)}`;
   }, head!);
 }
 
@@ -521,6 +540,11 @@ export class CodeNode extends Node {
   baseDir: string | null;
   /** The flow's file label an inline body's stack frames are named after. Not fingerprinted. */
   sourceFile: string;
+  /**
+   * Where each body line starts in `sourceFile`, in order; empty when not known exactly. Not
+   * fingerprinted.
+   */
+  codeLineStarts: readonly CodeLineStart[];
   /** The authored identity of the whole `code:` scalar. Diagnostic-only. */
   codeOrigin: OriginRef | null;
   /** The authored identities of the exact constructed body lines, in order. Diagnostic-only. */
@@ -537,6 +561,9 @@ export class CodeNode extends Node {
    * @param options.baseDir The directory a reference resolves against.
    * @param options.sourceFile The flow's file label a failing inline body's stack frames are named
    *   after (default `"<inline-code>"`).
+   * @param options.codeLineStarts Where each body line starts in `sourceFile`, in order, so a frame
+   *   names a file line; empty (the default) names frames by node and body line instead. The node
+   *   keeps a frozen copy.
    * @param options.codeOrigin The authored identity of the whole `code:` scalar.
    * @param options.codeLineOrigins The authored identities of the exact constructed body lines in
    *   order; empty when line-level provenance is unavailable. The node keeps a frozen copy.
@@ -552,6 +579,7 @@ export class CodeNode extends Node {
       code: string | BuiltinCode;
       baseDir?: string | null;
       sourceFile?: string;
+      codeLineStarts?: readonly CodeLineStart[];
       codeOrigin?: OriginRef | null;
       codeLineOrigins?: readonly OriginRef[];
       title?: string | null;
@@ -561,6 +589,7 @@ export class CodeNode extends Node {
       code,
       baseDir = null,
       sourceFile = "<inline-code>",
+      codeLineStarts = [],
       codeOrigin = null,
       codeLineOrigins = [],
       title = null,
@@ -570,6 +599,7 @@ export class CodeNode extends Node {
     validateCodeOrigins(codeOrigin, codeLineOrigins);
     this.baseDir = baseDir;
     this.sourceFile = sourceFile;
+    this.codeLineStarts = Object.freeze(codeLineStarts.map((start) => Object.freeze({ ...start })));
     this.codeOrigin = codeOrigin;
     this.codeLineOrigins = Object.freeze([...codeLineOrigins]);
     this.mode = typeof this.code === "string" ? classifyCodeSource(this.code) : "builtin";
@@ -689,9 +719,10 @@ export class CodeNode extends Node {
    * inline body runs on a worker thread and gets `inputs`, a frozen host copy (ints as
    * `number`s, big ones as `bigint`s) behind a proxy that throws on an undeclared name; what it
    * throws rejects as a `CodeError` (an inline body's frames in its stack named after
-   * `sourceFile` and the body line), its `console` calls go to this thread's `console`, and its
-   * result goes through host intake (a top-level `return inputs` returns the record). The worker
-   * runs with the caller's `current()` values and goes back to the idle pool after its reply.
+   * `sourceFile` and the file line, else the node and the body line), its `console` calls go to
+   * this thread's `console`, and its result goes through host intake (a top-level `return inputs`
+   * returns the record). The worker runs with the caller's `current()` values and goes back to the
+   * idle pool after its reply.
    *
    * @param caps.signal Aborting it terminates the worker, then rejects with its reason. A body
    *   blocked in a synchronous system call (`execSync`, a blocking read) ends when that call
@@ -731,7 +762,7 @@ export class CodeNode extends Node {
       const error = replyError(reply);
       // The failure's traceback shows this stack; `original` keeps the raw frames `bodyLine` reads.
       if (error instanceof CodeError && typeof error.stack === "string") {
-        error.stack = labelBodyFrames(error.stack, this.id, this.sourceFile);
+        error.stack = labelBodyFrames(error.stack, this.id, this.sourceFile, this.codeLineStarts);
       }
       throw error;
     }

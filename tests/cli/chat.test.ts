@@ -71,7 +71,7 @@ function chatIo({ tty = false, environment = env } = {}) {
   return { io, stdin, stdout: out.text, stderr: err.text, screen: () => stderrStream.text };
 }
 
-/** A model answering each request with `answer` of it and its count (from 1); every request is kept. */
+/** A model answering each request with `answer` of it and its count (from 1); it keeps each. */
 class AnsweringModel implements ChatModel {
   readonly provider = "xai";
   readonly model = "grok-4.3";
@@ -84,21 +84,27 @@ class AnsweringModel implements ChatModel {
 
   stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
     this.requests.push(request);
-    return new ScriptedModel([this.#answer(request, this.requests.length)], this).stream(request, options);
+    return new ScriptedModel([this.#answer(request, this.requests.length)], this).stream(
+      request,
+      options,
+    );
   }
 }
 
 /** `request`'s messages as JSON text, to look for what the model was shown. */
-const shown = (request: Request): string => JSON.stringify(request.messages.map((message) => message.toJSON()));
+const shown = (request: Request): string =>
+  JSON.stringify(request.messages.map((message) => message.toJSON()));
 
 /** The text of each tool result the model was given in `request`, in order. */
 function toolResults(request: Request): string[] {
   return request.messages.flatMap((message) =>
-    message.parts.filter((part) => part instanceof ToolResultPart).map((part) => (part as ToolResultPart).content),
+    message.parts
+      .filter((part) => part instanceof ToolResultPart)
+      .map((part) => (part as ToolResultPart).content),
   );
 }
 
-/** Run `yian chat` with `flow` in focus (none when undefined), in `root`, its log at `tmp/chat.jsonl`. */
+/** Run `yian chat` in `root` with `flow` in focus (none when undefined), its log in `tmp`. */
 async function runChat(
   io: CliIo,
   model: ChatModel,
@@ -154,33 +160,55 @@ output: \${sure.output}
  * relaying it, or in a status a run tool returned. Null when it isn't shown.
  */
 function askedCall(request: Request): string | null {
-  const relayed = request.messages.filter((message) => message.author === "yian").map((m) => m.text());
+  const relayed = request.messages
+    .filter((message) => message.author === "yian")
+    .map((m) => m.text());
   for (const text of [...relayed, ...toolResults(request)]) {
     const match =
-      /\(call ([^)\s]+)\): "Which region\?"/.exec(text) ?? /"call":"([^"]+)","question":"Which region\?"/.exec(text);
+      /\(call ([^)\s]+)\): "Which region\?"/.exec(text) ??
+      /"call":"([^"]+)","question":"Which region\?"/.exec(text);
     if (match !== null) return match[1]!;
   }
   return null;
 }
 
-/** A flow that sleeps a second, so it starts before it asks, then asks which region. */
-const REGION = `id: region
+/**
+ * A flow that asks which region once the test opens its gate (`openGate`), so the assistant sees
+ * it start before it asks; the gate gives way after 5 s, so a test that never opens it still ends.
+ */
+const region = () => `id: region
 name: region
 nodes:
-  settle:
-    kind: tool
-    tool_id: sleep
-    input:
-      for: 1s
+  gate:
+    kind: code
+    output: str
+    code: |
+      const fs = await import("node:fs");
+      const cap = Date.now() + 5000;
+      while (!fs.existsSync(${JSON.stringify(join(tmp, "gate"))}) && Date.now() < cap) {
+        await new Promise((wake) => setTimeout(wake, 5));
+      }
+      return "open";
   sure:
     kind: tool
     tool_id: ask
-    depends_on: [settle]
+    depends_on: [gate]
     input:
       prompt: "Which region?"
     output: str
 output: \${sure.output}
 `;
+
+/** Let the region flow ask. */
+const openGate = () => writeFileSync(join(tmp, "gate"), "");
+
+/** Whether `model` was given the result of a call to `tool`. */
+const gotResult = (model: AnsweringModel, tool: string) =>
+  model.requests.some((request) =>
+    request.messages.some((message) =>
+      message.parts.some((part) => part instanceof ToolResultPart && part.name === tool),
+    ),
+  );
 
 test(
   "yian chat prints a banner naming the model, then the assistant's reply to a typed line",
@@ -207,7 +235,9 @@ test(
     const model = new AnsweringModel(() => textReply("hello"));
     const { code, log } = await runChat(io, model);
     expect(code).toBe(1);
-    expect(stderr()).toContain("chat failed: the assistant has no provider or model; run 'yian auth <provider>'");
+    expect(stderr()).toContain(
+      "chat failed: the assistant has no provider or model; run 'yian auth <provider>'",
+    );
     expect(existsSync(log)).toBe(false);
     expect(model.requests).toEqual([]);
   },
@@ -218,12 +248,15 @@ test(
   "a default provider yian doesn't know fails the chat with its message",
   async () => {
     const { io, stdin, stderr } = chatIo({
-      environment: (name) => ({ HOME: home, YIAN_DEFAULT_PROVIDER: "nope", YIAN_DEFAULT_MODEL: "x" })[name],
+      environment: (name) =>
+        ({ HOME: home, YIAN_DEFAULT_PROVIDER: "nope", YIAN_DEFAULT_MODEL: "x" })[name],
     });
     stdin.end();
     const { code } = await runChat(io, new AnsweringModel(() => textReply("hello")));
     expect(code).toBe(1);
-    expect(stderr()).toContain("chat failed: YIAN_DEFAULT_PROVIDER='nope' is not a supported provider");
+    expect(stderr()).toContain(
+      "chat failed: YIAN_DEFAULT_PROVIDER='nope' is not a supported provider",
+    );
   },
   TIMEOUT,
 );
@@ -242,7 +275,9 @@ test(
     const system = model.requests[0]!.messages[0]!.text();
     expect(system).toContain("Flow in focus: hello.yaml");
     // A snapshot, fenced as data.
-    expect(system).toContain("as they were when the chat opened. read_flow and check_flow give its current state.");
+    expect(system).toContain(
+      "as they were when the chat opened. read_flow and check_flow give its current state.",
+    );
     expect(system).toContain(`<<<FLOW TEXT\n${HELLO}`);
     expect(system).toContain("ok\nname: hello\ninputs:\n  name: str\nFLOW TEXT>>>");
     expect(system.replace(/\s+/g, " ")).toContain("between <<<FLOW TEXT and FLOW TEXT>>>");
@@ -261,7 +296,8 @@ test(
     const model = new AnsweringModel(() => textReply("sure"));
     expect((await runChat(io, model, path)).code).toBe(0);
     expect(stderr()).toContain(
-      `${path} is outside this folder; to work on it with the tools, run yian chat from its folder\n`,
+      `${path} is outside this folder; ` +
+        "to work on it with the tools, run yian chat from its folder\n",
     );
     const system = model.requests[0]!.messages[0]!.text().replace(/\s+/g, " ");
     expect(system).toContain(`Flow in focus: ${path}`);
@@ -348,7 +384,11 @@ test(
     const results = toolResults(model.requests[3]!);
     expect(results[0]).toStartWith("ok\nname: hello");
     expect(JSON.parse(results[1]!)).toMatchObject({ run: "r1" });
-    expect(JSON.parse(results[2]!)).toMatchObject({ run: "r1", status: "succeeded", output: "Hi Ada" });
+    expect(JSON.parse(results[2]!)).toMatchObject({
+      run: "r1",
+      status: "succeeded",
+      output: "Hi Ada",
+    });
   },
   TIMEOUT,
 );
@@ -356,7 +396,7 @@ test(
 test(
   "a child's question reaches the assistant as a message authored yian, and its answer goes back",
   async () => {
-    writeFileSync(join(root, "region.yaml"), REGION);
+    writeFileSync(join(root, "region.yaml"), region());
     const { io, stdin, stdout, screen } = chatIo({ tty: true });
     let answered = false;
     const model = new AnsweringModel((request, count) => {
@@ -373,10 +413,15 @@ test(
     stdin.write(`run region${ENTER}`);
     await until(() => screen().includes("Run region.yaml"));
     stdin.write(ENTER);
+    // Once the assistant has seen it start, the run asks.
+    await until(() => gotResult(model, "start_flow"));
+    openGate();
     /** Whether the model was sent a message authored yian holding `text`. */
     const relayed = (text: string) =>
       model.requests.some((request) =>
-        request.messages.some((message) => message.author === "yian" && message.text().includes(text)),
+        request.messages.some(
+          (message) => message.author === "yian" && message.text().includes(text),
+        ),
       );
     // The child's end is relayed too.
     await until(() => relayed('run r1 succeeded with output "eu"'));
@@ -384,18 +429,22 @@ test(
     expect((await chatting).code).toBe(0);
     expect(relayed("Which region?")).toBe(true);
     expect(stdout()).toContain("answered");
-    expect(inspectRun(join(home, ".yian", "runs", "chat-1-r1", "log.jsonl")).status).toBe("succeeded");
+    expect(inspectRun(join(home, ".yian", "runs", "chat-1-r1", "log.jsonl")).status).toBe(
+      "succeeded",
+    );
   },
   TIMEOUT,
 );
 
 test(
-  "/exit with a child waiting on a question prints its log and that it can't go on outside the chat",
+  "/exit with a child waiting on a question prints its log and that it can't go on elsewhere",
   async () => {
-    writeFileSync(join(root, "region.yaml"), REGION);
+    writeFileSync(join(root, "region.yaml"), region());
     const { io, stdin, stderr, screen } = chatIo({ tty: true });
     const model = new AnsweringModel((_, count) =>
-      count === 1 ? callReply(["start_flow", { path: "region.yaml", inputs: {} }, "c1"]) : textReply("waiting"),
+      count === 1
+        ? callReply(["start_flow", { path: "region.yaml", inputs: {} }, "c1"])
+        : textReply("waiting"),
     );
     // While the waiting children print, a Ctrl-C has a listener, so it can't end the process.
     const signals = new EventEmitter();
@@ -410,6 +459,9 @@ test(
     stdin.write(`run region${ENTER}`);
     await until(() => screen().includes("Run region.yaml"));
     stdin.write(ENTER);
+    // Once the assistant has seen it start, the run asks.
+    await until(() => gotResult(model, "start_flow"));
+    openGate();
     // The question reaches the assistant in a turn of its own.
     await until(() => model.requests.some((request) => shown(request).includes("Which region?")));
     stdin.write(`/exit${ENTER}`);
@@ -417,7 +469,8 @@ test(
     const child = join(home, ".yian", "runs", "chat-2-r1", "log.jsonl");
     expect(inspectRun(child).status).toBe("waiting");
     expect(stderr()).toContain(
-      `run r1 waits for an answer to its question; its log: ${child}\n  it can't be continued outside this chat yet\n`,
+      `run r1 waits for an answer to its question; its log: ${child}\n` +
+        "  it can't be continued outside this chat yet\n",
     );
     expect(listening).toEqual([1]);
     expect(signals.listenerCount("SIGINT")).toBe(0);
@@ -426,7 +479,7 @@ test(
 );
 
 test(
-  "a Ctrl-C while the chat ends halts a child whose cancel hangs, and the chat still says where it is",
+  "a Ctrl-C while the chat ends halts a child whose cancel hangs; the chat still says where it is",
   async () => {
     writeFileSync(join(root, "ask.yaml"), ASK);
     const { io, stdin, stderr, screen } = chatIo({ tty: true });
@@ -461,11 +514,7 @@ test(
     await until(() => screen().includes("Run ask.yaml"));
     stdin.write(ENTER);
     // The answer is taken: the child runs the pass that never ends.
-    const answeredResult = (request: Request) =>
-      request.messages.some((message) =>
-        message.parts.some((part) => part instanceof ToolResultPart && part.name === "answer_flow"),
-      );
-    await until(() => model.requests.some(answeredResult));
+    await until(() => gotResult(model, "answer_flow"));
     stdin.write(`/exit${ENTER}`);
     await until(() => stderr().includes("session ended"));
     // The chat's own listener is gone; the cleanup's is the one left.
@@ -488,18 +537,22 @@ test(
     const { log } = await runChat(io, new AnsweringModel(() => textReply("hello")));
     const resumed = chatIo();
     expect(await main(["run", "--resume", log], resumed.io)).toBe(1);
-    expect(resumed.stderr()).toContain("this run is a yian chat's; yian run --resume can't continue it");
+    expect(resumed.stderr()).toContain(
+      "this run is a yian chat's; yian run --resume can't continue it",
+    );
   },
   TIMEOUT,
 );
 
 test(
-  "yian run --resume refuses a chat's log left waiting, and one from a chat of another yian version",
+  "yian run --resume refuses a chat's log left waiting, and one from another version's chat",
   async () => {
     // Stopped at the prompt: the chat's run waits at its take.
     const signals = new EventEmitter();
     const { io, stderr } = chatIo();
-    const chatting = runChat(io, new AnsweringModel(() => textReply("hello")), undefined, { deps: { signals } });
+    const chatting = runChat(io, new AnsweringModel(() => textReply("hello")), undefined, {
+      deps: { signals },
+    });
     await until(() => stderr().includes("Run log: "));
     await until(() => signals.listenerCount("SIGTERM") > 0);
     signals.emit("SIGTERM");
@@ -508,12 +561,16 @@ test(
     expect(inspectRun(log).status).toBe("waiting");
     const resumed = chatIo();
     expect(await main(["run", "--resume", log], resumed.io)).toBe(1);
-    expect(resumed.stderr()).toContain("this run is a yian chat's; yian run --resume can't continue it");
-    // Another version's chat: its flow file is chat.yaml with the chat's id, its text not this one's.
+    expect(resumed.stderr()).toContain(
+      "this run is a yian chat's; yian run --resume can't continue it",
+    );
+    // Another version's chat: a chat.yaml with the chat's id, its text not this one's.
     const other = join(root, "chat.yaml");
     writeFileSync(other, HELLO.replace("id: hello", "id: yian-chat"));
     const otherLog = join(tmp, "other.jsonl");
-    expect(await main(["run", other, "--input", "name=Ada", "--log", otherLog, "--quiet"], chatIo().io)).toBe(0);
+    expect(
+      await main(["run", other, "--input", "name=Ada", "--log", otherLog, "--quiet"], chatIo().io),
+    ).toBe(0);
     const again = chatIo();
     expect(await main(["run", "--resume", otherLog], again.io)).toBe(1);
     expect(again.stderr()).toContain("this run is a yian chat's");
@@ -528,7 +585,9 @@ test(
     writeFileSync(path, HELLO.replace("id: hello", "id: yian-chat"));
     const log = join(tmp, "mine.jsonl");
     const first = chatIo();
-    expect(await main(["run", path, "--input", "name=Ada", "--log", log, "--quiet"], first.io)).toBe(0);
+    expect(
+      await main(["run", path, "--input", "name=Ada", "--log", log, "--quiet"], first.io),
+    ).toBe(0);
     const resumed = chatIo();
     expect(await main(["run", "--resume", log, "--quiet"], resumed.io)).toBe(0);
     expect(resumed.stdout()).toBe("Hi Ada\n");

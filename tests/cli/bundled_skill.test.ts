@@ -25,7 +25,7 @@ afterEach(() => {
 /** An environment whose `HOME` is the test's. */
 const env = (name: string) => (name === "HOME" ? home : undefined);
 
-test("the skill is written under ~/.yian/cache/skills, named by its content, and loads from there", () => {
+test("the skill is written under ~/.yian/cache/skills, named by its content, and loads", () => {
   const skill = bundledSkill(env);
   expect(skill.name).toBe("composing-agents");
   const cache = join(home, ".yian", "cache", "skills");
@@ -53,10 +53,12 @@ test("load_skill reads the skill's instructions and its reference.md", () => {
   const skill = bundledSkill(env);
   const skills = new Map([[skill.name, skill]]);
   expect(invokeLoadSkill(skills, { name: "composing-agents" })).toContain("# Writing yian flows");
-  expect(invokeLoadSkill(skills, { name: "composing-agents", path: "reference.md" })).toBe(SKILL["reference.md"]!);
+  expect(invokeLoadSkill(skills, { name: "composing-agents", path: "reference.md" })).toBe(
+    SKILL["reference.md"]!,
+  );
 });
 
-test("a folder another chat renames into place first is used, and the call's own is removed", () => {
+test("a folder another chat renames into place first is used, and this call's removed", () => {
   const first = bundledSkill(env);
   const folder = first.directory!;
   rmSync(folder, { recursive: true });

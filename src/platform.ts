@@ -31,6 +31,15 @@ export const runtime: "bun" | "node" = typeof Bun !== "undefined" ? "bun" : "nod
  */
 export const compiled: boolean = runtime === "bun" && Bun.isStandaloneExecutable === true;
 
+/** The runtime and its version (`Bun 1.4.2`), and the OS and CPU (`linux x64`), for a report. */
+export function hostPlatform(): { runtime: string; platform: string } {
+  const version = runtime === "bun" ? Bun.version : process.versions.node;
+  return {
+    runtime: `${runtime === "bun" ? "Bun" : "Node"} ${version}`,
+    platform: `${process.platform} ${process.arch}`,
+  };
+}
+
 /**
  * A value bound to a positional `?` parameter. A `number` passing
  * `Number.isSafeInteger` binds as INTEGER; any other

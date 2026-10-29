@@ -20,6 +20,7 @@ import {
   type FileLock,
   FileLockError,
   homeDir,
+  hostPlatform,
   insecureTlsWarning,
   isLocked,
   isSystemError,
@@ -108,6 +109,12 @@ describe("runtime", () => {
 
   test.if(process.versions.bun === undefined)("is node under the Node runner", () => {
     expect(runtime).toBe("node");
+  });
+  test("hostPlatform names the runtime with its version, and the OS and CPU", () => {
+    const { runtime: named, platform } = hostPlatform();
+    const version = process.versions.bun ?? process.versions.node;
+    expect(named).toBe(`${process.versions.bun === undefined ? "Node" : "Bun"} ${version}`);
+    expect(platform).toBe(`${process.platform} ${process.arch}`);
   });
 });
 

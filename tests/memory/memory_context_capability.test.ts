@@ -146,29 +146,14 @@ test("the scope is frozen before node execution", async () => {
   expect((events[0]![2] as RecallContext).consumerStaticPath).toEqual(["work"]);
 });
 
-/** A consumer whose custom `run` must not be reached. */
-class CustomRun extends Consumer {
-  constructor() {
-    super(() => new Output(null));
-  }
-
-  override async run(): Promise<NodeResult> {
-    throw new Error("the custom run must not be reached");
-  }
-}
-
-test("malformed scope is host fault even for custom run override", async () => {
-  const node = new CustomRun();
+test("malformed scope is a host fault before the node runs", async () => {
+  const node = new Consumer(() => {
+    throw new Error("the node must not run");
+  });
   node.memoryScope = "invalid" as unknown as MemoryScope;
   const error = await rejected(evaluate(node, opener([])));
   expect(error).toBeInstanceOf(TypeError);
   expect((error as Error).message).toBe("node memory_scope must be an exact MemoryScope or null");
-});
-
-test("missing scoped opener remains setup fault for custom run", async () => {
-  const error = await rejected(evaluate(new CustomRun(), null));
-  expect(error).toBeInstanceOf(Error);
-  expect((error as Error).message).toBe("scoped node 'work' requires an injected memory context callback");
 });
 
 test("a node that returns without awaiting the opener doesn't settle before the open", async () => {

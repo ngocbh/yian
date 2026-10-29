@@ -4,7 +4,7 @@
  * A node is a pure function of its bound input record; the engine owns both boundaries: the read
  * (bind the inputs from the pool) and the write (the dispatcher stores `Output`). `evalNode` is
  * the append-only dispatcher's evaluation seam: it binds the record, pre-resolves reserved keys,
- * builds the trait-gated capabilities, runs the node through its assert-owning `run` template,
+ * builds the trait-gated capabilities, runs the node through its assert-owning template,
  * and resolves to an `EvaluatedOutcome` holding exactly `Output | Route | Grow | Pending |
  * EvaluationFailure` plus optional input capture. It publishes no observers; durable
  * observer order belongs to the dispatcher.
@@ -43,7 +43,7 @@ import {
   DeferredBindingFault,
   Grow,
   markerMessage,
-  Node,
+  type Node,
   NodeBodyError,
   type NodeCaps,
   type NodeResult,
@@ -530,7 +530,6 @@ async function evaluateNode(
   // graph and deliberately escapes the expected binder catch.
   const nodeWiring: ReadonlyMap<string, unknown> =
     wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow?.wiring.get(node.id) ?? new Map());
-  const usesBaseTemplate = node.run === Node.prototype.run;
   // The declared types field reads go through: a declared field that is absent reads null.
   const declared = flow !== null ? poolDeclaredTypes(flow) : null;
   const itemType = flow !== null && node.itemSourceKey !== null ? itemDeclaredType(flow, node) : null;
@@ -584,8 +583,6 @@ async function evaluateNode(
     collector?.invalidate();
     return withAuthoredRoots(evaluationFailure(node, error.failureCode, error, error.origin), nodeWiring);
   }
-
-  if (captureInputs !== null && !usesBaseTemplate) captureInputs(record);
 
   const scoped = memoryScope !== null && memoryScope.memories.length > 0;
   if (scoped && memoryContextOpener === null) {
@@ -706,9 +703,7 @@ async function evaluateNode(
   let result: unknown;
   let rejection: { error: unknown } | null = null;
   try {
-    result = usesBaseTemplate
-      ? await node.runForEvaluator(record, caps, captureInputs)
-      : await node.run(record, caps);
+    result = await node.runForEvaluator(record, caps, captureInputs);
   } catch (error) {
     rejection = { error };
   }
@@ -730,8 +725,8 @@ async function evaluateNode(
   if (rejection !== null) {
     const { error } = rejection;
     // A template default that fails to bind leaves no usable input record.
-    if (usesBaseTemplate && error instanceof BindingStageError) collector?.invalidate();
-    return withAuthoredRoots(stageFailure(node, error, usesBaseTemplate), nodeWiring);
+    if (error instanceof BindingStageError) collector?.invalidate();
+    return withAuthoredRoots(stageFailure(node, error), nodeWiring);
   }
   const contractError = resultContractError(node, result);
   if (contractError !== null) return evaluationFailure(node, "contract.node_result", contractError);
@@ -754,30 +749,26 @@ function resultContractError(node: Node, result: unknown): Error | null {
 }
 
 /**
- * Classify one rejection of a node's run by the stage that threw it.
+ * Classify one rejection of a node's run by the template stage that threw it.
  *
- * @throws The original of a capability or deferred binder fault, and, for the base template, any
- *   error outside its stages (malformed setup).
+ * @throws The original of a capability or deferred binder fault, and any error outside the
+ *   template's stages (malformed setup).
  */
-function stageFailure(node: Node, error: unknown, usesBaseTemplate: boolean): EvaluationFailure {
+function stageFailure(node: Node, error: unknown): EvaluationFailure {
   if (error instanceof DeferredBindingFault || error instanceof CapabilityFault) throw error.original;
   if (error instanceof BindingStageError) {
     const { original } = error;
-    // A custom run is one undivided node-body stage.
-    if (!usesBaseTemplate) return evaluationFailure(node, "node.execute", original, node.exceptionOrigin(original));
     return evaluationFailure(node, original.failureCode, original, original.origin);
   }
   if (error instanceof AssertionStageError) {
     const { original } = error;
-    if (!usesBaseTemplate) return evaluationFailure(node, "node.execute", original, node.exceptionOrigin(original));
     return evaluationFailure(node, original.failureCode, original, original.assertion?.origin ?? null);
   }
   if (error instanceof NodeBodyError) {
     const { original } = error;
     return evaluationFailure(node, node.exceptionCode(original), original, node.exceptionOrigin(original));
   }
-  if (usesBaseTemplate) throw error;
-  return evaluationFailure(node, node.exceptionCode(error), error, node.exceptionOrigin(error));
+  throw error;
 }
 
 /**

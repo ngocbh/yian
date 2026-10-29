@@ -148,35 +148,17 @@ describe("a stop is the node's aborted signal", () => {
     expect(node.ran).toBe(false);
   });
 
-  /** The same node with a custom `run` that awaits the gate itself, outside the template. */
-  class GatedRunNode extends GatedNode {
-    override async run(_inputs: Readonly<Record<string, unknown>>, caps: NodeCaps = {}): Promise<NodeResult> {
-      this.ran = true;
-      await this.gate;
-      return this.settle(caps);
-    }
-  }
-
-  for (const [label, Gated, settle] of [
+  for (const [label, settle] of [
     [
       "its own error",
-      GatedNode,
       () => {
         throw new Error("interrupted");
       },
     ],
     [
       "the reason",
-      GatedNode,
       (caps: NodeCaps) => {
         throw caps.signal!.reason;
-      },
-    ],
-    [
-      "its own error from a custom run",
-      GatedRunNode,
-      () => {
-        throw new Error("interrupted");
       },
     ],
   ] as const) {
@@ -184,7 +166,7 @@ describe("a stop is the node's aborted signal", () => {
       const controller = new AbortController();
       const reason = new Error("stopped");
       const gate = Promise.withResolvers<void>();
-      const evaluation = drive(new Gated("work", gate.promise, settle), { signal: controller.signal });
+      const evaluation = drive(new GatedNode("work", gate.promise, settle), { signal: controller.signal });
 
       controller.abort(reason);
       gate.resolve();

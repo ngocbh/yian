@@ -13,8 +13,6 @@ import { RouteModel } from "../../src/llm/executor.ts";
 import { Message, replayRecord, Request, TextPart } from "../../src/llm/messages.ts";
 import { defaultModelAccess, type ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
-  AssertionStageError,
-  BindingStageError,
   CapabilityFault,
   Grow,
   Node,
@@ -759,47 +757,16 @@ class ExceptionCodeNode extends ResultNode {
   }
 }
 
-/** Bypass the base template with an `async` `run` that rejects with `error`. */
-class OverrideRaisesNode extends Node {
-  readonly kind = NodeKind.CODE;
-  readonly error: unknown;
+test("node execution uses the node exception code", async () => {
+  // A body error takes the code the node's hook selects.
+  const node = new ExceptionCodeNode("n", new Error("unauthorized"));
 
-  constructor(nodeId: string, error: unknown) {
-    super(nodeId, { origin: new OriginRef(`node:${nodeId}`) });
-    this.error = error;
-  }
+  const failure = await driveFailure(node);
 
-  override forward(): NodeResult {
-    return new Output("unused");
-  }
-
-  override async run(): Promise<NodeResult> {
-    throw this.error;
-  }
-}
-
-/** Bypass the base template while classifying every body error as `provider.auth`. */
-class OverrideRaisesWithCode extends OverrideRaisesNode {
-  override exceptionCode(): "provider.auth" {
-    return "provider.auth";
-  }
-}
-
-for (const [label, make] of [
-  ["body", () => new ExceptionCodeNode("n", new Error("unauthorized"))],
-  ["run override", () => new OverrideRaisesWithCode("n", new Error("unauthorized"))],
-] as const) {
-  test(`node execution uses the node exception code (${label})`, async () => {
-    // A body error takes the code the node's hook selects.
-    const node: Node = make();
-
-    const failure = await driveFailure(node);
-
-    expect(failure.code).toBe("provider.auth");
-    expect(failure.trace).toEqual([node.origin!]);
-    expect(failure.causeType).toBe("Error");
-  });
-}
+  expect(failure.code).toBe("provider.auth");
+  expect(failure.trace).toEqual([node.origin!]);
+  expect(failure.causeType).toBe("Error");
+});
 
 test("base exception code is node execution", () => {
   // A node without a finer classification reports `node.execute`.
@@ -831,39 +798,6 @@ for (const [label, result, configure, expectedCode] of [
     configure(node);
 
     expect((await driveFailure(node)).code).toBe(expectedCode);
-  });
-}
-
-for (const [label, error, expectedCauseType] of [
-  ["ordinary", new Error("ordinary override failure"), "Error"],
-  ["binding error", new BindingError("spoofed", { failureCode: "binding.evaluate" }), "BindingError"],
-  [
-    "assertion error",
-    new NodeAssertFailed("spoofed", { assertion: new Assertion("true", "true", { origin: new OriginRef("spoofed") }) }),
-    "NodeAssertFailed",
-  ],
-  [
-    "binding stage marker",
-    new BindingStageError(new BindingError("wrapped", { failureCode: "binding.evaluate" })),
-    "BindingError",
-  ],
-  [
-    "assertion stage marker",
-    new AssertionStageError(new NodeAssertFailed("wrapped", { assertion: new Assertion("true", "true") })),
-    "NodeAssertFailed",
-  ],
-] as const) {
-  test(`run override exception is node execution (${label})`, async () => {
-    // A custom run is one undivided node-body stage.
-    const node = new OverrideRaisesNode("n", error);
-
-    const failure = await driveFailure(node);
-
-    expect(failure.code).toBe("node.execute");
-    expect(failure.trace).toEqual([node.origin!]);
-    expect(failure.causeType).toBe(expectedCauseType);
-    expect(failure.traceback).not.toContain("BindingStageError");
-    expect(failure.traceback).not.toContain("AssertionStageError");
   });
 }
 

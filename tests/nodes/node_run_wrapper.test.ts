@@ -436,10 +436,6 @@ test("wrapper delegates for grow kind", async () => {
   expect((result as Grow).seed).toEqual({ topic: "ACME" });
 });
 
-// evalNode doesn't check asserts itself: the `run` template does. evalNode calls `run` (not
-// `forward`), so a node whose `run` bypasses the template returns its Output even with a failing
-// post-assert.
-
 test("runtime does not drive backward", async () => {
   // Forward execution remains the runtime's only node-body call.
   class BackwardTrapNode extends ImplNode {
@@ -451,23 +447,8 @@ test("runtime does not drive backward", async () => {
   expect(await drive(new BackwardTrapNode("n", "ok"))).toEqual(new Output("ok"));
 });
 
-/** A node whose `run` returns its Output directly, never checking its asserts. */
-class BypassRunNode extends ImplNode {
-  override async run(): Promise<NodeResult> {
-    return new Output(this.value);
-  }
-}
-
-test("eval node does not fire when run bypasses firing", async () => {
-  const node = new BypassRunNode("n", "v");
-  // It would fail if anything checked it.
-  node.postAsserts = [new Assertion("output == 'never'", "output must equal never")];
-
-  expect(await drive(node)).toEqual(new Output("v"));
-});
-
-test("eval node fires via wrapper positive control", async () => {
-  // The same node with the inherited template, which does check the failing post-assert.
+test("eval node checks a post-assert through the template", async () => {
+  // evalNode doesn't check asserts itself: the template around `forward` does.
   const node = new ImplNode("n", "v");
   node.postAsserts = [new Assertion("output == 'never'", "output must equal never")];
 

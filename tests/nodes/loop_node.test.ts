@@ -410,12 +410,12 @@ test("times is a times loop's count, so it can't sit beside another loop kind or
   expectError(
     () => new LoopNode("lp", { flowId: "f", predicateKind: "while", predicate: "${x}", times: 2 }),
     RangeError,
-    "loop 'lp': times: is the count of a times loop, not of a while loop",
+    "loop node 'lp': times: is the count of a times loop, not of a while loop",
   );
   expectError(
     () => new LoopNode("lp", { flowId: "f", predicateKind: "times", times: 2, maxIters: 3 }),
     RangeError,
-    "loop 'lp': a times loop's count is times: 2, but maxIters is 3",
+    "loop node 'lp': a times loop's count is times: 2, but maxIters is 3",
   );
 });
 

@@ -180,12 +180,12 @@ export class LoopNode extends Node {
     super(nodeId, { title });
     if (times !== null && predicateKind !== "times") {
       throw new RangeError(
-        `loop ${reprText(nodeId)}: times: is the count of a times loop, not of a ${predicateKind} loop`,
+        `loop node ${reprText(nodeId)}: times: is the count of a times loop, not of a ${predicateKind} loop`,
       );
     }
     if (times !== null && maxIters !== null && maxIters !== times) {
       throw new RangeError(
-        `loop ${reprText(nodeId)}: a times loop's count is times: ${times}, but maxIters is ${maxIters}`,
+        `loop node ${reprText(nodeId)}: a times loop's count is times: ${times}, but maxIters is ${maxIters}`,
       );
     }
     this.flowId = flowId;

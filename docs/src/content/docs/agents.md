@@ -137,6 +137,8 @@ $ yian run extract.yaml --input text="Ada loved the new release."
 ```
 
 - yian uses the provider's structured output when it has one, and a JSON instruction otherwise.
+- A `date` or `datetime` field tells the model the [form](/types/) yian accepts, such as
+  `2026-10-14` or `2026-10-14T10:30:00Z`.
 - A reply that doesn't fit gets a correction and another try, up to `retries:` times. Then the
   node fails with `agent.output_invalid`.
 - `output:` can't hold `file` or `None`, and nests at most 16 levels. Build such a value in a

@@ -6,7 +6,8 @@
  * `Optional(str)`), the agent stays a text producer: `typeToSchema` returns `null` and the AGENT
  * loop takes the plain-text path. For any constrained or richer type (a `Literal(...)` variant,
  * record, union, scalar `int`/`float`/`bool`, or list) it returns the JSON Schema the model is
- * asked to fill, with ints as `bigint`.
+ * asked to fill, with ints as `bigint`; a `date` or `datetime` slot is a string whose
+ * description gives the form the value check accepts.
  *
  * Scalars and lists can't be a top-level schema on their own, so they are wrapped in a
  * single-field object (`ScalarWrapper` with `value`, `ListWrapper` with `items`), and so is a
@@ -87,6 +88,22 @@ const SCALAR_TYPES: ReadonlyMap<ValueKind, string> = new Map([
   [ValueKind.BOOLEAN, "boolean"],
   [ValueKind.DATE, "string"],
   [ValueKind.DATETIME, "string"],
+]);
+
+// The form yian's value check accepts for a date or datetime slot, told to the model since a
+// string schema says nothing of it. Only `date` gets a `format`: JSON Schema's `date-time`
+// requires seconds and an offset, so a grammar-constrained provider couldn't return a datetime
+// without an offset, which yian accepts and keeps apart from one with an offset.
+const DATE_HINTS: ReadonlyMap<ValueKind, JsonObject> = new Map<ValueKind, JsonObject>([
+  [ValueKind.DATE, { description: "A date: YYYY-MM-DD, such as 2026-05-21.", format: "date" }],
+  [
+    ValueKind.DATETIME,
+    {
+      description:
+        "A date and time: YYYY-MM-DDTHH:MM[:SS[.ffffff]][Z|+HH:MM|-HH:MM], such as 2026-05-21T14:30:00Z. " +
+        "Seconds, a fraction of one to six digits and the offset are optional.",
+    },
+  ],
 ]);
 
 // An identifier: an XID_Start character or `_`, then XID_Continue characters.
@@ -191,11 +208,13 @@ function nonNullSchema(typ: Type, defs: Defs, position: string, closed: boolean)
 /**
  * Return the schema of a scalar slot of `kind`, within inclusive `bounds`.
  *
- * An open (`null`) end has no limit, so the schema omits that end's `minimum` or `maximum`.
- * A bound keeps the form the type stores it in (`bigint` or `number`); a `-0` bound becomes `0`.
+ * A `date` or `datetime` slot describes its accepted form, and a `date` also has
+ * `format: "date"`. An open (`null`) end has no limit, so the schema omits that end's `minimum`
+ * or `maximum`. A bound keeps the form the type stores it in (`bigint` or `number`); a `-0`
+ * bound becomes `0`.
  */
 function scalarSchema(kind: ValueKind, bounds: Bounds | undefined): JsonObject {
-  const schema: JsonObject = { type: SCALAR_TYPES.get(kind)! };
+  const schema: JsonObject = { ...DATE_HINTS.get(kind), type: SCALAR_TYPES.get(kind)! };
   const [minimum, maximum] = bounds ?? [null, null];
   // `define` compares schemas by their `logJson` text, which throws on `-0`; only a hand-built
   // Type has one. `-0 === 0`, so the ternary writes `0`, and a `bigint` passes through.

@@ -1592,6 +1592,51 @@ describe("yian chat --resume", () => {
   );
 
   test(
+    "the printed command quotes the log path and names the inbox when the flow has several",
+    async () => {
+      const flow = flowFile(`id: two
+name: two
+input:
+  messages: !Inbox(str)
+  other: !Inbox(str)
+nodes:
+  heard:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.messages}
+  side:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.other}
+  reply:
+    kind: code
+    input:
+      events: \${heard.output.events}
+    output: str
+    code: |
+      return "echo: " + inputs["events"].join(" | ");
+output: \${reply.output}
+`);
+      mkdirSync(join(tmp, "my runs"));
+      const log = join(tmp, "my runs", "run.jsonl");
+      const first = chatIo();
+      const chatting = runChat(flow, first.io, { inbox: "messages", log });
+      await until(() => existsSync(log) && records(log).at(-1) instanceof RunWaitingRecord);
+      signals.emit("SIGTERM");
+      expect((await chatting).code).toBe(130);
+      expect(first.stderr()).toContain(`continue with: yian chat --resume '${log}' --inbox messages\n`);
+
+      const second = chatIo();
+      second.stdin.write("hi\n/exit\n");
+      expect(await resumeChat(log, second.io, { inbox: "messages" })).toBe(0);
+      expect(second.stdout()).toBe("echo: hi\n");
+    },
+    TIMEOUT,
+  );
+
+  test(
     "a finished run is refused and nothing is appended",
     async () => {
       const first = chatIo();

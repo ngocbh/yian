@@ -62,7 +62,7 @@ import {
   writeEngineTrace,
 } from "./run.ts";
 import { Terminal, TerminalStopped } from "./terminal.ts";
-import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, UsageError } from "./utils.ts";
+import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, shellQuote, UsageError } from "./utils.ts";
 
 /**
  * The options `chat` reads; an absent option is `undefined`, an absent repeatable one an empty
@@ -95,10 +95,14 @@ const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel
 const SECOND_PRESS_MS = 2_000;
 const EXIT_LINES = new Set(["/exit", "/quit"]);
 
-/** The inbox lines go to: its name, and whether it takes messages (`Inbox(Message)`) or text. */
+/**
+ * The inbox lines go to: its name, whether it takes messages (`Inbox(Message)`) or text, and
+ * whether the flow has others lines could go to, so it must be named with `--inbox`.
+ */
 interface LineInbox {
   name: string;
   message: boolean;
+  several: boolean;
 }
 
 /**
@@ -108,12 +112,13 @@ interface LineInbox {
  *   one of them.
  */
 function pickInbox(flow: ComposedFlow, chosen: string | undefined): LineInbox {
-  const inboxes = flow.input.flatMap((param): LineInbox[] => {
+  const inboxes = flow.input.flatMap((param): Omit<LineInbox, "several">[] => {
     const type = param.contract?.type ?? null;
     if (!isInboxType(type)) return [];
     if (canonicalTypeLabel(type!.element!) === "str") return [{ name: param.name, message: false }];
     return typeEquals(type!.element!, builtinType("Message")!) ? [{ name: param.name, message: true }] : [];
   });
+  const several = inboxes.length > 1;
   const names = inboxes.map((inbox) => inbox.name);
   const id = flow.compiled.flowId ?? flow.name;
   if (names.length === 0) {
@@ -121,7 +126,7 @@ function pickInbox(flow: ComposedFlow, chosen: string | undefined): LineInbox {
   }
   if (chosen !== undefined) {
     const picked = inboxes.find((inbox) => inbox.name === chosen);
-    if (picked !== undefined) return picked;
+    if (picked !== undefined) return { ...picked, several };
     throw new UsageError(
       `--inbox '${chosen}' is not one of the flow's Inbox(str) or Inbox(Message) inputs (${names.join(", ")})`,
     );
@@ -131,7 +136,7 @@ function pickInbox(flow: ComposedFlow, chosen: string | undefined): LineInbox {
       `flow '${id}' has several Inbox(str) or Inbox(Message) inputs (${names.join(", ")}); pick one with --inbox`,
     );
   }
-  return inboxes[0]!;
+  return { ...inboxes[0]!, several: false };
 }
 
 /** Return the inbox event a typed line becomes: the line, or a user message holding it as text. */
@@ -176,6 +181,15 @@ async function recordedFlow(log: string, engineTrace: boolean, io: CliIo): Promi
     if (!isSetupError(error)) throw error;
     return failed(error);
   }
+}
+
+/**
+ * Return what a stopped chat prints: where its run is, and the `yian chat --resume` that continues
+ * it, naming the inbox when the flow has several (the log doesn't record which one the chat used).
+ */
+function stoppedText(log: string, inbox: LineInbox): string {
+  const named = inbox.several ? ` --inbox ${shellQuote(inbox.name)}` : "";
+  return `chat stopped; the run is in ${log}\ncontinue with: yian chat --resume ${shellQuote(log)}${named}\n`;
 }
 
 /** Whether the run log at `log` records that the top-level inbox `inbox` was closed. */
@@ -564,8 +578,7 @@ export async function chat(
     return 1;
   } catch (error) {
     if (error instanceof HostStop || (error instanceof TerminalStopped && error.reason === "eof")) {
-      const stopped = `chat stopped; the run is in ${log}\ncontinue with: yian chat --resume ${log}\n`;
-      await io.stderr.write(log === null ? "chat cancelled\n" : stopped);
+      await io.stderr.write(log === null ? "chat cancelled\n" : stoppedText(log, inbox));
       return error instanceof HostStop ? 130 : 1;
     }
     if (error instanceof ResumeKeyError) {

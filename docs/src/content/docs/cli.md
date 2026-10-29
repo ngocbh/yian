@@ -225,7 +225,8 @@ $ yian chat --resume ~/.yian/runs/4f1c/log.jsonl
 - Ctrl-C while a reply runs interrupts it, and the prompt comes back. A second Ctrl-C within 2
   seconds, or Ctrl-C at the prompt, cancels the run: `chat cancelled`, exit 130.
 - SIGTERM, SIGHUP, or Ctrl-C at an `ask` prompt stops the run: `chat stopped; the run is in LOG`
-  and `continue with: yian chat --resume LOG`, exit 130.
+  and `continue with: yian chat --resume LOG` (with `--inbox NAME` when the flow has several), exit
+  130.
 - On a terminal, Esc takes back the lines the run hasn't read yet into the prompt and stops the
   reply. It never cancels the run.
 - A line the inbox refuses prints `not sent: REASON`, and the chat goes on.

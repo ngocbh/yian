@@ -112,6 +112,7 @@ import {
   osReason,
   printJson,
   type PromptContext,
+  shellQuote,
   stopOnSignals,
   UsageError,
   type Writer,
@@ -1743,7 +1744,7 @@ export function waitingDocument(result: RunResult): Record<string, JsonValue> {
 /** @internal Return the text a waiting result prints on stderr: what it waits on and how to go on. */
 export function waitingText(result: RunResult): string {
   const waits = result.waits.map((wait) => `${wait.node} (${wait.tool})`).join(", ");
-  return `run waiting: ${waits}\ncontinue with: yian run --resume ${result.log}\n`;
+  return `run waiting: ${waits}\ncontinue with: yian run --resume ${shellQuote(result.log!)}\n`;
 }
 
 /**

@@ -82,6 +82,17 @@ export function forTerminal(text: string, out: Writer): string {
   return out.isTTY ? stripControls(text) : text;
 }
 
+// Characters a POSIX shell word may hold unquoted.
+const SHELL_SAFE = /^[A-Za-z0-9_@%+=:,./-]+$/;
+
+/**
+ * Return `text` as one POSIX shell word: as is when it holds only safe characters, else in single
+ * quotes, each `'` written `'\''`. Used for the commands the CLI prints for you to paste.
+ */
+export function shellQuote(text: string): string {
+  return SHELL_SAFE.test(text) ? text : `'${text.replaceAll("'", "'\\''")}'`;
+}
+
 /**
  * Whether `io`'s stdin and stderr are both TTYs, so a `Terminal` over them may draw with escape
  * codes; otherwise it should be `plain`.

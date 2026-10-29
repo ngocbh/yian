@@ -71,7 +71,6 @@ import {
   homeDir,
   isSystemError,
   leavesRoot,
-  realScheduler,
   sqliteErrorCode,
   statOrNull,
   syncFolder,
@@ -397,7 +396,7 @@ const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const SPIN_MS = 80;
 
 /** Return `ms` as a bracketed elapsed time in whole units: `[5s]`, `[1m05s]`, `[1h02m]`. */
-export function elapsedTag(ms: number): string {
+function elapsedTag(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   if (seconds < 60) return `[${seconds}s]`;
   const minutes = Math.floor(seconds / 60);
@@ -436,7 +435,8 @@ export class ProgressReporter {
     this.#out = out;
     this.#verbose = options.verbose;
     this.#env = options.env;
-    this.#now = options.now ?? realScheduler.now;
+    // A monotonic clock, so a wall-clock change mid-run doesn't skew a duration.
+    this.#now = options.now ?? (() => performance.now());
   }
 
   /** Fold one engine event into the display; boundary nodes and other events are ignored. */
@@ -551,13 +551,14 @@ export class ProgressReporter {
     const frame = SPINNER.charAt(this.#frame);
     const now = this.#now();
     const lines = [...this.#running].map(([nodeId, start]) => {
-      const idLength = [...nodeId].length;
-      const text = [...`${nodeId} ${elapsedTag(now - start)}`];
-      // A line wider than the terminal would wrap, and the erase would miss its first part; the
-      // elapsed time is cut before the node id.
-      const fitted = columns === undefined ? text : text.slice(0, Math.max(0, columns - 3));
-      const id = paint(fitted.slice(0, idLength).join(""), "cyan", this.#out, this.#env);
-      return `${frame} ${id}${fitted.slice(idLength).join("")}`;
+      const chars = [...nodeId];
+      const tag = ` ${elapsedTag(now - start)}`;
+      // A line wider than the terminal would wrap, and the erase would miss its first part: the
+      // elapsed time goes whole, then the node id is cut.
+      const width = columns === undefined ? Number.POSITIVE_INFINITY : Math.max(0, columns - 3);
+      const fits = chars.length + tag.length <= width;
+      const id = paint(chars.slice(0, width).join(""), "cyan", this.#out, this.#env);
+      return `${frame} ${id}${fits ? tag : ""}`;
     });
     this.#write(this.#erase() + lines.join("\n"));
     this.#drawn = lines.length;

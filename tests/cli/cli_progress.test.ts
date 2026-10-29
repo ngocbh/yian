@@ -190,13 +190,27 @@ test("on a TTY the elapsed time counts up between events", () => {
   reporter.stop();
 });
 
-test("a spinner line too wide for the terminal is cut, its elapsed time first", () => {
+test("a spinner line too wide for the terminal drops its elapsed time whole, then cuts the id", () => {
   jest.useFakeTimers();
-  const { reporter, chunks } = sinkReporter({ isTTY: true, columns: 12 });
-  reporter.handle(started("abcdefghij"));
-  // Nine columns after `⠋ `, one spare, so the line can't wrap.
-  expect(chunks).toEqual(["\r\x1b[K⠋ abcdefghi"]);
-  reporter.stop();
+  // The text after `⠋ ` gets the columns but three, keeping one spare, so the line can't wrap.
+  const fits = sinkReporter({ isTTY: true, columns: 15 });
+  fits.reporter.handle(started("abcdef"));
+  fits.tick(12_000);
+  jest.advanceTimersByTime(80);
+  expect(fits.chunks.at(-1)).toBe("\r\x1b[K⠙ abcdef [12s]");
+  fits.reporter.stop();
+
+  const tagCut = sinkReporter({ isTTY: true, columns: 12 });
+  tagCut.reporter.handle(started("abcdef"));
+  tagCut.tick(12_000);
+  jest.advanceTimersByTime(80);
+  expect(tagCut.chunks.at(-1)).toBe("\r\x1b[K⠙ abcdef");
+  tagCut.reporter.stop();
+
+  const idCut = sinkReporter({ isTTY: true, columns: 12 });
+  idCut.reporter.handle(started("abcdefghij"));
+  expect(idCut.chunks).toEqual(["\r\x1b[K⠋ abcdefghi"]);
+  idCut.reporter.stop();
 });
 
 test("each node's duration runs from its own start, frozen at its end", () => {

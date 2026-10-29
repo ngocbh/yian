@@ -797,6 +797,15 @@ test("an isinstance to a typedef that admits null doesn't prove a skipped value 
   }
 });
 
+test("a null check below the read's root in a searched when: proves the root present", async () => {
+  // `a.output?.n != null` holds only when `a` ran, as `a.output != null` does.
+  for (const check of ["a.output?.n != null", "isinstance(a.output?.n, int)"]) {
+    const text = searchedGate(`${check} and a.output.n + 1 > 1 :- false`);
+    expect(await run(text, { approve: true })).toEqual({ v: "hot" });
+    expect(await run(text, { approve: false })).toEqual({ v: "cold" });
+  }
+});
+
 test("plain arithmetic in a searched when: loads", async () => {
   // A plain read skips `gate2` with `a`, so its arithmetic never sees a skipped null.
   const text = searchedGate("a.output.n + 1 > 1");

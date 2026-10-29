@@ -386,8 +386,8 @@ export function nullSkippedOutputs(flowOutputs: readonly FlowOutput[], model: Sk
  * @param options.diagnostics Factory for located load errors.
  * @param options.searchedWhens Each searched CASE's id mapped to one `[case index, authored when,
  *   origin, range]` per case: the origin is the preferred location, the range the fallback. A
- *   `when:` is checked like a binding, without following `and`/`or`: arithmetic behind a null guard
- *   is reported too.
+ *   `when:` is checked like a binding: arithmetic behind a guard that proves its root not null
+ *   (`a.output?.n != null and a.output.n + 1 > 1`) loads.
  * @throws LoadError at the first such binding or `when:`, naming it, the operand and its producers,
  *   and asking for a `:-` default.
  */
@@ -571,8 +571,9 @@ function skippedOperandIn(
 }
 
 /**
- * Return whether `guard` proves the root of the read `path` not null: a `!= null` check on it, or
- * an `isinstance` of it to a type that excludes null, holds whenever the read runs.
+ * Return whether `guard` proves the root of the read `path` not null: a `!= null` check, or an
+ * `isinstance` to a type that excludes null, on the root or a path below it holds whenever the
+ * read runs. Such a check on a path below the root holds only when the root isn't null.
  */
 function provesNotNull(guard: Guard, path: string, registry: TypeRegistry): boolean {
   const names = path.split(".");
@@ -581,7 +582,7 @@ function provesNotNull(guard: Guard, path: string, registry: TypeRegistry): bool
     (part) =>
       part instanceof Holds &&
       part.value &&
-      part.check.base === root &&
+      (part.check.base === root || part.check.base.startsWith(root + ".")) &&
       (part.check instanceof NotNullCheck ||
         (part.check instanceof IsinstanceCheck && excludesNull(part.check.typeName, registry))),
   );

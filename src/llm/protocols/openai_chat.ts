@@ -24,7 +24,7 @@
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { getCapabilities } from "../capabilities.ts";
-import { type ErrorKind, kindForStatus, ProviderError } from "../errors.ts";
+import { type ErrorKind, ProviderError } from "../errors.ts";
 import {
   type Event,
   Finish,
@@ -42,7 +42,6 @@ import {
   isPlainObject,
   MediaPart,
   type Message,
-  MessageFormatError,
   NamedTool,
   type OutputFormat,
   type Part,
@@ -59,18 +58,26 @@ import {
   ToolResultPart,
   Usage,
 } from "../messages.ts";
-import { callId, eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
-import { STREAM_ERROR_KINDS } from "./openai_responses.ts";
+import {
+  callId,
+  eventData,
+  httpCodeKind,
+  notIntMessage,
+  OPENAI_STREAM_ERROR_KINDS,
+  tokenCount,
+  usageOrProtocolError,
+  wrongPart,
+} from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "openai_chat";
 const NO_MEDIA = "the openai_chat route does not send media parts yet";
 // The wire field a reasoning record names when its text may be echoed.
 const ECHOED_FIELD = "reasoning_content";
-// Error chunk codes: the Responses table, plus OpenRouter's content filter codes. Any other
+// Error chunk codes: the OpenAI stream table, plus OpenRouter's content filter codes. Any other
 // code, or none, is a server error.
 const CHUNK_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>([
-  ...STREAM_ERROR_KINDS,
+  ...OPENAI_STREAM_ERROR_KINDS,
   ["content_filter", "refused"],
   ["content_policy_violation", "refused"],
 ]);
@@ -407,11 +414,9 @@ export class OpenAIChat implements SseProtocol {
     const rawMessage = error["message"];
     const message = typeof rawMessage === "string" ? rawMessage : "";
     const code = error["code"];
-    let kind: ErrorKind;
-    if (typeof code === "bigint" && code >= 400n && code <= 599n) {
-      // Classified as the HTTP path classifies the same body, so a content-filter code in it counts.
-      kind = kindForStatus(Number(code), encodeBody({ error }, "stream error"));
-    } else {
+    // Classified as the HTTP path classifies the same body, so a content-filter code in it counts.
+    let kind = httpCodeKind(code, { error });
+    if (kind === null) {
       // An error without a string code may still name its kind in `type` (`invalid_request_error`).
       const name = typeof code === "string" ? code : error["type"];
       kind = (typeof name === "string" ? CHUNK_ERROR_KINDS.get(name) : undefined) ?? "server";
@@ -664,8 +669,8 @@ function usageOf(usage: JsonValue | undefined, provider: string): Usage | null {
   const notInt = notIntMessage(provider);
   const inputTokens = tokenCount(usage["prompt_tokens"], notInt) ?? 0;
   const outputTokens = tokenCount(usage["completion_tokens"], notInt) ?? 0;
-  try {
-    return new Usage({
+  return usageOrProtocolError(
+    {
       inputTokens,
       outputTokens,
       totalTokens: tokenCount(usage["total_tokens"], notInt) ?? inputTokens + outputTokens,
@@ -673,12 +678,9 @@ function usageOf(usage: JsonValue | undefined, provider: string): Usage | null {
         tokenCount(promptDetails["cached_tokens"], notInt) ?? tokenCount(usage["prompt_cache_hit_tokens"], notInt),
       cacheCreationTokens: tokenCount(promptDetails["cache_write_tokens"], notInt),
       reasoningTokens: tokenCount(completionDetails["reasoning_tokens"], notInt),
-    });
-  } catch (error) {
-    // `Usage` refuses a count past `Number.MAX_SAFE_INTEGER`, which `Number()` rounds.
-    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
-    throw error;
-  }
+    },
+    notInt,
+  );
 }
 
 /** Render a tool call with its arguments text. */

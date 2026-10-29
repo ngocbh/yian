@@ -34,7 +34,7 @@ import {
   ToolCallPart,
   Usage,
 } from "../../src/llm/messages.ts";
-import { OpenAIResponses, PROTOCOL } from "../../src/llm/protocols/openai_responses.ts";
+import { matchTerminal, OpenAIResponses, PROTOCOL } from "../../src/llm/protocols/openai_responses.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
 
 afterEach(() => install(BUILTIN));
@@ -785,6 +785,69 @@ describe("terminal output", () => {
     ]);
     expect(events[0]).toEqual(new ToolCallDelta({ index: 0, id: "call_1", name: "double", arguments: "" }));
     expect((await collect(events)).message.toolCalls()[0]!.arguments).toEqual({ value: 3n });
+  });
+});
+
+describe("terminal matching", () => {
+  const msg = (id: string): JsonObject => ({ type: "message", id });
+  const call = (id: string, callId: string): JsonObject => ({ type: "function_call", id, call_id: callId });
+  const ids = (entries: [number, string[]][]) => new Map(entries.map(([index, each]) => [index, new Set(each)]));
+
+  test("an index takes the item holding one of its ids, wherever it sits", () => {
+    const output = [msg("b"), call("c", "call_a")];
+    const { matches, rest } = matchTerminal(output, new Set([0, 1]), new Set(), ids([[0, ["call_a"]], [1, ["b"]]]));
+    expect([...matches]).toEqual([
+      [0, output[1]!],
+      [1, output[0]!],
+    ]);
+    expect(rest).toEqual([]);
+  });
+
+  test("an index without a match by id takes the item at its position when the stream gave none of its ids", () => {
+    const output = [msg("x"), msg("y")];
+    const { matches, rest } = matchTerminal(output, new Set([0, 1]), new Set([0, 1]), ids([[0, ["gone"]]]));
+    expect([...matches]).toEqual([
+      [0, output[0]!],
+      [1, output[1]!],
+    ]);
+    expect(rest).toEqual([]);
+  });
+
+  test("an item whose ids the stream gave is not taken by position or left over", () => {
+    const output = [msg("a"), msg("b")];
+    const { matches, rest } = matchTerminal(output, new Set([0, 1]), new Set([0]), ids([[0, ["a", "b"]]]));
+    expect([...matches]).toEqual([[0, output[0]!]]);
+    expect(rest).toEqual([]);
+  });
+
+  test("an unfinished index with no ids takes the first item left that has ids the stream never gave", () => {
+    const output = [{ type: "message" }, msg("a"), msg("x")];
+    const { matches, rest } = matchTerminal(output, new Set([0, 5]), new Set([0]), ids([[0, ["a"]]]));
+    expect([...matches]).toEqual([
+      [0, output[1]!],
+      [5, output[2]!],
+    ]);
+    expect(rest).toEqual([output[0]!]);
+  });
+
+  test("a finished index with no ids takes no item past its position", () => {
+    const output = [msg("x")];
+    const { matches, rest } = matchTerminal(output, new Set([3]), new Set([3]), ids([]));
+    expect(matches.size).toBe(0);
+    expect(rest).toEqual([output[0]!]);
+  });
+
+  test("items no index took, whose ids the stream never gave, are left over in order", () => {
+    const output = [msg("r"), msg("a"), call("c", "call_z")];
+    const { matches, rest } = matchTerminal(output, new Set([1]), new Set([1]), ids([[1, ["a"]]]));
+    expect([...matches]).toEqual([[1, output[1]!]]);
+    expect(rest).toEqual([output[0]!, output[2]!]);
+  });
+
+  test("an index only in finished is matched too", () => {
+    const output = [msg("a")];
+    const { matches } = matchTerminal(output, new Set(), new Set([2]), ids([[2, ["a"]]]));
+    expect([...matches]).toEqual([[2, output[0]!]]);
   });
 });
 

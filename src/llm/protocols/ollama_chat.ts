@@ -47,7 +47,6 @@ import {
   isPlainObject,
   MediaPart,
   type Message,
-  MessageFormatError,
   type Part,
   readReplayRecord,
   ReasoningPart,
@@ -61,7 +60,7 @@ import {
   type ToolSpec,
   Usage,
 } from "../messages.ts";
-import { callId, notIntMessage, tokenCount, wrongPart } from "./common.ts";
+import { callId, notIntMessage, tokenCount, usageOrProtocolError, wrongPart } from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "ollama_chat";
@@ -425,18 +424,15 @@ function usageOf(line: JsonObject, provider: string): Usage | null {
   const outputTokens = tokenCount(line["eval_count"], notInt) ?? 0;
   const cacheReadTokens = tokenCount(line["prompt_eval_cached_count"], notInt);
   if (inputTokens + outputTokens === 0 && (cacheReadTokens ?? 0) === 0) return null;
-  try {
-    return new Usage({
+  return usageOrProtocolError(
+    {
       inputTokens,
       outputTokens,
       totalTokens: inputTokens + outputTokens,
       cacheReadTokens,
       cacheCreationTokens: null,
       reasoningTokens: null,
-    });
-  } catch (error) {
-    // `Usage` refuses a sum past `Number.MAX_SAFE_INTEGER`, which `Number` arithmetic rounds.
-    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
-    throw error;
-  }
+    },
+    notInt,
+  );
 }

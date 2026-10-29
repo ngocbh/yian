@@ -15,7 +15,7 @@
 
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
-import { type ErrorKind, ProviderError } from "../errors.ts";
+import { ProviderError } from "../errors.ts";
 import {
   type Event,
   Finish,
@@ -52,7 +52,14 @@ import {
   ToolResultPart,
   Usage,
 } from "../messages.ts";
-import { eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
+import {
+  eventData,
+  notIntMessage,
+  OPENAI_STREAM_ERROR_KINDS,
+  tokenCount,
+  usageOrProtocolError,
+  wrongPart,
+} from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "openai_responses";
@@ -78,35 +85,6 @@ const ITEM_EVENTS: ReadonlySet<string> = new Set([
 ]);
 // The subscription backend may end a reply with `response.done` instead of `response.completed`.
 const TERMINAL_EVENTS: ReadonlySet<string> = new Set(["response.completed", "response.done", "response.incomplete"]);
-const BAD_REQUEST_CODES = [
-  "invalid_prompt",
-  "invalid_request_error",
-  "invalid_image",
-  "invalid_image_format",
-  "invalid_base64_image",
-  "invalid_image_url",
-  "invalid_image_mode",
-  "image_too_large",
-  "image_too_small",
-  "image_parse_error",
-  "image_file_too_large",
-  "image_file_not_found",
-  "empty_image_file",
-  "unsupported_image_media_type",
-  "failed_to_download_image",
-];
-// In-stream error codes; any other code, or none, is a server error.
-export const STREAM_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>([
-  ["rate_limit_exceeded", "rate_limit"],
-  ["server_error", "server"],
-  ["vector_store_timeout", "server"],
-  ["context_length_exceeded", "context_length"],
-  ...BAD_REQUEST_CODES.map((code): [string, ErrorKind] => [code, "bad_request"]),
-  ["image_content_policy_violation", "refused"],
-  ["insufficient_quota", "quota"],
-  ["usage_limit_reached", "quota"],
-  ["usage_not_included", "quota"],
-]);
 
 /** An assistant part that can carry a replay record. */
 type ReplayPart = TextPart | RefusalPart | ReasoningPart | ToolCallPart;
@@ -234,16 +212,12 @@ export class OpenAIResponses implements SseProtocol {
     };
     const opened = new Map<number, JsonObject>();
     const finished = new Set<number>();
-    // The item ids and call ids the stream gave, in all and by output index.
-    const seenIds = new Set<string>();
+    // The item ids and call ids the stream gave, by output index.
     const streamedIds = new Map<number, Set<string>>();
     const sawIds = (outputIndex: number, ids: string[]): void => {
       let known = streamedIds.get(outputIndex);
       if (known === undefined) streamedIds.set(outputIndex, (known = new Set()));
-      for (const id of ids) {
-        known.add(id);
-        seenIds.add(id);
-      }
+      for (const id of ids) known.add(id);
     };
     const lastSummary = new Map<number, JsonValue | undefined>();
     // Refusal text by output index, then content index.
@@ -344,39 +318,9 @@ export class OpenAIResponses implements SseProtocol {
         const output = Array.isArray(rawOutput) ? rawOutput : [];
         const started = new Set([...opened.keys(), ...indexes.keys()]);
         const unfinished = [...started].filter((each) => !finished.has(each)).sort((a, b) => a - b);
-        // Each streamed output index is matched to at most one item of `output`, and each item to
-        // at most one index. By ids first, wherever the item sits, since a gateway may renumber
-        // output indexes; then the item at the index's own position, when the stream gave none of
-        // its ids, since a gateway may also rewrite ids for the final response.
-        const streamed = [...new Set([...started, ...finished])].sort((a, b) => a - b);
-        const terminal = new Map<number, JsonValue>();
-        const claimed = new Set<number>();
-        const take = (each: number, position: number): void => {
-          if (position < 0 || claimed.has(position) || terminal.has(each)) return;
-          claimed.add(position);
-          terminal.set(each, output[position]!);
-        };
-        const fresh = (item: JsonValue): boolean => !itemIds(item).some((id) => seenIds.has(id));
-        for (const each of streamed) {
-          const ids = streamedIds.get(each);
-          if (ids !== undefined && ids.size > 0) {
-            take(each, output.findIndex((item) => itemIds(item).some((id) => ids.has(id))));
-          }
-        }
-        for (const each of streamed) {
-          if (each < output.length && fresh(output[each]!)) take(each, each);
-        }
-        // An unfinished index the stream gave no ids takes the first item left whose ids it never
-        // gave, so no item of `output` is shown twice.
+        const { matches, rest } = matchTerminal(output, started, finished, streamedIds);
         for (const each of unfinished) {
-          if (terminal.has(each) || (streamedIds.get(each)?.size ?? 0) > 0) continue;
-          take(
-            each,
-            output.findIndex((item, position) => !claimed.has(position) && itemIds(item).length > 0 && fresh(item)),
-          );
-        }
-        for (const each of unfinished) {
-          const item = terminal.get(each);
+          const item = matches.get(each);
           if (item === undefined) {
             // Text, reasoning and calls are built from their deltas; a refusal streams none, so
             // its part is built here.
@@ -393,9 +337,8 @@ export class OpenAIResponses implements SseProtocol {
         }
         // Output items no streamed index took, and whose ids the stream never gave, still belong
         // to the reply, after the others.
-        for (const [position, item] of output.entries()) {
-          if (claimed.has(position) || !fresh(item)) continue;
-          // A new slot each: the position may also be an output index the stream used.
+        for (const item of rest) {
+          // A new slot each: its position may also be an output index the stream used.
           for (const [, part] of itemParts(item, this.#key)) {
             if (part instanceof ToolCallPart) sawCalls = true;
             yield new PartDone(count++, part);
@@ -471,7 +414,7 @@ export class OpenAIResponses implements SseProtocol {
   #streamFailure(error: JsonObject): ProviderError {
     // An error without a string code may still name its kind in `type` (`invalid_request_error`).
     const code = typeof error["code"] === "string" ? error["code"] : error["type"];
-    const kind = (typeof code === "string" ? STREAM_ERROR_KINDS.get(code) : undefined) ?? "server";
+    const kind = (typeof code === "string" ? OPENAI_STREAM_ERROR_KINDS.get(code) : undefined) ?? "server";
     const rawMessage = error["message"];
     const message = typeof rawMessage === "string" && rawMessage ? rawMessage : "no message";
     const text = this.subscription
@@ -657,6 +600,61 @@ function readRecord(
   return fits ? read : { ok: false, reason: "malformed" };
 }
 
+/**
+ * Match a terminal event's `output` items to the streamed output indexes.
+ *
+ * Each streamed output index (in `started` or `finished`) takes at most one item, and each item
+ * goes to at most one index. By ids first, wherever the item sits, since a gateway may renumber
+ * output indexes; then the item at the index's own position, when the stream gave none of its
+ * ids, since a gateway may also rewrite ids for the final response; then, for an unfinished
+ * index whose events gave no ids, the first item left that has ids the stream never gave.
+ *
+ * @param output The terminal response's output items.
+ * @param started The output indexes an item was added at or a part was indexed for.
+ * @param finished The output indexes whose item got its done event.
+ * @param streamedIds The item ids and call ids each output index's events gave.
+ * @returns The item each matched index took, and the items no index took whose ids the stream
+ *   never gave, in `output` order.
+ */
+export function matchTerminal(
+  output: readonly JsonValue[],
+  started: ReadonlySet<number>,
+  finished: ReadonlySet<number>,
+  streamedIds: ReadonlyMap<number, ReadonlySet<string>>,
+): { matches: Map<number, JsonValue>; rest: JsonValue[] } {
+  const seenIds = new Set([...streamedIds.values()].flatMap((ids) => [...ids]));
+  const streamed = [...new Set([...started, ...finished])].sort((a, b) => a - b);
+  const unfinished = [...started].filter((each) => !finished.has(each)).sort((a, b) => a - b);
+  const matches = new Map<number, JsonValue>();
+  const claimed = new Set<number>();
+  const take = (each: number, position: number): void => {
+    if (position < 0 || claimed.has(position) || matches.has(each)) return;
+    claimed.add(position);
+    matches.set(each, output[position]!);
+  };
+  const fresh = (item: JsonValue): boolean => !itemIds(item).some((id) => seenIds.has(id));
+  for (const each of streamed) {
+    const ids = streamedIds.get(each);
+    if (ids !== undefined && ids.size > 0) {
+      take(each, output.findIndex((item) => itemIds(item).some((id) => ids.has(id))));
+    }
+  }
+  for (const each of streamed) {
+    if (each < output.length && fresh(output[each]!)) take(each, each);
+  }
+  // An unfinished index the stream gave no ids takes the first item left whose ids it never
+  // gave, so no item of `output` is shown twice.
+  for (const each of unfinished) {
+    if (matches.has(each) || (streamedIds.get(each)?.size ?? 0) > 0) continue;
+    take(
+      each,
+      output.findIndex((item, position) => !claimed.has(position) && itemIds(item).length > 0 && fresh(item)),
+    );
+  }
+  const rest = output.filter((item, position) => !claimed.has(position) && fresh(item));
+  return { matches, rest };
+}
+
 /** Return an output item's string `id`, and its string `call_id` when it is a function call. */
 function itemIds(item: JsonValue): string[] {
   if (!isPlainObject(item)) return [];
@@ -688,20 +686,17 @@ function usageOf(usage: JsonValue | undefined, provider: string): Usage | null {
   const notInt = notIntMessage(provider);
   const inputTokens = tokenCount(usage["input_tokens"], notInt) ?? 0;
   const outputTokens = tokenCount(usage["output_tokens"], notInt) ?? 0;
-  try {
-    return new Usage({
+  return usageOrProtocolError(
+    {
       inputTokens,
       outputTokens,
       totalTokens: tokenCount(usage["total_tokens"], notInt) ?? inputTokens + outputTokens,
       cacheReadTokens: tokenCount(inputDetails["cached_tokens"], notInt),
       cacheCreationTokens: tokenCount(inputDetails["cache_write_tokens"], notInt),
       reasoningTokens: tokenCount(outputDetails["reasoning_tokens"], notInt),
-    });
-  } catch (error) {
-    // `Usage` refuses a count past `Number.MAX_SAFE_INTEGER`, which `Number()` rounds.
-    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
-    throw error;
-  }
+    },
+    notInt,
+  );
 }
 
 /**

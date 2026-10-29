@@ -10,7 +10,7 @@
 
 import type { Env } from "../defaults.ts";
 import type { Diagnostic } from "../diagnostics.ts";
-import { cells, charCells } from "./terminal.ts";
+import { cells, wrapLine } from "./cells.ts";
 import { type CliIo, forTerminal, type Writer } from "./utils.ts";
 
 const SGR = { bold: 1, dim: 2, italic: 3, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
@@ -67,61 +67,6 @@ export function box(
   }
   lines.push(edge(`╰${"─".repeat(inner + 2)}╯`));
   return lines.join("\n");
-}
-
-/**
- * @internal Return the UTF-16 ranges of `text`'s rows wrapped to `width` cells, each ending
- * before its row's trailing whitespace; an empty line is one empty row. Follows rich's
- * `divide_line`: a word keeps its trailing spaces, moves to a new row when it doesn't fit the rest
- * of this one, and is folded by characters when it is wider than a row.
- */
-export function wrapLine(text: string, width: number): [start: number, end: number][] {
-  const starts = [0];
-  let used = 0;
-  for (const match of text.matchAll(/\s*\S+\s*/g)) {
-    const word = match[0];
-    const length = cells(word.trimEnd());
-    if (length <= width - used) {
-      used += cells(word);
-    } else if (length > width) {
-      // Folded: each chunk of at most `width` cells starts a row; a character that doesn't fit
-      // starts the next chunk.
-      if (match.index > 0) starts.push(match.index);
-      let at = match.index;
-      let chunk = 0;
-      for (const char of word) {
-        const size = charCells(char);
-        if (chunk > 0 && chunk + size > width) {
-          starts.push(at);
-          chunk = 0;
-        }
-        chunk += size;
-        at += char.length;
-      }
-      used = chunk;
-    } else {
-      starts.push(match.index);
-      used = cells(word);
-    }
-  }
-  return starts.map((start, i) => {
-    const row = text.slice(start, starts[i + 1] ?? text.length);
-    return [start, start + row.trimEnd().length];
-  });
-}
-
-/** @internal `text` cut to at most `width` cells, ending in `…` when cut. */
-export function fit(text: string, width: number): string {
-  if (cells(text) <= width) return text;
-  let kept = "";
-  let used = 0;
-  for (const char of text) {
-    const size = charCells(char);
-    if (used + size > width - 1) break;
-    kept += char;
-    used += size;
-  }
-  return `${kept}…`;
 }
 
 /** @internal One piece of a line: its text and its style, or `null` for none. */

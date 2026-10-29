@@ -24,6 +24,8 @@ import {
   ValueKind,
   writeAsText,
 } from "../typesys/values.ts";
+import { ANSI, cells, charCells, columnsOf, fit, wrapLine } from "./cells.ts";
+import { box } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 
 /** Why a prompt stopped without an answer. */
@@ -127,7 +129,6 @@ const SHOW_CURSOR = `${ESC}?25h`;
 const HIDE_CURSOR = `${ESC}?25l`;
 const PASTE_ON = `${ESC}?2004h`;
 const PASTE_OFF = `${ESC}?2004l`;
-const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 
 /**
  * `output` for a plain terminal: what is written loses its escape codes and carriage returns, and
@@ -146,38 +147,6 @@ function plainOutput(output: Output): Output {
   };
 }
 
-/** `text` folded onto rows of at most `width` cells; an empty text is one empty row. */
-function foldCells(text: string, width: number): string[] {
-  const rows = [""];
-  let used = 0;
-  for (const char of text) {
-    const size = charCells(char);
-    if (used + size > width && used > 0) {
-      rows.push("");
-      used = 0;
-    }
-    rows[rows.length - 1] += char;
-    used += size;
-  }
-  return rows;
-}
-
-/**
- * `text` wrapped onto rows of at most `width` cells at its spaces, a word wider than a row folded
- * (`foldCells`); each row without its trailing spaces.
- */
-function wrapWords(text: string, width: number): string[] {
-  const rows = [""];
-  for (const word of text.match(/\s*\S+\s*|\s+/g) ?? [""]) {
-    const last = rows[rows.length - 1]!;
-    if (cells(last + word.trimEnd()) <= width) rows[rows.length - 1] = last + word;
-    else if (cells(word.trim()) <= width) rows.push(word.trimStart());
-    else rows.push(...foldCells(word.trim(), width));
-  }
-  const trimmed = rows.map((row) => row.trimEnd());
-  return trimmed[0] === "" && trimmed.length > 1 ? trimmed.slice(1) : trimmed;
-}
-
 /** A unified diff's hunk header: where its old and new lines start. */
 const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 
@@ -185,21 +154,20 @@ const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
  * The lines of an approval's card, `columns` wide: a box titled `title` holding `body` and then
  * `diff` (a unified diff) without its `---`/`+++` header, each line numbered (an old line's number
  * for a `-` line, the new one's otherwise), `-` lines red and `+` lines green, a dim `⋯` between
- * hunks. Long lines wrap (the body's at its spaces) inside the box. The text is drawn as it is
- * given: sanitize it first.
+ * hunks; a title too long for the edge is cut with `…`. Long lines wrap at their spaces inside the
+ * box (`wrapLine`). The text is drawn as it is given: sanitize it first.
  */
 export function diffCard(title: string, body: string, diff: string, columns: number): string[] {
   const inner = Math.max(1, columns - 4);
-  const rows: string[] = [];
-  const add = (text: string, codes: string | null, gutter = "", fold = foldCells) => {
+  const rows: [string, string][] = [];
+  const add = (text: string, codes: string | null, gutter = "") => {
     const lead = cells(gutter);
-    fold(text, Math.max(1, inner - lead)).forEach((part, i) => {
-      const shownPart = (i === 0 ? gutter : " ".repeat(lead)) + part;
-      const padded = shownPart + " ".repeat(Math.max(0, inner - cells(shownPart)));
-      rows.push(`${style("36", "│")} ${codes === null ? padded : style(codes, padded)} ${style("36", "│")}`);
-    });
+    for (const [i, [start, end]] of wrapLine(text, Math.max(1, inner - lead)).entries()) {
+      const part = (i === 0 ? gutter : " ".repeat(lead)) + text.slice(start, end);
+      rows.push([part, codes === null ? part : style(codes, part)]);
+    }
   };
-  if (body !== "") for (const line of body.replace(/\n$/, "").split("\n")) add(line, null, "", wrapWords);
+  if (body !== "") for (const line of body.replace(/\n$/, "").split("\n")) add(line, null);
   const lines = diff === "" ? [] : diff.replace(/\n$/, "").split("\n").filter((line) => !/^(---|\+\+\+) /.test(line));
   // The widest line number, for the gutter.
   let widest = 1;
@@ -227,18 +195,9 @@ export function diffCard(title: string, body: string, diff: string, columns: num
       add(line.slice(1), null, `${String(newLine++).padStart(widest)}   `);
     } else add(line, "2");
   }
-  const heading = `─ ${title} `;
-  const fill = Math.max(0, inner + 2 - cells(heading));
-  return [
-    style("36", `╭${cells(heading) > inner + 2 ? "─".repeat(inner + 2) : heading + "─".repeat(fill)}╮`),
-    ...rows,
-    style("36", `╰${"─".repeat(inner + 2)}╯`),
-  ];
-}
-
-/** The columns `output` is wide: as it reports, else 80. */
-function columnsOf(output: Output): number {
-  return output.columns || 80;
+  // The terminal's widgets draw in colour whatever the environment says, and so does the card.
+  const card = box(rows, "cyan", { isTTY: true }, () => undefined, fit(title, Math.max(1, inner - 2)), inner);
+  return card.split("\n");
 }
 
 /** `text` with each `\n` written as `\r\n`, since raw mode may not translate it. */
@@ -249,44 +208,6 @@ function crlf(text: string): string {
 /** Wrap `text` in the SGR `codes`. */
 function style(codes: string, text: string): string {
   return `${ESC}${codes}m${text}${ESC}0m`;
-}
-
-/** Whether `code` is an East Asian Wide or Fullwidth character or an emoji, two columns wide. */
-function isWide(code: number): boolean {
-  return (
-    (code >= 0x1100 && code <= 0x115f) ||
-    (code >= 0x2e80 && code <= 0x303e) ||
-    (code >= 0x3041 && code <= 0x33ff) ||
-    (code >= 0x3400 && code <= 0x4dbf) ||
-    (code >= 0x4e00 && code <= 0x9fff) ||
-    (code >= 0xa000 && code <= 0xa4cf) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe30 && code <= 0xfe4f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1f64f) ||
-    (code >= 0x1f680 && code <= 0x1f6ff) ||
-    (code >= 0x1f900 && code <= 0x1f9ff) ||
-    (code >= 0x1fa70 && code <= 0x1faff) ||
-    (code >= 0x20000 && code <= 0x3fffd)
-  );
-}
-
-/** A combining mark, a zero-width joiner or a variation selector: drawn on the character before it. */
-const ZERO_WIDTH = /^[\p{Mn}\p{Me}\u200d\ufe00-\ufe0f]$/u;
-
-/** The columns one character takes: 0 for a zero-width one, 2 for a wide one, else 1. */
-export function charCells(char: string): number {
-  if (ZERO_WIDTH.test(char)) return 0;
-  return isWide(char.codePointAt(0)!) ? 2 : 1;
-}
-
-/** The columns `text` takes on a terminal, ANSI sequences not counted. */
-export function cells(text: string): number {
-  let width = 0;
-  for (const char of text.replace(ANSI, "")) width += charCells(char);
-  return width;
 }
 
 /**
@@ -1079,7 +1000,7 @@ export class Terminal {
         if (refused !== undefined) output.write(`${refused}\n`);
         return;
       }
-      const columns = output.columns || 80;
+      const columns = columnsOf(output);
       const lines = widget.lines();
       const cursor = widget.cursor();
       const at = cursor === null ? -1 : Array.from(cursor.before.replace(ANSI, "")).length;
@@ -1396,7 +1317,7 @@ function writePanel(output: Output, title: string, prompt: string, count: number
 /** Write a blank line and the `Question i of N · <header>` rule across the terminal. */
 function writeRule(output: Output, index: number, total: number, header: string): void {
   const title = style("1", `Question ${index} of ${total}`) + (header ? ` ${style("2", `· ${header}`)}` : "");
-  const fill = Math.max(0, (output.columns || 80) - cells(title) - 1);
+  const fill = Math.max(0, columnsOf(output) - cells(title) - 1);
   output.write(`\r\n${title} ${style("36", "─".repeat(fill))}\r\n`);
 }
 

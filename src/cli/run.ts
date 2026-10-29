@@ -105,7 +105,8 @@ import {
   preflightKeys,
   readFlowText,
 } from "./startup.ts";
-import { cells, Terminal, TerminalStopped } from "./terminal.ts";
+import { cells, columnsOf } from "./cells.ts";
+import { Terminal, TerminalStopped } from "./terminal.ts";
 import {
   atTerminal,
   type CliIo,
@@ -202,7 +203,7 @@ export function flowBanner(
   }
   // Rich measures the box before it expands tabs, counting a tab as no cells.
   const widest = Math.max(...lines.map((spans) => cells(spans.map(([text]) => text.replaceAll("\t", "")).join(""))));
-  const inner = Math.max(1, Math.min(widest, (out.columns || 80) - 4));
+  const inner = Math.max(1, Math.min(widest, columnsOf(out) - 4));
   const rows = lines.flatMap((spans) => wrapSpans(expandTabs(spans), inner, out, env));
   return `${box(rows, "cyan", out, env, "", inner)}\n`;
 }

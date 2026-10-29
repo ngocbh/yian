@@ -24,9 +24,9 @@ import {
 import type { Scheduler } from "../platform.ts";
 import type { ChildEvent } from "./chat_events.ts";
 import { MarkdownLines, TAB } from "./markdown.ts";
-import { box, type Colored, fit, paint, type Span, type Style, wrapLine, wrapSpans } from "./render.ts";
+import { cells, clip, columnsOf, fit, wrapLine } from "./cells.ts";
+import { box, type Colored, paint, type Span, type Style, wrapSpans } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
-import { cells, charCells } from "./terminal.ts";
 import type { CliIo, Writer } from "./utils.ts";
 
 /** The hint under the chat's framed prompt. */
@@ -81,11 +81,6 @@ export function homePath(path: string, home: string | undefined): string {
     if (path.startsWith(trimmed + sep)) return `~${path.slice(trimmed.length)}`;
   }
   return path;
-}
-
-/** The columns `out` is wide: as it reports, else 80. */
-function columnsOf(out: ViewOutput): number {
-  return out.columns || 80;
 }
 
 /** The rows `out` is high: as it reports, else 24. */
@@ -189,31 +184,6 @@ export function summary(text: string, width: number): string[] {
   const joined = items.map((item) => fit(item, room)).join(" · ");
   const rows = wrapLine(joined, Math.max(1, width)).map(([start, end]) => joined.slice(start, end));
   return rows.length <= 2 ? rows : [rows[0]!, fit(`${rows[1]} ${rows[2]}`, width)];
-}
-
-/** An SGR sequence, which takes no cells. */
-const SGR_SEQUENCE = /^\x1b\[[0-9;]*m/;
-
-/** `row`, styled, cut to at most `width` cells; its styles are reset when it is cut. */
-function clip(row: string, width: number): string {
-  if (cells(row) <= width) return row;
-  let kept = "";
-  let used = 0;
-  let at = 0;
-  while (at < row.length) {
-    const sequence = SGR_SEQUENCE.exec(row.slice(at));
-    if (sequence !== null) {
-      kept += sequence[0];
-      at += sequence[0].length;
-      continue;
-    }
-    const char = String.fromCodePoint(row.codePointAt(at)!);
-    if (used + charCells(char) > width) break;
-    kept += char;
-    used += charCells(char);
-    at += char.length;
-  }
-  return `${kept}\x1b[0m`;
 }
 
 /** Whether `nodeId` is a node named `reply`, at any depth: the chat's assistant. */

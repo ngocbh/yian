@@ -21,7 +21,7 @@ import {
   shortArgs,
   summary,
 } from "../../src/cli/chat_view.ts";
-import { cells } from "../../src/cli/terminal.ts";
+import { cells } from "../../src/cli/cells.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import type { Env } from "../../src/defaults.ts";
 import {

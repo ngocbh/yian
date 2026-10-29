@@ -9,9 +9,9 @@
  */
 
 import type { Env } from "../defaults.ts";
-import { type Colored, fit, paint, type Span, type Style, wrapSpans } from "./render.ts";
+import { cells, fit } from "./cells.ts";
+import { type Colored, paint, type Span, type Style, wrapSpans } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
-import { cells } from "./terminal.ts";
 
 const FENCE = /^\s*(```|~~~)\s*([^`\s]*)/;
 const HEADING = /^(#{1,6})\s+(.*)$/;

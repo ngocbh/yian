@@ -2524,6 +2524,15 @@ async function aFramedApprovalFoldsALongLineInsideTheCard(): Promise<void> {
   assert.equal(await answer, "Approve");
 }
 
+async function aFramedApprovalCutsALongTitle(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 30 });
+  const answer = terminal.approve({ ...approval(), title: `Write ${"deep/".repeat(10)}a.yaml`, frame: true });
+  await tick();
+  assert.equal(view().rows[0], "╭─ Write deep/deep/deep/de… ─╮");
+  input.write(ENTER);
+  assert.equal(await answer, "Approve");
+}
+
 async function approveOffATtyReturnsNullWithoutReading(): Promise<void> {
   const { input, output, terminal } = setup({ tty: false });
   input.write(ENTER);
@@ -2697,6 +2706,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "approve shows its text sanitized": approveShowsItsTextSanitized,
   "a framed approval numbers the diff and colours its lines": aFramedApprovalNumbersTheDiffAndColoursItsLines,
   "a framed approval folds a long line inside the card": aFramedApprovalFoldsALongLineInsideTheCard,
+  "a framed approval cuts a long title": aFramedApprovalCutsALongTitle,
   "approve off a TTY returns null without reading": approveOffATtyReturnsNullWithoutReading,
   "Ctrl-C in approve rejects and keeps the terminal open": ctrlCInApproveRejectsAndKeepsTheTerminalOpen,
   "an aborted approve returns null": anAbortedApproveReturnsNull,

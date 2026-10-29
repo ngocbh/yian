@@ -225,6 +225,20 @@ test.each([
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(range);
 });
 
+test("an alias key is reported where it is written, not at its anchor", () => {
+  const text =
+    "id: f\nname: f\nnodes:\n  n: !int &k 1\n" +
+    "output:\n  r: ${n.output}\n  *k : ${n.output}\n";
+
+  const error = parseError(text);
+
+  expect(error.diagnostic.message).toBe(
+    "the key `1` was read by YAML as an integer, but names in a flow must be text. " +
+      'Quote it ("1") or choose another name.',
+  );
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(new SourceRange(7, 3, 7, 5));
+});
+
 test("a numeric input key is a load error not a type error", () => {
   const text = `id: f
 name: f

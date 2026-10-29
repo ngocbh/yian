@@ -535,10 +535,14 @@ function build(
     const arcs: MapArc[] = [];
     for (const pair of pairs) {
       const keyNode = target(aliasTargets, pair.key);
+      // An alias key is located where it is written, not at its anchor: the fix goes on the
+      // key, and quoting the anchored node would change its value instead.
+      const keyAlias = isAlias(pair.key) ? pair.key : null;
+      const keyAt = keyAlias === null ? spanOf(keyNode).start : keyAlias.range![0];
       const collectionKey = (): SourceSyntaxError =>
         new SourceSyntaxError(
           "a list or mapping can't be a mapping key; mapping keys must be text",
-          pointRange(starts, spanOf(keyNode).start),
+          pointRange(starts, keyAt),
         );
       if (!isScalar(keyNode)) throw collectionKey();
       const keyDefinition = intern(keyNode);
@@ -550,12 +554,14 @@ function build(
       const valueDefinition =
         pair.value === null ? internMissing(pair.key.range[1]) : intern(pair.value);
       const key = keyText(keyScalar);
-      // Fills don't run in document order, so the key that starts first wins; an alias key
-      // is its anchored node.
-      const keyAt = spanOf(keyNode).start;
+      // Fills don't run in document order, so the key that starts first wins.
       if (typeof keyScalar.value !== "string" && (nonTextKey === null || keyAt < nonTextKeyAt)) {
         const keyValue = keyScalar.value as NonTextKey["key"];
-        nonTextKey = Object.freeze({ key: keyValue, text: key, range: keyScalar.range! });
+        const range =
+          keyAlias === null
+            ? keyScalar.range!
+            : toRange(starts, keyAlias.range![0], keyAlias.range![1]);
+        nonTextKey = Object.freeze({ key: keyValue, text: key, range });
         nonTextKeyAt = keyAt;
       }
       arcs.push(Object.freeze({ key, keyDefinition, valueDefinition }));
@@ -616,7 +622,7 @@ function build(
       const plain = node.type === Scalar.PLAIN;
       let value: ScalarValue;
       try {
-        value = scalarValue(text, plain, core, tag !== null);
+        value = scalarValue(text, plain, core);
       } catch (error) {
         if (error instanceof FlowLoaderError) throw new SourceSyntaxError(error.message, at);
         throw error;
@@ -995,13 +1001,12 @@ function scalarValue(
   text: string,
   plain: boolean,
   core: string | undefined,
-  local: boolean,
 ): ScalarValue {
   if (core !== undefined) return constructScalar(core, text, plain);
   if (!plain) return text;
   const resolved = resolvePlain(text);
-  // `<<` merges only as an untagged key; under a local tag it is text.
-  return constructScalar(local && resolved === MERGE_TAG ? STR_TAG : resolved, text, true);
+  // `<<` merges only as an untagged key, which never reaches here; anywhere else it is text.
+  return constructScalar(resolved === MERGE_TAG ? STR_TAG : resolved, text, true);
 }
 
 /**

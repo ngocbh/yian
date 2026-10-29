@@ -277,6 +277,13 @@ has an inbox input, a second line says to chat with the flow itself through `yia
 [Chatting on a terminal](#chatting-on-a-terminal)). The prompt, `/exit`, Ctrl-C and Esc work as
 there, and the assistant's replies print on stdout.
 
+When stdin, stdout and stderr are all a terminal, the chat draws its own look instead: a box at the
+top names the model, how it is reached (an API key or a ChatGPT login), the folder and the flow in
+focus. The reply streams in as it is written, with its Markdown (bold, italic, code, headings,
+lists, code blocks) drawn. Each tool call shows as a `⏺` line with its result under it, and so does
+each event of a flow the assistant runs. A spinner runs while the assistant works, and you type in
+a framed box. Set `NO_COLOR`, or redirect any of the three, to get the plain lines above.
+
 ### What the assistant can do
 
 | Tool | What it does |
@@ -301,7 +308,8 @@ inside the folder too.
 
 Before a write or a start, the chat shows a card on the terminal and waits for your choice:
 
-- `write_flow` shows the change as a diff. Approve writes the file; Reject leaves it alone.
+- `write_flow` shows the change as a diff (on a terminal, framed, with line numbers, removed lines
+  red and added lines green). Approve writes the file; Reject leaves it alone.
 - `start_flow` shows the inputs and what the flow can do: its node kinds, the tools and skills its
   agents get, and the code files it runs. Approve starts it; "Approve this flow for this chat"
   also starts it again later without asking, until the flow or its code files change.

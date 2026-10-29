@@ -51,4 +51,20 @@ describe("unifiedDiff", () => {
     const diff = unifiedDiff("x\na\nb\nc\n", "a\nb\nc\nx\n", LABELS);
     expect(diff).toBe(["--- a.yaml", "+++ a.yaml", "@@ -1,4 +1,4 @@", "-x", " a", " b", " c", "+x", ""].join("\n"));
   });
+
+  test("a change too large to compare is shown whole, with a note", () => {
+    const old = Array.from({ length: 2001 }, (_, i) => `old ${i}`).join("\n") + "\n";
+    const edited = Array.from({ length: 2001 }, (_, i) => `new ${i}`).join("\n") + "\n";
+    const lines = unifiedDiff(`same\n${old}`, `same\n${edited}`, LABELS).split("\n");
+    expect(lines.slice(0, 5)).toEqual([
+      "--- a.yaml",
+      "+++ a.yaml",
+      "@@ -1,2002 +1,2002 @@",
+      " same",
+      "(lines not matched: too large to compare)",
+    ]);
+    expect(lines[5]).toBe("-old 0");
+    expect(lines.filter((line) => line.startsWith("+")).length).toBe(2002);
+    expect(unifiedDiff("a\n", "b\n", LABELS)).not.toContain("too large");
+  });
 });

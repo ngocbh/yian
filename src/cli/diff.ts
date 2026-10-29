@@ -13,10 +13,15 @@ const CONTEXT = 3;
  */
 const MAX_TABLE = 4_000_000;
 
+/** The note above a change too large to compare line by line. */
+const UNMATCHED = "(lines not matched: too large to compare)";
+
 /** One line of a diff: kept (` `), removed (`-`) or added (`+`), with its line ending. */
 interface Edit {
   op: " " | "-" | "+";
   line: string;
+  /** Set on the first edit of a change too large to compare line by line. */
+  unmatched?: true;
 }
 
 /** `text`'s lines, each with its `\n` (the last may have none); none for an empty text. */
@@ -38,8 +43,10 @@ function lineEdits(a: readonly string[], b: readonly string[]): Edit[] {
   const n = x.length;
   const m = y.length;
   if (n * m > MAX_TABLE) {
+    const first = edits.length;
     for (const line of x) edits.push({ op: "-", line });
     for (const line of y) edits.push({ op: "+", line });
+    edits[first]!.unmatched = true;
   } else {
     // `table[i * (m + 1) + j]`: the longest common subsequence of `x[i..]` and `y[j..]`.
     const table = new Uint32Array((n + 1) * (m + 1));
@@ -84,7 +91,8 @@ function shown(edit: Edit): string {
 /**
  * Return the unified diff turning `oldText` into `newText`: `--- oldLabel` and `+++ newLabel`
  * headers, then `@@` hunks with three lines of context, or an empty string when the texts are
- * equal. A line ending in `\r\n` is shown with `[CRLF]`, so a change only in line endings shows.
+ * equal. A line ending in `\r\n` is shown with `[CRLF]`, so a change only in line endings shows,
+ * and a change too large to compare line by line is shown whole under a note.
  */
 export function unifiedDiff(
   oldText: string,
@@ -120,7 +128,10 @@ export function unifiedDiff(
     const oldStart = oldCount === 0 ? oldAt[start]! : oldAt[start]! + 1;
     const newStart = newCount === 0 ? newAt[start]! : newAt[start]! + 1;
     text += `@@ -${range(oldStart, oldCount)} +${range(newStart, newCount)} @@\n`;
-    for (const edit of hunk) text += shown(edit);
+    for (const edit of hunk) {
+      if (edit.unmatched) text += `${UNMATCHED}\n`;
+      text += shown(edit);
+    }
     first = last + 1;
   }
   return text;

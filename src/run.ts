@@ -380,6 +380,7 @@ export class RunResult {
    *   the output's shape, or `headers` has a name or value that can't be sent or names other than
    *   the recorded ones (the message never echoes a value).
    * @throws MemorySetupError when the run's memories can't restore their recorded snapshots.
+   * @throws RunBusyError when another writer holds the run's log (a durable one).
    * @throws Error when another backward call on this result is in progress, or an earlier call
    *   couldn't retain its accepted prefix; host and log faults also reject, keeping the accepted
    *   prefix.
@@ -739,6 +740,7 @@ class BackwardHandle {
   /**
    * Reopen and replay the log, then drive one whole backward attempt over it.
    *
+   * @throws RunBusyError when another writer holds the log.
    * @throws Error when an earlier call couldn't retain its accepted prefix, and what the replay or
    *   `driveBackward` throws.
    */
@@ -755,11 +757,10 @@ class BackwardHandle {
     }
     // The call comes after the run's scope ended, so the replay's `checkRecorded` needs its own.
     return withEnv(this.env, async () => {
-      const logOptions = { clock: this.clock };
       const authority =
         this.path === null
-          ? MemoryRunLog.fromRecords(this.records, logOptions)
-          : JsonlRunLog.resume(this.path, logOptions);
+          ? MemoryRunLog.fromRecords(this.records, { clock: this.clock })
+          : openLog(this.path, this.clock);
       let state: RunState | null = null;
       let replaySequence: number | null = null;
       let primary: { error: unknown } | null = null;

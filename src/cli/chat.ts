@@ -35,11 +35,11 @@ import { chatBanner, ChatView, homePath, loginLabel, richChat } from "./chat_vie
 import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
 import { inboxChat, type InboxChatHost } from "./inbox_chat.ts";
-import { printStyled } from "./render.ts";
+import { paint, printStyled, type Style } from "./render.ts";
 import { CHAT_FLOW_FILE, removeEmptyDir, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
-import type { CliIo } from "./utils.ts";
+import type { CliIo, Writer } from "./utils.ts";
 
 /** The label the bundled flow's diagnostics and recorded source go by. */
 const CHAT_LABEL = CHAT_FLOW_FILE;
@@ -68,6 +68,8 @@ export interface ChatDeps {
   models?: ModelAccess | null;
   /** The `advance` and `cancel` the children's runs use. */
   children?: Pick<ChildRunsOptions, "advance" | "cancel">;
+  /** The clock the spinner ticks on, apart from `scheduler`, which a test may hold. */
+  ticker?: Scheduler;
 }
 
 /**
@@ -147,17 +149,21 @@ function consoleFileFor(log: string): string {
   return join(dirname(log), `${basename(log, extname(log))}.child-output.log`);
 }
 
-/** The lines telling the user how each child left waiting can go on. */
-function waitingLines(children: readonly WaitingChild[]): string {
+/**
+ * The lines telling the user how each child left waiting can go on, the first of each in yellow
+ * and the next dim when `out` takes colour (`paint`).
+ */
+function waitingLines(children: readonly WaitingChild[], out: Writer, env: Env): string {
+  const shown = (text: string, style: Style) => `${paint(text, style, out, env)}\n`;
   return children
     .map((child) => {
-      if (child.kind === "halted") return `run ${child.run} was stopped while it ran; its log: ${child.log}\n`;
+      if (child.kind === "halted") return shown(`run ${child.run} was stopped while it ran; its log: ${child.log}`, "yellow");
       const what = { question: "an answer to its question", inbox: "a message", timer: "a timer" }[child.kind];
       const next =
         child.kind === "timer"
           ? `continue with: yian run --resume ${child.log}`
           : "it can't be continued outside this chat yet";
-      return `run ${child.run} waits for ${what}; its log: ${child.log}\n  ${next}\n`;
+      return shown(`run ${child.run} waits for ${what}; its log: ${child.log}`, "yellow") + shown(`  ${next}`, "dim");
     })
     .join("");
 }
@@ -197,7 +203,7 @@ export async function chat(
   const root = deps.root ?? process.cwd();
   const env = io.env;
   // On a terminal, everything the chat prints goes through its view.
-  const view = richChat(io) ? new ChatView(io.stderrStream) : null;
+  const view = richChat(io) ? new ChatView(io.stderrStream, env, deps.ticker ?? realScheduler) : null;
   if (view !== null) io = { ...io, stdout: view.writer, stderr: view.writer };
   const flow = await loadChatFlow(env);
   let skill: Skill;
@@ -249,7 +255,7 @@ export async function chat(
   const focus = flowPath === undefined ? null : (inputs["flow"] as string);
   if (view !== null) {
     const info = { ...model, cwd: homePath(root, env("HOME")), focus };
-    await io.stderr.write(`${chatBanner(info, io.stderrStream, env)}${sanitize(hint)}`);
+    await io.stderr.write(`${chatBanner(info, io.stderrStream, env)}${view.note(sanitize(hint))}`);
   } else {
     const banner = [`yian chat`, model.model, focus === null ? null : `focus: ${focus}`]
       .filter((part) => part !== null)
@@ -327,7 +333,7 @@ export async function chat(
     signals.on("SIGINT", halt);
     try {
       const waiting = await runs.dispose();
-      await io.stderr.write(waitingLines(waiting));
+      await io.stderr.write(waitingLines(waiting, view === null ? { write: io.stderr.write } : io.stderr, env));
       if (fresh.runDir !== null) removeEmptyDir(fresh.runDir);
     } finally {
       signals.off("SIGINT", halt);

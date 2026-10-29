@@ -34,6 +34,8 @@ export interface FlushIo {
   write: (text: string) => Promise<void>;
   /** A send made at a wake failed other than by a refusal: the chat stops with `error`. */
   fault: (error: unknown) => void;
+  /** Told each event once its send is appended, to show it on the terminal. */
+  sent?: (event: ChildEvent) => void;
 }
 
 /** The text of a withdrawn message: its text parts joined. */
@@ -190,6 +192,7 @@ export class ChatFlusher {
           const seq = await this.#io.send(this.#io.message ? toMessage(event) : event.text);
           this.#sent.set(seq, event);
           seqs.push(seq);
+          this.#io.sent?.(event);
         } catch (error) {
           if (!(error instanceof DeliveryRefused)) {
             this.#failed = true;

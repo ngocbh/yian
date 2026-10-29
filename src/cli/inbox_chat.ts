@@ -25,7 +25,7 @@ import { resolveMemoryLayout } from "../compile/memory_layout.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { Diagnostic } from "../diagnostics.ts";
-import { NodeSucceeded, type RunEvent, RunStarted } from "../events.ts";
+import { NodeSucceeded, type RunEvent, RunStarted, type StreamChunk } from "../events.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import { realScheduler, type Scheduler } from "../platform.ts";
 import {
@@ -48,6 +48,7 @@ import type { Skill } from "../skills/catalog.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { builtinType } from "../typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
+import type { ChildEvent } from "./chat_events.ts";
 import { type ChatEvents, ChatFlusher } from "./chat_flush.ts";
 import { printStyled, renderDiagnostic, writeEngineTrace } from "./render.ts";
 import {
@@ -121,10 +122,26 @@ export interface InboxChatHost {
   view?: InboxChatView | null;
 }
 
-/** What a host drawing the chat's look gives it. */
+/**
+ * What a host drawing the chat's look gives it (`ChatView`): the chat hands it the run's events
+ * and its stream, its turns, the times a prompt has the terminal, the reply and the child events
+ * sent; and frames its prompt.
+ */
 export interface InboxChatView {
   /** The hint under the framed prompt. */
   readonly hint: string;
+  onEvent(event: RunEvent): void;
+  onStream(chunk: StreamChunk): void;
+  /** A turn starts (`true`) or ends. */
+  turn(active: boolean): void;
+  /** A prompt takes the terminal (`true`) or gives it back. */
+  active(active: boolean): void;
+  /** The output of a node named `reply`, as text. */
+  reply(text: string): void;
+  /** A child event, once sent. */
+  childEvent(event: ChildEvent): void;
+  /** `text`, whole lines of the chat's own notes, styled. */
+  note(text: string): string;
 }
 
 const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
@@ -372,6 +389,9 @@ export async function inboxChat(
   // Set once the inbox is closed (`/exit`, `/quit`, the end of input): no prompt comes back.
   let closed = false;
   const move = deps.advance ?? advance;
+  const view = host.view ?? null;
+  // The chat's own notes, styled when it draws its look.
+  const note = (text: string): Promise<void> => io.stderr.write(view === null ? text : view.note(text));
   // Sends the child events, once the run's log exists (`started`).
   const flusher =
     host.events === undefined
@@ -379,8 +399,9 @@ export async function inboxChat(
       : new ChatFlusher(host.events, {
           message: inbox.message,
           send: (value) => send(log!, inbox.name, value, { env: env.read }),
-          write: (text) => io.stderr.write(text),
+          write: note,
           fault: (error) => stop.abort(error),
+          sent: view === null ? undefined : (event) => view.childEvent(event),
         });
   const cancelRun = async (path: string): Promise<boolean> => {
     try {
@@ -402,7 +423,7 @@ export async function inboxChat(
     // cancels.
     if (turning && (pressedAt === null || now - pressedAt > SECOND_PRESS_MS)) {
       pressedAt = now;
-      void io.stderr.write(`${INTERRUPTING}\n`).catch(() => {});
+      void note(`${INTERRUPTING}\n`).catch(() => {});
       // The live engine takes it at once. With no reply running it records the Stop for the turn,
       // or nothing when the chat waits at the take.
       const sent = interruptReply(log, inbox.name, { env: env.read }).catch((error: unknown) => {
@@ -434,15 +455,15 @@ export async function inboxChat(
         const texts = back.map((event) => valueText(event.value, inbox.message)).filter(Boolean);
         const count = `${back.length} message${back.length === 1 ? "" : "s"}`;
         // After /exit no prompt comes back, so the text is printed rather than lost.
-        if (closed) await io.stderr.write(`(withdrew ${count}: ${texts.join(" ")})\n`);
+        if (closed) await note(`(withdrew ${count}: ${texts.join(" ")})\n`);
         else {
           // Sent before the draft was typed, so it goes first.
           draft = [...texts, draft].filter(Boolean).join(" ");
-          await io.stderr.write(`(withdrew ${count}; back in the prompt)\n`);
+          await note(`(withdrew ${count}; back in the prompt)\n`);
         }
       }
       const stopped = await interruptReply(path, inbox.name, { env: env.read });
-      if (stopped.seq !== null) await io.stderr.write("(stopping the reply)\n");
+      if (stopped.seq !== null) await note("(stopping the reply)\n");
     })().catch((error: unknown) => {
       if (!(error instanceof DeliveryRefused)) stop.abort(error);
     });
@@ -456,6 +477,7 @@ export async function inboxChat(
     onStop: (reason) => {
       if (log !== null) stop.abort(reason === "interrupt" ? new HostStop("SIGINT") : new TerminalStopped("eof"));
     },
+    onActive: view === null ? undefined : (active) => view.active(active),
   });
   const onStopSignal = (signal: NodeJS.Signals) => () => stop.abort(new HostStop(signal));
   const listeners = [
@@ -516,18 +538,21 @@ export async function inboxChat(
     // A node named `reply`, at any depth, is what the chat says.
     const onEvent = (event: RunEvent) => {
       if (event instanceof RunStarted) flusher?.started();
+      view?.onEvent(event);
       if (!(event instanceof NodeSucceeded)) return;
       if (event.nodeId.slice(event.nodeId.lastIndexOf("/") + 1) !== "reply") return;
       // An interrupted reply succeeds with null when its output is `Optional(...)`.
-      if (event.interrupted) return io.stderr.write("(interrupted)\n");
+      if (event.interrupted) return note("(interrupted)\n");
       if (event.output === null) return;
       const text = writeAsText(event.output as Value);
+      if (view !== null) return view.reply(text);
       // A reply is the model's or the flow's text: on a terminal its escape sequences are dropped and
       // its control characters shown; piped, it keeps every byte.
       return io.stdout.write(`${io.stdout.isTTY === true ? sanitize(text) : text}\n`);
     };
     const shared = {
       onEvent,
+      onStream: view === null ? null : (chunk: StreamChunk) => view.onStream(chunk),
       tools: {
         ...registeredTools(),
         ...(typeof host.tools === "function" ? host.tools(terminal) : host.tools),
@@ -548,9 +573,11 @@ export async function inboxChat(
       const keys = new AbortController();
       terminal.watchKeys(keys.signal, (key) => (key === "escape" ? escape() : interrupt()));
       flusher?.beginTurn();
+      view?.turn(true);
       try {
         return await step();
       } finally {
+        view?.turn(false);
         keys.abort();
         turning = false;
         // An interrupt sent during the turn lands before the next line is sent.
@@ -638,7 +665,7 @@ export async function inboxChat(
         );
       }
       if (stop.signal.aborted) prompt.abort();
-      const framing = host.view ? { frame: true, hint: host.view.hint } : {};
+      const framing = view === null ? {} : { frame: true, hint: view.hint };
       const read = await terminal.readLine("You:", { signal: prompt.signal, initial: draft, escape: true, ...framing });
       draft = "aborted" in read || "escape" in read ? read.draft : "";
       timer.abort();

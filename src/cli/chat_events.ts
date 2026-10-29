@@ -29,6 +29,18 @@ export interface ChildEvent {
   readonly run: string | null;
   readonly seq: number;
   readonly text: string;
+  /** The event as the chat's view draws it; absent for one that came from no status. */
+  readonly card?: EventCard;
+}
+
+/**
+ * A child event as a card on the terminal: the status it came from, what the run now does (its
+ * first clause's verb: `asks`, `succeeded`, ...) and the rest of the line.
+ */
+export interface EventCard {
+  readonly status: ChildStatus["status"];
+  readonly verb: string;
+  readonly body: string;
 }
 
 /** What a waiting status waits on, as far as `childEvent` reads it. */
@@ -47,32 +59,37 @@ interface Wait {
  */
 export function childEvent(status: ChildStatus): ChildEvent | null {
   if (status.status === "running") return null;
-  const clauses: string[] = [];
+  // Each clause is its verb and what follows it, which starts with a space when it isn't empty.
+  const clauses: [string, string][] = [];
   const quote = (value: unknown) => JSON.stringify(value) ?? "null";
-  if (status.status === "succeeded") clauses.push(`succeeded with output ${quote(status.output ?? null)}`);
-  else if (status.status === "cancelled") clauses.push("was cancelled");
+  if (status.status === "succeeded") clauses.push(["succeeded", ` with output ${quote(status.output ?? null)}`]);
+  else if (status.status === "cancelled") clauses.push(["was cancelled", ""]);
   else if (status.status === "failed") {
     const failure = status.failure;
-    clauses.push(
+    clauses.push([
+      "failed",
       failure === undefined
-        ? `failed: ${quote(status.note ?? "")}`
-        : `failed (${failure.code}${failure.node === null ? "" : ` at ${failure.node}`}): ${quote(failure.message)}`,
-    );
+        ? `: ${quote(status.note ?? "")}`
+        : ` (${failure.code}${failure.node === null ? "" : ` at ${failure.node}`}): ${quote(failure.message)}`,
+    ]);
   } else if ((status.asks ?? []).length > 0) {
     const asks = status.asks!.slice(0, LIST_ITEMS).map((ask) => `(call ${ask.call}): ${quote(ask.question)}`);
     const more = status.asks!.length - LIST_ITEMS;
     if (more > 0) asks.push(`(${more} more; flow_status shows all)`);
-    clauses.push(`asks ${asks.join(", ")}`);
+    clauses.push(["asks", ` ${asks.join(", ")}`]);
   } else {
     const waits = (status.waits ?? []) as readonly Wait[];
     const inbox = waits.find((wait) => wait.tool === TAKE && wait.settled !== true && typeof wait.inbox === "string");
-    if (inbox !== undefined) clauses.push(`waits for a message on inbox ${quote(inbox.inbox)}`);
+    if (inbox !== undefined) clauses.push(["waits for a message", ` on inbox ${quote(inbox.inbox)}`]);
   }
-  if ((status.replies ?? []).length > 0) clauses.push(`said ${status.replies!.map(quote).join(", ")}`);
+  if ((status.replies ?? []).length > 0) clauses.push(["said", ` ${status.replies!.map(quote).join(", ")}`]);
   if (clauses.length === 0) return null;
-  let text = `run ${status.run} ${clauses.join("; ")}`;
-  if (text.length > EVENT_BODY_CHARS) text = `${text.slice(0, EVENT_BODY_CHARS)}... (cut; flow_status shows all)`;
-  return { run: status.run, seq: status.seq, text };
+  const cut = (line: string) =>
+    line.length > EVENT_BODY_CHARS ? `${line.slice(0, EVENT_BODY_CHARS)}... (cut; flow_status shows all)` : line;
+  const text = cut(`run ${status.run} ${clauses.map(([verb, rest]) => verb + rest).join("; ")}`);
+  const [[verb, first], ...others] = clauses as [[string, string], ...[string, string][]];
+  const body = cut([first.trim(), ...others.map(([word, rest]) => word + rest)].filter(Boolean).join("; "));
+  return { run: status.run, seq: status.seq, text, card: { status: status.status, verb, body } };
 }
 
 /** The message `event` is sent to the chat's inbox as: a user message authored `yian`. */

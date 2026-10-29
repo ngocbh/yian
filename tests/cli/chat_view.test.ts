@@ -6,18 +6,30 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { chat, type ChatDeps } from "../../src/cli/chat.ts";
-import { chatBanner, homePath, loginLabel } from "../../src/cli/chat_view.ts";
+import { childEvent } from "../../src/cli/chat_events.ts";
+import { chatBanner, ChatView, homePath, loginLabel, shortArgs, summary } from "../../src/cli/chat_view.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import type { Env } from "../../src/defaults.ts";
+import {
+  ModelCallFinished,
+  ModelCallStarted,
+  NodeSucceeded,
+  StreamChunk,
+  ToolCallFinished,
+  ToolCallStarted,
+} from "../../src/events.ts";
+import type { Scheduler } from "../../src/platform.ts";
 import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import type { Request, Response } from "../../src/llm/messages.ts";
-import { ScriptedModel } from "../../src/llm/testing.ts";
-import { serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { Finish, PartDone, TextDelta } from "../../src/llm/events.ts";
+import { TextPart } from "../../src/llm/messages.ts";
+import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
+import { callReply, serving, textReply } from "../helpers/run_state_fixtures.ts";
 import { ENTER, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 20_000;
@@ -75,9 +87,9 @@ class AnsweringModel implements ChatModel {
   readonly provider = "xai";
   readonly model = "grok-4.3";
   readonly requests: Request[] = [];
-  readonly #answer: (request: Request, count: number) => Response;
+  readonly #answer: (request: Request, count: number) => ScriptedReply;
 
-  constructor(answer: (request: Request, count: number) => Response) {
+  constructor(answer: (request: Request, count: number) => ScriptedReply) {
     this.#answer = answer;
   }
 
@@ -175,6 +187,294 @@ describe("yian chat on a terminal", () => {
       expect(await chatting).toBe(0);
       expect(rows()).not.toContain(TOP);
       expect(output.text).not.toContain("╭");
+    },
+    TIMEOUT,
+  );
+});
+
+/** A clock that moves only when the test advances it. */
+function manualClock(): Scheduler & { advance(ms: number): Promise<void> } {
+  let now = 0;
+  let sleepers: { at: number; wake: () => void }[] = [];
+  return {
+    now: () => now,
+    sleep(ms, signal) {
+      return new Promise<void>((resolve, reject) => {
+        if (signal?.aborted) return reject(signal.reason);
+        const sleeper = { at: now + ms, wake: resolve };
+        sleepers.push(sleeper);
+        signal?.addEventListener(
+          "abort",
+          () => {
+            sleepers = sleepers.filter((other) => other !== sleeper);
+            reject(signal.reason);
+          },
+          { once: true },
+        );
+      });
+    },
+    async advance(ms) {
+      const until = now + ms;
+      while (true) {
+        const due = sleepers.filter((sleeper) => sleeper.at <= until).sort((a, b) => a.at - b.at)[0];
+        if (due === undefined) break;
+        sleepers = sleepers.filter((other) => other !== due);
+        now = due.at;
+        due.wake();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+      now = until;
+    },
+  };
+}
+
+/** A view on a fake TTY 60 columns wide, its clock, and the rows the screen shows. */
+function viewOn(rows?: number) {
+  const output = Object.assign(new FakeOutput({ columns: COLUMNS }), { isTTY: true, rows });
+  const clock = manualClock();
+  const view = new ChatView(output, () => undefined, clock);
+  return { view, clock, output, rows: () => screen(output.text, COLUMNS).rows };
+}
+
+const REPLY = "chat/answered/reply";
+const chunk = (n: number, text: string) => new StreamChunk({ nodeId: REPLY, key: "text", chunk: text, n, index: 0 });
+const started = (n: number) => new ModelCallStarted({ nodeId: REPLY, n, purpose: "chat", startedAt: 0 });
+const finished = (n: number, error: string | null = null) =>
+  new ModelCallFinished({ nodeId: REPLY, n, purpose: "chat", error });
+
+describe("the chat's view", () => {
+  test("a reply streams after ⏺, rendered as Markdown line by line, and isn't printed again", () => {
+    const { view, rows } = viewOn();
+    view.turn(true);
+    view.onEvent(started(1));
+    view.onStream(chunk(1, "hello ran and "));
+    expect(rows()).toEqual(["", "⏺ hello ran and", "· Thinking… (0s · esc to interrupt)"]);
+    view.onStream(chunk(1, "returned **Hi Ada**.\n- one"));
+    expect(rows()).toEqual([
+      "",
+      "⏺ hello ran and returned Hi Ada.",
+      "  - one",
+      "· Thinking… (0s · esc to interrupt)",
+    ]);
+    view.onEvent(finished(1));
+    view.onEvent(new NodeSucceeded({ nodeId: REPLY, output: "..." }));
+    view.reply("hello ran and returned **Hi Ada**.\n- one");
+    view.turn(false);
+    expect(rows()).toEqual(["", "⏺ hello ran and returned Hi Ada.", "  • one"]);
+  });
+
+  test("a failed attempt's text is replaced by (retrying), and the next starts a new block", () => {
+    const { view, rows } = viewOn();
+    view.turn(true);
+    view.onStream(chunk(1, "first try\nmore"));
+    view.onEvent(finished(1, "ProviderError"));
+    view.onStream(chunk(2, "second"));
+    view.onEvent(finished(2));
+    view.turn(false);
+    expect(rows()).toEqual(["", "  (retrying)", "", "⏺ second"]);
+  });
+
+  test("streamed text is sanitized", () => {
+    const { view, output, rows } = viewOn();
+    view.onStream(chunk(1, "a\x1b[2Jb\x1b]52;c;eA==\x07 \u202e"));
+    view.onEvent(finished(1));
+    expect(rows()).toEqual(["", "⏺ ab \\u{202e}"]);
+    expect(output.text).not.toContain("\x1b[2J");
+    expect(output.text).not.toContain("\x1b]52");
+  });
+
+  test("a reply that didn't stream is printed as a block", () => {
+    const { view, rows } = viewOn();
+    view.onEvent(started(1));
+    view.reply("# Done\nall `good`");
+    expect(rows()).toEqual(["", "⏺ Done", "  all good"]);
+  });
+
+  test("a tool call is a ⏺ line with short arguments and a ⎿ result of at most two rows", () => {
+    const { view, rows } = viewOn();
+    view.turn(true);
+    const call = { nodeId: REPLY, n: 1, callIndex: 0, toolCallId: "c1" };
+    view.onEvent(new ToolCallStarted({ ...call, name: "check_flow", arguments: { path: "examples/hello.yaml" } }));
+    view.onEvent(new ToolCallFinished({ ...call, name: "check_flow", result: "ok\nname: hello\ninputs:\n  name: str\n" }));
+    const start = { ...call, callIndex: 1, toolCallId: "c2", name: "start_flow" };
+    view.onEvent(new ToolCallStarted({ ...start, arguments: { path: "examples/hello.yaml", inputs: { name: "Ada" } } }));
+    view.onEvent(new ToolCallFinished({ ...start, result: `invalid: \x1b[31m${"word ".repeat(40)}` }));
+    view.onEvent(new ToolCallStarted({ ...call, toolCallId: "c3", name: "wait_flow", arguments: { run: "r1" } }));
+    view.onEvent(new ToolCallFinished({ ...call, toolCallId: "c3", name: "wait_flow", error: "interrupted" }));
+    view.turn(false);
+    expect(rows()).toEqual([
+      "",
+      "⏺ check_flow(examples/hello.yaml)",
+      "  ⎿  ok · name: hello · inputs: name: str",
+      '⏺ start_flow(examples/hello.yaml, {name: "Ada"})',
+      "  ⎿  invalid: word word word word word word word word word",
+      "     word word word word word word word word word word word…",
+      "⏺ wait_flow(r1)",
+      "  ⎿  interrupted",
+    ]);
+  });
+
+  test("a child event is a card coloured by its status", () => {
+    const { view, output, rows } = viewOn();
+    const status = (fields: object) => ({ run: "r1", seq: 1, log: "r1.jsonl", status: "waiting" as const, ...fields });
+    view.childEvent(childEvent(status({ status: "succeeded", output: "Hi Ada" }))!);
+    view.childEvent(childEvent(status({ asks: [{ call: "c1", question: "Which region?" }] }))!);
+    view.childEvent(childEvent(status({ status: "failed", failure: { code: "code.error", message: "kaboom", node: "x" } }))!);
+    view.childEvent({ run: null, seq: 0, text: "run r9 was cancelled" });
+    expect(rows()).toEqual([
+      "",
+      "⏺ r1 succeeded",
+      '  ⎿  with output "Hi Ada"',
+      "⏺ r1 asks",
+      '  ⎿  (call c1): "Which region?"',
+      "⏺ r1 failed",
+      '  ⎿  (code.error at x): "kaboom"',
+      "⏺ yian",
+      "  ⎿  run r9 was cancelled",
+    ]);
+    expect(output.text).toContain("\x1b[32m⏺");
+    expect(output.text).toContain("\x1b[31m⏺");
+  });
+
+  test("the spinner counts seconds on its own clock, keeps clear of lines printed, and goes at the turn's end", async () => {
+    const { view, clock, rows } = viewOn();
+    view.turn(true);
+    expect(rows()).toEqual(["· Thinking… (0s · esc to interrupt)"]);
+    await clock.advance(3_000);
+    // Twelve frames of six: back at the first.
+    expect(rows()).toEqual(["· Thinking… (3s · esc to interrupt)"]);
+    await clock.advance(250);
+    expect(rows()).toEqual(["✢ Thinking… (3s · esc to interrupt)"]);
+    await view.writer.write("warning: a skill didn't load\n");
+    expect(rows()).toEqual(["warning: a skill didn't load", rows()[1]!]);
+    expect(rows()[1]).toContain("Thinking… (3s");
+    // A prompt has the terminal: the spinner goes until it gives it back.
+    view.active(true);
+    expect(rows()).toEqual(["warning: a skill didn't load"]);
+    view.active(false);
+    expect(rows()[1]).toContain("Thinking…");
+    view.turn(false);
+    expect(rows()).toEqual(["warning: a skill didn't load"]);
+  });
+
+  test("a block longer than the screen prints its top for good", () => {
+    const { view, rows } = viewOn(8);
+    view.onStream(chunk(1, "1\n2\n3\n4\n5\n6\n"));
+    view.onEvent(finished(1, "ProviderError"));
+    // Its top is gone by: the block stays as it was, and (retrying) follows it.
+    expect(rows()).toEqual(["", "⏺ 1", "  2", "  3", "  4", "  5", "  6", "  (retrying)"]);
+  });
+});
+
+describe("the view's helpers", () => {
+  test("shortArgs shows a path or run bare and other values short", () => {
+    expect(shortArgs({ path: "a.yaml", inputs: { n: 1, tags: ["x"] } })).toBe('a.yaml, {n: 1, tags: ["x"]}');
+    expect(shortArgs({ content: "y".repeat(60) })).toBe(`"${"y".repeat(38)}…"`);
+    expect(shortArgs(null)).toBe("");
+  });
+
+  test("summary joins lines and keeps to two rows", () => {
+    expect(summary("ok\ninputs:\n  a: int\n  b: str\n\nnext", 60)).toEqual(["ok · inputs: a: int, b: str · next"]);
+    expect(summary("x ".repeat(50), 20)).toEqual(["x x x x x x x x x x", "x x x x x x x x x x…"]);
+  });
+});
+
+/** A reply streamed in `chunks`. */
+function streamed(...chunks: string[]): ScriptedReply {
+  const text = chunks.join("");
+  return [...chunks.map((chunk) => new TextDelta(0, chunk)), new PartDone(0, new TextPart(text)), new Finish({ reason: "stop" })];
+}
+
+const HELLO = `id: hello
+name: hello
+input:
+  name: !str
+nodes:
+  greet:
+    kind: code
+    input:
+      name: \${input.name}
+    output: str
+    code: |
+      return "Hi " + inputs["name"];
+output: \${greet.output}
+`;
+
+describe("a session on a terminal", () => {
+  /** Run the hello session: check, start once approved, wait, and a streamed reply. */
+  async function hello(noColor: boolean): Promise<{ rows: string[]; text: string }> {
+    writeFileSync(join(root, "hello.yaml"), HELLO);
+    const { io, stdin, output, rows } = terminalIo({ noColor });
+    const script: ScriptedReply[] = [
+      callReply(["check_flow", { path: "hello.yaml" }, "c1"]),
+      callReply(["start_flow", { path: "hello.yaml", inputs: { name: "Ada" } }, "c2"]),
+      callReply(["wait_flow", { run: "r1", seconds: 30 }, "c3"]),
+      streamed("hello ran and ", "returned **Hi Ada**."),
+    ];
+    const model = new AnsweringModel((_, count) => script[count - 1] ?? textReply("noted"));
+    const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+    const prompt = noColor ? "> You:" : "│ >";
+    await until(() => rows().some((line) => line.startsWith(prompt)));
+    stdin.write(`run hello for Ada${ENTER}`);
+    await until(() => output.text.includes("Run hello.yaml"));
+    stdin.write(ENTER);
+    await until(() => model.requests.length >= 4 && rows().some((line) => line.startsWith(prompt)));
+    stdin.write(`/exit${ENTER}`);
+    expect(await chatting).toBe(0);
+    const shown = rows();
+    return { rows: shown.slice(shown.findIndex((line) => line.includes("run hello for Ada"))), text: output.text };
+  }
+
+  /** The text of the approval card, the same in both looks. */
+  const CARD = [
+    "Starts hello.yaml in the background.",
+    'inputs: {"name":"Ada"}',
+    "node kinds: code",
+    "runs code on this machine (CODE nodes)",
+    "an approval for this chat doesn't cover changes to the files",
+    " the code imports",
+    "? Run hello.yaml Approve",
+  ];
+
+  test(
+    "draws tool lines, the approval, and the streamed reply in colour",
+    async () => {
+      const { rows } = await hello(false);
+      expect(rows).toEqual([
+        "> run hello for Ada",
+        "",
+        "⏺ check_flow(hello.yaml)",
+        "  ⎿  ok · name: hello · inputs: name: str",
+        '⏺ start_flow(hello.yaml, {name: "Ada"})',
+        ...CARD,
+        // Of several fields, each takes at most half the row: the log's path is cut.
+        expect.stringMatching(/^ {2}⎿ {2}run: r1 · status: running · log: \S+…$/),
+        "⏺ wait_flow(r1, 30)",
+        expect.stringMatching(/^ {2}⎿ {2}run: r1 · log: \S+… · status:$/),
+        "     succeeded · output: Hi Ada",
+        "",
+        "⏺ hello ran and returned Hi Ada.",
+        "",
+        "> /exit",
+        "session ended",
+      ]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "prints today's plain lines with NO_COLOR",
+    async () => {
+      const { rows, text } = await hello(true);
+      expect(rows).toEqual([
+        "> You: run hello for Ada",
+        ...CARD,
+        "hello ran and returned **Hi Ada**.",
+        "> You: /exit",
+        "session ended",
+      ]);
+      expect(text).not.toContain("⏺");
+      expect(text).not.toContain("╭");
     },
     TIMEOUT,
   );

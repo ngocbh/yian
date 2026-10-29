@@ -44,10 +44,12 @@ import { FunctionTool } from "./function_tools.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
 
 /**
- * The brands of `McpError` and `McpServer`. yian checks them rather than `instanceof`, so an error
- * or server from another copy of yian (an npm install beside a workspace one) is still known.
+ * The brands of `McpError`, `AlreadyOpenError` and `McpServer`. yian checks them rather than
+ * `instanceof`, so an error or server from another copy of yian (an npm install beside a workspace
+ * one) is still known.
  */
 const MCP_ERROR = Symbol.for("yian.mcp_error");
+const ALREADY_OPEN = Symbol.for("yian.mcp_already_open");
 const MCP_SERVER = Symbol.for("yian.mcp_server");
 
 const REPORTED: readonly ToolErrorKind[] = Object.freeze(["reported"]);
@@ -179,6 +181,8 @@ export class AlreadyOpenError extends Error {
   override name = "AlreadyOpenError";
 }
 
+Object.defineProperty(AlreadyOpenError.prototype, ALREADY_OPEN, { value: true });
+
 /** Return whether `value` carries `brand`; never throws, so a hostile object has no brand. */
 function hasBrand(value: unknown, brand: symbol): boolean {
   if (value === null || (typeof value !== "object" && typeof value !== "function")) return false;
@@ -192,6 +196,11 @@ function hasBrand(value: unknown, brand: symbol): boolean {
 /** Return whether `value` is an `McpError` from any copy of yian. */
 export function isMcpError(value: unknown): value is McpError {
   return hasBrand(value, MCP_ERROR);
+}
+
+/** Return whether `value` is an `AlreadyOpenError` from any copy of yian. */
+export function isAlreadyOpenError(value: unknown): value is AlreadyOpenError {
+  return hasBrand(value, ALREADY_OPEN);
 }
 
 /** The options of `mcpServer`. */

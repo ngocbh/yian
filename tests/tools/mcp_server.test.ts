@@ -24,6 +24,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import {
   AlreadyOpenError,
   capResponse,
+  isAlreadyOpenError,
   isMcpError,
   isMcpServer,
   McpCallCancelled,
@@ -281,6 +282,14 @@ describe("MCP errors", () => {
     );
     expect(isMcpError(hostile)).toBe(false);
     expect(isMcpServer(hostile)).toBe(false);
+    expect(isAlreadyOpenError(hostile)).toBe(false);
+  });
+
+  test("isAlreadyOpenError reads the brand", () => {
+    expect(isAlreadyOpenError(new AlreadyOpenError("m"))).toBe(true);
+    expect(isAlreadyOpenError(new Error("m"))).toBe(false);
+    expect(isAlreadyOpenError(new McpError("m"))).toBe(false);
+    expect(isAlreadyOpenError({ [Symbol.for("yian.mcp_already_open")]: true })).toBe(true);
   });
 });
 

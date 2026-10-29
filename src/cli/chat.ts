@@ -208,7 +208,7 @@ function every(clock: Scheduler, ms: number, listener: () => void): () => void {
  * The run list under the chat's input box (`runRows` of the children still live, their times on
  * `scheduler`), drawn again each `LIST_TICK_MS` on `ticker`, and the run view Enter on a row opens:
  * the run's screen (`runScreen`), read again from its log each `VIEW_TICK_MS`, while the chat's
- * view holds what it draws.
+ * view holds what it draws; the screen says when an approval or a question waits behind it.
  */
 function runList(
   runs: ChildRuns,
@@ -232,8 +232,11 @@ function runList(
       view.hold(true);
       try {
         await terminal.showScreen({
-          draw: (columns, rows) => runScreen(info(), progress.rows(scheduler.now()), columns, rows, out, env),
+          draw: (columns, rows, waiting) =>
+            runScreen(info(), progress.rows(scheduler.now()), columns, rows, out, env, waiting),
           subscribe: (redraw) => every(ticker, VIEW_TICK_MS, redraw),
+          // What the chat drew meanwhile goes out before a prompt waiting behind the view draws.
+          onClose: () => view.hold(false),
         });
       } finally {
         view.hold(false);

@@ -983,3 +983,103 @@ describe("the run list under the input box", () => {
     TIMEOUT,
   );
 });
+
+/**
+ * A model answering by what a request holds: `answer` gets the request and gives a reply, or a
+ * promise of one, so a test can hold a reply back.
+ */
+class StepModel implements ChatModel {
+  readonly provider = "xai";
+  readonly model = "grok-4.3";
+  readonly requests: Request[] = [];
+  readonly #answer: (request: Request) => ScriptedReply | Promise<ScriptedReply>;
+
+  constructor(answer: (request: Request) => ScriptedReply | Promise<ScriptedReply>) {
+    this.#answer = answer;
+  }
+
+  stream(request: Request): EventStream {
+    this.requests.push(request);
+    const reply = this.#answer(request);
+    const model = this;
+    async function* events() {
+      yield* new ScriptedModel([await reply], model).stream(request);
+    }
+    return new EventStream(events());
+  }
+}
+
+/** Whether a request's last message is a tool's result. */
+const afterTool = (request: Request) => request.messages.at(-1)?.role === "tool";
+
+const BLUE = `id: blue
+name: blue
+nodes:
+  say: !str blue
+output: \${say.output}
+`;
+
+describe("a run's view while the chat goes on", () => {
+  test(
+    "opens from the list while a reply runs; Esc in the list withdraws nothing; an approval behind it is said",
+    async () => {
+      writeFileSync(join(root, "color.yaml"), COLOR_FLOW);
+      const { io, stdin, output, rows } = terminalIo();
+      const gate = Promise.withResolvers<void>();
+      let started = false;
+      let wrote = false;
+      const model = new StepModel((request) => {
+        if (afterTool(request)) return textReply("done.");
+        if (!started && asked(request, "pick a colour")) {
+          started = true;
+          return callReply(["start_flow", { path: "color.yaml", inputs: {} }, "c1"]);
+        }
+        if (!wrote && asked(request, "write it")) {
+          wrote = true;
+          return gate.promise.then(() => callReply(["write_flow", { path: "blue.yaml", content: BLUE }, "c2"]));
+        }
+        return textReply("noted.");
+      });
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      const idle = () => rows().at(-1)!.includes("● asks") && !rows().some((line) => line.includes("Thinking"));
+      await until(() => rows().includes(HINT));
+      stdin.write(`pick a colour${ENTER}`);
+      await until(() => output.text.includes("Run color.yaml"));
+      stdin.write(ENTER);
+      await until(idle);
+      stdin.write(`write it${ENTER}`);
+      await until(() => wrote && rows().some((line) => line.includes("Thinking")));
+      // While the reply runs, Down moves into the list, and Esc there only comes back.
+      stdin.write(DOWN);
+      await until(() => rows().at(-1)!.startsWith("» r1  color.yaml"));
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().at(-1)!.startsWith("  r1  color.yaml"));
+      expect(output.text).not.toContain("withdrew");
+      expect(output.text).not.toContain("stopping the reply");
+      expect(rows().some((line) => line.includes("Thinking"))).toBe(true);
+      stdin.write(DOWN);
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      stdin.write(ENTER);
+      await until(() => rows()[0] === "r1  color.yaml  ● asks");
+      expect(rows().at(-1)).toBe("esc to go back to the chat");
+      // The reply asks to write a file: its approval waits behind the view, which says so.
+      gate.resolve();
+      await until(() => rows().at(-1) === "the chat waits on you · esc to answer");
+      expect(rows()[0]).toBe("r1  color.yaml  ● asks");
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().includes("? Write blue.yaml (Use arrow keys)"));
+      // What the chat drew while the view was up is printed above the card, not after it.
+      const shown = rows();
+      const call = shown.findIndex((line) => line.startsWith("⏺ write_flow(blue.yaml"));
+      expect(call).toBeGreaterThan(-1);
+      expect(call).toBeLessThan(shown.findIndex((line) => line.startsWith("╭─ Write blue.yaml")));
+      stdin.write(ENTER);
+      await until(() => rows().includes("⏺ done.") && idle());
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+});

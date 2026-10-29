@@ -180,7 +180,8 @@ export interface RunViewInfo {
 /**
  * The run view's screen, `rows` high (each row is cut to the width when drawn): the header (the
  * run, its flow and its status, then its log), the `progress` rows, as many of the last as fit
- * under a dim count of those left out, the questions it waits on, and how to go back.
+ * under a dim count of those left out, the questions it waits on, and how to go back: in yellow,
+ * saying so, when the chat `waiting` waits on the user (an approval or a question behind the view).
  */
 export function runScreen(
   info: RunViewInfo,
@@ -189,6 +190,7 @@ export function runScreen(
   rows: number,
   out: Colored,
   env: Env,
+  waiting = false,
 ): string[] {
   const style = (text: string, s: Style) => paint(text, s, out, env);
   const { status } = info;
@@ -200,7 +202,10 @@ export function runScreen(
     "",
   ];
   const asks = (status.asks ?? []).map((ask) => style(`? ${sanitize(ask.question)}`, "yellow"));
-  const foot = [...(asks.length > 0 ? ["", ...asks] : []), "", style("esc to go back to the chat", "dim")];
+  const back = waiting
+    ? style("the chat waits on you · esc to answer", "yellow")
+    : style("esc to go back to the chat", "dim");
+  const foot = [...(asks.length > 0 ? ["", ...asks] : []), "", back];
   const room = Math.max(1, rows - head.length - foot.length);
   let body = progress.length > 0 ? [...progress] : [style("(nothing yet)", "dim")];
   if (body.length > room) {

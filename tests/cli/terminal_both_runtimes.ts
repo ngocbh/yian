@@ -881,6 +881,33 @@ async function showScreenDrawsOnTheAlternateScreenAndGivesTheScreenBack(): Promi
   assert.deepEqual(await line, { value: "ok" });
 }
 
+async function showScreenSaysWhenAPromptWaitsBehindItAndClosesFirst(): Promise<void> {
+  const events: string[] = [];
+  const { input, terminal, view } = setup({ columns: 40, onActive: (on) => events.push(on ? "active" : "inactive") });
+  const screenUp = terminal.showScreen({
+    draw: (_columns, _rows, waiting) => [waiting ? "a prompt waits" : "nothing waits"],
+    onClose: () => events.push("closed"),
+  });
+  await tick();
+  assert.deepEqual(view().rows, ["nothing waits"]);
+  // A line prompt behind it waits on no one; an ask does.
+  const line = terminal.readLine("You:", { signal: AbortSignal.timeout(60_000) });
+  await tick();
+  assert.deepEqual(view().rows, ["nothing waits"]);
+  const answer = terminal.askText("Name:");
+  await tick();
+  assert.deepEqual(view().rows, ["a prompt waits"]);
+  input.write("q");
+  await screenUp;
+  // The screen's owner is told it closed before the prompt behind takes the terminal.
+  assert.deepEqual(events.slice(0, 3), ["active", "closed", "inactive"]);
+  await tick();
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "" });
+  input.write("ada" + ENTER);
+  assert.equal(await answer, "ada");
+}
+
 async function showScreenOffATtyDoesNothing(): Promise<void> {
   const { output, terminal } = setup({ tty: false });
   await terminal.showScreen({ draw: () => ["x"] });
@@ -2818,6 +2845,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "watchKeys with an editor gives it the keys but Ctrl-C": watchKeysWithAnEditorGivesItTheKeysButCtrlC,
   "showScreen draws on the alternate screen and gives the screen back":
     showScreenDrawsOnTheAlternateScreenAndGivesTheScreenBack,
+  "showScreen says when a prompt waits behind it, and closes before that prompt":
+    showScreenSaysWhenAPromptWaitsBehindItAndClosesFirst,
   "showScreen off a TTY does nothing": showScreenOffATtyDoesNothing,
   "wide characters redraw without stale rows": wideCharactersRedrawWithoutStaleRows,
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,

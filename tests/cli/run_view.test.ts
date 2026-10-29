@@ -137,6 +137,12 @@ describe("a run's screen", () => {
     expect(rows[0]).toContain("\x1b[33m● asks");
   });
 
+  test("says in yellow when the chat waits on the user behind it", () => {
+    const rows = runScreen({ id: "r1", name: "pick.yaml", status }, [], 60, 24, COLOR, NO_ENV, true);
+    expect(shown(rows).at(-1)).toBe("the chat waits on you · esc to answer");
+    expect(rows.at(-1)).toContain("\x1b[33m");
+  });
+
   test("keeps the last rows of a long progress, under a count of those left out", () => {
     const progress = Array.from({ length: 30 }, (_, i) => `✓ n${i}`);
     const done: ChildStatus = { run: "r1", status: "succeeded", seq: 9, log: "l", output: "ok" };

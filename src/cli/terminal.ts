@@ -129,6 +129,8 @@ interface Widget<T> {
   watch?(redraw: () => void): () => void;
   /** Drawn on the whole (alternate) screen, which the terminal gives back as it was. */
   screen?: boolean;
+  /** Called once the widget has left the screen, before the turn behind it can draw. */
+  closed?(): void;
 }
 
 const ESC = "\x1b[";
@@ -702,6 +704,10 @@ export class Terminal {
   #pasting = false;
   /** Whether the turn holding the terminal left rows on the screen. */
   #printed = false;
+  /** How many turns that want an answer (any prompt but a line prompt) wait in the queue. */
+  #waiting = 0;
+  /** Told each time `#waiting` changes. */
+  readonly #onWaiting = new Set<() => void>();
 
   /** Build a terminal over `options.input` and `options.output`; touches neither stream. */
   constructor(options: TerminalOptions = {}) {
@@ -788,7 +794,7 @@ export class Terminal {
     if (signal?.aborted) return { aborted: true, draft: initial };
     let ended: { value: string | typeof ESCAPED | Opened } | { stop: StopReason };
     try {
-      ended = await this.#runTurn(signal, (run) => run(widget), { keepOpen: true });
+      ended = await this.#runTurn(signal, (run) => run(widget), { keepOpen: true, wants: false });
     } catch (error) {
       if (signal?.aborted && error === signal.reason) return { aborted: true, draft: draft() };
       throw error;
@@ -824,14 +830,17 @@ export class Terminal {
 
   /**
    * Show `draw`'s rows on the whole screen, the alternate one, until Escape, `q`, Enter or Ctrl-C,
-   * or `signal` aborts; then give back the screen as it was. `draw` gets the columns and rows and
-   * is called again on each `subscribe` callback; rows past the screen's height are left out and
-   * each is cut to the width. Does nothing on a plain terminal or an input that isn't a TTY, and
-   * when the terminal is closed. Ctrl-C leaves the terminal open.
+   * or `signal` aborts; then give back the screen as it was and call `onClose`, before any prompt
+   * queued behind takes the terminal. `draw` gets the columns, the rows and whether a prompt that
+   * wants an answer (any but a `readLine`) waits behind the screen, and is called again on each
+   * `subscribe` callback and each time that changes; rows past the screen's height are left out
+   * and each is cut to the width. Does nothing on a plain terminal or an input that isn't a TTY,
+   * and when the terminal is closed. Ctrl-C leaves the terminal open.
    */
   async showScreen(options: {
-    draw: (columns: number, rows: number) => readonly string[];
+    draw: (columns: number, rows: number, waiting: boolean) => readonly string[];
     subscribe?: (redraw: () => void) => () => void;
+    onClose?: () => void;
     signal?: AbortSignal;
   }): Promise<void> {
     if (this.#plain || this.#input.isTTY !== true || options.signal?.aborted) return;
@@ -839,7 +848,7 @@ export class Terminal {
     const widget: Widget<null> = {
       preface: "",
       screen: true,
-      lines: () => [...options.draw(columnsOf(output), rowsOf(output))],
+      lines: () => [...options.draw(columnsOf(output), rowsOf(output), this.#waiting > 0)],
       cursor: () => null,
       key(key) {
         if (key.paste) return undefined;
@@ -849,7 +858,15 @@ export class Terminal {
         return key.name === "escape" || (plain && leave) ? { value: null } : undefined;
       },
       done: () => null,
-      watch: options.subscribe,
+      watch: (redraw) => {
+        const stop = options.subscribe?.(redraw);
+        this.#onWaiting.add(redraw);
+        return () => {
+          stop?.();
+          this.#onWaiting.delete(redraw);
+        };
+      },
+      closed: options.onClose,
     };
     try {
       await this.#runTurn(options.signal, (run) => run(widget), { keepOpen: true });
@@ -1072,15 +1089,17 @@ export class Terminal {
   /**
    * Run `fn` as one turn of the FIFO: wait for the turns before it, take the terminal (raw mode,
    * listeners, input flowing), let `fn` run widgets, then restore the terminal on every outcome.
-   * A plain terminal sets raw mode only with `raw`.
+   * A plain terminal sets raw mode only with `raw`. While it waits behind another, it counts as
+   * wanting an answer (`showScreen` says so) unless `wants` is false.
    * Returns `fn`'s value, or the stop that ended the turn (Ctrl-C, end of input, a closed
    * terminal); throws `signal`'s reason when it aborted first, else `fn`'s error.
    */
   async #runTurn<R>(
     signal: AbortSignal | undefined,
     fn: (run: RunWidget) => Promise<R>,
-    { keepOpen = false, raw = false }: { keepOpen?: boolean; raw?: boolean } = {},
+    options: { keepOpen?: boolean; raw?: boolean; wants?: boolean } = {},
   ): Promise<{ value: R } | { stop: StopReason }> {
+    const { keepOpen = false, raw = false, wants = true } = options;
     if (this.#closed) return { stop: "closed" };
     signal?.throwIfAborted();
     const ahead = this.#tail;
@@ -1109,7 +1128,14 @@ export class Terminal {
     let started = false;
     let result: { value: R } | { error: unknown } | undefined;
     try {
-      await Promise.race([ahead, queuedAbort]);
+      // Counted while it waits behind another turn, so a screen up can say a prompt wants an answer.
+      const counted = wants && this.#turn !== undefined;
+      if (counted) this.#countWaiting(1);
+      try {
+        await Promise.race([ahead, queuedAbort]);
+      } finally {
+        if (counted) this.#countWaiting(-1);
+      }
       if (turn.ending === undefined && this.#closed) turn.ending = "closed";
       if (turn.ending === undefined) {
         started = true;
@@ -1157,6 +1183,12 @@ export class Terminal {
     if (signal?.aborted) throw signal.reason;
     if (result !== undefined && "value" in result) return result;
     throw result!.error;
+  }
+
+  /** Change the count of turns that wait for an answer by `by`, and tell the listeners. */
+  #countWaiting(by: number): void {
+    this.#waiting += by;
+    for (const listener of [...this.#onWaiting]) quietly(listener);
   }
 
   /**
@@ -1275,6 +1307,7 @@ export class Terminal {
       this.#active = undefined;
       quietly(unwatch);
       if (widget.screen && !this.#plain) quietly(() => output.write(ALT_OFF));
+      if (widget.closed) quietly(widget.closed);
     }
     const ended = outcome!;
     if ("value" in ended) return ended.value;

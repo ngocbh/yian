@@ -296,8 +296,8 @@ function inboxClosed(log: string, inbox: string): boolean {
  * (`--engine-trace` included), except that the inbox input is never asked for or supplied and
  * `deps.inputs` are supplied beside the given ones. Skills are `deps.skills`, or else read as `yian
  * run` reads them, once per chat, before any input prompt. The chat opens no MCP servers and builds
- * no memories. A host failure prints `chat failed: <message>`, its stack below
- * under `engineTrace`, and exits 1.
+ * no memories. A host failure prints `chat failed: <message>`, its stack below under
+ * `engineTrace`, and exits 1.
  *
  * With `options.resume` there is no `flowPath`: the chat picks up the run recorded in that log,
  * with the flow it recorded (`loadRecordedFlow`), as `yian run --resume` does. Its first move is an

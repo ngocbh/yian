@@ -27,7 +27,9 @@ const HASH_DIGITS = 16;
 /** The sha256 of `files`, path and text each, in path order. */
 function contentHash(files: Readonly<Record<string, string>>): string {
   const hash = createHash("sha256");
-  for (const path of Object.keys(files).sort(compareCodeUnits)) hash.update(path).update("\0").update(files[path]!).update("\0");
+  for (const path of Object.keys(files).sort(compareCodeUnits)) {
+    hash.update(path).update("\0").update(files[path]!).update("\0");
+  }
   return hash.digest("hex");
 }
 

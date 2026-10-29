@@ -78,7 +78,9 @@ test("bundled.ts holds the bundled flows, the composing-agents skill and the doc
     const stale = [
       ...Object.keys(want).filter((key) => have[key] === undefined).map((key) => `missing ${key}`),
       ...Object.keys(have).filter((key) => want[key] === undefined).map((key) => `extra ${key}`),
-      ...Object.keys(want).filter((key) => have[key] !== undefined && have[key] !== want[key]).map((key) => `changed ${key}`),
+      ...Object.keys(want)
+        .filter((key) => have[key] !== undefined && have[key] !== want[key])
+        .map((key) => `changed ${key}`),
     ];
     expect(stale, `${name} is stale; run ${REGENERATE}`).toEqual([]);
   }

@@ -136,7 +136,12 @@ function waitingLines(children: readonly WaitingChild[]): string {
  *
  * @throws {UsageError} As `validateRunLogOptions` does for `--log`.
  */
-export async function chat(flowPath: string | undefined, options: ChatOptions, io: CliIo, deps: ChatDeps = {}): Promise<number> {
+export async function chat(
+  flowPath: string | undefined,
+  options: ChatOptions,
+  io: CliIo,
+  deps: ChatDeps = {},
+): Promise<number> {
   validateRunLogOptions({ flow: CHAT_LABEL, inputValues: [], log: options.log });
   const root = deps.root ?? process.cwd();
   const env = io.env;
@@ -207,13 +212,22 @@ export async function chat(flowPath: string | undefined, options: ChatOptions, i
   const docs = new Map(Object.entries(DOCS));
   const tools: InboxChatDeps["tools"] = (terminal) => {
     const host: ChatToolHost = { root, approve: (request) => terminal.approve(request), env, docs };
-    const all = trackInFlight([...chatFileTools(host), ...chatRunTools(host, runs, { seen: queue, scheduler })], inFlight);
+    const all = trackInFlight(
+      [...chatFileTools(host), ...chatRunTools(host, runs, { seen: queue, scheduler })],
+      inFlight,
+    );
     return Object.fromEntries(all.map((each) => [each.name, each]));
   };
   try {
     return await inboxChat(
       CHAT_LABEL,
-      { inputValues: [], log: fresh.path, provider: options.provider, model: options.model, engineTrace: options.engineTrace },
+      {
+        inputValues: [],
+        log: fresh.path,
+        provider: options.provider,
+        model: options.model,
+        engineTrace: options.engineTrace,
+      },
       io,
       {
         ...deps,

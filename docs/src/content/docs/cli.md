@@ -153,7 +153,9 @@ chats and the replies go to the file. It chats when all of these hold:
 - The flow declares no memory and grants or calls no MCP tool.
 - There is no `--json`, `--memory-root` or `--memory-storage`; with `--resume`, see below.
 
-Otherwise the run goes as above, and a `take` on the inbox leaves it waiting. When the rest holds
+Otherwise the run goes as above, and a `take` on the inbox leaves it waiting. To chat with a flow
+from a script or a pipe, drive it from your own program with `send` and `advance` (see
+[Inbox calls](/embedding/#inbox-calls)). When the rest holds
 but `--inbox NAME` names none of the flow's inbox inputs, the command is a usage error. A chat takes
 `--input`, `--inputs`, `--log`, `-w`, `--provider`, `--model` and `--engine-trace`, and shows no
 banner or per-node progress.

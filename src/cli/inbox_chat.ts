@@ -40,6 +40,7 @@ import {
   type RunResult,
   runFlow,
   send,
+  type WaitInfo,
   withdraw,
 } from "../run.ts";
 import { type InboxClosedRecord, iterRunRecords, recordTimeMs } from "../runtime/log.ts";
@@ -75,12 +76,14 @@ import {
   type Draft,
   draftLabel,
   draftText,
+  holdsPaste,
   joinDrafts,
   type Key,
   type LineEditor,
   type PromptList,
   Terminal,
   TerminalStopped,
+  textDraft,
 } from "./terminal.ts";
 import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, shellQuote, sleepUntil, UsageError } from "./utils.ts";
 
@@ -246,11 +249,6 @@ function lastWaitingSeq(path: string): number {
   let last = -1;
   for (const entry of iterRunRecords(path, { kinds: ["run_waiting"], payloads: false })) last = entry.seq;
   return last;
-}
-
-/** Whether `draft` holds a pasted token. */
-function holdsPaste(draft: Draft): boolean {
-  return draft.some((part) => typeof part !== "string");
 }
 
 /** Return the text a withdrawn event holds: a `str` as it is, a message's text parts joined. */
@@ -508,17 +506,19 @@ export async function inboxChat(
       if (flusher !== null) back = await flusher.reclaim(back, closed);
       // Kept before the interrupt, which may be refused.
       if (back.length > 0) {
-        const texts = back.map((event) => valueText(event.value, inbox.message)).filter(Boolean);
+        // A line sent with pasted tokens comes back with them; one sent before a resume, as
+        // the box would hold it (a long one as a token).
+        const drafts = back.map((event) => {
+          const text = valueText(event.value, inbox.message);
+          return pasted.get(event.seq) ?? (editor === null || closed ? [text] : textDraft(text));
+        });
         const count = `${back.length} message${back.length === 1 ? "" : "s"}`;
         // After /exit no prompt comes back, so the text is printed rather than lost.
-        if (closed) await note(`(withdrew ${count}: ${texts.join(" ")})\n`);
+        if (closed) await note(`(withdrew ${count}: ${draftLabel(joinDrafts(drafts))})\n`);
         else {
           // Sent before the draft was typed, so it goes first. While a turn runs, the draft is
           // what the input box holds.
           const box = turning ? editor : null;
-          const drafts = back.map(
-            (event) => pasted.get(event.seq) ?? [valueText(event.value, inbox.message)],
-          );
           draft = joinDrafts([...drafts, box?.draft() ?? draft]);
           if (box !== null) {
             box.set(draft);
@@ -527,6 +527,8 @@ export async function inboxChat(
           await note(`(withdrew ${count}; back in the prompt)\n`);
         }
       }
+      // The run has read every line it didn't give back, so none sent so far can come back.
+      pasted.clear();
       const stopped = await interruptReply(path, inbox.name, { env: env.read });
       if (stopped.seq !== null) await note("(stopping the reply)\n");
     })().catch((error: unknown) => {
@@ -779,6 +781,9 @@ export async function inboxChat(
         result = await moveOn();
         continue;
       }
+      // A take waiting on the inbox has read every line sent: none can be withdrawn any more.
+      const taking = (wait: WaitInfo) => wait.tool === "take" && wait.inbox === inbox.name;
+      if (result.waits.some((wait) => taking(wait) && !wait.settled)) pasted.clear();
       const next = wakeAt(result.waits);
       const wake: string | null = next === spent ? null : next;
       if (closed) {

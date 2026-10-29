@@ -1076,14 +1076,36 @@ describe("a long paste in the input box", () => {
       await until(() => rows().includes(HINT));
       stdin.write(`tell me a story${ENTER}`);
       await until(() => rows().includes("⏺ Once upon"));
+      stdin.write(`count the lines of this paste, then say its last one: `);
       stdin.write(`${PASTE_START}${pastedLines(40)}${PASTE_END}`);
-      await until(() => rows().includes(row("> [Pasted text #1 +40 lines]")));
+      await until(() => rows().includes(row("  [Pasted text #1 +40 lines]")));
       stdin.write(ENTER);
-      await until(() => rows().includes("> [Pasted text #1 +40 lines]"));
+      // The echo wraps rather than cutting the token.
+      await until(() => rows().includes("> count the lines of this paste, then say its last one:"));
+      expect(rows()).toContain("[Pasted text #1 +40 lines]");
       model.open();
       await until(() => model.requests.length === 2 && rows().at(-1) === HINT);
-      expect(lastSaid(model.requests[1]!)).toBe(pastedText(40));
+      expect(lastSaid(model.requests[1]!)).toBe(
+        `count the lines of this paste, then say its last one: ${pastedText(40)}`,
+      );
       stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "is printed as the token when Esc withdraws it after /exit",
+    async () => {
+      const { io, stdin, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      stdin.write(`${PASTE_START}${pastedLines(40)}${PASTE_END}${ENTER}/exit${ENTER}${ESCAPE}`);
+      await until(() => rows().includes("(withdrew 1 message: [Pasted text #1 +40 lines])"));
+      model.open();
       expect(await chatting).toBe(0);
     },
     TIMEOUT,

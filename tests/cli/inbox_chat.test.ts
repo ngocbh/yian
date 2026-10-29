@@ -19,6 +19,7 @@ import {
   runOrChat,
   type RunOrChatOptions,
 } from "../../src/cli/inbox_chat.ts";
+import { ChatView } from "../../src/cli/chat_view.ts";
 import { main } from "../../src/cli/index.ts";
 import { type CliIo, HostStop, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts";
@@ -38,7 +39,17 @@ import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../helpers/run_state_fixtures.ts";
 import { heldScheduler } from "../helpers/schedulers.ts";
-import { CTRL_C, CTRL_U, ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
+import {
+  CTRL_C,
+  CTRL_U,
+  ENTER,
+  ESCAPE,
+  FakeInput,
+  FakeOutput,
+  PASTE_END,
+  PASTE_START,
+  screen,
+} from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 10_000;
 const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
@@ -1509,6 +1520,61 @@ test(
       await until(() => stderr().includes("(interrupted)"));
       stdin.write("/exit" + ENTER);
       expect((await chatting).code).toBe(0);
+    } finally {
+      globalThis.fetch = original;
+    }
+  },
+  TIMEOUT,
+);
+
+test(
+  "Esc at the framed prompt puts two pasted lines sent there back as tokens #1 and #2",
+  async () => {
+    const { io, stdin } = chatIo({ tty: true, env: XAI });
+    const { scheduler, open } = heldScheduler();
+    const output = io.stderrStream as FakeOutput;
+    const view = new ChatView(output, io.env, scheduler);
+    const rows = () => screen(output.text).rows;
+    const lines = (count: number) => Array.from({ length: count }, (_, i) => `l${i}\r`).join("");
+    const bodies: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (_: unknown, init?: { body?: unknown }) => {
+      bodies.push(String(init?.body));
+      return new Response(SEVEN, { headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    try {
+      const log = join(tmp, "run.jsonl");
+      const chatting = inboxChat(
+        flowFile(NAP_AGENT),
+        { inputValues: [], engineTrace: false, log },
+        { ...io, stdout: view.writer, stderr: view.writer },
+        { scheduler, signals },
+        { view },
+      );
+      stdin.write("hi" + ENTER);
+      const waiting = (record: unknown) => record instanceof RunWaitingRecord;
+      await until(() => existsSync(log) && records(log).filter(waiting).length === 2);
+      // The prompt is back, empty, after the line it echoes.
+      const empty = `│ >${" ".repeat(76)}│`;
+      const back = (echo: string) =>
+        rows().includes(echo) && rows().at(-3) === empty && !rows().join().includes("Thinking");
+      // Sent at the prompt while the turn sleeps: nothing reads them before Esc.
+      stdin.write(PASTE_START + lines(40) + PASTE_END + ENTER);
+      await until(() => back("> [Pasted text #1 +40 lines]"));
+      stdin.write(PASTE_START + lines(5) + PASTE_END + ENTER);
+      await until(() => back("> [Pasted text #1 +5 lines]"));
+      stdin.write(ESCAPE);
+      await until(() => rows().includes("(withdrew 2 messages; back in the prompt)"));
+      const box = "> [Pasted text #1 +40 lines] [Pasted text #2 +5 lines]";
+      await until(() => rows().some((row) => row.includes(box)));
+      stdin.write(ENTER);
+      open();
+      // The model reads the pasted text, not the tokens.
+      await until(() => bodies.length === 1);
+      expect(bodies[0]).toContain("l39");
+      expect(bodies[0]).not.toContain("Pasted text");
+      stdin.write(CTRL_U + "/exit" + ENTER);
+      expect(await chatting).toBe(0);
     } finally {
       globalThis.fetch = original;
     }

@@ -77,7 +77,7 @@ import {
   suggestTag,
   yamlQuoted,
 } from "../helpers/tags.ts";
-import { readFlowInputs, readSourceFlowInputs, readSourceParameters, readValueContract } from "../helpers/types.ts";
+import { readFlowInputs, readSourceParameters, readValueContract } from "../helpers/types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import {
   BuildContext,
@@ -1758,7 +1758,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   let inputs: Parameter[];
   if (inputsSection !== null) {
     if (inputsCursor !== null) {
-      inputs = readSourceFlowInputs(inputsCursor.withValue(inputsSection as Value), registry, {
+      inputs = readSourceParameters(inputsCursor.withValue(inputsSection as Value), registry, {
         sitePath: owner,
         catalogBuilder,
         diagnostics,

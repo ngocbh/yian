@@ -221,4 +221,4 @@ test.each<CaseRow>([
     call: rootInput,
   },
   { id: "types/compose_type_name_checks__empty_literal_member_in_a_tag", call: rootInput },
-])("readSourceFlowInputs: $id", runCase);
+])("readSourceParameters: $id", runCase);

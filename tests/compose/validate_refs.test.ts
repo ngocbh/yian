@@ -11,7 +11,7 @@
 
 import { afterEach, expect, test } from "bun:test";
 
-import { readSourceFlowInputs } from "../../src/compose/helpers/types.ts";
+import { readSourceParameters } from "../../src/compose/helpers/types.ts";
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { BuildContext, BuildResult } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
@@ -77,7 +77,7 @@ function load(id: string): Loaded {
     flowWiring.set(nodeId, result.wiring);
   }
   const flowInputs = new Set(
-    readSourceFlowInputs(SourceDocument.parse(text, label).root.child("input"), new Map(), {
+    readSourceParameters(SourceDocument.parse(text, label).root.child("input"), new Map(), {
       sitePath: ["flow"],
       catalogBuilder: new SourceCatalogBuilder(),
     }).map((decl) => decl.name),

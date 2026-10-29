@@ -261,20 +261,25 @@ export type DeliveryOp =
  * @throws TypeError when `op` is no delivery.
  */
 export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransition | null {
-  const kind: unknown = typeof op === "object" && op !== null ? op.kind : undefined;
-  if (kind === "send") return prepareSend(state, (op as { inbox: string }).inbox, (op as { event: unknown }).event);
-  if (kind === "withdraw") return prepareWithdraw(state, (op as { inbox: string }).inbox);
-  if (kind === "complete") {
-    const { callId, result } = op as Extract<DeliveryOp, { kind: "complete" }>;
-    return prepareComplete(state, callId, result);
+  switch (op.kind) {
+    case "send":
+      return prepareSend(state, op.inbox, op.event);
+    case "withdraw":
+      return prepareWithdraw(state, op.inbox);
+    case "complete":
+      return prepareComplete(state, op.callId, op.result);
+    case "close":
+      return prepareInboxClosed(state, op.inbox);
+    case "interrupt":
+      return prepareInterrupt(state, op.inbox, op.running ?? null);
+    case "cancel":
+      return prepareRunCancelled(state);
+    default: {
+      const unknown: never = op;
+      const kind = (unknown as { readonly kind: unknown }).kind;
+      throw new TypeError(`a delivery's kind must be send, withdraw, complete, close, interrupt or cancel, got ${reprText(String(kind))}`);
+    }
   }
-  if (kind === "close") return prepareInboxClosed(state, (op as { inbox: string }).inbox);
-  if (kind === "interrupt") {
-    const { inbox, running = null } = op as Extract<DeliveryOp, { kind: "interrupt" }>;
-    return prepareInterrupt(state, inbox, running);
-  }
-  if (kind === "cancel") return prepareRunCancelled(state);
-  throw new TypeError(`a delivery's kind must be send, withdraw, complete, close, interrupt or cancel, got ${reprText(String(kind))}`);
 }
 
 /** The node's calls as its evaluation sees them: state, closing reason, deadline and answer. */

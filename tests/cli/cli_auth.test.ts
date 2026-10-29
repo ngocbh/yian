@@ -46,7 +46,7 @@ import {
   validateOrganization,
 } from "../../src/llm_clients/connection_settings.ts";
 import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
-import { type ListModelsOptions, ModelListError } from "../../src/llm_clients/model_list.ts";
+import { type ListModelsOptions, listModels, ModelListError } from "../../src/llm_clients/model_list.ts";
 import { type Event, Finish, PartDone, TextDelta } from "../../src/llm/events.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
 import { lockFile, virtualScheduler } from "../../src/platform.ts";
@@ -325,6 +325,48 @@ describe("models --provider", () => {
     const args = modelsArgs({ provider: "openrouter", "base-url": "https://gateway.example/api/v1", timeout: 0.5 });
     await run(models, args, fakeIo({ stdin: "k" }), fake);
     expect(fake.calls[0]!.options).toEqual({ apiKey: "k", baseUrl: "https://gateway.example/api/v1", timeout: 0.5 });
+  });
+
+  /** A `listModels` over a fake transport that records each requested URL and lists `gateway-model`. */
+  function recordedListing() {
+    const urls: string[] = [];
+    const listing: AuthDeps["listModels"] = (provider, options) =>
+      listModels(provider, {
+        ...options,
+        request: async (_method, url) => {
+          urls.push(url);
+          return new HttpResponse(200, { data: [{ id: "gateway-model" }] });
+        },
+      });
+    return { urls, listing };
+  }
+
+  test("openai lists OPENAI_BASE_URL when it is set and sends nothing to api.openai.com", async () => {
+    const recorded = recordedListing();
+    const io = fakeIo({ stdin: "private-key", env: { OPENAI_BASE_URL: "https://gateway.example.com/v1" } });
+    const result = await run(models, modelsArgs({ provider: "openai" }), io, { listModels: recorded.listing });
+    expect(result).toMatchObject({ code: 0, out: "gateway-model\n" });
+    expect(recorded.urls).toEqual(["https://gateway.example.com/v1/models"]);
+    expect(recorded.urls.some((url) => url.includes("api.openai.com"))).toBe(false);
+  });
+
+  test("an invalid OPENAI_BASE_URL fails the openai listing without a request", async () => {
+    const recorded = recordedListing();
+    const io = fakeIo({ stdin: "private-key", env: { OPENAI_BASE_URL: "http://gateway.example.com/v1" } });
+    const result = await run(models, modelsArgs({ provider: "openai" }), io, { listModels: recorded.listing });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("Couldn't list the openai models: invalid request");
+    expect(result.out + result.err).not.toContain("private-");
+    expect(recorded.urls).toEqual([]);
+  });
+
+  test("--base-url wins over OPENAI_BASE_URL, and other providers ignore OPENAI_BASE_URL", async () => {
+    const fake = fakeListModels();
+    const env = { OPENAI_BASE_URL: "https://gateway.example.com/v1" };
+    const explicit = modelsArgs({ provider: "openai", "base-url": "https://other.example/v1" });
+    await run(models, explicit, fakeIo({ stdin: "k", env }), fake);
+    await run(models, modelsArgs({ provider: "openrouter" }), fakeIo({ stdin: "k", env }), fake);
+    expect(fake.calls.map((call) => call.options["baseUrl"])).toEqual(["https://other.example/v1", null]);
   });
 
   test.each<[string, string, bigint | null]>([

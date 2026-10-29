@@ -368,7 +368,8 @@ $ printf '%s' "$OPENROUTER_API_KEY" | yian models --provider openrouter
 | `--json` | | Print one JSON document |
 
 Give exactly one of `--auth-file` and `--provider`. The key comes from stdin, never from the
-command line or the environment; an empty stdin, or a terminal, sends none. Azure has no model
+command line or the environment; an empty stdin, or a terminal, sends none. Without `--base-url`,
+`--provider openai` lists `OPENAI_BASE_URL` when it is set, the host runs use. Azure has no model
 listing. A failed listing exits 1.
 
 ## yian config check

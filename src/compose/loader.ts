@@ -70,7 +70,7 @@ import {
   writeAsText,
 } from "../typesys/values.ts";
 import type { FlowSource } from "../runtime/log.ts";
-import { assemble, type CallableScope as AssemblyScope, ComposedFlow } from "./build/pipeline.ts";
+import { assemble, type AssembleOptions, type CallableScope as AssemblyScope, ComposedFlow } from "./build/pipeline.ts";
 import { INLINE_FLOW_PREFIX } from "./desugar/inline_bodies.ts";
 import { LoadDiagnostics, LoadError } from "./helpers/errors.ts";
 import { parseMemoryDeclarations } from "./helpers/memory.ts";
@@ -958,7 +958,7 @@ function refuseInheritedLlmValues(flow: ComposedFlow): void {
 }
 
 /**
- * Read a flow- or def-level `llm_config` with its values and tags, and check it.
+ * @internal Read a flow- or def-level `llm_config` with its values and tags, and check it.
  *
  * The layer is read through its tags and checked the way an AGENT node's own is
  * (`validateLlmConfig`): a layer holding `${...}` values becomes a `ValueTemplate`, or a `Binding`
@@ -975,7 +975,7 @@ function refuseInheritedLlmValues(flow: ComposedFlow): void {
  * @returns The layer: a record, a `ValueTemplate` or a `Binding`; `{}` when absent.
  * @throws LoadError when the layer is malformed or sets a field a flow file may not set.
  */
-function readAuthoredLlmConfig(
+export function readAuthoredLlmConfig(
   llmConfig: unknown,
   where: string,
   options: {
@@ -1150,29 +1150,16 @@ export async function loadFlowFile(
 
   const staged = callNestingScope(() => {
     scope.eagerLoadDefs();
-    return assemble({
-      inputsSection: f.inputs,
-      inputsCursor: sourceChild(root, "input"),
-      nodesCursor: flowNodesCursor(document, f.nodes),
-      outputsSection: f.outputs,
-      assertsSection: f.asserts,
-      registry,
-      scope,
-      owner: ["root"],
-      usesAliases: Object.keys(f.uses),
-      version: f.version,
-      name: f.name,
-      description: f.description,
-      flowLlmConfig,
-      flowEnv: f.env,
-      boundaryFieldRanges: boundaryFieldRanges(root),
-      assertsCursor: root.has("nodes") && root.has("asserts") ? root.child("asserts") : null,
-      outputsCursor: root.has("nodes") && root.has("output") ? root.child("output") : null,
-      flowId: f.id,
-      memories: rootMemories,
-      memoriesCursor: root.has("nodes") && root.has("long_term_memory") ? root.child("long_term_memory") : null,
-      baseDir,
-    });
+    return assemble(
+      rootAssembleOptions(document, f, {
+        registry,
+        scope,
+        usesAliases: Object.keys(f.uses),
+        flowLlmConfig,
+        memories: rootMemories,
+        baseDir,
+      }),
+    );
   });
   const code: CodeCheckOptions = {
     diagnostics,
@@ -1188,6 +1175,39 @@ export async function loadFlowFile(
   // `uses:` child checks its own document in its own load.
   rejectUnreadTags(document, scope.catalogBuilder.consumedTags, diagnostics);
   return replaceFlow(scope.finalize(staged), { importDepth: scope.importDepth });
+}
+
+/**
+ * @internal Return the `assemble` options for `document`'s root flow: the sections of `f`, its
+ * parsed file, their cursors and the flow's metadata, plus `rest`. Only a full flow (one with
+ * `nodes:`) locates its `asserts:`, `output:` and `long_term_memory:`: a compact flow lends its
+ * top-level `output:` to its one synthesized node.
+ */
+export function rootAssembleOptions(
+  document: SourceDocument,
+  f: ReturnType<typeof parseFile>,
+  rest: Pick<AssembleOptions, "registry" | "scope" | "usesAliases" | "flowLlmConfig" | "memories" | "baseDir">,
+): AssembleOptions {
+  const root = document.root;
+  const fullFlowChild = (key: string) => (root.has("nodes") && root.has(key) ? root.child(key) : null);
+  return {
+    ...rest,
+    inputsSection: f.inputs,
+    inputsCursor: sourceChild(root, "input"),
+    nodesCursor: flowNodesCursor(document, f.nodes),
+    outputsSection: f.outputs,
+    assertsSection: f.asserts,
+    owner: ["root"],
+    version: f.version,
+    name: f.name,
+    description: f.description,
+    flowEnv: f.env,
+    boundaryFieldRanges: boundaryFieldRanges(root),
+    assertsCursor: fullFlowChild("asserts"),
+    outputsCursor: fullFlowChild("output"),
+    flowId: f.id,
+    memoriesCursor: fullFlowChild("long_term_memory"),
+  };
 }
 
 /**

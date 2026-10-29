@@ -1964,6 +1964,16 @@ async function anAskShowsControlCharactersInsteadOfSendingThem(): Promise<void> 
   assert.ok(!output.text.includes("^M"));
 }
 
+async function aChoiceShowsControlCharactersAndAnswersTheChoiceAsGiven(): Promise<void> {
+  const { input, output, terminal } = setup();
+  const model = "gpt\x1b]52;c;aGk=\x07-x";
+  const answer = terminal.askChoice("Model:", ["plain", model]);
+  input.write(DOWN + ENTER);
+  assert.equal(await answer, model);
+  assert.ok(!output.text.includes("\x1b]52"), JSON.stringify(output.text));
+  assert.ok(output.text.includes("gpt^[]52;c;aGk=^G-x"), JSON.stringify(output.text));
+}
+
 async function aPlainAskIsATextPrompt(): Promise<void> {
   const { input, terminal, view } = setup();
   let answer = terminal.askUser(request({ question: "Name?", options: [], questions: [] }), toolContext());
@@ -2452,6 +2462,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "options are one select with Other and no panel": optionsAreOneSelectWithOtherAndNoPanel,
   "a plain ask is a text prompt": aPlainAskIsATextPrompt,
   "an ask shows control characters instead of sending them": anAskShowsControlCharactersInsteadOfSendingThem,
+  "a choice shows control characters and answers the choice as given":
+    aChoiceShowsControlCharactersAndAnswersTheChoiceAsGiven,
   "an aborted askUser throws the reason and leaves later keys buffered":
     anAbortedAskUserThrowsTheReasonAndLeavesLaterKeysBuffered,
   "a queued askUser whose signal aborts never draws": aQueuedAskUserWhoseSignalAbortsNeverDraws,

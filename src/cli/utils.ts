@@ -9,6 +9,8 @@
  * - `relay` copies the `run --json` child's document to the entry's stdout; `abortOnSignal` turns
  *   the stop the entry forwards to the child into its `CliIo.stop`, aborted with a `HostStop`.
  * - `stopOnSignals` stops a command's controller with a `HostStop` on the first stop signal.
+ * - `forTerminal` takes the escape sequences and control characters out of model, tool and
+ *   provider text written to a TTY (`stripControls`); piped output stays exact.
  * - `ensureEnvKey` is the interactive key prompt `llm_clients/api_key_env.ts` points at; `yian run`
  *   calls it pre-flight for agents without a saved login, so a missing key surfaces as an upfront
  *   prompt instead of a failure on the first API call. It prompts only when given a terminal;
@@ -51,6 +53,33 @@ export interface CliIo {
    * later, it stops the run.
    */
   stop?: AbortSignal;
+}
+
+// An escape sequence, matched whole: CSI (7-bit or C1) to its final byte; OSC through BEL or ST;
+// DCS, SOS, PM and APC through ST; or ESC with intermediates and a final byte (`ESC 7`, `ESC ( B`).
+// The string bodies stop at the first ESC, BEL or C1 character (ST and every introducer among them),
+// so an unended one scans only to the next sequence and the whole match stays linear.
+const ESCAPE_SEQUENCE =
+  /(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|(?:\x1b\]|\x9d)[^\x07\x1b\x80-\x9f]*(?:\x07|\x1b\\|\x9c)|(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x80-\x9f]*(?:\x1b\\|\x9c)|\x1b[ -/]*[0-~]/g;
+// Each C0 control but `\t` and `\n`, DEL and each C1 control.
+const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+
+/**
+ * Return `text` with what a terminal would act on taken out: `\r\n` read as `\n`, each escape
+ * sequence dropped whole, then each other control character but `\t` and `\n` (ESC, CR and C1
+ * included).
+ */
+export function stripControls(text: string): string {
+  return text.replaceAll("\r\n", "\n").replace(ESCAPE_SEQUENCE, "").replace(CONTROL, "");
+}
+
+/**
+ * Return `text` as it may be written to `out`: through `stripControls` when `out` is a TTY, as is
+ * otherwise. Model, tool and provider text can carry escape sequences that move the cursor, set
+ * the clipboard or forge a link; piped output keeps its exact bytes.
+ */
+export function forTerminal(text: string, out: Writer): string {
+  return out.isTTY ? stripControls(text) : text;
 }
 
 /**

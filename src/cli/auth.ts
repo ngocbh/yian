@@ -39,7 +39,7 @@ import { realScheduler, type Scheduler } from "../platform.ts";
 import { isRecord } from "../typesys/index.ts";
 import { parseJson } from "../typesys/json.ts";
 import { Terminal } from "./terminal.ts";
-import { type CliIo, type ParsedArgs, printJson, stopOnSignals, UsageError, type Writer } from "./utils.ts";
+import { type CliIo, forTerminal, type ParsedArgs, printJson, stopOnSignals, UsageError, type Writer } from "./utils.ts";
 
 const KINDS: Readonly<Record<string, string>> = { api_key: "api-key", subscription: "subscription", none: "none" };
 const CANCELLED = "Authentication cancelled; the previous login is unchanged";
@@ -501,7 +501,9 @@ async function setupOpenai(
     const openUrl = ctx.deps.openUrl ?? ((url: string) => openBrowser(url, ctx.io.stdout));
     credentials =
       login === "device"
-        ? await service.deviceLogin((url, code) => ctx.io.stdout.write(`Open ${url} and enter code: ${code}\n`))
+        ? await service.deviceLogin((url, code) =>
+            ctx.io.stdout.write(forTerminal(`Open ${url} and enter code: ${code}\n`, ctx.io.stdout)),
+          )
         : await service.browserLogin(openUrl);
     models = await service.subscriptionModels(credentials);
     choices = models;
@@ -714,7 +716,7 @@ async function setupProvider(
         model = await choose("Model:", models, { initial: models[0]!, option: "--model" }, ctx);
       } else {
         await ctx.io.stdout.write(
-          `Couldn't list the ${provider} models (${failure || "none were returned"}); type a model name\n`,
+          `Couldn't list the ${provider} models (${forTerminal(failure || "none were returned", ctx.io.stdout)}); type a model name\n`,
         );
         model = await ask("Model:", "--model", ctx);
       }
@@ -876,7 +878,7 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
       // Device sign-in writes JSON lines, so its error is an event line too.
       await printJson(device ? { event: "error", error: failure } : { error: failure }, io.stdout);
     } else {
-      await io.stderr.write(`${error.message}\n`);
+      await io.stderr.write(`${forTerminal(error.message, io.stderr)}\n`);
     }
     return 1;
   } finally {
@@ -1105,11 +1107,11 @@ export async function models(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}
   const json = command.options["json"] === true;
   if (error !== null) {
     if (json) await printJson({ error }, io.stdout);
-    else await io.stderr.write(`${error.message}\n`);
+    else await io.stderr.write(`${forTerminal(error.message, io.stderr)}\n`);
     return 1;
   }
   if (json) await printJson({ models: listed === null ? null : [...listed] }, io.stdout);
   else if (listed === null) await io.stderr.write(`${provider} has no model listing\n`);
-  else for (const model of listed) await io.stdout.write(`${model}\n`);
+  else for (const model of listed) await io.stdout.write(`${forTerminal(model, io.stdout)}\n`);
   return 0;
 }

@@ -5,7 +5,7 @@
 // through `yian run`: `--verbose` prints the output, `--quiet` streams no events, and the worker
 // count is read from the run log's `RunStarted` record.
 
-import { afterEach, beforeEach, expect, jest, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -50,6 +50,33 @@ test("failure renders cross and error", () => {
   const failure = new Failure({ code: "node.execute", message: "boom", nodeId: "verdict", causeType: "ValueError" });
   reporter.handle(new NodeFailed({ failure }));
   expect(text()).toBe("✗ verdict\n    boom\n");
+});
+
+describe("model and tool text with escape sequences", () => {
+  const raw = "out\x1b]52;c;aGk=\x07put\x1b[2J";
+  const run = (isTTY: boolean) => {
+    const { reporter, text } = sinkReporter({ verbose: true, isTTY });
+    reporter.handle(started("a"));
+    reporter.handle(succeeded("a", raw));
+    reporter.handle(started("b"));
+    const failure = new Failure({ code: "node.execute", message: raw, nodeId: "b", causeType: "ValueError" });
+    reporter.handle(new NodeFailed({ failure }));
+    reporter.warn(raw);
+    reporter.stop();
+    return text();
+  };
+
+  test("is stripped on a TTY: output, failure message and warning", () => {
+    const text = run(true);
+    expect(text.match(/output/g)).toHaveLength(3);
+    expect(text).not.toContain("\x1b]");
+    expect(text).not.toContain("\x07");
+    expect(text).not.toContain("\x1b[2J");
+  });
+
+  test("is written exactly off a TTY", () => {
+    expect(run(false)).toBe(`✓ a\n    ${raw}\n✗ b\n    ${raw}\nwarning: ${raw}\n`);
+  });
 });
 
 test("routed renders check with handle", () => {

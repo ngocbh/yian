@@ -547,7 +547,10 @@ export class Terminal {
     return ended.stop === "interrupt" ? { interrupt: true } : { eof: true };
   }
 
-  /** A single choice among strings; null when cancelled or closed. */
+  /**
+   * A single choice among strings; null when cancelled or closed. Each choice is drawn through
+   * `visible` (a provider's model ids are choices) and answered as given.
+   */
   async askChoice(
     label: string,
     choices: readonly string[],
@@ -559,7 +562,7 @@ export class Terminal {
       throw new RangeError(`askChoice's initial ${JSON.stringify(options.initial)} is not one of the choices`);
     }
     const initial = options.initial === undefined ? 0 : choices.indexOf(options.initial);
-    const ended = await this.#runTurn(options.signal, (run) => run(selectWidget({ label, titles: choices, initial })));
+    const ended = await this.#runTurn(options.signal, (run) => run(selectWidget({ label, titles: choices.map(visible), initial })));
     return "value" in ended ? choices[ended.value]! : null;
   }
 

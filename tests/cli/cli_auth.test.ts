@@ -70,9 +70,11 @@ function sink() {
 
 /**
  * A command's I/O: stdin ended with `stdin` (text or bytes) and marked `isTTY` as given, collected
- * stdout and stderr, and `env` as the environment.
+ * stdout and stderr (TTYs when `outTty`), and `env` as the environment.
  */
-function fakeIo(options: { stdin?: string | Uint8Array; isTTY?: boolean; env?: Record<string, string> } = {}) {
+function fakeIo(
+  options: { stdin?: string | Uint8Array; isTTY?: boolean; outTty?: boolean; env?: Record<string, string> } = {},
+) {
   const stdin = Object.assign(new PassThrough(), { isTTY: options.isTTY });
   stdin.end(options.stdin === undefined ? undefined : Buffer.from(options.stdin));
   const stdout = sink();
@@ -80,8 +82,8 @@ function fakeIo(options: { stdin?: string | Uint8Array; isTTY?: boolean; env?: R
   const env = options.env ?? {};
   const io: CliIo = {
     stdin,
-    stdout: stdout.out,
-    stderr: stderr.out,
+    stdout: { ...stdout.out, isTTY: options.outTty ?? false },
+    stderr: { ...stderr.out, isTTY: options.outTty ?? false },
     stderrStream: new PassThrough(),
     env: (name) => (Object.hasOwn(env, name) ? env[name] : undefined),
   };
@@ -416,6 +418,27 @@ describe("models --provider", () => {
     const fake = fakeListModels(["m-a", "m-b"]);
     const result = await run(models, modelsArgs({ provider: "openrouter" }), fakeIo({ stdin: "k" }), fake);
     expect(result).toEqual({ code: 0, out: "m-a\nm-b\n", err: "" });
+  });
+});
+
+describe("models --provider with escape sequences in the provider's text", () => {
+  const raw = "m\x1b]52;c;aGk=\x07-a\x1b[2J";
+
+  test("a model id is stripped on a TTY stdout and kept exactly when piped", async () => {
+    const fake = fakeListModels([raw]);
+    const tty = await run(models, modelsArgs({ provider: "openrouter" }), fakeIo({ stdin: "k", outTty: true }), fake);
+    expect(tty).toEqual({ code: 0, out: "m-a\n", err: "" });
+    const piped = await run(models, modelsArgs({ provider: "openrouter" }), fakeIo({ stdin: "k" }), fake);
+    expect(piped).toEqual({ code: 0, out: `${raw}\n`, err: "" });
+  });
+
+  test("a listing failure is stripped on a TTY stderr and kept exactly when piped", async () => {
+    const fake = fakeListModels(new ModelListError(`HTTP 400: ${raw}`, { status: 400 }));
+    const args = modelsArgs({ provider: "openrouter" });
+    const tty = await run(models, args, fakeIo({ stdin: "k", outTty: true }), fake);
+    expect(tty.err).toBe("Couldn't list the openrouter models: HTTP 400: m-a\n");
+    const piped = await run(models, args, fakeIo({ stdin: "k" }), fake);
+    expect(piped.err).toBe(`Couldn't list the openrouter models: HTTP 400: ${raw}\n`);
   });
 });
 
@@ -1300,6 +1323,20 @@ describe("auth OpenAI setup", () => {
     expect(setup.opened).toEqual(login === "browser" ? ["https://example.invalid/authorize"] : []);
   });
 
+  test.each<[string, boolean, string]>([
+    ["stripped on a TTY", true, "Open https://example.invalid/device and enter code: TEST-CODE\n"],
+    ["kept exactly when piped", false, "Open https://example.invalid/device and enter code: TEST\x1b]52;c;aGk=\x07-CODE\n"],
+  ])("the device sign-in's code is %s", async (_, outTty, shown) => {
+    const setup = setupAuth();
+    const deviceLogin = setup.service.service.deviceLogin;
+    setup.service.service.deviceLogin = (display) =>
+      deviceLogin((url, code) => display(url, code.replace("-", "\x1b]52;c;aGk=\x07-")));
+    const io = fakeIo({ env: setup.env, outTty });
+    const result = await run(auth, authArgs("openai", { method: "subscription", login: "device", model: "gpt-test" }), io, setup.deps);
+    expect(result.code).toBe(0);
+    expect(result.out).toStartWith(shown);
+  });
+
   // Interactive setup defaults to subscription and catalog first model.
   test("interactive setup defaults to a subscription and the catalog's first model", async () => {
     const setup = setupAuth();
@@ -1913,6 +1950,20 @@ describe("auth provider setup", () => {
       err: "The model didn't answer: NotFoundError: model not found; the previous login is unchanged\n",
     });
     expect(readFileSync(c.path)).toEqual(before);
+  });
+
+  const raw = "m\x1b]52;c;aGk=\x07-a\x1b[2J";
+  test.each<[string, boolean, string]>([
+    ["stripped on a TTY", true, "m-a"],
+    ["kept exactly when piped", false, raw],
+  ])("a provider's error is %s", async (_, outTty, shown) => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.fake.models = [];
+    c.chat.failure = named("NotFoundError", raw);
+    const io = fakeIo({ env: c.env, outTty });
+    const result = await run(auth, authArgs("anthropic", { model: "claude-y" }), io, c.deps);
+    expect(result.err).toBe(`The model didn't answer: NotFoundError: ${shown}; the previous login is unchanged\n`);
   });
 
   // Listing failure falls back to one reply.

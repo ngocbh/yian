@@ -54,7 +54,7 @@ import {
   writeEngineTrace,
 } from "./run.ts";
 import { Terminal, TerminalStopped } from "./terminal.ts";
-import { atTerminal, type CliIo, CommandEnv, HostStop, UsageError } from "./utils.ts";
+import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, UsageError } from "./utils.ts";
 
 /**
  * The options `chat` reads; an absent option is `undefined`, an absent repeatable one an empty
@@ -340,7 +340,7 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
       // An interrupted reply succeeds with null when its output is `Optional(...)`.
       if (event.interrupted) return io.stderr.write("(interrupted)\n");
       if (event.output === null) return;
-      return io.stdout.write(`${writeAsText(event.output as Value)}\n`);
+      return io.stdout.write(`${forTerminal(writeAsText(event.output as Value), io.stdout)}\n`);
     };
     const shared = {
       onEvent,
@@ -462,7 +462,7 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
         } catch (error) {
           if (!(error instanceof DeliveryRefused)) throw error;
           if (error.reason !== "ended") {
-            await io.stderr.write(`not sent: ${error.message}\n`);
+            await io.stderr.write(`not sent: ${forTerminal(error.message, io.stderr)}\n`);
             continue;
           }
         }
@@ -488,7 +488,7 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     }
     // Another writer holding the run's log is a busy run, not a bug.
     if (!(error instanceof RunBusyError || isSetupError(error))) throw error;
-    await io.stderr.write(`chat failed: ${error.message}\n`);
+    await io.stderr.write(`chat failed: ${forTerminal(error.message, io.stderr)}\n`);
     await writeEngineTrace(error, options.engineTrace, io);
     return 1;
   } finally {

@@ -106,6 +106,7 @@ import {
   type CliIo,
   CommandEnv,
   ensureEnvKey,
+  forTerminal,
   HostStop,
   MissingKeyError,
   osReason,
@@ -130,7 +131,7 @@ function paint(text: string, style: Style, out: Writer, env: Env): string {
 
 /** @internal Write `text` in `style` and a newline to `io.stderr`. */
 export function printStyled(io: CliIo, text: string, style: Style): Promise<void> {
-  return io.stderr.write(`${paint(text, style, io.stderr, io.env)}\n`);
+  return io.stderr.write(`${paint(forTerminal(text, io.stderr), style, io.stderr, io.env)}\n`);
 }
 
 /** Return `text`'s lines as source ranges count them, with no empty line after a final break. */
@@ -235,7 +236,8 @@ function renderFrameBox(text: string, marks: readonly number[], title: string, o
  *
  * A frame is boxed around the lines its range covers (`SourceRange.coveredLines`), or shown as
  * its label when none is in its text; its note follows it. Several frames are headed `source
- * locations:`. A diagnostic without frames prints only its message.
+ * locations:`. A diagnostic without frames prints only its message. On a TTY the message and notes,
+ * which can carry provider or tool text, go through `forTerminal`.
  */
 export async function renderDiagnostic(diag: Diagnostic, out: Writer, env: Env): Promise<void> {
   const parts: string[] = [];
@@ -243,10 +245,10 @@ export async function renderDiagnostic(diag: Diagnostic, out: Writer, env: Env):
   for (const frame of diag.frames) {
     const framed = renderFrameBox(frame.text, frame.range.coveredLines(frame.text), frame.label, out, env);
     parts.push(framed ?? paint(frame.label, "red bold", out, env));
-    if (frame.note !== null) parts.push(paint(`  ↳ ${frame.note}`, "yellow", out, env));
+    if (frame.note !== null) parts.push(paint(`  ↳ ${forTerminal(frame.note, out)}`, "yellow", out, env));
   }
-  parts.push(paint(diag.message, "red", out, env));
-  for (const note of diag.notes) parts.push(paint(`  ↳ ${note}`, "yellow", out, env));
+  parts.push(paint(forTerminal(diag.message, out), "red", out, env));
+  for (const note of diag.notes) parts.push(paint(`  ↳ ${forTerminal(note, out)}`, "yellow", out, env));
   await out.write(`${parts.join("\n")}\n`);
 }
 
@@ -280,7 +282,7 @@ export function diagnosticJson(diag: Diagnostic): DiagnosticJson {
 
 /** Return `text`, a stack or captured traceback, in a box titled `traceback`, ending in a newline. */
 function tracebackBox(text: string, out: Writer, env: Env): string {
-  const lines = splitLines(text.trimEnd());
+  const lines = splitLines(forTerminal(text, out).trimEnd());
   const rows = lines.map((line) => [line, paint(line, "dim", out, env)] as const);
   return `${box(rows, "red", out, env, "traceback")}\n`;
 }
@@ -400,7 +402,8 @@ const SPIN_MS = 80;
  * for a router) or a red `✗ <node>` with the error on the next line on failure. With `verbose`
  * each node's output follows its check. Several nodes can run at once (a fan-out), so there is
  * one spinner line per running node. On a TTY the spinners are redrawn every 80 ms and each
- * finished line is printed over them; off a TTY only the finished lines are printed.
+ * finished line is printed over them; off a TTY only the finished lines are printed. Outputs,
+ * failure messages and warnings go through `forTerminal`.
  */
 export class ProgressReporter {
   readonly #out: Writer;
@@ -438,7 +441,7 @@ export class ProgressReporter {
         this.#running.delete(event.nodeId);
         const lines = [style(`✓ ${event.nodeId}`, "green")];
         if (this.#verbose) {
-          const bodyLines = splitLines(writeAsText(event.output as Value));
+          const bodyLines = splitLines(forTerminal(writeAsText(event.output as Value), this.#out));
           for (const line of bodyLines.length > 0 ? bodyLines : [""]) lines.push(style(`    ${line}`, "dim"));
         }
         this.#print(lines.join("\n"));
@@ -454,10 +457,12 @@ export class ProgressReporter {
         // commits it, so it gets no line, only its spinner cleared.
         this.#running.delete(event.nodeId);
         break;
-      case "NodeFailed":
+      case "NodeFailed": {
         if (nodeId !== null) this.#running.delete(nodeId);
-        this.#print(`${style(`✗ ${nodeId}`, "red bold")}\n${style(`    ${event.failure.message}`, "red")}`);
+        const message = forTerminal(event.failure.message, this.#out);
+        this.#print(`${style(`✗ ${nodeId}`, "red bold")}\n${style(`    ${message}`, "red")}`);
         break;
+      }
       default:
         return;
     }
@@ -469,7 +474,7 @@ export class ProgressReporter {
    * `resume` or `stop`, so it can't land inside the prompt that has the terminal.
    */
   warn(message: string): void {
-    const line = paint(`warning: ${message}`, "yellow", this.#out, this.#env);
+    const line = paint(`warning: ${forTerminal(message, this.#out)}`, "yellow", this.#out, this.#env);
     if (this.#paused) {
       this.#held.push(line);
       return;
@@ -1476,7 +1481,7 @@ async function startRun(
   const setupFailed = async (error: Error) => {
     const notes = selectionNotes.get(error) ?? [];
     const label = paint(`${action} failed: `, "red bold", io.stderr, io.env);
-    const text = [error.message, ...notes].map((line) => paint(line, "red", io.stderr, io.env));
+    const text = [error.message, ...notes].map((line) => paint(forTerminal(line, io.stderr), "red", io.stderr, io.env));
     await io.stderr.write(`${label}${text.join("\n")}\n`);
     await writeStack(error);
     return fail(new Diagnostic({ code: "run.setup", message: error.message, notes }));
@@ -1668,8 +1673,8 @@ async function startRun(
 
   if (result.status === "succeeded") {
     if (json) await printJson({ status: "succeeded", output: jsonValue(result.output) }, io.stdout);
-    // A string prints as is; any other value in yian's text form.
-    else await io.stdout.write(`${writeAsText(result.output as Value)}\n`);
+    // A string prints as is, any other value in yian's text form; a TTY gets it through forTerminal.
+    else await io.stdout.write(`${forTerminal(writeAsText(result.output as Value), io.stdout)}\n`);
     return 0;
   }
   if (result.status === "waiting") {

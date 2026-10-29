@@ -179,6 +179,9 @@ ends. See [Agents](/agents/) for the file format.
   finished lines print.
 - Warnings print as `warning: <message>` lines on stderr.
 - Colour is used only on a terminal, and never when `NO_COLOR` is set.
+- On a terminal, the output, errors and warnings lose their escape sequences and control
+  characters (all but newlines and tabs), so text from a model or tool can't move the cursor, set
+  the clipboard or add a link. Piped or redirected output keeps every byte.
 
 A load error shows where the flow broke: the lines around it, the line marked `❱`, and the message
 below. A runtime error points at the line it came from the same way. Add `--engine-trace` only to
@@ -212,7 +215,8 @@ $ yian chat support.yaml --inbox questions --input team=billing
 | `--engine-trace` | | On a failure, also print the engine's stack trace |
 
 - Each time the run waits, a `> You:` prompt shows on stderr. Your line goes to the inbox and the
-  run moves on. The output of every node named `reply` prints on stdout as it finishes.
+  run moves on. The output of every node named `reply` prints on stdout as it finishes, cleaned
+  on a terminal as `yian run`'s output is.
 - An `Inbox(Message)` gets your line as a user message with one text part.
 - `/exit`, `/quit` or Ctrl-D closes the inbox; once the flow finishes: `session ended`, exit 0.
 - Ctrl-C while a reply runs interrupts it, and the prompt comes back. A second Ctrl-C within 2

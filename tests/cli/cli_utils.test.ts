@@ -16,6 +16,7 @@ import {
   type CommandSpec,
   ensureEnvKey,
   flush,
+  forTerminal,
   helpText,
   HostStop,
   JSON_FORMAT,
@@ -26,6 +27,7 @@ import {
   printJson,
   stopOnSignals,
   streamWriter,
+  stripControls,
   UsageError,
   usageError,
   type Writer,
@@ -612,5 +614,49 @@ describe("stopOnSignals", () => {
     expect(controller.signal.reason).toBeInstanceOf(HostStop);
     expect(controller.signal.reason.signal).toBe("SIGTERM");
     expect(listeners(target)).toEqual([0, 0, 0]);
+  });
+});
+
+describe("stripControls", () => {
+  test.each<[string, string, string]>([
+    ["an OSC 52 clipboard write ended by BEL", "a\x1b]52;c;aGk=\x07b", "ab"],
+    ["an OSC 8 hyperlink ended by ST", "\x1b]8;;https://x.example\x1b\\link\x1b]8;;\x1b\\", "link"],
+    ["an OSC ended by C1 ST", "\x9d0;title\x9cok", "ok"],
+    ["a CSI cursor move and colour", "\x1b[2J\x1b[1;31mred\x1b[0m\x1b[?25l", "red"],
+    ["a C1 CSI", "a\x9b2Jb", "ab"],
+    ["a DCS string", "a\x1bPq#0\x1b\\b", "ab"],
+    ["two-byte ESC sequences", "\x1b7a\x1b(Bb\x1bc", "ab"],
+    ["an unended OSC, leaving its text", "a\x1b]8;;x", "a8;;x"],
+    ["C0, DEL and C1 controls, a lone CR among them", "a\x00\x07\x08\rb\x7f\x85c", "abc"],
+    ["kept newlines and tabs, CRLF read as LF", "a\tb\r\nc\n", "a\tb\nc\n"],
+    ["plain text with non-ASCII", "héllo — 世界", "héllo — 世界"],
+  ])("drops %s", (_, text, expected) => {
+    expect(stripControls(text)).toBe(expected);
+  });
+
+  test.each<[string, string]>([
+    ["OSC", "\x9d"],
+    ["DCS", "\x90"],
+    ["mixed 7-bit and C1", "\x1b]\x9d\x90\x1bP"],
+  ])("takes linear time on a megabyte of unended %s introducers", (_, introducer) => {
+    const text = introducer.repeat(Math.ceil(1_000_000 / introducer.length));
+    const start = performance.now();
+    const stripped = stripControls(text);
+    expect(performance.now() - start).toBeLessThan(1000);
+    // No control survives, nor anything else: an unended introducer is a control on its own.
+    expect(stripped).toBe("");
+  });
+});
+
+describe("forTerminal", () => {
+  const text = "a\x1b]52;c;aGk=\x07b";
+
+  test("strips text written to a TTY", () => {
+    expect(forTerminal(text, { write: async () => {}, isTTY: true })).toBe("ab");
+  });
+
+  test("keeps text written elsewhere exactly", () => {
+    expect(forTerminal(text, { write: async () => {}, isTTY: false })).toBe(text);
+    expect(forTerminal(text, { write: async () => {} })).toBe(text);
   });
 });

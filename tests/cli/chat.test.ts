@@ -69,16 +69,23 @@ function sink() {
   return { out, text: () => chunks.join("") };
 }
 
-/** A fresh io over a scripted stdin (a fake TTY when `tty`), its outputs collected. */
-function chatIo({ tty = false, env = {} }: { tty?: boolean; env?: Record<string, string> } = {}) {
+/**
+ * A fresh io over a scripted stdin (a fake TTY when `tty`), its outputs collected and marked TTYs
+ * when `outTty`.
+ */
+function chatIo({
+  tty = false,
+  outTty = false,
+  env = {},
+}: { tty?: boolean; outTty?: boolean; env?: Record<string, string> } = {}) {
   stdin = new FakeInput({ tty });
   const out = sink();
   const err = sink();
   // A TTY chat draws on a TTY stderr; a piped one on a plain one.
   const stderrStream = new FakeOutput({ tty });
   const io: CliIo = {
-    stdout: out.out,
-    stderr: err.out,
+    stdout: { ...out.out, isTTY: outTty },
+    stderr: { ...err.out, isTTY: outTty },
     stdin,
     stderrStream,
     env: (name) => (Object.hasOwn(env, name) ? env[name] : NO_ENV(name)),
@@ -556,6 +563,53 @@ test(
   },
   TIMEOUT,
 );
+
+const ESCAPED = "x\x1b]52;c;aGk=\x07y\x1b]8;;https://e.example\x1b\\z\x1b[2J";
+const ESCAPED_REPLY = `      reply:
+        kind: code
+        output: str
+        code: |
+          return "x\\u001b]52;c;aGk=\\u0007y\\u001b]8;;https://e.example\\u001b\\\\z\\u001b[2J";
+`;
+
+describe("yian chat's model text with escape sequences", () => {
+  test(
+    "a reply is stripped on a TTY stdout and kept exactly when piped",
+    async () => {
+      for (const [outTty, reply] of [
+        [true, "xyz"],
+        [false, ESCAPED],
+      ] as const) {
+        const { io, stdin, stdout } = chatIo({ outTty, env: { NO_COLOR: "1" } });
+        stdin.write("/exit\n");
+        const { code } = await runChat(flowFile(turnFlow(ESCAPED_REPLY)), io, { log: join(tmp, `${outTty}.jsonl`) });
+        expect([code, stdout()]).toEqual([0, `${reply}\n`]);
+      }
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "chat failed: is stripped on a TTY stderr and kept exactly when piped",
+    async () => {
+      // A log whose folder is a file: the run can't create it, and the error names its path.
+      writeFileSync(join(tmp, "t\x1b]52;c;aGk=\x07"), "");
+      const log = join(tmp, "t\x1b]52;c;aGk=\x07", "run.jsonl");
+      for (const [outTty, folder] of [
+        [true, "/t/"],
+        [false, "/t\x1b]52;c;aGk=\x07/"],
+      ] as const) {
+        const { io, stderr } = chatIo({ outTty, env: { NO_COLOR: "1" } });
+        const { code } = await runChat(flowFile(ECHO), io, { log });
+        expect(code).toBe(1);
+        const failed = stderr().slice(stderr().indexOf("chat failed: "));
+        expect(failed).toStartWith("chat failed: ENOTDIR");
+        expect(failed).toContain(`${folder}run.jsonl`);
+      }
+    },
+    TIMEOUT,
+  );
+});
 
 describe("yian chat's failures under --engine-trace", () => {
   test(

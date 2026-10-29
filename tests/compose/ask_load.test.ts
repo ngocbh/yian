@@ -167,6 +167,11 @@ test("a questions reference loads", () => {
 test.each([
   ["a question without its question", "      questions:\n        - header: Ship\n", "question[0] is invalid"],
   ["a non-text header", "      questions:\n        - question: Ship?\n          header: 5\n", "`questions[0].header:` must be text"],
+  [
+    "a repeated option label",
+    "      questions:\n        - question: Ship?\n          header: s\n          options: [{label: yes}, {label: yes}]\n",
+    'question[0] is invalid: option labels must be unique, got ["yes","yes"]',
+  ],
   ["questions that aren't a list", "      questions: ship\n", "must be a list of questions"],
   ["a questions reference that isn't a list", "      questions: ${input.n}\n", "must be a list of questions, but the value is int"],
   ["prompt: 5", "      prompt: 5\n", "`prompt:` must be text, but YAML read it as an integer"],

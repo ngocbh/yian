@@ -142,7 +142,7 @@ output: ${plan.output}
 | Input | Meaning |
 |---|---|
 | `prompt:` | One free-text question |
-| `questions:` | A list of 1 to 4 questions (`YIAN_MAX_QUESTIONS` changes the 4), each with `question:` and a unique `header:`; optional `options:` (each a `label:` and an optional `description:`) and `multi_select:` |
+| `questions:` | A list of 1 to 4 questions (`YIAN_MAX_QUESTIONS` changes the 4), each with `question:` and a unique `header:`; optional `options:` (each a `label:`, unique within the question, and an optional `description:`) and `multi_select:` |
 | `adaptive_questions:` | A block whose `prompt:` asks a model to write the questions from the node's other inputs |
 | `timeout:` | How long to wait; see below |
 | anything else | Refused before the run, unless the host's `ask` handler declares it; then it reaches the handler, such as `to: lead` |

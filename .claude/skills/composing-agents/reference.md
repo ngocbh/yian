@@ -73,7 +73,8 @@ adds `over`; `loop` adds one of `while`, `until`, `times`, and optional `max`.
 
 **ask** ([Inboxes and waiting](https://yian.readthedocs.io/inboxes/#ask-a-person)):
 `tool_id: ask`, `input` with one of `prompt` or `questions` (1 to 4, each with `question`, a
-unique `header`, optional `options` and `multi_select`), optional `timeout`; or
+unique `header`, optional `options` (labels unique within the question) and `multi_select`),
+optional `timeout`; or
 `adaptive_questions: {prompt: ...}` beside `input`. A `questions:` answer is a record keyed by
 `header`. Other inputs reach the host's handler, which must declare them.
 

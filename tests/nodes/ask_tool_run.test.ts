@@ -240,6 +240,49 @@ output: \${choose.output}
   ]);
 });
 
+/** A flow whose ask `ask` asks the questions of its `qs` input and returns the answer. */
+const QUESTIONS_FLOW = `
+id: asks
+name: asks
+input:
+  qs: !list(object)
+nodes:
+  ask:
+    kind: tool
+    tool_id: ask
+    input:
+      questions: \${input.qs}
+output: \${ask.output}
+`;
+
+test("an upstream question list with a label repeated within a question fails before it asks", async () => {
+  const seen: AskRequest[] = [];
+  const qs = [{ question: "Ship?", header: "ship", options: [{ label: "yes" }, { label: "yes", description: "hold" }] }];
+
+  const result = await runFlow(await loadFlow(QUESTIONS_FLOW), { qs }, {
+    env: hostEnv(dir),
+    log: freshLog(),
+    tools: { ask: (request: AskRequest) => (seen.push(request), { ship: "yes" }) },
+  });
+
+  expect(result.status).toBe("failed");
+  expect(result.failure?.message).toBe('question[0] is invalid: option labels must be unique, got ["yes","yes"]');
+  expect(seen).toEqual([]);
+});
+
+test("a question list with an empty header and an empty label still runs, answered keyed by the empty header", async () => {
+  const qs = [{ question: "", header: "", options: [{ label: "" }, { label: "no" }] }];
+
+  const result = await runFlow(await loadFlow(QUESTIONS_FLOW), { qs }, {
+    env: hostEnv(dir),
+    log: freshLog(),
+    tools: { ask: () => ({ "": "" }) },
+  });
+
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual({ "": "" });
+});
+
 test.each([
   ["a date", "2000-01-01"],
   ["a datetime", "2000-01-01T01:02:03"],

@@ -96,6 +96,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_MODEL_LIST_BYTES` | input cap | 16,777,216 | 1 or more | Largest model listing read from a provider |
 | `YIAN_MAX_MODEL_LIST_PAGES` | input cap | 100 | 1 or more | Most pages read from a provider's model listing |
 | `YIAN_MAX_MCP_MESSAGE_BYTES` | input cap | 16,777,216 | 1 or more | Largest message read from a stdio MCP server |
+| `YIAN_MAX_MODEL_EVENT_BYTES` | input cap | 16,777,216 | 1 or more | Largest event read from a model's reply stream: an SSE event's data or one NDJSON line |
 | `YIAN_MAX_EVENT_BYTES` | input cap | 1,048,576 | 1 or more | Largest event sent to a run's inbox, host call's pending step or completed answer, in run-log JSON bytes |
 | `YIAN_MAX_BASE_URL_CHARS` | input cap | 2,048 | 1 or more | Longest provider base URL accepted |
 | `YIAN_MAX_CONNECTION_HEADERS` | input cap | 32 | 1 or more | Most extra request headers a provider connection may send |

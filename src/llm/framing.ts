@@ -3,9 +3,14 @@
  *
  * Both readers take the body as byte chunks of any size and do work linear in its length:
  * a partial line is kept as a list of pieces and joined once, never rescanned. Both read
- * the chunks with `for await`, so a consumer that stops early closes the source.
+ * the chunks with `for await`, so a consumer that stops early closes the source. Both stop
+ * with a `ProviderError` (kind `protocol`, not retryable) once one event grows past
+ * `YIAN_MAX_MODEL_EVENT_BYTES`, so an endless line can't grow memory without bound.
  */
 
+import { Buffer } from "node:buffer";
+
+import { current } from "../defaults.ts";
 import { ProviderError } from "./errors.ts";
 import { JSONDecodeError, parseJson, type JsonValue } from "../typesys/json.ts";
 
@@ -40,14 +45,23 @@ export class SSEEvent {
  * lines (starting with `:`) and `retry` or unknown fields are ignored. A blank line
  * dispatches the event if it had a `data` field. An event still open at the end of the
  * stream is dropped.
+ *
+ * Throws `ProviderError` (kind `protocol`, not retryable) when an event's `data` so far plus
+ * the line being read pass `maxEventBytes` UTF-8 bytes; the message gives the line number.
  */
-export async function* iterSse(chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array>): AsyncGenerator<SSEEvent> {
+export async function* iterSse(
+  chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
+  maxEventBytes: number = current().maxModelEventBytes,
+): AsyncGenerator<SSEEvent> {
   // The default decoder removes one leading BOM, even one split across chunks.
   const decoder = new TextDecoder();
   let data: string[] = [];
+  let dataBytes = 0;
   let event: string | null = null;
   let lastId: string | null = null;
   const pending: string[] = [];
+  let pendingBytes = 0;
+  let number = 0;
   // A CR ending one piece may be the first half of a CRLF; its LF is then skipped.
   let afterCr = false;
   for await (const chunk of chunks) {
@@ -59,13 +73,20 @@ export async function* iterSse(chunks: AsyncIterable<Uint8Array> | Iterable<Uint
     if (text) afterCr = text.endsWith("\r");
     let start = 0;
     for (const match of text.matchAll(LINE_END)) {
-      pending.push(text.slice(start, match.index));
+      const piece = text.slice(start, match.index);
+      number += 1;
+      if (dataBytes + pendingBytes + Buffer.byteLength(piece) > maxEventBytes) {
+        throw overCap("SSE event at line", number, maxEventBytes);
+      }
+      pending.push(piece);
       const line = pending.join("");
       pending.length = 0;
+      pendingBytes = 0;
       start = match.index + match[0].length;
       if (!line) {
         if (data.length > 0) yield new SSEEvent({ data: data.join("\n"), event, id: lastId });
         data = [];
+        dataBytes = 0;
         event = null;
         continue;
       }
@@ -74,11 +95,19 @@ export async function* iterSse(chunks: AsyncIterable<Uint8Array> | Iterable<Uint
       const name = colon === -1 ? line : line.slice(0, colon);
       let value = colon === -1 ? "" : line.slice(colon + 1);
       if (value.startsWith(" ")) value = value.slice(1);
-      if (name === "data") data.push(value);
-      else if (name === "event") event = value || null;
+      if (name === "data") {
+        // Each line after the first adds the `\n` it is joined with.
+        dataBytes += (data.length > 0 ? 1 : 0) + Buffer.byteLength(value);
+        data.push(value);
+      } else if (name === "event") event = value || null;
       else if (name === "id" && !value.includes("\0")) lastId = value;
     }
-    if (start < text.length) pending.push(text.slice(start));
+    if (start < text.length) {
+      const piece = text.slice(start);
+      pendingBytes += Buffer.byteLength(piece);
+      if (dataBytes + pendingBytes > maxEventBytes) throw overCap("SSE event at line", number + 1, maxEventBytes);
+      pending.push(piece);
+    }
   }
 }
 
@@ -86,24 +115,34 @@ export async function* iterSse(chunks: AsyncIterable<Uint8Array> | Iterable<Uint
  * Parse newline-delimited JSON, yielding each non-blank line's value; a final line without
  * a newline still counts. Ints read as `bigint`.
  *
- * Throws `ProviderError` (kind `protocol`) when a line is not valid UTF-8 JSON; the message
- * gives the line number, never the line.
+ * Throws `ProviderError` (kind `protocol`, not retryable) when a line is not valid UTF-8 JSON
+ * or is longer than `maxEventBytes` bytes; the message gives the line number, never the line.
  */
-export async function* iterNdjson(chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array>): AsyncGenerator<JsonValue> {
+export async function* iterNdjson(
+  chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
+  maxEventBytes: number = current().maxModelEventBytes,
+): AsyncGenerator<JsonValue> {
   const pending: Uint8Array[] = [];
+  let pendingBytes = 0;
   let number = 0;
   for await (const chunk of chunks) {
     let start = 0;
     for (let end = chunk.indexOf(LF); end !== -1; end = chunk.indexOf(LF, start)) {
+      number += 1;
+      if (pendingBytes + end - start > maxEventBytes) throw overCap("NDJSON line", number, maxEventBytes);
       pending.push(chunk.subarray(start, end));
       start = end + 1;
-      number += 1;
       const line = join(pending);
       pending.length = 0;
+      pendingBytes = 0;
       if (!isBlank(line)) yield jsonLine(line, number);
     }
-    // Copied, since the source may reuse the chunk's buffer once it moves on.
-    if (start < chunk.length) pending.push(chunk.slice(start));
+    if (start < chunk.length) {
+      pendingBytes += chunk.length - start;
+      if (pendingBytes > maxEventBytes) throw overCap("NDJSON line", number + 1, maxEventBytes);
+      // Copied, since the source may reuse the chunk's buffer once it moves on.
+      pending.push(chunk.slice(start));
+    }
   }
   const line = join(pending);
   if (!isBlank(line)) yield jsonLine(line, number + 1);
@@ -143,6 +182,12 @@ function jsonLine(line: Uint8Array, number: number): JsonValue {
     if (!(err instanceof JSONDecodeError)) throw err;
     throw invalidLine(number);
   }
+}
+
+/** Return the error for `what` at line `number`, which passed the `limit` bytes cap. */
+function overCap(what: string, number: number, limit: number): ProviderError {
+  const message = `${what} ${number} is over the limit of ${limit} bytes (YIAN_MAX_MODEL_EVENT_BYTES)`;
+  return new ProviderError("protocol", message);
 }
 
 /** Return the error for NDJSON line `number`, which is not valid UTF-8 JSON. */

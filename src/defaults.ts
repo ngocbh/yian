@@ -323,6 +323,14 @@ export const ENTRIES = Object.freeze([
     group: "input cap",
     minimum: 1,
   }),
+  // As large as the model listing: a reply's events are small, but one may carry a
+  // whole image or tool argument.
+  entry("MAX_MODEL_EVENT_BYTES", {
+    default: 16 * 1024 * 1024,
+    description: "Largest event read from a model's reply stream: an SSE event's data or one NDJSON line",
+    group: "input cap",
+    minimum: 1,
+  }),
   // Media travel as run-folder file refs, so the cap is on text and structure.
   entry("MAX_EVENT_BYTES", {
     default: MAX_EVENT_BYTES,

@@ -514,6 +514,7 @@ export const BUILTIN_MEMORY_CONFIG_KEYS: ReadonlyMap<string, ReadonlySet<string>
 
 /**
  * Per built-in key, in the order checked: the least integer allowed and whether null is allowed.
+ * Every key is also at most 2^53 − 1.
  *
  * These mirror the backend constructors so a bad value fails at load, not first when the host
  * builds the memories; null leaves an episodic or reflective limit to the stored or default value.
@@ -548,7 +549,7 @@ const BUILTIN_MEMORY_CONFIG_RULES: ReadonlyMap<string, readonly (readonly [strin
  * Throw when a built-in type's config value breaks its backend's rule.
  *
  * @throws TypeError when a value isn't a `bigint` (or null, where allowed).
- * @throws RangeError when a value is below its minimum.
+ * @throws RangeError when a value is below its minimum or above 2^53 − 1.
  */
 function checkBuiltinConfigValues(typeName: string, config: JsonObject): void {
   for (const [key, minimum, nullable] of BUILTIN_MEMORY_CONFIG_RULES.get(typeName)!) {
@@ -560,6 +561,9 @@ function checkBuiltinConfigValues(typeName: string, config: JsonObject): void {
     }
     if (value < minimum) {
       throw new RangeError(`${typeName} memory config ${key} must be an integer of at least ${minimum}, got ${value}`);
+    }
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+      throw new RangeError(`${typeName} memory config ${key} must be at most ${Number.MAX_SAFE_INTEGER}, got ${value}`);
     }
   }
 }

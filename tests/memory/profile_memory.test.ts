@@ -843,7 +843,7 @@ test("a store read failing with a system error during learn is profile.store_una
   expect(model.configs).toEqual([]);
 });
 
-test("feedback holding Infinity is profile.invalid_context after the model call", async () => {
+test("feedback holding Infinity is profile.invalid_context before the model call", async () => {
   const model = installModel(["<profile># Ada\nBrief.</profile>"]);
   const memory = await newMemory("# Ada\n", { createModel: model.createModel });
   const error = await withRun(memory, (session) =>
@@ -855,8 +855,8 @@ test("feedback holding Infinity is profile.invalid_context after the model call"
     false,
     "feedback must be finite JSON",
   ]);
-  expect(error.cause).toBeInstanceOf(RangeError);
-  expect(model.requests.length).toBe(1);
+  expect(model.configs).toEqual([]);
+  expect(model.requests.length).toBe(0);
 });
 
 test("onRetry sees a retried provider error", async () => {

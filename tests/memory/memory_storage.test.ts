@@ -221,7 +221,10 @@ test.each([
   const store = new SQLiteStorage(path.join(dir, "memory.sqlite"), "session");
   try {
     store.save({ old: true });
-    expectStorageError(() => store.save(invalid), "invalid_state");
+    // Infinity is allowed, so the message doesn't say "finite".
+    expect(expectStorageError(() => store.save(invalid), "invalid_state").message).toBe(
+      "Memory storage requires a JSON object (no NaN).",
+    );
     expect(store.load()).toEqual({ old: true });
     store.save({ valid: true });
   } finally {

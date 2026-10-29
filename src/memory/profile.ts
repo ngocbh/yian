@@ -434,6 +434,17 @@ export class ProfileSession implements MemorySession {
       throw error("learn", "profile.invalid_context", "context must be a LearnContext");
     }
     if (context.feedback.length === 0) return [];
+    const feedback: JsonValue[] = [];
+    const seen = new Set<string>();
+    for (const entry of context.feedback) {
+      const value = feedbackValue(entry);
+      // A mutation payload can't hold a non-finite number; refuse it before the paid model call.
+      if (hasNonFinite(value)) throw error("learn", "profile.invalid_context", "feedback must be finite JSON");
+      const key = logJson(value);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      feedback.push(value);
+    }
     const memory = this.memory;
     let currentText: string;
     let currentVersion: string;
@@ -494,15 +505,6 @@ export class ProfileSession implements MemorySession {
     }
     const text = parseReply(response, currentText, memory.maxChars);
     if (text.trim() === currentText.trim()) return [];
-    const feedback: JsonValue[] = [];
-    const seen = new Set<string>();
-    for (const entry of context.feedback) {
-      const value = feedbackValue(entry);
-      const key = logJson(value);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      feedback.push(value);
-    }
     const payload = {
       base_version: currentVersion,
       text,
@@ -510,15 +512,7 @@ export class ProfileSession implements MemorySession {
       run_id: context.runId,
       feedback,
     };
-    try {
-      return [new MemoryMutation(`profile:${sha256(text)}`, payload)];
-    } catch (cause) {
-      // Feedback may hold infinity, which a mutation payload can't.
-      if (cause instanceof RangeError && feedback.some(hasNonFinite)) {
-        throw error("learn", "profile.invalid_context", "feedback must be finite JSON", { cause });
-      }
-      throw cause;
-    }
+    return [new MemoryMutation(`profile:${sha256(text)}`, payload)];
   }
 
   /**

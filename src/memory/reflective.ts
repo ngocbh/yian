@@ -609,7 +609,7 @@ function parseInventory(value: unknown): Inventory {
  * ```ts
  * const memory = new ReflectiveMemory({ storage: "memory.sqlite" });
  * try {
- *   const result = await runFlow(flow, inputs, { memory: { reflective: memory }, learnable: true });
+ *   const result = await runFlow(flow, inputs, { memory: new Map([["reflective", memory]]), learnable: true });
  *   await result.backward();
  * } finally {
  *   memory.close();

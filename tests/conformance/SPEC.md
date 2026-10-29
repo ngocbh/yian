@@ -687,7 +687,17 @@ of the `pool_commit` it names (a `from` seq by the kind and node of the record i
 cut right after its `pool_commit` runs again, so what it took from the host scripts goes back from
 its last record before the commit (its steps replay). A cut inside the run start (before the START
 inputs' commit) can't be resumed: the sweep expects the resume to refuse it (`run log <path> ends
-inside its run start; start the run again`) and leave the log as it is.
+inside its run start; start the run again`) and leave the log as it is. Each resume is held to
+the host scripts as the uncut run is: a model request that differs from its entry's `request`, a
+call past a script's end, or an entry left unused fails the sweep. An AGENT tool call whose reply
+is in the cut log, but not its result, and that the uncut run made is closed `crashed`, not made
+again (`closed: crashed` above): the resume must close exactly those calls, by node and call id (a
+call the agent never makes, such as an ungranted tool's, has nothing to cut off). For each such call, the
+script it took from (`host.tools` or `host.human`) may keep one entry, since what the call took
+stays taken; its agent's `host.models` script may run out, since the agent reads the closer and
+may make a model call more; and the agent's later scripted requests are compared with that call's
+result read as the closer (`content` the closer text, `is_error: true`). A filled secret in the
+uncut run's log or in a resumed log fails the sweep too.
 
 A `run`, `resume` or `backward` case may have a **golden log**, `<name>.log.jsonl` beside it: the
 run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`

@@ -59,6 +59,8 @@ const ALLOWED: Record<string, string> = {
   "cli/chat_tools.ts: LIST_FLOWS_ENTRIES": "files and folders list_flows looks at before it stops",
   "cli/chat_tools.ts: LIST_FLOWS_LIMIT": "flow paths list_flows shows the chat's model",
   "cli/chat_tools.ts: READ_FLOW_BYTES": "size of a flow file read_flow shows the chat's model",
+  "cli/chat_tools.ts: STATUS_TEXT_CHARS": "size of each text field of a child run's status the chat's model reads",
+  "cli/chat_tools.ts: WAIT_FLOW_MAX_S": "longest wait_flow waits for a child run to change",
   "cli/diff.ts: CONTEXT": "lines of context around a change in a diff",
   "cli/inbox_chat.ts: SECOND_PRESS_MS": "how soon a second Ctrl-C cancels the chat's run",
   "cli/render.ts: ERR_CONTEXT": "lines of YAML shown around an error",

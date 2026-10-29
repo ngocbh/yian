@@ -5,8 +5,11 @@
  * throws a `ReportedToolError` (a refusal, a bad argument, a failed read) that the model reads as
  * the call's result, and `write_flow` returns every outcome once it has asked the user.
  *
- * Knows about: the file system, the host tool API and its errors, confined loading and the
- * terminal's approval prompt.
+ * The run tools (`chatRunTools`) start flows in the chat's folder as child runs, once the user
+ * approves each on the terminal, and read, wait on, answer, message and stop them.
+ *
+ * Knows about: the file system, the host tool API and its errors, confined loading, the
+ * terminal's approval prompt, the run boundary's flow readers and the chat's child runs.
  */
 
 import {
@@ -27,17 +30,20 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createHash } from "node:crypto";
 import { basename, dirname, extname, join, relative, resolve, sep } from "node:path";
 
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import type { Env } from "../defaults.ts";
 import { compareCodeUnits, type Diagnostic, reprText } from "../diagnostics.ts";
-import { isSystemError, leavesRoot } from "../platform.ts";
+import { isSystemError, leavesRoot, realScheduler, type Scheduler } from "../platform.ts";
+import { hostInputs, skillGrants, staticNodes } from "../run.ts";
 import { resolvedPath } from "../skills/catalog.ts";
 import { isReportedToolError, ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
 import { canonicalTypeLabel } from "../typesys/values.ts";
+import type { ChildRuns, ChildStatus } from "./chat_runs.ts";
 import { loadConfinedText } from "./confined_load.ts";
 import { unifiedDiff } from "./diff.ts";
 import { renderDiagnostic } from "./render.ts";
@@ -585,4 +591,305 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
       },
     }),
   ];
+}
+
+/** The longest `wait_flow` waits, in seconds. */
+const WAIT_FLOW_MAX_S = 120;
+
+/** The most characters of each text field a run tool's status shows the model. */
+const STATUS_TEXT_CHARS = 4000;
+
+/** The approval answers `start_flow` offers: the first two start, the last (Ctrl-C's) doesn't. */
+const START_CHOICES = ["Approve", "Approve this flow for this chat", "Reject"] as const;
+
+/** What the run tools need beside the file tools' host. */
+export interface ChatRunToolsOptions {
+  /**
+   * Told each status a run tool hands the model, by run and seq, so the child events up to it
+   * aren't relayed again; `null` for none.
+   */
+  seen?: { markSeen(run: string, seq: number): void } | null;
+  /** The clock `wait_flow` times out on; the real one by default. */
+  scheduler?: Scheduler;
+}
+
+/** `text` cut to `STATUS_TEXT_CHARS` characters, with a note when it was cut. */
+function cutText(text: string): string {
+  if (text.length <= STATUS_TEXT_CHARS) return text;
+  return `${text.slice(0, STATUS_TEXT_CHARS)}... (cut at ${STATUS_TEXT_CHARS} characters)`;
+}
+
+/** `status` as the model reads it: its text fields cut, without the seq it doesn't need. */
+function shownStatus(status: ChildStatus): Record<string, unknown> {
+  const { seq: _, output, failure, asks, replies, note, ...rest } = status;
+  const shown: Record<string, unknown> = { ...rest };
+  if (output !== undefined) {
+    // An output too long as JSON is shown as its cut JSON text.
+    const json = JSON.stringify(output) ?? "null";
+    if (typeof output === "string") shown["output"] = cutText(output);
+    else shown["output"] = json.length > STATUS_TEXT_CHARS ? cutText(json) : output;
+  }
+  if (failure !== undefined) shown["failure"] = { ...failure, message: cutText(failure.message) };
+  if (asks !== undefined) shown["asks"] = asks.map((ask) => ({ ...ask, question: cutText(ask.question) }));
+  if (replies !== undefined) shown["replies"] = replies.map(cutText);
+  if (note !== undefined) shown["note"] = cutText(note);
+  return shown;
+}
+
+/**
+ * What the flow `flow` can do, over its own nodes and the flows it uses: the node kinds, the
+ * tools its TOOL nodes call, the tools and skills its agents are granted, and whether it runs
+ * code; one line each, for the approval card.
+ */
+function capabilities(flow: ComposedFlow): string[] {
+  const kinds = new Set<string>();
+  const called = new Set<string>();
+  const granted = new Set<string>();
+  for (const [, node] of staticNodes(flow)) {
+    // Every flow has its start and end; they do nothing to approve.
+    if (node.kind !== "start" && node.kind !== "end") kinds.add(node.kind);
+    const call = node.hostToolCall();
+    if (call !== null) called.add(call.toolId);
+    for (const grant of node.grantedTools()) granted.add(grant);
+  }
+  const skills = new Set<string>();
+  for (const [, grant] of skillGrants(flow.compiled)) {
+    for (const name of grant === "all" ? ["all the skills the run has"] : grant) skills.add(name);
+  }
+  const listed = (names: ReadonlySet<string>) => Array.from(names).sort(compareCodeUnits).join(", ");
+  const lines = [`node kinds: ${listed(kinds) || "none"}`];
+  if (called.size > 0) lines.push(`tools it calls: ${listed(called)}`);
+  if (granted.size > 0) lines.push(`tools its agents may call: ${listed(granted)}`);
+  if (skills.size > 0) lines.push(`skills its agents get: ${listed(skills)}`);
+  if (kinds.has("code")) lines.push("runs code on this machine (CODE nodes)");
+  return lines;
+}
+
+/**
+ * The child run `id` names, for a tool.
+ *
+ * @throws {ReportedToolError} When no child has the id, or it isn't a string.
+ */
+function knownRun(runs: ChildRuns, args: Record<string, unknown>): string {
+  const id = stringArg(args, "run");
+  try {
+    runs.status(id);
+  } catch (error) {
+    if (error instanceof RangeError) throw new ReportedToolError(error.message);
+    throw error;
+  }
+  return id;
+}
+
+/**
+ * Load the flow file `path` in `host.root` for `start_flow`: its real path, text and flow.
+ *
+ * @throws {ToolRefused} For a path that is refused, or a file that isn't a flow file or is too large.
+ * @throws {ReportedToolError} For a file that can't be read, or a flow that doesn't load.
+ */
+async function loadForStart(
+  host: ChatToolHost,
+  path: string,
+): Promise<{ real: string; shown: string; text: string; flow: ComposedFlow }> {
+  const root = resolveRoot(host.root);
+  const real = confine(root, path);
+  const text = readFlow(path, real);
+  try {
+    const flow = await loadConfinedText(root, real, text, host.env);
+    return { real, shown: slashed(relative(root, real)), text, flow };
+  } catch (error) {
+    if (error instanceof LoadError) {
+      throw new ReportedToolError(`invalid:\n${await renderedDiagnostic(error.diagnostic, host.env)}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * The chat assistant's run tools over `runs`: `start_flow`, which asks the user through
+ * `host.approve` before it starts a flow in `host.root`; `flow_status` and `wait_flow`, which
+ * read a child's status; and `answer_flow`, `message_flow`, `close_inbox` and `stop_flow`, which
+ * relay to it. Each returns the child's status as JSON, its text fields cut at
+ * `STATUS_TEXT_CHARS`, and marks it read (`runs.markRead`, `options.seen`). An unknown run, or an
+ * argument of the wrong type, is a `ReportedToolError`.
+ */
+export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatRunToolsOptions = {}): FunctionTool[] {
+  const { seen = null, scheduler = realScheduler } = options;
+  // The approvals given "for this chat", by real path: the digest of what was approved.
+  const approved = new Map<string, string>();
+  // By child, the last seq a tool showed the model, so `wait_flow` returns at once for a newer one.
+  const shown = new Map<string, number>();
+  const show = (status: ChildStatus): string => {
+    runs.markRead(status.run, status.seq);
+    seen?.markSeen(status.run, status.seq);
+    const last = shown.get(status.run) ?? 0;
+    shown.set(status.run, Math.max(status.seq, last));
+    // The stored status keeps the replies it was published with; once shown, they are read.
+    const { replies: _, ...unrepeated } = status;
+    return JSON.stringify(shownStatus(status.seq <= last ? unrepeated : status));
+  };
+  const runArgument = (description: string, ...more: [name: string, description: string][]) =>
+    stringArguments(
+      ["run", description, true],
+      ...more.map(([name, text]): [string, string, boolean] => [name, text, true]),
+    );
+  const RUN = "The run's id, as start_flow returned it (r1, r2, ...).";
+  const STATUS =
+    "Returns the run's status as JSON: status (running, waiting, succeeded, failed or cancelled), output, " +
+    "failure, waits, asks (questions with their call ids), replies (what it said since you last looked), note " +
+    "(something that couldn't be done) and log.";
+  return [
+    tool({
+      name: "start_flow",
+      description:
+        "Start a flow file (.yaml, .yml) in the chat's folder as a background run of this chat, once the user " +
+        "approves it on their terminal. Run check_flow first to learn its inputs, and ask the user for input " +
+        "values you don't know rather than inventing them; an Inbox input is never given here (use " +
+        `message_flow). ${STATUS} The status's run is the id the other run tools take. Returns \`not ` +
+        "started: <why>` when the user rejects it or it can't start; don't retry a rejected start unchanged.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "The flow file, relative to the chat's folder." },
+          inputs: { type: "object", description: "The flow's inputs by name; {} for none." },
+        },
+        required: ["path", "inputs"],
+        additionalProperties: false,
+      },
+      execute: (args, ctx) => startFlow(stringArg(args, "path"), args["inputs"], ctx.signal),
+    }),
+    tool({
+      name: "flow_status",
+      description: `Read where a run this chat started stands now, without waiting. ${STATUS}`,
+      parameters: runArgument(RUN),
+      isConcurrencySafe: () => true,
+      execute: (args) => show(runs.status(knownRun(runs, args))),
+    }),
+    tool({
+      name: "wait_flow",
+      description:
+        "Wait for a run this chat started to change (a reply, a question, its end), up to `seconds` " +
+        `(at most ${WAIT_FLOW_MAX_S}), and return its status then, or at the timeout. Returns at once when ` +
+        `it changed since you last saw it. ${STATUS}`,
+      parameters: {
+        type: "object",
+        properties: {
+          run: { type: "string", description: RUN },
+          seconds: {
+            type: "number",
+            description: `How long to wait at most, in seconds (at most ${WAIT_FLOW_MAX_S}).`,
+          },
+        },
+        required: ["run", "seconds"],
+        additionalProperties: false,
+      },
+      isConcurrencySafe: () => true,
+      execute: async (args, ctx) => {
+        const id = knownRun(runs, args);
+        const seconds = args["seconds"];
+        if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
+          throw new ReportedToolError("seconds must be a number of seconds, 0 or more");
+        }
+        const done = new AbortController();
+        const end = () => done.abort();
+        ctx.signal.addEventListener("abort", end, { once: true });
+        if (ctx.signal.aborted) end();
+        scheduler.sleep(Math.min(seconds, WAIT_FLOW_MAX_S) * 1000, done.signal).then(end, () => {});
+        try {
+          return show(await runs.next(id, shown.get(id) ?? 0, { signal: done.signal }));
+        } finally {
+          ctx.signal.removeEventListener("abort", end);
+          end();
+        }
+      },
+    }),
+    tool({
+      name: "answer_flow",
+      description:
+        "Answer a question a run this chat started asks (its status's asks), by its call id, with the user's " +
+        "answer: relay the question to the user and pass on what they say, and don't answer a question twice. " +
+        `The answer is any JSON value but null; text for a plain question. ${STATUS}`,
+      parameters: {
+        type: "object",
+        properties: {
+          run: { type: "string", description: RUN },
+          call: { type: "string", description: "The question's call id, from the status's asks." },
+          answer: { description: "The answer." },
+        },
+        required: ["run", "call", "answer"],
+        additionalProperties: false,
+      },
+      execute: async (args) => {
+        const id = knownRun(runs, args);
+        const call = stringArg(args, "call");
+        const answer = args["answer"];
+        if (answer === null || answer === undefined) throw new ReportedToolError("answer can't be null");
+        return show(await runs.answer(id, call, answer));
+      },
+    }),
+    tool({
+      name: "message_flow",
+      description:
+        "Send text to an Inbox input of a run this chat started, as a chat message to a flow that takes them; " +
+        `its status's waits name the inbox a run waits on. ${STATUS}`,
+      parameters: runArgument(RUN, ["inbox", "The Inbox input's name."], ["text", "The message."]),
+      execute: async (args) => {
+        const id = knownRun(runs, args);
+        return show(await runs.message(id, stringArg(args, "inbox"), stringArg(args, "text")));
+      },
+    }),
+    tool({
+      name: "close_inbox",
+      description:
+        "Close an Inbox input of a run this chat started, so the flow stops waiting for messages there and " +
+        `can finish. ${STATUS}`,
+      parameters: runArgument(RUN, ["inbox", "The Inbox input's name."]),
+      execute: async (args) => {
+        const id = knownRun(runs, args);
+        return show(await runs.closeInbox(id, stringArg(args, "inbox")));
+      },
+    }),
+    tool({
+      name: "stop_flow",
+      description: `Cancel a run this chat started; use it only when the user asks. ${STATUS}`,
+      parameters: runArgument(RUN),
+      execute: async (args) => show(await runs.stop(knownRun(runs, args))),
+    }),
+  ];
+
+  /**
+   * Start the flow at `path` with `inputs` once the user approves it, as `start_flow` describes.
+   * Every outcome once the user is asked is returned.
+   */
+  async function startFlow(path: string, inputs: unknown, signal: AbortSignal): Promise<string> {
+    const { real, shown: file, text, flow } = await loadForStart(host, path);
+    try {
+      hostInputs(flow.input, inputs);
+    } catch (error) {
+      if (error instanceof Error) throw new ReportedToolError(`bad inputs: ${error.message}`);
+      throw error;
+    }
+    const can = capabilities(flow);
+    const digest = createHash("sha256").update(text).update("\0").update(can.join("\n")).digest("hex");
+    if (approved.get(real) !== digest) {
+      const answer = await host.approve({
+        title: `Run ${file}`,
+        body: [`Starts ${file} in the background.`, `inputs: ${JSON.stringify(inputs)}`, ...can].join("\n"),
+        diff: null,
+        choices: START_CHOICES,
+        signal,
+      });
+      if (answer === null) return "not started: not approved (no terminal, or the prompt ended)";
+      if (answer === START_CHOICES[1]) approved.set(real, digest);
+      else if (answer !== START_CHOICES[0]) return "not started: rejected";
+    }
+    let id: string;
+    try {
+      ({ id } = await runs.start(flow, inputs as Record<string, unknown>, { signal }));
+    } catch (error) {
+      if (error instanceof Error) return `not started: ${error.message}`;
+      throw error;
+    }
+    return show(runs.status(id));
+  }
 }

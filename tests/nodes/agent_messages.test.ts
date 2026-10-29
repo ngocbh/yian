@@ -9,8 +9,8 @@ import {
   MediaPart, Message as ModelMessage, ReasoningPart, RefusalPart, replayRecord, TextPart, ToolCallPart, ToolResultPart,
 } from "../../src/llm/messages.ts";
 import {
-  checkConversation, checkMessage, checkModelConversation, ConversationError, fromModelMessage, type Message, messageSteps,
-  rebuildMessages, steerValues, toModelMessage,
+  checkConversation, checkMessage, checkModelConversation, ConversationError, foldSteps, fromModelMessage, type Message, messageSteps,
+  type NumberedStep, rebuildMessages, steerValues, toModelMessage,
 } from "../../src/nodes/agent/messages.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
@@ -305,6 +305,25 @@ describe("an AGENT's new messages", () => {
   ] as JsonObject[];
   const output = buildValue({ a: 1n });
   const answer = { role: "assistant", parts: [{ type: "text", text: '{"a":1}' }] };
+
+  test("foldSteps groups the steps into exchanges: the steers before a call, its attempts, the results after it by call id", () => {
+    const steer = { kind: "steer", seqs: [9n] } as JsonObject;
+    const all = [steer, ...steps, steer, steps[1]!, resultStep("c", "C"), { kind: "interrupted", by: 13n } as JsonObject];
+    const folded = foldSteps(all);
+    const ns = (numbered: readonly NumberedStep<JsonObject>[]) => numbered.map(({ n }) => n);
+    expect(folded.exchanges.map(({ steers, attempts, results }) => [ns(steers), ns(attempts), [...results].map(([id, { n }]) => [id, n])])).toEqual([
+      [[1], [3, 4], [["b", 5], ["a", 6]]],
+      [[], [7], []],
+      [[], [8], []],
+      // A result after retried attempts is still filed under the call before them.
+      [[], [9], [["c", 12]]],
+    ]);
+    // After the last call: the steer read for the next one and its retried attempt so far.
+    expect([ns(folded.open.steers), ns(folded.open.attempts), folded.open.results.size]).toEqual([[10], [11], 0]);
+    expect(folded.honored).toEqual({ n: 13, step: all[12]! });
+    // A result before any call answers nothing.
+    expect(foldSteps([resultStep("c", "C")])).toEqual({ exchanges: [], open: { steers: [], attempts: [], results: new Map() }, honored: null });
+  });
 
   test("messageSteps picks each chat reply that arrived, every tool result and the accepted structured call", () => {
     expect(messageSteps(steps)).toEqual([3, 4, 5, 6, 8]);

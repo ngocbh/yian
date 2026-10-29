@@ -108,8 +108,14 @@ import {
   sameMemorySpec,
 } from "./memory/contracts.ts";
 import { MemoryRegistry } from "./memory_host.ts";
-import { type NumberedStep, type ReadSteps, readAgentSteps } from "./nodes/agent/context.ts";
-import { fromModelMessage, type Message as MessageValue } from "./nodes/agent/messages.ts";
+import {
+  type FoldedSteps,
+  foldSteps,
+  fromModelMessage,
+  type Message as MessageValue,
+  type NumberedStep,
+  type StepExchange,
+} from "./nodes/agent/messages.ts";
 import { staticPathOf } from "./nodes/ids.ts";
 import type { BackwardOptions, CompleteResult, MaterialCaps, Node } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
@@ -2699,10 +2705,10 @@ export interface AgentCallView {
   readonly interrupted: boolean;
 }
 
-/** A node's logical model calls (`readAgentSteps`), a call not over yet (retried attempts only) last. */
-function agentStepCalls(steps: readonly ValueRecord[]): { calls: (readonly NumberedStep[])[]; read: ReadSteps } {
-  const read = readAgentSteps(steps);
-  return { calls: read.trailing.length > 0 ? [...read.calls, read.trailing] : [...read.calls], read };
+/** A node's logical model calls (`foldSteps`), a call not over yet (retried attempts only) last. */
+function agentStepCalls(steps: readonly ValueRecord[]): { calls: StepExchange[]; folded: FoldedSteps } {
+  const folded = foldSteps(steps);
+  return { calls: folded.open.attempts.length > 0 ? [...folded.exchanges, folded.open] : [...folded.exchanges], folded };
 }
 
 /**
@@ -2730,7 +2736,7 @@ export function agentCalls(log: string): AgentCallEntry[] {
   }
   const listed: { seq: number; entry: AgentCallEntry }[] = [];
   for (const [nodeId, { steps, seqs }] of nodes) {
-    for (const attempts of agentStepCalls(steps).calls) {
+    for (const { attempts } of agentStepCalls(steps).calls) {
       const last = attempts.at(-1)!;
       const entry = {
         nodeId,
@@ -2852,9 +2858,10 @@ export async function agentCall(
     checkHostHeaderNames(state.effectiveLlmByStaticPath, headers, callTime);
   }
   const steps = stepsWithSteerValues(state, nodeId);
-  const { calls, read } = agentStepCalls(steps);
-  const attempts = calls.find((each) => each.some((attempt) => attempt.n === n));
-  if (attempts === undefined || node === null) throw missing();
+  const { calls, folded } = agentStepCalls(steps);
+  const exchange = calls.find((each) => each.attempts.some((attempt) => attempt.n === n));
+  if (exchange === undefined || node === null) throw missing();
+  const { attempts } = exchange;
   const agent: Node = node;
   const appended = new Map(
     entries.flatMap(({ envelope, at }) => (isStep(envelope.record) ? [[envelope.record.n, at]] : [])),
@@ -2898,11 +2905,11 @@ export async function agentCall(
       memorySections: sections?.map(({ memory, text }) => ({ memory, text })) ?? null,
       attempts: attempts.map((attempt) => attemptView(attempt, appended.get(attempt.n)!)),
       reply: output == null ? null : fromModelMessage(Message.fromJSON(output)),
-      toolResults: output == null ? [] : toolResults(Message.fromJSON(output), read.results.get(last.n)),
+      toolResults: output == null ? [] : toolResults(Message.fromJSON(output), exchange.results),
       usage: usageView(last.step["usage"]),
       finish: (last.step["finish"] as string | undefined) ?? null,
       // The honor is the node's last step, so it follows its last call.
-      interrupted: last.step["finish"] === "interrupted" || (read.honored !== null && attempts === calls.at(-1)),
+      interrupted: last.step["finish"] === "interrupted" || (folded.honored !== null && exchange === calls.at(-1)),
     };
   } finally {
     await runtime?.close();
@@ -2971,11 +2978,11 @@ function usageView(usage: unknown): AgentCallUsage | null {
 }
 
 /** Each tool call of `reply`, in call order, with its `tool_result` step from `results` (by call id). */
-function toolResults(reply: Message, results: ReadonlyMap<string, ValueRecord> | undefined): AgentToolResult[] {
+function toolResults(reply: Message, results: StepExchange["results"]): AgentToolResult[] {
   return reply.parts
     .filter((part) => part instanceof ToolCallPart)
     .map((part) => {
-      const result = results?.get(part.id);
+      const result = results.get(part.id)?.step;
       return {
         callId: part.id,
         name: part.name,

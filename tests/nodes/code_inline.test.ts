@@ -561,6 +561,14 @@ test("a thrown string's text is the string, a thrown record's its text form", as
   expect((error as Error).message).toBe("RangeError: bad");
 });
 
+test("a thrown value nested too deep to copy back reads as its type name", async () => {
+  const error = await failure("let a = []\nfor (let i = 0; i < 200000; i++) a = [a]\nthrow a");
+
+  expect(error).toBeInstanceOf(CodeError);
+  expect((error as Error).message).toBe("Array");
+  expect((error as CodeError).original).toBe("Array");
+});
+
 test("the built-in identity returns the bound field unchanged", async () => {
   const node = new CodeNode("v", { code: { builtin: "identity", field: "v" } });
   const record = { k: [1n] };

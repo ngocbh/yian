@@ -214,7 +214,10 @@ function swapLeaves(value: unknown, swap: (part: object) => unknown): unknown {
   return root;
 }
 
-/** Return how a value the code threw crosses to the main thread. */
+/**
+ * Return how a value the code threw crosses to the main thread: an `Error`'s fields, a yian value,
+ * else its text. A yian value nested too deep to copy back crosses as its type name.
+ */
 function thrownOf(value: unknown): Thrown {
   if (value instanceof Error) {
     const fields: ThrownError = { kind: "error", name: String(value.name), message: String(value.message) };
@@ -226,7 +229,10 @@ function thrownOf(value: unknown): Thrown {
     return fields;
   }
   try {
-    return { kind: "value", value: packFiles(toHost(fromHost(value, "error"))) };
+    const thrown = fromHost(value, "error");
+    // Too deep for the copy back, which would overflow in `postMessage`: name its type instead.
+    if (tooDeepToCopy(thrown)) return { kind: "text", text: jsTypeName(value) };
+    return { kind: "value", value: packFiles(toHost(thrown)) };
   } catch {
     // Not a yian value: its text, else its type name when it has none, as a stage marker reads.
     try {

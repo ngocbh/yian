@@ -381,7 +381,7 @@ export class ChildRuns {
   live(): LiveChild[] {
     return [...this.#children.values()]
       .filter((child) => this.#driving(child))
-      .map((child) => ({ id: child.id, name: child.name, since: child.since, status: child.status }));
+      .map(({ id, name, since, status }) => ({ id, name, since, status }));
   }
 
   /** @internal For tests: how many `next` calls wait, over all children. */

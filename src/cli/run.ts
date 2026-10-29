@@ -276,10 +276,12 @@ export class ProgressReporter {
         this.#print(lines.join("\n"));
         break;
       }
-      case "NodeRouted":
+      case "NodeRouted": {
         // A router (CASE) produces no value: it selected an out-edge handle.
-        this.#print(style(endedNodeText(event.nodeId, this.#finish(event.nodeId), event.handle), "green"));
+        const took = this.#finish(event.nodeId);
+        this.#print(style(endedNodeText(event.nodeId, took, event.handle), "green"));
         break;
+      }
       case "NodeExpanded":
         // A spawner grew the graph instead of returning a value; the spliced fragment's terminal
         // commits it, so it gets no line, only its spinner cleared.

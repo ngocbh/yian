@@ -27,7 +27,15 @@ import type { ChildEvent } from "./chat_events.ts";
 import type { ChildStatus, LiveChild } from "./chat_runs.ts";
 import { MarkdownLines, renderMarkdown, TAB } from "./markdown.ts";
 import { ANSI, cells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
-import { box, type Colored, elapsedTag, paint, type Span, type Style, wrapSpans } from "./render.ts";
+import {
+  box,
+  type Colored,
+  elapsedTag,
+  paint,
+  type Span,
+  type Style,
+  wrapSpans,
+} from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 import type { CliIo, Writer } from "./utils.ts";
 
@@ -342,7 +350,6 @@ export class ChatView {
   /** Shows the cursor if the process exits while a turn has it hidden. */
   readonly #showOnExit = () => this.#output.write(SHOW_CURSOR);
 
-
   /**
    * @param clock The spinner's own clock: never the run's, which a test may hold or drive.
    */
@@ -450,7 +457,8 @@ export class ChatView {
   /** Print `line`, a line sent from the input box, as the prompt leaves one: `> <line>`. */
   echo(line: string): void {
     this.#last = "other";
-    this.#commit([clip(`${this.#paint(">", "bold")} ${sanitize(line).replaceAll("\n", "⏎")}`, this.#width())]);
+    const text = `${this.#paint(">", "bold")} ${sanitize(line).replaceAll("\n", "⏎")}`;
+    this.#commit([clip(text, this.#width())]);
   }
 
   /**
@@ -475,7 +483,8 @@ export class ChatView {
       this.#finishBlock();
       // Its width is fixed now: after a resize its rows are cut to the new width, not wrapped again.
       const markdown = new MarkdownLines(this.#width() - 2, this.#output, this.#env);
-      block = { node: chunk.nodeId, n: chunk.n, markdown, rows: [], printed: 0, partial: "", opened: false };
+      const fresh = { markdown, rows: [], printed: 0, partial: "", opened: false };
+      block = { node: chunk.nodeId, n: chunk.n, ...fresh };
       this.#block = block;
       this.#streamed = true;
     }
@@ -678,7 +687,9 @@ export class ChatView {
     const rows = [...(partial === "" ? [] : block.markdown.line(partial)), ...block.markdown.end()];
     // Blank lines at its end show nothing either.
     while (rows.length > 0 && blank(rows.at(-1)!)) rows.pop();
-    if (rows.length === 0) while (block.rows.length > 0 && blank(block.rows.at(-1)!)) block.rows.pop();
+    if (rows.length === 0) {
+      while (block.rows.length > 0 && blank(block.rows.at(-1)!)) block.rows.pop();
+    }
     if (this.#open(block, rows)) block.rows.push(...rows);
     this.#settleBlock();
     this.#block = null;

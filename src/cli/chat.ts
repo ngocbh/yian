@@ -358,12 +358,14 @@ export async function chat(
   }
   // On a terminal, everything the chat prints from here on goes through its view, which holds
   // nothing to release until a turn starts.
-  const view = richChat(io) ? new ChatView(io.stderrStream, env, deps.ticker ?? realScheduler) : null;
+  const ticker = deps.ticker ?? realScheduler;
+  const view = richChat(io) ? new ChatView(io.stderrStream, env, ticker) : null;
   if (view !== null) io = { ...io, stdout: view.writer, stderr: view.writer };
   const focus = flowPath === undefined ? null : (inputs["flow"] as string);
   if (view !== null) {
     const home = env("HOME");
-    const info = { ...model, cwd: homePath(reachedAs(root, env("PWD")), home, realHome(home)), focus };
+    const cwd = homePath(reachedAs(root, env("PWD")), home, realHome(home));
+    const info = { ...model, cwd, focus };
     await io.stderr.write(`${chatBanner(info, io.stderrStream, env)}${view.note(sanitize(hint))}`);
   } else {
     const banner = [`yian chat`, model.model, focus === null ? null : `focus: ${focus}`]
@@ -437,7 +439,7 @@ export async function chat(
         rows:
           view === null
             ? null
-            : runList(runs, view, { scheduler, ticker: deps.ticker ?? realScheduler }, io.stderrStream, env),
+            : runList(runs, view, { scheduler, ticker }, io.stderrStream, env),
       },
     );
   } finally {

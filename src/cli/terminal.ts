@@ -380,7 +380,12 @@ export interface PromptList {
  * row `open`s it, Escape in the box is `escape`, Ctrl-D in an empty box the end of input; `null`
  * when the key only edited or moved.
  */
-export type EditorAction = { value: string } | { open: string } | { escape: true } | { stop: "eof" } | null;
+export type EditorAction =
+  | { value: string }
+  | { open: string }
+  | { escape: true }
+  | { stop: "eof" }
+  | null;
 
 /** The screen rows a prompt's list leaves for what is drawn above the box. */
 const LIST_MARGIN = 4;
@@ -402,7 +407,7 @@ export class LineEditor {
   readonly #hint: string;
   /** The list under the hint, if any. */
   readonly list: PromptList | null;
-  /** The list row with the keys, by its key and where it last was, or null while the box has them. */
+  /** The list row with the keys, its key and place, or null while the box has them. */
   #focus: { key: string; index: number } | null = null;
 
   /** @param options.rows The screen's height, which the list keeps within; no bound when absent. */
@@ -437,8 +442,9 @@ export class LineEditor {
   #find(rows: readonly PromptRow[]): number | null {
     if (this.#focus === null) return null;
     const at = rows.findIndex((row) => row.key === this.#focus!.key);
-    // A row that went (its run ended) gives the keys to the one in its place, or above it, or the box.
-    const index = at !== -1 ? at : rows.length === 0 ? null : Math.min(this.#focus.index, rows.length - 1);
+    // A row that went (its run ended) gives the keys to the one in its place, or above, or the box.
+    const last = rows.length - 1;
+    const index = at !== -1 ? at : last < 0 ? null : Math.min(this.#focus.index, last);
     this.#focus = index === null ? null : { key: rows[index]!.key, index };
     return index;
   }
@@ -467,7 +473,8 @@ export class LineEditor {
     const edge = "─".repeat(width + 4);
     const border = (part: string): string => style("2", part);
     const list = this.#listRows(rows.length + 2);
-    const both = list.length > 0 && this.list?.hint ? `${this.#hint} · ${this.list.hint}` : this.#hint;
+    const extra = list.length > 0 ? this.list?.hint : undefined;
+    const both = extra ? `${this.#hint} · ${extra}` : this.#hint;
     // The list's hint only when it fits on the row: the box's hint matters more.
     const hint = cells(both) + 2 <= this.#columns() ? both : this.#hint;
     return [
@@ -482,7 +489,7 @@ export class LineEditor {
     ];
   }
 
-  /** The cursor's row among `lines()` and that row's text before it; null while the list has the keys. */
+  /** The cursor's row among `lines()` and its text before it; null while the list has the keys. */
   cursor(): { row: number; before: string } | null {
     if (this.focus() !== null) return null;
     const { rows, row } = this.#fold();
@@ -562,7 +569,10 @@ type Opened = { open: string };
  * Escape ends it only with `escape` (answering `ESCAPED`), and Enter on a list row answers
  * `{open}`.
  */
-function editorWidget(editor: LineEditor, escape: boolean): Widget<string | typeof ESCAPED | Opened> {
+function editorWidget(
+  editor: LineEditor,
+  escape: boolean,
+): Widget<string | typeof ESCAPED | Opened> {
   return {
     preface: "",
     lines: () => editor.lines(),
@@ -751,7 +761,11 @@ export class Terminal {
    * terminal raw.
    */
   #watch:
-    | { onKey: (key: "escape" | "interrupt") => void; edit: ((key: Key) => boolean) | null; wasRaw: boolean }
+    | {
+        onKey: (key: "escape" | "interrupt") => void;
+        edit: ((key: Key) => boolean) | null;
+        wasRaw: boolean;
+      }
     | undefined;
   /** The last key was a `return`, so an `enter` now is the `\n` of the same `\r\n`. */
   #afterReturn = false;
@@ -778,7 +792,8 @@ export class Terminal {
   /** A `LineEditor` as wide as this terminal's output. */
   lineEditor(options: { hint: string; list?: PromptList | null }): LineEditor {
     const output = this.#output;
-    return new LineEditor({ ...options, columns: () => columnsOf(output), rows: () => rowsOf(output) });
+    const size = { columns: () => columnsOf(output), rows: () => rowsOf(output) };
+    return new LineEditor({ ...options, ...size });
   }
 
   /** A free-text or hidden prompt; null when the user cancels or the terminal is closed. */
@@ -843,7 +858,9 @@ export class Terminal {
             ...text,
             key: (key) => (key.name === "escape" ? { value: ESCAPED } : text.key(key)),
             done: (outcome) =>
-              "value" in outcome && outcome.value === ESCAPED ? null : text.done(outcome as Outcome<string>),
+              "value" in outcome && outcome.value === ESCAPED
+                ? null
+                : text.done(outcome as Outcome<string>),
           }
         : text;
       draft = () => text.text();
@@ -859,7 +876,9 @@ export class Terminal {
     if ("value" in ended) {
       const { value } = ended;
       // Only an `escape` prompt answers ESCAPED, so E is true here.
-      if (value === ESCAPED) return { escape: true, draft: draft() } as E extends true ? Escaped : never;
+      if (value === ESCAPED) {
+        return { escape: true, draft: draft() } as E extends true ? Escaped : never;
+      }
       if (typeof value !== "string") return { open: value.open, draft: draft() };
       return { value };
     }
@@ -1049,8 +1068,9 @@ export class Terminal {
    * and Ctrl-C `onKey("interrupt")`, rather than raising SIGINT, since the input is raw; other keys
    * wait for the next prompt. Given `edit`, every key but Ctrl-C goes to it first, and only one it
    * doesn't take (returns false for) goes on as above; bracketed paste is then on while the watch
-   * runs, so a paste reaches it as typed text, its newlines kept. A prompt meanwhile takes the keys as usual,
-   * and the watch goes on after it. Does nothing on a plain terminal or an input that isn't a TTY.
+   * runs, so a paste reaches it as typed text, its newlines kept. A prompt meanwhile takes the keys
+   * as usual, and the watch goes on after it. Does nothing on a plain terminal or an input that
+   * isn't a TTY.
    */
   watchKeys(
     signal: AbortSignal,
@@ -1192,7 +1212,7 @@ export class Terminal {
     let started = false;
     let result: { value: R } | { error: unknown } | undefined;
     try {
-      // Counted while it waits behind another turn, so a screen up can say a prompt wants an answer.
+      // Counted while it waits behind another turn, so a screen up can say a prompt waits.
       const counted = wants && this.#turn !== undefined;
       if (counted) this.#countWaiting(1);
       try {

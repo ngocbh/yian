@@ -71,7 +71,13 @@ import {
 } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import { cliLayer, freshLog, loadFlowFile, preflightKeys } from "./startup.ts";
-import { type Key, type LineEditor, type PromptList, Terminal, TerminalStopped } from "./terminal.ts";
+import {
+  type Key,
+  type LineEditor,
+  type PromptList,
+  Terminal,
+  TerminalStopped,
+} from "./terminal.ts";
 import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, shellQuote, sleepUntil, UsageError } from "./utils.ts";
 
 /**
@@ -140,7 +146,7 @@ export interface InboxChatView {
   onStream(chunk: StreamChunk): void;
   /** A turn starts (`true`) or ends. */
   turn(active: boolean): void;
-  /** A prompt takes the terminal (`true`) or gives it back, having left rows on it when `printed`. */
+  /** A prompt takes the terminal (`true`) or gives it back, having left rows when `printed`. */
   active(active: boolean, printed: boolean): void;
   /** The output of a node named `reply`, as text. */
   reply(text: string): void;
@@ -524,7 +530,9 @@ export async function inboxChat(
   });
   // With the chat's look on a terminal, the prompt's box stays up while a turn runs.
   const editor =
-    view !== null && atTerminal(io) ? terminal.lineEditor({ hint: view.hint, list: host.rows?.list }) : null;
+    view !== null && atTerminal(io)
+      ? terminal.lineEditor({ hint: view.hint, list: host.rows?.list })
+      : null;
   // Opens a row of `host.rows` without waiting for the user to leave it: the chat goes on meanwhile
   // (its prompt queues behind the row's screen), and only a failure stops it.
   const openRow = (key: string): void => {
@@ -642,11 +650,13 @@ export async function inboxChat(
           }
           // The hold ends with this line: held events, and those withdrawn, go before it.
           await flusher?.lineSent();
-          liveSeqs.push(await send(path, inbox.name, lineEvent(line, inbox.message), { env: env.read }));
+          const event = lineEvent(line, inbox.message);
+          liveSeqs.push(await send(path, inbox.name, event, { env: env.read }));
         })
         .catch(async (error: unknown) => {
           if (!(error instanceof DeliveryRefused)) return stop.abort(error);
-          if (error.reason !== "ended") await note(`not sent: ${forTerminal(error.message, io.stderr)}\n`);
+          if (error.reason === "ended") return;
+          await note(`not sent: ${forTerminal(error.message, io.stderr)}\n`);
         });
     };
     /** A key at the input box while a turn runs; false for one it leaves to `watchKeys` (Esc). */

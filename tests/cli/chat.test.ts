@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { chat, type ChatDeps, type ChatOptions } from "../../src/cli/chat.ts";
+import { main } from "../../src/cli/index.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import { type Request, Response, ToolResultPart } from "../../src/llm/messages.ts";
@@ -292,6 +293,19 @@ test(
     expect(stderr()).toContain(
       `run r1 waits for an answer to its question; its log: ${child}\n  it can't be continued outside this chat yet\n`,
     );
+  },
+  TIMEOUT,
+);
+
+test(
+  "yian run --resume on a chat's log exits 1 and names yian chat",
+  async () => {
+    const { io, stdin } = chatIo();
+    stdin.write("hi\n/exit\n");
+    const { log } = await runChat(io, new AnsweringModel(() => textReply("hello")));
+    const resumed = chatIo();
+    expect(await main(["run", "--resume", log], resumed.io)).toBe(1);
+    expect(resumed.stderr()).toContain("this run is a yian chat's; yian run --resume can't continue it");
   },
   TIMEOUT,
 );

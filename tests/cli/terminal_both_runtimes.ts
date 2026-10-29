@@ -803,15 +803,49 @@ async function aTokenWiderThanTheBoxIsCut(): Promise<void> {
   assert.deepEqual(await answer, { value: `ab${pastedText(40)}` });
 }
 
-async function aPasteThatNeverEndsGoesInAfterAPause(): Promise<void> {
+/** Wait longer than a paste may pause before Escape or Ctrl-C can end it. */
+const pastPastePause = () => new Promise((resolve) => setTimeout(resolve, 800));
+
+async function aPasteSplitByAPauseGoesInWhole(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  let answered = false;
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  void answer.then(() => (answered = true));
+  input.write(PASTE_START + "a\rb");
+  await pastPastePause();
+  // The rest of the paste: its newlines are still newlines, not Enter.
+  input.write("\rc" + PASTE_END);
+  await tick();
+  assert.equal(answered, false);
+  assert.deepEqual(view().rows[1], framed("> a⏎b⏎c"));
+  input.write(ENTER);
+  assert.deepEqual(await answer, { value: "a\nb\nc" });
+}
+
+async function escapeAfterAPauseEndsAPasteThatNeverEnds(): Promise<void> {
   const { input, terminal, view } = setup({ columns: 60 });
   const answer = terminal.readLine("You:", { frame: true, hint: HINT });
-  // The terminal dropped the paste's end: the keys after the pause are typed ones again.
+  // The terminal dropped the paste's end.
   input.write(PASTE_START + "a\rb");
-  await new Promise((resolve) => setTimeout(resolve, 800));
+  await pastPastePause();
+  input.write(ESCAPE);
+  await pastEscape();
   assert.deepEqual(view().rows[1], framed("> a⏎b"));
   input.write("c" + ENTER);
   assert.deepEqual(await answer, { value: "a\nbc" });
+}
+
+async function ctrlCAfterAPauseDropsAPasteThatNeverEnds(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  input.write("x" + PASTE_START + "a\rb");
+  await pastPastePause();
+  // Ctrl-C drops the paste, and only that: the prompt stays.
+  input.write(CTRL_C);
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> x"));
+  input.write("y" + ENTER);
+  assert.deepEqual(await answer, { value: "xy" });
 }
 
 async function aPasteKeepsItsTabsShownAsSpaces(): Promise<void> {
@@ -3077,7 +3111,9 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "two pastes are numbered, and typed token text stays text":
     twoPastesAreNumberedAndTypedTokenTextStaysText,
   "a token wider than the box is cut": aTokenWiderThanTheBoxIsCut,
-  "a paste that never ends goes in after a pause": aPasteThatNeverEndsGoesInAfterAPause,
+  "a paste split by a pause goes in whole": aPasteSplitByAPauseGoesInWhole,
+  "Escape after a pause ends a paste that never ends": escapeAfterAPauseEndsAPasteThatNeverEnds,
+  "Ctrl-C after a pause drops a paste that never ends": ctrlCAfterAPauseDropsAPasteThatNeverEnds,
   "a paste keeps its tabs, shown as spaces": aPasteKeepsItsTabsShownAsSpaces,
   "Escape erases a framed readLine": escapeErasesAFramedReadLine,
   "a framed readLine with a list moves into it and opens a row": aFramedReadLineWithAListMovesIntoItAndOpensARow,

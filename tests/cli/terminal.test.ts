@@ -18,6 +18,7 @@ import {
   LineEditor,
   parseStructuredInput,
   Terminal,
+  textDraft,
 } from "../../src/cli/terminal.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
@@ -99,15 +100,13 @@ describe("a draft with pasted tokens", () => {
     expect(editor.text()).toBe("see ");
   });
 
-  test("set collapses a plain text as long as a long paste, but not a draft's text", () => {
+  test("set keeps a text as it is; textDraft makes a long one a token", () => {
     const editor = new LineEditor({ columns: () => 60, hint: "" });
     editor.set("1\n2\n3\n4");
-    expect(draftLabel(editor.draft())).toBe("[Pasted text #1 +4 lines]");
-    expect(editor.text()).toBe("1\n2\n3\n4");
-    editor.set("1\n2\n3");
-    expect(editor.draft()).toEqual(["1\n2\n3"]);
-    editor.set(["1\n2\n3\n4"]);
     expect(editor.draft()).toEqual(["1\n2\n3\n4"]);
+    expect(draftLabel(textDraft("1\n2\n3\n4"))).toBe("[Pasted text #1 +4 lines]");
+    expect(textDraft("1\n2\n3")).toEqual(["1\n2\n3"]);
+    expect(draftLabel(textDraft("w".repeat(801)))).toBe("[Pasted text #1 +1 line]");
   });
 
   test("a paste after a million characters typed still numbers its token", () => {

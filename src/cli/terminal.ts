@@ -298,8 +298,10 @@ function printable(key: Key): key is Key & { str: string } {
 const PASTE_LINES = 3;
 /** A paste longer than this many characters goes into a `LineEditor` as one token. */
 const PASTE_CHARS = 800;
-/** How long a paste whose end never came waits for more keys before it goes in as it is. */
+/** How long a paste pauses before Escape or Ctrl-C, as a key of its own, can end it. */
 const PASTE_IDLE_MS = 500;
+/** The characters a paste keeps; past them the rest of it is dropped. */
+const PASTE_MAX_CHARS = 16_000_000;
 
 /** A paste a `LineEditor` holds as one token, `[Pasted text #<number> +<lines> lines]`. */
 export interface PastedText {
@@ -336,10 +338,6 @@ export function textDraft(text: string): Draft {
   return collapses(text) ? [{ text, number: 1 }] : [text];
 }
 
-/** Whether `draft` holds a pasted token. */
-export function holdsPaste(draft: Draft): boolean {
-  return draft.some((part) => typeof part !== "string");
-}
 
 /** The text `draft` stands for, each token expanded to its paste: what is sent. */
 export function draftText(draft: Draft): string {
@@ -563,12 +561,9 @@ export class LineEditor {
     return draft;
   }
 
-  /**
-   * Replace the text (and its tokens, given a draft), the cursor after it. A plain text as long as
-   * a paste that collapses (a line sent before the chat was resumed) goes in as one token.
-   */
+  /** Replace the text (and its tokens, given a draft), the cursor after it. */
   set(text: string | Draft): void {
-    this.#text.set(typeof text === "string" ? textDraft(text) : text);
+    this.#text.set(text);
   }
 
   /** Where the list row with the keys is, or null while the box has them. */
@@ -937,7 +932,11 @@ export class Terminal {
   #afterReturn = false;
   /** The text of the bracketed paste arriving, or null outside one. */
   #pasting: string[] | null = null;
-  /** Ends the paste arriving once no key came for `PASTE_IDLE_MS`. */
+  /** The characters `#pasting` holds. */
+  #pasted = 0;
+  /** Whether no key of the paste arriving came for `PASTE_IDLE_MS`. */
+  #pasteStalled = false;
+  /** Marks the paste arriving stalled once no key came for `PASTE_IDLE_MS`. */
   #pasteTimer: ReturnType<typeof setTimeout> | undefined;
   /** Whether the turn holding the terminal left rows on the screen. */
   #printed = false;
@@ -1290,6 +1289,13 @@ export class Terminal {
       this.#pasteIdle();
       return;
     }
+    // A paste whose end never came (a terminal dropped it) would keep every later key, Enter and
+    // Ctrl-C too. Once it has paused, Escape ends it as it is and Ctrl-C drops it; a pause alone
+    // doesn't end it, since a slow link can pause one that is still coming.
+    const hatch = name === "escape" || (raw?.ctrl === true && name === "c");
+    if (this.#pasting !== null && this.#pasteStalled && hatch) {
+      return this.#endPaste(name === "escape");
+    }
     if (name === "enter" && this.#afterReturn) {
       this.#afterReturn = false;
       return;
@@ -1298,30 +1304,36 @@ export class Terminal {
     // A paste reaches the widget as one key holding its text, so a long one can become a token:
     // its newlines kept, the keys it holds (arrows, Escape, Ctrl-C) only text.
     if (this.#pasting !== null && name !== "paste-end") {
-      this.#pasting.push(name === "return" || name === "enter" ? "\n" : (str ?? ""));
+      const text = name === "return" || name === "enter" ? "\n" : (str ?? "");
+      if (this.#pasted + text.length <= PASTE_MAX_CHARS) {
+        this.#pasting.push(text);
+        this.#pasted += text.length;
+      }
       this.#pasteIdle();
       return;
     }
-    if (name === "paste-end") return this.#endPaste();
+    if (name === "paste-end") return this.#endPaste(true);
     const meta = raw?.meta === true && alt === null;
     this.#dispatch({ name, ctrl: raw?.ctrl === true, meta, str: alt?.[1] ?? str, paste: false });
   };
 
-  /**
-   * (Re)start the wait for the rest of the paste arriving: a terminal that drops the paste's end
-   * would otherwise leave every later key in it, Enter and Ctrl-C too.
-   */
+  /** A key of the paste arrived: it hasn't paused, and its pause starts again. */
   #pasteIdle(): void {
+    this.#pasteStalled = false;
     clearTimeout(this.#pasteTimer);
-    this.#pasteTimer = setTimeout(() => this.#endPaste(), PASTE_IDLE_MS);
+    this.#pasteTimer = setTimeout(() => (this.#pasteStalled = true), PASTE_IDLE_MS);
+    // The pause only arms Escape and Ctrl-C, so it never keeps the process up.
+    this.#pasteTimer.unref?.();
   }
 
-  /** End the paste arriving: hand its text on as one paste key. */
-  #endPaste(): void {
+  /** End the paste arriving: hand its text on as one paste key, or drop it unless `keep`. */
+  #endPaste(keep: boolean): void {
     clearTimeout(this.#pasteTimer);
     const text = this.#pasting?.join("") ?? "";
     this.#pasting = null;
-    if (text === "") return;
+    this.#pasted = 0;
+    this.#pasteStalled = false;
+    if (!keep || text === "") return;
     this.#dispatch({ name: undefined, ctrl: false, meta: false, str: text, paste: true });
   }
 
@@ -1365,8 +1377,7 @@ export class Terminal {
     this.#input.removeListener("end", this.#onEnd);
     this.#input.removeListener("error", this.#onEnd);
     this.#buffer = [];
-    clearTimeout(this.#pasteTimer);
-    this.#pasting = null;
+    this.#endPaste(false);
   }
 
   /**

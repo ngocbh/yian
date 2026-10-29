@@ -75,6 +75,13 @@ describe("renderMarkdown", () => {
     ]);
   });
 
+  test("__bold__ opens only after a non-word character", () => {
+    expect(inlineSpans("snake__case__name and __this__")).toEqual([
+      ["snake__case__name and ", null],
+      ["this", "bold"],
+    ]);
+  });
+
   test("inline styles nest", () => {
     expect(inlineSpans("**a `b` *c* d**")).toEqual([
       ["a ", "bold"],

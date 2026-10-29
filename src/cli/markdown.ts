@@ -21,14 +21,18 @@ const NUMBERED = /^(\s*)(\d{1,9}[.)])\s+(.*)$/;
 /** Spaces a tab is drawn as, so each character takes the cells it is measured at. */
 export const TAB = "    ";
 
-/** `base` with `style` added, or `style` alone. */
+/**
+ * `base` with `style` added, or `style` alone. A style holds at most two words, so of three nested
+ * styles the innermost two show (`` `code` `` in `*italic*` in `**bold**` is cyan italic).
+ */
 function combine(base: Style | null, style: Style): Style {
   return base === null || base === style ? style : (`${style} ${base.split(" ")[0]}` as Style);
 }
 
 /**
- * The spans of `text`'s inline Markdown in `base`: `` `code` `` cyan, `**bold**` (or `__bold__`)
- * bold and `*italic*` italic, their markers dropped; a marker with no end stays as written.
+ * The spans of `text`'s inline Markdown in `base`: `` `code` `` cyan, `**bold**` (or `__bold__`
+ * after a non-word character) bold and `*italic*` italic, their markers dropped; a marker with no
+ * end stays as written.
  */
 export function inlineSpans(text: string, base: Style | null = null): Span[] {
   const spans: Span[] = [];
@@ -49,7 +53,9 @@ export function inlineSpans(text: string, base: Style | null = null): Span[] {
         continue;
       }
     }
-    const strong = rest.startsWith("**") ? "**" : rest.startsWith("__") ? "__" : null;
+    // `__` opens only after a non-word character, so `snake__case__name` stays as written.
+    const underscores = rest.startsWith("__") && (i === 0 || !/\w/.test(text[i - 1]!));
+    const strong = rest.startsWith("**") ? "**" : underscores ? "__" : null;
     if (strong !== null) {
       const end = text.indexOf(strong, i + 2);
       if (end > i + 2 && !/\s/.test(text[i + 2]!)) {

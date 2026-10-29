@@ -334,6 +334,15 @@ describe("invalid request sends nothing", () => {
   }
 });
 
+test("a base url with a long run of inner slashes is read in linear time", async () => {
+  // `/\/+$/` backtracks quadratically here: about 6 s for this input.
+  const fake = ok({ data: [{ id: "m" }] });
+  const started = performance.now();
+  expect(await listModels("vllm", { baseUrl: `http://x${"/".repeat(100_000)}a/`, request: fake })).toEqual(["m"]);
+  expect(performance.now() - started).toBeLessThan(1000);
+  expect(fake.calls[0]!.base).toBe(`http://x${"/".repeat(100_000)}a/models`);
+});
+
 test("keyless http base url is allowed", async () => {
   const fake = ok({ data: [{ id: "m" }] });
   expect(await listModels("vllm", { baseUrl: "http://10.0.0.5:8000/v1", request: fake })).toEqual(["m"]);

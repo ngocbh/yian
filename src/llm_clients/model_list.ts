@@ -15,7 +15,7 @@ import { realScheduler, type Scheduler } from "../platform.ts";
 import { isRecord } from "../typesys/index.ts";
 import { HttpResponse, isVisibleText } from "./auth/common.ts";
 import { request as httpRequest } from "./auth/http.ts";
-import { splitOllamaBaseUrl, validateBaseUrl } from "./config.ts";
+import { splitOllamaBaseUrl, stripTrailingSlashes, validateBaseUrl } from "./config.ts";
 import { openaiIdHeaders, validateHeaders } from "./connection_settings.ts";
 import {
   ANTHROPIC_ENDPOINT,
@@ -172,7 +172,7 @@ export async function listModels(
   const taken = new Set(Object.keys(fixed).map((key) => key.toLowerCase()));
   const kept = Object.entries(settings).filter(([key]) => !taken.has(key.toLowerCase()));
   const headers = { ...Object.fromEntries(kept), ...fixed };
-  const root = (base as string).replace(/\/+$/, "");
+  const root = stripTrailingSlashes(base as string);
 
   const send = options.request ?? httpRequest;
   const { maxModelListBytes: bodyLimit, maxModelListPages } = current();

@@ -20,7 +20,7 @@ import {
 } from "../../src/cli/inbox_chat.ts";
 import { main } from "../../src/cli/index.ts";
 import { type CliIo, HostStop, UsageError, type Writer } from "../../src/cli/utils.ts";
-import { FileLockError, lockFile, type Scheduler, virtualScheduler } from "../../src/platform.ts";
+import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts";
 import { cancel, inspectRun, readRunIndex, send } from "../../src/run.ts";
 import {
   InboxClosedRecord,
@@ -36,6 +36,7 @@ import {
 import type { ToolContext } from "../../src/tools/context.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../helpers/run_state_fixtures.ts";
+import { heldScheduler } from "../helpers/schedulers.ts";
 import { CTRL_C, CTRL_U, ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 10_000;
@@ -1237,27 +1238,6 @@ test(
   },
   TIMEOUT,
 );
-
-/**
- * The virtual scheduler with every sleep held until `open` is called, so a prompt the run's
- * `wakeAt` would take down stays up meanwhile.
- */
-function heldScheduler(): { scheduler: Scheduler; open: () => void } {
-  const base = virtualScheduler(Date.parse("2026-01-01T00:00:00Z"));
-  const { promise: gate, resolve: open } = Promise.withResolvers<void>();
-  const scheduler: Scheduler = {
-    now: () => base.now(),
-    async sleep(ms, signal) {
-      await new Promise<void>((resolve, reject) => {
-        if (signal?.aborted) return reject(signal.reason);
-        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
-        void gate.then(resolve);
-      });
-      return base.sleep(ms, signal);
-    },
-  };
-  return { scheduler, open };
-}
 
 /**
  * A chat turn that takes the lines, sleeps 60 s, then replies with an agent reading the inbox as

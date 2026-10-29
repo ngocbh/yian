@@ -108,11 +108,11 @@ export function confine(root: string, path: string): string {
 }
 
 /**
- * The real path of the chat's folder `root`.
+ * @internal The real path of the chat's folder `root`.
  *
  * @throws {ReportedToolError} When it can't be resolved, removed since the chat started say.
  */
-function resolveRoot(root: string): string {
+export function resolveRoot(root: string): string {
   try {
     return realpathSync(root);
   } catch (error) {
@@ -122,11 +122,11 @@ function resolveRoot(root: string): string {
 }
 
 /**
- * The string argument `name` of a tool call.
+ * @internal The string argument `name` of a tool call.
  *
  * @throws {ReportedToolError} When it isn't a string.
  */
-function stringArg(args: Record<string, unknown>, name: string): string {
+export function stringArg(args: Record<string, unknown>, name: string): string {
   const value = args[name];
   if (typeof value !== "string") throw new ReportedToolError(`${name} must be a string`);
   return value;
@@ -171,8 +171,11 @@ function lstatOrNull(path: string): Stats | null {
   }
 }
 
-/** Return `path` written with `/` between its parts, as the model sees it on every platform. */
-function slashed(path: string): string {
+/**
+ * @internal Return `path` written with `/` between its parts, as the model sees it on every
+ * platform.
+ */
+export function slashed(path: string): string {
   return path.split(sep).join("/");
 }
 
@@ -273,10 +276,10 @@ function readCapped(path: string, real: string): { bytes: Buffer; stats: Stats }
 }
 
 /**
- * The text of the flow file `path` (as the model gave it) at `real`, refusing anything but a YAML
- * file of at most `READ_FLOW_BYTES`.
+ * @internal The text of the flow file `path` (as the model gave it) at `real`, refusing anything
+ * but a YAML file of at most `READ_FLOW_BYTES`.
  */
-function readFlow(path: string, real: string): string {
+export function readFlow(path: string, real: string): string {
   if (!isFlowFile(real)) throw new ToolRefused(`${path} is not a .yaml or .yml file`);
   try {
     return decodeFlowText(readCapped(path, real).bytes, path);
@@ -285,8 +288,8 @@ function readFlow(path: string, real: string): string {
   }
 }
 
-/** `diag` as `yian check` writes it, without colour. */
-async function renderedDiagnostic(diag: Diagnostic, env: Env): Promise<string> {
+/** @internal `diag` as `yian check` writes it, without colour. */
+export async function renderedDiagnostic(diag: Diagnostic, env: Env): Promise<string> {
   let text = "";
   await renderDiagnostic(diag, { write: async (chunk) => void (text += chunk), isTTY: false }, env);
   return text.trimEnd();
@@ -495,8 +498,8 @@ function quietly(action: () => unknown): void {
   } catch {}
 }
 
-/** A tool's JSON Schema for string arguments, each `[name, description, required]`. */
-function stringArguments(...fields: [name: string, description: string, required: boolean][]) {
+/** @internal A tool's JSON Schema for string arguments, each `[name, description, required]`. */
+export function stringArguments(...fields: [name: string, description: string, required: boolean][]) {
   return {
     type: "object",
     properties: Object.fromEntries(fields.map(([name, description]) => [name, { type: "string", description }])),

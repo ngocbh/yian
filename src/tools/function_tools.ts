@@ -171,6 +171,23 @@ export class FunctionTool {
 Object.defineProperty(FunctionTool.prototype, FUNCTION_TOOL, { value: true });
 
 /**
+ * @internal Return a `FunctionTool` like `original` in every field but its call, which is
+ * `execute`: for a host that wraps a tool's calls (to count them, say).
+ */
+export function withExecute(original: FunctionTool, execute: FunctionTool["execute"]): FunctionTool {
+  return new FunctionTool({
+    name: original.name,
+    description: original.description,
+    parametersJsonSchema: original.parametersJsonSchema,
+    isConcurrencySafe: original.isConcurrencySafe,
+    parametersValidator: original.parametersValidator,
+    outputJsonSchema: original.outputJsonSchema,
+    outputValidator: original.outputValidator,
+    execute,
+  });
+}
+
+/**
  * Return whether `value` is a `FunctionTool` from any copy of yian: it carries the brand and a
  * tool's shape. Never throws, so a hostile object is not a tool.
  */

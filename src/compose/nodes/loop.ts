@@ -22,6 +22,7 @@
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import type { ExprNode } from "../../expr/grammar.ts";
+import { evaluateWhenRecord } from "../../expr/expressions.ts";
 import { ExpressionError, exprRefs, parseCondition } from "../../expr/index.ts";
 import {
   comparePaths,
@@ -389,7 +390,13 @@ export class LoopDescriptor extends NodeDescriptor {
       }
       // Builtins are pure, so a predicate that reads no carried field has the same value on every
       // check: without `max:`, one that doesn't stop the loop at once never will.
-      if (present.length === 1 && this.max === null && tree !== null && heads.size === 0) {
+      if (
+        present.length === 1 &&
+        this.max === null &&
+        tree !== null &&
+        heads.size === 0 &&
+        constantKeepsLooping(predicate, key)
+      ) {
         errors.push(
           `${subject}: \`${key}: ${predicate}\` reads no carried field, so it never changes; read one, ` +
             "or add `max:`",
@@ -416,6 +423,20 @@ export class LoopDescriptor extends NodeDescriptor {
       this.fieldRanges.get(siteKey("input", name)) ?? this.fieldRanges.get(siteKey("field", "inputs")) ?? null,
     );
   }
+}
+
+/**
+ * Whether constant predicate `predicate` (one that reads no name) keeps a `key` loop going:
+ * `while:` true or `until:` false. `false` when evaluating it fails, which the run reports.
+ */
+function constantKeepsLooping(predicate: string, key: "while" | "until"): boolean {
+  let truth: boolean;
+  try {
+    truth = evaluateWhenRecord(predicate, {});
+  } catch {
+    return false;
+  }
+  return key === "while" ? truth : !truth;
 }
 
 /**

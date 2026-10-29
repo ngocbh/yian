@@ -12,12 +12,13 @@
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { writeAsText } from "../typesys/values.ts";
 import {
+  has,
   hostOnlyFieldError,
   LLM_CONFIG_KEYS,
-  LLMConfig,
   mergeLlmConfig,
+  own,
+  removedFormError,
   RETIRED_LLM_CONFIG_KEYS,
-  retiredKeyError,
   validateBaseUrl,
 } from "./config.ts";
 import {
@@ -166,16 +167,8 @@ export function validateLayer(config: Readonly<AgentConfig>): void {
     throw new RangeError(hostOnly[1]);
   }
   rejectInternalKeys(config);
-  const provider = own(config, "provider");
-  if (
-    (typeof provider === "string" && provider.toLowerCase() === "codex") ||
-    has(config, "sandbox") ||
-    has(config, "cwd")
-  ) {
-    new LLMConfig(config);
-  }
-  const retired = retiredKeyError(config);
-  if (retired !== null) throw new RangeError(retired);
+  const removed = removedFormError(config);
+  if (removed !== null) throw new RangeError(removed);
   // The loader checks authored values; a host layer is checked here only for unknown keys, which
   // would otherwise be recorded and silently ignored. Its values, including block contents, are
   // checked against the effective config before the run starts (`checkModelConfig`) and when the
@@ -183,10 +176,6 @@ export function validateLayer(config: Readonly<AgentConfig>): void {
   const unknown = Object.keys(config)
     .filter((key) => has(config, key) && !LLM_CONFIG_KEYS.has(key) && key !== "_connection")
     .sort(compareCodeUnits);
-  for (const key of unknown) {
-    const dashed = key.replaceAll("_", "-");
-    if (LLM_CONFIG_KEYS.has(dashed)) throw new RangeError(`\`${key}\` is not an llm_config key; write \`${dashed}\``);
-  }
   if (unknown.length > 0) {
     throw new RangeError(
       `llm_config has unknown field(s) ${writeAsText(unknown)} ` +
@@ -194,7 +183,7 @@ export function validateLayer(config: Readonly<AgentConfig>): void {
     );
   }
   // `null`, not `undefined`, so a layer without a provider isn't checked as an openai one.
-  if (has(config, "_connection")) validateConnection(config["_connection"], provider ?? null);
+  if (has(config, "_connection")) validateConnection(config["_connection"], own(config, "provider") ?? null);
 }
 
 /** Reject the fields only a resolved, recorded config may hold. */
@@ -212,16 +201,6 @@ function prefixed(subject: string, check: () => unknown): void {
     if (!(error instanceof RangeError)) throw error;
     throw new RangeError(`effective LLM config for ${subject}: ${error.message}`);
   }
-}
-
-/** Return `config`'s own value for `key`, so inherited names such as `constructor` are absent. */
-function own(config: Readonly<AgentConfig>, key: string): unknown {
-  return Object.hasOwn(config, key) ? config[key] : undefined;
-}
-
-/** Whether `config` holds `key` as written: an own property that isn't `undefined` (`null` counts). */
-function has(config: Readonly<AgentConfig>, key: string): boolean {
-  return own(config, key) !== undefined;
 }
 
 /** Whether the yian value `value` counts as set: empty strings, lists and records don't. */

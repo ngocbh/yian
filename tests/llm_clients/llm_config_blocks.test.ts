@@ -239,6 +239,22 @@ test("host layer rejects the underscore spelling of a dash block", () => {
   expect(() => validateLayer(layer)).toThrow("`qwen_cn` is not an llm_config key; write `qwen-cn`");
 });
 
+test("host layer reports a removed form as the config does, first match first", () => {
+  const message = (layer: Record<string, unknown>): string => {
+    try {
+      validateLayer(layer);
+    } catch (error) {
+      expect(error).toBeInstanceOf(RangeError);
+      return (error as RangeError).message;
+    }
+    throw new Error("expected a RangeError");
+  };
+  expect(message({ provider: "CoDeX" })).toStartWith("Native Codex configuration has been removed");
+  expect(message({ cwd: null })).toStartWith("Native Codex configuration has been removed");
+  expect(message({ sandbox: 1n, temperature: 1n })).toStartWith("`temperature` moved into the provider block");
+  expect(message({ temperature: 1n, qwen_cn: {} })).toBe("`qwen_cn` is not an llm_config key; write `qwen-cn`");
+});
+
 test("host layer unknown key lists the authored keys", () => {
   let message = "";
   try {

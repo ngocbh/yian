@@ -222,6 +222,12 @@ test("popHostCredentials takes the url only with the layer's key", () => {
   layer = { provider: "azure", model: "gpt-4o", base_url: AZURE_RESOURCE };
   expect(fields(popHostCredentials(layer))).toEqual(NO_CONNECTION);
   expect(layer).toEqual({ provider: "azure", model: "gpt-4o", base_url: AZURE_RESOURCE });
+  // Empty headers are no headers, so the endpoint stays a layer setting beside them too.
+  for (const headers of [{}, { "X-A": undefined }]) {
+    layer = { provider: "azure", model: "gpt-4o", base_url: AZURE_RESOURCE, headers };
+    expect(fields(popHostCredentials(layer))).toEqual(NO_CONNECTION);
+    expect(layer).toEqual({ provider: "azure", model: "gpt-4o", base_url: AZURE_RESOURCE });
+  }
   // A host Azure key never goes to an endpoint another layer names.
   error = caught(() => popHostCredentials({ provider: "azure", model: "gpt-4o", api_key: SENTINEL }));
   expect(error).toBeInstanceOf(RangeError);
@@ -578,8 +584,8 @@ describe("edge cases", () => {
     expect(hostOnlyFieldError(null)).toBeNull();
   });
 
-  test("popApiKey needs a truthy provider", () => {
-    for (const provider of [undefined, null, false, "", 0n, 0, [], {}]) {
+  test("popApiKey needs a provider", () => {
+    for (const provider of [undefined, null]) {
       const layer: Record<string, unknown> = { provider, api_key: SENTINEL };
       const error = caught(() => popApiKey(layer));
       expect(error).toBeInstanceOf(RangeError);
@@ -589,6 +595,22 @@ describe("edge cases", () => {
       );
       expect(Object.hasOwn(layer, "api_key")).toBe(false);
     }
+  });
+
+  test("popApiKey names a provider that is set but not a provider", () => {
+    for (const provider of [false, "", 0n, 0, [], {}]) {
+      const layer: Record<string, unknown> = { provider, api_key: SENTINEL };
+      const error = caught(() => popApiKey(layer));
+      expect(error).toBeInstanceOf(ValidationError);
+      expect((error as ValidationError).issues.map(({ loc, type }) => [loc, type])).toEqual([
+        [["provider"], "literal_error"],
+      ]);
+      expect(error.message).not.toContain(SENTINEL);
+      expect(Object.hasOwn(layer, "api_key")).toBe(false);
+    }
+  });
+
+  test("popApiKey returns a valid key and refuses a bad one", () => {
     const layer: Record<string, unknown> = { provider: "openai", api_key: SENTINEL };
     expect(popApiKey(layer)).toBe(SENTINEL);
     expect(layer).toEqual({ provider: "openai" });

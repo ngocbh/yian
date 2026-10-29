@@ -42,12 +42,7 @@ import {
   type Credentials,
   OAuthCredentials,
 } from "./auth/common.ts";
-import {
-  azureResourceEndpoint,
-  LLMConfig,
-  splitOllamaBaseUrl,
-  SUPPORTED_LLM_PROVIDERS,
-} from "./config.ts";
+import { azureResourceEndpoint, LLMConfig, splitOllamaBaseUrl } from "./config.ts";
 import {
   checkModelConfig,
   type Connection,
@@ -63,11 +58,10 @@ import {
   GOOGLE_ENDPOINT,
   OLLAMA_ENDPOINT,
   OPENAI_API_ENDPOINT,
-  OPENAI_COMPATIBLE,
   prefersResponses,
   PROVIDER_BASE_URL,
 } from "./endpoints.ts";
-import { validateModel } from "./validators.ts";
+import { isKnownModel } from "./model_catalog.ts";
 
 /** Providers with a dedicated route. */
 export const DEDICATED_PROVIDERS: readonly string[] = Object.freeze([
@@ -76,19 +70,6 @@ export const DEDICATED_PROVIDERS: readonly string[] = Object.freeze([
   "google",
   "azure",
 ]);
-
-const ROUTED_PROVIDERS = [...OPENAI_COMPATIBLE, ...DEDICATED_PROVIDERS];
-{
-  const routed = new Set(ROUTED_PROVIDERS);
-  const supported = new Set<string>(SUPPORTED_LLM_PROVIDERS);
-  if (
-    routed.size !== ROUTED_PROVIDERS.length ||
-    routed.size !== supported.size ||
-    ![...supported].every((provider) => routed.has(provider))
-  ) {
-    throw new Error("LLM factory routes and LLMConfig provider vocabulary are out of sync");
-  }
-}
 
 /**
  * Return the non-secret account id replay records carry for `identity` (an API key, a ChatGPT
@@ -557,7 +538,7 @@ export async function chatModelFromConfig(
   // After the credential and header reads, so a removed login or
   // mismatched header names raise without a warning, while a missing environment key (outside
   // OpenAI) still warns first.
-  if (!validateModel(provider, model)) {
+  if (!isKnownModel(provider, model)) {
     onWarning(
       `Model '${model}' is not in the known model list for provider '${provider}'. ` +
         "Continuing anyway.",

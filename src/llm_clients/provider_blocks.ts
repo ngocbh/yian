@@ -81,7 +81,7 @@ interface Checked {
 type Options<K extends Field["kind"]> = Omit<Extract<Field, { kind: K }>, "kind">;
 
 /** Return `obj` as a frozen null-prototype object, so no inherited key reads as an entry. */
-function table<T>(obj: Readonly<Record<string, T>>): Readonly<Record<string, T>> {
+export function table<T>(obj: Readonly<Record<string, T>>): Readonly<Record<string, T>> {
   return Object.freeze(Object.assign(Object.create(null) as Record<string, T>, obj));
 }
 
@@ -1270,20 +1270,7 @@ interface PartialWalk {
  * @param block A key of `PROVIDER_BLOCKS`, e.g. `"anthropic"`.
  * @param tree The block as written, with values in place of some leaves or subtrees.
  * @param isValue Whether a leaf or subtree is a value.
- * @returns One message per problem, in the order written; empty when none.
- * @throws {RangeError} If `block` has no block.
- */
-export function partialBlockProblems(block: string, tree: unknown, isValue: (leaf: unknown) => boolean): string[] {
-  return locatedBlockProblems(block, tree, isValue).map((problem) => problem.message);
-}
-
-/**
- * Check a block as `partialBlockProblems` does; give each problem's key path too.
- *
- * @param block A key of `PROVIDER_BLOCKS`, e.g. `"anthropic"`.
- * @param tree The block as written, with values in place of some leaves or subtrees.
- * @param isValue Whether a leaf or subtree is a value.
- * @returns One problem each, in the order written; empty when none.
+ * @returns One problem each, with its key path, in the order written; empty when none.
  * @throws {RangeError} If `block` has no block.
  */
 export function locatedBlockProblems(

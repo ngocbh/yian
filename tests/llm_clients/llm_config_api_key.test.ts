@@ -241,6 +241,21 @@ test.each([
   expect(() => splitModelConfig({ ...marked, _host_key: "yes", api_key: SENTINEL })).toThrow(/marker/);
 });
 
+test("a marked config's headers that are not a record are refused as malformed, not as unrecorded", () => {
+  for (const headers of [[], "", false, 0n]) {
+    const marked = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      api_key: SENTINEL,
+      headers,
+      _host_key: true,
+      _header_names: ["X-Gateway"],
+    };
+    const error = refusal(() => splitModelConfig(marked));
+    expect(error.issues.map(({ loc, type }) => [loc, type])).toEqual([[["headers"], "dict_type"]]);
+  }
+});
+
 test("split and resolve keep the key as a secret", () => {
   const config = new LLMConfig({ provider: "anthropic", model: "claude-sonnet-4-5", api_key: SENTINEL });
   const [validated] = splitModelConfig(config);

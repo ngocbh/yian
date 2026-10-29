@@ -287,7 +287,8 @@ a framed box. Set `NO_COLOR`, or redirect any of the three, to get the plain lin
 The box stays up under the spinner while the assistant works. Press Enter there to send the line at
 once: the assistant reads it before its next model call, so it can change course mid-reply. Ctrl-C
 and Esc work as they do between replies. An approval card or a question takes the box's place
-until you answer it.
+until you answer it. One that opens while you type ignores keys for a moment, so an Enter meant
+for the box answers nothing.
 
 A paste of more than 3 lines or 800 characters goes into the box as one token, such as
 `[Pasted text #1 +40 lines]`, numbered within the line. The cursor steps over a token, and

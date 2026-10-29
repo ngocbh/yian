@@ -517,6 +517,43 @@ async function aYieldingReadLineGivesWayToAPromptQueuedBehindIt(): Promise<void>
   assert.equal(await later, "Approve");
 }
 
+async function aPromptOpeningWhileTheLiveBoxTakesKeysDropsThemForAWhile(): Promise<void> {
+  let clock = 0;
+  const { input, terminal, view } = setup({ tty: true, now: () => clock });
+  const editor = new LineEditor({ columns: () => 60, hint: "" });
+  const sent: string[] = [];
+  const watch = new AbortController();
+  terminal.watchKeys(
+    watch.signal,
+    () => {},
+    (key) => {
+      const action = editor.key(key);
+      if (action !== null && "value" in action) sent.push(action.value);
+      return true;
+    },
+  );
+  input.write("steer");
+  await tick();
+  clock += 100;
+  // The card opens as the user presses Enter, meant to send the line.
+  const answer = terminal.approve(approval());
+  await tick();
+  input.write(ENTER);
+  await tick();
+  assert.equal(view().rows.at(-3), "? Write a.yaml (Use arrow keys)");
+  clock += 1000;
+  input.write(ENTER);
+  assert.equal(await answer, "Approve");
+  assert.deepEqual(sent, []);
+  // Long after the last key in the box, a card takes keys at once.
+  clock += 1000;
+  const later = terminal.approve(approval());
+  await tick();
+  input.write(ENTER);
+  assert.equal(await later, "Approve");
+  watch.abort();
+}
+
 async function approvePreselectsTheChoiceItNames(): Promise<void> {
   const { input, terminal, view } = setup();
   const choices = ["Go", "Save", "Cancel"];
@@ -1200,7 +1237,8 @@ async function showScreenSaysWhenAPromptWaitsBehindItAndClosesFirst(): Promise<v
 }
 
 async function aWatchWithAnEditorTurnsBracketedPasteOnAndAPasteStaysOneLine(): Promise<void> {
-  const { input, output, terminal } = setup({ columns: 60 });
+  let clock = 0;
+  const { input, output, terminal } = setup({ columns: 60, now: () => clock });
   const modes = () => screen(output.text).modes.filter((mode) => mode.startsWith("?2004"));
   const editor = new LineEditor({ columns: () => 60, hint: "" });
   const sent: string[] = [];
@@ -1220,9 +1258,10 @@ async function aWatchWithAnEditorTurnsBracketedPasteOnAndAPasteStaysOneLine(): P
   await tick();
   assert.deepEqual(sent, []);
   assert.equal(editor.text(), "one\n/exit\nthree");
-  // A prompt meanwhile leaves it on for the watch.
+  // A prompt meanwhile leaves it on for the watch; past its grace, it takes keys.
   const answer = terminal.askText("Name:");
   await tick();
+  clock += 1000;
   input.write("x" + ENTER);
   assert.equal(await answer, "x");
   assert.equal(modes().at(-1), "?2004h");
@@ -3164,6 +3203,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a yielding readLine gives way to a prompt queued behind it":
     aYieldingReadLineGivesWayToAPromptQueuedBehindIt,
   "approve preselects the choice it names": approvePreselectsTheChoiceItNames,
+  "a prompt opening while the live box takes keys drops them for a while":
+    aPromptOpeningWhileTheLiveBoxTakesKeysDropsThemForAWhile,
   "onActive says whether a turn left rows on the screen": onActiveSaysWhetherATurnLeftRows,
   "Escape at readLine with escape returns the draft": escapeAtReadLineReturnsTheDraft,
   "Escape at readLine without escape is ignored": escapeAtReadLineWithoutTheOptionIsIgnored,

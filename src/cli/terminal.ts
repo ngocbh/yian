@@ -513,8 +513,9 @@ export type EditorAction =
 const LIST_MARGIN = 4;
 
 /**
- * How long a prompt that took a yielding `readLine`'s place drops keys, in milliseconds: an Enter
- * meant for the line mustn't answer it.
+ * How long a prompt drops keys, in milliseconds, once it takes a yielding `readLine`'s place or
+ * opens this soon after a key reached a watch's editor (the live box): an Enter meant for the line
+ * mustn't answer it.
  */
 const YIELD_GRACE_MS = 400;
 
@@ -958,8 +959,10 @@ export class Terminal {
   readonly #now: () => number;
   /** Set when a `readLine` yields: the next turn to start took its place. */
   #yielded = false;
-  /** Until when keys are dropped (`#now` time), after a prompt took a yielding line's place. */
+  /** Until when keys are dropped (`#now` time), after a prompt took a line's place. */
   #graceUntil = 0;
+  /** When a watch's editor last took a key (`#now` time). */
+  #editedAt = Number.NEGATIVE_INFINITY;
 
   /** Build a terminal over `options.input` and `options.output`; touches neither stream. */
   constructor(options: TerminalOptions = {}) {
@@ -1018,7 +1021,8 @@ export class Terminal {
    * queued behind it while it is up: it ends as `{yielded}` with the draft, erased as an abort
    * erases it, and a `readLine` called next waits behind that prompt. The prompt that took its
    * place drops the keys typed before it opened, and those of its first `YIELD_GRACE_MS` but
-   * Ctrl-C.
+   * Ctrl-C; so does any other prompt that opens within `YIELD_GRACE_MS` of a key a watch's
+   * editor took.
    */
   async readLine<E extends boolean = false>(
     label: string,
@@ -1433,7 +1437,10 @@ export class Terminal {
     if (graced && !(key.ctrl && key.name === "c")) return;
     if (this.#active) this.#active.key(key);
     else if (watch !== undefined && key.ctrl && key.name === "c") watch.onKey("interrupt");
-    else if (watch?.edit?.(key) === true) return;
+    else if (watch?.edit?.(key) === true) {
+      this.#editedAt = this.#now();
+      return;
+    }
     else if (watch !== undefined && key.name === "escape") watch.onKey("escape");
     else this.#buffer.push(key);
   }
@@ -1525,7 +1532,9 @@ export class Terminal {
       if (turn.ending === undefined) {
         started = true;
         this.#turn = turn;
-        if (this.#yielded) {
+        // A line prompt after the live box is the same box going on, not a prompt taking its place.
+        const afterEdit = wants && this.#now() - this.#editedAt < YIELD_GRACE_MS;
+        if (this.#yielded || afterEdit) {
           // The user may have been typing in the line: what they typed for it answers nothing here.
           this.#yielded = false;
           this.#buffer = [];

@@ -90,6 +90,7 @@ import {
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import * as runLog from "../../src/runtime/log.ts";
 import {
   captureBindings,
   checkMemoryScope,
@@ -808,7 +809,7 @@ function install(trace: RetainedTrace, target: string, entry: SourceEntry): void
 function installOccurrence(trace: RetainedTrace, record: OutcomeRecord, nodeData: JsonObject = {}): TraceOccurrence {
   const capture = record.forwardCapture!;
   const envelope = new RecordEnvelope(SCHEMA_VERSION, RUN, 2, record);
-  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, {
+  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, encodeRecord(envelope), capture.route, {
     rebind: () => ({ inputs: { v: 1n }, capture, inputRoute: capture.route }),
     nodeDataRebuilder: () => nodeData,
   });
@@ -1003,7 +1004,7 @@ test("checkMemoryScope returns null or an exact MemoryScope", () => {
   );
 });
 
-test("a trace occurrence keeps a decoded copy of its envelope", () => {
+test("a trace occurrence keeps its log line and decodes a copy of its envelope", () => {
   const keys = new Set<string>();
   const capture = new ForwardCapture(ValueRoute.record([["v", sourceRoute(0, ["x"])]]), {
     evaluatedKeys: keys,
@@ -1013,11 +1014,11 @@ test("a trace occurrence keeps a decoded copy of its envelope", () => {
   const hidden = new Set(["v"]);
   const scope = new MemoryScope(["a"], { memories: ["notes"] });
 
-  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, {
+  const recordJson = encodeRecord(envelope);
+  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, recordJson, capture.route, {
     memoryScope: scope,
     hiddenInputs: hidden,
   });
-  const recordJson = encodeRecord(envelope);
   (capture.evaluatedKeys as Set<string>).add("v");
   hidden.add("w");
 
@@ -1029,7 +1030,7 @@ test("a trace occurrence keeps a decoded copy of its envelope", () => {
   expect([...occurrence.hiddenInputs]).toEqual(["v"]);
   expect(Object.isFrozen(occurrence)).toBe(true);
   expectError(
-    () => new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, { memoryScope: {} as MemoryScope }),
+    () => new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, recordJson, capture.route, { memoryScope: {} as MemoryScope }),
     TypeError,
     "historical memory scope must be a MemoryScope or null",
   );
@@ -1286,6 +1287,30 @@ function runNode(
 ): RetainedTrace {
   return step(step(trace, at(seq, new NodeStartedRecord(node.id)))!, at(seq + 1, record), node, options)!;
 }
+
+// Under Bun only: the Node runner can't spy on a module's export.
+test.if(process.versions.bun !== undefined)(
+  "an occurrence keeps the log line it is given and decodes its envelope once, when first read",
+  () => {
+    const trace = startedTrace(true);
+    const succeeded = learnableRun()[2]!;
+    const recordJson = encodeRecord(succeeded);
+    const encode = spyOn(runLog, "encodeRecord");
+    const decode = spyOn(runLog, "decodeRecord");
+    try {
+      const occurrence = step(trace, succeeded, new TraceNode("a"), { envelopeJson: recordJson })!.occurrences[0]!;
+      expect(occurrence.recordJson).toBe(recordJson);
+      expect(encode).not.toHaveBeenCalled();
+      expect(decode).not.toHaveBeenCalled();
+      expect(occurrence.envelope).toBe(occurrence.envelope);
+      expect(occurrence.envelope.record).toBe(occurrence.record);
+      expect(decode).toHaveBeenCalledTimes(1);
+    } finally {
+      encode.mockRestore();
+      decode.mockRestore();
+    }
+  },
+);
 
 test("a binding that finished must rebind; only one that didn't rebuilds to null", () => {
   const unfinished = fixedRebinder(null);
@@ -2029,7 +2054,6 @@ function changedOccurrence(
     source?: SourceRef;
     nodeId?: string;
     outcomeSeq?: number;
-    envelope?: RecordEnvelope;
     memoryScope?: MemoryScope | null;
   },
 ): TraceOccurrence {
@@ -2037,7 +2061,7 @@ function changedOccurrence(
     changes.source ?? occurrence.source,
     changes.nodeId ?? occurrence.nodeId,
     changes.outcomeSeq ?? occurrence.outcomeSeq,
-    changes.envelope ?? occurrence.envelope,
+    occurrence.recordJson,
     occurrence.inputRoute,
     {
       memoryScope: changes.memoryScope === undefined ? occurrence.memoryScope : changes.memoryScope,
@@ -2258,10 +2282,10 @@ test("an outcome trace source must match the physical accepted start before appe
 
 test.each(
   OUTCOME_KINDS.flatMap((kind) =>
-    (["source", "node", "sequence", "record"] as const).map((change) => [kind, change] as const),
+    (["source", "node", "sequence"] as const).map((change) => [kind, change] as const),
   ),
 )(
-  "an outcome trace occurrence must match the canonical record: %s, %s",
+  "an outcome trace occurrence must match the accepted outcome: %s, %s",
   (kind, change) => {
     const { state, log, prepared } = preparedScopedOutcome(kind);
     const delta = prepared._plan.traceDelta!;
@@ -2270,7 +2294,6 @@ test.each(
       source: { source: new SourceRef(state.runId!, 0) },
       node: { nodeId: START_ID },
       sequence: { outcomeSeq: occurrence.outcomeSeq + 1 },
-      record: { envelope: log.records().at(-1)! },
     }[change];
 
     expectRefused(

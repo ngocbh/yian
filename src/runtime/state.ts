@@ -2176,7 +2176,7 @@ function planAnchors(
     startNode: state.flow.nodes.get(startId)!,
     endId,
     endNode: state.flow.nodes.get(endId) ?? null,
-    traceDelta: prepareRecordTrace(state, envelope, traceOptions),
+    traceDelta: prepareRecordTrace(state, envelope, { ...traceOptions, envelopeJson }),
   };
 }
 
@@ -2963,8 +2963,7 @@ function requireOutcomeTraceTerminal(state: RunState, prepared: PreparedTransiti
     typeof occurrence.nodeId !== "string" ||
     occurrence.nodeId !== nodeId ||
     !Number.isSafeInteger(occurrence.outcomeSeq) ||
-    occurrence.outcomeSeq !== prepared.expectedSequence ||
-    occurrence.recordJson !== plan.envelopeJson
+    occurrence.outcomeSeq !== prepared.expectedSequence
   ) {
     throw new RangeError("physical trace occurrence disagrees with the accepted outcome");
   }

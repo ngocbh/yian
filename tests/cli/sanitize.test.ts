@@ -32,8 +32,17 @@ describe("sanitize", () => {
     expect(sanitize("a\u200bb\u200fc\u2060d\ufeffe")).toBe("a\\u{200b}b\\u{200f}c\\u{2060}d\\u{feff}e");
   });
 
+  test("shows other invisible format characters, astral ones included", () => {
+    const text = "a\u061cb\u2028c\u2029d\u00ade\u180ef\u2061g\u2064h\u206ai\u206fj\ufff9k\ufffbl\u{e0041}m\u{e007f}n";
+    expect(sanitize(text)).toBe(
+      "a\\u{61c}b\\u{2028}c\\u{2029}d\\u{ad}e\\u{180e}f\\u{2061}g\\u{2064}h\\u{206a}i\\u{206f}j\\u{fff9}k\\u{fffb}l" +
+        "\\u{e0041}m\\u{e007f}n",
+    );
+  });
+
   test("leaves other text as it is", () => {
     expect(sanitize("héllo 你好")).toBe("héllo 你好");
+    expect(sanitize("\u{1f600} \u{20000}")).toBe("\u{1f600} \u{20000}");
   });
 
   test("the ask form shows sequences and tabs and keeps BIDI and zero-width characters", () => {

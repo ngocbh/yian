@@ -24,14 +24,18 @@ export interface SanitizeOptions {
 const SEQUENCE =
   /(?:\x1b\[|\x9b)[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)|(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x9c]*(?:\x1b\\|\x9c)/g;
 
-/** The BIDI embeddings, overrides and isolates, and the zero-width characters. */
-const INVISIBLE = /[\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g;
+/**
+ * The BIDI marks, embeddings, overrides and isolates, the zero-width and other invisible format
+ * characters, the line and paragraph separators, the interlinear annotation marks and the tags.
+ */
+const INVISIBLE =
+  /[\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu;
 
 /**
  * Return `text` safe to print: `\r\n` read as `\n`; escape sequences dropped; each other control
  * character but `\n` and `\t` (C0, DEL and C1, ESC included) shown as `^X` (`^[` for ESC, `^?` for
- * DEL) or, for C1, U+FFFD; BIDI controls and zero-width characters shown as `\u{202e}`. Other text,
- * accents and wide characters included, is left as it is.
+ * DEL) or, for C1, U+FFFD; BIDI controls, zero-width and other invisible characters shown as
+ * `\u{202e}`. Other text, accents and wide characters included, is left as it is.
  */
 export function sanitize(text: string, options: SanitizeOptions = {}): string {
   let safe = text.replaceAll("\r\n", "\n");
@@ -43,7 +47,7 @@ export function sanitize(text: string, options: SanitizeOptions = {}): string {
     return code < 0x20 ? `^${String.fromCharCode(code + 64)}` : "\uFFFD";
   });
   if (options.invisible !== "keep") {
-    safe = safe.replace(INVISIBLE, (char) => `\\u{${char.charCodeAt(0).toString(16)}}`);
+    safe = safe.replace(INVISIBLE, (char) => `\\u{${char.codePointAt(0)!.toString(16)}}`);
   }
   return safe;
 }

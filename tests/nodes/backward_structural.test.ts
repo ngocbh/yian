@@ -465,24 +465,6 @@ test.each([
   expect(() => rebuildNodeData(node, { topic: "reefs", limit: 4n }, {})).toThrow(new RangeError(message));
 });
 
-test("custom run captures its inputs at its existing pre-run boundary", async () => {
-  class CustomRun extends CaptureNode {
-    override async run(inputs: Readonly<Record<string, unknown>>): Promise<NodeResult> {
-      return this.forward(inputs as Record<string, unknown>);
-    }
-  }
-
-  const node = new CustomRun();
-  const evaluated = await evalNode(node, null, new VariablePool(), {
-    wiringOverride: { topic: "reefs" },
-    captureBindings: true,
-  });
-  expect((evaluated.outcome as Output).value).toBe("reefs");
-  expect(evaluated.bindings!.boundInputs).toEqual({ topic: "reefs", limit: 4n });
-  expect(evaluated.backwardCapture!.inputNames).toEqual(["topic", "limit"]);
-  expect(node.captures).toBe(0);
-});
-
 test("an agent capture keeps the variable inventory separate from the delivered inputs", async () => {
   const config = { provider: "openai", model: "gpt-5.5" };
   const variables = parametersFromYaml("variables:\n  instruction: !str Summarize clearly\n", new Map(), {

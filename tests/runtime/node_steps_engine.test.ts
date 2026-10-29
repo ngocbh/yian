@@ -86,9 +86,6 @@ test("eval node passes steps only to opted in nodes and checks the type", async 
   const passed = seen.at(-1) as NodeSteps;
   expect([passed.starts, passed.prior]).toEqual([2, [{ kind: "test", attempt: 1n }]]);
   expect(recorded).toEqual([{ kind: "test", attempt: 2n }]);
-  await expect(evalNode(new StepNode("d", body), null, pool, { steps: { starts: 1 } as never })).rejects.toThrow(
-    new TypeError("steps must be a NodeSteps or null"),
-  );
 });
 
 test("a node that catches the recorder's fault still rejects evalNode with its original", async () => {

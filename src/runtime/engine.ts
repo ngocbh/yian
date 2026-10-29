@@ -59,9 +59,8 @@ import {
   evalNode,
   evaluationFailure,
   type MemoryContextOpener,
-  requireModels,
 } from "./eval_node.ts";
-import { LiveChannel } from "./live.ts";
+import type { LiveChannel } from "./live.ts";
 import {
   InterruptedRecord,
   isRunLog,
@@ -261,20 +260,25 @@ export type DeliveryOp =
  * @throws TypeError when `op` is no delivery.
  */
 export function prepareDelivery(state: RunState, op: DeliveryOp): PreparedTransition | null {
-  const kind: unknown = typeof op === "object" && op !== null ? op.kind : undefined;
-  if (kind === "send") return prepareSend(state, (op as { inbox: string }).inbox, (op as { event: unknown }).event);
-  if (kind === "withdraw") return prepareWithdraw(state, (op as { inbox: string }).inbox);
-  if (kind === "complete") {
-    const { callId, result } = op as Extract<DeliveryOp, { kind: "complete" }>;
-    return prepareComplete(state, callId, result);
+  switch (op.kind) {
+    case "send":
+      return prepareSend(state, op.inbox, op.event);
+    case "withdraw":
+      return prepareWithdraw(state, op.inbox);
+    case "complete":
+      return prepareComplete(state, op.callId, op.result);
+    case "close":
+      return prepareInboxClosed(state, op.inbox);
+    case "interrupt":
+      return prepareInterrupt(state, op.inbox, op.running ?? null);
+    case "cancel":
+      return prepareRunCancelled(state);
+    default: {
+      const unknown: never = op;
+      const kind = (unknown as { readonly kind: unknown }).kind;
+      throw new TypeError(`a delivery's kind must be send, withdraw, complete, close, interrupt or cancel, got ${reprText(String(kind))}`);
+    }
   }
-  if (kind === "close") return prepareInboxClosed(state, (op as { inbox: string }).inbox);
-  if (kind === "interrupt") {
-    const { inbox, running = null } = op as Extract<DeliveryOp, { kind: "interrupt" }>;
-    return prepareInterrupt(state, inbox, running);
-  }
-  if (kind === "cancel") return prepareRunCancelled(state);
-  throw new TypeError(`a delivery's kind must be send, withdraw, complete, close, interrupt or cancel, got ${reprText(String(kind))}`);
 }
 
 /** The node's calls as its evaluation sees them: state, closing reason, deadline and answer. */
@@ -371,14 +375,10 @@ export class FlowEngine {
   #timer: { readonly at: string; readonly controller: AbortController } | null = null;
 
   /**
-   * Borrow a prepared state and log and configure one drive.
+   * Borrow a prepared state and log and configure one drive. The run boundary checks the options.
    *
-   * @throws TypeError when `state` isn't exactly a `RunState`, `log` lacks `append`, `runId` or
-   *   `nextSequence`, `growBuilder` or a given callback isn't a function, `numWorkers` isn't a safe
-   *   integer, `tools` isn't exactly a `ToolSet`, `skills` isn't a `Map`, `models` lacks its
-   *   methods, `signal` isn't an `AbortSignal`, `scheduler` isn't an object whose `now`
-   *   and `sleep` are functions, `random` isn't a function, or `runDir` isn't a string.
-   * @throws RangeError when `numWorkers` is negative.
+   * @throws TypeError when `state` isn't exactly a `RunState`, or `log` lacks `append`, `runId` or
+   *   `nextSequence`.
    */
   constructor(state: RunState, log: RunLog, options: FlowEngineOptions) {
     const { growBuilder, numWorkers, onEvent = null, onStream = null, memoryContextOpener = null } = options;
@@ -387,28 +387,6 @@ export class FlowEngine {
     const { runDir = null, live = null } = options;
     if (!isExactly(state, RunState)) throw new TypeError("FlowEngine expects a RunState");
     if (!isRunLog(log)) throw new TypeError("FlowEngine expects a RunLog");
-    if (typeof growBuilder !== "function") throw new TypeError("grow_builder must be callable");
-    if (!Number.isSafeInteger(numWorkers)) {
-      throw new TypeError("num_workers must be a non-negative integer");
-    }
-    if (numWorkers < 0) throw new RangeError("num_workers must be a non-negative integer");
-    if (onEvent !== null && typeof onEvent !== "function") throw new TypeError("on_event must be callable or null");
-    if (onStream !== null && typeof onStream !== "function") throw new TypeError("on_stream must be callable or null");
-    if (memoryContextOpener !== null && typeof memoryContextOpener !== "function") {
-      throw new TypeError("memory_context_opener must be callable or null");
-    }
-    if (tools !== null && !isExactly(tools, ToolSet)) throw new TypeError("tools must be a ToolSet or null");
-    if (skills !== null && !(skills instanceof Map)) throw new TypeError("skills must be a map or null");
-    if (signal !== null && !(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal or null");
-    if (
-      scheduler !== null &&
-      (typeof scheduler !== "object" || typeof scheduler.now !== "function" || typeof scheduler.sleep !== "function")
-    ) {
-      throw new TypeError("scheduler must be a Scheduler or null");
-    }
-    if (random !== null && typeof random !== "function") throw new TypeError("random must be a function or null");
-    if (runDir !== null && typeof runDir !== "string") throw new TypeError("run_dir must be a string or null");
-    if (live !== null && !(live instanceof LiveChannel)) throw new TypeError("live must be a LiveChannel or null");
     this.state = state;
     this.log = log;
     this.growBuilder = growBuilder;
@@ -420,7 +398,7 @@ export class FlowEngine {
     this.skills = skills;
     this.scheduler = scheduler;
     this.random = random;
-    this.models = requireModels(models);
+    this.models = models;
     this.runDir = runDir;
     this.live = live;
     this.#hostSignal = signal;

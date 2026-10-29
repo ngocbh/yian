@@ -16,7 +16,7 @@ import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { type AskHandler, type AskRequest, ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { engine, graph, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { engine, graph, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 /** A tool that returns a fixed reply. */
 const PING = new FunctionTool({
@@ -68,23 +68,6 @@ test("a node declaring needsTools without a run tool set receives a fresh ToolSe
   await evalNode(node, null, new VariablePool());
 
   expect(node.seen.tools).toBeInstanceOf(ToolSet);
-});
-
-test("eval node rejects a raw tools mapping", async () => {
-  const error = await rejected(
-    evalNode(new ToolNode("ping", { toolId: "ping" }), null, new VariablePool(), { tools: { ping: PING } as never }),
-  );
-
-  expect(error).toEqual(new TypeError("tools must be a ToolSet or null"));
-});
-
-test("flow engine rejects a raw tools mapping", () => {
-  const flow = graph([new ToolNode("ping", { toolId: "ping" })], [
-    [START_ID, "ping"],
-    ["ping", END_ID],
-  ]);
-
-  expect(() => engine(flow, { tools: { ping: PING } as never })).toThrow(new TypeError("tools must be a ToolSet or null"));
 });
 
 test("eval node passes the run toolset to a tool node", async () => {

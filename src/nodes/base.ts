@@ -1440,6 +1440,9 @@ export abstract class Node {
    * error; the checks and the synchronous part of `forward` (up to its first `await`) still run
    * before the promise is returned.
    *
+   * The evaluator runs the same template through `runForEvaluator`, so a kind changes what it
+   * does through `forward`, never by overriding this.
+   *
    * @param inputs The bound input record; the template fills defaults into a fresh copy.
    * @param caps The capabilities the node's traits ask for, passed to `forward`.
    */
@@ -1539,9 +1542,9 @@ export abstract class Node {
    * Run the node as a pure function of its bound input record: the kind's body, which the `run`
    * template wraps.
    *
-   * Every concrete kind defines it; the evaluator drives `run`, which checks the assertions
-   * around this body exactly once. A kind that omits it gets this loud error (the setup check
-   * reports it first). The evaluator gives a body error the code the node's `exceptionCode`
+   * Every concrete kind defines it; the evaluator drives the `run` template, which checks the
+   * assertions around this body exactly once. A kind that omits it gets this loud error (the setup
+   * check reports it first). The evaluator gives a body error the code the node's `exceptionCode`
    * names (default `node.execute`).
    *
    * @param inputs The bound input record; the body may change it.

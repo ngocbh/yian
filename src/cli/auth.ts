@@ -513,7 +513,9 @@ async function setupOpenai(
     const apiCredentials = new ApiKeyCredentials(key, values);
     credentials = apiCredentials;
     try {
-      models = await service.apiModels(apiCredentials, { organization, project });
+      // Runs with this login go to OPENAI_BASE_URL when it is set, so the key must go there too.
+      const endpoint = ctx.io.env("OPENAI_BASE_URL") || undefined;
+      models = await service.apiModels(apiCredentials, { organization, project, endpoint });
     } catch (error) {
       // The messages are fixed today; scrubbed so no sent secret can reach output.
       if (!(error instanceof AuthError)) throw error;

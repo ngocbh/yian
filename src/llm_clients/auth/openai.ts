@@ -8,6 +8,7 @@ import { compareCodeUnits } from "../../diagnostics.ts";
 import { ProviderError } from "../../llm/errors.ts";
 import { realScheduler, type Scheduler, USER_AGENT } from "../../platform.ts";
 import { isRecord } from "../../typesys/index.ts";
+import { stripTrailingSlashes, validateBaseUrl } from "../config.ts";
 import { openaiIdHeaders, validateHeaders } from "../connection_settings.ts";
 import { OPENAI_API_ENDPOINT, SUBSCRIPTION_ENDPOINT } from "../endpoints.ts";
 import { type ApiKeyCredentials, AuthError, HttpResponse, isVisibleText, OAuthCredentials } from "./common.ts";
@@ -534,16 +535,26 @@ export class OpenAIAuth {
    * Validate an API key and return the model identifiers it can list, sorted and without
    * duplicates.
    *
-   * The request carries the credential's connection headers and, when given, the organization
-   * and project ids as `OpenAI-Organization` and `OpenAI-Project`. Rejects with `AuthError` if a
-   * setting is invalid (checked before any request, and the message holds no header value or
-   * id), the request fails (a mismatched organization or project is an HTTP status), or the
-   * list is invalid or empty.
+   * Lists `{endpoint}/models`, where `endpoint` is the `OPENAI_BASE_URL` runs use, defaulting to
+   * OpenAI's API. The request carries the credential's connection headers and, when given, the
+   * organization and project ids as `OpenAI-Organization` and `OpenAI-Project`. Rejects with
+   * `AuthError` if the endpoint or a setting is invalid (checked before any request, and the
+   * message holds no header value or id), the request fails (a mismatched organization or
+   * project is an HTTP status), or the list is invalid or empty.
    */
   async apiModels(
     credentials: ApiKeyCredentials,
-    options: { organization?: unknown; project?: unknown } = {},
+    options: { organization?: unknown; project?: unknown; endpoint?: unknown } = {},
   ): Promise<readonly string[]> {
+    const { endpoint = OPENAI_API_ENDPOINT } = options;
+    let base: string;
+    try {
+      // The key goes to this host, so hold it to the rules for a config base_url.
+      base = stripTrailingSlashes(validateBaseUrl(endpoint));
+    } catch (error) {
+      if (error instanceof RangeError) throw new AuthError(`Invalid OPENAI_BASE_URL: ${error.message}`);
+      throw error;
+    }
     let headers: Record<string, string>;
     try {
       headers = validateHeaders(Object.fromEntries(credentials.headers), "openai");
@@ -553,7 +564,7 @@ export class OpenAIAuth {
       throw error;
     }
     headers.Authorization = "Bearer " + credentials.apiKey;
-    const response = await this.#send("GET", `${OPENAI_API_ENDPOINT}/models`, { signal: this.#signal, headers });
+    const response = await this.#send("GET", `${base}/models`, { signal: this.#signal, headers });
     const data = get(responseData(response), "data");
     if (
       !Array.isArray(data) ||

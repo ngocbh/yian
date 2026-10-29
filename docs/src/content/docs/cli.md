@@ -321,6 +321,9 @@ Setup changes nothing until sign-in and a check of the model succeed. The first 
 becomes the default. Listing never prints a secret. Off a terminal, give every value the setup
 would ask for.
 
+An OpenAI API key is checked by listing the models at `OPENAI_BASE_URL` when it is set, else at
+OpenAI's API, so the key goes only to the host runs use.
+
 ## yian providers
 
 `yian providers` lists each supported provider, the login kinds `yian auth` can save for it, and

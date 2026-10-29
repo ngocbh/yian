@@ -27,7 +27,15 @@ import {
 } from "../../src/cli/auth.ts";
 import { type CliIo, type OptionValue, type ParsedArgs, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
-import { ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
+import {
+  ApiKeyCredentials,
+  AuthError,
+  type AuthRequest,
+  AuthStore,
+  HttpResponse,
+  OAuthCredentials,
+  OpenAIAuth,
+} from "../../src/llm_clients/auth/index.ts";
 import { LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS, validateBaseUrl } from "../../src/llm_clients/config.ts";
 import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
 import {
@@ -1396,6 +1404,66 @@ describe("auth OpenAI setup", () => {
     ]);
     expect(setup.service.settings).toEqual([{ apiKey: "typed-key", headers: [["X-G", "typed-gw"]] }]);
     expect(result.output).not.toContain("typed-");
+  });
+
+  /** An `openAIAuth` building the real service over a fake transport that records each request. */
+  function recordedService(models: readonly string[]) {
+    const sent: { url: string; headers: Record<string, string> }[] = [];
+    const request: AuthRequest = async (_method, url, options) => {
+      sent.push({ url, headers: options.headers });
+      return new HttpResponse(200, { data: models.map((id) => ({ id })) });
+    };
+    const openAIAuth: AuthDeps["openAIAuth"] = (options) => new OpenAIAuth({ ...options, request });
+    return { sent, openAIAuth };
+  }
+
+  test("API-key setup lists models at OPENAI_BASE_URL and sends nothing to api.openai.com", async () => {
+    const setup = setupAuth();
+    const recorded = recordedService(["gateway-model"]);
+    const result = await runSetup(
+      setup,
+      { method: "api-key", model: "gateway-model", header: ["X-G=GW_TOKEN"] },
+      {
+        env: { OPENAI_BASE_URL: "https://gateway.example.com/v1/", GW_TOKEN: "private-gw" },
+        deps: { openAIAuth: recorded.openAIAuth },
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(recorded.sent.map((request) => request.url)).toEqual(["https://gateway.example.com/v1/models"]);
+    expect(recorded.sent[0]!.headers).toMatchObject({ Authorization: "Bearer private-key", "X-G": "private-gw" });
+    expect(recorded.sent.some((request) => request.url.includes("api.openai.com"))).toBe(false);
+    expect(setup.store.selection("openai")?.model).toBe("gateway-model");
+    expect(result.output).not.toContain("private-");
+  });
+
+  test("API-key setup refuses an invalid OPENAI_BASE_URL before sending the key anywhere", async () => {
+    const setup = setupAuth();
+    const recorded = recordedService(["gpt-test"]);
+    const result = await runSetup(
+      setup,
+      { method: "api-key", model: "gpt-test" },
+      {
+        env: { OPENAI_BASE_URL: "https://user:private-pw@gateway.example.com/v1" },
+        deps: { openAIAuth: recorded.openAIAuth },
+      },
+    );
+    expect(result.code).toBe(1);
+    expect(result.err).toStartWith("Invalid OPENAI_BASE_URL: base_url must be");
+    expect(recorded.sent).toEqual([]);
+    expect(result.output).not.toContain("private-");
+    expect(existsSync(setup.path)).toBe(false);
+  });
+
+  test("API-key setup with an empty OPENAI_BASE_URL lists OpenAI's models, as runs use OpenAI's host", async () => {
+    const setup = setupAuth();
+    const recorded = recordedService(["gpt-test"]);
+    const result = await runSetup(
+      setup,
+      { method: "api-key", model: "gpt-test" },
+      { env: { OPENAI_BASE_URL: "" }, deps: { openAIAuth: recorded.openAIAuth } },
+    );
+    expect(result.code).toBe(0);
+    expect(recorded.sent.map((request) => request.url)).toEqual(["https://api.openai.com/v1/models"]);
   });
 
   test.each<[string, (string | null)[], string]>([

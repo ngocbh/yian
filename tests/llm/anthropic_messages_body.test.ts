@@ -28,6 +28,7 @@ import {
   ToolSpec,
 } from "../../src/llm/messages.ts";
 import { AnthropicMessages, PROTOCOL } from "../../src/llm/protocols/anthropic_messages.ts";
+import { getKnownModels } from "../../src/llm_clients/model_catalog.ts";
 import { type JsonObject, type JsonValue, parseJson } from "../../src/typesys/json.ts";
 
 const SONNET = "claude-sonnet-4-5";
@@ -640,6 +641,8 @@ describe("default max_tokens", () => {
     ["claude-sonnet-4-5-20250929", 64000n],
     ["claude-fable-5", 128000n],
     ["claude-fable-5-1", 128000n],
+    ["claude-mythos-5", 128000n],
+    ["claude-mythos-5-1", 128000n],
     ["claude-opus-4-6", 128000n],
     ["claude-opus-4-7", 128000n],
     ["claude-opus-4-8", 128000n],
@@ -649,13 +652,24 @@ describe("default max_tokens", () => {
     ["claude-sonnet-5", 128000n],
     ["claude-sonnet-5-5", 128000n],
     ["claude-opus-4-1", 4096n],
-    ["claude-mythos-5-1", 4096n],
     ["claude-sonnet-4-5-20990101", 4096n],
     ["claude-unknown-x", 4096n],
   ];
   for (const [model, expected] of table) {
     test(`${model} defaults to ${expected}`, () => {
       expect(bodyOf([user("Hi.")], { model })["max_tokens"]).toBe(expected);
+    });
+  }
+
+  // A catalog model missing from the table would silently fall back to 4096 and cut long outputs.
+  const claudes = getKnownModels()["anthropic"];
+  // Fails if the catalog key is renamed or emptied, which would otherwise drop the loop below.
+  test("the catalog lists anthropic models", () => {
+    expect(claudes?.length ?? 0).toBeGreaterThan(0);
+  });
+  for (const model of claudes ?? []) {
+    test(`catalog model ${model} has its own default, not the 4096 fallback`, () => {
+      expect(bodyOf([user("Hi.")], { model })["max_tokens"]).not.toBe(4096n);
     });
   }
 

@@ -99,6 +99,27 @@ describe("a draft with pasted tokens", () => {
     expect(editor.text()).toBe("see ");
   });
 
+  test("set collapses a plain text as long as a long paste, but not a draft's text", () => {
+    const editor = new LineEditor({ columns: () => 60, hint: "" });
+    editor.set("1\n2\n3\n4");
+    expect(draftLabel(editor.draft())).toBe("[Pasted text #1 +4 lines]");
+    expect(editor.text()).toBe("1\n2\n3\n4");
+    editor.set("1\n2\n3");
+    expect(editor.draft()).toEqual(["1\n2\n3"]);
+    editor.set(["1\n2\n3\n4"]);
+    expect(editor.draft()).toEqual(["1\n2\n3\n4"]);
+  });
+
+  test("a paste after a million characters typed still numbers its token", () => {
+    const editor = new LineEditor({ columns: () => 60, hint: "" });
+    const chunk = "a".repeat(800);
+    for (let i = 0; i < 1300; i++) editor.key(paste(chunk));
+    editor.key(paste("1\n2\n3\n4"));
+    expect(draftLabel(editor.draft()).endsWith("a[Pasted text #1 +4 lines]")).toBe(true);
+    editor.set(editor.draft());
+    expect(editor.text().length).toBe(1300 * 800 + 7);
+  });
+
   test("joinDrafts joins with spaces, skipping empty drafts, and numbers the tokens from 1", () => {
     const editor = new LineEditor({ columns: () => 60, hint: "" });
     editor.key(paste("1\n2\n3\n4"));

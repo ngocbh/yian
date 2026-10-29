@@ -803,6 +803,28 @@ async function aTokenWiderThanTheBoxIsCut(): Promise<void> {
   assert.deepEqual(await answer, { value: `ab${pastedText(40)}` });
 }
 
+async function aPasteThatNeverEndsGoesInAfterAPause(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  // The terminal dropped the paste's end: the keys after the pause are typed ones again.
+  input.write(PASTE_START + "a\rb");
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  assert.deepEqual(view().rows[1], framed("> a⏎b"));
+  input.write("c" + ENTER);
+  assert.deepEqual(await answer, { value: "a\nbc" });
+}
+
+async function aPasteKeepsItsTabsShownAsSpaces(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  input.write(PASTE_START + "a\tb" + PASTE_END);
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> a    b"));
+  assert.deepEqual(view().cursor, { row: 1, col: 10 });
+  input.write(PASTE_START + "\tx\ry\rz\rw" + PASTE_END + ENTER);
+  assert.deepEqual(await answer, { value: "a\tb\tx\ny\nz\nw" });
+}
+
 async function escapeErasesAFramedReadLine(): Promise<void> {
   const { input, output, terminal, view } = setup({ columns: 60 });
   output.write("above\r\n");
@@ -3055,6 +3077,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "two pastes are numbered, and typed token text stays text":
     twoPastesAreNumberedAndTypedTokenTextStaysText,
   "a token wider than the box is cut": aTokenWiderThanTheBoxIsCut,
+  "a paste that never ends goes in after a pause": aPasteThatNeverEndsGoesInAfterAPause,
+  "a paste keeps its tabs, shown as spaces": aPasteKeepsItsTabsShownAsSpaces,
   "Escape erases a framed readLine": escapeErasesAFramedReadLine,
   "a framed readLine with a list moves into it and opens a row": aFramedReadLineWithAListMovesIntoItAndOpensARow,
   "a list row that goes gives the keys back, and the list redraws on its own":

@@ -298,6 +298,8 @@ function printable(key: Key): key is Key & { str: string } {
 const PASTE_LINES = 3;
 /** A paste longer than this many characters goes into a `LineEditor` as one token. */
 const PASTE_CHARS = 800;
+/** How long a paste whose end never came waits for more keys before it goes in as it is. */
+const PASTE_IDLE_MS = 500;
 
 /** A paste a `LineEditor` holds as one token, `[Pasted text #<number> +<lines> lines]`. */
 export interface PastedText {
@@ -310,17 +312,33 @@ export interface PastedText {
 /** What a `LineEditor` holds: typed text and pasted tokens, in order. */
 export type Draft = readonly (string | PastedText)[];
 
+/** The lines `text` holds; a newline that ends it starts no line. */
+function lineCount(text: string): number {
+  return text.replace(/\n$/, "").split("\n").length;
+}
+
 /** The token a paste is drawn as: `[Pasted text #1 +40 lines]`. */
 function pasteLabel(paste: PastedText): string {
-  // A newline that ends the text starts no line.
-  const lines = paste.text.replace(/\n$/, "").split("\n").length;
+  const lines = lineCount(paste.text);
   return `[Pasted text #${paste.number} +${lines} line${lines === 1 ? "" : "s"}]`;
 }
 
 /** Whether a paste of `text` goes into a `LineEditor` as a token rather than as text. */
 function collapses(text: string): boolean {
-  const lines = text.replace(/\n$/, "").split("\n").length;
-  return lines > PASTE_LINES || Array.from(text).length > PASTE_CHARS;
+  return lineCount(text) > PASTE_LINES || Array.from(text).length > PASTE_CHARS;
+}
+
+/**
+ * `text` as a draft: one token when it is as long as a paste the input box collapses, else the
+ * text.
+ */
+export function textDraft(text: string): Draft {
+  return collapses(text) ? [{ text, number: 1 }] : [text];
+}
+
+/** Whether `draft` holds a pasted token. */
+export function holdsPaste(draft: Draft): boolean {
+  return draft.some((part) => typeof part !== "string");
 }
 
 /** The text `draft` stands for, each token expanded to its paste: what is sent. */
@@ -358,9 +376,15 @@ function unitsOf(draft: string | Draft): Unit[] {
   return parts.flatMap((part): Unit[] => (typeof part === "string" ? Array.from(part) : [part]));
 }
 
-/** What `unit` draws: a newline as `⏎`, a token as its label. */
+/** What `unit` draws: a newline as `⏎`, a tab as four spaces, a token as its label. */
 function drawn(unit: Unit): string {
-  return typeof unit !== "string" ? pasteLabel(unit) : unit === "\n" ? "⏎" : unit;
+  if (typeof unit !== "string") return pasteLabel(unit);
+  return unit === "\n" ? "⏎" : unit === "\t" ? "    " : unit;
+}
+
+/** The text `initial` stands for: itself, or a draft's text with its tokens expanded. */
+function textOf(initial: string | Draft): string {
+  return typeof initial === "string" ? initial : draftText(initial);
 }
 
 /** Whether `a` and `b` hold the same characters and the very same tokens. */
@@ -388,7 +412,7 @@ function textWidget(options: {
   set(text: string | Draft): void;
 } {
   const mark = options.mark ?? "?";
-  const chars: Unit[] = Array.from(options.initial ?? "");
+  let chars: Unit[] = Array.from(options.initial ?? "");
   let pos = chars.length;
   let error: string | undefined;
   const shown = (part: readonly Unit[]): string =>
@@ -400,12 +424,12 @@ function textWidget(options: {
     pos += added.length;
   };
   const paste = (pasted: string): void => {
-    // A paste keeps its newlines and drops the other control characters; a token keeps its tabs.
-    if (options.collapse && collapses(pasted)) {
-      const numbers = chars.map((unit) => (typeof unit === "string" ? 0 : unit.number));
-      const text = pasted.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
-      insert([{ text, number: Math.max(0, ...numbers) + 1 }]);
-    } else insert(Array.from(pasted.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, "")));
+    // A paste keeps its newlines and tabs, and drops the other control characters.
+    const text = pasted.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+    if (!(options.collapse && collapses(text))) return insert(Array.from(text));
+    let last = 0;
+    for (const unit of chars) if (typeof unit !== "string") last = Math.max(last, unit.number);
+    insert([{ text, number: last + 1 }]);
   };
   return {
     preface: labelPreface(mark, options.label),
@@ -444,9 +468,10 @@ function textWidget(options: {
     },
     text,
     caret: () => pos,
-    units: () => chars,
+    units: () => chars.slice(),
     set(text) {
-      chars.splice(0, chars.length, ...unitsOf(text));
+      // A new array rather than a splice, whose arguments a long text would overflow.
+      chars = unitsOf(text);
       pos = chars.length;
       error = undefined;
     },
@@ -538,9 +563,12 @@ export class LineEditor {
     return draft;
   }
 
-  /** Replace the text (and its tokens, given a draft), the cursor after it. */
+  /**
+   * Replace the text (and its tokens, given a draft), the cursor after it. A plain text as long as
+   * a paste that collapses (a line sent before the chat was resumed) goes in as one token.
+   */
   set(text: string | Draft): void {
-    this.#text.set(text);
+    this.#text.set(typeof text === "string" ? textDraft(text) : text);
   }
 
   /** Where the list row with the keys is, or null while the box has them. */
@@ -909,6 +937,8 @@ export class Terminal {
   #afterReturn = false;
   /** The text of the bracketed paste arriving, or null outside one. */
   #pasting: string[] | null = null;
+  /** Ends the paste arriving once no key came for `PASTE_IDLE_MS`. */
+  #pasteTimer: ReturnType<typeof setTimeout> | undefined;
   /** Whether the turn holding the terminal left rows on the screen. */
   #printed = false;
   /** Whether a widget has the whole (alternate) screen, which an exit must give back. */
@@ -993,7 +1023,7 @@ export class Terminal {
       widget = editorWidget(editor, options.escape === true);
       draft = () => editor.text();
     } else {
-      const text = textWidget({ label, mark: ">", initial: draftText(unitsOf(initial)) });
+      const text = textWidget({ label, mark: ">", initial: textOf(initial) });
       widget = options.escape
         ? {
             ...text,
@@ -1006,7 +1036,7 @@ export class Terminal {
         : text;
       draft = () => text.text();
     }
-    if (signal?.aborted) return { aborted: true, draft: draftText(unitsOf(initial)) };
+    if (signal?.aborted) return { aborted: true, draft: textOf(initial) };
     let ended: { value: string | typeof ESCAPED | Opened } | { stop: StopReason };
     try {
       ended = await this.#runTurn(signal, (run) => run(widget), { keepOpen: true, wants: false });
@@ -1209,9 +1239,9 @@ export class Terminal {
    * and Ctrl-C `onKey("interrupt")`, rather than raising SIGINT, since the input is raw; other keys
    * wait for the next prompt. Given `edit`, every key but Ctrl-C goes to it first, and only one it
    * doesn't take (returns false for) goes on as above; bracketed paste is then on while the watch
-   * runs, so a paste reaches it as one key holding the text, its newlines kept. A prompt meanwhile takes the keys
-   * as usual, and the watch goes on after it. Does nothing on a plain terminal or an input that
-   * isn't a TTY.
+   * runs, so a paste reaches it as one key holding the text, its newlines kept. A prompt meanwhile
+   * takes the keys as usual, and the watch goes on after it. Does nothing on a plain terminal or an
+   * input that isn't a TTY.
    */
   watchKeys(
     signal: AbortSignal,
@@ -1256,7 +1286,8 @@ export class Terminal {
     // is dropped and the key stays the one typed.
     const alt = raw?.meta === true ? /^\x1b([^\x00-\x1f\x7f])$/su.exec(raw.sequence ?? "") : null;
     if (name === "paste-start") {
-      this.#pasting = [];
+      this.#pasting ??= [];
+      this.#pasteIdle();
       return;
     }
     if (name === "enter" && this.#afterReturn) {
@@ -1268,25 +1299,41 @@ export class Terminal {
     // its newlines kept, the keys it holds (arrows, Escape, Ctrl-C) only text.
     if (this.#pasting !== null && name !== "paste-end") {
       this.#pasting.push(name === "return" || name === "enter" ? "\n" : (str ?? ""));
+      this.#pasteIdle();
       return;
     }
-    let key: Key;
-    if (name === "paste-end") {
-      const text = this.#pasting?.join("") ?? "";
-      this.#pasting = null;
-      if (text === "") return;
-      key = { name: undefined, ctrl: false, meta: false, str: text, paste: true };
-    } else {
-      const meta = raw?.meta === true && alt === null;
-      key = { name, ctrl: raw?.ctrl === true, meta, str: alt?.[1] ?? str, paste: false };
-    }
+    if (name === "paste-end") return this.#endPaste();
+    const meta = raw?.meta === true && alt === null;
+    this.#dispatch({ name, ctrl: raw?.ctrl === true, meta, str: alt?.[1] ?? str, paste: false });
+  };
+
+  /**
+   * (Re)start the wait for the rest of the paste arriving: a terminal that drops the paste's end
+   * would otherwise leave every later key in it, Enter and Ctrl-C too.
+   */
+  #pasteIdle(): void {
+    clearTimeout(this.#pasteTimer);
+    this.#pasteTimer = setTimeout(() => this.#endPaste(), PASTE_IDLE_MS);
+  }
+
+  /** End the paste arriving: hand its text on as one paste key. */
+  #endPaste(): void {
+    clearTimeout(this.#pasteTimer);
+    const text = this.#pasting?.join("") ?? "";
+    this.#pasting = null;
+    if (text === "") return;
+    this.#dispatch({ name: undefined, ctrl: false, meta: false, str: text, paste: true });
+  }
+
+  /** Hand `key` to the active widget or the watch, or buffer it for the next widget. */
+  #dispatch(key: Key): void {
     const watch = this.#turn === undefined ? this.#watch : undefined;
     if (this.#active) this.#active.key(key);
     else if (watch !== undefined && key.ctrl && key.name === "c") watch.onKey("interrupt");
     else if (watch?.edit?.(key) === true) return;
     else if (watch !== undefined && key.name === "escape") watch.onKey("escape");
     else this.#buffer.push(key);
-  };
+  }
 
   /** The input ended or failed (EIO when the terminal goes away): the active or next widget ends. */
   readonly #onEnd = (): void => {
@@ -1318,6 +1365,8 @@ export class Terminal {
     this.#input.removeListener("end", this.#onEnd);
     this.#input.removeListener("error", this.#onEnd);
     this.#buffer = [];
+    clearTimeout(this.#pasteTimer);
+    this.#pasting = null;
   }
 
   /**

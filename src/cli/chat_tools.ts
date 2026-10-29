@@ -7,9 +7,9 @@
  */
 
 import { lstatSync, realpathSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { relative, resolve } from "node:path";
 
-import { isSystemError } from "../platform.ts";
+import { isSystemError, leavesRoot } from "../platform.ts";
 import { resolvedPath } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
 
@@ -37,10 +37,7 @@ export function confine(root: string, path: string): string {
     if (lstatOrNull(target)?.isSymbolicLink()) throw new ToolRefused(`${path} is a symlink to a missing file`);
     real = resolvedPath(target);
   }
-  const shown = relative(realRoot, real);
-  if (shown === ".." || shown.startsWith(`..${sep}`) || isAbsolute(shown)) {
-    throw new ToolRefused(`${path} is outside the folder the chat started in`);
-  }
+  if (leavesRoot(relative(realRoot, real))) throw new ToolRefused(`${path} is outside the folder the chat started in`);
   return real;
 }
 

@@ -9,7 +9,7 @@
  */
 
 import type { Env } from "../defaults.ts";
-import { type Colored, paint, type Span, type Style, wrapSpans } from "./render.ts";
+import { type Colored, fit, paint, type Span, type Style, wrapSpans } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 import { cells } from "./terminal.ts";
 
@@ -19,7 +19,7 @@ const BULLET = /^(\s*)[-*+]\s+(.*)$/;
 const NUMBERED = /^(\s*)(\d{1,9}[.)])\s+(.*)$/;
 
 /** Spaces a tab is drawn as, so each character takes the cells it is measured at. */
-const TAB = "    ";
+export const TAB = "    ";
 
 /** `base` with `style` added, or `style` alone. */
 function combine(base: Style | null, style: Style): Style {
@@ -104,7 +104,7 @@ export class MarkdownLines {
     }
     if (fence !== null) {
       this.#fence = fence[1]!;
-      const title = fence[2] ? `─ ${fence[2]} ` : "";
+      const title = fence[2] ? `─ ${fit(fence[2], Math.max(1, this.#width - 6))} ` : "";
       return [this.#dim(`╭${title}${"─".repeat(Math.max(0, this.#width - 2 - cells(title)))}╮`)];
     }
     const heading = HEADING.exec(text);

@@ -23,8 +23,8 @@ import {
 } from "../events.ts";
 import type { Scheduler } from "../platform.ts";
 import type { ChildEvent } from "./chat_events.ts";
-import { MarkdownLines } from "./markdown.ts";
-import { box, type Colored, paint, type Span, type Style, wrapLine, wrapSpans } from "./render.ts";
+import { MarkdownLines, TAB } from "./markdown.ts";
+import { box, type Colored, fit, paint, type Span, type Style, wrapLine, wrapSpans } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 import { cells, charCells } from "./terminal.ts";
 import type { CliIo, Writer } from "./utils.ts";
@@ -47,8 +47,10 @@ export interface BannerInfo {
 /** An output the view reads: whether it is a TTY, so colour is on, and its size. */
 export type ViewOutput = Colored & { readonly columns?: number; readonly rows?: number };
 
-/** An output the view draws on. */
-export type ViewStream = Pick<NodeJS.WritableStream, "write"> & ViewOutput;
+/** An output the view draws on; a TTY stream emits `resize` when the terminal's size changes. */
+export type ViewStream = Pick<NodeJS.WritableStream, "write"> &
+  ViewOutput &
+  Partial<Pick<NodeJS.EventEmitter, "on" | "off">>;
 
 /**
  * Whether `yian chat` draws its look on `io`: stdin, stdout and stderr are all a TTY and
@@ -116,20 +118,6 @@ export function chatBanner(info: BannerInfo, out: ViewOutput, env: Env): string 
   field("cwd", [[sanitize(info.cwd), null]]);
   if (info.focus !== null) field("focus", [[sanitize(info.focus), null]]);
   return `${box(rows, "dim", out, env, "", inner)}\n`;
-}
-
-/** `text` cut to at most `width` cells, ending in `…` when cut. */
-export function fit(text: string, width: number): string {
-  if (cells(text) <= width) return text;
-  let kept = "";
-  let used = 0;
-  for (const char of text) {
-    const size = charCells(char);
-    if (used + size > width - 1) break;
-    kept += char;
-    used += size;
-  }
-  return `${kept}…`;
 }
 
 /** The most characters of one argument value a tool line shows. */
@@ -203,6 +191,31 @@ export function summary(text: string, width: number): string[] {
   return rows.length <= 2 ? rows : [rows[0]!, fit(`${rows[1]} ${rows[2]}`, width)];
 }
 
+/** An SGR sequence, which takes no cells. */
+const SGR_SEQUENCE = /^\x1b\[[0-9;]*m/;
+
+/** `row`, styled, cut to at most `width` cells; its styles are reset when it is cut. */
+function clip(row: string, width: number): string {
+  if (cells(row) <= width) return row;
+  let kept = "";
+  let used = 0;
+  let at = 0;
+  while (at < row.length) {
+    const sequence = SGR_SEQUENCE.exec(row.slice(at));
+    if (sequence !== null) {
+      kept += sequence[0];
+      at += sequence[0].length;
+      continue;
+    }
+    const char = String.fromCodePoint(row.codePointAt(at)!);
+    if (used + charCells(char) > width) break;
+    kept += char;
+    used += charCells(char);
+    at += char.length;
+  }
+  return `${kept}\x1b[0m`;
+}
+
 /** Whether `nodeId` is a node named `reply`, at any depth: the chat's assistant. */
 function isReply(nodeId: string): boolean {
   return nodeId.slice(nodeId.lastIndexOf("/") + 1) === "reply";
@@ -251,8 +264,14 @@ export class ChatView {
   readonly #output: ViewStream;
   readonly #env: Env;
   readonly #clock: Scheduler;
-  /** Rows of the live region on screen; the cursor is at the end of its last. */
-  #drawn = 0;
+  /** The cells of each live row on screen; the cursor is at the end of the last. */
+  #drawn: number[] = [];
+  /**
+   * The failed attempt of the reply's model call: its rows already printed for good, if any.
+   * `(retrying)` follows them once the next attempt starts, `(failed)` if the turn ends first.
+   */
+  #failed: { node: string; rows: string[] } | null = null;
+  readonly #onResize = () => this.#resized();
   #block: Block | null = null;
   /** Whether the reply's last model call streamed text, so its output isn't printed again. */
   #streamed = false;
@@ -280,6 +299,12 @@ export class ChatView {
         return columnsOf(output);
       },
     };
+    output.on?.("resize", this.#onResize);
+  }
+
+  /** Stop listening for the terminal's resizes. */
+  close(): void {
+    this.#output.off?.("resize", this.#onResize);
   }
 
   /** Print `text`, whole lines, above the live rows. */
@@ -305,6 +330,7 @@ export class ChatView {
       return;
     }
     this.#finishBlock();
+    this.#settleFailed("(failed)");
     this.#turn?.stop.abort();
     this.#turn = null;
     // A blank line between what the turn printed and the prompt.
@@ -333,31 +359,43 @@ export class ChatView {
       this.#streamed = true;
     }
     block.partial += chunk.chunk;
-    const lines = block.partial.split(/\r\n|\n|\r/);
-    block.partial = lines.pop()!;
+    // A `\r` at the end may be half of a `\r\n`: it waits for the next chunk.
+    const held = block.partial.endsWith("\r");
+    const lines = (held ? block.partial.slice(0, -1) : block.partial).split(/\r\n|\n|\r/);
+    block.partial = lines.pop()! + (held ? "\r" : "");
     for (const line of lines) block.rows.push(...block.markdown.line(line));
-    // Rows beyond what the screen can hold are printed for good; only the rest can be retracted.
+    // Rows beyond what the screen can hold are printed for good, the line still coming included;
+    // only the rest can be taken back.
     const keep = Math.max(1, rowsOf(this.#output) - 4);
-    if (block.rows.length > keep) {
-      const done = block.rows.splice(0, block.rows.length - keep);
-      this.#commit(this.#prefixed(done, block.printed));
-      block.printed += done.length;
-    } else this.#redraw();
+    const partial = this.#partialRows(block);
+    let excess = block.rows.length + partial.length - keep;
+    if (excess <= 0) return this.#redraw();
+    const done = block.rows.splice(0, Math.min(excess, block.rows.length));
+    excess -= done.length;
+    if (excess > 0) {
+      // The line's head goes as written, never as Markdown: it is past taking back.
+      done.push(...partial.slice(0, excess).map(([, printed]) => printed));
+      block.partial = this.#partialText(block).slice(partial[excess]![0]);
+    }
+    this.#commit(this.#prefixed(done, block.printed));
+    block.printed += done.length;
   }
 
   /** The run's events: the reply's model and tool calls, and its end. */
   onEvent(event: RunEvent): void {
     if (!("nodeId" in event) || !isReply(event.nodeId)) return;
-    if (event instanceof ModelCallStarted) this.#streamed = false;
-    else if (event instanceof ModelCallFinished) {
+    if (event instanceof ModelCallStarted) {
+      this.#streamed = false;
+      if (this.#failed?.node === event.nodeId) this.#settleFailed("(retrying)");
+    } else if (event instanceof ModelCallFinished) {
       const block = this.#block;
       if (block === null || block.node !== event.nodeId || block.n !== event.n) return;
       if (event.error === null) return this.#finishBlock();
-      // A failed attempt's text is taken back; the next attempt streams a block of its own.
+      // A failed attempt's text is taken back; a next attempt streams a block of its own.
       this.#block = null;
       this.#streamed = false;
-      const shown = block.printed > 0 ? this.#prefixed(block.rows, block.printed) : [];
-      this.#commit([...shown, `  ${this.#paint("(retrying)", "dim")}`]);
+      this.#failed = { node: block.node, rows: block.printed > 0 ? this.#prefixed(block.rows, block.printed) : [] };
+      this.#redraw();
     } else if (event instanceof ToolCallStarted) {
       this.#finishBlock();
       this.#gap("tool");
@@ -399,6 +437,27 @@ export class ChatView {
     this.#last = "tool";
   }
 
+  /** Print what a failed attempt left, then `note` dim in place of its text. */
+  #settleFailed(note: string): void {
+    const failed = this.#failed;
+    if (failed === null) return;
+    this.#failed = null;
+    this.#commit([...failed.rows, `  ${this.#paint(note, "dim")}`]);
+  }
+
+  /** The line still coming in `block`, as it is drawn: sanitized, a held `\r` left out, tabs expanded. */
+  #partialText(block: Block): string {
+    return sanitize(block.partial.replace(/\r$/, "")).replaceAll("\t", TAB);
+  }
+
+  /** The rows the line still coming in `block` takes: each one's start in `#partialText`, and its text. */
+  #partialRows(block: Block): [number, string][] {
+    const text = this.#partialText(block);
+    if (text === "") return [];
+    const width = Math.max(1, this.#width() - 2);
+    return wrapLine(text, width).map(([start, end]) => [start, text.slice(start, end)]);
+  }
+
   /** Print `rows` of a result under the line above: `  ⎿  ` before the first. */
   #result(rows: string[], style: Style): void {
     this.#commit(rows.map((row, i) => `${i === 0 ? "  ⎿  " : "     "}${this.#paint(row, style)}`));
@@ -416,7 +475,8 @@ export class ChatView {
     const block = this.#block;
     if (block === null) return;
     this.#block = null;
-    if (block.partial !== "") block.rows.push(...block.markdown.line(block.partial));
+    const partial = block.partial.replace(/\r$/, "");
+    if (partial !== "") block.rows.push(...block.markdown.line(partial));
     block.rows.push(...block.markdown.end());
     this.#commit(this.#prefixed(block.rows, block.printed));
   }
@@ -432,12 +492,7 @@ export class ChatView {
     const block = this.#block;
     if (block !== null) {
       // The line still coming is shown as written; it is drawn as Markdown once it ends.
-      const partial =
-        block.partial === ""
-          ? []
-          : wrapSpans([[sanitize(block.partial), null]], this.#width() - 2, this.#output, this.#env).map(
-              ([, printed]) => printed,
-            );
+      const partial = this.#partialRows(block).map(([, text]) => text);
       rows.push(...this.#prefixed([...block.rows, ...partial], block.printed));
     }
     if (this.#turn !== null && !this.#paused) {
@@ -445,13 +500,29 @@ export class ChatView {
       const frame = SPIN_FRAMES[this.#frame % SPIN_FRAMES.length]!;
       rows.push(`${this.#paint(frame, "cyan")} ${this.#paint(`Thinking… (${seconds}s · esc to interrupt)`, "dim")}`);
     }
-    return this.#paused ? [] : rows;
+    // Each row fits the width, so each takes one row of the screen.
+    return this.#paused ? [] : rows.map((row) => clip(row, this.#width()));
   }
 
-  /** The text that erases the live rows, leaving the cursor at the start of where they began. */
+  /**
+   * The text that erases the live rows, leaving the cursor at the start of where they began. They
+   * take one screen row each at the width they were drawn at; at a narrower width, as many as a
+   * terminal that reflows its lines wraps them onto.
+   */
   #erase(): string {
-    if (this.#drawn === 0) return "";
-    return `\r${this.#drawn > 1 ? `\x1b[${this.#drawn - 1}A` : ""}\x1b[J`;
+    const width = this.#width();
+    const taken = this.#drawn.reduce((sum, used) => sum + Math.max(1, Math.ceil(used / width)), 0);
+    if (taken === 0) return "";
+    return `\r${taken > 1 ? `\x1b[${taken - 1}A` : ""}\x1b[J`;
+  }
+
+  /**
+   * The terminal changed size: the live rows are erased as it reflowed them and drawn again at the
+   * new width. A terminal that cuts long lines rather than reflowing them may keep a stale row
+   * above them; the rows printed for good are left as the terminal shows them.
+   */
+  #resized(): void {
+    this.#redraw();
   }
 
   /** Print `rows` for good above the live rows, then draw those again. */
@@ -459,7 +530,7 @@ export class ChatView {
     if (rows.length === 0) return;
     if (this.#turn !== null) this.#turnPrinted = true;
     this.#write(this.#erase() + rows.map((row) => `${row}\r\n`).join(""));
-    this.#drawn = 0;
+    this.#drawn = [];
     this.#redraw();
   }
 
@@ -467,7 +538,7 @@ export class ChatView {
   #redraw(): void {
     const rows = this.#liveRows();
     const text = this.#erase() + rows.join("\r\n");
-    this.#drawn = rows.length;
+    this.#drawn = rows.map(cells);
     if (text !== "") this.#write(text);
   }
 

@@ -12,7 +12,16 @@ import { join } from "node:path";
 
 import { chat, type ChatDeps } from "../../src/cli/chat.ts";
 import { childEvent } from "../../src/cli/chat_events.ts";
-import { chatBanner, ChatView, homePath, loginLabel, shortArgs, summary } from "../../src/cli/chat_view.ts";
+import {
+  chatBanner,
+  ChatView,
+  homePath,
+  loginLabel,
+  richChat,
+  shortArgs,
+  summary,
+} from "../../src/cli/chat_view.ts";
+import { cells } from "../../src/cli/terminal.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import type { Env } from "../../src/defaults.ts";
 import {
@@ -263,15 +272,73 @@ describe("the chat's view", () => {
     expect(rows()).toEqual(["", "⏺ hello ran and returned Hi Ada.", "  • one"]);
   });
 
-  test("a failed attempt's text is replaced by (retrying), and the next starts a new block", () => {
+  test("a failed attempt's text is replaced by (retrying) once the next starts, in a new block", () => {
     const { view, rows } = viewOn();
     view.turn(true);
     view.onStream(chunk(1, "first try\nmore"));
     view.onEvent(finished(1, "ProviderError"));
+    // Not known to be retried yet: the text is gone and nothing stands in for it.
+    expect(rows()).toEqual(["", "· Thinking… (0s · esc to interrupt)"]);
+    view.onEvent(started(2));
     view.onStream(chunk(2, "second"));
     view.onEvent(finished(2));
     view.turn(false);
     expect(rows()).toEqual(["", "  (retrying)", "", "⏺ second"]);
+  });
+
+  test("a failed attempt that isn't retried shows (failed) when the turn ends", () => {
+    const { view, rows } = viewOn();
+    view.turn(true);
+    view.onStream(chunk(1, "half a rep"));
+    view.onEvent(finished(1, "ProviderError"));
+    view.turn(false);
+    expect(rows()).toEqual(["", "  (failed)"]);
+  });
+
+  test("a \\r\\n split across chunks ends one line, and a tab in the line coming is expanded", () => {
+    const { view, rows } = viewOn();
+    view.onStream(chunk(1, "one\r"));
+    view.onStream(chunk(1, "\ntwo\tx"));
+    expect(rows()).toEqual(["", "⏺ one", "  two    x"]);
+    view.onEvent(finished(1));
+    expect(rows()).toEqual(["", "⏺ one", "  two    x"]);
+  });
+
+  test("a long line still streaming prints its top for good, so the live rows fit the screen", () => {
+    const { view, output, rows } = viewOn(10);
+    view.turn(true);
+    view.onStream(chunk(1, "word ".repeat(400)));
+    // Every move up the live rows take stays within the screen: at most rows - 1 rows drawn.
+    const ups = [...output.text.matchAll(/\x1b\[(\d+)A/g)].map((match) => Number(match[1]));
+    expect(Math.max(0, ...ups)).toBeLessThanOrEqual(8);
+    view.onEvent(finished(1));
+    view.turn(false);
+    const text = rows().join(" ").replace(/[⏺\s]+/g, " ").trim();
+    expect(text).toBe("word ".repeat(400).trim());
+  });
+
+  test("each live row is cut to the width: a fence's long label, a deep bullet, the spinner", () => {
+    const { view, rows } = viewOn();
+    const narrow = viewOn();
+    view.turn(true);
+    view.onStream(chunk(1, `\`\`\`${"x".repeat(80)}\n${" ".repeat(70)}- deep\nmore`));
+    for (const row of rows()) expect(cells(row)).toBeLessThanOrEqual(COLUMNS);
+    narrow.output.columns = 20;
+    narrow.view.turn(true);
+    expect(narrow.rows()).toEqual(["· Thinking… (0s · es"]);
+  });
+
+  test("on a resize, the live rows are erased as the terminal reflowed them and drawn at the new width", () => {
+    const { view, output } = viewOn();
+    view.turn(true);
+    const before = output.text.length;
+    output.columns = 20;
+    output.emit("resize");
+    // The 36-cell spinner row reflowed onto two rows of 20.
+    expect(output.text.slice(before)).toBe("\r\x1b[1A\x1b[J\x1b[36m·\x1b[0m \x1b[2mThinking… (0s · es\x1b[0m");
+    view.close();
+    output.emit("resize");
+    expect(output.listenerCount("resize")).toBe(0);
   });
 
   test("streamed text is sanitized", () => {
@@ -364,12 +431,26 @@ describe("the chat's view", () => {
     const { view, rows } = viewOn(8);
     view.onStream(chunk(1, "1\n2\n3\n4\n5\n6\n"));
     view.onEvent(finished(1, "ProviderError"));
+    view.onEvent(started(2));
     // Its top is gone by: the block stays as it was, and (retrying) follows it.
     expect(rows()).toEqual(["", "⏺ 1", "  2", "  3", "  4", "  5", "  6", "  (retrying)"]);
   });
 });
 
 describe("the view's helpers", () => {
+  test("richChat needs stdin, stdout and stderr on a TTY and NO_COLOR unset", () => {
+    const io = (stdout: boolean, noColor = false): CliIo => ({
+      stdin: new FakeInput({ tty: true }),
+      stderrStream: Object.assign(new FakeOutput(), { isTTY: true }),
+      stdout: { write: async () => {}, isTTY: stdout },
+      stderr: { write: async () => {}, isTTY: true },
+      env: envWith(noColor ? { NO_COLOR: "1" } : {}),
+    });
+    expect(richChat(io(true))).toBe(true);
+    expect(richChat(io(false))).toBe(false);
+    expect(richChat(io(true, true))).toBe(false);
+  });
+
   test("shortArgs shows a path or run bare and other values short", () => {
     expect(shortArgs({ path: "a.yaml", inputs: { n: 1, tags: ["x"] } })).toBe('a.yaml, {n: 1, tags: ["x"]}');
     expect(shortArgs({ content: "y".repeat(60) })).toBe(`"${"y".repeat(38)}…"`);

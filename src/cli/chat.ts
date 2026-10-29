@@ -346,6 +346,7 @@ export async function chat(
       if (fresh.runDir !== null) removeEmptyDir(fresh.runDir);
     } finally {
       signals.off("SIGINT", halt);
+      view?.close();
     }
   }
 }

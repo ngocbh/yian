@@ -110,6 +110,20 @@ export function wrapLine(text: string, width: number): [start: number, end: numb
   });
 }
 
+/** @internal `text` cut to at most `width` cells, ending in `…` when cut. */
+export function fit(text: string, width: number): string {
+  if (cells(text) <= width) return text;
+  let kept = "";
+  let used = 0;
+  for (const char of text) {
+    const size = charCells(char);
+    if (used + size > width - 1) break;
+    kept += char;
+    used += size;
+  }
+  return `${kept}…`;
+}
+
 /** @internal One piece of a line: its text and its style, or `null` for none. */
 export type Span = readonly [text: string, style: Style | null];
 

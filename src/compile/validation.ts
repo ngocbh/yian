@@ -34,13 +34,15 @@ import {
 } from "../typesys/values.ts";
 import { END_ID, START_ID } from "./model.ts";
 
-// The ONLY valid ${system.X} ambients, each with its scalar type label:
-//   today=date / now=datetime: the host clock seam; run_id=str: the run-scoped id
-//   (a host-injected ambient, like the clock; seeded once at the boundary, child-inherited)
-const SYSTEM_AMBIENTS: ReadonlyMap<string, string> = new Map([
-  ["today", "date"],
-  ["now", "datetime"],
-  ["run_id", "str"],
+/**
+ * The only valid `${system.X}` ambients, each with its scalar kind: `today` (date) and `now`
+ * (datetime) read the host clock, `run_id` (str) is the run's id. The run seeds each once at its
+ * boundary and a child inherits them.
+ */
+export const SYSTEM_AMBIENTS: ReadonlyMap<string, ValueKind> = new Map([
+  ["today", ValueKind.DATE],
+  ["now", ValueKind.DATETIME],
+  ["run_id", ValueKind.STRING],
 ]);
 
 /**

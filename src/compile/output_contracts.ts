@@ -54,7 +54,7 @@ import {
 import type { Node } from "../nodes/base.ts";
 import { messagesKey, NEW_MESSAGES } from "../typesys/pool.ts";
 import { fileFieldType, isListKind, joinedType, typeEquals } from "../typesys/values.ts";
-import { typeRelation } from "./validation.ts";
+import { SYSTEM_AMBIENTS, typeRelation } from "./validation.ts";
 
 /** Marks a binding source that is a template, not a literal, in `literalValue`. */
 export const NOT_LITERAL: unique symbol = Symbol("NOT_LITERAL");
@@ -154,8 +154,8 @@ function checkFlowInputContract(name: string, contract: unknown): void {
 }
 
 /**
- * Resolve one `input.X...`, `<id>.output...` or an AGENT's `<id>.new_messages...` path to its
- * exact or projected contract.
+ * Resolve one `input.X...`, `<id>.output...`, `system.X` or an AGENT's `<id>.new_messages...`
+ * path to its exact or projected contract. A system ambient has its scalar type.
  *
  * @param path The dotted reference path.
  * @param producers Node output contracts by producer id, and an AGENT's new messages' contract
@@ -178,6 +178,10 @@ export function referenceContract(
     if (contract === undefined) return null;
     checkFlowInputContract(name, contract);
     return projectOutputContract(contract, parts.slice(2));
+  }
+  if (head === "system") {
+    const kind = parts.length === 2 ? SYSTEM_AMBIENTS.get(parts[1]!) : undefined;
+    return kind === undefined ? null : new ValueContract(Type.scalar(kind));
   }
   if (parts.length >= 2 && parts[1] === NEW_MESSAGES) {
     const messages = producers.get(messagesKey(parts[0]!));

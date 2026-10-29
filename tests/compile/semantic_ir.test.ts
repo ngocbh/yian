@@ -879,7 +879,7 @@ test("recordFieldOrigins indexes field origins in canonical order", () => {
   );
 });
 
-test("referenceContract projects flow inputs and producer outputs", () => {
+test("referenceContract projects flow inputs and producer outputs and types system ambients", () => {
   const record = new ValueContract(recordType({ f: INT }));
   const producers = table<OutputContract>({ p: record });
   const inputs = table({ x: record });
@@ -891,6 +891,11 @@ test("referenceContract projects flow inputs and producer outputs", () => {
   expect(referenceContract("input.y", producers, inputs)).toBe(null);
   expect(referenceContract("p.other", producers, inputs)).toBe(null);
   expect(referenceContract("p", producers, inputs)).toBe(null);
+  expect(exact(referenceContract("system.today", producers, inputs)).type).toEqual(Type.scalar(ValueKind.DATE));
+  expect(exact(referenceContract("system.now", producers, inputs)).type).toEqual(Type.scalar(ValueKind.DATETIME));
+  expect(exact(referenceContract("system.run_id", producers, inputs)).type).toEqual(STR);
+  expect(referenceContract("system.nope", producers, inputs)).toBe(null);
+  expect(referenceContract("system.today.year", producers, inputs)).toBe(null);
 
   expectError(
     () => referenceContract("input.x", producers, table({ x: STR as unknown as ValueContract })),

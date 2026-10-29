@@ -50,6 +50,7 @@ import {
   projectOutputContract,
   type TypeFn,
 } from "../../compile/output_contracts.ts";
+import { SYSTEM_AMBIENTS } from "../../compile/validation.ts";
 
 /**
  * Return the advice for an inline binding whose type can't be proven.
@@ -342,7 +343,10 @@ function inferDirectReference(parts: readonly string[], walk: Walk): Type {
   } else if (head === "inputs" || head === "outputs") {
     throw fail(`reference \${${path}} uses retired plural head ${reprText(head)}`);
   } else if (head === "system") {
-    throw fail(`reference \${${path}} has no statically proven system type`);
+    const kind = parts.length >= 2 ? SYSTEM_AMBIENTS.get(parts[1]!) : undefined;
+    if (kind === undefined) throw fail(`reference \${${path}} has no statically proven system type`);
+    root = Type.scalar(kind);
+    fields = parts.slice(2);
   } else {
     if (parts.length < 2 || (parts[1] !== "output" && parts[1] !== NEW_MESSAGES)) {
       throw fail(`reference \${${path}} must select ${head}.output[.field] or an AGENT's ${head}.${NEW_MESSAGES}`);

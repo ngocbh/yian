@@ -263,6 +263,14 @@ describe("inline input inference", () => {
     expect(infer("${input.record.value}", { parentInputTypes: new Map([["record", declared]]) })).toEqual(INT);
   });
 
+  test.each([
+    ["${system.today}", ValueKind.DATE],
+    ["${system.now}", ValueKind.DATETIME],
+    ["${system.run_id}", ValueKind.STRING],
+  ])("a system ambient has its scalar type: %s", (source, kind) => {
+    expect(infer(source)).toEqual(Type.scalar(kind));
+  });
+
   test("a whole unrefined object reference is allowed but copied", () => {
     const declared = Type.scalar(ValueKind.OBJECT);
 
@@ -496,7 +504,7 @@ describe("inline input inference", () => {
     ["${input.opaque.value}", "reference ${input.opaque.value} traverses 'value' without proven record fields"],
     ["${input.record.missing}", "reference ${input.record.missing} reads unknown record field 'missing'"],
     ["${item.value}", "reference ${item.value} is only typed inside an outer MAP input"],
-    ["${system.now}", "reference ${system.now} has no statically proven system type"],
+    ["${system.nope}", "reference ${system.nope} has no statically proven system type"],
     ["${producer}", "reference ${producer} must select producer.output[.field] or an AGENT's producer.new_messages"],
     ["${producer.value}", "reference ${producer.value} must select producer.output[.field] or an AGENT's producer.new_messages"],
     ["${producer()}", NOT_SCALAR],

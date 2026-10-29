@@ -1,0 +1,20 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  nodes:
+    e:
+      kind: code
+      input:
+        n: !int ${system.today}
+      output: int
+      code: return 1
+  output: ${e.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: "node 'e' input 'n': declared int, but the value is date"
+      frames:
+      - label: flow.yaml
+        range: [7, 10, 7, 30]

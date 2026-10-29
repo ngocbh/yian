@@ -205,19 +205,6 @@ function steerInboxCapability(
   };
 }
 
-/**
- * Return a host model access after checking its shape, or `null`.
- *
- * @throws TypeError when `models` isn't `null` and lacks a function `env` and `createModel`.
- */
-export function requireModels(models: unknown): ModelAccess | null {
-  const access = models as Partial<ModelAccess> | null | undefined;
-  if (models !== null && !(typeof access?.env === "function" && typeof access.createModel === "function")) {
-    throw new TypeError("models must provide env(name) and createModel(config, options), or be null");
-  }
-  return models as ModelAccess | null;
-}
-
 /** The closed raw worker result the append-only dispatcher consumes. */
 export type WorkerOutcome = Output | Route | Grow | Pending | EvaluationFailure;
 
@@ -233,44 +220,11 @@ export class EvaluatedOutcome {
   readonly bindings: BindingCapture | null;
   readonly backwardCapture: BackwardCapture | null;
 
-  /**
-   * Require one closed raw outcome and exact optional captures; the backward capture is checked
-   * again by rebuilding it.
-   *
-   * @throws TypeError for an outcome outside `WorkerOutcome`, or a capture that isn't exactly its
-   *   class.
-   * @throws RangeError when only one of `bindings` and `backwardCapture` is present, or as
-   *   `BackwardCapture` refuses the capture.
-   */
   constructor(
     outcome: WorkerOutcome,
     bindings: BindingCapture | null = null,
     backwardCapture: BackwardCapture | null = null,
   ) {
-    if (
-      !(
-        outcome instanceof Output ||
-        outcome instanceof Route ||
-        outcome instanceof Grow ||
-        outcome instanceof Pending ||
-        outcome instanceof EvaluationFailure
-      )
-    ) {
-      throw new TypeError("outcome must be a WorkerOutcome");
-    }
-    if (bindings !== null && !isExactly(bindings, BindingCapture)) {
-      throw new TypeError("bindings must be a BindingCapture or null");
-    }
-    if (backwardCapture !== null) {
-      if (!isExactly(backwardCapture, BackwardCapture)) {
-        throw new TypeError("backward_capture must be a BackwardCapture or null");
-      }
-      const { inputNames, variableNames, scope } = backwardCapture;
-      new BackwardCapture({ inputNames, variableNames, scope });
-    }
-    if ((bindings === null) !== (backwardCapture === null)) {
-      throw new RangeError("binding capture and backward invocation metadata must be retained together");
-    }
     this.outcome = outcome;
     this.bindings = bindings;
     this.backwardCapture = backwardCapture;
@@ -463,7 +417,6 @@ export interface EvalNodeOptions {
  * @param pool The pool the sources read.
  * @param options The capabilities and captures; see `EvalNodeOptions`.
  * @returns The outcome, with captures when asked for.
- * @throws TypeError (as a rejection) for a malformed option.
  * @throws The original error of the first capability fault (a failing stream or event sink, a
  *   repeated memory context open or a failing opener, a `CapabilityFault` from `steps.record` or
  *   the steer inbox), whatever the node then returned or threw.
@@ -502,41 +455,11 @@ export async function evalNode(
     random = null,
     runDir = null,
   } = options;
-  requireModels(models);
-  if (typeof captureBindings !== "boolean") throw new TypeError("capture_bindings must be a bool");
-  if (emitStream !== null && typeof emitStream !== "function") {
-    throw new TypeError("emit_stream must be callable or null");
-  }
-  if (emitEvent !== null && typeof emitEvent !== "function") {
-    throw new TypeError("emit_event must be callable or null");
-  }
-  if (sourceResolver !== null && typeof sourceResolver !== "function") {
-    throw new TypeError("source_resolver must be callable or null");
-  }
-  if (memoryContextOpener !== null && typeof memoryContextOpener !== "function") {
-    throw new TypeError("memory_context_opener must be callable or null");
-  }
-  if (tools !== null && !isExactly(tools, ToolSet)) throw new TypeError("tools must be a ToolSet or null");
-  if (skills !== null && !(skills instanceof Map)) throw new TypeError("skills must be a map or null");
-  if (steps !== null && !isExactly(steps, NodeSteps)) throw new TypeError("steps must be a NodeSteps or null");
-  if (steerInbox !== null && typeof steerInbox !== "function") throw new TypeError("steer_inbox must be callable or null");
-  if (onFault !== null && typeof onFault !== "function") throw new TypeError("on_fault must be callable or null");
   // Read once, so a node replacing its scope while it runs doesn't change what it recalls.
   const memoryScope = node.needsMemoryContext === true ? node.memoryScope : null;
   if (memoryScope !== null && !isExactly(memoryScope, MemoryScope)) {
     throw new TypeError("node memory_scope must be an exact MemoryScope or null");
   }
-  if (options.signal != null && !(options.signal instanceof AbortSignal)) {
-    throw new TypeError("signal must be an AbortSignal or null");
-  }
-  if (
-    scheduler !== null &&
-    (typeof scheduler !== "object" || typeof scheduler.now !== "function" || typeof scheduler.sleep !== "function")
-  ) {
-    throw new TypeError("scheduler must be a Scheduler or null");
-  }
-  if (random !== null && typeof random !== "function") throw new TypeError("random must be a function or null");
-  if (runDir !== null && typeof runDir !== "string") throw new TypeError("run_dir must be a string or null");
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
   const collector = captureBindings ? new BindingCollector() : null;

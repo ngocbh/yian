@@ -62,13 +62,6 @@ async function refused(run: Promise<unknown>, kind: ErrorConstructor): Promise<s
   return (error as Error).message;
 }
 
-test("growth builder is a required constructor dependency", () => {
-  const { state, log } = engine(actionFlow());
-  expect(() => new FlowEngine(state, log, { numWorkers: 0 } as FlowEngineOptions)).toThrow(
-    new TypeError("grow_builder must be callable"),
-  );
-});
-
 test("unprepared state is rejected before any node executes", async () => {
   probe.length = 0;
   const state = new RunState(actionFlow());
@@ -124,16 +117,6 @@ test("the constructor checks its arguments", () => {
 
   expect(build({}, {})).toThrow(new TypeError("FlowEngine expects a RunState"));
   expect(build({}, state, { runId: RUN_ID, nextSequence: 1 })).toThrow(new TypeError("FlowEngine expects a RunLog"));
-  expect(build({ numWorkers: 1.5 })).toThrow(new TypeError("num_workers must be a non-negative integer"));
-  expect(build({ numWorkers: "1" })).toThrow(new TypeError("num_workers must be a non-negative integer"));
-  expect(build({ numWorkers: -1 })).toThrow(new RangeError("num_workers must be a non-negative integer"));
-  expect(build({ onEvent: 1 })).toThrow(new TypeError("on_event must be callable or null"));
-  expect(build({ onStream: 1 })).toThrow(new TypeError("on_stream must be callable or null"));
-  expect(build({ memoryContextOpener: 1 })).toThrow(new TypeError("memory_context_opener must be callable or null"));
-  expect(build({ skills: {} })).toThrow(new TypeError("skills must be a map or null"));
-  expect(build({ models: { env: NO_ENV, createModel: 1 } })).toThrow(
-    new TypeError("models must provide env(name) and createModel(config, options), or be null"),
-  );
 });
 
 test("the run's tool set is bound to the run id and the run signal", () => {

@@ -127,7 +127,7 @@ import { driveBackward, recordedGrants } from "./runtime/backward.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { type DeliveryOp, FlowEngine, prepareDelivery, resumedAttemptEvents } from "./runtime/engine.ts";
 import { LiveChannel } from "./runtime/live.ts";
-import { bindStarted, requireModels } from "./runtime/eval_node.ts";
+import { bindStarted } from "./runtime/eval_node.ts";
 import {
   canonicalSeed,
   decodeRecord,
@@ -1024,6 +1024,18 @@ function checkDriveOptions(options: DriveOptions): [string, McpServer][] {
   // The other entries' errors come before anything is opened.
   new ToolSet(otherTools, { context });
   return unopened;
+}
+
+/**
+ * Check a host model access's shape.
+ *
+ * @throws TypeError when `models` isn't `null` and lacks a function `env` and `createModel`.
+ */
+function requireModels(models: unknown): void {
+  const access = models as Partial<ModelAccess> | null | undefined;
+  if (models !== null && !(typeof access?.env === "function" && typeof access.createModel === "function")) {
+    throw new TypeError("models must provide env(name) and createModel(config, options), or be null");
+  }
 }
 
 /**

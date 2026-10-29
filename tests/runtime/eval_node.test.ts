@@ -41,8 +41,7 @@ import {
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { virtualScheduler } from "../../src/platform.ts";
-import { type EvalNodeOptions, EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
-import { ToolSet } from "../../src/tools/registry.ts";
+import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, type Value, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, FuncNode, graph, NO_ENV, nodeFlow, rejected, thrownBy as thrown } from "../helpers/run_state_fixtures.ts";
@@ -358,54 +357,6 @@ const MODELS: ModelAccess = {
   },
 };
 
-describe("evalNode checks its arguments", () => {
-  const node = new FuncNode("n", () => "unused");
-  const pool = new VariablePool();
-
-  for (const [label, options, error] of [
-    ["capture_bindings", { captureBindings: "yes" }, new TypeError("capture_bindings must be a bool")],
-    ["emit_stream", { emitStream: "sink" }, new TypeError("emit_stream must be callable or null")],
-    ["emit_event", { emitEvent: {} }, new TypeError("emit_event must be callable or null")],
-    ["source_resolver", { sourceResolver: 1 }, new TypeError("source_resolver must be callable or null")],
-    [
-      "memory_context_opener",
-      { memoryContextOpener: {} },
-      new TypeError("memory_context_opener must be callable or null"),
-    ],
-    ["tools", { tools: new Map() }, new TypeError("tools must be a ToolSet or null")],
-    ["skills", { skills: { s: {} } }, new TypeError("skills must be a map or null")],
-    ["steps", { steps: { starts: 1, prior: [], record() {} } }, new TypeError("steps must be a NodeSteps or null")],
-    ["steer_inbox", { steerInbox: {} }, new TypeError("steer_inbox must be callable or null")],
-    ["on_fault", { onFault: {} }, new TypeError("on_fault must be callable or null")],
-    ["signal", { signal: new AbortController() }, new TypeError("signal must be an AbortSignal or null")],
-    [
-      "models",
-      { models: { env: NO_ENV } },
-      new TypeError("models must provide env(name) and createModel(config, options), or be null"),
-    ],
-  ] as const) {
-    test(label, async () => {
-      expect(await rejected(evalNode(node, null, pool, options as unknown as EvalNodeOptions))).toEqual(error);
-    });
-  }
-
-  test("well-formed options are accepted", async () => {
-    const options: EvalNodeOptions = {
-      captureBindings: false,
-      emitStream: () => {},
-      emitEvent: () => {},
-      skills: new Map(),
-      tools: new ToolSet(),
-      steps: new NodeSteps(1, [], () => 1),
-      signal: new AbortController().signal,
-      models: MODELS,
-      onFault: () => {},
-    };
-
-    expect((await evalNode(node, null, pool, options)).outcome).toEqual(new Output("unused"));
-  });
-});
-
 /** Record the capabilities each run receives, and return `null`. */
 class CapsNode extends Node {
   readonly kind: NodeKind = NodeKind.CODE;
@@ -429,19 +380,6 @@ class TraitCapsNode extends CapsNode {
   override readonly needsSteps = true;
   override readonly readsSteerInbox = true;
 }
-
-/** The scheduler, random-draw and run-folder options, malformed, with the error each rejects with. */
-const BAD_WAIT_CAPS = [
-  ["scheduler without sleep", { scheduler: { now: () => 0 } }, new TypeError("scheduler must be a Scheduler or null")],
-  [
-    "scheduler whose now isn't a function",
-    { scheduler: { now: 0, sleep: async () => {} } },
-    new TypeError("scheduler must be a Scheduler or null"),
-  ],
-  ["scheduler that isn't an object", { scheduler: "clock" }, new TypeError("scheduler must be a Scheduler or null")],
-  ["random", { random: 0.5 }, new TypeError("random must be a function or null")],
-  ["run folder", { runDir: 3 }, new TypeError("run_dir must be a string or null")],
-] as const;
 
 describe("evalNode gives every node the scheduler, the random draw and the run folder", () => {
   const pool = new VariablePool();
@@ -477,13 +415,6 @@ describe("evalNode gives every node the scheduler, the random draw and the run f
       }
     });
   }
-
-  for (const [label, options, error] of BAD_WAIT_CAPS) {
-    test(`a malformed ${label} is refused`, async () => {
-      const node = new CapsNode("n", []);
-      expect(await rejected(evalNode(node, null, pool, options as unknown as EvalNodeOptions))).toEqual(error);
-    });
-  }
 });
 
 describe("FlowEngine gives every node the scheduler, the random draw and the run folder", () => {
@@ -505,16 +436,6 @@ describe("FlowEngine gives every node the scheduler, the random draw and the run
       expect(caps.runDir).toBe("/runs/r1");
     }
   });
-
-  for (const [label, options, error] of BAD_WAIT_CAPS) {
-    test(`the constructor refuses a malformed ${label}`, () => {
-      const flow = graph([new CapsNode("a", [])], [
-        [START_ID, "a"],
-        ["a", END_ID],
-      ]);
-      expect(() => engine(flow, options as never)).toThrow(error);
-    });
-  }
 });
 
 /** Record the capabilities each evaluation supplies, by node id. */

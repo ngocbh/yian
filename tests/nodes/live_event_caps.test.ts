@@ -95,8 +95,3 @@ for (const sink of ["emitStream", "emitEvent"] as const) {
   });
 }
 
-test("emit event must be callable", async () => {
-  expect(await rejected(drive(new LiveProbe("probe"), { emitEvent: "not callable" as never }))).toEqual(
-    new TypeError("emit_event must be callable or null"),
-  );
-});

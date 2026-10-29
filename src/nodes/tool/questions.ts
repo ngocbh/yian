@@ -87,6 +87,31 @@ export function parseQuestions(raw: unknown): QuestionSpec[] {
   return questions;
 }
 
+/**
+ * Return a model-written question list with each option whose label repeats an earlier label of
+ * its question, ignoring case, left out, as `ask_user` drops a model's repeated labels. Anything
+ * that isn't such a list, question or option is kept as given, for `parseQuestions` to report.
+ *
+ * Example: `[{question: "Ship?", header: "s", options: [{label: "Yes"}, {label: "yes"}]}]` reads
+ * `[{question: "Ship?", header: "s", options: [{label: "Yes"}]}]`.
+ */
+export function dropRepeatedLabels(raw: unknown): unknown {
+  if (!isList(raw)) return raw;
+  return raw.map((item) => {
+    if (!isRecord(item) || !isList(item["options"])) return item;
+    const seen = new Set<string>();
+    const options = item["options"].filter((option) => {
+      if (!isRecord(option) || typeof option["label"] !== "string") return true;
+      // Upper then lower case folds case: "Straße" and "STRASSE" are the same label.
+      const key = option["label"].toUpperCase().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return { ...item, options };
+  });
+}
+
 /** Read one question item; the message names its first problem, without the item prefix. */
 function parseQuestion(item: unknown): QuestionSpec {
   if (!isRecord(item)) throw new QuestionSpecError(`must be a record, got ${valueRepr(item)}`);

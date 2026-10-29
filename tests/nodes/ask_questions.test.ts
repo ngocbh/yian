@@ -2,12 +2,12 @@
  * `parseQuestions`, the authoring rules of an `ask`'s question list: option labels are unique
  * within a question, since the answer is the chosen label, while the lists asks already run with
  * (an empty header, label or question text, a label shared by two questions, `multi_select` on a
- * free-text question) parse as before.
+ * free-text question) parse as before. A composer model's list drops its repeated labels first.
  */
 
 import { expect, test } from "bun:test";
 
-import { parseQuestions, QuestionSpecError } from "../../src/nodes/tool/questions.ts";
+import { dropRepeatedLabels, parseQuestions, QuestionSpecError } from "../../src/nodes/tool/questions.ts";
 
 /** Return what `fn` throws, or fail when it returns. */
 function thrown(fn: () => unknown): unknown {
@@ -64,4 +64,19 @@ test("empty text and multi_select on a free-text question parse as before", () =
     },
     { question: "Notes?", header: "notes", options: [], multiSelect: true },
   ]);
+});
+
+test("dropRepeatedLabels keeps each question's first option of a label, ignoring case, and leaves the rest as given", () => {
+  const raw = [
+    { question: "Ship?", header: "s", options: [{ label: "Yes" }, { label: "YES", description: "x" }, { label: "no" }] },
+    { question: "Notes?", header: "n" },
+    "not a question",
+  ];
+
+  expect(dropRepeatedLabels(raw)).toEqual([
+    { question: "Ship?", header: "s", options: [{ label: "Yes" }, { label: "no" }] },
+    { question: "Notes?", header: "n" },
+    "not a question",
+  ]);
+  expect(dropRepeatedLabels("ship")).toBe("ship");
 });

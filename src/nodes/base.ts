@@ -668,8 +668,11 @@ export interface MaterialCaps {
   readonly toolSpecs: (ids: readonly string[]) => readonly ToolSpec[] | null;
   /** Builds the invocation's model to read its request settings off; never called. */
   readonly models: ModelAccess | null;
-  /** Recalls the memory sections against the run's recorded snapshots, as `NodeCaps` does. */
-  readonly openMemoryContext: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
+  /**
+   * Recalls the memory sections against the run's recorded snapshots, as `NodeCaps` does, from the
+   * rendered system prompt without the skill listing and the rendered prompt.
+   */
+  readonly openMemoryContext: (systemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
   /** The declared type of each of the node's locals, as `NodeCaps.localTypes` gives it. */
   readonly localTypes?: ReadonlyMap<string, Type | null>;
 }
@@ -994,10 +997,11 @@ export interface NodeCaps {
     event: ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished | ReplayDegraded,
   ) => void;
   /**
-   * Opens the invocation's memory context once, from the visible base system prompt and the
-   * rendered prompt; supplied to a node that declares `needsMemoryContext`.
+   * Opens the invocation's memory context once, from the rendered system prompt (an AGENT's
+   * without its skill listing, so grants never change recall) and the rendered prompt; supplied to
+   * a node that declares `needsMemoryContext`.
    */
-  readonly openMemoryContext?: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
+  readonly openMemoryContext?: (systemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
   /**
    * Opens the node's steer inbox; supplied to a node declaring `readsSteerInbox` when the engine
    * supplies steps. Opening registers the node as reading `inbox` until its outcome commits.

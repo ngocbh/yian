@@ -232,10 +232,10 @@ export async function learningMaterials(
   // Recalls for `occurrence` against the recorded snapshots, as its run did.
   const recallFor =
     (occurrence: TraceOccurrence) =>
-    async (baseSystemPrompt: string, prompt: string): Promise<MemoryContext> => {
+    async (systemPrompt: string, prompt: string): Promise<MemoryContext> => {
       const scope = occurrence.memoryScope;
       if (scope === null || scope.memories.length === 0 || memory === null) return new MemoryContext();
-      const recall = new RecallContext(baseSystemPrompt, prompt, visibleInputs(occurrence) ?? {}, scope.staticPath);
+      const recall = new RecallContext(systemPrompt, prompt, visibleInputs(occurrence) ?? {}, scope.staticPath);
       return await memory.openContext(scope, recall, { signal: new AbortController().signal });
     };
   const materials = new Map<string, LearningMaterial>();

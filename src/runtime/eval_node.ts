@@ -298,7 +298,7 @@ function memoryContextCapability(options: {
    *   throws it.
    * @throws CapabilityFault carrying a repeated open or any other opener fault.
    */
-  const enter = async (baseSystemPrompt: string, renderedPrompt: string): Promise<MemoryContext> => {
+  const enter = async (systemPrompt: string, renderedPrompt: string): Promise<MemoryContext> => {
     try {
       if (used) throw new Error("memory context capability was already entered");
       used = true;
@@ -306,7 +306,7 @@ function memoryContextCapability(options: {
       if (canonicalInputs === null) throw new MemoryRecallError("memory recall context is invalid");
       let recall: RecallContext;
       try {
-        recall = new RecallContext(baseSystemPrompt, renderedPrompt, canonicalInputs, scope.staticPath);
+        recall = new RecallContext(systemPrompt, renderedPrompt, canonicalInputs, scope.staticPath);
       } catch (error) {
         if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
         throw new MemoryRecallError("memory recall context is invalid", { cause: error });
@@ -329,10 +329,10 @@ function memoryContextCapability(options: {
     }
   };
 
-  const open = (baseSystemPrompt: string, renderedPrompt: string) => {
+  const open = (systemPrompt: string, renderedPrompt: string) => {
     const opened: Promise<MemoryContext> = closed
       ? Promise.reject(new Error("memory context capability is closed"))
-      : enter(baseSystemPrompt, renderedPrompt);
+      : enter(systemPrompt, renderedPrompt);
     // A node may drop the promise: its rejection must not go unhandled, and the evaluator awaits
     // it, so a fault still reaches `onFault`.
     opened.catch(() => {});

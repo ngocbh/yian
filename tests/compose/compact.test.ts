@@ -132,6 +132,14 @@ test("a compact flow's invalid input is located at its value", () => {
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(new SourceRange(4, 8, 4, 15));
 });
 
+test.each(["0", "false", '""', "[]", ""])("a compact flow's input: %p is not a param map", (value) => {
+  const error = loadError(() => parseFile(`id: f\nname: f\nkind: code\ncode: m:f\ninput: ${value}\n`));
+
+  expect(error.message).toBe(
+    "compact (single-node) flow: `input:` must be a param map (`name: !TYPE`, e.g. `topic: !str`)",
+  );
+});
+
 test("a compact flow's input named inf is rejected at its key", () => {
   const document = parseSourceDocument(
     "id: f\nname: f\nkind: code\ncode: m:f\ninput:\n  inf: !float\n",

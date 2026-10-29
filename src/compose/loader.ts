@@ -82,13 +82,12 @@ import { rejectUnreadTags } from "./helpers/tags.ts";
 import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
 import { checkLlmConfigValue, readLlmConfig } from "./nodes/agent.ts";
-import { notTextDetail, notTextError } from "./nodes/base.ts";
+import { notTextDetail, notTextError, valueTypeError } from "./nodes/base.ts";
 import { KINDS, REMOVED_KINDS } from "./nodes/index.ts";
 import { checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
 import { callNestingScope } from "./nodes/resolver.ts";
 import {
   flowNodesCursor,
-  isEmptyValue,
   parseFile,
   parseSourceDocument,
   signatureNodeBody,
@@ -1747,6 +1746,13 @@ function loadDef(
   }
   if (defEnv !== null) validateEnv(defEnv, `${where}: `, defCursor?.child("env") ?? null, diagnostics);
   checkDefAsserts(name, field("asserts"), defCursor, diagnostics);
+  // Like a full flow's, a written `input:` must be a mapping, so an empty one is refused.
+  const inputs = Object.hasOwn(body, "inputs") ? body["inputs"]! : {};
+  if (!isRecord(inputs)) {
+    throw diagnostics.error(`${where}: ${valueTypeError("input", "a mapping", inputs, "write a mapping")}`, {
+      range: defCursor?.rangeOf("input") ?? null,
+    });
+  }
   const nodesCursor = defAssemblyCursor(defCursor, body["nodes"]!);
   try {
     const memories =
@@ -1757,10 +1763,9 @@ function loadDef(
             site: new DeclSite([], ["def", name], null),
           })
         : [];
-    const inputs = field("inputs");
     const asserts = field("asserts");
     return assemble({
-      inputsSection: (isEmptyValue(inputs) ? {} : inputs) as ValueRecord,
+      inputsSection: inputs,
       inputsCursor: sourceChild(defCursor, "input"),
       nodesCursor,
       outputsSection: field("outputs"),
@@ -1842,7 +1847,7 @@ function loadSingleNodeDef(
     throw kindError(`node ${reprText(name)}: unknown kind ${reprText(kind)} (allowed: ${allowed})`);
   }
   const inputCursor = sourceChild(defCursor, "input");
-  const paramTypes = signatureParams(Object.hasOwn(body, "inputs") ? body["inputs"]! : null, {
+  const paramTypes = signatureParams(Object.hasOwn(body, "inputs") ? body["inputs"]! : undefined, {
     where,
     inputLabel: "single-node `input:`",
     inputCursor,

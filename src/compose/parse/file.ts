@@ -266,20 +266,11 @@ function backMapToPlural(body: Value, active: Set<ValueRecord> = new Set()): Val
 }
 
 /**
- * Whether `value` is null, false, zero, empty text or an empty container: an `input:` that declares
- * no params, in a compact flow or a single-node def.
- */
-export function isEmptyValue(value: Value): boolean {
-  if (isList(value)) return value.length === 0;
-  if (isRecord(value)) return Object.keys(value).length === 0;
-  return value === null || value === false || value === 0n || value === 0 || value === "";
-}
-
-/**
  * Return the parameters of a one-node signature (a compact flow or a single-node def): its
  * `input:`, which must be a param map, with no parameter named `inf`.
  *
- * @param input The authored `input:`; an empty value declares no parameters.
+ * @param input The authored `input:`, or `undefined` when it is absent and so declares no
+ *   parameters. A written empty `input:` is refused, as in a full flow.
  * @param options.where The form in messages, such as `compact (single-node) flow`.
  * @param options.inputLabel How the param-map message names `input:`.
  * @param options.inputCursor The authored `input:`, or `null`.
@@ -288,7 +279,7 @@ export function isEmptyValue(value: Value): boolean {
  * @throws LoadError when `input:` isn't a param map or a parameter is named `inf`.
  */
 export function signatureParams(
-  input: Value,
+  input: Value | undefined,
   options: {
     where: string;
     inputLabel: string;
@@ -298,13 +289,13 @@ export function signatureParams(
   },
 ): ValueRecord {
   const { where, inputLabel, inputCursor, fallbackRange, diagnostics } = options;
-  if (!isRecord(input) && !isEmptyValue(input)) {
+  if (input !== undefined && !isRecord(input)) {
     throw diagnostics.error(
       `${where}: ${inputLabel} must be a param map (\`name: !TYPE\`, e.g. \`topic: !str\`)`,
       { range: inputCursor?.range ?? fallbackRange },
     );
   }
-  const params: ValueRecord = isRecord(input) ? input : {};
+  const params: ValueRecord = input ?? {};
   // The node reads each parameter by bare name, so `inf` would read infinity instead.
   if (Object.hasOwn(params, "inf")) {
     rejectInfinityName(`${where}: input 'inf'`, "inf", inputCursor?.keyRangeOf("inf") ?? null, diagnostics);
@@ -397,7 +388,7 @@ function desugarCompact(body: ValueRecord, root: SourceCursor): ValueRecord {
       { range: root.rangeOf("id") },
     );
   }
-  const params = signatureParams(Object.hasOwn(body, "input") ? body["input"]! : null, {
+  const params = signatureParams(Object.hasOwn(body, "input") ? body["input"]! : undefined, {
     where: "compact (single-node) flow",
     inputLabel: "`input:`",
     inputCursor: root.has("input") ? root.child("input") : null,

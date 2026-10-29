@@ -318,6 +318,35 @@ class Paced implements ChatModel {
   }
 }
 
+/**
+ * A model whose call holds its first byte until its signal aborts, then throws the signal's
+ * reason, as a slow first token or a non-streaming request does; `waiting` resolves once a read
+ * is pending.
+ */
+class Held implements ChatModel {
+  readonly provider = "anthropic";
+  readonly model = "claude-test";
+  readonly #waiting = Promise.withResolvers<void>();
+  /** Resolves once the consumer waits on the first event. */
+  readonly waiting = this.#waiting.promise;
+  /** The signal the call was made with, once made. */
+  signal: AbortSignal | undefined;
+
+  stream(_request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    const signal = options.signal;
+    this.signal = signal;
+    const waiting = this.#waiting;
+    async function* held(): AsyncGenerator<Event> {
+      const { promise, reject } = Promise.withResolvers<never>();
+      if (signal?.aborted) reject(signal.reason);
+      signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+      waiting.resolve();
+      yield await promise;
+    }
+    return new EventStream(held());
+  }
+}
+
 const LOOKUP_CALL = new ToolCallDelta({ index: 1, id: "call-1", name: "lookup", arguments: '{"topic": "a"}' });
 
 // --- the loop's honor points (loop level) ------------------------------------------------ //
@@ -579,7 +608,8 @@ test("a too-deep tool call fails the node even with the interrupt pending", asyn
     [new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" })],
     CONFIG,
   );
-  const onEvent = (event: unknown) => void (event instanceof ModelCallStarted && interruptNow());
+  // Once the whole reply arrived, so the interrupt is pending when the reply is checked.
+  const onEvent = (event: unknown) => void (event instanceof ModelCallFinished && interruptNow());
   const last = await runEngine(chatFlow({ tools: ["lookup"] }), model, { tools: new ToolSet({ lookup }), onEvent });
   expect(last).toBeInstanceOf(RunFailed);
   expect((last as RunFailed).failure.code).toBe("node.execute");
@@ -784,20 +814,73 @@ test("an interrupt on the last chunk records the whole reply and skips its call"
   expect(shape()).toEqual(["model_call", "skipped", "interrupted"]);
 });
 
-test("an interrupt during a single-chunk reply records the whole reply and skips its calls", async () => {
+test("an interrupt after a reply's only text chunk records the whole reply and skips its calls", async () => {
   const ran: string[] = [];
+  const lookup = lookupTool((topic) => (ran.push(topic), "found"));
+  const model = new ScriptedModel([twoCalls()], CONFIG);
+  const onStream = (chunk: StreamChunk) => void (chunk.chunk === "Checking both." && interruptNow());
+  const output = await run(chatFlow({ tools: ["lookup"] }), model, { tools: new ToolSet({ lookup }), onStream });
+  expect(output).toBeNull();
+  expect(ran).toEqual([]);
+  expect(model.requests).toHaveLength(1);
+  expect(shape()).toEqual(["model_call", "skipped", "skipped", "interrupted"]);
+});
+
+test("an interrupt while a model call waits for its first event aborts the request at once: an empty cut", async () => {
+  const model = new Held();
+  const chunks: StreamChunk[] = [];
   const events: unknown[] = [];
-  const onEvent = (event: unknown) => {
-    events.push(event);
-    if (event instanceof ModelCallStarted) interruptNow();
-  };
+  const onStream = (chunk: StreamChunk) => void chunks.push(chunk);
+  const done = run(chatFlow(), model, { onStream, onEvent: (event) => void events.push(event) });
+  await model.waiting;
+  interruptNow();
+  expect(await done).toBeNull();
+  expect(model.signal?.aborted).toBe(true);
+  expect(shape()).toEqual(["cut", "interrupted"]);
+  expect(cutText()).toBe("");
+  expect(steps()[0]!["usage"]).toBeNull();
+  expect(chunked(chunks)).toEqual([["", true]]);
+  const finished = events.filter((event) => event instanceof ModelCallFinished);
+  expect(finished.map((event) => [event.error, event.usage, event.n])).toEqual([[null, null, 1]]);
+});
+
+test("an interrupt as a model call starts cuts it before its reply: its calls never start", async () => {
+  const ran: string[] = [];
+  const onEvent = (event: unknown) => void (event instanceof ModelCallStarted && interruptNow());
   const lookup = lookupTool((topic) => (ran.push(topic), "found"));
   const model = new ScriptedModel([twoCalls()], CONFIG);
   const output = await run(chatFlow({ tools: ["lookup"] }), model, { tools: new ToolSet({ lookup }), onEvent, onStream: () => {} });
   expect(output).toBeNull();
   expect(ran).toEqual([]);
   expect(model.requests).toHaveLength(1);
-  expect(shape()).toEqual(["model_call", "skipped", "skipped", "interrupted"]);
+  expect(shape()).toEqual(["cut", "interrupted"]);
+  expect(cutText()).toBe("");
+});
+
+test("callModel: an interrupt before the first event rejects with an empty reply; a stop with it wins", async () => {
+  const events: unknown[] = [];
+  const live = liveSinks({ nodeId: "chat", llmConfig: CONFIG, emitEvent: (event) => void events.push(event) });
+  const interruptSignal = new AbortController();
+  const model = new Held();
+  const call = callModel(live, model, REQUEST, { purpose: "chat", interrupt: interruptSignal.signal });
+  await model.waiting;
+  interruptSignal.abort(new Error("interrupted"));
+  const cut = await rejected(call);
+  expect(cut).toBeInstanceOf(ReplyInterrupted);
+  expect([(cut as ReplyInterrupted).reply.parts, (cut as ReplyInterrupted).usage]).toEqual([[], null]);
+  expect(typesAndErrors(events)).toEqual([
+    ["ModelCallStarted", null],
+    ["ModelCallFinished", null],
+  ]);
+
+  const stop = new AbortController();
+  const both = new AbortController();
+  const held = new Held();
+  const stopped = callModel(null, held, REQUEST, { purpose: "chat", signal: stop.signal, interrupt: both.signal });
+  await held.waiting;
+  both.abort(new Error("interrupted"));
+  stop.abort(new Error("stopped"));
+  expect(((await rejected(stopped)) as Error).message).toBe("stopped");
 });
 
 test("a cut with no stream sink still records the text received", async () => {
@@ -1034,10 +1117,10 @@ test("an interrupt already set when a model-retry wait begins ends it with an em
   install({ ...BUILTIN, modelRetries: 1 });
   const events: unknown[] = [];
   const interruptSignal = new AbortController();
-  // Set during the failing attempt, so it is already aborted when the wait starts.
+  // Set as the failing attempt ends, so it is already aborted when the wait starts.
   const emitEvent = (event: unknown) => {
     events.push(event);
-    if (event instanceof ModelCallStarted) interruptSignal.abort(new Error("interrupted"));
+    if (event instanceof ModelCallFinished) interruptSignal.abort(new Error("interrupted"));
   };
   const live = liveSinks({ nodeId: "chat", llmConfig: CONFIG, emitEvent });
   const model = new ScriptedModel([new ProviderError("server", "boom", { retryAfter: 60 }), reply("never")], CONFIG);

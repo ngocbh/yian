@@ -202,9 +202,10 @@ interface Called<N extends number | null> {
  * `media` folder, a failed write) fails the call, unretried, as a last attempt's error does. A
  * call the stop cut writes nothing, nor does a retry wait an interrupt ended.
  *
- * With `interrupt`, a host interrupt cuts the call. During an attempt it is checked right before
- * each non-empty `TextDelta` that isn't the attempt's first event (a later chunk, as a host sees
- * it); a cut closes the stream, sends the final chunk when streaming and `ModelCallFinished` with
+ * With `interrupt`, a host interrupt cuts the call. Before an attempt's first event it aborts the
+ * request at once (a slow first token, a non-streaming reply), cutting an empty reply; after it,
+ * the interrupt is checked right before each non-empty `TextDelta` (a later chunk, as a host sees
+ * it). A cut closes the stream, sends the final chunk when streaming and `ModelCallFinished` with
  * the usage of the last `UsageReport` before the cut (else `null`) and no error. A reply whose
  * text had all arrived is never cut. During a retry wait the interrupt ends the wait at once with
  * nothing more emitted. A stop wins over an interrupt.
@@ -217,7 +218,8 @@ interface Called<N extends number | null> {
  *   the `n` of the reply's `model_call` step (typed `number` then; `null` without); and whether the
  *   reply was replayed.
  * @throws ReplyInterrupted carrying the text shown before the cut and its usage, or an empty
- *   reply and `null` usage for a cut wait; it is never marked.
+ *   reply and `null` usage for a cut wait or an attempt cut before its first event; it is never
+ *   marked.
  * @throws CapabilityFault when a recorded call's purpose or digest differs from this one's.
  */
 export async function callModel(
@@ -275,6 +277,15 @@ export async function callModel(
   let firstTokenAt: number | null = null;
   let arrived = new ReplyAssembler();
   let waiting = false;
+  // With `interrupt`, each attempt streams under its own signal, which the stop aborts and the
+  // interrupt aborts until the attempt's first event, so a request still waiting on its first byte
+  // ends at once. `release` detaches the interrupt from the current attempt.
+  let attemptSignal = signal;
+  let release = () => {};
+  const streamed: ChatModel =
+    interrupt === undefined
+      ? model
+      : { provider: model.provider, model: model.model, stream: (req) => model.stream(req, { signal: attemptSignal }) };
   const call = () => ({
     purpose,
     model: model.model,
@@ -284,7 +295,7 @@ export async function callModel(
   });
   let response: Response;
   try {
-    response = await callWithRetries(model, sent, {
+    response = await callWithRetries(streamed, sent, {
       signal,
       random,
       prior,
@@ -300,10 +311,21 @@ export async function callModel(
         arrived = new ReplyAssembler();
         startedAt = record === undefined ? scheduler.now() : record.steps.now();
         emitEvent?.(new ModelCallStarted({ ...identity, n, startedAt }));
+        release();
+        if (interrupt !== undefined) {
+          const cutter = new AbortController();
+          const cut = () => cutter.abort(new ReplyInterrupted(new Message({ role: "assistant", parts: [] }), null));
+          interrupt.addEventListener("abort", cut, { once: true });
+          release = () => interrupt.removeEventListener("abort", cut);
+          if (interrupt.aborted) cut();
+          attemptSignal = signal === undefined ? cutter.signal : AbortSignal.any([signal, cutter.signal]);
+        }
       },
       onEvent: (event) => {
+        release();
         const text = event instanceof TextDelta ? event.text : "";
-        if (text !== "" && !first && interrupt?.aborted) {
+        // Before the first event the interrupt aborted the attempt; an event that still got through is cut too.
+        if (interrupt?.aborted && (first || text !== "")) {
           const parts = shownText ? [new TextPart(shownText)] : [];
           throw new ReplyInterrupted(new Message({ role: "assistant", parts }), usage);
         }
@@ -348,6 +370,8 @@ export async function callModel(
     markModelFailure(error);
     emitEvent?.(new ModelCallFinished({ ...identity, n, error: errorName(error) }));
     throw error;
+  } finally {
+    release();
   }
   let step: number | null = null;
   if (record !== undefined) {

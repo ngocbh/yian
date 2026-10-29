@@ -412,7 +412,8 @@ A `sends` item's `after: {node: <node id>, <point>}`, and a `stop`'s `{<node id>
 - `{model_call: n}`: once the node's `n`th `agent` model call has finished (its last chunk
   taken); not when the call raises;
 - `{model_call: n, chunk: k}`: once chunk `k` of that call has been delivered; `k` counts the
-  entry's `chunks` list, text or not (a `reply` streams as one chunk);
+  entry's `chunks` list, text or not (a `reply` streams as one chunk). `chunk: 0` is as the call's
+  first chunk is asked for, before the model sends it;
 - `{tool_call: i}`: once the node's `i`th tool call in call order has returned or raised,
   counted as in `expect.tool_calls` (`ask_user` included). Stub tools return at once, so calls
   finish in call order.
@@ -424,8 +425,8 @@ run, whose calls aren't counted. A resumed AGENT replays its recorded calls, ste
 honored is honored on the resume.
 
 The AGENT reads its steer inbox at the top of each loop iteration (just before a model call),
-and checks for an interrupt there, before each later chunk of a streamed reply and before each
-tool call. A host can't act "before" a point, so:
+and checks for an interrupt there, while a model call waits for its first chunk, before each later
+chunk of a streamed reply and before each tool call. A host can't act "before" a point, so:
 
 - a steer before model call `n` is a `sends` item `after: {node, model_call: n-1}` (or
   `{tool_call: i}` for a call of reply `n-1`);
@@ -433,12 +434,15 @@ tool call. A host can't act "before" a point, so:
   for the first call of reply `n`. This holds only when call `i` isn't in the same group as call
   `i-1`: the calls of `concurrency_safe` stub tools run together, so a group's later calls have
   already started when an earlier one returns, and they finish;
-- an interrupt after chunk `k` is `after: {model_call: n, chunk: k}`.
+- an interrupt after chunk `k` is `after: {model_call: n, chunk: k}`; one before the first chunk
+  is `after: {model_call: n, chunk: 0}`.
 
-yian checks for an interrupt before each later **text** chunk, before each tool call's check,
-before each group, and before failing at a call whose check failed. So a case that cuts
-mid-stream needs a text chunk after its point (an interrupt before a `tool_call`, `usage` or
-`finish` chunk keeps the reply whole, and its calls are skipped with brackets).
+An interrupt while a call waits for its first chunk aborts the call: its `model_call` step
+records an empty reply. After the first chunk, yian checks for an interrupt before each later
+**text** chunk, before each tool call's check, before each group, and before failing at a call
+whose check failed. So a case that cuts mid-stream needs a text chunk after its point (an
+interrupt before a `tool_call`, `usage` or `finish` chunk keeps the reply whole, and its calls are
+skipped with brackets).
 
 An interrupted AGENT records the cut reply in its `model_call` step (finish `interrupted`; a cut
 stream ends with a final `""` chunk), writes each skipped tool call as a `skipped` result

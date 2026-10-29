@@ -316,8 +316,9 @@ output: ${worker.output :- "(stopped)"}
 - **Render.** `steer_inbox: {from: ${input.notes}, render: "From the owner: ${event}"}` wraps each
   message in a template. The template reads only `${event}`.
 - **Interrupts.** A host can interrupt every agent reading an inbox. The agent stops at its next
-  safe point: before a model call, between streamed chunks, or before a tool call. A running tool
-  call finishes. In `yian chat`, Ctrl-C or Esc during a turn does this.
+  safe point: before a model call, while a model call waits for its reply to start (the request
+  is aborted at once), between streamed chunks, or before a tool call. A running tool call
+  finishes. In `yian chat`, Ctrl-C or Esc during a turn does this.
 - **The result.** An interrupted agent's output is null. With an `Optional(...)` output it
   succeeds, so the flow can route on null as above. Any other output fails the node with
   `agent.interrupted`.

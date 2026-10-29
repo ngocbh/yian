@@ -79,6 +79,29 @@ function hooked(model: ScriptedModel, during: (request: number) => unknown): Cha
   };
 }
 
+/** `model`, running `after` once the consumer took the first event of its first call. */
+function afterFirstEvent(model: ScriptedModel, after: () => void): ChatModel & { requests: Request[] } {
+  return {
+    provider: model.provider,
+    model: model.model,
+    requests: model.requests,
+    stream(request: Request, options?: { signal?: AbortSignal }): EventStream {
+      const inner = model.stream(request, options);
+      const first = model.requests.length === 1;
+      return new EventStream(
+        (async function* () {
+          let taken = 0;
+          for await (const event of inner) {
+            yield event;
+            if (first && ++taken === 1) after();
+          }
+        })(),
+        () => inner.close(),
+      );
+    },
+  };
+}
+
 /** A lookup tool returning `found <topic>`. */
 const lookup = () =>
   new FunctionTool({
@@ -190,7 +213,7 @@ test("a reply with tool calls at the cap still fails", async () => {
 test("an interrupt that lands during the final reply beats a queued steer: the answer stands, the steer stays", async () => {
   const interrupt = new AbortController();
   const { inbox, queue, reads } = inboxDouble([], interrupt.signal, 9);
-  const model = hooked(new ScriptedModel([textReply("final")], CONFIG), () => {
+  const model = afterFirstEvent(new ScriptedModel([textReply("final")], CONFIG), () => {
     queue.push("late");
     interrupt.abort();
   });

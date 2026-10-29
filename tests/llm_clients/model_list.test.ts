@@ -9,7 +9,7 @@ import { inspect } from "node:util";
 
 import { describe, expect, test } from "bun:test";
 
-import { current } from "../../src/defaults.ts";
+import { current, withEnv } from "../../src/defaults.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { HttpResponse } from "../../src/llm_clients/auth/common.ts";
 import type { request } from "../../src/llm_clients/auth/http.ts";
@@ -435,13 +435,57 @@ describe("malformed response is invalid", () => {
 test("timeout is shared by every page", async () => {
   // Each page takes 150 ms and always has more; a 400 ms budget allows three, each getting what's left.
   const scheduler = virtualScheduler();
-  const fake = server(async () => {
+  const fake = server(async (call) => {
     await scheduler.sleep(150);
-    return new HttpResponse(200, { data: [{ id: "m" }], has_more: true, last_id: "m" });
+    const id = `m${fake.calls.indexOf(call)}`;
+    return new HttpResponse(200, { data: [{ id }], has_more: true, last_id: id });
   });
   const error = await rejected(listModels("anthropic", { apiKey: KEY, timeout: 0.4, scheduler, request: fake }));
   assertClean(error, "timed out");
   expect(fake.calls.map((call) => call.timeoutMs)).toEqual([400, 250, 100]);
+});
+
+describe("a cursor that comes back is invalid", () => {
+  const rows: [string, (call: Call) => HttpResponse][] = [
+    ["anthropic", () => new HttpResponse(200, { data: [{ id: "m" }], has_more: true, last_id: "m" })],
+    // The cursor cycles back to an earlier one rather than repeating the last.
+    ["anthropic", (call) => {
+      const id = call.params["after_id"] === "a" ? "b" : "a";
+      return new HttpResponse(200, { data: [{ id }], has_more: true, last_id: id });
+    }],
+    ["google", () => new HttpResponse(200, { models: [], nextPageToken: "tok" })],
+  ];
+  rows.forEach(([provider, handler], at) => {
+    test(`${provider} row ${at}`, async () => {
+      const fake = server(handler);
+      assertClean(await rejected(listModels(provider, { apiKey: KEY, request: fake })), "invalid response");
+      expect(fake.calls.length).toBeLessThanOrEqual(3);
+    });
+  });
+});
+
+describe("pages past the cap are invalid", () => {
+  const rows: [string, (call: Call, at: number) => HttpResponse][] = [
+    ["anthropic", (_, at) => new HttpResponse(200, { data: [{ id: `m${at}` }], has_more: true, last_id: `m${at}` })],
+    ["google", (_, at) => new HttpResponse(200, { models: [], nextPageToken: `tok${at}` })],
+  ];
+  for (const [provider, handler] of rows) {
+    test(provider, async () => {
+      const fake = server((call) => handler(call, fake.calls.length));
+      const env = (name: string) => (name === "YIAN_MAX_MODEL_LIST_PAGES" ? "3" : undefined);
+      const error = await rejected(withEnv(env, () => listModels(provider, { apiKey: KEY, request: fake })));
+      assertClean(error, "invalid response");
+      expect(fake.calls).toHaveLength(3);
+    });
+  }
+});
+
+test("a listing may take exactly the page cap", async () => {
+  const fake = server(() =>
+    new HttpResponse(200, { data: [{ id: `m${fake.calls.length}` }], has_more: fake.calls.length < 3, last_id: `m${fake.calls.length}` }),
+  );
+  const env = (name: string) => (name === "YIAN_MAX_MODEL_LIST_PAGES" ? "3" : undefined);
+  expect(await withEnv(env, () => listModels("anthropic", { apiKey: KEY, request: fake }))).toEqual(["m1", "m2", "m3"]);
 });
 
 /** Start `server` on a loopback port and return its URL root. */

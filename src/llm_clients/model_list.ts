@@ -85,10 +85,13 @@ export interface ListModelsOptions {
   request?: typeof httpRequest;
 }
 
-/** Get one page: GET `path` with `params` and return its JSON object. */
+/**
+ * Get one page: GET `path` with `params` and return its JSON object. Throws `invalid response`
+ * past `YIAN_MAX_MODEL_LIST_PAGES` pages.
+ */
 type GetPage = (path: string, params: Record<string, string>) => Promise<Record<string, unknown>>;
 
-/** Return each page's model ids, unchecked, following every page. */
+/** Return each page's model ids, unchecked, following every page; a cursor seen before is invalid. */
 type Pages = (getPage: GetPage) => Promise<unknown[]>;
 
 /**
@@ -97,14 +100,15 @@ type Pages = (getPage: GetPage) => Promise<unknown[]>;
  *
  * `provider` is case-insensitive: `anthropic`, `google`, `ollama`, `azure`, or any provider routed
  * through the OpenAI client. Anthropic lists `{base}/v1/models` and Google `{base}/v1beta/models`,
- * both following every page; Google keeps only models that support `generateContent`, without
- * the `models/` prefix. OpenAI-compatible providers list `{base}/models`, Ollama its local tags at
- * `{base}/api/tags`. Redirects are refused by the default `request`, so the key and connection
+ * both following every page up to `YIAN_MAX_MODEL_LIST_PAGES`; Google keeps only models that
+ * support `generateContent`, without the `models/` prefix. OpenAI-compatible providers list
+ * `{base}/models`, Ollama its local tags at `{base}/api/tags`. Redirects are refused by the default `request`, so the key and connection
  * settings go only to the host asked.
  *
  * Throws `ModelListError` for an unsupported provider, an invalid key, URL, timeout or connection
  * setting (or one given without a key), a non-2xx status, an unreachable host, an exhausted
- * timeout, or a response that is not a model list. A caller abort rejects with `signal.reason`.
+ * timeout, a response that is not a model list, or pages past the cap or back to a cursor seen
+ * before. A caller abort rejects with `signal.reason`.
  */
 export async function listModels(
   provider: unknown,
@@ -171,9 +175,13 @@ export async function listModels(
   const root = (base as string).replace(/\/+$/, "");
 
   const send = options.request ?? httpRequest;
-  const bodyLimit = current().maxModelListBytes;
+  const { maxModelListBytes: bodyLimit, maxModelListPages } = current();
   const deadline = scheduler.now() + timeout * 1000;
+  let pageCount = 0;
   const getPage: GetPage = async (path, params) => {
+    // A host that always has another page would otherwise be read until the deadline.
+    pageCount += 1;
+    if (pageCount > maxModelListPages) throw new ModelListError("invalid response");
     const timeoutMs = deadline - scheduler.now();
     if (timeoutMs <= 0) throw new ModelListError("timed out", { timedOut: true });
     const query = new URLSearchParams(params).toString();
@@ -276,12 +284,13 @@ function text(value: unknown): string {
  */
 async function anthropicIds(getPage: GetPage): Promise<unknown[]> {
   const ids: unknown[] = [];
+  const cursors = new Set<string>();
   let params: Record<string, string> = { limit: PAGE_SIZE };
   for (;;) {
     const page = await getPage("/v1/models", params);
     ids.push(...list(field(page, "data")).map((model) => field(model, "id")));
     if (!page["has_more"]) return ids;
-    params = { limit: PAGE_SIZE, after_id: text(field(page, "last_id")) };
+    params = { limit: PAGE_SIZE, after_id: nextCursor(cursors, field(page, "last_id")) };
   }
 }
 
@@ -293,6 +302,7 @@ async function anthropicIds(getPage: GetPage): Promise<unknown[]> {
  */
 async function googleIds(getPage: GetPage): Promise<unknown[]> {
   const ids: unknown[] = [];
+  const cursors = new Set<string>();
   let params: Record<string, string> = { pageSize: PAGE_SIZE };
   for (;;) {
     const page = await getPage("/v1beta/models", params);
@@ -305,8 +315,19 @@ async function googleIds(getPage: GetPage): Promise<unknown[]> {
     }
     const token = page["nextPageToken"];
     if (!token) return ids;
-    params = { pageSize: PAGE_SIZE, pageToken: text(token) };
+    params = { pageSize: PAGE_SIZE, pageToken: nextCursor(cursors, token) };
   }
+}
+
+/**
+ * Return `cursor` if it is a string not in `seen`, adding it, else throw `invalid response`: a
+ * cursor that comes back would page in a loop.
+ */
+function nextCursor(seen: Set<string>, cursor: unknown): string {
+  const value = text(cursor);
+  if (seen.has(value)) throw new ModelListError("invalid response");
+  seen.add(value);
+  return value;
 }
 
 /** Return model ids from an OpenAI-compatible `/models` listing. */

@@ -62,7 +62,6 @@ import {
   renderValuePath,
   setField,
   shownText,
-  valueRepr,
 } from "../typesys/values.ts";
 import {
   Binding,
@@ -864,7 +863,7 @@ export function bindParams(
           rejectInvalidBinding(value, `default for ${reprText(p.name)}`, p.defaultOrigin ?? p.origin);
           collector?.recordSource(p.name, ValueRoute.literal(value), false);
         } else if (!present && p.required) {
-          throw new BindingError(`required input ${reprText(p.name)} is unbound (from=${valueRepr(source)})`, {
+          throw new BindingError(`required input ${reprText(p.name)} is unbound`, {
             failureCode: "binding.evaluate",
             origin: p.origin,
           });

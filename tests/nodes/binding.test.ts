@@ -452,7 +452,7 @@ test("binding errors carry the stage code and the operation origin", () => {
     bindParams([new Parameter("x", { required: true, origin: parameterOrigin })], new Map(), poolOf()),
   );
   expect([required.failureCode, required.origin]).toEqual(["binding.evaluate", parameterOrigin]);
-  expect(required.message).toBe("required input 'x' is unbound (from=null)");
+  expect(required.message).toBe("required input 'x' is unbound");
 
   const integerContract = new ValueContract(
     Type.scalar(ValueKind.INTEGER),

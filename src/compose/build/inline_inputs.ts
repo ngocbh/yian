@@ -23,6 +23,7 @@ import {
   bindingSource,
   isExactly,
   type OutputContract,
+  outputContractFieldError,
   ValueContract,
   ValueTemplate,
 } from "../../nodes/contracts.ts";
@@ -43,7 +44,6 @@ import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
 import {
   directReferenceParts,
   hasOptionalStep,
-  outputContractPathError,
   projectOutputContract,
   resolveOutputBindingContract,
   type TypeFn,
@@ -352,7 +352,7 @@ function inferDirectReference(parts: readonly string[], walk: Walk): Type {
     fields = parts.slice(2);
   }
 
-  const pathError = outputContractPathError(root, fields, path);
+  const pathError = outputContractFieldError(root, fields, path);
   if (pathError !== null) throw fail(pathError);
   const projected = projectOutputContract(root, fields);
   if (!isExactly(projected, ValueContract)) throw fail(`reference \${${path}} has no statically proven exact type`);

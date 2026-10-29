@@ -914,7 +914,7 @@ async function startOnlyRun(): Promise<{
   });
   (start as Node).forward = () => new Route(ELSE_HANDLE);
   start.memoryScope = new MemoryScope([START_ID], { memories: [POLICY] });
-  const flow = CompiledFlow.fromParts(new Map([[START_ID, start]]), []);
+  const flow = new CompiledFlow(new Map([[START_ID, start]]), []);
   // `endId` is readonly and fixed by the constructor.
   (flow as { endId: string }).endId = START_ID;
   const initialPool = new VariablePool(START_ID);

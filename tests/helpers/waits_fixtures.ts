@@ -7,7 +7,7 @@
 import { mkdtempSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
+import { stampExecutionScopes } from "../../src/compile/execution_layout.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -94,7 +94,7 @@ export function paramFlow(
 ): CompiledFlow {
   const options = rest[0] instanceof Node || rest.length === 0 ? {} : (rest.shift() as { wiring: ReadonlyMap<string, ReadonlyMap<string, unknown>> });
   const nodes = rest as Node[];
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params })],
       ...nodes.map((node) => [node.id, node] as const),
@@ -141,7 +141,7 @@ export function started(
   } = {},
 ) {
   const fingerprint = options.fingerprint ?? flowFingerprint(flow);
-  if (options.learnable) applyExecutionLayout(flow, resolveExecutionLayout(flow));
+  if (options.learnable) stampExecutionScopes(flow);
   // Beside the test's HOME, in the per-test dir the preload removes once the run ends.
   const path = join(mkdtempSync(join(dirname(process.env.HOME!), "waits-")), "log.jsonl");
   const log = JsonlRunLog.create(path, RUN_ID, { clock: FIXED_CLOCK });

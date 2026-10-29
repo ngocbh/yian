@@ -163,10 +163,10 @@ test("flow construction normalizes direct wiring values", () => {
   expect(flow.wiring.get("sink")!.get("nested")).toBe(nested);
 });
 
-test("compiled flow fromParts normalizes direct wiring values", () => {
+test("compiled flow constructor normalizes direct wiring values", () => {
   const existing = new Binding(7n, { origin: origin("count") });
 
-  const flow = CompiledFlow.fromParts(new Map([["sink", new BareNode("sink")]]), [], {
+  const flow = new CompiledFlow(new Map([["sink", new BareNode("sink")]]), [], {
     wiring: new Map([
       [
         "sink",
@@ -201,7 +201,7 @@ for (const constructor of ["flow", "compiled"]) {
     const build = () =>
       constructor === "flow"
         ? new Flow(nodes, [], { wiring: wiring("sink") as never })
-        : CompiledFlow.fromParts(nodes, [], { wiring: wiring("sink") as never });
+        : new CompiledFlow(nodes, [], { wiring: wiring("sink") as never });
     expect(build).toThrow(TypeError);
     expect(build).toThrow(message("sink"));
   });
@@ -209,7 +209,7 @@ for (const constructor of ["flow", "compiled"]) {
 
 test("addSubgraph normalizes wiring and preserves an existing binding", () => {
   // Programmatic growth enters the same canonical stored representation.
-  const flow = CompiledFlow.fromParts(new Map([["base", new BareNode("base")]]), []);
+  const flow = new CompiledFlow(new Map([["base", new BareNode("base")]]), []);
   const existing = new Binding("${base.output}", { origin: origin("child-value") });
 
   flow.addSubgraph(
@@ -232,7 +232,7 @@ test("addSubgraph normalizes wiring and preserves an existing binding", () => {
 
 test.each(BAD_WIRING)("addSubgraph rejects a bad wiring %s before changing topology", (_name, wiring, message) => {
   // An invalid splice can't leave nodes, edges, wiring or adjacency partially installed.
-  const flow = CompiledFlow.fromParts(new Map([["base", new BareNode("base")]]), [], {
+  const flow = new CompiledFlow(new Map([["base", new BareNode("base")]]), [], {
     wiring: new Map([["base", new Map()]]),
   });
   const beforeNodes = new Map(flow.nodes);
@@ -310,7 +310,7 @@ function manifestFragment(value: unknown, key = "result"): Flow {
 function manifestCompiledOutput(value: unknown): CompiledFlow {
   const start = new StartNode(START_ID, { params: [] });
   const end = EndNode.value(END_ID, { outputName: "result" });
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, start],
       [END_ID, end],

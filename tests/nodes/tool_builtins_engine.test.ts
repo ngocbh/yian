@@ -44,7 +44,7 @@ function toolFlow(node: ToolNode, wiring: Record<string, unknown>, inboxes: read
   const str = Type.scalar(ValueKind.STRING);
   const params = inboxes.map((name) => new Parameter(name, { contract: new ValueContract(inboxType(str)) }));
   node.params = Object.keys(wiring).map((name) => new Parameter(name));
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params })],
       [node.id, node],

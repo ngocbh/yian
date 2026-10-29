@@ -92,7 +92,7 @@ function twoStep(): CompiledFlow {
   const second = new CodeNode("second", { code: 'return inputs["y"] * 2' });
   second.params = [new Parameter("y")];
   second.outputContract = intContract();
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: [new Parameter("x", { contract: intContract() })] })],
       ["first", first],
@@ -122,7 +122,7 @@ function recordOutput(): CompiledFlow {
   const first = new CodeNode("first", { code: 'return inputs["x"] + 1' });
   first.params = [new Parameter("x")];
   first.outputContract = intContract();
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: [new Parameter("x", { contract: intContract() })] })],
       ["first", first],

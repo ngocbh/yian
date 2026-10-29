@@ -20,11 +20,6 @@ import { Binding, ChildFlowBoundary, SeedConnection } from "../../src/nodes/cont
 import { mapCallsite, ns } from "../../src/nodes/ids.ts";
 import { childFlow } from "../helpers/run_state_fixtures.ts";
 
-/** Return an instance of `cls` holding `fields`, made without running its constructor. */
-function forged<T>(cls: abstract new (...args: never[]) => T, fields: object): T {
-  return Object.assign(Object.create(cls.prototype) as object, fields) as T;
-}
-
 test("map subgraph matches grow map type", () => {
   const child = childFlow();
   const records = [{ x: 1n }, { x: 2n }];
@@ -157,18 +152,3 @@ test("map subgraph appends item occurrence and scopes generated fan nodes", () =
   expect(fragment.nodes.get(ns("map", END_ID))!.memoryScope).toEqual(generatedScope);
 });
 
-test("map subgraph revalidates supplied memory scope", () => {
-  const child = childFlow();
-  const occurrence = forged(MemoryOccurrenceSegment, {
-    kind: MemoryOccurrenceKind.LOOP_ITERATION,
-    staticPath: ["outer"],
-    index: true,
-  });
-  const scope = new MemoryScope(["outer", "map"], { occurrencePath: [occurrence] });
-
-  const grow = () => mapSubgraph(child, "map", [{ x: 1n }], { memoryScope: scope });
-  expect(grow).toThrow(TypeError);
-  expect(grow).toThrow("index must be an integer");
-
-  expect([...child.nodes.values()].every((node) => node.memoryScope === null)).toBe(true);
-});

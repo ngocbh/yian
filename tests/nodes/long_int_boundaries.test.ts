@@ -157,7 +157,7 @@ function partialRecordWorking() {
       ["note", null],
     ]),
   });
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["work", work],

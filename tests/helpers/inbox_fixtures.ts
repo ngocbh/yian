@@ -162,7 +162,7 @@ export function inboxFlow(
 ): CompiledFlow {
   const str = Type.scalar(ValueKind.STRING);
   const params = inboxes.map((name) => new Parameter(name, { contract: new ValueContract(inboxType(str)) }));
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params })],
       ...nodes.map((node) => [node.id, node] as const),

@@ -112,7 +112,7 @@ function func(nodeId: string, options: { outputContract?: OutputContract | null 
 
 /** Return a graph with fan-out, a two-edge join and an existing ready node. */
 function joinedFanoutFlow(): CompiledFlow {
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["first", func("first")],
@@ -140,7 +140,7 @@ function redirectFlow(edges?: Edge[]): CompiledFlow {
   const listType = Type.scalar(ValueKind.LIST_STRING);
   const filler = func("filler");
   filler.commitAs = "baked";
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["filler", filler],
@@ -178,7 +178,7 @@ function duplicateSuccessorFlow(): CompiledFlow {
 
 /** Return target edges ordered A1, B, A2, so B becomes ready before A. */
 function interleavedSuccessorFlow(): CompiledFlow {
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["target", func("target")],
@@ -204,7 +204,7 @@ function parallelSuccessorFlow(width: number): CompiledFlow {
       new Edge(`target-b-${index}`, "target", "after-b", { inputGroup: "b" }),
     );
   }
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["target", func("target")],
@@ -231,7 +231,7 @@ function wideJoinVisits(width: number): number {
     );
   }
   nodes.set(END_ID, EndNode.value(END_ID, { outputName: null }));
-  const { state, log } = initializedAndStarted(CompiledFlow.fromParts(nodes, edges));
+  const { state, log } = initializedAndStarted(new CompiledFlow(nodes, edges));
   const incoming = state.flow.incoming.bind(state.flow);
   let visits = 0;
   state.flow.incoming = (nodeId) => {
@@ -257,7 +257,7 @@ function partialRecordWorking(): { state: RunState; log: MemoryRunLog } {
       ["note", null],
     ]),
   });
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["work", work],
@@ -273,7 +273,7 @@ function partialRecordWorking(): { state: RunState; log: MemoryRunLog } {
 
 /** Return a graph whose END, sibling and queued leaf run concurrently. */
 function endAndSiblingFlow(): CompiledFlow {
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["sibling", func("sibling")],
@@ -300,7 +300,7 @@ function endCommittedWithSiblingInFlight(): { state: RunState; log: MemoryRunLog
 
 /** Return `START -> END`. */
 function startEndFlow(): CompiledFlow {
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       [END_ID, EndNode.value(END_ID, { outputName: null })],
@@ -418,7 +418,7 @@ test.each([
 );
 
 test("a success checks an ordinary target against its output contract's type", () => {
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["filler", func("filler", { outputContract: new ValueContract(Type.scalar(ValueKind.NUMBER)) })],
@@ -811,7 +811,7 @@ test("the END output waits for full quiescence", () => {
 });
 
 test("a newly ready successor prevents quiescence", () => {
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["worker", func("worker")],
@@ -1028,7 +1028,7 @@ test("a route derives its skip closure without a skip record", () => {
 });
 
 test.each([ELSE_HANDLE, "go"])("a route takes every edge matching the else or a named handle: %s", (handle) => {
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["router", func("router")],
@@ -1057,7 +1057,7 @@ test.each([ELSE_HANDLE, "go"])("a route takes every edge matching the else or a 
 
 test("a route keeps DFS observers and the existing FIFO readiness", () => {
   const ids = ["router", "existing", "dead-a", "ready-a", "chosen", "dead-b", "ready-b"];
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ...ids.map((id) => [id, func(id)] as const),
@@ -1249,7 +1249,7 @@ test("a route skip flood is iterative for a deep chain", () => {
   for (let index = 0; index < depth - 1; index++) {
     edges.push(new Edge(`dead-edge-${index}`, `dead-${index}`, `dead-${index + 1}`));
   }
-  const { state, log } = routeInFlight(CompiledFlow.fromParts(nodes, edges));
+  const { state, log } = routeInFlight(new CompiledFlow(nodes, edges));
 
   const observers = commitPrepared(log, state, prepareNodeRouted(state, "router", "yes"));
 
@@ -1271,7 +1271,7 @@ test("a route skip join matches the control, data, ordering and wait semantics",
     "runs-after-ready",
     "unused",
   ];
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ...ids.map((id) => [id, func(id)] as const),
@@ -1312,7 +1312,7 @@ test("a route scans each touched head's incoming adjacency once", () => {
     edges.push(new Edge(`route-${index}`, "router", "head", { sourceHandle: `no-${index}` }));
   }
   edges.push(new Edge("route-live", "router", "head", { sourceHandle: "yes" }));
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["router", func("router")],
@@ -1639,7 +1639,7 @@ function terminalPruneParentFlow(): CompiledFlow {
     new Edge("start-pruner", START_ID, "pruner"),
     new Edge("creator-end", "creator", END_ID, { inputGroup: "result" }),
   ];
-  return CompiledFlow.fromParts(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])) });
+  return new CompiledFlow(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])) });
 }
 
 /** Return `nodes` and `edges` as a fragment from `startId` to `endId`, with empty wiring. */
@@ -1822,7 +1822,7 @@ test("a terminal commit does no materialization after append (route)", () => {
 
 /** Return END and two ordinary nodes concurrently in flight, plus a queued leaf. */
 function failureFlow(): CompiledFlow {
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["failing", func("failing")],
@@ -2081,7 +2081,7 @@ function unnamedEndInputFlow(): CompiledFlow {
     ["no", new FuncNode("no", (inputs) => inputs)],
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [
+  return new CompiledFlow(nodes, [
     new Edge("start-router", START_ID, "router"),
     new Edge("router-yes", "router", "yes", { sourceHandle: "yes" }),
     new Edge("router-no", "router", "no", { sourceHandle: "no" }),

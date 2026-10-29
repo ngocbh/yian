@@ -5,7 +5,7 @@
 
 import { emitKeypressEvents } from "node:readline";
 
-import { reprText } from "../diagnostics.ts";
+import { compareCodePoints, reprText } from "../diagnostics.ts";
 import { coerceParam } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import type { QuestionSpec } from "../nodes/tool/questions.ts";
@@ -995,19 +995,6 @@ const BLANK_TEXT = /^[\t-\r\x1c-\x20\x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202
 interface Choice {
   title: string;
   value: unknown;
-}
-
-/** Compare two strings by code point. */
-function compareCodePoints(a: string, b: string): number {
-  // Equal code points take equal code units, so one index walks both strings.
-  let i = 0;
-  while (i < a.length && i < b.length) {
-    const x = a.codePointAt(i)!;
-    const y = b.codePointAt(i)!;
-    if (x !== y) return x - y;
-    i += x > 0xffff ? 2 : 1;
-  }
-  return a.length - b.length;
 }
 
 /** Whether a resolved input contract accepts an explicit null. */

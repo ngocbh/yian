@@ -3347,7 +3347,7 @@ function seedCallFlow(
   options: { extraFirst?: boolean } = {},
 ): CompiledFlow {
   const parameters = Object.keys(sources).map((name) => new Parameter(name));
-  const child = CompiledFlow.fromParts(
+  const child = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: parameters })],
       [END_ID, EndNode.value(END_ID, { outputName: null })],

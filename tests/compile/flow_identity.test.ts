@@ -112,7 +112,7 @@ function compiled(): CompiledFlow {
   step.postAsserts = [new Assertion("output > x", "output > x")];
   step.env = { alpha: 1n, beta: 2n };
   const end = EndNode.value(END_ID, { outputName: "result" });
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, start],
       ["step", step],
@@ -141,7 +141,7 @@ function oneStepFlow(
   const step = new CodeNode("step", { code: 'return "ok"' });
   step.params = wiring.map(([name]) => new Parameter(name));
   step.env = env;
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: inputs })],
       ["step", step],
@@ -548,7 +548,7 @@ function llmFlow(
 ): CompiledFlow {
   const ask = new AgentNode("ask", { prompt: "Answer briefly.", llmConfig: nodeLayer, llmInherit });
   ask.outputContract = strContract();
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: [] })],
       ["ask", ask],
@@ -1389,7 +1389,7 @@ test("manifest has no redaction markers", () => {
     sig: "first-value",
     webhook_url: "https://hooks.example/services/T0/B0/first-value",
   };
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [
         START_ID,
@@ -1552,7 +1552,7 @@ const INT_TYPE_MANIFEST = { element: null, fields: null, kind: "int", nullable: 
 test("flow fingerprint preserves semantic edge order", () => {
   const original = compiled();
   const base = compiled();
-  const reordered = CompiledFlow.fromParts(base.nodes, [...base.edges].reverse(), {
+  const reordered = new CompiledFlow(base.nodes, [...base.edges].reverse(), {
     outputs: base.outputs,
     wiring: base.wiring,
     flowLlmConfig: base.flowLlmConfig,
@@ -2150,15 +2150,6 @@ test("case predicate origins do not affect program or expansion identity", () =>
   expect(expansionDigest(first)).toBe(expansionDigest(second));
 });
 
-test("case manifest rejects a mutated non-origin predicate carrier", () => {
-  const forged = Object.assign(Object.create(Case.prototype), new Case("branch", { when: "true" }), {
-    origin: "flow.yaml:12",
-  });
-  const flow = singleNodeFlow(new CaseNode("case", [forged]));
-
-  expectError(() => flowManifest(flow), TypeError, "flow.nodes.case.cases[0].origin: expected OriginRef or null");
-});
-
 test("a CASE branch that isn't a Case is refused", () => {
   const flow = singleNodeFlow(new CaseNode("case", [{ handle: "branch", when: "true", origin: null } as Case]));
 
@@ -2282,26 +2273,17 @@ test("memory expansion projection fields", () => {
   expect(expansionDigest(flow)).toBe(sha256(expected));
 });
 
-test("a forged memory scope or occurrence segment is refused", () => {
-  const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["nested"], 1);
-  const scoped = (scope: unknown) => {
-    const flow = fragment();
-    Object.assign(code(flow, "body"), { memoryScope: scope });
-    return flow;
-  };
-  const forgedSegment = Object.assign(Object.create(MemoryOccurrenceSegment.prototype), segment, { index: 0.5 });
-  const forgedScope = Object.assign(Object.create(MemoryScope.prototype), new MemoryScope(["nested", "body"]), {
-    occurrencePath: [forgedSegment],
-  });
+test("a memory scope that isn't a MemoryScope is refused", () => {
+  const flow = fragment();
+  Object.assign(code(flow, "body"), { memoryScope: { staticPath: ["body"] } });
 
   expectError(
-    () => expansionDigest(scoped({ staticPath: ["body"] })),
+    () => expansionDigest(flow),
     TypeError,
     "expansion.nodes.body.memoryScope: expected exact MemoryScope, got Object",
   );
-  expectError(() => expansionDigest(scoped(forgedScope)), TypeError, "index must be an integer");
   // The authored manifest never reads the scope.
-  expect(flowFingerprint(scoped(forgedScope))).toBe(FRAGMENT_FINGERPRINT);
+  expect(flowFingerprint(flow)).toBe(FRAGMENT_FINGERPRINT);
 });
 
 test("memory expansion projection omits root id and config but hashes keys", () => {

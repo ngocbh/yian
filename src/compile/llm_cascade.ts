@@ -53,7 +53,7 @@ import { BindingError, bindParams, copyValue } from "../nodes/binding.ts";
 import { Binding, type Parameter, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { isRecord, type Type, TypeCheckError, type Value, type ValueRecord, VariablePool } from "../typesys/index.ts";
 import { setField, writeAsText } from "../typesys/values.ts";
-import { copyGraph, type Flow } from "./model.ts";
+import { copyGraph, type Flow, nodeChild, setNodeChild } from "./model.ts";
 
 /**
  * A flow as the cascade reads it: its nodes, wiring and START id and, for a composed flow, its own
@@ -339,7 +339,7 @@ function findInherited(
       const found = inheritedBy(node, own, enclosing, nodePath);
       if (found !== null) return found;
     }
-    const child = childOf(node);
+    const child = nodeChild(node);
     if (child !== null) {
       const found = findInherited(child, nodePath, node, [...enclosing, own]);
       if (found !== null) return found;
@@ -513,7 +513,7 @@ function resolveFlow(
       setField(scope.effective as ValueRecord, key, copied(config) as Value);
     }
 
-    const child = childOf(node);
+    const child = nodeChild(node);
     if (child !== null) {
       // Copy at EACH callsite. A copy of only the root preserves shared descendant aliases and lets
       // differently configured parents interfere.
@@ -783,7 +783,7 @@ function staticAgents(flow: CascadeFlow, path: readonly string[] = []): [string,
   for (const [nodeId, node] of flow.nodes) {
     const nodePath = [...path, nodeId];
     if (node instanceof AgentNode) agents.push([pathKey(nodePath), node, flow]);
-    const child = childOf(node);
+    const child = nodeChild(node);
     if (child !== null) agents.push(...staticAgents(child, nodePath));
   }
   return agents;
@@ -844,7 +844,7 @@ function applyFlow(
       }
     }
 
-    const child = childOf(node);
+    const child = nodeChild(node);
     if (child !== null) applyFlow(setChild(node, child), effective, callTime, selection, nodePath);
   }
 }
@@ -880,7 +880,7 @@ export function bindHostCredentials(
       if (given !== null) config["headers"] = { ...given };
       node.llmConfig = config;
     }
-    const child = childOf(node);
+    const child = nodeChild(node);
     if (child !== null) bindHostCredentials(child, apiKey, headers);
   }
 }
@@ -899,16 +899,10 @@ function pathKey(path: readonly string[]): string {
   return path.join("/");
 }
 
-/** Return a node's static child flow (CALL, MAP, LOOP), or `null`. */
-function childOf(node: Node): Flow | null {
-  const child = (node as { child?: unknown }).child;
-  return child === undefined || child === null ? null : (child as Flow);
-}
-
 /** Give `node` a private copy of its static child flow, and return the copy. */
 function setChild(node: Node, child: Flow): Flow {
   const copy = copyGraph(child);
-  (node as { child?: unknown }).child = copy;
+  setNodeChild(node, copy);
   return copy;
 }
 

@@ -30,7 +30,7 @@
  *   8. `closeFlow`: synthesize the START_ID/END_ID boundary over all edges; check `llm_config`
  *      sources; fill each node's `isinstance` type table; check reserved sources (`over:`,
  *      `until:`).
- *   9. `checkGraph`: reject cycles and check if/else handles; then `CompiledFlow.fromParts`.
+ *   9. `checkGraph`: reject cycles and check if/else handles; then `new CompiledFlow`.
  *
  * One retained assertion item cursor supplies its carrier origin and Compose-only validation
  * range; only the origin crosses into the semantic assertion.
@@ -2702,7 +2702,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   const closed = closeFlow(read, desugared, built, routed.narrowing, checked, outputs, ctx);
   checkGraph(built.descriptors, closed, routed.hostEdges, ctx);
 
-  const compiled = CompiledFlow.fromParts(closed.nodes, closed.edges, {
+  const compiled = new CompiledFlow(closed.nodes, closed.edges, {
     outputs,
     wiring: closed.wiring,
     flowLlmConfig: desugared.flowLlmConfig ?? {},

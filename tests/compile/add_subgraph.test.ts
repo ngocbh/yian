@@ -17,7 +17,7 @@ class FuncNode extends Node {
 
 /** Return a flow `START -> a -> END`. */
 function base(): CompiledFlow {
-  return CompiledFlow.fromParts(new Map([["a", new FuncNode("a")]]), [
+  return new CompiledFlow(new Map([["a", new FuncNode("a")]]), [
     new Edge("__start__->a", START_ID, "a"),
     new Edge("a->__end__#0", "a", END_ID),
   ]);

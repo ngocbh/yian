@@ -325,7 +325,7 @@ export function validateGrowthMetadata(flow: Flow): void {
   }
 }
 
-/** The options of `CompiledFlow`'s constructor and `fromParts`. */
+/** The options of `CompiledFlow`'s constructor. */
 type CompiledFlowOptions = {
   outputs?: readonly FlowOutput[] | null;
   wiring?: WiringInput;
@@ -409,15 +409,6 @@ export class CompiledFlow extends Flow {
     this.incomingEdges = new Map();
     this.outgoingEdges = new Map();
     indexEdges(edges, this.incomingEdges, this.outgoingEdges);
-  }
-
-  /**
-   * Build a compiled flow. The entry is always the synthesized START node (`StartNode.ID`), added
-   * implicitly by the loader or graph builder and never authored; the engine seeds and advances
-   * it at run start.
-   */
-  static fromParts(nodes: Map<string, Node>, edges: Edge[], options: CompiledFlowOptions = {}): CompiledFlow {
-    return new CompiledFlow(nodes, edges, options);
   }
 
   /** The edges ending at `nodeId` (its inputs); empty when none. */
@@ -600,6 +591,17 @@ export function nodeChild(node: Node, fail: GraphWalkError = plainWalkError): Fl
     throw fail(TypeError, `node ${reprText(node.id)} static child must be an exact Flow`, node.origin);
   }
   return child;
+}
+
+/**
+ * Replace the static child flow of a node that has one (CALL, MAP, LOOP) with `child`.
+ *
+ * @throws What `nodeChild` throws, or a RangeError when the node has no static child.
+ */
+export function setNodeChild(node: Node, child: Flow): void {
+  if (nodeChild(node) === null) throw new RangeError(`node ${reprText(node.id)} has no static child to replace`);
+  // Every kind with a static child keeps it in its `child` field, which `originChildren` returns.
+  (node as Node & { child: Flow }).child = child;
 }
 
 /**

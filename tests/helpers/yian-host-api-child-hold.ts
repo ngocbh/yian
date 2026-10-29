@@ -34,7 +34,7 @@ export function processChatFlow(): ComposedFlow {
   const gate = new ToolNode("gate", { toolId: "gate" });
   const outputs = [new FlowOutput("heard", "${heard.output}")];
   return new ComposedFlow(
-    CompiledFlow.fromParts(
+    new CompiledFlow(
       new Map<string, Node>([
         [START_ID, start],
         [heard.id, heard],

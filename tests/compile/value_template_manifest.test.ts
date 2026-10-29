@@ -197,7 +197,7 @@ test("a plain mapping under a credential key is identity", () => {
 function outputsFlow(source: unknown): CompiledFlow {
   const step = new CodeNode("step", { code: "return 1" });
   step.outputContract = new ValueContract(INTEGER);
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: [] })],
       ["step", step],
@@ -244,7 +244,7 @@ function llmFingerprint(
     new Parameter("cfg", { contract: new ValueContract(OBJECT) }),
   ];
   return flowFingerprint(
-    CompiledFlow.fromParts(
+    new CompiledFlow(
       new Map<string, Node>([
         [START_ID, new StartNode(START_ID, { params: inputs })],
         ["a", new AgentNode("a", { prompt: "Go.", llmConfig: nodeLayer })],

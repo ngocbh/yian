@@ -61,6 +61,7 @@ import {
   iterSourceStrings,
   type OutputContract,
   type Parameter,
+  outputContractFieldError,
   outputContractType,
   PartialRecordContract,
   ValueContract,
@@ -87,7 +88,6 @@ import {
   directReferencePathParts,
   itemContract,
   localFieldError,
-  outputContractPathError,
   projectOutputContract,
   referenceContract,
 } from "../../compile/output_contracts.ts";
@@ -406,16 +406,16 @@ export function validateReferences(
       const producer = siteProducers.get(parts[0]!);
       const input = parts.length >= 3 && parts[0] === "input" ? siteInputs.get(parts[1]!) : undefined;
       if (err === null && parts.length >= 2 && parts[1] === "output" && producer !== undefined) {
-        err = outputContractPathError(producer, parts.slice(2), path, { partialUnionFields });
+        err = outputContractFieldError(producer, parts.slice(2), path, { partialUnionFields });
       } else if (err === null && parts.length >= 2 && parts[1] === NEW_MESSAGES) {
         const messagesContract = siteProducers.get(messagesKey(parts[0]!));
         if (messagesContract !== undefined) {
-          err = outputContractPathError(messagesContract, parts.slice(2), path, { partialUnionFields });
+          err = outputContractFieldError(messagesContract, parts.slice(2), path, { partialUnionFields });
         }
       } else if (err === null && input !== undefined) {
-        err = outputContractPathError(input, parts.slice(2), path, { partialUnionFields });
+        err = outputContractFieldError(input, parts.slice(2), path, { partialUnionFields });
       } else if (err === null && parts.length >= 2 && parts[0] === "item" && elementContract !== null) {
-        err = outputContractPathError(elementContract, parts.slice(1), path, { partialUnionFields });
+        err = outputContractFieldError(elementContract, parts.slice(1), path, { partialUnionFields });
       }
       if (err !== null && readFacts !== null && readFacts.size > 0) {
         const candidate = envReadType(path, readFacts);

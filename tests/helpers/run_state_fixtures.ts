@@ -21,12 +21,8 @@ import { expect } from "bun:test";
 
 import { main } from "../../src/cli/index.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
-import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
-import {
-  applyMemoryLayout,
-  memoryStacks as layoutStacks,
-  resolveMemoryLayout,
-} from "../../src/compile/memory_layout.ts";
+import { stampExecutionScopes } from "../../src/compile/execution_layout.ts";
+import { memoryStacks as layoutStacks, stampMemoryLayout } from "../../src/compile/memory_layout.ts";
 import { buildGrow } from "../../src/compile/expand.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
@@ -333,7 +329,7 @@ export function flow(): CompiledFlow {
     ["work", new FuncNode("work", (inputs) => inputs)],
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [
+  return new CompiledFlow(nodes, [
     new Edge("start-work", START_ID, "work"),
     new Edge("work-end", "work", END_ID),
   ]);
@@ -347,7 +343,7 @@ export function fanoutFlow(): CompiledFlow {
     ["second", new FuncNode("second", (inputs) => inputs)],
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [
+  return new CompiledFlow(nodes, [
     new Edge("start-first", START_ID, "first"),
     new Edge("start-second", START_ID, "second"),
   ]);
@@ -362,7 +358,7 @@ export function routeFlow(): CompiledFlow {
     ),
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [
+  return new CompiledFlow(nodes, [
     new Edge("start-router", START_ID, "router"),
     new Edge("route-dead", "router", "dead-parent", { sourceHandle: "no" }),
     new Edge("route-chosen", "router", "chosen", { sourceHandle: "yes" }),
@@ -399,7 +395,7 @@ export function terminalSkipRouteFlow(
     nodes.set("unrelated", new FuncNode("unrelated", (inputs) => inputs));
     edges.push(new Edge("start-unrelated", START_ID, "unrelated"));
   }
-  return CompiledFlow.fromParts(nodes, edges);
+  return new CompiledFlow(nodes, edges);
 }
 
 /** The id of `callRedirectFlow`'s child END. */
@@ -430,7 +426,7 @@ export function callRedirectFlow(options: { fallback?: boolean } = {}): Compiled
     edges.splice(1, 0, new Edge("start-fallback", START_ID, "fallback"));
     edges.push(new Edge("fallback-end", "fallback", END_ID, { inputGroup: "result" }));
   }
-  return CompiledFlow.fromParts(nodes, edges);
+  return new CompiledFlow(nodes, edges);
 }
 
 /** Return the complete pool a fresh run of `flow` records under `runId`. */
@@ -466,7 +462,7 @@ export function nodeFlow(
   node: Node,
   wiring: Readonly<Record<string, unknown>> = node instanceof FuncNode ? node.reads : {},
 ): CompiledFlow {
-  return CompiledFlow.fromParts(new Map([[node.id, node]]), [], {
+  return new CompiledFlow(new Map([[node.id, node]]), [], {
     wiring: new Map([[node.id, new Map(Object.entries(wiring))]]),
   });
 }
@@ -855,7 +851,7 @@ export function graph(
   if (outputs.length > 0) {
     wiring.set(END_ID, new Map(outputs.map((output) => [output.name, output.binding])));
   }
-  return CompiledFlow.fromParts(nodeMap, edges, { outputs, wiring });
+  return new CompiledFlow(nodeMap, edges, { outputs, wiring });
 }
 
 /**
@@ -875,7 +871,7 @@ export function learnableStarted(
   } = {},
 ): { state: RunState; log: MemoryRunLog } {
   const inputs = options.inputs ?? {};
-  applyExecutionLayout(flow, resolveExecutionLayout(flow));
+  stampExecutionScopes(flow);
   const state = new RunState(flow);
   const initialPool = new VariablePool(flow.startId);
   initialPool.set(flow.startId, { ...inputs });
@@ -939,7 +935,7 @@ export function engine(
     defaults = {},
     ...rest
   } = options;
-  if (learnable) applyExecutionLayout(flow, resolveExecutionLayout(flow));
+  if (learnable) stampExecutionScopes(flow);
   const state = new RunState(flow);
   const initialPool = new VariablePool(flow.startId);
   initialPool.set(flow.startId, { ...inputs });
@@ -1035,8 +1031,7 @@ export const POLICY = "reflective";
 
 /**
  * Return a learnable engine over `flow` whose root flow owns one memory, `POLICY`, with the recorded table and stacks: the flow's
- * `memories` become one root-owned `POLICY` declaration, `resolveMemoryLayout` and
- * `applyMemoryLayout` scope every node, the table and stacks are the layout's, and each snapshot
+ * `memories` become one root-owned `POLICY` declaration, `stampMemoryLayout` scopes every node, the table and stacks are the layout's, and each snapshot
  * is `{}`. It leaves `flow.flowId` at its default (`null`), which the runtime
  * never reads, and applies no effective LLM map.
  */
@@ -1045,8 +1040,7 @@ export function ownerEngine(
   options: { inputs?: Readonly<Record<string, unknown>> } & Partial<FlowEngineOptions> = {},
 ): { engine: FlowEngine; memories: MemorySpec[]; stacks: MemoryStack[] } {
   flow.memories = [new MemoryDecl(POLICY, POLICY, {}, new DeclSite([], ["root"]))];
-  const layout = resolveMemoryLayout(flow);
-  applyMemoryLayout(flow, layout);
+  const layout = stampMemoryLayout(flow);
   const memories = layout.memories.map((memory) => memory.spec);
   const memoryStacks = [...layoutStacks(layout)];
   const memorySnapshots = memories.map((spec) => new MemorySnapshotEnvelope(spec.key, {}));
@@ -1504,7 +1498,7 @@ export function parentFlow(options: { spawner?: Node; sibling?: boolean } = {}):
   if (options.sibling) nodes.set("side", new FuncNode("side", (inputs) => inputs));
   const edges = [new Edge("start-spawn", START_ID, spawner.id), new Edge("spawn-end", spawner.id, END_ID)];
   if (options.sibling) edges.push(new Edge("start-side", START_ID, "side"));
-  return CompiledFlow.fromParts(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])) });
+  return new CompiledFlow(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])) });
 }
 
 /** Return a replay-valid state and log with the static spawner in flight. */
@@ -1582,7 +1576,7 @@ export function canonicalChild(options: { optionalInput?: boolean } = {}): Compi
     [START_ID, new StartNode(START_ID, { params: parameters })],
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [new Edge("child-boundary", START_ID, END_ID, { ordering: true })], {
+  return new CompiledFlow(nodes, [new Edge("child-boundary", START_ID, END_ID, { ordering: true })], {
     wiring: new Map([
       [START_ID, new Map(options.optionalInput ? [["optional", "${input.optional}"]] : [])],
       [END_ID, new Map()],
@@ -1624,7 +1618,7 @@ export function childFlow(): CompiledFlow {
     [START_ID, new Map([["x", "${input.x}"]])],
     [END_ID, new Map([["out", "${tail.output}"]])],
   ]);
-  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${tail.output}")], wiring });
+  return new CompiledFlow(nodes, edges, { outputs: [new FlowOutput("out", "${tail.output}")], wiring });
 }
 
 /**
@@ -1652,7 +1646,7 @@ export function parentWithSpawner(child: CompiledFlow): CompiledFlow {
     [START_ID, new Map([["x", "${input.x}"]])],
     [END_ID, new Map([["out", "${after.output}"]])],
   ]);
-  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${after.output}")], wiring });
+  return new CompiledFlow(nodes, edges, { outputs: [new FlowOutput("out", "${after.output}")], wiring });
 }
 
 /** A memory log, holding `prior`'s records, whose append fails before it retains the record. */
@@ -1844,7 +1838,7 @@ export function startedRun(
 ): RunState {
   const { inputs = {}, numWorkers = 0, effective = {}, learnable = false } = options;
   const privateFlow = options.privateFlow ?? copyGraph(loaded.compiled);
-  if (learnable) applyExecutionLayout(privateFlow, resolveExecutionLayout(privateFlow));
+  if (learnable) stampExecutionScopes(privateFlow);
   const pool = new VariablePool(privateFlow.startId);
   pool.set(privateFlow.startId, structuredClone(inputs));
   seedSystemClock(pool, Date.UTC(2026, 7, 14, 12));

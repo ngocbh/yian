@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { runFlow } from "../../src/run.ts";
-import { type JsonlRunLog, readRunLog } from "../../src/runtime/log.ts";
+import { readRunLog } from "../../src/runtime/log.ts";
 import { withAppendHook } from "./append_hook.ts";
 import { NO_ENV } from "./run_state_fixtures.ts";
 
@@ -37,14 +37,25 @@ async function run(log = freshLog()): Promise<string> {
 }
 
 test("a hook sees every append its body makes, after awaits too, and no other run's", async () => {
-  const seen: string[] = [];
-  const inside = withAppendHook((log: JsonlRunLog) => seen.push(log.path), run);
+  const seen: (string | null)[] = [];
+  const inside = withAppendHook((log) => seen.push(log.path), run);
   // Started outside the hook's scope while the hooked run goes on.
   const outside = run();
   const [hooked, other] = await Promise.all([inside, outside]);
   expect(seen.length).toBeGreaterThan(1);
   expect(new Set(seen)).toEqual(new Set([hooked]));
   expect(seen).not.toContain(other);
+});
+
+test("a hook sees an in-memory log's appends too", async () => {
+  const seen: (string | null)[] = [];
+  const result = await withAppendHook(
+    (log) => seen.push(log.path),
+    async () => runFlow(await loadFlow(FLOW), {}, { log: null, env: NO_ENV }),
+  );
+  expect(result.status).toBe("succeeded");
+  expect(seen.length).toBeGreaterThan(1);
+  expect(new Set(seen)).toEqual(new Set([null]));
 });
 
 test("a hook that throws refuses the append", async () => {

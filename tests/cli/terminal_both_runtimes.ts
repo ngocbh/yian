@@ -555,6 +555,15 @@ async function aPromptOpeningWhileTheLiveBoxTakesKeysDropsThemForAWhile(): Promi
   // Ctrl-C still reaches it, as the reject.
   input.write(CTRL_C);
   assert.equal(await later, "Reject");
+  // A paste that ends in the grace is dropped whole, like any key; after it, a paste counts.
+  clock += 1000;
+  const question = terminal.askText("Name:");
+  await tick();
+  input.write(PASTE_START + "meant\rfor the box" + PASTE_END);
+  await tick();
+  clock += 1000;
+  input.write(PASTE_START + "ada" + PASTE_END + ENTER);
+  assert.equal(await question, "ada");
   watch.abort();
   // With the box down, a card takes keys at once.
   const after = terminal.approve(approval());

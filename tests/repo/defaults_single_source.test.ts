@@ -2,8 +2,9 @@
  * Every default and limit is defined only in `defaults.ts`.
  *
  * The scan reads `src` as text, with comments and strings blanked by `blank`, and never
- * imports it; only the inline-cap tests import `BUILTIN`, for the values to look for. A flagged literal is an integer of 2 or more or a negative integer (decimal, hex,
- * binary, octal, separators, bigint; floats are not flagged), anywhere in: a top-level
+ * imports it; only the inline-cap tests import `BUILTIN`, for the values to look for. A flagged
+ * literal is an integer of 2 or more or a negative integer (decimal, hex, binary, octal,
+ * separators, bigint; floats are not flagged), anywhere in: a top-level
  * `const`/`let`/`var` value, including inside top-level blocks; a class field value; a
  * parameter default, including inside a destructured parameter; a destructuring default in a
  * declaration (`const { timeoutMs = 30_000 } = options`); and a numeric constant right of `??`

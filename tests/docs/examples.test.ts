@@ -1,8 +1,9 @@
 /**
  * Every example on the docs site is checked against the code: each YAML block loads with the real
- * loader (or fails to with the error its page shows, or is only parsed, as its `check=` says), each `check=runnable` block runs on
- * a scripted model and prints the output its page shows, and each `yian` line in a console block
- * is one the CLI's command table takes. `docs/STYLE.md` says how writers mark blocks.
+ * loader (or fails to with the error its page shows, or is only parsed, as its `check=` says),
+ * each `check=runnable` block runs on a scripted model and prints the output its page shows, and
+ * each `yian` line in a console block is one the CLI's command table takes. `docs/STYLE.md` says
+ * how writers mark blocks.
  */
 
 import { expect, test } from "bun:test";

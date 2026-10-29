@@ -798,11 +798,17 @@ describe.skipIf(!BINARY)("the compiled binary", () => {
     for (const dir of workdirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
-  // `build:bin` compiles with the running Bun, so the binary embeds that Bun and its license must
-  // name it. Without a binary the version is only what CI pins, and any Bun may run the suite.
-  test("Bun's section names the Bun the binary embeds", () => {
-    expect(bunLicenseVersion()).toBe(process.versions.bun);
-  });
+  // The binary embeds a Bun, so its license must name that one. Without a binary the version is
+  // only what CI pins, and any Bun may run the suite.
+  test(
+    "Bun's section names the Bun the binary embeds",
+    async () => {
+      const result = await runBinary(workdir(), ["--version"], { env: { BUN_BE_BUN: "1" } });
+      expect(result.code, context(result)).toBe(0);
+      expect(bunLicenseVersion()).toBe(result.stdout.trim());
+    },
+    BINARY_TEST_LIMIT,
+  );
 
   test(
     "--licenses prints LICENSES",

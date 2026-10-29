@@ -99,14 +99,25 @@ const entryOf = (id: string) => id.split("/")[0]!.replace(/\.ts$/, "");
 /** The index in `LAYERS` of `id`'s entry, or -1 when no layer holds it. */
 const layerOf = (id: string) => LAYERS.findIndex((layer) => layer.includes(entryOf(id)));
 
+/** How to fix an upward import out of a layer, keyed by the layer's first entry. */
+const LAYER_HINTS: Record<string, string> = {
+  nodes:
+    "nodes must not import compile; return a canonical Grow seed and let the injected compile-layer " +
+    "builder interpret it. nodes must not import runtime; direct-driver fallbacks belong on a lower seam",
+  compile: "compile must stay representation-neutral and execution-free",
+};
+
 /** One rule per layer below the top: its modules import no module of a layer above it. */
 const LAYER_RULES: Rule[] = LAYERS.slice(0, -1).map((layer, rank) => {
   const above = LAYERS.slice(rank + 1).flat();
+  const hint = LAYER_HINTS[layer[0]!];
   return {
     name: `${layer.join(", ")} import no layer above them`,
     files: (path) => layerOf(path) === rank,
     forbid: above,
-    why: `${layer.join(", ")} must not import ${above.join(", ")} (ARCHITECTURE.md, "Imports go one way")`,
+    why:
+      `${layer.join(", ")} must not import ${above.join(", ")} (ARCHITECTURE.md, "Imports go one way")` +
+      (hint ? `. ${hint}` : ""),
     samples: { file: `${layer[0]}/x.ts`, bad: above, good: LAYERS.slice(0, rank + 1).flat() },
   };
 });

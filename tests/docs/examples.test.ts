@@ -1,8 +1,9 @@
 /**
  * Every example on the docs site is checked against the code: each YAML block loads with the real
- * loader (or fails to, or is only parsed, as its `check=` says), each `check=runnable` block runs on
- * a scripted model and prints the output its page shows, and each `yian` line in a console block
- * is one the CLI's command table takes. `docs/STYLE.md` says how writers mark blocks.
+ * loader (or fails to with the error its page shows, or is only parsed, as its `check=` says),
+ * each `check=runnable` block runs on a scripted model and prints the output its page shows, and
+ * each `yian` line in a console block is one the CLI's command table takes. `docs/STYLE.md` says
+ * how writers mark blocks.
  */
 
 import { expect, test } from "bun:test";
@@ -98,12 +99,27 @@ test.each(YAML_BLOCKS.map((block) => [where(block), block] as const))("%s", asyn
   }
   const load = () => loadFlow(block.text, { sourceLabel: label, searchPaths: [EXAMPLES] });
   if (check === "fails") {
-    await expect(load()).rejects.toBeInstanceOf(LoadError);
+    await expectShownError(block, load);
     return;
   }
   const flow = await load();
   if (check === "runnable") await expectShownOutput(block, flow);
 });
+
+/**
+ * Expect `load` to fail with a `LoadError` whose message ends with the line the `text` block after
+ * `block` shows, so a typo in the example can't pass as the error the page explains.
+ */
+async function expectShownError(block: Block, load: () => Promise<ComposedFlow>): Promise<void> {
+  const next = BLOCKS[BLOCKS.indexOf(block) + 1];
+  if (next?.file !== block.file || next.lang !== "text") {
+    throw new Error(`${where(block)}: a fails block is followed by a text block holding its error`);
+  }
+  const error = await load().catch((thrown: unknown) => thrown);
+  expect(error).toBeInstanceOf(LoadError);
+  // The page's text is what's expected; the loader's last message line is what's received.
+  expect((error as LoadError).message.trimEnd().split("\n").at(-1)).toBe(next.text.trimEnd());
+}
 
 /**
  * Run `flow` the way the console block after `block` shows (`$ yian run <title> --input k=v ...`),

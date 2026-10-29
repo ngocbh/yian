@@ -44,7 +44,7 @@ blocks in the root `README.md`.
   |---|---|---|
   | (none) | a whole flow | loads it with the real loader |
   | `check=runnable` | a flow whose output you show | loads it, runs it, compares the output |
-  | `check=fails` | a flow that shows a load error | expects the load to fail |
+  | `check=fails` | a flow that shows a load error | expects the load to fail with the error in the `text` block after it |
   | `check=fragment` | part of a flow, or other YAML | checks only the YAML syntax |
   | `source=examples/<file>` | a flow from `examples/`, shown whole | checks the block is identical to the file, then loads it |
 

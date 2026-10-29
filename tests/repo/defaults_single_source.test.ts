@@ -2,8 +2,9 @@
  * Every default and limit is defined only in `defaults.ts`.
  *
  * The scan reads `src` as text, with comments and strings blanked by `blank`, and never
- * imports it. A flagged literal is an integer of 2 or more or a negative integer (decimal, hex,
- * binary, octal, separators, bigint; floats are not flagged), anywhere in: a top-level
+ * imports it; only the inline-cap tests import `BUILTIN`, for the values to look for. A flagged
+ * literal is an integer of 2 or more or a negative integer (decimal, hex, binary, octal,
+ * separators, bigint; floats are not flagged), anywhere in: a top-level
  * `const`/`let`/`var` value, including inside top-level blocks; a class field value; a
  * parameter default, including inside a destructured parameter; a destructuring default in a
  * declaration (`const { timeoutMs = 30_000 } = options`); and a numeric constant right of `??`
@@ -17,6 +18,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { BUILTIN } from "../../src/defaults.ts";
 import { blank } from "../helpers/source_scan.ts";
 
 const SRC = fileURLToPath(new URL("../../src/", import.meta.url));
@@ -642,7 +644,7 @@ test("oauth callback cap is not inline", () => {
   // Every run of constant tokens, and every slice of it that is an expression.
   for (let start = 0; start < tokens.length; start++) {
     for (let end = start + 1; end <= tokens.length && inConstant(tokens[end - 1]!); end++) {
-      if (constantInt(tokens.slice(start, end)) === 16384n) {
+      if (constantInt(tokens.slice(start, end)) === BigInt(BUILTIN.maxOauthCallbackBytes)) {
         inline.add(source.slice(0, tokens[start]!.index).split("\n").length);
       }
     }
@@ -651,5 +653,6 @@ test("oauth callback cap is not inline", () => {
 });
 
 test("question count cap is not inline", () => {
-  expect(comparesLengthTo(readFileSync(join(SRC, "nodes/tool/questions.ts"), "utf8"), 4n)).toBe(false);
+  const source = readFileSync(join(SRC, "nodes/tool/questions.ts"), "utf8");
+  expect(comparesLengthTo(source, BigInt(BUILTIN.maxQuestions))).toBe(false);
 });

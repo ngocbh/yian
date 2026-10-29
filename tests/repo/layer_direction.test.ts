@@ -1,14 +1,14 @@
 /**
  * Import-direction ratchets and source lints for `src`.
  *
- * Lower layers never import the layers that drive them, a few leaves import only
+ * No module imports a layer above its own in ARCHITECTURE.md's order, a few leaves import only
  * declared modules, and engine-dependent or platform-specific APIs stay out of
  * `src` (the platform ones outside `platform.ts`). Each check is a function of
  * `{path, text}` sources, so snippets prove the rules the real tree is held to.
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join, posix, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,9 +22,8 @@ interface Source {
   text: string;
 }
 
-/** Return every `.ts` file below `src`, or `[]` while `src` doesn't exist. */
+/** Return every `.ts` file below `src`. */
 function sources(): Source[] {
-  if (!existsSync(SRC)) return [];
   return readdirSync(SRC, { recursive: true, encoding: "utf8" })
     .filter((name) => name.endsWith(".ts"))
     .sort()
@@ -80,29 +79,51 @@ interface Rule {
 const below = (dir: string) => (path: string) => path.startsWith(`${dir}/`);
 const only = (file: string) => (path: string) => path === file;
 
+/**
+ * The layers of `src`, bottom first, as ARCHITECTURE.md's "Imports go one way" lists them. Each
+ * entry is a top-level module (without `.ts`) or folder of `src`.
+ */
+const LAYERS: readonly (readonly string[])[] = [
+  ["diagnostics", "defaults", "typesys", "platform"],
+  ["events", "expr", "llm", "llm_clients", "tools", "skills", "memory"],
+  ["nodes"],
+  ["compile"],
+  ["compose", "runtime"],
+  ["run", "memory_host"],
+  ["index", "cli"],
+];
+
+/** The `src` entry a source path or module id sits in: its first segment, without `.ts`. */
+const entryOf = (id: string) => id.split("/")[0]!.replace(/\.ts$/, "");
+
+/** The index in `LAYERS` of `id`'s entry, or -1 when no layer holds it. */
+const layerOf = (id: string) => LAYERS.findIndex((layer) => layer.includes(entryOf(id)));
+
+/** How to fix an upward import out of a layer, keyed by the layer's first entry. */
+const LAYER_HINTS: Record<string, string> = {
+  nodes:
+    "nodes must not import compile; return a canonical Grow seed and let the injected compile-layer " +
+    "builder interpret it. nodes must not import runtime; direct-driver fallbacks belong on a lower seam",
+  compile: "compile must stay representation-neutral and execution-free",
+};
+
+/** One rule per layer below the top: its modules import no module of a layer above it. */
+const LAYER_RULES: Rule[] = LAYERS.slice(0, -1).map((layer, rank) => {
+  const above = LAYERS.slice(rank + 1).flat();
+  const hint = LAYER_HINTS[layer[0]!];
+  return {
+    name: `${layer.join(", ")} import no layer above them`,
+    files: (path) => layerOf(path) === rank,
+    forbid: above,
+    why:
+      `${layer.join(", ")} must not import ${above.join(", ")} (ARCHITECTURE.md, "Imports go one way")` +
+      (hint ? `. ${hint}` : ""),
+    samples: { file: `${layer[0]}/x.ts`, bad: above, good: LAYERS.slice(0, rank + 1).flat() },
+  };
+});
+
 const RULES: Rule[] = [
-  {
-    name: "nodes never import compile",
-    files: below("nodes"),
-    forbid: ["compile"],
-    why: "nodes must not import compile; return a canonical Grow seed and let the injected compile-layer builder interpret it",
-    samples: {
-      file: "nodes/call/node.ts",
-      bad: ["compile", "compile/expand", "compile/index"],
-      good: ["nodes/contracts", "diagnostics", "skills", "compiled"],
-    },
-  },
-  {
-    name: "nodes never import runtime",
-    files: below("nodes"),
-    forbid: ["runtime"],
-    why: "nodes must not import runtime; direct-driver fallbacks belong on a lower seam",
-    samples: {
-      file: "nodes/call/node.ts",
-      bad: ["runtime", "runtime/log"],
-      good: ["run", "nodes/contracts", "skills"],
-    },
-  },
+  ...LAYER_RULES,
   {
     name: "nodes/contracts.ts imports only diagnostics and typesys",
     files: only("nodes/contracts.ts"),
@@ -113,17 +134,6 @@ const RULES: Rule[] = [
       file: "nodes/contracts.ts",
       bad: ["nodes/call/node", "nodes/index", "index", "compile", "runtime", "skills", "defaults"],
       good: ["diagnostics", "typesys", "typesys/json"],
-    },
-  },
-  {
-    name: "compile never imports compose or runtime",
-    files: below("compile"),
-    forbid: ["compose", "runtime"],
-    why: "compile must stay representation-neutral and execution-free",
-    samples: {
-      file: "compile/expand.ts",
-      bad: ["compose", "compose/load", "runtime", "runtime/log"],
-      good: ["nodes/contracts", "diagnostics", "run"],
     },
   },
   {
@@ -138,17 +148,6 @@ const RULES: Rule[] = [
     },
   },
   {
-    name: "runtime never imports memory_host or cli",
-    files: below("runtime"),
-    forbid: ["memory_host", "cli"],
-    why: "runtime must not import memory_host or cli",
-    samples: {
-      file: "runtime/log.ts",
-      bad: ["memory_host", "cli", "cli/main"],
-      good: ["memory/contracts", "nodes/contracts"],
-    },
-  },
-  {
     name: "memory/contracts.ts imports only diagnostics and defaults",
     files: only("memory/contracts.ts"),
     allow: ["diagnostics", "defaults"],
@@ -160,39 +159,6 @@ const RULES: Rule[] = [
         ...["memory/episodic", "memory/reflective", "memory/profile", "memory/index"],
       ],
       good: ["diagnostics", "defaults"],
-    },
-  },
-  {
-    name: "skills imports no engine or front-end layer",
-    files: below("skills"),
-    forbid: ["nodes", "compile", "compose", "runtime", "run", "cli"],
-    why: "skills must stay a leaf",
-    samples: {
-      file: "skills/load.ts",
-      bad: ["nodes", "nodes/call/node", "compile", "compose", "runtime", "run", "cli"],
-      good: ["diagnostics", "defaults"],
-    },
-  },
-  {
-    name: "tools imports no engine or front-end layer",
-    files: below("tools"),
-    forbid: ["nodes", "compile", "compose", "runtime", "run", "cli"],
-    why: "tools must not import nodes, compile, compose, runtime, run, or cli",
-    samples: {
-      file: "tools/registry.ts",
-      bad: ["nodes", "nodes/contracts", "compile", "compose", "compose/skills", "runtime", "run", "cli"],
-      good: ["tools/context", "skills/tool", "typesys", "llm/messages", "defaults", "diagnostics"],
-    },
-  },
-  {
-    name: "memory never imports engine, host or cli layers",
-    files: below("memory"),
-    forbid: ["runtime", "compose", "compile", "run", "memory_host", "cli", "index"],
-    why: "memory must not import runtime, compose, compile, run, memory_host, cli, or the package root",
-    samples: {
-      file: "memory/episodic.ts",
-      bad: ["runtime", "compose", "compile", "run", "memory_host", "cli", "index"],
-      good: ["memory/contracts", "memory/index", "diagnostics"],
     },
   },
   {
@@ -524,6 +490,19 @@ describe("importTargets", () => {
   });
 });
 
+/**
+ * Return each file of `files` that no layer holds, as its path, and each local import whose
+ * target no layer holds, as `path:line: statement -> target`.
+ */
+function unlayered(files: Source[]): string[] {
+  return files.flatMap((file) => [
+    ...(layerOf(file.path) < 0 ? [file.path] : []),
+    ...importTargets(file)
+      .filter((t) => t.local && layerOf(t.target) < 0)
+      .map((t) => `${file.path}:${t.line}: ${t.statement} -> ${t.target}`),
+  ]);
+}
+
 describe("layer rules", () => {
   const files = sources();
   for (const rule of RULES) {
@@ -531,6 +510,11 @@ describe("layer rules", () => {
       expect(report(rule.why, ruleViolations(rule, files))).toBe("");
     });
   }
+
+  test("every src module and local import sits in a layer", () => {
+    const why = "put each new src entry in LAYERS and in ARCHITECTURE.md's import order";
+    expect(report(why, unlayered(files))).toBe("");
+  });
 });
 
 /** The import spellings every rule must see. */
@@ -550,7 +534,31 @@ function spell(file: string, id: string, extension: string): string {
   return `${path.startsWith(".") ? "" : "./"}${path}${extension}`;
 }
 
+/** The layer rule that holds `entry`'s modules. */
+const layerRule = (entry: string) => LAYER_RULES.find((rule) => rule.files(`${entry}/x.ts`))!;
+
 describe("layer rule snippets", () => {
+  test("a layer rule holds each entry of its layer, as a file and as a folder", () => {
+    LAYERS.slice(0, -1).forEach((layer, rank) => {
+      for (const entry of layer) {
+        const paths = [`${entry}.ts`, `${entry}/x.ts`, `${entry}/a/b.ts`];
+        expect(paths.filter((path) => !LAYER_RULES[rank]!.files(path))).toEqual([]);
+      }
+    });
+    expect(LAYER_RULES.filter((rule) => rule.files("index.ts") || rule.files("cli/x.ts"))).toEqual([]);
+  });
+
+  test("a module of no layer, and a local import of none, are reported", () => {
+    const text = 'import { a } from "./diagnostics.ts";\nimport { b } from "./extra/b.ts";';
+    expect(unlayered([{ path: "extra.ts", text }])).toEqual([
+      "extra.ts",
+      'extra.ts:2: import { b } from "./extra/b.ts"; -> extra/b',
+    ]);
+    expect(unlayered([{ path: "cli/x.ts", text: 'import "../../package.json";\nimport "yaml";' }])).toEqual([
+      'cli/x.ts:1: import "../../package.json"; -> ../package.json',
+    ]);
+  });
+
   for (const rule of RULES) {
     test(rule.name, () => {
       const { file, bad, good } = rule.samples;
@@ -569,7 +577,7 @@ describe("layer rule snippets", () => {
   }
 
   test("a violation names the file, line, statement and target", () => {
-    const rule = RULES.find((r) => r.name === "nodes never import compile")!;
+    const rule = layerRule("nodes");
     const text = 'const a = 1;\nimport { expand } from "../../compile/expand.ts";';
     expect(ruleViolations(rule, [{ path: "nodes/call/node.ts", text }])).toEqual([
       'nodes/call/node.ts:2: import { expand } from "../../compile/expand.ts"; -> compile/expand',
@@ -598,7 +606,7 @@ describe("layer rule snippets", () => {
   });
 
   test("the package's own name is the root facade", () => {
-    const rule = RULES.find((r) => r.name === "memory never imports engine, host or cli layers")!;
+    const rule = layerRule("memory");
     const text = 'import { run } from "@ngocbh/yian";';
     expect(ruleViolations(rule, [{ path: "memory/episodic.ts", text }])).toEqual([
       'memory/episodic.ts:1: import { run } from "@ngocbh/yian"; -> index',

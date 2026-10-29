@@ -162,7 +162,7 @@ function shownForm(value: unknown, spellFloat: (x: number) => string): string {
 
 /** An open container while writing: its keys (`null` for an array) and the next index. */
 interface TextCursor {
-  readonly container: { readonly [key: string]: unknown } | readonly unknown[];
+  readonly container: object;
   readonly keys: readonly string[] | null;
   index: number;
 }
@@ -178,7 +178,8 @@ function textForm(root: unknown, budget: number, spellFloat: (x: number) => stri
   while (stack.length > 0 && out.length < budget) {
     const step = stack[stack.length - 1]!;
     if ("container" in step) {
-      const size = step.keys === null ? step.container.length : step.keys.length;
+      const size =
+        step.keys === null ? (step.container as readonly unknown[]).length : step.keys.length;
       if (step.index === size) {
         stack.pop();
         out += step.keys === null ? "]" : "}";
@@ -207,9 +208,8 @@ function textForm(root: unknown, budget: number, spellFloat: (x: number) => stri
       out += quoteHead(value, budget);
     } else if (FileRef.isFileRef(value) || InboxRef.isInboxRef(value)) {
       out += "{";
-      const container = value as unknown as { readonly [key: string]: unknown };
       const keys = FileRef.isFileRef(value) ? FILE_FIELDS : INBOX_FIELDS;
-      stack.push({ container, keys, index: 0 });
+      stack.push({ container: value, keys, index: 0 });
     } else if (isList(value)) {
       out += "[";
       stack.push({ container: value, keys: null, index: 0 });
@@ -426,7 +426,7 @@ export function rejectLoneSurrogates(value: unknown, where: string): void {
 /** An open container in the nesting walk. */
 interface NestingFrame {
   readonly container: object;
-  /** The keys of a record or `FileRef`, or `null` for an array, read up to its length. */
+  /** The keys of a record, `FileRef` or `InboxRef`, or `null` for an array, read up to its end. */
   readonly keys: readonly string[] | null;
   /** The container's key or index in its parent (`null` for the root). */
   readonly key: string | number | null;
@@ -449,8 +449,8 @@ type NestingEntry = [
  * Yield each entry of a value's containers, depth first and in order.
  *
  * Unwraps a `TypedValue` wherever it sits. The walk goes into an entry that is an array,
- * record or `FileRef` not already on the path. A caller reads the stack before resuming the
- * walk, which changes it. A leaf yields nothing.
+ * record, `FileRef` or `InboxRef` not already on the path. A caller reads the stack before
+ * resuming the walk, which changes it. A leaf yields nothing.
  */
 function* walkNesting(value: unknown): Generator<NestingEntry> {
   const root = unwrapTyped(value);
@@ -711,16 +711,15 @@ export function toHost(value: Value): unknown {
 /**
  * Closed type vocabulary for runtime values.
  *
- * Each value IS the one surface vocabulary: at once the serialized discriminator tag,
- * the author-written `type:` token and the displayed name (`str`, never `string`).
+ * A scalar kind's value is at once the serialized discriminator tag, the author-written
+ * `type:` token and the displayed name (`str`, never `string`). The list kinds keep the
+ * bracket storage spelling (`list[str]`); type labels spell them `list(str)`.
  *
  * Every kind but `ANY` is a storage tag and wire discriminator. `ANY` is type-only: no
  * carrier stores it, and an `Any` value persists under its natural kind (`str`,
- * `object`, `list[Any]`, ...). The list kinds keep the bracket storage spelling
- * (`list[str]`); type labels spell them `list(str)`. `date` and `datetime` are stored
- * as strings and never inferred; `file` is reserved: never inferred, not authorable yet.
- * `inbox` is a handle on a top-level inbox, an `Inbox(T)` input's value; never inferred from a
- * record.
+ * `object`, `list[Any]`, ...). `date` and `datetime` are stored as strings and never
+ * inferred. `file` holds a `FileRef`. `inbox` is a handle on a top-level inbox, an `Inbox(T)`
+ * input's value; never inferred from a record.
  */
 export const ValueKind = {
   NONE: "None",
@@ -780,7 +779,7 @@ export function listElementKind(kind: ValueKind): ValueKind | null {
 }
 
 // --------------------------------------------------------------------------------------- //
-// Reserved FILE placeholder
+// File references
 // --------------------------------------------------------------------------------------- //
 
 /** The fields a `FileRef` is built from; `mime` and `name` default to `null`. */
@@ -791,7 +790,7 @@ interface FileRefInit {
 }
 
 /**
- * A minimal, opaque file reference: a reserved placeholder.
+ * A minimal, opaque file reference: the value of a `file` slot.
  *
  * Carries only what is needed to round-trip through the typed-value wire form. Its JSON
  * form is the mapping `{"uri": ..., "mime": ..., "name": ...}`: a `file` slot reads that
@@ -1048,7 +1047,9 @@ export class TypedValue {
     if (storage === ValueKind.FILE) {
       if (!isRecord(value)) throw new RangeError("file typed value must contain a JSON object");
       requireFields(value, FILE_FIELDS, "file reference");
-      return decodedAs("file", () => new TypedValue(storage, new FileRef(value as unknown as FileRefInit)));
+      // The constructor checks each field's type.
+      const fields = value as { uri: string; mime: string | null; name: string | null };
+      return decodedAs("file", () => new TypedValue(storage, new FileRef(fields)));
     }
     if (storage === ValueKind.INBOX && isRecord(value)) {
       requireFields(value, INBOX_FIELDS, "inbox handle");
@@ -1930,8 +1931,7 @@ function admitsNone(typ: Type): boolean {
 /**
  * Whether `file` or `Inbox(T)` appears anywhere in `typ`: itself, a field, the element, or a
  * member, so some value of `typ` may hold a file or an inbox handle, a value that isn't plain
- * JSON (callers: `fileReadingType`, the `Any` relations, `compose/helpers/tags.ts`). A type
- * without either holds only JSON values, so every value of it is an `Any` value.
+ * JSON. A type without either holds only JSON values, so every value of it is an `Any` value.
  */
 export function hasFile(typ: Type): boolean {
   if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
@@ -1942,8 +1942,7 @@ export function hasFile(typ: Type): boolean {
 
 /**
  * Whether every non-null value of `typ` holds a file or an inbox handle, a value that isn't
- * plain JSON (callers: `fileReadingType`, the `Any` relations, `compose/helpers/tags.ts`), so
- * none is an `Any` value. An `Inbox(T)` always counts.
+ * plain JSON, so none is an `Any` value. An `Inbox(T)` always counts.
  *
  * A list counts when its element is a non-nullable type that requires a file: the empty list
  * is shared by every list type and is not counted as a shared value. A record counts when a

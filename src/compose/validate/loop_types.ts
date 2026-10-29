@@ -1,22 +1,9 @@
 /**
- * Graph-stage: the type-level half of a `loop`'s `'a -> 'a` contract.
+ * Graph stage: the type-level half of a `loop`'s `'a -> 'a` contract (`checkLoopTypeContract`).
  *
- * A loader post-build pass (run after `checkCallMapTypes`). `LoopDescriptor.build` checked only
- * the carried field-name sets: it lacks the resolved carried-record types, which depend on the
- * parent producers and flow inputs assembled by the parent build. This pass resolves each returned
- * carried field's contract from its bound seed source (`${<id>.output}`/`${input.X}` over the
- * parent producer and flow-input contracts, via `resolveOutputBindingContract`), takes its type,
- * and checks it with `typesCompatible` against the body output's same-named field type. A field
- * the body omits carries over unchanged, so it has nothing to compare. The node's canonical output
- * contract already keeps independently proven body fields when no sound exact aggregate exists.
- * Its range anchor is `BuildResult.fieldRanges` at `siteKey("field", "inputs")` (the coarse
- * `input:` mapping span).
- *
- * Each proven returned field must also fit the body parameter it is bound to on the next iteration
- * (a named body's declared input, or the parameter an inline body generates from its seed), read
- * as nullable where the loop's `while:` proves the field not null; that error points at the seed
- * binding. A literal seed stays lenient here (its contract is not inferred); `checkCallMapTypes`
- * checks every seed against the body's declared input.
+ * `LoopDescriptor.build` checks only the carried field names, since the carried types depend on
+ * the parent's producers and flow inputs. Once those are assembled, this pass checks that each
+ * returned field keeps its carried type and fits the body parameter it is bound to next.
  *
  * Knows about: `compile/validation` (the type comparator), `compose/helpers` (shared
  * output-contract inference, tag advice, load diagnostics and the text form of a literal) and
@@ -36,7 +23,7 @@ import {
   ValueContract,
   ValueTemplate,
 } from "../../nodes/contracts.ts";
-import type { LoopNode } from "../../nodes/loop/node.ts";
+import { LoopNode } from "../../nodes/loop/node.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { canonicalTypeLabel, isList, isRecord, jsTypeName, type Type, ValueKind } from "../../typesys/values.ts";
 import { LoadDiagnostics, shownLiteral } from "../helpers/errors.ts";
@@ -97,9 +84,8 @@ export function checkLoopTypeContract(
   const typeFn = registry !== null ? constructorTypeFn(registry) : null;
   assertExactContracts(producers, flowInputs);
   for (const [nodeId, result] of buildResults) {
-    if (!result.node.isLoop) continue;
-    // A loop is recognised by `isLoop`, so a hand-built loop is checked too.
-    const node = result.node as LoopNode;
+    const node = result.node;
+    if (!(node instanceof LoopNode)) continue;
     // The node's carried-record contract: the body's own contract for a total loop, or the merged
     // returned-plus-seeded contract for a partial loop.
     const loopContract = node.outputContract;
@@ -110,7 +96,7 @@ export function checkLoopTypeContract(
     ) {
       throw new TypeError(
         `node ${reprText(nodeId)} output_contract must be an exact ValueContract, PartialRecordContract, ` +
-          `or None, got ${jsTypeName(loopContract)}`,
+          `or null, got ${jsTypeName(loopContract)}`,
       );
     }
     const carriedFields = carriedFieldTypes(loopContract);
@@ -129,7 +115,7 @@ export function checkLoopTypeContract(
       if (isExactly(sourceContract, PartialRecordContract)) continue; // no exact type to compare
       if (!isExactly(sourceContract, ValueContract)) {
         throw new TypeError(
-          "resolved loop source contract must be ValueContract, PartialRecordContract, or None",
+          "resolved loop source contract must be ValueContract, PartialRecordContract, or null",
         );
       }
       const source = sourceContract.type;
@@ -144,7 +130,9 @@ export function checkLoopTypeContract(
         throw diagnostics.error(message, { range });
       }
     }
-    checkReturnedFields(result, carriedFields, wiring, registry, diagnostics, { inline: inlineLoops.has(nodeId) });
+    checkReturnedFields(node, result, carriedFields, wiring, registry, diagnostics, {
+      inline: inlineLoops.has(nodeId),
+    });
   }
 }
 
@@ -158,7 +146,8 @@ export function checkLoopTypeContract(
  * nullable returned field whose non-null type fits the parameter is accepted; a null it returns
  * fails the next iteration's input check.
  *
- * @param result The built loop node and its source ranges.
+ * @param node The loop node.
+ * @param result The loop's build, for its source ranges.
  * @param carriedFields The statically proven carried field types; a returned field's entry is the
  *   body's own field type.
  * @param wiring The loop's seed bindings keyed by carried field.
@@ -169,6 +158,7 @@ export function checkLoopTypeContract(
  *   types and says how to make them agree.
  */
 function checkReturnedFields(
+  node: LoopNode,
   result: BuildResult,
   carriedFields: ReadonlyMap<string, Type>,
   wiring: ReadonlyMap<string, unknown>,
@@ -176,7 +166,6 @@ function checkReturnedFields(
   diagnostics: LoadDiagnostics,
   options: { inline: boolean },
 ): void {
-  const node = result.node as LoopNode;
   const returned = node.returnedFields;
   const parameters = new Map<string, ValueContract>();
   for (const parameter of node.childInputs) {

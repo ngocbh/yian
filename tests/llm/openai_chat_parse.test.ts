@@ -1162,30 +1162,34 @@ describe("tool calls", () => {
     ]);
   });
 
-  test("a generated id differs from every real id in the reply", async () => {
+  test("a real id an earlier call already took gets yian_call_<n>, with _<k> while that is taken", async () => {
     const once = await partsOf([
       calls(wire(0, undefined, "double", "{}"), wire(1, "yian_call_0", "double", "{}")),
       CALLS_DONE,
     ]);
-    expect(once).toEqual([callPart("yian_call_0_1", "{}"), callPart("yian_call_0", "{}")]);
+    expect(once).toEqual([callPart("yian_call_0", "{}"), callPart("yian_call_1", "{}")]);
     const twice = await partsOf([
-      calls(wire(0, undefined, "double", "{}"), wire(1, "yian_call_0", "double", "{}")),
-      calls(wire(2, "yian_call_0_1", "double", "{}")),
+      calls(wire(0, "yian_call_1", "double", "{}"), wire(1, undefined, "double", "{}")),
+      calls(wire(2, "yian_call_1_1", "double", "{}")),
       CALLS_DONE,
     ]);
     expect(twice).toEqual([
-      callPart("yian_call_0_2", "{}"),
-      callPart("yian_call_0", "{}"),
-      callPart("yian_call_0_1", "{}"),
+      callPart("yian_call_1", "{}"),
+      callPart("yian_call_1_1", "{}"),
+      callPart("yian_call_2", "{}"),
     ]);
   });
 
-  test("two real calls sharing an id keep it", async () => {
+  test("two calls at different indexes sharing an id: the second gets yian_call_<n>", async () => {
     const parts = await partsOf([
-      calls(wire(0, "call_1", "double", '{"value":3}'), wire(1, "call_1", "double", '{"value":4}')),
+      calls(wire(0, "call_0", "a", '{"value":3}')),
+      calls(wire(1, "call_0", "b", '{"value":4}')),
       CALLS_DONE,
     ]);
-    expect(parts).toEqual([callPart("call_1", '{"value":3}'), callPart("call_1", '{"value":4}')]);
+    expect(parts).toEqual([
+      callPart("call_0", '{"value":3}', "a"),
+      callPart("yian_call_1", '{"value":4}', "b"),
+    ]);
   });
 
   test("a call with no name fails before any PartDone, ahead of the id rule", async () => {

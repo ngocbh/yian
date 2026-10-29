@@ -267,7 +267,8 @@ export class OpenAIChat implements SseProtocol {
    *
    * @param frames The reply's server-sent events, in order.
    * @returns The deltas, then one `PartDone` per part in index order (reasoning with its replay
-   *   record; a call without an id named `yian_call_<n>`, `n` its position among the calls),
+   *   record; a call whose id is missing or an earlier call's named `yian_call_<n>`, `n` its
+   *   position among the calls, with `_<k>` appended while taken),
    *   then `UsageReport` (when any usage came; the last one wins) and `Finish`, whose reason is
    *   `tool_calls` when any call came, unless it is `length`.
    * @throws {ProviderError} For an error chunk (kind from its HTTP code, else its code or
@@ -367,7 +368,6 @@ export class OpenAIChat implements SseProtocol {
     }
     // Every part is built before the first PartDone, so a call with no name fails first.
     const taken = new Set<string>();
-    for (const part of parts) if (isCall(part) && part.id !== null) taken.add(part.id);
     const done: Part[] = [];
     let callCount = 0;
     for (const part of parts) {
@@ -587,16 +587,16 @@ function callPieces(toolCalls: JsonValue | undefined, provider: string): CallPie
 /**
  * Build a finished tool call, its arguments read by `parseArguments` (not repaired).
  *
- * A call without an id gets `yian_call_<n>`, with `_<k>` appended while that id is in `taken`;
- * the id it gets is added to `taken`.
+ * The call's id is its own unless missing or in `taken`, else `yian_call_<n>`, with `_<k>`
+ * appended while that id is in `taken`; the id it gets is added to `taken`.
  *
  * @param n The call's position among the reply's calls.
- * @param taken The ids in the reply so far: every real id, and those generated.
+ * @param taken The ids the reply's earlier calls got.
  * @throws {ProviderError} The call has no name (kind `protocol`).
  */
 function callPart(call: CallAssembly, n: number, taken: Set<string>, provider: string): ToolCallPart {
   if (call.name === null) throw new ProviderError("protocol", `${provider} tool call ${n} has no name`);
-  const id = call.id ?? callId(null, n, taken);
+  const id = callId(call.id, n, taken);
   const [args, rawArguments] = parseArguments(call.args);
   return new ToolCallPart({ id, name: call.name, arguments: args, rawArguments });
 }

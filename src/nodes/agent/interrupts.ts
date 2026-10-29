@@ -13,12 +13,13 @@ import type { TokenUsage } from "../../events.ts";
 import type { Message } from "../../llm/messages.ts";
 
 /**
- * A streamed model reply cut off at a chunk boundary by a host interrupt, or a model call whose
- * retry wait a host interrupt ended.
+ * A streamed model reply cut off by a host interrupt at a chunk boundary or before it started, or
+ * a model call whose retry wait a host interrupt ended.
  *
  * `reply` is an assistant message holding only the visible text streamed so far (none for a cut
- * wait); a partial tool call is never kept because it cannot run. `usage` is what the provider
- * reported in the chunks already received, or `null` (always for a cut wait).
+ * wait or a reply cut before it started, reasoning included); a partial tool call is never kept
+ * because it cannot run. `usage` is what the provider reported in the chunks already received, or
+ * `null` (always for a cut wait).
  */
 export class ReplyInterrupted extends Error {
   override name = "ReplyInterrupted";

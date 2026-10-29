@@ -22,12 +22,13 @@
  * writes the call's `tool_result`; the woken agent replays and calls the model with every result.
  *
  * An agent with a steer inbox reads it at the top of each iteration (a recorded `steer` step) and
- * stops at a host interrupt of that inbox between effects or before a later chunk of a streamed
- * reply: the cut reply keeps its text so far, calls not started are skipped, the reply's pending
- * calls get `interrupted` closers, and the loop writes `interrupted {by}` and returns
- * `Interrupted`. An interrupt never aborts a running tool call. In the chat loop, a steer queued
- * when the model gives its final answer gets one more model call, within `maxToolIterations`; a
- * structured agent without tools or skills reads its steers once, before its single call.
+ * stops at a host interrupt of that inbox between effects, while a model call waits for its reply
+ * to start (aborting the request), or before a later chunk of a streamed reply: the cut reply keeps
+ * its text so far, calls not started are skipped, the reply's pending calls get `interrupted`
+ * closers, and the loop writes `interrupted {by}` and returns `Interrupted`. An interrupt never
+ * aborts a running tool call. In the chat loop, a steer queued when the model gives its final
+ * answer gets one more model call, within `maxToolIterations`; a structured agent without tools or
+ * skills reads its steers once, before its single call.
  *
  * Knows about:   diagnostics, events, llm, llm_clients connection, memory contracts, platform,
  *                nodes/base, skills, tools, typesys, peer AGENT modules.

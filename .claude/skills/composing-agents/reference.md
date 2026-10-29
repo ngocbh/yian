@@ -194,8 +194,8 @@ inbox. Each turn:
 4. The turn returns `history: ${compacted.output.history + (answered.output :- [])}` and
    `closed: ${heard.output.closed}`; the loop runs `while: not closed`.
 
-The host ends the chat by closing the inbox (`/exit` in `yian chat`). Try it with
-`yian chat chat.yaml` from the templates folder.
+The host ends the chat by closing the inbox (`/exit` in `yian run`'s chat). Try it with
+`yian run chat.yaml` from the templates folder.
 
 ## Where to look next
 

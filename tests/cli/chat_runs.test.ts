@@ -84,7 +84,7 @@ test(
   async () => {
     const children = childRuns();
     const started = await children.start(await flow(GREET), { who: "ada" });
-    expect(started).toEqual({ id: "r1", log: join(root, "runs", `${CHAT}-r1`, "log.jsonl") });
+    expect(started).toEqual({ id: "r1", log: join(root, "runs", `${CHAT}-r1`, "log.jsonl"), seq: 1 });
     expect(children.status("r1")).toMatchObject({ run: "r1", status: "running", log: started.log });
     const status = await children.next("r1");
     expect(status).toMatchObject({ run: "r1", status: "succeeded", output: "hi ada", log: started.log });
@@ -268,7 +268,9 @@ test(
     const waiting = await settled(children, "r1");
     const call = `${CHAT}-r1/sure`;
     expect(waiting).toMatchObject({ status: "waiting", asks: [{ call, question: "Proceed?" }], wake_at: null });
-    expect((await children.answer("r1", call, "yes")).note).toBeUndefined();
+    const answered = await children.answer("r1", call, "yes");
+    expect(answered).toEqual({ run: "r1", status: "running", log: waiting.log, seq: waiting.seq + 1 });
+    expect(children.status("r1")).toBe(answered);
     expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded", output: "yes" });
   },
   TIMEOUT,
@@ -404,6 +406,12 @@ test(
     await expect(children.start(await flow(GREET), { who: "ada", whom: "x" })).rejects.toThrow("whom");
     expect(existsSync(join(root, "runs", `${CHAT}-r1`))).toBe(false);
     expect(() => children.status("r1")).toThrow(RangeError);
+    // Refused by `runFlow` itself, after the key check.
+    const fake = "id: fake\nname: fake\nnodes:\n  f: {kind: tool, tool_id: fake}\noutput: ${f.output}\n";
+    await expect(children.start(await flow(fake, "fake.yaml"), {})).rejects.toThrow("fake");
+    expect(existsSync(join(root, "runs", `${CHAT}-r1`))).toBe(false);
+    // The id goes to the next start that succeeds.
+    expect((await children.start(await flow(GREET), { who: "ada" })).id).toBe("r1");
   },
   TIMEOUT,
 );
@@ -492,3 +500,53 @@ describe("console", () => {
     TIMEOUT,
   );
 });
+
+/** BUSY_NODE, run once `node` has succeeded. */
+const after = (node: string) => BUSY_NODE.replace("    output: str\n", `    input:\n      after: \${${node}.output}\n    output: str\n`);
+
+/** Sleep a minute, then keep busy. */
+const NAP_THEN_BUSY = `id: nap_busy
+name: nap_busy
+nodes:
+  nap:
+    kind: tool
+    tool_id: sleep
+    input:
+      for: "1m"
+${after("nap")}output: \${busy.output}
+`;
+
+/** Ask, then keep busy. */
+const ASK_THEN_BUSY = ASK.replace("output: ${sure.output}\n", `${after("sure")}output: \${busy.output}\n`);
+
+test(
+  "dispose goes by the published status: a waiting child mid wake pass is left, a just-answered one cancelled",
+  async () => {
+    const { scheduler, open } = heldScheduler();
+    let advances = 0;
+    const children = childRuns({
+      scheduler,
+      advance: (options) => {
+        advances += 1;
+        return advance(options);
+      },
+    });
+    await children.start(await flow(NAP_THEN_BUSY), {});
+    await children.start(await flow(ASK_THEN_BUSY, "ask_busy.yaml"), {});
+    const asked = await settled(children, "r2");
+    expect(asked.asks).toHaveLength(1);
+    expect(await settled(children, "r1")).toMatchObject({ status: "waiting", wake_at: expect.any(String) });
+    expect((await children.answer("r2", asked.asks![0]!.call, "yes")).status).toBe("running");
+    // r1's wake pass runs its busy node while r2's status still says waiting.
+    open();
+    await until(() => advances >= 2);
+    expect(children.status("r1").status).toBe("waiting");
+    const logs = ["r1", "r2"].map((id) => children.status(id).log);
+    expect(await children.dispose()).toEqual([{ run: "r1", kind: "timer", log: logs[0]! }]);
+    expect(children.status("r2").status).toBe("cancelled");
+    expect(inspectRun(logs[1]!).status).toBe("cancelled");
+    // The halted wake pass leaves the run to resume.
+    expect(["waiting", "stopped"]).toContain(inspectRun(logs[0]!).status);
+  },
+  TIMEOUT,
+);

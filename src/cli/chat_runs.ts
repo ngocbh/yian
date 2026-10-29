@@ -55,10 +55,19 @@ import { CommandEnv, sleepUntil } from "./utils.ts";
 export interface ChildStatus {
   /** The child's id in the chat (`r1`, `r2`, ...). */
   run: string;
+  /**
+   * `running` from the start and from each delivery the run took until the pass it causes
+   * settles; `waiting`, `succeeded`, `failed` or `cancelled` as a pass leaves it. A pass at a
+   * `wakeAt` publishes only where it settles.
+   */
   status: "running" | "waiting" | "succeeded" | "failed" | "cancelled";
   /** The flow's output, once it succeeded. */
   output?: unknown;
-  /** Why it failed, once it failed. */
+  /**
+   * Why it failed, once the run failed. A child whose driver a host fault stopped (the log
+   * unreadable, another writer holding it) is `failed` with only a `note`: such a fault has no
+   * failure code, the codes being the run's closed list.
+   */
   failure?: { code: string; message: string; node: string | null };
   /** What a waiting child waits on (`WaitInfo`s). */
   waits?: unknown[];
@@ -129,8 +138,6 @@ interface Child {
   dirty: boolean;
   /** The driver's rest between passes, which a nudge ends; `null` while it doesn't rest. */
   rest: AbortController | null;
-  /** Whether a pass runs. */
-  passing: boolean;
   /** What the child's `reply` nodes said during the current pass. */
   readonly replies: string[];
   /** The child's own stop: it stops the driver and leaves the log as it is. */
@@ -167,6 +174,8 @@ export class ChildRuns {
   readonly #children = new Map<string, Child>();
   #seq = 0;
   #started = 0;
+  /** The start in progress: starts take their ids one at a time, each once its run has started. */
+  #starting: Promise<unknown> = Promise.resolve();
   #disposed = false;
   /** The passes running, and the console methods their start replaced. */
   #passes = 0;
@@ -177,8 +186,9 @@ export class ChildRuns {
   }
 
   /**
-   * Start `flow` with `inputs` as the next child (`r1`, `r2`, ...): return its id and log once the
-   * log holds the run's start, while the run goes on in the background. `options.signal` is the
+   * Start `flow` with `inputs` as the next child (`r1`, `r2`, ...): return its id, its log and the
+   * `seq` of its first status (`running`) once the log holds the run's start, while the run goes on
+   * in the background; `next(id, seq)` then sees every later status. `options.signal` is the
    * caller's: aborting it before the start rejects, and after it, does nothing to the child.
    *
    * A provider key the flow's agents need is checked first, without a prompt.
@@ -192,26 +202,39 @@ export class ChildRuns {
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
     options: { signal?: AbortSignal | null } = {},
-  ): Promise<{ id: string; log: string }> {
+  ): Promise<{ id: string; log: string; seq: number }> {
     if (this.#disposed) throw new Error("the chat's runs were disposed");
     options.signal?.throwIfAborted();
     const { env, llmConfig } = this.#options;
     // No terminal: a missing key is reported to the assistant rather than prompted for mid-chat.
     await ensureProviderKeys(flow, llmConfig, inputs, { env: new CommandEnv(env), terminal: null });
     options.signal?.throwIfAborted();
+    const turn = this.#starting.then(() => this.#begin(flow, inputs));
+    this.#starting = turn.catch(() => {});
+    return turn;
+  }
+
+  /**
+   * Start `flow` as the next child once the starts before it are done, taking its id only once its
+   * run has started, so a failed start leaves no gap.
+   */
+  async #begin(
+    flow: ComposedFlow,
+    inputs: Readonly<Record<string, unknown>>,
+  ): Promise<{ id: string; log: string; seq: number }> {
     if (this.#disposed) throw new Error("the chat's runs were disposed");
-    const id = `r${++this.#started}`;
+    const id = `r${this.#started + 1}`;
     const runId = `${this.#options.chatRunId}-${id}`;
     const log = runLogPath(this.#options.logDir, runId);
+    const seq = ++this.#seq;
     const child: Child = {
       id,
       flow,
       log,
-      status: { run: id, status: "running", log, seq: ++this.#seq },
+      status: { run: id, status: "running", log, seq },
       waiters: [],
       dirty: false,
       rest: null,
-      passing: false,
       replies: [],
       halt: new AbortController(),
       done: null,
@@ -225,7 +248,8 @@ export class ChildRuns {
       this.#children.delete(id);
       throw error;
     }
-    return { id, log };
+    this.#started += 1;
+    return { id, log, seq };
   }
 
   /**
@@ -238,7 +262,8 @@ export class ChildRuns {
   }
 
   /**
-   * Resolve with child `id`'s first status numbered after `after` (default: its current one's), or
+   * Resolve with child `id`'s first status numbered after `after` (without it, after its current
+   * status, so a status published before the call isn't seen; pass the `seq` read before), or
    * with its current status once its driver has stopped and none will follow, or `cancelWaits`
    * is called.
    *
@@ -316,16 +341,17 @@ export class ChildRuns {
   }
 
   /**
-   * End the chat's hold on its children: cancel each one a pass is moving, stop the driver of each
-   * waiting one, leaving its log to resume, and resolve every waiting `next`. Returns the waiting
-   * children, by id. Later starts throw.
+   * End the chat's hold on its children, by each one's published status: cancel each `running`
+   * one; stop the driver of each `waiting` one, a pass at its `wakeAt` included, leaving its log to
+   * resume; and resolve every waiting `next`. Returns the waiting children, by id. Later starts
+   * throw.
    */
   async dispose(): Promise<WaitingChild[]> {
     this.#disposed = true;
     const left: WaitingChild[] = [];
     const stopping = [...this.#children.values()].map(async (child) => {
       if (!this.#driving(child)) return;
-      if (child.passing) {
+      if (child.status.status === "running") {
         try {
           await cancel(child.log, this.#deliveryOptions(child));
           this.nudge(child.id);
@@ -374,7 +400,10 @@ export class ChildRuns {
     };
   }
 
-  /** Make `deliver`'s delivery to `child`'s log and nudge its driver; a refusal is a note. */
+  /**
+   * Make `deliver`'s delivery to `child`'s log, publish the child `running` and nudge its driver;
+   * return its status. A refusal is a note on the status returned, and publishes nothing.
+   */
   async #deliver(
     child: Child,
     deliver: (log: string, options: DeliveryOptions) => Promise<unknown>,
@@ -385,6 +414,8 @@ export class ChildRuns {
       if (!(error instanceof DeliveryRefused)) throw error;
       return { ...child.status, note: error.message };
     }
+    // Until its pass settles, the child moves on what it was given.
+    if (this.#driving(child)) this.#publish(child, { run: child.id, status: "running", log: child.log });
     this.nudge(child.id);
     return child.status;
   }
@@ -410,7 +441,7 @@ export class ChildRuns {
     };
     const common = { ...this.#shared(child), onEvent, signal: child.halt.signal, env, scheduler, models };
     try {
-      let result = await this.#pass(child, () =>
+      let result = await this.#pass(() =>
         runFlow(child.flow, inputs, {
           log: child.log,
           runId,
@@ -432,7 +463,7 @@ export class ChildRuns {
         const wake: string | null = next === spent ? null : next;
         if (await this.#rest(child, wake)) spent = wake;
         if (child.halt.signal.aborted) return;
-        result = await this.#pass(child, () =>
+        result = await this.#pass(() =>
           move({ log: child.log, ...this.#deliveryOptions(child), ...common }),
         );
       }
@@ -454,14 +485,12 @@ export class ChildRuns {
     }
   }
 
-  /** Run `move` as a pass of `child`, the console routed to the console file meanwhile. */
-  async #pass(child: Child, move: () => Promise<RunResult>): Promise<RunResult> {
-    child.passing = true;
+  /** Run `move` as a pass, the console routed to the console file meanwhile. */
+  async #pass(move: () => Promise<RunResult>): Promise<RunResult> {
     if (this.#passes++ === 0) this.#routeConsole();
     try {
       return await move();
     } finally {
-      child.passing = false;
       if (--this.#passes === 0) this.#restoreConsole();
     }
   }
@@ -470,7 +499,8 @@ export class ChildRuns {
    * Send the console methods to the console file, if there is one. A CODE worker's console lines
    * are replayed through this process's `console` with no run named, so routing the whole console
    * while a child runs is the only way to keep them off the chat's terminal; a sink per run would
-   * replace this.
+   * replace this. `#restoreConsole` puts back the methods as they were here, so a change made to
+   * them meanwhile is undone.
    */
   #routeConsole(): void {
     const file = this.#options.consoleFile ?? null;

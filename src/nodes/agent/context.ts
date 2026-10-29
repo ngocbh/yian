@@ -729,6 +729,8 @@ const MEDIA_EXTENSIONS: ReadonlyMap<string, string> = new Map([
  *
  * @returns The file's reference: its path relative to the run folder (`media/<sha256>.<ext>`) as
  *   `uri`, so it still holds when the folder is copied elsewhere; `mime`; and its file name as `name`.
+ * @throws Error, writing no file, when `media` exists but isn't a folder (a symlink included), or is
+ *   another user's, or its group or others can write it.
  */
 export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): FileRef {
   const media = resolve(dir, "media");
@@ -737,6 +739,13 @@ export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): File
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
+  // A `media` already there may not be ours (a log in a shared folder such as /tmp): a symlink
+  // would lead writes out, which `fileToInline` then refuses to read, and another writer could
+  // swap the bytes a step names. `getuid` exists only on POSIX, like the run log's lock.
+  const info = fs.lstatSync(media);
+  const refused = (why: string) => new Error(`the run's media folder ${media} ${why}; give the run a folder of its own`);
+  if (!info.isDirectory()) throw refused("is not a folder");
+  if (info.uid !== process.getuid!() || (info.mode & 0o022) !== 0) throw refused("is another user's or others can write it");
   // A new `media` entry is durable only once the run folder holding it is synced. Synced every
   // time: a crash after an earlier call made `media` may have left the folder unsynced.
   syncFolder(resolve(dir));

@@ -129,8 +129,9 @@ server that doesn't start, a bad `YIAN_*` value, a callback that throws, a log i
 
 A run with a `log` writes every step to that file, so it can survive a crash, wait for days, and
 take messages from other processes. Give each run a folder of its own: `runLogPath(runsDir, runId)`
-makes `<runsDir>/<runId>/` and returns the log path inside it. The run keeps its lock file and
-media files beside the log.
+makes `<runsDir>/<runId>/` and returns the log path inside it. The log's folder is the run's
+folder: the run keeps its lock file and its `media` folder beside the log. A model call whose reply
+holds media fails if `media` is a symlink, another user's, or writable by others.
 
 `advance({ log })` moves a run on from its log:
 

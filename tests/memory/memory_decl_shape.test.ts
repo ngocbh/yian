@@ -14,7 +14,11 @@ import {
   MemoryDecl,
   MemorySetupError,
 } from "../../src/memory/contracts.ts";
+import { EpisodicMemory } from "../../src/memory/episodic.ts";
 import * as memoryPackage from "../../src/memory/index.ts";
+import { ProfileMemory } from "../../src/memory/profile.ts";
+import { ReflectiveMemory } from "../../src/memory/reflective.ts";
+import { InMemoryMarkdownStore } from "../../src/memory/storage/markdown.ts";
 
 const SITE = new DeclSite([], ["root"], null);
 
@@ -201,6 +205,32 @@ test("the built-in rules cover the allowlist", () => {
       expect(() => checkMemoryDeclaration("notes", typeName, { [key]: minimum - 1n })).toThrow(
         `${typeName} memory config ${key} must be an integer of at least ${minimum}, got ${minimum - 1n}`,
       );
+    }
+  }
+});
+
+const MAX = BigInt(Number.MAX_SAFE_INTEGER);
+
+/** Build the backend the host would build for one built-in key, the key in camelCase. */
+function backend(typeName: string, key: string, value: bigint): unknown {
+  const option = { [key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())]: value };
+  if (typeName === "episodic") return new EpisodicMemory(option);
+  if (typeName === "reflective") return new ReflectiveMemory(option);
+  return new ProfileMemory(new InMemoryMarkdownStore(), option);
+}
+
+test("each built-in key loads up to 2^53 - 1 and is refused above, where its backend refuses it too", () => {
+  for (const [typeName, rules] of Object.entries(RULES)) {
+    for (const key of Object.keys(rules)) {
+      checkMemoryDeclaration("notes", typeName, { [key]: MAX });
+      backend(typeName, key, MAX);
+      expectError(
+        () => checkMemoryDeclaration("notes", typeName, { [key]: MAX + 1n }),
+        RangeError,
+        `${typeName} memory config ${key} must be at most ${MAX}, got ${MAX + 1n}`,
+      );
+      // The run would have failed here anyway, when the host builds the memory.
+      expect(() => backend(typeName, key, MAX + 1n)).toThrow(RangeError);
     }
   }
 });

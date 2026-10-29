@@ -62,7 +62,6 @@ import {
   renderValuePath,
   setField,
   shownText,
-  valueRepr,
 } from "../typesys/values.ts";
 import {
   Binding,
@@ -323,6 +322,7 @@ const FALSE_SPELLINGS: ReadonlySet<string> = new Set(["0", "false", "no", "n", "
 const DIGITS = "[0-9](?:_?[0-9])*";
 const INT_TEXT = new RegExp(`^[+-]?${DIGITS}$`);
 const FLOAT_TEXT = new RegExp(`^[+-]?(?:${DIGITS}(?:\\.(?:${DIGITS})?)?|\\.${DIGITS})(?:[eE][+-]?${DIGITS})?$`);
+const INFINITY_TEXT = /^([+-]?)inf(?:inity)?$/i;
 
 /** Return an int spelling (`INT_TEXT`) as its `bigint`. */
 function intFromText(text: string): bigint {
@@ -340,10 +340,11 @@ function intFromText(text: string): bigint {
  *
  * Only text is converted, and only for a parameter with `coerceStrings` and a contract. After
  * `trim()`, an `int` input reads an int spelling (`[+-]?` and ASCII digits with single `_`
- * separators) at any size. A `float` input reads `inf` and `-inf` as infinity, an int spelling
- * as that int, and a float spelling (`2.0`, `1e3`, `.5`) as a float. A `bool` input reads
- * `1`/`true`/`yes`/`y`/`on` and `0`/`false`/`no`/`n`/`off`, ignoring case. Text that does not
- * convert is returned as given, untrimmed, for the contract to reject.
+ * separators) at any size. A `float` input reads `inf` or `infinity`, in any case and with an
+ * optional sign, as infinity (`nan` stays text), an int spelling as that int, and a float
+ * spelling (`2.0`, `1e3`, `.5`) as a float. A `bool` input reads `1`/`true`/`yes`/`y`/`on` and
+ * `0`/`false`/`no`/`n`/`off`, ignoring case. Text that does not convert is returned as given,
+ * untrimmed, for the contract to reject.
  *
  * @returns the converted int, float or boolean, or `value` unchanged.
  * @throws TypeError when `parameter` is not an exact `Parameter`.
@@ -364,8 +365,8 @@ export function coerceParam(parameter: Parameter, value: unknown): unknown {
     return INT_TEXT.test(raw) ? intFromText(raw) : value;
   }
   if (kind === ValueKind.NUMBER) {
-    if (raw === "inf") return Infinity;
-    if (raw === "-inf") return -Infinity;
+    const infinity = INFINITY_TEXT.exec(raw);
+    if (infinity !== null) return infinity[1] === "-" ? -Infinity : Infinity;
     if (INT_TEXT.test(raw)) return intFromText(raw);
     if (!FLOAT_TEXT.test(raw)) return value;
     const number = Number(raw.replaceAll("_", ""));
@@ -862,7 +863,7 @@ export function bindParams(
           rejectInvalidBinding(value, `default for ${reprText(p.name)}`, p.defaultOrigin ?? p.origin);
           collector?.recordSource(p.name, ValueRoute.literal(value), false);
         } else if (!present && p.required) {
-          throw new BindingError(`required input ${reprText(p.name)} is unbound (from=${valueRepr(source)})`, {
+          throw new BindingError(`required input ${reprText(p.name)} is unbound`, {
             failureCode: "binding.evaluate",
             origin: p.origin,
           });

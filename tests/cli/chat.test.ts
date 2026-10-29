@@ -15,7 +15,7 @@ import { chat, type ChatDeps, type ChatOptions } from "../../src/cli/chat.ts";
 import { main } from "../../src/cli/index.ts";
 import { type CliIo, HostStop, type Writer } from "../../src/cli/utils.ts";
 import { FileLockError, lockFile, type Scheduler, virtualScheduler } from "../../src/platform.ts";
-import { cancel, inspectRun, send } from "../../src/run.ts";
+import { cancel, inspectRun, readRunIndex, send } from "../../src/run.ts";
 import {
   InboxClosedRecord,
   InboxWithdrawnRecord,
@@ -75,7 +75,7 @@ function chatIo({ tty = false, env = {} }: { tty?: boolean; env?: Record<string,
   const out = sink();
   const err = sink();
   // A TTY chat draws on a TTY stderr; a piped one on a plain one.
-  const stderrStream = Object.assign(new FakeOutput(), { isTTY: tty });
+  const stderrStream = new FakeOutput({ tty });
   const io: CliIo = {
     stdout: out.out,
     stderr: err.out,
@@ -536,6 +536,63 @@ test(
   TIMEOUT,
 );
 
+test(
+  "a chat on the default log path is in the run index once it ends, before any yian status",
+  async () => {
+    const home = join(tmp, "home");
+    mkdirSync(home);
+    const { io, stdin } = chatIo({ env: { HOME: home } });
+    stdin.write("hi\n/exit\n");
+    const code = await chat(
+      flowFile(ECHO),
+      { inputValues: [], engineTrace: false },
+      io,
+      { scheduler: virtualScheduler(Date.parse("2026-01-01T00:00:00Z")), signals },
+    );
+    expect(code).toBe(0);
+    const runsDir = join(home, ".yian", "runs");
+    const runs = readdirSync(runsDir).filter((name) => !name.startsWith("index.sqlite"));
+    expect(readRunIndex(runsDir).map((row) => [row.runId, row.status])).toEqual([[runs[0]!, "succeeded"]]);
+  },
+  TIMEOUT,
+);
+
+describe("yian chat's failures under --engine-trace", () => {
+  test(
+    "a load error is located, with the stack below only under --engine-trace",
+    async () => {
+      const broken = flowFile("id: b\nname: b\nnodes:\n  n: {kind: code, output: str, code: return ${nope.output}}\n");
+      for (const engineTrace of [false, true]) {
+        const { io, stderr } = chatIo();
+        const { code } = await runChat(broken, io, { engineTrace });
+        expect(code).toBe(1);
+        expect(stderr()).toContain("chat.yaml:");
+        expect(stderr().includes("    at ")).toBe(engineTrace);
+      }
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "chat failed: adds the stack box under --engine-trace",
+    async () => {
+      // A log whose folder is a file: the run can't create it.
+      writeFileSync(join(tmp, "taken"), "");
+      const log = join(tmp, "taken", "run.jsonl");
+      for (const engineTrace of [false, true]) {
+        const { io, stderr } = chatIo();
+        const { code } = await runChat(flowFile(ECHO), io, { engineTrace, log });
+        expect(code).toBe(1);
+        const failed = stderr().indexOf("chat failed: ");
+        expect(failed).toBeGreaterThan(-1);
+        expect(stderr().indexOf("─ traceback ") > failed).toBe(engineTrace);
+        expect(stderr().includes("    at ")).toBe(engineTrace);
+      }
+    },
+    TIMEOUT,
+  );
+});
+
 /** A turn whose reply is the host tool `hold`, which waits until the test releases it. */
 const HOLD = turnFlow(`      reply:
         kind: tool
@@ -720,7 +777,7 @@ describe("yian chat's inbox and inputs", () => {
       expect(missing.stderr).not.toContain("messages");
       const inbox = await cli([path, "-i", "topic=x", "-i", "messages=hi"]);
       expect(inbox.code).toBe(2);
-      expect(inbox.stderr).toContain('unknown input "messages"');
+      expect(inbox.stderr).toContain('input "messages" is an inbox; it takes messages through send, not a value');
     },
     TIMEOUT,
   );

@@ -19,7 +19,7 @@ import { loadSkills } from "../../src/compose/skills.ts";
 import { MemoryRegistry } from "../../src/memory_host.ts";
 import { runFlow } from "../../src/run.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
-import { McpServer, mcpServer } from "../../src/tools/mcp.ts";
+import { McpSdkMissingError, McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import { TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { withAppendHook } from "../helpers/append_hook.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
@@ -734,13 +734,18 @@ test("only the missing mcp sdk import error is a host error", async () => {
       throw error;
     };
   };
+  const SDK = "MCP servers need the MCP SDK; install @modelcontextprotocol/client 2.3.1";
   let reported;
   let other;
+  let worded;
   try {
-    failWith(new Error("MCP servers need the MCP SDK; install @modelcontextprotocol/client 2.3.1"));
+    failWith(new McpSdkMissingError(SDK));
     reported = await run([flow, "--mcp-config", cfg]);
     failWith(new Error("no module named 'x'"));
     other = await run([flow, "--mcp-config", cfg]);
+    // Known by its class, not its message.
+    failWith(new Error(SDK));
+    worded = await run([flow, "--mcp-config", cfg]);
   } finally {
     McpServer.prototype.open = open;
   }
@@ -748,7 +753,10 @@ test("only the missing mcp sdk import error is a host error", async () => {
   expect(reported.code).toBe(1);
   expect(reported.output).toContain("run failed: MCP servers need the MCP SDK");
   // Any other error is a bug: `main` prints its stack, not a `run failed:` line.
-  expect(other.code).toBe(1);
+  for (const bug of [other, worded]) {
+    expect(bug.code).toBe(1);
+    expect(bug.stderr).toContain("\n    at ");
+    expect(bug.stderr).not.toContain("run failed:");
+  }
   expect(other.stderr).toContain("Error: no module named 'x'\n    at ");
-  expect(other.stderr).not.toContain("run failed:");
 });

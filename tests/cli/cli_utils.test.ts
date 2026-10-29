@@ -4,6 +4,7 @@
 // `load-core/seed_00_hello_agent`, and set a default provider and model where they rely on one.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,12 +17,14 @@ import {
   ensureEnvKey,
   flush,
   helpText,
+  HostStop,
   JSON_FORMAT,
   MissingKeyError,
   type OptionSpec,
   type ParsedArgs,
   parseCommand,
   printJson,
+  stopOnSignals,
   streamWriter,
   UsageError,
   usageError,
@@ -560,5 +563,54 @@ describe("streamWriter", () => {
     });
     const error = await rejection(streamWriter(stream).write("x"));
     expect(error.message).toBe("write EIO");
+  });
+});
+
+describe("stopOnSignals", () => {
+  const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  const listeners = (target: EventEmitter) => SIGNALS.map((name) => target.listenerCount(name));
+
+  test("each signal aborts with a HostStop naming it and removes all three listeners", () => {
+    for (const name of SIGNALS) {
+      const target = new EventEmitter();
+      const controller = new AbortController();
+      stopOnSignals(controller, target);
+      expect(listeners(target)).toEqual([1, 1, 1]);
+      target.emit(name);
+      expect(controller.signal.reason).toBeInstanceOf(HostStop);
+      expect(controller.signal.reason.signal).toBe(name);
+      expect(listeners(target)).toEqual([0, 0, 0]);
+    }
+  });
+
+  test("the disposer removes the listeners", () => {
+    const target = new EventEmitter();
+    const controller = new AbortController();
+    const dispose = stopOnSignals(controller, target);
+    dispose();
+    expect(listeners(target)).toEqual([0, 0, 0]);
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  test("an already aborted controller keeps its reason and still removes them", () => {
+    const target = new EventEmitter();
+    const controller = new AbortController();
+    const first = new HostStop("SIGINT");
+    controller.abort(first);
+    stopOnSignals(controller, target);
+    target.emit("SIGTERM");
+    expect(controller.signal.reason).toBe(first);
+    expect(listeners(target)).toEqual([0, 0, 0]);
+  });
+
+  test("names picks the signals listened for", () => {
+    const target = new EventEmitter();
+    const controller = new AbortController();
+    stopOnSignals(controller, target, ["SIGTERM"]);
+    expect(listeners(target)).toEqual([0, 1, 0]);
+    target.emit("SIGTERM");
+    expect(controller.signal.reason).toBeInstanceOf(HostStop);
+    expect(controller.signal.reason.signal).toBe("SIGTERM");
+    expect(listeners(target)).toEqual([0, 0, 0]);
   });
 });

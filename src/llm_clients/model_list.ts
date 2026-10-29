@@ -38,17 +38,19 @@ export const MODEL_LIST_TIMEOUT_SECONDS = 8;
  * The message is one of `HTTP <status>`, `can't reach host`, `timed out`, `invalid request`,
  * `invalid response`, or `unsupported provider`; it never holds the key, a header value, the URL,
  * or the response body. `status` is the HTTP status of an `HTTP <status>` failure, else `null`;
- * hosts read it rather than the message. A status of 401 or 403 makes `isAuthFailure` count the
- * error.
+ * `timedOut` is true for a `timed out` failure; hosts read them rather than the message. A status
+ * of 401 or 403 makes `isAuthFailure` count the error.
  */
 export class ModelListError extends Error {
   override name = "ModelListError";
   readonly status: number | null;
+  readonly timedOut: boolean;
 
-  constructor(message: string, options: { status?: number } = {}) {
+  constructor(message: string, options: { status?: number; timedOut?: boolean } = {}) {
     // No options reach `super`, so the error never has a `cause` key.
     super(message);
     this.status = options.status ?? null;
+    this.timedOut = options.timedOut === true;
   }
 }
 
@@ -158,7 +160,7 @@ export async function listModels(
   const deadline = scheduler.now() + timeout * 1000;
   const getPage: GetPage = async (path, params) => {
     const timeoutMs = deadline - scheduler.now();
-    if (timeoutMs <= 0) throw new ModelListError("timed out");
+    if (timeoutMs <= 0) throw new ModelListError("timed out", { timedOut: true });
     const query = new URLSearchParams(params).toString();
     const url = root + path + (query ? `?${query}` : "");
     let response: unknown;
@@ -166,7 +168,7 @@ export async function listModels(
       response = await send("GET", url, { headers, timeoutMs, bodyLimit, signal, scheduler });
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
-      if (error instanceof ProviderError && error.kind === "timeout") throw new ModelListError("timed out");
+      if (error instanceof ProviderError && error.kind === "timeout") throw new ModelListError("timed out", { timedOut: true });
       if (error instanceof ProviderError && error.kind === "protocol") throw new ModelListError("invalid response");
       throw new ModelListError("can't reach host");
     }

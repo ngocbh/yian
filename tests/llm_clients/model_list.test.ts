@@ -94,6 +94,7 @@ function assertClean(error: Error, message: string): void {
   expect(error).toBeInstanceOf(ModelListError);
   expect(error.name).toBe("ModelListError");
   expect(error.message).toBe(message);
+  expect((error as ModelListError).timedOut).toBe(message === "timed out");
   expect("cause" in error).toBe(false);
   for (const text of texts(error)) {
     expect(text).not.toContain(KEY);

@@ -19,7 +19,6 @@ import {
   parseKv,
   readInputsJson,
   skillsCheck,
-  stopOnSignals,
 } from "../../src/cli/run.ts";
 import { childCommand, main } from "../../src/cli/index.ts";
 import { LICENSES } from "../../src/cli/licenses.ts";
@@ -28,6 +27,7 @@ import {
   type CliIo,
   HostStop,
   printJson,
+  stopOnSignals,
   UsageError,
   type Writer,
 } from "../../src/cli/utils.ts";
@@ -329,44 +329,6 @@ describe("flowBanner", () => {
     expect(text).toContain("\x1b[1mRunning flow: \x1b[0m");
     expect(text).toContain("\x1b[1mDescription: \x1b[0m");
     expect(text).toContain("\x1b[36m╭");
-  });
-});
-
-describe("stopOnSignals", () => {
-  const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-  const listeners = (target: EventEmitter) => SIGNALS.map((name) => target.listenerCount(name));
-
-  test("each signal aborts with a HostStop naming it and removes all three listeners", () => {
-    for (const name of SIGNALS) {
-      const target = new EventEmitter();
-      const controller = new AbortController();
-      stopOnSignals(controller, target);
-      expect(listeners(target)).toEqual([1, 1, 1]);
-      target.emit(name);
-      expect(controller.signal.reason).toBeInstanceOf(HostStop);
-      expect(controller.signal.reason.signal).toBe(name);
-      expect(listeners(target)).toEqual([0, 0, 0]);
-    }
-  });
-
-  test("the disposer removes the listeners", () => {
-    const target = new EventEmitter();
-    const controller = new AbortController();
-    const dispose = stopOnSignals(controller, target);
-    dispose();
-    expect(listeners(target)).toEqual([0, 0, 0]);
-    expect(controller.signal.aborted).toBe(false);
-  });
-
-  test("an already aborted controller keeps its reason and still removes them", () => {
-    const target = new EventEmitter();
-    const controller = new AbortController();
-    const first = new HostStop("SIGINT");
-    controller.abort(first);
-    stopOnSignals(controller, target);
-    target.emit("SIGTERM");
-    expect(controller.signal.reason).toBe(first);
-    expect(listeners(target)).toEqual([0, 0, 0]);
   });
 });
 
@@ -1023,6 +985,34 @@ const PAUSE_FLOW =
   "  settle:\n    kind: code\n    depends_on: [first]\n    code: |\n" +
   "      await new Promise((resolve) => setTimeout(resolve, 30_000));\n      return null;\n" +
   "output: ${first.output}\n";
+
+test("an ask off a terminal writes its prompt with no escape codes", async () => {
+  const flow = file("flow.yaml", ASK_FLOW);
+  const { io, stdout, stderr } = testIo();
+  // A piped run: stdin has ended and stderr isn't a TTY.
+  const input = new FakeInput({ tty: false });
+  input.end();
+  const output = new FakeOutput({ tty: false });
+  const argv = ["run", flow, "-q", "--json", "--log", join(tmp, "run.jsonl")];
+  const code = await main(argv, { ...io, stdin: input, stderrStream: output });
+  expect(code).toBe(1);
+  expect(stderr()).toEndWith("\nrun cancelled\n");
+  expect(JSON.parse(stdout()).error.code).toBe("run.cancelled");
+  expect(output.text).toContain("Proceed?");
+  expect(output.text).not.toContain("\x1b");
+});
+
+test("a value for an inbox input is a usage error, as in chat", async () => {
+  const flow =
+    "id: f\nname: f\ninput:\n  messages: !Inbox(str)\nnodes:\n" +
+    "  heard:\n    kind: tool\n    tool_id: take\n    input:\n      from: ${input.messages}\n" +
+    "output: ${heard.output}\n";
+  const { code, stdout, stderr } = await runFlowCli(flow, ["-q", "-i", "messages=hello"]);
+  expect(code).toBe(2);
+  expect(stdout).toBe("");
+  expect(stderr).toContain('input "messages" is an inbox; it takes messages through send, not a value');
+  expect(stderr).not.toContain("Run log: ");
+});
 
 describe("run's stops", () => {
   test("Ctrl-C at a prompt during the run: cancelled by user, exit 130, no document", async () => {

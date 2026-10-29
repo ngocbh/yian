@@ -49,7 +49,8 @@ output: ${gather.output.seen}
 This flow collects notes until its inbox closes, then returns them all.
 
 - An inbox input is required and has no default. A run takes no value for it: messages come
-  through `send` (see [Sending messages](#sending-messages)).
+  through `send` (see [Sending messages](#sending-messages)). Passing one with `--input` or
+  `--inputs` is a usage error.
 - Read an inbox only whole, as `${input.notes}`, in one of three places: a `take`'s `from:`, an
   agent's `steer_inbox:` (see [Agents](/agents/)), or an `Inbox` input of a `kind: call` node's
   or a `loop`'s child.

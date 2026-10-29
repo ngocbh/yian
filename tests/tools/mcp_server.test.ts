@@ -30,6 +30,7 @@ import {
   McpError,
   McpInvalidRequestError,
   McpRequestError,
+  McpSdkMissingError,
   McpServer,
   McpServerClosed,
   mcpServer,
@@ -233,6 +234,7 @@ describe("MCP errors", () => {
     const cases: [Error, readonly ToolErrorKind[]][] = [
       [new McpError("m"), []],
       [new McpConnectError("m"), []],
+      [new McpSdkMissingError("m"), []],
       [new McpToolError("m"), ["reported"]],
       [new McpRequestError("m", -32000), ["reported"]],
       [new McpInvalidRequestError("m", -32602), ["reported", "permanent"]],
@@ -1211,6 +1213,7 @@ describe("McpServer on Node, built", () => {
         const { mcpServer } = await import(${builtUrl("dist/src/tools/mcp.js")});
         await assert.rejects(mcpServer({ command: "x" }).open(), (error) => {
           assert.equal(error.message, "MCP servers need the MCP SDK; install @modelcontextprotocol/client 2.3.1");
+          assert.equal(error.name, "McpSdkMissingError");
           assert.equal(error.cause.code, "ERR_MODULE_NOT_FOUND");
           assert.match(error.cause.message, /@modelcontextprotocol\\/client/);
           return true;

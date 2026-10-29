@@ -8,6 +8,7 @@
  * - `printJson` writes the one `yian.cli.v1` document a `--json` command prints.
  * - `relay` copies the `run --json` child's document to the entry's stdout; `abortOnSignal` turns
  *   the stop the entry forwards to the child into its `CliIo.stop`, aborted with a `HostStop`.
+ * - `stopOnSignals` stops a command's controller with a `HostStop` on the first stop signal.
  * - `ensureEnvKey` is the interactive key prompt `llm_clients/api_key_env.ts` points at; `yian run`
  *   calls it pre-flight for agents without a saved login, so a missing key surfaces as an upfront
  *   prompt instead of a failure on the first API call. It prompts only when given a terminal;
@@ -43,13 +44,21 @@ export interface CliIo {
   stdout: Writer;
   stderr: Writer;
   stdin: NodeJS.ReadableStream & { isTTY?: boolean };
-  stderrStream: NodeJS.WritableStream & { columns?: number };
+  stderrStream: NodeJS.WritableStream & { isTTY?: boolean; columns?: number };
   env: Env;
   /**
    * A stop from outside the process's signals, aborted with a `HostStop`: aborted, or aborting
    * later, it stops the run.
    */
   stop?: AbortSignal;
+}
+
+/**
+ * Whether `io`'s stdin and stderr are both TTYs, so a `Terminal` over them may draw with escape
+ * codes; otherwise it should be `plain`.
+ */
+export function atTerminal(io: CliIo): boolean {
+  return io.stdin.isTTY === true && io.stderrStream.isTTY === true;
 }
 
 /** The last write each `streamWriter` started, which `flush` awaits. */
@@ -149,6 +158,34 @@ export function abortOnSignal(
   const controller = new AbortController();
   target.on(name, () => controller.abort(reason));
   return controller.signal;
+}
+
+const STOP_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+/**
+ * Abort `controller` with a `HostStop` naming the signal on the first of `names` (SIGINT, SIGTERM
+ * and SIGHUP unless given) that `target` emits, and return a disposer that removes the listeners.
+ *
+ * The first signal removes every listener, so a second one gets the default action and ends the
+ * process. An already aborted controller keeps its reason.
+ */
+export function stopOnSignals(
+  controller: AbortController,
+  target: Pick<NodeJS.EventEmitter, "on" | "off"> = process,
+  names: readonly NodeJS.Signals[] = STOP_SIGNALS,
+): () => void {
+  const listeners = names.map((signal) => {
+    const listener = () => {
+      dispose();
+      controller.abort(new HostStop(signal));
+    };
+    return [signal, listener] as const;
+  });
+  const dispose = () => {
+    for (const [signal, listener] of listeners) target.off(signal, listener);
+  };
+  for (const [signal, listener] of listeners) target.on(signal, listener);
+  return dispose;
 }
 
 /** A command's view of the environment: the values it `set`, over the base environment. */

@@ -522,6 +522,45 @@ describe("planStructured: the schema", () => {
   });
 });
 
+describe("planStructured: a date or datetime field's format hint reaches every route", () => {
+  const DATE_HINT = "A date: YYYY-MM-DD, such as 2026-05-21.";
+  const DATETIME_HINT =
+    "A date and time: YYYY-MM-DDTHH:MM[:SS[.ffffff]][Z|+HH:MM|-HH:MM], such as 2026-05-21T14:30:00Z. " +
+    "Seconds, a fraction of one to six digits and the offset are optional.";
+  const schema = typeToSchema(typeFor("Due", readTypedefs({ Due: { on: "date", at: "datetime" } })))!;
+  const thinking: JsonObject = { thinking: { type: "enabled", budget_tokens: 1024n } };
+  const anthropic = (model: string, block: JsonObject | null) =>
+    target({ provider: "anthropic", model, protocol: "anthropic_messages", block });
+
+  /** Return the schema `plan` sends: its tool's parameters, its output format's, or the prompted one. */
+  function sent(plan: StructuredPlan): JsonObject {
+    return plan.tools[0]?.parameters ?? plan.outputFormat?.schema ?? plan.schema;
+  }
+
+  // Each route with the `format` the date field keeps; Azure's strict mode rejects `format`, so it
+  // moves into the description after the hint.
+  test.each([
+    ["row 1, prompted", "prompt", target({ model: "no-structured-sentinel" }), "date"],
+    ["row 3, anthropic thinking", "json_schema", anthropic("claude-opus-5-5", thinking), "date"],
+    ["row 4, anthropic tool", "forced_tool", anthropic("claude-sonnet-4-5", null), "date"],
+    ["row 6, ollama", "json_schema", target({ provider: "ollama", model: "llama3", protocol: "ollama_chat" }), "date"],
+    ["row 7, gemini", "json_schema", target({ provider: "google", model: "gemini-2.5-pro", protocol: "gemini" }), "date"],
+    ["row 9, azure legacy tool", "forced_tool", target({ provider: "azure", model: "gpt-4-turbo" }), "date"],
+    ["row 10, azure strict", "json_schema", target({ provider: "azure", model: "gpt-4o" }), null],
+    ["row 11, openai tool", "forced_tool", target(), "date"],
+  ] as const)("%s", (_row, strategy, route, format) => {
+    const plan = planStructured(route, schema);
+    expect(plan.strategy).toBe(strategy);
+    const properties = sent(plan)["properties"] as JsonObject;
+    const on = properties["on"] as JsonObject;
+    const at = properties["at"] as JsonObject;
+    expect(on["format"]).toBe(format ?? undefined);
+    expect(on["description"]).toBe(format === null ? `${DATE_HINT}\n\n{format: "date"}` : DATE_HINT);
+    expect(at["format"]).toBeUndefined();
+    expect(at["description"]).toBe(DATETIME_HINT);
+  });
+});
+
 describe("forcesTool and sendsJsonSchemaAsTool", () => {
   test("the refusing prefixes", () => {
     expect([...FORCED_TOOL_REFUSING_PREFIXES]).toEqual([

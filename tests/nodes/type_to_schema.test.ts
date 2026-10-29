@@ -378,12 +378,22 @@ const CAPTURES: [string, () => Type, string][] = [
   [
     "date",
     () => t("date"),
-    `{"properties":{"value":{"title":"Value","type":"string"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+    `{"properties":{"value":{"description":"A date: YYYY-MM-DD, such as 2026-05-21.","format":"date","title":"Value","type":"string"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
   ],
   [
     "datetime",
     () => t("datetime"),
-    `{"properties":{"value":{"title":"Value","type":"string"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+    `{"properties":{"value":{"description":"A date and time: YYYY-MM-DDTHH:MM[:SS[.ffffff]][Z|+HH:MM|-HH:MM], such as 2026-05-21T14:30:00Z. Seconds, a fraction of one to six digits and the offset are optional.","title":"Value","type":"string"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
+  ],
+  [
+    "list(date)",
+    () => t("list(date)"),
+    `{"properties":{"items":{"items":{"description":"A date: YYYY-MM-DD, such as 2026-05-21.","format":"date","type":"string"},"title":"Items","type":"array"}},"required":["items"],"title":"ListWrapper","type":"object"}`,
+  ],
+  [
+    "Optional(datetime)",
+    () => t("Optional(datetime)"),
+    `{"properties":{"value":{"anyOf":[{"description":"A date and time: YYYY-MM-DDTHH:MM[:SS[.ffffff]][Z|+HH:MM|-HH:MM], such as 2026-05-21T14:30:00Z. Seconds, a fraction of one to six digits and the offset are optional.","type":"string"},{"type":"null"}],"title":"Value"}},"required":["value"],"title":"ScalarWrapper","type":"object"}`,
   ],
   [
     "bool",
@@ -405,7 +415,7 @@ const CAPTURES: [string, () => Type, string][] = [
           Lesson: { lesson_id: "str", meta: "Meta", meta_list: "list(Meta)" },
         }),
       ),
-    `{"$defs":{"meta":{"properties":{"due_date":{"title":"Due Date","type":"string"},"score":{"anyOf":[{"maximum":10,"minimum":0,"type":"integer"},{"type":"null"}],"default":null,"title":"Score"}},"required":["due_date"],"title":"meta","type":"object"},"meta_list_item":{"properties":{"due_date":{"title":"Due Date","type":"string"},"score":{"anyOf":[{"maximum":10,"minimum":0,"type":"integer"},{"type":"null"}],"default":null,"title":"Score"}},"required":["due_date"],"title":"meta_list_item","type":"object"}},"properties":{"lesson_id":{"title":"Lesson Id","type":"string"},"meta":{"$ref":"#/$defs/meta"},"meta_list":{"items":{"$ref":"#/$defs/meta_list_item"},"title":"Meta List","type":"array"}},"required":["lesson_id","meta","meta_list"],"title":"Record","type":"object"}`,
+    `{"$defs":{"meta":{"properties":{"due_date":{"description":"A date: YYYY-MM-DD, such as 2026-05-21.","format":"date","title":"Due Date","type":"string"},"score":{"anyOf":[{"maximum":10,"minimum":0,"type":"integer"},{"type":"null"}],"default":null,"title":"Score"}},"required":["due_date"],"title":"meta","type":"object"},"meta_list_item":{"properties":{"due_date":{"description":"A date: YYYY-MM-DD, such as 2026-05-21.","format":"date","title":"Due Date","type":"string"},"score":{"anyOf":[{"maximum":10,"minimum":0,"type":"integer"},{"type":"null"}],"default":null,"title":"Score"}},"required":["due_date"],"title":"meta_list_item","type":"object"}},"properties":{"lesson_id":{"title":"Lesson Id","type":"string"},"meta":{"$ref":"#/$defs/meta"},"meta_list":{"items":{"$ref":"#/$defs/meta_list_item"},"title":"Meta List","type":"array"}},"required":["lesson_id","meta","meta_list"],"title":"Record","type":"object"}`,
   ],
   [
     // The `properties` field's schema is sorted too (checked by key order).

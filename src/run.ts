@@ -993,8 +993,8 @@ type DriveOptions = Pick<
 >;
 
 /**
- * Check the options `runFlow` and `advance` share before anything is opened or created, as the
- * engine checks them, and split off the servers the call opens.
+ * Check the options `runFlow` and `advance` share before anything is opened or created, and split
+ * off the servers the call opens.
  *
  * @returns The unopened `tools` servers, as `splitRunServers` returns them.
  * @throws TypeError when `signal` isn't an `AbortSignal`, `live` isn't a `LiveChannel`, `onEvent`

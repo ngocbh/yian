@@ -1000,7 +1000,6 @@ test("an empty history starts nothing and leaves every memory unrequested", () =
   expect(state.started).toBeNull();
   expect(state.ready).toBeNull();
   expect(state.finished).toBeNull();
-  expect(state.everRequested).toBe(false);
   expect(state.commitAttemptKey).toBeNull();
   expect(state.policyOutcomes).toEqual([
     new PolicyCommitOutcome("a", "unrequested"),
@@ -1025,7 +1024,6 @@ test("an unfinished attempt reads its records and derives the unfinished outcome
   expect(state.started).toBe(attempt.started);
   expect(state.ready).toBe(attempt.ready);
   expect(state.finished).toBeNull();
-  expect(state.everRequested).toBe(true);
   expect(state.commitAttemptKey).toBe(1);
   expect(state.canStart).toBe(false);
   const policies = [
@@ -1091,7 +1089,6 @@ test("a finished history admits a start and keeps the accepted outcome", () => {
   expect(state.current).toBe(second);
   expect(state.finished).toBe(second.finished);
   expect(state.ready).toBeNull();
-  expect(state.everRequested).toBe(true);
   expect(state.commitAttemptKey).toBe(2);
   expect(state.canStart).toBe(true);
   expect(state.outcome).toBe(second.finished!.outcome);
@@ -1214,7 +1211,6 @@ test("the reducer accepts a full attempt Started → Ready → Requested → Suc
   expect(afterFinish!.outcome).toBe((records[4] as BackwardFinishedRecord).outcome);
   expect(afterFinish!.attempts).toHaveLength(1);
   expect(afterFinish!.canStart).toBe(true);
-  expect(afterFinish!.everRequested).toBe(true);
   for (const state of states) {
     expect(Object.isFrozen(state)).toBe(true);
     expect(state.memoryOrder).toBe(empty.memoryOrder);

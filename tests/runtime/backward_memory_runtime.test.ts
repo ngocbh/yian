@@ -600,7 +600,7 @@ test("an append fault preserves the exact prefix and closes resources", async ()
       expect(memory.get("A")!.commitCalls).toEqual([]);
     } else if (recordType === MemoryCommitRequestedRecord) {
       expect(current.ready).not.toBeNull();
-      expect(current.everRequested).toBe(false);
+      expect(current.current!.requests).toEqual([]);
       expect(memory.get("A")!.commitCalls).toEqual([]);
     } else if (recordType === MemoryCommitSucceededRecord || recordType === MemoryCommitFailedRecord) {
       expect(current.policyOutcomes[0]!.status).toBe("unknown");
@@ -636,7 +636,7 @@ test("a manual precommit retry reopens snapshots and recomputes every memory", a
     expect((caught as Error).message).toBe("interrupted before request");
     const old = built.state.backwardState;
     expect(old.finished).toBeNull();
-    expect(old.everRequested).toBe(false);
+    expect(old.current!.requests).toEqual([]);
     const before = records(built).length;
     const invalid = await rejected(drive(built, new Map([["A", memory]]), []));
     expect((invalid as Error).constructor).toBe(RangeError);
@@ -788,7 +788,7 @@ test("a host capability fault escapes as itself, with cleanup errors noted on it
   ]);
   for (const backend of memory.values()) expect(backend.closeCount).toBe(1);
   expect(built.state.backwardState.finished).toBeNull();
-  expect(built.state.backwardState.everRequested).toBe(false);
+  expect(built.state.backwardState.current!.requests).toEqual([]);
 });
 
 test("a later attempt follows or closes any prior attempt and recomputes everything", async () => {
@@ -1071,7 +1071,7 @@ test("cleanup closes every session and keeps the primary error or the close fail
         "memory 'B' session close also raised MemoryOperationError: Close failed.",
       ]);
       expect(built.state.backwardState.finished).toBeNull();
-      expect(built.state.backwardState.everRequested).toBe(false);
+      expect(built.state.backwardState.current!.requests).toEqual([]);
     } else {
       expect(built.state.backwardState.finished!.outcome.status).toBe("succeeded");
       expect(built.state.backwardState.canStart).toBe(true);

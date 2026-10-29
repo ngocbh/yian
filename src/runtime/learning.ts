@@ -823,11 +823,6 @@ export class RuntimeBackwardState {
     return this.current?.finished ?? null;
   }
 
-  /** Whether any attempt has an accepted commit request, whatever was observed later. */
-  get everRequested(): boolean {
-    return this.attempts.some((attempt) => attempt.requests.length > 0);
-  }
-
   /** The attempt id folded into the current attempt's commit ids. */
   get commitAttemptKey(): number | null {
     return this.current?.started.attemptId ?? null;

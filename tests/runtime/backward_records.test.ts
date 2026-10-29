@@ -1116,7 +1116,7 @@ test("a backward start's append failure installs no attempt", () => {
   };
   expect(() => commitPrepared(log, state, prepared)).toThrow("append failed");
   expect(state.backwardState).toBe(prior);
-  expect(prior.everRequested).toBe(false);
+  expect(prior.attempts).toEqual([]);
   expect(state.result).toBe(result);
   expect(state.nextSequence).toBe(sequence);
   expect(state.trace!.nextSequence).toBe(sequence);
@@ -1342,7 +1342,6 @@ test("backward policy batches and unfinished prefixes follow the accepted layout
   for (const { memory, mutations } of proposals) {
     const commitId = memoryCommitId(state.runId!, memory, mutations, 1);
     acceptBackward(state, log, new MemoryCommitRequestedRecord(memory, commitId, mutations, 1));
-    expect(state.backwardState.everRequested).toBe(true);
     expect(state.backwardState.policyOutcomes.find((policy) => policy.memory === memory)!.status).toBe("unknown");
     expect(state.backwardState.canStart).toBe(false);
     acceptBackward(state, log, new MemoryCommitSucceededRecord(memory, commitId, 1));
@@ -1536,7 +1535,7 @@ test.each(retryableRows(["commit.failed", "backward.unfinished"]))(
       log,
       new BackwardFinishedRecord(1, new BackwardOutcome("failed", { feedback: root, failure, learning })),
     );
-    expect(state.backwardState.everRequested).toBe(true);
+    expect(state.backwardState.current!.requests).not.toEqual([]);
     expect(state.backwardState.canStart).toBe(true);
     acceptBackward(state, log, new BackwardStartedRecord(2, "Different."));
     expect(state.backwardState.current!.started.attemptId).toBe(2);
@@ -1688,7 +1687,7 @@ test.each([
   const commitId = change === "identity" ? "commit-1" : memoryCommitId(state.runId!, policy, batch, 1);
   const record = new MemoryCommitRequestedRecord(policy, commitId, batch, attempt);
   expectError(() => prepareRecord(state, record), RangeError, message);
-  expect(state.backwardState.everRequested).toBe(false);
+  expect(state.backwardState.current!.requests).toEqual([]);
 });
 
 test.each([
@@ -1741,7 +1740,7 @@ test.each(["ready", "request", "finished"] as const)(
     };
     expect(() => commitPrepared(log, state, prepared)).toThrow("append failed");
     expect(state.backwardState).toBe(prior);
-    expect(prior.everRequested).toBe(false);
+    expect(prior.current!.requests).toEqual([]);
     expect(state.result).toBe(result);
     expect(state.nextSequence).toBe(sequence);
     expect(state.trace!.nextSequence).toBe(sequence);

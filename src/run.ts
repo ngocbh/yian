@@ -380,6 +380,7 @@ export class RunResult {
    *   the output's shape, or `headers` has a name or value that can't be sent or names other than
    *   the recorded ones (the message never echoes a value).
    * @throws MemorySetupError when the run's memories can't restore their recorded snapshots.
+   * @throws RunBusyError when another writer holds the run's log (a durable one).
    * @throws Error when another backward call on this result is in progress, or an earlier call
    *   couldn't retain its accepted prefix; host and log faults also reject, keeping the accepted
    *   prefix.
@@ -409,7 +410,7 @@ export class RunResult {
     try {
       return await handle.backward(taken as FeedbackValue, {
         apiKey: apiKey === null ? null : secretKey(apiKey),
-        headers: headers === null ? null : secretHeaders(headers),
+        headers: headers === null ? null : validateHeaders(headers, null),
         onEvent,
       });
     } finally {
@@ -642,7 +643,8 @@ function idleRun(
 /**
  * Close what a run call opened and hand the run on, whatever fails.
  *
- * 1. Servers close, then memory.
+ * 1. Servers close, then memory. Server close never rejects (`closeRunServers`), so only memory and
+ *    log close errors are noted.
  * 2. Then, in one synchronous step: the next idle entry is built (after every await, so it holds
  *    every record appended under this hold), the log closes, and the hold is released.
  *
@@ -665,11 +667,7 @@ async function closeAndRelease(parts: {
     if (pending === null) pending = { error };
     else noteCleanup(pending.error, error, `${operation} also raised`);
   };
-  try {
-    await closeRunServers(parts.servers);
-  } catch (error) {
-    note("server close", error);
-  }
+  await closeRunServers(parts.servers);
   try {
     await parts.memoryRuntime?.close();
   } catch (error) {
@@ -739,6 +737,7 @@ class BackwardHandle {
   /**
    * Reopen and replay the log, then drive one whole backward attempt over it.
    *
+   * @throws RunBusyError when another writer holds the log.
    * @throws Error when an earlier call couldn't retain its accepted prefix, and what the replay or
    *   `driveBackward` throws.
    */
@@ -755,11 +754,10 @@ class BackwardHandle {
     }
     // The call comes after the run's scope ended, so the replay's `checkRecorded` needs its own.
     return withEnv(this.env, async () => {
-      const logOptions = { clock: this.clock };
       const authority =
         this.path === null
-          ? MemoryRunLog.fromRecords(this.records, logOptions)
-          : JsonlRunLog.resume(this.path, logOptions);
+          ? MemoryRunLog.fromRecords(this.records, { clock: this.clock })
+          : openLog(this.path, this.clock);
       let state: RunState | null = null;
       let replaySequence: number | null = null;
       let primary: { error: unknown } | null = null;
@@ -1086,16 +1084,6 @@ type CallTimeLlm = {
   selection: SelectionRecord;
   agents: Record<string, AgentConfig>;
 };
-
-/**
- * Return host header values once every name and value may be sent, in their given order.
- *
- * @throws RangeError when a name or value is refused, or there are too many headers; the message
- *   never echoes a value.
- */
-function secretHeaders(raw: unknown): Record<string, string> {
-  return validateHeaders(raw, null);
-}
 
 /**
  * Return whether a run's recorded agents may use the host key: a static agent is marked for it, or
@@ -1676,7 +1664,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     const unopened = checkDriveOptions(options);
     const { apiKey: rawKey = null, headers: rawHeaders = null } = options;
     let apiKey = rawKey === null ? null : secretKey(rawKey);
-    let headers = rawHeaders === null ? null : secretHeaders(rawHeaders);
+    let headers = rawHeaders === null ? null : validateHeaders(rawHeaders, null);
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);
     // The registry's key: the file itself, however the path names it (throws ENOENT when missing).
@@ -1883,16 +1871,16 @@ export async function loadRecordedFlow(
  */
 function checkRecordedSpecs(
   kind: "tools" | "skills",
-  recorded: Readonly<Record<string, RecordedTool | RecordedSkill>>,
-  current: Readonly<Record<string, RecordedTool | RecordedSkill>>,
+  recorded: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
+  current: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
 ): void {
   const names = [...new Set([...Object.keys(recorded), ...Object.keys(current)])].sort(compareCodeUnits);
   for (const name of names) {
     const subject = `resume refused: ${kind}.${name}`;
     if (!Object.hasOwn(current, name)) throw new RangeError(`${subject} is recorded, but this run's ${kind} lack it`);
     if (!Object.hasOwn(recorded, name)) throw new RangeError(`${subject} isn't recorded; the run started without it`);
-    const was = recorded[name] as unknown as Record<string, unknown>;
-    const now = current[name] as unknown as Record<string, unknown>;
+    const was = recorded[name]!;
+    const now = current[name]!;
     for (const field of Object.keys(was)) {
       if (logJson(was[field]) !== logJson(now[field])) {
         throw new RangeError(`${subject} ${field} differs from the recorded one`);
@@ -2232,8 +2220,9 @@ export function pendingCalls(log: string): readonly PendingCall[] {
   const waits = new WaitsState();
   // Each unsettled call's recorded arguments; a settled node's calls leave the fold, so theirs go.
   const args = new Map<string, JsonObject | null>();
-  // Each running node's latest `model_call` step, which holds its agent calls' arguments.
-  const replies = new Map<string, Readonly<JsonObject>>();
+  // Each running node's step count and latest `model_call` step with its number: an agent call's
+  // `reply` must name that step, so the earlier ones needn't be kept.
+  const nodes = new Map<string, { count: number; replyN: number; reply: Readonly<JsonObject> | undefined }>();
   let first = true;
   for (const { envelope } of iterRunRecords(log)) {
     if (first && !(envelope.record instanceof RunStartedRecord)) {
@@ -2242,18 +2231,22 @@ export function pendingCalls(log: string): readonly PendingCall[] {
     first = false;
     applyWaitsRecord(waits, envelope);
     const record = envelope.record;
-    if (record instanceof NodeStepRecord && record.step["kind"] === "model_call") {
-      replies.set(record.nodeId, record.step);
-    } else if (record instanceof NodeStepRecord && record.step["kind"] === "pending") {
+    if (record instanceof NodeStepRecord) {
+      const node = nodes.get(record.nodeId) ?? { count: 0, replyN: 0, reply: undefined };
+      nodes.set(record.nodeId, node);
+      node.count += 1;
       const step = record.step;
-      const value = Object.hasOwn(step, "reply")
-        ? agentCallArguments(replies.get(record.nodeId), Number(step["index"]))
-        : (step["arguments"] as JsonObject);
-      args.set(String(step["call_id"]), value);
+      if (step["kind"] === "model_call") {
+        node.replyN = node.count;
+        node.reply = step;
+      } else if (step["kind"] === "pending") {
+        const replyAt = (n: number) => (n === node.replyN ? node.reply : undefined);
+        args.set(String(step["call_id"]), pendingArguments(replyAt, step));
+      }
     } else {
       const settled = settledNodeId(record);
       if (settled === null) continue;
-      replies.delete(settled);
+      nodes.delete(settled);
       for (const callId of args.keys()) if (!waits.calls.has(callId)) args.delete(callId);
     }
   }
@@ -2293,8 +2286,18 @@ function openHostCalls(waits: WaitsState, argumentsOf: (call: Call) => JsonObjec
 function stateArguments(state: RunState, call: Call): JsonObject | null {
   const steps = state.nodeSteps.get(call.nodeId) ?? [];
   const step = steps.find((entry) => entry["kind"] === "pending" && entry["call_id"] === call.callId);
-  if (step === undefined) return null;
-  if (Object.hasOwn(step, "reply")) return agentCallArguments(steps[Number(step["reply"]) - 1], Number(step["index"]));
+  return step === undefined ? null : pendingArguments((n) => steps[n - 1], step);
+}
+
+/**
+ * The arguments `pending` step `step` registered (for an agent's call, those of the tool call in
+ * the reply its `reply` names, which `stepAt` returns by step number), or `null`.
+ */
+function pendingArguments(
+  stepAt: (n: number) => Readonly<JsonObject> | undefined,
+  step: Readonly<JsonObject>,
+): JsonObject | null {
+  if (Object.hasOwn(step, "reply")) return agentCallArguments(stepAt(Number(step["reply"])), Number(step["index"]));
   return (step["arguments"] as JsonObject | undefined) ?? null;
 }
 
@@ -2789,7 +2792,7 @@ export async function agentCall(
   const { nodeId, n } = call;
   const missing = () => new RangeError(`run log ${log} has no model call ${n} of node ${reprText(nodeId)}`);
   const apiKey = options.apiKey == null ? null : secretKey(options.apiKey);
-  const headers = options.headers == null ? null : secretHeaders(options.headers);
+  const headers = options.headers == null ? null : validateHeaders(options.headers, null);
   const env = options.env ?? processEnv;
   const entries = [...iterRunRecords(log)];
   const start = startRecord(entries[0]?.envelope);

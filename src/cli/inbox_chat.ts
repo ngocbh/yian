@@ -76,7 +76,6 @@ import {
   type Draft,
   draftLabel,
   draftText,
-  holdsPaste,
   joinDrafts,
   type Key,
   type LineEditor,
@@ -249,6 +248,14 @@ function lastWaitingSeq(path: string): number {
   let last = -1;
   for (const entry of iterRunRecords(path, { kinds: ["run_waiting"], payloads: false })) last = entry.seq;
   return last;
+}
+
+/**
+ * Whether the run has read every line sent to `inbox`, so none can be withdrawn: a take of it
+ * waits, unsettled, among `waits`, which it does only once nothing sent is left to read.
+ */
+export function inboxDrained(waits: readonly WaitInfo[], inbox: string): boolean {
+  return waits.some((wait) => wait.tool === "take" && wait.inbox === inbox && !wait.settled);
 }
 
 /** Return the text a withdrawn event holds: a `str` as it is, a message's text parts joined. */
@@ -428,8 +435,9 @@ export async function inboxChat(
   // What was typed at a prompt a deadline or Esc took down, plus what Esc withdrew, shown again at
   // the next prompt.
   let draft: Draft = [];
-  // The lines sent holding pasted tokens, by seq: Esc puts one it withdraws back with its tokens.
-  const pasted = new Map<number, Draft>();
+  // The lines sent from the framed box, by seq, as the box held them: Esc puts one it withdraws
+  // back as it was, its tokens and all.
+  const sent = new Map<number, Draft>();
   // Set once the inbox is closed (`/exit`, `/quit`, the end of input): no prompt comes back.
   let closed = false;
   // The sends of lines typed in the input box while a turn ran, in order, and their seqs.
@@ -498,6 +506,8 @@ export async function inboxChat(
     const done = (async () => {
       // A line entered in the box just before is in the log first, so Esc takes it back too.
       await liveSends;
+      // The lines a withdraw may take back; one sent meanwhile is kept for the next.
+      const known = [...sent.keys()];
       let back = await withdraw(path, inbox.name, { env: env.read });
       // What was taken back is no longer for the run to read: it moves the run no more.
       const gone = new Set(back.map((event) => event.seq));
@@ -506,11 +516,11 @@ export async function inboxChat(
       if (flusher !== null) back = await flusher.reclaim(back, closed);
       // Kept before the interrupt, which may be refused.
       if (back.length > 0) {
-        // A line sent with pasted tokens comes back with them; one sent before a resume, as
-        // the box would hold it (a long one as a token).
+        // A line sent from the box comes back as it held it; one sent before a resume, as a
+        // paste would (a long one as a token).
         const drafts = back.map((event) => {
           const text = valueText(event.value, inbox.message);
-          return pasted.get(event.seq) ?? (editor === null || closed ? [text] : textDraft(text));
+          return sent.get(event.seq) ?? (editor === null || closed ? [text] : textDraft(text));
         });
         const count = `${back.length} message${back.length === 1 ? "" : "s"}`;
         // After /exit no prompt comes back, so the text is printed rather than lost.
@@ -527,8 +537,8 @@ export async function inboxChat(
           await note(`(withdrew ${count}; back in the prompt)\n`);
         }
       }
-      // The run has read every line it didn't give back, so none sent so far can come back.
-      pasted.clear();
+      // The run has read every line it didn't give back, so none of those can come back.
+      for (const seq of known) sent.delete(seq);
       const stopped = await interruptReply(path, inbox.name, { env: env.read });
       if (stopped.seq !== null) await note("(stopping the reply)\n");
     })().catch((error: unknown) => {
@@ -673,7 +683,7 @@ export async function inboxChat(
           const event = lineEvent(line, inbox.message);
           const seq = await send(path, inbox.name, event, { env: env.read });
           liveSeqs.push(seq);
-          if (holdsPaste(entered)) pasted.set(seq, entered);
+          sent.set(seq, entered);
         })
         .catch(async (error: unknown) => {
           if (!(error instanceof DeliveryRefused)) return stop.abort(error);
@@ -781,9 +791,8 @@ export async function inboxChat(
         result = await moveOn();
         continue;
       }
-      // A take waiting on the inbox has read every line sent: none can be withdrawn any more.
-      const taking = (wait: WaitInfo) => wait.tool === "take" && wait.inbox === inbox.name;
-      if (result.waits.some((wait) => taking(wait) && !wait.settled)) pasted.clear();
+      // None of the lines sent so far can be withdrawn any more.
+      if (inboxDrained(result.waits, inbox.name)) sent.clear();
       const next = wakeAt(result.waits);
       const wake: string | null = next === spent ? null : next;
       if (closed) {
@@ -876,7 +885,7 @@ export async function inboxChat(
         try {
           const event = lineEvent(read.value, inbox.message);
           const seq = await send(path, inbox.name, event, { env: env.read });
-          if (holdsPaste(typed)) pasted.set(seq, typed);
+          if (editor !== null) sent.set(seq, typed);
         } catch (error) {
           if (!(error instanceof DeliveryRefused)) throw error;
           if (error.reason !== "ended") {

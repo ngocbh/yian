@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   inboxChat,
+  inboxDrained,
   type InboxChatDeps,
   type InboxChatHost,
   type InboxChatOptions,
@@ -1526,6 +1527,22 @@ test(
   },
   TIMEOUT,
 );
+
+test("an inbox is drained while a take on it waits, unsettled", () => {
+  const wait = (tool: string, inbox: string | null, settled = false) => ({
+    node: "chat/turn/heard",
+    callId: "c1",
+    tool,
+    inbox,
+    deadline: null,
+    settled,
+  });
+  expect(inboxDrained([wait("take", "messages")], "messages")).toBe(true);
+  expect(inboxDrained([wait("take", "messages", true)], "messages")).toBe(false);
+  expect(inboxDrained([wait("take", "other")], "messages")).toBe(false);
+  expect(inboxDrained([wait("sleep", null)], "messages")).toBe(false);
+  expect(inboxDrained([], "messages")).toBe(false);
+});
 
 test(
   "Esc at the framed prompt puts two pasted lines sent there back as tokens #1 and #2",

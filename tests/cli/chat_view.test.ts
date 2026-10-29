@@ -1095,6 +1095,27 @@ describe("a long paste in the input box", () => {
   );
 
   test(
+    "leaves a typed line as long as a long paste as text when Esc withdraws it",
+    async () => {
+      const { io, stdin, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      stdin.write(`${"x".repeat(900)}${ENTER}${ESCAPE}`);
+      await until(() => rows().includes("(withdrew 1 message; back in the prompt)"));
+      expect(rows()).toContain(row(`> ${"x".repeat(54)}`));
+      expect(rows().join("\n")).not.toContain("[Pasted text");
+      model.open();
+      await until(() => prompting(rows()));
+      stdin.write(`\x15/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
     "is printed as the token when Esc withdraws it after /exit",
     async () => {
       const { io, stdin, rows } = terminalIo();

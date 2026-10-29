@@ -1615,11 +1615,11 @@ export interface AssembleOptions {
  */
 export function assemble(options: AssembleOptions): ComposedFlow {
   const { inputsSection = null, inputParameters = null, inputsCursor = null } = options;
-  const { registry, scope, owner, usesAliases = [], flowLlmConfig = null, flowEnv = null } = options;
+  const { registry, scope, owner, usesAliases = [], flowEnv = null } = options;
   const { boundaryFieldRanges = null, assertsCursor = null, outputsCursor = null } = options;
   const { version = null, name = null, description = null, flowId = null, memoriesCursor = null } = options;
   const { baseDir = null } = options;
-  let { nodesCursor, outputsSection, outputsRange = null, memories = [] } = options;
+  let { nodesCursor, outputsSection, outputsRange = null, memories = [], flowLlmConfig = null } = options;
 
   if ((inputsSection === null) === (inputParameters === null)) {
     throw new RangeError("assemble requires exactly one of inputsSection or inputParameters");
@@ -1896,19 +1896,25 @@ export function assemble(options: AssembleOptions): ComposedFlow {
 
   // The cases whose value is used, taken before the expansion below rewrites the reads; each
   // must be exhaustive (checked once producer types are known).
-  const valueCaseIds = valueCases(descriptors, caseOutputReads(descriptors, outputsSection));
+  const valueCaseIds = valueCases(descriptors, caseOutputReads(descriptors, outputsSection, flowLlmConfig));
 
   // Expand `${<case>.output}` value refs to a coalesce over the case's branch targets. Runs after
   // the inline-call desugar (so synth-node bindings are covered too) and before the build loop —
   // downstream sees only ordinary branch-target refs.
-  // Each expanded case read, so a field-read error names the read as written.
+  const flowLlmConfigLabel = owner[0] === "def" ? `defs entry ${reprText(owner[1]!)} llm_config` : "flow llm_config";
+  // Each expanded case read, so a reference or field-read error names the read as written.
   const caseSpellings = new Map<string, CaseRead>();
-  [descriptors, outputsSection] = expandCaseOutputs(descriptors, outputsSection, assertsSection, {
+  let expandedLlmConfig: unknown;
+  [descriptors, outputsSection, expandedLlmConfig] = expandCaseOutputs(descriptors, outputsSection, assertsSection, {
     outputsRange,
     assertionRangeAt: flowAssertionRangeAt,
+    flowLlmConfig,
+    flowLlmConfigLabel,
+    resolveOrigin,
     diagnostics,
     spellings: caseSpellings,
   });
+  flowLlmConfig = expandedLlmConfig as typeof flowLlmConfig;
 
   // The inline-child builder and the binding-contract reader read it lazily; it is set just
   // before the build.
@@ -2221,6 +2227,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     resolveOrigin,
     diagnostics,
     searchedWhens,
+    caseSpellings,
   });
   // Node-local `asserts:` (per-node contract): validate node-locally + classify pre/post + stamp
   // onto each built leaf/call node. Shared by defs (a def's internal nodes too).
@@ -2328,7 +2335,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   checkLlmConfigSources(
     buildResults,
     flowLlmConfig ?? {},
-    owner[0] === "def" ? `defs entry ${reprText(owner[1]!)} llm_config` : "flow llm_config",
+    flowLlmConfigLabel,
     producers,
     flowInputContracts,
     { typeFn: constructorType, registry, resolveOrigin, diagnostics },

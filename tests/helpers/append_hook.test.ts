@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { runFlow } from "../../src/run.ts";
-import type { JsonlRunLog } from "../../src/runtime/log.ts";
+import { type JsonlRunLog, readRunLog } from "../../src/runtime/log.ts";
 import { withAppendHook } from "./append_hook.ts";
 import { NO_ENV } from "./run_state_fixtures.ts";
 
@@ -23,11 +23,15 @@ nodes:
 output: \${a.output}
 `;
 
-/** Run `FLOW` to a fresh log; return the log's path. */
-async function run(): Promise<string> {
+/** A log path in a fresh dir that is removed after the test. */
+function freshLog(): string {
   const dir = mkdtempSync(join(tmpdir(), "append-hook-"));
   made.push(dir);
-  const log = join(dir, "run.jsonl");
+  return join(dir, "run.jsonl");
+}
+
+/** Run `FLOW` to `log`, a fresh log by default; return the log's path. */
+async function run(log = freshLog()): Promise<string> {
   await runFlow(await loadFlow(FLOW), {}, { log, env: NO_ENV });
   return log;
 }
@@ -45,10 +49,18 @@ test("a hook sees every append its body makes, after awaits too, and no other ru
 
 test("a hook that throws refuses the append", async () => {
   const refused = new Error("refused");
-  const crashed = withAppendHook((log) => {
-    if (log.nextSequence > 2) throw refused;
-  }, run);
+  const log = freshLog();
+  let calls = 0;
+  const crashed = withAppendHook(
+    () => {
+      calls += 1;
+      if (calls === 3) throw refused;
+    },
+    () => run(log),
+  );
   await expect(crashed).rejects.toBe(refused);
+  // Only the two appends before the refused one reached the log.
+  expect(readRunLog(log)).toHaveLength(2);
 });
 
 test("a nested hook runs after the enclosing one", async () => {

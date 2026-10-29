@@ -48,7 +48,7 @@ $ yian run --resume ~/.yian/runs/4f1c/log.jsonl
 | `FLOW` | path | The flow `.yaml` to run. Leave it out with `--resume` |
 | `-i`, `--input` | `k=v` | One input. Repeat it for more |
 | `--inputs` | file | A JSON file of inputs |
-| `--inbox` | name | On a terminal, the inbox input to send typed lines to, when the flow has several |
+| `--inbox` | name | On a terminal, the inbox input to send typed lines to, when the flow has several (see [Chatting on a terminal](#chatting-on-a-terminal)) |
 | `--log` | path | Write the run log here instead of the default location. The path must not exist |
 | `--resume` | path | Resume the run recorded in this run log, with the flow it recorded |
 | `-q`, `--quiet` | | Print no banner and no per-node progress |
@@ -150,9 +150,10 @@ and the output of each node named `reply` prints on stdout. It chats when all of
 
 - The flow has one such input, or `--inbox NAME` picks one of several.
 - The flow declares no memory and grants or calls no MCP tool.
-- The run is fresh, with no `--resume`, `--json` or `--memory-storage`.
+- The run is fresh, with no `--resume`, `--json`, `--memory-root` or `--memory-storage`.
 
-Otherwise the run goes as above, and a `take` on the inbox leaves it waiting. A chat takes
+Otherwise the run goes as above, and a `take` on the inbox leaves it waiting. When the rest holds
+but `--inbox NAME` names none of the flow's inbox inputs, the command is a usage error. A chat takes
 `--input`, `--inputs`, `--log`, `-w`, `--provider`, `--model` and `--engine-trace`, and shows no
 banner or per-node progress.
 

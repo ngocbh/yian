@@ -315,7 +315,15 @@ test(
     const model = new AnsweringModel((_, count) =>
       count === 1 ? callReply(["start_flow", { path: "region.yaml", inputs: {} }, "c1"]) : textReply("waiting"),
     );
-    const chatting = runChat(io, model, undefined, { deps: { runId: "chat-2" } });
+    // While the waiting children print, a Ctrl-C has a listener, so it can't end the process.
+    const signals = new EventEmitter();
+    const listening: number[] = [];
+    const write = io.stderr.write;
+    io.stderr.write = (text) => {
+      if (text.includes("waits for")) listening.push(signals.listenerCount("SIGINT"));
+      return write(text);
+    };
+    const chatting = runChat(io, model, undefined, { deps: { runId: "chat-2", signals } });
     await until(() => screen().includes("You:"));
     stdin.write(`run region${ENTER}`);
     await until(() => screen().includes("Run region.yaml"));
@@ -329,6 +337,8 @@ test(
     expect(stderr()).toContain(
       `run r1 waits for an answer to its question; its log: ${child}\n  it can't be continued outside this chat yet\n`,
     );
+    expect(listening).toEqual([1]);
+    expect(signals.listenerCount("SIGINT")).toBe(0);
   },
   TIMEOUT,
 );

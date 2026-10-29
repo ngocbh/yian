@@ -252,8 +252,17 @@ export async function chat(
       flow,
     );
   } finally {
-    const waiting = await runs.dispose();
-    await io.stderr.write(waitingLines(waiting));
-    if (fresh.runDir !== null) removeEmptyDir(fresh.runDir);
+    // The chat's own listener is gone: another Ctrl-C mustn't end the process mid-cleanup, leaving
+    // children running and their logs unprinted.
+    const signals = deps.signals ?? process;
+    const ignore = () => {};
+    signals.on("SIGINT", ignore);
+    try {
+      const waiting = await runs.dispose();
+      await io.stderr.write(waitingLines(waiting));
+      if (fresh.runDir !== null) removeEmptyDir(fresh.runDir);
+    } finally {
+      signals.off("SIGINT", ignore);
+    }
   }
 }

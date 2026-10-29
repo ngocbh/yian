@@ -450,25 +450,21 @@ export interface CallableScope extends PrivateRegistrar {
  * @param descriptors The final node descriptors by id.
  * @param bodies The retained inline bodies by node id.
  * @param options.registrar Where each body's lazy builder is registered.
- * @param options.diagnostics Factory for located load errors (default: from the first body's
- *   `nodes:` cursor).
  * @param options.buildChild Builds one body's child flow under its labelled descriptor.
  * @returns A new descriptor map with each inline composite labelled.
- * @throws LoadError when a body has no descriptor, its descriptor is not a CALL, MAP or LOOP, or
- *   the descriptor does not call the body's private id.
+ * @throws RangeError, a compiler bug, when a body has no descriptor, its descriptor is not a
+ *   CALL, MAP or LOOP, or the descriptor does not call the body's private id: body extraction
+ *   gives every body such a descriptor.
  */
 export function registerInlineBodies(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
   bodies: ReadonlyMap<string, InlineBody>,
   options: {
     registrar: PrivateRegistrar;
-    diagnostics?: LoadDiagnostics | null;
     buildChild: (body: InlineBody, descriptor: CallDescriptor | LoopDescriptor) => ComposedFlow;
   },
 ): Map<string, NodeDescriptor> {
   const { registrar, buildChild } = options;
-  const diagnostics =
-    options.diagnostics ?? LoadDiagnostics.fromCursor(bodies.values().next().value?.nodesCursor ?? null);
   const associated = new Map(descriptors);
   const registrations: [InlineBody, CallDescriptor | LoopDescriptor, string][] = [];
 
@@ -476,17 +472,13 @@ export function registerInlineBodies(
     const label = `inline body of node ${reprText(body.nodeId)}`;
     const descriptor = descriptors.get(body.nodeId);
     if (descriptor === undefined) {
-      throw diagnostics.error(`${label}: no matching composite node descriptor`, { range: body.nodesCursor.range });
+      throw new RangeError(`${label}: no matching composite node descriptor`);
     }
     if (!(descriptor instanceof CallDescriptor || descriptor instanceof LoopDescriptor)) {
-      throw diagnostics.error(`${label}: final node descriptor is not CALL, MAP, or LOOP`, {
-        range: body.nodesCursor.range,
-      });
+      throw new RangeError(`${label}: final node descriptor is not CALL, MAP, or LOOP`);
     }
     if (descriptor.call !== body.flowId) {
-      throw diagnostics.error(`${label}: final node descriptor does not target its retained inline body`, {
-        range: body.nodesCursor.range,
-      });
+      throw new RangeError(`${label}: final node descriptor does not target its retained inline body`);
     }
 
     const labelledDescriptor = descriptor.replace({ childLabel: label });
@@ -508,7 +500,9 @@ export function registerInlineBodies(
  * @param assertsCursor Retained authored sequence, or `null` for a generated or source-free list.
  * @param diagnostics Factory for located load errors.
  * @returns One item cursor per assertion. Source-free lists contain `null` entries.
- * @throws LoadError when the retained sequence does not align with the semantic list.
+ * @throws RangeError, a compiler bug, when the retained sequence does not align with the semantic
+ *   list.
+ * @throws LoadError when the retained sequence cannot be traversed.
  */
 export function assertionCursors(
   assertions: readonly unknown[],
@@ -518,9 +512,7 @@ export function assertionCursors(
   if (assertsCursor === null) return assertions.map(() => null);
   const cursors = locateSourceAccess(diagnostics, () => assertsCursor.children());
   if (cursors.length !== assertions.length) {
-    throw diagnostics.error("retained assertion cursor does not align with semantic assertions", {
-      range: assertsCursor.range,
-    });
+    throw new RangeError("retained assertion cursor does not align with semantic assertions");
   }
   return cursors;
 }
@@ -1065,7 +1057,8 @@ function caseOutputCursor(
  *
  * @param descriptors Final descriptors keyed by node id.
  * @param flowWiring Mutable final binding maps keyed by node id.
- * @throws Error when a node has a declared input type but no wiring binding by that name.
+ * @throws RangeError, a compiler bug, when a node has a declared input type but no wiring binding
+ *   by that name.
  */
 export function attachInputContracts(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
@@ -1078,7 +1071,7 @@ export function attachInputContracts(
       // Every kind keeps its authored inputs in its wiring, so a declared type with no binding
       // to land on would be silently unchecked at runtime.
       if (!wiring.has(name)) {
-        throw new Error(`node ${reprText(nodeId)}: typed input ${reprText(name)} has no wiring binding`);
+        throw new RangeError(`node ${reprText(nodeId)}: typed input ${reprText(name)} has no wiring binding`);
       }
       const binding = asBinding(wiring.get(name));
       wiring.set(name, new Binding(binding.source, { origin: binding.origin, contract }));
@@ -1949,7 +1942,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       if (!descriptors.has(producerId)) return null;
 
       const cache = descriptorCache;
-      if (cache === null) throw new Error("descriptor cache was not initialized before inline child resolution");
+      if (cache === null) throw new RangeError("descriptor cache was not initialized before inline child resolution");
       const node = cache.buildOne(producerId, bindingLabel, bindingRange).node;
       if (messages) {
         if (node.producesMessages) return new ValueContract(newMessagesType());
@@ -2044,7 +2037,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   /** Resolve one parent binding's contract, building referenced producers on demand. */
   const readBindingContract: BindingContractReader = (bindingLabel, binding, bindingRange) => {
     const cache = descriptorCache;
-    if (cache === null) throw new Error("descriptor cache was not initialized before binding contract resolution");
+    if (cache === null) throw new RangeError("descriptor cache was not initialized before binding contract resolution");
     const producers = new Map<string, OutputContract>();
     for (const producerId of new Set(bindingProducers(binding))) {
       if (!descriptors.has(producerId)) continue;
@@ -2055,11 +2048,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     return resolveOutputBindingContract(binding, producers, flowInputContracts, { typeFn: constructorType });
   };
 
-  descriptors = registerInlineBodies(descriptors, inlineBodies, {
-    registrar: scope,
-    diagnostics,
-    buildChild: buildInlineChild,
-  });
+  descriptors = registerInlineBodies(descriptors, inlineBodies, { registrar: scope, buildChild: buildInlineChild });
 
   // Build EVERY node kind-blind through its own descriptor's `build(ctx)` — leaf, call/map (a
   // map rides the call descriptor, no branch), loop, AND case (which lowers in its own `build`,

@@ -278,21 +278,18 @@ describe("assertionCursors", () => {
     expect(cursors.map((item) => item!.value)).toEqual(["a", "b"]);
   });
 
-  test("a sequence of another length doesn't align", () => {
-    const document = SourceDocument.parse("asserts: [a, b]\n", "flow.yaml");
-    const cursor = document.root.child("asserts");
-    const error = loadError(() =>
-      assertionCursors(["a"], cursor, LoadDiagnostics.fromDocument(document)),
-    );
+  test("a sequence of another length doesn't align, a compiler bug", () => {
+    const cursor = SourceDocument.parse("asserts: [a, b]\n", "flow.yaml").root.child("asserts");
+    const error = thrown(() => assertionCursors(["a"], cursor, diagnostics));
+    expect(error.constructor).toBe(RangeError);
     expect(error.message).toBe("retained assertion cursor does not align with semantic assertions");
-    expect(error.diagnostic.frames[0]!.range).toEqual(cursor.range!);
   });
 
-  test("a non-sequence has no items to align", () => {
+  test("a non-sequence has no items to align, a compiler bug", () => {
     const cursor = SourceDocument.parse("asserts: a\n").root.child("asserts");
-    expect(loadError(() => assertionCursors(["a"], cursor, diagnostics)).message).toBe(
-      "retained assertion cursor does not align with semantic assertions",
-    );
+    const error = thrown(() => assertionCursors(["a"], cursor, diagnostics));
+    expect(error.constructor).toBe(RangeError);
+    expect(error.message).toBe("retained assertion cursor does not align with semantic assertions");
   });
 });
 
@@ -526,7 +523,7 @@ describe("attachInputContracts", () => {
     const run = () => attachInputContracts(descriptors, new Map([["use", new Map()]]));
     const error = thrown(run);
     expect(error.message).toBe("node 'use': typed input 'qty' has no wiring binding");
-    expect(error.constructor).toBe(Error);
+    expect(error.constructor).toBe(RangeError);
   });
 });
 

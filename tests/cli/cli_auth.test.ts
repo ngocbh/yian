@@ -324,8 +324,11 @@ describe("models --provider", () => {
     ["timed out", "models.timeout", null],
     ["can't reach host", "models.failed", null],
   ])("a listing failing with %s is %s", async (reason, code, status) => {
-    // As `listModels` throws them: an HTTP refusal carries its status.
-    const failure = new ModelListError(reason, status === null ? {} : { status: Number(status) });
+    // As `listModels` throws them: an HTTP refusal carries its status, a timeout its flag.
+    const failure = new ModelListError(reason, {
+      ...(status === null ? {} : { status: Number(status) }),
+      timedOut: reason === "timed out",
+    });
     const fake = fakeListModels(failure);
     const result = await run(models, modelsArgs({ provider: "openrouter", json: true }), fakeIo({ stdin: "k" }), fake);
     expect(result.code).toBe(1);
@@ -336,6 +339,12 @@ describe("models --provider", () => {
     });
     const text = await run(models, modelsArgs({ provider: "openrouter" }), fakeIo({ stdin: "k" }), fake);
     expect(text).toEqual({ code: 1, out: "", err: `${message}\n` });
+  });
+
+  test("a listing's timeout is known by its flag, not its message", async () => {
+    const fake = fakeListModels(new ModelListError("deadline passed", { timedOut: true }));
+    const result = await run(models, modelsArgs({ provider: "openrouter", json: true }), fakeIo({ stdin: "k" }), fake);
+    expect(JSON.parse(result.out).error.code).toBe("models.timeout");
   });
 
   test("the JSON status is an int", async () => {

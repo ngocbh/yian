@@ -73,6 +73,11 @@ export class McpConnectError extends McpError {
   override name = "McpConnectError";
 }
 
+/** The MCP SDK, which opening an MCP server needs, isn't installed; the import error is the `cause`. */
+export class McpSdkMissingError extends McpError {
+  override name = "McpSdkMissingError";
+}
+
 /**
  * An MCP server returned an error result for a tool call, or the call failed locally.
  *
@@ -525,7 +530,7 @@ export class McpServer {
    *   the signal's reason.
    * @returns This server.
    * @throws {AlreadyOpenError} The server is already open, or still opening.
-   * @throws {Error} The MCP SDK (`@modelcontextprotocol/client`) is not installed.
+   * @throws {McpSdkMissingError} The MCP SDK (`@modelcontextprotocol/client`) is not installed.
    * @throws {McpConnectError} The server doesn't start, doesn't list its tools within the connect
    *   timeout, lists a tool twice or a tool yian can't use, or `concurrencySafe` names a tool it
    *   doesn't list; or `close()` ran while it started.
@@ -1008,7 +1013,7 @@ export function isMcpServer(value: unknown): value is McpServer {
 /**
  * Import the MCP SDK client module, and for a stdio server its default environment.
  *
- * @throws {Error} The SDK is not installed; the import error is the `cause`.
+ * @throws {McpSdkMissingError} The SDK is not installed.
  */
 async function loadSdk(stdio: boolean): Promise<{ sdk: typeof Sdk; defaultEnv: Record<string, string> }> {
   try {
@@ -1016,7 +1021,7 @@ async function loadSdk(stdio: boolean): Promise<{ sdk: typeof Sdk; defaultEnv: R
     const defaultEnv = stdio ? (await import("@modelcontextprotocol/client/stdio")).getDefaultEnvironment() : {};
     return { sdk, defaultEnv };
   } catch (cause) {
-    throw new Error("MCP servers need the MCP SDK; install @modelcontextprotocol/client 2.3.1", { cause });
+    throw new McpSdkMissingError("MCP servers need the MCP SDK; install @modelcontextprotocol/client 2.3.1", { cause });
   }
 }
 

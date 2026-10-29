@@ -254,6 +254,7 @@ test("tools/index.ts exports the tools API, the same objects as its modules'", (
     McpToolError: mcp.McpToolError,
     McpOutputError: mcp.McpOutputError,
     McpRequestError: mcp.McpRequestError,
+    McpSdkMissingError: mcp.McpSdkMissingError,
     McpInvalidRequestError: mcp.McpInvalidRequestError,
     McpTimeoutError: mcp.McpTimeoutError,
     McpTransportError: mcp.McpTransportError,

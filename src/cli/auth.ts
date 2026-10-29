@@ -1068,10 +1068,9 @@ export async function models(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}
       listed = await (deps.listModels ?? listModels)(provider, { apiKey: key, baseUrl: baseUrl ?? null, timeout });
     } catch (failure) {
       if (!(failure instanceof ModelListError)) throw failure;
-      const reason = failure.message;
       error = {
-        code: reason === "timed out" ? "models.timeout" : "models.failed",
-        message: `Couldn't list the ${provider} models: ${reason}`,
+        code: failure.timedOut ? "models.timeout" : "models.failed",
+        message: `Couldn't list the ${provider} models: ${failure.message}`,
         status: failure.status === null ? null : BigInt(failure.status),
       };
     }

@@ -53,6 +53,7 @@ export {
   McpInvalidRequestError,
   McpOutputError,
   McpRequestError,
+  McpSdkMissingError,
   McpServer,
   McpServerClosed,
   type McpServerOptions,

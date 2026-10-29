@@ -85,7 +85,7 @@ import {
 } from "../run.ts";
 import { wakeAt } from "../runtime/waits.ts";
 import { ASK_USER, BUILTIN_TOOL_IDS } from "../tools/context.ts";
-import { McpConnectError, type McpServer } from "../tools/mcp.ts";
+import { McpConnectError, McpSdkMissingError, type McpServer } from "../tools/mcp.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { defaultRunId } from "../typesys/seeding.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
@@ -830,8 +830,7 @@ export function isSetupError(error: unknown): error is Error {
     // the lock's.
     error instanceof FileLockError ||
     (error instanceof Error && error.cause instanceof FileLockError) ||
-    // The missing MCP SDK; any other plain `Error` is a bug and keeps its stack.
-    (error instanceof Error && error.message.startsWith("MCP servers need the MCP SDK")) ||
+    error instanceof McpSdkMissingError ||
     isSystemError(error)
   );
 }

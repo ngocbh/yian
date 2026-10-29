@@ -662,7 +662,12 @@ describe("default max_tokens", () => {
   }
 
   // A catalog model missing from the table would silently fall back to 4096 and cut long outputs.
-  for (const model of getKnownModels()["anthropic"] ?? []) {
+  const claudes = getKnownModels()["anthropic"];
+  // Fails if the catalog key is renamed or emptied, which would otherwise drop the loop below.
+  test("the catalog lists anthropic models", () => {
+    expect(claudes?.length ?? 0).toBeGreaterThan(0);
+  });
+  for (const model of claudes ?? []) {
     test(`catalog model ${model} has its own default, not the 4096 fallback`, () => {
       expect(bodyOf([user("Hi.")], { model })["max_tokens"]).not.toBe(4096n);
     });

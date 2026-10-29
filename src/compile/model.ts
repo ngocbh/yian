@@ -286,7 +286,6 @@ export function validateGrowthMetadata(flow: Flow): void {
       }
       scopes.push(scope);
     }
-    // The loop above pushes exactly one scope per endpoint, so there are always two.
     const [start, end] = scopes as [ExecutionScope | null, ExecutionScope | null];
     if (
       start !== null &&

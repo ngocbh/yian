@@ -27,7 +27,7 @@ import {
   TypeCheckError,
   ValueKind,
 } from "../../src/typesys/values.ts";
-import { assembled, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
+import { assembled, assembleText, type CaseRow, loadError, runCase } from "../helpers/declarations.ts";
 
 const LIST_VALUE_KINDS = Object.values(ValueKind).filter(isListKind);
 
@@ -272,21 +272,28 @@ describe("inline input inference", () => {
     expect(loadError(() => infer(value)).message).toBe(message("each.input.value", reason));
   });
 
-  test.each(["mapping", "list"])("an active literal cycle is rejected: %s", (containerKind) => {
-    let value: unknown;
-    let at: string;
-    if (containerKind === "mapping") {
-      const mapping: Record<string, unknown> = {};
-      mapping["self"] = mapping;
-      [value, at] = [mapping, 'each.input.value["self"]'];
-    } else {
-      const list: unknown[] = [];
-      list.push(list);
-      [value, at] = [list, "each.input.value[0]"];
-    }
-
-    expect(loadError(() => infer(value)).message).toBe(
-      message("each.input.value", `cyclic literal container encountered at ${at}`),
+  test("a recursive alias in an inline input is refused before inference", () => {
+    const source = `id: cyc
+name: cyc
+input:
+  k: !int
+nodes:
+  wrap:
+    kind: call
+    input:
+      xs: &a ["\${input.k}", *a]
+    nodes:
+      echo:
+        kind: code
+        input:
+          xs: \${input.xs}
+        output: int
+        code: return 1
+    output: \${echo.output}
+output: \${wrap.output}
+`;
+    expect(loadError(() => assembleText(source)).message).toBe(
+      "'xs': cannot descend through a recursive alias occurrence",
     );
   });
 

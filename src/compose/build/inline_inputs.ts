@@ -152,7 +152,7 @@ export function inferInlineBindingType(
   } else if (source instanceof ValueTemplate) {
     inferred = inferTemplate(source.value, walk.bindingLabel, walk);
   } else {
-    inferred = inferLiteral(source, walk.bindingLabel, new Set(), walk);
+    inferred = inferLiteral(source, walk.bindingLabel, walk);
   }
   return requireProvenType(inferred, walk);
 }
@@ -392,19 +392,19 @@ function inferTemplate(node: unknown, path: string, walk: Walk): Type {
     );
     return new Type({ kind: listKindForElement(element), element });
   }
-  return inferLiteral(node, path, new Set(), walk);
+  return inferLiteral(node, path, walk);
 }
 
 /** Infer a recursive literal; nested strings never enter the template parser. */
-function inferLiteral(value: unknown, path: string, activeContainers: Set<object>, walk: Walk): Type {
+function inferLiteral(value: unknown, path: string, walk: Walk): Type {
   if (value === null) return Type.scalar(ValueKind.NONE);
   if (typeof value === "boolean") return Type.scalar(ValueKind.BOOLEAN);
   if (typeof value === "bigint") return Type.scalar(ValueKind.INTEGER);
   if (typeof value === "number") return Type.scalar(ValueKind.NUMBER);
   if (typeof value === "string") return Type.scalar(ValueKind.STRING);
 
-  if (isRecord(value)) return inferMapping(value, path, activeContainers, walk);
-  if (Array.isArray(value)) return inferList(value, path, activeContainers, walk);
+  if (isRecord(value)) return inferMapping(value, path, walk);
+  if (Array.isArray(value)) return inferList(value, path, walk);
 
   throw inferenceError(
     walk.bindingLabel,
@@ -418,46 +418,31 @@ function inferLiteral(value: unknown, path: string, activeContainers: Set<object
  * Infer a sorted closed record from one literal mapping. A record key is always text, so no
  * key needs checking.
  */
-function inferMapping(
-  value: Readonly<Record<string, unknown>>,
-  path: string,
-  activeContainers: Set<object>,
-  walk: Walk,
-): Type {
-  enterContainer(value, path, activeContainers, walk);
-  try {
-    const fields = new Map(
-      Object.keys(value)
-        .sort(compareCodeUnits)
-        .map((key) => [key, inferLiteral(value[key], `${path}[${writeAsJson(key)}]`, activeContainers, walk)]),
-    );
-    return new Type({ kind: ValueKind.OBJECT, fields, required: new Set(fields.keys()) });
-  } finally {
-    activeContainers.delete(value);
-  }
+function inferMapping(value: Readonly<Record<string, unknown>>, path: string, walk: Walk): Type {
+  const fields = new Map(
+    Object.keys(value)
+      .sort(compareCodeUnits)
+      .map((key) => [key, inferLiteral(value[key], `${path}[${writeAsJson(key)}]`, walk)]),
+  );
+  return new Type({ kind: ValueKind.OBJECT, fields, required: new Set(fields.keys()) });
 }
 
 /** Infer one homogeneous structural list, widening only int/float scalars. */
-function inferList(value: readonly unknown[], path: string, activeContainers: Set<object>, walk: Walk): Type {
-  enterContainer(value, path, activeContainers, walk);
-  try {
-    if (value.length === 0) {
-      throw inferenceError(
-        walk.bindingLabel,
-        walk.bindingRange,
-        `empty literal list at ${path} has no provable element type`,
-        walk.diagnostics,
-      );
-    }
-    const element = commonElementType(
-      value.map((item, index) => inferLiteral(item, `${path}[${index}]`, activeContainers, walk)),
-      path,
-      walk,
+function inferList(value: readonly unknown[], path: string, walk: Walk): Type {
+  if (value.length === 0) {
+    throw inferenceError(
+      walk.bindingLabel,
+      walk.bindingRange,
+      `empty literal list at ${path} has no provable element type`,
+      walk.diagnostics,
     );
-    return new Type({ kind: listKindForElement(element), element });
-  } finally {
-    activeContainers.delete(value);
   }
+  const element = commonElementType(
+    value.map((item, index) => inferLiteral(item, `${path}[${index}]`, walk)),
+    path,
+    walk,
+  );
+  return new Type({ kind: listKindForElement(element), element });
 }
 
 /** Return the common type up to `Optional`, or the scalar numeric widening, for a list. */
@@ -479,19 +464,6 @@ function commonElementType(elementTypes: readonly Type[], path: string, walk: Wa
     `${noun} at ${path} has heterogeneous element types`,
     walk.diagnostics,
   );
-}
-
-/** Add one container to the active recursion path and reject true cycles. */
-function enterContainer(value: object, path: string, activeContainers: Set<object>, walk: Walk): void {
-  if (activeContainers.has(value)) {
-    throw inferenceError(
-      walk.bindingLabel,
-      walk.bindingRange,
-      `cyclic literal container encountered at ${path}`,
-      walk.diagnostics,
-    );
-  }
-  activeContainers.add(value);
 }
 
 /** Create the one located error shape used by strict inline inference. */

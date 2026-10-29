@@ -538,6 +538,35 @@ ${after("nap")}output: \${busy.output}
 const ASK_THEN_BUSY = ASK.replace("output: ${sure.output}\n", `${after("sure")}output: \${busy.output}\n`);
 
 test(
+  "haltAll ends a dispose held by a cancel that never settles, and reports the halted child",
+  async () => {
+    const children = childRuns({
+      // The pass the answer starts runs until its stop; the cancel never settles.
+      advance: (options) =>
+        new Promise((_, reject) => {
+          const signal = options.signal!;
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+      cancel: () => new Promise(() => {}),
+    });
+    await children.start(await flow(ASK), {});
+    const asking = await settled(children, "r1");
+    await children.answer("r1", asked(asking), "yes");
+    expect(children.status("r1").status).toBe("running");
+    let done = false;
+    const disposing = children.dispose().then((left) => {
+      done = true;
+      return left;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(done).toBe(false);
+    children.haltAll();
+    expect(await disposing).toEqual([{ run: "r1", kind: "halted", log: asking.log }]);
+  },
+  TIMEOUT,
+);
+
+test(
   "dispose goes by the published status: a waiting child mid wake pass is left, a just-answered one cancelled",
   async () => {
     const { scheduler, open } = heldScheduler();

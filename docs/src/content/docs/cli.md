@@ -338,6 +338,9 @@ and how to go on:
 | A timer (a `sleep` or a timeout) | `yian run --resume LOG` continues it |
 | An answer to a question, or a message | It can't be continued outside the chat yet |
 
+Ctrl-C while the chat ends stops every flow at once, cancelled or not, and the chat still prints
+where each one is: a flow stopped while it ran prints `run rN was stopped while it ran` and its log.
+
 The chat's own run can't be resumed: `yian run --resume` on its log exits 1.
 
 ## yian check

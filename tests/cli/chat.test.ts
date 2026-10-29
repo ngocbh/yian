@@ -136,6 +136,33 @@ nodes:
 output: \${greet.output}
 `;
 
+/** A flow that asks which region at once. */
+const ASK = `id: ask
+name: ask
+nodes:
+  sure:
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "Which region?"
+    output: str
+output: \${sure.output}
+`;
+
+/**
+ * The call id of the question "Which region?" as `request` shows it: in a message authored yian
+ * relaying it, or in a status a run tool returned. Null when it isn't shown.
+ */
+function askedCall(request: Request): string | null {
+  const relayed = request.messages.filter((message) => message.author === "yian").map((m) => m.text());
+  for (const text of [...relayed, ...toolResults(request)]) {
+    const match =
+      /\(call ([^)\s]+)\): "Which region\?"/.exec(text) ?? /"call":"([^"]+)","question":"Which region\?"/.exec(text);
+    if (match !== null) return match[1]!;
+  }
+  return null;
+}
+
 /** A flow that sleeps a second, so it starts before it asks, then asks which region. */
 const REGION = `id: region
 name: region
@@ -320,9 +347,10 @@ test(
     let answered = false;
     const model = new AnsweringModel((request, count) => {
       if (count === 1) return callReply(["start_flow", { path: "region.yaml", inputs: {} }, "c1"]);
-      if (!answered && shown(request).includes("Which region?")) {
+      const call = askedCall(request);
+      if (!answered && call !== null) {
         answered = true;
-        return callReply(["answer_flow", { run: "r1", call: "chat-1-r1/sure", answer: "eu" }, "c2"]);
+        return callReply(["answer_flow", { run: "r1", call, answer: "eu" }, "c2"]);
       }
       return textReply(answered ? "answered" : "started");
     });
@@ -379,6 +407,61 @@ test(
     );
     expect(listening).toEqual([1]);
     expect(signals.listenerCount("SIGINT")).toBe(0);
+  },
+  TIMEOUT,
+);
+
+test(
+  "a Ctrl-C while the chat ends halts a child whose cancel hangs, and the chat still says where it is",
+  async () => {
+    writeFileSync(join(root, "ask.yaml"), ASK);
+    const { io, stdin, stderr, screen } = chatIo({ tty: true });
+    let answered = false;
+    const model = new AnsweringModel((request, count) => {
+      if (count === 1) return callReply(["start_flow", { path: "ask.yaml", inputs: {} }, "c1"]);
+      const call = askedCall(request);
+      if (!answered && call !== null) {
+        answered = true;
+        return callReply(["answer_flow", { run: "r1", call, answer: "eu" }, "c2"]);
+      }
+      return textReply("ok");
+    });
+    const signals = new EventEmitter();
+    const chatting = runChat(io, model, undefined, {
+      deps: {
+        runId: "chat-5",
+        signals,
+        // The pass the answer starts runs until it is stopped, and a cancel never settles.
+        children: {
+          advance: (options) =>
+            new Promise((_, reject) => {
+              const signal = options.signal!;
+              signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+            }),
+          cancel: () => new Promise(() => {}),
+        },
+      },
+    });
+    await until(() => screen().includes("You:"));
+    stdin.write(`run it${ENTER}`);
+    await until(() => screen().includes("Run ask.yaml"));
+    stdin.write(ENTER);
+    // The answer is taken: the child runs the pass that never ends.
+    const answeredResult = (request: Request) =>
+      request.messages.some((message) =>
+        message.parts.some((part) => part instanceof ToolResultPart && part.name === "answer_flow"),
+      );
+    await until(() => model.requests.some(answeredResult));
+    stdin.write(`/exit${ENTER}`);
+    await until(() => stderr().includes("session ended"));
+    // The chat's own listener is gone; the cleanup's is the one left.
+    await until(() => signals.listenerCount("SIGINT") === 1);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(stderr()).not.toContain("run r1");
+    signals.emit("SIGINT");
+    expect((await chatting).code).toBe(0);
+    const child = join(home, ".yian", "runs", "chat-5-r1", "log.jsonl");
+    expect(stderr()).toContain(`run r1 was stopped while it ran; its log: ${child}\n`);
   },
   TIMEOUT,
 );

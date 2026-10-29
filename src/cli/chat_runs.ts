@@ -130,13 +130,18 @@ export interface ChildRunsOptions {
   onStatus?: ((status: ChildStatus) => void) | null;
   /** @internal For tests: the `advance` the drivers call. */
   advance?: typeof advance;
+  /** @internal For tests: the `cancel` `stop` and `dispose` call. */
+  cancel?: typeof cancel;
 }
 
 /** A child left waiting when the chat ends, and what it waits on. */
 export interface WaitingChild {
   readonly run: string;
-  /** `question` when it asks something, else `inbox` when it waits for a message, else `timer`. */
-  readonly kind: "question" | "inbox" | "timer";
+  /**
+   * `question` when it asks something, else `inbox` when it waits for a message, else `timer`;
+   * `halted` for a running one `haltAll` stopped before its cancel was done.
+   */
+  readonly kind: "question" | "inbox" | "timer" | "halted";
   readonly log: string;
 }
 
@@ -229,6 +234,8 @@ export class ChildRuns {
   /** The start in progress: starts run one at a time, in call order. */
   #starting: Promise<unknown> = Promise.resolve();
   #disposed = false;
+  /** Aborted by `haltAll`: a dispose waits no longer. */
+  readonly #halting = new AbortController();
   /** The passes running, and what puts the console back once none does. */
   #passes = 0;
   #restoreConsole: (() => void) | null = null;
@@ -358,6 +365,16 @@ export class ChildRuns {
     return count;
   }
 
+  /**
+   * Stop every child's driver at once, leaving each log as it is, and end a `dispose` that waits
+   * on a cancel: it returns with each running child it hadn't cancelled yet as `halted`. For a
+   * second Ctrl-C while the chat ends.
+   */
+  haltAll(): void {
+    this.#halting.abort();
+    for (const child of this.#children.values()) child.halt.abort();
+  }
+
   /** Resolve every waiting `next` call with its child's current status. */
   cancelWaits(): void {
     for (const child of this.#children.values()) this.#release(child);
@@ -427,7 +444,7 @@ export class ChildRuns {
    * @throws {RangeError} When no child has the id.
    */
   stop(id: string): Promise<ChildStatus> {
-    return this.#deliver(this.#child(id), (log, options) => cancel(log, options));
+    return this.#deliver(this.#child(id), (log, options) => (this.#options.cancel ?? cancel)(log, options));
   }
 
   /**
@@ -439,12 +456,18 @@ export class ChildRuns {
   async dispose(): Promise<WaitingChild[]> {
     this.#disposed = true;
     const left: WaitingChild[] = [];
+    const halted = new Promise<"halted">((resolve) => {
+      if (this.#halting.signal.aborted) resolve("halted");
+      this.#halting.signal.addEventListener("abort", () => resolve("halted"), { once: true });
+    });
+    const move = this.#options.cancel ?? cancel;
     const stopping = [...this.#children.values()].map(async (child) => {
       if (!this.#driving(child)) return;
       if (child.status.status === "running") {
         try {
-          await cancel(child.log, this.#deliveryOptions(child));
-          this.nudge(child.id);
+          const cancelled = await Promise.race([move(child.log, this.#deliveryOptions(child)), halted]);
+          if (cancelled === "halted") left.push({ run: child.id, kind: "halted", log: child.log });
+          else this.nudge(child.id);
         } catch (error) {
           // One that ended meanwhile needs nothing; any other failure leaves the stop to the halt.
           if (!(error instanceof DeliveryRefused)) child.halt.abort();
@@ -453,7 +476,8 @@ export class ChildRuns {
         left.push({ run: child.id, kind: this.#waitKind(child), log: child.log });
         child.halt.abort();
       }
-      await child.done;
+      // A halt ends the driver's pass; a pass slow to stop isn't waited for once halted.
+      await Promise.race([child.done, halted]);
     });
     await Promise.all(stopping);
     this.cancelWaits();

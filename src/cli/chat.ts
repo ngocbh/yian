@@ -30,7 +30,7 @@ import { DOCS, FLOWS } from "./bundled.ts";
 import { bundledSkill } from "./bundled_skill.ts";
 import { EventQueue, InFlight, trackInFlight } from "./chat_events.ts";
 import { chatRunTools } from "./chat_run_tools.ts";
-import { ChildRuns, type WaitingChild } from "./chat_runs.ts";
+import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
 import { inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { printStyled } from "./render.ts";
@@ -64,6 +64,8 @@ export interface ChatDeps {
   scheduler?: Scheduler;
   signals?: Pick<NodeJS.EventEmitter, "on" | "off">;
   models?: ModelAccess | null;
+  /** The `advance` and `cancel` the children's runs use. */
+  children?: Pick<ChildRunsOptions, "advance" | "cancel">;
 }
 
 /**
@@ -128,6 +130,7 @@ function consoleFileFor(log: string): string {
 function waitingLines(children: readonly WaitingChild[]): string {
   return children
     .map((child) => {
+      if (child.kind === "halted") return `run ${child.run} was stopped while it ran; its log: ${child.log}\n`;
       const what = { question: "an answer to its question", inbox: "a message", timer: "a timer" }[child.kind];
       const next =
         child.kind === "timer"
@@ -157,7 +160,9 @@ function waitingLines(children: readonly WaitingChild[]): string {
  *
  * When the chat ends, the children still running are cancelled, and each child left waiting is
  * printed with its log and how to go on: one waiting for a timer resumes with `yian run --resume`;
- * one waiting for an answer or a message can't be continued outside the chat.
+ * one waiting for an answer or a message can't be continued outside the chat. A Ctrl-C meanwhile
+ * halts every child (`ChildRuns.haltAll`), so the chat ends at once and prints each one it stopped
+ * while it ran.
  *
  * @throws {UsageError} As `validateRunLogOptions` does for `--log`.
  */
@@ -240,6 +245,7 @@ export async function chat(
     skillsFor,
     consoleFile: consoleFileFor(fresh.path),
     onStatus: (status) => queue.push(status),
+    ...deps.children,
   });
   const queue = new EventQueue({ wake, markRead: runs.markRead.bind(runs) });
   const inFlight = new InFlight(wake);
@@ -274,17 +280,17 @@ export async function chat(
       },
     );
   } finally {
-    // The chat's own listener is gone: another Ctrl-C mustn't end the process mid-cleanup, leaving
-    // children running and their logs unprinted.
+    // The chat's own listener is gone. A Ctrl-C now halts the children instead of ending the
+    // process, so the cleanup ends promptly and still says where each child is.
     const signals = deps.signals ?? process;
-    const ignore = () => {};
-    signals.on("SIGINT", ignore);
+    const halt = () => runs.haltAll();
+    signals.on("SIGINT", halt);
     try {
       const waiting = await runs.dispose();
       await io.stderr.write(waitingLines(waiting));
       if (fresh.runDir !== null) removeEmptyDir(fresh.runDir);
     } finally {
-      signals.off("SIGINT", ignore);
+      signals.off("SIGINT", halt);
     }
   }
 }

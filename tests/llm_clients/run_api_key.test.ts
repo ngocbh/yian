@@ -374,6 +374,22 @@ test("an empty key is rejected", async () => {
   expect(error.message).toContain("api_key");
 });
 
+test("a key with a newline is rejected without echoing it", async () => {
+  const key = "sk-dummy-key\nzz";
+  let error = (await rejected(
+    runFlow(await loadFlow(FLOW, { env }), {}, { llmConfig: { ...VLLM, api_key: key }, env }),
+  )) as Error;
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toContain("api_key must not contain a control character");
+  expect(error.message).not.toContain("sk-dummy-key");
+  const path = join(fresh(), "run.jsonl");
+  await interruptedRun(path, VLLM, env);
+  error = (await rejected(advance({ log: path, apiKey: key, env }))) as Error;
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.message).toContain("api_key must not contain a control character");
+  expect(error.message).not.toContain("sk-dummy-key");
+});
+
 test("authored key is rejected without echoing it", async () => {
   const nodeLevel = FLOW.replace("prompt: hi}", `prompt: hi, llm_config: {api_key: ${SENTINEL}}}`);
   const flowLevel = FLOW.replace("nodes:", `llm_config: {api_key: ${SENTINEL}}\nnodes:`);

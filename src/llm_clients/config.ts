@@ -397,7 +397,8 @@ function bindConnectionToKey(connection: Connection): void {
  * - `api_key`: provider API key supplied by the host. It takes precedence over the provider's
  *   saved login and key environment variable. Read it with `apiKey`; it never shows in
  *   `JSON.stringify`, `inspect` or `dump()`. Unset keeps the saved-login or environment key. An
- *   empty key is refused, since some clients would treat it as unset and read the environment.
+ *   empty key is refused, since some clients would treat it as unset and read the environment,
+ *   and so is a key with a control character (U+0000 to U+001F, U+007F), such as a pasted newline.
  * - `base_url`: API endpoint that replaces the provider's default, such as an Azure OpenAI
  *   resource's `https://<resource>.openai.azure.com/openai/v1/` with `provider: "openai"`. It
  *   decides where `api_key` is sent, so it needs `api_key` and `provider` in the same config. It
@@ -477,6 +478,8 @@ export class LLMConfig {
     const apiKey = text("api_key", (value) => {
       // Some clients would replace an empty key with an environment variable.
       if (value === "") throw new RangeError("api_key must not be empty");
+      // A pasted key often carries a newline; sent as a header it fails late or splits the header.
+      if (/[\x00-\x1f\x7f]/.test(value)) throw new RangeError("api_key must not contain a control character");
       return value;
     });
     const baseUrl = text("base_url", validateBaseUrl);

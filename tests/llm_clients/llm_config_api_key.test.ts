@@ -1,10 +1,10 @@
 /**
- * API keys in `LLMConfig` and `chatModelFromConfig`: empty keys and the host key marker, host
- * intake through `LLMConfig.fromHost`, model config resolution, connection credentials, saved
- * subscriptions, and the auth headers each client sends (a fake `send` answers 400, so a test
- * checks the request). `describe("redact")` redacts keys from text; `describe("scrub")` scrubs
- * them from errors, through `cause` chains, `AggregateError` members and string members.
- * Validation messages never hold a value.
+ * API keys in `LLMConfig` and `chatModelFromConfig`: empty keys, keys with control characters and
+ * the host key marker, host intake through `LLMConfig.fromHost`, model config resolution,
+ * connection credentials, saved subscriptions, and the auth headers each client sends (a fake
+ * `send` answers 400, so a test checks the request). `describe("redact")` redacts keys from text;
+ * `describe("scrub")` scrubs them from errors, through `cause` chains, `AggregateError` members
+ * and string members. Validation messages never hold a value.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -216,6 +216,32 @@ test("an empty key is rejected instead of falling back", async () => {
   const error = await rejection(build({ provider: "google", model: "gemini-2.5-flash", api_key: "" }));
   expect(error).toBeInstanceOf(ValidationError);
   expect((error as Error).message).toContain("api_key");
+});
+
+test.each([
+  ["LF", "\n"],
+  ["CR", "\r"],
+  ["tab", "\t"],
+  ["NUL", "\u0000"],
+  ["U+001F", "\u001f"],
+  ["DEL", "\u007f"],
+])("a key with a %s is refused without echoing it", (_name, control) => {
+  const error = thrown({ provider: "openai", api_key: `sk-dummy${control}zz` });
+  expect(error.issues).toEqual([
+    {
+      loc: ["api_key"],
+      type: "value_error",
+      msg: "Value error, api_key must not contain a control character",
+      error: "api_key must not contain a control character",
+    },
+  ]);
+  expect(error.message).not.toContain("sk-dummy");
+});
+
+test("a key with inner spaces or non-ASCII is kept", () => {
+  for (const key of ["sk dummy", "sk-dummy-\u00e9"]) {
+    expect(new LLMConfig({ provider: "openai", api_key: key }).apiKey).toBe(key);
+  }
 });
 
 test.each([

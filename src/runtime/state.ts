@@ -2844,7 +2844,8 @@ function prepareRecordTrace(
     ...options,
     rebinder: state.trace === null || node === null ? null : nodeRebinder(state, node),
     nodeDataRebuilder: state.trace === null || node === null ? null : nodeDataRebuilder(state, node),
-    steps: nodeId === null ? [] : stepsWithSteerValues(state, nodeId),
+    // Only learning reads the steps, so a run that doesn't learn doesn't copy them.
+    steps: state.trace === null || nodeId === null ? [] : stepsWithSteerValues(state, nodeId),
     rootStartId: started ? state.flow.startId : null,
     rootEndId: started ? state.flow.endId : null,
     rootInputNames: started && record.learnable ? state.flow.nodes.get(state.flow.startId)!.backwardInputNames() : null,

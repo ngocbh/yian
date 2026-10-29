@@ -2,7 +2,7 @@
  * Node steps: the `NodeStepRecord` a running node appends and how the run-state reducer folds it.
  */
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import { buildGrow } from "../../src/compile/expand.ts";
 import { copyGraph, START_ID } from "../../src/compile/model.ts";
@@ -349,6 +349,18 @@ test("a failure deletes the node's steps and starts", () => {
   expect(state.nodeSteps.has("first")).toBe(false);
   expect(state.nodeStarts.has("first")).toBe(false);
   expect(state.ready).toEqual(["second"]);
+});
+
+test("an outcome in a run that doesn't learn copies none of its node's steps", () => {
+  const { state, log } = firstInFlight();
+  commitPrepared(log, state, prepareNodeStep(state, "first", FAILED));
+  const clone = spyOn(globalThis, "structuredClone");
+  try {
+    prepareNodeFailed(state, nodeFailure("first"));
+    expect(clone).not.toHaveBeenCalled();
+  } finally {
+    clone.mockRestore();
+  }
 });
 
 test("a route deletes the node's steps and starts", () => {

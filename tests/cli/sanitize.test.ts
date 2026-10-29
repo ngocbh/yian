@@ -40,6 +40,13 @@ describe("sanitize", () => {
     );
   });
 
+  test("shows the fillers and joiners that draw as nothing or a blank", () => {
+    const text = "a\u034fb\u115fc\u1160d\u17b4e\u17b5f\u3164g\uffa0h";
+    expect(sanitize(text)).toBe(
+      "a\\u{34f}b\\u{115f}c\\u{1160}d\\u{17b4}e\\u{17b5}f\\u{3164}g\\u{ffa0}h",
+    );
+  });
+
   test("leaves other text as it is", () => {
     expect(sanitize("héllo 你好")).toBe("héllo 你好");
     expect(sanitize("\u{1f600} \u{20000}")).toBe("\u{1f600} \u{20000}");

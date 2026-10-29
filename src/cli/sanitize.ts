@@ -19,17 +19,28 @@ export interface SanitizeOptions {
   invisible?: "show" | "keep";
 }
 
-// CSI, then OSC ended by BEL or ST, then DCS, SOS, PM or APC ended by ST; each in its 7-bit and
-// 8-bit form. An unended one isn't matched, so its characters are shown instead.
-const SEQUENCE =
-  /(?:\x1b\[|\x9b)[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)|(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x9c]*(?:\x1b\\|\x9c)/g;
+/** A CSI sequence, in its 7-bit or 8-bit form: parameters, intermediates and a final byte. */
+const CSI = String.raw`(?:\x1b\[|\x9b)[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]`;
+
+/** An OSC sequence, in its 7-bit or 8-bit form, ended by BEL or ST. */
+const OSC = String.raw`(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)`;
+
+/** A DCS, SOS, PM or APC string, in its 7-bit or 8-bit form, ended by ST. */
+const STRING = String.raw`(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x9c]*(?:\x1b\\|\x9c)`;
+
+// An unended sequence isn't matched, so its characters are shown instead.
+const SEQUENCE = new RegExp(`${CSI}|${OSC}|${STRING}`, "g");
 
 /**
  * The BIDI marks, embeddings, overrides and isolates, the zero-width and other invisible format
- * characters, the line and paragraph separators, the interlinear annotation marks and the tags.
+ * characters, the Hangul and Khmer fillers that draw as blanks, the line and paragraph separators,
+ * the interlinear annotation marks and the tags.
  */
-const INVISIBLE =
-  /[\u00ad\u061c\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f\ufeff\ufff9-\ufffb\u{e0000}-\u{e007f}]/gu;
+const INVISIBLE = new RegExp(
+  String.raw`[\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180e\u200b-\u200f\u2028-\u202e\u2060-\u206f` +
+    String.raw`\u3164\ufeff\uffa0\ufff9-\ufffb\u{e0000}-\u{e007f}]`,
+  "gu",
+);
 
 /**
  * Return `text` safe to print: `\r\n` read as `\n`; escape sequences dropped; each other control

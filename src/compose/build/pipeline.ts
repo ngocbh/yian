@@ -91,8 +91,8 @@ import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts"
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
-import { ToolDescriptor } from "../nodes/tool.ts";
-import { desugarAdaptiveQuestions, QPARAM } from "../desugar/adaptive_questions.ts";
+import { QUESTIONS_INPUT, ToolDescriptor } from "../nodes/tool.ts";
+import { desugarAdaptiveQuestions } from "../desugar/adaptive_questions.ts";
 import { type CaseRead, caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
 import { desugarCaseCallTargets } from "../desugar/case_targets.ts";
 import { extractInlineBodies, type InlineBody } from "../desugar/inline_bodies.ts";
@@ -173,7 +173,7 @@ function locateSourceAccess<T>(diagnostics: LoadDiagnostics, fn: () => T): T {
 }
 
 /** One active descriptor build and the dependency edge that requested it; frozen. */
-export class BuildRequest {
+class BuildRequest {
   /** The node being built. */
   readonly nodeId: string;
   /** The requesting edge's label, or `null` for none. */
@@ -2376,7 +2376,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     if (descriptor.host !== null && descriptor.fieldLabels.size > 0) synthHosts.set(nodeId, descriptor.host);
   }
   const synthWires = new Set(
-    edges.filter((edge) => synthHosts.get(edge.from) === edge.to && edge.inputGroup === QPARAM).map((edge) => edge.id),
+    edges
+      .filter((edge) => synthHosts.get(edge.from) === edge.to && edge.inputGroup === QUESTIONS_INPUT)
+      .map((edge) => edge.id),
   );
   rejectCycles(edges, nodeIds, {
     nodeRanges,

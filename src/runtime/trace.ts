@@ -41,7 +41,7 @@ import {
   retainFailure,
   validateDeclaredNames,
 } from "../nodes/base.ts";
-import { BINDING_FAILURE_CODES, BindingCapture, BindingError } from "../nodes/binding.ts";
+import { BindingCapture, BindingError } from "../nodes/binding.ts";
 import {
   type ChildFlowBoundary,
   isExactly,
@@ -122,7 +122,7 @@ export type Rebinder = (
 
 /** What binding an occurrence's node again rebuilds (`TraceOccurrence`). */
 export interface ReboundOccurrence {
-  /** The canonical bound inputs, or `null` for a failure at a binding stage. */
+  /** The canonical bound inputs, or `null` for a failure whose binding didn't finish. */
   readonly inputs: JsonObject | null;
   /** The forward capture, each interpolation route's text rebuilt. */
   readonly capture: ForwardCapture;
@@ -156,6 +156,7 @@ export function captureBindings(bindings: BindingCapture, backward: BackwardCapt
     scope: backward.scope,
     inputNames: backward.inputNames,
     variableNames: backward.variableNames,
+    bound: bindings.boundInputs !== null,
   });
 }
 
@@ -416,8 +417,8 @@ export class TraceOccurrence {
 
   /**
    * The bound inputs, canonical JSON rebuilt by binding the node again from the values its route
-   * read (`reboundCapture`), or `null` for a failure at a binding stage, whose binding didn't
-   * finish. Built on the first read.
+   * read (`reboundCapture`), or `null` for a failure whose binding didn't finish (its capture's
+   * `bound`). Built on the first read.
    *
    * @throws RangeError when the occurrence was made without a rebinder, a route source has no
    *   accepted producer, or a finished binding no longer finishes (the `BindingError` as
@@ -546,6 +547,7 @@ function withInterpolationText(capture: ForwardCapture, binding: BindingCapture)
     scope: capture.scope,
     inputNames: capture.inputNames,
     variableNames: capture.variableNames,
+    bound: capture.bound,
   });
 }
 
@@ -1268,7 +1270,8 @@ export interface PrepareTraceOptions {
  *   holds a capture (it is rebuilt from its sources), the record's
  *   coordinates or terminal payload disagree with the trace, a resume disagrees with the
  *   unfinished starts, a waiting node has no accepted start or a woken one no parked start, an
- *   outcome lacks its capture or its accepted start, the capture's scope
+ *   outcome lacks its capture or its accepted start, an outcome other than a failure holds a
+ *   binding that didn't finish, the capture's scope
  *   differs from the node's, a route source isn't an earlier accepted producer or lacks its path,
  *   a seed connection isn't captured or its target or a boundary endpoint already has an owner,
  *   or a terminal disagrees with the root writer or has no causal occurrence.
@@ -1382,9 +1385,14 @@ export function prepareTrace(
   validateSources(trace, inputRoute, envelope.seq);
   // A derived record's capture is rebuilt whole with its value; a recorded one's interpolation
   // routes get their text by binding the node again, which learning does on its first read. A
-  // failure at a binding stage bound no inputs, so it is bound again only for that text.
+  // binding that didn't finish bound no inputs, so it is bound again only for that text.
   const fillsText = rebuilt === null && holdsInterpolation(capture);
-  const bound = !unbound(record);
+  // The capture records whether the bound inputs are usable: a failure's code doesn't tell,
+  // since a node's body may fail with a binding code after its binding finished.
+  const bound = capture.bound;
+  if (!bound && !isExactly(record, NodeFailedRecord)) {
+    throw new RangeError("only a failure's capture may hold a binding that didn't finish");
+  }
   if (bound && rebuildNodeData !== null && rebinder === null) {
     throw new RangeError("rebuilding the node data of a finished binding requires a rebinder");
   }
@@ -1514,11 +1522,6 @@ export function prepareTrace(
     causalRouteSource,
     terminal,
   });
-}
-
-/** Whether `record` is a failure at a binding stage, which bound no inputs. */
-function unbound(record: RecordEnvelope["record"]): boolean {
-  return isExactly(record, NodeFailedRecord) && (BINDING_FAILURE_CODES as readonly string[]).includes(record.failure.code);
 }
 
 /** Canonical log text of the JSON `text`. */

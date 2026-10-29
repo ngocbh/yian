@@ -2107,7 +2107,8 @@ function capture(captured: Case): Case {
   for (const item of captured["items"] as Case[]) item["capture"] = capture(item["capture"] as Case);
   return Object.fromEntries(
     Object.entries(captured).filter(
-      ([key, value]) => truthy(value) || !CAPTURE_LEFT_OUT_WHEN_EMPTY.has(key),
+      // A finished binding, the usual case, leaves out its `bound`.
+      ([key, value]) => (key === "bound" ? value !== true : truthy(value) || !CAPTURE_LEFT_OUT_WHEN_EMPTY.has(key)),
     ),
   );
 }

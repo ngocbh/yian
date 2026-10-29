@@ -266,7 +266,8 @@ export class BackwardCapture {
  * its route read (`TraceOccurrence.boundInputs`). Its record holds no interpolation route's text
  * either; the same binding rebuilds it (`TraceOccurrence.capture`). Nor node data: learning
  * rebuilds it from the node (`TraceOccurrence.nodeData`). An unfinished binding keeps its safe
- * partial routes. Item captures retain explicit indices and actual second-template evaluation
+ * partial routes and says so (`bound`), since a failure's code doesn't tell whether its bound
+ * inputs are usable. Item captures retain explicit indices and actual second-template evaluation
  * flags. Outcomes and visible interactions stay on their accepted record. Scope may be absent for
  * synthetic nodes awaiting instantiation.
  */
@@ -283,6 +284,11 @@ export class ForwardCapture {
   readonly inputNames: readonly string[];
   /** Distinct local variable names retained for this invocation. */
   readonly variableNames: readonly string[];
+  /**
+   * Whether the bound inputs are usable: `false` when this binding, or any of a MAP's item
+   * bindings, failed; an item's flag follows its MAP's.
+   */
+  readonly bound: boolean;
 
   /**
    * Validate the routes and retain frozen copies of the invocation's inventories.
@@ -295,6 +301,7 @@ export class ForwardCapture {
    * @param options.scope The captured execution scope; defaults to `null`.
    * @param options.inputNames Distinct eligible input names; defaults to empty.
    * @param options.variableNames Distinct local variable names; defaults to empty.
+   * @param options.bound Whether the bound inputs are usable (see `bound`); defaults to `true`.
    * @throws TypeError when a carrier or container has an invalid type.
    * @throws RangeError when a route, inventory name or item index breaks the capture contract.
    * @throws JSONDecodeError when a route's `valueJson` isn't JSON yian reads.
@@ -307,6 +314,7 @@ export class ForwardCapture {
       scope?: ExecutionScope | null;
       inputNames?: readonly string[];
       variableNames?: readonly string[];
+      bound?: boolean;
     } = {},
   ) {
     const {
@@ -315,6 +323,7 @@ export class ForwardCapture {
       scope = null,
       inputNames = [],
       variableNames = [],
+      bound = true,
     } = options;
     validateRoute(route);
     if (route.kind !== "record") throw new RangeError("input route must be a record");
@@ -343,12 +352,14 @@ export class ForwardCapture {
     }
     validateDeclaredNames(inputNames, "input_names");
     validateDeclaredNames(variableNames, "variable_names");
+    if (typeof bound !== "boolean") throw new TypeError("bound must be a boolean");
     this.route = route;
     this.evaluatedKeys = keys;
     this.items = Object.freeze(pairs.map(([index, capture]) => Object.freeze([index, capture] as const)));
     this.scope = scope;
     this.inputNames = Object.freeze([...inputNames]);
     this.variableNames = Object.freeze([...variableNames]);
+    this.bound = bound;
     Object.freeze(this);
   }
 }

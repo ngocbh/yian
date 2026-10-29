@@ -579,7 +579,9 @@ For example:
   JSON text, markers for values JSON can't hold); its structure stays. It also leaves out every
   other field equal to its empty value (null, `[]`, `0`, `""`), except `kind`, which always stays,
   and its `value_json` text is read as JSON (codec form). The capture leaves out `evaluated_keys`,
-  `items`, `input_names` and `variable_names` when they are `[]`. A capture records no
+  `items`, `input_names` and `variable_names` when they are `[]`, and `bound` when it is `true`.
+  `bound` says whether the bound inputs are usable: `false` when this binding, or any of a MAP's
+  item bindings, failed; an item's flag follows its MAP's. A capture records no
   `bound_inputs` (learning rebuilds them by binding the node again from what its route read) and no
   `node_data` (learning rebuilds it from the node: its static material, and an AGENT's render and
   model config), and a derived record (a success naming a derived or expansion commit, and

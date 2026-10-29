@@ -71,10 +71,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 23;
+export const SCHEMA_VERSION = 24;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -2806,6 +2806,7 @@ function capturePayload(capture: ForwardCapture): JsonObject {
     scope: executionScopePayload(capture.scope),
     input_names: [...capture.inputNames],
     variable_names: [...capture.variableNames],
+    bound: capture.bound,
   };
 }
 
@@ -2825,7 +2826,10 @@ function captureFromPayload(value: unknown, label: string): ForwardCapture {
     "scope",
     "input_names",
     "variable_names",
+    "bound",
   ]);
+  const bound = wire["bound"];
+  if (typeof bound !== "boolean") throw new TypeError(`${label} bound must be a boolean`);
   const keys = wireTextArray(wire["evaluated_keys"], `${label} evaluated_keys`);
   if (!strictlyIncreasing(keys, compareCodeUnits)) throw new RangeError("evaluated_keys must be sorted and unique");
   const items = wireArray(wire["items"], `${label} items`).map((item) => {
@@ -2839,6 +2843,7 @@ function captureFromPayload(value: unknown, label: string): ForwardCapture {
     scope: executionScopeFromPayload(wire["scope"], `${label} scope`),
     inputNames: wireTextArray(wire["input_names"], `${label} input_names`),
     variableNames: wireTextArray(wire["variable_names"], `${label} variable_names`),
+    bound,
   });
 }
 

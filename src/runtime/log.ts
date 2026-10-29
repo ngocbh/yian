@@ -1321,40 +1321,6 @@ export type RunRecord =
 /** A run-record class. */
 type RunRecordClass = new (...args: never[]) => RunRecord;
 
-/** Each record class and its snake_case wire kind. */
-const RECORD_KINDS: ReadonlyMap<RunRecordClass, string> = new Map<RunRecordClass, string>([
-  [RunStartedRecord, "run_started"],
-  [RunResumedRecord, "run_resumed"],
-  [RunStoppedRecord, "run_stopped"],
-  [NodeWaitingRecord, "node_waiting"],
-  [NodeWokenRecord, "node_woken"],
-  [RunWaitingRecord, "run_waiting"],
-  [InboxClosedRecord, "inbox_closed"],
-  [InboxWithdrawnRecord, "inbox_withdrawn"],
-  [InterruptedRecord, "interrupted"],
-  [RunCancelledRecord, "run_cancelled"],
-  [RunFailedRecord, "run_failed"],
-  [NodeStartedRecord, "node_started"],
-  [NodeStepRecord, "node_step"],
-  [PoolCommitRecord, "pool_commit"],
-  [NodeSucceededRecord, "node_succeeded"],
-  [NodeRoutedRecord, "node_routed"],
-  [NodeExpandedRecord, "node_expanded"],
-  [NodeFailedRecord, "node_failed"],
-  [MemoryCommitRequestedRecord, "memory_commit_requested"],
-  [MemoryCommitSucceededRecord, "memory_commit_succeeded"],
-  [MemoryCommitFailedRecord, "memory_commit_failed"],
-  [BackwardStartedRecord, "backward_started"],
-  [BackwardReadyRecord, "backward_ready"],
-  [BackwardFinishedRecord, "backward_finished"],
-]);
-
-/** Every run-record class. */
-export const RUN_RECORD_TYPES: readonly RunRecordClass[] = Object.freeze([...RECORD_KINDS.keys()]);
-
-/** The closed set of wire kinds this schema reads. */
-const WIRE_KINDS: ReadonlySet<string> = new Set(RECORD_KINDS.values());
-
 /**
  * Return `value` when it is a SHA-256 hex digest: 64 lowercase hex digits.
  *
@@ -1607,12 +1573,15 @@ function requireWireSchema(schema: unknown): void {
 }
 
 /**
- * Return a record's wire kind.
+ * Return the codec of a record's kind.
  *
  * @throws TypeError when `record` isn't exactly one of `RUN_RECORD_TYPES`.
  */
-function kindForRecord(record: unknown): string {
-  for (const [cls, kind] of RECORD_KINDS) if (isExactly(record, cls)) return kind;
+function codecForRecord(record: unknown): RecordCodec {
+  if (typeof record === "object" && record !== null) {
+    const codec = CODEC_BY_PROTOTYPE.get(Object.getPrototypeOf(record));
+    if (codec !== undefined) return codec;
+  }
   const name = record === null || record === undefined ? String(record) : Object(record).constructor?.name;
   throw new TypeError(`unsupported run record: ${name}`);
 }
@@ -1656,7 +1625,7 @@ export class RecordEnvelope {
     if (!Number.isSafeInteger(seq) || seq < 0) {
       throw new RangeError("run-record envelope seq must be a non-negative integer");
     }
-    kindForRecord(record);
+    codecForRecord(record);
     this.schema = schema;
     this.runId = runId;
     this.seq = seq;
@@ -1667,12 +1636,12 @@ export class RecordEnvelope {
 
   /** The record's stable snake_case wire kind, such as `node_started`. */
   get kind(): string {
-    return kindForRecord(this.record);
+    return codecForRecord(this.record).kind;
   }
 
   /** The record's deep-frozen canonical JSON payload, counters as `bigint`s. */
   get payload(): Readonly<JsonObject> {
-    return freezeParsed(canonicalCopy(payloadForRecord(this.record)) as JsonObject);
+    return freezeParsed(canonicalCopy(codecForRecord(this.record).encode(this.record)) as JsonObject);
   }
 }
 
@@ -1686,13 +1655,14 @@ export class RecordEnvelope {
  */
 export function encodeRecord(envelope: RecordEnvelope): string {
   if (!isExactly(envelope, RecordEnvelope)) throw new TypeError("encodeRecord expects a RecordEnvelope");
+  const codec = codecForRecord(envelope.record);
   return logJson({
     schema: BigInt(envelope.schema),
     run_id: envelope.runId,
     seq: BigInt(envelope.seq),
     ...(envelope.at === null ? {} : { at: envelope.at }),
-    kind: envelope.kind,
-    payload: payloadForRecord(envelope.record),
+    kind: codec.kind,
+    payload: codec.encode(envelope.record),
   });
 }
 
@@ -1774,7 +1744,7 @@ function decodeWire(data: string | Uint8Array, requireAt: boolean): WireEnvelope
   const seq = wireInt(envelope["seq"], "run-record envelope seq");
   const at = timed ? requireRecordTime(envelope["at"]) : null;
   const kind = requireText(envelope["kind"], "run-record envelope kind");
-  if (!WIRE_KINDS.has(kind)) {
+  if (!CODEC_BY_KIND.has(kind)) {
     throw new RangeError(`run-record kind ${reprText(kind)} is unsupported in schema ${SCHEMA_VERSION}`);
   }
   const payload = wireObject(envelope["payload"], "run-record envelope payload");
@@ -1788,23 +1758,7 @@ function decodeWire(data: string | Uint8Array, requireAt: boolean): WireEnvelope
  * @throws TypeError, RangeError when that id isn't a non-empty string.
  */
 function wireNodeId(kind: string, payload: JsonObject): string | null {
-  const label = `${kind} payload`;
-  switch (kind) {
-    case "node_started":
-    case "node_step":
-    case "pool_commit":
-    case "node_succeeded":
-    case "node_routed":
-    case "node_waiting":
-    case "node_woken":
-      return requireName(payload["node_id"], `${label} node_id`);
-    case "node_expanded":
-      return requireName(payload["spawner_id"], `${label} spawner_id`);
-    case "node_failed":
-      return requireName(wireObject(payload["failure"], `${label} failure`)["node_id"], `${label} failure node_id`);
-    default:
-      return null;
-  }
+  return CODEC_BY_KIND.get(kind)?.nodeId?.(payload, `${kind} payload`) ?? null;
 }
 
 /**
@@ -2284,7 +2238,7 @@ export function* iterRunRecords(
     throw new RangeError("runId and afterSeq describe the record before afterOffset, so they need one");
   }
   const wanted = kinds === null ? null : new Set(kinds);
-  const unknown = wanted === null ? [] : [...wanted].filter((kind) => !WIRE_KINDS.has(kind));
+  const unknown = wanted === null ? [] : [...wanted].filter((kind) => !CODEC_BY_KIND.has(kind));
   if (unknown.length > 0) {
     throw new RangeError(`unknown run-record kinds: ${writeAsText(unknown.sort(compareCodeUnits))}`);
   }
@@ -3170,10 +3124,53 @@ const RUN_STARTED_FIELDS = [
   "parent",
 ];
 
-/** Build the canonical JSON payload of one record; counters are written as `bigint`s. */
-function payloadForRecord(record: RunRecord): JsonObject {
-  if (record instanceof RunStartedRecord) {
-    return {
+/**
+ * How one record kind is written and read: its class, its wire kind, its payload's encoder and
+ * decoder, and the node its payload names. The encoder and decoder are declared as methods, so a
+ * kind's codec, typed by its own class, fits the table: `codecForRecord` hands a codec only
+ * records of its class, and `recordFromPayload` only payloads of its kind.
+ */
+interface RecordCodec<R extends RunRecord = RunRecord> {
+  /** The record class. */
+  readonly cls: new (...args: never[]) => R;
+  /** The class's snake_case wire kind. */
+  readonly kind: string;
+  /** Build the record's canonical JSON payload; counters are written as `bigint`s. */
+  encode(record: R): JsonObject;
+  /**
+   * Build the record from its payload object, through the record's constructor; `label` names
+   * the payload in errors.
+   *
+   * @throws RangeError for missing or extra fields, an empty id or a counter that isn't a safe
+   *   integer, besides the constructor's own errors.
+   * @throws TypeError when a field has the wrong JSON type.
+   */
+  decode(payload: JsonObject, label: string): R;
+  /**
+   * Return the node the payload is about, checking only that id; absent for a kind about no one
+   * node.
+   *
+   * @throws TypeError, RangeError when that id isn't a non-empty string.
+   */
+  nodeId?(payload: JsonObject, label: string): string;
+}
+
+/** Return `codec` as given; it infers the codec's record type from its class. */
+function recordCodec<R extends RunRecord>(codec: RecordCodec<R>): RecordCodec<R> {
+  return codec;
+}
+
+/** Return the `node_id` of a node record's payload; `label` names the payload. */
+function payloadNodeId(payload: JsonObject, label: string): string {
+  return requireName(payload["node_id"], `${label} node_id`);
+}
+
+/** The codec of every record kind, the one place a kind is defined. */
+const RECORD_CODECS: readonly RecordCodec[] = [
+  recordCodec({
+    cls: RunStartedRecord,
+    kind: "run_started",
+    encode: (record) => ({
       flow_fingerprint: record.flowFingerprint,
       start_wiring_override: record.startWiringOverride as JsonObject,
       effective_llm_by_static_path: record.effectiveLlmByStaticPath as JsonObject,
@@ -3191,130 +3188,8 @@ function payloadForRecord(record: RunRecord): JsonObject {
       tool_groups: Object.fromEntries(Object.entries(record.toolGroups).map(([name, members]) => [name, [...members]])),
       yian_version: record.yianVersion,
       parent: record.parent === null ? null : { run_id: record.parent.runId, node: record.parent.node },
-    };
-  }
-  if (record instanceof RunResumedRecord) {
-    return {
-      retry_node_ids: [...record.retryNodeIds],
-      num_workers: BigInt(record.numWorkers),
-      closed_calls: [...record.closedCalls],
-    };
-  }
-  if (record instanceof RunStoppedRecord) {
-    return { reason: record.reason, message: record.message, node_ids: [...record.nodeIds] };
-  }
-  if (record instanceof NodeWaitingRecord) {
-    return {
-      node_id: record.nodeId,
-      call_ids: [...record.callIds],
-      waits: record.waits.map((entry) => ({
-        call_id: entry.callId,
-        tool: entry.tool,
-        inbox: entry.inbox,
-        mode: entry.mode,
-        deadline: entry.deadline,
-      })),
-      steer_inbox: record.steerInbox,
-    };
-  }
-  if (record instanceof NodeWokenRecord) return { node_id: record.nodeId, timed_out: [...record.timedOut] };
-  if (record instanceof RunWaitingRecord) return { node_ids: [...record.nodeIds] };
-  if (record instanceof InboxClosedRecord) return { inbox: record.inbox };
-  if (record instanceof InboxWithdrawnRecord) return { inbox: record.inbox, events: record.events.map(BigInt) };
-  if (record instanceof InterruptedRecord) return { inbox: record.inbox, nodes: [...record.nodes] };
-  if (record instanceof RunCancelledRecord) return {};
-  if (record instanceof RunFailedRecord) return { failure: failurePayload(record.failure) };
-  if (record instanceof NodeStartedRecord) return { node_id: record.nodeId };
-  if (record instanceof NodeStepRecord) {
-    return { node_id: record.nodeId, n: BigInt(record.n), step: record.step as JsonObject };
-  }
-  if (record instanceof PoolCommitRecord) {
-    if (record.value !== null) {
-      return { node_id: record.nodeId, key: record.key, kind: record.value.kind, value: record.value.value as JsonValue };
-    }
-    if (record.take !== null) {
-      const { inbox, events, closed } = record.take;
-      return { node_id: record.nodeId, key: record.key, inbox, events: events.map(BigInt), closed };
-    }
-    if (record.steps !== null) return { node_id: record.nodeId, key: record.key, steps: record.steps.map(BigInt) };
-    const from = Object.fromEntries([...record.from!].map(([name, seq]) => [name, BigInt(seq)]));
-    return { node_id: record.nodeId, key: record.key, from };
-  }
-  if (record instanceof NodeSucceededRecord) {
-    return {
-      node_id: record.nodeId,
-      commit: BigInt(record.commit),
-      messages: record.messages === null ? null : BigInt(record.messages),
-      ...outcomePayload(record),
-    };
-  }
-  if (record instanceof NodeRoutedRecord) {
-    return {
-      node_id: record.nodeId,
-      handle: record.handle,
-      terminal_failure: record.terminalFailure === null ? null : failurePayload(record.terminalFailure),
-      ...outcomePayload(record),
-    };
-  }
-  if (record instanceof NodeExpandedRecord) {
-    return {
-      spawner_id: record.spawnerId,
-      prune_ids: [...record.pruneIds],
-      topology_digest: record.topologyDigest,
-      ...outcomePayload(record),
-    };
-  }
-  if (record instanceof NodeFailedRecord) return { failure: failurePayload(record.failure), ...outcomePayload(record) };
-  if (record instanceof MemoryCommitRequestedRecord) {
-    return {
-      memory: record.memory,
-      commit_id: record.commitId,
-      attempt_id: BigInt(record.attemptId),
-      mutations: record.mutations.map(mutationPayload),
-    };
-  }
-  if (record instanceof MemoryCommitSucceededRecord) {
-    return { memory: record.memory, commit_id: record.commitId, attempt_id: BigInt(record.attemptId) };
-  }
-  if (record instanceof MemoryCommitFailedRecord) {
-    return {
-      memory: record.memory,
-      commit_id: record.commitId,
-      attempt_id: BigInt(record.attemptId),
-      failure: memoryFailurePayload(record.failure),
-    };
-  }
-  if (record instanceof BackwardStartedRecord) {
-    return { attempt_id: BigInt(record.attemptId), feedback: record.feedback as JsonValue };
-  }
-  if (record instanceof BackwardReadyRecord) {
-    return {
-      attempt_id: BigInt(record.attemptId),
-      root_result: backwardResultPayload(record.rootResult),
-      attributed_results: record.attributedResults.map(attributedResultPayload),
-      proposals: record.proposals.map(memoryProposalPayload),
-    };
-  }
-  // The one kind left is backward_finished.
-  return {
-    attempt_id: BigInt(record.attemptId),
-    outcome: backwardOutcomePayload(record.outcome),
-    attributed_results: record.attributedResults.map(attributedResultPayload),
-  };
-}
-
-/**
- * Build the record of wire kind `kind` from its payload object, through the record's
- * constructor.
- *
- * @throws RangeError for an unknown kind, missing or extra fields, an empty id or a counter that
- *   isn't a safe integer, besides the constructor's own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
-  const label = `${kind} payload`;
-  switch (kind) {
-    case "run_started":
+    }),
+    decode: (payload, label) => {
       requireFields(payload, RUN_STARTED_FIELDS, label);
       // The record's constructor checks the fields cast here (the pool, the agents' configs, the
       // defaults and the call-time agents), so a bad value is named by its entry.
@@ -3343,21 +3218,54 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         yianVersion: requireText(payload["yian_version"], `${label} yian_version`),
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),
       });
-    case "run_resumed":
+    },
+  }),
+  recordCodec({
+    cls: RunResumedRecord,
+    kind: "run_resumed",
+    encode: (record) => ({
+      retry_node_ids: [...record.retryNodeIds],
+      num_workers: BigInt(record.numWorkers),
+      closed_calls: [...record.closedCalls],
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["retry_node_ids", "num_workers", "closed_calls"], label);
       return new RunResumedRecord(
         wireTextArray(payload["retry_node_ids"], `${label} retry_node_ids`),
         wireInt(payload["num_workers"], `${label} num_workers`),
         wireTextArray(payload["closed_calls"], `${label} closed_calls`),
       );
-    case "run_stopped":
+    },
+  }),
+  recordCodec({
+    cls: RunStoppedRecord,
+    kind: "run_stopped",
+    encode: (record) => ({ reason: record.reason, message: record.message, node_ids: [...record.nodeIds] }),
+    decode: (payload, label) => {
       requireFields(payload, ["reason", "message", "node_ids"], label);
       return new RunStoppedRecord(
         requireText(payload["reason"], `${label} reason`) as RunStopReason,
         requireText(payload["message"], `${label} message`),
         wireTextArray(payload["node_ids"], `${label} node_ids`),
       );
-    case "node_waiting":
+    },
+  }),
+  recordCodec({
+    cls: NodeWaitingRecord,
+    kind: "node_waiting",
+    encode: (record) => ({
+      node_id: record.nodeId,
+      call_ids: [...record.callIds],
+      waits: record.waits.map((entry) => ({
+        call_id: entry.callId,
+        tool: entry.tool,
+        inbox: entry.inbox,
+        mode: entry.mode,
+        deadline: entry.deadline,
+      })),
+      steer_inbox: record.steerInbox,
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_id", "call_ids", "waits", "steer_inbox"], label);
       return new NodeWaitingRecord(
         requireName(payload["node_id"], `${label} node_id`),
@@ -3367,44 +3275,119 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
           steerInbox: wireNullableText(payload["steer_inbox"], `${label} steer_inbox`),
         },
       );
-    case "node_woken":
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: NodeWokenRecord,
+    kind: "node_woken",
+    encode: (record) => ({ node_id: record.nodeId, timed_out: [...record.timedOut] }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_id", "timed_out"], label);
       return new NodeWokenRecord(
         requireName(payload["node_id"], `${label} node_id`),
         wireTextArray(payload["timed_out"], `${label} timed_out`),
       );
-    case "run_waiting":
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: RunWaitingRecord,
+    kind: "run_waiting",
+    encode: (record) => ({ node_ids: [...record.nodeIds] }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_ids"], label);
       return new RunWaitingRecord(wireTextArray(payload["node_ids"], `${label} node_ids`));
-    case "inbox_closed":
+    },
+  }),
+  recordCodec({
+    cls: InboxClosedRecord,
+    kind: "inbox_closed",
+    encode: (record) => ({ inbox: record.inbox }),
+    decode: (payload, label) => {
       requireFields(payload, ["inbox"], label);
       return new InboxClosedRecord(requireName(payload["inbox"], `${label} inbox`));
-    case "inbox_withdrawn":
+    },
+  }),
+  recordCodec({
+    cls: InboxWithdrawnRecord,
+    kind: "inbox_withdrawn",
+    encode: (record) => ({ inbox: record.inbox, events: record.events.map(BigInt) }),
+    decode: (payload, label) => {
       requireFields(payload, ["inbox", "events"], label);
       return new InboxWithdrawnRecord(
         requireName(payload["inbox"], `${label} inbox`),
         wireItems(payload["events"], `${label} events`, wireInt),
       );
-    case "interrupted":
+    },
+  }),
+  recordCodec({
+    cls: InterruptedRecord,
+    kind: "interrupted",
+    encode: (record) => ({ inbox: record.inbox, nodes: [...record.nodes] }),
+    decode: (payload, label) => {
       requireFields(payload, ["inbox", "nodes"], label);
       return new InterruptedRecord(requireName(payload["inbox"], `${label} inbox`), wireTextArray(payload["nodes"], `${label} nodes`));
-    case "run_cancelled":
+    },
+  }),
+  recordCodec({
+    cls: RunCancelledRecord,
+    kind: "run_cancelled",
+    encode: () => ({}),
+    decode: (payload, label) => {
       requireFields(payload, [], label);
       return new RunCancelledRecord();
-    case "run_failed":
+    },
+  }),
+  recordCodec({
+    cls: RunFailedRecord,
+    kind: "run_failed",
+    encode: (record) => ({ failure: failurePayload(record.failure) }),
+    decode: (payload, label) => {
       requireFields(payload, ["failure"], label);
       return new RunFailedRecord(failureFromPayload(payload["failure"], `${label} failure`));
-    case "node_started":
+    },
+  }),
+  recordCodec({
+    cls: NodeStartedRecord,
+    kind: "node_started",
+    encode: (record) => ({ node_id: record.nodeId }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_id"], label);
       return new NodeStartedRecord(requireName(payload["node_id"], `${label} node_id`));
-    case "node_step":
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: NodeStepRecord,
+    kind: "node_step",
+    encode: (record) => ({ node_id: record.nodeId, n: BigInt(record.n), step: record.step as JsonObject }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_id", "n", "step"], label);
       return new NodeStepRecord(
         requireName(payload["node_id"], `${label} node_id`),
         wireInt(payload["n"], `${label} n`),
         wireObject(payload["step"], `${label} step`),
       );
-    case "pool_commit": {
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: PoolCommitRecord,
+    kind: "pool_commit",
+    encode: (record): JsonObject => {
+      if (record.value !== null) {
+        return { node_id: record.nodeId, key: record.key, kind: record.value.kind, value: record.value.value as JsonValue };
+      }
+      if (record.take !== null) {
+        const { inbox, events, closed } = record.take;
+        return { node_id: record.nodeId, key: record.key, inbox, events: events.map(BigInt), closed };
+      }
+      if (record.steps !== null) return { node_id: record.nodeId, key: record.key, steps: record.steps.map(BigInt) };
+      const from = Object.fromEntries([...record.from!].map(([name, seq]) => [name, BigInt(seq)]));
+      return { node_id: record.nodeId, key: record.key, from };
+    },
+    decode: (payload, label) => {
       // The form is chosen by its marker key, so a payload mixing forms is refused as extra fields.
       const form = Object.hasOwn(payload, "steps")
         ? "steps"
@@ -3424,15 +3407,38 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
           steps: form === "steps" ? wireItems(payload["steps"], `${label} steps`, wireInt) : null,
         },
       );
-    }
-    case "node_succeeded":
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: NodeSucceededRecord,
+    kind: "node_succeeded",
+    encode: (record) => ({
+      node_id: record.nodeId,
+      commit: BigInt(record.commit),
+      messages: record.messages === null ? null : BigInt(record.messages),
+      ...outcomePayload(record),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_id", "commit", "messages", "forward_capture"], label);
       return new NodeSucceededRecord(
         requireName(payload["node_id"], `${label} node_id`),
         wireInt(payload["commit"], `${label} commit`),
         { ...outcomeFromPayload(payload, label), messages: wireNullableInt(payload["messages"], `${label} messages`) },
       );
-    case "node_routed": {
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: NodeRoutedRecord,
+    kind: "node_routed",
+    encode: (record) => ({
+      node_id: record.nodeId,
+      handle: record.handle,
+      terminal_failure: record.terminalFailure === null ? null : failurePayload(record.terminalFailure),
+      ...outcomePayload(record),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_id", "handle", "terminal_failure", "forward_capture"], label);
       const failure = payload["terminal_failure"];
       return new NodeRoutedRecord(
@@ -3443,8 +3449,19 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
           ...outcomeFromPayload(payload, label),
         },
       );
-    }
-    case "node_expanded":
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: NodeExpandedRecord,
+    kind: "node_expanded",
+    encode: (record) => ({
+      spawner_id: record.spawnerId,
+      prune_ids: [...record.pruneIds],
+      topology_digest: record.topologyDigest,
+      ...outcomePayload(record),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["spawner_id", "prune_ids", "topology_digest", "forward_capture"], label);
       return new NodeExpandedRecord(
         requireName(payload["spawner_id"], `${label} spawner_id`),
@@ -3452,13 +3469,33 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         requireText(payload["topology_digest"], `${label} topology_digest`),
         outcomeFromPayload(payload, label),
       );
-    case "node_failed":
+    },
+    nodeId: (payload, label) => requireName(payload["spawner_id"], `${label} spawner_id`),
+  }),
+  recordCodec({
+    cls: NodeFailedRecord,
+    kind: "node_failed",
+    encode: (record) => ({ failure: failurePayload(record.failure), ...outcomePayload(record) }),
+    decode: (payload, label) => {
       requireFields(payload, ["failure", "forward_capture"], label);
       return new NodeFailedRecord(
         failureFromPayload(payload["failure"], `${label} failure`),
         outcomeFromPayload(payload, label),
       );
-    case "memory_commit_requested":
+    },
+    nodeId: (payload, label) =>
+      requireName(wireObject(payload["failure"], `${label} failure`)["node_id"], `${label} failure node_id`),
+  }),
+  recordCodec({
+    cls: MemoryCommitRequestedRecord,
+    kind: "memory_commit_requested",
+    encode: (record) => ({
+      memory: record.memory,
+      commit_id: record.commitId,
+      attempt_id: BigInt(record.attemptId),
+      mutations: record.mutations.map(mutationPayload),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["memory", "commit_id", "attempt_id", "mutations"], label);
       return new MemoryCommitRequestedRecord(
         requireName(payload["memory"], `${label} memory`),
@@ -3466,14 +3503,31 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         wireItems(payload["mutations"], `${label} mutations`, mutationFromPayload),
         wireInt(payload["attempt_id"], `${label} attempt_id`),
       );
-    case "memory_commit_succeeded":
+    },
+  }),
+  recordCodec({
+    cls: MemoryCommitSucceededRecord,
+    kind: "memory_commit_succeeded",
+    encode: (record) => ({ memory: record.memory, commit_id: record.commitId, attempt_id: BigInt(record.attemptId) }),
+    decode: (payload, label) => {
       requireFields(payload, ["memory", "commit_id", "attempt_id"], label);
       return new MemoryCommitSucceededRecord(
         requireName(payload["memory"], `${label} memory`),
         requireName(payload["commit_id"], `${label} commit_id`),
         wireInt(payload["attempt_id"], `${label} attempt_id`),
       );
-    case "memory_commit_failed":
+    },
+  }),
+  recordCodec({
+    cls: MemoryCommitFailedRecord,
+    kind: "memory_commit_failed",
+    encode: (record) => ({
+      memory: record.memory,
+      commit_id: record.commitId,
+      attempt_id: BigInt(record.attemptId),
+      failure: memoryFailurePayload(record.failure),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["memory", "commit_id", "attempt_id", "failure"], label);
       return new MemoryCommitFailedRecord(
         requireName(payload["memory"], `${label} memory`),
@@ -3481,13 +3535,30 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         memoryFailureFromPayload(payload["failure"], `${label} failure`),
         wireInt(payload["attempt_id"], `${label} attempt_id`),
       );
-    case "backward_started":
+    },
+  }),
+  recordCodec({
+    cls: BackwardStartedRecord,
+    kind: "backward_started",
+    encode: (record) => ({ attempt_id: BigInt(record.attemptId), feedback: record.feedback as JsonValue }),
+    decode: (payload, label) => {
       requireFields(payload, ["attempt_id", "feedback"], label);
       return new BackwardStartedRecord(
         wireInt(payload["attempt_id"], `${label} attempt_id`),
         payload["feedback"] as FeedbackValue,
       );
-    case "backward_ready":
+    },
+  }),
+  recordCodec({
+    cls: BackwardReadyRecord,
+    kind: "backward_ready",
+    encode: (record) => ({
+      attempt_id: BigInt(record.attemptId),
+      root_result: backwardResultPayload(record.rootResult),
+      attributed_results: record.attributedResults.map(attributedResultPayload),
+      proposals: record.proposals.map(memoryProposalPayload),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["attempt_id", "root_result", "attributed_results", "proposals"], label);
       return new BackwardReadyRecord(
         wireInt(payload["attempt_id"], `${label} attempt_id`),
@@ -3495,16 +3566,49 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         wireItems(payload["attributed_results"], `${label} attributed_results`, attributedResultFromPayload),
         wireItems(payload["proposals"], `${label} proposals`, memoryProposalFromPayload),
       );
-    case "backward_finished":
+    },
+  }),
+  recordCodec({
+    cls: BackwardFinishedRecord,
+    kind: "backward_finished",
+    encode: (record) => ({
+      attempt_id: BigInt(record.attemptId),
+      outcome: backwardOutcomePayload(record.outcome),
+      attributed_results: record.attributedResults.map(attributedResultPayload),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["attempt_id", "outcome", "attributed_results"], label);
       return new BackwardFinishedRecord(
         wireInt(payload["attempt_id"], `${label} attempt_id`),
         backwardOutcomeFromPayload(payload["outcome"], `${label} outcome`),
         wireItems(payload["attributed_results"], `${label} attributed_results`, attributedResultFromPayload),
       );
-    default:
-      throw new RangeError(`unknown run-record kind: ${reprText(kind)}`);
-  }
+    },
+  }),
+];
+
+/** Each record kind's codec by wire kind: the closed set of kinds this schema reads. */
+const CODEC_BY_KIND: ReadonlyMap<string, RecordCodec> = new Map(RECORD_CODECS.map((codec) => [codec.kind, codec]));
+
+/** Each record kind's codec by its class's prototype, so a subclass's record isn't one. */
+const CODEC_BY_PROTOTYPE: ReadonlyMap<object, RecordCodec> = new Map(
+  RECORD_CODECS.map((codec) => [codec.cls.prototype as object, codec]),
+);
+
+/** Every run-record class. */
+export const RUN_RECORD_TYPES: readonly RunRecordClass[] = Object.freeze(RECORD_CODECS.map((codec) => codec.cls));
+
+/**
+ * Build the record of wire kind `kind` from its payload object, through the record's
+ * constructor.
+ *
+ * @throws RangeError for an unknown kind, besides the kind's decoder's errors.
+ * @throws TypeError as the kind's decoder.
+ */
+function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
+  const codec = CODEC_BY_KIND.get(kind);
+  if (codec === undefined) throw new RangeError(`unknown run-record kind: ${reprText(kind)}`);
+  return codec.decode(payload, `${kind} payload`);
 }
 
 /**

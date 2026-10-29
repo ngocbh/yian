@@ -33,10 +33,11 @@ const REPO = "ngocbh/yian";
 const REPORT_FLOW_FILE = "report_issue.yaml";
 
 /**
- * @internal The longest prefilled link `file_issue` gives, in characters: GitHub refuses a much
- * longer URL.
+ * @internal The longest prefilled link `file_issue` gives, in characters: well under what GitHub
+ * takes, and short enough that the whole outcome fits what the chat's model reads of a run's
+ * output, so the assistant can pass the link on whole.
  */
-export const LINK_CHARS = 8000;
+export const LINK_CHARS = 3500;
 
 /** The most reports saved within one second before `file_issue` gives up on a free name. */
 const SAME_SECOND_REPORTS = 100;

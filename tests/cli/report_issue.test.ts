@@ -191,6 +191,10 @@ test("the browser link is prefilled and saved beside it", async () => {
     `not filed yet: open this link to file it: ${link}\n` + "saved to ~/.yian/reports/2026-10-29T14-03-05Z.md",
   );
   expect(saved()).toEqual(["2026-10-29T14-03-05Z.md"]);
+  // However long the body, the whole outcome fits what the chat's model reads of a run's output.
+  const long = await fileIssue(fileHost, TITLE, "x".repeat(20_000));
+  expect(long).toContain("cut%20to%20fit%20a%20link");
+  expect(long.length).toBeLessThanOrEqual(4000);
 });
 
 test("save only saves the report, and a second report the same second gets its own file", async () => {

@@ -71,7 +71,7 @@ const ALLOWED: Record<string, string> = {
   "cli/run.ts: SPIN_MS": "spinner frame interval",
   "cli/cells.ts: columnsOf.||": "terminal width when the output reports none",
   "cli/cells.ts: rowsOf.||": "terminal height when the output reports none",
-  "cli/report_issue.ts: LINK_CHARS": "longest prefilled new-issue link, under what GitHub accepts",
+  "cli/report_issue.ts: LINK_CHARS": "longest prefilled new-issue link, so the chat's model reads it whole",
   "cli/report_issue.ts: SAME_SECOND_REPORTS": "reports saved in one second before file_issue finds no free name",
   "cli/run_view.ts: KEPT_ROWS": "rows of a child run's progress the chat's run view keeps",
   "cli/terminal.ts: LIST_MARGIN": "screen rows a prompt's list leaves for what is drawn above the box",

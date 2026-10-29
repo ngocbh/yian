@@ -3,17 +3,13 @@
  */
 
 import { compareCodeUnits } from "../diagnostics.ts";
+import { table } from "./provider_blocks.ts";
 
 /** A model choice: the label shown in a picker and the model id it selects. */
 export type ModelOption = readonly [label: string, value: string];
 
 /** Selection mode (`quick`, `deep`) to the model options offered in that mode. */
 export type ModeOptions = Readonly<Record<string, readonly ModelOption[]>>;
-
-/** Freeze a table into a null-prototype record so only its own keys are entries. */
-function table<T>(entries: Record<string, T>): Readonly<Record<string, T>> {
-  return Object.freeze(Object.assign(Object.create(null) as Record<string, T>, entries));
-}
 
 /** Freeze one mode's option list, each option included. */
 function options(...entries: ModelOption[]): readonly ModelOption[] {

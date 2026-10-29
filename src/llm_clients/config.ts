@@ -122,17 +122,17 @@ export const RETIRED_LLM_CONFIG_KEYS: ReadonlySet<string> = new Set([...RETIRED_
 type Data = Readonly<Record<string, unknown>>;
 
 /** Return `data`'s own value for `key`, so inherited names such as `constructor` are absent. */
-function own(data: Data, key: string): unknown {
+export function own(data: Data, key: string): unknown {
   return Object.hasOwn(data, key) ? data[key] : undefined;
 }
 
 /** Whether `data` holds `key` as written: an own property that isn't `undefined` (`null` counts). */
-function has(data: Data, key: string): boolean {
+export function has(data: Data, key: string): boolean {
   return own(data, key) !== undefined;
 }
 
 /** Whether `value` is one of `SUPPORTED_LLM_PROVIDERS`. */
-function isProvider(value: unknown): value is LLMProvider {
+export function isProvider(value: unknown): value is LLMProvider {
   return typeof value === "string" && (SUPPORTED_LLM_PROVIDERS as readonly string[]).includes(value);
 }
 
@@ -274,13 +274,14 @@ export function splitOllamaBaseUrl(value: unknown): [baseUrl: string, credential
 }
 
 /**
- * Return why `data` uses a removed `llm_config` form, or `null`.
+ * Return why the `llm_config` layer `data` uses a removed form, or `null`.
  *
  * Checks, first match wins: an underscore spelling of a dash block (`qwen_cn` for `qwen-cn`), a
  * retired key (`retiredKeyError`), then the native Codex options (`provider: codex`, `sandbox`,
- * `cwd`), which point at the unified OpenAI connection.
+ * `cwd`), which point at the unified OpenAI connection. A key counts whatever its value (`null`
+ * too).
  */
-function removedFormError(data: Data): string | null {
+export function removedFormError(data: Data): string | null {
   for (const key of SUPPORTED_LLM_PROVIDERS) {
     const name = key.replaceAll("-", "_");
     if (name !== key && has(data, name)) return `\`${name}\` is not an llm_config key; write \`${key}\``;
@@ -729,9 +730,8 @@ export function popHostCredentials(config: Record<string, unknown>): HostConnect
   if (apiKey === null && provider === "azure") {
     const endpoint = own(config, "base_url");
     if (endpoint !== null && endpoint !== undefined) validateBaseUrl(endpoint);
-    // Validation names the first setting that needs a key.
-    if (Object.keys(settings).length > 0) new LLMConfig({ provider, ...settings });
-    return new HostConnection();
+    if (Object.keys(settings).length === 0) return new HostConnection();
+    // Settings without a key go on to the validation below, which names the first that needs one.
   }
   const baseUrl = own(config, "base_url");
   delete config["base_url"];

@@ -53,11 +53,6 @@ export const OPENAI_REFUSED_HEADER_NAMES: Readonly<Record<string, string>> = Obj
 const TOKEN = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
 const VISIBLE_ASCII = /^[\x21-\x7e]+$/;
 
-/** Return `table`'s own entry for `key`, so inherited names such as `constructor` are absent. */
-function own(table: Readonly<Record<string, string>>, key: string): string | undefined {
-  return Object.hasOwn(table, key) ? table[key] : undefined;
-}
-
 /** Return the number of code points in `text`. */
 function codePoints(text: string): number {
   return [...text].length;
@@ -80,8 +75,9 @@ export function validateHeaderName(name: unknown, provider: string | null): stri
     throw new RangeError("header names must be HTTP tokens: letters, digits and !#$%&'*+-.^_`|~");
   }
   const lower = name.toLowerCase();
+  // Both tables have a null prototype, so a name such as `constructor` finds no entry.
   const reason =
-    own(REFUSED_HEADER_NAMES, lower) ?? (provider === "openai" ? own(OPENAI_REFUSED_HEADER_NAMES, lower) : undefined);
+    REFUSED_HEADER_NAMES[lower] ?? (provider === "openai" ? OPENAI_REFUSED_HEADER_NAMES[lower] : undefined);
   if (reason !== undefined) throw new RangeError(`header ${name} is refused: ${reason}`);
   return name;
 }

@@ -81,7 +81,7 @@ interface Checked {
 type Options<K extends Field["kind"]> = Omit<Extract<Field, { kind: K }>, "kind">;
 
 /** Return `obj` as a frozen null-prototype object, so no inherited key reads as an entry. */
-function table<T>(obj: Readonly<Record<string, T>>): Readonly<Record<string, T>> {
+export function table<T>(obj: Readonly<Record<string, T>>): Readonly<Record<string, T>> {
   return Object.freeze(Object.assign(Object.create(null) as Record<string, T>, obj));
 }
 

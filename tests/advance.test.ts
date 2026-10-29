@@ -449,6 +449,18 @@ test("an advance passing an API key the flow doesn't use still hits the registry
   expect((await advance({ log, tools, env: NO_ENV, apiKey: "sk-test" })).status).toBe("waiting");
 });
 
+test("a runFlow given an API key the flow doesn't use leaves an entry an advance with that key hits", async () => {
+  const root = mkdtempSync(join(ROOT, "run-key-"));
+  const { dir, flow } = await codeHostFlow(root);
+  const log = freshLog();
+  const tools = { lookup: lookupQ() };
+  const llmConfig = { provider: "openai", api_key: "sk-test" };
+  expect((await runFlow(flow, {}, { log, env: NO_ENV, tools, llmConfig })).status).toBe("waiting");
+  unlinkSync(join(dir, "fn.ts"));
+  // A hit: nothing recompiles, so the missing CODE file isn't read.
+  expect((await advance({ log, tools, env: NO_ENV, apiKey: "sk-test" })).status).toBe("waiting");
+});
+
 test("repeated advances of a waiting run that can't move each append nothing", async () => {
   const { log, flow, tools } = await waitingRun();
   const before = readFileSync(log);

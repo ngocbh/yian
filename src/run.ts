@@ -1305,6 +1305,9 @@ async function startRun(
     const host = popHostCredentials(runLlmConfig);
     let apiKey = host.apiKey;
     let headers = host.headers;
+    // The idle entry keeps the given credentials, as `advance`'s does, before a flow that sends no
+    // host key drops them below: a later call passing the same ones then reuses it.
+    const credentials = { apiKey, headers };
 
     // One selection snapshot determines every static agent before RunStarted, and what each agent
     // resolved only when it runs binds from.
@@ -1397,7 +1400,6 @@ async function startRun(
       runHold = hold(key, null);
       const opened = authority as JsonlRunLog;
       const hostFlow = flow.source === null ? flow : null;
-      const credentials = { apiKey, headers };
       keep = () => idleRun(state, flow, key, opened, { hostFlow, codeRoot: null, ...credentials });
     }
     // Every append goes through the live channel's wrapper; the authority itself is kept and closed.

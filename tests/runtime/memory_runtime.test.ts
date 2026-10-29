@@ -328,6 +328,27 @@ test("registry must be a Map", async () => {
   expect(events).toEqual([]);
 });
 
+test("a registry key deleted during openRun still opens", async () => {
+  const events: Events = [];
+  const memory = pair(events);
+  const alpha = memory.get("alpha")! as FakeMemory;
+  const openAlpha = alpha.openRun.bind(alpha);
+  alpha.openRun = (options) => {
+    memory.delete("beta");
+    return openAlpha(options);
+  };
+
+  const runtime = await open(memory);
+
+  expect(events).toEqual([
+    ["openRun", "alpha", null],
+    ["openRun", "beta", null],
+    ["snapshot", "alpha"],
+    ["snapshot", "beta"],
+  ]);
+  await runtime.close();
+});
+
 test("later open failure closes prior session and preserves origin", async () => {
   const events: Events = [];
   const failure = new MemoryOperationError("openRun", "beta.unavailable", "temporarily unavailable", true);

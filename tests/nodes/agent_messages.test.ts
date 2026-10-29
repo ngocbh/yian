@@ -10,7 +10,7 @@ import {
 } from "../../src/llm/messages.ts";
 import {
   checkConversation, checkMessage, checkModelConversation, ConversationError, fromModelMessage, type Message, messageSteps,
-  rebuildMessages, toModelMessage,
+  rebuildMessages, steerValues, toModelMessage,
 } from "../../src/nodes/agent/messages.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
@@ -442,6 +442,12 @@ describe("an AGENT's new messages", () => {
 
   test("a steer step without its values is refused", () => {
     const bare = { kind: "steer", inbox: "notes", from: [1n] } as unknown as JsonObject;
-    expect(() => rebuildMessages([bare], null)).toThrow(new RangeError("a steer step without its values"));
+    expect(() => rebuildMessages([bare], null)).toThrow(new RangeError("a steer step without its values, which only the engine's copy of the step carries"));
+  });
+
+  test("steerValues reads a steer step's values and refuses a step without them", () => {
+    expect(steerValues({ kind: "steer", inbox: "notes", from: [1n], values: ["x"] })).toEqual(["x"]);
+    const bare = { kind: "steer", inbox: "notes", from: [1n], values: null };
+    expect(() => steerValues(bare)).toThrow(new RangeError("a steer step without its values, which only the engine's copy of the step carries"));
   });
 });

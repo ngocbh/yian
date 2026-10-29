@@ -29,8 +29,8 @@
  * when the model gives its final answer gets one more model call, within `maxToolIterations`; a
  * structured agent without tools or skills reads its steers once, before its single call.
  *
- * Knows about:   diagnostics, events, llm, llm_clients connection, platform, nodes/base, skills,
- *                tools, typesys, peer AGENT modules.
+ * Knows about:   diagnostics, events, llm, llm_clients connection, memory contracts, platform,
+ *                nodes/base, skills, tools, typesys, peer AGENT modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -86,7 +86,7 @@ import {
   type ToolCallIdentity,
 } from "./live.ts";
 import { type CloserReason, closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
-import { type SteerRender, steerMessages } from "./messages.ts";
+import { type SteerRender, steerMessages, steerValues } from "./messages.ts";
 import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
 import { pushVisible, textOf } from "./text.ts";
 
@@ -215,7 +215,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     // synchronous, so neither a stop nor an interrupt lands between it and the model call.
     for (const values of steerReads(steps, ctx.steerInbox)) messages.push(...steerMessages(values, steerOptions));
     const request = new Request({ messages, tools: bound });
-    let called: Awaited<ReturnType<typeof callModel>>;
+    let called: { response: Response; n: number; replayed: boolean };
     try {
       called = await callModel(live, model, request, {
         purpose: "chat",
@@ -231,7 +231,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       throw error;
     }
     // With `record`, `n` is the reply's `model_call` step.
-    const { response, n, replayed } = called as { response: Response; n: number; replayed: boolean };
+    const { response, n, replayed } = called;
     // A stop that lands during the call wins over its reply.
     checkStopped(ctx);
     rejectInvalidReply(response.message);
@@ -405,8 +405,11 @@ export async function stepsMaterial(
     }
     if (step["kind"] === "steer") {
       commit();
-      const values = step["values"];
-      if (!Array.isArray(values)) {
+      let values: readonly unknown[];
+      try {
+        values = steerValues(step);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
         digestOk = false;
         break;
       }

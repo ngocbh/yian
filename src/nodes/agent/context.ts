@@ -3,8 +3,8 @@
  * replies' media go to.
  *
  * Knows about:   diagnostics, events, llm errors, llm messages, llm_clients factory, memory
- *                contracts, nodes/base, nodes/contracts, platform, skills, tools, typesys, node's
- *                crypto and node's fs.
+ *                contracts, nodes/base, nodes/contracts, platform, skills, tools, typesys, peer
+ *                AGENT modules, node's crypto and node's fs.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -27,7 +27,7 @@ import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesy
 import { CapabilityFault, type NodeCaps, type SteerInbox } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
 import type { CloserReason } from "./memory.ts";
-import type { SteerRender } from "./messages.ts";
+import { type SteerRender, steerValues } from "./messages.ts";
 
 /** The system prompt of an AGENT that authors none. */
 export const DEFAULT_SYSTEM =
@@ -110,7 +110,7 @@ export interface RetrySettings {
 }
 
 /** The token counts a model call step records. */
-type UsageCounts = Pick<Usage, "inputTokens" | "outputTokens" | "cacheReadTokens" | "reasoningTokens">;
+type UsageCounts = Pick<Usage, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheCreationTokens" | "reasoningTokens">;
 
 /** What every `model_call` step records. Times are epoch milliseconds. */
 interface CallFields {
@@ -326,20 +326,19 @@ export class AgentSteps {
    *
    * @returns Each one's step `n` and the values the engine attached to the step's copy; empty when
    *   none was recorded there, or they were taken.
-   * @throws CapabilityFault carrying a RangeError when a step's copy has no values: the steps
-   *   came from somewhere other than the engine.
+   * @throws CapabilityFault carrying a RangeError naming the node and the step when a step's copy
+   *   has no values (`steerValues`): the steps came from somewhere other than the engine.
    */
   takeRecordedSteers(): RecordedSteer[] {
     const recorded = this.#steers.get(this.#taken) ?? [];
     this.#steers.delete(this.#taken);
     return recorded.map(({ n, step }) => {
-      const values = step["values"];
-      if (!Array.isArray(values)) {
-        throw new CapabilityFault(
-          new RangeError(`node ${reprText(this.#nodeId)} step ${n}: a steer step without its values; resume through the engine`),
-        );
+      try {
+        return { n, values: steerValues(step) };
+      } catch (error) {
+        const message = `node ${reprText(this.#nodeId)} step ${n}: ${(error as RangeError).message}; resume through the engine`;
+        throw new CapabilityFault(new RangeError(message, { cause: error }));
       }
-      return { n, values };
     });
   }
 
@@ -605,6 +604,7 @@ function usageStep(usage: UsageCounts | null): ValueRecord | null {
     input_tokens: count(usage.inputTokens),
     output_tokens: count(usage.outputTokens),
     cache_read_tokens: count(usage.cacheReadTokens),
+    cache_creation_tokens: count(usage.cacheCreationTokens),
     reasoning_tokens: count(usage.reasoningTokens),
   };
 }
@@ -631,6 +631,8 @@ export function recordedResponse(step: ValueRecord): Response {
             // The step doesn't record the total; the provider's is the sum of these two.
             totalTokens: Number(usage["input_tokens"]) + Number(usage["output_tokens"]),
             cacheReadTokens: count(usage["cache_read_tokens"]),
+            // Absent from a step an older version wrote.
+            cacheCreationTokens: count(usage["cache_creation_tokens"]),
             reasoningTokens: count(usage["reasoning_tokens"]),
           }),
     finishReason: step["finish"] as string | null,
@@ -726,6 +728,8 @@ const MEDIA_EXTENSIONS: ReadonlyMap<string, string> = new Map([
  *
  * @returns The file's reference: its path relative to the run folder (`media/<sha256>.<ext>`) as
  *   `uri`, so it still holds when the folder is copied elsewhere; `mime`; and its file name as `name`.
+ * @throws Error, writing no file, when `media` exists but isn't a folder (a symlink included), or,
+ *   on POSIX, is another user's or its group or others can write it.
  */
 export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): FileRef {
   const media = resolve(dir, "media");
@@ -733,6 +737,17 @@ export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): File
     fs.mkdirSync(media, { mode: 0o700 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  // A `media` already there may not be ours (a log in a shared folder such as /tmp): a symlink
+  // would lead writes out, which `fileToInline` then refuses to read, and another writer could
+  // swap the bytes a step names.
+  const info = fs.lstatSync(media);
+  const refused = (why: string) => new Error(`the run's media folder ${media} ${why}; give the run a folder of its own`);
+  if (!info.isDirectory()) throw refused("is not a folder");
+  // Owner and mode are checked only on POSIX: Windows has no `getuid`, and its modes read 0o666.
+  const uid = process.getuid?.();
+  if (uid !== undefined && (info.uid !== uid || (info.mode & 0o022) !== 0)) {
+    throw refused("is another user's or others can write it");
   }
   // A new `media` entry is durable only once the run folder holding it is synced. Synced every
   // time: a crash after an earlier call made `media` may have left the folder unsynced.

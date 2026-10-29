@@ -127,6 +127,18 @@ function steerParts(message: Message, onDrop: (part: number) => void): TextPart[
   return parts;
 }
 
+/**
+ * Return the events a `steer` step read, which the engine attaches as `values` to each copy of the
+ * step it hands out; the run log itself holds only their seqs.
+ *
+ * @throws RangeError when the step has no `values`: it didn't come from the engine.
+ */
+export function steerValues(step: Readonly<Record<string, unknown>>): readonly unknown[] {
+  const values = step["values"];
+  if (!Array.isArray(values)) throw new RangeError("a steer step without its values, which only the engine's copy of the step carries");
+  return values;
+}
+
 /** Renders one steer event to text: an AGENT's `render:` template over `${event}`. */
 export type SteerRender = (value: unknown) => string;
 
@@ -352,7 +364,7 @@ export function messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
  *   rendered them.
  * @returns The `list(Message)` value.
  * @throws RangeError when a structured call is given with no output value, or a steer step
- *   without its values.
+ *   without its values (`steerValues`).
  */
 export function rebuildMessages(
   steps: readonly Readonly<JsonObject>[],
@@ -388,9 +400,7 @@ export function rebuildMessages(
     }
     if (step["kind"] === "steer") {
       flush();
-      const values = step["values"];
-      if (!Array.isArray(values)) throw new RangeError("a steer step without its values");
-      for (const message of steerMessages(values, { render })) messages.push(fromModelMessage(message));
+      for (const message of steerMessages(steerValues(step), { render })) messages.push(fromModelMessage(message));
       continue;
     }
     if (step["kind"] === "interrupted") {

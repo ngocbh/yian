@@ -103,7 +103,9 @@ input offers `Set null`. Ctrl-C or the end of input cancels: `run cancelled`, ex
 
 A fresh run writes its log to `~/.yian/runs/<run_id>/log.jsonl`, in a folder of its own, and
 prints `Run log: PATH` on stderr before it starts, even with `--quiet`. With `--log PATH`, choose a
-path in a folder no other run uses: the run keeps its lock file and media files beside the log.
+path in a folder no other run uses: that folder is the run's folder, and the run keeps its lock
+file and its `media` folder beside the log. A model call whose reply holds media fails if `media`
+is a symlink, another user's, or writable by others.
 
 The log holds the run's inputs, node outputs, model replies and errors. Treat it as private data.
 yian creates `~/.yian` and the run folders with mode `0700` and the log with mode `0600`.

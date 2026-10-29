@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { withEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { StreamChunk } from "../../src/events.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
@@ -113,6 +114,26 @@ test("raw node raise and invalid grow are failures not observers", async () => {
   expect(invalidGrow).toBeInstanceOf(EvaluationFailure);
   expect((invalidGrow as EvaluationFailure).failure.code).toBe("contract.node_result");
   expect((invalidGrow as EvaluationFailure).failure.message).toContain("not a spawner");
+});
+
+test("a failure's message and traceback are cut to the failure cap, saying how much was cut", async () => {
+  const raised = await withEnv(
+    (name) => (name === "YIAN_MAX_FAILURE_CHARS" ? "50" : undefined),
+    () => drive(new FailNode("raise", "😀".repeat(3_000))),
+  );
+  const { message, traceback } = (raised as EvaluationFailure).failure;
+  expect(message).toBe("😀".repeat(50) + "… (2950 more characters)");
+  // The stack starts with `Error: ` and the message; its frames are cut too.
+  const cut = /^Error: (?:😀){43}… \((\d+) more characters\)$/u.exec(traceback!);
+  expect(cut).not.toBeNull();
+  expect(Number(cut![1])).toBeGreaterThan(2_957);
+});
+
+test("a failure's message and traceback within the failure cap are kept whole", async () => {
+  const raised = await drive(new FailNode("raise", "x".repeat(9_000)));
+  const { message, traceback } = (raised as EvaluationFailure).failure;
+  expect(message).toBe("x".repeat(9_000));
+  expect(traceback!.startsWith(`Error: ${message}\n`)).toBe(true);
 });
 
 describe("a stop is the node's aborted signal", () => {

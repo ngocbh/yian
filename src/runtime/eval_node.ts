@@ -41,8 +41,8 @@ import {
   BindingStageError,
   CapabilityFault,
   DeferredBindingFault,
+  failureMessage,
   Grow,
-  markerMessage,
   type Node,
   NodeBodyError,
   type NodeCaps,
@@ -99,7 +99,8 @@ export class EvaluationFailure {
 /**
  * @internal Build one failure of `node` from a thrown value: its message, the `Error`'s `name`
  * (else the value's type name) as the cause type, and the `Error`'s stack followed by its string
- * `notes`, one per line, as the traceback. The engine uses it for its contract failures.
+ * `notes`, one per line, as the traceback. The message and the traceback are each cut to
+ * `YIAN_MAX_FAILURE_CHARS`. The engine uses it for its contract failures.
  *
  * @param origin The failing operation's authored origin; `null` falls back to the node's origin.
  */
@@ -112,7 +113,7 @@ export function evaluationFailure(
   return new EvaluationFailure(
     new Failure({
       code,
-      message: markerMessage(error),
+      message: failureMessage(error),
       nodeId: node.id,
       trace: node.failureTrace(origin),
       causeType: error instanceof Error ? error.name : jsTypeName(error),

@@ -152,6 +152,14 @@ export const ENTRIES = Object.freeze([
     group: "limit",
     minimum: 2,
   }),
+  // A body can throw any amount of text, and its failure is written to the run log twice:
+  // as the message and inside the traceback.
+  entry("MAX_FAILURE_CHARS", {
+    default: 10_000,
+    description: "Longest message or traceback a failure records; a longer one is cut and says how much was cut",
+    group: "limit",
+    minimum: 1,
+  }),
   // Defaults for node and memory behavior; a flow can override some of them.
   entry("AGENT_RETRIES", {
     default: 2,

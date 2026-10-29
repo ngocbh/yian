@@ -29,8 +29,8 @@ import {
   type BackwardOptions,
   BackwardResult,
   copyBackwardValue,
+  failureMessage,
   type LearningMaterial,
-  markerMessage,
   type MaterialCaps,
   tracebackText,
   validateBackwardResult,
@@ -84,7 +84,7 @@ export class BackwardComputeError extends Error {
 /** Return `error` as a `code` failure of the occurrence `context` describes. */
 function computeFailure(context: BackwardContext, code: string, error: unknown): BackwardComputeError {
   return new BackwardComputeError(
-    new BackwardFailure("backward", code, markerMessage(error), {
+    new BackwardFailure("backward", code, failureMessage(error), {
       scope: context.scope,
       runId: context.runId,
       nodeId: context.nodeId,

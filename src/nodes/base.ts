@@ -20,6 +20,7 @@
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
+import { current } from "../defaults.ts";
 import { Failure, type FailureCode, OriginRef, reprText } from "../diagnostics.ts";
 import type {
   ModelCallFinished,
@@ -54,6 +55,7 @@ import type { ToolSet } from "../tools/registry.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
 import {
+  cutText,
   fromHost,
   isList,
   isRecord,
@@ -817,15 +819,23 @@ export function markerMessage(original: unknown): string {
 }
 
 /**
- * @internal Return an `Error`'s stack followed by its string `notes`, one per line, else `null`;
- * the notes in the text keep a cleanup note durable. Used
- * for a failure's traceback.
+ * @internal Return a thrown value's `markerMessage` cut to `YIAN_MAX_FAILURE_CHARS` code points by
+ * `cutText`. Used for a failure's message, which the run log records.
+ */
+export function failureMessage(error: unknown): string {
+  return cutText(markerMessage(error), current().maxFailureChars);
+}
+
+/**
+ * @internal Return an `Error`'s stack followed by its string `notes`, one per line, cut to
+ * `YIAN_MAX_FAILURE_CHARS` code points by `cutText`, else `null`; the notes in the text keep a
+ * cleanup note durable. Used for a failure's traceback.
  */
 export function tracebackText(error: unknown): string | null {
   if (!(error instanceof Error)) return null;
   const notes: unknown = (error as { notes?: unknown }).notes;
   const lines = [error.stack, ...(Array.isArray(notes) ? notes : [])].filter((line) => typeof line === "string");
-  return lines.length > 0 ? lines.join("\n") : null;
+  return lines.length > 0 ? cutText(lines.join("\n"), current().maxFailureChars) : null;
 }
 
 /** A stage marker retaining one value thrown by a node's body. Used by the evaluator. */

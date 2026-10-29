@@ -37,7 +37,8 @@ import { isSystemError, leavesRoot } from "../platform.ts";
 import { resolvedPath } from "../skills/catalog.ts";
 import { isReportedToolError, ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
-import { canonicalTypeLabel } from "../typesys/values.ts";
+import { builtinType } from "../typesys/types.ts";
+import { canonicalTypeLabel, isInboxType, type Type } from "../typesys/values.ts";
 import { loadConfinedText } from "./confined_load.ts";
 import { unifiedDiff } from "./diff.ts";
 import { renderDiagnostic } from "./render.ts";
@@ -300,17 +301,38 @@ export async function renderedDiagnostic(diag: Diagnostic, env: Env): Promise<st
  * `name: type` lines, or `invalid:` and the diagnostic.
  */
 async function checkText(root: string, path: string, text: string, env: Env): Promise<string> {
+  return (await checkedFlow(root, path, text, env)).check;
+}
+
+/** Check `text` as `checkText` does, returning the flow too, or `null` when it doesn't load. */
+async function checkedFlow(
+  root: string,
+  path: string,
+  text: string,
+  env: Env,
+): Promise<{ check: string; flow: ComposedFlow | null }> {
   let flow: ComposedFlow;
   try {
     flow = await loadConfinedText(root, path, text, env);
   } catch (error) {
-    if (error instanceof LoadError) return `invalid:\n${await renderedDiagnostic(error.diagnostic, env)}`;
+    if (error instanceof LoadError) {
+      return { check: `invalid:\n${await renderedDiagnostic(error.diagnostic, env)}`, flow: null };
+    }
     throw error;
   }
   // A flow's `input:` entry always declares its type, so its contract is set.
-  const inputs = flow.input.map((decl) => `  ${decl.name}: ${canonicalTypeLabel(decl.contract!.type)}`);
+  const inputs = flow.input.map((decl) => `  ${decl.name}: ${shownTypeLabel(decl.contract!.type)}`);
   const name = flow.name ?? flow.compiled.flowId;
-  return ["ok", `name: ${name}`, ...(inputs.length > 0 ? ["inputs:", ...inputs] : ["inputs: none"])].join("\n");
+  const lines = ["ok", `name: ${name}`, ...(inputs.length > 0 ? ["inputs:", ...inputs] : ["inputs: none"])];
+  return { check: lines.join("\n"), flow };
+}
+
+/**
+ * `type`'s label as the model reads it: the canonical one, with the built-in `Message` record
+ * written by its name rather than field by field.
+ */
+function shownTypeLabel(type: Type): string {
+  return canonicalTypeLabel(type).replaceAll(canonicalTypeLabel(builtinType("Message")!), "Message");
 }
 
 /** `text` cut to at most `FOCUS_BYTES` of UTF-8, between characters, with a note when it was cut. */
@@ -326,18 +348,21 @@ function focusText(text: string): string {
 
 /**
  * Read and check the flow the chat is about (its focus) at `path`, confined to its own folder, so
- * a flow outside the chat's root works: its text, cut at `FOCUS_BYTES` with a note, and its check
- * as `check_flow` gives it, of the whole text. A file that can't be read gives no text and why.
+ * a flow outside the chat's root works: its text, cut at `FOCUS_BYTES` with a note, its check as
+ * `check_flow` gives it, of the whole text, and whether it loads with an `Inbox` input. A file
+ * that can't be read gives no text and why.
  */
-export async function checkFocus(path: string, env: Env): Promise<{ text: string; check: string }> {
+export async function checkFocus(path: string, env: Env): Promise<{ text: string; check: string; inbox: boolean }> {
   let text: string;
   try {
     text = readFlowText(path);
   } catch (error) {
-    return { text: "", check: toReadFailure(path, error).message };
+    return { text: "", check: toReadFailure(path, error).message, inbox: false };
   }
   const real = realpathSync(path);
-  return { text: focusText(text), check: await checkText(dirname(real), real, text, env) };
+  const { check, flow } = await checkedFlow(dirname(real), real, text, env);
+  const inbox = flow?.input.some((decl) => isInboxType(decl.contract?.type ?? null)) ?? false;
+  return { text: focusText(text), check, inbox };
 }
 
 /** The approval answers `write_flow` offers: the first writes, the last (Ctrl-C's) doesn't. */

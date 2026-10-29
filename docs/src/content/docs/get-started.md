@@ -149,17 +149,31 @@ Common flags:
 A run that stops to wait, for example for a person's answer, prints the
 `yian run --resume` line that continues it. The [CLI](/cli/) page lists every flag.
 
+## Chat with yian's assistant
+
+`yian chat` opens a chat with yian's assistant. Ask it to find, explain, check, write or run the
+flows in the current folder. It asks before it writes a file or runs a flow, and it tells you what
+a flow it runs asks and returns. Like any agent, it needs the provider login you set up above.
+
+```console
+$ yian chat
+$ yian chat hello.yaml
+```
+
+With a flow, the chat is about that flow: the assistant reads it and checks it first. Type
+`/exit` or press Ctrl-D to leave. [`yian chat`](/cli/#yian-chat) lists what the assistant can do.
+
 ## Chat with a flow
 
-`yian chat` is for flows that hold a conversation. The flow takes an input of type
-`Inbox(str)` or `Inbox(Message)`, and each line you type is sent to it. Whatever a step named
-`reply` answers is printed.
+A flow can hold a conversation itself. It takes an input of type `Inbox(str)` or `Inbox(Message)`,
+and on a terminal `yian run` sends each line you type to it. Whatever a step named `reply` answers
+is printed.
 
 Save [`chat.yaml` and `compact_history.yaml`](/examples/#chatyaml) from the Examples page in
 one folder, then run:
 
 ```console
-$ yian chat chat.yaml
+$ yian run chat.yaml
 ```
 
 | Key | What it does |
@@ -170,8 +184,6 @@ $ yian chat chat.yaml
 | Esc | Takes back lines the flow hasn't read yet, then stops the reply |
 | `/exit`, `/quit` or Ctrl-D | Ends the chat once the queued lines are answered |
 
-`yian chat` takes `--input`, `--inputs`, `--provider`, `--model` and `--log` like `yian run`. It
-opens no MCP servers and loads no skills.
 Use `--inbox NAME` when the flow has more than one inbox input. Inboxes are covered in
 [Inboxes and waiting](/inboxes/).
 

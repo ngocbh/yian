@@ -1,6 +1,6 @@
 ---
 name: composing-agents
-description: Use when writing or editing a yian flow (a YAML file run with `yian run`): wiring agent, code, tool, case, call, map or loop nodes, asking a person, waiting on an inbox or a time, or answering "how do I write a flow that ...". Trigger on "write a flow", "create an agent", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow".
+description: 'Use when writing or editing a yian flow (a YAML file run with `yian run`): wiring agent, code, tool, case, call, map or loop nodes, asking a person, waiting on an inbox or a time, or answering "how do I write a flow that ...". Trigger on "write a flow", "create an agent", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow".'
 ---
 
 # Writing yian flows

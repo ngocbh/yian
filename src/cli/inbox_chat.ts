@@ -1,7 +1,8 @@
 /**
- * `yian chat`: a terminal host that sends each typed line to a flow's `Inbox(str)` or
- * `Inbox(Message)` input and advances the run. `yian run` comes here first too (`runOrChat`): on a
- * terminal, a flow the chat can take is chatted with, and any other goes on to `run`.
+ * The inbox chat: a terminal host that sends each typed line to a flow's `Inbox(str)` or
+ * `Inbox(Message)` input and advances the run. `yian run` comes here first (`runOrChat`): on a
+ * terminal, a flow the chat can take is chatted with, and any other goes on to `run`. `yian chat`
+ * (`chat.ts`) runs its bundled assistant through it.
  *
  * The chat starts the flow, then loops while the run waits: read a line, `send` it, `advance`.
  * The engine holds no prompt and the run holds no worker between turns, and an `advance` finishes
@@ -10,7 +11,7 @@
  * run at its `wakeAt`, so `sleep` and `ask`/`take` timeouts fire on time. With `--resume`, the chat
  * picks up a run a chat left (stopped or waiting) by advancing it, then goes on the same way.
  *
- * Given child events (`InboxChatDeps.events`), the chat also sends each into the inbox as a message
+ * Given child events (`InboxChatHost.events`), the chat also sends each into the inbox as a message
  * authored `yian`, through its flusher (`chat_flush.ts`), which it tells when turns begin and end,
  * when the prompt is up and when the user interrupts or sends a line.
  *
@@ -25,6 +26,7 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { Diagnostic } from "../diagnostics.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "../events.ts";
+import type { ModelAccess } from "../llm_clients/factory.ts";
 import { realScheduler, type Scheduler } from "../platform.ts";
 import {
   advance,
@@ -42,6 +44,7 @@ import {
 } from "../run.ts";
 import { type InboxClosedRecord, iterRunRecords, recordTimeMs } from "../runtime/log.ts";
 import { wakeAt } from "../runtime/waits.ts";
+import type { Skill } from "../skills/catalog.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { builtinType } from "../typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
@@ -65,12 +68,13 @@ import {
   validateRunLogOptions,
   waitingText,
 } from "./run.ts";
+import { sanitize } from "./sanitize.ts";
 import { cliLayer, freshLog, loadFlowFile, preflightKeys } from "./startup.ts";
 import { Terminal, TerminalStopped } from "./terminal.ts";
 import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, shellQuote, sleepUntil, UsageError } from "./utils.ts";
 
 /**
- * The options `inboxChat` reads, for `yian chat` and for the chats `runOrChat` hands over; an
+ * The options `inboxChat` reads, for `yian chat`'s assistant and the chats `runOrChat` hands over; an
  * absent option is `undefined`, an absent repeatable one an empty list, an absent flag `false`.
  */
 export interface InboxChatOptions {
@@ -87,16 +91,32 @@ export interface InboxChatOptions {
 
 /**
  * @internal Test seams: the clock the run and the chat's timers share, the source of the process
- * signals, and host tools added to the registered ones; and the child events the chat sends, for
- * `yian chat`'s assistant.
+ * signals, the model builder AGENT nodes use, and the `advance` each turn after the first calls.
  */
 export interface InboxChatDeps {
   scheduler?: Scheduler;
   signals?: Pick<NodeJS.EventEmitter, "on" | "off">;
-  tools?: Readonly<Record<string, ToolEntry>>;
-  events?: ChatEvents;
-  /** @internal For tests: the `advance` each turn after the first calls. */
+  models?: ModelAccess | null;
   advance?: typeof advance;
+}
+
+/**
+ * What a host running a flow through the chat gives it beside the command line, as `yian chat`
+ * runs its bundled assistant: the flow itself, inputs, skills, tools, child events and a run id.
+ */
+export interface InboxChatHost {
+  /** The flow at `flowPath`, already loaded; read from the file when absent. */
+  flow?: ComposedFlow;
+  /** Inputs the host supplies itself, beside those given on the command line; never prompted for. */
+  inputs?: Readonly<Record<string, unknown>>;
+  /** The skills the run gets, instead of those read from the skill folders. */
+  skills?: ReadonlyMap<string, Skill> | null;
+  /** The run's id; a fresh one when absent. */
+  runId?: string;
+  /** Host tools added to the registered ones; a function gets the chat's terminal, to ask through. */
+  tools?: Readonly<Record<string, ToolEntry>> | ((terminal: Terminal) => Readonly<Record<string, ToolEntry>>);
+  /** The child events the chat sends into the inbox. */
+  events?: ChatEvents;
 }
 
 const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
@@ -152,7 +172,7 @@ function pickInbox(flow: ComposedFlow, chosen: string | undefined): LineInbox {
   const names = inboxes.map((inbox) => inbox.name);
   const id = flow.compiled.flowId ?? flow.name;
   if (names.length === 0) {
-    throw new UsageError(`flow '${id}' has no Inbox(str) or Inbox(Message) input; yian chat sends each line to one`);
+    throw new UsageError(`flow '${id}' has no Inbox(str) or Inbox(Message) input; the chat sends each line to one`);
   }
   if (chosen !== undefined) {
     const picked = inboxes.find((inbox) => inbox.name === chosen);
@@ -221,12 +241,12 @@ async function recordedFlow(log: string, engineTrace: boolean, io: CliIo): Promi
 }
 
 /**
- * Return what a stopped chat prints: where its run is, and the `yian chat --resume` that continues
+ * Return what a stopped chat prints: where its run is, and the `yian run --resume` that continues
  * it, naming the inbox when the flow has several (the log doesn't record which one the chat used).
  */
 function stoppedText(log: string, inbox: LineInbox): string {
   const named = inbox.several ? ` --inbox ${shellQuote(inbox.name)}` : "";
-  return `chat stopped; the run is in ${log}\ncontinue with: yian chat --resume ${shellQuote(log)}${named}\n`;
+  return `chat stopped; the run is in ${log}\ncontinue with: yian run --resume ${shellQuote(log)}${named}\n`;
 }
 
 /** Whether the run log at `log` records that the top-level inbox `inbox` was closed. */
@@ -241,7 +261,8 @@ function inboxClosed(log: string, inbox: string): boolean {
  * Chat with the flow at `flowPath`: start it, send each line typed at the `You:` prompt to its
  * one `Inbox(str)` or `Inbox(Message)` input (or `options.inbox`; a `Message` inbox gets the line
  * as a user message holding it as text), and advance the run after each send, printing the
- * output of each node named `reply` on stdout as it finishes; returns the exit code.
+ * output of each node named `reply` on stdout as it finishes, through `sanitize`; returns the exit
+ * code.
  *
  * `/exit`, `/quit` or the end of input closes the inbox; the run finishes, `session ended` goes to
  * stderr and the chat exits 0. Ctrl-C (SIGINT) while a turn runs interrupts the agents reading the
@@ -256,7 +277,7 @@ function inboxClosed(log: string, inbox: string): boolean {
  * arrives as a key with the same rule, Ctrl-Z and Ctrl-\ raise no signal, and other keys are kept
  * for the next prompt. SIGTERM, SIGHUP or
  * `io.stop` stops the run and leaves its log (`chat stopped; the run is in <log>` and the
- * `yian chat --resume <log>` that continues it, exit 130), as does Ctrl-C at an `ask` prompt,
+ * `yian run --resume <log>` that continues it, exit 130), as does Ctrl-C at an `ask` prompt,
  * which ignores Esc. While the prompt is up, the run is advanced
  * at its `wakeAt`; what was typed so far comes back at the next prompt. Off a terminal (stdin or
  * stderr isn't a TTY), each prompt is written once, with no escape codes, and Esc isn't seen. An
@@ -265,7 +286,7 @@ function inboxClosed(log: string, inbox: string): boolean {
  * run that ends waiting after the inbox closed, with no deadline to wake it, prints what it waits
  * on and exits 0.
  *
- * With `deps.events`, each child event queued is sent to the inbox as a message authored `yian`
+ * With `host.events`, each child event queued is sent to the inbox as a message authored `yian`
  * (as text to an `Inbox(str)`): while a turn runs, at once, unless a tool call is in flight, then
  * when the last one ends; while the prompt is up, the prompt is taken down, the events are sent
  * in a turn of their own and what was typed comes back. A turn that leaves the run waiting with an
@@ -278,10 +299,11 @@ function inboxClosed(log: string, inbox: string): boolean {
  * <event>)`).
  *
  * The flow loads, inputs, provider keys, log path and run index are handled as `yian run`'s
- * (`--engine-trace` included), except that the inbox input is never asked for or supplied. Skills
- * are read as `yian run` reads them, once per chat, before any input prompt. The chat opens no MCP
- * servers and builds no memories. A host failure prints `chat failed: <message>`, its stack below
- * under `engineTrace`, and exits 1.
+ * (`--engine-trace` included), except that the inbox input is never asked for or supplied and
+ * `host.inputs` are supplied beside the given ones. Skills are `host.skills`, or else read as `yian
+ * run` reads them, once per chat, before any input prompt. The chat opens no MCP servers and builds
+ * no memories. A host failure prints `chat failed: <message>`, its stack below under
+ * `engineTrace`, and exits 1.
  *
  * With `options.resume` there is no `flowPath`: the chat picks up the run recorded in that log,
  * with the flow it recorded (`loadRecordedFlow`), as `yian run --resume` does. Its first move is an
@@ -293,7 +315,7 @@ function inboxClosed(log: string, inbox: string): boolean {
  * ended (<status>); ...`, appends nothing and exits 1, as do a log that can't be read and a flow
  * built in code; a recorded flow that no longer loads is reported located.
  *
- * @param loaded The flow at `flowPath`, already loaded; read from the file when absent.
+ * @param host What a host running a flow through the chat supplies (`InboxChatHost`).
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a flow without exactly
  *   one `Inbox(str)` or `Inbox(Message)` input to pick; for an input the flow doesn't declare
  *   (the inbox included); off a TTY, for missing required inputs.
@@ -303,17 +325,17 @@ export async function inboxChat(
   options: InboxChatOptions,
   io: CliIo,
   deps: InboxChatDeps = {},
-  loaded?: ComposedFlow,
+  host: InboxChatHost = {},
 ): Promise<number> {
   validateRunLogOptions({ ...options, flow: flowPath });
   const resumed = options.resume ?? null;
   const flow =
     resumed === null
-      ? (loaded ?? (await loadFlowFile(flowPath!, io, { engineTrace: options.engineTrace })))
+      ? (host.flow ?? (await loadFlowFile(flowPath!, io, { engineTrace: options.engineTrace })))
       : await recordedFlow(resumed, options.engineTrace, io);
   if (flow === null || flow instanceof Diagnostic) return 1;
   const inbox = pickInbox(flow, options.inbox);
-  const supplied = mergeInputs(options.inputs, options.inputValues);
+  const supplied = { ...mergeInputs(options.inputs, options.inputValues), ...host.inputs };
   checkSuppliedInputs(flow.input, supplied);
 
   const scheduler = deps.scheduler ?? realScheduler;
@@ -344,9 +366,9 @@ export async function inboxChat(
   const move = deps.advance ?? advance;
   // Sends the child events, once the run's log exists (`started`).
   const flusher =
-    deps.events === undefined
+    host.events === undefined
       ? null
-      : new ChatFlusher(deps.events, {
+      : new ChatFlusher(host.events, {
           message: inbox.message,
           send: (value) => send(log!, inbox.name, value, { env: env.read }),
           write: (text) => io.stderr.write(text),
@@ -447,7 +469,7 @@ export async function inboxChat(
 
   try {
     // Read once: every `advance` must pass the skills the run recorded at its start.
-    const skills = await readGrantedSkills(flow, env.read, io);
+    const skills = host.skills !== undefined ? host.skills : await readGrantedSkills(flow, env.read, io);
     const prompter = io.stdin.isTTY === true ? terminal : null;
     const cliCfg = cliLayer(options);
     let path: string;
@@ -469,7 +491,7 @@ export async function inboxChat(
       if (keyRefusal !== null) return 1;
       stop.signal.throwIfAborted();
       const fresh = freshLog(options.log, io.env);
-      runId = fresh.runId;
+      runId = host.runId ?? fresh.runId;
       path = fresh.path;
       runDir = fresh.runDir;
     } else {
@@ -491,11 +513,19 @@ export async function inboxChat(
       // An interrupted reply succeeds with null when its output is `Optional(...)`.
       if (event.interrupted) return io.stderr.write("(interrupted)\n");
       if (event.output === null) return;
-      return io.stdout.write(`${forTerminal(writeAsText(event.output as Value), io.stdout)}\n`);
+      const text = writeAsText(event.output as Value);
+      // A reply is the model's or the flow's text: on a terminal its escape sequences are dropped and
+      // its control characters shown; piped, it keeps every byte.
+      return io.stdout.write(`${io.stdout.isTTY === true ? sanitize(text) : text}\n`);
     };
     const shared = {
       onEvent,
-      tools: { ...registeredTools(), ...deps.tools, ask: terminal.askUser },
+      tools: {
+        ...registeredTools(),
+        ...(typeof host.tools === "function" ? host.tools(terminal) : host.tools),
+        ask: terminal.askUser,
+      },
+      models: deps.models,
       skills,
       env: env.read,
       signal: stop.signal,
@@ -703,9 +733,12 @@ export async function inboxChat(
  * input to type into: its only one, or `inbox`. Otherwise hand the command to `run`, which reads
  * the flow again and reports what is wrong with it; checking writes nothing. Returns the exit code.
  *
+ * With `resume`, the chat a stop left in that log goes on (`inboxChat` with `resume`) under the
+ * same conditions, judged on the flow the log recorded, and when no fresh-run flag is given;
+ * a run that has ended, or a log that can't be read, goes to `run` to report.
+ *
  * The chat's start-up comes before `run` sets anything up, so the two never share the terminal,
- * the signals or stderr. `deps.tools` reaches only the chat's run: whether the flow needs MCP
- * tools is judged by the registered tools alone, as `run` judges it.
+ * the signals or stderr.
  *
  * @throws {UsageError} As `run` or `inboxChat` does; for an `inbox` that isn't one of the
  *   `Inbox(str)` or `Inbox(Message)` inputs of a flow the chat could otherwise take.
@@ -716,11 +749,39 @@ export async function runOrChat(
   io: CliIo,
   deps: InboxChatDeps = {},
 ): Promise<number> {
+  if (options.resume !== undefined) {
+    if (!(await chatsOnResume(flowPath, options, io))) return run(flowPath, options, io);
+    const { inbox, numWorkers, engineTrace, resume } = options;
+    return inboxChat(undefined, { inbox, inputValues: [], numWorkers, engineTrace, resume }, io, deps);
+  }
   const flow = await chatFlow(flowPath, options, io);
   if (flow === null) return run(flowPath, options, io);
   const { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace } = options;
   const chatOptions = { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace };
-  return inboxChat(flowPath!, chatOptions, io, deps, flow);
+  return inboxChat(flowPath!, chatOptions, io, deps, { flow });
+}
+
+/**
+ * Whether `runOrChat` goes on with the chat recorded at `options.resume`: on a TTY, not under
+ * `json`, with no FLOW, fresh-run or memory flag, for a run that hasn't ended whose recorded flow
+ * the chat could take. Writes nothing.
+ */
+async function chatsOnResume(flowPath: string | undefined, options: RunOrChatOptions, io: CliIo): Promise<boolean> {
+  if (flowPath !== undefined || options.json || !atTerminal(io)) return false;
+  const fresh = [options.inputs, options.log, options.provider, options.model, options.memoryRoot];
+  if (fresh.some((value) => value !== undefined) || options.inputValues.length > 0) return false;
+  if (options.memoryStorage.length > 0) return false;
+  let flow: ComposedFlow | null;
+  try {
+    const { status } = inspectRun(options.resume!);
+    if (status === "succeeded" || status === "failed" || status === "cancelled") return false;
+    flow = await loadRecordedFlow(options.resume!, { env: io.env });
+  } catch {
+    return false;
+  }
+  if (flow === null || !chattable(flow)) return false;
+  const count = lineInboxes(flow).length;
+  return options.inbox !== undefined ? count > 0 : count === 1;
 }
 
 /**

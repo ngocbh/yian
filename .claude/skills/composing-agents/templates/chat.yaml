@@ -1,11 +1,11 @@
 # Conversational REPL — a turn-by-turn LOOP, with the older turns folded into a rolling
-# summary by compact_history.yaml. Try it: `yian chat chat.yaml` from this folder.
+# summary by compact_history.yaml. Try it: `yian run chat.yaml` from this folder.
 # The host sends each owner message (a built-in Message) to the `owner_messages` inbox
 # (`send`), and each turn's `take` reads everything sent since the last one. A take with
 # nothing to read waits: the run ends `waiting` and holds no worker until the next send.
 # Beside the take, `compacted` CALLs compact_history on the turns so far (no model call under
 # its budget); it runs after the reply, so the run ends `waiting` once any fold is done (a
-# host that shows the next prompt only then, such as `yian chat`, shows it after the fold).
+# host that shows the next prompt only then, such as `yian run`'s chat, shows it after the fold).
 # `answered` calls `respond` with the summary, the kept turns flattened by a comprehension in
 # the CALL's binding, what was said and the inbox; the reply's system prompt renders the
 # summary. The reply reads the inbox as its `steer_inbox:`, so messages sent while it runs

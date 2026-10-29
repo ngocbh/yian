@@ -7,23 +7,23 @@ kind: load
 flow: |
   # chat — a turn-by-turn conversational assistant that folds older turns into a rolling summary.
   #
-  # The host sends each owner message to the `owner_messages` inbox (`yian chat` sends each line you
-  # type as a user message). Each turn's `take` waits for them and takes everything sent since the
-  # last turn. Beside that take, `compacted` calls compact_history.yaml on the history so far: under
-  # its budget (32,000 characters of message text) it passes it through with no model call; over it,
-  # one model call folds the older turns into the summary and keeps the last 4 turns. `answered`
-  # calls `respond` with the summary, the kept turns flattened into one list of messages, and what
-  # was just said; the reply's system prompt carries the summary.
+  # The host sends each owner message to the `owner_messages` inbox (`yian run` on a terminal sends
+  # each line you type as a user message). Each turn's `take` waits for them and takes everything
+  # sent since the last turn. Beside that take, `compacted` calls compact_history.yaml on the
+  # history so far: under its budget (32,000 characters of message text) it passes it through with
+  # no model call; over it, one model call folds the older turns into the summary and keeps the last
+  # 4 turns. `answered` calls `respond` with the summary, the kept turns flattened into one list of
+  # messages, and what was just said; the reply's system prompt carries the summary.
   #
   # Messages sent while `reply` runs steer it: they join its next model call (`steer_inbox`).
-  # `interrupt(run, "owner_messages")` (Ctrl-C in `yian chat`) cuts the reply: its output is null,
-  # which `Optional(str)` allows, and its `new_messages` end with the user message
+  # `interrupt(run, "owner_messages")` (Ctrl-C in `yian run`'s chat) cuts the reply: its output is
+  # null, which `Optional(str)` allows, and its `new_messages` end with the user message
   # "[interrupted by the user]". Each turn adds one list to the history: what was said, then the
   # reply's `new_messages` (its tool calls and results, the steers it read, and its final reply).
-  # Closing the inbox (/exit in `yian chat`) ends the loop once the queued messages are answered.
-  # The flow grants no tools; the Examples page shows how to add some. The run log grows linearly
-  # (the Control flow page covers carried values).
-  # Run it with:  yian chat examples/chat.yaml
+  # Closing the inbox (/exit in `yian run`'s chat) ends the loop once the queued messages are
+  # answered. The flow grants no tools; the Examples page shows how to add some. The run log grows
+  # linearly (the Control flow page covers carried values).
+  # Run it with:  yian run examples/chat.yaml
   id: chat
   name: chat
   description: A turn-by-turn conversational assistant that folds older turns into a rolling summary.
@@ -134,7 +134,7 @@ files:
       fold:                   # one model call: the old summary and the older turns give a new summary
         input: {summary: !str, older: !list(list(Message)), recent: !list(list(Message))}
         nodes:
-          summarize:          # never `reply`: `yian chat` prints any node named `reply`
+          summarize:          # never `reply`: `yian run`'s chat prints any node named `reply`
             kind: agent
             input: {summary: "${input.summary}", older: "${input.older}"}
             output: str

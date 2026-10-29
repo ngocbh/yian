@@ -155,8 +155,8 @@ output: ${plan.output}
 - `asserts:` apply to the answer. `retries:` is a load error.
 - `tool_id: ask_user` is the same as `ask`.
 
-`yian run` and `yian chat` ask at the terminal and wait for your answer there, so `timeout:` has no
-effect in them. A host's handler may hold the question instead; then the run waits until the host
+`yian run` asks at the terminal and waits for your answer there, so `timeout:` has no effect in
+it. A host's handler may hold the question instead; then the run waits until the host
 answers it (see [Embedding yian](/embedding/)).
 
 An agent can also ask a person, only when its model chooses to, through the `ask_user` tool (see
@@ -194,11 +194,10 @@ the calls in full.
 
 On a terminal, `yian run` does this for you. It runs a flow with one `Inbox(str)` or
 `Inbox(Message)` input (pick one with `--inbox NAME` when there are several), sends each line you
-type, and prints the output of each node named `reply`. `yian chat` does the same:
+type, and prints the output of each node named `reply`:
 
 ```console
 $ yian run collect.yaml
-$ yian chat collect.yaml
 ```
 
 | You do | The chat calls |
@@ -210,7 +209,7 @@ $ yian chat collect.yaml
 
 A message larger than `YIAN_MAX_EVENT_BYTES` (1 MiB by default) is refused, and the chat prints
 `not sent: <reason>`. While the prompt is up, the chat moves the run on when a `sleep` or a
-`timeout` comes due. A chat that stopped goes on with `yian chat --resume LOG`, which calls
+`timeout` comes due. A chat that stopped goes on with `yian run --resume LOG`, which calls
 `advance` and then reads your lines again. [Chatting on a terminal](/cli/#chatting-on-a-terminal)
 lists when `yian run` chats.
 

@@ -554,6 +554,14 @@ function lexists(path: string): boolean {
 }
 
 /**
+ * The id and file name of `yian chat`'s bundled flow: `yian run --resume` refuses a log whose
+ * recorded flow has both, as a chat of any yian version records it. A flow of your own resumes
+ * unless it has both too.
+ */
+export const CHAT_FLOW_ID = "yian-chat";
+export const CHAT_FLOW_FILE = "chat.yaml";
+
+/**
  * Reject a flow file or fresh-only options on `--resume`, a fresh run without a flow file, and a
  * `--log` path that already exists. Absent options are `undefined`; `inputValues` is empty when
  * no `--input` is given.
@@ -1036,9 +1044,10 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * never a file on disk, and its memories, skills and MCP config are read as for a fresh run; then
  * the log path is printed and `advance` recovers the run, with no input prompts, no
  * `provider`/`model` layer and no key preflight; `numWorkers` absent keeps the recorded count. A
- * log whose flow was built in code can't be resumed here and prints `resume failed: ...`.
- * Before anything is appended, the keys the recorded configs need are checked: a missing one is
- * prompted for on a TTY stdin; a missing, changed or declined key, a run whose key came from a
+ * log whose flow was built in code, or that `yian chat` wrote (its flow's id `CHAT_FLOW_ID` and
+ * its file `CHAT_FLOW_FILE`), can't be resumed here and prints `resume failed: ...`. Before
+ * anything is appended, the keys the recorded configs need are checked: a missing one is prompted
+ * for on a TTY stdin; a missing, changed or declined key, a run whose key came from a
  * host, or a saved login that no longer resolves prints its message and exits 1 (`run.setup`). A
  * host failure, an empty, damaged or locked log included, prints `resume failed: <message>`. A
  * finished log prints its recorded outcome and appends nothing.
@@ -1169,6 +1178,11 @@ async function startRun(
       return setupFailed(
         new RangeError("this run's flow was built in code; resume it with advance({log, flow})"),
       );
+    }
+    // A chat's run needs the chat to type into it and to host its tools.
+    if (recorded.compiled.flowId === CHAT_FLOW_ID && recorded.source?.root === CHAT_FLOW_FILE) {
+      const message = "this run is a yian chat's; yian run --resume can't continue it";
+      return setupFailed(new RangeError(message));
     }
     flow = recorded;
   } else {

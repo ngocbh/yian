@@ -335,7 +335,30 @@ describe("checkFocus", () => {
     expect(await checkFocus(path, NO_ENV)).toEqual({
       text: parentFlow("lib/child"),
       check: "ok\nname: main\ninputs:\n  n: int",
+      inbox: false,
     });
+  });
+
+  test("names the built-in Message type rather than spelling out its record", async () => {
+    const path = join(root, "messages.yaml");
+    writeFileSync(
+      path,
+      "id: talk\nname: talk\ninput:\n  messages: !Inbox(Message)\n  seen: !Optional(list(Message))\n" +
+        "nodes:\n  heard:\n    kind: tool\n    tool_id: take\n    input:\n      from: ${input.messages}\noutput: done\n",
+    );
+    expect((await checkFocus(path, NO_ENV)).check).toBe(
+      "ok\nname: talk\ninputs:\n  messages: Inbox(Message)\n  seen: Optional(list(Message))",
+    );
+  });
+
+  test("says whether the flow has an Inbox input", async () => {
+    const path = join(root, "inbox.yaml");
+    writeFileSync(
+      path,
+      "id: talk\nname: talk\ninput:\n  messages: !Inbox(str)\nnodes:\n  heard:\n    kind: tool\n" +
+        "    tool_id: take\n    input:\n      from: ${input.messages}\noutput: done\n",
+    );
+    expect((await checkFocus(path, NO_ENV)).inbox).toBe(true);
   });
 
   test("cuts a long flow's text, with a note, but checks all of it", async () => {
@@ -354,6 +377,7 @@ describe("checkFocus", () => {
     const focus = await checkFocus(path, NO_ENV);
     expect(focus.text).toBe("id: [\n");
     expect(focus.check).toStartWith("invalid:\n");
+    expect(focus.inbox).toBe(false);
   });
 });
 

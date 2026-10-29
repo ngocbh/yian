@@ -425,15 +425,13 @@ describe("a session on a terminal", () => {
     return { rows: shown.slice(shown.findIndex((line) => line.includes("run hello for Ada"))), text: output.text };
   }
 
-  /** The text of the approval card, the same in both looks. */
+  /** The text of the approval card. */
   const CARD = [
     "Starts hello.yaml in the background.",
     'inputs: {"name":"Ada"}',
     "node kinds: code",
     "runs code on this machine (CODE nodes)",
-    "an approval for this chat doesn't cover changes to the files",
-    " the code imports",
-    "? Run hello.yaml Approve",
+    "an approval for this chat doesn't cover changes to the files the code imports",
   ];
 
   test(
@@ -446,7 +444,12 @@ describe("a session on a terminal", () => {
         "⏺ check_flow(hello.yaml)",
         "  ⎿  ok · name: hello · inputs: name: str",
         '⏺ start_flow(hello.yaml, {name: "Ada"})',
-        ...CARD,
+        `╭─ Run hello.yaml ${"─".repeat(41)}╮`,
+        ...CARD.slice(0, 4).map(row),
+        row("an approval for this chat doesn't cover changes to the"),
+        row("files the code imports"),
+        BOTTOM,
+        "? Run hello.yaml Approve",
         // Of several fields, each takes at most half the row: the log's path is cut.
         expect.stringMatching(/^ {2}⎿ {2}run: r1 · status: running · log: \S+…$/),
         "⏺ wait_flow(r1, 30)",
@@ -468,7 +471,10 @@ describe("a session on a terminal", () => {
       const { rows, text } = await hello(true);
       expect(rows).toEqual([
         "> You: run hello for Ada",
-        ...CARD,
+        ...CARD.slice(0, 4),
+        "an approval for this chat doesn't cover changes to the files",
+        " the code imports",
+        "? Run hello.yaml Approve",
         "hello ran and returned **Hi Ada**.",
         "> You: /exit",
         "session ended",

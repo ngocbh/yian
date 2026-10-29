@@ -2477,6 +2477,50 @@ async function approveShowsItsTextSanitized(): Promise<void> {
   }
 }
 
+async function aFramedApprovalNumbersTheDiffAndColoursItsLines(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 60 });
+  const diff = "--- a.yaml\n+++ a.yaml\n@@ -1,3 +1,3 @@\n id: a\n-name: old\n+name: new\n nodes:\n@@ -12 +12,2 @@\n-x\x1b[2J\n+y\n+z\n";
+  const answer = terminal.approve({ ...approval({ diff }), frame: true });
+  await tick();
+  const row = (text: string) => `│ ${text}${" ".repeat(56 - text.length)} │`;
+  assert.deepEqual(view().rows, [
+    `╭─ Write a.yaml ${"─".repeat(43)}╮`,
+    row("a new flow"),
+    row(""),
+    row(" 1   id: a"),
+    row(" 2 - name: old"),
+    row(" 2 + name: new"),
+    row(" 3   nodes:"),
+    row("⋯"),
+    row("12 - x^[[2J"),
+    row("12 + y"),
+    row("13 + z"),
+    `╰${"─".repeat(58)}╯`,
+    "? Write a.yaml (Use arrow keys)",
+    " » Approve",
+    "   Reject",
+  ]);
+  // Removed lines red, added green; an escape sequence shown, never sent.
+  assert.ok(output.text.includes("\x1b[31m 2 - name: old"));
+  assert.ok(output.text.includes("\x1b[32m 2 + name: new"));
+  assert.ok(!output.text.includes("\x1b[2J"));
+  input.write(ENTER);
+  assert.equal(await answer, "Approve");
+}
+
+async function aFramedApprovalFoldsALongLineInsideTheCard(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 30 });
+  const answer = terminal.approve({ ...approval({ diff: `@@ -1 +1 @@\n+${"y".repeat(30)}\n` }), frame: true });
+  await tick();
+  assert.deepEqual(view().rows.slice(3, 6), [
+    `│ 1 + ${"y".repeat(22)} │`,
+    `│     ${"y".repeat(8)}${" ".repeat(14)} │`,
+    `╰${"─".repeat(28)}╯`,
+  ]);
+  input.write(ENTER);
+  assert.equal(await answer, "Approve");
+}
+
 async function approveOffATtyReturnsNullWithoutReading(): Promise<void> {
   const { input, output, terminal } = setup({ tty: false });
   input.write(ENTER);
@@ -2648,6 +2692,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a child exits on its own after Ctrl-C with stdin open": aChildExitsOnItsOwnAfterCtrlCWithStdinOpen,
   "approve: Enter picks the first choice and Down the next": approveEnterPicksTheFirstChoiceAndDownTheNext,
   "approve shows its text sanitized": approveShowsItsTextSanitized,
+  "a framed approval numbers the diff and colours its lines": aFramedApprovalNumbersTheDiffAndColoursItsLines,
+  "a framed approval folds a long line inside the card": aFramedApprovalFoldsALongLineInsideTheCard,
   "approve off a TTY returns null without reading": approveOffATtyReturnsNullWithoutReading,
   "Ctrl-C in approve rejects and keeps the terminal open": ctrlCInApproveRejectsAndKeepsTheTerminalOpen,
   "an aborted approve returns null": anAbortedApproveReturnsNull,

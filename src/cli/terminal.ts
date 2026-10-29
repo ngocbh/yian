@@ -69,6 +69,8 @@ export interface ApproveRequest {
   choices: readonly string[];
   /** Ends the prompt, with no answer, when it aborts. */
   signal?: AbortSignal;
+  /** Draw the body and diff as a framed card (`diffCard`), rather than as plain lines. */
+  frame?: boolean;
 }
 
 /** A prompt ended because the terminal closed (Ctrl-C, end of input, or close()). */
@@ -142,6 +144,96 @@ function plainOutput(output: Output): Output {
       return output.columns;
     },
   };
+}
+
+/** `text` folded onto rows of at most `width` cells; an empty text is one empty row. */
+function foldCells(text: string, width: number): string[] {
+  const rows = [""];
+  let used = 0;
+  for (const char of text) {
+    const size = charCells(char);
+    if (used + size > width && used > 0) {
+      rows.push("");
+      used = 0;
+    }
+    rows[rows.length - 1] += char;
+    used += size;
+  }
+  return rows;
+}
+
+/**
+ * `text` wrapped onto rows of at most `width` cells at its spaces, a word wider than a row folded
+ * (`foldCells`); each row without its trailing spaces.
+ */
+function wrapWords(text: string, width: number): string[] {
+  const rows = [""];
+  for (const word of text.match(/\s*\S+\s*|\s+/g) ?? [""]) {
+    const last = rows[rows.length - 1]!;
+    if (cells(last + word.trimEnd()) <= width) rows[rows.length - 1] = last + word;
+    else if (cells(word.trim()) <= width) rows.push(word.trimStart());
+    else rows.push(...foldCells(word.trim(), width));
+  }
+  const trimmed = rows.map((row) => row.trimEnd());
+  return trimmed[0] === "" && trimmed.length > 1 ? trimmed.slice(1) : trimmed;
+}
+
+/** A unified diff's hunk header: where its old and new lines start. */
+const HUNK = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
+/**
+ * The lines of an approval's card, `columns` wide: a box titled `title` holding `body` and then
+ * `diff` (a unified diff) without its `---`/`+++` header, each line numbered (an old line's number
+ * for a `-` line, the new one's otherwise), `-` lines red and `+` lines green, a dim `⋯` between
+ * hunks. Long lines wrap (the body's at its spaces) inside the box. The text is drawn as it is
+ * given: sanitize it first.
+ */
+export function diffCard(title: string, body: string, diff: string, columns: number): string[] {
+  const inner = Math.max(1, columns - 4);
+  const rows: string[] = [];
+  const add = (text: string, codes: string | null, gutter = "", fold = foldCells) => {
+    const lead = cells(gutter);
+    fold(text, Math.max(1, inner - lead)).forEach((part, i) => {
+      const shownPart = (i === 0 ? gutter : " ".repeat(lead)) + part;
+      const padded = shownPart + " ".repeat(Math.max(0, inner - cells(shownPart)));
+      rows.push(`${style("36", "│")} ${codes === null ? padded : style(codes, padded)} ${style("36", "│")}`);
+    });
+  };
+  if (body !== "") for (const line of body.replace(/\n$/, "").split("\n")) add(line, null, "", wrapWords);
+  const lines = diff === "" ? [] : diff.replace(/\n$/, "").split("\n").filter((line) => !/^(---|\+\+\+) /.test(line));
+  // The widest line number, for the gutter.
+  let widest = 1;
+  let oldLine = 0;
+  let newLine = 0;
+  for (const line of lines) {
+    const hunk = HUNK.exec(line);
+    if (hunk !== null) [oldLine, newLine] = [Number(hunk[1]), Number(hunk[2])];
+    else if (line.startsWith("-")) widest = Math.max(widest, String(oldLine++).length);
+    else if (line.startsWith("+") || line.startsWith(" ")) widest = Math.max(widest, String(newLine++).length);
+  }
+  if (body !== "" && lines.length > 0) add("", null);
+  let hunks = 0;
+  for (const line of lines) {
+    const hunk = HUNK.exec(line);
+    if (hunk !== null) {
+      if (hunks++ > 0) add("⋯", "2");
+      [oldLine, newLine] = [Number(hunk[1]), Number(hunk[2])];
+    } else if (line.startsWith("-")) {
+      add(line.slice(1), "31", `${String(oldLine++).padStart(widest)} - `);
+    } else if (line.startsWith("+")) {
+      add(line.slice(1), "32", `${String(newLine++).padStart(widest)} + `);
+    } else if (line.startsWith(" ")) {
+      oldLine++;
+      add(line.slice(1), null, `${String(newLine++).padStart(widest)}   `);
+    } else add(line, "2");
+  }
+  const heading = `─ ${title} `;
+  const fill = Math.max(0, inner + 2 - cells(heading));
+  return [
+    style("36", `╭${cells(heading) > inner + 2 ? "─".repeat(inner + 2) : heading + "─".repeat(fill)}╮`),
+    ...rows,
+    style("36", `╰${"─".repeat(inner + 2)}╯`),
+  ];
 }
 
 /** The columns `output` is wide: as it reports, else 80. */
@@ -656,8 +748,9 @@ export class Terminal {
   }
 
   /**
-   * Ask the user to approve an action: write `body` and the unified `diff` when there is one, then
-   * select among `choices` under `title`, the first preselected. All the text is drawn through
+   * Ask the user to approve an action: write `body` and the unified `diff` when there is one (with
+   * `frame`, as a card: `diffCard`), then select among `choices` under `title`, the first
+   * preselected. All the text is drawn through
    * `sanitize`, its escape sequences shown rather than dropped. Returns the chosen choice; the
    * last one (the reject) for Ctrl-C, which leaves the terminal open; null without drawing or
    * reading when the terminal is plain, closed or its input isn't a TTY, and null when the input
@@ -671,7 +764,16 @@ export class Terminal {
     // A sequence is shown, not dropped: what the user approves must not hide anything it holds.
     const shown = (text: string): string => sanitize(text, { sequences: "show" });
     const label = shown(request.title);
-    const card = [request.body, request.diff ?? ""].filter((text) => text !== "").map(shown);
+    const card = request.frame
+      ? [
+          diffCard(
+            label,
+            shown(request.body).replaceAll("\t", "    "),
+            shown(request.diff ?? "").replaceAll("\t", "    "),
+            columnsOf(this.#output),
+          ).join("\n"),
+        ]
+      : [request.body, request.diff ?? ""].filter((text) => text !== "").map(shown);
     const titles = choices.map(shown);
     let ended: { value: number } | { stop: StopReason };
     try {

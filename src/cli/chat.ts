@@ -296,7 +296,9 @@ export async function chat(
   const inFlight = new InFlight(wake);
   const docs = new Map(Object.entries(DOCS));
   const tools: InboxChatHost["tools"] = (terminal) => {
-    const host: ChatToolHost = { root, approve: (request) => terminal.approve(request), env, docs };
+    // On a terminal, the approval is drawn as a framed card.
+    const approve: ChatToolHost["approve"] = (request) => terminal.approve({ ...request, frame: view !== null });
+    const host: ChatToolHost = { root, approve, env, docs };
     const all = trackInFlight(
       [...chatFileTools(host), ...chatRunTools(host, runs, { seen: queue, scheduler })],
       inFlight,

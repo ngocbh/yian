@@ -2295,7 +2295,7 @@ export function* iterRunRecords(
         const offset = lineStart;
         lineStart += line.length + 1;
         let where = `run log ${path} byte ${offset}`;
-        if (afterOffset === 0) where = `run log ${path} line ${expected! + 1} (seq ${expected})`;
+        if (afterOffset === 0) where = lineWhere(path, expected!);
         else if (expected !== null) where += ` (seq ${expected})`;
         let wire: WireEnvelope;
         let nodeId: string | null;
@@ -2318,13 +2318,7 @@ export function* iterRunRecords(
             throw discontinued(`expected ${saved.filter((part) => part !== null).join(" of ")}, found ${found}`);
           }
         }
-        if (expected !== null && wire.seq !== expected) {
-          throw new RangeError(`${where}: run-log sequence mismatch: expected ${expected}, found ${wire.seq}`);
-        }
-        runId ??= wire.runId;
-        if (wire.runId !== runId) {
-          throw new RangeError(`${where}: run-log run_id mismatch: expected ${reprText(runId)}, found ${reprText(wire.runId)}`);
-        }
+        runId = checkedLine(where, wire, expected, runId);
         expected = wire.seq + 1;
         if (wanted !== null && !wanted.has(wire.kind)) continue;
         yield { seq: wire.seq, offset, end: lineStart, runId, at: wire.at!, kind: wire.kind, nodeId, envelope };
@@ -2346,6 +2340,33 @@ export function* iterRunRecords(
  */
 export function runRecordOffsets(path: string): number[] {
   return Array.from(iterRunRecords(path, { payloads: false }), (entry) => entry.offset);
+}
+
+/** Where the record of seq `seq` sits in the run log at `path`, read from the start, for errors. */
+function lineWhere(path: string, seq: number): string {
+  return `run log ${path} line ${seq + 1} (seq ${seq})`;
+}
+
+/**
+ * Check that the record read at `where` continues its log: it has seq `expected` (any seq when
+ * `null`) and names the log's run id `runId` (any run id when `null`, as for the first record).
+ * Returns the log's run id.
+ *
+ * @throws RangeError naming `where` when the seq or the run id doesn't match.
+ */
+function checkedLine(
+  where: string,
+  record: { readonly seq: number; readonly runId: string },
+  expected: number | null,
+  runId: string | null,
+): string {
+  if (expected !== null && record.seq !== expected) {
+    throw new RangeError(`${where}: run-log sequence mismatch: expected ${expected}, found ${record.seq}`);
+  }
+  if (runId !== null && record.runId !== runId) {
+    throw new RangeError(`${where}: run-log run_id mismatch: expected ${reprText(runId)}, found ${reprText(record.runId)}`);
+  }
+  return record.runId;
 }
 
 /**
@@ -3803,22 +3824,14 @@ function decodeCompletePrefix(data: Uint8Array, path: string): RecordEnvelope[] 
   let runId: string | null = null;
   for (let start = 0, sequence = 0; start < data.length; sequence++) {
     const end = data.indexOf(0x0a, start);
-    const where = `run log ${path} line ${sequence + 1} (seq ${sequence})`;
+    const where = lineWhere(path, sequence);
     let envelope: RecordEnvelope;
     try {
       envelope = decodeLine(data.subarray(start, end), true);
     } catch (error) {
       throw locatedError(where, error);
     }
-    if (envelope.seq !== sequence) {
-      throw new RangeError(`${where}: run-log sequence mismatch: expected ${sequence}, found ${envelope.seq}`);
-    }
-    runId ??= envelope.runId;
-    if (envelope.runId !== runId) {
-      throw new RangeError(
-        `${where}: run-log run_id mismatch: expected ${reprText(runId)}, found ${reprText(envelope.runId)}`,
-      );
-    }
+    runId = checkedLine(where, envelope, sequence, runId);
     records.push(envelope);
     start = end + 1;
   }

@@ -29,7 +29,7 @@ import { LoadDiagnostics } from "../helpers/errors.ts";
 import { isExtensionKey } from "../helpers/source.ts";
 import { yamlReadAs } from "../helpers/yaml_words.ts";
 import { notTextError, rejectInfinityName, valueTypeError } from "../nodes/base.ts";
-import { REMOVED_KINDS } from "../nodes/index.ts";
+import { KINDS, REMOVED_KINDS } from "../nodes/index.ts";
 import {
   SourceAccessError,
   SourceCursor,
@@ -86,13 +86,16 @@ const ALLOWED_TOP_MESSAGE = [...TOP_SURFACE_KEYS].sort(compareCodeUnits).join(",
 const COMPACT_FLOW_KEYS: readonly string[] = ["id", "name", "description", "version", "typedefs"];
 
 /** The kinds a compact flow may use: the value-producing leaf kinds. */
-const COMPACT_KINDS: ReadonlySet<string> = new Set([
-  // case/call/map reference other nodes or callables that a one-node flow has none of, so an
-  // author who needs them writes `nodes:`.
-  "agent",
-  "code",
-  "tool",
-]);
+const COMPACT_KINDS: ReadonlySet<string> = new Set(["agent", "code", "tool"]);
+
+/**
+ * The kinds a compact flow refuses: they reference other nodes or callables that a one-node flow
+ * has none of, so an author who needs them writes `nodes:`.
+ */
+const NON_COMPACT_KINDS: readonly string[] = [...KINDS.keys()].filter((kind) => !COMPACT_KINDS.has(kind));
+
+/** The flow-level keys a compact flow can't hold, which would otherwise read as node fields. */
+const NON_COMPACT_FLOW_KEYS: readonly string[] = ["uses", "defs"];
 
 /** The fields of a `ComposeFile`; an absent optional field takes its default. */
 interface ComposeFileFields {
@@ -266,20 +269,11 @@ function backMapToPlural(body: Value, active: Set<ValueRecord> = new Set()): Val
 }
 
 /**
- * Whether `value` is null, false, zero, empty text or an empty container: an `input:` that declares
- * no params, in a compact flow or a single-node def.
- */
-export function isEmptyValue(value: Value): boolean {
-  if (isList(value)) return value.length === 0;
-  if (isRecord(value)) return Object.keys(value).length === 0;
-  return value === null || value === false || value === 0n || value === 0 || value === "";
-}
-
-/**
  * Return the parameters of a one-node signature (a compact flow or a single-node def): its
  * `input:`, which must be a param map, with no parameter named `inf`.
  *
- * @param input The authored `input:`; an empty value declares no parameters.
+ * @param input The authored `input:`, or `undefined` when it is absent and so declares no
+ *   parameters. A written empty `input:` is refused, as in a full flow.
  * @param options.where The form in messages, such as `compact (single-node) flow`.
  * @param options.inputLabel How the param-map message names `input:`.
  * @param options.inputCursor The authored `input:`, or `null`.
@@ -288,7 +282,7 @@ export function isEmptyValue(value: Value): boolean {
  * @throws LoadError when `input:` isn't a param map or a parameter is named `inf`.
  */
 export function signatureParams(
-  input: Value,
+  input: Value | undefined,
   options: {
     where: string;
     inputLabel: string;
@@ -298,13 +292,13 @@ export function signatureParams(
   },
 ): ValueRecord {
   const { where, inputLabel, inputCursor, fallbackRange, diagnostics } = options;
-  if (!isRecord(input) && !isEmptyValue(input)) {
+  if (input !== undefined && !isRecord(input)) {
     throw diagnostics.error(
       `${where}: ${inputLabel} must be a param map (\`name: !TYPE\`, e.g. \`topic: !str\`)`,
       { range: inputCursor?.range ?? fallbackRange },
     );
   }
-  const params: ValueRecord = isRecord(input) ? input : {};
+  const params: ValueRecord = input ?? {};
   // The node reads each parameter by bare name, so `inf` would read infinity instead.
   if (Object.hasOwn(params, "inf")) {
     rejectInfinityName(`${where}: input 'inf'`, "inf", inputCursor?.keyRangeOf("inf") ?? null, diagnostics);
@@ -349,8 +343,9 @@ export function signatureNodeBody(
  *
  * @returns The canonical body, with a `nodes:` mapping, for the schema check.
  * @throws LoadError for a `kind:` YAML read as non-text (`null` included), a removed kind, a
- *   non-leaf kind, a flow `id:` YAML read as non-text, a missing, null, empty or non-identifier
- *   flow `id:`, an `input:` that isn't a mapping, or a flow input named `inf`.
+ *   non-leaf kind, a `uses:` or `defs:` key, a flow `id:` YAML read as non-text, a missing, null,
+ *   empty or non-identifier flow `id:`, an `input:` that isn't a mapping, or a flow input named
+ *   `inf`.
  */
 function desugarCompact(body: ValueRecord, root: SourceCursor): ValueRecord {
   const diagnostics = LoadDiagnostics.fromCursor(root);
@@ -372,9 +367,16 @@ function desugarCompact(body: ValueRecord, root: SourceCursor): ValueRecord {
   if (!COMPACT_KINDS.has(kind)) {
     throw diagnostics.error(
       `compact (single-node) flow: kind ${reprText(kind)} is not allowed inline ` +
-        `(allowed: ${allowed}); case/call/map reference other nodes a one-node flow has none ` +
-        "of — write a full `nodes:` map instead",
+        `(allowed: ${allowed}); ${NON_COMPACT_KINDS.join("/")} reference other nodes a one-node flow ` +
+        "has none of — write a full `nodes:` map instead",
       { range: root.rangeOf("kind") },
+    );
+  }
+  const flowKey = NON_COMPACT_FLOW_KEYS.find((key) => Object.hasOwn(body, key));
+  if (flowKey !== undefined) {
+    throw diagnostics.error(
+      "compact (single-node) flow: a compact flow has no `uses:`/`defs:`; write the full `nodes:` form",
+      { range: root.keyRangeOf(flowKey) },
     );
   }
   const flowId = Object.hasOwn(body, "id") ? body["id"]! : null;
@@ -397,7 +399,7 @@ function desugarCompact(body: ValueRecord, root: SourceCursor): ValueRecord {
       { range: root.rangeOf("id") },
     );
   }
-  const params = signatureParams(Object.hasOwn(body, "input") ? body["input"]! : null, {
+  const params = signatureParams(Object.hasOwn(body, "input") ? body["input"]! : undefined, {
     where: "compact (single-node) flow",
     inputLabel: "`input:`",
     inputCursor: root.has("input") ? root.child("input") : null,
@@ -524,8 +526,11 @@ function readComposeFile(
   });
 }
 
-/** Explain that a key YAML read as non-text can't name anything, and the fix. */
-function nonTextKeyMessage(key: Value, text: string): string {
+/**
+ * Explain that a key YAML read as non-text can't name anything, and the fix; `cutValue` is the
+ * front of a value a `{...}` mapping's comma split before the key, if one did.
+ */
+function nonTextKeyMessage(key: Value, text: string, cutValue: string | undefined): string {
   const readAs = yamlReadAs(key);
   if (!text) {
     return (
@@ -539,10 +544,17 @@ function nonTextKeyMessage(key: Value, text: string): string {
     /[\u007f-\uffff]/g,
     (unit) => `\\u${unit.charCodeAt(0).toString(16).padStart(4, "0")}`,
   );
-  return (
-    `the key \`${text}\` was read by YAML as ${readAs}, but names in a flow must be text. ` +
-    `Quote it (${quoted}) or choose another name.`
-  );
+  const problem =
+    `the key \`${text}\` was read by YAML as ${readAs}, but names in a flow must be text. `;
+  // The key is a piece of the split value, so quoting the key alone wouldn't fix it.
+  if (cutValue !== undefined) {
+    return (
+      problem +
+      `This \`{...}\` mapping's comma split the value that starts \`${cutValue}\`; quote ` +
+      "that value or use block style."
+    );
+  }
+  return `${problem}Quote it (${quoted}) or choose another name.`;
 }
 
 /**
@@ -566,14 +578,20 @@ export function parseSourceDocument(text: string, label: string): SourceDocument
     });
   }
   if (document.nonTextKey !== null) {
-    const { key, text: keyText, range } = document.nonTextKey;
-    throw new LoadDiagnostics(label, text).error(nonTextKeyMessage(key, keyText), { range });
+    const { key, text: keyText, range, cutValue } = document.nonTextKey;
+    throw new LoadDiagnostics(label, text).error(nonTextKeyMessage(key, keyText, cutValue), {
+      range,
+    });
   }
   if (document.repeatedKey !== null) {
-    const { key, first, second } = document.repeatedKey;
+    const { key, first, second, cutValue } = document.repeatedKey;
+    const fix =
+      cutValue === undefined
+        ? "a YAML mapping's keys must be unique, so remove or rename one"
+        : `this \`{...}\` mapping's comma split the value that starts \`${cutValue}\`, so ` +
+          "quote that value or use block style";
     throw new LoadDiagnostics(label, text).error(
-      `duplicate key ${reprText(key)} (first at line ${first.startLine}); a YAML mapping's keys ` +
-        "must be unique, so remove or rename one",
+      `duplicate key ${reprText(key)} (first at line ${first.startLine}); ${fix}`,
       { range: second },
     );
   }

@@ -79,7 +79,7 @@ output: ${writer.output}
 - `system_prompt:` replaces yian's default instruction; it doesn't add to it. Every model call
   of the node starts with it.
 - Each `variables:` entry is a type tag and a value, checked at load. Variables can't share a
-  name with an input.
+  name with an input, and can't be named `__llm_config` or `__steer_inbox`.
 
 ### A list prompt
 
@@ -109,7 +109,7 @@ output: ${answer.output}
 `Message` is the built-in message type (see [Types](/types/)); a record with `role` (`user` or
 `assistant`) and `text` works too. The last item must be a user message. An agent's `${answer.new_messages}` holds the
 messages its call added (replies, tool calls and their results), so a chat loop can append them
-to its history.
+to its history, and a `case` can route on them.
 
 ## Structured output
 
@@ -137,6 +137,8 @@ $ yian run extract.yaml --input text="Ada loved the new release."
 ```
 
 - yian uses the provider's structured output when it has one, and a JSON instruction otherwise.
+- A `date` or `datetime` field tells the model the [form](/types/) yian accepts, such as
+  `2026-10-14` or `2026-10-14T10:30:00Z`.
 - A reply that doesn't fit gets a correction and another try, up to `retries:` times. Then the
   node fails with `agent.output_invalid`.
 - `output:` can't hold `file` or `None`, and nests at most 16 levels. Build such a value in a
@@ -210,6 +212,7 @@ The file uses the `mcpServers` format other MCP clients use:
 | `disabled` | `true` turns the server off, even one an earlier file defines |
 
 - An entry has exactly one of `command` and `url`. SSE servers aren't supported.
+- A key set to `null` counts as absent.
 - A server can't share a name with a registered tool or a built-in: `take`, `sleep`, `ask`,
   `ask_user`, `load_skill`.
 - In `command`, `args`, `cwd`, `url` and the values of `env` and `headers`, `${VAR}` reads an
@@ -261,7 +264,12 @@ reviewer:
 The model sees only each skill's name and description. When it needs one, it calls the built-in
 `load_skill` tool, which returns the instructions, or a file in the skill's folder such as
 `references/checklist.md`. Files must be UTF-8 text of at most 256 KiB; paths outside the folder
-and hidden files are refused.
+and hidden files are refused, including through symlinks. Against another process swapping
+folders in a skill folder while it's read, this holds on Linux with `/proc` and with Bun on
+macOS; elsewhere (Node on macOS, Windows) it is best effort. A hard link to a hidden file reads like any other file, so
+don't keep hard links to secrets in a skill folder. A call the model gets wrong (a skill it wasn't
+granted, a missing or refused file, bad arguments) doesn't fail the node: the model reads the
+refusal as the call's error result and carries on.
 
 - `skills: [name, ...]` grants those skills; `skills: all` grants every skill the run has.
 - Names use lowercase letters, digits and single hyphens, up to 64 characters.
@@ -312,8 +320,9 @@ output: ${worker.output :- "(stopped)"}
 - **Render.** `steer_inbox: {from: ${input.notes}, render: "From the owner: ${event}"}` wraps each
   message in a template. The template reads only `${event}`.
 - **Interrupts.** A host can interrupt every agent reading an inbox. The agent stops at its next
-  safe point: before a model call, between streamed chunks, or before a tool call. A running tool
-  call finishes. In `yian chat`, Ctrl-C or Esc during a turn does this.
+  safe point: before a model call, while a model call waits or thinks before its reply starts
+  (the request is aborted at once), between streamed chunks, or before a tool call. A running tool call
+  finishes. In `yian run`'s chat, Ctrl-C or Esc during a turn does this.
 - **The result.** An interrupted agent's output is null. With an `Optional(...)` output it
   succeeds, so the flow can route on null as above. Any other output fails the node with
   `agent.interrupted`.

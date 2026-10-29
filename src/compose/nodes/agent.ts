@@ -7,7 +7,8 @@
  * checks the shapes of its own fields, and builds the runtime `AgentNode`. Registered in `KINDS`
  * and `BINDING_FIELDS` by `compose/nodes/index.ts`.
  * `readLlmConfig` reads an authored `llm_config:` layer with the `${...}` values and tags in it,
- * and `checkLlmConfigValue` checks a layer holding values.
+ * `validateLlmConfig` checks a flow, def or AGENT layer, and `checkLlmConfigValue` one holding
+ * values.
  *
  * Knows about: diagnostics, compose source and helpers, expr (span reading and the binder),
  *              llm_clients (config and provider blocks), memory contracts, nodes (agent and
@@ -20,10 +21,16 @@ import { current } from "../../defaults.ts";
 import { MISSING_ROOT } from "../../expr/expressions.ts";
 import { wholeSpanInterior } from "../../expr/grammar.ts";
 import { evalBinding } from "../../expr/template.ts";
-import { hostOnlyFieldError, LLMConfig } from "../../llm_clients/config.ts";
+import { hostOnlyFieldError, LLMConfig, responsesBlockError } from "../../llm_clients/config.ts";
 import { locatedBlockProblems, PROVIDER_BLOCKS, ValidationError } from "../../llm_clients/provider_blocks.ts";
 import { DeclSite, MemoryDecl } from "../../memory/contracts.ts";
-import { isValue, LLM_CONFIG_KEY, valueLeaves } from "../../nodes/agent/llm_values.ts";
+import {
+  BASE_URL_FROM_VALUE,
+  declaredHostOnlyError,
+  isValue,
+  LLM_CONFIG_KEY,
+  valueLeaves,
+} from "../../nodes/agent/llm_values.ts";
 import { AgentNode, isMaxToolIterations, type PromptItem, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { typeToSchema } from "../../nodes/agent/structured.ts";
 import {
@@ -103,8 +110,8 @@ function formerBooleanHint(value: unknown): string {
  * @param options.sitePath Catalog site prefix for the layer.
  * @param options.catalogBuilder File-owned origin catalog builder.
  * @param options.diagnostics Factory for located load errors.
- * @returns The layer, and for a `ValueTemplate` the value range of each key written in it, keyed
- *   by its dotted path (`anthropic.thinking`); empty otherwise.
+ * @returns The layer, and the value range of each key written in it, keyed by its dotted path
+ *   (`anthropic.thinking`); empty for a whole-record value.
  * @throws LoadError when a tag is malformed or names no type, a tag sits on the whole mapping, a
  *   tag has no value, or the tag reader refuses the value.
  */
@@ -145,13 +152,13 @@ export function readLlmConfig(
       { range: cursor.range },
     );
   }
-  if (!(value instanceof ValueTemplate)) return [value, new Map()];
-  if (valueLeaves(value).length === 0) {
-    // Only tagged literals, already checked against their tags: a literal layer.
-    return [literalPart(value.value), new Map()];
-  }
   const ranges = new Map<string, SourceRange>();
   collectKeyRanges(cursor, "", ranges);
+  if (!(value instanceof ValueTemplate)) return [value, ranges];
+  if (valueLeaves(value).length === 0) {
+    // Only tagged literals, already checked against their tags: a literal layer.
+    return [literalPart(value.value), ranges];
+  }
   return [withKeyOrigins(value, cursor, sitePath, catalogBuilder), ranges];
 }
 
@@ -251,16 +258,10 @@ function hostOnlyMessage(prefix: string, message: string): string {
   return message.startsWith("llm_config") ? prefix + message.slice("llm_config".length) : `${prefix}: ${message}`;
 }
 
-/** Return the field a `hostOnlyFieldError` message names (`llm_config.<field> ...`). */
-function hostOnlyField(message: string): string {
-  const rest = message.startsWith("llm_config.") ? message.slice("llm_config.".length) : message;
-  return rest.split(" ", 1)[0]!;
-}
-
 /** Return the field names a record type, or any member of a record union, declares. */
 function declaredFields(typ: Type): Set<string> {
   const names = new Set(typ.fields?.keys() ?? []);
-  for (const member of typ.variants ?? []) {
+  for (const member of typ.members ?? []) {
     for (const name of member.fields?.keys() ?? []) names.add(name);
   }
   return names;
@@ -272,7 +273,8 @@ function declaredFields(typ: Type): Set<string> {
  * Fields that only the host sets may not appear, from a value or not, and a whole-record type may
  * not declare them; `base_url` beside a literal `provider: azure` must itself be literal.
  * `inherit` must be a literal boolean. The literal top-level fields are checked as `LLMConfig`
- * fields, and the literal parts of a provider block holding values against that block.
+ * fields, the literal parts of a provider block holding values against that block, and a literal
+ * provider and model against the block (`checkResponsesBlock`).
  *
  * @param cfg The layer, or the whole-record value.
  * @param prefix Message prefix naming the layer.
@@ -294,15 +296,8 @@ export function checkLlmConfigValue(
 ): [ValueTemplate | Binding, boolean] {
   const { allowInherit = true } = options;
   if (cfg instanceof Binding) {
-    if (cfg.contract !== null) {
-      const declared = Object.fromEntries([...declaredFields(cfg.contract.type)].map((name) => [name, null]));
-      const message = hostOnlyFieldError(declared);
-      if (message !== null) {
-        throw diagnostics.error(`${prefix}: its type declares \`${hostOnlyField(message)}\`; ${message}`, {
-          range: sourceRange,
-        });
-      }
-    }
+    const message = cfg.contract === null ? null : declaredHostOnlyError(declaredFields(cfg.contract.type));
+    if (message !== null) throw diagnostics.error(`${prefix}: ${message}`, { range: sourceRange });
     return [cfg, true];
   }
   let tree = cfg.value;
@@ -337,14 +332,11 @@ export function checkLlmConfigValue(
   );
   const hostOnly = hostOnlyFieldError(literal);
   if (hostOnly !== null) {
-    throw diagnostics.error(hostOnlyMessage(prefix, hostOnly), { range: at(hostOnlyField(hostOnly)) });
+    const [field, message] = hostOnly;
+    throw diagnostics.error(hostOnlyMessage(prefix, message), { range: at(field) });
   }
   if (Object.hasOwn(tree, "base_url") && holdsValue(tree["base_url"])) {
-    throw diagnostics.error(
-      `${prefix}.base_url can't come from a value: it decides where the key is sent, which stays with the ` +
-        "host or `yian auth`; write the Azure resource endpoint as literal text",
-      { range: at("base_url") },
-    );
+    throw diagnostics.error(`${prefix}.${BASE_URL_FROM_VALUE}`, { range: at("base_url") });
   }
   checkLiteralFields(literal, prefix, sourceRange, diagnostics, at);
   for (const [key, block] of Object.entries(tree)) {
@@ -356,7 +348,30 @@ export function checkLlmConfigValue(
       });
     }
   }
+  checkResponsesBlock(literal["provider"], literal["model"], tree, prefix, diagnostics, at);
   return [cfg, inherit];
+}
+
+/**
+ * Refuse a layer whose literal `provider` and `model` send the call to the Responses API while it
+ * writes that provider's block (`responsesBlockError`); a provider or model from a value is
+ * checked when it resolves.
+ *
+ * @param tree The layer as written; the block may hold values.
+ * @param at The location of a top-level field by its key.
+ * @throws LoadError at the block.
+ */
+function checkResponsesBlock(
+  provider: unknown,
+  model: unknown,
+  tree: Readonly<Record<string, unknown>>,
+  prefix: string,
+  diagnostics: LoadDiagnostics,
+  at: (key: string) => SourceRange | null,
+): void {
+  if (typeof provider !== "string" || typeof model !== "string") return;
+  const message = responsesBlockError(provider, model, Object.hasOwn(tree, provider) ? tree[provider] : null);
+  if (message !== null) throw diagnostics.error(`${prefix}: ${message}`, { range: at(provider) });
 }
 
 /**
@@ -365,8 +380,7 @@ export function checkLlmConfigValue(
  * @param cfg The literal fields; a field holding a value is `null`.
  * @param prefix Message prefix naming the layer.
  * @param sourceRange The layer's location, when retained.
- * @param fieldRange The location of a top-level field by its key; `null` locates every error at
- *   the layer.
+ * @param fieldRange The location of a top-level field by its key.
  * @throws LoadError when a field violates `LLMConfig`: a text field YAML read as non-text is named
  *   by `notTextError`, any other violation keeps the `LLMConfig` message.
  */
@@ -375,7 +389,7 @@ function checkLiteralFields(
   prefix: string,
   sourceRange: SourceRange | null,
   diagnostics: LoadDiagnostics,
-  fieldRange: ((key: string) => SourceRange | null) | null = null,
+  fieldRange: (key: string) => SourceRange | null,
 ): void {
   try {
     new LLMConfig(cfg);
@@ -383,7 +397,7 @@ function checkLiteralFields(
     if (!(error instanceof ValidationError)) throw error;
     const detail = notTextDetail(error, cfg);
     const key = error.issues[0]?.loc[0];
-    const range = fieldRange !== null && typeof key === "string" ? fieldRange(key) : sourceRange;
+    const range = typeof key === "string" ? fieldRange(key) : sourceRange;
     throw diagnostics.error(`${prefix}: ` + (detail !== null ? notTextError(...detail) : error.message), {
       range,
       cause: error,
@@ -402,36 +416,59 @@ function checkLiteralFields(
  * @param cfg The authored layer, or `null` for defaults.
  * @param prefix Message prefix naming the layer, such as `node 'a': llm_config`.
  * @param sourceRange The layer's location, when retained.
- * @param fieldRanges For a layer holding values, the value range of each key written in it, by
- *   dotted path.
+ * @param diagnostics Factory for located load errors.
+ * @param fieldRanges The value range of each key written in the layer, by dotted path.
+ * @param options.allowInherit Whether the layer may set `inherit` (an AGENT's own layer; the
+ *   default); elsewhere it is an unknown field.
  * @returns The layer without `inherit`, then `inherit`.
- * @throws LoadError when the layer is not a mapping, sets a non-boolean `inherit`, sets a
- *   host-only field (`api_key`, `organization`, `project`, `headers`, or `base_url` other than
- *   beside `provider: azure`), or violates `LLMConfig`.
+ * @throws LoadError, located at the offending field when its range is known, when the layer is not
+ *   a mapping, sets a non-boolean `inherit`, sets a host-only field (`api_key`, `organization`,
+ *   `project`, `headers`, or `base_url` other than beside `provider: azure`), violates
+ *   `LLMConfig`, or writes a block its model can't take (`checkResponsesBlock`).
  */
-function validateLlmConfig(
+export function validateLlmConfig(
   cfg: unknown,
   prefix: string,
   sourceRange: SourceRange | null,
   diagnostics: LoadDiagnostics,
   fieldRanges: ReadonlyMap<string, SourceRange>,
+  options: { allowInherit?: boolean } = {},
 ): [Readonly<Record<string, unknown>> | ValueTemplate | Binding, boolean] {
+  const { allowInherit = true } = options;
   if (cfg === null) return [{}, true];
   if (cfg instanceof ValueTemplate || cfg instanceof Binding) {
-    return checkLlmConfigValue(cfg, prefix, sourceRange, diagnostics, fieldRanges);
+    return checkLlmConfigValue(cfg, prefix, sourceRange, diagnostics, fieldRanges, { allowInherit });
   }
   if (!isRecord(cfg)) throw diagnostics.error(`${prefix} must be a mapping`, { range: sourceRange });
-  const { inherit = true, ...rest } = cfg;
+  const at = (path: string) => fieldRanges.get(path) ?? sourceRange;
+  let rest: Readonly<Record<string, unknown>> = cfg;
+  let inherit: unknown = true;
+  if (allowInherit) ({ inherit = true, ...rest } = cfg);
   if (typeof inherit !== "boolean") {
     throw diagnostics.error(
       `${prefix} \`inherit:\` must be true or false, got ${valueRepr(inherit)}${formerBooleanHint(inherit)}`,
-      { range: sourceRange },
+      { range: at("inherit") },
     );
   }
   const hostOnly = hostOnlyFieldError(rest);
-  if (hostOnly !== null) throw diagnostics.error(hostOnlyMessage(prefix, hostOnly), { range: sourceRange });
-  checkLiteralFields(rest, prefix, sourceRange, diagnostics);
+  if (hostOnly !== null) throw diagnostics.error(hostOnlyMessage(prefix, hostOnly[1]), { range: at(hostOnly[0]) });
+  checkLiteralFields(rest, prefix, sourceRange, diagnostics, at);
+  checkResponsesBlock(rest["provider"], rest["model"], rest, prefix, diagnostics, at);
   return [rest, inherit];
+}
+
+/**
+ * Return why an `env:` mapping's `max_tool_iterations` isn't one an AGENT accepts, or `null` when
+ * it is valid or absent.
+ *
+ * Example: `{max_tool_iterations: 0}` gives ``"`env.max_tool_iterations` must be a positive int or
+ * -1 (no cap), got 0"``.
+ */
+export function maxToolIterationsError(env: Readonly<Record<string, unknown>>): string | null {
+  if (!Object.hasOwn(env, "max_tool_iterations")) return null;
+  const value = env["max_tool_iterations"];
+  if (isMaxToolIterations(value)) return null;
+  return `\`env.max_tool_iterations\` must be a positive int or -1 (no cap), got ${valueRepr(value)}`;
 }
 
 /** The roles a prompt list message may take; `system` is `system_prompt:`. */
@@ -704,6 +741,7 @@ export class AgentDescriptor extends NodeDescriptor {
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
+    cursor: SourceCursor,
   ): void {
     const id = reprText(nodeId);
     const rangeOf = (key: string) => ranges.get(siteKey("field", key)) ?? ownRange;
@@ -773,11 +811,11 @@ export class AgentDescriptor extends NodeDescriptor {
           ? []
           : parseMemoryDeclarations(value, {
               diagnostics,
-              sourceRange: ranges.get(siteKey("field", "long_term_memory")) ?? null,
+              cursor: cursor.child("long_term_memory"),
               site: new DeclSite([], ["root"], nodeId),
             });
     }
-    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
   /**
@@ -790,9 +828,8 @@ export class AgentDescriptor extends NodeDescriptor {
    *
    * @throws LoadError for a bad `env.max_tool_iterations`, a bad variable declaration, a tool or
    *   skill grant the node refuses, an `output:` nesting deeper than
-   *   `current().maxAgentOutputNesting` or holding a type a model can't produce, a steer inbox with
-   *   non-text output, a variable named like an input, or an input named `__llm_config` or
-   *   `__steer_inbox`.
+   *   `current().maxAgentOutputNesting` or holding a type a model can't produce, a variable named
+   *   like an input, or an input or variable named `__llm_config` or `__steer_inbox`.
    * @throws TypeError when `ctx.variableDeclarationReader` returns anything but an array of exact
    *   `Parameter`s or `null`.
    */
@@ -812,12 +849,11 @@ export class AgentDescriptor extends NodeDescriptor {
       llmFieldRanges,
     );
     const steerInboxRange = this.fieldRanges.get(siteKey("field", "steer_inbox")) ?? this.range;
-    if (Object.hasOwn(this.env, "max_tool_iterations") && !isMaxToolIterations(this.env["max_tool_iterations"])) {
-      throw ctx.diagnostics.error(
-        `node ${id}: \`env.max_tool_iterations\` must be a positive int or -1 (no cap), ` +
-          `got ${valueRepr(this.env["max_tool_iterations"])}`,
-        { range: this.fieldRanges.get(siteKey("field", "env")) ?? this.range },
-      );
+    const maxToolIterations = maxToolIterationsError(this.env);
+    if (maxToolIterations !== null) {
+      throw ctx.diagnostics.error(`node ${id}: ${maxToolIterations}`, {
+        range: this.fieldRanges.get(siteKey("field", "env")) ?? this.range,
+      });
     }
     const variables = this.readVariables(ctx);
     const memories = this.memories.map(
@@ -882,10 +918,24 @@ export class AgentDescriptor extends NodeDescriptor {
     node.params = this.sinkParams();
     const inputNames = new Set(node.params.map((parameter) => parameter.name));
     for (const variable of variables) {
-      if (!inputNames.has(variable.name)) continue;
+      // The reserved keys are refused whether or not this agent wires them, as for an input: the
+      // run binds them beside the inputs, so a variable of that name collides there.
+      let message: string;
+      if (variable.name === LLM_CONFIG_KEY) {
+        message =
+          `node ${id}: variable ${reprText(LLM_CONFIG_KEY)} is reserved for the values of \`llm_config\`; ` +
+          "rename the variable";
+      } else if (variable.name === STEER_INBOX_KEY) {
+        message =
+          `node ${id}: variable ${reprText(STEER_INBOX_KEY)} is reserved for \`steer_inbox:\`; ` +
+          "rename the variable";
+      } else if (inputNames.has(variable.name)) {
+        message = `node ${id}: variable ${reprText(variable.name)} collides with an input name`;
+      } else {
+        continue;
+      }
       const frame =
         ctx.resolveOrigin !== null && variable.origin !== null ? ctx.resolveOrigin(variable.origin) : null;
-      const message = `node ${id}: variable ${reprText(variable.name)} collides with an input name`;
       if (frame !== null) throw ctx.diagnostics.error(message, { frames: [frame] });
       throw ctx.diagnostics.error(message, {
         range: this.fieldRanges.get(siteKey("field", "variables")) ?? this.range,

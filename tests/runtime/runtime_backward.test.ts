@@ -1000,7 +1000,6 @@ test("an empty history starts nothing and leaves every memory unrequested", () =
   expect(state.started).toBeNull();
   expect(state.ready).toBeNull();
   expect(state.finished).toBeNull();
-  expect(state.everRequested).toBe(false);
   expect(state.commitAttemptKey).toBeNull();
   expect(state.policyOutcomes).toEqual([
     new PolicyCommitOutcome("a", "unrequested"),
@@ -1025,7 +1024,6 @@ test("an unfinished attempt reads its records and derives the unfinished outcome
   expect(state.started).toBe(attempt.started);
   expect(state.ready).toBe(attempt.ready);
   expect(state.finished).toBeNull();
-  expect(state.everRequested).toBe(true);
   expect(state.commitAttemptKey).toBe(1);
   expect(state.canStart).toBe(false);
   const policies = [
@@ -1091,7 +1089,6 @@ test("a finished history admits a start and keeps the accepted outcome", () => {
   expect(state.current).toBe(second);
   expect(state.finished).toBe(second.finished);
   expect(state.ready).toBeNull();
-  expect(state.everRequested).toBe(true);
   expect(state.commitAttemptKey).toBe(2);
   expect(state.canStart).toBe(true);
   expect(state.outcome).toBe(second.finished!.outcome);
@@ -1214,7 +1211,6 @@ test("the reducer accepts a full attempt Started → Ready → Requested → Suc
   expect(afterFinish!.outcome).toBe((records[4] as BackwardFinishedRecord).outcome);
   expect(afterFinish!.attempts).toHaveLength(1);
   expect(afterFinish!.canStart).toBe(true);
-  expect(afterFinish!.everRequested).toBe(true);
   for (const state of states) {
     expect(Object.isFrozen(state)).toBe(true);
     expect(state.memoryOrder).toBe(empty.memoryOrder);
@@ -1395,7 +1391,7 @@ test.each<[string, (trace: RetainedTrace) => unknown, ErrorClass, string]>([
     "a record of another class",
     (trace) => reduced([started(), forgedRecord()], trace),
     RangeError,
-    "backward commit requires a completed memory proposal",
+    "unknown backward record",
   ],
   [
     "Finished feedback that differs from Ready",
@@ -1648,7 +1644,6 @@ const NOTES_SPEC = new MemorySpec("notes", "notes", {}, [new DeclSite([], ["def"
 const OUTER_SPEC = new MemorySpec("outer", "outer", {}, [new DeclSite([], ["root"])]);
 const OWNER_TABLE = [EMPTY_SPEC, NOTES_SPEC, OUTER_SPEC];
 const P_STACK = new MemoryStack(["p"], ["notes"]);
-const OWNER_ROOT = new BackwardResult({ inputFeedback: { x: ["Raise v.", "Check w."] } });
 
 /** The chain's results with `p` sending `v`, `w`, self feedback `self` and variable feedback. */
 function ownerResults(self = "Be careful."): AttributedBackwardResult[] {
@@ -1666,14 +1661,13 @@ function ownerResults(self = "Be careful."): AttributedBackwardResult[] {
 interface OwnerOptions {
   memories?: readonly MemorySpec[];
   stacks?: readonly MemoryStack[];
-  root?: BackwardResult;
   results?: AttributedBackwardResult[];
 }
 
 /** Project the owner contexts of `trace` for root feedback `Too low.`. */
 function ownerContexts(trace: RetainedTrace, options: OwnerOptions = {}): readonly LearnContext[] {
-  const { memories = OWNER_TABLE, stacks = [P_STACK], root = OWNER_ROOT, results = ownerResults() } = options;
-  return projectOwnerContexts(trace, memories, stacks, "Too low.", root, results);
+  const { memories = OWNER_TABLE, stacks = [P_STACK], results = ownerResults() } = options;
+  return projectOwnerContexts(trace, memories, stacks, "Too low.", results);
 }
 
 /** Return what `fn` throws. */
@@ -1845,54 +1839,6 @@ test("owner context entries carry p's execution scope coordinates", () => {
 
 test.each<[string, OwnerOptions, ErrorClass, string]>([
   [
-    "a table that isn't an array",
-    { memories: new Set(OWNER_TABLE) as never },
-    TypeError,
-    "owner contexts require the complete recorded memory table",
-  ],
-  [
-    "a table entry of another class",
-    { memories: [{ ...EMPTY_SPEC } as MemorySpec] },
-    TypeError,
-    "owner contexts require the complete recorded memory table",
-  ],
-  [
-    "stacks that aren't an array",
-    { stacks: new Set([P_STACK]) as never },
-    TypeError,
-    "owner contexts require the recorded memory stacks",
-  ],
-  [
-    "a stack of another class",
-    { stacks: [{ ...P_STACK } as MemoryStack] },
-    TypeError,
-    "owner contexts require the recorded memory stacks",
-  ],
-  [
-    "an unsorted table",
-    { memories: [NOTES_SPEC, EMPTY_SPEC] },
-    RangeError,
-    "owner contexts require a memory table sorted by unique key",
-  ],
-  [
-    "a repeated key",
-    { memories: [NOTES_SPEC, NOTES_SPEC] },
-    RangeError,
-    "owner contexts require a memory table sorted by unique key",
-  ],
-  [
-    "repeated stack locators",
-    { stacks: [P_STACK, new MemoryStack(["p"], [])] },
-    RangeError,
-    "recorded memory stacks must have unique locators",
-  ],
-  [
-    "a root result that disagrees with the transfers",
-    { root: CHAIN_ROOT },
-    RangeError,
-    "backward root result must match the accepted START and source-zero projection",
-  ],
-  [
     "a scope without its recorded stack",
     { stacks: [] },
     RangeError,
@@ -1963,10 +1909,7 @@ test("a feedback value freezeFeedback refuses fails the owner's context, naming 
 
 test("a root fallback context that can't be built names no occurrence", () => {
   const trace = syntheticTrace("");
-  const root = new BackwardResult({ selfFeedback: ["original text"] });
-  const error = thrown(() =>
-    projectOwnerContexts(trace, [OUTER_SPEC], [], "original text", root, []),
-  ) as OwnerContextError;
+  const error = thrown(() => projectOwnerContexts(trace, [OUTER_SPEC], [], "original text", [])) as OwnerContextError;
   expect(error.constructor).toBe(OwnerContextError);
   expect(error.memory).toBe("outer");
   expect(error.context).toBeNull();
@@ -2456,7 +2399,7 @@ test.each([false, true])(
     const result = resultAt(results, occurrence.source);
     expect(result.feedback).toEqual(transform ? ["same!", "same!"] : ["same", "same"]);
     expect(result.attribution.map((item) => item.parents)).toEqual(transform ? [[0, 1], [0, 1]] : [[0], [1]]);
-    const [context] = projectOwnerContexts(trace, memories, stacks, feedback, root, results);
+    const [context] = projectOwnerContexts(trace, memories, stacks, feedback, results);
     const received = feedbackEntries(context!).filter(
       (entry) => entry.channel === "output" && entry.execution_seq === BigInt(occurrence.source.executionSeq),
     );
@@ -2473,7 +2416,7 @@ test("a root output that is the run inputs doesn't invent an executed producer",
     params: [new Parameter("topic"), new Parameter("omitted", { hasDefault: true, default: "unused" })],
   });
   (start as Node).forward = () => new Route(ELSE_HANDLE);
-  const flow = CompiledFlow.fromParts(new Map([[START_ID, start]]), []);
+  const flow = new CompiledFlow(new Map([[START_ID, start]]), []);
   // `endId` is readonly and fixed by the constructor.
   (flow as { endId: string }).endId = START_ID;
   const initialPool = new VariablePool(START_ID);
@@ -2592,7 +2535,7 @@ test.each([false, true])(
     expect(root).toEqual(new BackwardResult());
     expect(recovered.contributions).toEqual([]);
     expect(recovered.stopped.map((stop) => stop.feedback)).toEqual(opaque ? [feedback] : []);
-    const [context] = projectOwnerContexts(trace, memories, stacks, "review", root, results);
+    const [context] = projectOwnerContexts(trace, memories, stacks, "review", results);
     const entries = feedbackEntries(context!);
     const returned = entries.filter((entry) => entry.target_name === "file" && entry.channel === "input");
     expect(returned.map((entry) => entry.value)).toEqual([feedback]);
@@ -2701,7 +2644,7 @@ test("a MAP's whole-list context and item order survive reversed completion", as
       expect(details.some(itemContext(index))).toBe(true);
     }
     expect(results).toHaveLength(trace.occurrences.length);
-    const ownerContexts = projectOwnerContexts(trace, memories, stacks, "review both items", root, results);
+    const ownerContexts = projectOwnerContexts(trace, memories, stacks, "review both items", results);
     expect(ownerContexts).toHaveLength(1);
     const [ownerContext] = ownerContexts;
     expect(ownerContext!.episodes).toHaveLength(trace.occurrences.length);
@@ -2790,7 +2733,7 @@ test("a diamond crossing a CALL uses one walk and preserves the child's default 
     expect(resultAt(results, boundary!.owner).invoked).toBe(false);
     expect(root.selfFeedback).toEqual([]);
     expect(root.variableFeedback).toEqual({});
-    const contexts = projectOwnerContexts(trace, memories, stacks, feedback, root, results);
+    const contexts = projectOwnerContexts(trace, memories, stacks, feedback, results);
     expect(contexts).toHaveLength(2);
     for (const context of contexts) {
       const entries = feedbackEntries(context);
@@ -2991,7 +2934,7 @@ output: \${loop.output}
     const reached = new Set(results.filter((result) => result.invoked).map((result) => sourceKey(result.source)));
     expect(reached.has(sourceKey(drivers.at(-1)!.source))).toBe(true);
     expect(drivers.slice(0, -1).every((item) => !reached.has(sourceKey(item.source)))).toBe(true);
-    const contexts = projectOwnerContexts(trace, memories, stacks, "review carried value", root, results);
+    const contexts = projectOwnerContexts(trace, memories, stacks, "review carried value", results);
     expect(contexts).toHaveLength(2);
     const byKey = new Map(contexts.map((context) => [context.memory, context]));
     const policy = byKey.get(POLICY)!;
@@ -3015,7 +2958,7 @@ output: \${loop.output}
     }
     backward.mockImplementation(unreachable("projection replay invoked callback"));
     const replay = replayRecords(new RunState(original), built.log.records(), { growBuilder: buildGrow });
-    expect(projectOwnerContexts(replay.trace!, memories, stacks, "review carried value", root, results)).toEqual(
+    expect(projectOwnerContexts(replay.trace!, memories, stacks, "review carried value", results)).toEqual(
       contexts,
     );
   } finally {
@@ -3061,7 +3004,7 @@ test.each([false, true])(
     expect(routed.contributions).toEqual([]);
     const stops = opaque ? [[null, { uri: "Check second URI." }]] : [];
     expect(routed.stopped.map((stop) => stop.feedback)).toEqual(stops);
-    const [context] = projectOwnerContexts(trace, memories, stacks, feedback, root, results);
+    const [context] = projectOwnerContexts(trace, memories, stacks, feedback, results);
     const stopped = feedbackEntries(context!).filter((entry) => entry.channel === "stopped");
     expect(stopped.map((entry) => entry.value)).toEqual(stops);
     // The expansion checks its growth against the rebuild from its commits' `from`, which runs the

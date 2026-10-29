@@ -155,6 +155,7 @@ export class ToolDescriptor extends NodeDescriptor {
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
+    cursor: SourceCursor,
   ): void {
     const rangeOf = (key: string) => ranges.get(siteKey("field", key)) ?? ownRange;
     rejectNonText(this.kind, nodeId, "tool_id", fields["toolId"] ?? null, rangeOf("tool_id"), diagnostics, {
@@ -191,7 +192,7 @@ export class ToolDescriptor extends NodeDescriptor {
       }
       fields["retries"] = Number(fields["retries"]);
     }
-    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
   /**
@@ -535,7 +536,7 @@ const QUESTION_LIST = new Type({ kind: ValueKind.LIST_OBJECT, element: Type.scal
 const TAKE_MODE = new Type({ kind: ValueKind.STRING, tags: new Set(["one", "all"]) });
 
 /** The keys the adaptive desugar reads from an `adaptive_questions:` block. */
-export const ADAPTIVE_KEYS: ReadonlySet<string> = new Set(["prompt", "llm_config", "retries"]);
+const ADAPTIVE_KEYS: ReadonlySet<string> = new Set(["prompt", "llm_config", "retries"]);
 
 /**
  * Check an authored `adaptive_questions:` block's keys and brief, before the template parse.
@@ -544,7 +545,7 @@ export const ADAPTIVE_KEYS: ReadonlySet<string> = new Set(["prompt", "llm_config
  * @throws LoadError when the block authors `mode:` or a key other than `prompt`/`llm_config`/
  *   `retries` (at the key), or its brief is not text or holds a lone surrogate (at the brief).
  */
-export function checkAdaptiveBlock(
+function checkAdaptiveBlock(
   nodeId: string,
   label: string,
   cursor: SourceCursor,
@@ -580,7 +581,7 @@ export function checkAdaptiveBlock(
  * "adaptive_questions.prompt")`, and `llm_config:` value, as `siteKey("field",
  * "adaptive_questions.llm_config")`, so an error points at them rather than the whole block.
  */
-export function recordAdaptiveRanges(desc: NodeDescriptor, cursor: SourceCursor): void {
+function recordAdaptiveRanges(desc: NodeDescriptor, cursor: SourceCursor): void {
   const adaptive = cursor.get("adaptive_questions");
   if (!isRecord(adaptive)) return;
   for (const [key, site] of [
@@ -600,7 +601,7 @@ export function recordAdaptiveRanges(desc: NodeDescriptor, cursor: SourceCursor)
  * @param label The node's kind or tool id as messages name it, such as `tool_id: ask`.
  * @throws LoadError at `range` for the first rule broken.
  */
-export function checkAdaptiveFields(
+function checkAdaptiveFields(
   nodeId: string,
   label: string,
   adaptive: unknown,
@@ -628,7 +629,7 @@ export function checkAdaptiveFields(
  * @returns The offending field's key path from the node body and its value, or `null` when every
  *   present text field is text.
  */
-export function nonTextQuestionField(questions: readonly unknown[]): [(string | number)[], unknown] | null {
+function nonTextQuestionField(questions: readonly unknown[]): [(string | number)[], unknown] | null {
   for (const [i, question] of questions.entries()) {
     if (!isRecord(question)) continue;
     for (const key of ["question", "header"]) {

@@ -13,7 +13,7 @@ import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { BuildContext } from "../../src/compose/nodes/base.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
-import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
+import { childSignature } from "../../src/compose/nodes/resolver.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
@@ -93,7 +93,7 @@ test("seed 03 loads as a child flow", async () => {
   const loaded = await loadConformanceFlow(RESEARCH_ONE);
   expect(loaded).toBeInstanceOf(ComposedFlow);
   const sig = childSignature(loaded);
-  expect(sig).toBeInstanceOf(ChildSignature);
+  expect(Object.isFrozen(sig)).toBe(true);
 
   // topic is a required str; as_of has a typed date default, so it isn't required.
   const parameters = new Map(sig.inputs.map((parameter) => [parameter.name, parameter]));
@@ -283,7 +283,6 @@ test("a map child with no output is loud", async () => {
   expect(signature.output).toBeNull();
   // No declaration, so a MAP cannot form list(U).
   expect(signature.outputNames).toEqual([]);
-  expect(signature.declaredOutputs).toEqual([]);
   const resolver = (flowId: string) => {
     expect(flowId).toBe("no-output");
     return child;

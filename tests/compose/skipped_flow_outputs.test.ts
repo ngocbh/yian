@@ -741,15 +741,18 @@ test("the hint replaces a null default", () => {
 // `a` is skippable (then: a / else: rejected); `gate2` is a searched case that reads it.
 const A = gate("a", "rejected") + code("a", '{"n": 2}', "\n      n: int") + code("rejected", '"no"');
 
-/** Return the flow where searched case `gate2` routes to `hot` when `when` holds. */
-function searchedGate(when: string): string {
+/**
+ * Return the flow where searched case `gate2` routes to `hot` when `when` holds; `a` replaces the
+ * nodes before `gate2`, and `typedefs` is the flow's `typedefs:` block.
+ */
+function searchedGate(when: string, options: { a?: string; typedefs?: string } = {}): string {
   const nodes =
-    A +
+    (options.a ?? A) +
     `  gate2:\n    kind: case\n    cases:\n      - when: "${when}"\n        then: hot\n` +
     "    else: cold\n" +
     code("hot", '"hot"') +
     code("cold", '"cold"');
-  return flow(nodes, "\n  v: ${hot.output | cold.output}");
+  return flow(nodes, "\n  v: ${hot.output | cold.output}", { typedefs: options.typedefs });
 }
 
 test("arithmetic in a searched when: under a default is a load error", () => {
@@ -777,6 +780,30 @@ test("arithmetic on a defaulted value in a searched when: loads", async () => {
   const text = searchedGate("(a.output?.n :- 0) + 1 > 1");
   expect(await run(text, { approve: true })).toEqual({ v: "hot" });
   expect(await run(text, { approve: false })).toEqual({ v: "cold" });
+});
+
+test("an isinstance to a typedef that admits null doesn't prove a skipped value present", async () => {
+  // `MaybeInt` is `Optional(int)`, so the isinstance holds on the null of a skipped `a`.
+  const when = "isinstance(a.output, MaybeInt) and a.output + 1 > 1 :- false";
+  const a = gate("a", "rejected") + code("a", "2", "int") + code("rejected", '"no"');
+  const text = (check: string) => searchedGate(when.replace("MaybeInt", check), { a, typedefs: "typedefs:\n  MaybeInt: Optional(int)\n  Count: int\n" });
+  expect(loadError(() => assembleText(text("MaybeInt"))).message).toBe(
+    `node 'gate2' cases[0].when: ${arithmetic(when, "a.output", "node 'a' is")}`,
+  );
+  // A typedef that excludes null proves it, as `int` does.
+  for (const check of ["Count", "int"]) {
+    expect(await run(text(check), { approve: true })).toEqual({ v: "hot" });
+    expect(await run(text(check), { approve: false })).toEqual({ v: "cold" });
+  }
+});
+
+test("a null check below the read's root in a searched when: proves the root present", async () => {
+  // `a.output?.n != null` holds only when `a` ran, as `a.output != null` does.
+  for (const check of ["a.output?.n != null", "isinstance(a.output?.n, int)"]) {
+    const text = searchedGate(`${check} and a.output.n + 1 > 1 :- false`);
+    expect(await run(text, { approve: true })).toEqual({ v: "hot" });
+    expect(await run(text, { approve: false })).toEqual({ v: "cold" });
+  }
 });
 
 test("plain arithmetic in a searched when: loads", async () => {

@@ -244,12 +244,12 @@ test("nested objects follow the direction", () => {
 
 test("tagged union of $defs is a union of records when closed", () => {
   const typ = typeFromJsonSchema(TAGGED_UNION, { closed: true });
-  expect(typ?.variants).toBeDefined();
-  expect(typ!.variants!.map(canonicalTypeLabel)).toEqual([
+  expect(typ?.members).toBeDefined();
+  expect(typ!.members!.map(canonicalTypeLabel)).toEqual([
     '{"action":Literal(buy),"qty":int}',
     '{"action":Literal(sell),"price":float}',
   ]);
-  for (const member of typ!.variants!) {
+  for (const member of typ!.members!) {
     expect(member.required).toEqual(new Set(member.fields!.keys()));
   }
 });
@@ -264,8 +264,8 @@ test("nullable union of records", () => {
   const typ = typeFromJsonSchema(schema, { closed: true });
   expect(typ).not.toBeNull();
   expect(typ!.nullable).toBe(true);
-  expect(typ!.variants).toBeDefined();
-  expect(typ!.variants!.some((member) => member.nullable)).toBe(false);
+  expect(typ!.members).toBeDefined();
+  expect(typ!.members!.some((member) => member.nullable)).toBe(false);
 });
 
 test("definitions refs resolve against root", () => {

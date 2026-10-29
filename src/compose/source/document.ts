@@ -76,6 +76,11 @@ export interface RepeatedKey {
   readonly key: string;
   readonly first: SourceRange;
   readonly second: SourceRange;
+  /**
+   * The front of a value a `{...}` mapping's comma split before either copy of the key, if one
+   * did.
+   */
+  readonly cutValue?: string;
 }
 
 /** The first mapping key, in document order, that YAML read as non-text. */
@@ -83,6 +88,8 @@ export interface NonTextKey {
   readonly key: Exclude<ScalarValue, string>;
   readonly text: string;
   readonly range: SourceRange;
+  /** The front of a value a `{...}` mapping's comma split before the key, if one did. */
+  readonly cutValue?: string;
 }
 
 // YAML's printable characters; with the `u` flag a lone surrogate is one code point,
@@ -125,6 +132,8 @@ type SpanOf = (node: Node) => Span;
  */
 interface PairSequence {
   readonly pairs: readonly MapPair[];
+  /** Whether a leaf's pairs are written in a `{...}` mapping. */
+  readonly flow: boolean;
   readonly parts: readonly PairSequence[];
   readonly partOffsets: readonly number[];
   readonly flatPairCount: number;
@@ -144,6 +153,7 @@ interface ArcRope {
 
 const EMPTY_PAIRS: PairSequence = {
   pairs: NO_PARTS,
+  flow: false,
   parts: NO_PARTS,
   partOffsets: NO_PARTS,
   flatPairCount: 0,
@@ -484,7 +494,7 @@ function build(
   const ownLeaf = (map: YAMLMap.Parsed): PairSequence => {
     let leaf = ownLeaves.get(map);
     if (leaf === undefined) {
-      leaf = pairLeaf(ownPairs(map, targetOf));
+      leaf = pairLeaf(ownPairs(map, targetOf), map.flow === true);
       ownLeaves.set(map, leaf);
     }
     return leaf;
@@ -531,14 +541,18 @@ function build(
    *
    * @throws SourceSyntaxError at a list or mapping key, or at a node that can't be built.
    */
-  const leafArcs = (pairs: readonly MapPair[]): ArcSequence => {
+  const leafArcs = ({ pairs, flow }: PairSequence): ArcSequence => {
     const arcs: MapArc[] = [];
-    for (const pair of pairs) {
+    for (const [index, pair] of pairs.entries()) {
       const keyNode = target(aliasTargets, pair.key);
+      // An alias key is located where it is written, not at its anchor: the fix goes on the
+      // key, and quoting the anchored node would change its value instead.
+      const keyAlias = isAlias(pair.key) ? pair.key : null;
+      const keyAt = keyAlias === null ? spanOf(keyNode).start : keyAlias.range![0];
       const collectionKey = (): SourceSyntaxError =>
         new SourceSyntaxError(
           "a list or mapping can't be a mapping key; mapping keys must be text",
-          pointRange(starts, spanOf(keyNode).start),
+          pointRange(starts, keyAt),
         );
       if (!isScalar(keyNode)) throw collectionKey();
       const keyDefinition = intern(keyNode);
@@ -550,12 +564,20 @@ function build(
       const valueDefinition =
         pair.value === null ? internMissing(pair.key.range[1]) : intern(pair.value);
       const key = keyText(keyScalar);
-      // Fills don't run in document order, so the key that starts first wins; an alias key
-      // is its anchored node.
-      const keyAt = spanOf(keyNode).start;
+      // Fills don't run in document order, so the key that starts first wins.
       if (typeof keyScalar.value !== "string" && (nonTextKey === null || keyAt < nonTextKeyAt)) {
         const keyValue = keyScalar.value as NonTextKey["key"];
-        nonTextKey = Object.freeze({ key: keyValue, text: key, range: keyScalar.range! });
+        const range =
+          keyAlias === null
+            ? keyScalar.range!
+            : toRange(starts, keyAlias.range![0], keyAlias.range![1]);
+        const cutValue = flow ? cutValueBefore(pairs, index) : null;
+        nonTextKey = Object.freeze({
+          key: keyValue,
+          text: key,
+          range,
+          ...(cutValue === null ? {} : { cutValue }),
+        });
         nonTextKeyAt = keyAt;
       }
       arcs.push(Object.freeze({ key, keyDefinition, valueDefinition }));
@@ -580,7 +602,7 @@ function build(
       const [current, ready] = stack.pop()!;
       if (arcRopes.has(current)) continue;
       if (current.parts.length === 0) {
-        const sequence = leafArcs(current.pairs);
+        const sequence = leafArcs(current);
         arcRopes.set(current, { sequence, summary: leafSummary(sequence.arcs) });
       } else if (!ready) {
         stack.push([current, true]);
@@ -616,7 +638,7 @@ function build(
       const plain = node.type === Scalar.PLAIN;
       let value: ScalarValue;
       try {
-        value = scalarValue(text, plain, core, tag !== null);
+        value = scalarValue(text, plain, core);
       } catch (error) {
         if (error instanceof FlowLoaderError) throw new SourceSyntaxError(error.message, at);
         throw error;
@@ -702,10 +724,37 @@ function build(
   return { definitions: built, ids, nonTextKey };
 }
 
-/** Return `pairs` as a leaf rope; no pairs is the empty rope. */
-function pairLeaf(pairs: readonly MapPair[]): PairSequence {
+/**
+ * Return `pairs`, written in a `{...}` mapping when `flow`, as a leaf rope; no pairs is the
+ * empty rope.
+ */
+function pairLeaf(pairs: readonly MapPair[], flow: boolean): PairSequence {
   if (pairs.length === 0) return EMPTY_PAIRS;
-  return { pairs, parts: NO_PARTS, partOffsets: NO_PARTS, flatPairCount: pairs.length };
+  return { pairs, flow, parts: NO_PARTS, partOffsets: NO_PARTS, flatPairCount: pairs.length };
+}
+
+/** Return how many more `(` than `)` `text` holds. */
+function openParens(text: string): number {
+  return text.split("(").length - text.split(")").length;
+}
+
+/**
+ * Return the front of a value a `{...}` mapping's comma split before `pairs[index]`, or null.
+ *
+ * YAML reads `{role: Literal(a, true, b)}` as the value `Literal(a` and the keys `true` and
+ * `b)` with no value. The front is the nearest earlier plain value, past plain keys with no
+ * value; it is a split value's when it and those keys open more `(` than they close.
+ */
+function cutValueBefore(pairs: readonly MapPair[], index: number): string | null {
+  let open = 0;
+  for (let i = index - 1; i >= 0; i--) {
+    const { key, value } = pairs[i]!;
+    const piece = value ?? key;
+    if (!isScalar(piece) || piece.type !== Scalar.PLAIN) return null;
+    open += openParens(piece.source);
+    if (value !== null) return open > 0 ? piece.source : null;
+  }
+  return null;
 }
 
 /** Return the concatenation of `parts` without the empty ones: the only one, when one is left. */
@@ -719,7 +768,7 @@ function concat(parts: readonly PairSequence[]): PairSequence {
     partOffsets.push(count);
     count += part.flatPairCount;
   }
-  return { pairs: NO_PARTS, parts: kept, partOffsets, flatPairCount: count };
+  return { pairs: NO_PARTS, flow: false, parts: kept, partOffsets, flatPairCount: count };
 }
 
 /** Return an arc leaf's summary: its keys by first occurrence, and each key's last arc. */
@@ -789,8 +838,8 @@ function firstRepeatedKey(
       continue;
     }
     if (!isMap(node)) continue;
-    const firstKeys = new Map<string, SourceRange>();
-    for (const pair of node.items) {
+    const firstKeys = new Map<string, { readonly range: SourceRange; readonly index: number }>();
+    for (const [index, pair] of node.items.entries()) {
       const keyNode = target(aliasTargets, pair.key);
       // Keys a merge brings in override; only a mapping's own pairs count.
       if (isMergeKey(keyNode)) continue;
@@ -803,8 +852,20 @@ function firstRepeatedKey(
         ? toRange(starts, written.range![0], written.range![1])
         : keyScalar.range!;
       const first = firstKeys.get(key);
-      if (first !== undefined) return Object.freeze({ key, first, second: range });
-      firstKeys.set(key, range);
+      if (first !== undefined) {
+        // Either copy of the key can be a piece of the split value.
+        const cutValue =
+          node.flow === true
+            ? (cutValueBefore(node.items, index) ?? cutValueBefore(node.items, first.index))
+            : null;
+        return Object.freeze({
+          key,
+          first: first.range,
+          second: range,
+          ...(cutValue === null ? {} : { cutValue }),
+        });
+      }
+      firstKeys.set(key, { range, index });
     }
     for (let i = node.items.length - 1; i >= 0; i--) {
       const pair = node.items[i]!;
@@ -995,13 +1056,12 @@ function scalarValue(
   text: string,
   plain: boolean,
   core: string | undefined,
-  local: boolean,
 ): ScalarValue {
   if (core !== undefined) return constructScalar(core, text, plain);
   if (!plain) return text;
   const resolved = resolvePlain(text);
-  // `<<` merges only as an untagged key; under a local tag it is text.
-  return constructScalar(local && resolved === MERGE_TAG ? STR_TAG : resolved, text, true);
+  // `<<` merges only as an untagged key, which never reaches here; anywhere else it is text.
+  return constructScalar(resolved === MERGE_TAG ? STR_TAG : resolved, text, true);
 }
 
 /**

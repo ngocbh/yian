@@ -60,6 +60,7 @@ flow: |
       depends_on: [settle]                # ordering edge — run after the sleep (side effect)
       input:
         action: ${propose.output}
+        answer: ${approve.output}
       output: str
       code: ./fixtures/seeds.ts:confirm_action
 

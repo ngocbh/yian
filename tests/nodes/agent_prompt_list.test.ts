@@ -10,7 +10,7 @@ import { ExpressionError } from "../../src/expr/expressions.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentPrompt, AgentNode, type PromptItem } from "../../src/nodes/agent/node.ts";
-import { type NodeCaps, Output } from "../../src/nodes/base.ts";
+import { CapabilityFault, type NodeCaps, Output } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
 import type { Skill } from "../../src/skills/catalog.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
@@ -216,6 +216,19 @@ test("recall, learning and the render capture read the list's text forms", async
       { role: "user", text: "Now: again" },
     ]),
   );
+});
+
+test("a rendered prompt the capture can't write is a capability fault carrying the original", () => {
+  // A lone surrogate renders, but isn't run-log JSON.
+  let error: unknown = null;
+  try {
+    agent(CHAT).renderCapture({ history: [{ role: "user", text: "\ud800" }], message: "again" });
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(CapabilityFault);
+  expect((error as CapabilityFault).original).toEqual(new TypeError("Unicode surrogate is not valid canonical JSON"));
 });
 
 test("the node refuses a malformed list prompt", () => {

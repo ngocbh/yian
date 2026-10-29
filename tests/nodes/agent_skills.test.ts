@@ -3,7 +3,7 @@
  * demand, and only nodes with the skills trait receiving skills.
  */
 
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -241,9 +241,40 @@ test("skills with structured output still run the tool loop", async () => {
   );
 });
 
-test("an escape attempt fails the node", async () => {
-  const model = new ScriptedModel([loadCall({ name: "review", path: "../review/../../secret" })], CONFIG);
-  const node = new AgentNode("agent", { prompt: "p", llmConfig: CONFIG, skills: ["review"] });
-  const outcome = await drive(node, { models: serving(model), skills: SKILLS });
-  expect(failureMessage(outcome)).toContain("relative path inside the skill directory");
+/** The tool result ending `messages`. */
+function lastResultPart(messages: readonly Message[]): ToolResultPart {
+  return messages.at(-1)!.parts[0] as ToolResultPart;
+}
+
+test.each([
+  ["a missing file", { name: "review", path: "templates/ask.yaml" }, "skill 'review': file 'templates/ask.yaml' does not exist"],
+  ["an escape attempt", { name: "review", path: "../review/../../secret" }, "relative path inside the skill directory"],
+  ["a hidden file", { name: "review", path: ".env" }, "hidden files and folders are not readable"],
+  ["a skill with no files", { name: "deploy", path: "notes.md" }, "skill 'deploy' has no bundled files"],
+  ["an ungranted skill", { name: "other" }, "load_skill: skill 'other' is not granted to this node"],
+  ["a non-string name", { name: 7 }, "load_skill needs a string `name`"],
+  ["an unexpected argument", { name: "review", page: 2 }, "load_skill got unexpected arguments"],
+] as const)("%s is the call's error result and the agent answers", async (_label, args, message) => {
+  const model = new ScriptedModel([loadCall(args), textReply("sorry")], CONFIG);
+  const node = new AgentNode("agent", { prompt: "p", llmConfig: CONFIG, skills: ["review", "deploy"] });
+  expect(await drive(node, { models: serving(model), skills: SKILLS })).toEqual(new Output("sorry"));
+  const result = lastResultPart(model.requests[1]!.messages);
+  expect(result.isError).toBe(true);
+  expect(result.content).toContain(message);
+});
+
+// Root reads a file whatever its mode, so the open can't fail there.
+test.skipIf(process.getuid?.() === 0)("an I/O fault reading a skill file still fails the node", async () => {
+  const locked = join(REVIEW_DIR, "locked.md");
+  writeFileSync(locked, "secret\n");
+  chmodSync(locked, 0o000);
+  try {
+    const model = new ScriptedModel([loadCall({ name: "review", path: "locked.md" }), textReply("unused")], CONFIG);
+    const node = new AgentNode("agent", { prompt: "p", llmConfig: CONFIG, skills: ["review"] });
+    const outcome = await drive(node, { models: serving(model), skills: SKILLS });
+    expect(failureMessage(outcome)).toContain("EACCES");
+    expect(model.requests).toHaveLength(1);
+  } finally {
+    rmSync(locked, { force: true });
+  }
 });

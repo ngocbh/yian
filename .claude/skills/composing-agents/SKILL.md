@@ -1,6 +1,6 @@
 ---
 name: composing-agents
-description: Use when writing or editing a yian flow (a YAML file run with `yian run`): wiring agent, code, tool, case, call, map or loop nodes, asking a person, waiting on an inbox or a time, or answering "how do I write a flow that ...". Trigger on "write a flow", "create an agent", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow".
+description: 'Use when writing or editing a yian flow (a YAML file run with `yian run`): wiring agent, code, tool, case, call, map or loop nodes, asking a person, waiting on an inbox or a time, or answering "how do I write a flow that ...". Trigger on "write a flow", "create an agent", "compose a workflow", "add a node to my flow", "how do I branch / loop / call another flow".'
 ---
 
 # Writing yian flows
@@ -182,7 +182,8 @@ output:
 - **`loop`** takes exactly one driver: `while:` (checked before each run), `until:` (after each
   run) or `times: N`. `max:` guards `while:` and `until:`, and is a load error with `times:`.
   The body reads carried fields as `${input.<name>}`, and the condition reads them bare
-  (`while: not done`). The body returns only carried fields, at least one; a field it leaves out
+  (`while: not done`). Without `max:`, a condition that doesn't end the loop at once must
+  read a carried field the body returns. The body returns only carried fields, at least one; a field it leaves out
   keeps its value. See [Repeat with loop](https://yian.readthedocs.io/control-flow/#repeat-with-loop).
 
 ### Code nodes
@@ -190,7 +191,8 @@ output:
 - **Bodies are TypeScript or JavaScript**: the body of an async function that reads `inputs.x`
   and ends with `return`. Return `null` for no value; `undefined` fails the node.
 - **A file reference starts with `./` or `../`**: `code: ./text.ts:countWords`, resolved against
-  the flow's folder. `module:function` without `./` fails at load.
+  the flow's folder. The file is `.ts`, `.js` or `.mjs`, and the path has no whitespace.
+  `module:function` without `./`, or a reference that breaks these rules, fails at load.
 - **Only erasable TypeScript**: annotations, `as`, interfaces and type aliases; `enum` and
   `namespace` fail at load. A body runs on a worker thread and is not a sandbox.
 

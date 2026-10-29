@@ -38,7 +38,6 @@ import {
   type WaitEntry,
 } from "./log.ts";
 
-export { CLOSE_REASONS, type CloseReason } from "../events.ts";
 import { CLOSE_REASONS, type CloseReason } from "../events.ts";
 
 /** Where a registered call stands. */
@@ -172,7 +171,7 @@ export class WaitsState {
    *
    * @throws RangeError when `json` isn't such a form.
    */
-  static fromJSON(json: WaitsJson): WaitsState {
+  static fromJSON(json: unknown): WaitsState {
     if (!isObject(json)) throw new RangeError("waits JSON must be an object");
     const keys = Object.keys(json);
     if (keys.length !== WAITS_JSON_KEYS.length || !WAITS_JSON_KEYS.every((key) => json[key] !== undefined)) {

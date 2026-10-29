@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildGrow } from "../../src/compile/expand.ts";
-import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -463,7 +463,7 @@ class CapturingLog extends MemoryRunLog {
 /** Create one private explicitly configured run of `loaded` through its first record. */
 function newStartedRun(loaded: ComposedFlow, numWorkers: number): { state: RunState; log: CapturingLog } {
   const privateFlow = copyGraph(loaded.compiled);
-  const effective = resolveLlmCascade(privateFlow, {}, { defaults: { provider: "openai", model: "offline-test" } });
+  const { effective } = resolveRunLlm(privateFlow, {}, { defaults: { provider: "openai", model: "offline-test" } });
   const log = new CapturingLog(RUN_ID);
   return { state: startedRun(loaded, log, { numWorkers, effective, privateFlow }), log };
 }
@@ -797,7 +797,7 @@ function agentFlow(options: { sibling?: boolean } = {}): CompiledFlow {
     throw new Error("replay invoked a node");
   });
   agent.memoryScope = new MemoryScope(["agent"], { memories: ["notes"] });
-  const built = CompiledFlow.fromParts(
+  const built = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["agent", agent],

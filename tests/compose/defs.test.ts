@@ -73,7 +73,7 @@ test("the defs: section parses", () => {
 test("the callable scope eagerly builds defs and memoizes resolution", async () => {
   // One scope eagerly builds local defs and resolves each external alias once.
   const seen: [string, string | null][] = [];
-  const externalChild = await loadConformanceFlow("id: external\nname: external\nnodes: {}\n");
+  const externalChild = await loadConformanceFlow("id: external\nname: external\nversion: declared-v1\nnodes: {}\n");
   const document = SourceDocument.parse("defs:\n  local:\n    nodes: {}\n");
   const external = (path: string, version: string | null) => {
     seen.push([path, version]);
@@ -93,7 +93,7 @@ test("the callable scope eagerly builds defs and memoizes resolution", async () 
   expect(scope.resolve("local")).toBe(local);
 
   const first = await scope.resolveAlias("remote");
-  const second = scope.resolve("remote", "another-caller-version");
+  const second = scope.resolve("remote");
   expect(seen).toEqual([["library/child", "declared-v1"]]);
   expect(first).not.toBe(externalChild);
   expect(first.compiled).not.toBe(externalChild.compiled);
@@ -346,6 +346,52 @@ output: \${go.output}
 `;
   const error = await loadErrorAsync(loadConformanceFlow(text));
   expect(error.message).toContain("nodes");
+});
+
+test.each([
+  ["false", "`input:` must be a mapping, but YAML read it as a boolean; write a mapping"],
+  ["", "`input:` must be a mapping, but it is empty; write a mapping"],
+])("a multi-node def's input: %p is refused like a flow's", async (value, message) => {
+  const text = `
+id: f
+name: f
+defs:
+  d:
+    input: ${value}
+    nodes:
+      c:
+        kind: code
+        code: return 1
+        output: int
+    output: \${c.output}
+nodes:
+  x:
+    kind: call
+    call: d
+output: \${x.output}
+`;
+  const error = await loadErrorAsync(loadConformanceFlow(text));
+  expect(error.message).toContain(`defs entry 'd': ${message}`);
+});
+
+test.each(["false", ""])("a single-node def's input: %p is not a param map", async (value) => {
+  const text = `
+id: f
+name: f
+defs:
+  d:
+    input: ${value}
+    kind: code
+    code: return 1
+    output: int
+nodes:
+  x:
+    kind: call
+    call: d
+output: \${x.output}
+`;
+  const error = await loadErrorAsync(loadConformanceFlow(text));
+  expect(error.message).toContain("defs entry 'd': single-node `input:` must be a param map");
 });
 
 test("a def-internal error names the def", async () => {
@@ -630,6 +676,45 @@ output: \${go.output}
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(
     SourceDocument.parse(text).root.child("defs").child("d").child("input").keyRangeOf("inf")!,
   );
+});
+
+/** A flow whose node `go` calls the single-node def `d`, written as `kind`. */
+const singleNodeDef = (kind: string) => `id: f
+name: f
+defs:
+  d:
+    kind: ${kind}
+    cases:
+      - when: "true"
+        then: go
+nodes:
+  go:
+    kind: call
+    call: d
+    input: {}
+output: \${go.output}
+`;
+
+test("a single-node def of kind case is refused at its kind, asking for nodes:", async () => {
+  const text = singleNodeDef("case");
+  const error = await loadErrorAsync(loadConformanceFlow(text));
+  expect(error.message).toBe(
+    "defs entry 'd': kind 'case' is not allowed in a single-node def (allowed: agent, call, code, loop, " +
+      "map, tool); a case routes to other nodes, which a one-node def has none of — write a full " +
+      "`nodes:` body instead",
+  );
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(
+    SourceDocument.parse(text).root.child("defs").child("d").rangeOf("kind")!,
+  );
+});
+
+test("a single-node def's unknown or non-text kind lists the kinds it takes", async () => {
+  const unknown = await loadErrorAsync(loadConformanceFlow(singleNodeDef("bogus")));
+  expect(unknown.message).toBe(
+    "defs entry 'd': node 'd': unknown kind 'bogus' (allowed: agent, call, code, loop, map, tool)",
+  );
+  const number = await loadErrorAsync(loadConformanceFlow(singleNodeDef("1")));
+  expect(number.message).toContain("write one of agent, call, code, loop, map, tool");
 });
 
 test("defs without a source cursor build from their normalized bodies", () => {

@@ -1,0 +1,24 @@
+# In a `{...}` record typedef, YAML splits `Literal(a, true, b)` at its commas, so `true`
+# becomes a key YAML reads as a boolean; the error names the split type.
+kind: load
+flow: |
+  id: err-split-typedef-non-text
+  name: err_split_typedef_non_text
+  typedefs:
+    Msg: {role: Literal(a, true, b)}   # ERROR: quote the type or use block style
+  input:
+    msg: !Msg
+  nodes:
+    echo:
+      kind: code
+      input:
+        msg: ${input.msg}
+      output: str
+      code: ./fixtures/seeds.ts:echo_value
+  output: ${echo.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "the key `true` was read by YAML as a boolean, but names in a flow must be text. This `{...}` mapping's comma split the value that starts `Literal(a`; quote that value or use block style."
+        frames: [{label: flow.yaml, range: [4, 26, 4, 30]}]

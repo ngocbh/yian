@@ -36,14 +36,20 @@ import type { ModelAccess } from "../src/llm_clients/factory.ts";
 import type { CaseNode } from "../src/nodes/case/node.ts";
 import { Binding } from "../src/nodes/contracts.ts";
 import {
+  agentCall,
+  agentCalls,
+  foldRunLog,
   inspectRun,
   iterRunRecords,
+  loadRecordedFlow,
+  pendingCalls,
   type AdvanceOptions,
   RunResult,
   type RunInspection,
   advance,
   runFlow,
   type RunFlowOptions,
+  RunLogLineTooLongError,
   RunLogSchemaError,
   runLogPath,
   staticNodes,
@@ -64,6 +70,7 @@ import { Skill } from "../src/skills/catalog.ts";
 import { tool } from "../src/tools/function_tools.ts";
 import { TypeCheckError } from "../src/typesys/values.ts";
 
+import { folderSyncs } from "./helpers/folder_syncs.ts";
 import { hostEnv } from "./helpers/mcp_helpers.ts";
 import {
   crashAfter,
@@ -232,6 +239,35 @@ afterEach(() => {
 });
 
 // ---- a CODE-only flow runs end-to-end ----
+
+test("the readers built on iterRunRecords pass maxLineBytes on, and a longer line throws", async () => {
+  const flow = await load(PLAN_FLOW);
+  const log = join(dir, "run.jsonl");
+  await run(flow, { topic: "ACME" }, { log });
+  const limit = 100;
+  const message = `run log ${log} line 1 (seq 0): the line is ${readFileSync(log).indexOf(0x0a)} bytes, over maxLineBytes ${limit}`;
+  const env = hostEnv(dir);
+  const readers: [string, () => unknown][] = [
+    ["inspectRun", () => inspectRun(log, { maxLineBytes: limit })],
+    ["inspectRun with flow", () => inspectRun(log, { flow, env, maxLineBytes: limit })],
+    ["pendingCalls", () => pendingCalls(log, { maxLineBytes: limit })],
+    ["agentCalls", () => agentCalls(log, { maxLineBytes: limit })],
+    ["loadRecordedFlow", () => loadRecordedFlow(log, { env, maxLineBytes: limit })],
+    ["foldRunLog", () => foldRunLog(log, { env, maxLineBytes: limit })],
+    ["agentCall", () => agentCall(log, { nodeId: "plan", n: 1 }, { env, maxLineBytes: limit })],
+  ];
+  for (const [name, read] of readers) {
+    let caught: unknown;
+    try {
+      await read();
+    } catch (error) {
+      caught = error;
+    }
+    expect([name, caught]).toEqual([name, expect.any(RunLogLineTooLongError)]);
+    expect((caught as Error).message).toBe(message);
+  }
+  expect(inspectRun(log, { maxLineBytes: 1 << 20 }).status).toBe("succeeded");
+});
 
 test("code flow runs to declared output", async () => {
   const result = await run(await load(PLAN_FLOW), { topic: "ACME" });
@@ -430,6 +466,17 @@ test.each([
   [{ random: 0.5 }, "random must be a function or null"],
   [{ models: { env: NO_ENV } }, "models must provide env(name) and createModel(config, options), or be null"],
 ])("a bad test option is refused before the log exists (%#)", async (option, message) => {
+  const path = join(dir, "run.jsonl");
+  const flow = await load(PLAN_FLOW);
+  const options = { log: path, ...option } as unknown as RunFlowOptions;
+  await expect(run(flow, { topic: "ACME" }, options)).rejects.toThrow(new TypeError(message));
+  expect(existsSync(path)).toBe(false);
+});
+
+test.each([
+  [{ onEvent: 5 }, "onEvent must be a function or null"],
+  [{ onStream: 5 }, "onStream must be a function or null"],
+])("a callback that isn't a function is refused before the log exists (%#)", async (option, message) => {
   const path = join(dir, "run.jsonl");
   const flow = await load(PLAN_FLOW);
   const options = { log: path, ...option } as unknown as RunFlowOptions;
@@ -1537,6 +1584,33 @@ test("runLogPath is log.jsonl in the run's own 0700 folder, and creates no file"
   expect(path).toBe(join(runs, "r1", "log.jsonl"));
   expect(statSync(join(runs, "r1")).mode & 0o777).toBe(0o700);
   expect(existsSync(path)).toBe(false);
+});
+
+test("runLogPath syncs the runs folder once, and the folders above the ones it made", () => {
+  const runs = join(dir, "state", "runs");
+  const real = fs.realpathSync(dir);
+  expect(folderSyncs(() => runLogPath(runs, "r1"))).toEqual([join(real, "state", "runs"), join(real, "state"), real]);
+  expect(folderSyncs(() => runLogPath(runs, "r2"))).toEqual([join(real, "state", "runs")]);
+});
+
+test("runLogPath syncs the runs folder once when its path climbs out of folders it doesn't make", () => {
+  mkdirSync(join(dir, "p"));
+  let path: string | undefined;
+  const synced = folderSyncs(() => {
+    path = runLogPath(`${dir}/p/q/../..`, "r1");
+  });
+  expect(synced).toEqual([fs.realpathSync(dir)]);
+  expect(path).toBe(join(dir, "r1", "log.jsonl"));
+  expect(existsSync(join(dir, "p", "q"))).toBe(false);
+});
+
+test("runLogPath throws a folder sync's I/O error and removes the run folder", () => {
+  expect(() =>
+    folderSyncs(() => {
+      runLogPath(dir, "r1");
+    }, "EIO"),
+  ).toThrow(/EIO/);
+  expect(existsSync(join(dir, "r1"))).toBe(false);
 });
 
 test("runLogPath refuses an existing run folder, and a symlink to one, leaving its target as it was", () => {

@@ -1,6 +1,6 @@
 /** Routes: where a model call goes and how it authenticates. */
 
-import { type Auth, checkHeaderValue } from "./auth.ts";
+import { type Auth, checkConnectionHeaderValue } from "./auth.ts";
 
 // An RFC 7230 token.
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
@@ -28,8 +28,8 @@ export class Route {
   readonly headers: Readonly<Record<string, string>>;
 
   /**
-   * @throws TypeError If a header name is not an HTTP token or a value is not valid header
-   *   text; the message names the header, never the value.
+   * @throws TypeError If a header name is not an HTTP token or `checkConnectionHeaderValue`
+   *   refuses a value; the message names the header, never the value.
    */
   constructor(options: {
     provider: string;
@@ -52,7 +52,7 @@ export class Route {
       if (!HEADER_NAME.test(name)) {
         throw new TypeError(`route header name ${JSON.stringify(name)} is not a valid HTTP header name`);
       }
-      checkHeaderValue(`route header ${name}`, value);
+      checkConnectionHeaderValue(name, value);
     }
   }
 

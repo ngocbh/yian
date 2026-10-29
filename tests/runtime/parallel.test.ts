@@ -177,7 +177,7 @@ test("veto under workers data edged branch skips", async () => {
     new Edge("pro_note->end", "pro_note", END_ID),
     new Edge("con_note->end", "con_note", END_ID),
   ];
-  const built = engine(CompiledFlow.fromParts(new Map(nodes), edges), { numWorkers: 4 });
+  const built = engine(new CompiledFlow(new Map(nodes), edges), { numWorkers: 4 });
   await built.run();
   expect(log).toContain("pro_note");
   expect(log).not.toContain("con_note");

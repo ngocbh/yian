@@ -54,7 +54,7 @@ unknown name is a load error that suggests a close match.
 | `Optional(X)` | An `X`, or null |
 | `Literal(a, b, c)` | One of these texts, written as names or quoted strings, not numbers |
 | `Union(A, B)` | A value of one of these records (see [Unions](#unions)) |
-| `dict(K, V)` | The same as `object` |
+| `dict(K, V)` | The same as `object`; `K` and `V` must name known types |
 | `Inbox(X)` | A handle on an inbox of `X` events (see [Inboxes and waiting](/inboxes/)) |
 | `Message` | A chat message, built in (see [Agents](/agents/)) |
 
@@ -197,6 +197,11 @@ A tag on a literal is checked when the flow loads, using YAML's rules for unquot
 | `1.5`, `.5`, `1e3`, `.inf` | A float |
 | `1_000`, `1:30` | Text |
 | `2026-10-14` | Text, checked as a date when the slot is a `date` |
+| `2026-10-14 10:30:00` | Text, checked as a datetime when the slot is a `datetime` |
+
+An unquoted value shaped like a date or time must be a real one in the `date` or `datetime`
+form. Other forms YAML reads as a time, such as `2026-1-5 9:00:00` or `2026-10-14t10:30:00`,
+fail with a message to quote them.
 
 So `!str 30` fails with ``quote it to keep it as text: `v: !str "30"` ``, `!bool yes` fails
 with `` `yes` is text; write `true` ``, and `!int "5"` fails because quoted text stays text.
@@ -317,7 +322,7 @@ input's type before the run starts:
 | Input type | Text it converts |
 |---|---|
 | `int` | A whole number, such as `42` |
-| `float` | A number, such as `2.5`, `1e3` or `inf` |
+| `float` | A number, such as `2.5` or `1e3`, or infinity: `inf` or `infinity` in any case, with an optional sign, such as `-Infinity` |
 | `bool` | `true`, `yes`, `y`, `on`, `1` and `false`, `no`, `n`, `off`, `0`, in any case |
 | `Any` | None: `--input x=3` gives the text `"3"` |
 

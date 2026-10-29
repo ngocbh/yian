@@ -11,12 +11,21 @@ import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-import { reprText } from "../../diagnostics.ts";
-import { type FileLock, FileLockError, sqliteErrorCode, waitForLock } from "../../platform.ts";
+import { current as currentDefaults } from "../../defaults.ts";
+import { compareCodePoints, reprText } from "../../diagnostics.ts";
+import {
+  type FileLock,
+  FileLockError,
+  isSystemError,
+  sqliteErrorCode,
+  statOrNull,
+  syncFolder,
+  waitForLock,
+} from "../../platform.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { floatText } from "../../typesys/values.ts";
 import { freezeJsonObject } from "../contracts.ts";
-import { checkStoragePath, isSystemError, realStoragePath } from "./sqlite.ts";
+import { checkStoragePath, realStoragePath } from "./sqlite.ts";
 
 /** A compare-and-set write named a base version that is no longer current. */
 export class MarkdownVersionMismatch extends Error {
@@ -47,7 +56,8 @@ export class MarkdownVersionMismatch extends Error {
  * `MarkdownVersionMismatch` for a stale base version, and a Node system error (an `Error` with a
  * string `code` and a string `syscall` or a numeric `errno`) when storage can't be reached. In a
  * run, profile memory turns these, and on restore a `TypeError`, into typed memory failures; any
- * other error passes through it, `runFlow`, `advance` and `backward` unchanged.
+ * other error passes through it, `runFlow`, `advance` and `backward` unchanged. `signal`, when
+ * given, is the run's stop: a store that waits should give up with `signal.reason` once it aborts.
  */
 export interface MarkdownStore {
   /**
@@ -58,6 +68,7 @@ export interface MarkdownStore {
    */
   read(
     version?: string | null,
+    options?: { signal?: AbortSignal },
   ): readonly [text: string, version: string] | Promise<readonly [text: string, version: string]>;
 
   /**
@@ -71,7 +82,10 @@ export interface MarkdownStore {
    * @throws Error a Node system error when storage can't be reached; the write may or may not
    *   have landed.
    */
-  write(text: string, options: { baseVersion: string; provenance?: JsonObject | null }): string | Promise<string>;
+  write(
+    text: string,
+    options: { baseVersion: string; provenance?: JsonObject | null; signal?: AbortSignal },
+  ): string | Promise<string>;
 }
 
 /**
@@ -82,32 +96,6 @@ export interface MarkdownStore {
 export function markdownVersion(text: string): string {
   if (!text.isWellFormed()) throw new RangeError("text holds a lone surrogate, which has no UTF-8 encoding");
   return `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
-}
-
-/** The errors that make a path read as missing, so neither a file nor a directory. */
-const IGNORED_CODES = new Set(["ENOENT", "ENOTDIR", "EBADF", "ELOOP"]);
-
-/** `fs.statSync`, or `null` for the errors that make a path read as missing. */
-function statOrNull(file: string): fs.Stats | null {
-  try {
-    return fs.statSync(file);
-  } catch (error) {
-    if (isSystemError(error) && IGNORED_CODES.has(error.code)) return null;
-    throw error;
-  }
-}
-
-/** Compare two strings by code point. */
-function compareCodePoints(a: string, b: string): number {
-  // Equal code points take equal code units, so one index walks both strings.
-  let i = 0;
-  while (i < a.length && i < b.length) {
-    const x = a.codePointAt(i)!;
-    const y = b.codePointAt(i)!;
-    if (x !== y) return x - y;
-    i += x > 0xffff ? 2 : 1;
-  }
-  return a.length - b.length;
 }
 
 /**
@@ -141,7 +129,10 @@ function readExact(source: string): string {
   }
 }
 
-/** Write `text` to `target` through a synced temporary file in its directory. */
+/**
+ * Write `text` to `target` through a synced temporary file in its directory, then sync the
+ * directory so the renamed entry survives a power loss.
+ */
 function replace(target: string, text: string): void {
   const temporary = join(dirname(target), `.${basename(target)}.${randomBytes(8).toString("hex")}`);
   const { O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
@@ -158,6 +149,18 @@ function replace(target: string, text: string): void {
     if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
     throw error;
   }
+  syncFolder(dirname(target));
+}
+
+/** Make private directory `path` unless it exists, and sync its parent when it was made. */
+function makeDirectory(path: string): void {
+  try {
+    fs.mkdirSync(path, { mode: 0o700 });
+  } catch (error) {
+    if (isSystemError(error) && error.code === "EEXIST") return;
+    throw error;
+  }
+  syncFolder(dirname(path));
 }
 
 const VERSION = /^sha256:[0-9a-f]{64}$/;
@@ -170,7 +173,11 @@ const VERSION = /^sha256:[0-9a-f]{64}$/;
  * is kept under `.<name>.versions/` next to it, so recorded runs can reopen it later. Each write
  * appends its versions and provenance to `.<name>.writes.jsonl` as one JSON line: keys sorted by
  * code point, separators `, ` and `: `, non-ASCII as `\uXXXX`, floats with a fraction digit.
- * Writers on one host take turns through `.<name>.lock`. Nothing on disk is touched until the first read or write. A
+ * The write log and kept copies are made private to their owner (mode 0600, the versions folder
+ * 0700), since provenance can hold a learner's feedback. Writers on one host take turns through
+ * `.<name>.lock`, each waiting at most `YIAN_PROFILE_LOCK_TIMEOUT_SECONDS` for the one holding it.
+ * Files and the directory entries naming them are synced before a call returns, so a version it
+ * handed out survives a power loss. Nothing on disk is touched until the first read or write. A
  * person may edit `path` directly; the next compare-and-set write then reports a mismatch. A
  * symlinked `path` is resolved when the store is built: writes update the link's target, and the
  * versions, write log and lock sit next to the target.
@@ -212,10 +219,14 @@ export class FileMarkdownStore implements MarkdownStore {
    *
    * @throws RangeError when the named version is unknown or the file isn't valid UTF-8.
    * @throws Error a Node system error when storage can't be reached, including `ENOENT` for a
-   *   missing parent directory without `createParent`.
+   *   missing parent directory without `createParent` and `EIO` once the lock wait times out.
+   * @throws `signal.reason` when `signal` aborts while waiting for the lock.
    */
-  async read(version: string | null = null): Promise<readonly [string, string]> {
-    return this.#locked(() => {
+  async read(
+    version: string | null = null,
+    { signal }: { signal?: AbortSignal } = {},
+  ): Promise<readonly [string, string]> {
+    return this.#locked(signal, () => {
       const text = this.#current();
       const current = markdownVersion(text);
       if (version === null || current === version) {
@@ -239,11 +250,17 @@ export class FileMarkdownStore implements MarkdownStore {
    * @throws RangeError when `text` holds a lone surrogate, the current file isn't valid UTF-8, or
    *   `provenance` holds a non-finite number, a lone surrogate or a cycle; nothing was written.
    * @throws MarkdownVersionMismatch when `baseVersion` is not current.
-   * @throws Error a Node system error when storage can't be reached.
+   * @throws Error a Node system error when storage can't be reached, `EIO` once the lock wait
+   *   times out.
+   * @throws `signal.reason` when `signal` aborts while waiting for the lock; nothing was written.
    */
   async write(
     text: string,
-    { baseVersion, provenance = null }: { baseVersion: string; provenance?: JsonObject | null },
+    {
+      baseVersion,
+      provenance = null,
+      signal,
+    }: { baseVersion: string; provenance?: JsonObject | null; signal?: AbortSignal },
   ): Promise<string> {
     if (typeof text !== "string" || typeof baseVersion !== "string") {
       throw new TypeError("text and base_version must be strings");
@@ -253,26 +270,46 @@ export class FileMarkdownStore implements MarkdownStore {
     // Encode the log line before touching the document so a bad value can't leave a replaced
     // document without its log entry.
     const line = `${spacedJson({ base_version: baseVersion, version: newVersion, provenance: copy })}\n`;
-    return this.#locked(() => {
+    return this.#locked(signal, () => {
       const current = markdownVersion(this.#current());
       if (current !== baseVersion) throw new MarkdownVersionMismatch(baseVersion, current);
       this.#keep(newVersion, text);
       replace(this.path, text);
-      const fd = fs.openSync(this.#writes, "a");
+      const { O_APPEND, O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
+      let created = true;
+      let fd: number;
       try {
+        // Private like the document: provenance can hold the learner's feedback.
+        fd = fs.openSync(this.#writes, O_CREAT | O_EXCL | O_WRONLY | O_APPEND, 0o600);
+      } catch (error) {
+        if (!isSystemError(error) || error.code !== "EEXIST") throw error;
+        created = false;
+        fd = fs.openSync(this.#writes, O_WRONLY | O_APPEND);
+      }
+      try {
+        // The open's mode is masked by the umask; fchmod isn't.
+        if (created) fs.fchmodSync(fd, 0o600);
         fs.appendFileSync(fd, line);
         fs.fsyncSync(fd);
       } finally {
         fs.closeSync(fd);
       }
+      if (created) syncFolder(this.#directory);
       return newVersion;
     });
   }
 
-  /** Run `body` holding the host-wide exclusive lock for this document. */
-  async #locked<T>(body: () => T): Promise<T> {
+  /**
+   * Run `body` holding the host-wide exclusive lock for this document, waiting for it at most
+   * `YIAN_PROFILE_LOCK_TIMEOUT_SECONDS` and until `signal` aborts.
+   */
+  async #locked<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
     if (this.#createParent) {
-      fs.mkdirSync(this.#directory, { recursive: true });
+      const first = fs.mkdirSync(this.#directory, { recursive: true });
+      // Each new directory's entry lives in its parent, from the one above the first made down.
+      if (first !== undefined) {
+        for (let made = this.#directory; made !== dirname(first); made = dirname(made)) syncFolder(dirname(made));
+      }
     } else if (!statOrNull(this.#directory)?.isDirectory()) {
       throw Object.assign(new Error(`document directory does not exist: ${this.#directory}`), {
         code: "ENOENT",
@@ -281,7 +318,8 @@ export class FileMarkdownStore implements MarkdownStore {
     }
     let lock: FileLock;
     try {
-      lock = await waitForLock(this.#lockPath);
+      const timeoutMs = currentDefaults().profileLockTimeoutSeconds * 1000;
+      lock = await waitForLock(this.#lockPath, { timeoutMs, signal });
     } catch (error) {
       // Checked before passing errors through: Bun's SQLiteError has a string `code` and a numeric
       // `errno`, so it already looks like a system error, but callers must get a real one.
@@ -316,7 +354,7 @@ export class FileMarkdownStore implements MarkdownStore {
   #keep(version: string, text: string): void {
     const kept = this.#versionPath(version);
     if (kept !== null && statOrNull(kept) === null) {
-      fs.mkdirSync(this.#versions, { recursive: true });
+      makeDirectory(this.#versions);
       replace(kept, text);
     }
   }

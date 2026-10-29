@@ -28,7 +28,7 @@ expect:
     status: failed
     failure:
       code: contract.output
-      message: '"maybe" is not a member of variant ["approve","revise"]'
+      message: '"maybe" is not one of Literal(approve, revise)'
       frames:
       - label: flow.yaml
         range: [12, 13, 12, 37]
@@ -63,7 +63,7 @@ expect:
     - approval
     - failure:
         code: contract.output
-        message: '"maybe" is not a member of variant ["approve","revise"]'
+        message: '"maybe" is not one of Literal(approve, revise)'
         frames:
         - label: flow.yaml
           range: [12, 13, 12, 37]
@@ -82,7 +82,7 @@ expect:
   - - NodeFailed
     - failure:
         code: contract.output
-        message: '"maybe" is not a member of variant ["approve","revise"]'
+        message: '"maybe" is not one of Literal(approve, revise)'
         frames:
         - label: flow.yaml
           range: [12, 13, 12, 37]
@@ -90,7 +90,7 @@ expect:
   - - RunFailed
     - failure:
         code: contract.output
-        message: '"maybe" is not a member of variant ["approve","revise"]'
+        message: '"maybe" is not one of Literal(approve, revise)'
         frames:
         - label: flow.yaml
           range: [12, 13, 12, 37]

@@ -1,14 +1,14 @@
 /** Profile memory's backend, sessions, learning and commits. */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { BUILTIN, DefaultsError, type Env, forget, install } from "../../src/defaults.ts";
+import { BUILTIN, DefaultsError, type Env, forget, install, withEnv } from "../../src/defaults.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import type { RetryInfo } from "../../src/llm/executor.ts";
 import { Message, type Request, Response, TextPart } from "../../src/llm/messages.ts";
@@ -31,7 +31,9 @@ import {
 } from "../../src/memory/contracts.ts";
 import { parseReply, ProfileMemory, type ProfileSession } from "../../src/memory/profile.ts";
 import { FileMarkdownStore, InMemoryMarkdownStore, markdownVersion } from "../../src/memory/storage/markdown.ts";
+import { lockFile } from "../../src/platform.ts";
 import { type Value, writeAsJson } from "../../src/typesys/values.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 // Rows pass values the signatures refuse, to reach the runtime checks.
 type Mutable = any;
@@ -767,7 +769,25 @@ test("store read failures: a plain Error escapes, a system error is retryable", 
     "profile store could not be read",
   ]);
   expect(error.cause).toBe(thrown);
-  expect((await failure(() => memory.openRun({ snapshot }))).code).toBe("profile.snapshot_unavailable");
+  const restoring = await failure(() => memory.openRun({ snapshot }));
+  expect([restoring.code, restoring.retryable, restoring.cause]).toEqual(["profile.store_unavailable", true, thrown]);
+});
+
+test("a file store's lock held past its cap is retryable store_unavailable; an abort rejects", async () => {
+  const memory = await newMemory();
+  const lock = lockFile(join(home, ".ada.md.lock"));
+  try {
+    const capped = baseEnv({ YIAN_PROFILE_LOCK_TIMEOUT_SECONDS: "0" });
+    const error = await withEnv(capped, () => failure(() => memory.openRun()));
+    expect([error.code, error.retryable]).toEqual(["profile.store_unavailable", true]);
+    expect((error.cause as Error).message).toContain("timed out after 0 ms");
+    const controller = new AbortController();
+    const reason = new Error("stop");
+    setTimeout(() => controller.abort(reason), 50);
+    await expect(memory.openRun({ signal: controller.signal })).rejects.toBe(reason);
+  } finally {
+    lock.release();
+  }
 });
 
 test("two concurrent commits of one id write once", async () => {
@@ -824,7 +844,7 @@ test("a store read failing with a system error during learn is profile.store_una
   expect(model.configs).toEqual([]);
 });
 
-test("feedback holding Infinity is profile.invalid_context after the model call", async () => {
+test("feedback holding Infinity is profile.invalid_context before the model call", async () => {
   const model = installModel(["<profile># Ada\nBrief.</profile>"]);
   const memory = await newMemory("# Ada\n", { createModel: model.createModel });
   const error = await withRun(memory, (session) =>
@@ -836,8 +856,8 @@ test("feedback holding Infinity is profile.invalid_context after the model call"
     false,
     "feedback must be finite JSON",
   ]);
-  expect(error.cause).toBeInstanceOf(RangeError);
-  expect(model.requests.length).toBe(1);
+  expect(model.configs).toEqual([]);
+  expect(model.requests.length).toBe(0);
 });
 
 test("onRetry sees a retried provider error", async () => {
@@ -880,28 +900,7 @@ function childEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("YIAN_")));
 }
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/memory/memory_storage.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 describe.skipIf(!NODE)("the built backend on Node", () => {
   test(

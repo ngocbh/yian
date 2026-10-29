@@ -15,13 +15,21 @@
  * Typed values (source entries, terminal output, system values) are held as their canonical log
  * text, and each read decodes a fresh value.
  *
- * Knows about:   diagnostics, expr/expressions, expr/lineage, memory, nodes/base, nodes/binding,
+ * Knows about:   diagnostics, expr/lineage, memory, nodes/base, nodes/binding,
  *                nodes/contracts, runtime/contracts, runtime/log, typesys.
  * Never imports: runtime state, learning or backward, engine or run, compile, compose, or the CLI.
  */
 
 import { compareCodeUnits, Failure, reprText } from "../diagnostics.ts";
-import { type FeedbackValue, type RootRead, SourceRef, sameSource, sourceKey, ValueRoute } from "../expr/lineage.ts";
+import {
+  type FeedbackValue,
+  type RootRead,
+  type RoutePath,
+  SourceRef,
+  sameSource,
+  sourceKey,
+  ValueRoute,
+} from "../expr/lineage.ts";
 import {
   type MemoryOccurrenceSegment,
   MemoryScope,
@@ -37,13 +45,15 @@ import {
   type BackwardResult,
   type LearningMaterial,
   type MaterialCaps,
+  markerMessage,
   type Node,
   retainFailure,
   validateDeclaredNames,
 } from "../nodes/base.ts";
-import { BINDING_FAILURE_CODES, BindingCapture, BindingError } from "../nodes/binding.ts";
+import { BindingCapture, BindingError } from "../nodes/binding.ts";
 import {
   type ChildFlowBoundary,
+  type ExecutionScope,
   isExactly,
   type SeedConnection,
   sameExecutionScope,
@@ -122,7 +132,7 @@ export type Rebinder = (
 
 /** What binding an occurrence's node again rebuilds (`TraceOccurrence`). */
 export interface ReboundOccurrence {
-  /** The canonical bound inputs, or `null` for a failure at a binding stage. */
+  /** The canonical bound inputs, or `null` for a failure whose binding didn't finish. */
   readonly inputs: JsonObject | null;
   /** The forward capture, each interpolation route's text rebuilt. */
   readonly capture: ForwardCapture;
@@ -156,6 +166,7 @@ export function captureBindings(bindings: BindingCapture, backward: BackwardCapt
     scope: backward.scope,
     inputNames: backward.inputNames,
     variableNames: backward.variableNames,
+    bound: bindings.boundInputs !== null,
   });
 }
 
@@ -177,6 +188,11 @@ export class SourceEntry {
   readonly valueJson: string;
   /** The type the value is read through to restore its files, or `null`. */
   readonly files: Type | null;
+  /**
+   * The value's JSON, parsed on the first `requirePath` and kept: each item of a wide MAP checks
+   * a path into the same list, which parsing per check made quadratic.
+   */
+  #json: { value: JsonValue } | null = null;
 
   /** Hold the entry's fields as given. */
   constructor(source: SourceRef | null, outcomeSeq: number, valueJson: string, files: Type | null = null) {
@@ -196,6 +212,34 @@ export class SourceEntry {
   get storedValue(): Value {
     return decodeTyped(this.valueJson).toObject();
   }
+
+  /**
+   * Require `path` inside the value.
+   *
+   * @throws RangeError when the path is absent.
+   */
+  requirePath(path: RoutePath): void {
+    this.#json ??= parseJson(this.valueJson, "codec") as { value: JsonValue };
+    atPath(this.#json.value, path);
+  }
+}
+
+/**
+ * The JSON at `path` inside `value`.
+ *
+ * @throws RangeError when the path is absent.
+ */
+function atPath(value: JsonValue, path: RoutePath): JsonValue {
+  for (const part of path) {
+    if (typeof part === "string" && isRecord(value) && Object.hasOwn(value, part)) {
+      value = value[part] as JsonValue;
+    } else if (typeof part === "number" && isList(value) && part >= 0 && part < value.length) {
+      value = value[part] as JsonValue;
+    } else {
+      throw new RangeError("source path is absent from its accepted value");
+    }
+  }
+  return value;
 }
 
 /** Whether two entries have the same source (by key), outcome sequence, value text and files type. */
@@ -269,6 +313,31 @@ export function checkMemoryScope(scope: MemoryScope | null): MemoryScope | null 
 }
 
 /**
+ * An occurrence's node data (`TraceOccurrence.nodeData`) couldn't be rebuilt; the error the
+ * rebuild threw is the `cause`. It names the occurrence as its backward context would.
+ */
+export class NodeDataError extends Error {
+  override name = "NodeDataError";
+  /** The occurrence's execution scope. */
+  readonly scope: ExecutionScope | null;
+  /** The occurrence's run. */
+  readonly runId: string;
+  /** The occurrence's node. */
+  readonly nodeId: string;
+  /** The occurrence's accepted start sequence. */
+  readonly nodeStartedSeq: number;
+
+  constructor(occurrence: TraceOccurrence, cause: unknown) {
+    const { nodeId, source } = occurrence;
+    super(`node ${reprText(nodeId)}: its node data can't be rebuilt: ${markerMessage(cause)}`, { cause });
+    this.scope = occurrence.capture.scope;
+    this.runId = source.runId;
+    this.nodeId = nodeId;
+    this.nodeStartedSeq = source.executionSeq;
+  }
+}
+
+/**
  * One accepted outcome and its derived route, identified by its accepted start. Frozen.
  *
  * Private memory ownership is detached from the physical node before pruning. Replay reconstructs
@@ -288,8 +357,8 @@ export class TraceOccurrence {
   readonly outcomeSeq: number;
   /** The outcome envelope's canonical log line. */
   readonly recordJson: string;
-  /** The envelope decoded from `recordJson`, a frozen copy independent of the caller's. */
-  readonly envelope: RecordEnvelope;
+  /** The envelope decoded from `recordJson`, once read. */
+  #envelope: RecordEnvelope | null = null;
   /** The effective input route as accepted; `inputRoute` reads it with its text rebuilt. */
   readonly #inputRoute: ValueRoute;
   /** The receiver's memory keys and occurrence path, if it has memory. */
@@ -316,8 +385,9 @@ export class TraceOccurrence {
   #nodeData: JsonObject | null = null;
 
   /**
-   * Encode `envelope` (which validates it, as an append does) and keep its decoded copy.
+   * Keep the outcome's log line; its envelope is decoded on the first read.
    *
+   * @param recordJson The outcome envelope's canonical log line, as the log holds it.
    * @param inputRoute The effective input route: the captured route joined with pending seed
    *   routes.
    * @param options.memoryScope The receiver's memory scope; defaults to `null`.
@@ -332,15 +402,15 @@ export class TraceOccurrence {
    *   which `capture` and `inputRoute` then read; defaults to `false` (they give it as held).
    * @param options.nodeDataRebuilder Rebuilds the node data from the node and its bound inputs;
    *   `null` (the default) leaves `nodeData` unreadable.
-   * @throws TypeError when `envelope` isn't exactly a `RecordEnvelope`, `memoryScope` isn't
-   *   `null` or exactly a `MemoryScope`, or there is no capture.
+   * @throws TypeError when `memoryScope` isn't `null` or exactly a `MemoryScope`, or there is no
+   *   capture.
    * @throws RangeError when `fillsText` is given without `rebind`.
    */
   constructor(
     source: SourceRef,
     nodeId: string,
     outcomeSeq: number,
-    envelope: RecordEnvelope,
+    recordJson: string,
     inputRoute: ValueRoute,
     options: {
       memoryScope?: MemoryScope | null;
@@ -369,9 +439,8 @@ export class TraceOccurrence {
     this.source = source;
     this.nodeId = nodeId;
     this.outcomeSeq = outcomeSeq;
-    this.recordJson = encodeRecord(envelope);
-    this.envelope = decodeRecord(this.recordJson);
-    const held = capture ?? (this.envelope.record as OutcomeRecord).forwardCapture;
+    this.recordJson = recordJson;
+    const held = capture ?? this.record.forwardCapture;
     if (!isExactly(held, ForwardCapture)) throw new TypeError("a trace occurrence requires its forward capture");
     this.#capture = held;
     this.#rebind = rebind;
@@ -384,6 +453,11 @@ export class TraceOccurrence {
     this.steps = Object.freeze([...steps]);
     this.messagesSource = messagesSource;
     Object.freeze(this);
+  }
+
+  /** The envelope decoded from `recordJson` on the first read, a frozen copy independent of the caller's. */
+  get envelope(): RecordEnvelope {
+    return (this.#envelope ??= decodeRecord(this.recordJson));
   }
 
   /** The accepted outcome record, read from the decoded envelope. */
@@ -416,8 +490,8 @@ export class TraceOccurrence {
 
   /**
    * The bound inputs, canonical JSON rebuilt by binding the node again from the values its route
-   * read (`reboundCapture`), or `null` for a failure at a binding stage, whose binding didn't
-   * finish. Built on the first read.
+   * read (`reboundCapture`), or `null` for a failure whose binding didn't finish (its capture's
+   * `bound`). Built on the first read.
    *
    * @throws RangeError when the occurrence was made without a rebinder, a route source has no
    *   accepted producer, or a finished binding no longer finishes (the `BindingError` as
@@ -433,15 +507,21 @@ export class TraceOccurrence {
    * node and its bound inputs (`rebuildNodeData`): its static material and, for a node whose
    * `forward` rendered, the render and the model config it used. Built on the first read.
    *
-   * @throws RangeError when the occurrence was made without a rebuilder, as `boundInputs` (a
-   *   finished binding whose bound inputs don't rebuild included), or when the run recorded no
-   *   model config for the node.
+   * @throws RangeError when the occurrence was made without a rebuilder.
+   * @throws NodeDataError carrying what the rebuild threw: an error rebinding the inputs (as
+   *   `boundInputs`, a finished binding whose bound inputs don't rebuild included), a run that
+   *   recorded no model config for the node, or a render error that isn't one of the run's refusals
+   *   (`Node.renderCapture`), such as a capture fault.
    */
   get nodeData(): JsonObject {
     if (this.#rebuildNodeData === null) {
       throw new RangeError(`occurrence of ${reprText(this.nodeId)} can't rebuild its node data`);
     }
-    this.#nodeData ??= this.#rebuildNodeData();
+    try {
+      this.#nodeData ??= this.#rebuildNodeData();
+    } catch (error) {
+      throw new NodeDataError(this, error);
+    }
     return this.#nodeData;
   }
 
@@ -546,6 +626,7 @@ function withInterpolationText(capture: ForwardCapture, binding: BindingCapture)
     scope: capture.scope,
     inputNames: capture.inputNames,
     variableNames: capture.variableNames,
+    bound: capture.bound,
   });
 }
 
@@ -665,9 +746,17 @@ export function selectSeedRoute(
   let route = inputRoute ?? capture.route;
   const path = connection.seedPath;
   if (path.length === 2) {
-    const binding = capture.items.find(([index]) => index === path[0]);
-    if (binding === undefined) return null;
-    route = binding[1].route;
+    // Items are in increasing index order, and a MAP's growth selects one per item.
+    const items = capture.items;
+    let low = 0;
+    let high = items.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (items[middle]![0] < (path[0] as number)) low = middle + 1;
+      else high = middle;
+    }
+    if (items[low]?.[0] !== path[0]) return null;
+    route = items[low]![1].route;
   }
   const position = route.names.indexOf(path[path.length - 1] as string);
   return position < 0 ? null : route.children[position]!;
@@ -790,17 +879,7 @@ export class RetainedTrace {
     const key = sourceKey(new SourceRef(source.runId, source.executionSeq));
     const entry = this._sources.get(key);
     if (entry === undefined) throw new RangeError(`no accepted source for ${key}`);
-    let value = (parseJson(entry.valueJson, "codec") as { value: JsonValue }).value;
-    for (const part of source.path) {
-      if (typeof part === "string" && isRecord(value) && Object.hasOwn(value, part)) {
-        value = value[part] as JsonValue;
-      } else if (typeof part === "number" && isList(value) && part >= 0 && part < value.length) {
-        value = value[part] as JsonValue;
-      } else {
-        throw new RangeError("source path is absent from its accepted value");
-      }
-    }
-    return value;
+    return atPath((parseJson(entry.valueJson, "codec") as { value: JsonValue }).value, source.path);
   }
 
   /**
@@ -1243,6 +1322,8 @@ export interface PrepareTraceOptions {
   seed?: JsonValue | null;
   /** The executing node's recorded steps across its starts, which a learnable occurrence keeps. */
   steps?: readonly ValueRecord[];
+  /** The envelope's canonical log line, when the caller has encoded it; defaults to encoding it. */
+  envelopeJson?: string | null;
   /** A derived record's forward capture, rebuilt from its sources, which the record leaves out. */
   capture?: ForwardCapture | null;
   /** Binds the executing node again, which rebuilds the occurrence's bound inputs. */
@@ -1268,7 +1349,8 @@ export interface PrepareTraceOptions {
  *   holds a capture (it is rebuilt from its sources), the record's
  *   coordinates or terminal payload disagree with the trace, a resume disagrees with the
  *   unfinished starts, a waiting node has no accepted start or a woken one no parked start, an
- *   outcome lacks its capture or its accepted start, the capture's scope
+ *   outcome lacks its capture or its accepted start, an outcome other than a failure holds a
+ *   binding that didn't finish, the capture's scope
  *   differs from the node's, a route source isn't an earlier accepted producer or lacks its path,
  *   a seed connection isn't captured or its target or a boundary endpoint already has an owner,
  *   or a terminal disagrees with the root writer or has no causal occurrence.
@@ -1297,6 +1379,7 @@ export function prepareTrace(
     initialCommit = false,
     seed = null,
     steps = [],
+    envelopeJson = null,
     capture: rebuilt = null,
     rebinder = null,
     nodeDataRebuilder: rebuildNodeData = null,
@@ -1382,9 +1465,14 @@ export function prepareTrace(
   validateSources(trace, inputRoute, envelope.seq);
   // A derived record's capture is rebuilt whole with its value; a recorded one's interpolation
   // routes get their text by binding the node again, which learning does on its first read. A
-  // failure at a binding stage bound no inputs, so it is bound again only for that text.
+  // binding that didn't finish bound no inputs, so it is bound again only for that text.
   const fillsText = rebuilt === null && holdsInterpolation(capture);
-  const bound = !unbound(record);
+  // The capture records whether the bound inputs are usable: a failure's code doesn't tell,
+  // since a node's body may fail with a binding code after its binding finished.
+  const bound = capture.bound;
+  if (!bound && !isExactly(record, NodeFailedRecord)) {
+    throw new RangeError("only a failure's capture may hold a binding that didn't finish");
+  }
   if (bound && rebuildNodeData !== null && rebinder === null) {
     throw new RangeError("rebuilding the node data of a finished binding requires a rebinder");
   }
@@ -1398,7 +1486,8 @@ export function prepareTrace(
     const filled = withInterpolationText(capture, rebound.capture);
     return { inputs, capture: filled, inputRoute: filled === capture ? inputRoute : joinSeedRoutes(filled, candidates) };
   };
-  const occurrence = new TraceOccurrence(source, node.id, envelope.seq, envelope, inputRoute, {
+  const recordJson = envelopeJson ?? encodeRecord(envelope);
+  const occurrence = new TraceOccurrence(source, node.id, envelope.seq, recordJson, inputRoute, {
     memoryScope: node.memoryScope,
     hiddenInputs: node.modelHiddenInputs(),
     seed,
@@ -1516,11 +1605,6 @@ export function prepareTrace(
   });
 }
 
-/** Whether `record` is a failure at a binding stage, which bound no inputs. */
-function unbound(record: RecordEnvelope["record"]): boolean {
-  return isExactly(record, NodeFailedRecord) && (BINDING_FAILURE_CODES as readonly string[]).includes(record.failure.code);
-}
-
 /** Canonical log text of the JSON `text`. */
 function canonicalText(text: string): string {
   return logJson(parseJson(text, "codec"));
@@ -1540,7 +1624,7 @@ function validateSources(trace: RetainedTrace, route: ValueRoute, outcomeSeq: nu
       throw new RangeError("route source must name an earlier accepted producer");
     }
     try {
-      trace.lookupSource(source);
+      entry.requirePath(source.path);
     } catch (error) {
       throw new RangeError("route source path is absent from its accepted value", { cause: error });
     }

@@ -24,6 +24,7 @@ import {
   iterOriginCarrier,
   iterSourceStrings,
   mapSourceStrings,
+  type OriginCarrier,
   Parameter,
   rewriteOriginCarrier,
   ValueContract,
@@ -37,6 +38,11 @@ import { readTypedefs } from "../../src/typesys/types.ts";
 const INTEGER = Type.scalar(ValueKind.INTEGER);
 
 /** Prefix an origin's key with `m:`. */
+/** Every origin `iterOriginCarrier` yields for `carrier`, in order. */
+function originsOf(carrier: OriginCarrier): OriginRef[] {
+  return [...iterOriginCarrier(carrier, new Set())];
+}
+
 function rename(origin: OriginRef): OriginRef {
   return new OriginRef("m:" + origin.key);
 }
@@ -191,17 +197,17 @@ test("binding origins include the template and nested bindings", () => {
     { origin: outer },
   );
 
-  expect([...binding.iterOrigins()]).toEqual([outer, leaf, nested, nestedContract]);
+  expect(originsOf(binding)).toEqual([outer, leaf, nested, nestedContract]);
 
-  const mapped = binding.mapOrigins(rename);
-  expect([...mapped.iterOrigins()]).toEqual([
+  const mapped = rewriteOriginCarrier(binding, rename, new Map());
+  expect(originsOf(mapped)).toEqual([
     new OriginRef("m:outer"),
     new OriginRef("m:leaf"),
     new OriginRef("m:nested"),
     new OriginRef("m:nested/contract"),
   ]);
   // The original carrier graph is untouched.
-  expect([...binding.iterOrigins()]).toEqual([outer, leaf, nested, nestedContract]);
+  expect(originsOf(binding)).toEqual([outer, leaf, nested, nestedContract]);
 });
 
 test("rewriting a carrier reaches template and nested origins", () => {
@@ -215,12 +221,12 @@ test("rewriting a carrier reaches template and nested origins", () => {
 
   const rewritten = rewriteOriginCarrier(binding, rename, new Map());
 
-  expect([...rewritten.iterOrigins()]).toEqual([
+  expect(originsOf(rewritten)).toEqual([
     new OriginRef("m:outer"),
     new OriginRef("m:leaf"),
     new OriginRef("m:nested"),
   ]);
-  expect([...binding.iterOrigins()]).toEqual([
+  expect(originsOf(binding)).toEqual([
     new OriginRef("outer"),
     new OriginRef("leaf"),
     new OriginRef("nested"),
@@ -236,16 +242,13 @@ function twoLevelBinding(): Binding {
   });
 }
 
-test("every origin walker reaches a binding nested two levels deep", () => {
+test("both origin walkers reach a binding nested two levels deep", () => {
   const binding = twoLevelBinding();
   const keys = ["outer", "leaf", "middle", "inner"];
 
-  expect([...binding.iterOrigins()].map((origin) => origin.key)).toEqual(keys);
-  const mapped = binding.mapOrigins(rename);
-  expect([...mapped.iterOrigins()].map((origin) => origin.key)).toEqual(keys.map((key) => "m:" + key));
+  expect(originsOf(binding).map((origin) => origin.key)).toEqual(keys);
   const rewritten = rewriteOriginCarrier(binding, rename, new Map());
-  expect([...rewritten.iterOrigins()].map((origin) => origin.key)).toEqual(keys.map((key) => "m:" + key));
-  expect(rewritten).toEqual(mapped);
+  expect(originsOf(rewritten).map((origin) => origin.key)).toEqual(keys.map((key) => "m:" + key));
 });
 
 test("a plain binding with a record source keeps its contents opaque", () => {
@@ -254,7 +257,7 @@ test("a plain binding with a record source keeps its contents opaque", () => {
     { origin: new OriginRef("o") },
   );
 
-  expect([...binding.iterOrigins()]).toEqual([new OriginRef("o")]);
+  expect(originsOf(binding)).toEqual([new OriginRef("o")]);
 });
 
 // --- binder --- //

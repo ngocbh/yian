@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { resolveLlmCascade, resolveRunLlm } from "../../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ValueTemplate } from "../../src/nodes/contracts.ts";
@@ -119,7 +119,7 @@ const CASCADE_DEFAULTS = { provider: "openai", model: "gpt-x" };
 test("the cascade check names a composer by its gate", async () => {
   const flow = (await loadFlow(COMPOSER_IN_CHILD.replace("'${pick.output}'", "m1"))).compiled;
   flow.flowLlmConfig = new ValueTemplate({ model: "${pick.output}" });
-  const message = rangeError(() => resolveLlmCascade(flow, {}, { defaults: CASCADE_DEFAULTS }));
+  const message = rangeError(() => resolveRunLlm(flow, {}, { defaults: CASCADE_DEFAULTS }));
   expect(message).toStartWith("node 'ask' adaptive_questions.llm_config in 'c' would inherit llm_config.model ");
   expect(message).not.toContain("__compose");
 });
@@ -280,14 +280,14 @@ output: \${repeat.output}
 test("a flow built around compose hits the cascade check", async () => {
   const flow = (await loadFlow(defCall({ rootModel: "m0" }))).compiled;
   flow.flowLlmConfig = new ValueTemplate({ model: "${pick.output}" });
-  const message = rangeError(() => resolveLlmCascade(flow, {}, { defaults: CASCADE_DEFAULTS }));
+  const message = rangeError(() => resolveRunLlm(flow, {}, { defaults: CASCADE_DEFAULTS }));
   expect(message).toMatch(/node 'c\/a' would inherit llm_config\.model/);
   expect(message).toContain(FIX);
 });
 
 test("a root input value or a literal passes the cascade check", async () => {
   const flow = (await loadFlow(defCall({ rootModel: "m0" }))).compiled;
-  expect(resolveLlmCascade(flow, {}, { defaults: CASCADE_DEFAULTS })["c/a"]!["model"]).toBe("m0");
+  expect(resolveRunLlm(flow, {}, { defaults: CASCADE_DEFAULTS }).effective["c/a"]!["model"]).toBe("m0");
   flow.flowLlmConfig = new ValueTemplate({ model: "${input.m}" });
   const run = resolveRunLlm(flow, {}, { defaults: CASCADE_DEFAULTS, runInputs: { m: "gpt-y" } });
   expect(run.effective["c/a"]!["model"]).toBe("gpt-y");

@@ -65,7 +65,8 @@ or `./file.ts:fn`), `input`, `output`. The body reads `inputs.<name>` and return
 starts when the tool is missing or an argument can never fit.
 
 **case** ([Control flow](https://yian.readthedocs.io/control-flow/#branch-with-case)): `on`
-(optional), `cases` (a list of `{when, then}`), `else`.
+(optional), `cases` (a list of `{when, then}`), `else`. A `when:` or `on:` may read an agent's
+`new_messages` (`when: ${len(reply.new_messages) > 1}`).
 
 **call / map / loop** ([Control flow](https://yian.readthedocs.io/control-flow/)): `call` or
 inline `nodes` plus `output`; `input` (the child's arguments, or the loop's seed record); `map`
@@ -73,7 +74,8 @@ adds `over`; `loop` adds one of `while`, `until`, `times`, and optional `max`.
 
 **ask** ([Inboxes and waiting](https://yian.readthedocs.io/inboxes/#ask-a-person)):
 `tool_id: ask`, `input` with one of `prompt` or `questions` (1 to 4, each with `question`, a
-unique `header`, optional `options` and `multi_select`), optional `timeout`; or
+unique `header`, optional `options` (labels unique within the question) and `multi_select`),
+optional `timeout`; or
 `adaptive_questions: {prompt: ...}` beside `input`. A `questions:` answer is a record keyed by
 `header`. Other inputs reach the host's handler, which must declare them.
 
@@ -128,7 +130,7 @@ False values are `false`, `null`, `0`, `0.0`, `""`, `[]` and an empty record. Bu
 | `str`, `int`, `float`, `bool` | `int` is any size; an int fits a `float` |
 | `date`, `datetime` | Text such as `2026-10-14`, `2026-10-14T10:30:00Z` |
 | `int(1..12)`, `int(0..)`, `float(0.0..1.0)` | Inclusive ranges; one end may be open |
-| `object`, `dict(K, V)` | Any JSON object |
+| `object`, `dict(K, V)` | Any JSON object; `K` and `V` must name known types |
 | `Any` | Any JSON value but null; fills only an `Any` slot unless tagged or narrowed |
 | `None`, `Optional(X)` | Null; `X` or null |
 | `list(X)` | Holds null only if `X` does: `list(Optional(int))` |
@@ -192,8 +194,8 @@ inbox. Each turn:
 4. The turn returns `history: ${compacted.output.history + (answered.output :- [])}` and
    `closed: ${heard.output.closed}`; the loop runs `while: not closed`.
 
-The host ends the chat by closing the inbox (`/exit` in `yian chat`). Try it with
-`yian chat chat.yaml` from the templates folder.
+The host ends the chat by closing the inbox (`/exit` in `yian run`'s chat). Try it with
+`yian run chat.yaml` from the templates folder.
 
 ## Where to look next
 

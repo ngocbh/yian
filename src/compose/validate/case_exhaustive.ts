@@ -29,13 +29,14 @@
  * Knows about: `diagnostics` (`SourceRange`), `expr` (the ref scan), `nodes/contracts` (the
  * output-contract sum), `typesys` (`Type` and the strict value check), `compile/output_contracts`,
  * and the compose peers `helpers/errors`, `helpers/tags`, `helpers/yaml_words`,
- * `nodes/case`, `source`, `validate/narrowing` and `validate/typed_bindings`.
+ * `nodes/case`, `source` and `validate/narrowing`.
  * Never imports: build, the loader, or the runtime; nothing in the engine imports this back.
  */
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError, exprRefsOf } from "../../expr/index.ts";
 import { isExactly, type OutputContract, ValueContract } from "../../nodes/contracts.ts";
+import { NEW_MESSAGES } from "../../typesys/pool.ts";
 import {
   buildValueAs,
   canonicalTypeLabel,
@@ -44,15 +45,14 @@ import {
   ValueKind,
   writeAsText,
 } from "../../typesys/values.ts";
-import { LoadDiagnostics, sourceText } from "../helpers/errors.ts";
+import { LoadDiagnostics, shownLiteral, sourceText } from "../helpers/errors.ts";
 import { assertExactContracts, resolveOutputBindingContract } from "../../compile/output_contracts.ts";
-import { valueFits, yamlQuoted } from "../helpers/tags.ts";
-import { formerBooleanFix } from "../helpers/yaml_words.ts";
+import { yamlQuoted } from "../helpers/tags.ts";
+import { formerBooleanFix, valueFits } from "../helpers/yaml_words.ts";
 import type { NodeDescriptor } from "../nodes/base.ts";
 import { CaseDescriptor, onMatchKey } from "../nodes/case.ts";
 import { parseYamlLiteral, SourceSyntaxError } from "../source/index.ts";
 import type { Narrowing } from "./narrowing.ts";
-import { shownLiteral } from "./typed_bindings.ts";
 
 /** A matchable `on:`-form `when:` value: text, a bool, an int or a float. */
 type WhenValue = string | boolean | bigint | number;
@@ -489,7 +489,8 @@ function coveredTags(covered: readonly unknown[]): Set<string> {
  * @param onRef The case's `on:` template.
  * @param producers Each producer node's output contract by id.
  * @param flowInputs The flow-input contracts by name. With them an `${input.<name>[.<field>...]}`
- *   ref resolves too; without them (`null`, the default) only `${<id>.output[.<field>...]}` does.
+ *   ref resolves too; without them (`null`, the default) only `${<id>.output[.<field>...]}` and an
+ *   AGENT's `${<id>.new_messages[...]}` do.
  * @returns The resolved type, or `null` for an unsupported head, an opaque result, or a non-record
  *   step (lenient: no check).
  */
@@ -507,7 +508,7 @@ function resolveOnType(
   }
   if (refs.length !== 1) return null;
   const parts = refs[0]!.split(".");
-  const nodeOutput = parts.length >= 2 && parts[1] === "output";
+  const nodeOutput = parts.length >= 2 && (parts[1] === "output" || parts[1] === NEW_MESSAGES);
   const flowInput = flowInputs !== null && parts.length >= 2 && parts[0] === "input";
   if (!(nodeOutput || flowInput)) return null;
   const contract = resolveOutputBindingContract(onRef, producers, flowInputs ?? new Map());

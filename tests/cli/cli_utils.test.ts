@@ -1,28 +1,35 @@
 // The key prompt, with a fake terminal standing in for a TTY; the argument parser, the usage text
-// and `printJson`; and `ensureProviderKeys`, which also resolves a saved login without a prompt.
+// and `printJson`; and startup.ts's `ensureProviderKeys`, which also resolves a saved login without
+// a prompt (kept here for the private home and auth store these tests share).
 // The provider-key rows load the hello-agent seed from its harvested case,
 // `load-core/seed_00_hello_agent`, and set a default provider and model where they rely on one.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 
-import { agentConnections, ensureProviderKeys } from "../../src/cli/run.ts";
+import { agentConnections, ensureProviderKeys } from "../../src/cli/startup.ts";
 import {
   CommandEnv,
   type CommandSpec,
   ensureEnvKey,
   flush,
+  forTerminal,
   helpText,
+  HostStop,
   JSON_FORMAT,
   MissingKeyError,
   type OptionSpec,
   type ParsedArgs,
   parseCommand,
   printJson,
+  shellQuote,
+  stopOnSignals,
   streamWriter,
+  stripControls,
   UsageError,
   usageError,
   type Writer,
@@ -318,6 +325,15 @@ describe("parseCommand", () => {
 
   test("int options are checked", () => {
     expect(usage(RUN, [flow, "-w", "x"])).toBe("Invalid value for '--num-workers' / '-w': 'x' is not a valid integer.");
+    // Past 2^53 a Number loses digits, and 309 digits or more read as Infinity.
+    for (const text of ["9007199254740992", "99999999999999999999", "9".repeat(400)]) {
+      expect(usage(RUN, [flow, "-w", text])).toBe(
+        `Invalid value for '--num-workers' / '-w': '${text}' is not a valid integer.`,
+      );
+    }
+    expect(parseCommand(RUN, [flow, "-w", "9007199254740991"])).toMatchObject({
+      options: { "num-workers": 9007199254740991 },
+    });
     for (const argv of [["--num-workers=-1"], ["-w-1"]]) {
       expect(usage(RUN, [flow, ...argv])).toBe("Invalid value for '--num-workers' / '-w': -1 is not in the range x>=0.");
     }
@@ -551,5 +567,111 @@ describe("streamWriter", () => {
     });
     const error = await rejection(streamWriter(stream).write("x"));
     expect(error.message).toBe("write EIO");
+  });
+});
+
+describe("stopOnSignals", () => {
+  const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  const listeners = (target: EventEmitter) => SIGNALS.map((name) => target.listenerCount(name));
+
+  test("each signal aborts with a HostStop naming it and removes all three listeners", () => {
+    for (const name of SIGNALS) {
+      const target = new EventEmitter();
+      const controller = new AbortController();
+      stopOnSignals(controller, target);
+      expect(listeners(target)).toEqual([1, 1, 1]);
+      target.emit(name);
+      expect(controller.signal.reason).toBeInstanceOf(HostStop);
+      expect(controller.signal.reason.signal).toBe(name);
+      expect(listeners(target)).toEqual([0, 0, 0]);
+    }
+  });
+
+  test("the disposer removes the listeners", () => {
+    const target = new EventEmitter();
+    const controller = new AbortController();
+    const dispose = stopOnSignals(controller, target);
+    dispose();
+    expect(listeners(target)).toEqual([0, 0, 0]);
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  test("an already aborted controller keeps its reason and still removes them", () => {
+    const target = new EventEmitter();
+    const controller = new AbortController();
+    const first = new HostStop("SIGINT");
+    controller.abort(first);
+    stopOnSignals(controller, target);
+    target.emit("SIGTERM");
+    expect(controller.signal.reason).toBe(first);
+    expect(listeners(target)).toEqual([0, 0, 0]);
+  });
+
+  test("names picks the signals listened for", () => {
+    const target = new EventEmitter();
+    const controller = new AbortController();
+    stopOnSignals(controller, target, ["SIGTERM"]);
+    expect(listeners(target)).toEqual([0, 1, 0]);
+    target.emit("SIGTERM");
+    expect(controller.signal.reason).toBeInstanceOf(HostStop);
+    expect(controller.signal.reason.signal).toBe("SIGTERM");
+    expect(listeners(target)).toEqual([0, 0, 0]);
+  });
+});
+
+describe("stripControls", () => {
+  test.each<[string, string, string]>([
+    ["an OSC 52 clipboard write ended by BEL", "a\x1b]52;c;aGk=\x07b", "ab"],
+    ["an OSC 8 hyperlink ended by ST", "\x1b]8;;https://x.example\x1b\\link\x1b]8;;\x1b\\", "link"],
+    ["an OSC ended by C1 ST", "\x9d0;title\x9cok", "ok"],
+    ["a CSI cursor move and colour", "\x1b[2J\x1b[1;31mred\x1b[0m\x1b[?25l", "red"],
+    ["a C1 CSI", "a\x9b2Jb", "ab"],
+    ["a DCS string", "a\x1bPq#0\x1b\\b", "ab"],
+    ["two-byte ESC sequences", "\x1b7a\x1b(Bb\x1bc", "ab"],
+    ["an unended OSC, leaving its text", "a\x1b]8;;x", "a8;;x"],
+    ["C0, DEL and C1 controls, a lone CR among them", "a\x00\x07\x08\rb\x7f\x85c", "abc"],
+    ["kept newlines and tabs, CRLF read as LF", "a\tb\r\nc\n", "a\tb\nc\n"],
+    ["plain text with non-ASCII", "héllo — 世界", "héllo — 世界"],
+  ])("drops %s", (_, text, expected) => {
+    expect(stripControls(text)).toBe(expected);
+  });
+
+  test.each<[string, string]>([
+    ["OSC", "\x9d"],
+    ["DCS", "\x90"],
+    ["mixed 7-bit and C1", "\x1b]\x9d\x90\x1bP"],
+  ])("takes linear time on a megabyte of unended %s introducers", (_, introducer) => {
+    const text = introducer.repeat(Math.ceil(1_000_000 / introducer.length));
+    const start = performance.now();
+    const stripped = stripControls(text);
+    expect(performance.now() - start).toBeLessThan(1000);
+    // No control survives, nor anything else: an unended introducer is a control on its own.
+    expect(stripped).toBe("");
+  });
+});
+
+describe("forTerminal", () => {
+  const text = "a\x1b]52;c;aGk=\x07b";
+
+  test("strips text written to a TTY", () => {
+    expect(forTerminal(text, { write: async () => {}, isTTY: true })).toBe("ab");
+  });
+
+  test("keeps text written elsewhere exactly", () => {
+    expect(forTerminal(text, { write: async () => {}, isTTY: false })).toBe(text);
+    expect(forTerminal(text, { write: async () => {} })).toBe(text);
+  });
+});
+
+describe("shellQuote", () => {
+  test("a word of safe characters stays as it is", () => {
+    expect(shellQuote("/home/ada/.yian/runs/4f1c/log.jsonl")).toBe("/home/ada/.yian/runs/4f1c/log.jsonl");
+    expect(shellQuote("a-b_c=d:e,f@g%h+i")).toBe("a-b_c=d:e,f@g%h+i");
+  });
+
+  test("anything else is single-quoted, each quote closed, escaped and reopened", () => {
+    expect(shellQuote("/tmp/my runs/log.jsonl")).toBe("'/tmp/my runs/log.jsonl'");
+    expect(shellQuote("it's $HOME")).toBe("'it'\\''s $HOME'");
+    expect(shellQuote("")).toBe("''");
   });
 });

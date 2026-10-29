@@ -1027,7 +1027,7 @@ const str = Type.scalar(ValueKind.STRING);
 const Rec = new Type({ kind: ValueKind.OBJECT, fields: new Map([["k", str], ["opt", str]]), required: new Set(["k"]) });
 const A = new Type({ kind: ValueKind.OBJECT, fields: new Map([["x", str]]), required: new Set() });
 const B = new Type({ kind: ValueKind.OBJECT, fields: new Map([["y", str]]), required: new Set() });
-const U = new Type({ kind: ValueKind.OBJECT, variants: [A, B] });
+const U = new Type({ kind: ValueKind.OBJECT, members: [A, B] });
 
 test("declaredAt projects a type through declared fields", () => {
   expect(typeEquals(declaredAt(Rec, ["opt"])!, str)).toBe(true);

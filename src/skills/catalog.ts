@@ -6,17 +6,16 @@
  * lives in `compose/skills.ts`, because only Compose parses YAML.
  */
 
-import { readFileSync, realpathSync, statSync, type Stats } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
+import { isMissingPath, isSystemError, leavesRoot, openFilePath, statOrNull } from "../platform.ts";
 import { valueRepr } from "../typesys/values.ts";
 
 export const SKILL_FILE = "SKILL.md";
 const NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-// These errors mean the path isn't a file, rather than a failure.
-const IGNORED_CODES = new Set(["ENOENT", "ENOTDIR", "ELOOP", "EBADF"]);
 
 /** A skill package, grant, or resource request is invalid. */
 export class SkillError extends RangeError {
@@ -80,17 +79,30 @@ export function checkSkillName(name: unknown): string {
 }
 
 /**
+ * @internal Test seams for `readSkillFile`: a call between the path checks and the open, and the
+ * read of an open file's path from its descriptor.
+ */
+export interface SkillFileDeps {
+  beforeOpen?: (path: string) => void;
+  openedPath?: (fd: number) => string | null;
+}
+
+/**
  * Return one UTF-8 file bundled with `skill`, confined to its directory.
  *
  * @param skill The granted skill.
  * @param path POSIX path relative to the skill directory, such as `references/api.md`. Absolute
  *   paths, `..`, backslashes, hidden (dot) files and folders, and symlinks that leave the
- *   directory are rejected.
+ *   directory or resolve to a hidden file or folder inside it are rejected. The checks apply to
+ *   the file actually opened, so a folder swapped for a symlink mid-read is refused too. Where
+ *   the OS can't report an open file's path (Node on macOS, Linux without `/proc`, Windows), that
+ *   recheck reads paths again and only narrows the race with a writer that keeps swapping. A hard
+ *   link to a hidden file can't be told from a visible file and is read.
  * @returns The file text.
  * @throws {SkillError} If the path is unsafe, hidden, missing, not a regular file, larger than
- *   `current().maxSkillFileBytes`, or not UTF-8 text.
+ *   `current().maxSkillFileBytes`, not UTF-8 text, or changed while it was read.
  */
-export function readSkillFile(skill: Skill, path: string): string {
+export function readSkillFile(skill: Skill, path: string, deps: SkillFileDeps = {}): string {
   const where = `skill ${reprText(skill.name)}: file ${reprText(path)}`;
   if (skill.directory === null) throw new SkillError(`skill ${reprText(skill.name)} has no bundled files`);
   // Empty and `.` segments drop out.
@@ -103,12 +115,51 @@ export function readSkillFile(skill: Skill, path: string): string {
   }
   const root = resolvedPath(skill.directory);
   const target = resolvedPath(join(root, ...parts));
-  const rel = relative(root, target);
-  if (rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel)) {
-    throw new SkillError(`${where} resolves outside the skill directory`);
-  }
+  checkInside(root, target, where);
   if (!statOrNull(target)?.isFile()) throw new SkillError(`${where} does not exist`);
-  return readSkillText(target, where);
+  deps.beforeOpen?.(target);
+  let fd: number;
+  try {
+    // Non-blocking, so a FIFO swapped in after the check can't hang the open.
+    fd = openSync(target, constants.O_RDONLY | constants.O_NONBLOCK);
+  } catch (error) {
+    if (isMissingPath(error)) throw new SkillError(`${where} does not exist`);
+    throw error;
+  }
+  try {
+    // Another process can swap a checked folder for a symlink before the open, so check the file
+    // the descriptor holds: by the path the OS reports for it where it can, else by resolving
+    // the path again and matching the file's identity. That fallback reads paths too, so a writer
+    // that keeps swapping can still win it, just far less often.
+    const opened = fstatSync(fd, { bigint: true });
+    if (!opened.isFile()) throw new SkillError(`${where} does not exist`);
+    const real = (deps.openedPath ?? openFilePath)(fd) ?? resolvedPath(target);
+    checkInside(root, real, where);
+    let now;
+    try {
+      now = statSync(real, { bigint: true });
+    } catch (error) {
+      if (isMissingPath(error)) throw new SkillError(`${where} does not exist`);
+      throw error;
+    }
+    if (now.dev !== opened.dev || now.ino !== opened.ino) throw new SkillError(`${where} changed while it was read`);
+    return readOpenText(fd, where);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Refuse `real`, the real path of a file under skill directory `root`, when it leaves `root` or
+ * passes through a hidden file or folder.
+ */
+function checkInside(root: string, real: string, where: string): void {
+  const rel = relative(root, real);
+  if (leavesRoot(rel)) throw new SkillError(`${where} resolves outside the skill directory`);
+  // A symlink with a visible name can still point at a hidden file or folder.
+  if (rel.split(sep).some((part) => part.startsWith("."))) {
+    throw new SkillError(`${where}: hidden files and folders are not readable`);
+  }
 }
 
 /**
@@ -120,10 +171,19 @@ export function readSkillFile(skill: Skill, path: string): string {
  * @throws {SkillError} If the file is larger than `current().maxSkillFileBytes` or not UTF-8 text.
  */
 export function readSkillText(path: string, where: string | null = null): string {
-  const label = where || path;
+  const fd = openSync(path, "r");
+  try {
+    return readOpenText(fd, where || path);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** Read open skill file `fd` as `readSkillText` does, labelling errors with `label`. */
+function readOpenText(fd: number, label: string): string {
   const limit = current().maxSkillFileBytes;
-  if (statSync(path).size > limit) throw new SkillError(`${label} is larger than ${limit} bytes`);
-  const bytes = readFileSync(path);
+  if (fstatSync(fd).size > limit) throw new SkillError(`${label} is larger than ${limit} bytes`);
+  const bytes = readFileSync(fd);
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
@@ -152,21 +212,4 @@ export function resolvedPath(path: string): string {
       candidate = parent;
     }
   }
-}
-
-/** @internal `statSync`, or `null` for the errors that mean the path isn't a file. */
-export function statOrNull(path: string): Stats | null {
-  try {
-    return statSync(path);
-  } catch (error) {
-    if (isSystemError(error) && IGNORED_CODES.has(error.code)) return null;
-    throw error;
-  }
-}
-
-/** @internal Whether `error` is a Node SystemError (an OS error). */
-export function isSystemError(error: unknown): error is NodeJS.ErrnoException & { code: string } {
-  if (!(error instanceof Error)) return false;
-  const { code, syscall, errno } = error as NodeJS.ErrnoException;
-  return typeof code === "string" && (typeof syscall === "string" || typeof errno === "number");
 }

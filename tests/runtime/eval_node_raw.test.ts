@@ -6,7 +6,8 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { Failure, OriginRef } from "../../src/diagnostics.ts";
+import { withEnv } from "../../src/defaults.ts";
+import { OriginRef } from "../../src/diagnostics.ts";
 import { StreamChunk } from "../../src/events.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import {
@@ -20,9 +21,7 @@ import {
   Route,
   type SteerInbox,
 } from "../../src/nodes/base.ts";
-import { BindingCollector } from "../../src/nodes/binding.ts";
 import { ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
-import { BackwardCapture } from "../../src/runtime/contracts.ts";
 import {
   EvaluatedOutcome,
   EvaluationFailure,
@@ -50,21 +49,6 @@ class ResultNode extends Node {
 /** A minimal spawner for the raw `Grow` result. */
 class Spawner extends ResultNode {
   override readonly isSpawner = true;
-}
-
-/** Return the value `run` throws, or fail when it returns. */
-function thrown(run: () => unknown): unknown {
-  try {
-    run();
-  } catch (error) {
-    return error;
-  }
-  throw new Error("expected a throw");
-}
-
-/** Return a `node.execute` failure for node `work`. */
-function failure(): Failure {
-  return new Failure({ code: "node.execute", message: "boom", nodeId: "work" });
 }
 
 test("public evaluation always returns frozen slotted wrapper", async () => {
@@ -132,6 +116,40 @@ test("raw node raise and invalid grow are failures not observers", async () => {
   expect((invalidGrow as EvaluationFailure).failure.message).toContain("not a spawner");
 });
 
+test("a failure's message and traceback are cut to the failure cap, saying how much was cut", async () => {
+  const raised = await withEnv(
+    (name) => (name === "YIAN_MAX_FAILURE_CHARS" ? "50" : undefined),
+    () => drive(new FailNode("raise", "😀".repeat(3_000))),
+  );
+  const { message, traceback } = (raised as EvaluationFailure).failure;
+  expect(message).toBe("😀".repeat(50) + "… (2950 more characters)");
+  // The stack's header, `Error: ` and the message, is cut on its own, and its frames follow.
+  const [header, frame] = traceback!.split("\n");
+  expect(header).toBe("Error: " + "😀".repeat(43) + "… (2957 more characters)");
+  expect(frame).toStartWith("    at ");
+});
+
+test("a failure's traceback keeps the frames and notes after a message over the failure cap", async () => {
+  const raised = await drive(
+    new FuncNode("raise", () => {
+      throw Object.assign(new Error("x".repeat(20_000)), { notes: ["cleanup failed: lock kept"] });
+    }),
+  );
+  const { message, traceback } = (raised as EvaluationFailure).failure;
+  expect(message).toBe("x".repeat(10_000) + "… (10000 more characters)");
+  const lines = traceback!.split("\n");
+  expect(lines[0]).toBe(`Error: ${"x".repeat(9_993)}… (10007 more characters)`);
+  expect(lines[1]).toStartWith("    at ");
+  expect(lines.at(-1)).toBe("cleanup failed: lock kept");
+});
+
+test("a failure's message and traceback within the failure cap are kept whole", async () => {
+  const raised = await drive(new FailNode("raise", "x".repeat(9_000)));
+  const { message, traceback } = (raised as EvaluationFailure).failure;
+  expect(message).toBe("x".repeat(9_000));
+  expect(traceback!.startsWith(`Error: ${message}\n`)).toBe(true);
+});
+
 describe("a stop is the node's aborted signal", () => {
   /** Await `gate`, then settle with `settle`, recording that `forward` ran. */
   class GatedNode extends Node {
@@ -165,35 +183,17 @@ describe("a stop is the node's aborted signal", () => {
     expect(node.ran).toBe(false);
   });
 
-  /** The same node with a custom `run` that awaits the gate itself, outside the template. */
-  class GatedRunNode extends GatedNode {
-    override async run(_inputs: Readonly<Record<string, unknown>>, caps: NodeCaps = {}): Promise<NodeResult> {
-      this.ran = true;
-      await this.gate;
-      return this.settle(caps);
-    }
-  }
-
-  for (const [label, Gated, settle] of [
+  for (const [label, settle] of [
     [
       "its own error",
-      GatedNode,
       () => {
         throw new Error("interrupted");
       },
     ],
     [
       "the reason",
-      GatedNode,
       (caps: NodeCaps) => {
         throw caps.signal!.reason;
-      },
-    ],
-    [
-      "its own error from a custom run",
-      GatedRunNode,
-      () => {
-        throw new Error("interrupted");
       },
     ],
   ] as const) {
@@ -201,7 +201,7 @@ describe("a stop is the node's aborted signal", () => {
       const controller = new AbortController();
       const reason = new Error("stopped");
       const gate = Promise.withResolvers<void>();
-      const evaluation = drive(new Gated("work", gate.promise, settle), { signal: controller.signal });
+      const evaluation = drive(new GatedNode("work", gate.promise, settle), { signal: controller.signal });
 
       controller.abort(reason);
       gate.resolve();
@@ -416,60 +416,6 @@ describe("streaming", () => {
       expect(await rejected(evaluation)).toBe(expected);
     });
   }
-});
-
-describe("EvaluatedOutcome checks its fields", () => {
-  test("every worker outcome is accepted", () => {
-    for (const outcome of [new Output("v"), new Route("a"), new Grow({}), new EvaluationFailure(failure())]) {
-      expect(new EvaluatedOutcome(outcome, null).outcome).toBe(outcome);
-    }
-  });
-
-  test("an outcome outside the closed sum is refused", () => {
-    for (const outcome of [{ value: "v" }, "done", null]) {
-      expect(thrown(() => new EvaluatedOutcome(outcome as Output, null))).toEqual(
-        new TypeError("outcome must be a WorkerOutcome"),
-      );
-    }
-  });
-
-  test("bindings and backward capture travel together", () => {
-    const bindings = new BindingCollector().freeze();
-    const capture = new BackwardCapture({ inputNames: ["x"] });
-
-    const evaluated = new EvaluatedOutcome(new Output(), bindings, capture);
-    expect(evaluated.bindings).toBe(bindings);
-    expect(evaluated.backwardCapture).toBe(capture);
-
-    const together = new RangeError("binding capture and backward invocation metadata must be retained together");
-    expect(thrown(() => new EvaluatedOutcome(new Output(), bindings, null))).toEqual(together);
-    expect(thrown(() => new EvaluatedOutcome(new Output(), null, capture))).toEqual(together);
-  });
-
-  test("bindings must be exactly a BindingCapture", () => {
-    const capture = new BackwardCapture();
-    expect(thrown(() => new EvaluatedOutcome(new Output(), {} as never, capture))).toEqual(
-      new TypeError("bindings must be a BindingCapture or null"),
-    );
-  });
-
-  test("backward capture must be exactly a BackwardCapture and is checked again", () => {
-    const bindings = new BindingCollector().freeze();
-    expect(thrown(() => new EvaluatedOutcome(new Output(), bindings, {} as never))).toEqual(
-      new TypeError("backward_capture must be a BackwardCapture or null"),
-    );
-
-    // A capture built without its constructor is checked as the constructor would.
-    const forged = Object.assign(Object.create(BackwardCapture.prototype) as BackwardCapture, {
-      inputNames: ["x", "x"],
-      variableNames: [],
-      scope: null,
-      nodeData: {},
-    });
-    expect(thrown(() => new EvaluatedOutcome(new Output(), bindings, forged))).toEqual(
-      new RangeError("input_names must contain unique names"),
-    );
-  });
 });
 
 describe("the steer inbox capability's faults", () => {

@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import { readTaggedValue } from "../../src/compose/helpers/tags.ts";
-import { readSourceFlowInputs, readType, readValueContract } from "../../src/compose/helpers/types.ts";
+import { readSourceParameters, readType, readValueContract } from "../../src/compose/helpers/types.ts";
 import { encodeSitePath, SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { SourceDocument } from "../../src/compose/source/index.ts";
 import { BUILTIN, forget, install, reload } from "../../src/defaults.ts";
@@ -238,7 +238,7 @@ test.each<CaseRow>([
 
 /** Return the label of input `name`'s type in the `input:` declarations at `path`. */
 function inputLabel(document: SourceDocument, registry: TypeRegistry, path: string[], name: string): string {
-  const parameters = readSourceFlowInputs(cursorAt(document, path), registry, {
+  const parameters = readSourceParameters(cursorAt(document, path), registry, {
     sitePath: [],
     catalogBuilder: new SourceCatalogBuilder(),
   });

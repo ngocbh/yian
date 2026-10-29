@@ -1,0 +1,160 @@
+# An interrupt delivered while the call waits for its first chunk aborts the request at once: the
+# model_call step records an empty reply (finish `interrupted`), the stream gets only its final
+# chunk, the agent's output is null, and the reply's tool call never runs.
+kind: run
+flow: |
+  id: steer
+  name: steer
+  llm_config: {provider: openai, model: gpt-5.5}
+  input:
+    notes: !Inbox(str)
+  nodes:
+    chat:
+      kind: agent
+      steer_inbox: ${input.notes}
+      tools: [lookup]
+      system_prompt: Help.
+      prompt: Help the user.
+      output: Optional(str)
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  sends:
+  - {interrupt: notes, after: {node: chat, model_call: 1, chunk: 0}}
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results: []
+  models:
+    chat:
+      agent:
+      - chunks:
+        - text: hello
+        - text: ' big'
+        - text: ' world'
+        - tool_call:
+            index: 0
+            id: call-1
+            name: lookup
+            arguments: '{"topic": "a"}'
+        - finish: tool_calls
+expect:
+  output:
+    status: succeeded
+    output: null
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        chat:
+          _connection:
+            endpoint: https://api.openai.com/v1
+            method: api_key
+            source: missing
+          model: gpt-5.5
+          provider: openai
+      learnable: false
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {notes: {inbox: notes}}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, chat]
+  - - interrupted
+    - null
+    - inbox: notes
+      nodes: [chat]
+  - - node_step
+    - chat
+    - n: 1
+      step:
+        finish: interrupted
+        kind: model_call
+        model: gpt-5.5
+        output:
+          format: yian.message.v1
+          parts: []
+          role: assistant
+        purpose: chat
+        request_sha256: b7d9caa4b04860d9400ab6dbcf24314a6f33bc70850cb5d4333791714d0c2ca6
+        response_id: null
+        usage: null
+  - - node_step
+    - chat
+    - n: 2
+      step: {by: 9, kind: interrupted}
+  - - pool_commit
+    - chat
+  - - pool_commit
+    - chat
+    - {key: chat.new_messages, steps: [10, 11]}
+  - - node_succeeded
+    - chat
+    - {commit: 12, messages: 13}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+  - - node_succeeded
+    - __end__
+    - {commit: 16}
+  events:
+  - [RunStarted]
+  - - NodeStarted
+    - node_id: __start__
+  - - NodeSucceeded
+    - node_id: __start__
+      output: {notes: {inbox: notes}}
+      interrupted: false
+  - - NodeStarted
+    - node_id: chat
+  - - ModelCallStarted
+    - model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+      n: 1
+  - - ModelCallFinished
+    - model: gpt-5.5
+      node_id: chat
+      provider: openai
+      purpose: chat
+      n: 1
+  - - NodeSucceeded
+    - node_id: chat
+      interrupted: true
+  - - NodeStarted
+    - node_id: __end__
+  - - NodeSucceeded
+    - node_id: __end__
+      interrupted: false
+  - - RunSucceeded
+  stream:
+  - chunk: ''
+    final: true
+    key: text
+    node_id: chat
+    n: 1
+    index: 0

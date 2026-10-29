@@ -18,6 +18,7 @@ import {
   type Value,
   ValueKind,
 } from "../../src/typesys/values.ts";
+import { typeCheckError } from "../helpers/type_errors.ts";
 
 /** Return `typed` after a run-log round trip: `toWire`, `logJson`, `parseJson` and `fromWire`. */
 function roundTrip(typed: TypedValue): TypedValue {
@@ -31,17 +32,6 @@ function jsType(value: Value): string {
     return Object.getPrototypeOf(value) === Object.prototype ? "record" : "other object";
   }
   return typeof value;
-}
-
-/** Return the `TypeCheckError` `run` throws. */
-function typeCheckError(run: () => unknown): TypeCheckError {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(TypeCheckError);
-    return error as TypeCheckError;
-  }
-  throw new Error("expected a TypeCheckError");
 }
 
 /** Expect `run` to throw a `TypeCheckError` with exactly `message` at `path`. */
@@ -276,7 +266,7 @@ describe("declared-type write boundary", () => {
     expect(buildValueAs(action, "Approve").value).toBe("Approve");
     expectTypeCheckError(
       () => buildValueAs(action, "approve"),
-      '"approve" is not a member of variant ["Approve","Defer","Reject"]',
+      '"approve" is not one of Literal(Approve, Defer, Reject)',
       [],
     );
   });

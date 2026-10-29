@@ -4,7 +4,7 @@
  * A node is a pure function of its bound input record; the engine owns both boundaries: the read
  * (bind the inputs from the pool) and the write (the dispatcher stores `Output`). `evalNode` is
  * the append-only dispatcher's evaluation seam: it binds the record, pre-resolves reserved keys,
- * builds the trait-gated capabilities, runs the node through its assert-owning `run` template,
+ * builds the trait-gated capabilities, runs the node through its assert-owning template,
  * and resolves to an `EvaluatedOutcome` holding exactly `Output | Route | Grow | Pending |
  * EvaluationFailure` plus optional input capture. It publishes no observers; durable
  * observer order belongs to the dispatcher.
@@ -41,9 +41,9 @@ import {
   BindingStageError,
   CapabilityFault,
   DeferredBindingFault,
+  failureMessage,
   Grow,
-  markerMessage,
-  Node,
+  type Node,
   NodeBodyError,
   type NodeCaps,
   type NodeResult,
@@ -99,7 +99,8 @@ export class EvaluationFailure {
 /**
  * @internal Build one failure of `node` from a thrown value: its message, the `Error`'s `name`
  * (else the value's type name) as the cause type, and the `Error`'s stack followed by its string
- * `notes`, one per line, as the traceback. The engine uses it for its contract failures.
+ * `notes`, one per line, as the traceback. The message and the traceback are each cut to
+ * `YIAN_MAX_FAILURE_CHARS`. The engine uses it for its contract failures.
  *
  * @param origin The failing operation's authored origin; `null` falls back to the node's origin.
  */
@@ -112,7 +113,7 @@ export function evaluationFailure(
   return new EvaluationFailure(
     new Failure({
       code,
-      message: markerMessage(error),
+      message: failureMessage(error),
       nodeId: node.id,
       trace: node.failureTrace(origin),
       causeType: error instanceof Error ? error.name : jsTypeName(error),
@@ -205,72 +206,27 @@ function steerInboxCapability(
   };
 }
 
-/**
- * Return a host model access after checking its shape, or `null`.
- *
- * @throws TypeError when `models` isn't `null` and lacks a function `env` and `createModel`.
- */
-export function requireModels(models: unknown): ModelAccess | null {
-  const access = models as Partial<ModelAccess> | null | undefined;
-  if (models !== null && !(typeof access?.env === "function" && typeof access.createModel === "function")) {
-    throw new TypeError("models must provide env(name) and createModel(config, options), or be null");
-  }
-  return models as ModelAccess | null;
-}
-
 /** The closed raw worker result the append-only dispatcher consumes. */
 export type WorkerOutcome = Output | Route | Grow | Pending | EvaluationFailure;
 
 /**
- * One raw worker outcome with its optional binding and backward capture. Frozen.
+ * One raw worker outcome with what its evaluation captured. Frozen.
  *
- * Binding values and routes travel with the common inventories and static material, as separate
- * lower binding and runtime carriers. Neither is accepted history until the dispatcher records
- * this outcome.
+ * `bindings` holds the inputs the node was bound to and the routes evaluated while binding them;
+ * `backwardCapture` holds what backward later reads of the invocation (its routes, evaluated keys
+ * and scope). Either is `null` when the evaluation captured none. Neither is accepted history
+ * until the dispatcher records this outcome.
  */
 export class EvaluatedOutcome {
   readonly outcome: WorkerOutcome;
   readonly bindings: BindingCapture | null;
   readonly backwardCapture: BackwardCapture | null;
 
-  /**
-   * Require one closed raw outcome and exact optional captures; the backward capture is checked
-   * again by rebuilding it.
-   *
-   * @throws TypeError for an outcome outside `WorkerOutcome`, or a capture that isn't exactly its
-   *   class.
-   * @throws RangeError when only one of `bindings` and `backwardCapture` is present, or as
-   *   `BackwardCapture` refuses the capture.
-   */
   constructor(
     outcome: WorkerOutcome,
     bindings: BindingCapture | null = null,
     backwardCapture: BackwardCapture | null = null,
   ) {
-    if (
-      !(
-        outcome instanceof Output ||
-        outcome instanceof Route ||
-        outcome instanceof Grow ||
-        outcome instanceof Pending ||
-        outcome instanceof EvaluationFailure
-      )
-    ) {
-      throw new TypeError("outcome must be a WorkerOutcome");
-    }
-    if (bindings !== null && !isExactly(bindings, BindingCapture)) {
-      throw new TypeError("bindings must be a BindingCapture or null");
-    }
-    if (backwardCapture !== null) {
-      if (!isExactly(backwardCapture, BackwardCapture)) {
-        throw new TypeError("backward_capture must be a BackwardCapture or null");
-      }
-      const { inputNames, variableNames, scope } = backwardCapture;
-      new BackwardCapture({ inputNames, variableNames, scope });
-    }
-    if ((bindings === null) !== (backwardCapture === null)) {
-      throw new RangeError("binding capture and backward invocation metadata must be retained together");
-    }
     this.outcome = outcome;
     this.bindings = bindings;
     this.backwardCapture = backwardCapture;
@@ -342,7 +298,7 @@ function memoryContextCapability(options: {
    *   throws it.
    * @throws CapabilityFault carrying a repeated open or any other opener fault.
    */
-  const enter = async (baseSystemPrompt: string, renderedPrompt: string): Promise<MemoryContext> => {
+  const enter = async (systemPrompt: string, renderedPrompt: string): Promise<MemoryContext> => {
     try {
       if (used) throw new Error("memory context capability was already entered");
       used = true;
@@ -350,7 +306,7 @@ function memoryContextCapability(options: {
       if (canonicalInputs === null) throw new MemoryRecallError("memory recall context is invalid");
       let recall: RecallContext;
       try {
-        recall = new RecallContext(baseSystemPrompt, renderedPrompt, canonicalInputs, scope.staticPath);
+        recall = new RecallContext(systemPrompt, renderedPrompt, canonicalInputs, scope.staticPath);
       } catch (error) {
         if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
         throw new MemoryRecallError("memory recall context is invalid", { cause: error });
@@ -373,10 +329,10 @@ function memoryContextCapability(options: {
     }
   };
 
-  const open = (baseSystemPrompt: string, renderedPrompt: string) => {
+  const open = (systemPrompt: string, renderedPrompt: string) => {
     const opened: Promise<MemoryContext> = closed
       ? Promise.reject(new Error("memory context capability is closed"))
-      : enter(baseSystemPrompt, renderedPrompt);
+      : enter(systemPrompt, renderedPrompt);
     // A node may drop the promise: its rejection must not go unhandled, and the evaluator awaits
     // it, so a fault still reaches `onFault`.
     opened.catch(() => {});
@@ -463,7 +419,6 @@ export interface EvalNodeOptions {
  * @param pool The pool the sources read.
  * @param options The capabilities and captures; see `EvalNodeOptions`.
  * @returns The outcome, with captures when asked for.
- * @throws TypeError (as a rejection) for a malformed option.
  * @throws The original error of the first capability fault (a failing stream or event sink, a
  *   repeated memory context open or a failing opener, a `CapabilityFault` from `steps.record` or
  *   the steer inbox), whatever the node then returned or threw.
@@ -502,41 +457,11 @@ export async function evalNode(
     random = null,
     runDir = null,
   } = options;
-  requireModels(models);
-  if (typeof captureBindings !== "boolean") throw new TypeError("capture_bindings must be a bool");
-  if (emitStream !== null && typeof emitStream !== "function") {
-    throw new TypeError("emit_stream must be callable or null");
-  }
-  if (emitEvent !== null && typeof emitEvent !== "function") {
-    throw new TypeError("emit_event must be callable or null");
-  }
-  if (sourceResolver !== null && typeof sourceResolver !== "function") {
-    throw new TypeError("source_resolver must be callable or null");
-  }
-  if (memoryContextOpener !== null && typeof memoryContextOpener !== "function") {
-    throw new TypeError("memory_context_opener must be callable or null");
-  }
-  if (tools !== null && !isExactly(tools, ToolSet)) throw new TypeError("tools must be a ToolSet or null");
-  if (skills !== null && !(skills instanceof Map)) throw new TypeError("skills must be a map or null");
-  if (steps !== null && !isExactly(steps, NodeSteps)) throw new TypeError("steps must be a NodeSteps or null");
-  if (steerInbox !== null && typeof steerInbox !== "function") throw new TypeError("steer_inbox must be callable or null");
-  if (onFault !== null && typeof onFault !== "function") throw new TypeError("on_fault must be callable or null");
   // Read once, so a node replacing its scope while it runs doesn't change what it recalls.
   const memoryScope = node.needsMemoryContext === true ? node.memoryScope : null;
   if (memoryScope !== null && !isExactly(memoryScope, MemoryScope)) {
     throw new TypeError("node memory_scope must be an exact MemoryScope or null");
   }
-  if (options.signal != null && !(options.signal instanceof AbortSignal)) {
-    throw new TypeError("signal must be an AbortSignal or null");
-  }
-  if (
-    scheduler !== null &&
-    (typeof scheduler !== "object" || typeof scheduler.now !== "function" || typeof scheduler.sleep !== "function")
-  ) {
-    throw new TypeError("scheduler must be a Scheduler or null");
-  }
-  if (random !== null && typeof random !== "function") throw new TypeError("random must be a function or null");
-  if (runDir !== null && typeof runDir !== "string") throw new TypeError("run_dir must be a string or null");
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
   const collector = captureBindings ? new BindingCollector() : null;
@@ -605,64 +530,34 @@ async function evaluateNode(
   const { emitStream, emitEvent, skills, tools, models, steps, steerInbox, scheduler, random, runDir } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
-  const nodeWiring: ReadonlyMap<string, unknown> =
-    wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow?.wiring.get(node.id) ?? new Map());
-  const usesBaseTemplate = node.run === Node.prototype.run;
-  // The declared types field reads go through: a declared field that is absent reads null.
-  const declared = flow !== null ? poolDeclaredTypes(flow) : null;
-  const itemType = flow !== null && node.itemSourceKey !== null ? itemDeclaredType(flow, node) : null;
-  const reservedSources = new Set<string>();
-  const reservedBinder: ReservedBinder | null =
-    collector === null
-      ? null
-      : (name, source, normalize) => {
-          // Retain the route of the value the node delivers, after its normalization.
-          const value = normalize(resolveSource(source, pool, { collector, name, sourceResolver }));
-          reservedSources.add(name);
-          return value;
-        };
-
-  let record: ValueRecord;
+  const nodeWiring = wiringFor(node, flow, wiringOverride);
+  let bound: BoundNode;
   try {
-    record = node.bindsPerItem
-      ? {}
-      : bindParams(node.params ?? [], nodeWiring, pool, {
-          collector,
-          sourceResolver,
-          types: node.types,
-          labels: node.bindingLabels,
-          finishCapture: false,
-          declared,
-        });
-    let reserved: Record<string, unknown>;
-    try {
-      reserved = node.bindReserved(nodeWiring, pool, { bind: reservedBinder });
-    } catch (error) {
-      if (error instanceof BindingError && steps !== null && node.needsSteps === true && steps.prior.length > 0) {
-        // A start records steps only after binding, and resume restores the pool, so the code
-        // that resolves these keys changed since then.
-        throw new RangeError(
-          `${error.message}; an earlier start of this node resolved it, so resume the run with the flow and ` +
-            "yian version that started it",
-        );
-      }
-      throw error;
-    }
-    for (const name of Object.keys(reserved)) {
-      const value = reserved[name] as Value;
-      setField(record, name, value);
-      // A hook that materialized its value without the binder has no evaluated source.
-      if (collector !== null && !reservedSources.has(name)) {
-        collector.recordSource(name, ValueRoute.literal(value), false);
-      }
-    }
+    bound = bindNode(node, flow, nodeWiring, pool, {
+      collector,
+      sourceResolver,
+      bindReserved: (bind) => {
+        try {
+          return node.bindReserved(nodeWiring, pool, { bind });
+        } catch (error) {
+          if (error instanceof BindingError && steps !== null && node.needsSteps === true && steps.prior.length > 0) {
+            // A start records steps only after binding, and resume restores the pool, so the code
+            // that resolves these keys changed since then.
+            throw new RangeError(
+              `${error.message}; an earlier start of this node resolved it, so resume the run with the flow and ` +
+                "yian version that started it",
+            );
+          }
+          throw error;
+        }
+      },
+    });
   } catch (error) {
     if (!(error instanceof BindingError)) throw error;
     collector?.invalidate();
     return withAuthoredRoots(evaluationFailure(node, error.failureCode, error, error.origin), nodeWiring);
   }
-
-  if (captureInputs !== null && !usesBaseTemplate) captureInputs(record);
+  const { record } = bound;
 
   const scoped = memoryScope !== null && memoryScope.memories.length > 0;
   if (scoped && memoryContextOpener === null) {
@@ -711,26 +606,11 @@ async function evaluateNode(
   if (scheduler !== null) caps.scheduler = scheduler;
   if (random !== null) caps.random = random;
   if (runDir !== null) caps.runDir = runDir;
-  if (node.bindsPerItem) {
-    const params = node.params ?? [];
+  const { bindItem } = bound;
+  if (bindItem !== null) {
     caps.bindItem = (element, index) => {
       try {
-        let item: Value | ResolvedValue = element;
-        let itemCollector: BindingCollector | null = null;
-        if (collector !== null) {
-          itemCollector = collector.forItem(index);
-          const key = node.itemSourceKey;
-          item = new ResolvedValue(element, true, key !== null ? collector.routeFor(key).project([index]) : null);
-        }
-        return bindParams(params, nodeWiring, pool, {
-          item,
-          collector: itemCollector,
-          sourceResolver,
-          types: node.types,
-          labels: node.bindingLabels,
-          declared,
-          itemType,
-        });
+        return bindItem(element, index);
       } catch (error) {
         if (error instanceof BindingError) {
           collector?.invalidate();
@@ -765,8 +645,15 @@ async function evaluateNode(
         throw error;
       }
     };
-    caps.steps = new NodeSteps(steps.starts, steps.prior, recordStep, steps.calls, steps.maxEventBytes, steps.durable, () =>
-      steps.currentCalls(),
+    caps.steps = new NodeSteps(
+      steps.starts,
+      steps.prior,
+      recordStep,
+      steps.calls,
+      steps.maxEventBytes,
+      steps.durable,
+      () => steps.currentCalls(),
+      () => steps.next,
     );
   }
   if (steerInbox !== null && node.readsSteerInbox === true) {
@@ -776,9 +663,7 @@ async function evaluateNode(
   let result: unknown;
   let rejection: { error: unknown } | null = null;
   try {
-    result = usesBaseTemplate
-      ? await node.runForEvaluator(record, caps, captureInputs)
-      : await node.run(record, caps);
+    result = await node.runForEvaluator(record, caps, captureInputs);
   } catch (error) {
     rejection = { error };
   }
@@ -800,8 +685,8 @@ async function evaluateNode(
   if (rejection !== null) {
     const { error } = rejection;
     // A template default that fails to bind leaves no usable input record.
-    if (usesBaseTemplate && error instanceof BindingStageError) collector?.invalidate();
-    return withAuthoredRoots(stageFailure(node, error, usesBaseTemplate), nodeWiring);
+    if (error instanceof BindingStageError) collector?.invalidate();
+    return withAuthoredRoots(stageFailure(node, error), nodeWiring);
   }
   const contractError = resultContractError(node, result);
   if (contractError !== null) return evaluationFailure(node, "contract.node_result", contractError);
@@ -824,30 +709,26 @@ function resultContractError(node: Node, result: unknown): Error | null {
 }
 
 /**
- * Classify one rejection of a node's run by the stage that threw it.
+ * Classify one rejection of a node's run by the template stage that threw it.
  *
- * @throws The original of a capability or deferred binder fault, and, for the base template, any
- *   error outside its stages (malformed setup).
+ * @throws The original of a capability or deferred binder fault, and any error outside the
+ *   template's stages (malformed setup).
  */
-function stageFailure(node: Node, error: unknown, usesBaseTemplate: boolean): EvaluationFailure {
+function stageFailure(node: Node, error: unknown): EvaluationFailure {
   if (error instanceof DeferredBindingFault || error instanceof CapabilityFault) throw error.original;
   if (error instanceof BindingStageError) {
     const { original } = error;
-    // A custom run is one undivided node-body stage.
-    if (!usesBaseTemplate) return evaluationFailure(node, "node.execute", original, node.exceptionOrigin(original));
     return evaluationFailure(node, original.failureCode, original, original.origin);
   }
   if (error instanceof AssertionStageError) {
     const { original } = error;
-    if (!usesBaseTemplate) return evaluationFailure(node, "node.execute", original, node.exceptionOrigin(original));
     return evaluationFailure(node, original.failureCode, original, original.assertion?.origin ?? null);
   }
   if (error instanceof NodeBodyError) {
     const { original } = error;
     return evaluationFailure(node, node.exceptionCode(original), original, node.exceptionOrigin(original));
   }
-  if (usesBaseTemplate) throw error;
-  return evaluationFailure(node, node.exceptionCode(error), error, node.exceptionOrigin(error));
+  throw error;
 }
 
 /**
@@ -865,17 +746,17 @@ export function nodeBackwardCapture(node: Node): BackwardCapture {
 /**
  * Rebuild the node data backward reads about one evaluation of `node`, which its record leaves
  * out: none for a binding that didn't finish (`inputs` `null`); else the node's static material
- * (`captureBackwardContext`), and, when the node renders (`renderCapture`) and its pre-asserts
- * hold for `inputs`, so its `forward` ran, that render with the model config the invocation used
- * as `effective_llm_config`: the config bound with its inputs (`boundLlmConfig`), else the run's
- * entry for its static path.
+ * (`captureBackwardContext`), and, when its pre-asserts hold for `inputs` (so its `forward` ran)
+ * and the node renders (`renderCapture`, called only then), that render with the model config the
+ * invocation used as `effective_llm_config`: the config bound with its inputs (`boundLlmConfig`),
+ * else the run's entry for its static path.
  *
  * @param inputs The bound inputs, as binding the node again gives them.
  * @param effectiveLlmByStaticPath The run's recorded model config by static path.
  * @param localTypes The node's locals' declared types (`localTypes`); `null` leaves them undeclared.
  * @returns Canonical JSON.
  * @throws TypeError when the static material isn't a record, TypeCheckError when it or the render
- *   isn't JSON, and the hooks' own errors.
+ *   isn't JSON, and the hooks' own errors (`preAssertsHold`'s, and `renderCapture`'s faults).
  * @throws RangeError when the node renders and the run's map has no entry for its static path, or
  *   its render holds `effective_llm_config` or a key of its static material.
  */
@@ -889,8 +770,9 @@ export function rebuildNodeData(
   const captured: unknown = node.captureBackwardContext();
   if (!isRecord(captured)) throw new TypeError("capture_backward_context must return a record");
   const data: Record<string, unknown> = { ...captured };
-  const render = node.renderCapture(inputs, localTypes);
-  if (render !== null && node.preAssertsHold(inputs, localTypes)) {
+  // Pre-asserts first: an occurrence whose `forward` never ran is never rendered again.
+  const render = node.preAssertsHold(inputs, localTypes) ? node.renderCapture(inputs, localTypes) : null;
+  if (render !== null) {
     if (Object.hasOwn(render, "effective_llm_config")) {
       throw new RangeError("effective_llm_config belongs to the run's model config");
     }
@@ -983,48 +865,92 @@ function bindPool(
   collector: BindingCollector | null,
   reserved: Readonly<Record<string, unknown>> | null,
 ): Rebound {
-  const nodeWiring: ReadonlyMap<string, unknown> =
-    wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow.wiring.get(node.id) ?? new Map());
-  const params = node.params ?? [];
-  const declared = poolDeclaredTypes(flow);
-  const itemType = node.itemSourceKey !== null ? itemDeclaredType(flow, node) : null;
-  const bindOptions = { sourceResolver, types: node.types, labels: node.bindingLabels, declared };
-  const record: Record<string, unknown> = node.bindsPerItem
-    ? {}
-    : bindParams(params, nodeWiring, pool, { ...bindOptions, collector, finishCapture: false });
-  const reservedSources = new Set<string>();
-  const bound =
-    reserved ??
-    node.bindReserved(nodeWiring, pool, {
-      bind:
-        collector === null
-          ? null
-          : (name, source, normalize) => {
-              reservedSources.add(name);
-              return normalize(resolveSource(source, pool, { collector, name, sourceResolver }));
-            },
-    });
-  for (const name of Object.keys(bound)) {
-    const value = bound[name] as Value;
-    setField(record as ValueRecord, name, value);
-    if (collector !== null && !reservedSources.has(name)) collector.recordSource(name, ValueRoute.literal(value), false);
-  }
-  const inputs = applyDefaults(params, record);
+  const nodeWiring = wiringFor(node, flow, wiringOverride);
+  const { record, bindItem } = bindNode(node, flow, nodeWiring, pool, {
+    collector,
+    sourceResolver,
+    bindReserved: reserved === null ? null : () => reserved,
+  });
+  const inputs = applyDefaults(node.params ?? [], record);
   collector?.finish(inputs as ValueRecord);
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = {
     signal: new AbortController().signal,
     localTypes: localTypes(flow, node),
   };
-  if (node.bindsPerItem) {
-    caps.bindItem = (element, index) => {
-      if (collector === null) return bindParams(params, nodeWiring, pool, { ...bindOptions, item: element, itemType });
-      const key = node.itemSourceKey;
-      const item = new ResolvedValue(element, true, key !== null ? collector.routeFor(key).project([index]) : null);
-      const itemCollector = collector.forItem(index);
-      return bindParams(params, nodeWiring, pool, { ...bindOptions, item, itemType, collector: itemCollector });
-    };
-  }
+  if (bindItem !== null) caps.bindItem = bindItem;
   return { inputs, caps };
+}
+
+/** The wiring `node` binds from: `wiringOverride` when given, else the flow's; `null` flow is empty. */
+function wiringFor(node: Node, flow: Flow | null, wiringOverride: JsonObject | null): ReadonlyMap<string, unknown> {
+  return wiringOverride !== null ? new Map(Object.entries(wiringOverride)) : (flow?.wiring.get(node.id) ?? new Map());
+}
+
+/** One node's bound record and per-item binder (`bindNode`). */
+interface BoundNode {
+  /** The bound params (none for a node that binds per item) and reserved values, defaults not filled. */
+  readonly record: ValueRecord;
+  /** Binds one element's record for a node that binds per item, else `null`. */
+  readonly bindItem: ((element: Value, index: number) => ValueRecord) | null;
+}
+
+/**
+ * Bind `node`'s params and reserved values from `pool` through `wiring`: the one binding both the
+ * evaluator and the run reducer's rebuild run, so a rebuilt capture is the one the evaluator
+ * collected. With a `collector`, each route is collected too; a reserved value its hook made
+ * without the binder gets a literal route. Defaults aren't filled and the capture isn't finished.
+ *
+ * @param flow The flow whose declared types the reads go through; `null` declares none.
+ * @param options.bindReserved Gives the reserved values from the binder (`null` when not
+ *   collecting) in place of `node.bindReserved(wiring, pool, { bind })`.
+ * @returns The record, and a per-item binder that throws what binding an item throws.
+ * @throws BindingError when a source doesn't evaluate, and what the reserved hook throws.
+ */
+function bindNode(
+  node: Node,
+  flow: Flow | null,
+  wiring: ReadonlyMap<string, unknown>,
+  pool: VariablePool,
+  options: {
+    collector: BindingCollector | null;
+    sourceResolver: SourceResolver | null;
+    bindReserved?: ((bind: ReservedBinder | null) => Record<string, unknown>) | null;
+  },
+): BoundNode {
+  const { collector, sourceResolver, bindReserved = null } = options;
+  const params = node.params ?? [];
+  // The declared types field reads go through: a declared field that is absent reads null.
+  const declared = flow !== null ? poolDeclaredTypes(flow) : null;
+  const itemType = flow !== null && node.itemSourceKey !== null ? itemDeclaredType(flow, node) : null;
+  const bindOptions = { sourceResolver, types: node.types, labels: node.bindingLabels, declared };
+  const record = node.bindsPerItem
+    ? {}
+    : bindParams(params, wiring, pool, { ...bindOptions, collector, finishCapture: false });
+  const reservedSources = new Set<string>();
+  const binder: ReservedBinder | null =
+    collector === null
+      ? null
+      : (name, source, normalize) => {
+          // Retain the route of the value the node delivers, after its normalization.
+          const value = normalize(resolveSource(source, pool, { collector, name, sourceResolver }));
+          reservedSources.add(name);
+          return value;
+        };
+  const reserved = bindReserved !== null ? bindReserved(binder) : node.bindReserved(wiring, pool, { bind: binder });
+  for (const name of Object.keys(reserved)) {
+    const value = reserved[name] as Value;
+    setField(record, name, value);
+    if (collector !== null && !reservedSources.has(name)) collector.recordSource(name, ValueRoute.literal(value), false);
+  }
+  if (!node.bindsPerItem) return { record, bindItem: null };
+  const bindItem = (element: Value, index: number): ValueRecord => {
+    if (collector === null) return bindParams(params, wiring, pool, { ...bindOptions, item: element, itemType });
+    const itemCollector = collector.forItem(index);
+    const key = node.itemSourceKey;
+    const item = new ResolvedValue(element, true, key !== null ? collector.routeFor(key).project([index]) : null);
+    return bindParams(params, wiring, pool, { ...bindOptions, item, itemType, collector: itemCollector });
+  };
+  return { record, bindItem };
 }
 
 /**

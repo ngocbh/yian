@@ -9,7 +9,7 @@ import { inspect } from "node:util";
 
 import { describe, expect, test } from "bun:test";
 
-import { current } from "../../src/defaults.ts";
+import { current, withEnv } from "../../src/defaults.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { HttpResponse } from "../../src/llm_clients/auth/common.ts";
 import type { request } from "../../src/llm_clients/auth/http.ts";
@@ -94,6 +94,7 @@ function assertClean(error: Error, message: string): void {
   expect(error).toBeInstanceOf(ModelListError);
   expect(error.name).toBe("ModelListError");
   expect(error.message).toBe(message);
+  expect((error as ModelListError).timedOut).toBe(message === "timed out");
   expect("cause" in error).toBe(false);
   for (const text of texts(error)) {
     expect(text).not.toContain(KEY);
@@ -227,6 +228,9 @@ describe("ollama lists tags", () => {
     [null, "http://localhost:11434/api/tags"],
     ["http://127.0.0.1:11434/v1", "http://127.0.0.1:11434/api/tags"],
     ["http://127.0.0.1:11434/v1/", "http://127.0.0.1:11434/api/tags"],
+    // Read as runs read OLLAMA_BASE_URL: no scheme gets http://, an upper-case scheme gets :11434.
+    ["localhost:11434", "http://localhost:11434/api/tags"],
+    ["HTTP://gpu-box", "http://gpu-box:11434/api/tags"],
   ];
   for (const [baseUrl, url] of rows) {
     test(String(baseUrl), async () => {
@@ -247,6 +251,15 @@ test("ollama sends no key even when given one", async () => {
   expect(call.url).toBe("http://192.168.1.5:11434/api/tags");
   expect(AUTH_HEADERS.filter((name) => name in call.headers)).toEqual([]);
   expect(JSON.stringify(call)).not.toContain(KEY);
+});
+
+test("ollama sends the base url's user name and password as basic auth", async () => {
+  const fake = ok({ models: [{ name: "m" }] });
+  expect(await listModels("ollama", { baseUrl: "http://user:pw@gpu-box:11434", request: fake })).toEqual(["m"]);
+  const call = fake.calls[0]!;
+  // The userinfo leaves the URL, which Node's fetch would refuse.
+  expect(call.url).toBe("http://gpu-box:11434/api/tags");
+  expect(call.headers["authorization"]).toBe(`Basic ${btoa("user:pw")}`);
 });
 
 test("azure has no listing", async () => {
@@ -299,6 +312,9 @@ describe("invalid request sends nothing", () => {
     ["openai", "gateway.example.com/v1", null, 8],
     ["vllm", "ftp://localhost/v1", null, 8],
     ["vllm", "http://[::1/v1", null, 8],
+    // An OLLAMA_BASE_URL runs would refuse.
+    ["ollama", "gpu-box", null, 8],
+    ["ollama", "http://user:secret-pw@gpu-box:70000", null, 8],
     // A key the HTTP client would refuse in a header.
     ["openai", null, `${KEY}\n`, 8],
     ["openai", null, "sk-é", 8],
@@ -316,6 +332,15 @@ describe("invalid request sends nothing", () => {
       assertClean(await rejected(listModels(provider, options)), "invalid request");
     });
   }
+});
+
+test("a base url with a long run of inner slashes is read in linear time", async () => {
+  // `/\/+$/` backtracks quadratically here: about 6 s for this input.
+  const fake = ok({ data: [{ id: "m" }] });
+  const started = performance.now();
+  expect(await listModels("vllm", { baseUrl: `http://x${"/".repeat(100_000)}a/`, request: fake })).toEqual(["m"]);
+  expect(performance.now() - started).toBeLessThan(1000);
+  expect(fake.calls[0]!.base).toBe(`http://x${"/".repeat(100_000)}a/models`);
 });
 
 test("keyless http base url is allowed", async () => {
@@ -419,13 +444,57 @@ describe("malformed response is invalid", () => {
 test("timeout is shared by every page", async () => {
   // Each page takes 150 ms and always has more; a 400 ms budget allows three, each getting what's left.
   const scheduler = virtualScheduler();
-  const fake = server(async () => {
+  const fake = server(async (call) => {
     await scheduler.sleep(150);
-    return new HttpResponse(200, { data: [{ id: "m" }], has_more: true, last_id: "m" });
+    const id = `m${fake.calls.indexOf(call)}`;
+    return new HttpResponse(200, { data: [{ id }], has_more: true, last_id: id });
   });
   const error = await rejected(listModels("anthropic", { apiKey: KEY, timeout: 0.4, scheduler, request: fake }));
   assertClean(error, "timed out");
   expect(fake.calls.map((call) => call.timeoutMs)).toEqual([400, 250, 100]);
+});
+
+describe("a cursor that comes back is invalid", () => {
+  const rows: [string, (call: Call) => HttpResponse][] = [
+    ["anthropic", () => new HttpResponse(200, { data: [{ id: "m" }], has_more: true, last_id: "m" })],
+    // The cursor cycles back to an earlier one rather than repeating the last.
+    ["anthropic", (call) => {
+      const id = call.params["after_id"] === "a" ? "b" : "a";
+      return new HttpResponse(200, { data: [{ id }], has_more: true, last_id: id });
+    }],
+    ["google", () => new HttpResponse(200, { models: [], nextPageToken: "tok" })],
+  ];
+  rows.forEach(([provider, handler], at) => {
+    test(`${provider} row ${at}`, async () => {
+      const fake = server(handler);
+      assertClean(await rejected(listModels(provider, { apiKey: KEY, request: fake })), "invalid response");
+      expect(fake.calls.length).toBeLessThanOrEqual(3);
+    });
+  });
+});
+
+describe("pages past the cap are invalid", () => {
+  const rows: [string, (call: Call, at: number) => HttpResponse][] = [
+    ["anthropic", (_, at) => new HttpResponse(200, { data: [{ id: `m${at}` }], has_more: true, last_id: `m${at}` })],
+    ["google", (_, at) => new HttpResponse(200, { models: [], nextPageToken: `tok${at}` })],
+  ];
+  for (const [provider, handler] of rows) {
+    test(provider, async () => {
+      const fake = server((call) => handler(call, fake.calls.length));
+      const env = (name: string) => (name === "YIAN_MAX_MODEL_LIST_PAGES" ? "3" : undefined);
+      const error = await rejected(withEnv(env, () => listModels(provider, { apiKey: KEY, request: fake })));
+      assertClean(error, "invalid response");
+      expect(fake.calls).toHaveLength(3);
+    });
+  }
+});
+
+test("a listing may take exactly the page cap", async () => {
+  const fake = server(() =>
+    new HttpResponse(200, { data: [{ id: `m${fake.calls.length}` }], has_more: fake.calls.length < 3, last_id: `m${fake.calls.length}` }),
+  );
+  const env = (name: string) => (name === "YIAN_MAX_MODEL_LIST_PAGES" ? "3" : undefined);
+  expect(await withEnv(env, () => listModels("anthropic", { apiKey: KEY, request: fake }))).toEqual(["m1", "m2", "m3"]);
 });
 
 /** Start `server` on a loopback port and return its URL root. */

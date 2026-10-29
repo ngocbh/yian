@@ -13,7 +13,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'compact (single-node) flow: kind ''case'' is not allowed inline (allowed: agent, code, tool); case/call/map reference other nodes a one-node flow has none of — write a full `nodes:` map instead'
+      message: 'compact (single-node) flow: kind ''case'' is not allowed inline (allowed: agent, code, tool); case/call/map/loop reference other nodes a one-node flow has none of — write a full `nodes:` map instead'
       frames:
       - label: flow.yaml
         range: [5, 7, 5, 11]

@@ -215,7 +215,7 @@ test.each([
     const result = node.backward(context, feedback);
 
     expect(context.inputNames).toEqual(names);
-    expect(context.nodeData).toEqual({ input_output_paths: paths });
+    expect<unknown>(context.nodeData).toEqual({ input_output_paths: paths });
     expect(result.inputFeedback).toEqual(expected);
     validateBackwardResult(result, context);
   },
@@ -463,24 +463,6 @@ test.each([
   const node = new CaptureNode();
   node.renderCapture = () => render;
   expect(() => rebuildNodeData(node, { topic: "reefs", limit: 4n }, {})).toThrow(new RangeError(message));
-});
-
-test("custom run captures its inputs at its existing pre-run boundary", async () => {
-  class CustomRun extends CaptureNode {
-    override async run(inputs: Readonly<Record<string, unknown>>): Promise<NodeResult> {
-      return this.forward(inputs as Record<string, unknown>);
-    }
-  }
-
-  const node = new CustomRun();
-  const evaluated = await evalNode(node, null, new VariablePool(), {
-    wiringOverride: { topic: "reefs" },
-    captureBindings: true,
-  });
-  expect((evaluated.outcome as Output).value).toBe("reefs");
-  expect(evaluated.bindings!.boundInputs).toEqual({ topic: "reefs", limit: 4n });
-  expect(evaluated.backwardCapture!.inputNames).toEqual(["topic", "limit"]);
-  expect(node.captures).toBe(0);
 });
 
 test("an agent capture keeps the variable inventory separate from the delivered inputs", async () => {

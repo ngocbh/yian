@@ -1,0 +1,32 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  defs:
+    step:
+      input:
+        s: !str
+        n: !int
+      nodes:
+        echo:
+          kind: code
+          input:
+            s: ${input.s}
+            n: ${input.n}
+          output:
+            s: str
+            n: int
+          code: "return {s: inputs.s, n: inputs.n + 1}"
+      output: ${echo.output}
+  nodes:
+    lp:
+      kind: loop
+      call: step
+      max: 2
+      input:
+        s: ${system.today}
+        n: 0
+      until: ${n >= 2}
+  output: ${lp.output}
+expect:
+  load: ok

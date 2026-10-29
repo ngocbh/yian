@@ -2,10 +2,11 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { renderDiagnostic } from "../../src/cli/run.ts";
+import { box, renderDiagnostic, wrapSpans } from "../../src/cli/render.ts";
 import type { Writer } from "../../src/cli/utils.ts";
 import type { Env } from "../../src/defaults.ts";
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
+import { FakeOutput, screen } from "./terminal_both_runtimes.ts";
 
 const SOURCE = `id: f
 name: f
@@ -124,5 +125,55 @@ describe("renderDiagnostic", () => {
     expect(await render(diag, { isTTY: true })).toContain("\x1b[31m");
     const noColor: Env = (name) => (name === "NO_COLOR" ? "1" : undefined);
     expect(await render(diag, { isTTY: true, env: noColor })).not.toContain("\x1b[");
+  });
+});
+
+describe("provider text with escape sequences", () => {
+  const raw = "bad\x1b]8;;https://x.example\x07 request\x1b[1A";
+  const diag = new Diagnostic({ code: "node.execute", message: raw, notes: [raw] });
+
+  test("is stripped from the message and notes on a TTY", async () => {
+    expect(await render(diag, { isTTY: true, env: () => "1" })).toBe("bad request\n  ↳ bad request\n");
+  });
+
+  test("is written exactly off a TTY", async () => {
+    expect(await render(diag)).toBe(`${raw}\n  ↳ ${raw}\n`);
+  });
+});
+
+describe("box and wrapSpans", () => {
+  const noColor: Env = (name) => (name === "NO_COLOR" ? "1" : undefined);
+
+  /** A TTY output 60 columns wide, as the chat draws on. */
+  const tty = () => Object.assign(new FakeOutput({ columns: 60 }), { isTTY: true });
+
+  for (const [label, env] of [
+    ["in colour", noEnv],
+    ["with NO_COLOR", noColor],
+  ] as const) {
+    test(`a box sizes a CJK row by its cells, ${label}`, () => {
+      const out = tty();
+      const rows = [
+        ...wrapSpans([["名前 ", "bold"], ["Ada", null]], 56, out, env),
+        ...wrapSpans([["ok", "dim"]], 56, out, env),
+      ];
+      // The replayer moves down a row at a newline without going back to column 0.
+      out.write(`${box(rows, "cyan", out, env, "", 10).replaceAll("\n", "\r\n")}\r\n`);
+      expect(screen(out.text, 60).rows).toEqual([
+        "╭────────────╮",
+        "│ 名前 Ada   │",
+        "│ ok         │",
+        "╰────────────╯",
+      ]);
+      expect(out.text.includes("\x1b[")).toBe(env === noEnv);
+    });
+  }
+
+  test("wrapSpans wraps the plain text and keeps each piece's style", () => {
+    const out = tty();
+    const rows = wrapSpans([["漢字漢字 ", "bold"], ["and more words", null]], 10, out, noEnv);
+    expect(rows.map(([plain]) => plain)).toEqual(["漢字漢字", "and more", "words"]);
+    expect(rows[0]![1]).toBe("\x1b[1m漢字漢字\x1b[0m");
+    expect(rows[1]![1]).toBe("and more");
   });
 });

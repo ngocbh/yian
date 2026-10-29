@@ -75,11 +75,33 @@ cases:
 `;
 
 test("a compact flow rejects a non-leaf kind", () => {
-  // case/call/map reference other nodes a one-node flow has none of.
+  // case/call/map/loop reference other nodes a one-node flow has none of.
   const error = loadError(() => parseFile(COMPACT_NON_LEAF));
 
   expect(error.message).toContain("not allowed inline");
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(new SourceRange(6, 7, 6, 11));
+});
+
+test("a compact loop is refused with the other non-leaf kinds", () => {
+  const error = loadError(() => parseFile("id: f\nname: f\nkind: loop\ntimes: 2\ncall: body\n"));
+
+  expect(error.message).toBe(
+    "compact (single-node) flow: kind 'loop' is not allowed inline (allowed: agent, code, tool); " +
+      "case/call/map/loop reference other nodes a one-node flow has none of — write a full `nodes:` map instead",
+  );
+});
+
+test.each(["uses", "defs"])("a compact flow's %s: is refused as a flow key, at its key", (key) => {
+  const document = parseSourceDocument(
+    `id: f\nname: f\nkind: code\ncode: m:f\n${key}:\n  x: ./x.yaml\n`,
+    "compact.yaml",
+  );
+  const error = loadError(() => parseFile(document));
+
+  expect(error.message).toBe(
+    "compact (single-node) flow: a compact flow has no `uses:`/`defs:`; write the full `nodes:` form",
+  );
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(document.root.keyRangeOf(key)!);
 });
 
 const COMPACT_MODEL = `
@@ -130,6 +152,14 @@ test("a compact flow's invalid input is located at its value", () => {
 
   expect(error.message).toContain("must be a param map");
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(new SourceRange(4, 8, 4, 15));
+});
+
+test.each(["0", "false", '""', "[]", ""])("a compact flow's input: %p is not a param map", (value) => {
+  const error = loadError(() => parseFile(`id: f\nname: f\nkind: code\ncode: m:f\ninput: ${value}\n`));
+
+  expect(error.message).toBe(
+    "compact (single-node) flow: `input:` must be a param map (`name: !TYPE`, e.g. `topic: !str`)",
+  );
 });
 
 test("a compact flow's input named inf is rejected at its key", () => {

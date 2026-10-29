@@ -42,7 +42,6 @@ import {
   isPlainObject,
   MediaPart,
   type Message,
-  MessageFormatError,
   NamedTool,
   type Part,
   ReasoningPart,
@@ -58,13 +57,14 @@ import {
   type ToolSpec,
   Usage,
 } from "../messages.ts";
-import { eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
+import { eventData, notIntMessage, tokenCount, usageOrProtocolError, wrongPart } from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "anthropic_messages";
 const NO_MEDIA = "the anthropic_messages route does not send media parts yet";
 // The default `max_tokens` by exact model id, from langchain-anthropic 1.7.5's model profiles;
-// any other model gets 4096.
+// any other model gets 4096. Those profiles carry no limits for the Mythos models (not on
+// models.dev), so theirs are the 128K max output from Anthropic's model docs.
 const MAX_TOKENS: ReadonlyMap<string, bigint> = new Map([
   ...[
     "claude-haiku-4-5",
@@ -77,6 +77,8 @@ const MAX_TOKENS: ReadonlyMap<string, bigint> = new Map([
   ...[
     "claude-fable-5",
     "claude-fable-5-1",
+    "claude-mythos-5",
+    "claude-mythos-5-1",
     "claude-opus-4-6",
     "claude-opus-4-7",
     "claude-opus-4-8",
@@ -707,20 +709,17 @@ function usageOf(usage: JsonObject, provider: string): Usage {
   const cacheWrite = breakdown > 0 ? breakdown : tokenCount(usage["cache_creation_input_tokens"], notInt);
   const inputTokens = (tokenCount(usage["input_tokens"], notInt) ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
   const outputTokens = tokenCount(usage["output_tokens"], notInt) ?? 0;
-  try {
-    return new Usage({
+  return usageOrProtocolError(
+    {
       inputTokens,
       outputTokens,
       totalTokens: inputTokens + outputTokens,
       cacheReadTokens: cacheRead,
       cacheCreationTokens: cacheWrite,
       reasoningTokens: tokenCount(outputDetails["thinking_tokens"], notInt),
-    });
-  } catch (error) {
-    // `Usage` refuses a sum past `Number.MAX_SAFE_INTEGER`, which `Number` arithmetic rounds.
-    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
-    throw error;
-  }
+    },
+    notInt,
+  );
 }
 
 /** Return the text of `blocks` when they are one text block, else `null`. */

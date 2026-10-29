@@ -1,11 +1,11 @@
-# An unknown `llm_config:` provider fails at the whole `llm_config:` value, not the node header.
+# An unknown `llm_config:` provider fails at the `provider:` value, not the node header.
 kind: load
 flow: |
   # e39 — a bad `llm_config:` entry rejected during descriptor construction.
   #
-  # The authored `llm_config:` mapping is retained as one source range. Its first
-  # entry is the invalid `provider:` value below, so that range begins at the most
-  # useful source line for this validation failure.
+  # The authored `llm_config:` mapping keeps a source range for each key. The
+  # invalid `provider:` value below is the field the validation failure names, so
+  # the error points at that value.
   #
   # The descriptor passes that range into the load-time validation boundary. The
   # resulting LoadError must keep it instead of falling back to the node-header range.
@@ -40,5 +40,5 @@ expect:
     diagnostics:
       # No `message`: the case pins the code and the frame, not the schema error's text.
       - code: compose.load
-        # The `llm_config:` mapping, from `provider:` on line 27 to the `input:` key that ends it.
-        frames: [{label: flow.yaml, range: [27, 7, 30, 5]}]
+        # The `bogus_provider` value on line 27.
+        frames: [{label: flow.yaml, range: [27, 17, 27, 31]}]

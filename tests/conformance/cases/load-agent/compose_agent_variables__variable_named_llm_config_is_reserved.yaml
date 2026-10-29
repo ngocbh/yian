@@ -1,0 +1,26 @@
+# A variable can't take the call-time `llm_config` values' reserved key, as an input can't; it
+# would fail every run.
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    pick:
+      kind: agent
+      prompt: Pick a model.
+      output: str
+    chat:
+      kind: agent
+      prompt: Go.
+      variables:
+        __llm_config: !str hello
+      llm_config: {model: '${pick.output}', provider: openai}
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''chat'': variable ''__llm_config'' is reserved for the values of `llm_config`; rename the variable'
+      frames:
+      - label: flow.yaml
+        range: [12, 7, 12, 19]

@@ -13,12 +13,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { advance, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { pending } from "../../src/tools/context.ts";
 import type { AskRequest } from "../../src/tools/registry.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { rejected } from "../helpers/run_state_fixtures.ts";
+import { rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-ask-tool-run-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -238,6 +239,100 @@ output: \${choose.output}
       ],
     ],
   ]);
+});
+
+/** A flow whose ask `ask` asks the questions of its `qs` input and returns the answer. */
+const QUESTIONS_FLOW = `
+id: asks
+name: asks
+input:
+  qs: !list(object)
+nodes:
+  ask:
+    kind: tool
+    tool_id: ask
+    input:
+      questions: \${input.qs}
+output: \${ask.output}
+`;
+
+test("an upstream question list with a label repeated within a question fails before it asks", async () => {
+  const seen: AskRequest[] = [];
+  const qs = [{ question: "Ship?", header: "ship", options: [{ label: "yes" }, { label: "yes", description: "hold" }] }];
+
+  const result = await runFlow(await loadFlow(QUESTIONS_FLOW), { qs }, {
+    env: hostEnv(dir),
+    log: freshLog(),
+    tools: { ask: (request: AskRequest) => (seen.push(request), { ship: "yes" }) },
+  });
+
+  expect(result.status).toBe("failed");
+  expect(result.failure?.message).toBe('question[0] is invalid: option labels must be unique, got ["yes","yes"]');
+  expect(seen).toEqual([]);
+});
+
+test("a composer model's repeated option label is dropped and the adaptive ask runs with one option", async () => {
+  const seen: AskRequest[] = [];
+  const composed = [
+    {
+      question: "Ship?",
+      header: "ship",
+      options: [
+        { label: "Yes", description: "deploy" },
+        { label: "yes", description: "hold" },
+        { label: "No", description: "" },
+      ],
+      multi_select: false,
+    },
+  ];
+  const models = serving(new ScriptedModel([textReply(JSON.stringify({ items: composed }))]), hostEnv(dir));
+  const flow = `
+id: adaptive
+name: adaptive
+nodes:
+  ask:
+    kind: tool
+    tool_id: ask
+    adaptive_questions:
+      prompt: Ask whether to ship
+      llm_config: {provider: openai, model: gpt-test}
+output: \${ask.output}
+`;
+
+  const result = await run(flow, {
+    log: freshLog(),
+    models,
+    tools: { ask: (request: AskRequest) => (seen.push(request), { ship: "Yes" }) },
+  });
+
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual({ ship: "Yes" });
+  expect(seen.map((request) => request.questions)).toEqual([
+    [
+      {
+        question: "Ship?",
+        header: "ship",
+        options: [
+          { label: "Yes", description: "deploy" },
+          { label: "No", description: "" },
+        ],
+        multiSelect: false,
+      },
+    ],
+  ]);
+});
+
+test("a question list with an empty header and an empty label still runs, answered keyed by the empty header", async () => {
+  const qs = [{ question: "", header: "", options: [{ label: "" }, { label: "no" }] }];
+
+  const result = await runFlow(await loadFlow(QUESTIONS_FLOW), { qs }, {
+    env: hostEnv(dir),
+    log: freshLog(),
+    tools: { ask: () => ({ "": "" }) },
+  });
+
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toEqual({ "": "" });
 });
 
 test.each([

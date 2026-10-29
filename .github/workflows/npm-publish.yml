@@ -17,7 +17,7 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     environment:
       name: npm
       url: https://www.npmjs.com/package/@ngocbh/yian
@@ -29,9 +29,10 @@ jobs:
         with:
           persist-credentials: false
 
+      # The minimum Node yian supports (package.json engines), for test:node.
       - uses: actions/setup-node@v5
         with:
-          node-version: "24"
+          node-version: "22.18"
           registry-url: https://registry.npmjs.org
 
       - uses: oven-sh/setup-bun@v2
@@ -58,12 +59,22 @@ jobs:
 
       - run: bun test ./tests
 
+      - run: bun run test:node
+
+      - run: bun tests/conformance/runner.ts
+
       - name: Test the packed tarball
         run: YIAN_TEST_PACK=1 bun test tests/repo/packaging.test.ts -t "npm tarball"
 
-      - run: npm publish --access public --dry-run
+      # npm refuses to publish a prerelease (a `-` before any `+build`) under `latest`.
+      - name: Pick the dist-tag
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          case "${version%%+*}" in *-*) tag=next ;; *) tag=latest ;; esac
+          echo "DIST_TAG=$tag" >> "$GITHUB_ENV"
 
-      # A version with a `-` (a prerelease) also needs `--tag next`.
+      - run: npm publish --access public --tag "$DIST_TAG" --dry-run
+
       - name: Publish
         if: github.event_name == 'release'
-        run: npm publish --access public
+        run: npm publish --access public --tag "$DIST_TAG"

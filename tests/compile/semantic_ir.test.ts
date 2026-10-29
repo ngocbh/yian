@@ -32,7 +32,7 @@ import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
 import { MapDescriptor } from "../../src/compose/nodes/map.ts";
-import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
+import { childSignature } from "../../src/compose/nodes/resolver.ts";
 import { checkCallMapTypes } from "../../src/compose/validate/call_types.ts";
 import { checkLoopTypeContract } from "../../src/compose/validate/loop_types.ts";
 import { validateReferences } from "../../src/compose/validate/references.ts";
@@ -163,10 +163,10 @@ test("flow construction normalizes direct wiring values", () => {
   expect(flow.wiring.get("sink")!.get("nested")).toBe(nested);
 });
 
-test("compiled flow fromParts normalizes direct wiring values", () => {
+test("compiled flow constructor normalizes direct wiring values", () => {
   const existing = new Binding(7n, { origin: origin("count") });
 
-  const flow = CompiledFlow.fromParts(new Map([["sink", new BareNode("sink")]]), [], {
+  const flow = new CompiledFlow(new Map([["sink", new BareNode("sink")]]), [], {
     wiring: new Map([
       [
         "sink",
@@ -201,7 +201,7 @@ for (const constructor of ["flow", "compiled"]) {
     const build = () =>
       constructor === "flow"
         ? new Flow(nodes, [], { wiring: wiring("sink") as never })
-        : CompiledFlow.fromParts(nodes, [], { wiring: wiring("sink") as never });
+        : new CompiledFlow(nodes, [], { wiring: wiring("sink") as never });
     expect(build).toThrow(TypeError);
     expect(build).toThrow(message("sink"));
   });
@@ -209,7 +209,7 @@ for (const constructor of ["flow", "compiled"]) {
 
 test("addSubgraph normalizes wiring and preserves an existing binding", () => {
   // Programmatic growth enters the same canonical stored representation.
-  const flow = CompiledFlow.fromParts(new Map([["base", new BareNode("base")]]), []);
+  const flow = new CompiledFlow(new Map([["base", new BareNode("base")]]), []);
   const existing = new Binding("${base.output}", { origin: origin("child-value") });
 
   flow.addSubgraph(
@@ -232,7 +232,7 @@ test("addSubgraph normalizes wiring and preserves an existing binding", () => {
 
 test.each(BAD_WIRING)("addSubgraph rejects a bad wiring %s before changing topology", (_name, wiring, message) => {
   // An invalid splice can't leave nodes, edges, wiring or adjacency partially installed.
-  const flow = CompiledFlow.fromParts(new Map([["base", new BareNode("base")]]), [], {
+  const flow = new CompiledFlow(new Map([["base", new BareNode("base")]]), [], {
     wiring: new Map([["base", new Map()]]),
   });
   const beforeNodes = new Map(flow.nodes);
@@ -310,7 +310,7 @@ function manifestFragment(value: unknown, key = "result"): Flow {
 function manifestCompiledOutput(value: unknown): CompiledFlow {
   const start = new StartNode(START_ID, { params: [] });
   const end = EndNode.value(END_ID, { outputName: "result" });
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, start],
       [END_ID, end],
@@ -879,7 +879,7 @@ test("recordFieldOrigins indexes field origins in canonical order", () => {
   );
 });
 
-test("referenceContract projects flow inputs and producer outputs", () => {
+test("referenceContract projects flow inputs and producer outputs and types system ambients", () => {
   const record = new ValueContract(recordType({ f: INT }));
   const producers = table<OutputContract>({ p: record });
   const inputs = table({ x: record });
@@ -891,6 +891,11 @@ test("referenceContract projects flow inputs and producer outputs", () => {
   expect(referenceContract("input.y", producers, inputs)).toBe(null);
   expect(referenceContract("p.other", producers, inputs)).toBe(null);
   expect(referenceContract("p", producers, inputs)).toBe(null);
+  expect(exact(referenceContract("system.today", producers, inputs)).type).toEqual(Type.scalar(ValueKind.DATE));
+  expect(exact(referenceContract("system.now", producers, inputs)).type).toEqual(Type.scalar(ValueKind.DATETIME));
+  expect(exact(referenceContract("system.run_id", producers, inputs)).type).toEqual(STR);
+  expect(referenceContract("system.nope", producers, inputs)).toBe(null);
+  expect(referenceContract("system.today.year", producers, inputs)).toBe(null);
 
   expectError(
     () => referenceContract("input.x", producers, table({ x: STR as unknown as ValueContract })),
@@ -1002,12 +1007,8 @@ test("childSignature retains a partial contract when one field is opaque", () =>
   expect(output.names).toEqual(["n", "done"]);
   expect(output.fields[0]).toEqual(["n", null]);
   expect(output.fields[1]![1]).not.toBeNull();
+  expect(typeEquals((output.fields[1]![1] as ValueContract).type, Type.scalar(ValueKind.BOOLEAN))).toBe(true);
   expect(signature.outputNames).toEqual(["n", "done"]);
-  expect(signature.declaredOutputs[0]).toEqual(["n", null]);
-  expect(signature.declaredOutputs[1]![0]).toBe("done");
-  expect(typeEquals((signature.declaredOutputs[1]![1] as ValueContract).type, Type.scalar(ValueKind.BOOLEAN))).toBe(
-    true,
-  );
 });
 
 test("childSignature keeps a nested partial output opaque at a record field", () => {
@@ -1023,24 +1024,12 @@ test("childSignature keeps a nested partial output opaque at a record field", ()
 
   const signature = childSignature(loaded);
 
-  expect(signature.declaredOutputs[0]![0]).toBe("nested");
-  expect(signature.declaredOutputs[0]![1]).toBe(nested);
+  expect(signature.outputNames).toEqual(["nested", "done"]);
   expect(isExactly(signature.output, PartialRecordContract)).toBe(true);
   const output = signature.output as PartialRecordContract;
   expect(output.fields[0]).toEqual(["nested", null]);
   expect(output.fields[1]![0]).toBe("done");
   expect(output.fields[1]![1]).not.toBeNull();
-});
-
-test("childSignature rejects contradictory declared output evidence", () => {
-  // The exported signature can't carry two incompatible output authorities.
-  const boolean = new ValueContract(Type.scalar(ValueKind.BOOLEAN));
-
-  expectError(
-    () => new ChildSignature({ inputs: [], output: boolean, declaredOutputs: [["result", null]] }),
-    RangeError,
-    "child output contract contradicts its declared output evidence",
-  );
 });
 
 test("composite builders preserve or deliberately wrap the child contract", () => {

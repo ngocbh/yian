@@ -24,18 +24,22 @@ import {
   readRunLog,
   RecordEnvelope,
   RunLogChangedError,
+  RunLogLineTooLongError,
   RunLogSchemaError,
+  runRecordOffsets,
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import { folderSyncs } from "../helpers/folder_syncs.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 const DIGEST = "d".repeat(64);
 /** A record time, as a log writes one, and a clock that always reads it. */
 const AT = "2026-10-20T14:02:11.123Z";
 const CLOCK = () => Date.UTC(2026, 9, 20, 14, 2, 11, 123);
 /** The error text for the retired TS schema `schema`. */
-const retired = (schema: number) => `run log schema ${schema} predates schema 23 and is not supported`;
-const RETIRED_SCHEMA = retired(22);
+const retired = (schema: number) => `run log schema ${schema} predates schema 25 and is not supported`;
+const RETIRED_SCHEMA = retired(24);
 const NOT_CONTIGUOUS = "reopened prefix must have one run and contiguous sequences";
 
 /** Assert `fn` throws an error of exactly class `cls` with exactly `message`, and return it. */
@@ -147,8 +151,8 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("the schema version is 23", () => {
-  expect(SCHEMA_VERSION).toBe(23);
+test("the schema version is 25", () => {
+  expect(SCHEMA_VERSION).toBe(25);
 });
 
 test.each([7, 8, 9])("retired schema %d record is rejected by name", (schema) => {
@@ -166,9 +170,23 @@ test("a schema 21 record, from before an AGENT's success wrote a messages commit
 
 test("a schema 22 record, from before inbox_withdrawn and empty interrupted records, is retired", () => {
   const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":22,"seq":0}`;
-  const error = expectError(() => decodeRecord(line), RunLogSchemaError, RETIRED_SCHEMA) as RunLogSchemaError;
+  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(22)) as RunLogSchemaError;
   expect(error.schema).toBe(22);
-  expectError(() => new RecordEnvelope(22, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, RETIRED_SCHEMA);
+  expectError(() => new RecordEnvelope(22, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(22));
+});
+
+test("a schema 23 record, from before a forward capture recorded whether its bound inputs are usable, is retired", () => {
+  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":23,"seq":0}`;
+  const error = expectError(() => decodeRecord(line), RunLogSchemaError, retired(23)) as RunLogSchemaError;
+  expect(error.schema).toBe(23);
+  expectError(() => new RecordEnvelope(23, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(23));
+});
+
+test("a schema 24 record, from before run_started recorded its flow's code root, is retired", () => {
+  const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":24,"seq":0}`;
+  const error = expectError(() => decodeRecord(line), RunLogSchemaError, RETIRED_SCHEMA) as RunLogSchemaError;
+  expect(error.schema).toBe(24);
+  expectError(() => new RecordEnvelope(24, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, RETIRED_SCHEMA);
 });
 
 test.each<[number, string]>([
@@ -187,7 +205,9 @@ test.each<[number, string]>([
   [19, retired(19)],
   [20, retired(20)],
   [21, retired(21)],
-  [22, RETIRED_SCHEMA],
+  [22, retired(22)],
+  [23, retired(23)],
+  [24, RETIRED_SCHEMA],
 ])("a retired schema %d log is rejected on resume", (schema, message) => {
   const file = path.join(dir, "retired.jsonl");
   const bytes = `${wireLine({ schema: String(schema) })}\n`;
@@ -202,10 +222,10 @@ test.each<[string, unknown, string]>([
   ["6", 6, "6"],
   ["7", 7, "7"],
   ["8", 8, "8"],
-  ["24", 24, "24"],
+  ["26", 26, "26"],
   ["true", true, "true"],
   ["false", false, "false"],
-  ["23.0", undefined, "23.0"],
+  ["25.0", undefined, "25.0"],
 ])("the schema check doesn't weaken validation: %s", (token, value, shown) => {
   const message = `unsupported run-record schema: ${shown}`;
   if (value !== undefined) {
@@ -249,7 +269,7 @@ test.each<[string, (wire: any) => void, new (...args: never[]) => Error, string]
       wire.kind = "unsupported";
     },
     RangeError,
-    "run-record kind 'unsupported' is unsupported in schema 23",
+    "run-record kind 'unsupported' is unsupported in schema 25",
   ],
 ])("the schema check doesn't weaken payload validation: %s", (_name, corrupt, cls, message) => {
   const wire = JSON.parse(wireLine());
@@ -916,7 +936,7 @@ test("iterRunRecords with payloads: false reads the envelope and node id without
 test.each<[string, string, new (...args: never[]) => Error, string]>([
   ["an empty node id", kindLine("node_started", '{"node_id":""}'), RangeError, "node_started payload node_id must be a non-empty string"],
   ["a missing node id", kindLine("node_step", "{}"), TypeError, "node_step payload node_id must be a non-empty string"],
-  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 23"],
+  ["an unknown kind", kindLine("node_paused", "{}"), RangeError, "run-record kind 'node_paused' is unsupported in schema 25"],
   ["invalid JSON", "{", RangeError, "invalid run-record JSON"],
 ])("iterRunRecords with payloads: false still refuses %s", (_name, line, causeClass, message) => {
   const file = path.join(dir, "run.jsonl");
@@ -968,8 +988,10 @@ test.each<[string, string, number]>([
   ["19", retired(19), 19],
   ["20", retired(20), 20],
   ["21", retired(21), 21],
-  ["22", RETIRED_SCHEMA, 22],
-  ["24", "unsupported run-record schema: 24", 24],
+  ["22", retired(22), 22],
+  ["23", retired(23), 23],
+  ["24", RETIRED_SCHEMA, 24],
+  ["26", "unsupported run-record schema: 26", 26],
 ])("iterRunRecords refuses schema %s with a RunLogSchemaError naming the line", (schema, message, value) => {
   const file = path.join(dir, "run.jsonl");
   fs.writeFileSync(file, `${wireLine({ schema })}\n`);
@@ -1019,6 +1041,178 @@ test("iterRunRecords reads in bounded chunks, and reads only as far as it is ask
   }
 });
 
+/** The fields a `RunLogLineTooLongError` carries besides its message. */
+function tooLongFields(error: Error) {
+  const { offset, end, length, limit, seq, runId, kind, nodeId } = error as RunLogLineTooLongError;
+  return { offset, end, length, limit, seq, runId, kind, nodeId };
+}
+
+test("iterRunRecords with maxLineBytes reads a line at the cap and refuses one a byte over, naming the line and the limit", () => {
+  const file = path.join(dir, "run.jsonl");
+  const first = wireLine();
+  const cap = byteLength(first);
+  const over = wireLine({ seq: 1, nodeId: "worky" });
+  expect(byteLength(over)).toBe(cap + 1);
+  fs.writeFileSync(file, `${first}\n${over}\n${wireLine({ seq: 2 })}\n`);
+
+  const reader = iterRunRecords(file, { maxLineBytes: cap });
+  expect(reader.next().value!.seq).toBe(0);
+  const message = `run log ${file} line 2 (seq 1): the line is ${cap + 1} bytes, over maxLineBytes ${cap}`;
+  const error = expectError(() => reader.next(), RunLogLineTooLongError, message);
+  expect(error).toBeInstanceOf(RangeError);
+  expect(error.name).toBe("RunLogLineTooLongError");
+  const end = cap + 1 + cap + 2;
+  expect(tooLongFields(error)).toEqual({
+    offset: cap + 1,
+    end,
+    length: cap + 1,
+    limit: cap,
+    seq: 1,
+    runId: "run",
+    kind: "node_started",
+    nodeId: "worky",
+  });
+
+  // A host reads on past the line from what the error names.
+  const rest = [...iterRunRecords(file, { afterOffset: end, runId: "run", afterSeq: 1, maxLineBytes: cap })];
+  expect(rest.map((entry) => entry.seq)).toEqual([2]);
+  expect([...iterRunRecords(file, { maxLineBytes: cap + 1 })].map((entry) => entry.seq)).toEqual([0, 1, 2]);
+});
+
+test("iterRunRecords with maxLineBytes keeps no more than the cap of a long line, and still reads its node id", () => {
+  const file = path.join(dir, "run.jsonl");
+  const big = "x".repeat(1_000_000);
+  // The failure's node id sorts after its long message; a nested node_id must not be taken for it.
+  const failure = `{"code":"tool_error","details":{"node_id":"inner"},"message":"${big}\\"","node_id":"tail\\u00e9"}`;
+  const long = kindLine("node_failed", `{"failure":${failure},"forward_capture":null}`, { seq: 1 });
+  fs.writeFileSync(file, `${wireLine()}\n${long}\n`);
+  const sizes: number[] = [];
+  const realConcat = Buffer.concat;
+  const concatSpy = spyOn(Buffer, "concat").mockImplementation(((list: readonly Uint8Array[], ...rest: any[]) => {
+    const joined = Reflect.apply(realConcat, Buffer, [list, ...rest]) as Buffer;
+    sizes.push(joined.length);
+    return joined;
+  }) as typeof Buffer.concat);
+  let error: Error;
+  try {
+    error = expectError(
+      () => [...iterRunRecords(file, { maxLineBytes: 100_000 })],
+      RunLogLineTooLongError,
+      `run log ${file} line 2 (seq 1): the line is ${byteLength(long)} bytes, over maxLineBytes 100000`,
+    );
+  } finally {
+    concatSpy.mockRestore();
+  }
+  expect(Math.max(0, ...sizes)).toBeLessThanOrEqual(100_000);
+  expect(tooLongFields(error)).toMatchObject({ seq: 1, runId: "run", kind: "node_failed", nodeId: "tail\u00e9" });
+});
+
+test("iterRunRecords with maxLineBytes names a long line's node id as its kind does, and null for what it can't read", () => {
+  const file = path.join(dir, "run.jsonl");
+  const pad = "y".repeat(200);
+  const lines = [
+    kindLine("node_expanded", `{"forward_capture":"${pad}","prune_ids":[],"spawner_id":"grow","topology_digest":"${DIGEST}"}`),
+    kindLine("run_failed", `{"failure":{"message":"${pad}","node_id":"bad"}}`, { seq: 1 }),
+    `{"at":"${AT}","kind":"node_started","payload":{"node_id":["${pad}"]},"run_id":"run","schema":${SCHEMA_VERSION},"seq":"2"}`,
+  ];
+  fs.writeFileSync(file, `${lines.join("\n")}\n`);
+  const read = (afterOffset: number) => {
+    try {
+      [...iterRunRecords(file, { afterOffset, maxLineBytes: 100 })];
+    } catch (error) {
+      expect(error).toBeInstanceOf(RunLogLineTooLongError);
+      return tooLongFields(error as Error);
+    }
+    throw new Error("expected a RunLogLineTooLongError");
+  };
+  const first = read(0);
+  expect(first).toMatchObject({ seq: 0, kind: "node_expanded", nodeId: "grow" });
+  const second = read(first.end);
+  expect(second).toMatchObject({ seq: 1, kind: "run_failed", nodeId: null });
+  expect(read(second.end)).toMatchObject({ seq: null, runId: "run", kind: "node_started", nodeId: null });
+});
+
+test("iterRunRecords with maxLineBytes still checks a long line's seq and run id", () => {
+  const file = path.join(dir, "run.jsonl");
+  const pad = "z".repeat(200);
+  fs.writeFileSync(file, `${wireLine()}\n${wireLine({ seq: 2, nodeId: pad })}\n`);
+  expectError(
+    () => [...iterRunRecords(file, { maxLineBytes: 150 })],
+    RangeError,
+    `run log ${file} line 2 (seq 1): run-log sequence mismatch: expected 1, found 2`,
+  );
+  const end = byteLength(wireLine()) + 1;
+  expectError(
+    () => [...iterRunRecords(file, { afterOffset: end, runId: "other", maxLineBytes: 100 })],
+    RunLogChangedError,
+    `run log ${file} doesn't continue the records read before byte ${end}: expected run 'other', found seq 2 of run 'run'; it was truncated or replaced`,
+  );
+});
+
+test("iterRunRecords with maxLineBytes stops at a torn long last line, and refuses it once it's complete", () => {
+  const file = path.join(dir, "run.jsonl");
+  const long = wireLine({ seq: 1, nodeId: "w".repeat(500) });
+  fs.writeFileSync(file, `${wireLine()}\n${long.slice(0, 400)}`);
+  expect([...iterRunRecords(file, { maxLineBytes: 200 })].map((entry) => entry.seq)).toEqual([0]);
+  fs.appendFileSync(file, `${long.slice(400)}\n`);
+  const error = expectError(
+    () => [...iterRunRecords(file, { maxLineBytes: 200 })],
+    RunLogLineTooLongError,
+    `run log ${file} line 2 (seq 1): the line is ${byteLength(long)} bytes, over maxLineBytes 200`,
+  );
+  expect((error as RunLogLineTooLongError).end).toBe(fs.statSync(file).size);
+});
+
+test("iterRunRecords with maxLineBytes keeps no stack for a deeply nested long line", () => {
+  const file = path.join(dir, "run.jsonl");
+  const depth = 8_000_000;
+  fs.writeFileSync(file, `${"[".repeat(depth)}\n`);
+  Bun.gc(true);
+  const before = process.memoryUsage().heapUsed;
+  let peak = before;
+  const realRead = fs.readSync;
+  // Sampled between reads, while the scan is part way through the line.
+  const readSpy = spyOn(fs, "readSync").mockImplementation(((...args: Parameters<typeof fs.readSync>) => {
+    peak = Math.max(peak, process.memoryUsage().heapUsed);
+    return Reflect.apply(realRead, fs, args) as number;
+  }) as typeof fs.readSync);
+  let error: Error;
+  try {
+    error = expectError(
+      () => [...iterRunRecords(file, { maxLineBytes: 1 << 20 })],
+      RunLogLineTooLongError,
+      `run log ${file} line 1 (seq 0): the line is ${depth} bytes, over maxLineBytes ${1 << 20}`,
+    );
+  } finally {
+    readSpy.mockRestore();
+  }
+  // A frame per bracket would take hundreds of MB here.
+  expect(peak - before).toBeLessThan(32 * 1024 * 1024);
+  expect(tooLongFields(error)).toMatchObject({ seq: null, runId: null, kind: null, nodeId: null });
+});
+
+test("readRunLog and runRecordOffsets pass maxLineBytes on", () => {
+  const file = path.join(dir, "run.jsonl");
+  fs.writeFileSync(file, `${wireLine()}\n${wireLine({ seq: 1, nodeId: "w".repeat(200) })}\n`);
+  const message = `run log ${file} line 2 (seq 1): the line is ${byteLength(wireLine({ seq: 1, nodeId: "w".repeat(200) }))} bytes, over maxLineBytes 150`;
+  expectError(() => readRunLog(file, { maxLineBytes: 150 }), RunLogLineTooLongError, message);
+  expectError(() => runRecordOffsets(file, { maxLineBytes: 150 }), RunLogLineTooLongError, message);
+  expect(runRecordOffsets(file, { maxLineBytes: 400 })).toEqual([0, byteLength(wireLine()) + 1]);
+});
+
+test("iterRunRecords refuses a maxLineBytes that isn't a positive integer", () => {
+  const file = path.join(dir, "run.jsonl");
+  fs.writeFileSync(file, `${wireLine()}\n`);
+  for (const [value, shown] of [[0, "0"], [1.5, "1.5"], ["10", '"10"']] as const) {
+    expectError(
+      () => [...iterRunRecords(file, { maxLineBytes: value as number })],
+      RangeError,
+      `maxLineBytes must be a positive integer, got ${shown}`,
+    );
+  }
+  expect([...iterRunRecords(file, { maxLineBytes: null })].map((entry) => entry.seq)).toEqual([0]);
+});
+
 const LOG_URL = new URL("../../src/runtime/log.ts", import.meta.url).href;
 
 /** The message `create` and `resume` throw when another writer holds the log at `file`. */
@@ -1066,6 +1260,32 @@ test("jsonl create sets owner read-write permissions", () => {
     }
   }
   expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+});
+
+test("jsonl create syncs the log's folder once, so the new log survives a power loss", () => {
+  const file = path.join(dir, "run.jsonl");
+  let log: JsonlRunLog | undefined;
+  const synced = folderSyncs(() => {
+    log = JsonlRunLog.create(file, "run", { clock: CLOCK });
+    log.append(new NodeStartedRecord("first"));
+    log.append(new NodeStartedRecord("second"));
+  });
+  log![Symbol.dispose]();
+  expect(synced).toEqual([fs.realpathSync(dir)]);
+});
+
+test("jsonl create throws a folder sync's I/O error and releases the log's lock", () => {
+  const file = path.join(dir, "run.jsonl");
+  let caught: NodeJS.ErrnoException | undefined;
+  folderSyncs(() => {
+    try {
+      JsonlRunLog.create(file, "run");
+    } catch (error) {
+      caught = error as NodeJS.ErrnoException;
+    }
+  }, "EIO");
+  expect(caught?.code).toBe("EIO");
+  expectUnlocked(file);
 });
 
 test("jsonl create refuses a lone-surrogate run id before any file exists", () => {
@@ -1218,7 +1438,7 @@ test.each<[string, string, string]>([
   [
     "kind",
     wireLine({ seq: 2 }).replace("node_started", "xnode_started"),
-    "run-record kind 'xnode_started' is unsupported in schema 23",
+    "run-record kind 'xnode_started' is unsupported in schema 25",
   ],
   ["sequence", wireLine({ seq: 5 }), "run-log sequence mismatch: expected 2, found 5"],
   ["run id", wireLine({ seq: 2, runId: "other" }), "run-log run_id mismatch: expected 'run', found 'other'"],
@@ -1724,28 +1944,7 @@ test("a tail repair failure releases the lock", () => {
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const BUILT = path.join(ROOT, "dist/src/runtime/log.js");
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/platform.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 describe.skipIf(!NODE)("the built jsonl log on Node", () => {
   test(

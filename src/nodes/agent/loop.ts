@@ -22,15 +22,16 @@
  * writes the call's `tool_result`; the woken agent replays and calls the model with every result.
  *
  * An agent with a steer inbox reads it at the top of each iteration (a recorded `steer` step) and
- * stops at a host interrupt of that inbox between effects or before a later chunk of a streamed
- * reply: the cut reply keeps its text so far, calls not started are skipped, the reply's pending
- * calls get `interrupted` closers, and the loop writes `interrupted {by}` and returns
- * `Interrupted`. An interrupt never aborts a running tool call. In the chat loop, a steer queued
- * when the model gives its final answer gets one more model call, within `maxToolIterations`; a
- * structured agent without tools or skills reads its steers once, before its single call.
+ * stops at a host interrupt of that inbox between effects, while a model call waits for its reply
+ * to start (aborting the request), or before a later chunk of a streamed reply: the cut reply keeps
+ * its text so far, calls not started are skipped, the reply's pending calls get `interrupted`
+ * closers, and the loop writes `interrupted {by}` and returns `Interrupted`. An interrupt never
+ * aborts a running tool call. In the chat loop, a steer queued when the model gives its final
+ * answer gets one more model call, within `maxToolIterations`; a structured agent without tools or
+ * skills reads its steers once, before its single call.
  *
- * Knows about:   diagnostics, events, llm, llm_clients connection, platform, nodes/base, skills,
- *                tools, typesys, peer AGENT modules.
+ * Knows about:   diagnostics, events, llm, llm_clients connection, memory contracts, platform,
+ *                nodes/base, skills, tools, typesys, peer AGENT modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -55,7 +56,7 @@ import {
   type VisibleInteraction,
 } from "../../memory/contracts.ts";
 import { realScheduler, warn } from "../../platform.ts";
-import type { Skill } from "../../skills/catalog.ts";
+import { type Skill, SkillError } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
 import { ASK_USER, isPending } from "../../tools/context.ts";
 import { isReportedToolError, ReportedToolError } from "../../tools/errors.ts";
@@ -86,9 +87,9 @@ import {
   type ToolCallIdentity,
 } from "./live.ts";
 import { type CloserReason, closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
-import { type SteerRender, steerMessages } from "./messages.ts";
+import { foldSteps, type SteerRender, steerMessages, steerValues } from "./messages.ts";
 import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
-import { pushVisible, textOf } from "./text.ts";
+import { pushVisible } from "./text.ts";
 
 /**
  * Run one AGENT invocation.
@@ -215,7 +216,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     // synchronous, so neither a stop nor an interrupt lands between it and the model call.
     for (const values of steerReads(steps, ctx.steerInbox)) messages.push(...steerMessages(values, steerOptions));
     const request = new Request({ messages, tools: bound });
-    let called: Awaited<ReturnType<typeof callModel>>;
+    let called: { response: Response; n: number; replayed: boolean };
     try {
       called = await callModel(live, model, request, {
         purpose: "chat",
@@ -231,7 +232,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       throw error;
     }
     // With `record`, `n` is the reply's `model_call` step.
-    const { response, n, replayed } = called as { response: Response; n: number; replayed: boolean };
+    const { response, n, replayed } = called;
     // A stop that lands during the call wins over its reply.
     checkStopped(ctx);
     rejectInvalidReply(response.message);
@@ -252,7 +253,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       const late = !interruptRequested(interrupt, steps) && iterations !== ctx.maxToolIterations;
       if (late && lateSteer(steps, ctx.steerInbox)) continue;
       if (schema !== null) return await structured();
-      return new Output(textOf(reply));
+      return new Output(reply.text());
     }
 
     if (iterations === ctx.maxToolIterations) {
@@ -350,8 +351,9 @@ function steerReads(steps: AgentSteps, inbox: SteerInbox | undefined): (readonly
  * is left out); then the structured calls as `structuredMaterial` shows them. A failed attempt,
  * a reply a host interrupt cut, and a reply whose tool call arguments nest too deep (it failed
  * the node) show nothing. Steer steps add their messages where they were read; a steer step
- * without its values fails the check. Steps of another kind are skipped. A
- * request's digest leaves recalled memory out, as the writer does, so it doesn't break the check.
+ * without its values fails the check. The steps are grouped as `foldSteps` groups them; steps of
+ * another kind are skipped. A request's digest leaves recalled memory out, as the writer does, so
+ * it doesn't break the check.
  *
  * @param steps The invocation's steps across its starts.
  * @param options `messages` are the system message (memory sections included) and the prompt's
@@ -380,12 +382,62 @@ export async function stepsMaterial(
   const interactions: VisibleInteraction[] = [];
   const requests = new Map<number, RebuiltRequest>();
   let digestOk = true;
-  // The latest reply's runnable calls and the results recorded for them, by call id.
-  let calls: ToolCallPart[] = [];
-  let results = new Map<string, ValueRecord>();
-  const commit = () => {
+  const { exchanges, open } = foldSteps(steps);
+  const turns = [...exchanges, open];
+  for (const [turn, exchange] of turns.entries()) {
+    for (const { step } of exchange.steers) {
+      let values: readonly unknown[];
+      try {
+        values = steerValues(step);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        return { interactions, requests, digestOk: false };
+      }
+      messages.push(...steerMessages(values, { render: options.renderSteer ?? null }));
+    }
+    // The call's reply's runnable calls, which its results answer.
+    let calls: ToolCallPart[] = [];
+    for (const [at, { n, step }] of exchange.attempts.entries()) {
+      if (step["purpose"] !== "chat") {
+        const rest = [...exchange.attempts.slice(at), ...turns.slice(turn + 1).flatMap((later) => later.attempts)];
+        const structured = await options.structured();
+        if (structured === null) {
+          for (const later of rest) requests.set(later.n - 1, { request: null, digestOk: false });
+          return { interactions, requests, digestOk: false };
+        }
+        const material = structuredMaterial(
+          structured.model,
+          messages,
+          structured.typ,
+          rest.map((later) => later.step),
+          options.baseSystemPrompt,
+        );
+        material.requests.forEach((rebuilt, index) => requests.set(rest[index]!.n - 1, rebuilt));
+        interactions.push(...material.interactions);
+        return { interactions, requests, digestOk: digestOk && material.digestOk };
+      }
+      const request = options.tools === null ? null : new Request({ messages, tools: options.tools });
+      const digest = request === null ? null : requestSha256(digestRequest(request, options.baseSystemPrompt));
+      const matched = digest !== null && step["request_sha256"] === digest;
+      requests.set(n - 1, { request, digestOk: matched });
+      if (!matched) digestOk = false;
+      if (Object.hasOwn(step, "error")) continue;
+      const reply = recordedResponse(step).message;
+      messages.push(reply);
+      if (step["finish"] === "interrupted") continue;
+      try {
+        rejectInvalidReply(reply);
+      } catch (error) {
+        // The run failed the node at this reply before acting on it.
+        if (error instanceof TypeCheckError) return { interactions, requests, digestOk };
+        throw error;
+      }
+      calls = reply.parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null);
+      if (calls.length === 0) pushVisible(interactions, () => new ModelTextInteraction(reply.text()));
+      for (const call of calls) pushVisible(interactions, () => new ToolCallInteraction(call.name, call.arguments));
+    }
     for (const call of calls) {
-      const result = results.get(call.id);
+      const result = exchange.results.get(call.id)?.step;
       if (result === undefined) continue;
       const content = result["output"] as string;
       if (result["closed"] !== "skipped") {
@@ -395,65 +447,7 @@ export async function stepsMaterial(
       const part = new ToolResultPart({ callId: call.id, name: call.name, content, isError });
       messages.push(new Message({ role: "tool", parts: [part] }));
     }
-    calls = [];
-    results = new Map();
-  };
-  for (const [index, step] of steps.entries()) {
-    if (step["kind"] === "tool_result") {
-      results.set(step["call_id"] as string, step);
-      continue;
-    }
-    if (step["kind"] === "steer") {
-      commit();
-      const values = step["values"];
-      if (!Array.isArray(values)) {
-        digestOk = false;
-        break;
-      }
-      messages.push(...steerMessages(values, { render: options.renderSteer ?? null }));
-      continue;
-    }
-    if (step["kind"] !== "model_call") continue;
-    commit();
-    if (step["purpose"] !== "chat") {
-      const rest = [...steps.entries()].slice(index).filter(([, later]) => later["kind"] === "model_call");
-      const structured = await options.structured();
-      if (structured === null) {
-        for (const [at] of rest) requests.set(at, { request: null, digestOk: false });
-        return { interactions, requests, digestOk: false };
-      }
-      const material = structuredMaterial(
-        structured.model,
-        messages,
-        structured.typ,
-        rest.map(([, later]) => later),
-        options.baseSystemPrompt,
-      );
-      material.requests.forEach((rebuilt, at) => requests.set(rest[at]![0], rebuilt));
-      interactions.push(...material.interactions);
-      return { interactions, requests, digestOk: digestOk && material.digestOk };
-    }
-    const request = options.tools === null ? null : new Request({ messages, tools: options.tools });
-    const digest = request === null ? null : requestSha256(digestRequest(request, options.baseSystemPrompt));
-    const matched = digest !== null && step["request_sha256"] === digest;
-    requests.set(index, { request, digestOk: matched });
-    if (!matched) digestOk = false;
-    if (Object.hasOwn(step, "error")) continue;
-    const reply = recordedResponse(step).message;
-    messages.push(reply);
-    if (step["finish"] === "interrupted") continue;
-    try {
-      rejectInvalidReply(reply);
-    } catch (error) {
-      // The run failed the node at this reply before acting on it.
-      if (error instanceof TypeCheckError) break;
-      throw error;
-    }
-    calls = reply.parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null);
-    if (calls.length === 0) pushVisible(interactions, () => new ModelTextInteraction(reply.text()));
-    for (const call of calls) pushVisible(interactions, () => new ToolCallInteraction(call.name, call.arguments));
   }
-  commit();
   return { interactions, requests, digestOk };
 }
 
@@ -625,8 +619,16 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   const { ctx, toolset, skills } = turn;
   const args = call.arguments!;
   if (skills.size > 0 && call.name === LOAD_SKILL) {
-    // `load_skill` only reads the granted skills.
-    const invoke = async () => invokeLoadSkill(skills, args);
+    // `load_skill` only reads the granted skills. Every `SkillError` it throws refuses the
+    // model's arguments, so the model reads it as the call's result; any other error is a fault.
+    const invoke = async () => {
+      try {
+        return invokeLoadSkill(skills, args);
+      } catch (error) {
+        if (error instanceof SkillError) throw new ReportedToolError(error.message, { cause: error });
+        throw error;
+      }
+    };
     return { planned: { call, index, callId: undefined, deadline: null, invoke }, safe: true };
   }
   if (!turn.granted.includes(call.name)) {

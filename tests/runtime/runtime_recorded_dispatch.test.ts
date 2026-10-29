@@ -191,7 +191,7 @@ function fanFlow(nodes: readonly Node[]): CompiledFlow {
     ...nodes.map((node) => new Edge(`start-${node.id}`, START_ID, node.id, { optional: true, ordering: true })),
     ...nodes.map((node) => new Edge(`${node.id}-end`, node.id, END_ID, { optional: true, ordering: true })),
   ];
-  return CompiledFlow.fromParts(all, edges);
+  return new CompiledFlow(all, edges);
 }
 
 /** A memory log that runs `guard` before each append and counts `close` calls. */
@@ -681,7 +681,7 @@ describe("routes", () => {
       ["skipped", new ActionNode("skipped", () => ran.push("skipped") && "no")],
       [END_ID, EndNode.value(END_ID, { outputName: null })],
     ]);
-    const flow = CompiledFlow.fromParts(nodes, [
+    const flow = new CompiledFlow(nodes, [
       new Edge("start-route", START_ID, "route", { optional: true, ordering: true }),
       new Edge("route-chosen", "route", "chosen", { sourceHandle: "chosen" }),
       new Edge("route-skipped", "route", "skipped", { sourceHandle: "other" }),

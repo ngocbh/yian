@@ -4,5 +4,5 @@ value: -0.0
 expect:
   raises:
     class: TypeCheckError
-    message: 0 does not match declared type int
+    message: -0.0 does not match declared type int
     path: []

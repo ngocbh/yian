@@ -30,7 +30,7 @@ export type DescriptorClass = typeof NodeDescriptor;
  * One entry per author-written kind. `start` and `end` are boundaries the loader makes, never
  * authored, so they are absent.
  */
-export const DESCRIPTORS: readonly DescriptorClass[] = [
+const DESCRIPTORS: readonly DescriptorClass[] = [
   AgentDescriptor,
   CodeDescriptor,
   ToolDescriptor,

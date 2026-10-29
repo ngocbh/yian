@@ -17,6 +17,8 @@ import {
   fileFieldError,
   fileFieldsType,
   HostToolCall,
+  type OriginCarrier,
+  type OriginMapper,
   type OutputContract,
   outputContractFieldError,
   outputContractFileType,
@@ -24,14 +26,13 @@ import {
   outputContractType,
   Parameter,
   PartialRecordContract,
+  rewriteOriginCarrier,
   sameOutputContract,
   SeedConnection,
   validateOutputContract,
   ValueContract,
   type ValuePath,
 } from "../../src/nodes/contracts.ts";
-import * as nodes from "../../src/nodes/index.ts";
-import type { OutputContract as NodesOutputContract, ValuePath as NodesValuePath } from "../../src/nodes/index.ts";
 import { FileRef, Type, TypeCheckError, TypedValue, ValueKind } from "../../src/typesys/index.ts";
 
 /** Build a short valid origin for carrier tests. */
@@ -316,6 +317,11 @@ test("partial record contract rejects ambiguous representations", () => {
   expect(() => new PartialRecordContract([["x", integer]])).toThrow(/fully typed/);
 });
 
+/** `carrier` rebuilt through `rewriteOriginCarrier` with a fresh `seen`. */
+function rewrite<C extends OriginCarrier>(carrier: C, mapper: OriginMapper): C {
+  return rewriteOriginCarrier(carrier, mapper, new Map());
+}
+
 test("parameter maps every nested origin without copying semantics", () => {
   const valueType = Type.scalar(ValueKind.OBJECT);
   const defaultValue = { name: "Ada" };
@@ -331,7 +337,7 @@ test("parameter maps every nested origin without copying semantics", () => {
     defaultOrigin: origin("default"),
   });
 
-  const mapped = parameter.mapOrigins((ref) => origin(`mapped:${ref.key}`));
+  const mapped = rewrite(parameter, (ref) => origin(`mapped:${ref.key}`));
 
   expect(mapped.name).toBe(parameter.name);
   expect(mapped.default).toBe(defaultValue);
@@ -351,30 +357,25 @@ test("each carrier maps present origins and skips null", () => {
   };
 
   const present = origin("present");
-  expect(new Binding("x", { origin: present }).mapOrigins(mapper).origin).toEqual(origin("new:present"));
-  expect(new Assertion("x", "x", { origin: present }).mapOrigins(mapper).origin).toEqual(
-    origin("new:present"),
-  );
-  expect(new ContractOrigins({ default: present }).mapOrigins(mapper).default).toEqual(
-    origin("new:present"),
-  );
+  expect(rewrite(new Binding("x", { origin: present }), mapper).origin).toEqual(origin("new:present"));
+  expect(rewrite(new Assertion("x", "x", { origin: present }), mapper).origin).toEqual(origin("new:present"));
+  expect(rewrite(new ContractOrigins({ default: present }), mapper).default).toEqual(origin("new:present"));
   expect(
-    new ValueContract(Type.scalar(ValueKind.STRING), new ContractOrigins({ default: present })).mapOrigins(
-      mapper,
-    ).origins.default,
+    rewrite(new ValueContract(Type.scalar(ValueKind.STRING), new ContractOrigins({ default: present })), mapper)
+      .origins.default,
   ).toEqual(origin("new:present"));
   const partial = new PartialRecordContract([
     ["known", new ValueContract(Type.scalar(ValueKind.STRING), new ContractOrigins({ default: present }))],
     ["opaque", null],
   ]);
-  expect(partial.mapOrigins(mapper).fields[0]![1]!.origins.default).toEqual(origin("new:present"));
+  expect(rewrite(partial, mapper).fields[0]![1]!.origins.default).toEqual(origin("new:present"));
 
   const callCount = calls.length;
-  new Binding("x").mapOrigins(mapper);
-  new Assertion("x", "x").mapOrigins(mapper);
-  new ContractOrigins().mapOrigins(mapper);
-  new ValueContract(Type.scalar(ValueKind.STRING)).mapOrigins(mapper);
-  new Parameter("x").mapOrigins(mapper);
+  rewrite(new Binding("x"), mapper);
+  rewrite(new Assertion("x", "x"), mapper);
+  rewrite(new ContractOrigins(), mapper);
+  rewrite(new ValueContract(Type.scalar(ValueKind.STRING)), mapper);
+  rewrite(new Parameter("x"), mapper);
   expect(calls.length).toBe(callCount);
 });
 
@@ -386,11 +387,11 @@ test("origin mapper exceptions propagate", () => {
     throw new MappingError("cannot rebase");
   };
 
-  expect(() => new Binding("x", { origin: origin("x") }).mapOrigins(fail)).toThrow(MappingError);
-  expect(() => new Binding("x", { origin: origin("x") }).mapOrigins(fail)).toThrow("cannot rebase");
+  expect(() => rewrite(new Binding("x", { origin: origin("x") }), fail)).toThrow(MappingError);
+  expect(() => rewrite(new Binding("x", { origin: origin("x") }), fail)).toThrow("cannot rebase");
 });
 
-const CARRIERS: [string, { mapOrigins(mapper: (ref: OriginRef) => OriginRef): unknown }][] = [
+const CARRIERS: [string, OriginCarrier][] = [
   ["a binding", new Binding("x", { origin: origin("binding") })],
   ["an assertion", new Assertion("x", "x", { origin: origin("assertion") })],
   ["a contract default", new ContractOrigins({ default: origin("contract-default") })],
@@ -402,26 +403,10 @@ const CARRIERS: [string, { mapOrigins(mapper: (ref: OriginRef) => OriginRef): un
 for (const invalid of [null, "not-an-origin"]) {
   test.each(CARRIERS)(`origin mapper rejects ${String(invalid)} for %s`, (_name, carrier) => {
     const mapper = (() => invalid) as unknown as (ref: OriginRef) => OriginRef;
-    expect(() => carrier.mapOrigins(mapper)).toThrow(TypeError);
-    expect(() => carrier.mapOrigins(mapper)).toThrow(/mapper must return an OriginRef/);
+    expect(() => rewrite(carrier, mapper)).toThrow(TypeError);
+    expect(() => rewrite(carrier, mapper)).toThrow(/mapper must return an OriginRef/);
   });
 }
-
-test("nodes package exports the canonical contract vocabulary", () => {
-  expect(nodes.Assertion).toBe(Assertion);
-  expect(nodes.Binding).toBe(Binding);
-  expect(nodes.ContractOrigins).toBe(ContractOrigins);
-  expect(nodes.PartialRecordContract).toBe(PartialRecordContract);
-  expect(nodes.Parameter).toBe(Parameter);
-  expect(nodes.ValueContract).toBe(ValueContract);
-  expect(nodes.asBinding).toBe(asBinding);
-  expect(nodes.bindingSource).toBe(bindingSource);
-  // The type-only names have no runtime value; these lines compile only if the index exports them.
-  const contract: NodesOutputContract = new ValueContract(Type.scalar(ValueKind.STRING));
-  const path: NodesValuePath = ["field", 0];
-  expect(contract).toBeInstanceOf(ValueContract);
-  expect(path).toEqual(["field", 0]);
-});
 
 // --- TS-only rows --- //
 

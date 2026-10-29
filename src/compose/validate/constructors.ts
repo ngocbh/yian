@@ -133,7 +133,7 @@ function recordErrors(
   refType: RefType | null,
   typeFn: TypeFn,
 ): string[] {
-  if (typ.variants !== undefined) {
+  if (typ.members !== undefined) {
     const members = unionMemberNames(name, registry);
     const listed = members.length > 0 ? ` (${members.map((m) => `${m}(...)`).join(" or ")})` : "";
     return [`${name} is a union; construct a member${listed}, or check a value with ${name}(x)`];

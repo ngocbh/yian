@@ -10,10 +10,12 @@
 import { isIPv6 } from "node:net";
 
 import { current } from "../defaults.ts";
+import { reprText } from "../diagnostics.ts";
 import { isRecord } from "../typesys/index.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { fromHost as hostValue } from "../typesys/values.ts";
 import { validateHeaderName, validateHeaders, validateOrganization } from "./connection_settings.ts";
+import { PROVIDER_BASE_URL, prefersResponses } from "./endpoints.ts";
 import { blockSchema, checkBlock, choices, type Issue, PROVIDER_BLOCKS, ValidationError } from "./provider_blocks.ts";
 
 /**
@@ -46,6 +48,25 @@ export const AZURE_NEEDS_BASE_URL =
   "provider azure needs llm_config.base_url, the Azure OpenAI resource endpoint " +
   "(https://<resource>.openai.azure.com/); set llm_config.base_url beside " +
   "provider: azure. AZURE_OPENAI_ENDPOINT is not read";
+
+/**
+ * Return why `provider`'s `block` can't be sent with `model`, or `null`.
+ *
+ * A Chat Completions vendor (any OpenAI-compatible provider but `openai`) or Azure sends a model
+ * that `prefersResponses` to the Responses API, while its block mirrors the Chat Completions
+ * request, so such a model needs the block empty; a field set to `null` counts as unset. A block
+ * that is not a record is left to the block's own check.
+ */
+export function responsesBlockError(provider: string, model: string, block: unknown): string | null {
+  const chat = provider === "azure" || Object.hasOwn(PROVIDER_BASE_URL, provider);
+  if (!chat || !prefersResponses(model) || !isRecord(block)) return null;
+  // A null field is unset, as `LLMConfig` reads it, so a block of only nulls is empty.
+  if (!Object.values(block).some((value) => value !== null && value !== undefined)) return null;
+  return (
+    `The ${reprText(provider)} block mirrors the Chat Completions request, but model ${reprText(model)} ` +
+    "is routed to the Responses API; remove the block or use a model served through Chat Completions."
+  );
+}
 
 const CODEX_REMOVED =
   "Native Codex configuration has been removed. Run 'yian auth openai', use provider: openai, " +
@@ -101,17 +122,17 @@ export const RETIRED_LLM_CONFIG_KEYS: ReadonlySet<string> = new Set([...RETIRED_
 type Data = Readonly<Record<string, unknown>>;
 
 /** Return `data`'s own value for `key`, so inherited names such as `constructor` are absent. */
-function own(data: Data, key: string): unknown {
+export function own(data: Data, key: string): unknown {
   return Object.hasOwn(data, key) ? data[key] : undefined;
 }
 
 /** Whether `data` holds `key` as written: an own property that isn't `undefined` (`null` counts). */
-function has(data: Data, key: string): boolean {
+export function has(data: Data, key: string): boolean {
   return own(data, key) !== undefined;
 }
 
 /** Whether `value` is one of `SUPPORTED_LLM_PROVIDERS`. */
-function isProvider(value: unknown): value is LLMProvider {
+export function isProvider(value: unknown): value is LLMProvider {
   return typeof value === "string" && (SUPPORTED_LLM_PROVIDERS as readonly string[]).includes(value);
 }
 
@@ -245,21 +266,22 @@ export function splitOllamaBaseUrl(value: unknown): [baseUrl: string, credential
   // LangChain lowercases the scheme only when it rebuilds the URL, which it does for credentials.
   let suffix = port ? `:${Number(port)}` : "";
   if (!port && scheme !== scheme.toLowerCase() && credentials === null) suffix = ":11434";
-  let trimmed = path.replace(/\/+$/, "");
+  let trimmed = stripTrailingSlashes(path);
   if (trimmed.endsWith("/v1")) trimmed = trimmed.slice(0, -3);
-  trimmed = trimmed.replace(/^\/+|\/+$/g, "");
+  trimmed = stripTrailingSlashes(trimmed).replace(/^\/+/, "");
   if (trimmed) suffix += `/${trimmed}`;
   return [`${scheme.toLowerCase()}://${host.toLowerCase()}${suffix}`, credentials];
 }
 
 /**
- * Return why `data` uses a removed `llm_config` form, or `null`.
+ * Return why the `llm_config` layer `data` uses a removed form, or `null`.
  *
  * Checks, first match wins: an underscore spelling of a dash block (`qwen_cn` for `qwen-cn`), a
  * retired key (`retiredKeyError`), then the native Codex options (`provider: codex`, `sandbox`,
- * `cwd`), which point at the unified OpenAI connection.
+ * `cwd`), which point at the unified OpenAI connection. A key counts whatever its value (`null`
+ * too).
  */
-function removedFormError(data: Data): string | null {
+export function removedFormError(data: Data): string | null {
   for (const key of SUPPORTED_LLM_PROVIDERS) {
     const name = key.replaceAll("-", "_");
     if (name !== key && has(data, name)) return `\`${name}\` is not an llm_config key; write \`${key}\``;
@@ -375,7 +397,8 @@ function bindConnectionToKey(connection: Connection): void {
  * - `api_key`: provider API key supplied by the host. It takes precedence over the provider's
  *   saved login and key environment variable. Read it with `apiKey`; it never shows in
  *   `JSON.stringify`, `inspect` or `dump()`. Unset keeps the saved-login or environment key. An
- *   empty key is refused, since some clients would treat it as unset and read the environment.
+ *   empty key is refused, since some clients would treat it as unset and read the environment,
+ *   and so is a key with a control character (U+0000 to U+001F, U+007F), such as a pasted newline.
  * - `base_url`: API endpoint that replaces the provider's default, such as an Azure OpenAI
  *   resource's `https://<resource>.openai.azure.com/openai/v1/` with `provider: "openai"`. It
  *   decides where `api_key` is sent, so it needs `api_key` and `provider` in the same config. It
@@ -455,6 +478,8 @@ export class LLMConfig {
     const apiKey = text("api_key", (value) => {
       // Some clients would replace an empty key with an environment variable.
       if (value === "") throw new RangeError("api_key must not be empty");
+      // A pasted key often carries a newline; sent as a header it fails late or splits the header.
+      if (/[\x00-\x1f\x7f]/.test(value)) throw new RangeError("api_key must not contain a control character");
       return value;
     });
     const baseUrl = text("base_url", validateBaseUrl);
@@ -546,7 +571,7 @@ export class LLMConfig {
 }
 
 /** Return `url` without its trailing slashes. */
-function stripTrailingSlashes(url: string): string {
+export function stripTrailingSlashes(url: string): string {
   // A loop, not `/\/+$/`: that regex backtracks quadratically on a long run of inner slashes.
   let end = url.length;
   while (end > 0 && url[end - 1] === "/") end -= 1;
@@ -597,33 +622,22 @@ const HOST_ONLY_FIELDS: ReadonlyMap<string, string> = new Map([
 ]);
 
 /**
- * Return why an authored `llm_config` layer may not be used, or `null`.
+ * Return the first host-only field an authored `llm_config` layer sets and why it may not, or
+ * `null`.
  *
- * Gives the message for the first host-only field the layer sets (`api_key`, `base_url`,
- * `organization`, `project`, `headers`; a `null` value counts). A `base_url` beside
- * `provider: azure` is allowed: it is the Azure resource endpoint, and the Azure key comes from
- * the environment, which flow code can already read, while a host `api_key` for Azure must bring
- * its own `base_url` (see `popHostCredentials`). A non-record has no host-only field.
+ * The fields are `api_key`, `base_url`, `organization`, `project` and `headers`; a `null` value
+ * counts. A `base_url` beside `provider: azure` is allowed: it is the Azure resource endpoint,
+ * and the Azure key comes from the environment, which flow code can already read, while a host
+ * `api_key` for Azure must bring its own `base_url` (see `popHostCredentials`). A non-record has no
+ * host-only field.
  */
-export function hostOnlyFieldError(config: unknown): string | null {
+export function hostOnlyFieldError(config: unknown): readonly [field: string, message: string] | null {
   if (!isRecord(config)) return null;
   for (const [field, message] of HOST_ONLY_FIELDS) {
     if (field === "base_url" && own(config, "provider") === "azure") continue;
-    if (has(config, field)) return message;
+    if (has(config, field)) return [field, message];
   }
   return null;
-}
-
-/**
- * Whether `value` counts as empty: unset, `false`, `""`, zero, or an empty list or record
- * (a record whose values are all `undefined` counts as empty).
- */
-function isFalsy(value: unknown): boolean {
-  if (value === undefined || value === null || value === false || value === "" || value === 0n || value === 0) {
-    return true;
-  }
-  if (Array.isArray(value)) return value.length === 0;
-  return isRecord(value) && Object.values(value).every((item) => item === undefined);
 }
 
 /**
@@ -639,7 +653,7 @@ export function popApiKey(config: Record<string, unknown>): string | null {
   delete config["api_key"];
   if (raw === null || raw === undefined) return null;
   const provider = own(config, "provider");
-  if (isFalsy(provider)) {
+  if (provider === null || provider === undefined) {
     throw new RangeError("llm_config.api_key needs llm_config.provider, so the key goes only to that provider");
   }
   return new LLMConfig({ provider, api_key: raw }).apiKey;
@@ -716,15 +730,16 @@ export function popHostCredentials(config: Record<string, unknown>): HostConnect
     if (value !== null && value !== undefined) settings[field] = value;
   }
   const provider = own(config, "provider");
+  let baseUrl: unknown = null;
   if (apiKey === null && provider === "azure") {
+    // A keyless Azure base_url is the resource endpoint, an ordinary setting that stays in the
+    // layer; its settings are still checked below, without it.
     const endpoint = own(config, "base_url");
     if (endpoint !== null && endpoint !== undefined) validateBaseUrl(endpoint);
-    // Validation names the first setting that needs a key.
-    if (Object.keys(settings).length > 0) new LLMConfig({ provider, ...settings });
-    return new HostConnection();
+  } else {
+    baseUrl = own(config, "base_url");
+    delete config["base_url"];
   }
-  const baseUrl = own(config, "base_url");
-  delete config["base_url"];
   const noBaseUrl = baseUrl === null || baseUrl === undefined;
   if (noBaseUrl && apiKey !== null && provider === "azure") {
     throw new RangeError(

@@ -90,6 +90,10 @@ A condition skips the `case` when it reads a skipped node, unless the read has a
 [expression](/expressions/) syntax, and `and` and `or` stop early, so
 `x.output != null and x.output.k > 1` reads `x.output.k` only when `x.output` is set.
 
+A condition or an `on:` can also read an agent's new messages (see [Agents](/agents/)):
+`len(reply.new_messages) > 1` is true when agent `reply` added more than its reply, such as a
+tool call. The `case` then runs after `reply`, and the same skip and default rules apply.
+
 ### Branch targets
 
 A `then:` or `else:` names what runs on that branch:
@@ -332,7 +336,8 @@ Exactly one driver decides how often the body runs:
 - `max:` is a runaway guard. A loop that would run more than `max` times fails with
   `loop.max_exceeded`. Without `max:`, a loop runs until its condition ends it.
 - A condition that reads only fields the body never returns can't change, so it is a load error
-  unless you give `max:`.
+  unless you give `max:`. So is one that reads no carried field and doesn't end the loop at once
+  (`until: 1 > 2`).
 - The body returns at least one carried field, and only carried fields. A returned field keeps its
   carried type.
 - Returning `null` sets the field to `null`; leaving it out keeps its value.

@@ -11,8 +11,8 @@
  * route sends it).
  *
  * Replies stream text, reasoning and tool calls as deltas; a refusal is collected into one part.
- * A call without an id gets one (`yian_call_<n>`). The finish is held until the stream ends, so
- * the usage chunk that follows it is read. Reasoning parts carry replay records naming the wire
+ * A call without an id, or with one an earlier call took, gets `yian_call_<n>`. The finish is
+ * held until the stream ends, so the usage chunk that follows it is read. Reasoning parts carry replay records naming the wire
  * field they came from, so only reasoning this route parsed from `reasoning_content` is echoed.
  * DeepSeek requires every earlier turn's `reasoning_content` when the request sends tools, so on
  * a tool request a turn with no reasoning to echo sends `reasoning_content: ""`.
@@ -24,7 +24,7 @@
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { getCapabilities } from "../capabilities.ts";
-import { type ErrorKind, kindForStatus, ProviderError } from "../errors.ts";
+import { type ErrorKind, ProviderError } from "../errors.ts";
 import {
   type Event,
   Finish,
@@ -42,7 +42,6 @@ import {
   isPlainObject,
   MediaPart,
   type Message,
-  MessageFormatError,
   NamedTool,
   type OutputFormat,
   type Part,
@@ -59,18 +58,26 @@ import {
   ToolResultPart,
   Usage,
 } from "../messages.ts";
-import { callId, eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
-import { STREAM_ERROR_KINDS } from "./openai_responses.ts";
+import {
+  callId,
+  eventData,
+  httpCodeKind,
+  notIntMessage,
+  OPENAI_STREAM_ERROR_KINDS,
+  tokenCount,
+  usageOrProtocolError,
+  wrongPart,
+} from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "openai_chat";
 const NO_MEDIA = "the openai_chat route does not send media parts yet";
 // The wire field a reasoning record names when its text may be echoed.
 const ECHOED_FIELD = "reasoning_content";
-// Error chunk codes: the Responses table, plus OpenRouter's content filter codes. Any other
+// Error chunk codes: the OpenAI stream table, plus OpenRouter's content filter codes. Any other
 // code, or none, is a server error.
 const CHUNK_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>([
-  ...STREAM_ERROR_KINDS,
+  ...OPENAI_STREAM_ERROR_KINDS,
   ["content_filter", "refused"],
   ["content_policy_violation", "refused"],
 ]);
@@ -267,7 +274,8 @@ export class OpenAIChat implements SseProtocol {
    *
    * @param frames The reply's server-sent events, in order.
    * @returns The deltas, then one `PartDone` per part in index order (reasoning with its replay
-   *   record; a call without an id named `yian_call_<n>`, `n` its position among the calls),
+   *   record; a call whose id is missing or an earlier call's named `yian_call_<n>`, `n` its
+   *   position among the calls, with `_<k>` appended while taken),
    *   then `UsageReport` (when any usage came; the last one wins) and `Finish`, whose reason is
    *   `tool_calls` when any call came, unless it is `length`.
    * @throws {ProviderError} For an error chunk (kind from its HTTP code, else its code or
@@ -367,7 +375,6 @@ export class OpenAIChat implements SseProtocol {
     }
     // Every part is built before the first PartDone, so a call with no name fails first.
     const taken = new Set<string>();
-    for (const part of parts) if (isCall(part) && part.id !== null) taken.add(part.id);
     const done: Part[] = [];
     let callCount = 0;
     for (const part of parts) {
@@ -407,11 +414,9 @@ export class OpenAIChat implements SseProtocol {
     const rawMessage = error["message"];
     const message = typeof rawMessage === "string" ? rawMessage : "";
     const code = error["code"];
-    let kind: ErrorKind;
-    if (typeof code === "bigint" && code >= 400n && code <= 599n) {
-      // Classified as the HTTP path classifies the same body, so a content-filter code in it counts.
-      kind = kindForStatus(Number(code), encodeBody({ error }, "stream error"));
-    } else {
+    // Classified as the HTTP path classifies the same body, so a content-filter code in it counts.
+    let kind = httpCodeKind(code, { error });
+    if (kind === null) {
       // An error without a string code may still name its kind in `type` (`invalid_request_error`).
       const name = typeof code === "string" ? code : error["type"];
       kind = (typeof name === "string" ? CHUNK_ERROR_KINDS.get(name) : undefined) ?? "server";
@@ -587,16 +592,16 @@ function callPieces(toolCalls: JsonValue | undefined, provider: string): CallPie
 /**
  * Build a finished tool call, its arguments read by `parseArguments` (not repaired).
  *
- * A call without an id gets `yian_call_<n>`, with `_<k>` appended while that id is in `taken`;
- * the id it gets is added to `taken`.
+ * The call's id is its own unless missing or in `taken`, else `yian_call_<n>`, with `_<k>`
+ * appended while that id is in `taken`; the id it gets is added to `taken`.
  *
  * @param n The call's position among the reply's calls.
- * @param taken The ids in the reply so far: every real id, and those generated.
+ * @param taken The ids the reply's earlier calls got.
  * @throws {ProviderError} The call has no name (kind `protocol`).
  */
 function callPart(call: CallAssembly, n: number, taken: Set<string>, provider: string): ToolCallPart {
   if (call.name === null) throw new ProviderError("protocol", `${provider} tool call ${n} has no name`);
-  const id = call.id ?? callId(null, n, taken);
+  const id = callId(call.id, n, taken);
   const [args, rawArguments] = parseArguments(call.args);
   return new ToolCallPart({ id, name: call.name, arguments: args, rawArguments });
 }
@@ -664,8 +669,8 @@ function usageOf(usage: JsonValue | undefined, provider: string): Usage | null {
   const notInt = notIntMessage(provider);
   const inputTokens = tokenCount(usage["prompt_tokens"], notInt) ?? 0;
   const outputTokens = tokenCount(usage["completion_tokens"], notInt) ?? 0;
-  try {
-    return new Usage({
+  return usageOrProtocolError(
+    {
       inputTokens,
       outputTokens,
       totalTokens: tokenCount(usage["total_tokens"], notInt) ?? inputTokens + outputTokens,
@@ -673,12 +678,9 @@ function usageOf(usage: JsonValue | undefined, provider: string): Usage | null {
         tokenCount(promptDetails["cached_tokens"], notInt) ?? tokenCount(usage["prompt_cache_hit_tokens"], notInt),
       cacheCreationTokens: tokenCount(promptDetails["cache_write_tokens"], notInt),
       reasoningTokens: tokenCount(completionDetails["reasoning_tokens"], notInt),
-    });
-  } catch (error) {
-    // `Usage` refuses a count past `Number.MAX_SAFE_INTEGER`, which `Number()` rounds.
-    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
-    throw error;
-  }
+    },
+    notInt,
+  );
 }
 
 /** Render a tool call with its arguments text. */

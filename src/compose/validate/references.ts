@@ -31,7 +31,8 @@
  * carriers), `typesys` (`Type`), `compose/helpers` (closed-path
  * projection, binding-contract resolution, narrowed reads, and errors), and `compose/validate`
  * (`constructors` for the constructor and builtin checks, `narrowing` for each node's view, and
- * `typed_bindings` for the node-local contracts and a MAP's item contract).
+ * `typed_bindings` for the node-local contracts and a MAP's item contract), and `compose/desugar`
+ * (`case_outputs` to spell an expanded case value read as written).
  * Never imports: the loader or the compose package facade; they import this back.
  */
 
@@ -43,7 +44,6 @@ import {
   ExpressionError,
   exprRefsOf,
   optionalInsideRoot,
-  parseCondition,
   promptRefs,
   referencePath,
   referenceText,
@@ -61,6 +61,7 @@ import {
   iterSourceStrings,
   type OutputContract,
   type Parameter,
+  outputContractFieldError,
   outputContractType,
   PartialRecordContract,
   ValueContract,
@@ -87,14 +88,14 @@ import {
   directReferencePathParts,
   itemContract,
   localFieldError,
-  outputContractPathError,
   projectOutputContract,
   referenceContract,
 } from "../../compile/output_contracts.ts";
+import { type CaseRead, caseReadsAsWritten } from "../desugar/case_outputs.ts";
 import { SYNTH_PREFIX } from "../desugar/inline_calls.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { builtinFieldErrors, constructorErrors } from "./constructors.ts";
-import { Narrowing, searchedWhenReads } from "./narrowing.ts";
+import { Narrowing, parsedWhen, searchedWhenReads } from "./narrowing.ts";
 import type { SearchedWhen } from "./skips.ts";
 import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
@@ -104,7 +105,7 @@ import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
  * can when every member can.
  */
 function holdsMessages(typ: Type, list: boolean): boolean {
-  if (typ.variants !== undefined) return typ.variants.every((variant) => holdsMessages(variant, list));
+  if (typ.members !== undefined) return typ.members.every((variant) => holdsMessages(variant, list));
   if (typ.kind === ValueKind.ANY) return true;
   if (typ.kind === ValueKind.OBJECT) {
     // Compared without `nullable`, as a nullable `{role, text}` record loads: the render refuses a spliced null.
@@ -165,8 +166,6 @@ interface ScanOptions {
    * allowed. Defaults to telling the author to take from the inbox.
    */
   inboxTail?: string | null;
-  /** Lets an AGENT's `${x.new_messages}` be read; a CASE's routing reads only outputs. */
-  messages?: boolean;
 }
 
 /** Why most sites refuse a whole inbox read: only `take` reads its events. */
@@ -267,6 +266,8 @@ function outputBindings(outputs: unknown): unknown[] {
  * @param options.registry The flow's typedefs, naming a narrowed type and resolving constructors.
  * @param options.resolveOrigin Resolves a registered origin to its source frame.
  * @param options.diagnostics Factory for located load errors.
+ * @param options.caseSpellings Each expanded case value read, so an error names the read as
+ *   written, once.
  * @throws TypeError when a producer contract is not a `ValueContract` or `PartialRecordContract`.
  * @throws LoadError listing every unresolved reference, else every constructor call that can never
  *   succeed, else every inbox input nothing reads.
@@ -286,16 +287,17 @@ export function validateReferences(
     resolveOrigin?: ResolveOrigin | null;
     diagnostics?: LoadDiagnostics | null;
     searchedWhens?: ReadonlyMap<string, readonly SearchedWhen[]> | null;
+    caseSpellings?: ReadonlyMap<string, CaseRead> | null;
   } = {},
 ): void {
   const { outputsRange = null, narrowing = null, registry = null, resolveOrigin = null } = options;
+  const caseSpellings = options.caseSpellings ?? new Map<string, CaseRead>();
   const searchedWhens = options.searchedWhens ?? new Map<string, readonly SearchedWhen[]>();
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const inputContracts = options.inputContracts ?? new Map<string, ValueContract>();
   // An AGENT's new messages are read under their own pool name, `<id>.new_messages`.
-  const nodeTargets = new Set(buildResults.keys());
   const validTargets = new Set([
-    ...nodeTargets,
+    ...buildResults.keys(),
     ...[...buildResults].filter(([, result]) => result.node.producesMessages).map(([nodeId]) => messagesKey(nodeId)),
   ]);
   // Keep exact and partial carriers intact; the Compose projection below checks closed record
@@ -355,7 +357,6 @@ export function validateReferences(
       readFacts = null,
       routedBases = new Set<string>(),
       inboxTail = TAKE_TAIL,
-      messages = true,
     } = site;
     let paths: string[];
     try {
@@ -385,31 +386,27 @@ export function validateReferences(
         }
       }
     }
+    const pathErrors = new Set<string>();
     for (const path of paths) {
       const parts = path.split(".");
       if (parts[0] === "input" && inboxInputs.has(parts[1]!)) {
         checkInboxRead(text, parts, where, rng, inboxTail);
         continue;
       }
-      let err = classifyPath(path, messages ? validTargets : nodeTargets, flowInputs, extraHeads);
-      if (!messages && parts[1] === NEW_MESSAGES && validTargets.has(messagesKey(parts[0]!))) {
-        err =
-          `reference \${${path}}: a case can't route on an agent's new_messages yet; ` +
-          "read it in a node input, and route on that node's output";
-      }
+      let err = classifyPath(path, validTargets, flowInputs, extraHeads);
       const producer = siteProducers.get(parts[0]!);
       const input = parts.length >= 3 && parts[0] === "input" ? siteInputs.get(parts[1]!) : undefined;
       if (err === null && parts.length >= 2 && parts[1] === "output" && producer !== undefined) {
-        err = outputContractPathError(producer, parts.slice(2), path, { partialUnionFields });
+        err = outputContractFieldError(producer, parts.slice(2), path, { partialUnionFields });
       } else if (err === null && parts.length >= 2 && parts[1] === NEW_MESSAGES) {
         const messagesContract = siteProducers.get(messagesKey(parts[0]!));
         if (messagesContract !== undefined) {
-          err = outputContractPathError(messagesContract, parts.slice(2), path, { partialUnionFields });
+          err = outputContractFieldError(messagesContract, parts.slice(2), path, { partialUnionFields });
         }
       } else if (err === null && input !== undefined) {
-        err = outputContractPathError(input, parts.slice(2), path, { partialUnionFields });
+        err = outputContractFieldError(input, parts.slice(2), path, { partialUnionFields });
       } else if (err === null && parts.length >= 2 && parts[0] === "item" && elementContract !== null) {
-        err = outputContractPathError(elementContract, parts.slice(1), path, { partialUnionFields });
+        err = outputContractFieldError(elementContract, parts.slice(1), path, { partialUnionFields });
       }
       if (err !== null && readFacts !== null && readFacts.size > 0) {
         const candidate = envReadType(path, readFacts);
@@ -419,7 +416,12 @@ export function validateReferences(
           });
         }
       }
-      if (err !== null) errors.push([`${where}: ${asWritten(err, path, trees)}`, rng]);
+      if (err === null) continue;
+      // Each leaf of an expanded case read gives the same message once spelled as written.
+      const message = `${where}: ${caseReadsAsWritten(asWritten(err, path, trees), text, caseSpellings)}`;
+      if (pathErrors.has(message)) continue;
+      pathErrors.add(message);
+      errors.push([message, rng]);
     }
     for (const tree of trees) {
       const err = optionalInsideRoot(tree, poolRootLength);
@@ -722,15 +724,9 @@ export function validateReferences(
       // checked as written, at its own `when:`, under the checks before it.
       const views = narrowing ?? new Narrowing({ producers, inputs: inputContracts });
       for (const [index, when, , whenRange] of whens) {
-        if (typeof when !== "string") continue;
-        let tree: ExprNode;
-        try {
-          tree = parseCondition(when);
-        } catch (error) {
-          // The CASE build reports a malformed `when:`.
-          if (error instanceof ExpressionError) continue;
-          throw error;
-        }
+        // The CASE build reports a malformed `when:`.
+        const tree = parsedWhen(when);
+        if (tree === null) continue;
         const where = `${result.siteName(nodeId, `cases[${index}].when`)} from`;
         for (const read of searchedWhenReads(views, nodeId, tree, registry ?? new Map())) {
           scan(`\${${referenceText(read.node)}}`, where, whenRange ?? inputRng, {
@@ -740,8 +736,6 @@ export function validateReferences(
             readFacts: read.facts,
             routedBases: read.routed,
             inboxTail: inboxSiteTail(nodeId, node, ""),
-            // A CASE's routing edges follow only `${x.output}` reads.
-            messages: false,
           });
         }
       }
@@ -766,8 +760,6 @@ export function validateReferences(
         siteInputs: nodeInputs,
         partialUnionFields,
         inboxTail: whole ? inboxSiteTail(nodeId, node, param) : TAKE_TAIL,
-        // A CASE's routing edges follow only `${x.output}` reads.
-        messages: !(node instanceof CaseNode),
       });
     }
   }

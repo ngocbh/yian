@@ -31,10 +31,4 @@ flow: |
       output: ${e.output}
   output: ${c.output}
 expect:
-  load:
-    diagnostics:
-    - code: compose.load
-      message: 'cannot infer type for inline binding ''c.input.is_buy'': a whole-value expression has no supported static scalar type; declare its type with a tag (`is_buy: !<type> ...`) or use an explicitly typed named `defs:` body'
-      frames:
-      - label: flow.yaml
-        range: [21, 15, 21, 43]
+  load: ok

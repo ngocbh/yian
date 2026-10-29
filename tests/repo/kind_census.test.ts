@@ -3,9 +3,9 @@
  *
  * The engine core (`runtime/engine.ts` + `runtime/eval_node.ts`) knows only an
  * abstract node contract and the closed `Outcome` sum; it must not branch on a
- * node's kind nor on a concrete `*Expansion` type. The census counts the lines
- * that do and holds the count at the ceiling, which is zero. It reads the source,
- * so it survives line-number drift.
+ * node's kind nor on a concrete `*Expansion` type. The census finds the lines
+ * that do and holds their count at zero. It reads the source, so it survives
+ * line-number drift.
  *
  * A kind-dispatch line holds any of, outside imports, comments and strings:
  *   - a `NodeKind` member (`NodeKind.AGENT`);
@@ -46,10 +46,6 @@ const SRC = new URL("../../src/", import.meta.url);
 /** The two modules, below `src`, that make up the engine core the census guards. */
 const CORE_MODULES = ["runtime/engine.ts", "runtime/eval_node.ts"];
 
-/** The most kind-dispatch lines the engine core may hold. */
-// The engine core dispatches only on node traits and hooks and the closed `Outcome` sum.
-const KIND_DISPATCH_CEILING = 0;
-
 /** The values of `NodeKind`. */
 const NODE_KINDS = new Set([
   "agent",
@@ -62,16 +58,6 @@ const NODE_KINDS = new Set([
   "call",
   "map",
 ]);
-
-/**
- * Return the core modules that are missing and must exist. Before the engine
- * lands (no core module and no `run.ts`) none must; after, both must, so a
- * rename can't switch the census off.
- */
-function missingCore(exists: (path: string) => boolean): string[] {
-  if (!exists("run.ts") && !CORE_MODULES.some((path) => exists(path))) return [];
-  return CORE_MODULES.filter((path) => !exists(path));
-}
 
 /** Kind references that count wherever they appear in code. */
 const KIND_REFERENCES = [
@@ -119,58 +105,18 @@ function dispatchLines(text: string): Set<number> {
   return lines;
 }
 
-const coreExists = (path: string) => existsSync(new URL(path, SRC));
-
-/** Return each existing core module's path mapped to its sorted kind-dispatch lines. */
-function census(): Record<string, number[]> {
-  return Object.fromEntries(
-    CORE_MODULES.filter(coreExists).map((path) => [
-      path,
-      [...dispatchLines(readFileSync(new URL(path, SRC), "utf8"))].sort((a, b) => a - b),
-    ]),
-  );
-}
-
-/** Return `""` when no core module is missing, else a message naming the missing ones. */
-function missingReport(): string {
-  const missing = missingCore(coreExists);
-  return missing.length === 0 ? "" : `engine core modules missing from src: ${missing.join(", ")}`;
-}
-
-const total = (sites: Record<string, number[]>) =>
-  Object.values(sites).reduce((sum, lines) => sum + lines.length, 0);
-
 describe("kind census", () => {
-  test("kind dispatch stays at or below the ceiling", () => {
-    expect(missingReport()).toBe("");
-    const sites = census();
-    const count = total(sites);
-    expect(
-      count <= KIND_DISPATCH_CEILING
-        ? ""
-        : `kind-dispatch census rose to ${count} (ceiling ${KIND_DISPATCH_CEILING}). ` +
-            `The engine core must not gain kind dispatch. Sites: ${JSON.stringify(sites)}`,
-    ).toBe("");
-  });
-
-  test("the ceiling matches the observed count", () => {
-    expect(missingReport()).toBe("");
-    const sites = census();
-    const count = total(sites);
-    expect(
-      count === KIND_DISPATCH_CEILING
-        ? ""
-        : `kind-dispatch census is ${count} but KIND_DISPATCH_CEILING is ${KIND_DISPATCH_CEILING}. ` +
-            `Set the ceiling to ${count} to keep the ratchet tight. Sites: ${JSON.stringify(sites)}`,
-    ).toBe("");
-  });
-
-  test("missing core files are allowed only before the engine exists", () => {
-    const over = (paths: string[]) => missingCore((path) => paths.includes(path));
-    expect(over([])).toEqual([]);
-    expect(over(["run.ts"])).toEqual(["runtime/engine.ts", "runtime/eval_node.ts"]);
-    expect(over(["runtime/engine.ts"])).toEqual(["runtime/eval_node.ts"]);
-    expect(over(["runtime/engine.ts", "runtime/eval_node.ts"])).toEqual([]);
+  test("the engine core exists and holds no kind dispatch", () => {
+    // A missing core module fails, so a rename can't switch the census off.
+    const missing = CORE_MODULES.filter((path) => !existsSync(new URL(path, SRC)));
+    expect(missing, "engine core modules missing from src").toEqual([]);
+    const sites: Record<string, number[]> = {};
+    for (const path of CORE_MODULES) {
+      const lines = [...dispatchLines(readFileSync(new URL(path, SRC), "utf8"))];
+      if (lines.length > 0) sites[path] = lines;
+    }
+    // The engine core dispatches only on node traits and hooks and the closed `Outcome` sum.
+    expect(sites, "kind-dispatch lines in the engine core; move kind-specific work into nodes/").toEqual({});
   });
 
   test("the detector counts dispatch sites", () => {

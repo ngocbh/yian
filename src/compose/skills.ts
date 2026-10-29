@@ -10,21 +10,18 @@
  */
 
 import { readdirSync } from "node:fs";
-import { userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 import { type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
-import { warn as platformWarn } from "../platform.ts";
+import { homeDir, isSystemError, statOrNull, warn as platformWarn } from "../platform.ts";
 import {
   checkSkillName,
-  isSystemError,
   readSkillText,
   resolvedPath,
   SKILL_FILE,
   Skill,
   SkillError,
-  statOrNull,
 } from "../skills/catalog.ts";
 import { isRecord, type ValueRecord } from "../typesys/index.ts";
 import { pathText } from "./helpers/source.ts";
@@ -36,7 +33,9 @@ export { Skill, SkillError } from "../skills/catalog.ts";
 /**
  * Read one skill directory.
  *
- * The frontmatter `name` wins; without it the directory name is used, as Claude Code does.
+ * The frontmatter `name` wins; without it the directory name is used, as Claude Code does. The
+ * name is the last part of the absolute path, so `.` works and a symlinked directory keeps its
+ * link's name.
  * Fields other than `name` and `description` are ignored.
  *
  * @param directory Directory containing `SKILL.md`. A symlinked directory is allowed; its
@@ -52,7 +51,7 @@ export function loadSkillDir(directory: string): Skill {
   const [meta, body] = splitFrontmatter(readSkillText(path), path);
   let name: string;
   try {
-    name = checkSkillName(Object.hasOwn(meta, "name") ? meta.name : pathName(directory));
+    name = checkSkillName(Object.hasOwn(meta, "name") ? meta.name : basename(resolve(directory)));
   } catch (error) {
     if (error instanceof SkillError) throw new SkillError(`${path}: ${error.message}`);
     throw error;
@@ -145,14 +144,14 @@ export function defaultSkillRoots({
   home,
   env = processEnv,
 }: { cwd?: string; home?: string; env?: Env } = {}): string[] {
-  const homeDir = home ?? (env("HOME") || userInfo().homedir);
+  const userHome = home ?? homeDir(env);
   const start = resolvedPath(cwd ?? process.cwd());
   const chain = [start];
   for (let parent = dirname(start); parent !== chain.at(-1); parent = dirname(parent)) chain.push(parent);
   // `statOrNull` throws on errors other than a missing path.
   const depth = chain.findIndex((level) => statOrNull(join(level, ".git")) !== null);
   const levels = depth === -1 ? [start] : chain.slice(0, depth + 1);
-  const roots = [join(homeDir, ".claude", "skills"), join(homeDir, ".agents", "skills")];
+  const roots = [join(userHome, ".claude", "skills"), join(userHome, ".agents", "skills")];
   for (const level of levels) roots.push(join(level, ".claude", "skills"), join(level, ".agents", "skills"));
   return roots;
 }
@@ -175,9 +174,4 @@ function splitFrontmatter(text: string, path: string): [ValueRecord, string] {
   }
   if (!isRecord(meta)) throw new SkillError(`${path}: frontmatter must be a mapping`);
   return [meta, lines.slice(index + 1).join("").replace(/^\n+/, "")];
-}
-
-/** `directory`'s last part: empty and `.` segments drop out. */
-function pathName(directory: string): string {
-  return directory.split("/").filter((part) => part !== "" && part !== ".").at(-1) ?? "";
 }

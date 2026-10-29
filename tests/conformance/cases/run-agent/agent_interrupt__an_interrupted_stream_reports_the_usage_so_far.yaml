@@ -90,7 +90,7 @@ expect:
         purpose: chat
         request_sha256: 7de94d825befe72ccf8ab4b0b2607e0d8e52aeda6c2004860876ee65a05e3882
         response_id: null
-        usage: {cache_read_tokens: null, input_tokens: 1000, output_tokens: 1, reasoning_tokens: null}
+        usage: {cache_creation_tokens: null, cache_read_tokens: null, input_tokens: 1000, output_tokens: 1, reasoning_tokens: null}
   - - node_step
     - chat
     - n: 2

@@ -1,0 +1,41 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    R: {n: int}
+  input:
+    approve: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: ${input.approve}
+          then: a
+      else: b
+    a:
+      kind: code
+      output: R
+      code: "return {n: 2}"
+    b:
+      kind: code
+      output: str
+      code: "return 'no'"
+    gate2:
+      kind: case
+      cases:
+        - when: "a.output?.n != null and a.output.n + 1 > 1 :- false"
+          then: hot
+      else: cold
+    hot:
+      kind: code
+      output: str
+      code: "return 'hot'"
+    cold:
+      kind: code
+      output: str
+      code: "return 'cold'"
+  output:
+    v: ${hot.output | cold.output}
+expect:
+  load: ok

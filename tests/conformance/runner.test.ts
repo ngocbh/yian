@@ -44,6 +44,7 @@ import {
 import type { Case, CaseContext, Kind, KindRunner } from "./runner.ts";
 import { lintSchema, loadSchema, validate } from "../helpers/schema.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import { current, forget, read, reload } from "../../src/defaults.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import {
   decodeRecord,
@@ -171,7 +172,8 @@ const AT = "host.models.n.agent[0]";
 const SENDS =
   "`host.sends` items are {inbox, event, after?|down?}, {close}, {withdraw, after?}, {interrupt, after?} or {complete, output | error}; " +
   "`hold: true` marks an item sent while the run waits that isn't followed by an advance";
-const COUNTS = "`host.sends[0].after` counts must be ints from 1";
+const COUNTS = "`host.sends[0].after` counts must be ints from 1, `chunk` from 0";
+const STOP_COUNTS = "`host.stop.a.after` counts must be ints from 1, `chunk` from 0";
 const USAGE = "{input_tokens: 1, output_tokens: 2, total_tokens: 3}";
 const CONSUMER_LIST = "agent, structured_retry, compose, backward, summary";
 const MEMORY_CONSUMER = "consumers go under `__memory__`, and `__memory__` holds only them";
@@ -524,7 +526,8 @@ describe("checkCase", () => {
       `${RUN}host: {stop: {a: {after: {chunk: 1}}}}`,
       "`host.stop.a.after` is `{model_call, chunk}`, `{model_call}` or `{tool_call}`",
     ],
-    [`${RUN}host: {stop: {a: {after: {model_call: 0}}}}`, "`host.stop.a.after` counts must be ints from 1"],
+    [`${RUN}host: {stop: {a: {after: {model_call: 0}}}}`, STOP_COUNTS],
+    [`${RUN}host: {stop: {a: {after: {model_call: 1, chunk: -1}}}}`, STOP_COUNTS],
     [
       `${BARE_BACKWARD}backward: [{feedback: f}]`,
       "a `backward` case needs `run.learnable: true`",
@@ -937,6 +940,36 @@ describe("setUp", () => {
     const bare = setUp({ kind: "cli" }, temp());
     made.push(bare.dir);
     expect(bare.env).toEqual({});
+  });
+});
+
+describe("expr and value", () => {
+  const made: string[] = [];
+  afterEach(() => {
+    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+    forget();
+  });
+
+  test("a case's env applies to its own reads and leaves the defaults a caller installed", async () => {
+    const outer = (name: string) => (name === "YIAN_MAX_VALUE_NESTING" ? "5" : undefined);
+    reload(outer);
+    const message =
+      "expression nests deeper than 2 levels, the limit for a yian expression (each call, list, unary operator, " +
+      "comparison, and chain of operators is a level); split it into smaller bindings or steps";
+    const cases = [
+      // Raises only under the case's limit of 2, not the caller's 5.
+      'kind: expr\nexpr: "[[[x]] for x in xs]"\nvalues: {xs: [1, 2]}\nenv: {YIAN_MAX_VALUE_NESTING: "2"}\n' +
+        `expect: {raises: {class: ExpressionError, message: "${message}"}}\n`,
+      "kind: value\nenv: {YIAN_MAX_VALUE_NESTING: '3'}\ntype: Any\nvalue: [[1]]\n" +
+        "expect: {value: [[1]], kind: \"list[Any]\"}\n",
+    ];
+    for (const text of cases) {
+      const case_ = prepare(checkCase(readCase(text)));
+      const ctx = setUp(case_, join(tmpdir(), "none"));
+      made.push(ctx.dir);
+      await RUNNERS[case_["kind"] as Kind]!(case_, ctx);
+      expect(current()).toEqual(read(outer));
+    }
   });
 });
 
@@ -1894,6 +1927,131 @@ expect:
     const cuts: string[] = [];
     await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
     expect(cuts.length).toBeGreaterThan(0);
+  }, SWEEP);
+
+  /** Return the prepared case `text` and its set-up directory. */
+  function sweepCase(text: string): [Case, CaseContext] {
+    const case_ = prepare(checkCase(readCase(text)));
+    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
+    made.push(ctx.dir);
+    return [case_, ctx];
+  }
+
+  // An agent that calls `lookup` once and answers, its second request scripted.
+  const LOOKUP = `kind: run
+flow: |
+  id: m
+  name: m
+  nodes:
+    research:
+      kind: agent
+      tools: [lookup]
+      output: str
+      llm_config: {provider: openai, model: gpt-5.5}
+      system_prompt: Help.
+      prompt: "Look up x."
+  output: \${research.output}
+env: {OPENAI_API_KEY: "<key:1>"}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters: {type: object, properties: {q: {type: string}}, required: [q]}
+      results:
+      - return: X1
+  models:
+    research:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: tool_call, id: c1, name: lookup, arguments: {q: x}}]
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: found X1}]}
+        request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - {format: yian.message.v1, role: user, parts: [{type: text, text: Look up x.}]}
+          - format: yian.message.v1
+            role: assistant
+            parts: [{type: tool_call, id: c1, name: lookup, arguments: {q: x}}]
+          - format: yian.message.v1
+            role: tool
+            parts: [{type: tool_result, call_id: c1, name: lookup, content: X1}]
+          tools:
+          - name: lookup
+            description: ""
+            parameters: {type: object, properties: {q: {type: string}}, required: [q]}
+expect:
+  output: {status: succeeded, output: found X1}
+`;
+
+  test("a cut between a reply and its tool results expects the crashed closer in the next request", async () => {
+    // Cut after the reply (record 9), the resume closes `lookup`'s call `crashed` instead of
+    // calling it: its entry stays unused, and the next request reads the closer for its result.
+    const [case_, ctx] = sweepCase(LOOKUP);
+    const cuts: string[] = [];
+    await crashSweep(case_, ctx, { beforeResume: (log) => cuts.push(log) });
+    expect(cuts.length).toBeGreaterThan(0);
+  }, SWEEP);
+
+  test("fails a resume whose replayed reply changed, though the call it made closes crashed", async () => {
+    const [case_, ctx] = sweepCase(LOOKUP);
+    const damage = (log: string) => {
+      writeFileSync(log, readFileSync(log, "utf8").replace('"arguments":{"q":"x"}', '"arguments":{"q":"DAMAGED"}'));
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: damage });
+    await expect(failure).rejects.toThrow(
+      "the resume's host calls differ from the script (crash sweep, cut after record 9)\n" +
+        "`host.models.research.agent[1].request` differs",
+    );
+  }, SWEEP);
+
+  test("fails a resume that closes other calls crashed than the cut cut off", async () => {
+    const [case_, ctx] = sweepCase(LOOKUP);
+    const rename = (log: string) => {
+      writeFileSync(log, readFileSync(log, "utf8").replace('"id":"c1"', '"id":"c2"'));
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: rename });
+    await expect(failure).rejects.toThrow(
+      "the resume closed [research c2] crashed, but the cut cut off [research c1] (crash sweep, cut after record 9)",
+    );
+  }, SWEEP);
+
+  test("fails a resume whose model request differs from its scripted one, though its reply is the same", async () => {
+    // The agent's second request carries lookup's result. A cut right after that result is
+    // recorded makes the resume send the request again, now with the rewritten result; the
+    // scripted reply hides it from the output and the node outcomes.
+    const [case_, ctx] = sweepCase(LOOKUP);
+    const rewrite = (log: string) => {
+      writeFileSync(log, readFileSync(log, "utf8").replace('"output":"X1"', '"output":"X9"'));
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: rewrite });
+    await expect(failure).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failure).rejects.toThrow(
+      "the resume's host calls differ from the script (crash sweep, cut after record 10)\n" +
+        "`host.models.research.agent[1].request` differs",
+    );
+  }, SWEEP);
+
+  test("fails a resume that leaves a script entry unused", async () => {
+    // An entry nothing calls: the uncut run leaves it too, so each resume must report it.
+    const spare = "host:\n  tools:\n    spare:\n      parameters: {type: object, properties: {}}\n      results: [{return: s}]\n";
+    const case_ = prepare(checkCase(readCase(TWO_NODES.replace("expect:", `${spare}expect:`))));
+    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
+    made.push(ctx.dir);
+    const failure = crashSweep(case_, ctx);
+    await expect(failure).rejects.toThrow("`host.tools.spare.results` has 1 entry left (crash sweep, cut after record 4)");
+  }, SWEEP);
+
+  test("fails a filled secret in a sweep's run log", async () => {
+    const case_ = prepare(checkCase(readCase(TWO_NODES.replace("expect:", 'env: {OPENAI_API_KEY: "<key:1>"}\nexpect:'))));
+    const ctx = setUp(case_, join(CASES, "..", "fixtures"));
+    made.push(ctx.dir);
+    const leak = (log: string) => {
+      writeFileSync(log, readFileSync(log, "utf8").replace('"value":"x"', '"value":"sk-conformance-1"'));
+    };
+    const failure = crashSweep(case_, ctx, { beforeResume: leak });
+    await expect(failure).rejects.toThrow("secret sk-conformance-1 appears in the run log (crash sweep, cut after record 9)");
   }, SWEEP);
 
   test("fails the strong oracle when a recorded value changes before the resume", async () => {

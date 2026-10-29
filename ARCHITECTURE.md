@@ -49,7 +49,7 @@ flowchart LR
 | `memory/` | Memory contracts and the episodic, reflective and profile memories, with their storage |
 | `memory_host.ts` | Builds the memories a flow declares and owns their lifetime |
 | `platform.ts` | The only module that uses Bun- or Node-specific APIs (SQLite, file locks, `fetch`, timers) |
-| `cli/` | The `yian` command: the bin (`bin.ts`), which checks the runtime floor first, the command table (`index.ts`), its handlers in `run.ts` (`run`, `check`, `status`, `skills check`), `chat.ts` and `auth.ts` (`auth`, `providers`, `models`, `config check`), and their helpers |
+| `cli/` | The `yian` command: the bin (`bin.ts`), which checks the runtime floor first, the command table (`index.ts`), its handlers in `run.ts` (`run`, `check`, `status`, `skills check`), `inbox_chat.ts` (the inbox chat `run` hands a terminal chat to), `chat.ts` (`chat`, which runs the bundled assistant flow in `flows/` through the inbox chat) and `auth.ts` (`auth`, `providers`, `models`, `config check`), and their helpers, among them the start-up `run` and `chat` share (`startup.ts`), the rendering of diagnostics and boxes (`render.ts`), the cells text takes on a terminal (`cells.ts`), the sanitizing of text printed on the terminal (`sanitize.ts`), loading a flow confined to a root folder (`confined_load.ts`, for `check --root` and the chat's tools), the chat assistant's file tools (`chat_tools.ts`) and run tools (`chat_run_tools.ts`), the diff its approval card shows (`diff.ts`), its look on a terminal (`chat_view.ts`) and the Markdown it draws replies in (`markdown.ts`), the child runs it starts and drives (`chat_runs.ts`) and shows on a screen of their own (`run_view.ts`), and the child events it relays to its assistant (`chat_events.ts`) and the flusher that sends them (`chat_flush.ts`), and what the chat carries inside the CLI: the generated `bundled.ts` (its flows, the `composing-agents` skill and the docs pages) and the skill's cache folder (`bundled_skill.ts`) |
 
 ## Rules that must not break
 
@@ -78,9 +78,9 @@ count at zero.
 **Imports go one way.** `diagnostics`, `defaults`, `typesys` and `platform` sit at the bottom;
 `events`, `expr`, `llm`, `llm_clients`, `tools`, `skills` and `memory` above them; then `nodes`,
 then `compile`, then `compose` and `runtime`; then `run.ts` and `memory_host.ts`; then `index.ts`
-and `cli/`. A module never imports one above it. `tests/repo/layer_direction.test.ts` holds the
-main edges of this order, and also that only `platform.ts` touches Bun or `fetch` and only
-`defaults.ts` reads the environment.
+and `cli/`. A module never imports one above it. `tests/repo/layer_direction.test.ts` holds this
+order, failing on a new `src/` entry until it has a layer, and also that only `platform.ts`
+touches Bun or `fetch` and only `defaults.ts` reads the environment.
 
 **Failure codes are a closed list.** `failure.code` is how a host tells failures apart. A new code
 needs a distinct host reaction, a test, a conformance case and its entry on the docs Reference

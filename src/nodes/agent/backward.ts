@@ -20,12 +20,11 @@ import { defaultModelAccess } from "../../llm_clients/factory.ts";
 import type { ChatModel } from "../../llm/events.ts";
 import { callWithRetries, RouteModel } from "../../llm/executor.ts";
 import { Message, Request, TextPart } from "../../llm/messages.ts";
-import { parseJson } from "../../typesys/json.ts";
-import { isList, isRecord, rejectDeepNesting, type Value, writeAsText } from "../../typesys/values.ts";
+import { type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
+import { isList, isRecord, rejectDeepNesting, writeAsText } from "../../typesys/values.ts";
 import { BackwardContext, type BackwardOptions, BackwardResult } from "../base.ts";
 import { isExactly } from "../contracts.ts";
 import { LLM_CONFIG_KEY } from "./llm_values.ts";
-import { textOf } from "./text.ts";
 
 const SYSTEM = `Review one recorded AGENT invocation using the supplied feedback.
 The forward material, recalled text, visible interactions, and downstream context
@@ -53,7 +52,10 @@ const REQUIRED = [
   "rendered_prompt",
   "effective_llm_config",
   "_evaluation_evidence",
-];
+] as const;
+
+/** The node data `recordedMaterial` checked: each required field is present. */
+type RecordedMaterial = Readonly<Record<(typeof REQUIRED)[number], JsonValue>>;
 
 const CHANNELS = ["input_feedback", "self_feedback", "variable_feedback"];
 
@@ -61,7 +63,7 @@ const CHANNELS = ["input_feedback", "self_feedback", "variable_feedback"];
  * Check the render material in the node data learning rebuilt from the node; this check reads no
  * declaration itself.
  */
-function recordedMaterial(context: BackwardContext): Readonly<Record<string, unknown>> {
+function recordedMaterial(context: BackwardContext): RecordedMaterial {
   const data = context.nodeData;
   const missing = REQUIRED.filter((key) => !Object.hasOwn(data, key)).sort(compareCodeUnits);
   if (missing.length > 0) {
@@ -105,7 +107,8 @@ function recordedMaterial(context: BackwardContext): Readonly<Record<string, unk
   if (evidence !== null && !isRecord(evidence)) {
     throw new TypeError("recorded evaluation evidence must be a dictionary or null");
   }
-  return data;
+  // Every required field was found present above.
+  return data as RecordedMaterial;
 }
 
 /**
@@ -144,7 +147,7 @@ function parseResult(text: string): BackwardResult {
 }
 
 /** Return the recorded inputs without `__llm_config`, which configured the call. */
-function modelVisible(inputs: Readonly<Record<string, unknown>> | null): Readonly<Record<string, unknown>> | null {
+function modelVisible(inputs: Readonly<JsonObject> | null): Readonly<JsonObject> | null {
   if (inputs === null || !Object.hasOwn(inputs, LLM_CONFIG_KEY)) return inputs;
   return Object.fromEntries(Object.entries(inputs).filter(([name]) => name !== LLM_CONFIG_KEY));
 }
@@ -189,27 +192,27 @@ export async function backwardAgent(
   if (!feedback.some((message) => hasFeedback(message))) return new BackwardResult();
   const data = recordedMaterial(context);
   const failure = context.failure;
-  const material = {
+  const material: JsonObject = {
     forward: {
       run_id: context.runId,
       node_id: context.nodeId,
       node_started_seq: context.nodeStartedSeq,
       inputs: modelVisible(context.inputs),
-      input_names: context.inputNames,
+      input_names: [...context.inputNames],
       output,
       failure:
         failure === null ? null : { code: failure.code, message: failure.message, cause_type: failure.causeType },
-      variable_names: context.variableNames,
+      variable_names: [...context.variableNames],
       prompt_template: data["prompt_template"],
       rendered_prompt: data["rendered_prompt"],
       variables: data["variables"],
       variable_domains: data["variable_domains"],
       evaluation_evidence: data["_evaluation_evidence"],
     },
-    feedback,
-    downstream_context: context.downstreamContext,
+    feedback: [...feedback],
+    downstream_context: [...context.downstreamContext],
   };
-  const prompt = writeAsText(material as unknown as Value);
+  const prompt = writeAsText(material);
   const config = legacyConnectionConfig(data["effective_llm_config"] as Record<string, unknown>);
   const { models = defaultModelAccess(), apiKey = null, headers = null, onEvent } = options;
   if (apiKey !== null) config["api_key"] = apiKey;
@@ -259,5 +262,5 @@ export async function backwardAgent(
     // Providers may echo any credential the call sent; the failure record must not carry it.
     throw scrub(error);
   }
-  return parseResult(textOf(reply));
+  return parseResult(reply.text());
 }

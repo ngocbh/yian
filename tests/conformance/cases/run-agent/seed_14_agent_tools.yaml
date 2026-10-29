@@ -99,7 +99,7 @@ expect:
     - [pool_commit, __start__, {value: {topic: rates}}]
     - [node_succeeded, __start__, {commit: 6}]
     - [node_started, reviewer]
-    - [node_step, reviewer, {n: 1, step: {finish: null, kind: model_call, model: claude-opus-4-8, output: {format: yian.message.v1, parts: [{text: Rates held steady this quarter., type: text}], role: assistant}, purpose: chat, request_sha256: 4e7506b6087d69e969bdcdfa00c47a9f1fcc9c26381aaf2ff6c80e11723fd711, response_id: null, usage: null}}]
+    - [node_step, reviewer, {n: 1, step: {finish: null, kind: model_call, model: claude-opus-4-8, output: {format: yian.message.v1, parts: [{text: Rates held steady this quarter., type: text}], role: assistant}, purpose: chat, request_sha256: 209abd3e6780e0065de282f1c3ca24307e9afe4120e9f9bf98606981a0edb58c, response_id: null, usage: null}}]
     - [node_step, reviewer, {n: 2, step: {finish: null, kind: model_call, model: claude-opus-4-8, output: {format: yian.message.v1, parts: [{text: '{"claim": "Rates held steady.", "confidence": 0.7}', type: text}], role: assistant}, purpose: structured_native, request_sha256: 2bfc05d15326df01ca6d2750c89f679403353ca89645094ef7201e5468f13845, response_id: null, usage: null}}]
     - [pool_commit, reviewer, {value: {claim: Rates held steady., confidence: 0.7}}]
     - [pool_commit, reviewer, {key: reviewer.new_messages, steps: [9, 10]}]

@@ -39,7 +39,7 @@ import { realScheduler, type Scheduler } from "../platform.ts";
 import { isRecord } from "../typesys/index.ts";
 import { parseJson } from "../typesys/json.ts";
 import { Terminal } from "./terminal.ts";
-import { type CliIo, type ParsedArgs, printJson, UsageError, type Writer } from "./utils.ts";
+import { type CliIo, forTerminal, type ParsedArgs, printJson, stopOnSignals, UsageError, type Writer } from "./utils.ts";
 
 const KINDS: Readonly<Record<string, string>> = { api_key: "api-key", subscription: "subscription", none: "none" };
 const CANCELLED = "Authentication cancelled; the previous login is unchanged";
@@ -501,7 +501,9 @@ async function setupOpenai(
     const openUrl = ctx.deps.openUrl ?? ((url: string) => openBrowser(url, ctx.io.stdout));
     credentials =
       login === "device"
-        ? await service.deviceLogin((url, code) => ctx.io.stdout.write(`Open ${url} and enter code: ${code}\n`))
+        ? await service.deviceLogin((url, code) =>
+            ctx.io.stdout.write(forTerminal(`Open ${url} and enter code: ${code}\n`, ctx.io.stdout)),
+          )
         : await service.browserLogin(openUrl);
     models = await service.subscriptionModels(credentials);
     choices = models;
@@ -513,7 +515,9 @@ async function setupOpenai(
     const apiCredentials = new ApiKeyCredentials(key, values);
     credentials = apiCredentials;
     try {
-      models = await service.apiModels(apiCredentials, { organization, project });
+      // Runs with this login go to OPENAI_BASE_URL when it is set, so the key must go there too.
+      const endpoint = ctx.io.env("OPENAI_BASE_URL") || undefined;
+      models = await service.apiModels(apiCredentials, { organization, project, endpoint });
     } catch (error) {
       // The messages are fixed today; scrubbed so no sent secret can reach output.
       if (!(error instanceof AuthError)) throw error;
@@ -712,7 +716,7 @@ async function setupProvider(
         model = await choose("Model:", models, { initial: models[0]!, option: "--model" }, ctx);
       } else {
         await ctx.io.stdout.write(
-          `Couldn't list the ${provider} models (${failure || "none were returned"}); type a model name\n`,
+          `Couldn't list the ${provider} models (${forTerminal(failure || "none were returned", ctx.io.stdout)}); type a model name\n`,
         );
         model = await ask("Model:", "--model", ctx);
       }
@@ -724,27 +728,6 @@ async function setupProvider(
   }
   await store.save(provider, key ? new ApiKeyCredentials(key, values) : null, model, { endpoint, makeDefault });
   await ctx.io.stdout.write(`Saved ${provider} login (${key ? "api-key" : "none"}) with model ${model}\n`);
-}
-
-/**
- * Abort `controller` on the first of the signals `names` that `target` emits, and return the
- * function that stops listening. The first signal stops listening, so a second one gets the
- * signal's default action (for a process, it ends it).
- */
-function onStopSignals(
-  names: readonly NodeJS.Signals[],
-  controller: AbortController,
-  target: Pick<EventEmitter, "on" | "off">,
-): () => void {
-  const off = () => {
-    for (const name of names) target.off(name, stop);
-  };
-  const stop = () => {
-    off();
-    controller.abort();
-  };
-  for (const name of names) target.on(name, stop);
-  return off;
 }
 
 /**
@@ -816,7 +799,7 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
     deps.terminal !== undefined ? deps.terminal : io.stdin.isTTY === true ? new Terminal({ input: io.stdin }) : null;
   const ctx: SetupContext = { io, deps, terminal, signal: stop.signal };
   // Installed right before the `try` whose `finally` removes them.
-  const off = onStopSignals(names, stop, deps.signals ?? process);
+  const off = stopOnSignals(stop, deps.signals ?? process, names);
   try {
     if (provider === undefined) {
       const { method, login, model, apiKeyEnv, endpoint, organization, project } = options;
@@ -895,7 +878,7 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
       // Device sign-in writes JSON lines, so its error is an event line too.
       await printJson(device ? { event: "error", error: failure } : { error: failure }, io.stdout);
     } else {
-      await io.stderr.write(`${error.message}\n`);
+      await io.stderr.write(`${forTerminal(error.message, io.stderr)}\n`);
     }
     return 1;
   } finally {
@@ -1047,9 +1030,10 @@ async function subscriptionModels(
  * `yian models --auth-file F` lists the models the openai subscription login saved in F offers, in
  * its order, refreshing an expiring token first. `yian models --provider P` lists the model ids
  * P's host gives the key read from stdin (none when stdin is empty or a terminal), sorted;
- * `--base-url` lists another host. azure has no model listing. `--timeout` (default 8) bounds the
- * whole listing, in seconds. Prints a `yian.cli.v1` document `{models}` or `{error: {code,
- * message, status}}` with `--json`, else one id per line, or the failure on stderr.
+ * `--base-url` lists another host, and for openai `OPENAI_BASE_URL` does when it is set. azure has
+ * no model listing. `--timeout` (default 8) bounds the whole listing, in seconds. Prints a
+ * `yian.cli.v1` document `{models}` or `{error: {code, message, status}}` with `--json`, else one
+ * id per line, or the failure on stderr.
  *
  * @returns 0, or 1 when the listing fails.
  * @throws {UsageError} Not exactly one of `--auth-file` and `--provider` is given, `--base-url`
@@ -1086,13 +1070,14 @@ export async function models(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}
       key = text.trim() || null;
     }
     try {
-      listed = await (deps.listModels ?? listModels)(provider, { apiKey: key, baseUrl: baseUrl ?? null, timeout });
+      // Runs with an openai key go to OPENAI_BASE_URL when it is set, so its key must not go to OpenAI's host.
+      const listedUrl = baseUrl ?? ((provider === "openai" && io.env("OPENAI_BASE_URL")) || null);
+      listed = await (deps.listModels ?? listModels)(provider, { apiKey: key, baseUrl: listedUrl, timeout });
     } catch (failure) {
       if (!(failure instanceof ModelListError)) throw failure;
-      const reason = failure.message;
       error = {
-        code: reason === "timed out" ? "models.timeout" : "models.failed",
-        message: `Couldn't list the ${provider} models: ${reason}`,
+        code: failure.timedOut ? "models.timeout" : "models.failed",
+        message: `Couldn't list the ${provider} models: ${failure.message}`,
         status: failure.status === null ? null : BigInt(failure.status),
       };
     }
@@ -1122,11 +1107,11 @@ export async function models(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}
   const json = command.options["json"] === true;
   if (error !== null) {
     if (json) await printJson({ error }, io.stdout);
-    else await io.stderr.write(`${error.message}\n`);
+    else await io.stderr.write(`${forTerminal(error.message, io.stderr)}\n`);
     return 1;
   }
   if (json) await printJson({ models: listed === null ? null : [...listed] }, io.stdout);
   else if (listed === null) await io.stderr.write(`${provider} has no model listing\n`);
-  else for (const model of listed) await io.stdout.write(`${model}\n`);
+  else for (const model of listed) await io.stdout.write(`${forTerminal(model, io.stdout)}\n`);
   return 0;
 }

@@ -1,0 +1,27 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    big: !bool
+  llm_config: {provider: openai}
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: input.big
+          then: slow
+    slow: {kind: code, output: str, code: "return 'model-big'"}
+    chat:
+      kind: agent
+      prompt: Go.
+      llm_config: {model: !str '${gate.output}'}
+  output: ${chat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'case node ''gate'' produces a value, so it must be exhaustive: add an `else:` (a searched case needs an else:)'
+      frames:
+      - label: flow.yaml
+        range: [7, 3, 7, 7]

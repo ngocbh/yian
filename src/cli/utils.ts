@@ -8,12 +8,16 @@
  * - `printJson` writes the one `yian.cli.v1` document a `--json` command prints.
  * - `relay` copies the `run --json` child's document to the entry's stdout; `abortOnSignal` turns
  *   the stop the entry forwards to the child into its `CliIo.stop`, aborted with a `HostStop`.
+ * - `stopOnSignals` stops a command's controller with a `HostStop` on the first stop signal.
+ * - `forTerminal` takes the escape sequences and control characters out of model, tool and
+ *   provider text written to a TTY (`stripControls`); piped output stays exact.
  * - `ensureEnvKey` is the interactive key prompt `llm_clients/api_key_env.ts` points at; `yian run`
  *   calls it pre-flight for agents without a saved login, so a missing key surfaces as an upfront
  *   prompt instead of a failure on the first API call. It prompts only when given a terminal;
  *   without one it returns the ambient key, or throws for a required key that is missing, so
  *   non-interactive runs stay scriptable. It reads the environment through a `CommandEnv`, and
  *   records a prompted key there rather than in the process environment.
+ * - `sleepUntil` waits for a wall-clock time on a scheduler, as the chat waits for a run's `wakeAt`.
  */
 
 import { accessSync, constants, statSync } from "node:fs";
@@ -22,6 +26,7 @@ import { parseArgs } from "node:util";
 import { current, type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
+import { type Scheduler, SLEEP_CHUNK_MS } from "../platform.ts";
 import { logJson } from "../typesys/json.ts";
 import type { Terminal } from "./terminal.ts";
 
@@ -43,13 +48,59 @@ export interface CliIo {
   stdout: Writer;
   stderr: Writer;
   stdin: NodeJS.ReadableStream & { isTTY?: boolean };
-  stderrStream: NodeJS.WritableStream & { columns?: number };
+  stderrStream: NodeJS.WritableStream & { isTTY?: boolean; columns?: number };
   env: Env;
   /**
    * A stop from outside the process's signals, aborted with a `HostStop`: aborted, or aborting
    * later, it stops the run.
    */
   stop?: AbortSignal;
+}
+
+// An escape sequence, matched whole: CSI (7-bit or C1) to its final byte; OSC through BEL or ST;
+// DCS, SOS, PM and APC through ST; or ESC with intermediates and a final byte (`ESC 7`, `ESC ( B`).
+// The string bodies stop at the first ESC, BEL or C1 character (ST and every introducer among them),
+// so an unended one scans only to the next sequence and the whole match stays linear.
+const ESCAPE_SEQUENCE =
+  /(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|(?:\x1b\]|\x9d)[^\x07\x1b\x80-\x9f]*(?:\x07|\x1b\\|\x9c)|(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x80-\x9f]*(?:\x1b\\|\x9c)|\x1b[ -/]*[0-~]/g;
+// Each C0 control but `\t` and `\n`, DEL and each C1 control.
+const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+
+/**
+ * Return `text` with what a terminal would act on taken out: `\r\n` read as `\n`, each escape
+ * sequence dropped whole, then each other control character but `\t` and `\n` (ESC, CR and C1
+ * included).
+ */
+export function stripControls(text: string): string {
+  return text.replaceAll("\r\n", "\n").replace(ESCAPE_SEQUENCE, "").replace(CONTROL, "");
+}
+
+/**
+ * Return `text` as it may be written to `out`: through `stripControls` when `out` is a TTY, as is
+ * otherwise. Model, tool and provider text can carry escape sequences that move the cursor, set
+ * the clipboard or forge a link; piped output keeps its exact bytes.
+ */
+export function forTerminal(text: string, out: Writer): string {
+  return out.isTTY ? stripControls(text) : text;
+}
+
+// Characters a POSIX shell word may hold unquoted.
+const SHELL_SAFE = /^[A-Za-z0-9_@%+=:,./-]+$/;
+
+/**
+ * Return `text` as one POSIX shell word: as is when it holds only safe characters, else in single
+ * quotes, each `'` written `'\''`. Used for the commands the CLI prints for you to paste.
+ */
+export function shellQuote(text: string): string {
+  return SHELL_SAFE.test(text) ? text : `'${text.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * Whether `io`'s stdin and stderr are both TTYs, so a `Terminal` over them may draw with escape
+ * codes; otherwise it should be `plain`.
+ */
+export function atTerminal(io: CliIo): boolean {
+  return io.stdin.isTTY === true && io.stderrStream.isTTY === true;
 }
 
 /** The last write each `streamWriter` started, which `flush` awaits. */
@@ -149,6 +200,34 @@ export function abortOnSignal(
   const controller = new AbortController();
   target.on(name, () => controller.abort(reason));
   return controller.signal;
+}
+
+const STOP_SIGNALS: readonly NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+/**
+ * Abort `controller` with a `HostStop` naming the signal on the first of `names` (SIGINT, SIGTERM
+ * and SIGHUP unless given) that `target` emits, and return a disposer that removes the listeners.
+ *
+ * The first signal removes every listener, so a second one gets the default action and ends the
+ * process. An already aborted controller keeps its reason.
+ */
+export function stopOnSignals(
+  controller: AbortController,
+  target: Pick<NodeJS.EventEmitter, "on" | "off"> = process,
+  names: readonly NodeJS.Signals[] = STOP_SIGNALS,
+): () => void {
+  const listeners = names.map((signal) => {
+    const listener = () => {
+      dispose();
+      controller.abort(new HostStop(signal));
+    };
+    return [signal, listener] as const;
+  });
+  const dispose = () => {
+    for (const [signal, listener] of listeners) target.off(signal, listener);
+  };
+  for (const [signal, listener] of listeners) target.on(signal, listener);
+  return dispose;
 }
 
 /** A command's view of the environment: the values it `set`, over the base environment. */
@@ -270,12 +349,13 @@ function checkPath(hint: string, value: string, check: PathCheck): void {
   if (check.writable && !can(constants.W_OK)) fail("is not writable");
 }
 
-/** Return `text` as an int `option` accepts, or throw a `UsageError`. */
+/** Return `text` as a safe int `option` accepts, or throw a `UsageError`. */
 function toInt(option: OptionSpec, text: string): number {
-  if (!/^-?[0-9]+$/.test(text)) {
+  const value = Number(text);
+  // Past 2^53 a Number no longer holds the digits given.
+  if (!/^-?[0-9]+$/.test(text) || !Number.isSafeInteger(value)) {
     throw new UsageError(`Invalid value for ${optionHint(option)}: ${reprText(text)} is not a valid integer.`);
   }
-  const value = Number(text);
   if (option.min !== undefined && value < option.min) {
     throw new UsageError(`Invalid value for ${optionHint(option)}: ${value} is not in the range x>=${option.min}.`);
   }
@@ -551,4 +631,16 @@ export function osReason(error: NodeJS.ErrnoException): string {
   const at = error.syscall === undefined ? -1 : reason.indexOf(`, ${error.syscall}`);
   if (at !== -1) reason = reason.slice(0, at);
   return reason.charAt(0).toUpperCase() + reason.slice(1);
+}
+
+/**
+ * Resolve once `scheduler`'s clock reaches `at` (epoch milliseconds), re-reading it after each
+ * chunk, so a laptop that slept still wakes on time.
+ *
+ * @throws `signal.reason` once it aborts.
+ */
+export async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal): Promise<void> {
+  for (let left = at - scheduler.now(); left > 0; left = at - scheduler.now()) {
+    await scheduler.sleep(Math.min(left, SLEEP_CHUNK_MS), signal);
+  }
 }

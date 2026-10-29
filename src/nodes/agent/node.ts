@@ -697,7 +697,7 @@ export class AgentNode extends Node {
 
   /** Rebuild this agent's new messages (see `rebuildMessages` in `messages.ts`). */
   override rebuildMessages(
-    steps: readonly Readonly<JsonObject>[],
+    steps: readonly Readonly<ValueRecord>[],
     output: TypedValue | null,
     localTypes: ReadonlyMap<string, Type | null> | null = null,
   ): TypedValue {
@@ -1115,7 +1115,9 @@ export class AgentNode extends Node {
         if (captured !== null) captured["rendered_prompt"] = messages[0]!.text;
       } else {
         messages = renderPromptList(this.id, this.prompt, record, declared);
-        if (captured !== null) captured["rendered_prompt"] = logJson(messages.map((message) => message.captured));
+        if (captured !== null) {
+          captured["rendered_prompt"] = captureValue(() => logJson(messages.map((message) => message.captured)));
+        }
       }
       systemPrompt =
         this.systemPrompt === null ? DEFAULT_SYSTEM : renderTemplateRecord(this.systemPrompt, record, declared);
@@ -1139,9 +1141,10 @@ export class AgentNode extends Node {
   /**
    * Render `inputs` again as `forward` renders them (`renderPrompt`) and return its capture: the
    * actual template, the resolved variable values and domains, and the rendered prompt, with the
-   * parts established before a render that fails, as the run's render failed the same way.
+   * parts established before a render the run refused the same way (a variable colliding with an
+   * input, or a rebuild refusal, `isRebuildRefusal`).
    *
-   * @throws CapabilityFault when the capture fails.
+   * @throws CapabilityFault when the capture fails; any other error the render throws, unchanged.
    */
   override renderCapture(
     inputs: Readonly<Record<string, unknown>>,
@@ -1149,10 +1152,14 @@ export class AgentNode extends Node {
   ): Record<string, unknown> {
     let captured: Record<string, unknown> = {};
     try {
-      // No skills: the grants are read after the capture, which is all this needs.
+      // No skills: the grants are read after the capture, which is all this needs, so a node that
+      // grants skills ends in a `SkillError`.
       this.renderPrompt(inputs, null, { capture: (data) => void (captured = { ...data }), localTypes });
     } catch (error) {
-      if (error instanceof CapabilityFault) throw error;
+      // The render refuses a colliding variable first, so a RangeError then is that refusal.
+      if (!isRebuildRefusal(error) && !(error instanceof RangeError && collidingVariable(this, inputs) !== null)) {
+        throw error;
+      }
     }
     return captured;
   }

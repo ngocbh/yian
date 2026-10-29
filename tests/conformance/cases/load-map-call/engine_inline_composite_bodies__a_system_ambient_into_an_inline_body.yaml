@@ -1,0 +1,24 @@
+kind: load
+flow: |
+  id: p
+  name: p
+  nodes:
+    wrap:
+      kind: call
+      input:
+        day: ${system.today}
+        now: ${system.now}
+        run: ${system.run_id}
+      nodes:
+        echo:
+          kind: code
+          input:
+            day: !date ${input.day}
+            now: !datetime ${input.now}
+            run: !str ${input.run}
+          output: str
+          code: return String(inputs.day)
+      output: ${echo.output}
+  output: ${wrap.output}
+expect:
+  load: ok

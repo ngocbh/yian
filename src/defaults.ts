@@ -152,6 +152,14 @@ export const ENTRIES = Object.freeze([
     group: "limit",
     minimum: 2,
   }),
+  // A body can throw any amount of text, and its failure is written to the run log twice:
+  // as the message and inside the traceback.
+  entry("MAX_FAILURE_CHARS", {
+    default: 10_000,
+    description: "Longest message or traceback a failure records; a longer one is cut and says how much was cut",
+    group: "limit",
+    minimum: 1,
+  }),
   // Defaults for node and memory behavior; a flow can override some of them.
   entry("AGENT_RETRIES", {
     default: 2,
@@ -284,6 +292,14 @@ export const ENTRIES = Object.freeze([
     group: "setting",
     minimum: 1,
   }),
+  // A hung holder of a profile's `.lock` would otherwise stall a run or a backward pass
+  // forever; SQLite memory storage fails at once instead.
+  entry("PROFILE_LOCK_TIMEOUT_SECONDS", {
+    default: 30,
+    description: "Longest wait in seconds for another writer to release a profile memory's `.lock` file",
+    group: "setting",
+    minimum: 0,
+  }),
   // Input-size caps.
   entry("MAX_AUTH_RESPONSE_BYTES", {
     default: 1024 * 1024,
@@ -310,9 +326,24 @@ export const ENTRIES = Object.freeze([
     group: "input cap",
     minimum: 1,
   }),
+  // At Anthropic's and Google's largest page size, 100 pages hold 100,000 models.
+  entry("MAX_MODEL_LIST_PAGES", {
+    default: 100,
+    description: "Most pages read from a provider's model listing",
+    group: "input cap",
+    minimum: 1,
+  }),
   entry("MAX_MCP_MESSAGE_BYTES", {
     default: 16 * 1024 * 1024,
-    description: "Largest message read from a stdio MCP server",
+    description: "Largest message read from an MCP server: a stdio line, an SSE event or an HTTP reply body",
+    group: "input cap",
+    minimum: 1,
+  }),
+  // As large as the model listing: a reply's events are small, but one may carry a
+  // whole image or tool argument.
+  entry("MAX_MODEL_EVENT_BYTES", {
+    default: 16 * 1024 * 1024,
+    description: "Largest event read from a model's reply stream: an SSE event's data or one NDJSON line",
     group: "input cap",
     minimum: 1,
   }),

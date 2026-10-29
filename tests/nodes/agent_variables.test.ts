@@ -20,8 +20,9 @@ import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type MaterialCaps, Node, NodeKind, Output } from "../../src/nodes/base.ts";
-import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { Assertion, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
+import { driveBackward } from "../../src/runtime/backward.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import {
   decodeRecord,
@@ -31,6 +32,7 @@ import {
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
+import { NodeDataError } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { FileRef, Type, TypeCheckError, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
@@ -197,25 +199,20 @@ test("a retained agent's node data is its render locals, rendered again", async 
   expect(built.state.effectiveLlmByStaticPath["writer"]).toEqual(data["effective_llm_config"] as JsonObject);
 });
 
-test.each(["resolve", "render", "empty"] as const)(
+test.each(["render", "empty"] as const)(
   "a retained agent distinguishes partial and empty render locals: %s",
   async (stage) => {
     const node = new AgentNode("writer", {
       prompt: stage === "empty" ? "" : "${note}",
       variables: stage === "empty" ? [] : variables("note: !Optional(str) null\n"),
     });
-    if (stage === "resolve") {
-      spyResolve(node, () => {
-        throw new RangeError("variable resolution failed");
-      });
-    }
 
     const { record, occurrence, models } = await retainedAgent(node);
 
     const data = occurrence.nodeData;
     expect(data["prompt_template"]).toBe(node.prompt as string);
     expect(data["variable_domains"]).toEqual(stage === "empty" ? {} : { note: "Optional(str)" });
-    expect(data["variables"]).toEqual(stage === "resolve" ? null : stage === "empty" ? {} : { note: null });
+    expect(data["variables"]).toEqual(stage === "empty" ? {} : { note: null });
     expect(data["rendered_prompt"]).toBe(stage === "empty" ? "" : null);
     expect(occurrence.boundInputs).toEqual({});
     expect(models.prompts).toEqual(stage === "empty" ? [""] : []);
@@ -225,6 +222,91 @@ test.each(["resolve", "render", "empty"] as const)(
     }
   },
 );
+
+/** A retained run of an agent whose variables fail to resolve with `expected`. */
+async function unresolvable(expected: Error) {
+  const node = new AgentNode("writer", { prompt: "${note}", variables: variables("note: !Optional(str) null\n") });
+  spyResolve(node, () => {
+    throw expected;
+  });
+  return await retainedAgent(node);
+}
+
+test("a retained agent whose variables fail to resolve fails the node, and its node data names the node", async () => {
+  const expected = new TypeError("variable resolution failed");
+
+  const { record, occurrence } = await unresolvable(expected);
+
+  expect(record).toBeInstanceOf(NodeFailedRecord);
+  expect((record as NodeFailedRecord).failure.code).toBe("node.execute");
+  let error: unknown = null;
+  try {
+    void occurrence.nodeData;
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(NodeDataError);
+  const { message, cause, nodeId, nodeStartedSeq, runId } = error as NodeDataError;
+  expect(message).toBe("node 'writer': its node data can't be rebuilt: variable resolution failed");
+  expect(cause).toBe(expected);
+  expect([nodeId, nodeStartedSeq, runId]).toEqual(["writer", occurrence.source.executionSeq, occurrence.source.runId]);
+});
+
+test("an agent whose pre-assert failed is not rendered again, so its node data rebuilds", async () => {
+  const node = new AgentNode("writer", { prompt: "${note}", variables: variables("note: !Optional(str) null\n") });
+  node.preAsserts = [new Assertion("false", "never")];
+  spyResolve(node, () => {
+    throw new TypeError("variable resolution failed");
+  });
+
+  const { record, occurrence } = await retainedAgent(node);
+
+  expect((record as NodeFailedRecord).failure.code).toBe("assertion.failed");
+  expect(occurrence.nodeData).not.toHaveProperty("rendered_prompt");
+});
+
+test("backward over an agent whose node data can't be rebuilt finishes with a failure attributed to it", async () => {
+  const { built, occurrence } = await unresolvable(new TypeError("variable resolution failed"));
+
+  const outcome = await driveBackward(built.state, built.log, "Review.");
+
+  expect(outcome.status).toBe("failed");
+  expect(outcome.failure!.code).toBe("backward.execute");
+  expect(outcome.failure!.message).toBe("node 'writer': its node data can't be rebuilt: variable resolution failed");
+  expect(outcome.failure!.nodeId).toBe("writer");
+  expect(outcome.failure!.nodeStartedSeq).toBe(occurrence.source.executionSeq);
+  expect(outcome.failure!.runId).toBe(built.state.runId);
+  expect(built.state.backwardState.finished!.outcome).toBe(outcome);
+});
+
+test.each([
+  ["a colliding variable", { topic: "reefs" }, {}, { variable_domains: null, variables: null }],
+  ["a missing value", {}, {}, { variable_domains: { tone: "str" }, variables: { tone: "concise" } }],
+  ["a granted skill", { topic: "reefs" }, { skills: ["review"] }, { variable_domains: { tone: "str" }, variables: { tone: "concise" } }],
+] as const)("the render capture keeps what rendered before a refusal: %s", (name, inputs, extra, expected) => {
+  const node = new AgentNode("writer", {
+    prompt: "${topic}: ${tone}",
+    variables: variables(name === "a colliding variable" ? "topic: !str concise\n" : "tone: !str concise\n"),
+    ...extra,
+  });
+
+  const capture = node.renderCapture(inputs);
+
+  expect(capture["prompt_template"]).toBe("${topic}: ${tone}");
+  expect(capture["variable_domains"]).toEqual(expected.variable_domains);
+  expect(capture["variables"]).toEqual(expected.variables);
+  expect(capture["rendered_prompt"]).toBe(name === "a granted skill" ? "reefs: concise" : null);
+});
+
+test("the render capture rethrows a render fault that isn't a refusal", () => {
+  const node = new AgentNode("writer", { prompt: "${tone}", variables: variables("tone: !str concise\n") });
+  const expected = new TypeError("variable resolution failed");
+  spyResolve(node, () => {
+    throw expected;
+  });
+
+  expect(() => node.renderCapture({})).toThrow(expected);
+});
 
 test("a retained agent canonicalizes a supported file variable without changing its default", async () => {
   const file = new FileRef({ uri: "file:///tmp/artifact.txt" });

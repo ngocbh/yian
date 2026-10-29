@@ -23,12 +23,13 @@
  * The fact algebra (`Members`, `Exact`, their union and intersection) lives in
  * `helpers/narrowing_facts.ts`; this module re-exports it.
  *
- * Knows about: descriptors, compiled edges, output contracts, condition guards, narrowing facts,
- * and `typesys` unions.
+ * Knows about: descriptors, compiled edges and their topological order, output contracts, condition
+ * guards, narrowing facts, and `typesys` unions.
  * Never imports: runtime.
  */
 
 import { Edge } from "../../compile/model.ts";
+import { topologicalOrder } from "../../compile/validation.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import type { ExprNode, Tree } from "../../expr/grammar.ts";
 import { ExpressionError, parseCondition } from "../../expr/index.ts";
@@ -140,7 +141,7 @@ export function narrowType(typ: Type, path: readonly string[], narrowed: Type): 
   if (path.length === 0) return narrowed;
   const [name, ...rest] = path as [string, ...string[]];
   // A union is never entered: rewriting its members would break member identity.
-  if (typ.fields === undefined || typ.variants !== undefined || !typ.fields.has(name)) return null;
+  if (typ.fields === undefined || typ.members !== undefined || !typ.fields.has(name)) return null;
   const inner = narrowType(typ.fields.get(name)!, rest, narrowed);
   if (inner === null) return null;
   const fields = new Map(typ.fields).set(name, inner);
@@ -261,13 +262,13 @@ function buildViews(
 
 /** The union type of an exact contract, else `null`. */
 function unionType(contract: OutputContract | null): Type | null {
-  if (isExactly(contract, ValueContract) && contract.type.variants !== undefined) return contract.type;
+  if (isExactly(contract, ValueContract) && contract.type.members !== undefined) return contract.type;
   return null;
 }
 
 /** The sorted tag values of a tagged union's tag field. */
 function tags(union: Type, tagField: string): string[] {
-  return union.variants!.flatMap((member) => [...member.fields!.get(tagField)!.tags!]).sort(compareCodeUnits);
+  return union.members!.flatMap((member) => [...member.fields!.get(tagField)!.tags!]).sort(compareCodeUnits);
 }
 
 /** The fact that a value is one of `members`, relative to the base's own union. */
@@ -316,7 +317,7 @@ function onCaseFacts(
     if (members === undefined) byHandle.set(then, (members = []));
     if (typeof value === "string" && tagValues.includes(value)) {
       listed.add(value);
-      members.push(...union.variants!.filter((member) => member.fields!.get(tagField)!.tags!.has(value)));
+      members.push(...union.members!.filter((member) => member.fields!.get(tagField)!.tags!.has(value)));
     }
   }
   const facts = new Map<string, Env>();
@@ -324,7 +325,7 @@ function onCaseFacts(
     facts.set(handle, new Map([[base, membersFact(reference, members, false)]]));
   }
   if (desc.else_ !== null) {
-    const unlisted = union.variants!.filter(
+    const unlisted = union.members!.filter(
       (member) => ![...member.fields!.get(tagField)!.tags!].some((tag) => listed.has(tag)),
     );
     facts.set(ELSE_HANDLE, new Map([[base, membersFact(reference, unlisted, union.nullable)]]));
@@ -405,8 +406,8 @@ export function searchedWhenReads(
   return reads;
 }
 
-/** A searched `when:` parsed, or `null` when it is no string or does not parse. */
-function parsedWhen(when: unknown): ExprNode | null {
+/** A searched `when:` (or any condition) parsed, or `null` when it is no string or does not parse. */
+export function parsedWhen(when: unknown): ExprNode | null {
   if (typeof when !== "string") return null;
   try {
     return parseCondition(when);
@@ -508,33 +509,6 @@ function knownEdges(descriptors: ReadonlyMap<string, NodeDescriptor>, edges: rea
   return known.filter((edge) => descriptors.has(edge.from) && descriptors.has(edge.to));
 }
 
-/** Kahn's order over `edges`, in descriptor order among ready nodes. */
-function topologicalOrder(descriptors: ReadonlyMap<string, NodeDescriptor>, edges: readonly Edge[]): string[] {
-  const indegree = new Map<string, number>();
-  const successors = new Map<string, string[]>();
-  for (const nodeId of descriptors.keys()) {
-    indegree.set(nodeId, 0);
-    successors.set(nodeId, []);
-  }
-  for (const edge of edges) {
-    indegree.set(edge.to, indegree.get(edge.to)! + 1);
-    successors.get(edge.from)!.push(edge.to);
-  }
-  const ready = [...indegree].filter(([, count]) => count === 0).map(([nodeId]) => nodeId);
-  const order: string[] = [];
-  // `ready` is a queue: nodes are taken from the front as they are appended at the back.
-  for (let next = 0; next < ready.length; next++) {
-    const nodeId = ready[next]!;
-    order.push(nodeId);
-    for (const successor of successors.get(nodeId)!) {
-      const count = indegree.get(successor)! - 1;
-      indegree.set(successor, count);
-      if (count === 0) ready.push(successor);
-    }
-  }
-  return order;
-}
-
 /**
  * Compute each node's narrowing facts and contract views.
  *
@@ -574,7 +548,7 @@ export function computeNarrowing(
 ): Narrowing {
   const registry = options.registry ?? new Map();
   const known = knownEdges(descriptors, edges);
-  const order = topologicalOrder(descriptors, known);
+  const { order } = topologicalOrder(descriptors.keys(), known);
   const incoming = new Map<string, Edge[]>();
   for (const nodeId of descriptors.keys()) incoming.set(nodeId, []);
   for (const edge of known) incoming.get(edge.to)!.push(edge);

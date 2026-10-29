@@ -55,11 +55,7 @@ import {
   reprText,
   type SourceRange,
 } from "../diagnostics.ts";
-import { hostOnlyFieldError, LLMConfig } from "../llm_clients/config.ts";
-import { ValidationError } from "../llm_clients/provider_blocks.ts";
 import { DeclSite, MemorySetupError } from "../memory/contracts.ts";
-import { isMaxToolIterations } from "../nodes/agent/node.ts";
-import type { Node } from "../nodes/base.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { typeName, readTypedefs, type TypeRegistry } from "../typesys/types.ts";
 import {
@@ -73,7 +69,7 @@ import {
   writeAsText,
 } from "../typesys/values.ts";
 import type { FlowSource } from "../runtime/log.ts";
-import { assemble, type CallableScope as AssemblyScope, ComposedFlow } from "./build/pipeline.ts";
+import { assemble, type AssembleOptions, type CallableScope as AssemblyScope, ComposedFlow } from "./build/pipeline.ts";
 import { INLINE_FLOW_PREFIX } from "./desugar/inline_bodies.ts";
 import { LoadDiagnostics, LoadError } from "./helpers/errors.ts";
 import { parseMemoryDeclarations } from "./helpers/memory.ts";
@@ -81,13 +77,13 @@ import { boundaryFieldRanges, pathText } from "./helpers/source.ts";
 import { rejectUnreadTags } from "./helpers/tags.ts";
 import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
-import { checkLlmConfigValue, readLlmConfig } from "./nodes/agent.ts";
-import { notTextDetail, notTextError } from "./nodes/base.ts";
+import { maxToolIterationsError, readLlmConfig, validateLlmConfig } from "./nodes/agent.ts";
+import { notTextError, valueTypeError } from "./nodes/base.ts";
+import { KINDS, REMOVED_KINDS } from "./nodes/index.ts";
 import { checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
 import { callNestingScope } from "./nodes/resolver.ts";
 import {
   flowNodesCursor,
-  isEmptyValue,
   parseFile,
   parseSourceDocument,
   signatureNodeBody,
@@ -98,7 +94,8 @@ import { SourceAccessError, SourceCursor, type SourceDocument } from "./source/i
 
 /**
  * Resolves a `uses:` ref to its flow: `path` is the ref's flow path and `version` its
- * `@<version>` (`null` when unpinned). It may return the flow or a promise of it.
+ * `@<version>` (`null` when unpinned). It may return the flow or a promise of it; a pinned ref's
+ * flow must declare that `version`, or the load fails.
  */
 export type ChildResolver = (path: string, version: string | null) => ComposedFlow | Promise<ComposedFlow>;
 
@@ -250,6 +247,11 @@ const DEF_ALLOWED: ReadonlySet<string> = new Set([
   "env",
   "long_term_memory",
 ]);
+// The kinds a single-node def may use, sorted: a case routes to other nodes, which a one-node
+// def has none of.
+const SINGLE_NODE_DEF_KINDS: readonly string[] = [...KINDS.keys()]
+  .filter((kind) => kind !== "case")
+  .sort(compareCodeUnits);
 // The authored spellings of `DEF_ALLOWED`, sorted, for error messages.
 const DEF_SURFACE_KEYS: readonly string[] = [...DEF_ALLOWED]
   .map((key) => (key === "inputs" ? "input" : key === "outputs" ? "output" : key))
@@ -327,6 +329,28 @@ export class LoadCtx {
 
   constructor(codeRoot: string | null = null) {
     this.codeRoot = codeRoot;
+  }
+
+  /**
+   * Return the flow loaded for `key`, loading it with `load` the first time.
+   *
+   * @param key The file's real path (or recorded key).
+   * @param load Loads the file's flow.
+   * @throws LoadError when `key` is already being loaded: a reference cycle across files.
+   */
+  async loadOnce(key: string, load: () => Promise<ComposedFlow>): Promise<ComposedFlow> {
+    const cached = this.flows.get(key);
+    if (cached !== undefined) return cached;
+    if (this.loading.has(key)) throw UNLOCATED_DIAGNOSTICS.error(`flow-reference cycle across files: ${key}`);
+    this.loading.add(key);
+    let child: ComposedFlow;
+    try {
+      child = await load();
+    } finally {
+      this.loading.delete(key);
+    }
+    this.flows.set(key, child);
+    return child;
   }
 }
 
@@ -432,23 +456,36 @@ function validateExternalChild(alias: string, child: unknown): OriginRef[] {
   }
 
   for (const origin of origins) {
-    let frame: unknown;
-    try {
-      frame = resolve.call(resolver, origin);
-    } catch (error) {
-      throw UNLOCATED_DIAGNOSTICS.error(
-        `uses: alias ${reprText(alias)} child origin resolver failed for ${reprText(origin.key)}: ${errorText(error)}`,
-        { cause: error },
-      );
-    }
-    if (!(frame instanceof DiagnosticFrame)) {
-      const detail = frame === null ? "no frame" : jsTypeName(frame);
-      throw UNLOCATED_DIAGNOSTICS.error(
-        `uses: alias ${reprText(alias)} child origin resolver returned ${detail} for ${reprText(origin.key)}`,
-      );
-    }
+    checkFrame(
+      () => resolve.call(resolver, origin),
+      `uses: alias ${reprText(alias)} child origin resolver`,
+      reprText(origin.key),
+      UNLOCATED_DIAGNOSTICS,
+    );
   }
   return origins;
+}
+
+/**
+ * Throw unless `resolve` returns a `DiagnosticFrame`.
+ *
+ * @param resolve Resolves one origin through a resolver.
+ * @param subject The resolver, as messages name it.
+ * @param target The origin, as messages name it.
+ * @param diagnostics Factory for the load error.
+ * @throws LoadError when `resolve` throws or returns anything but a frame.
+ */
+function checkFrame(resolve: () => unknown, subject: string, target: string, diagnostics: LoadDiagnostics): void {
+  let frame: unknown;
+  try {
+    frame = resolve();
+  } catch (error) {
+    throw diagnostics.error(`${subject} failed for ${target}: ${errorText(error)}`, { cause: error });
+  }
+  if (!(frame instanceof DiagnosticFrame)) {
+    const detail = frame === null ? "no frame" : jsTypeName(frame);
+    throw diagnostics.error(`${subject} returned ${detail} for ${target}`);
+  }
 }
 
 /**
@@ -524,18 +561,7 @@ export function finalizeComposedFlow(
       throw diagnostics.error(`reachable origin ${reprText(origin.key)} has multiple resolver routes`);
     }
     const authority = authorities[0]!;
-    let frame: unknown;
-    try {
-      frame = authority.resolve(origin);
-    } catch (error) {
-      throw diagnostics.error(`resolver route failed for origin ${reprText(origin.key)}: ${errorText(error)}`, {
-        cause: error,
-      });
-    }
-    if (!(frame instanceof DiagnosticFrame)) {
-      const detail = frame === null ? "no frame" : jsTypeName(frame);
-      throw diagnostics.error(`resolver route returned ${detail} for origin ${reprText(origin.key)}`);
-    }
+    checkFrame(() => authority.resolve(origin), "resolver route", `origin ${reprText(origin.key)}`, diagnostics);
     entries.push([origin, authority, origin]);
   }
   return replaceFlow(staged, { originResolver: ResolverTable.fromEntries(entries) });
@@ -545,8 +571,8 @@ export function finalizeComposedFlow(
  * Build the default local file resolver for `uses:` references.
  *
  * The returned resolver finds a ref's `<dir>/<path>.yaml` on the search path, the first match
- * winning; `@<version>` is never part of the file name but a guard: the resolved file is loaded,
- * then its declared `version:` must equal the pinned one. Children load recursively, so their own
+ * winning; `@<version>` is never part of the file name: the importer checks the resolved file's
+ * declared `version:` against the pin. Children load recursively, so their own
  * `uses:` and `system.paths` re-root at the child's directory. A `hub:` or other scheme ref never
  * reaches here.
  *
@@ -555,8 +581,8 @@ export function finalizeComposedFlow(
  *   diamond-reuse cache, keyed by real path, and the files read.
  * @param from The importing file, which records the path each of its refs resolved to; `null`
  *   records nothing.
- * @returns The resolver; it rejects with a `LoadError` for a missing target, a cross-file
- *   reference cycle, or a pinned-version mismatch.
+ * @returns The resolver; it rejects with a `LoadError` for a missing target or a cross-file
+ *   reference cycle.
  */
 export function makeFileResolver(
   searchPaths: readonly string[],
@@ -574,28 +600,13 @@ export function makeFileResolver(
         throw error;
       }
       from?.refs.set(usesRef(path, version), real);
-      const cached = ctx.flows.get(real);
-      if (cached !== undefined) {
-        checkVersion(cached, path, version);
-        return cached;
-      }
-      if (ctx.loading.has(real)) {
-        throw UNLOCATED_DIAGNOSTICS.error(`flow-reference cycle across files: ${real}`);
-      }
-      ctx.loading.add(real);
-      let child: ComposedFlow;
-      try {
+      return ctx.loadOnce(real, async () => {
         const text = UTF8.decode(await fsp.readFile(real)).replace(/\r\n?/g, "\n");
         const file: ReadFile = { text, refs: new Map() };
         ctx.read.set(real, file);
         const own = dirname(real);
-        child = await loadFlowFile(parseSourceDocument(text, basename(real)), null, [own], ctx, own, file);
-      } finally {
-        ctx.loading.delete(real);
-      }
-      ctx.flows.set(real, child);
-      checkVersion(child, path, version);
-      return child;
+        return loadFlowFile(parseSourceDocument(text, basename(real)), null, [own], ctx, own, file);
+      });
     }
     throw UNLOCATED_DIAGNOSTICS.error(
       `flow ${reprText(path)} not found on search path ${writeAsText([...searchPaths])}`,
@@ -635,8 +646,9 @@ interface LoadOptions {
  * @param options.codeRoot A directory every CODE reference's file must resolve inside (a relative
  *   one against the current directory); symlinks are resolved on both sides. A reference outside
  *   it is a `LoadError` at its `code:` value. The files read through the search path are checked
- *   too; a `childResolver`'s flow is the host's to load with its own `codeRoot`. An inline `code:`
- *   body is not confined. `null` or absent confines nothing.
+ *   too, and so is each flow a `childResolver` returns, however the host loaded it. An inline
+ *   `code:` body is not confined. `null` or absent confines nothing. The flow's `source` keeps the root's
+ *   real path, so a run records it and a resume confines the recorded files to it again.
  * @param options.env The environment this load reads the `YIAN_*` values from; default
  *   `processEnv`, which keeps the values in effect, so a `childResolver` that calls `loadFlow`
  *   without `env` loads under the caller's.
@@ -674,32 +686,55 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
           return child;
         };
   const loaded = await loadFlowFile(document, resolver, searchPaths, ctx, ownDir, rootFile);
+  if (ctx.codeRoot !== null) await checkHostedCode(hosted, document, ctx.codeRoot);
   const flow = replaceFlow(loaded, { source: await flowSource(ctx, rootFile, hosted, sourceLabel, ownDir) });
   return checkRoot(flow);
+}
+
+/**
+ * Check each CODE reference of every flow a host resolver returned, its own children included,
+ * against `codeRoot`: the host may have loaded it under no root, and a run records the root for
+ * all of the flow's files, so the loaded flow and a load from its recorded source agree.
+ *
+ * @throws LoadError at the first CODE node whose file resolves outside `codeRoot`, or can't be read.
+ */
+async function checkHostedCode(
+  hosted: ReadonlyMap<string, unknown>,
+  document: SourceDocument,
+  codeRoot: string,
+): Promise<void> {
+  const diagnostics = LoadDiagnostics.fromDocument(document);
+  const seen = new Set<object>();
+  for (const child of hosted.values()) {
+    if (!(child instanceof ComposedFlow)) continue;
+    const resolver = child.originResolver;
+    const resolveOrigin = resolver === null ? null : (origin: OriginRef) => resolver.resolve(origin);
+    await checkFlowCode(child.compiled, { diagnostics, resolveOrigin, seen, codeRoot });
+  }
 }
 
 /**
  * Compile the flow files `source` holds, as a run recorded them, without reading them from disk:
  * the load starts at `source.root` and resolves each `uses:` ref through the file's `refs`. Each
  * file is labelled with its key's file name, and its CODE references resolve on disk in its key's
- * folder below `source.dir`.
+ * folder below `source.dir`, inside `source.codeRoot` when it has one (a host child's recorded
+ * file included), as `loadFlow`'s `codeRoot`.
  *
  * @param source A loaded flow's `source`, or a run's recorded `flow`.
  * @param options.env The environment the load reads the `YIAN_*` values from, as `loadFlow`'s.
- * @param options.codeRoot A directory every recorded file's CODE references must resolve inside,
- *   as `loadFlow`'s; a host child's recorded file is checked too. `null` or absent confines
- *   nothing.
  * @returns The flow, whose `source` is `source`.
- * @throws LoadError for a flow that doesn't load, or a `uses:` ref its file's `refs` lacks.
+ * @throws LoadError for a flow that doesn't load, a `uses:` ref its file's `refs` lacks, or a CODE
+ *   reference resolving outside `source.codeRoot`.
  * @throws DefaultsError when a `YIAN_<NAME>` value in `env` isn't accepted.
  */
 export async function loadFlowSource(
   source: FlowSource,
-  options: { env?: Env; codeRoot?: string | null } = {},
+  options: { env?: Env } = {},
 ): Promise<ComposedFlow> {
-  const { env = processEnv, codeRoot = null } = options;
+  const { env = processEnv } = options;
   return withEnv(env, async () => {
-    const loaded = await loadSourceFile(source, source.root, await newLoadCtx(codeRoot));
+    // Already a real path, as the load that made the source resolved it.
+    const loaded = await loadSourceFile(source, source.root, new LoadCtx(source.codeRoot));
     return checkRoot(replaceFlow(loaded, { source }));
   });
 }
@@ -719,22 +754,7 @@ function sourceResolver(source: FlowSource, from: string, ctx: LoadCtx): ChildRe
       throw UNLOCATED_DIAGNOSTICS.error(`flow ${reprText(ref)} is not among the recorded flow files`);
     }
     const key = refs[ref]!;
-    const cached = ctx.flows.get(key);
-    if (cached !== undefined) {
-      checkVersion(cached, path, version);
-      return cached;
-    }
-    if (ctx.loading.has(key)) throw UNLOCATED_DIAGNOSTICS.error(`flow-reference cycle across files: ${key}`);
-    ctx.loading.add(key);
-    let child: ComposedFlow;
-    try {
-      child = await loadSourceFile(source, key, ctx);
-    } finally {
-      ctx.loading.delete(key);
-    }
-    ctx.flows.set(key, child);
-    checkVersion(child, path, version);
-    return child;
+    return ctx.loadOnce(key, () => loadSourceFile(source, key, ctx));
   };
 }
 
@@ -797,7 +817,7 @@ async function flowSource(
     if (!(child instanceof ComposedFlow) || child.source === null) return null;
     root.refs.set(ref, sourceNodes(child.source));
   }
-  return sourceOf(root, dir);
+  return sourceOf(root, dir, ctx.codeRoot);
 }
 
 /** Return the graph of `source`'s files, from its root, each at its path below `source.dir`. */
@@ -817,10 +837,11 @@ function sourceNodes(source: FlowSource): SourceNode {
 }
 
 /**
- * Key each file of the graph at `root` by its path relative to `dir`, and return the source. Two
- * different files claiming one path (texts a host gave) get keys of their own, `<key>~1`, ...
+ * Key each file of the graph at `root` by its path relative to `dir`, and return the source, whose
+ * code root is `codeRoot`. Two different files claiming one path (texts a host gave) get keys of
+ * their own, `<key>~1`, ...
  */
-function sourceOf(root: SourceNode, dir: string): FlowSource {
+function sourceOf(root: SourceNode, dir: string, codeRoot: string | null): FlowSource {
   // Two nodes are one file when their paths, texts and the files their refs reach are; each
   // distinct file gets a number, so a long chain compares in linear time.
   const ids = new Map<string, number>();
@@ -857,7 +878,7 @@ function sourceOf(root: SourceNode, dir: string): FlowSource {
     return key;
   };
   const rootKey = visit(root);
-  return Object.freeze({ root: rootKey, dir, files: Object.freeze(Object.fromEntries(files)) });
+  return Object.freeze({ root: rootKey, dir, codeRoot, files: Object.freeze(Object.fromEntries(files)) });
 }
 
 /** Return `path`'s real path, or `path` itself when it doesn't exist. */
@@ -940,8 +961,7 @@ function refuseInheritedLlmValues(flow: ComposedFlow): void {
   if (found.callsite === null) {
     subject = `flow ${field}`;
   } else {
-    // A CALL, MAP or LOOP callsite names its child flow.
-    const name = reprText((found.callsite as Node & { flowId: string }).flowId);
+    const name = reprText(found.callsite.flowId);
     const called = `called by node ${reprText(found.owner.join("/"))}`;
     const callsiteFrame = frame(found.callsite.origin);
     if (valueFrame === null || callsiteFrame === null) {
@@ -961,15 +981,12 @@ function refuseInheritedLlmValues(flow: ComposedFlow): void {
 }
 
 /**
- * Read a flow- or def-level `llm_config` with its values and tags, and check it.
+ * @internal Read a flow- or def-level `llm_config` with its values and tags, and check it.
  *
- * The layer is read through its tags the way an AGENT node's own is: a layer holding `${...}`
- * values becomes a `ValueTemplate`, or a `Binding` for a whole record written as one value, and is
- * checked by `checkLlmConfigValue`. Otherwise it must be a mapping of `LLMConfig` fields without
- * `api_key`, `organization`, `project`, `headers`, or `base_url` other than beside
- * `provider: azure`, which only the host sets. A text field YAML read as non-text (such as
- * `model: 5`) is named by `notTextError`; any other violation keeps the `LLMConfig` message.
- * `inherit` is an AGENT-only key.
+ * The layer is read through its tags and checked the way an AGENT node's own is
+ * (`validateLlmConfig`): a layer holding `${...}` values becomes a `ValueTemplate`, or a `Binding`
+ * for a whole record written as one value; otherwise it must be a mapping of `LLMConfig` fields
+ * without the fields only the host sets. `inherit` is an AGENT-only key.
  *
  * @param llmConfig The authored layer; `null` means absent.
  * @param where The layer's owner in messages, such as `flow`.
@@ -981,7 +998,7 @@ function refuseInheritedLlmValues(flow: ComposedFlow): void {
  * @returns The layer: a record, a `ValueTemplate` or a `Binding`; `{}` when absent.
  * @throws LoadError when the layer is malformed or sets a field a flow file may not set.
  */
-function readAuthoredLlmConfig(
+export function readAuthoredLlmConfig(
   llmConfig: unknown,
   where: string,
   options: {
@@ -1015,27 +1032,9 @@ function readAuthoredLlmConfig(
       }
     }
   }
-  if (llmConfig instanceof ValueTemplate || llmConfig instanceof Binding) {
-    return checkLlmConfigValue(llmConfig, `${where}: llm_config`, sourceRange, diagnostics, ranges, {
-      allowInherit: false,
-    })[0];
-  }
-  if (!isRecord(llmConfig)) throw diagnostics.error(`${where}: llm_config must be a mapping`, { range: sourceRange });
-  const message = hostOnlyFieldError(llmConfig);
-  if (message !== null) throw diagnostics.error(`${where}: ${message}`, { range: sourceRange });
-  try {
-    new LLMConfig(llmConfig);
-  } catch (error) {
-    if (error instanceof ValidationError) {
-      const detail = notTextDetail(error, llmConfig);
-      throw diagnostics.error(`${where}: llm_config: ` + (detail !== null ? notTextError(...detail) : error.message), {
-        range: sourceRange,
-        cause: error,
-      });
-    }
-    throw diagnostics.error(`${where}: llm_config: ${errorText(error)}`, { range: sourceRange, cause: error });
-  }
-  return llmConfig;
+  return validateLlmConfig(llmConfig, `${where}: llm_config`, sourceRange, diagnostics, ranges, {
+    allowInherit: false,
+  })[0];
 }
 
 /**
@@ -1058,12 +1057,11 @@ function validateEnv(
   diagnostics: LoadDiagnostics,
 ): void {
   checkEnvValues(env, prefix, envCursor, diagnostics);
-  if (Object.hasOwn(env, "max_tool_iterations") && !isMaxToolIterations(env["max_tool_iterations"])) {
-    throw diagnostics.error(
-      `${prefix}\`env.max_tool_iterations\` must be a positive int or -1 (no cap), ` +
-        `got ${valueRepr(env["max_tool_iterations"])}`,
-      { range: envCursor?.rangeOf("max_tool_iterations") ?? null },
-    );
+  const maxToolIterations = maxToolIterationsError(env);
+  if (maxToolIterations !== null) {
+    throw diagnostics.error(prefix + maxToolIterations, {
+      range: envCursor?.rangeOf("max_tool_iterations") ?? null,
+    });
   }
 }
 
@@ -1161,7 +1159,7 @@ export async function loadFlowFile(
     root.has("nodes") && f.longTermMemory !== null
       ? parseMemoryDeclarations(f.longTermMemory, {
           diagnostics,
-          sourceRange: root.rangeOf("long_term_memory"),
+          cursor: root.child("long_term_memory"),
           site: new DeclSite([], ["root"], null),
         })
       : [];
@@ -1175,29 +1173,16 @@ export async function loadFlowFile(
 
   const staged = callNestingScope(() => {
     scope.eagerLoadDefs();
-    return assemble({
-      inputsSection: f.inputs,
-      inputsCursor: sourceChild(root, "input"),
-      nodesCursor: flowNodesCursor(document, f.nodes),
-      outputsSection: f.outputs,
-      assertsSection: f.asserts,
-      registry,
-      scope,
-      owner: ["root"],
-      usesAliases: Object.keys(f.uses),
-      version: f.version,
-      name: f.name,
-      description: f.description,
-      flowLlmConfig,
-      flowEnv: f.env,
-      boundaryFieldRanges: boundaryFieldRanges(root),
-      assertsCursor: root.has("nodes") && root.has("asserts") ? root.child("asserts") : null,
-      outputsCursor: root.has("nodes") && root.has("output") ? root.child("output") : null,
-      flowId: f.id,
-      memories: rootMemories,
-      memoriesCursor: root.has("nodes") && root.has("long_term_memory") ? root.child("long_term_memory") : null,
-      baseDir,
-    });
+    return assemble(
+      rootAssembleOptions(document, f, {
+        registry,
+        scope,
+        usesAliases: Object.keys(f.uses),
+        flowLlmConfig,
+        memories: rootMemories,
+        baseDir,
+      }),
+    );
   });
   const code: CodeCheckOptions = {
     diagnostics,
@@ -1213,6 +1198,39 @@ export async function loadFlowFile(
   // `uses:` child checks its own document in its own load.
   rejectUnreadTags(document, scope.catalogBuilder.consumedTags, diagnostics);
   return replaceFlow(scope.finalize(staged), { importDepth: scope.importDepth });
+}
+
+/**
+ * @internal Return the `assemble` options for `document`'s root flow: the sections of `f`, its
+ * parsed file, their cursors and the flow's metadata, plus `rest`. Only a full flow (one with
+ * `nodes:`) locates its `asserts:`, `output:` and `long_term_memory:`: a compact flow lends its
+ * top-level `output:` to its one synthesized node.
+ */
+export function rootAssembleOptions(
+  document: SourceDocument,
+  f: ReturnType<typeof parseFile>,
+  rest: Pick<AssembleOptions, "registry" | "scope" | "usesAliases" | "flowLlmConfig" | "memories" | "baseDir">,
+): AssembleOptions {
+  const root = document.root;
+  const fullFlowChild = (key: string) => (root.has("nodes") && root.has(key) ? root.child(key) : null);
+  return {
+    ...rest,
+    inputsSection: f.inputs,
+    inputsCursor: sourceChild(root, "input"),
+    nodesCursor: flowNodesCursor(document, f.nodes),
+    outputsSection: f.outputs,
+    assertsSection: f.asserts,
+    owner: ["root"],
+    version: f.version,
+    name: f.name,
+    description: f.description,
+    flowEnv: f.env,
+    boundaryFieldRanges: boundaryFieldRanges(root),
+    assertsCursor: fullFlowChild("asserts"),
+    outputsCursor: fullFlowChild("output"),
+    flowId: f.id,
+    memoriesCursor: fullFlowChild("long_term_memory"),
+  };
 }
 
 /**
@@ -1242,9 +1260,8 @@ class PrivateCallable {
  * neither authored mapping is rejected instead of reaching the external resolver. Private
  * declarations, local defs and external aliases share one memo table. The in-progress set makes
  * recursive private and def construction loud; cross-file recursion is outside this scope and
- * belongs to the selected external resolver. A failed callable construction drops its new private
- * declarations, nested cache entries and source-catalog sites together, so a later retry can't
- * see a stale partial attempt.
+ * belongs to the selected external resolver. A failed callable construction is never retried: its
+ * error aborts the load, so what it added to the memo and the source catalog is never read.
  *
  * Aliases resolve asynchronously, through `resolveAlias`, before assembly; the synchronous
  * `resolve` assembly calls only reads them from the memo.
@@ -1372,29 +1389,12 @@ export class CallableScope implements AssemblyScope {
     return finalizeComposedFlow(staged, this.#catalogBuilder.freeze(), tables, this.#diagnostics);
   }
 
-  /**
-   * Build one callable without caching origins from a failed attempt: when `builder` throws, the
-   * memo entries and private declarations it added are dropped with the catalog sites the
-   * builder's transaction rolls back.
-   */
-  #buildTransactionally(builder: () => ComposedFlow): ComposedFlow {
-    const cachedBefore = new Set(this.#built.keys());
-    const privateBefore = new Set(this.#private.keys());
-    try {
-      return this.#catalogBuilder.transaction(builder);
-    } catch (error) {
-      for (const flowId of [...this.#built.keys()]) if (!cachedBefore.has(flowId)) this.#built.delete(flowId);
-      for (const flowId of [...this.#private.keys()]) if (!privateBefore.has(flowId)) this.#private.delete(flowId);
-      throw error;
-    }
-  }
-
-  /** Build callable `flowId` transactionally, marked in progress while it builds, and cache it. */
+  /** Build callable `flowId`, marked in progress while it builds, and cache it. */
   #buildOnce(flowId: string, builder: () => ComposedFlow): ComposedFlow {
     this.#inProgress.add(flowId);
     let loaded: ComposedFlow;
     try {
-      loaded = this.#buildTransactionally(builder);
+      loaded = builder();
     } finally {
       this.#inProgress.delete(flowId);
     }
@@ -1453,12 +1453,11 @@ export class CallableScope implements AssemblyScope {
    *
    * @param flowId The callable name: a compiler-generated callable, a `defs:` entry or a `uses:`
    *   alias.
-   * @param _version Unused; a `uses:` alias takes its version from its own ref.
    * @returns The built callable, cached for later calls.
    * @throws LoadError when the callable is unknown, recursive, fails to build, or is an alias that
    *   wasn't resolved first.
    */
-  resolve(flowId: string, _version: string | null = null): ComposedFlow {
+  resolve(flowId: string): ComposedFlow {
     const built = this.#built.get(flowId);
     if (built !== undefined) return built;
     const privateCallable = this.#private.get(flowId);
@@ -1515,8 +1514,8 @@ export class CallableScope implements AssemblyScope {
    * @param alias A declared `uses:` alias.
    * @returns The alias's rebased child, cached for later calls.
    * @throws LoadError (as a rejection), located at the alias, when its ref is malformed or has a
-   *   scheme, no resolver was given, the resolver fails or returns a bad flow, or the import chain
-   *   is past the limit.
+   *   scheme, no resolver was given, the resolver fails or returns a bad flow, the flow declares
+   *   another `version` than the ref pins, or the import chain is past the limit.
    */
   async resolveAlias(alias: string): Promise<ComposedFlow> {
     const built = this.#built.get(alias);
@@ -1554,6 +1553,8 @@ export class CallableScope implements AssemblyScope {
         throw this.#diagnostics.error(`${where}: could not resolve: ${errorText(error)}`, { cause: error });
       }
       loaded = rebaseExternalChild(alias, child);
+      // Checked here for every resolver, a host's too, so a load and a resume apply one rule.
+      checkVersion(loaded, ref.path, ref.version);
       const depth: unknown = loaded.importDepth;
       if (typeof depth !== "number" || !Number.isInteger(depth) || depth < 0) {
         throw this.#diagnostics.error(
@@ -1746,20 +1747,26 @@ function loadDef(
   }
   if (defEnv !== null) validateEnv(defEnv, `${where}: `, defCursor?.child("env") ?? null, diagnostics);
   checkDefAsserts(name, field("asserts"), defCursor, diagnostics);
+  // Like a full flow's, a written `input:` must be a mapping, so an empty one is refused.
+  const inputs = Object.hasOwn(body, "inputs") ? body["inputs"]! : {};
+  if (!isRecord(inputs)) {
+    throw diagnostics.error(`${where}: ${valueTypeError("input", "a mapping", inputs, "write a mapping")}`, {
+      range: defCursor?.rangeOf("input") ?? null,
+    });
+  }
   const nodesCursor = defAssemblyCursor(defCursor, body["nodes"]!);
   try {
     const memories =
       field("long_term_memory") !== null
         ? parseMemoryDeclarations(body["long_term_memory"]!, {
             diagnostics,
-            sourceRange: defCursor?.rangeOf("long_term_memory") ?? null,
+            cursor: defCursor?.has("long_term_memory") ? defCursor.child("long_term_memory") : null,
             site: new DeclSite([], ["def", name], null),
           })
         : [];
-    const inputs = field("inputs");
     const asserts = field("asserts");
     return assemble({
-      inputsSection: (isEmptyValue(inputs) ? {} : inputs) as ValueRecord,
+      inputsSection: inputs,
       inputsCursor: sourceChild(defCursor, "input"),
       nodesCursor,
       outputsSection: field("outputs"),
@@ -1805,8 +1812,9 @@ function loadDef(
  * @param scope The file's callable scope.
  * @param defCursor The authored body, or `null` for a virtual fallback.
  * @returns The built child flow.
- * @throws LoadError, located and prefixed `defs entry '<name>': `, when `input:` isn't a param
- *   map, a parameter is named `inf`, or the node fails to assemble.
+ * @throws LoadError, located and prefixed `defs entry '<name>': `, when `kind:` is non-text,
+ *   unknown or `case`, `input:` isn't a param map, a parameter is named `inf`, or the node fails
+ *   to assemble.
  */
 function loadSingleNodeDef(
   name: string,
@@ -1817,8 +1825,30 @@ function loadSingleNodeDef(
 ): ComposedFlow {
   const diagnostics = scope.diagnostics;
   const where = `defs entry ${reprText(name)}`;
+  // Framed like an error from assembling the node: the definition, then the `kind:` value.
+  const kindError = (message: string): LoadError =>
+    diagnostics.prepend(diagnostics.error(message, { range: defCursor?.rangeOf("kind") ?? null }), {
+      range: defCursor?.range ?? null,
+      message: `${where}: ${message}`,
+      note: `definition ${reprText(name)}`,
+    });
+  const kind = body["kind"]!;
+  const allowed = SINGLE_NODE_DEF_KINDS.join(", ");
+  if (typeof kind !== "string") {
+    throw kindError(`node ${reprText(name)}: ${notTextError("kind", kind, `write one of ${allowed}`)}`);
+  }
+  if (kind === "case") {
+    throw kindError(
+      `kind 'case' is not allowed in a single-node def (allowed: ${allowed}); a case routes to other ` +
+        "nodes, which a one-node def has none of — write a full `nodes:` body instead",
+    );
+  }
+  // A removed kind keeps the node parse's message, which names its replacement.
+  if (!KINDS.has(kind) && !REMOVED_KINDS.has(kind)) {
+    throw kindError(`node ${reprText(name)}: unknown kind ${reprText(kind)} (allowed: ${allowed})`);
+  }
   const inputCursor = sourceChild(defCursor, "input");
-  const paramTypes = signatureParams(Object.hasOwn(body, "inputs") ? body["inputs"]! : null, {
+  const paramTypes = signatureParams(Object.hasOwn(body, "inputs") ? body["inputs"]! : undefined, {
     where,
     inputLabel: "single-node `input:`",
     inputCursor,

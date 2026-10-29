@@ -28,7 +28,7 @@ import {
   type SourceRange,
 } from "../../diagnostics.ts";
 import { ExpressionError } from "../../expr/expressions.ts";
-import { isBareName, type Tree, wholeSpanInterior } from "../../expr/grammar.ts";
+import { isBareName, wholeSpanInterior } from "../../expr/grammar.ts";
 import { scanTemplate, Span, type TemplateSegment } from "../../expr/template.ts";
 import type { ValidationError } from "../../llm_clients/provider_blocks.ts";
 import type { Node } from "../../nodes/base.ts";
@@ -49,7 +49,7 @@ import { checkEnvValues } from "../helpers/value_nesting.ts";
 import { yamlReadAs } from "../helpers/yaml_words.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
-import type { ChildResolver } from "./resolver.ts";
+import type { CallableResolver } from "./resolver.ts";
 
 /**
  * A key path written as an author reads it, such as `questions[0].options[1].label`: the string
@@ -287,7 +287,7 @@ export function wholeRefName(text: string): string | null {
   }
   const [segment] = segments;
   if (segments.length !== 1 || !(segment instanceof Span) || !isBareName(segment.tree)) return null;
-  return String((segment.tree as Tree).children[0]);
+  return String(segment.tree.children[0]);
 }
 
 /**
@@ -337,8 +337,8 @@ export type BindingContractReader = (
 export class BuildContext {
   /** The flow's named types, for reading declared types. */
   readonly registry: TypeRegistry;
-  /** Resolves a child flow by id and version for call, map and loop; `null` for leaves. */
-  readonly resolver: ChildResolver | null;
+  /** Resolves a callable by id for call, map and loop; `null` for leaves. */
+  readonly resolver: CallableResolver | null;
   /** The opaque file name an inline CODE body reports in its errors. */
   readonly sourceFile: string;
   /** The directory a CODE reference resolves against; `null` when not known. */
@@ -363,7 +363,7 @@ export class BuildContext {
    */
   constructor(options: {
     registry: TypeRegistry;
-    resolver?: ChildResolver | null;
+    resolver?: CallableResolver | null;
     sourceFile?: string;
     baseDir?: string | null;
     resolveOrigin?: OriginPresenter | null;
@@ -642,7 +642,7 @@ export class NodeDescriptor {
       if (range !== null) ranges.set(siteKey("field", key), range);
       fields[this.keywordRemap.get(key) ?? camelCase(key)] = normalized.get(key);
     }
-    this._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+    this._validateFields(nodeId, fields, ranges, ownRange, diagnostics, normalized);
     this._readCommonFields(nodeId, normalized, fields, ranges);
     const descriptorFields = { ...fields, range: ownRange, fieldRanges: ranges } as NodeDescriptorFields;
     return new this(descriptorFields) as InstanceType<T>;
@@ -668,10 +668,11 @@ export class NodeDescriptor {
     for (const key of Object.keys(body)) {
       if (this.allowed.has(key)) continue;
       const hint = key === "when" ? this.whenHint : "";
-      // Name the authored spellings; the plural carrier names fail to load.
+      // Name the authored spellings, the offending key's too; the plural carrier names fail to load.
+      const field = SURFACE_NAMES.get(key) ?? key;
       const surface = new Set([...this.allowed].map((name) => SURFACE_NAMES.get(name) ?? name));
       throw diagnostics.error(
-        `node ${reprText(nodeId)} (kind=${this.kind}): field ${reprText(key)} is not allowed ` +
+        `node ${reprText(nodeId)} (kind=${this.kind}): field ${reprText(field)} is not allowed ` +
           `(allowed: ${[...surface].sort(compareCodeUnits).join(", ")})${hint}`,
         { range: cursor.rangeOf(key) },
       );
@@ -764,6 +765,7 @@ export class NodeDescriptor {
    * @param ranges The field ranges recorded so far.
    * @param ownRange The node body's range, for an error about an absent field.
    * @param diagnostics Factory for located load errors.
+   * @param cursor The node body, for errors located inside a field.
    * @throws LoadError for a bad `input:` or `asserts:`.
    */
   static _validateFields(
@@ -772,6 +774,7 @@ export class NodeDescriptor {
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
+    cursor: SourceCursor,
   ): void {
     const inputs = fields["inputs"];
     if (inputs !== undefined && inputs !== null && !isRecord(inputs)) {

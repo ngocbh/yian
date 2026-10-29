@@ -2,32 +2,36 @@
 // and prompted runs, `--json` documents, setup errors, stops and warnings, `check`, `status`, and
 // the run-log checks that run before the flow is read.
 
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
+import { diagnosticJson } from "../../src/cli/render.ts";
 import {
-  diagnosticJson,
   flowBanner,
   jsonValue,
   mergeInputs,
   parseKv,
   readInputsJson,
   skillsCheck,
-  stopOnSignals,
 } from "../../src/cli/run.ts";
+import { defaultRunsDir } from "../../src/cli/startup.ts";
 import { childCommand, main } from "../../src/cli/index.ts";
 import { LICENSES } from "../../src/cli/licenses.ts";
+import { userMcpConfig } from "../../src/cli/mcp_config.ts";
+import { defaultSkillRoots } from "../../src/compose/skills.ts";
+import { AuthStore } from "../../src/llm_clients/auth/index.ts";
 import {
   abortOnSignal,
   type CliIo,
   HostStop,
   printJson,
+  stopOnSignals,
   UsageError,
   type Writer,
 } from "../../src/cli/utils.ts";
@@ -35,7 +39,7 @@ import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { registerTool, TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { readRunIndex } from "../../src/run.ts";
-import { JsonlRunLog, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
+import { JsonlRunLog, NodeStartedRecord, NodeStepRecord, readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 import { FileRef } from "../../src/typesys/values.ts";
 import { compiled, VERSION } from "../../src/platform.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
@@ -332,41 +336,36 @@ describe("flowBanner", () => {
   });
 });
 
-describe("stopOnSignals", () => {
-  const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-  const listeners = (target: EventEmitter) => SIGNALS.map((name) => target.listenerCount(name));
-
-  test("each signal aborts with a HostStop naming it and removes all three listeners", () => {
-    for (const name of SIGNALS) {
-      const target = new EventEmitter();
-      const controller = new AbortController();
-      stopOnSignals(controller, target);
-      expect(listeners(target)).toEqual([1, 1, 1]);
-      target.emit(name);
-      expect(controller.signal.reason).toBeInstanceOf(HostStop);
-      expect(controller.signal.reason.signal).toBe(name);
-      expect(listeners(target)).toEqual([0, 0, 0]);
-    }
+describe("the home fallback", () => {
+  afterEach(() => {
+    mock.restore();
   });
 
-  test("the disposer removes the listeners", () => {
-    const target = new EventEmitter();
-    const controller = new AbortController();
-    const dispose = stopOnSignals(controller, target);
-    dispose();
-    expect(listeners(target)).toEqual([0, 0, 0]);
-    expect(controller.signal.aborted).toBe(false);
+  const env = () => undefined;
+  /** Each `~` path of the CLI with `HOME` unset: runs, MCP config, a skill root, logins. */
+  const homePaths = [
+    () => defaultRunsDir(env),
+    () => userMcpConfig(env),
+    () => defaultSkillRoots({ cwd: tmp, env })[0],
+    () => new AuthStore(null, { env }).path,
+  ];
+
+  test("every ~ path falls back to the account's home when HOME is unset", () => {
+    spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: "/account" });
+    expect(homePaths.map((path) => path())).toEqual([
+      join("/account", ".yian", "runs"),
+      join("/account", ".yian", "mcp.json"),
+      join("/account", ".claude", "skills"),
+      join("/account", ".config", "yian", "auth.json"),
+    ]);
   });
 
-  test("an already aborted controller keeps its reason and still removes them", () => {
-    const target = new EventEmitter();
-    const controller = new AbortController();
-    const first = new HostStop("SIGINT");
-    controller.abort(first);
-    stopOnSignals(controller, target);
-    target.emit("SIGTERM");
-    expect(controller.signal.reason).toBe(first);
-    expect(listeners(target)).toEqual([0, 0, 0]);
+  test("every ~ path throws the same error when the account has no home either", () => {
+    const failure = Object.assign(new Error("no passwd entry"), { code: "ENOENT", syscall: "uv_os_get_passwd" });
+    spyOn(os, "userInfo").mockImplementation(() => {
+      throw failure;
+    });
+    for (const path of homePaths) expect(path).toThrow(failure);
   });
 });
 
@@ -855,6 +854,39 @@ describe("warnings during a run", () => {
   }
 });
 
+describe("a provider's text with escape sequences", () => {
+  for (const isTTY of [true, false]) {
+    test(`a warning and the provider's error body are ${isTTY ? "stripped on a TTY" : "kept exactly when piped"}`, async () => {
+      const flow = file(
+        "flow.yaml",
+        `id: w\nname: w\nnodes:\n  agent: {kind: agent, prompt: hi}\noutput: \${agent.output}\n` +
+          `llm_config: {provider: anthropic, model: "m-${isTTY}-${Date.now()}\\e]52;c;aGk=\\a"}\n`,
+      );
+      mkdirSync(join(tmp, "home"), { recursive: true });
+      const plain = testIo({ HOME: join(tmp, "home"), ANTHROPIC_API_KEY: "sk-ant-test", NO_COLOR: "1" });
+      const io = { ...plain.io, stderr: { ...plain.io.stderr, isTTY } };
+      const send = globalThis.fetch;
+      const body = "bad\x1b]8;;https://e.example\x07 key\x1b[2J";
+      globalThis.fetch = (async () => Response.json({ error: { message: body } }, { status: 401 })) as never;
+      try {
+        expect(await main(["run", flow, "-q"], io)).toBe(1);
+      } finally {
+        globalThis.fetch = send;
+      }
+      const stderr = plain.stderr();
+      if (isTTY) {
+        expect(stderr).toMatch(/warning: Model 'm-true-\d+' is not in the known model list/);
+        expect(stderr).toContain("bad key");
+        expect(stderr).not.toContain("\x1b");
+        expect(stderr).not.toContain("\x07");
+      } else {
+        expect(stderr).toMatch(/warning: Model 'm-false-\d+\x1b\]52;c;aGk=\x07' is not in the known model list/);
+        expect(stderr).toContain(body);
+      }
+    });
+  }
+});
+
 const REQUIRED_INPUTS_FLOW = `id: cli_required_inputs
 name: cli_required_inputs
 input:
@@ -1024,6 +1056,34 @@ const PAUSE_FLOW =
   "      await new Promise((resolve) => setTimeout(resolve, 30_000));\n      return null;\n" +
   "output: ${first.output}\n";
 
+test("an ask off a terminal writes its prompt with no escape codes", async () => {
+  const flow = file("flow.yaml", ASK_FLOW);
+  const { io, stdout, stderr } = testIo();
+  // A piped run: stdin has ended and stderr isn't a TTY.
+  const input = new FakeInput({ tty: false });
+  input.end();
+  const output = new FakeOutput({ tty: false });
+  const argv = ["run", flow, "-q", "--json", "--log", join(tmp, "run.jsonl")];
+  const code = await main(argv, { ...io, stdin: input, stderrStream: output });
+  expect(code).toBe(1);
+  expect(stderr()).toEndWith("\nrun cancelled\n");
+  expect(JSON.parse(stdout()).error.code).toBe("run.cancelled");
+  expect(output.text).toContain("Proceed?");
+  expect(output.text).not.toContain("\x1b");
+});
+
+test("a value for an inbox input is a usage error, as in chat", async () => {
+  const flow =
+    "id: f\nname: f\ninput:\n  messages: !Inbox(str)\nnodes:\n" +
+    "  heard:\n    kind: tool\n    tool_id: take\n    input:\n      from: ${input.messages}\n" +
+    "output: ${heard.output}\n";
+  const { code, stdout, stderr } = await runFlowCli(flow, ["-q", "-i", "messages=hello"]);
+  expect(code).toBe(2);
+  expect(stdout).toBe("");
+  expect(stderr).toContain('input "messages" is an inbox; it takes messages through send, not a value');
+  expect(stderr).not.toContain("Run log: ");
+});
+
 describe("run's stops", () => {
   test("Ctrl-C at a prompt during the run: cancelled by user, exit 130, no document", async () => {
     const ctrlC = (keys: FakeInput) => keys.write("\x03");
@@ -1149,6 +1209,72 @@ describe("run setup errors", () => {
     expect(stderr.indexOf("─ traceback ")).toBeGreaterThan(failed);
     expect(stderr).toContain("ENOTDIR");
     expect(stderr).toContain("    at ");
+  });
+});
+
+// A JS string expression holding an OSC 52 clipboard write, an OSC 8 link and a cursor move.
+const ESCAPED_JS = String.raw`"x\u001b]52;c;aGk=\u0007y\u001b]8;;https://e.example\u001b\\z\u001b[2J"`;
+const ESCAPED = "x\x1b]52;c;aGk=\x07y\x1b]8;;https://e.example\x1b\\z\x1b[2J";
+
+/** Return `text` with each progress line's elapsed time (` [0s]`) taken out. */
+function untimed(text: string): string {
+  return text.replace(/ \[\d+s\]\n/g, "\n");
+}
+
+/** Run `yian run` on `body` with stdout and stderr TTYs or not, colour off. */
+async function runAt(body: string, argv: readonly string[], isTTY: boolean) {
+  const flow = file("flow.yaml", body);
+  mkdirSync(join(tmp, "home"), { recursive: true });
+  const out = sink();
+  const err = sink();
+  const io: CliIo = {
+    stdout: { ...out.out, isTTY },
+    stderr: { ...err.out, isTTY },
+    stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
+    env: (name) => (name === "NO_COLOR" ? "1" : name === "HOME" ? join(tmp, "home") : NO_ENV(name)),
+  };
+  const code = await main(["run", flow, ...argv], io);
+  return { code, stdout: out.text(), stderr: err.text() };
+}
+
+describe("run's model and tool text with escape sequences", () => {
+  const output = `id: f\nname: f\nnodes:\n  a: {kind: code, output: str, code: 'return ${ESCAPED_JS}'}\noutput: \${a.output}\n`;
+  const failing = output.replace("return ", "throw new Error(").replace("'}", ")'}");
+
+  test("the output is stripped on a TTY and kept exactly when piped", async () => {
+    expect((await runAt(output, ["-q"], true)).stdout).toBe("xyz\n");
+    expect((await runAt(output, ["-q"], false)).stdout).toBe(`${ESCAPED}\n`);
+  });
+
+  test("a verbose node output is stripped on a TTY and kept exactly when piped", async () => {
+    expect(untimed((await runAt(output, ["-v"], true)).stderr)).toContain("✓ a\n    xyz\n");
+    expect(untimed((await runAt(output, ["-v"], false)).stderr)).toContain(`✓ a\n    ${ESCAPED}\n`);
+  });
+
+  test("a failure's message and traceback are stripped on a TTY and kept exactly when piped", async () => {
+    const tty = await runAt(failing, ["--engine-trace"], true);
+    expect(tty.code).toBe(1);
+    expect(untimed(tty.stderr)).toContain("✗ a\n    Error: xyz\n");
+    expect(tty.stderr).toContain("\nError: xyz\n╭─ traceback ");
+    expect(tty.stderr).toContain("│ Error: xyz ");
+    expect(tty.stderr).not.toContain("\x1b]");
+    expect(tty.stderr).not.toContain("\x07");
+    const piped = await runAt(failing, [], false);
+    expect(piped.code).toBe(1);
+    expect(untimed(piped.stderr)).toContain(`✗ a\n    Error: ${ESCAPED}\n`);
+    expect(piped.stderr).toContain(`\nError: ${ESCAPED}\n`);
+  });
+
+  test("a setup failure's message is stripped on a TTY and kept exactly when piped", async () => {
+    // A log under a file can't be created, and the error names its path.
+    const taken = file("t\x1b]52;c;aGk=\x07", "");
+    const argv = ["-q", "--log", join(taken, "run.jsonl")];
+    const tty = await runAt(output, argv, true);
+    expect(tty.code).toBe(1);
+    expect(tty.stderr).toMatch(/run failed: ENOTDIR\b.*\/t\/run\.jsonl'\n$/);
+    const piped = await runAt(output, argv, false);
+    expect(piped.stderr).toMatch(/run failed: ENOTDIR\b.*\/t\x1b\]52;c;aGk=\x07\/run\.jsonl'\n$/);
   });
 });
 
@@ -1302,7 +1428,7 @@ describe("check", () => {
           diagnostics: [
             {
               code: "compose.load",
-              message: "system.paths is not supported with --root; use a relative uses: path",
+              message: "system.paths is not supported when loading confined to a folder; use a relative uses: path",
             },
           ],
         },
@@ -1419,10 +1545,16 @@ describe("check", () => {
     const root = join(tmp, "company");
     const pinned = file("company/pinned.yaml", parentFlow("lib/child@2"));
     file("company/lib/child.yaml", FLOW.replace("name: f\n", "name: f\nversion: '1'\n"));
-    expect((await rootDiagnostic(root, pinned)).message).toEndWith("lib/child is version '1', not '2'");
+    expect((await rootDiagnostic(root, pinned)).message).toBe(
+      'uses: ref pinned lib/child@2 but the resolved file declares version: "1" ' +
+        '(file-per-version: name a file that declares "2")',
+    );
     const unversioned = file("company/unversioned.yaml", parentFlow("lib/bare@2"));
     file("company/lib/bare.yaml", FLOW);
-    expect((await rootDiagnostic(root, unversioned)).message).toEndWith("lib/bare is version null, not '2'");
+    expect((await rootDiagnostic(root, unversioned)).message).toBe(
+      "uses: ref pinned lib/bare@2 but the resolved file declares version: null " +
+        '(file-per-version: name a file that declares "2")',
+    );
   });
 
   test("a CODE reference resolves against its own file's directory, not the cwd", async () => {
@@ -1474,6 +1606,9 @@ describe("status", () => {
     held.append(
       new RunStartedRecord({ flowFingerprint: "a".repeat(64), startWiringOverride: {}, effectiveLlmByStaticPath: {}, numWorkers: 0 }),
     );
+    held.append(new NodeStartedRecord("agent"));
+    const usage = { input_tokens: 9n, output_tokens: 2n, cache_read_tokens: 3n, cache_creation_tokens: 5n, reasoning_tokens: 1n };
+    held.append(new NodeStepRecord("agent", 1, { kind: "model_call", usage }));
     try {
       const text = testIo({ HOME: join(tmp, "home") });
       expect(await main(["status"], text.io)).toBe(0);
@@ -1482,7 +1617,7 @@ describe("status", () => {
         `${id.padEnd(width)}  ${status.padEnd(9)}  ${started.padEnd(24)}  ${shown}\n`;
       expect(text.stdout()).toBe(
         line("run id", "status", "started", "flow") +
-          rows.map((row) => line(row.runId, row.status, row.startedAt, flow)).join("") +
+          rows.map((row) => line(row.runId, row.status, row.startedAt!, flow)).join("") +
           line("held", "running", "2999-01-01T00:00:00.000Z", "-"),
       );
       expect(text.stderr()).toBe("");
@@ -1507,17 +1642,29 @@ describe("status", () => {
         input_tokens: 0,
         output_tokens: 0,
         cache_read_tokens: 0,
+        cache_creation_tokens: 0,
         reasoning_tokens: 0,
         ready: false,
         wake_at: null,
+        unreadable: null,
       });
-      expect(document.runs[2]).toMatchObject({ run_id: "held", flow: null, status: "running", result: null });
+      expect(document.runs[2]).toMatchObject({
+        run_id: "held",
+        flow: null,
+        status: "running",
+        result: null,
+        input_tokens: 9,
+        output_tokens: 2,
+        cache_read_tokens: 3,
+        cache_creation_tokens: 5,
+        reasoning_tokens: 1,
+      });
     } finally {
       held.close();
     }
   });
 
-  test("with no log and no runs folder, lists nothing; a run logged elsewhere isn't indexed; a bad log warns", async () => {
+  test("with no log and no runs folder, lists nothing; a run logged elsewhere isn't indexed; a bad log warns once and is listed unreadable", async () => {
     const empty = testIo({ HOME: join(tmp, "home") });
     expect(await main(["status"], empty.io)).toBe(0);
     expect([empty.stdout(), empty.stderr()]).toEqual(["", ""]);
@@ -1528,14 +1675,31 @@ describe("status", () => {
     const log = join(tmp, "elsewhere", "run-1", "log.jsonl");
     expect((await runFlowCli(ECHO_FLOW, ["-q", "--input", "topic=clouds", "--log", log])).code).toBe(0);
     expect(existsSync(join(tmp, "elsewhere", "index.sqlite"))).toBe(false);
-    // A log the update can't read is a warning.
+    // A log the update can't read is a warning, and a row unreadable at its first record.
     const damaged = join(tmp, "home", ".yian", "runs", "damaged");
     mkdirSync(damaged, { recursive: true });
     writeFileSync(join(damaged, "log.jsonl"), "not a run log\n");
+    const listed = `run id   status               started  flow\ndamaged  unreadable at seq 0  -        -\n`;
     const warned = testIo({ HOME: join(tmp, "home") });
     expect(await main(["status"], warned.io)).toBe(0);
-    expect(warned.stdout()).toBe("");
+    expect(warned.stdout()).toBe(listed);
     expect(warned.stderr()).toStartWith(`warning: run index skipped ${join(damaged, "log.jsonl")}: run log `);
+    // Until the log changes, the next update doesn't warn again.
+    const again = testIo({ HOME: join(tmp, "home") });
+    expect(await main(["status", "--json"], again.io)).toBe(0);
+    expect(again.stderr()).toBe("");
+    const schema = JSON.parse(readFileSync(fileURLToPath(new URL("../conformance/schema/cli.schema.json", import.meta.url)), "utf8")) as Schema;
+    const runsDocument = (schema["$defs"] as Record<string, Schema>)["runs_document"]!;
+    expect(validate(schema, runsDocument, parseJson(again.stdout(), "plain"))).toEqual([]);
+    expect(JSON.parse(again.stdout()).runs).toEqual([
+      expect.objectContaining({
+        run_id: "damaged",
+        status: "crashed",
+        started_at: null,
+        last_seq: null,
+        unreadable: { seq: 0, reason: expect.stringMatching(/^run log .*line 1/) },
+      }),
+    ]);
   });
 
   /** Run `ECHO_FLOW` to the end with its log at `tmp/<name>`, and return the log's path. */

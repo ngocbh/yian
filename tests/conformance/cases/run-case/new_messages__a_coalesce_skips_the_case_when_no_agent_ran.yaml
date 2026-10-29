@@ -1,0 +1,62 @@
+# A CASE routing on a coalesce of two AGENTs' new messages is skipped when both agents are
+# skipped, as a binding of that coalesce would be.
+kind: run
+flow: |
+  id: routed
+  name: routed
+  llm_config: {provider: anthropic, model: claude-test}
+  typedefs:
+    Who: Literal(left, right, nobody)
+  input:
+    who: !Who
+  nodes:
+    pre:
+      kind: case
+      on: ${input.who}
+      cases:
+        - when: left
+          then: left
+        - when: right
+          then: right
+      else: nobody
+    left:
+      kind: agent
+      system_prompt: Help.
+      prompt: hi
+      output: str
+    right:
+      kind: agent
+      system_prompt: Help.
+      prompt: hi
+      output: str
+    nobody: !str nobody ran
+    gate:
+      kind: case
+      cases:
+        - when: "${len(left.new_messages | right.new_messages) == 1}"
+          then: one
+      else: many
+    one: !str one message
+    many: !str many messages
+  output: ${one.output | many.output | nobody.output}
+inputs: {who: nobody}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output: {status: succeeded, output: nobody ran}
+  trace:
+    - [run_started, null, {effective_llm_by_static_path: {left: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}, right: {model: claude-test, provider: anthropic, _connection: {method: api_key, source: environment, endpoint: null}}}, learnable: false, num_workers: 0}]
+    - [pool_commit, __start__, {key: system.now}]
+    - [pool_commit, __start__, {key: system.run_id, value: r1}]
+    - [pool_commit, __start__, {key: system.today}]
+    - [pool_commit, __start__, {value: {who: nobody}}]
+    - [node_started, __start__]
+    - [pool_commit, __start__, {value: {who: nobody}}]
+    - [node_succeeded, __start__, {commit: 6}]
+    - [node_started, pre]
+    - [node_routed, pre, {handle: '#else'}]
+    - [node_started, nobody]
+    - [pool_commit, nobody, {value: nobody ran}]
+    - [node_succeeded, nobody, {commit: 11}]
+    - [node_started, __end__]
+    - [pool_commit, __end__, {value: nobody ran}]
+    - [node_succeeded, __end__, {commit: 14}]

@@ -44,7 +44,9 @@ import {
   AZURE_NEEDS_BASE_URL,
   azureResourceEndpoint,
   type HostConnection,
+  isProvider,
   LLMConfig,
+  responsesBlockError,
   RETIRED_LLM_CONFIG_KEYS,
   splitOllamaBaseUrl,
   SUPPORTED_LLM_PROVIDERS,
@@ -503,14 +505,9 @@ function nonempty(value: unknown, where: string): string {
   return value;
 }
 
-/** Whether `value` names a supported provider. */
-function isSupported(value: unknown): value is string {
-  return typeof value === "string" && (SUPPORTED_LLM_PROVIDERS as readonly string[]).includes(value);
-}
-
 /** Return `value` if it names a supported provider; otherwise throw `RangeError` naming `where`. */
 function supported(value: unknown, where: string): string {
-  if (!isSupported(value)) {
+  if (!isProvider(value)) {
     throw new RangeError(`${where} names an unsupported provider`);
   }
   return value;
@@ -543,7 +540,7 @@ export function connectionSnapshot(options: { env?: Env; store?: AuthStore } = {
   const envProvider = env("YIAN_DEFAULT_PROVIDER") || null;
   const apiEndpoint = env("OPENAI_BASE_URL") || OPENAI_API_ENDPOINT;
   const provider = (envProvider || state.defaultProvider || "").toLowerCase() || null;
-  if (envProvider !== null && !isSupported(provider)) {
+  if (envProvider !== null && !isProvider(provider)) {
     throw new RangeError(
       `YIAN_DEFAULT_PROVIDER=${reprText(envProvider)} is not a supported provider; ` +
         `set it to one of: ${SUPPORTED_LLM_PROVIDERS.join(", ")}`,
@@ -552,7 +549,7 @@ export function connectionSnapshot(options: { env?: Env; store?: AuthStore } = {
   const models: Record<string, string> = {};
   const connections: Record<string, Connection> = {};
   for (const selection of state.selections) {
-    if (!isSupported(selection.provider)) {
+    if (!isProvider(selection.provider)) {
       if (envProvider === null && selection.provider === state.defaultProvider) {
         throw new RangeError(
           `The saved default provider ${reprText(selection.provider)} is not supported; ` +
@@ -649,7 +646,7 @@ function selectionSettings(selection: ProviderSelection): Partial<Connection> {
  */
 export function validateConnection(value: unknown, provider: unknown = "openai"): Connection {
   if (typeof provider !== "string" || !KEYED.has(provider)) {
-    const name = isSupported(provider) ? `provider ${provider}` : "an unsupported provider";
+    const name = isProvider(provider) ? `provider ${provider}` : "an unsupported provider";
     throw new RangeError(`Internal connection metadata is not used for ${name}`);
   }
   if (
@@ -805,8 +802,7 @@ export function validateHeaderNames(value: unknown, provider: unknown): string[]
  */
 function checkHostHeaders(raw: Readonly<AgentConfig>, names: readonly string[]): void {
   const value = raw["headers"];
-  // An absent or empty value means no headers.
-  const headers = !value || (Array.isArray(value) && value.length === 0) ? {} : value;
+  const headers = value === null || value === undefined ? {} : value;
   // `LLMConfig` names the malformed field.
   if (!isRecord(headers)) return;
   const diff = headerNameDiff(names, Object.keys(headers));
@@ -942,12 +938,18 @@ export function splitModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LL
  * Throws `AuthError` if the config carries `HOST_KEY_MARKER` but no `api_key`. Throws `RangeError`
  * if a field is invalid, the connection rejects a set field, an `azure` config has no `base_url`,
  * or the provider's block does not fit the API the call actually reaches (e.g. an `openai` block
- * with `temperature` on a ChatGPT subscription connection).
+ * with `temperature` on a ChatGPT subscription connection, or any block on a model routed to the
+ * Responses API, `responsesBlockError`).
  */
 export function checkModelConfig(config: Readonly<AgentConfig> | LLMConfig): [LLMConfig, Connection | null] {
   const [validated, connection] = splitModelConfig(config);
   if (validated.provider === "azure" && validated.baseUrl === null) throw new RangeError(AZURE_NEEDS_BASE_URL);
-  if (validated.provider !== null) checkProviderBlock(validated, validated.provider, connection);
+  const { provider, model } = validated;
+  if (provider !== null) {
+    checkProviderBlock(validated, provider, connection);
+    const routed = model === null ? null : responsesBlockError(provider, model, validated.blockFor(provider));
+    if (routed !== null) throw new RangeError(routed);
+  }
   return [validated, connection];
 }
 

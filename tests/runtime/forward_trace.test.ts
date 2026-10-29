@@ -10,12 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { buildGrow, callSubgraph, cloneChild } from "../../src/compile/expand.ts";
-import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { expansionDigest } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
-import { Failure } from "../../src/diagnostics.ts";
+import { Failure, type FailureCode } from "../../src/diagnostics.ts";
 import { NodeExpanded, NodeSucceeded, RunFailed, RunSucceeded } from "../../src/events.ts";
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
 import { MISSING_ROOT } from "../../src/expr/expressions.ts";
@@ -90,6 +90,7 @@ import {
   RunStoppedRecord,
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
+import * as runLog from "../../src/runtime/log.ts";
 import {
   captureBindings,
   checkMemoryScope,
@@ -808,7 +809,7 @@ function install(trace: RetainedTrace, target: string, entry: SourceEntry): void
 function installOccurrence(trace: RetainedTrace, record: OutcomeRecord, nodeData: JsonObject = {}): TraceOccurrence {
   const capture = record.forwardCapture!;
   const envelope = new RecordEnvelope(SCHEMA_VERSION, RUN, 2, record);
-  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, {
+  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, encodeRecord(envelope), capture.route, {
     rebind: () => ({ inputs: { v: 1n }, capture, inputRoute: capture.route }),
     nodeDataRebuilder: () => nodeData,
   });
@@ -1003,7 +1004,7 @@ test("checkMemoryScope returns null or an exact MemoryScope", () => {
   );
 });
 
-test("a trace occurrence keeps a decoded copy of its envelope", () => {
+test("a trace occurrence keeps its log line and decodes a copy of its envelope", () => {
   const keys = new Set<string>();
   const capture = new ForwardCapture(ValueRoute.record([["v", sourceRoute(0, ["x"])]]), {
     evaluatedKeys: keys,
@@ -1013,11 +1014,11 @@ test("a trace occurrence keeps a decoded copy of its envelope", () => {
   const hidden = new Set(["v"]);
   const scope = new MemoryScope(["a"], { memories: ["notes"] });
 
-  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, {
+  const recordJson = encodeRecord(envelope);
+  const occurrence = new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, recordJson, capture.route, {
     memoryScope: scope,
     hiddenInputs: hidden,
   });
-  const recordJson = encodeRecord(envelope);
   (capture.evaluatedKeys as Set<string>).add("v");
   hidden.add("w");
 
@@ -1029,7 +1030,7 @@ test("a trace occurrence keeps a decoded copy of its envelope", () => {
   expect([...occurrence.hiddenInputs]).toEqual(["v"]);
   expect(Object.isFrozen(occurrence)).toBe(true);
   expectError(
-    () => new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, envelope, capture.route, { memoryScope: {} as MemoryScope }),
+    () => new TraceOccurrence(new SourceRef(RUN, 1), "a", 2, recordJson, capture.route, { memoryScope: {} as MemoryScope }),
     TypeError,
     "historical memory scope must be a MemoryScope or null",
   );
@@ -1048,6 +1049,19 @@ test("selectSeedRoute selects a seed field by name, or by item index and name", 
   expect(selectSeedRoute(capture, new SeedConnection("child", "n", [2, "n"]), inputRoute)).toBe(itemField);
   expect(selectSeedRoute(capture, new SeedConnection("child", "n", [3, "n"]))).toBeNull();
   expect(selectSeedRoute(capture, new SeedConnection("child", "w", ["w"]))).toBeNull();
+});
+
+test("selectSeedRoute finds each captured item among sparse indices, and no other", () => {
+  const routes = [0, 2, 5].map((index) => [index, sourceRoute(0, [`n${index}`])] as const);
+  const items = routes.map(([index, route]) => [index, new ForwardCapture(ValueRoute.record([["n", route]]))] as const);
+  const capture = new ForwardCapture(ValueRoute.record([]), { items });
+
+  for (const [index, route] of routes) {
+    expect(selectSeedRoute(capture, new SeedConnection("child", "n", [index, "n"]))).toBe(route);
+  }
+  for (const index of [1, 3, 4, 6]) {
+    expect(selectSeedRoute(capture, new SeedConnection("child", "n", [index, "n"]))).toBeNull();
+  }
 });
 
 test("a retained trace starts empty and checks its root input names", () => {
@@ -1274,7 +1288,31 @@ function runNode(
   return step(step(trace, at(seq, new NodeStartedRecord(node.id)))!, at(seq + 1, record), node, options)!;
 }
 
-test("a binding that finished must rebind; only a binding failure rebuilds to null", () => {
+// Under Bun only: the Node runner can't spy on a module's export.
+test.if(process.versions.bun !== undefined)(
+  "an occurrence keeps the log line it is given and decodes its envelope once, when first read",
+  () => {
+    const trace = startedTrace(true);
+    const succeeded = learnableRun()[2]!;
+    const recordJson = encodeRecord(succeeded);
+    const encode = spyOn(runLog, "encodeRecord");
+    const decode = spyOn(runLog, "decodeRecord");
+    try {
+      const occurrence = step(trace, succeeded, new TraceNode("a"), { envelopeJson: recordJson })!.occurrences[0]!;
+      expect(occurrence.recordJson).toBe(recordJson);
+      expect(encode).not.toHaveBeenCalled();
+      expect(decode).not.toHaveBeenCalled();
+      expect(occurrence.envelope).toBe(occurrence.envelope);
+      expect(occurrence.envelope.record).toBe(occurrence.record);
+      expect(decode).toHaveBeenCalledTimes(1);
+    } finally {
+      encode.mockRestore();
+      decode.mockRestore();
+    }
+  },
+);
+
+test("a binding that finished must rebind; only one that didn't rebuilds to null", () => {
   const unfinished = fixedRebinder(null);
   // A success's binding finished, so a rebind that fails is a fault, not missing inputs.
   const succeeded = drivenTrace(new TraceNode("a"), { rebinder: unfinished });
@@ -1283,20 +1321,33 @@ test("a binding that finished must rebind; only a binding failure rebuilds to nu
     RangeError,
     "the bound inputs of 'a' don't rebuild: the binding didn't finish",
   );
-  // A failure at a binding stage recorded none, and nothing is rebound.
+  // A binding that didn't finish, as its capture records, bound none, and nothing is rebound.
   let rebinds = 0;
   const counted: Rebinder = (sources, resolve, route) => {
     rebinds += 1;
     return unfinished(sources, resolve, route);
   };
-  const failure = new Failure({ code: "binding.evaluate", message: "Missing.", nodeId: "a" });
-  const failed = runNode(startedTrace(), 1, new TraceNode("a"), new NodeFailedRecord(failure, { forwardCapture: captureV() }), {
-    rebinder: counted,
-    terminalSucceeded: false,
-    terminalFailure: failure,
-  });
-  expect(failed.occurrences[0]!.boundInputs).toBeNull();
+  const failedWith = (code: FailureCode, capture: ForwardCapture, rebinder: Rebinder) => {
+    const failure = new Failure({ code, message: "Bad input.", nodeId: "a" });
+    return runNode(startedTrace(), 1, new TraceNode("a"), new NodeFailedRecord(failure, { forwardCapture: capture }), {
+      rebinder,
+      terminalSucceeded: false,
+      terminalFailure: failure,
+    }).occurrences[0]!;
+  };
+  expect(failedWith("binding.evaluate", captureV({ bound: false }), counted).boundInputs).toBeNull();
   expect(rebinds).toBe(0);
+  // A body failing with a binding code after its binding finished rebuilds its inputs.
+  expect(failedWith("contract.input", captureV(), fixedRebinder({ v: 1n })).boundInputs).toEqual({ v: 1n });
+});
+
+test("only a failure's capture may hold a binding that didn't finish", () => {
+  const record = new NodeSucceededRecord("a", 2, { forwardCapture: captureV({ bound: false }) });
+  expectError(
+    () => runNode(startedTrace(), 1, new TraceNode("a"), record, { rebinder: fixedRebinder({ v: 1n }) }),
+    RangeError,
+    "only a failure's capture may hold a binding that didn't finish",
+  );
 });
 
 test("prepareTrace and apply build the trace record by record", () => {
@@ -2003,7 +2054,6 @@ function changedOccurrence(
     source?: SourceRef;
     nodeId?: string;
     outcomeSeq?: number;
-    envelope?: RecordEnvelope;
     memoryScope?: MemoryScope | null;
   },
 ): TraceOccurrence {
@@ -2011,7 +2061,7 @@ function changedOccurrence(
     changes.source ?? occurrence.source,
     changes.nodeId ?? occurrence.nodeId,
     changes.outcomeSeq ?? occurrence.outcomeSeq,
-    changes.envelope ?? occurrence.envelope,
+    occurrence.recordJson,
     occurrence.inputRoute,
     {
       memoryScope: changes.memoryScope === undefined ? occurrence.memoryScope : changes.memoryScope,
@@ -2232,10 +2282,10 @@ test("an outcome trace source must match the physical accepted start before appe
 
 test.each(
   OUTCOME_KINDS.flatMap((kind) =>
-    (["source", "node", "sequence", "record"] as const).map((change) => [kind, change] as const),
+    (["source", "node", "sequence"] as const).map((change) => [kind, change] as const),
   ),
 )(
-  "an outcome trace occurrence must match the canonical record: %s, %s",
+  "an outcome trace occurrence must match the accepted outcome: %s, %s",
   (kind, change) => {
     const { state, log, prepared } = preparedScopedOutcome(kind);
     const delta = prepared._plan.traceDelta!;
@@ -2244,7 +2294,6 @@ test.each(
       source: { source: new SourceRef(state.runId!, 0) },
       node: { nodeId: START_ID },
       sequence: { outcomeSeq: occurrence.outcomeSeq + 1 },
-      record: { envelope: log.records().at(-1)! },
     }[change];
 
     expectRefused(
@@ -3298,7 +3347,7 @@ function seedCallFlow(
   options: { extraFirst?: boolean } = {},
 ): CompiledFlow {
   const parameters = Object.keys(sources).map((name) => new Parameter(name));
-  const child = CompiledFlow.fromParts(
+  const child = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: parameters })],
       [END_ID, EndNode.value(END_ID, { outputName: null })],
@@ -4096,7 +4145,7 @@ output: {left: '\${left.output}', right: '\${right.output}'}
     },
   };
   const built = growing(loaded, {
-    effectiveLlmByStaticPath: resolveLlmCascade(loaded, {}, { defaults: { provider: "test", model: "test" } }),
+    effectiveLlmByStaticPath: resolveRunLlm(loaded, {}, { defaults: { provider: "test", model: "test" } }).effective,
     models,
   });
   const original = copyGraph(built.state.flow);
@@ -4444,7 +4493,7 @@ nodes:
 output: \${nap.output}
 `;
 
-test("a tool body failing with a binding code after its binding finished rebuilds its text", async () => {
+test("a tool body failing with a binding code after its binding finished rebuilds its inputs and text", async () => {
   const log = join(boundDir, "nap.jsonl");
   const nap = await loadFlow(NAP, { sourceLabel: "flow.yaml" });
   const result = await runFlow(nap, { x: "soon" }, { env: NO_ENV, log, numWorkers: 0, learnable: true });
@@ -4460,6 +4509,42 @@ test("a tool body failing with a binding code after its binding finished rebuild
   expect(occurrence.record).toBeInstanceOf(NodeFailedRecord);
   expect(interpolationIn(occurrence.capture.route)!.valueJson).toBe(JSON.stringify("not a date soon"));
   expect(interpolationIn(occurrence.inputRoute)!.valueJson).toBe(JSON.stringify("not a date soon"));
+  // `sleep` refuses `until` with `contract.input` after its binding finished.
+  expect((occurrence.record as NodeFailedRecord).failure.code).toBe("contract.input");
+  expect(occurrence.record.forwardCapture!.bound).toBe(true);
+  expect(occurrence.boundInputs).toEqual({ until: "not a date soon" });
+});
+
+/** A TOOL `sleep` whose `until` falls back to a date when a deep read of `x` is null. */
+const NAP_FALLBACK = `
+id: nap-fallback
+name: nap_fallback
+input: {x: !object}
+nodes:
+  nap: {kind: tool, tool_id: sleep, input: {until: "\${input.x?.k?.deep?.more | 'tomorrow'}"}}
+output: \${nap.output}
+`;
+
+test("a binding that failed rebuilds no inputs, even where binding again from its reads would finish", async () => {
+  const log = join(boundDir, "nap-fallback.jsonl");
+  const nap = await loadFlow(NAP_FALLBACK, { sourceLabel: "flow.yaml" });
+  // `deep` is an int, so reading `.more` from it fails the binding before the fallback.
+  const result = await runFlow(nap, { x: { k: { deep: 1n } } }, { env: NO_ENV, log, numWorkers: 0, learnable: true });
+  expect(result.status).toBe("failed");
+  const reopened = JsonlRunLog.resume(log);
+  let trace: RetainedTrace;
+  try {
+    trace = replayRunLog(nap, reopened).trace!;
+  } finally {
+    reopened[Symbol.dispose]();
+  }
+  const occurrence = trace.occurrences.find((each) => each.nodeId === "nap")!;
+  const record = occurrence.record as NodeFailedRecord;
+  expect(record.failure.code).toBe("binding.evaluate");
+  // The failed read recorded no route, so binding again without `x` would take the fallback.
+  expect(record.forwardCapture!.route.names).toEqual([]);
+  expect(record.forwardCapture!.bound).toBe(false);
+  expect(occurrence.boundInputs).toBeNull();
 });
 
 /**
@@ -4468,7 +4553,15 @@ test("a tool body failing with a binding code after its binding finished rebuild
  */
 function failedBindingOccurrence(capture: ForwardCapture, rebinder: Rebinder): TraceOccurrence {
   const failure = new Failure({ code: "binding.evaluate", message: "Missing.", nodeId: "a" });
-  const trace = runNode(startedTrace(), 1, new TraceNode("a"), new NodeFailedRecord(failure, { forwardCapture: capture }), {
+  const unbound = new ForwardCapture(capture.route, {
+    evaluatedKeys: capture.evaluatedKeys,
+    items: capture.items,
+    scope: capture.scope,
+    inputNames: capture.inputNames,
+    variableNames: capture.variableNames,
+    bound: false,
+  });
+  const trace = runNode(startedTrace(), 1, new TraceNode("a"), new NodeFailedRecord(failure, { forwardCapture: unbound }), {
     rebinder,
     terminalSucceeded: false,
     terminalFailure: failure,

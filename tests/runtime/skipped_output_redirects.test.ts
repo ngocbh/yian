@@ -69,7 +69,7 @@ function mapRedirectFlow(): CompiledFlow {
   const collectorId = "map/__end__";
   const collector = EndNode.list(collectorId, { n: 1 });
   collector.commitAs = "map";
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["router", func("router")],
@@ -92,7 +92,7 @@ function loopRedirectFlow(): CompiledFlow {
   const bodyEndId = "loop#0/__end__";
   const driverId = "loop~1";
   const loop = { flowId: "body", predicateKind: "times", times: 2, maxIters: 2, originId: "loop" } as const;
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["router", func("router")],
@@ -118,7 +118,7 @@ function nestedCallRedirectFlow(): CompiledFlow {
   innerEnd.commitAs = "outer/inner";
   const outerEnd = EndNode.value(outerEndId, { outputName: null });
   outerEnd.commitAs = "outer";
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["router", func("router")],
@@ -192,7 +192,7 @@ test("several redirect owners are refused before the skip", () => {
   first.commitAs = "target";
   const second = func("second");
   second.commitAs = "target";
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["router", func("router")],
@@ -226,7 +226,7 @@ test("a live redirect target is refused before the skip", () => {
   // A logical anchor can't race a redirected producer for the same output.
   const owner = func("owner");
   owner.commitAs = "target";
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["router", func("router")],

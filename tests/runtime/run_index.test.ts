@@ -84,13 +84,16 @@ function runStarted(parent: { runId: string; node: string | null } | null = null
     startWiringOverride: {},
     effectiveLlmByStaticPath: {},
     numWorkers: 0,
-    flow: { root: "flow.yaml", dir: "/flows", files: { "flow.yaml": { text: "id: f\n", refs: {} } } },
+    flow: { root: "flow.yaml", dir: "/flows", codeRoot: null, files: { "flow.yaml": { text: "id: f\n", refs: {} } } },
     parent,
   });
 }
 
 /** A `model_call` step with these token counts; `error` makes it a failed attempt. */
-function modelCall(usage: [number, number, number | null, number | null] | null, error = false): Record<string, unknown> {
+function modelCall(
+  usage: [number, number, number | null, number | null, number | null] | null,
+  error = false,
+): Record<string, unknown> {
   const count = (n: number | null) => (n === null ? null : BigInt(n));
   return {
     kind: "model_call",
@@ -102,7 +105,8 @@ function modelCall(usage: [number, number, number | null, number | null] | null,
             input_tokens: count(usage[0]),
             output_tokens: count(usage[1]),
             cache_read_tokens: count(usage[2]),
-            reasoning_tokens: count(usage[3]),
+            cache_creation_tokens: count(usage[3]),
+            reasoning_tokens: count(usage[4]),
           },
     ...(error ? { error: { kind: "server", message: "overloaded" } } : {}),
   };
@@ -136,8 +140,8 @@ function start(log: JsonlRunLog, parent: { runId: string; node: string | null } 
 function succeededRun(log: JsonlRunLog): void {
   start(log, { runId: "parent-run", node: "spawner" });
   log.append(new NodeStartedRecord("agent"));
-  log.append(new NodeStepRecord("agent", 1, modelCall([100, 3, null, null], true)));
-  log.append(new NodeStepRecord("agent", 2, modelCall([120, 30, 64, 8])));
+  log.append(new NodeStepRecord("agent", 1, modelCall([100, 3, null, 4, null], true)));
+  log.append(new NodeStepRecord("agent", 2, modelCall([120, 30, 64, 16, 8])));
   succeed(log, "agent", { kind: "str", value: "rain" });
   log.append(new NodeStartedRecord(END_ID));
   succeed(log, END_ID, { kind: "object", value: { answer: "rain", n: 2n } });
@@ -147,7 +151,7 @@ function succeededRun(log: JsonlRunLog): void {
 function failedRun(log: JsonlRunLog): void {
   start(log);
   log.append(new NodeStartedRecord("agent"));
-  log.append(new NodeStepRecord("agent", 1, modelCall([10, 1, null, null], true)));
+  log.append(new NodeStepRecord("agent", 1, modelCall([10, 1, null, null, null], true)));
   log.append(new NodeFailedRecord(new Failure({ code: "node.execute", message: "boom", nodeId: "agent" })));
 }
 
@@ -162,7 +166,7 @@ function stoppedRun(log: JsonlRunLog): void {
 function runningRun(log: JsonlRunLog): void {
   start(log);
   log.append(new NodeStartedRecord("agent"));
-  log.append(new NodeStepRecord("agent", 1, modelCall([7, 2, null, 1])));
+  log.append(new NodeStepRecord("agent", 1, modelCall([7, 2, null, null, 1])));
 }
 
 /** The rows by run id. */
@@ -200,11 +204,13 @@ describe("updateRunIndex and readRunIndex", () => {
         inputTokens: 220,
         outputTokens: 33,
         cacheReadTokens: 64,
+        cacheCreationTokens: 20,
         reasoningTokens: 8,
         offset: readFileSync(join(runs, "run-succeeded", "log.jsonl")).length,
         waits: [],
         ready: false,
         wakeAt: null,
+        unreadable: null,
       });
       expect(rows["run-failed"]).toMatchObject({
         status: "failed",
@@ -215,6 +221,7 @@ describe("updateRunIndex and readRunIndex", () => {
         inputTokens: 10,
         outputTokens: 1,
         cacheReadTokens: 0,
+        cacheCreationTokens: 0,
         reasoningTokens: 0,
       });
       expect(rows["run-stopped"]).toMatchObject({ status: "stopped", endedAt: null, lastSeq: 3, result: null });
@@ -261,7 +268,7 @@ describe("updateRunIndex and readRunIndex", () => {
       const before = byId(readRunIndex(runs));
       const path = join(runs, "run-b", "log.jsonl");
       const size = readFileSync(path).length;
-      growing.append(new NodeStepRecord("agent", 2, modelCall([5, 5, 5, 5])));
+      growing.append(new NodeStepRecord("agent", 2, modelCall([5, 5, 5, 5, 5])));
       succeed(growing, "agent", { kind: "str", value: "ok" });
       const appended = readFileSync(path).length - size;
       const reads = spyOn(fs, "readSync");
@@ -373,14 +380,14 @@ describe("updateRunIndex and readRunIndex", () => {
     expect(readRunIndex(runs)[0]!.status).toBe("stopped");
   });
 
-  test("an unreadable log is skipped with a warning; a gone run loses its row; no index reads as []", () => {
+  test("a log of unreadable content keeps a row marked unreadable, a file error is skipped, each with a warning; a gone run loses its row; no index reads as []", () => {
     const runs = freshRuns();
     expect(readRunIndex(runs)).toEqual([]);
     writeRun(runs, "good", succeededRun);
     writeRun(runs, "gone", failedRun);
     mkdirSync(join(runs, "damaged"));
     writeFileSync(join(runs, "damaged", "log.jsonl"), "not a run log\n");
-    // A file error is skipped the same way.
+    // A file error is skipped, not marked.
     mkdirSync(join(runs, "folder-log", "log.jsonl"), { recursive: true });
     // A run folder reached through a symlink is a run folder.
     const elsewhere = freshRuns();
@@ -388,15 +395,28 @@ describe("updateRunIndex and readRunIndex", () => {
     symlinkSync(join(elsewhere, "linked"), join(runs, "linked"));
     const warnings: string[] = [];
     withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
-    expect(Object.keys(byId(readRunIndex(runs))).sort()).toEqual(["gone", "good", "linked"]);
+    const rows = byId(readRunIndex(runs));
+    expect(Object.keys(rows).sort()).toEqual(["damaged", "gone", "good", "linked"]);
     expect(warnings).toHaveLength(2);
     expect(warnings[0]).toStartWith(`run index skipped ${join(runs, "damaged", "log.jsonl")}: run log `);
     expect(warnings[1]).toStartWith(`run index skipped ${join(runs, "folder-log", "log.jsonl")}: `);
+    // No record was read, so the row knows nothing but where the log stops being readable.
+    expect(rows["damaged"]).toMatchObject({ flow: null, startedAt: null, endedAt: null, lastSeq: null, offset: 0, result: null });
+    expect(rows["damaged"]!.unreadable).toEqual({ seq: 0, reason: warnings[0]!.slice(warnings[0]!.indexOf(": ") + 2) });
+    expect(rows["good"]!.unreadable).toBeNull();
     // The index holds every run's result, so it is as private as the run folders.
     expect(statSync(join(runs, "index.sqlite")).mode & 0o777).toBe(0o600);
     rmSync(join(runs, "gone"), { recursive: true });
-    withWarnings(() => {}, () => updateRunIndex(runs));
-    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["good", "linked"]);
+    warnings.length = 0;
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    // An unreadable log that hasn't changed isn't read or warned about again; a file error is tried again.
+    expect(warnings).toEqual([expect.stringContaining(join(runs, "folder-log", "log.jsonl"))]);
+    expect(readRunIndex(runs).map((row) => row.runId)).toEqual(["damaged", "good", "linked"]);
+    // A log fixed since is read again.
+    rmSync(join(runs, "damaged"), { recursive: true });
+    writeRun(runs, "damaged", failedRun);
+    updateRunIndex(runs);
+    expect(byId(readRunIndex(runs))["damaged"]).toMatchObject({ status: "failed", unreadable: null, lastSeq: 4 });
   });
 
   test("a usage count that isn't an int counts as 0, so one odd step can't break the index", () => {
@@ -404,24 +424,122 @@ describe("updateRunIndex and readRunIndex", () => {
     writeRun(runs, "run-1", (log) => {
       start(log);
       log.append(new NodeStartedRecord("agent"));
-      const odd = { input_tokens: "12", output_tokens: 1.5, cache_read_tokens: Infinity, reasoning_tokens: 2n ** 60n };
+      const odd = {
+        input_tokens: "12",
+        output_tokens: 1.5,
+        cache_read_tokens: Infinity,
+        cache_creation_tokens: -0.5,
+        reasoning_tokens: 2n ** 60n,
+      };
       log.append(new NodeStepRecord("agent", 1, { kind: "model_call", usage: odd }));
-      log.append(new NodeStepRecord("agent", 2, modelCall([5, 6, 7, 8])));
+      log.append(new NodeStepRecord("agent", 2, modelCall([5, 6, 7, 9, 8])));
     });
     updateRunIndex(runs);
-    expect(readRunIndex(runs)[0]).toMatchObject({ inputTokens: 5, outputTokens: 6, cacheReadTokens: 7, reasoningTokens: 8 });
+    expect(readRunIndex(runs)[0]).toMatchObject({
+      inputTokens: 5,
+      outputTokens: 6,
+      cacheReadTokens: 7,
+      cacheCreationTokens: 9,
+      reasoningTokens: 8,
+    });
   });
 
-  test("a log that turns unreadable keeps the row it had", () => {
+  test("maxLineBytes marks a log with a longer line unreadable at it, reads it again only when it or the limit grows, and a bad one throws", () => {
+    const runs = freshRuns();
+    writeRun(runs, "good", succeededRun);
+    writeRun(runs, "big", (log) => {
+      start(log);
+      log.append(new NodeStartedRecord("agent"));
+      log.append(new NodeStepRecord("agent", 1, { kind: "note", text: "x".repeat(10_000) }));
+    });
+    const bigLog = join(runs, "big", "log.jsonl");
+    const warnings: string[] = [];
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs, { maxLineBytes: 4096 }));
+    const tooLong = /^run log .* line 4 \(seq 3\): the line is \d+ bytes, over maxLineBytes 4096$/;
+    expect(warnings).toEqual([expect.stringMatching(/^run index skipped .*big\/log\.jsonl: run log /)]);
+    // The row holds the records before the long line, and where it stopped.
+    const big = byId(readRunIndex(runs))["big"]!;
+    expect(big).toMatchObject({ status: "crashed", startedAt: timeAt(0), lastSeq: 2, endedAt: null });
+    expect(big.unreadable).toEqual({ seq: 3, reason: expect.stringMatching(tooLong) });
+    expect(byId(readRunIndex(runs))["good"]!.unreadable).toBeNull();
+    // Unchanged, the log isn't read again.
+    warnings.length = 0;
+    const reads = spyOn(fs, "readSync");
+    try {
+      withWarnings((message) => warnings.push(message), () => updateRunIndex(runs, { maxLineBytes: 4096 }));
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+    }
+    expect(warnings).toEqual([]);
+    expect(byId(readRunIndex(runs))["big"]).toEqual(big);
+    // Grown, it is read again, and still stops at the long line.
+    fs.appendFileSync(bigLog, "more\n");
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs, { maxLineBytes: 4096 }));
+    expect(warnings).toHaveLength(1);
+    // Read on from the saved row, the reason names the line by its byte offset.
+    expect(byId(readRunIndex(runs))["big"]!.unreadable).toEqual({ seq: 3, reason: expect.stringMatching(/\(seq 3\): the line is \d+ bytes/) });
+    // A lower limit can't read more, so it doesn't read again; a higher one reads to the damaged line.
+    warnings.length = 0;
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs, { maxLineBytes: 1024 }));
+    expect(warnings).toEqual([]);
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    expect(warnings).toHaveLength(1);
+    expect(byId(readRunIndex(runs))["big"]).toMatchObject({ lastSeq: 3, unreadable: { seq: 4 } });
+    expect(() => updateRunIndex(runs, { maxLineBytes: 0 })).toThrow("maxLineBytes must be a positive integer, got 0");
+  });
+
+  test.skipIf(process.getuid?.() === 0)("a log yian may not open keeps the row it had, and is read once it may, with its size and mtime unchanged", () => {
     const runs = freshRuns();
     writeRun(runs, "run-1", stoppedRun);
     updateRunIndex(runs);
-    const before = readRunIndex(runs);
+    const [before] = readRunIndex(runs);
+    const path = join(runs, "run-1", "log.jsonl");
+    const reopened = JsonlRunLog.resume(path, { clock: steppingClock() });
+    reopened.append(new RunResumedRecord(["agent"], 0));
+    reopened.close();
+    fs.chmodSync(path, 0o000);
+    const warnings: string[] = [];
+    try {
+      withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+      expect(warnings).toEqual([expect.stringMatching(new RegExp(`^run index skipped ${path}: .*EACCES`))]);
+      expect(readRunIndex(runs)).toEqual([before!]);
+    } finally {
+      // A chmod changes neither the size nor the mtime.
+      fs.chmodSync(path, 0o600);
+    }
+    warnings.length = 0;
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    expect(warnings).toEqual([]);
+    expect(readRunIndex(runs)[0]).toMatchObject({ lastSeq: 4, unreadable: null });
+  });
+
+  test("the reason stored for an unreadable log is cut to 200 characters", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", stoppedRun);
+    const path = join(runs, "run-1", "log.jsonl");
+    // A kind of 300 characters, which the error message quotes.
+    writeFileSync(path, readFileSync(path, "utf8").replace('"kind":"run_started"', `"kind":"${"k".repeat(300)}"`));
+    const warnings: string[] = [];
+    withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    const { reason } = readRunIndex(runs)[0]!.unreadable!;
+    expect([...reason]).toHaveLength(200);
+    expect(reason).toStartWith(`run log ${path} line 1 (seq 0): run-record kind 'kkk`);
+    expect(reason).toEndWith("k…");
+    expect(warnings).toEqual([`run index skipped ${path}: ${reason}`]);
+  });
+
+  test("a log that turns unreadable keeps the row it had, marked unreadable at the bad line", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", stoppedRun);
+    updateRunIndex(runs);
+    const [before] = readRunIndex(runs);
     fs.appendFileSync(join(runs, "run-1", "log.jsonl"), "not a run record\n");
     const warnings: string[] = [];
     withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
     expect(warnings).toHaveLength(1);
-    expect(readRunIndex(runs)).toEqual(before);
+    const [after] = readRunIndex(runs);
+    expect(after).toEqual({ ...before!, unreadable: { seq: 4, reason: expect.stringContaining("(seq 4)") } });
   });
 
   test("an index of another version is rebuilt", () => {
@@ -450,10 +568,22 @@ describe("updateRunIndex and readRunIndex", () => {
     try {
       const { scan } = reader.prepare("SELECT scan FROM runs").get() as { scan: string };
       expect(JSON.parse(scan).waits.stops).toEqual([]);
-      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
     } finally {
       reader.close();
     }
+  });
+
+  test("an index of version 4, which has no cache-creation column, is rebuilt with the count", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", succeededRun);
+    updateRunIndex(runs);
+    const db = openSqlite(join(runs, "index.sqlite"));
+    db.exec("ALTER TABLE runs DROP COLUMN cache_creation_tokens; PRAGMA user_version = 4");
+    db.close();
+    expect(readRunIndex(runs)).toEqual([]);
+    updateRunIndex(runs);
+    expect(readRunIndex(runs).map((row) => [row.runId, row.cacheCreationTokens])).toEqual([["run-1", 20]]);
   });
 
   test("a read takes the layout version and the rows from one snapshot, so a rebuild between them can't mix layouts", () => {

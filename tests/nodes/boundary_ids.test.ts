@@ -28,7 +28,7 @@ test("pool start id default mirrors startnode id", () => {
 
 test("compiledflow start end id accessors", () => {
   const n = new CodeNode("a", { code: "return 1" });
-  const flow = CompiledFlow.fromParts(new Map([["a", n]]), [new Edge("s", START_ID, "a"), new Edge("t", "a", END_ID)]);
+  const flow = new CompiledFlow(new Map([["a", n]]), [new Edge("s", START_ID, "a"), new Edge("t", "a", END_ID)]);
   expect(flow.startId).toBe(START_ID);
   expect(flow.endId).toBe(END_ID);
 });

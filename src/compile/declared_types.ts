@@ -167,7 +167,7 @@ function joinedAlternatives(types: readonly Type[]): Type | null {
   if (types.length <= 1) return types[0] ?? null;
   const joined = joinedType(types);
   if (joined !== null) return joined;
-  if (types.every((typ) => typ.fields !== undefined)) return new Type({ kind: ValueKind.OBJECT, variants: types });
+  if (types.every((typ) => typ.fields !== undefined)) return new Type({ kind: ValueKind.OBJECT, members: types });
   return types[0]!;
 }
 
@@ -254,7 +254,7 @@ export function localTypes(flow: Flow, node: Node): ReadonlyMap<string, Type | n
     if (name === "output") return nodeOutputType(flow, node);
     if (name === "event" && wiring.has(STEER_INBOX_KEY)) {
       const inbox = contractType(resolveOutputBindingContract(wiring.get(STEER_INBOX_KEY), producers, inputs, { typeFn }));
-      return inbox !== null && isInboxType(inbox) ? (inbox.element ?? null) : null;
+      return inbox !== null && isInboxType(inbox) ? inbox.element : null;
     }
     const param = params.get(name)!;
     if (param.contract !== null) return param.contract.type;

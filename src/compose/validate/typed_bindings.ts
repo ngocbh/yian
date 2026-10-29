@@ -32,11 +32,11 @@
  * origin, else its `input:` entry range, else the node range; a flow output error at its
  * registered origin, else the `output:` range.
  *
- * Knows about: `compile/validation` (the type relation), `expr` (template scanning), `typesys`,
- * `nodes` (binding carriers, the LOOP node, the AGENT's reserved key), and `compose/helpers`
- * (output-contract inference and load diagnostics).
- * Never imports: the loader, the compose package facade, or the CALL/MAP check (`call_types.ts`,
- * for its literal and `${item}` helpers); they import this back.
+ * Knows about: `compile/validation` (the type relation), `compile/output_contracts` (output-contract
+ * inference, literals and the `${item}` scope), `compile/model`, `expr` (template scanning),
+ * `typesys`, `nodes` (binding carriers, the LOOP node, the AGENT's reserved key), `compose/helpers`
+ * (load diagnostics and tag labels), `compose/nodes/base` and the narrowing view.
+ * Never imports: the loader or the compose package facade; they import this back.
  */
 
 import type { FlowOutput } from "../../compile/model.ts";
@@ -62,11 +62,8 @@ import {
   isRecord,
   type Type,
   TypeCheckError,
-  type Value,
-  valueRepr,
-  writeAsJson,
 } from "../../typesys/values.ts";
-import { LoadDiagnostics, type LoadError } from "../helpers/errors.ts";
+import { LoadDiagnostics, locatedError, shownLiteral } from "../helpers/errors.ts";
 import {
   bindingAlternatives,
   directReferenceParts,
@@ -339,32 +336,6 @@ function boundSource(binding: unknown): string | null {
 }
 
 /**
- * Build the load error, located at the binding's origin when it resolves, code `compose.load`
- * unless `options.code` names a narrower one, such as `expr.nullable_field_read`.
- *
- * @param message The error message.
- * @param binding The rejected binding.
- * @param fallback The location used when the origin does not resolve.
- * @param resolveOrigin Resolves a registered origin to its source frame.
- * @param diagnostics Factory for located load errors.
- * @param options.code The diagnostic code, when narrower than `compose.load`.
- * @returns The located error.
- */
-export function locatedError(
-  message: string,
-  binding: Binding,
-  fallback: SourceRange | null,
-  resolveOrigin: ResolveOrigin | null,
-  diagnostics: LoadDiagnostics,
-  options: { code?: string } = {},
-): LoadError {
-  const { code } = options;
-  const frame = resolveOrigin !== null && binding.origin !== null ? resolveOrigin(binding.origin) : null;
-  if (frame !== null) return diagnostics.error(message, { frames: [frame], code });
-  return diagnostics.error(message, { range: fallback, code });
-}
-
-/**
  * Return why one typed binding can never fit its declared type, else `null`.
  *
  * @param binding A wiring or output binding; untyped ones are skipped.
@@ -609,20 +580,4 @@ function itemReferenceContract(source: unknown, item: ValueContract | null): Out
   const [head, ...fields] = path.split(".");
   if (head !== "item") return null;
   return projectOutputContract(item, fields);
-}
-
-/**
- * Render a literal as its text form: compact JSON (`true`, `null`, `"text"`, `[1,"a"]`,
- * `{"k":2}`), the form messages use for values.
- *
- * @param value The literal to render.
- * @returns `writeAsJson`'s text; `valueRepr` for anything it can't write.
- */
-export function shownLiteral(value: unknown): string {
-  try {
-    return writeAsJson(value as Value);
-  } catch (error) {
-    if (error instanceof TypeError) return valueRepr(value);
-    throw error;
-  }
 }

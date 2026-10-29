@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -24,9 +24,10 @@ import {
   type RunFlowOptions,
   type RunResult,
   advance,
+  RunBusyError,
   runFlow,
 } from "../../src/run.ts";
-import { virtualScheduler } from "../../src/platform.ts";
+import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts";
 import { computeBackward } from "../../src/runtime/backward.ts";
 import { MemoryProposal } from "../../src/runtime/contracts.ts";
 import { memoryCommitId } from "../../src/runtime/learning.ts";
@@ -40,11 +41,13 @@ import {
   MemoryRunLog,
   readRunLog,
   type RecordEnvelope,
+  type RunLog,
   type RunRecord,
 } from "../../src/runtime/log.ts";
 import { commitPrepared, prepareRecord } from "../../src/runtime/state.ts";
 import { TypeCheckError } from "../../src/typesys/values.ts";
 
+import { withAppendHook } from "../helpers/append_hook.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { FakeMemory, FakeSession } from "../helpers/memory_fakes.ts";
 import { backwardReply, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
@@ -127,24 +130,12 @@ test.each(["memory", "durable"])("a %s log stamps backward records from the run'
   const log = kind === "durable" ? join(dir, "run.jsonl") : null;
   const scheduler = virtualScheduler(Date.UTC(2026, 9, 20, 14, 0));
   const result = await run(await loadFlow(IDENTITY), { text: "hello" }, { learnable: true, log, scheduler });
-  const append = MemoryRunLog.prototype.append;
-  const times: (string | null)[] = [];
-  MemoryRunLog.prototype.append = function (this: MemoryRunLog, record: RunRecord) {
-    const envelope = append.call(this, record);
-    times.push(envelope.at);
-    return envelope;
-  };
-  try {
-    expect((await result.backward("Too long.")).status).toBe("succeeded");
-  } finally {
-    MemoryRunLog.prototype.append = append;
-  }
-  const backward =
-    log === null
-      ? times
-      : readRunLog(log)
-          .filter((envelope) => envelope.kind.startsWith("backward_"))
-          .map((envelope) => envelope.at);
+  const appended = new Set<RunLog>();
+  const outcome = await withAppendHook((into) => appended.add(into), () => result.backward("Too long."));
+  expect(outcome.status).toBe("succeeded");
+  const backward = (log === null ? [...appended].flatMap((into) => into.records()) : readRunLog(log))
+    .filter((envelope) => envelope.kind.startsWith("backward_"))
+    .map((envelope) => envelope.at);
   expect(backward.length).toBeGreaterThan(0);
   expect(new Set(backward)).toEqual(new Set(["2026-10-20T14:00:00.000Z"]));
 });
@@ -572,6 +563,7 @@ test("distinct durable handles keep file lock exclusion", async () => {
   expect((await first.backward("Review.")).status).toBe("succeeded");
 
   expect(errors).toHaveLength(1);
+  expect(errors[0]).toBeInstanceOf(RunBusyError);
   expect((errors[0] as Error).message).toBe(`run log ${path} is locked by another writer (is the run still active?)`);
   expect(backend.learnContexts).toHaveLength(1);
   expect(backend.commitCalls).toHaveLength(1);
@@ -734,6 +726,23 @@ for (const otherFinishes of [false, true]) {
     expect([backend.learnContexts.length, backend.commitCalls.length]).toEqual([learned, committed]);
   });
 }
+
+test("backward while another writer holds the log is RunBusyError and appends nothing", async () => {
+  const path = join(dir, "held.jsonl");
+  const result = await run(await loadFlow(IDENTITY), { text: "hello" }, { learnable: true, log: path });
+  const before = readFileSync(path);
+  const holder = lockFile(`${realpathSync(path)}.lock`);
+  try {
+    const error = (await rejected(result.backward("Too long."))) as RunBusyError;
+    expect(error).toBeInstanceOf(RunBusyError);
+    expect([error.log, error.cause instanceof FileLockError]).toEqual([path, true]);
+  } finally {
+    holder.release();
+  }
+  expect(readFileSync(path).equals(before)).toBe(true);
+  expect(result.backwardOutcome).toBeNull();
+  expect((await result.backward("Too long.")).status).toBe("succeeded");
+});
 
 test("nonretained result rejects backward", async () => {
   const result = await run(await loadFlow(IDENTITY), { text: "hello" });

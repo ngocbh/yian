@@ -401,9 +401,9 @@ function snapshotJson(namespace: string, epoch: number, revision: number, state:
   });
 }
 
-/** Return the stable snapshot-validation failure. */
-function snapshotError(options: { cause?: unknown } = {}): MemoryOperationError {
-  return operationError("openRun", "episodic.invalid_snapshot", "recorded memory snapshot is invalid", options);
+/** Return one snapshot-validation failure, `message` naming what is wrong. */
+function snapshotError(message: string, cause?: unknown): MemoryOperationError {
+  return operationError("openRun", "episodic.invalid_snapshot", message, cause === undefined ? {} : { cause });
 }
 
 /**
@@ -457,7 +457,7 @@ function parseSnapshot(value: unknown): [string, number, number, State] {
     return result;
   } catch (error) {
     if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-    throw snapshotError({ cause: error });
+    throw snapshotError("recorded memory snapshot is invalid", error);
   }
 }
 
@@ -526,7 +526,7 @@ function parseInventory(value: unknown): Inventory {
  *
  * ```ts
  * const memory = new EpisodicMemory({ maxEpisodes: 100, recallLimit: 10 });
- * const result = await runFlow(flow, inputs, { memory: { episodic: memory }, learnable: true });
+ * const result = await runFlow(flow, inputs, { memory: new Map([["episodic", memory]]), learnable: true });
  * await result.backward();
  * ```
  *
@@ -710,16 +710,17 @@ export class EpisodicMemory implements Memory {
             this.state.episodes.length === 0 &&
             this.epoch === 0 &&
             this.revision === 0;
-          if (!pristine) throw snapshotError();
+          if (!pristine) throw snapshotError("snapshot namespace cannot replace a non-pristine memory");
           adopt = true;
         } else {
-          if (epoch !== this.epoch || revision > this.revision) throw snapshotError();
+          if (epoch !== this.epoch) throw snapshotError("snapshot generation is incompatible after reset");
+          if (revision > this.revision) throw snapshotError("snapshot revision is ahead of the memory state");
           if (
             revision === this.revision &&
             logJson(snapshotJson(namespace, epoch, revision, state)) !==
               logJson(snapshotJson(namespace, epoch, revision, this.state))
           ) {
-            throw snapshotError();
+            throw snapshotError("snapshot state does not match the current generation");
           }
         }
       }
@@ -960,8 +961,8 @@ export class EpisodicSession implements MemorySession {
    * batch is a no-op, and retention keeps the newest `maxEpisodes` entries.
    *
    * @throws MemoryOperationError `episodic.invalid_commit_id`, `episodic.invalid_batch`,
-   *   `episodic.commit_collision`, `episodic.stale_generation`, `episodic.config_conflict`; the
-   *   session or backend is closed; durable state can't be saved.
+   *   `episodic.commit_collision`, `episodic.stale_generation`; the session or backend is closed;
+   *   durable state can't be saved.
    */
   commit(commitId: string, mutations: readonly MemoryMutation[]): void {
     const memory = this.memory;
@@ -982,12 +983,6 @@ export class EpisodicSession implements MemorySession {
       }
       this.assertCurrent("commit");
       let state = memory["state"];
-      if (
-        state.limits.maxEpisodes !== this.state.limits.maxEpisodes ||
-        state.limits.recallLimit !== this.state.limits.recallLimit
-      ) {
-        throw operationError("commit", "episodic.config_conflict", "current memory limits changed");
-      }
       try {
         const seen = new Set<string>();
         const additions = mutations.map((mutation, index) => {

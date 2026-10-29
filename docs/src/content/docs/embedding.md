@@ -15,7 +15,7 @@ runs on disk, move messages and answers into them, and watch what they do. Insta
 | `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `EventHook` and `StreamHook`; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex` |
 | `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, and the ask handler types `AskHandler` and `AskRequest` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
-| `@ngocbh/yian/platform` | yian's file lock and SQLite wrapper, for hosts that lock files the same way: `lockFile`, `waitForLock`, `isLocked`, `FileLockError`, `openSqlite`, `sqliteErrorCode` |
+| `@ngocbh/yian/platform` | yian's file lock and SQLite wrapper, for hosts that lock files the same way: `lockFile`, `waitForLock`, `isLocked`, `FileLockError`, `openSqlite`, `sqliteErrorCode`; and `syncFolder`, which makes a folder's new entries durable |
 | `@ngocbh/yian/llm_clients` | Provider setup: `LLMConfig`, `SUPPORTED_LLM_PROVIDERS`, `listModels`, `AuthStore`, `AuthError` |
 | `@ngocbh/yian/code-worker` | Import it only for its side effect, as a bundle entry (see [Bundling](#bundling)) |
 
@@ -80,7 +80,14 @@ console.log(result.status, result.output); // succeeded total: 7.5
 `LoadError`, whose `diagnostic` points into the source. A CODE reference outside `codeRoot` is
 named as the flow wrote it (`'../x.ts:fn' is outside the code root`) and reads the same whether
 or not its file exists. Under `codeRoot` no CODE error names an absolute path, so you can show it
-to the flow's author.
+to the flow's author. A run records the flow's `codeRoot`, and every later call on its log holds
+the CODE files to it ([Keep runs on disk](#keep-runs-on-disk)).
+
+yian follows local `uses:` refs and the flow's `system.paths` as written, so an absolute path,
+`..` or a symlink can load any file your process can read; `codeRoot` confines only CODE files.
+If you run flows you didn't write, vet each flow and every file it imports yourself, or run yian
+in a sandbox. [`yian check --root`](/cli/#yian-check) checks that they stay inside a folder, and
+refuses a flow that sets `system.paths`.
 
 A flow that fails still resolves, with `status: "failed"`. `runFlow` rejects for problems in your
 program or setup: a bad option, a tool, provider or model the flow needs but the run lacks, an MCP
@@ -129,8 +136,9 @@ server that doesn't start, a bad `YIAN_*` value, a callback that throws, a log i
 
 A run with a `log` writes every step to that file, so it can survive a crash, wait for days, and
 take messages from other processes. Give each run a folder of its own: `runLogPath(runsDir, runId)`
-makes `<runsDir>/<runId>/` and returns the log path inside it. The run keeps its lock file and
-media files beside the log.
+makes `<runsDir>/<runId>/` and returns the log path inside it. The log's folder is the run's
+folder: the run keeps its lock file and its `media` folder beside the log. A model call whose reply
+holds media fails if `media` is a symlink, another user's, or writable by others.
 
 `advance({ log })` moves a run on from its log:
 
@@ -145,8 +153,10 @@ media files beside the log.
 model settings. Pass again what the log doesn't hold: `tools`, `skills`, `memory`, `context`, and
 the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`.
 
-The log doesn't hold `codeRoot` either. Pass `codeRoot` again on every `advance` and every host
-call below; a call without it doesn't confine the recorded flow's CODE files at all.
+The log holds the `codeRoot` the flow was loaded under, so `advance` and the host calls below
+confine the recorded flow's CODE files to it without being told. Passing `codeRoot` is optional; one
+that names another folder is refused with a `RangeError`, and so is any `codeRoot` passed for a run
+started without one.
 [How yian works](/how-it-works/#crash-recovery) explains replay and what can run twice.
 
 Only one writer holds a log at a time. A call on a log another process holds, or an `advance` of a
@@ -207,7 +217,10 @@ Your program reaches a waiting run by its log path:
 | `pendingCalls(log)` | `PendingCall[]` | Lists open host calls; reads without the lock |
 
 Apart from `cancel`, which ends the run, none of them moves the run on: call `advance` next. If
-your process is running the run right now, the call goes straight to it instead. This flow waits for notes:
+your process is running the run right now, the call goes straight to it instead. For a run started
+with `llmConfig.api_key`, pass these calls the `apiKey` and `headers` you pass `advance`. They are
+never recorded; passing them lets the next `advance` reuse the state the call left instead of
+replaying the log again. This flow waits for notes:
 
 ```yaml title="notes.yaml"
 id: notes
@@ -358,6 +371,33 @@ abort its `signal` instead: the run records a stop, rejects with the signal's re
 
 `inspectRun(log).wakeAt` is the earliest deadline of a waiting run: a host that keeps runs
 waiting calls `advance` then.
+
+`iterRunRecords` holds one line in memory at a time, so a huge line takes that much. Pass
+`maxLineBytes` to cap it. `inspectRun`, `loadRecordedFlow`, `foldRunLog`, `agentCalls`,
+`agentCall`, `pendingCalls` and `updateRunIndex` take it in their options too. A longer line isn't
+parsed: it is read through to its newline, in memory that stays within a small multiple of the
+limit however the line nests, and throws `RunLogLineTooLongError`, whose message names the line
+and the limit. The error holds the line's `offset`, `end` and `length`, and its `seq`, `runId`,
+`kind` and `nodeId`. A scan of the line's bytes reads those four, keeping at most the limit of
+their values, and gives `null` for one it can't read. `updateRunIndex` doesn't throw it: it skips
+that log with a warning, as it skips any log it can't read. To read on past a long line with
+`iterRunRecords`:
+
+```ts check=fragment
+import { iterRunRecords, RunLogLineTooLongError } from "@ngocbh/yian/run";
+
+let from = {};
+for (let done = false; !done; ) {
+  try {
+    for (const entry of iterRunRecords(log, { ...from, maxLineBytes: 1 << 20 })) index(entry);
+    done = true;
+  } catch (error) {
+    if (!(error instanceof RunLogLineTooLongError)) throw error;
+    skipped(error);
+    from = { afterOffset: error.end, runId: error.runId, afterSeq: error.seq };
+  }
+}
+```
 
 ## Environment and stopping
 

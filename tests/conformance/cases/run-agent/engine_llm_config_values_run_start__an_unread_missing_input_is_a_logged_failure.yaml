@@ -1,4 +1,3 @@
-# The null value is shown in the text form, `from=null`.
 kind: run
 flow: |
   id: f
@@ -25,7 +24,7 @@ expect:
       frames:
       - label: flow.yaml
         range: [5, 3, 5, 4]
-      message: required input 'n' is unbound (from=null)
+      message: required input 'n' is unbound
       node: __start__
   trace:
   - - run_started
@@ -60,7 +59,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [5, 3, 5, 4]
-        message: required input 'n' is unbound (from=null)
+        message: required input 'n' is unbound
         node: __start__
   events:
   - [RunStarted]
@@ -72,7 +71,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [5, 3, 5, 4]
-        message: required input 'n' is unbound (from=null)
+        message: required input 'n' is unbound
         node: __start__
   - - RunFailed
     - failure:
@@ -80,5 +79,5 @@ expect:
         frames:
         - label: flow.yaml
           range: [5, 3, 5, 4]
-        message: required input 'n' is unbound (from=null)
+        message: required input 'n' is unbound
         node: __start__

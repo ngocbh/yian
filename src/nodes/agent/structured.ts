@@ -6,7 +6,8 @@
  * `Optional(str)`), the agent stays a text producer: `typeToSchema` returns `null` and the AGENT
  * loop takes the plain-text path. For any constrained or richer type (a `Literal(...)` variant,
  * record, union, scalar `int`/`float`/`bool`, or list) it returns the JSON Schema the model is
- * asked to fill, with ints as `bigint`.
+ * asked to fill, with ints as `bigint`; a `date` or `datetime` slot is a string whose
+ * description gives the form the value check accepts.
  *
  * Scalars and lists can't be a top-level schema on their own, so they are wrapped in a
  * single-field object (`ScalarWrapper` with `value`, `ListWrapper` with `items`), and so is a
@@ -40,7 +41,7 @@
 import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
 import type { ChatModel } from "../../llm/events.ts";
-import { Message, Request, TextPart } from "../../llm/messages.ts";
+import { Message, Request, type Response, TextPart } from "../../llm/messages.ts";
 import { planStructured, StructuredOutputError, structuredTarget } from "../../llm/structured.ts";
 import {
   ModelTextInteraction,
@@ -87,6 +88,22 @@ const SCALAR_TYPES: ReadonlyMap<ValueKind, string> = new Map([
   [ValueKind.BOOLEAN, "boolean"],
   [ValueKind.DATE, "string"],
   [ValueKind.DATETIME, "string"],
+]);
+
+// The form yian's value check accepts for a date or datetime slot, told to the model since a
+// string schema says nothing of it. Only `date` gets a `format`: JSON Schema's `date-time`
+// requires seconds and an offset, so a grammar-constrained provider couldn't return a datetime
+// without an offset, which yian accepts and keeps apart from one with an offset.
+const DATE_HINTS: ReadonlyMap<ValueKind, JsonObject> = new Map<ValueKind, JsonObject>([
+  [ValueKind.DATE, { description: "A date: YYYY-MM-DD, such as 2026-05-21.", format: "date" }],
+  [
+    ValueKind.DATETIME,
+    {
+      description:
+        "A date and time: YYYY-MM-DDTHH:MM[:SS[.ffffff]][Z|+HH:MM|-HH:MM], such as 2026-05-21T14:30:00Z. " +
+        "Seconds, a fraction of one to six digits and the offset are optional.",
+    },
+  ],
 ]);
 
 // An identifier: an XID_Start character or `_`, then XID_Continue characters.
@@ -162,10 +179,10 @@ function nonNullSchema(typ: Type, defs: Defs, position: string, closed: boolean)
     if (typ.bounds !== undefined) typ.validateShape();
     return scalarSchema(kind, typ.bounds);
   }
-  if (kind === ValueKind.OBJECT && typ.variants !== undefined) {
+  if (kind === ValueKind.OBJECT && typ.members !== undefined) {
     const names = memberNames(typ, position);
     return {
-      anyOf: typ.variants.map((member, index) => {
+      anyOf: typ.members.map((member, index) => {
         const name = names[index]!;
         return define(defs, name, recordSchema(member, defs, name, true));
       }),
@@ -191,11 +208,13 @@ function nonNullSchema(typ: Type, defs: Defs, position: string, closed: boolean)
 /**
  * Return the schema of a scalar slot of `kind`, within inclusive `bounds`.
  *
- * An open (`null`) end has no limit, so the schema omits that end's `minimum` or `maximum`.
- * A bound keeps the form the type stores it in (`bigint` or `number`); a `-0` bound becomes `0`.
+ * A `date` or `datetime` slot describes its accepted form, and a `date` also has
+ * `format: "date"`. An open (`null`) end has no limit, so the schema omits that end's `minimum`
+ * or `maximum`. A bound keeps the form the type stores it in (`bigint` or `number`); a `-0`
+ * bound becomes `0`.
  */
 function scalarSchema(kind: ValueKind, bounds: Bounds | undefined): JsonObject {
-  const schema: JsonObject = { type: SCALAR_TYPES.get(kind)! };
+  const schema: JsonObject = { ...DATE_HINTS.get(kind), type: SCALAR_TYPES.get(kind)! };
   const [minimum, maximum] = bounds ?? [null, null];
   // `define` compares schemas by their `logJson` text, which throws on `-0`; only a hand-built
   // Type has one. `-0 === 0`, so the ternary writes `0`, and a `bigint` passes through.
@@ -225,7 +244,7 @@ function nested(position: string, segment: string): string {
  */
 function memberNames(typ: Type, position: string): string[] {
   const [tagField] = unionTagFields(typ);
-  const tags = typ.variants!.map((member) =>
+  const tags = typ.members!.map((member) =>
     tagField === undefined ? undefined : [...member.fields!.get(tagField)!.tags!][0]!,
   );
   const named = tags.every((tag) => tag !== undefined && IDENTIFIER.test(tag));
@@ -241,7 +260,7 @@ function recordName(position: string): string {
 function isRecord(typ: Type): boolean {
   return (
     typ.kind === ValueKind.OBJECT &&
-    typ.variants === undefined &&
+    typ.members === undefined &&
     typ.fields !== undefined &&
     typ.fields.size > 0
   );
@@ -435,6 +454,52 @@ export function userMessage(text: string): Message {
 }
 
 /**
+ * The conversation one structured generation of `typ` sends: `generateStructured` runs it and
+ * `structuredMaterial` rebuilds it, so learning's digests match the requests the run sent.
+ */
+interface StructuredConversation {
+  /** Whether the schema goes in the prompt (`plan.instruction()` as a user message). */
+  readonly prompted: boolean;
+  /** The purpose each call records: `structured_fallback` for the prompt strategy, else `structured_native`. */
+  readonly purpose: "structured_fallback" | "structured_native";
+  /** Return the next call's request. */
+  request(): Request;
+  /**
+   * Return the reply's checked value (`checkReply`), or, for a reply holding no valid answer or
+   * failing the check, its error, after adding the correction naming it to the conversation.
+   *
+   * @throws Any other error parsing or checking the reply, unchanged.
+   */
+  check(response: Response): { value: Value } | { invalid: StructuredOutputError | TypeCheckError };
+}
+
+/**
+ * Start the structured conversation (`StructuredConversation`) for `typ` with `model` after
+ * `messages`: the schema is sent the way `planStructured` picks for the model, and the prompt
+ * strategy appends its instruction as a user message. An invalid reply is not kept: the next
+ * request has the earlier messages and the correction.
+ */
+function structuredConversation(model: ChatModel, messages: readonly Message[], typ: Type): StructuredConversation {
+  const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
+  const prompted = plan.strategy === "prompt";
+  let conversation = [...messages, ...(prompted ? [userMessage(plan.instruction())] : [])];
+  return {
+    prompted,
+    purpose: prompted ? "structured_fallback" : "structured_native",
+    request: () => plan.apply(new Request({ messages: conversation })),
+    check(response) {
+      try {
+        return { value: checkReply(plan.parse(response), typ) };
+      } catch (error) {
+        if (!(error instanceof StructuredOutputError || error instanceof TypeCheckError)) throw error;
+        conversation = [...conversation, userMessage(plan.correction(error.message))];
+        return { invalid: error };
+      }
+    },
+  };
+}
+
+/**
  * Generate a value of `typ` with `model`, correcting an invalid reply up to `retries` times.
  *
  * The schema is sent the way `planStructured` picks for the model; the prompt strategy appends its
@@ -474,20 +539,16 @@ export async function generateStructured(
 ): Promise<Value> {
   const { live = null, signal, interrupt, retry, steps, baseSystemPrompt = null } = options;
   const retries = options.retries ?? current().agentRetries;
-  const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
-  const prompted = plan.strategy === "prompt";
-  const purpose = prompted ? "structured_fallback" : "structured_native";
-  const instruction = prompted ? [userMessage(plan.instruction())] : [];
-  let conversation = [...messages, ...instruction];
+  const conversation = structuredConversation(model, messages, typ);
   for (let call = 0; ; call++) {
     signal?.throwIfAborted();
     // No model call starts after an interrupt, or once replay passed an earlier start's honor; a
     // replaying call already happened.
     const interrupted = steps === undefined ? interrupt?.aborted === true : interruptRequested(interrupt, steps);
     if (interrupted) throw new ReplyInterrupted(new Message({ role: "assistant", parts: [] }));
-    const request = plan.apply(new Request({ messages: conversation }));
+    const request = conversation.request();
     const { response } = await callModel(live, model, request, {
-      purpose,
+      purpose: conversation.purpose,
       signal,
       interrupt,
       retry,
@@ -497,14 +558,11 @@ export async function generateStructured(
     });
     // A stop that lands during the call wins over its reply.
     signal?.throwIfAborted();
-    try {
-      return checkReply(plan.parse(response), typ);
-    } catch (error) {
-      if (!(error instanceof StructuredOutputError || error instanceof TypeCheckError)) throw error;
-      if (call >= retries) {
-        throw new OutputInvalidError(error.message, { cause: error, path: outputPath(error, typ) });
-      }
-      conversation = [...conversation, userMessage(plan.correction(error.message))];
+    const checked = conversation.check(response);
+    if ("value" in checked) return checked.value;
+    if (call >= retries) {
+      const error = checked.invalid;
+      throw new OutputInvalidError(error.message, { cause: error, path: outputPath(error, typ) });
     }
   }
 }
@@ -528,27 +586,20 @@ export function structuredMaterial(
   steps: readonly ValueRecord[],
   baseSystemPrompt: string | null = null,
 ): { interactions: VisibleInteraction[]; requests: RebuiltRequest[]; digestOk: boolean } {
-  const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
-  const prompted = plan.strategy === "prompt";
-  const purpose = prompted ? "structured_fallback" : "structured_native";
-  let conversation = [...messages, ...(prompted ? [userMessage(plan.instruction())] : [])];
+  const conversation = structuredConversation(model, messages, typ);
+  const { prompted, purpose } = conversation;
   const interactions: VisibleInteraction[] = [];
   const requests: RebuiltRequest[] = [];
   for (const step of steps) {
-    const request = plan.apply(new Request({ messages: conversation }));
+    const request = conversation.request();
     const digest = requestSha256(digestRequest(request, baseSystemPrompt));
     requests.push({ request, digestOk: step["purpose"] === purpose && step["request_sha256"] === digest });
     // A cut reply was never output: its text so far shows nothing, as in `stepsMaterial`.
     if (Object.hasOwn(step, "error") || step["finish"] === "interrupted") continue;
     const response = recordedResponse(step);
     if (prompted) pushVisible(interactions, () => new ModelTextInteraction(response.message.text()));
-    try {
-      const value = checkReply(plan.parse(response), typ);
-      if (!prompted) pushVisible(interactions, () => new ModelValueInteraction(value));
-    } catch (error) {
-      if (!(error instanceof StructuredOutputError || error instanceof TypeCheckError)) throw error;
-      conversation = [...conversation, userMessage(plan.correction(error.message))];
-    }
+    const checked = conversation.check(response);
+    if (!prompted && "value" in checked) pushVisible(interactions, () => new ModelValueInteraction(checked.value));
   }
   return { interactions, requests, digestOk: requests.every((each) => each.digestOk) };
 }
@@ -599,7 +650,7 @@ export function checkReply(data: JsonObject, typ: Type): Value {
  * field-less `object`, a flat list and a value of the wrong shape are kept as given.
  */
 function normalize(value: Value, typ: Type, closed = false): Value {
-  if (typ.variants !== undefined) return isValueRecord(value) ? normalizeUnion(value, typ) : value;
+  if (typ.members !== undefined) return isValueRecord(value) ? normalizeUnion(value, typ) : value;
   if (isRecord(typ)) {
     if (!isValueRecord(value)) return value;
     const fields = typ.fields!;
@@ -625,7 +676,7 @@ function normalize(value: Value, typ: Type, closed = false): Value {
 
 /** `normalize` for a record `value` of the union `typ`; `value` itself when no member fits. */
 function normalizeUnion(value: ValueRecord, typ: Type): Value {
-  const members = typ.variants!;
+  const members = typ.members!;
   const [tagField] = unionTagFields(typ);
   if (tagField !== undefined) {
     const tag = value[tagField];
@@ -668,7 +719,7 @@ function outputPath(error: Error, typ: Type): ValuePath | null {
  */
 export function isContractPath(path: ValuePath, typ: Type): boolean {
   if (path.length === 0) return true;
-  if (typ.variants !== undefined) return typ.variants.some((member) => isContractPath(path, member));
+  if (typ.members !== undefined) return typ.members.some((member) => isContractPath(path, member));
   const [head, ...tail] = path;
   if (isRecord(typ)) {
     const field = typeof head === "string" ? typ.fields!.get(head) : undefined;

@@ -1,0 +1,37 @@
+# A host stop after fetch's first tool call; the resume retries fetch, and hold's call waits until
+# the host's complete answers it. The run then moves on: the stop ended the first run only, so the
+# advance after the complete isn't stopped again.
+kind: resume
+flow: |
+  id: stop-then-complete
+  name: stop_then_complete
+  nodes:
+    fetch:
+      kind: tool
+      tool_id: lookup
+    hold:
+      kind: tool
+      tool_id: wait
+      input: {found: "${fetch.output}"}
+  output: ${hold.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      parameters: {type: object, properties: {}}
+      results:
+      - return: F1
+      - return: F1
+    wait:
+      parameters: {type: object, properties: {found: {type: string}}, required: [found]}
+      pending: true
+  stop:
+    fetch: {after: {tool_call: 1}}
+  sends:
+  - {complete: r1/hold, output: done}
+expect:
+  output: {status: succeeded, output: done}
+  trace: [[run_started, null, {learnable: false, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, fetch], [run_stopped, null, {node_ids: [fetch], reason: signal}], [run_resumed, null, {num_workers: 0, retry_node_ids: [fetch]}], [node_started, fetch], [pool_commit, fetch, {value: F1}], [node_succeeded, fetch, {commit: 12}], [node_started, hold], [node_step, hold, {n: 1, step: {arguments: {found: F1}, call_id: r1/hold, kind: pending, tool: wait}}], [node_waiting, hold, {call_ids: [r1/hold]}], [run_waiting, null, {node_ids: [hold]}], [node_step, hold, {n: 2, step: {call_id: r1/hold, kind: tool_result, output: {kind: str, value: done}}}], [node_woken, hold], [pool_commit, hold, {value: done}], [node_succeeded, hold, {commit: 20}], [node_started, __end__], [pool_commit, __end__, {value: done}], [node_succeeded, __end__, {commit: 23}]]
+  events: [[RunResumed], [NodeAttemptResumed, {node_id: fetch, crashed: 0}], [NodeStarted, {node_id: fetch}], [NodeSucceeded, {node_id: fetch, output: F1, interrupted: false}], [NodeStarted, {node_id: hold}], [NodeWaiting, {node_id: hold, call_ids: [r1/hold]}], [RunWaiting, {node_ids: [hold]}], [NodeWoken, {node_id: hold, timed_out: []}], [NodeSucceeded, {node_id: hold, output: done, interrupted: false}], [NodeStarted, {node_id: __end__}], [NodeSucceeded, {node_id: __end__, output: done, interrupted: false}], [RunSucceeded, {output: done}]]
+  tool_calls: {lookup: [{args: {}, call_id: r1/fetch, attempt: 1, node: fetch}, {args: {}, call_id: r1/fetch, attempt: 2, node: fetch}], wait: [{args: {found: F1}, call_id: r1/hold, attempt: 1, node: hold}]}
+resume: {}

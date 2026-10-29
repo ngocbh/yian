@@ -53,7 +53,7 @@ import { BindingError, bindParams, copyValue } from "../nodes/binding.ts";
 import { Binding, type Parameter, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { isRecord, type Type, TypeCheckError, type Value, type ValueRecord, VariablePool } from "../typesys/index.ts";
 import { setField, writeAsText } from "../typesys/values.ts";
-import { copyGraph, type Flow } from "./model.ts";
+import { copyGraph, type Flow, nodeChild, setNodeChild } from "./model.ts";
 
 /**
  * A flow as the cascade reads it: its nodes, wiring and START id and, for a composed flow, its own
@@ -69,32 +69,6 @@ interface CascadeFlow {
 
 /** One agent's configuration record. */
 type Config = Record<string, unknown>;
-
-/**
- * Bake and return every AGENT node's complete effective configuration.
- *
- * This is `resolveRunLlm` for a run given no inputs; its `effective` map is returned.
- *
- * @param flow The flow whose complete static call tree is resolved in place.
- * @param parentConfig The outermost gap-fill layer (the CLI/host layer).
- * @param options.defaults Lowest-precedence host defaults, possibly empty.
- * @param options.providerModels Saved models by provider.
- * @param options.strayModel Whether `YIAN_DEFAULT_MODEL` was set without a default provider;
- *   defaults to `false`.
- * @returns Complete effective configurations keyed by unambiguous static agent path.
- * @throws {RangeError} As `resolveRunLlm` throws it.
- */
-export function resolveLlmCascade(
-  flow: CascadeFlow,
-  parentConfig: Readonly<Config>,
-  options: {
-    defaults: Readonly<Config>;
-    providerModels?: Readonly<Record<string, string>> | null;
-    strayModel?: boolean;
-  },
-): Record<string, Config> {
-  return resolveRunLlm(flow, parentConfig, options).effective;
-}
 
 /** The configurations a run start resolves for its agents. Frozen. */
 export class RunLLM {
@@ -265,6 +239,9 @@ class RunInputs {
   }
 }
 
+/** A CALL, MAP or LOOP node, the only kinds with a static child flow, which each name by `flowId`. */
+type Callsite = Node & { readonly flowId: string };
+
 /**
  * An `llm_config` value in an enclosing flow's layer that a child flow's agent inherits. Frozen.
  *
@@ -276,7 +253,7 @@ export class InheritedValue {
   /** The static path of the callsite whose flow holds the layer; empty for the run's flow. */
   readonly owner: readonly string[];
   /** The CALL, MAP or LOOP node at `owner`; `null` for the run's flow. */
-  readonly callsite: Node | null;
+  readonly callsite: Callsite | null;
   /** The value's field path in its layer; empty for a whole record. */
   readonly field: ValuePath;
   /** The value's authored site, when known. */
@@ -289,7 +266,7 @@ export class InheritedValue {
   /** Record one inherited value. */
   constructor(fields: {
     owner: readonly string[];
-    callsite: Node | null;
+    callsite: Callsite | null;
     field: ValuePath;
     origin: OriginRef | null;
     agent: readonly string[];
@@ -341,7 +318,7 @@ interface Enclosing {
   readonly layer: unknown;
   readonly nullable: Nullable;
   readonly owner: readonly string[];
-  readonly callsite: Node | null;
+  readonly callsite: Callsite | null;
 }
 
 /** Answer from the static types Compose proved for a flow layer's values, else from tags. */
@@ -354,7 +331,7 @@ function flowNullable(flow: CascadeFlow, layer: unknown): Nullable {
 function findInherited(
   flow: CascadeFlow,
   path: readonly string[],
-  callsite: Node | null,
+  callsite: Callsite | null,
   enclosing: readonly Enclosing[],
 ): InheritedValue | null {
   const layer = flow.flowLlmConfig ?? {};
@@ -365,9 +342,9 @@ function findInherited(
       const found = inheritedBy(node, own, enclosing, nodePath);
       if (found !== null) return found;
     }
-    const child = childOf(node);
+    const child = nodeChild(node);
     if (child !== null) {
-      const found = findInherited(child, nodePath, node, [...enclosing, own]);
+      const found = findInherited(child, nodePath, node as Callsite, [...enclosing, own]);
       if (found !== null) return found;
     }
   }
@@ -539,7 +516,7 @@ function resolveFlow(
       setField(scope.effective as ValueRecord, key, copied(config) as Value);
     }
 
-    const child = childOf(node);
+    const child = nodeChild(node);
     if (child !== null) {
       // Copy at EACH callsite. A copy of only the root preserves shared descendant aliases and lets
       // differently configured parents interfere.
@@ -809,7 +786,7 @@ function staticAgents(flow: CascadeFlow, path: readonly string[] = []): [string,
   for (const [nodeId, node] of flow.nodes) {
     const nodePath = [...path, nodeId];
     if (node instanceof AgentNode) agents.push([pathKey(nodePath), node, flow]);
-    const child = childOf(node);
+    const child = nodeChild(node);
     if (child !== null) agents.push(...staticAgents(child, nodePath));
   }
   return agents;
@@ -870,7 +847,7 @@ function applyFlow(
       }
     }
 
-    const child = childOf(node);
+    const child = nodeChild(node);
     if (child !== null) applyFlow(setChild(node, child), effective, callTime, selection, nodePath);
   }
 }
@@ -906,7 +883,7 @@ export function bindHostCredentials(
       if (given !== null) config["headers"] = { ...given };
       node.llmConfig = config;
     }
-    const child = childOf(node);
+    const child = nodeChild(node);
     if (child !== null) bindHostCredentials(child, apiKey, headers);
   }
 }
@@ -925,16 +902,10 @@ function pathKey(path: readonly string[]): string {
   return path.join("/");
 }
 
-/** Return a node's static child flow (CALL, MAP, LOOP), or `null`. */
-function childOf(node: Node): Flow | null {
-  const child = (node as { child?: unknown }).child;
-  return child === undefined || child === null ? null : (child as Flow);
-}
-
 /** Give `node` a private copy of its static child flow, and return the copy. */
 function setChild(node: Node, child: Flow): Flow {
   const copy = copyGraph(child);
-  (node as { child?: unknown }).child = copy;
+  setNodeChild(node, copy);
   return copy;
 }
 

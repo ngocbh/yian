@@ -9,9 +9,6 @@
 
 import { expect, test } from "bun:test";
 
-import * as layoutModule from "../../src/compile/execution_layout.ts";
-import * as compilePackage from "../../src/compile/index.ts";
-import * as modelModule from "../../src/compile/model.ts";
 import {
   CompiledFlow,
   copyGraph,
@@ -22,7 +19,6 @@ import {
   START_ID,
   validateGrowthMetadata,
 } from "../../src/compile/model.ts";
-import * as originsModule from "../../src/compile/origins.ts";
 import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor } from "../../src/compose/source/index.ts";
@@ -73,7 +69,7 @@ test("adjacency and root", () => {
     new Edge("e2", "a", "c"),
     new Edge("e3", "b", END_ID),
   ];
-  const g = CompiledFlow.fromParts(nodes, edges);
+  const g = new CompiledFlow(nodes, edges);
   // The single root is the synthesized START_ID; `a` is its out-edge target.
   expect(g.startId).toBe(START_ID);
   expect(new Set(g.outgoing(START_ID).map((e) => e.to))).toEqual(new Set(["a"]));
@@ -91,7 +87,7 @@ test("diamond incoming", () => {
     new Edge("e4", "c", "d"),
     new Edge("e5", "d", END_ID),
   ];
-  const g = CompiledFlow.fromParts(nodesOf("a", "b", "c", "d"), edges);
+  const g = new CompiledFlow(nodesOf("a", "b", "c", "d"), edges);
   expect(new Set(g.incoming("d").map((e) => e.from))).toEqual(new Set(["b", "c"]));
 });
 
@@ -105,9 +101,9 @@ test("compiled flow wiring field threads and defaults", () => {
   // CompiledFlow carries flow-owned wiring (node id -> param -> source); empty by default.
   const nodes = nodesOf("a");
   const edges = [new Edge("e0", START_ID, "a"), new Edge("e1", "a", END_ID)];
-  const g = CompiledFlow.fromParts(nodes, edges, { wiring: new Map([["a", new Map([["x", "${input.x}"]])]]) });
+  const g = new CompiledFlow(nodes, edges, { wiring: new Map([["a", new Map([["x", "${input.x}"]])]]) });
   expect(g.wiring).toEqual(new Map([["a", new Map([["x", new Binding("${input.x}")]])]]));
-  expect(CompiledFlow.fromParts(nodes, edges).wiring).toEqual(new Map());
+  expect(new CompiledFlow(nodes, edges).wiring).toEqual(new Map());
 });
 
 test("flow base normalizes wiring with boundary defaults", () => {
@@ -504,7 +500,7 @@ test("compiled flow keeps its flow id and flow memories", () => {
 
 test("terminal id is END_ID while the END node is present and null once it is removed", () => {
   const edges = [new Edge("e0", START_ID, "a"), new Edge("e1", "a", END_ID)];
-  const g = CompiledFlow.fromParts(withBoundary(nodesOf("a")), edges);
+  const g = new CompiledFlow(withBoundary(nodesOf("a")), edges);
   expect(g).toBeInstanceOf(Flow);
   expect(g.startId).toBe(START_ID);
   expect(g.endId).toBe(END_ID);
@@ -524,7 +520,7 @@ test("a copied flow has fresh containers and nodes, and changing it leaves the o
     ["a", new Map([["x", "${input.x}"]])],
     ["b", new Map([["y", "${a.output}"]])],
   ]);
-  const g = CompiledFlow.fromParts(withBoundary(nodesOf("a", "b")), edges, { wiring, flowId: "flow" });
+  const g = new CompiledFlow(withBoundary(nodesOf("a", "b")), edges, { wiring, flowId: "flow" });
   const before = {
     nodes: [...g.nodes],
     edges: [...g.edges],
@@ -889,24 +885,6 @@ test.each([
   const flow = build();
   expect(() => validateGrowthMetadata(flow)).toThrow(error);
   expect(() => validateGrowthMetadata(flow)).toThrow(message);
-});
-
-test("compile/index.ts exports exactly its public names", () => {
-  // Each name and the module that defines it; a namespace lists its keys code-unit sorted.
-  const sources: Record<string, Record<string, unknown>> = {
-    CompiledFlow: modelModule,
-    END_ID: modelModule,
-    Edge: modelModule,
-    START_ID: modelModule,
-    applyExecutionLayout: layoutModule,
-    iterFlowOrigins: originsModule,
-    rebaseFlowOrigins: originsModule,
-    resolveExecutionLayout: layoutModule,
-    rewriteFlowOrigins: originsModule,
-  };
-  expect(Object.keys(compilePackage)).toEqual(Object.keys(sources));
-  const exported: Record<string, unknown> = compilePackage;
-  for (const [name, source] of Object.entries(sources)) expect(exported[name]).toBe(source[name]);
 });
 
 // ---------- harvested conformance cases ----------

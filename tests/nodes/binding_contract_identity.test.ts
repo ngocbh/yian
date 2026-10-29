@@ -18,7 +18,14 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
-import { Binding, ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import {
+  Binding,
+  ContractOrigins,
+  iterOriginCarrier,
+  Parameter,
+  rewriteOriginCarrier,
+  ValueContract,
+} from "../../src/nodes/contracts.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
@@ -52,29 +59,29 @@ test("a binding rejects a non-value contract", () => {
   expect(() => new Binding("${x}", { contract: "int" as never })).toThrow(/ValueContract/);
 });
 
-test("mapOrigins keeps and rebases the contract", () => {
+test("rewriting a binding's origins keeps and rebases the contract", () => {
   const contract = intContract(new OriginRef("type-site"));
   const binding = new Binding("${x}", { origin: new OriginRef("binding-site"), contract });
 
-  const mapped = binding.mapOrigins((origin) => new OriginRef(`mapped:${origin.key}`));
+  const mapped = rewriteOriginCarrier(binding, (origin) => new OriginRef(`mapped:${origin.key}`), new Map());
 
   expect(mapped.source).toBe("${x}");
   expect(mapped.origin).toEqual(new OriginRef("mapped:binding-site"));
   expect(mapped.contract).not.toBeNull();
   expect(mapped.contract!.type).toBe(contract.type);
   expect(mapped.contract!.origins.default).toEqual(new OriginRef("mapped:type-site"));
-  expect(new Binding("${x}").mapOrigins((origin) => origin).contract).toBeNull();
+  expect(rewriteOriginCarrier(new Binding("${x}"), (origin) => origin, new Map()).contract).toBeNull();
 });
 
-test("iterOrigins yields the binding's origin, then its contract's", () => {
+test("a binding's origins are its own, then its contract's", () => {
   const contract = new ValueContract(
     typeFor("int", new Map()),
     new ContractOrigins({ default: new OriginRef("type-site") }),
   );
   const binding = new Binding("${x}", { origin: new OriginRef("binding-site"), contract });
 
-  expect([...binding.iterOrigins()]).toEqual([new OriginRef("binding-site"), new OriginRef("type-site")]);
-  expect([...new Binding("${x}", { contract }).iterOrigins()]).toEqual([new OriginRef("type-site")]);
+  expect([...iterOriginCarrier(binding, new Set())]).toEqual([new OriginRef("binding-site"), new OriginRef("type-site")]);
+  expect([...iterOriginCarrier(new Binding("${x}", { contract }), new Set())]).toEqual([new OriginRef("type-site")]);
 });
 
 /** The hand-built `_TWO_STEP` flow: `first` adds 1 to `${input.x}`, `second` doubles it. */
@@ -85,7 +92,7 @@ function twoStep(): CompiledFlow {
   const second = new CodeNode("second", { code: 'return inputs["y"] * 2' });
   second.params = [new Parameter("y")];
   second.outputContract = intContract();
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: [new Parameter("x", { contract: intContract() })] })],
       ["first", first],
@@ -115,7 +122,7 @@ function recordOutput(): CompiledFlow {
   const first = new CodeNode("first", { code: 'return inputs["x"] + 1' });
   first.params = [new Parameter("x")];
   first.outputContract = intContract();
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: [new Parameter("x", { contract: intContract() })] })],
       ["first", first],

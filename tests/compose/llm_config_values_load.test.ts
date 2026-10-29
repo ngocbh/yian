@@ -112,6 +112,33 @@ test.each(["false", "${input.i}"])("inherit at flow level still fails: %p", asyn
   expect(error.message).toContain("inherit");
 });
 
+const RESPONSES_BLOCK =
+  "The 'openrouter' block mirrors the Chat Completions request, but model 'openai/gpt-5-codex' is routed to " +
+  "the Responses API; remove the block or use a model served through Chat Completions.";
+
+test.each([
+  ["literal", "{temperature: 0.5}"],
+  ["holding a value", "{temperature: '${input.t}'}"],
+])("a flow layer's block on a Responses-routed model fails at load: %s", async (_id, block) => {
+  const text = flowLayer(`llm_config: {provider: openrouter, model: openai/gpt-5-codex, openrouter: ${block}}\n`);
+  expect((await loadFailsAsync(text)).diagnostic.message).toBe(`flow: llm_config: ${RESPONSES_BLOCK}`);
+});
+
+test.each([
+  ["literal", "{temperature: 0.5}"],
+  ["holding a value", "{temperature: '${input.t}'}"],
+])("a node layer's block on a Responses-routed model fails at load: %s", (_id, block) => {
+  const text = flow(`    llm_config: {provider: openrouter, model: openai/gpt-5-codex, openrouter: ${block}}\n`);
+  expect(loadFails(text).diagnostic.message).toBe(`node 'a': llm_config: ${RESPONSES_BLOCK}`);
+});
+
+test("a block beside a model from a value loads, to be checked when the model is known", () => {
+  agentOf(flow("    llm_config: {provider: openrouter, model: '${input.m}', openrouter: {temperature: 0.5}}\n"));
+  agentOf(flow("    llm_config: {provider: openrouter, model: openai/gpt-5-codex}\n"));
+  // A null field is unset, so the block is empty.
+  agentOf(flow("    llm_config: {provider: openrouter, model: openai/gpt-5-codex, openrouter: {temperature: null}}\n"));
+});
+
 test("a literal flow layer is still a plain dict", async () => {
   const loaded = await loadFlow(flowLayer('llm_config: {provider: openai, model: "a$$b"}\n'));
   expect(loaded.compiled.flowLlmConfig).toEqual({ provider: "openai", model: "a$b" });
@@ -159,6 +186,41 @@ test("a literal field error in a flow value layer points at the field", async ()
   const error = await loadFailsAsync(text);
   expect(error.message).toStartWith("flow: llm_config:");
   expect(lineOf(error)).toBe(lineHolding(text, "temparature:"));
+});
+
+test("a field error in a literal flow layer points at the field", async () => {
+  const text = flowLayer("llm_config:\n  provider: openai\n  model: m\n  temparature: 1\n");
+  const error = await loadFailsAsync(text);
+  expect(error.message).toStartWith("flow: llm_config:");
+  expect(lineOf(error)).toBe(lineHolding(text, "temparature:"));
+});
+
+test("inherit in a literal flow layer points at the field", async () => {
+  const text = flowLayer("llm_config:\n  model: m\n  inherit: false\n");
+  const error = await loadFailsAsync(text);
+  expect(error.message).toContain("inherit");
+  expect(lineOf(error)).toBe(lineHolding(text, "inherit:"));
+});
+
+test("a host-only field in a literal def layer points at the field", async () => {
+  const text = defLayer("    llm_config:\n      provider: openai\n      project: p\n");
+  const error = await loadFailsAsync(text);
+  expect(error.message).toContain("defs entry 'sub': llm_config.project goes wherever");
+  expect(lineOf(error)).toBe(lineHolding(text, "project:"));
+});
+
+test("a field error in a literal agent layer points at the field", () => {
+  const text = flow("    llm_config:\n      model: m\n      temparature: 1\n");
+  const error = loadFails(text);
+  expect(error.message).toStartWith("node 'a': llm_config:");
+  expect(lineOf(error)).toBe(lineHolding(text, "temparature:"));
+});
+
+test("a non-boolean inherit in a literal agent layer points at the field", () => {
+  const text = flow("    llm_config:\n      model: m\n      inherit: yes\n");
+  const error = loadFails(text);
+  expect(error.message).toContain("node 'a': llm_config `inherit:` must be true or false");
+  expect(lineOf(error)).toBe(lineHolding(text, "inherit:"));
 });
 
 test("an agent built in code keeps its literal config", () => {
@@ -292,6 +354,16 @@ test("a whole record type declaring api_key fails", () => {
   expect(error.message).toContain("node 'a': llm_config: its type declares `api_key`");
   expect(error.message).toContain("llm_config.api_key is a host credential");
   expect(lineOf(error)).toBe(lineHolding(text, "llm_config:"));
+});
+
+test("a whole record type declaring base_url beside provider azure names the value rule", () => {
+  const typedefs = "typedefs:\n  Cfg:\n    provider: Literal(azure)\n    model: str\n    base_url: str\n";
+  const error = loadFails(flow("    llm_config: !Cfg ${input.cfg}\n", { typedefs }));
+  expect(error.diagnostic.message).toBe(
+    "node 'a': llm_config: its type declares `base_url`; llm_config.base_url can't come from a value: it " +
+      "decides where the key is sent, which stays with the host or `yian auth`; write the Azure resource " +
+      "endpoint as literal text",
+  );
 });
 
 test("base url from a value fails", () => {

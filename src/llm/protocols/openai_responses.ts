@@ -15,7 +15,7 @@
 
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
-import { type ErrorKind, ProviderError } from "../errors.ts";
+import { ProviderError } from "../errors.ts";
 import {
   type Event,
   Finish,
@@ -52,7 +52,14 @@ import {
   ToolResultPart,
   Usage,
 } from "../messages.ts";
-import { eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
+import {
+  eventData,
+  notIntMessage,
+  OPENAI_STREAM_ERROR_KINDS,
+  tokenCount,
+  usageOrProtocolError,
+  wrongPart,
+} from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "openai_responses";
@@ -78,36 +85,6 @@ const ITEM_EVENTS: ReadonlySet<string> = new Set([
 ]);
 // The subscription backend may end a reply with `response.done` instead of `response.completed`.
 const TERMINAL_EVENTS: ReadonlySet<string> = new Set(["response.completed", "response.done", "response.incomplete"]);
-const BAD_REQUEST_CODES = [
-  "invalid_prompt",
-  "invalid_request_error",
-  "invalid_image",
-  "invalid_image_format",
-  "invalid_base64_image",
-  "invalid_image_url",
-  "invalid_image_mode",
-  "image_too_large",
-  "image_too_small",
-  "image_parse_error",
-  "image_file_too_large",
-  "image_file_not_found",
-  "empty_image_file",
-  "unsupported_image_media_type",
-  "failed_to_download_image",
-];
-// In-stream error codes; any other code, or none, is a server error.
-export const STREAM_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>([
-  ["rate_limit_exceeded", "rate_limit"],
-  ["server_error", "server"],
-  ["vector_store_timeout", "server"],
-  ["context_length_exceeded", "context_length"],
-  ...BAD_REQUEST_CODES.map((code): [string, ErrorKind] => [code, "bad_request"]),
-  ["image_content_policy_violation", "refused"],
-  ["insufficient_quota", "quota"],
-  ["usage_limit_reached", "quota"],
-  ["usage_not_included", "quota"],
-]);
-const USAGE_NOT_INT = notIntMessage("openai");
 
 /** An assistant part that can carry a replay record. */
 type ReplayPart = TextPart | RefusalPart | ReasoningPart | ToolCallPart;
@@ -215,11 +192,12 @@ export class OpenAIResponses implements SseProtocol {
    * @returns The deltas and parts, then `UsageReport` (when the reply has usage) and `Finish` on
    *   `response.completed` (or `response.done`) or a length-truncated `response.incomplete` (or
    *   `response.done`).
-   * @throws {ProviderError} For `response.failed` or an `error` event (kind from the error code,
-   *   else its type), a stream that ends without a terminal event or a reply that did not
-   *   complete (kind `incomplete`, or `refused` for a content filter), or an event that is not
-   *   JSON, lacks the output index it needs, or holds an item or usage that cannot be read (kind
-   *   `protocol`). The message holds the provider's text uncapped.
+   * @throws {ProviderError} For `response.failed`, a terminal reply with status `failed` that
+   *   carries an error, or an `error` event (kind from the error code, else its type), a stream
+   *   that ends without a terminal event or a reply that did not complete (kind `incomplete`, or
+   *   `refused` for a content filter), or an event that is not JSON, lacks the output index it
+   *   needs, or holds an item or usage that cannot be read (kind `protocol`). The message holds
+   *   the provider's text uncapped.
    */
   async *parse(frames: AsyncIterable<SSEEvent>): AsyncGenerator<Event> {
     // Part index by output index, then content index.
@@ -234,16 +212,12 @@ export class OpenAIResponses implements SseProtocol {
     };
     const opened = new Map<number, JsonObject>();
     const finished = new Set<number>();
-    // The item ids and call ids the stream gave, in all and by output index.
-    const seenIds = new Set<string>();
+    // The item ids and call ids the stream gave, by output index.
     const streamedIds = new Map<number, Set<string>>();
     const sawIds = (outputIndex: number, ids: string[]): void => {
       let known = streamedIds.get(outputIndex);
       if (known === undefined) streamedIds.set(outputIndex, (known = new Set()));
-      for (const id of ids) {
-        known.add(id);
-        seenIds.add(id);
-      }
+      for (const id of ids) known.add(id);
     };
     const lastSummary = new Map<number, JsonValue | undefined>();
     // Refusal text by output index, then content index.
@@ -260,7 +234,7 @@ export class OpenAIResponses implements SseProtocol {
       if (frame.data.startsWith("[DONE]")) break;
       // Some gateways send keep-alive frames with empty data.
       if (frame.data === "") continue;
-      const data = eventData(frame.data, "openai");
+      const data = eventData(frame.data, this.provider);
       if (!isPlainObject(data)) continue;
       const rawType = data["type"] || frame.event;
       const type = typeof rawType === "string" ? rawType : null;
@@ -272,7 +246,7 @@ export class OpenAIResponses implements SseProtocol {
       if (type !== null && ITEM_EVENTS.has(type)) {
         const raw = data["output_index"];
         if (typeof raw !== "bigint") {
-          throw new ProviderError("protocol", `openai stream event ${type} has no output_index`);
+          throw new ProviderError("protocol", `${this.provider} stream event ${type} has no output_index`);
         }
         outputIndex = Number(raw);
         if (typeof data["item_id"] === "string") sawIds(outputIndex, [data["item_id"]]);
@@ -337,44 +311,16 @@ export class OpenAIResponses implements SseProtocol {
         }
       } else if (type !== null && TERMINAL_EVENTS.has(type)) {
         const response = data["response"];
-        if (!isPlainObject(response)) throw new ProviderError("protocol", `openai ${type} event has no response`);
+        if (!isPlainObject(response)) {
+          throw new ProviderError("protocol", `${this.provider} ${type} event has no response`);
+        }
         const rawOutput = response["output"];
         const output = Array.isArray(rawOutput) ? rawOutput : [];
         const started = new Set([...opened.keys(), ...indexes.keys()]);
         const unfinished = [...started].filter((each) => !finished.has(each)).sort((a, b) => a - b);
-        // Each streamed output index is matched to at most one item of `output`, and each item to
-        // at most one index. By ids first, wherever the item sits, since a gateway may renumber
-        // output indexes; then the item at the index's own position, when the stream gave none of
-        // its ids, since a gateway may also rewrite ids for the final response.
-        const streamed = [...new Set([...started, ...finished])].sort((a, b) => a - b);
-        const terminal = new Map<number, JsonValue>();
-        const claimed = new Set<number>();
-        const take = (each: number, position: number): void => {
-          if (position < 0 || claimed.has(position) || terminal.has(each)) return;
-          claimed.add(position);
-          terminal.set(each, output[position]!);
-        };
-        const fresh = (item: JsonValue): boolean => !itemIds(item).some((id) => seenIds.has(id));
-        for (const each of streamed) {
-          const ids = streamedIds.get(each);
-          if (ids !== undefined && ids.size > 0) {
-            take(each, output.findIndex((item) => itemIds(item).some((id) => ids.has(id))));
-          }
-        }
-        for (const each of streamed) {
-          if (each < output.length && fresh(output[each]!)) take(each, each);
-        }
-        // An unfinished index the stream gave no ids takes the first item left whose ids it never
-        // gave, so no item of `output` is shown twice.
+        const { matches, rest } = matchTerminal(output, started, finished, streamedIds);
         for (const each of unfinished) {
-          if (terminal.has(each) || (streamedIds.get(each)?.size ?? 0) > 0) continue;
-          take(
-            each,
-            output.findIndex((item, position) => !claimed.has(position) && itemIds(item).length > 0 && fresh(item)),
-          );
-        }
-        for (const each of unfinished) {
-          const item = terminal.get(each);
+          const item = matches.get(each);
           if (item === undefined) {
             // Text, reasoning and calls are built from their deltas; a refusal streams none, so
             // its part is built here.
@@ -391,9 +337,8 @@ export class OpenAIResponses implements SseProtocol {
         }
         // Output items no streamed index took, and whose ids the stream never gave, still belong
         // to the reply, after the others.
-        for (const [position, item] of output.entries()) {
-          if (claimed.has(position) || !fresh(item)) continue;
-          // A new slot each: the position may also be an output index the stream used.
+        for (const item of rest) {
+          // A new slot each: its position may also be an output index the stream used.
           for (const [, part] of itemParts(item, this.#key)) {
             if (part instanceof ToolCallPart) sawCalls = true;
             yield new PartDone(count++, part);
@@ -409,7 +354,7 @@ export class OpenAIResponses implements SseProtocol {
     }
     const message = this.subscription
       ? "OpenAI subscription stream ended before a complete response"
-      : "openai stream ended before a complete response";
+      : `${this.provider} stream ended before a complete response`;
     throw new ProviderError("incomplete", message, { retryable: true });
   }
 
@@ -420,14 +365,16 @@ export class OpenAIResponses implements SseProtocol {
    * or `incomplete`. Among incomplete replies only a stop at `max_output_tokens` signalled by
    * `response.incomplete`, or by `response.done` with status `incomplete`, counts as finished;
    * it finishes with `length` even when the reply has calls, since a truncated call cannot be
-   * trusted.
+   * trusted. A reply with status `failed` that carries an `error` object fails as
+   * `response.failed` does.
    *
    * @param response The terminal event's response.
    * @param hasCalls Whether the reply holds a function call.
    * @param responseId The id to use when `response` has none.
    * @param type The terminal event type.
-   * @throws {ProviderError} The reply did not complete (kind `incomplete`, or `refused` for a
-   *   content filter), or its usage cannot be read (kind `protocol`).
+   * @throws {ProviderError} The reply failed with an error (kind from its code, else its type),
+   *   did not complete (kind `incomplete`, or `refused` for a content filter), or its usage
+   *   cannot be read (kind `protocol`).
    */
   #finish(response: JsonObject, hasCalls: boolean, responseId: string | null, type: string): Event[] {
     const status = type === "response.incomplete" ? "incomplete" : response["status"];
@@ -438,14 +385,16 @@ export class OpenAIResponses implements SseProtocol {
       finishReason = hasCalls ? "tool_calls" : "stop";
     } else if (status === "incomplete" && reason === "max_output_tokens" && type !== "response.completed") {
       finishReason = "length";
+    } else if (status === "failed" && isPlainObject(response["error"])) {
+      throw this.#streamFailure(response["error"]);
     } else {
-      const prefix = this.subscription ? "OpenAI subscription response" : "openai response";
+      const prefix = this.subscription ? "OpenAI subscription response" : `${this.provider} response`;
       const shown = typeof reason === "string" && reason ? reason : "unknown";
       const kind = reason === "content_filter" ? "refused" : "incomplete";
       throw new ProviderError(kind, `${prefix} did not complete (${shown})`);
     }
     const events: Event[] = [];
-    const usage = usageOf(response["usage"]);
+    const usage = usageOf(response["usage"], this.provider);
     if (usage !== null) events.push(new UsageReport(usage));
     // `||`, not `??`: an empty id counts as none.
     const id = strOrNull(response["id"]) || responseId;
@@ -458,16 +407,19 @@ export class OpenAIResponses implements SseProtocol {
     return events;
   }
 
-  /** Return the error for `response.failed` or an `error` event; its kind from the error's code, else its type. */
+  /**
+   * Return the error for `response.failed`, a failed terminal reply or an `error` event; its
+   * kind from the error's code, else its type.
+   */
   #streamFailure(error: JsonObject): ProviderError {
     // An error without a string code may still name its kind in `type` (`invalid_request_error`).
     const code = typeof error["code"] === "string" ? error["code"] : error["type"];
-    const kind = (typeof code === "string" ? STREAM_ERROR_KINDS.get(code) : undefined) ?? "server";
+    const kind = (typeof code === "string" ? OPENAI_STREAM_ERROR_KINDS.get(code) : undefined) ?? "server";
     const rawMessage = error["message"];
     const message = typeof rawMessage === "string" && rawMessage ? rawMessage : "no message";
     const text = this.subscription
       ? `OpenAI subscription stream ended before a complete response: ${message}`
-      : `openai stream failed (${kind}): ${message}`;
+      : `${this.provider} stream failed (${kind}): ${message}`;
     return new ProviderError(kind, text);
   }
 
@@ -648,6 +600,61 @@ function readRecord(
   return fits ? read : { ok: false, reason: "malformed" };
 }
 
+/**
+ * Match a terminal event's `output` items to the streamed output indexes.
+ *
+ * Each streamed output index (in `started` or `finished`) takes at most one item, and each item
+ * goes to at most one index. By ids first, wherever the item sits, since a gateway may renumber
+ * output indexes; then the item at the index's own position, when the stream gave none of its
+ * ids, since a gateway may also rewrite ids for the final response; then, for an unfinished
+ * index whose events gave no ids, the first item left that has ids the stream never gave.
+ *
+ * @param output The terminal response's output items.
+ * @param started The output indexes an item was added at or a part was indexed for.
+ * @param finished The output indexes whose item got its done event.
+ * @param streamedIds The item ids and call ids each output index's events gave.
+ * @returns The item each matched index took, and the items no index took whose ids the stream
+ *   never gave, in `output` order.
+ */
+export function matchTerminal(
+  output: readonly JsonValue[],
+  started: ReadonlySet<number>,
+  finished: ReadonlySet<number>,
+  streamedIds: ReadonlyMap<number, ReadonlySet<string>>,
+): { matches: Map<number, JsonValue>; rest: JsonValue[] } {
+  const seenIds = new Set([...streamedIds.values()].flatMap((ids) => [...ids]));
+  const streamed = [...new Set([...started, ...finished])].sort((a, b) => a - b);
+  const unfinished = [...started].filter((each) => !finished.has(each)).sort((a, b) => a - b);
+  const matches = new Map<number, JsonValue>();
+  const claimed = new Set<number>();
+  const take = (each: number, position: number): void => {
+    if (position < 0 || claimed.has(position) || matches.has(each)) return;
+    claimed.add(position);
+    matches.set(each, output[position]!);
+  };
+  const fresh = (item: JsonValue): boolean => !itemIds(item).some((id) => seenIds.has(id));
+  for (const each of streamed) {
+    const ids = streamedIds.get(each);
+    if (ids !== undefined && ids.size > 0) {
+      take(each, output.findIndex((item) => itemIds(item).some((id) => ids.has(id))));
+    }
+  }
+  for (const each of streamed) {
+    if (each < output.length && fresh(output[each]!)) take(each, each);
+  }
+  // An unfinished index the stream gave no ids takes the first item left whose ids it never
+  // gave, so no item of `output` is shown twice.
+  for (const each of unfinished) {
+    if (matches.has(each) || (streamedIds.get(each)?.size ?? 0) > 0) continue;
+    take(
+      each,
+      output.findIndex((item, position) => !claimed.has(position) && itemIds(item).length > 0 && fresh(item)),
+    );
+  }
+  const rest = output.filter((item, position) => !claimed.has(position) && fresh(item));
+  return { matches, rest };
+}
+
 /** Return an output item's string `id`, and its string `call_id` when it is a function call. */
 function itemIds(item: JsonValue): string[] {
   if (!isPlainObject(item)) return [];
@@ -669,29 +676,27 @@ function strOrNull(value: JsonValue | undefined): string | null {
  * @throws {ProviderError} A count is not an int within `Number.MAX_SAFE_INTEGER`, or the
  *   details are not objects (kind `protocol`).
  */
-function usageOf(usage: JsonValue | undefined): Usage | null {
+function usageOf(usage: JsonValue | undefined, provider: string): Usage | null {
   if (!isPlainObject(usage)) return null;
   const inputDetails = usage["input_tokens_details"] ?? {};
   const outputDetails = usage["output_tokens_details"] ?? {};
   if (!isPlainObject(inputDetails) || !isPlainObject(outputDetails)) {
-    throw new ProviderError("protocol", "openai response usage details are not objects");
+    throw new ProviderError("protocol", `${provider} response usage details are not objects`);
   }
-  const inputTokens = tokenCount(usage["input_tokens"], USAGE_NOT_INT) ?? 0;
-  const outputTokens = tokenCount(usage["output_tokens"], USAGE_NOT_INT) ?? 0;
-  try {
-    return new Usage({
+  const notInt = notIntMessage(provider);
+  const inputTokens = tokenCount(usage["input_tokens"], notInt) ?? 0;
+  const outputTokens = tokenCount(usage["output_tokens"], notInt) ?? 0;
+  return usageOrProtocolError(
+    {
       inputTokens,
       outputTokens,
-      totalTokens: tokenCount(usage["total_tokens"], USAGE_NOT_INT) ?? inputTokens + outputTokens,
-      cacheReadTokens: tokenCount(inputDetails["cached_tokens"], USAGE_NOT_INT),
-      cacheCreationTokens: tokenCount(inputDetails["cache_write_tokens"], USAGE_NOT_INT),
-      reasoningTokens: tokenCount(outputDetails["reasoning_tokens"], USAGE_NOT_INT),
-    });
-  } catch (error) {
-    // `Usage` refuses a count past `Number.MAX_SAFE_INTEGER`, which `Number()` rounds.
-    if (error instanceof MessageFormatError) throw new ProviderError("protocol", USAGE_NOT_INT);
-    throw error;
-  }
+      totalTokens: tokenCount(usage["total_tokens"], notInt) ?? inputTokens + outputTokens,
+      cacheReadTokens: tokenCount(inputDetails["cached_tokens"], notInt),
+      cacheCreationTokens: tokenCount(inputDetails["cache_write_tokens"], notInt),
+      reasoningTokens: tokenCount(outputDetails["reasoning_tokens"], notInt),
+    },
+    notInt,
+  );
 }
 
 /**
@@ -704,7 +709,7 @@ function usageOf(usage: JsonValue | undefined): Usage | null {
  */
 function itemParts(item: JsonValue, key: ReplayKey): [number, Part][] {
   if (!isPlainObject(item)) {
-    throw new ProviderError("protocol", "openai response has an output item that is not an object");
+    throw new ProviderError("protocol", `${key.provider} response has an output item that is not an object`);
   }
   const type = item["type"];
   try {
@@ -716,7 +721,7 @@ function itemParts(item: JsonValue, key: ReplayKey): [number, Part][] {
     return [];
   } catch (error) {
     if (error instanceof MessageFormatError) {
-      throw new ProviderError("protocol", `openai response has an invalid ${type} item: ${error.message}`);
+      throw new ProviderError("protocol", `${key.provider} response has an invalid ${type} item: ${error.message}`);
     }
     throw error;
   }
@@ -736,20 +741,26 @@ function reasoningPart(item: JsonObject, key: ReplayKey): ReasoningPart {
 /** Build a message item's text and refusal parts, keyed by content index. */
 function messageParts(item: JsonObject, key: ReplayKey): [number, Part][] {
   const content = item["content"] ?? [];
-  if (!Array.isArray(content)) throw new ProviderError("protocol", "openai response message content is not a list");
+  if (!Array.isArray(content)) {
+    throw new ProviderError("protocol", `${key.provider} response message content is not a list`);
+  }
   const fields = contentFields(item["id"], item["phase"]);
   const parts: [number, Part][] = [];
   for (const [contentIndex, entry] of content.entries()) {
     if (!isPlainObject(entry)) continue;
     if (entry["type"] === "output_text") {
       const text = entry["text"];
-      if (typeof text !== "string") throw new ProviderError("protocol", "openai response output_text has no text");
+      if (typeof text !== "string") {
+        throw new ProviderError("protocol", `${key.provider} response output_text has no text`);
+      }
       const annotations = entry["annotations"];
       const kept = Array.isArray(annotations) ? dropNulls(annotations) : [];
       parts.push([contentIndex, new TextPart(text, replayRecord(key, { ...fields, annotations: kept }))]);
     } else if (entry["type"] === "refusal") {
       const refusal = entry["refusal"];
-      if (typeof refusal !== "string") throw new ProviderError("protocol", "openai response refusal has no text");
+      if (typeof refusal !== "string") {
+        throw new ProviderError("protocol", `${key.provider} response refusal has no text`);
+      }
       parts.push([contentIndex, new RefusalPart(refusal, replayRecord(key, fields))]);
     }
   }
@@ -779,7 +790,7 @@ function callPart(item: JsonObject, key: ReplayKey): ToolCallPart {
   const payload = dropNulls(item);
   const { call_id: id, name, arguments: text } = payload;
   if (typeof id !== "string" || typeof name !== "string" || typeof text !== "string") {
-    throw new ProviderError("protocol", "openai response function_call needs call_id, name and arguments");
+    throw new ProviderError("protocol", `${key.provider} response function_call needs call_id, name and arguments`);
   }
   const [args, raw] = parseArguments(text);
   const providerPayload = replayRecord(key, { item: payload });

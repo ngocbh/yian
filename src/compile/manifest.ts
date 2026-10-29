@@ -19,7 +19,7 @@
 
 import { createHash } from "node:crypto";
 
-import { compareCodeUnits, OriginRef, reprText } from "../diagnostics.ts";
+import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { DeclSite, MemoryDecl, MemoryOccurrenceSegment, MemoryScope } from "../memory/contracts.ts";
 import { AgentNode, authoredPrompt } from "../nodes/agent/node.ts";
 import { Node, NodeKind } from "../nodes/base.ts";
@@ -30,10 +30,10 @@ import {
   Assertion,
   Binding,
   ContractOrigins,
+  ExecutionScope,
   isExactly,
   Parameter,
   PartialRecordContract,
-  revalidateScope,
   ValueContract,
   ValueTemplate,
 } from "../nodes/contracts.ts";
@@ -128,7 +128,6 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "child",
     "predicateKind",
     "predicate",
-    "times",
     "maxIters",
     "iteration",
     "returnedFields",
@@ -153,8 +152,8 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   ],
   // `mode` is derived from `code`; CODE origins are diagnostic metadata resolved only by the
   // authoring front end; `baseDir` is where a reference resolves, not what it names; `sourceFile`
-  // only labels a failing body's stack frames.
-  [NodeKind.CODE]: ["mode", "baseDir", "sourceFile", "codeOrigin", "codeLineOrigins"],
+  // and `codeLineStarts` only label a failing body's stack frames.
+  [NodeKind.CODE]: ["mode", "baseDir", "sourceFile", "codeLineStarts", "codeOrigin", "codeLineOrigins"],
   // `inputTypes` is derived from wiring and producer contracts; the run-start tool check reads it.
   [NodeKind.TOOL]: ["inputTypes"],
   [NodeKind.CASE]: [],
@@ -205,7 +204,7 @@ const PARAMETER_FIELDS = new Set([
 const VALUE_CONTRACT_FIELDS = new Set(["type", "origins"]);
 const PARTIAL_RECORD_CONTRACT_FIELDS = new Set(["fields"]);
 const CONTRACT_ORIGINS_IGNORED_FIELDS = new Set(["default", "entries"]);
-const TYPE_FIELDS = new Set(["kind", "fields", "required", "tags", "element", "nullable", "bounds", "variants"]);
+const TYPE_FIELDS = new Set(["kind", "fields", "required", "tags", "element", "nullable", "bounds", "members"]);
 const MEMORY_DECL_FIELDS = new Set(["name", "type", "config", "site", "origin"]);
 const CASE_FIELDS = new Set(["handle", "when", "origin"]);
 const FLOW_FIELDS = ["nodes", "edges", "wiring", "startId", "endId", "inputConnections", "childBoundaries"];
@@ -529,9 +528,9 @@ function typeManifest(value: Type | null | undefined, ctx: ManifestContext, path
       // Each end is a typed value: a bound may be a float or an int past 2^53.
       manifest.bounds = value.bounds.map((end, index) => canonicalValue(end, ctx, `${path}.bounds[${index}]`));
     }
-    if (value.variants !== undefined) {
+    if (value.members !== undefined) {
       value.validateShape();
-      manifest.union = canonicalUnionOrder(value.variants).map((item, index) =>
+      manifest.union = canonicalUnionOrder(value.members).map((item, index) =>
         typeManifest(item, ctx, `${path}.union[${index}]`),
       );
     }
@@ -598,27 +597,13 @@ function parameterManifest(value: unknown, ctx: ManifestContext, path: string): 
 /**
  * Project one authored memory declaration while excluding its origin.
  *
- * @throws TypeError when `value` isn't exactly a `MemoryDecl`, its site exactly a `DeclSite`, or
- *   its origin an `OriginRef` or `null`.
- * @throws RangeError when its name or type isn't a non-empty string, or its site or origin fails
- *   its constructor's checks.
+ * @throws TypeError when `value` isn't exactly a `MemoryDecl` or its site exactly a `DeclSite`.
  */
 function memoryDeclManifest(value: unknown, ctx: ManifestContext, path: string): JsonObject {
   if (!isExactly(value, MemoryDecl)) throw new TypeError(`${path}: expected exact MemoryDecl, got ${typeName(value)}`);
   checkFields(value, MEMORY_DECL_FIELDS, path);
   const site: unknown = value.site;
   if (!isExactly(site, DeclSite)) throw new TypeError(`${path}.site: expected exact DeclSite`);
-  // Rebuilding replays the frozen carrier's checks on a forged site.
-  new DeclSite(site.scope, site.owner, site.node);
-  for (const label of ["name", "type"] as const) {
-    const item: unknown = value[label];
-    if (typeof item !== "string" || !item) throw new RangeError(`${path}.${label}: expected a non-empty exact string`);
-  }
-  const origin: unknown = value.origin;
-  if (origin !== null) {
-    if (!(origin instanceof OriginRef)) throw new TypeError(`${path}.origin: expected OriginRef or null`);
-    new OriginRef(origin.key);
-  }
   return {
     config: sortedMapping(value.config, ctx, `${path}.config`),
     name: value.name,
@@ -640,32 +625,24 @@ function memoriesManifest(values: unknown, ctx: ManifestContext, path: string): 
 /**
  * Canonicalize one ordered CASE arm; its origin is diagnostic-only.
  *
- * @throws TypeError when `value` isn't exactly a `Case`, or its origin isn't an `OriginRef` or
- *   `null`.
+ * @throws TypeError when `value` isn't exactly a `Case`.
  * @throws RangeError when its fields aren't the policy's.
  */
 function caseManifest(value: unknown, ctx: ManifestContext, path: string): JsonObject {
   if (!isExactly(value, Case)) throw new TypeError(`${path}: expected Case, got ${typeName(value)}`);
   checkFields(value, CASE_FIELDS, path);
-  const origin: unknown = value.origin;
-  if (origin !== null && !(origin instanceof OriginRef)) {
-    throw new TypeError(`${path}.origin: expected OriginRef or null`);
-  }
   return { handle: value.handle, when: canonicalValue(value.when, ctx, `${path}.when`) };
 }
 
 /**
  * Project one dynamic memory occurrence segment.
  *
- * @throws TypeError or RangeError when `segment` isn't exactly a `MemoryOccurrenceSegment` or
- *   fails its constructor's checks.
+ * @throws TypeError when `segment` isn't exactly a `MemoryOccurrenceSegment`.
  */
 function memoryOccurrenceTopology(segment: unknown, path: string): JsonObject {
   if (!isExactly(segment, MemoryOccurrenceSegment)) {
     throw new TypeError(`${path}: expected exact MemoryOccurrenceSegment, got ${typeName(segment)}`);
   }
-  // Rebuilding replays the frozen carrier's checks on a forged segment.
-  new MemoryOccurrenceSegment(segment.kind, segment.staticPath, segment.index);
   return {
     index: count(segment.index, `${path}.index`, false),
     kind: segment.kind,
@@ -677,15 +654,12 @@ function memoryOccurrenceTopology(segment: unknown, path: string): JsonObject {
  * Project the memory topology needed for deterministic growth identity: the node's path, its
  * memory keys and its occurrence path, without configs or origins.
  *
- * @throws TypeError or RangeError when `value` isn't exactly a `MemoryScope` or fails its
- *   constructor's checks.
+ * @throws TypeError when `value` isn't exactly a `MemoryScope`.
  */
 function memoryScopeTopology(value: unknown, path: string): JsonObject {
   if (!isExactly(value, MemoryScope)) {
     throw new TypeError(`${path}: expected exact MemoryScope, got ${typeName(value)}`);
   }
-  // Rebuilding replays the frozen carrier's checks on a forged scope.
-  new MemoryScope(value.staticPath, { memories: value.memories, occurrencePath: value.occurrencePath });
   return {
     memories: [...value.memories],
     occurrence_path: value.occurrencePath.map((segment, index) =>
@@ -698,11 +672,10 @@ function memoryScopeTopology(value: unknown, path: string): JsonObject {
 /**
  * Project a node's execution location for growth identity.
  *
- * @throws TypeError when `value` isn't exactly an `ExecutionScope`; TypeError or RangeError when
- *   it fails its constructor's checks.
+ * @throws TypeError when `value` isn't exactly an `ExecutionScope`.
  */
 function executionScopeTopology(value: unknown, path: string): JsonObject {
-  revalidateScope(value, path);
+  if (!isExactly(value, ExecutionScope)) throw new TypeError(`${path} must be an ExecutionScope`);
   return {
     static_path: [...value.staticPath],
     flow_path: [...value.flowPath],
@@ -880,9 +853,9 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
         manifest.max_iters = count(spawner.maxIters, `${path}.maxIters`, true);
         manifest.predicate = canonicalValue(spawner.predicate, ctx, `${path}.predicate`);
         manifest.predicate_kind = spawner.predicateKind;
-        // `times` is a typed value; it passes `count` first, so a forged
-        // float is refused rather than written as a float.
-        const times = spawner.times === null ? null : BigInt(count(spawner.times, `${path}.times`, false));
+        // A `times` loop keeps its count in `maxIters`, which passed `count` above; `times` is
+        // written as a typed value.
+        const times = spawner.predicateKind !== "times" || spawner.maxIters === null ? null : BigInt(spawner.maxIters);
         manifest.times = canonicalValue(times, ctx, `${path}.times`);
         // Left out for a total loop so the feature doesn't change the identity of flows that don't
         // use it.

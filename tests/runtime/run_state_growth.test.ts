@@ -45,6 +45,7 @@ import {
   prepareNodeStarted,
   prepareNodeStep,
   prepareRecord,
+  prepareRunStopped,
   RunState,
 } from "../../src/runtime/state.ts";
 import type { JsonValue } from "../../src/typesys/json.ts";
@@ -59,6 +60,7 @@ import {
   commitExpansion,
   fragmentIds,
   initializedSpawner,
+  reducerWrite,
   parentFlow,
   prepareGrowth,
   prepareOutput,
@@ -163,6 +165,24 @@ function expectRejected(fn: () => unknown, cls: new (...args: never[]) => Error,
   expect(error.cause).toBe(error.original);
   return error.original;
 }
+
+test("a spawner that leaves flight with an unadmitted expansion commit is refused before the next append", () => {
+  const { state, log } = initializedSpawner();
+  expect(commitExpansion(log, state, "spawn", new Grow({}), fragmentBuilder)).toBeGreaterThan(0);
+  expect([...state.pendingCommits.values()].some((pending) => pending.spawner === "spawn" && !pending.admitted)).toBe(true);
+  // Preparing checks the nodes the commits touched; only the spawner's write below is left.
+  const stop = prepareRunStopped(state, "signal", "");
+  reducerWrite(state, "spawn", () => {
+    state.inFlight.delete("spawn");
+    state.acceptedStarts.delete("spawn");
+  });
+  const before = log.nextSequence;
+
+  expect(() => commitPrepared(log, state, stop)).toThrow(
+    "node starts, steps and pending commits must match the unsettled invocations",
+  );
+  expect(log.nextSequence).toBe(before);
+});
 
 test("growth canonicalizes the seed and isolates the builder, record and observers", () => {
   const { state, log } = initializedSpawner();

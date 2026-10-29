@@ -1,0 +1,20 @@
+# The backend refuses a limit above 2^53 - 1, so load refuses it before the run builds the memory.
+kind: load
+flow: |
+  id: cli-memory
+  name: cli_memory
+  long_term_memory: {notes: {type: episodic, config: {max_episodes: 9007199254740992}}}
+  nodes:
+    work:
+      kind: code
+      code: return 7
+      output: int
+  output: ${work.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'long_term_memory ''notes'': episodic memory config max_episodes must be at most 9007199254740991, got 9007199254740992'
+      frames:
+      - label: flow.yaml
+        range: [3, 27, 3, 85]

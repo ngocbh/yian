@@ -1,46 +1,42 @@
 /**
  * The flow commands, `yian run`, `yian check`, `yian status` and `yian skills check`, and `yian
- * run`'s helpers: what it prints on stderr, the inputs it reads from flags, its run-log options and
- * default log path, and the signals that stop a run.
+ * run`'s helpers: what it prints on stderr, the inputs it reads from flags and its run-log options.
+ * The start-up it shares with `yian chat` is in `startup.ts`, and the rendering both use in
+ * `render.ts`.
  *
  * - `run` checks the run-log options, loads the flow, builds its memories, reads skills and MCP
  *   servers when it needs them, runs it on a fresh log or recovers the run recorded on a
- *   `--resume` log, checking its recorded keys, and prints its output or its failure;
+ *   `--resume` log, checking its recorded keys, and prints its output or its failure; `yian run`
+ *   reaches it through `runOrChat` in `inbox_chat.ts`, which hands a terminal chat to `inboxChat`;
  *   `check` loads each flow, or confined to `--root`, and reports each as text or one `--json`
  *   document; `status` reports where the run in a run log stands, or, given no log, updates and
  *   lists the run index of `~/.yian/runs`, as text or a `--json` document. A run whose log is in
  *   `~/.yian/runs` updates that index when it ends.
  * - `skillsCheck` loads skill directories and reports each as text or one `--json` document.
- * - `renderDiagnostic` boxes each source frame of a diagnostic, its marked lines numbered, the
- *   message below; `diagnosticJson` gives the same diagnostic as a `--json` document's part;
- *   `renderRunError` renders a failed run's diagnostic.
+ * - `renderRunError` renders a failed run's diagnostic.
  * - `flowBanner` is the "what am I running" box; `ProgressReporter` draws per-node progress.
  * - `mergeInputs` reads `--inputs` then `--input k=v` (`readInputsJson`, `parseKv`).
- * - `validateRunLogOptions` and `defaultRunLogPath` pick the run's log under `defaultRunsDir`;
- *   `reportRunLog` prints it.
- * - `ensureProviderKeys` checks the keys of the connections `agentConnections` finds before a run.
+ * - `validateRunLogOptions` checks the run-log options; `reportRunLog` prints the log's path.
+ * - `checkSuppliedInputs` and `indexRun` are the steps of a fresh run's start and end that `yian
+ *   chat` shares beside `startup.ts`'s.
  * - `readGrantedSkills` reads the skill folders when a flow's AGENTs grant skills.
- * - `stopOnSignals` stops a run's controller with a `HostStop` on SIGINT, SIGTERM or SIGHUP.
  *
  * Output is raw ANSI on stderr, coloured only on a TTY without `NO_COLOR`.
  */
 
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmdirSync, statSync } from "node:fs";
-import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { existsSync, lstatSync, realpathSync, rmdirSync } from "node:fs";
+import { basename, dirname, join, relative } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-import { knownCallTimeBaseUrls, knownCallTimeProviders } from "../compile/llm_cascade.ts";
-import { copyGraph, END_ID, START_ID } from "../compile/model.ts";
+import { END_ID, START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { loadFlow } from "../compose/loader.ts";
-import { parseSourceDocument } from "../compose/parse/file.ts";
 import { defaultSkillRoots, loadSkillDir, loadSkills } from "../compose/skills.ts";
 import { current, type Env } from "../defaults.ts";
-import { compareCodeUnits, Diagnostic, reprText } from "../diagnostics.ts";
+import { compareCodeUnits, Diagnostic, noteCleanup, reprText } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
-import { isSystemError, resolvedPath, type Skill, SkillError, statOrNull } from "../skills/catalog.ts";
+import { type Skill, SkillError } from "../skills/catalog.ts";
 import { LOAD_SKILL } from "../skills/tool.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 import {
@@ -57,19 +53,17 @@ import {
   type AgentConfig,
   type Connection,
   connectionCredentials,
-  connectionSnapshot,
   HEADER_NAMES_KEY,
   HOST_KEY_MARKER,
   keyIdentity,
 } from "../llm_clients/connection.ts";
 import { MemoryOperationError } from "../memory/contracts.ts";
-import { type MemoryRegistry, noteCleanup } from "../memory_host.ts";
-import { checkInputNames, coerceInputs } from "../nodes/binding.ts";
+import type { MemoryRegistry } from "../memory_host.ts";
+import { checkInputNames } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import { FileLockError, sqliteErrorCode, withWarnings } from "../platform.ts";
+import { FileLockError, isSystemError, sqliteErrorCode, statOrNull, withWarnings } from "../platform.ts";
 import {
   advance,
-  hostInputs,
   inspectRun,
   type LlmConfigsCheck,
   loadRecordedFlow,
@@ -78,201 +72,58 @@ import {
   type RunInspection,
   type RunResult,
   runFlow,
-  runLogPath,
-  runStartLlm,
   skillGrants,
   staticNodes,
   updateRunIndex,
 } from "../run.ts";
 import { wakeAt } from "../runtime/waits.ts";
 import { ASK_USER, BUILTIN_TOOL_IDS } from "../tools/context.ts";
-import { McpConnectError, type McpServer } from "../tools/mcp.ts";
+import { McpConnectError, McpSdkMissingError, type McpServer } from "../tools/mcp.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
-import { defaultRunId } from "../typesys/seeding.ts";
+import { loadConfined } from "./confined_load.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
 import { buildCliMemories, MemoryOptionError } from "./memory.ts";
-import { cells, charCells, Terminal, TerminalStopped } from "./terminal.ts";
 import {
+  box,
+  diagnosticJson,
+  elapsedTag,
+  endedNodeText,
+  failedNodeText,
+  paint,
+  printStyled,
+  renderDiagnostic,
+  splitLines,
+  type Style,
+  tracebackBox,
+  wrapSpans,
+  writeEngineTrace,
+} from "./render.ts";
+import {
+  cliLayer,
+  defaultRunsDir,
+  ensureProviderKeys,
+  freshLog,
+  loadFlowFile,
+  NotUtf8Error,
+  preflightKeys,
+  readFlowText,
+} from "./startup.ts";
+import { cells, columnsOf } from "./cells.ts";
+import { Terminal, TerminalStopped } from "./terminal.ts";
+import {
+  atTerminal,
   type CliIo,
   CommandEnv,
-  ensureEnvKey,
+  forTerminal,
   HostStop,
-  MissingKeyError,
   osReason,
   printJson,
   type PromptContext,
+  shellQuote,
+  stopOnSignals,
   UsageError,
   type Writer,
 } from "./utils.ts";
-
-const SGR = { bold: 1, dim: 2, red: 31, green: 32, yellow: 33, cyan: 36 } as const;
-
-/** A text style: a colour or weight, or two of them (`"red bold"`). */
-type Style = keyof typeof SGR | `${keyof typeof SGR} ${keyof typeof SGR}`;
-
-/** Return `text` in `style` when `out` is a TTY and `NO_COLOR` is unset or empty, else as is. */
-function paint(text: string, style: Style, out: Writer, env: Env): string {
-  if (!out.isTTY || env("NO_COLOR")) return text;
-  const codes = style.split(" ").map((word) => SGR[word as keyof typeof SGR]);
-  return `\x1b[${codes.join(";")}m${text}\x1b[0m`;
-}
-
-/** Write `text` in `style` and a newline to `io.stderr`. */
-function printStyled(io: CliIo, text: string, style: Style): Promise<void> {
-  return io.stderr.write(`${paint(text, style, io.stderr, io.env)}\n`);
-}
-
-/** Return `text`'s lines as source ranges count them, with no empty line after a final break. */
-function splitLines(text: string): string[] {
-  const lines = text.split(/\r\n|\r|\n/);
-  if (lines[lines.length - 1] === "") lines.pop();
-  return lines;
-}
-
-/**
- * Return `rows` in a box drawn in `border`, `title` set into its top edge, at least `width` cells
- * inside. Each row is its plain text, which sizes the box, and the text to print.
- */
-function box(
-  rows: readonly (readonly [string, string])[],
-  border: Style,
-  out: Writer,
-  env: Env,
-  title = "",
-  width = 0,
-): string {
-  const heading = title ? `─ ${title} ` : "";
-  const inner = Math.max(width, cells(heading) - 1, ...rows.map(([plain]) => cells(plain)));
-  const edge = (text: string) => paint(text, border, out, env);
-  const lines = [edge(`╭${heading}${"─".repeat(inner + 2 - cells(heading))}╮`)];
-  for (const [plain, printed] of rows) {
-    lines.push(`${edge("│")} ${printed}${" ".repeat(inner - cells(plain))} ${edge("│")}`);
-  }
-  lines.push(edge(`╰${"─".repeat(inner + 2)}╯`));
-  return lines.join("\n");
-}
-
-/**
- * Return the UTF-16 ranges of `text`'s rows wrapped to `width` cells, each ending before its
- * row's trailing whitespace; an empty line is one empty row. Follows rich's `divide_line`: a word
- * keeps its trailing spaces, moves to a new row when it doesn't fit the rest of this one, and is
- * folded by characters when it is wider than a row.
- */
-function wrapLine(text: string, width: number): [start: number, end: number][] {
-  const starts = [0];
-  let used = 0;
-  for (const match of text.matchAll(/\s*\S+\s*/g)) {
-    const word = match[0];
-    const length = cells(word.trimEnd());
-    if (length <= width - used) {
-      used += cells(word);
-    } else if (length > width) {
-      // Folded: each chunk of at most `width` cells starts a row; a character that doesn't fit
-      // starts the next chunk.
-      if (match.index > 0) starts.push(match.index);
-      let at = match.index;
-      let chunk = 0;
-      for (const char of word) {
-        const size = charCells(char);
-        if (chunk > 0 && chunk + size > width) {
-          starts.push(at);
-          chunk = 0;
-        }
-        chunk += size;
-        at += char.length;
-      }
-      used = chunk;
-    } else {
-      starts.push(match.index);
-      used = cells(word);
-    }
-  }
-  return starts.map((start, i) => {
-    const row = text.slice(start, starts[i + 1] ?? text.length);
-    return [start, start + row.trimEnd().length];
-  });
-}
-
-// Lines of source shown above and below the marked lines, so a large flow isn't printed whole.
-const ERR_CONTEXT = 5;
-
-/**
- * Return one boxed source frame, or `null` when no line of `marks` is in `text`.
- *
- * The box shows the source from 5 lines above the first mark to 5 below the last, numbered, each
- * marked line flagged `❱`, and is titled `title:line[,line...]`.
- */
-function renderFrameBox(text: string, marks: readonly number[], title: string, out: Writer, env: Env): string | null {
-  const lines = splitLines(text);
-  const shown = [...new Set(marks)].filter((mark) => 1 <= mark && mark <= lines.length).sort((a, b) => a - b);
-  if (shown.length === 0) return null;
-  const start = Math.max(1, shown[0]! - ERR_CONTEXT);
-  const end = Math.min(lines.length, shown[shown.length - 1]! + ERR_CONTEXT);
-  const width = String(end).length;
-  const rows: [string, string][] = [];
-  for (let line = start; line <= end; line++) {
-    const marked = shown.includes(line);
-    const gutter = `${marked ? "❱" : " "} ${String(line).padStart(width)} `;
-    const code = lines[line - 1]!;
-    rows.push([gutter + code, paint(gutter, marked ? "red bold" : "dim", out, env) + code]);
-  }
-  return box(rows, "red", out, env, `${title}:${shown.join(",")}`);
-}
-
-/**
- * Write `diag` to `out`: each frame, outermost first, then the message, then the notes.
- *
- * A frame is boxed around the lines its range covers (`SourceRange.coveredLines`), or shown as
- * its label when none is in its text; its note follows it. Several frames are headed `source
- * locations:`. A diagnostic without frames prints only its message.
- */
-export async function renderDiagnostic(diag: Diagnostic, out: Writer, env: Env): Promise<void> {
-  const parts: string[] = [];
-  if (diag.frames.length > 1) parts.push(paint("source locations:", "red bold", out, env));
-  for (const frame of diag.frames) {
-    const framed = renderFrameBox(frame.text, frame.range.coveredLines(frame.text), frame.label, out, env);
-    parts.push(framed ?? paint(frame.label, "red bold", out, env));
-    if (frame.note !== null) parts.push(paint(`  ↳ ${frame.note}`, "yellow", out, env));
-  }
-  parts.push(paint(diag.message, "red", out, env));
-  for (const note of diag.notes) parts.push(paint(`  ↳ ${note}`, "yellow", out, env));
-  await out.write(`${parts.join("\n")}\n`);
-}
-
-/** A diagnostic in the `yian.cli.v1` form. */
-export interface DiagnosticJson {
-  code: string;
-  message: string;
-  frames?: { label: string; range: [bigint, bigint, bigint, bigint]; note?: string }[];
-  notes?: string[];
-}
-
-/**
- * Return `diag` in the `yian.cli.v1` diagnostic form.
- *
- * A frame's range is `[startLine, startCol, endLine, endCol]`, 1-based with an exclusive end
- * column, as ints (`bigint`s, so `printJson` writes them without `.0`). `frames`, `notes` and a
- * frame's `note` are left out when empty.
- */
-export function diagnosticJson(diag: Diagnostic): DiagnosticJson {
-  const document: DiagnosticJson = { code: diag.code, message: diag.message };
-  if (diag.frames.length > 0) {
-    document.frames = diag.frames.map(({ label, range, note }) => ({
-      label,
-      range: [BigInt(range.startLine), BigInt(range.startCol), BigInt(range.endLine), BigInt(range.endCol)],
-      ...(note ? { note } : {}),
-    }));
-  }
-  if (diag.notes.length > 0) document.notes = [...diag.notes];
-  return document;
-}
-
-/** Return `text`, a stack or captured traceback, in a box titled `traceback`, ending in a newline. */
-function tracebackBox(text: string, out: Writer, env: Env): string {
-  const lines = splitLines(text.trimEnd());
-  const rows = lines.map((line) => [line, paint(line, "dim", out, env)] as const);
-  return `${box(rows, "red", out, env, "traceback")}\n`;
-}
 
 /**
  * Write a failed run's diagnostic to `out` and return it: the flow's `diagnose` of its failure,
@@ -355,22 +206,8 @@ export function flowBanner(
   }
   // Rich measures the box before it expands tabs, counting a tab as no cells.
   const widest = Math.max(...lines.map((spans) => cells(spans.map(([text]) => text.replaceAll("\t", "")).join(""))));
-  const inner = Math.max(1, Math.min(widest, (out.columns || 80) - 4));
-  const expanded = lines.map(expandTabs);
-  const plains = expanded.map((spans) => spans.map(([text]) => text).join(""));
-  const rows: [string, string][] = [];
-  expanded.forEach((spans, i) => {
-    for (const [start, end] of wrapLine(plains[i]!, inner)) {
-      let printed = "";
-      let at = 0;
-      for (const [text, style] of spans) {
-        const piece = text.slice(Math.max(0, start - at), Math.max(0, end - at));
-        if (piece) printed += style === null ? piece : paint(piece, style, out, env);
-        at += text.length;
-      }
-      rows.push([plains[i]!.slice(start, end), printed]);
-    }
-  });
+  const inner = Math.max(1, Math.min(widest, columnsOf(out) - 4));
+  const rows = lines.flatMap((spans) => wrapSpans(expandTabs(spans), inner, out, env));
   return `${box(rows, "cyan", out, env, "", inner)}\n`;
 }
 
@@ -386,16 +223,21 @@ const SPIN_MS = 80;
  * Per-node progress for `yian run`, drawn on stderr as the engine streams node events.
  *
  * A running node shows a spinner line, then a green `✓ <node>` on success (`✓ <node> → <handle>`
- * for a router) or a red `✗ <node>` with the error on the next line on failure. With `verbose`
- * each node's output follows its check. Several nodes can run at once (a fan-out), so there is
- * one spinner line per running node. On a TTY the spinners are redrawn every 80 ms and each
- * finished line is printed over them; off a TTY only the finished lines are printed.
+ * for a router) or a red `✗ <node>` with the error on the next line on failure. Each line ends
+ * with the time since that node started (`elapsedTag`, on the `now` clock), counting up on a
+ * spinner and frozen on the finished line; a node whose start wasn't seen has none. With
+ * `verbose` each node's output follows its check. Several nodes can run at once (a fan-out), so
+ * there is one spinner line per running node. On a TTY the spinners are redrawn every 80 ms and
+ * each finished line is printed over them; off a TTY only the finished lines are printed. Outputs,
+ * failure messages and warnings go through `forTerminal`.
  */
 export class ProgressReporter {
   readonly #out: Writer;
   readonly #verbose: boolean;
   readonly #env: Env;
-  readonly #running = new Set<string>();
+  readonly #now: () => number;
+  // Each running node's start time on `#now`.
+  readonly #running = new Map<string, number>();
   // Warning lines raised while paused, printed on `resume` or `stop`.
   readonly #held: string[] = [];
   #paused = false;
@@ -404,10 +246,12 @@ export class ProgressReporter {
   #drawn = 0;
   #timer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(out: Writer, options: { verbose: boolean; env: Env }) {
+  constructor(out: Writer, options: { verbose: boolean; env: Env; now?: () => number }) {
     this.#out = out;
     this.#verbose = options.verbose;
     this.#env = options.env;
+    // A monotonic clock, so a wall-clock change mid-run doesn't skew a duration.
+    this.#now = options.now ?? (() => performance.now());
   }
 
   /** Fold one engine event into the display; boundary nodes and other events are ignored. */
@@ -421,32 +265,35 @@ export class ProgressReporter {
     const style = (text: string, s: Style) => paint(text, s, this.#out, this.#env);
     switch (event.type) {
       case "NodeStarted":
-        this.#running.add(event.nodeId);
+        this.#running.set(event.nodeId, this.#now());
         break;
       case "NodeSucceeded": {
-        this.#running.delete(event.nodeId);
-        const lines = [style(`✓ ${event.nodeId}`, "green")];
+        const lines = [style(endedNodeText(event.nodeId, this.#finish(event.nodeId)), "green")];
         if (this.#verbose) {
-          const bodyLines = splitLines(writeAsText(event.output as Value));
+          const bodyLines = splitLines(forTerminal(writeAsText(event.output as Value), this.#out));
           for (const line of bodyLines.length > 0 ? bodyLines : [""]) lines.push(style(`    ${line}`, "dim"));
         }
         this.#print(lines.join("\n"));
         break;
       }
-      case "NodeRouted":
+      case "NodeRouted": {
         // A router (CASE) produces no value: it selected an out-edge handle.
-        this.#running.delete(event.nodeId);
-        this.#print(style(`✓ ${event.nodeId} → ${event.handle}`, "green"));
+        const took = this.#finish(event.nodeId);
+        this.#print(style(endedNodeText(event.nodeId, took, event.handle), "green"));
         break;
+      }
       case "NodeExpanded":
         // A spawner grew the graph instead of returning a value; the spliced fragment's terminal
         // commits it, so it gets no line, only its spinner cleared.
         this.#running.delete(event.nodeId);
         break;
-      case "NodeFailed":
-        if (nodeId !== null) this.#running.delete(nodeId);
-        this.#print(`${style(`✗ ${nodeId}`, "red bold")}\n${style(`    ${event.failure.message}`, "red")}`);
+      case "NodeFailed": {
+        const took = nodeId === null ? "" : this.#finish(nodeId);
+        const message = forTerminal(event.failure.message, this.#out);
+        const head = style(failedNodeText(String(nodeId), took), "red bold");
+        this.#print(`${head}\n${style(`    ${message}`, "red")}`);
         break;
+      }
       default:
         return;
     }
@@ -458,7 +305,7 @@ export class ProgressReporter {
    * `resume` or `stop`, so it can't land inside the prompt that has the terminal.
    */
   warn(message: string): void {
-    const line = paint(`warning: ${message}`, "yellow", this.#out, this.#env);
+    const line = paint(`warning: ${forTerminal(message, this.#out)}`, "yellow", this.#out, this.#env);
     if (this.#paused) {
       this.#held.push(line);
       return;
@@ -487,6 +334,13 @@ export class ProgressReporter {
     this.#sync();
   }
 
+  /** Forget `nodeId` as running; return ` <elapsed>` since its start, or "" when none was seen. */
+  #finish(nodeId: string): string {
+    const start = this.#running.get(nodeId);
+    this.#running.delete(nodeId);
+    return start === undefined ? "" : ` ${elapsedTag(this.#now() - start)}`;
+  }
+
   /** Print the warning lines held while paused. */
   #flushHeld(): void {
     for (const line of this.#held.splice(0)) this.#print(line);
@@ -513,10 +367,16 @@ export class ProgressReporter {
   #draw(): void {
     const columns = this.#out.columns;
     const frame = SPINNER.charAt(this.#frame);
-    const lines = [...this.#running].map((nodeId) => {
-      // A line wider than the terminal would wrap, and the erase would miss its first part.
-      const fitted = columns === undefined ? nodeId : [...nodeId].slice(0, Math.max(0, columns - 3)).join("");
-      return `${frame} ${paint(fitted, "cyan", this.#out, this.#env)}`;
+    const now = this.#now();
+    const lines = [...this.#running].map(([nodeId, start]) => {
+      const chars = [...nodeId];
+      const tag = ` ${elapsedTag(now - start)}`;
+      // A line wider than the terminal would wrap, and the erase would miss its first part: the
+      // elapsed time goes whole, then the node id is cut.
+      const width = columns === undefined ? Number.POSITIVE_INFINITY : Math.max(0, columns - 3);
+      const fits = chars.length + tag.length <= width;
+      const id = paint(chars.slice(0, width).join(""), "cyan", this.#out, this.#env);
+      return `${frame} ${id}${fits ? tag : ""}`;
     });
     this.#write(this.#erase() + lines.join("\n"));
     this.#drawn = lines.length;
@@ -619,6 +479,29 @@ export function mergeInputs(inputs: string | undefined, inputValues: readonly st
 export const INPUTS_HINT = "Invalid value for '--input' / '--inputs'";
 
 /**
+ * @internal Check that each name in `supplied` is one of `decls`' inputs that take a value at the
+ * start; an inbox input takes events through `send`, so a value for one is refused too.
+ *
+ * @throws {UsageError} For a name of an inbox input, or one no input has.
+ */
+export function checkSuppliedInputs(decls: readonly Parameter[], supplied: Readonly<Record<string, unknown>>): void {
+  // An inbox takes events through `send`, never a value at the start.
+  const isInbox = (decl: Parameter) => isInboxType(decl.contract?.type ?? null);
+  const inbox = decls.filter((decl) => isInbox(decl) && Object.hasOwn(supplied, decl.name)).map((decl) => decl.name);
+  if (inbox.length > 0) {
+    const name = JSON.stringify(inbox.sort(compareCodeUnits)[0]);
+    throw new UsageError(`${INPUTS_HINT}: input ${name} is an inbox; it takes messages through send, not a value`);
+  }
+  const values = decls.filter((decl) => !isInbox(decl));
+  try {
+    checkInputNames(values, supplied);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw new UsageError(`${INPUTS_HINT}: ${error.message}`);
+  }
+}
+
+/**
  * @internal Return the inputs to add to `supplied`: each declaration it lacks (key presence)
  * answered at `terminal`'s prompts, or `{}` without a terminal, leaving optional and defaulted
  * inputs absent for START. An inbox input is never asked for. Returns null when a prompt is
@@ -653,6 +536,14 @@ function lexists(path: string): boolean {
     return false;
   }
 }
+
+/**
+ * The id and file name of `yian chat`'s bundled flow: `yian run --resume` refuses a log whose
+ * recorded flow has both, as a chat of any yian version records it. A flow of your own resumes
+ * unless it has both too.
+ */
+export const CHAT_FLOW_ID = "yian-chat";
+export const CHAT_FLOW_FILE = "chat.yaml";
 
 /**
  * Reject a flow file or fresh-only options on `--resume`, a fresh run without a flow file, and a
@@ -698,32 +589,6 @@ export function validateRunLogOptions(options: {
   }
 }
 
-/**
- * Create the private CLI directories and the run's folder, and return a fresh run's default log
- * path, `~/.yian/runs/<runId>/log.jsonl` (`runLogPath` under `~/.yian/runs`), with `HOME` from
- * `env` (the process user's home directory, `os.homedir()`, when it is unset or empty).
- *
- * `~/.yian` and `~/.yian/runs` are created with mode 0700, or set to it if they exist; the run's
- * folder must be new and is created with mode 0700. The file itself is not created: the run log
- * creates it exclusively, owner-only.
- *
- * @throws {Error} When a directory can't be created or changed, a non-directory holds the path of
- *   `~/.yian` or `~/.yian/runs`, or anything holds the run folder's path.
- */
-export function defaultRunLogPath(runId: string, env: Env): string {
-  const runsDir = defaultRunsDir(env);
-  for (const dir of [dirname(runsDir), runsDir]) {
-    try {
-      mkdirSync(dir, { mode: 0o700 });
-    } catch (error) {
-      const taken = (error as NodeJS.ErrnoException).code === "EEXIST";
-      if (!taken || !statSync(dir, { throwIfNoEntry: false })?.isDirectory()) throw error;
-    }
-    chmodSync(dir, 0o700);
-  }
-  return runLogPath(runsDir, runId);
-}
-
 /** Remove the directory `dir` if it is empty; otherwise, or when that fails, leave it as it is. */
 export function removeEmptyDir(dir: string): void {
   try {
@@ -734,17 +599,13 @@ export function removeEmptyDir(dir: string): void {
   }
 }
 
-/** Return the CLI's runs folder, `~/.yian/runs`, with `HOME` from `env` as `defaultRunLogPath` reads it. */
-export function defaultRunsDir(env: Env): string {
-  return join(env("HOME") || homedir(), ".yian", "runs");
-}
-
 /**
- * Update the run index of `~/.yian/runs` (`updateRunIndex`, waiting at most a second for another
- * update) after the run in `log` ended, when `log` is a run folder's log there; a failed update is
- * a `warning:` line on stderr, and the logs it skips aren't reported (`yian status` reports them).
+ * @internal Update the run index of `~/.yian/runs` (`updateRunIndex`, waiting at most a second for
+ * another update) after the run in `log` ended, when `log` is a run folder's log there; a failed
+ * update is a `warning:` line on stderr, and the logs it skips aren't reported (`yian status`
+ * reports them).
  */
-async function indexRun(log: string, io: CliIo): Promise<void> {
+export async function indexRun(log: string, io: CliIo): Promise<void> {
   const runsDir = defaultRunsDir(io.env);
   // Real paths, so a log reached through a symlinked HOME still counts; a missing folder can't.
   const real = (path: string) => {
@@ -769,61 +630,11 @@ export async function reportRunLog(path: string, out: Writer, env: Env): Promise
   await out.write(`${paint(`Run log: ${path}`, "dim", out, env)}\n`);
 }
 
-const STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-
-/**
- * Abort `controller` with a `HostStop` on the first SIGINT, SIGTERM or SIGHUP `target` emits, and
- * return a disposer that removes the listeners.
- *
- * The first signal removes all three listeners, so a second one gets the default action and ends
- * the process. An already aborted controller keeps its reason.
- */
-export function stopOnSignals(
-  controller: AbortController,
-  target: Pick<NodeJS.EventEmitter, "on" | "off"> = process,
-): () => void {
-  const listeners = STOP_SIGNALS.map((signal) => {
-    const listener = () => {
-      dispose();
-      controller.abort(new HostStop(signal));
-    };
-    return [signal, listener] as const;
-  });
-  const dispose = () => {
-    for (const [signal, listener] of listeners) target.off(signal, listener);
-  };
-  for (const [signal, listener] of listeners) target.on(signal, listener);
-  return dispose;
-}
-
-/** @internal A flow or inputs file holding bytes that aren't UTF-8. */
-export class NotUtf8Error extends Error {
-  override name = "NotUtf8Error";
-}
-
-/**
- * @internal Read the flow or inputs file at `path` as strict UTF-8, a BOM kept, `\r\n` and `\r` read as `\n`.
- *
- * @throws {NotUtf8Error} When the file isn't UTF-8 text.
- * @throws {Error} A system error when the file can't be read.
- */
-export function readFlowText(path: string): string {
-  const bytes = readFileSync(path);
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
-  } catch (error) {
-    if (error instanceof TypeError) throw new NotUtf8Error(path);
-    throw error;
-  }
-  return text.replace(/\r\n?/g, "\n");
-}
-
 /**
  * The options `run` reads; an absent option is `undefined`, an absent repeatable one an empty list,
  * an absent flag `false`.
  */
-interface RunOptions {
+export interface RunOptions {
   inputValues: readonly string[];
   inputs?: string | undefined;
   log?: string | undefined;
@@ -857,11 +668,17 @@ export function isSetupError(error: unknown): error is Error {
     // the lock's.
     error instanceof FileLockError ||
     (error instanceof Error && error.cause instanceof FileLockError) ||
-    // The missing MCP SDK; any other plain `Error` is a bug and keeps its stack.
-    (error instanceof Error && error.message.startsWith("MCP servers need the MCP SDK")) ||
+    error instanceof McpSdkMissingError ||
     isSystemError(error)
   );
 }
+
+/**
+ * The lines `openMcpServers` adds below a server failure it throws: the ids no started server
+ * supplies and the other servers that failed. Kept apart from the error's `notes`, which a memory
+ * cleanup failure also writes to.
+ */
+const selectionNotes = new WeakMap<Error, readonly string[]>();
 
 /**
  * Return the tool ids `flow`'s static TOOL nodes call, which name single tools, and the ids its
@@ -878,6 +695,25 @@ function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
   return [toolIds, grants];
 }
 
+/** Return the tool ids a run supplies without MCP: the registered, built-in and skill tools. */
+function knownToolIds(): Set<string> {
+  return new Set([...Object.keys(registeredTools()), ...BUILTIN_TOOL_IDS, ASK_USER, LOAD_SKILL]);
+}
+
+/** Whether some id in `toolIds` or `grants` isn't in `known`. */
+function namesUnknown(toolIds: ReadonlySet<string>, grants: ReadonlySet<string>, known: ReadonlySet<string>): boolean {
+  return [...toolIds, ...grants].some((id) => !known.has(id));
+}
+
+/**
+ * @internal Whether a static TOOL node or AGENT grant of `flow` names a tool the run doesn't
+ * supply without MCP, so `run` reads the MCP configs.
+ */
+export function needsMcp(flow: ComposedFlow): boolean {
+  const [toolIds, grants] = mcpNeededNames(flow);
+  return namesUnknown(toolIds, grants, knownToolIds());
+}
+
 /**
  * @internal Run `body` with the configured MCP servers `flow` needs, and close every server in
  * `servers` when it settles.
@@ -886,12 +722,12 @@ function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
  * after its own checks and closes it. A TOOL node's id names one tool, never a group, so it counts
  * as unresolved unless it is in `known`; so does a grant that is neither in `known` nor a server
  * name. When some id is unresolved, the granted servers open here instead, and if their tools don't
- * supply every unresolved id, every other server opens to show its tools; those that list a
- * still-unresolved id stay open and the rest close before the run, so an unused server's tool
- * names can't collide with another's. A server opened only to show its tools that fails to start is
- * skipped with a `warn` call, unless the flow still lacks a needed id afterwards. Once `signal`
- * aborts, no further server opens, and only the servers already open are selected. Nothing is
- * selected when the flow needs no tools.
+ * supply every unresolved id, the other servers open in turn to show their tools until every id is
+ * supplied; those that list a still-unresolved id stay open and the rest close before the run, so
+ * an unused server's tool names can't collide with another's. A server opened only to show its
+ * tools that fails to start is skipped with a `warn` call, unless the flow still lacks a needed id
+ * afterwards. Once `signal` aborts, no further server opens, and only the servers already open are
+ * selected. Nothing is selected when the flow needs no tools.
  *
  * @param servers The configured servers by name, none of them open.
  * @param toolIds The tool ids the flow's static TOOL nodes call.
@@ -903,8 +739,8 @@ function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
  * @param body Called with the selected servers by name, as tool groups for the run.
  * @returns What `body` resolves to.
  * @throws {McpConnectError} A server the flow names doesn't start or lists bad tools; or a needed
- *   id is still missing and some server failed to start, the first failure then noting the missing
- *   ids and each other failure.
+ *   id is still missing and some server failed to start: the first failure, with lines naming the
+ *   missing ids and each other failure that `run` prints below it.
  * @throws {Error} A server must open here and the MCP SDK is not installed.
  * @throws The signal's reason, when it aborts while a server opens.
  */
@@ -944,21 +780,26 @@ export async function openMcpServers<T>(
           failed.push(error);
           continue;
         }
-        if (server.tools.some((tool) => unresolved.has(tool.name))) selected[name] = server;
-        else await server.close();
+        if (server.tools.some((tool) => unresolved.has(tool.name))) {
+          selected[name] = server;
+          // A later server that lists the same id would collide with this one.
+          for (const tool of server.tools) unresolved.delete(tool.name);
+        } else {
+          await server.close();
+        }
       }
       if (signal.aborted) {
         // The run throws the stop; only what is already open goes to it.
         selected = Object.fromEntries(Object.entries(selected).filter(([, server]) => server.isOpen));
       } else {
-        const supplied = toolNames(selected);
-        const missing = [...unresolved].filter((id) => !supplied.has(id)).sort(compareCodeUnits);
+        const missing = [...unresolved].sort(compareCodeUnits);
         if (missing.length > 0 && failed.length > 0) {
           // A server that failed to start may be the one that supplies them.
           const [error, ...others] = failed as [McpConnectError, ...McpConnectError[]];
-          const notes = ((error as { notes?: string[] }).notes ??= []);
-          notes.push(`the flow needs ${writeAsText(missing)}, which no started server supplies`);
-          for (const other of others) notes.push(other.message);
+          selectionNotes.set(error, [
+            `the flow needs ${writeAsText(missing)}, which no started server supplies`,
+            ...others.map((other) => other.message),
+          ]);
           throw error;
         }
       }
@@ -972,93 +813,8 @@ export async function openMcpServers<T>(
   }
 }
 
-/**
- * @internal Return the distinct provider and connection of every agent in `flow`, as a fresh run
- * would bind them.
- *
- * Snapshots the provider and model defaults and the connections once, resolves the `llm_config`
- * cascade as a fresh run would (`cliCfg` its outermost gap-fill layer, values read from `inputs`)
- * on a throwaway copy of the compiled flow, and binds each agent's connection as a fresh run would.
- * An agent whose config resolves only when it runs counts when its provider is already known, an
- * Azure one with the `base_url` its layers set; otherwise its key is checked at its model call.
- *
- * @param cliCfg The `--provider`/`--model` layer, possibly empty.
- * @param inputs The run's supplied inputs, before coercion; absent supplies none.
- * @returns The distinct `[provider, connection]` pairs in first-seen order, the connection `null`
- *   for a provider without one (`ollama`).
- * @throws {RangeError} If no layer gives an agent a provider and model, a supplied input can't be
- *   coerced, an input or a value the `llm_config` reads is invalid, or the saved logins or the
- *   default-provider environment are invalid.
- * @throws {TypeError} As `hostInputs` and `coerceInputs` do.
- */
-export function agentConnections(
-  flow: ComposedFlow,
-  cliCfg: Readonly<Record<string, string>>,
-  { inputs = {}, env }: { inputs?: Readonly<Record<string, unknown>>; env: Env },
-): [string, Connection | null][] {
-  const probe = copyGraph(flow.compiled);
-  const snapshot = connectionSnapshot({ env });
-  // Coerced as `runFlow` coerces, so an input selects the provider the run will use.
-  const coerced = coerceInputs(flow.input, hostInputs(flow.input, inputs));
-  const runLlm = runStartLlm(probe, coerced, { ...cliCfg }, snapshot);
-  // A call-time agent whose provider no value can change needs its key as surely as a static
-  // agent; finding out at its model call would waste the nodes before it.
-  const known = knownCallTimeProviders(probe, runLlm.callTime, snapshot.defaults);
-  const baseUrls = knownCallTimeBaseUrls(probe, runLlm.callTime);
-  const effective: Record<string, Record<string, unknown>> = { ...runLlm.effective };
-  for (const [path, provider] of known) {
-    if (!provider) continue;
-    effective[path] = { provider };
-    // A saved Azure key covers only its own resource, so the endpoint picks the key.
-    const baseUrl = baseUrls.get(path);
-    if (provider === "azure" && baseUrl !== undefined) effective[path]["base_url"] = baseUrl;
-  }
-  const seen: [string, Connection | null][] = [];
-  for (const config of Object.values(snapshot.bind(effective))) {
-    const connection = (config["_connection"] as Connection | undefined) ?? null;
-    const pair: [string, Connection | null] = [config["provider"] as string, connection];
-    if (!seen.some((other) => isDeepStrictEqual(other, pair))) seen.push(pair);
-  }
-  return seen;
-}
-
-/**
- * @internal Check every key `flow`'s agents will need before the run starts, prompting at
- * `context.terminal` if one is missing.
- *
- * Each distinct agent connection (`agentConnections`) is checked once: a saved login resolves its
- * stored credential without a prompt; any other agent needs its provider's key variable, through
- * `ensureEnvKey`, which skips keyless and unknown providers and an unset optional key. An Azure
- * agent whose `base_url` names another resource than the saved login needs `AZURE_OPENAI_API_KEY`.
- * A prompted key is `set` in `context.env`.
- *
- * @param cliCfg The `--provider`/`--model` layer, possibly empty.
- * @param supplied The run's supplied inputs, which `llm_config` values may read to select a
- *   provider.
- * @throws {MissingKeyError} As `ensureEnvKey` does, for a required key that is missing.
- * @throws {AuthError} If a saved login can't be resolved.
- * @throws {RangeError} As `agentConnections` and `connectionCredentials` do.
- * @throws {TypeError} As `agentConnections` does, for inputs that can't be coerced.
- * @throws {Error} A system error when a saved login can't be read.
- */
-export async function ensureProviderKeys(
-  flow: ComposedFlow,
-  cliCfg: Readonly<Record<string, string>>,
-  supplied: Readonly<Record<string, unknown>>,
-  context: PromptContext,
-): Promise<void> {
-  const env = context.env.read;
-  for (const [provider, connection] of agentConnections(flow, cliCfg, { inputs: supplied, env })) {
-    if (connection !== null && connection.source === "store") {
-      await connectionCredentials(connection, provider, { env });
-    } else {
-      await ensureEnvKey(provider, context);
-    }
-  }
-}
-
-/** A resumed run's recorded provider credentials are not available. */
-class ResumeKeyError extends Error {
+/** @internal A resumed run's recorded provider credentials are not available. */
+export class ResumeKeyError extends Error {
   override name = "ResumeKeyError";
 }
 
@@ -1211,6 +967,14 @@ async function checkResumeCredentials(
 }
 
 /**
+ * @internal Return the `checkLlmConfigs` a resume from the CLI passes to `advance`:
+ * `checkResumeCredentials` with `context`.
+ */
+export function resumeKeyCheck(context: ResumeKeyContext): LlmConfigsCheck {
+  return (effective, { callTimeHost }) => checkResumeCredentials(effective, callTimeHost, context);
+}
+
+/**
  * Return what `body` resolves to once `registry` has closed. When `body` throws, its error is
  * rethrown, with a close failure, and that failure's notes, appended to its `notes`; otherwise a
  * close failure is thrown.
@@ -1246,24 +1010,28 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * stderr, and closes them all when the run ends. Unless `quiet`, the flow's banner and per-node
  * progress go to stderr; the log path always does. A warning raised during the run prints as a
  * `warning:` line on stderr, above the spinners. On a TTY stdin, each input not supplied is
- * prompted for on stderr, and a cancelled prompt prints `run cancelled` and exits 1. `provider` and
- * `model`, those given, are the run's outermost `llmConfig` layer. Before the log exists, every key
- * the agents need is checked (`ensureProviderKeys`), prompted for on a TTY stdin; a missing one is
- * printed and exits 1. The log is `log`, else `~/.yian/runs/<run id>/log.jsonl` in a fresh folder.
- * A succeeded run prints its output on stdout, as text; a failed one prints its diagnostic on
- * stderr and exits 1. A run that ends waiting prints `run waiting: <node> (<tool>), ...` and the
- * `yian run --resume <log>` that continues it on stderr and exits 0; a cancelled one prints
- * `run cancelled` and exits 1 (`run.cancelled`). An inbox input is never asked for. A host failure (a bad option value, a log that can't be created, an MCP
- * server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr, an
- * `McpConnectError`'s notes on the lines below, and exits 1.
+ * prompted for on stderr, and a cancelled prompt prints `run cancelled` and exits 1. Off a terminal
+ * (stdin or stderr isn't a TTY), each prompt, an `ask` node's included, is written once, with no
+ * escape codes. `provider` and `model`, those given, are the run's outermost `llmConfig` layer.
+ * Before the log exists, every key the agents need is checked (`ensureProviderKeys`), prompted for
+ * on a TTY stdin; a missing one is printed and exits 1. The log is `log`, else
+ * `~/.yian/runs/<run id>/log.jsonl` in a fresh folder. A succeeded run prints its output on stdout,
+ * as text; a failed one prints its diagnostic on stderr and exits 1. A run that ends waiting prints
+ * `run waiting: <node> (<tool>), ...` and the `yian run --resume <log>` that continues it on stderr
+ * and exits 0; a cancelled one prints `run cancelled` and exits 1 (`run.cancelled`). An inbox input
+ * is never asked for or supplied. A host failure (a bad option value, a log that can't be created,
+ * an MCP server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr,
+ * and when no started server supplies a needed tool the missing ids and the other failed servers on
+ * the lines below, and exits 1.
  *
  * With `resume` there is no `flowPath`: the flow the log recorded is compiled (`loadRecordedFlow`),
  * never a file on disk, and its memories, skills and MCP config are read as for a fresh run; then
  * the log path is printed and `advance` recovers the run, with no input prompts, no
  * `provider`/`model` layer and no key preflight; `numWorkers` absent keeps the recorded count. A
- * log whose flow was built in code can't be resumed here and prints `resume failed: ...`.
- * Before anything is appended, the keys the recorded configs need are checked: a missing one is
- * prompted for on a TTY stdin; a missing, changed or declined key, a run whose key came from a
+ * log whose flow was built in code, or that `yian chat` wrote (its flow's id `CHAT_FLOW_ID` and
+ * its file `CHAT_FLOW_FILE`), can't be resumed here and prints `resume failed: ...`. Before
+ * anything is appended, the keys the recorded configs need are checked: a missing one is prompted
+ * for on a TTY stdin; a missing, changed or declined key, a run whose key came from a
  * host, or a saved login that no longer resolves prints its message and exits 1 (`run.setup`). A
  * host failure, an empty, damaged or locked log included, prints `resume failed: <message>`. A
  * finished log prints its recorded outcome and appends nothing.
@@ -1278,8 +1046,8 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * run prints `run cancelled` and exits 1 (`run.cancelled`). The first stop wins.
  *
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a memory flag value
- *   the flow can't take; for an input the flow doesn't declare; off a TTY, for missing required
- *   inputs.
+ *   the flow can't take; for an input the flow doesn't declare (or an inbox); off a TTY, for
+ *   missing required inputs.
  */
 export async function run(flowPath: string | undefined, options: RunOptions, io: CliIo): Promise<number> {
   const controller = new AbortController();
@@ -1298,6 +1066,8 @@ export async function run(flowPath: string | undefined, options: RunOptions, io:
   const terminal = new Terminal({
     input: io.stdin,
     output: io.stderrStream,
+    // Off a terminal, stderr gets the prompts once each, with no escape codes.
+    plain: !atTerminal(io),
     // Before the run, a stopped prompt answers null and the command reports it.
     onStop: (reason) => {
       if (!started.value) return;
@@ -1361,16 +1131,14 @@ async function startRun(
     await printStyled(io, message, "red");
     return fail(new Diagnostic({ code: "run.setup", message }));
   };
-  const writeStack = async (error: Error) => {
-    if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
-  };
+  const writeStack = (error: Error) => writeEngineTrace(error, engineTrace, io);
   const action = options.resume === undefined ? "run" : "resume";
-  // An McpConnectError's notes (the ids no started server supplies, the other servers that
-  // failed) follow its message; other notes, such as a cleanup failure, stay out of it.
+  // Only the MCP selection's lines follow the message; the error's own notes, such as a memory
+  // cleanup failure, stay out of it.
   const setupFailed = async (error: Error) => {
-    const notes = error instanceof McpConnectError ? ((error as { notes?: string[] }).notes ?? []) : [];
+    const notes = selectionNotes.get(error) ?? [];
     const label = paint(`${action} failed: `, "red bold", io.stderr, io.env);
-    const text = [error.message, ...notes].map((line) => paint(line, "red", io.stderr, io.env));
+    const text = [error.message, ...notes].map((line) => paint(forTerminal(line, io.stderr), "red", io.stderr, io.env));
     await io.stderr.write(`${label}${text.join("\n")}\n`);
     await writeStack(error);
     return fail(new Diagnostic({ code: "run.setup", message: error.message, notes }));
@@ -1395,28 +1163,16 @@ async function startRun(
         new RangeError("this run's flow was built in code; resume it with advance({log, flow})"),
       );
     }
+    // A chat's run needs the chat to type into it and to host its tools.
+    if (recorded.compiled.flowId === CHAT_FLOW_ID && recorded.source?.root === CHAT_FLOW_FILE) {
+      const message = "this run is a yian chat's; yian run --resume can't continue it";
+      return setupFailed(new RangeError(message));
+    }
     flow = recorded;
   } else {
-    const path = flowPath!;
-    let text: string;
-    try {
-      text = readFlowText(path);
-    } catch (error) {
-      if (!(error instanceof NotUtf8Error)) throw error;
-      const message = `can't read ${path}: not UTF-8 text`;
-      await printStyled(io, message, "red");
-      return fail(new Diagnostic({ code: "compose.load", message }));
-    }
-    try {
-      const loading = { searchPaths: [dirname(path)], sourceLabel: basename(path), env: io.env };
-      flow = await loadFlow(text, loading);
-    } catch (error) {
-      if (!(error instanceof LoadError)) throw error;
-      // Where in the `.yaml` the flow broke, not the engine's internals, unless asked for.
-      await renderDiagnostic(error.diagnostic, io.stderr, io.env);
-      await writeStack(error);
-      return fail(error.diagnostic);
-    }
+    const loaded = await loadFlowFile(flowPath!, io, { engineTrace });
+    if (loaded instanceof Diagnostic) return fail(loaded);
+    flow = loaded;
   }
 
   const commandEnv = new CommandEnv(io.env);
@@ -1448,10 +1204,10 @@ async function startRun(
       // MCP configs are read only when the flow needs a tool yian doesn't already have, so a
       // broken config file can't block flows that never use MCP. The servers stay unopened here;
       // `openMcpServers` selects the ones the flow needs just before the run.
-      const known = new Set([...Object.keys(registeredTools()), ...BUILTIN_TOOL_IDS, ASK_USER, LOAD_SKILL]);
+      const known = knownToolIds();
       const [toolIds, grants] = mcpNeededNames(flow);
       let servers: Record<string, McpServer> = {};
-      if ([...toolIds, ...grants].some((id) => !known.has(id))) {
+      if (namesUnknown(toolIds, grants, known)) {
         const user = userMcpConfig(commandEnv.read);
         const paths = [...(statOrNull(user)?.isFile() ? [user] : []), ...options.mcpConfig];
         try {
@@ -1508,8 +1264,7 @@ async function startRun(
           terminal: io.stdin.isTTY === true ? terminal : null,
           signal: controller.signal,
         };
-        const checkLlmConfigs: LlmConfigsCheck = (effective, { callTimeHost }) =>
-          checkResumeCredentials(effective, callTimeHost, keyContext);
+        const checkLlmConfigs = resumeKeyCheck(keyContext);
         return startLogged(log, (tools) =>
           advance({
             log,
@@ -1526,12 +1281,7 @@ async function startRun(
       }
       const supplied = mergeInputs(options.inputs, options.inputValues);
       // Before prompting, so a typo'd name fails instead of prompting for the real one.
-      try {
-        checkInputNames(flow.input, supplied);
-      } catch (error) {
-        if (!(error instanceof RangeError)) throw error;
-        throw new UsageError(`${INPUTS_HINT}: ${error.message}`);
-      }
+      checkSuppliedInputs(flow.input, supplied);
       // A signal during the load stops the command before it prompts.
       controller.signal.throwIfAborted();
       const prompter = io.stdin.isTTY === true ? terminal : null;
@@ -1541,23 +1291,16 @@ async function startRun(
       if (gathered === null) return cancelled();
       Object.assign(supplied, gathered);
 
-      // The flags supply the outermost cascade layer (fill the gap), not an override: an agent's
-      // own llm_config and the flow's still win.
-      const cliCfg: Record<string, string> = {};
-      if (options.provider) cliCfg["provider"] = options.provider;
-      if (options.model) cliCfg["model"] = options.model;
+      const cliCfg = cliLayer(options);
       // Any required key is asked for before the run creates its log.
-      try {
-        await ensureProviderKeys(flow, cliCfg, supplied, { env: commandEnv, terminal: prompter });
-      } catch (error) {
-        // A key prompt the stop closed is the stop, not a missing key.
-        controller.signal.throwIfAborted();
-        if (!(error instanceof MissingKeyError || error instanceof AuthError)) throw error;
-        return refused(error.message);
-      }
+      const keyRefusal = await preflightKeys(flow, cliCfg, supplied, io, {
+        env: commandEnv,
+        terminal: prompter,
+        signal: controller.signal,
+      });
+      if (keyRefusal !== null) return fail(keyRefusal);
 
-      const runId = defaultRunId();
-      const log = options.log ?? defaultRunLogPath(runId, io.env);
+      const { runId, path: log, runDir } = freshLog(options.log, io.env);
       return startLogged(
         log,
         (tools) =>
@@ -1573,7 +1316,7 @@ async function startRun(
             env: commandEnv.read,
             signal: controller.signal,
           }),
-        options.log === undefined ? dirname(log) : null,
+        runDir,
       );
     });
   } catch (error) {
@@ -1593,8 +1336,8 @@ async function startRun(
 
   if (result.status === "succeeded") {
     if (json) await printJson({ status: "succeeded", output: jsonValue(result.output) }, io.stdout);
-    // A string prints as is; any other value in yian's text form.
-    else await io.stdout.write(`${writeAsText(result.output as Value)}\n`);
+    // A string prints as is, any other value in yian's text form; a TTY gets it through forTerminal.
+    else await io.stdout.write(`${forTerminal(writeAsText(result.output as Value), io.stdout)}\n`);
     return 0;
   }
   if (result.status === "waiting") {
@@ -1630,90 +1373,7 @@ export function waitingDocument(result: RunResult): Record<string, JsonValue> {
 /** @internal Return the text a waiting result prints on stderr: what it waits on and how to go on. */
 export function waitingText(result: RunResult): string {
   const waits = result.waits.map((wait) => `${wait.node} (${wait.tool})`).join(", ");
-  return `run waiting: ${waits}\ncontinue with: yian run --resume ${result.log}\n`;
-}
-
-/**
- * Return `path` resolved without requiring it to exist (the real path of its longest existing
- * prefix, with the rest appended), except that a symlink loop throws its `ELOOP` system error.
- */
-function resolveFlowPath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch (error) {
-    if (!isSystemError(error) || error.code === "ELOOP") throw error;
-    return resolvedPath(path);
-  }
-}
-
-/** Whether `shown`, a path relative to the root, leaves it. */
-function leavesRoot(shown: string): boolean {
-  return shown === ".." || shown.startsWith(`..${sep}`) || isAbsolute(shown);
-}
-
-/**
- * Load the flow at `path` from inside `root`, labelled with its path relative to `root`; its
- * `uses:` children load the same way, each ref only from `<importing file's dir>/<ref>.yaml`.
- * Every `./file.ts:fn` CODE reference must resolve inside `root` too.
- *
- * The loader puts the `uses:` alias frame on a child's `LoadError` and turns anything else a child
- * throws into a `compose.load` error there.
- *
- * @param root The resolved root directory.
- * @param loading The resolved paths of the flows importing this one.
- * @throws {LoadError} `compose.outside_root` for a flow outside `root`; `compose.load` for a flow
- *   whose YAML doesn't parse, that sets `system.paths`, or that doesn't load.
- * @throws {Error} A reference cycle.
- * @throws {NotUtf8Error} When the flow isn't UTF-8 text.
- * @throws {Error} A system error when the flow can't be read.
- */
-async function loadConfined(
-  root: string,
-  path: string,
-  loading: ReadonlySet<string>,
-  env: Env,
-): Promise<ComposedFlow> {
-  // Resolved paths are compared, so a symlinked root (/var -> /private/var on macOS) works.
-  const resolved = resolveFlowPath(path);
-  const shown = relative(root, resolved) || ".";
-  if (leavesRoot(shown)) {
-    const message = `${shown} is outside the root`;
-    throw new LoadError(new Diagnostic({ code: "compose.outside_root", message }));
-  }
-  if (loading.has(resolved)) throw new Error(`flow-reference cycle at ${shown}`);
-  const text = readFlowText(resolved);
-  const doc = parseSourceDocument(text, shown).root.value;
-  // The loader doesn't search `system.paths` when given a child resolver, so such a flow would
-  // load differently from `yian run`.
-  if (isRecord(doc) && isRecord(doc["system"]) && Object.hasOwn(doc["system"], "paths")) {
-    throw new LoadError(
-      new Diagnostic({
-        code: "compose.load",
-        message: "system.paths is not supported with --root; use a relative uses: path",
-      }),
-    );
-  }
-  const dir = dirname(resolved);
-  const importing = new Set([...loading, resolved]);
-  // Unlike the default file resolver, this keeps no reuse cache, so a child imported along several
-  // paths loads once per path; that is fine for a check.
-  const childResolver = async (ref: string, version: string | null): Promise<ComposedFlow> => {
-    const childPath = join(dir, `${ref}.yaml`);
-    // A missing child outside the root is reported as outside, by `loadConfined`.
-    const inside = !leavesRoot(relative(root, resolveFlowPath(childPath)));
-    if (inside && !statOrNull(childPath)?.isFile()) {
-      throw new Error(`flow ${reprText(ref)} not found: ${relative(root, childPath)}`);
-    }
-    const child = await loadConfined(root, childPath, importing, env);
-    if (version !== null && child.version !== version) {
-      const shownVersion = child.version === null ? "null" : reprText(child.version);
-      throw new Error(`${ref} is version ${shownVersion}, not ${reprText(version)}`);
-    }
-    return child;
-  };
-  // `CodeNode.check()` resolves a `./file.ts:fn` reference against `baseDir`, here and in a child,
-  // and refuses one outside `codeRoot`; a child is loaded here, so it gets the root too.
-  return loadFlow(text, { childResolver, sourceLabel: shown, baseDir: dir, codeRoot: root, env });
+  return `run waiting: ${waits}\ncontinue with: yian run --resume ${shellQuote(result.log!)}\n`;
 }
 
 /** A loaded flow's input in a `yian check` result. */
@@ -1858,13 +1518,16 @@ export async function status(log: string | undefined, { json }: { json: boolean 
  * Update the run index of `~/.yian/runs` (`updateRunIndex`) and list its rows (`readRunIndex`), by
  * start time; returns the exit code. A missing runs folder lists nothing.
  *
- * As text, a header and one line per run on stdout, in aligned columns: run id, status, start time
- * and flow file (`-` for a flow built in code); nothing when there are no runs. With `json`, one
- * document whose `runs` holds each row: `run_id`, `flow`, `status`, `started_at`, `ended_at`,
- * `parent_run_id`, `last_seq`, `result` (the run's output, `null` until it succeeded), the
- * token sums, and for a waiting run `ready` and `wake_at` (`false` and `null` otherwise). A log the update skips is a `warning:` line on stderr. An index that can't be
- * updated (another update held it too long, or it isn't a database) prints its message on stderr
- * and exits 1 (`run.setup`).
+ * As text, a header and one line per run on stdout, in aligned columns: run id, status
+ * (`unreadable at seq N` for a log yian can't read from seq N), start time and flow file (`-` for
+ * none, or a flow built in code); nothing when there are no runs. With `json`, one document whose
+ * `runs` holds each row: `run_id`, `flow`, `status`, `started_at`, `ended_at`, `parent_run_id`,
+ * `last_seq`, `result` (the run's output, `null` until it succeeded), the token sums, for a waiting
+ * run `ready` and `wake_at` (`false` and `null` otherwise), and `unreadable` (`seq` and `reason`,
+ * or `null`). A log the update can't read is a `warning:` line on stderr: once until it changes, or
+ * on every update for a file error such as no permission, which leaves the run's row as it was. An
+ * index that can't be updated (another update held it too long, or it isn't a database) prints its
+ * message on stderr and exits 1 (`run.setup`).
  */
 async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number> {
   const runsDir = defaultRunsDir(io.env);
@@ -1892,14 +1555,16 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
       started_at: row.startedAt,
       ended_at: row.endedAt,
       parent_run_id: row.parentRunId,
-      last_seq: BigInt(row.lastSeq),
+      last_seq: row.lastSeq === null ? null : BigInt(row.lastSeq),
       result: row.result === null ? null : parseJson(row.result, "codec"),
       input_tokens: BigInt(row.inputTokens),
       output_tokens: BigInt(row.outputTokens),
       cache_read_tokens: BigInt(row.cacheReadTokens),
+      cache_creation_tokens: BigInt(row.cacheCreationTokens),
       reasoning_tokens: BigInt(row.reasoningTokens),
       ready: row.ready,
       wake_at: row.wakeAt,
+      unreadable: row.unreadable === null ? null : { seq: BigInt(row.unreadable.seq), reason: row.unreadable.reason },
     }));
     await printJson({ runs }, io.stdout);
     return 0;
@@ -1907,7 +1572,12 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
   if (rows.length === 0) return 0;
   const table = [
     ["run id", "status", "started", "flow"],
-    ...rows.map((row) => [row.runId, row.status, row.startedAt, row.flow ?? "-"]),
+    ...rows.map((row) => [
+      row.runId,
+      row.unreadable === null ? row.status : `unreadable at seq ${row.unreadable.seq}`,
+      row.startedAt ?? "-",
+      row.flow ?? "-",
+    ]),
   ];
   const widths = [0, 1, 2].map((column) => Math.max(...table.map((cells) => cells[column]!.length)));
   const lines = table.map((cells) => cells.map((cell, column) => (column < 3 ? cell.padEnd(widths[column]!) : cell)).join("  "));

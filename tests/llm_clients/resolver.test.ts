@@ -39,8 +39,8 @@ import {
   legacyConnectionConfig,
   resolveModelConfig,
 } from "../../src/llm_clients/connection.ts";
-import { OPENAI_API_ENDPOINT } from "../../src/llm_clients/endpoints.ts";
-import { accountHash, chatModelFromConfig, prefersResponses, warnOnce } from "../../src/llm_clients/factory.ts";
+import { OPENAI_API_ENDPOINT, prefersResponses } from "../../src/llm_clients/endpoints.ts";
+import { accountHash, chatModelFromConfig, warnOnce } from "../../src/llm_clients/factory.ts";
 import { AnthropicMessagesBlock } from "../../src/llm_clients/provider_blocks.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import type { JsonObject, JsonValue } from "../../src/typesys/json.ts";
@@ -909,20 +909,20 @@ const CASES: Case[] = [
     expect: blockOnResponses("openrouter", "openai/gpt-5-codex"),
   },
   {
-    // A missing key fails at build, before the block check.
+    // The block is checked with the config (`checkModelConfig`), before the key is looked up.
     name: "openrouter name-routed model with a block and no key",
     config: { provider: "openrouter", model: "openai/gpt-5-codex", openrouter: { max_tokens: 64n } },
     env: {},
     golden: "openai_responses/openrouter_codex",
-    expect: missingKey("openrouter", "OPENROUTER_API_KEY"),
+    expect: blockOnResponses("openrouter", "openai/gpt-5-codex"),
   },
   {
-    // The SDK client raises a missing API version at build, before the block check.
+    // The block is checked with the config, before the API version is read.
     name: "azure name-routed deployment with a block and no OPENAI_API_VERSION",
     config: { ...AZURE, model: "gpt-5-codex", api_key: HOST_KEY, azure: { max_tokens: 100n } },
     env: {},
     golden: "openai_responses/azure_codex",
-    expect: AZURE_NO_VERSION,
+    expect: blockOnResponses("azure", "gpt-5-codex"),
   },
   {
     name: "vllm name-routed model with a block",

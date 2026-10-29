@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { expect, test } from "bun:test";
 
 import { cloneChild } from "../../src/compile/expand.ts";
-import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import type { CompiledFlow } from "../../src/compile/model.ts";
 import type { LoadError } from "../../src/compose/helpers/errors.ts";
@@ -357,7 +357,7 @@ test("a layer of only tagged literals is wired as a literal layer", () => {
   expect(flow.wiring.get("chat")!.has(LLM_CONFIG_KEY)).toBe(false);
   expect(flow.nodes.get("chat")!.reservedWiringKeys()).toEqual(new Set());
   expect(flow.flowLlmConfig).toEqual({ provider: "openai" });
-  const effective = resolveLlmCascade(flow, {}, { defaults: {} });
+  const effective = resolveRunLlm(flow, {}, { defaults: {} }).effective;
   expect(effective["chat"]!["provider"]).toBe("openai");
   expect(effective["chat"]!["model"]).toBe("gpt-x");
 });

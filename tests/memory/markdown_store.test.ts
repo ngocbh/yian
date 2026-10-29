@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -20,8 +20,10 @@ import {
   MarkdownVersionMismatch,
   markdownVersion,
 } from "../../src/memory/storage/markdown.ts";
-import { FileLockError } from "../../src/platform.ts";
+import { withEnv } from "../../src/defaults.ts";
+import { FileLockError, lockFile } from "../../src/platform.ts";
 import { type ExtendResult, readAndExtend, replay } from "./markdown_both_runtimes.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 /** The package root. */
 const ROOT = path.resolve(import.meta.dirname, "../..");
@@ -41,7 +43,7 @@ async function failure(fn: () => unknown): Promise<unknown> {
   throw new Error("expected a failure");
 }
 
-/** Assert `error` has a Node system error's shape (`isSystemError` in `sqlite.ts`). */
+/** Assert `error` has a Node system error's shape (`isSystemError` in `platform.ts`). */
 function expectSystemError(error: unknown): asserts error is NodeJS.ErrnoException {
   expect(error).toBeInstanceOf(Error);
   const { code, syscall, errno } = error as NodeJS.ErrnoException;
@@ -450,6 +452,13 @@ test("a written document is private", async () => {
   expect(fs.statSync(keptPath(dir, version)).mode & 0o777).toBe(0o600);
 });
 
+test("the write log and the versions folder are private", async () => {
+  const store = new FileMarkdownStore(path.join(dir, "ada.md"));
+  await store.write("# Ada\n", { baseVersion: markdownVersion(""), provenance: { feedback: "private feedback" } });
+  expect(fs.statSync(path.join(dir, ".ada.md.writes.jsonl")).mode & 0o777).toBe(0o600);
+  expect(fs.statSync(path.join(dir, ".ada.md.versions")).mode & 0o777).toBe(0o700);
+});
+
 test.each(["kept copy", "document"])(
   "a failed rename of the %s rejects the write, leaves no temporary file and releases the lock",
   async (failing) => {
@@ -474,6 +483,78 @@ test.each(["kept copy", "document"])(
   },
 );
 
+/**
+ * Run `fn` and return, in order, each rename (`rename <to>`), directory made (`mkdir <path>`) and
+ * fsync (`fsync <path>`) it does, paths relative to the test directory.
+ */
+async function fileEvents(fn: () => Promise<unknown>): Promise<string[]> {
+  const events: string[] = [];
+  const opened = new Map<number, string>();
+  const root = fs.realpathSync(dir);
+  const relative = (target: fs.PathLike) => path.relative(root, String(target)) || ".";
+  const { openSync, renameSync, mkdirSync, fsyncSync } = fs;
+  const spies = [
+    spyOn(fs, "openSync").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
+      const fd = (openSync as (...args: unknown[]) => number)(target, ...rest);
+      opened.set(fd, relative(target));
+      return fd;
+    }) as typeof fs.openSync),
+    spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      renameSync(from, to);
+      events.push(`rename ${relative(to)}`);
+    }),
+    spyOn(fs, "mkdirSync").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
+      const existed = fs.existsSync(target);
+      const first = (mkdirSync as (...args: unknown[]) => string | undefined)(target, ...rest);
+      if (!existed) events.push(`mkdir ${relative(target)}`);
+      return first;
+    }) as typeof fs.mkdirSync),
+    spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+      fsyncSync(fd);
+      // Temporary files are left out: only the directory syncs matter here.
+      const name = opened.get(fd)!;
+      if (!/\.[0-9a-f]{16}$/.test(name)) events.push(`fsync ${name}`);
+    }),
+  ];
+  try {
+    await fn();
+  } finally {
+    for (const spy of spies) spy.mockRestore();
+  }
+  return events;
+}
+
+test("every new entry's directory is synced before the call returns", async () => {
+  const store = new FileMarkdownStore(path.join(dir, "notes", "ada.md"), { createParent: true });
+  const empty = markdownVersion("");
+  const v1 = markdownVersion("# Ada\n");
+  const kept = (version: string) => path.join("notes", ".ada.md.versions", `${version.slice(7)}.md`);
+  expect(await fileEvents(() => store.read())).toEqual([
+    "mkdir notes",
+    "fsync .",
+    "mkdir notes/.ada.md.versions",
+    "fsync notes",
+    `rename ${kept(empty)}`,
+    "fsync notes/.ada.md.versions",
+  ]);
+  expect(await fileEvents(() => store.write("# Ada\n", { baseVersion: empty }))).toEqual([
+    `rename ${kept(v1)}`,
+    "fsync notes/.ada.md.versions",
+    "rename notes/ada.md",
+    "fsync notes",
+    "fsync notes/.ada.md.writes.jsonl",
+    "fsync notes",
+  ]);
+  // The write log exists now, so only the renames need their directories synced.
+  expect(await fileEvents(() => store.write("# Ada\nMore.\n", { baseVersion: v1 }))).toEqual([
+    `rename ${kept(markdownVersion("# Ada\nMore.\n"))}`,
+    "fsync notes/.ada.md.versions",
+    "rename notes/ada.md",
+    "fsync notes",
+    "fsync notes/.ada.md.writes.jsonl",
+  ]);
+});
+
 test("a lock path that isn't a file fails with a system error and writes nothing", async () => {
   fs.mkdirSync(path.join(dir, ".ada.md.lock"));
   const store = new FileMarkdownStore(path.join(dir, "ada.md"));
@@ -486,30 +567,56 @@ test("a lock path that isn't a file fails with a system error and writes nothing
   expect(fs.readdirSync(dir)).toEqual([".ada.md.lock"]);
 });
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/platform.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
+/** `env` setting only the markdown lock wait to `seconds`. */
+const lockTimeout = (seconds: string) => (name: string) =>
+  name === "YIAN_PROFILE_LOCK_TIMEOUT_SECONDS" ? seconds : undefined;
+
+test("a held lock fails a read or write with a system error once the wait passes its cap", async () => {
+  const store = new FileMarkdownStore(path.join(dir, "ada.md"));
+  const lock = lockFile(path.join(dir, ".ada.md.lock"));
   try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
+    for (const operation of [() => store.read(), () => store.write("x", { baseVersion: markdownVersion("") })]) {
+      const started = performance.now();
+      const error = await withEnv(lockTimeout("1"), () => failure(operation));
+      const waited = performance.now() - started;
+      expect(waited).toBeGreaterThanOrEqual(900);
+      expect(waited).toBeLessThan(3000);
+      expectSystemError(error);
+      expect([error.code, error.syscall]).toEqual(["EIO", "lock"]);
+      expect(error.message).toContain("timed out after 1000 ms");
+      expect((error.cause as FileLockError).reason).toBe("busy");
+    }
+    // A cap of 0 tries once.
+    const error = await withEnv(lockTimeout("0"), () => failure(() => store.read()));
+    expect((error as Error).message).toContain("timed out after 0 ms");
+  } finally {
+    lock.release();
   }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
+  expect(fs.readdirSync(dir)).toEqual([".ada.md.lock"]);
+});
+
+test("an abort while waiting for the lock rejects with its reason and writes nothing", async () => {
+  const store = new FileMarkdownStore(path.join(dir, "ada.md"));
+  const lock = lockFile(path.join(dir, ".ada.md.lock"));
+  try {
+    for (const operation of [
+      (signal: AbortSignal) => store.read(null, { signal }),
+      (signal: AbortSignal) => store.write("x", { baseVersion: markdownVersion(""), signal }),
+    ]) {
+      const controller = new AbortController();
+      const reason = new Error("stop");
+      setTimeout(() => controller.abort(reason), 50);
+      const started = performance.now();
+      expect(await failure(() => operation(controller.signal))).toBe(reason);
+      expect(performance.now() - started).toBeLessThan(3000);
+    }
+  } finally {
+    lock.release();
   }
-  for (const built of [BUILT, BUILT_SCENARIOS]) {
-    if (!fs.existsSync(built)) throw new Error(`${built} is missing; run bun run build first`);
-  }
-  return node;
-})();
+  expect(fs.readdirSync(dir)).toEqual([".ada.md.lock"]);
+});
+
+const NODE = testNode(BUILT, BUILT_SCENARIOS);
 
 describe.skipIf(!NODE)("the built markdown store on Node", () => {
   /**

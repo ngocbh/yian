@@ -3,13 +3,12 @@
 import { randomBytes } from "node:crypto";
 // The default import keeps calls patchable by test spies.
 import fs from "node:fs";
-import { userInfo } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 
 import { current, type Env, processEnv } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
-import { FileLockError, type FileLock, realScheduler, type Scheduler, waitForLock } from "../../platform.ts";
+import { FileLockError, type FileLock, homeDir, realScheduler, type Scheduler, waitForLock } from "../../platform.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { parseJson } from "../../typesys/json.ts";
 import { SUPPORTED_LLM_PROVIDERS } from "../config.ts";
@@ -263,7 +262,7 @@ export class AuthStore {
       lockTimeoutMs = 30_000,
       refreshMarginMs = 60_000,
     } = options;
-    const home = () => env("HOME") || userInfo().homedir;
+    const home = () => homeDir(env);
     let target = path ?? (env("YIAN_AUTH_FILE") || null);
     if (target === null) {
       target = join(env("XDG_CONFIG_HOME") || join(home(), ".config"), "yian", "auth.json");

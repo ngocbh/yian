@@ -18,8 +18,8 @@ import {
 } from "../../diagnostics.ts";
 import { jsTypeName } from "../../typesys/index.ts";
 import { type OccurrencePath, SourceAccessError } from "./common.ts";
-import { SourceCursor } from "./cursor.ts";
-import { SourceDocument } from "./document.ts";
+import type { SourceCursor } from "./cursor.ts";
+import type { SourceDocument } from "./document.ts";
 
 /** A deterministic semantic path local to one Compose catalog. */
 export type SourceSitePath = readonly (string | number)[];
@@ -80,31 +80,23 @@ export function encodeSitePath(path: SourceSitePath): string {
  * prefix can't overlap document-local keys, which always begin with `/`, so applying this
  * repeatedly composes namespaces without losing the boundary between aliases or nested keys.
  *
- * @throws TypeError when `alias` isn't text or `origin` isn't an `OriginRef`.
- * @throws RangeError when `alias` or the origin key is empty.
+ * @throws RangeError when `alias` is empty.
  */
 export function scopeOrigin(alias: string, origin: OriginRef): OriginRef {
-  if (typeof alias !== "string") throw new TypeError("origin scope alias must be text");
   if (alias === "") throw new RangeError("origin scope alias cannot be empty");
-  if (!(origin instanceof OriginRef)) throw new TypeError("origin scope requires an OriginRef");
-  const oldKey = new OriginRef(origin.key).key;
-  return new OriginRef(SCOPED_ORIGIN_PREFIX + encodeSitePath(["uses", alias, "origin", oldKey]));
+  return new OriginRef(SCOPED_ORIGIN_PREFIX + encodeSitePath(["uses", alias, "origin", origin.key]));
 }
 
 /**
  * Resolve one registered occurrence without copying or freezing its table: the concrete
  * frame, or null for an unknown site or one whose selected range is gone.
  *
- * @throws TypeError when `origin` isn't an `OriginRef`.
  * @throws SourceAccessError when a retained occurrence can't be replayed.
  */
 function resolveRegisteredSite(
   sites: ReadonlyMap<string, SourceSite>,
   origin: OriginRef,
 ): DiagnosticFrame | null {
-  if (!(origin instanceof OriginRef)) {
-    throw new TypeError("source catalog resolve requires an OriginRef");
-  }
   const site = sites.get(origin.key);
   if (site === undefined) return null;
 
@@ -165,29 +157,11 @@ export class SourceCatalog implements OriginResolver {
   readonly #sites: ReadonlyMap<string, SourceSite>;
 
   /**
-   * Create a catalog over a defensive copy of `sites`, origin key to physical source site.
-   *
-   * @throws RangeError for a key that isn't non-empty text.
-   * @throws TypeError for a value that isn't a source site.
+   * Create a catalog over `sites`, origin key to frozen physical source site. The catalog keeps
+   * the map, so the caller must not change it afterwards.
    */
   constructor(sites: ReadonlyMap<string, SourceSite> = new Map()) {
-    const copied = new Map<string, SourceSite>();
-    for (const [key, site] of sites) {
-      if (typeof key !== "string" || key === "") {
-        throw new RangeError("source catalog keys must be non-empty strings");
-      }
-      const candidate: unknown = site;
-      if (
-        typeof candidate !== "object" ||
-        candidate === null ||
-        !((candidate as { document?: unknown }).document instanceof SourceDocument)
-      ) {
-        throw new TypeError("source catalog values must be source sites");
-      }
-      // A site from outside the builder may still be mutable; the snapshot keeps its own.
-      copied.set(key, siteOf(site.document, site.occurrencePath, site.selector));
-    }
-    this.#sites = copied;
+    this.#sites = sites;
   }
 
   /**
@@ -195,7 +169,6 @@ export class SourceCatalog implements OriginResolver {
    * null when `origin` is unknown or its retained anchor no longer has a range. A scoped child
    * identity must first route back to its local identity through a `ResolverTable`.
    *
-   * @throws TypeError when `origin` isn't an `OriginRef`.
    * @throws SourceAccessError when the retained occurrence path can't be replayed.
    */
   resolve(origin: OriginRef): DiagnosticFrame | null {
@@ -232,7 +205,7 @@ export class SourceCatalogBuilder {
    * unlocated or points at the same occurrence. Projected cursors keep their explicitly
    * supplied physical backing.
    *
-   * @throws TypeError for an invalid path, cursor or anchor.
+   * @throws TypeError for an invalid path.
    * @throws RangeError for an empty path.
    * @throws SourceAccessError when `sitePath` is already registered.
    */
@@ -242,12 +215,6 @@ export class SourceCatalogBuilder {
     anchor: SiteAnchor = "value",
   ): OriginRef | null {
     const key = encodeSitePath(sitePath);
-    if (!(cursor instanceof SourceCursor)) {
-      throw new TypeError("source catalog registration requires a SourceCursor");
-    }
-    if (anchor !== "value" && anchor !== "key") {
-      throw new TypeError("source catalog anchor must be 'value' or 'key'");
-    }
     const document = cursor.document;
     const range = anchor === "value" ? cursor.range : cursor.keyRange;
     if (this.#sites.has(key)) {
@@ -266,7 +233,7 @@ export class SourceCatalogBuilder {
    * cursors and value-changing projections return null without reserving the path, so the
    * caller can register a whole-value fallback. A site keeps the index, not a coordinate.
    *
-   * @throws TypeError for an invalid path or cursor, or an index that isn't an integer.
+   * @throws TypeError for an invalid path.
    * @throws RangeError for an empty path.
    * @throws SourceAccessError for a negative or out-of-range index, or when `sitePath` is
    *   already registered.
@@ -277,12 +244,6 @@ export class SourceCatalogBuilder {
     index: number,
   ): OriginRef | null {
     const key = encodeSitePath(sitePath);
-    if (!(cursor instanceof SourceCursor)) {
-      throw new TypeError("source catalog registration requires a SourceCursor");
-    }
-    if (!Number.isInteger(index)) {
-      throw new TypeError("constructed line index must be an integer");
-    }
     if (index < 0) {
       throw new SourceAccessError("constructed line index must be non-negative", cursor.range);
     }
@@ -312,38 +273,15 @@ export class SourceCatalogBuilder {
    * This read seam serves a load failure that must show a site before the file is finalized.
    * It replays the already-parsed document and never copies the mutable table.
    *
-   * @throws TypeError when `origin` isn't an `OriginRef`.
    * @throws SourceAccessError when a retained occurrence can't be replayed.
    */
   resolveRegistered(origin: OriginRef): DiagnosticFrame | null {
     return resolveRegisteredSite(this.#sites, origin);
   }
 
-  /**
-   * Run `fn` as one construction attempt and return its result; when it throws, roll back
-   * its registrations and consumed tags, then rethrow.
-   *
-   * Callable compilation is success-cached and may be retried after an error, so a failed
-   * attempt must leave the catalog at the same insertion boundary as the cache. Nested
-   * transactions are savepoints; the builder is single-threaded during Compose loading.
-   */
-  transaction<T>(fn: () => T): T {
-    const checkpoint = this.#sites.size;
-    const consumed = new Set(this.consumedTags);
-    try {
-      return fn();
-    } catch (error) {
-      for (const key of [...this.#sites.keys()].slice(checkpoint)) this.#sites.delete(key);
-      // Readers hold the ledger itself, so it is restored in place.
-      for (const tag of this.consumedTags) {
-        if (!consumed.has(tag)) this.consumedTags.delete(tag);
-      }
-      throw error;
-    }
-  }
-
-  /** Return an immutable snapshot of all successful registrations. */
+  /** Return an immutable snapshot of all registrations so far. */
   freeze(): SourceCatalog {
-    return new SourceCatalog(this.#sites);
+    // The sites are frozen by `siteOf`; only the table needs its own copy.
+    return new SourceCatalog(new Map(this.#sites));
   }
 }

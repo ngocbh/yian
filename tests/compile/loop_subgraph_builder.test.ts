@@ -21,11 +21,6 @@ import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { childFlow } from "../helpers/run_state_fixtures.ts";
 
-/** Return an instance of `cls` holding `fields`, made without running its constructor. */
-function forged<T>(cls: abstract new (...args: never[]) => T, fields: object): T {
-  return Object.assign(Object.create(cls.prototype) as object, fields) as T;
-}
-
 /** Return the running driver `origin~k` over `child`, reading the child START's params. */
 function driver(origin: string, k: number, child: Flow): LoopNode {
   const d = new LoopNode(`${origin}~${k}`, {
@@ -43,7 +38,7 @@ function driver(origin: string, k: number, child: Flow): LoopNode {
 
 /** Return a valid zero-field loop body. */
 function emptyChild(): CompiledFlow {
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID, { params: [] })],
       [END_ID, EndNode.value(END_ID, { outputName: null })],
@@ -236,26 +231,3 @@ test("continue appends body iteration but driver keeps outer occurrence", () => 
   expect(fragment.nodes.get(d.id)!.memoryScope!.occurrencePath).toEqual([outer]);
 });
 
-test("continue revalidates supplied driver memory scope", () => {
-  const child = childFlow();
-  const d = driver("lp", 1, child);
-  const baseScope = new MemoryScope(["lp"]);
-  const occurrence = forged(MemoryOccurrenceSegment, {
-    kind: MemoryOccurrenceKind.MAP_ITEM,
-    staticPath: ["outer"],
-    index: false,
-  });
-  const forgedScope = forged(MemoryScope, {
-    staticPath: baseScope.staticPath,
-    memories: baseScope.memories,
-    occurrencePath: [occurrence],
-  });
-  d.memoryScope = forgedScope;
-
-  const grow = () => loopContinueSubgraph(child, "lp", { x: 1n }, 0, d, { memoryScope: baseScope });
-  expect(grow).toThrow(TypeError);
-  expect(grow).toThrow("index must be an integer");
-
-  expect(d.memoryScope).toBe(forgedScope);
-  expect([...child.nodes.values()].every((node) => node.memoryScope === null)).toBe(true);
-});

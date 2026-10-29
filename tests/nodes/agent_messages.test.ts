@@ -9,8 +9,8 @@ import {
   MediaPart, Message as ModelMessage, ReasoningPart, RefusalPart, replayRecord, TextPart, ToolCallPart, ToolResultPart,
 } from "../../src/llm/messages.ts";
 import {
-  checkConversation, checkMessage, checkModelConversation, ConversationError, fromModelMessage, type Message, messageSteps,
-  rebuildMessages, toModelMessage,
+  checkConversation, checkMessage, checkModelConversation, ConversationError, foldSteps, fromModelMessage, type Message, messageSteps,
+  type NumberedStep, rebuildMessages, steerValues, toModelMessage,
 } from "../../src/nodes/agent/messages.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
@@ -119,7 +119,7 @@ test("a Message and a list of them survive the run log's codec; checkMessage res
 describe("agreement with message.schema.json", () => {
   const SCHEMA = loadSchema("message.schema.json") as { properties: Record<string, unknown>; $defs: Record<string, { properties: Record<string, unknown> }> };
   const message = typeFor("Message", new Map());
-  const parts = message.fields!.get("parts")!.element!.variants!;
+  const parts = message.fields!.get("parts")!.element!.members!;
   const partFields = (tag: string) =>
     [...parts.find((p) => p.fields!.get("type")!.tags!.has(tag))!.fields!.keys()].sort();
 
@@ -306,6 +306,25 @@ describe("an AGENT's new messages", () => {
   const output = buildValue({ a: 1n });
   const answer = { role: "assistant", parts: [{ type: "text", text: '{"a":1}' }] };
 
+  test("foldSteps groups the steps into exchanges: the steers before a call, its attempts, the results after it by call id", () => {
+    const steer = { kind: "steer", seqs: [9n] } as JsonObject;
+    const all = [steer, ...steps, steer, steps[1]!, resultStep("c", "C"), { kind: "interrupted", by: 13n } as JsonObject];
+    const folded = foldSteps(all);
+    const ns = (numbered: readonly NumberedStep<JsonObject>[]) => numbered.map(({ n }) => n);
+    expect(folded.exchanges.map(({ steers, attempts, results }) => [ns(steers), ns(attempts), [...results].map(([id, { n }]) => [id, n])])).toEqual([
+      [[1], [3, 4], [["b", 5], ["a", 6]]],
+      [[], [7], []],
+      [[], [8], []],
+      // A result after retried attempts is still filed under the call before them.
+      [[], [9], [["c", 12]]],
+    ]);
+    // After the last call: the steer read for the next one and its retried attempt so far.
+    expect([ns(folded.open.steers), ns(folded.open.attempts), folded.open.results.size]).toEqual([[10], [11], 0]);
+    expect(folded.honored).toEqual({ n: 13, step: all[12]! });
+    // A result before any call answers nothing.
+    expect(foldSteps([resultStep("c", "C")])).toEqual({ exchanges: [], open: { steers: [], attempts: [], results: new Map() }, honored: null });
+  });
+
   test("messageSteps picks each chat reply that arrived, every tool result and the accepted structured call", () => {
     expect(messageSteps(steps)).toEqual([3, 4, 5, 6, 8]);
     expect(messageSteps(steps.slice(0, 6))).toEqual([3, 4, 5, 6]);
@@ -442,6 +461,12 @@ describe("an AGENT's new messages", () => {
 
   test("a steer step without its values is refused", () => {
     const bare = { kind: "steer", inbox: "notes", from: [1n] } as unknown as JsonObject;
-    expect(() => rebuildMessages([bare], null)).toThrow(new RangeError("a steer step without its values"));
+    expect(() => rebuildMessages([bare], null)).toThrow(new RangeError("a steer step without its values, which only the engine's copy of the step carries"));
+  });
+
+  test("steerValues reads a steer step's values and refuses a step without them", () => {
+    expect(steerValues({ kind: "steer", inbox: "notes", from: [1n], values: ["x"] })).toEqual(["x"]);
+    const bare = { kind: "steer", inbox: "notes", from: [1n], values: null };
+    expect(() => steerValues(bare)).toThrow(new RangeError("a steer step without its values, which only the engine's copy of the step carries"));
   });
 });

@@ -18,4 +18,4 @@ expect:
       message: 'defs entry ''body'': llm_config.project goes wherever the host''s api_key is sent; pass it with that key in the run''s llm_config, or save it with the login by `yian auth`, not in a flow file'
       frames:
       - label: flow.yaml
-        range: [5, 17, 5, 54]
+        range: [5, 45, 5, 53]

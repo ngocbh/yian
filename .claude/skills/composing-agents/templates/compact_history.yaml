@@ -27,7 +27,7 @@ defs:
   fold:                   # one model call: the old summary and the older turns give a new summary
     input: {summary: !str, older: !list(list(Message)), recent: !list(list(Message))}
     nodes:
-      summarize:          # never `reply`: `yian chat` prints any node named `reply`
+      summarize:          # never `reply`: `yian run`'s chat prints any node named `reply`
         kind: agent
         input: {summary: "${input.summary}", older: "${input.older}"}
         output: str

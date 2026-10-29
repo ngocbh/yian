@@ -1,0 +1,27 @@
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    big: !bool
+  nodes:
+    gate:
+      kind: case
+      cases:
+        - when: input.big
+          then: x
+      else: y
+    x: {kind: code, output: {a: str}, code: "return {a: 'b'}"}
+    y: {kind: code, output: {a: str}, code: "return {a: 'c'}"}
+  output:
+    b: ${gate.output.nope}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: |-
+        flow has unresolved references:
+          flow output from: reference ${gate.output.nope} reads unknown field 'nope' on record
+      frames:
+      - label: flow.yaml
+        range: [15, 3, 16, 1]

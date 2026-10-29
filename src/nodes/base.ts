@@ -20,6 +20,7 @@
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
+import { current } from "../defaults.ts";
 import { Failure, type FailureCode, OriginRef, reprText } from "../diagnostics.ts";
 import type {
   ModelCallFinished,
@@ -51,9 +52,10 @@ import type {
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { ToolSet } from "../tools/registry.ts";
-import type { JsonObject } from "../typesys/json.ts";
+import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
 import {
+  cutText,
   fromHost,
   isList,
   isRecord,
@@ -505,13 +507,13 @@ export function retainFailure(failure: Failure): Failure {
  */
 export class BackwardContext {
   /** The bound JSON input record, or `null` when no usable record was retained. */
-  readonly inputs: Readonly<Record<string, unknown>> | null;
+  readonly inputs: Readonly<JsonObject> | null;
   /** Authored input names this owner may address, including defaults. */
   readonly inputNames: readonly string[];
   /** Declared local variables; an empty inventory rejects all targets. */
   readonly variableNames: readonly string[];
   /** The recorded JSON output, when the forward invocation produced one. */
-  readonly output: unknown;
+  readonly output: JsonValue;
   /** The recorded forward failure, independent of backward's outcome. */
   readonly failure: Failure | null;
   /** The authored path and structured child position, when available. */
@@ -523,9 +525,9 @@ export class BackwardContext {
   /** The positive accepted node-start sequence, paired with the run id. */
   readonly nodeStartedSeq: number | null;
   /** Node-owned JSON material retained for backward. */
-  readonly nodeData: Readonly<Record<string, unknown>>;
+  readonly nodeData: Readonly<JsonObject>;
   /** Ordered JSON attribution accompanying feedback messages. */
-  readonly downstreamContext: readonly Readonly<Record<string, unknown>>[];
+  readonly downstreamContext: readonly Readonly<JsonObject>[];
 
   /**
    * Validate the invocation metadata and retain frozen copies of its values.
@@ -600,7 +602,7 @@ export class BackwardContext {
     this.inputs = copyBackwardValue(inputs, "inputs") as typeof this.inputs;
     this.inputNames = Object.freeze([...inputNames]);
     this.variableNames = Object.freeze([...variableNames]);
-    this.output = copyBackwardValue(output, "output");
+    this.output = copyBackwardValue(output, "output") as JsonValue;
     this.failure = failure;
     this.scope = scope;
     this.runId = runId;
@@ -666,8 +668,11 @@ export interface MaterialCaps {
   readonly toolSpecs: (ids: readonly string[]) => readonly ToolSpec[] | null;
   /** Builds the invocation's model to read its request settings off; never called. */
   readonly models: ModelAccess | null;
-  /** Recalls the memory sections against the run's recorded snapshots, as `NodeCaps` does. */
-  readonly openMemoryContext: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
+  /**
+   * Recalls the memory sections against the run's recorded snapshots, as `NodeCaps` does, from the
+   * rendered system prompt without the skill listing and the rendered prompt.
+   */
+  readonly openMemoryContext: (systemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
   /** The declared type of each of the node's locals, as `NodeCaps.localTypes` gives it. */
   readonly localTypes?: ReadonlyMap<string, Type | null>;
 }
@@ -740,7 +745,7 @@ export function projectStructuralFeedback(
     if (!Object.hasOwn(inputs, name) || !Object.hasOwn(paths, name)) continue;
     const path = paths[name]!;
     if (context.failure === null) {
-      let value = output;
+      let value: unknown = output;
       for (const part of path) {
         if (typeof part === "string" && isRecord(value) && Object.hasOwn(value, part)) value = value[part];
         else if (typeof part !== "string" && isList(value) && Number(part) < value.length) value = value[Number(part)];
@@ -817,14 +822,33 @@ export function markerMessage(original: unknown): string {
 }
 
 /**
+ * @internal Return a thrown value's `markerMessage` cut to `YIAN_MAX_FAILURE_CHARS` code points by
+ * `cutText`. Used for a failure's message, which the run log records.
+ */
+export function failureMessage(error: unknown): string {
+  return cutText(markerMessage(error), current().maxFailureChars);
+}
+
+/**
  * @internal Return an `Error`'s stack followed by its string `notes`, one per line, else `null`;
- * the notes in the text keep a cleanup note durable. Used
- * for a failure's traceback.
+ * the notes in the text keep a cleanup note durable. Used for a failure's traceback.
+ *
+ * The stack's header (the error's name and message, before its first `at` frame), its frames
+ * and each note are each cut to `YIAN_MAX_FAILURE_CHARS` code points by `cutText`, so a huge
+ * message can't push the frames and notes out.
  */
 export function tracebackText(error: unknown): string | null {
   if (!(error instanceof Error)) return null;
+  const cap = current().maxFailureChars;
   const notes: unknown = (error as { notes?: unknown }).notes;
-  const lines = [error.stack, ...(Array.isArray(notes) ? notes : [])].filter((line) => typeof line === "string");
+  const lines: string[] = [];
+  if (typeof error.stack === "string") {
+    const frames = /\n[ \t]+at /.exec(error.stack)?.index ?? error.stack.length;
+    lines.push(cutText(error.stack.slice(0, frames), cap) + cutText(error.stack.slice(frames), cap));
+  }
+  for (const note of Array.isArray(notes) ? notes : []) {
+    if (typeof note === "string") lines.push(cutText(note, cap));
+  }
   return lines.length > 0 ? lines.join("\n") : null;
 }
 
@@ -973,10 +997,11 @@ export interface NodeCaps {
     event: ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished | ReplayDegraded,
   ) => void;
   /**
-   * Opens the invocation's memory context once, from the visible base system prompt and the
-   * rendered prompt; supplied to a node that declares `needsMemoryContext`.
+   * Opens the invocation's memory context once, from the rendered system prompt (an AGENT's
+   * without its skill listing, so grants never change recall) and the rendered prompt; supplied to
+   * a node that declares `needsMemoryContext`.
    */
-  readonly openMemoryContext?: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
+  readonly openMemoryContext?: (systemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
   /**
    * Opens the node's steer inbox; supplied to a node declaring `readsSteerInbox` when the engine
    * supplies steps. Opening registers the node as reading `inbox` until its outcome commits.
@@ -1351,7 +1376,7 @@ export abstract class Node {
    * @throws TypeError for a node that doesn't produce messages.
    */
   rebuildMessages(
-    _steps: readonly Readonly<JsonObject>[],
+    _steps: readonly Readonly<ValueRecord>[],
     _output: TypedValue | null,
     _localTypes: ReadonlyMap<string, Type | null> | null = null,
   ): TypedValue {
@@ -1435,10 +1460,13 @@ export abstract class Node {
    *
    * Declared defaults are filled first, then node-owned setup is validated (including that every
    * assertion and kind predicate parses), the pre-asserts run against the bound record, `forward`
-   * runs, and the post-asserts check an `Output` against the inputs as bound. The promise
-   * resolves to exactly one `NodeResult` (`Output | Route | Grow | Pending`). Every failure rejects it, with the original
-   * error; the checks and the synchronous part of `forward` (up to its first `await`) still run
-   * before the promise is returned.
+   * runs, and the post-asserts check an `Output` against the inputs as bound. The promise resolves
+   * to exactly one `NodeResult` (`Output | Route | Grow | Pending`). Every failure rejects it, with
+   * the original error; the checks and the synchronous part of `forward` (up to its first `await`)
+   * still run before the promise is returned.
+   *
+   * The evaluator runs the same template through `runForEvaluator`, so a kind changes what it
+   * does through `forward`, never by overriding this.
    *
    * @param inputs The bound input record; the template fills defaults into a fresh copy.
    * @param caps The capabilities the node's traits ask for, passed to `forward`.
@@ -1539,9 +1567,9 @@ export abstract class Node {
    * Run the node as a pure function of its bound input record: the kind's body, which the `run`
    * template wraps.
    *
-   * Every concrete kind defines it; the evaluator drives `run`, which checks the assertions
-   * around this body exactly once. A kind that omits it gets this loud error (the setup check
-   * reports it first). The evaluator gives a body error the code the node's `exceptionCode`
+   * Every concrete kind defines it; the evaluator drives the `run` template, which checks the
+   * assertions around this body exactly once. A kind that omits it gets this loud error (the setup
+   * check reports it first). The evaluator gives a body error the code the node's `exceptionCode`
    * names (default `node.execute`).
    *
    * @param inputs The bound input record; the body may change it.
@@ -1616,10 +1644,13 @@ export abstract class Node {
   /**
    * Return what an invocation's `forward` renders for bound `inputs`, rendered again: the JSON
    * material backward reads beside `captureBackwardContext`'s, with the parts established before
-   * a render that fails. Pure: it renders with the node's authored fields and calls no model.
+   * a render the run refused the same way. Pure: it renders with the node's authored fields and
+   * calls no model.
    *
    * @param localTypes The declared type of each local, as `NodeCaps.localTypes` gives it.
    * @returns The render material, or `null` (the default) for a kind that renders nothing.
+   * @throws CapabilityFault when building the capture fails; any render error that isn't one of
+   *   the run's refusals (a fault), unchanged. The run failed the node on the same error.
    */
   renderCapture(
     inputs: Readonly<Record<string, unknown>>,

@@ -18,7 +18,6 @@ import {
   contractType,
   directReferencePath,
   itemContract,
-  outputContractPathError,
   projectOutputContract,
   referenceContract,
   type TypeFn,
@@ -29,13 +28,18 @@ import {
   elementType,
   ExpressionError,
   inferExprType,
-  parseCondition,
   type RefStep,
   splitReference,
   stepsText,
 } from "../../expr/expressions.ts";
 import { bindingKey, type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
-import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../nodes/contracts.ts";
+import {
+  isExactly,
+  type OutputContract,
+  outputContractFieldError,
+  sameOutputContract,
+  ValueContract,
+} from "../../nodes/contracts.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import {
   fileFieldType,
@@ -86,13 +90,13 @@ import { Binding, bindingSource } from "../../nodes/contracts.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
-import { LoadDiagnostics } from "../helpers/errors.ts";
+import { LoadDiagnostics, locatedError } from "../helpers/errors.ts";
 import { namedTypeLabel } from "../helpers/tags.ts";
 import { bindingProducers } from "../edges/producers.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
-import type { Narrowing } from "./narrowing.ts";
-import { ARITHMETIC, type SearchedWhen, type SkipModel, stringSites } from "./skips.ts";
-import { LocalInput, locatedError, type ResolveOrigin } from "./typed_bindings.ts";
+import { type Narrowing, parsedWhen } from "./narrowing.ts";
+import { ARITHMETIC, bindingSite, type SearchedWhen, type SkipModel, stringSites } from "./skips.ts";
+import { LocalInput, type ResolveOrigin } from "./typed_bindings.ts";
 
 /** The code of a nullable field-read load error. */
 export const NULLABLE_FIELD_READ = "expr.nullable_field_read";
@@ -136,7 +140,7 @@ export function isUntyped(typ: Type | null): boolean {
   return (
     typ === null ||
     typ.kind === ValueKind.ANY ||
-    (typ.kind === ValueKind.OBJECT && typ.fields === undefined && typ.variants === undefined)
+    (typ.kind === ValueKind.OBJECT && typ.fields === undefined && typ.members === undefined)
   );
 }
 
@@ -345,7 +349,7 @@ function walk(
       // The name checks report a field a typed value lacks; below an untyped value they stop.
       if (!guarded || !roots.untyped(read.root, fields)) return null;
       const ref = prefix + (step.optional ? "?." : ".") + step.name;
-      const names = [...(typ.fields?.keys() ?? []), ...(typ.variants ?? []).flatMap((m) => [...m.fields!.keys()])];
+      const names = [...(typ.fields?.keys() ?? []), ...(typ.members ?? []).flatMap((m) => [...m.fields!.keys()])];
       const label = narrowedTypeLabel(typ.replace({ nullable: false }), registry);
       return { message: narrowedReadMessage(ref, step.name, label, prefix, new Set(names)), code: "compose.load" };
     }
@@ -380,7 +384,7 @@ function provesBelow(env: Env, path: string): boolean {
  * and whether that is because it is `Optional`; `null` when `typ` has no such field.
  */
 function fieldRead(typ: Type, name: string): { type: Type | null; nullable: boolean; optional: boolean } | null {
-  if (typ.variants !== undefined) {
+  if (typ.members !== undefined) {
     const read = unionField(typ, name);
     if (read.kind === "absent") return null;
     if (read.kind === "read") {
@@ -631,6 +635,17 @@ export function rootBaseType(
   };
 }
 
+/**
+ * Return the first of `alternatives` when they all have one type, else `null`. Origins are not
+ * compared: a typed binding's declared and inferred alternatives differ only there.
+ */
+function sameTypeContract(alternatives: readonly OutputContract[]): OutputContract | null {
+  const first = alternatives[0];
+  if (first === undefined) return null;
+  const typ = contractType(first)!;
+  return alternatives.every((contract) => typeEquals(contractType(contract)!, typ)) ? first : null;
+}
+
 /** Return `contracts` without repeats, in order. */
 function distinct(contracts: readonly OutputContract[]): OutputContract[] {
   const kept: OutputContract[] = [];
@@ -677,7 +692,7 @@ export function narrows(
     const typ = projected.type;
     if (check instanceof NotNullCheck) {
       if (typ.nullable) return true;
-    } else if (typ.variants !== undefined && unionTagFields(typ).includes(check.field)) {
+    } else if (typ.members !== undefined && unionTagFields(typ).includes(check.field)) {
       return true;
     }
   }
@@ -715,7 +730,7 @@ export class ReadSite {
     ref: string,
     options: { partialUnionFields: boolean; unionRoot?: string | null },
   ): string | null {
-    return outputContractPathError(contract, fields, ref, {
+    return outputContractFieldError(contract, fields, ref, {
       partialUnionFields: options.partialUnionFields,
       unionRoot: this.spawner ? (options.unionRoot ?? null) : null,
       isinstanceHint: !this.spawner,
@@ -1069,7 +1084,11 @@ export function fieldReadErrors(
   } = options;
   const readRoots: ReadRoots = {
     contracts: (root) => roots.get(root) ?? (opaqueRoots.has(root) ? [null] : undefined),
-    baseContract: (root) => (roots.has(root) ? roots.get(root)![0] ?? null : opaqueRoots.has(root) ? null : undefined),
+    baseContract: (root) => {
+      const alternatives = roots.get(root);
+      if (alternatives === undefined) return opaqueRoots.has(root) ? null : undefined;
+      return sameTypeContract(alternatives);
+    },
     rootLength,
     nullable: (root) => nullableRoots.has(root),
     why,
@@ -1142,7 +1161,6 @@ export function checkFieldReads(
   const typeFn = level.typeFn ?? null;
   for (const [nodeId, wiring] of flowWiring) {
     const result = buildResults.get(nodeId) ?? null;
-    const reserved = result !== null ? result.node.reservedWiringKeys() : new Set<string>();
     // A desugared node (an adaptive composer, a lifted call) is named by its author-facing labels,
     // not by its generated id.
     const roots = poolRoots(level, nodeId, wiring, result !== null && result.fieldLabels.size > 0 ? null : nodeId);
@@ -1152,17 +1170,7 @@ export function checkFieldReads(
         const read = firstFieldReadError(text, roots, registry, typeFn);
         if (read === null) continue;
         const message = caseReadsAsWritten(read.message, String(text), level.caseSpellings ?? new Map());
-        let where = `node ${reprText(nodeId)} input ${reprText(param)}`;
-        let fallback: SourceRange | null = null;
-        if (result !== null) {
-          // A reserved key (`over`, `until`) is a kind field, not an input.
-          const isReserved = reserved.has(param);
-          const label = isReserved ? result.node.reservedKeyLabel(param) : result.node.wiringRefLabel(param);
-          const own = result.fieldRanges.get(siteKey(isReserved ? "field" : "input", param));
-          fallback = own ?? result.fieldRanges.get(siteKey("field", "inputs")) ?? result.nodeRange;
-          // A synthetic param's label may already end in a colon (`on:`); the message adds one.
-          where = result.siteName(nodeId, label.replace(/:+$/, ""));
-        }
+        const [where, fallback] = bindingSite(nodeId, param, result);
         throw locatedError(`${where}: ${message}`, site, fallback, resolveOrigin, diagnostics, { code: read.code });
       }
     }
@@ -1170,15 +1178,9 @@ export function checkFieldReads(
   for (const [caseId, whens] of level.searchedWhens ?? []) {
     const roots = poolRoots(level, caseId, flowWiring.get(caseId) ?? new Map());
     for (const [index, when, origin, range] of whens) {
-      if (typeof when !== "string") continue;
-      let tree: ExprNode;
-      try {
-        tree = parseCondition(when);
-      } catch (error) {
-        // The CASE build reports a malformed `when:`.
-        if (error instanceof ExpressionError) continue;
-        throw error;
-      }
+      // The CASE build reports a malformed `when:`.
+      const tree = parsedWhen(when);
+      if (tree === null) continue;
       const error = firstTreeError(tree, roots, registry, typeFn);
       if (error === null) continue;
       throw locatedError(
@@ -1254,14 +1256,9 @@ function loopPredicateError(
   if (!(node instanceof LoopNode) || node.predicate === null || node.predicateKind === "times") return null;
   const carried = node.outputContract;
   if (carried === null) return null;
-  let tree: ExprNode;
-  try {
-    tree = parseCondition(node.predicate);
-  } catch (error) {
-    // The LOOP build reports a malformed predicate.
-    if (error instanceof ExpressionError) return null;
-    throw error;
-  }
+  // The LOOP build reports a malformed predicate.
+  const tree = parsedWhen(node.predicate);
+  if (tree === null) return null;
   const field = (name: string) => projectOutputContract(carried, [name]);
   const roots: ReadRoots = {
     contracts: (name) => {
@@ -1368,9 +1365,7 @@ function localRoots(level: FieldReadLevel, nodeId: string, result: BuildResult):
     contracts: (local) => locals.get(local)?.alternatives,
     baseContract: (local) => {
       const alternatives = base.get(local)?.alternatives;
-      if (alternatives === undefined) return undefined;
-      const distinctOnes = distinct(alternatives);
-      return distinctOnes.length === 1 ? distinctOnes[0]! : null;
+      return alternatives === undefined ? undefined : sameTypeContract(alternatives);
     },
     rootLength: () => 1,
     nullable: (local) => skippedProducer(local) !== null,

@@ -68,7 +68,7 @@ describe("readTagType", () => {
     expect(rt("int").kind).toBe(ValueKind.INTEGER);
     expect(rt("Optional(str)").nullable).toBe(true);
     expect(rt("int(1..12)").bounds).toEqual([1n, 12n]);
-    expect(rt("Decision").variants).toBeTruthy();
+    expect(rt("Decision").members).toBeTruthy();
     expect(rt("list(Buy)").element?.fields).toBeTruthy();
   });
 
@@ -84,6 +84,13 @@ describe("readTagType", () => {
     ["Bye", "Did you mean `Buy`?"],
   ])("rejects %p with %p", (tag, fragment) => {
     expect(rejected(tag).message).toContain(fragment);
+  });
+
+  test("a paren inside a quoted Literal member is text", () => {
+    for (const tag of ["Literal('(')", "Literal(')')", 'Literal("((")']) {
+      expect(rt(tag).kind).toBe(ValueKind.STRING);
+    }
+    expect(rejected("Literal('('").message).toContain("ends at the first space");
   });
 
   test("an incomplete tag's message names the tag and the fix", () => {
@@ -435,8 +442,8 @@ describe("readTaggedValue", () => {
     }
   });
 
-  test.each(["x: {a: call(f)}\n", "x: {a: 'call(f, b=1)'}\n", "x: [' call(f)']\n"])(
-    "a nested call is an error: %p",
+  test.each(["x: {a: call(f)}\n", "x: [call (f, b=1)]\n"])(
+    "an unquoted nested call is an error: %p",
     (text) => {
       fails(
         text,
@@ -445,6 +452,14 @@ describe("readTaggedValue", () => {
       );
     },
   );
+
+  test("a quoted nested call is text", () => {
+    expect(read("x:\n  a: 'call(f, b=1)'\n  b: [\" call(f)\"]\n  c: |\n    call(f)\n").value).toEqual({
+      a: "call(f, b=1)",
+      b: [" call(f)"],
+      c: "call(f)\n",
+    });
+  });
 
   test("nested spans make a template with raw leaf strings", () => {
     const template = templateOf(read('x: {a: "${n.output}", b: [1, "${m.output}"], c: "$$x"}\n'));

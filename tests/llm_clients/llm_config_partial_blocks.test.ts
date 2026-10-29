@@ -6,7 +6,6 @@ import {
   BlockProblem,
   blockFieldAnnotation,
   locatedBlockProblems,
-  partialBlockProblems,
 } from "../../src/llm_clients/provider_blocks.ts";
 
 const SENTINEL = "sk-sentinel-5f0c2a9e";
@@ -16,9 +15,10 @@ class Value {}
 
 const isValue = (leaf: unknown): boolean => leaf instanceof Value;
 
-const problems = (block: string, tree: unknown): string[] => partialBlockProblems(block, tree, isValue);
+const problems = (block: string, tree: unknown): string[] =>
+  locatedBlockProblems(block, tree, isValue).map((problem) => problem.message);
 
-describe("partialBlockProblems", () => {
+describe("locatedBlockProblems", () => {
   test("a block of values and valid literals has no problems", () => {
     const tree = {
       max_tokens: new Value(),
@@ -240,7 +240,6 @@ describe("edge cases", () => {
 
   test("an unknown block throws RangeError even when the tree is a value", () => {
     expect(() => locatedBlockProblems("nope", new Value(), isValue)).toThrow(RangeError);
-    expect(() => partialBlockProblems("nope", new Value(), isValue)).toThrow(RangeError);
     expect(() => blockFieldAnnotation("nope", [], new Value())).toThrow(RangeError);
   });
 

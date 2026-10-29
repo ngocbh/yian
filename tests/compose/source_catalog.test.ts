@@ -126,22 +126,9 @@ describe("scoped origins", () => {
     );
   });
 
-  test.each([
-    ["an empty alias", "", new OriginRef("old"), RangeError],
-    ["a null alias", null, new OriginRef("old"), TypeError],
-    ["a text origin", "child", "old", TypeError],
-  ] as const)("reject %s", (_case, alias, origin, error) => {
-    expect(() =>
-      scopeOrigin(alias as unknown as string, origin as unknown as OriginRef),
-    ).toThrow(error);
-  });
-
-  test("revalidate the origin's key", () => {
-    // An origin that skipped its constructor's check.
-    const invalid = Object.assign(Object.create(OriginRef.prototype) as OriginRef, { key: "" });
-
-    expect(() => scopeOrigin("child", invalid)).toThrow(
-      new RangeError("origin key must be a non-empty string"),
+  test("reject an empty alias", () => {
+    expect(() => scopeOrigin("", new OriginRef("old"))).toThrow(
+      new RangeError("origin scope alias cannot be empty"),
     );
   });
 });
@@ -174,21 +161,6 @@ describe("registration", () => {
 
     expect(() => builder.register(["a"], valueCursor())).toThrow(
       "duplicate source catalog site ('a',)",
-    );
-  });
-
-  test("rejects invalid resolver and registration inputs", () => {
-    const cursor = valueCursor();
-    const builder = new SourceCatalogBuilder();
-
-    expect(() => builder.register(["value"], "not a cursor" as unknown as SourceCursor)).toThrow(
-      new TypeError("source catalog registration requires a SourceCursor"),
-    );
-    expect(() => builder.register(["value"], cursor, "line" as "value")).toThrow(
-      new TypeError("source catalog anchor must be 'value' or 'key'"),
-    );
-    expect(() => builder.freeze().resolve("not an origin" as unknown as OriginRef)).toThrow(
-      new TypeError("source catalog resolve requires an OriginRef"),
     );
   });
 });
@@ -363,52 +335,6 @@ describe("snapshots", () => {
     expect(secondSnapshot.has("not-an-origin")).toBe(false);
   });
 
-  test("a failed transaction releases registered site keys", () => {
-    // A retry may reuse every semantic path from a failed construction.
-    const cursor = valueCursor();
-    const builder = new SourceCatalogBuilder();
-
-    expect(() =>
-      builder.transaction(() => {
-        builder.register(["value"], cursor);
-        throw new Error("construction failed");
-      }),
-    ).toThrow("construction failed");
-
-    const retried = builder.register(["value"], cursor);
-
-    expect(builder.freeze().resolve(retried!)).not.toBeNull();
-  });
-
-  test("a failed transaction restores consumed tags", () => {
-    // Tags read by a failed construction are not counted as consumed.
-    const builder = new SourceCatalogBuilder();
-    const ledger = builder.consumedTags;
-    ledger.add(1);
-
-    expect(() =>
-      builder.transaction(() => {
-        ledger.add(2);
-        throw new Error("construction failed");
-      }),
-    ).toThrow("construction failed");
-
-    expect(builder.consumedTags).toBe(ledger);
-    expect([...ledger]).toEqual([1]);
-  });
-
-  test("a successful transaction returns the callback's result and keeps its work", () => {
-    const builder = new SourceCatalogBuilder();
-
-    const origin = builder.transaction(() => {
-      builder.consumedTags.add(3);
-      return builder.register(["value"], valueCursor());
-    });
-
-    expect(builder.freeze().has(origin)).toBe(true);
-    expect([...builder.consumedTags]).toEqual([3]);
-  });
-
   test("builder lookup reads current sites without freezing", () => {
     const document = SourceDocument.parse("first: one\nsecond: two\n", "flow.yaml");
     const builder = new SourceCatalogBuilder();
@@ -481,16 +407,6 @@ describe("constructed lines", () => {
     expect(builder.freeze().resolve(wholeOrigin!)).not.toBeNull();
   });
 
-  test.each([[true], ["0"], [1.5], [null]])("reject the non-integer index %p", (index) => {
-    expect(() =>
-      new SourceCatalogBuilder().registerConstructedLine(
-        ["value", "bad-index"],
-        literalCursor(),
-        index as unknown as number,
-      ),
-    ).toThrow(new TypeError("constructed line index must be an integer"));
-  });
-
   test.each([
     [-1, "constructed line index must be non-negative"],
     [2, "constructed line index 2 is out of range"],
@@ -515,26 +431,6 @@ describe("constructed lines", () => {
     expect(catalog.resolve(origin)).toBeNull();
   });
 
-  test("a snapshot keeps its own copy of a mutable input site", () => {
-    const document = SourceDocument.parse("value: |-\n  first\n  second\n");
-    const cursor = document.root.child("value");
-    const origin = new OriginRef("site");
-    const occurrencePath: { key?: string; index?: number }[] = cursor.path.map((step) => ({
-      ...step,
-    }));
-    const selector = { index: 1 };
-    const site = { document, occurrencePath: occurrencePath as OccurrencePath, selector };
-    const catalog = new SourceCatalog(new Map([[origin.key, site]]));
-    const before = catalog.resolve(origin);
-
-    occurrencePath[0]!.key = "missing";
-    occurrencePath.push({ index: 0 });
-    selector.index = 0;
-
-    expect(before!.range).toEqual(new SourceRange(3, 3, 3, 9));
-    expect(catalog.resolve(origin)).toEqual(before);
-  });
-
   test("duplicate detection crosses selector kinds", () => {
     const cursor = literalCursor();
     const folded = SourceDocument.parse("value: >-\n  first\n  second\n").root.child("value");
@@ -555,32 +451,6 @@ describe("constructed lines", () => {
     expect(() => wholeFirst.registerConstructedLine(sitePath, cursor, 0)).toThrow(
       SourceAccessError,
     );
-  });
-
-  test("transactions and freeze are stable", () => {
-    const cursor = literalCursor();
-    const builder = new SourceCatalogBuilder();
-    const firstOrigin = builder.registerConstructedLine(["line", 0], cursor, 0)!;
-    const firstSnapshot = builder.freeze();
-    let rolledBackOrigin = null as OriginRef | null;
-
-    expect(() =>
-      builder.transaction(() => {
-        rolledBackOrigin = builder.registerConstructedLine(["line", 1], cursor, 1);
-        throw new Error("construction failed");
-      }),
-    ).toThrow("construction failed");
-
-    expect(firstSnapshot.resolve(firstOrigin)).not.toBeNull();
-    expect(firstSnapshot.resolve(rolledBackOrigin!)).toBeNull();
-
-    const retriedOrigin = builder.registerConstructedLine(["line", 1], cursor, 1)!;
-    const secondSnapshot = builder.freeze();
-
-    expect(retriedOrigin).toEqual(rolledBackOrigin!);
-    expect(firstSnapshot.resolve(retriedOrigin)).toBeNull();
-    expect(secondSnapshot.resolve(firstOrigin)).not.toBeNull();
-    expect(secondSnapshot.resolve(retriedOrigin)).not.toBeNull();
   });
 
   test("alias occurrences replay the shared definition", () => {

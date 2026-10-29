@@ -100,6 +100,45 @@ test("writeRunFile refuses a missing run folder and makes nothing", () => {
   expect(existsSync(dir)).toBe(false);
 });
 
+test("writeRunFile refuses a media folder that is a symlink, writing nothing through it", () => {
+  const dir = folder();
+  const target = folder();
+  symlinkSync(target, join(dir, "media"));
+  expect(() => writeRunFile(dir, PNG, "image/png")).toThrow(
+    new Error(`the run's media folder ${join(dir, "media")} is not a folder; give the run a folder of its own`),
+  );
+  expect(readdirSync(target)).toEqual([]);
+});
+
+test("writeRunFile refuses a media folder others can write, writing nothing into it", () => {
+  const dir = folder();
+  const media = join(dir, "media");
+  mkdirSync(media);
+  fs.chmodSync(media, 0o777);
+  expect(() => writeRunFile(dir, PNG, "image/png")).toThrow(
+    new Error(
+      `the run's media folder ${media} is another user's or others can write it; give the run a folder of its own`,
+    ),
+  );
+  expect(readdirSync(media)).toEqual([]);
+});
+
+test("without getuid (Windows), writeRunFile skips the owner and mode checks but still refuses a symlink", () => {
+  const dir = folder();
+  mkdirSync(join(dir, "media"));
+  fs.chmodSync(join(dir, "media"), 0o777);
+  const linked = folder();
+  symlinkSync(folder(), join(linked, "media"));
+  const getuid = Object.getOwnPropertyDescriptor(process, "getuid")!;
+  Object.defineProperty(process, "getuid", { value: undefined, configurable: true, writable: true });
+  try {
+    expect(writeRunFile(dir, PNG, "image/png").name).toBe(`${sha256(PNG)}.png`);
+    expect(() => writeRunFile(linked, PNG, "image/png")).toThrow("is not a folder");
+  } finally {
+    Object.defineProperty(process, "getuid", getuid);
+  }
+});
+
 test("the extension follows the media type; an unknown one is .bin", () => {
   const dir = folder();
   const digest = sha256(PNG);

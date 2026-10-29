@@ -11,7 +11,7 @@
  * Never imports: compile, compose, the engine, run or the CLI.
  */
 
-import { addNote, compareCodeUnits, errorTypeName, OriginRef, reprText } from "../diagnostics.ts";
+import { addNote, errorTypeName, type OriginRef, reprText } from "../diagnostics.ts";
 import {
   isMemory,
   type JsonObject,
@@ -23,19 +23,19 @@ import {
   MemoryOperationError,
   MemoryOperationFailure,
   MemoryRecallError,
-  MemoryScope,
+  type MemoryScope,
   MemorySection,
   type MemorySession,
   MemorySetupError,
   MemorySnapshotEnvelope,
-  MemorySpec,
-  RecallContext,
+  type MemorySpec,
+  type RecallContext,
   sameMemorySnapshotEnvelope,
 } from "../memory/contracts.ts";
 import { isExactly, sameItems } from "../nodes/contracts.ts";
 import { isList } from "../typesys/values.ts";
 import { MemoryProposal } from "./contracts.ts";
-import { MemoryCommitRequestedRecord } from "./log.ts";
+import type { MemoryCommitRequestedRecord } from "./log.ts";
 
 /** Return one exact non-empty well-formed registry identity. */
 function requireName(value: unknown, name: string): string {
@@ -43,41 +43,6 @@ function requireName(value: unknown, name: string): string {
   if (value === "") throw new RangeError(`${name} must be non-empty`);
   if (!value.isWellFormed()) throw new RangeError(`${name} must be valid UTF-8`);
   return value;
-}
-
-/** Replay the source-neutral origin contract after possible mutation. */
-function revalidateOrigin(value: unknown): OriginRef | null {
-  if (value === null) return null;
-  if (!(value instanceof OriginRef)) throw new TypeError("memory origins must be OriginRef values or null");
-  new OriginRef(value.key);
-  return value;
-}
-
-/** Require exact specs in sorted unique key order; return the keys. */
-function validateMemories(memories: unknown): readonly string[] {
-  if (!isList(memories)) throw new TypeError("memories must be an array of MemorySpec values");
-  // Spread, so a hole of a sparse array reads as `undefined` and is refused.
-  const copy = [...memories];
-  if (!copy.every((spec) => isExactly(spec, MemorySpec))) {
-    throw new TypeError("memories must be an array of MemorySpec values");
-  }
-  const keys = copy.map((spec) => spec.key);
-  if (keys.some((key, i) => i > 0 && compareCodeUnits(keys[i - 1]!, key) >= 0)) {
-    throw new RangeError("memories must be sorted by key and unique");
-  }
-  return keys;
-}
-
-/** Return a detached origin map with one entry per memory key, in key order. */
-function validateOrigins(keys: readonly string[], origins: unknown): Map<string, OriginRef | null> {
-  if (!(origins instanceof Map)) throw new TypeError("memory origins must be a Map");
-  for (const key of origins.keys()) {
-    if (typeof key !== "string") throw new TypeError("memory origin keys must be strings");
-  }
-  if (origins.size !== keys.length || !keys.every((key) => origins.has(key))) {
-    throw new RangeError("memory origins must exactly match the memory keys");
-  }
-  return new Map(keys.map((key) => [key, revalidateOrigin(origins.get(key))]));
 }
 
 /** Return a detached registry and reject one object registered under several names. */
@@ -100,24 +65,6 @@ function validateRegistry(memory: unknown): Map<string, Memory> {
     result.set(name, implementation);
   }
   return result;
-}
-
-/** Return the per-key restore payload, or fresh `null` payloads. */
-function validateSnapshots(snapshots: unknown, keys: readonly string[]): Map<string, JsonObject | null> {
-  if (snapshots === null || snapshots === undefined) return new Map(keys.map((key) => [key, null]));
-  if (!isList(snapshots)) throw new TypeError("memory snapshots must be an array or null");
-  const restored = new Map<string, JsonObject | null>();
-  for (const envelope of snapshots) {
-    if (!isExactly(envelope, MemorySnapshotEnvelope)) {
-      throw new TypeError("memory snapshots must contain MemorySnapshotEnvelope values");
-    }
-    if (restored.has(envelope.memory)) throw new RangeError("memory snapshot keys must be unique");
-    restored.set(envelope.memory, envelope.snapshot);
-  }
-  if (!sameItems([...restored.keys()], keys)) {
-    throw new RangeError("memory snapshots must exactly match the memory keys in canonical order");
-  }
-  return restored;
 }
 
 /** Require the narrow callable session surface without reading its snapshot. */
@@ -207,7 +154,7 @@ async function closeSessions(
 
 /** One opened set of per-key sessions shared by execution and learning. */
 export class MemoryRuntime {
-  /** The frozen recorded memory table for this run. */
+  /** The recorded memory table for this run. */
   readonly memories: readonly MemorySpec[];
   /** The frozen public snapshots captured after opening. */
   readonly snapshots: readonly MemorySnapshotEnvelope[];
@@ -215,7 +162,7 @@ export class MemoryRuntime {
   private readonly sessions: ReadonlyMap<string, MemorySession>;
   #closing: Promise<void> | null = null;
 
-  /** @internal Use `MemoryRuntime.open`, which validates and opens the sessions. */
+  /** @internal Use `MemoryRuntime.open`, which opens the sessions. */
   constructor(options: {
     memories: readonly MemorySpec[];
     origins: ReadonlyMap<string, OriginRef | null>;
@@ -270,7 +217,6 @@ export class MemoryRuntime {
    * @param recall - The matching recall context.
    * @param options.signal - Checked after recall.
    * @throws Error when the runtime is closed or the scope names a key that wasn't opened.
-   * @throws TypeError when a carrier or the signal has the wrong type.
    * @throws RangeError when the paths disagree.
    * @throws MemoryRecallError when a memory rejects recall or returns invalid content.
    * @throws `signal.reason` when the signal aborted by the end of recall; any other recall failure
@@ -282,10 +228,6 @@ export class MemoryRuntime {
     options: { signal: AbortSignal },
   ): Promise<MemoryContext> {
     if (this.closed) throw new Error("memory runtime is closed");
-    if (!isExactly(scope, MemoryScope)) throw new TypeError("memory context scope must be a MemoryScope");
-    if (!isExactly(recall, RecallContext)) throw new TypeError("memory recall must be a RecallContext");
-    const signal = options?.signal;
-    if (!(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal");
     if (!sameItems(recall.consumerStaticPath, scope.staticPath)) {
       throw new RangeError("memory recall context does not match the consumer scope");
     }
@@ -322,7 +264,7 @@ export class MemoryRuntime {
       }
       if (section.text) sections.push(section);
     }
-    signal.throwIfAborted();
+    options.signal.throwIfAborted();
     return new MemoryContext({ sections });
   }
 
@@ -383,15 +325,11 @@ export class MemoryRuntime {
    *   ordered batch.
    * @returns A known backend or return-contract failure, or `null` on success.
    * @throws Error when the runtime is closed.
-   * @throws TypeError when `request` isn't exactly a `MemoryCommitRequestedRecord`.
    * @throws RangeError when the request names a key that wasn't opened.
    * @throws any commit error other than a `MemoryOperationError`, unchanged.
    */
   async commitLearning(request: MemoryCommitRequestedRecord): Promise<MemoryOperationFailure | null> {
     if (this.closed) throw new Error("memory runtime is closed");
-    if (!isExactly(request, MemoryCommitRequestedRecord)) {
-      throw new TypeError("backward commit requires an exact MemoryCommitRequestedRecord");
-    }
     if (!this.sessions.has(request.memory)) {
       throw new RangeError("backward commit requires an enabled memory and attempt");
     }
@@ -406,13 +344,15 @@ export class MemoryRuntime {
   }
 
   /**
-   * Validate and open one session per recorded memory key.
+   * Validate the host registry and open one session per recorded memory key.
    *
-   * `snapshots` `null` or omitted opens the implementations at their current state for a fresh
-   * run. An array restores the exact public snapshots recorded by `RunStarted` during recovery. An
-   * empty table opens nothing.
+   * `memories` is the table the compile layer resolved or `RunStarted` recorded, sorted and unique
+   * by key, and `origins` holds one entry per key. `snapshots` `null` or omitted opens the
+   * implementations at their current state for a fresh run. An array restores the exact public
+   * snapshots recorded by `RunStarted` during recovery, one per key in table order. An empty table
+   * opens nothing. `signal`, the run's stop, reaches each backend's `openRun`.
    *
-   * @throws TypeError or RangeError for a malformed table, origins, registry or snapshots.
+   * @throws TypeError or RangeError for a malformed registry.
    * @throws MemorySetupError when the host supplied no backend for a key, a backend fails to open
    *   or returns an invalid session, a session fails to export or exports an invalid snapshot, or a
    *   restored session does not reproduce its recorded snapshot; every session opened so far is
@@ -423,11 +363,12 @@ export class MemoryRuntime {
     origins: ReadonlyMap<string, OriginRef | null>;
     memory: ReadonlyMap<string, Memory>;
     snapshots?: readonly MemorySnapshotEnvelope[] | null;
+    signal?: AbortSignal | null;
   }): Promise<MemoryRuntime> {
-    const keys = validateMemories(options.memories);
-    const origins = validateOrigins(keys, options.origins);
+    const { memories, origins } = options;
+    const keys = memories.map((spec) => spec.key);
     const registry = validateRegistry(options.memory);
-    const restore = validateSnapshots(options.snapshots, keys);
+    const recorded = options.snapshots ?? null;
     for (const key of keys) {
       if (!registry.has(key)) {
         throw new MemorySetupError(`memory ${reprText(key)} was not supplied by the host`, {
@@ -435,17 +376,17 @@ export class MemoryRuntime {
         });
       }
     }
-    // Copy the caller's arrays before the first await, so later edits to them change nothing.
-    const memories = Object.freeze([...options.memories]);
-    const recorded = options.snapshots == null ? null : [...options.snapshots];
+    const signal = options.signal ?? null;
 
     const opened = new Map<string, MemorySession>();
     const captured: MemorySnapshotEnvelope[] = [];
     try {
-      for (const key of keys) {
+      for (const [index, key] of keys.entries()) {
         const origin = origins.get(key)!;
         try {
-          const session: unknown = await registry.get(key)!.openRun({ snapshot: restore.get(key) ?? null });
+          const snapshot = recorded === null ? null : recorded[index]!.snapshot;
+          const options = signal === null ? { snapshot } : { snapshot, signal };
+          const session: unknown = await registry.get(key)!.openRun(options);
           // Register anything closable first, so a session failing the surface check is still closed.
           if (typeof (session as { close?: unknown } | null | undefined)?.close === "function") {
             opened.set(key, session as MemorySession);
@@ -493,6 +434,6 @@ export class MemoryRuntime {
       throw error;
     }
 
-    return new this({ memories, origins, sessions: opened, snapshots: Object.freeze(captured) });
+    return new MemoryRuntime({ memories, origins, sessions: opened, snapshots: Object.freeze(captured) });
   }
 }

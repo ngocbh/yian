@@ -234,6 +234,21 @@ describe("nonTextKey", () => {
   ])("reports an empty key with empty text: %s", (_, text, range) => {
     expect(SourceDocument.parse(text).nonTextKey).toEqual({ key: null, text: "", range });
   });
+
+  // Quoting the anchored node would change its value and leave the key as it is.
+  test.each([
+    ["block", "n: &k 1\nout:\n  *k : x\n", new SourceRange(3, 3, 3, 5)],
+    ["flow", "n: &k 1\nout: {*k : x}\n", new SourceRange(2, 7, 2, 9)],
+  ])("reports an alias key where it is written: %s", (_, text, range) => {
+    expect(SourceDocument.parse(text).nonTextKey).toEqual({ key: 1n, text: "1", range });
+  });
+
+  test("orders an alias key by where it is written", () => {
+    const found = SourceDocument.parse("n: &k 1\nm: {2: x}\nout:\n  *k : y\n").nonTextKey;
+
+    expect(found?.key).toBe(2n);
+    expect(found?.range).toEqual(new SourceRange(2, 5, 2, 6));
+  });
 });
 
 describe("repeatedKey", () => {
@@ -287,6 +302,16 @@ test("a list or mapping key is refused", () => {
 
   expect(error.message).toBe("a list or mapping can't be a mapping key; mapping keys must be text");
   expect(error.range).toEqual(new SourceRange(1, 1, 1, 2));
+});
+
+test.each([
+  ["block", "x: &m {a: 1}\ny:\n  *m : v\n", new SourceRange(3, 3, 3, 4)],
+  ["flow", "x: &m {a: 1}\ny: {*m : v}\n", new SourceRange(2, 5, 2, 6)],
+])("an alias of a list or mapping as a key is refused where it is written: %s", (_, text, range) => {
+  const error = refusal(text);
+
+  expect(error.message).toBe("a list or mapping can't be a mapping key; mapping keys must be text");
+  expect(error.range).toEqual(range);
 });
 
 test.each([
@@ -370,11 +395,12 @@ describe("property ranges", () => {
     expect(startAt(text, ...path)).toEqual(start);
   });
 
-  test.each([
-    ["&k 1: a\nb: {*k : c}\n", new SourceRange(1, 1, 1, 5)],
-    ["a: &k 1\n*k : b\n", new SourceRange(1, 4, 1, 8)],
-  ])("make a non-text key span its properties: %p", (text, range) => {
-    expect(SourceDocument.parse(text).nonTextKey).toEqual({ key: 1n, text: "1", range });
+  test("make a non-text key span its properties", () => {
+    expect(SourceDocument.parse("&k 1: a\nb: {*k : c}\n").nonTextKey).toEqual({
+      key: 1n,
+      text: "1",
+      range: new SourceRange(1, 1, 1, 5),
+    });
   });
 
   test("locate an undefined alias at the alias", () => {
@@ -424,9 +450,9 @@ describe("range ends", () => {
     );
     const { flow } = parseYaml(readFileSync(url, "utf8")) as { flow: string };
 
-    // The frame the case expects for `fetch`'s declared output record.
+    // `fetch`'s declared output record, from line 34 to the next key.
     expect(definitionAt(flow, "nodes", "fetch", "output").range).toEqual(
-      new SourceRange(34, 7, 35, 5),
+      new SourceRange(34, 7, 36, 5),
     );
   });
 });
@@ -910,6 +936,15 @@ describe("merges", () => {
       text: "1",
       range: new SourceRange(1, 11, 1, 12),
     });
+  });
+
+  // `<<` merges only as a mapping key, as `readPlainScalar` reads it.
+  test.each<[string, Value]>([
+    ["a: <<\n", { a: "<<" }],
+    ["a: [<<, {b: <<}]\n", { a: ["<<", { b: "<<" }] }],
+    ["k: &m <<\nv: *m\n", { k: "<<", v: "<<" }],
+  ])("a plain `<<` value is text: %p", (text, value) => {
+    expect(SourceDocument.parse(text)._value).toEqual(value);
   });
 
   test("a merged key is not a repeated key", () => {

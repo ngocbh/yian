@@ -2,10 +2,12 @@
  * The one module holding runtime-specific APIs, so the rest of yian runs unchanged
  * on Node and Bun: runtime detection, whether this is a compiled binary, a SQLite
  * wrapper over `bun:sqlite` or `node:sqlite`, loaded lazily for the runtime in use,
- * an exclusive file lock built on it, the scheduler that clocks and timed waits go through, the
- * TypeScript stripper for CODE bodies, loaded lazily too, `safeFetch`, the one way out
- * to the network: no redirects, yian's User-Agent, and a warning when TLS checks are off, and
- * `warn`, the path every yian warning takes.
+ * an exclusive file lock built on it, `syncFolder` for durable folder entries, the OS
+ * error, missing-path, open-file path, path-confinement and home-directory helpers, the
+ * scheduler that clocks and timed waits go through, the TypeScript stripper for CODE
+ * bodies, loaded lazily too, `safeFetch`, the one way out to the network: no redirects,
+ * yian's User-Agent, and a warning when TLS checks are off, and `warn`, the path every
+ * yian warning takes.
  */
 
 import type { Database } from "bun:sqlite";
@@ -13,9 +15,12 @@ import { AsyncLocalStorage } from "node:async_hooks";
 // The default import keeps calls patchable by test spies.
 import fs from "node:fs";
 import { createRequire } from "node:module";
+// Default import, like `fs`, so tests can spy on `userInfo`.
+import os from "node:os";
+import { isAbsolute, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 
-import { processEnv } from "./defaults.ts";
+import { type Env, processEnv } from "./defaults.ts";
 
 /** The JavaScript runtime yian is running on, detected once at load. */
 export const runtime: "bun" | "node" = typeof Bun !== "undefined" ? "bun" : "node";
@@ -401,6 +406,101 @@ export function isLocked(path: string): boolean {
   } finally {
     db?.close();
   }
+}
+
+/**
+ * The errors that mean this file system or platform can't sync a folder: Linux gives `EINVAL` for
+ * a file system without directory sync, and some file systems give `ENOTSUP` or `EOPNOTSUPP`.
+ * Windows can't open a folder (`EISDIR`, `EPERM`); elsewhere those are real failures.
+ */
+const FOLDER_SYNC_UNSUPPORTED = new Set([
+  "EINVAL",
+  "ENOTSUP",
+  "EOPNOTSUPP",
+  ...(process.platform === "win32" ? ["EISDIR", "EPERM"] : []),
+]);
+
+/**
+ * Flush the entries of folder `path` to disk, so a file created, renamed or removed in it
+ * survives a power loss. Does nothing where the file system or platform can't sync a folder; any
+ * other error (`ENOENT` for a missing folder) propagates.
+ */
+export function syncFolder(path: string): void {
+  let fd: number;
+  try {
+    fd = fs.openSync(path, "r");
+  } catch (error) {
+    if (FOLDER_SYNC_UNSUPPORTED.has(errnoCode(error) as string)) return;
+    throw error;
+  }
+  try {
+    fs.fsyncSync(fd);
+  } catch (error) {
+    if (!FOLDER_SYNC_UNSUPPORTED.has(errnoCode(error) as string)) throw error;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** @internal Whether `error` is a Node SystemError (an OS error). */
+export function isSystemError(error: unknown): error is NodeJS.ErrnoException & { code: string } {
+  if (!(error instanceof Error)) return false;
+  const { code, syscall, errno } = error as NodeJS.ErrnoException;
+  return typeof code === "string" && (typeof syscall === "string" || typeof errno === "number");
+}
+
+/** The errors that make a path read as missing, so neither a file nor a directory. */
+const MISSING_PATH_CODES = new Set(["ENOENT", "ENOTDIR", "ELOOP", "EBADF"]);
+
+/** @internal Whether `error` is one of the OS errors that make a path read as missing. */
+export function isMissingPath(error: unknown): boolean {
+  return isSystemError(error) && MISSING_PATH_CODES.has(error.code);
+}
+
+/** @internal `fs.statSync`, or `null` for the errors that make a path read as missing. */
+export function statOrNull(path: string): fs.Stats | null {
+  try {
+    return fs.statSync(path);
+  } catch (error) {
+    if (isMissingPath(error)) return null;
+    throw error;
+  }
+}
+
+/**
+ * @internal The path the OS holds for open file `fd`, read from the descriptor rather than
+ * resolved again from a path, or `null` where the runtime can't tell (Node on macOS, Linux
+ * without `/proc`, Windows). On Linux an unlinked file's path ends in ` (deleted)`.
+ */
+export function openFilePath(fd: number): string | null {
+  try {
+    // One readlink: resolving the target again would walk paths another process can change.
+    if (process.platform === "linux") return fs.readlinkSync(`/proc/self/fd/${fd}`);
+    if (process.platform === "darwin") {
+      // Bun answers from the descriptor (`F_GETPATH`); Node walks `/dev/fd` and returns a `/dev` path.
+      const path = fs.realpathSync(`/dev/fd/${fd}`);
+      return path.startsWith("/dev/") ? null : path;
+    }
+  } catch (error) {
+    if (!isSystemError(error)) throw error;
+  }
+  return null;
+}
+
+/**
+ * @internal Whether a path relative to a root (`relative(root, file)`) leaves that root: `..`, a
+ * `../` prefix, or an absolute path (another drive).
+ */
+export function leavesRoot(rel: string): boolean {
+  return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
+}
+
+/**
+ * @internal Return the user's home directory: `HOME` from `env` when set and non-empty, else the
+ * account's home directory (`os.userInfo().homedir`), which throws when the account has none.
+ */
+export function homeDir(env: Env): string {
+  return env("HOME") || os.userInfo().homedir;
 }
 
 /** A clock and a cancellable relative sleep; tests swap in `virtualScheduler`. */

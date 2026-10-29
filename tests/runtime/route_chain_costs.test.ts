@@ -396,7 +396,7 @@ test("downstream context reads are unaliased", () => {
   const context = new BackwardContext({}, { downstreamContext: items });
 
   const read = context.downstreamContext;
-  expect(read).toEqual(items);
+  expect<unknown>(read).toEqual(items);
   expect(read[0]!.first).toBe(read[0]!.again!);
   expect(read[0]!.first).toBe(read[1]!.second!);
   expect(read[0]!.first).not.toBe(shared);
@@ -466,4 +466,32 @@ test.each(["list", "scalar"] as const)("backward lookups grow near linearly: %s"
   const large = await backwardLookups(kind, 128);
   expect(small).toBeGreaterThan(0);
   expect(large / small).toBeLessThanOrEqual(7);
+});
+
+/** Run a learnable scalar chain of `n` operands, then count its backward's lookups of each source and path. */
+async function lookupsPerSource(n: number): Promise<Map<string, number>> {
+  const { flow, inputs } = await chainFlow("scalar", n);
+  const run = await runFlow(flow, inputs, {
+    log: join(dir, `per-source-${n}.jsonl`),
+    learnable: true,
+    memory: new Map([["test", new FakeMemory()]]),
+    env: hostEnv(dir),
+  });
+  const lookups = spyOn(RetainedTrace.prototype, "lookupSource");
+  try {
+    expect((await run.backward("good")).status).toBe("succeeded");
+    const counts = new Map<string, number>();
+    for (const [source] of lookups.mock.calls) {
+      const key = JSON.stringify([source.executionSeq, source.path]);
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+    return counts;
+  } finally {
+    lookups.mockRestore();
+  }
+}
+
+test("a backward pass looks each source up as often whatever the chain length", async () => {
+  // Every operand of the chain reads the same source, so a walk without the cache looks it up once per operand.
+  expect(await lookupsPerSource(128)).toEqual(await lookupsPerSource(32));
 });

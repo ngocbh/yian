@@ -11,7 +11,6 @@ import { checkCallMapTypes } from "../../src/compose/validate/call_types.ts";
 import { rejectCycles } from "../../src/compose/validate/cycles.ts";
 import { checkLoopTypeContract } from "../../src/compose/validate/loop_types.ts";
 import { validateReferences } from "../../src/compose/validate/references.ts";
-import { checkWiringParity } from "../../src/compose/validate/wiring_parity.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
@@ -227,25 +226,6 @@ describe("rejectCycles", () => {
     const edges = [...aliasCycleEdges(), dataEdge("c", "log", "q")];
     const error = loadError(() => rejectCycles(edges, new Set(["g", "c", "log"]), aliasOptions));
     expect(error.message).toBe('flow has a cycle involving ["g"]; flows must be acyclic');
-  });
-});
-
-describe("located pass errors", () => {
-  test("checkWiringParity anchors a parity failure at the input: mapping", () => {
-    // An orphan wiring key with no matching param fails parity; the error anchors on the node's
-    // `input:` mapping span (else its node range), and the frame carries that range.
-    const { node, wiring } = new CodeDescriptor({ id: "n", code: "m:f", inputs: { x: "${input.x}" } }).build(
-      new BuildContext({ registry: new Map() }),
-    );
-    const range = new SourceRange(3, 5, 4, 20);
-    const result = new BuildResult({ node, wiring, fieldRanges: new Map([[siteKey("field", "inputs"), range]]) });
-    const error = loadError(() =>
-      checkWiringParity(new Map([["n", result]]), new Map([["n", new Map([...wiring, ["orphan", "${input.y}"]])]]), {
-        diagnostics: rangeDiagnostics(),
-      }),
-    );
-    expect(error.message).toContain("key parity");
-    expect(error.diagnostic.frames[0]!.range).toEqual(range);
   });
 });
 

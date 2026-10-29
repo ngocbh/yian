@@ -20,6 +20,7 @@ import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
+import { ModelCallFinished, ModelCallStarted, type RunEvent } from "../../src/events.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, EventStream, Finish, TextDelta, UsageReport } from "../../src/llm/events.ts";
 import {
@@ -388,6 +389,25 @@ test("a failure with no retry left writes a failed model_call before node_failed
   expect(steps(log)[0]).toMatchObject({ error: { kind: "server", message: "boom" }, retry_in: null, output: null });
 });
 
+test("a reply whose media can't be stored writes a failed model_call and ends its call's bracket", async () => {
+  const media = new Message({ role: "assistant", parts: [new MediaPart({ mime: "image/png", data: "ab-_" })] });
+  const model = new ScriptedModel([new Response({ message: media, finishReason: "stop" })], CONFIG);
+  const events: string[] = [];
+  const onEvent = (event: RunEvent) => {
+    if (event instanceof ModelCallStarted) events.push(event.type);
+    if (event instanceof ModelCallFinished) events.push(`${event.type} ${event.error}`);
+  };
+  const { log, result } = await run(model, { flow: flowText([]), onEvent });
+  expect([result.status, result.failure?.code]).toEqual(["failed", "node.execute"]);
+  expect(shape(log)).toEqual(["NodeStartedRecord", "model_call 1", "NodeFailedRecord"]);
+  expect(steps(log)[0]).toMatchObject({
+    error: { kind: "RangeError", message: "image/png media data isn't base64" },
+    retry_in: null,
+    output: null,
+  });
+  expect(events).toEqual(["ModelCallStarted", "ModelCallFinished RangeError"]);
+});
+
 test("a failed call writes what arrived and the usage reported before it failed", async () => {
   const usage = new Usage({ inputTokens: 7, outputTokens: 2, totalTokens: 9, cacheReadTokens: 3 });
   const cut = [new TextDelta(0, "half"), new UsageReport(usage), new ProviderError("server", "cut", { status: 500 })];
@@ -627,7 +647,7 @@ function recordingSteps(prior: ValueRecord[] = []): { steps: AgentSteps; recorde
 test("AgentSteps writes model_call and tool_result payloads and returns each n", () => {
   const { steps, recorded } = recordingSteps([{ kind: "llm_config" }]);
   const output = new Message({ role: "assistant", parts: [new TextPart("ok")] });
-  const usage = new Usage({ inputTokens: 5, outputTokens: 1, totalTokens: 6, reasoningTokens: 0 });
+  const usage = new Usage({ inputTokens: 5, outputTokens: 1, totalTokens: 6, cacheCreationTokens: 4, reasoningTokens: 0 });
   const n = steps.modelCall(
     {
       purpose: "chat",
@@ -657,7 +677,7 @@ test("AgentSteps writes model_call and tool_result payloads and returns each n",
         output: output.toJSON(),
         response_id: "resp-1",
         finish: "stop",
-        usage: { input_tokens: 5n, output_tokens: 1n, cache_read_tokens: null, reasoning_tokens: 0n },
+        usage: { input_tokens: 5n, output_tokens: 1n, cache_read_tokens: null, cache_creation_tokens: 4n, reasoning_tokens: 0n },
       },
       { settled: true },
     ],
@@ -778,7 +798,7 @@ test("a steer copy without values is a host fault", () => {
   const error = thrownBy(() => steps.takeRecordedSteers());
   expect(error).toBeInstanceOf(CapabilityFault);
   expect(((error as CapabilityFault).original as Error).message).toBe(
-    "node 'writer' step 1: a steer step without its values; resume through the engine",
+    "node 'writer' step 1: a steer step without its values, which only the engine's copy of the step carries; resume through the engine",
   );
 });
 

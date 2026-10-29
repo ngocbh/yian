@@ -19,6 +19,7 @@ import { Message, Request, type Response, TextPart } from "../llm/messages.ts";
 import { type HostConnection, popHostCredentials } from "../llm_clients/config.ts";
 import { resolveModelConfig, scrubCallCredentials } from "../llm_clients/connection.ts";
 import { chatModelFromConfig } from "../llm_clients/factory.ts";
+import { isSystemError } from "../platform.ts";
 import { logJson, type JsonObject as StoreObject } from "../typesys/json.ts";
 import { fromHost, isList, isRecord, type Value, writeAsJson } from "../typesys/values.ts";
 import {
@@ -34,7 +35,6 @@ import {
 } from "./contracts.ts";
 import { boundedJsonMaterial, visibleInteractionJson } from "./reflective.ts";
 import { type MarkdownStore, MarkdownVersionMismatch } from "./storage/markdown.ts";
-import { isSystemError } from "./storage/sqlite.ts";
 
 const SNAPSHOT_FORMAT = "yian.profile_memory";
 const SNAPSHOT_VERSION = 1n;
@@ -306,18 +306,20 @@ export class ProfileMemory implements Memory {
    * Pin the current document, or the recorded version when restoring.
    *
    * @param options.snapshot A snapshot recorded by an earlier session of this backend.
+   * @param options.signal The run's stop, passed to the store's `read`.
    * @throws MemoryOperationError `profile.closed` after `close()`, `profile.store_unavailable`
-   *   (retryable) when the store can't be reached, `profile.store_invalid` when its document can't
-   *   be decoded, or `profile.snapshot_unavailable` when the recorded version is malformed,
-   *   unknown, or changed. Other store errors pass through unchanged.
+   *   (retryable) when the store can't be reached, fresh or restoring, `profile.store_invalid` when
+   *   its current document can't be decoded, or `profile.snapshot_unavailable` when the recorded
+   *   version is malformed, unknown, or changed. Other store errors pass through unchanged.
    */
-  async openRun(options: { snapshot?: JsonObject | null } = {}): Promise<ProfileSession> {
+  async openRun(options: { snapshot?: JsonObject | null; signal?: AbortSignal } = {}): Promise<ProfileSession> {
     this.ensureOpen("openRun");
     const snapshot = options.snapshot ?? null;
+    const read = options.signal === undefined ? {} : { signal: options.signal };
     let document: readonly [string, string];
     if (snapshot === null) {
       try {
-        document = await this.store.read(null);
+        document = await this.store.read(null, read);
       } catch (cause) {
         throw readError("openRun", cause);
       }
@@ -336,12 +338,14 @@ export class ProfileMemory implements Memory {
       }
       const recorded = snapshot.profile_version;
       if (typeof recorded !== "string") throw new RangeError("profile_version must be a string");
-      document = await this.store.read(recorded);
+      document = await this.store.read(recorded, read);
       if (document[1] !== recorded || sha256(document[0]) !== snapshot.text_sha256) {
         throw new RangeError("stored text differs from the recorded version");
       }
     } catch (cause) {
-      if (!(cause instanceof TypeError || cause instanceof RangeError || isSystemError(cause))) throw cause;
+      // An unreachable store, a lock wait that timed out included, may answer a retry.
+      if (isSystemError(cause)) throw readError("openRun", cause);
+      if (!(cause instanceof TypeError || cause instanceof RangeError)) throw cause;
       throw error("openRun", "profile.snapshot_unavailable", "recorded profile version cannot be restored", {
         cause,
       });
@@ -430,6 +434,17 @@ export class ProfileSession implements MemorySession {
       throw error("learn", "profile.invalid_context", "context must be a LearnContext");
     }
     if (context.feedback.length === 0) return [];
+    const feedback: JsonValue[] = [];
+    const seen = new Set<string>();
+    for (const entry of context.feedback) {
+      const value = feedbackValue(entry);
+      // A mutation payload can't hold a non-finite number; refuse it before the paid model call.
+      if (hasNonFinite(value)) throw error("learn", "profile.invalid_context", "feedback must be finite JSON");
+      const key = logJson(value);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      feedback.push(value);
+    }
     const memory = this.memory;
     let currentText: string;
     let currentVersion: string;
@@ -490,15 +505,6 @@ export class ProfileSession implements MemorySession {
     }
     const text = parseReply(response, currentText, memory.maxChars);
     if (text.trim() === currentText.trim()) return [];
-    const feedback: JsonValue[] = [];
-    const seen = new Set<string>();
-    for (const entry of context.feedback) {
-      const value = feedbackValue(entry);
-      const key = logJson(value);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      feedback.push(value);
-    }
     const payload = {
       base_version: currentVersion,
       text,
@@ -506,15 +512,7 @@ export class ProfileSession implements MemorySession {
       run_id: context.runId,
       feedback,
     };
-    try {
-      return [new MemoryMutation(`profile:${sha256(text)}`, payload)];
-    } catch (cause) {
-      // Feedback may hold infinity, which a mutation payload can't.
-      if (cause instanceof RangeError && feedback.some(hasNonFinite)) {
-        throw error("learn", "profile.invalid_context", "feedback must be finite JSON", { cause });
-      }
-      throw cause;
-    }
+    return [new MemoryMutation(`profile:${sha256(text)}`, payload)];
   }
 
   /**

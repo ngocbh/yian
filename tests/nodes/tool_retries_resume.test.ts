@@ -19,12 +19,12 @@ import { replayRunLog, advance, runFlow } from "../../src/run.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import {
   BackwardFinishedRecord,
-  JsonlRunLog,
   MemoryRunLog,
   NodeStepRecord,
   NodeSucceededRecord,
   readRunLog,
   type RecordEnvelope,
+  type RunLog,
   type RunRecord,
 } from "../../src/runtime/log.ts";
 import type { RunState } from "../../src/runtime/state.ts";
@@ -32,6 +32,7 @@ import type { ToolContext } from "../../src/tools/context.ts";
 import { TransientToolError } from "../../src/tools/errors.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
+import { withAppendHook } from "../helpers/append_hook.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { barrier, Crash, crashAfter, rejected, startedRun } from "../helpers/run_state_fixtures.ts";
 
@@ -421,20 +422,14 @@ test("two tools retrying at once in a pooled map resume with their own steps", a
   const { scheduler } = clock();
 
   // The crash: each child TOOL's outcome is refused, so both stay in flight.
-  const append = JsonlRunLog.prototype.append;
   const crash = new Crash("process lost");
-  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
+  const refuse = (_log: RunLog, record: RunRecord) => {
     if (record instanceof NodeSucceededRecord && record.nodeId.endsWith("/place")) throw crash;
-    return append.call(this, record);
   };
-  try {
-    const error = await rejected(
-      runFlow(flow, {}, { log: path, runId: "r1", tools: { x }, numWorkers: 4, ...host(scheduler) }),
-    );
-    expect(error).toBe(crash);
-  } finally {
-    JsonlRunLog.prototype.append = append;
-  }
+  const error = await withAppendHook(refuse, () =>
+    rejected(runFlow(flow, {}, { log: path, runId: "r1", tools: { x }, numWorkers: 4, ...host(scheduler) })),
+  );
+  expect(error).toBe(crash);
 
   crashed = true;
   const ids = new Map(seen.filter(([, ctx]) => ctx.attempt === 1).map(([n, ctx]) => [n, ctx.node]));

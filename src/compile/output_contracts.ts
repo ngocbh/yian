@@ -54,7 +54,7 @@ import {
 import type { Node } from "../nodes/base.ts";
 import { messagesKey, NEW_MESSAGES } from "../typesys/pool.ts";
 import { fileFieldType, isListKind, joinedType, typeEquals } from "../typesys/values.ts";
-import { typeRelation } from "./validation.ts";
+import { SYSTEM_AMBIENTS, typeRelation } from "./validation.ts";
 
 /** Marks a binding source that is a template, not a literal, in `literalValue`. */
 export const NOT_LITERAL: unique symbol = Symbol("NOT_LITERAL");
@@ -90,7 +90,7 @@ export function projectOutputContract(contract: OutputContract, fields: readonly
   let typ = contract.type;
   let pathNullable = typ.nullable;
   for (const field of fields) {
-    if (typ.variants !== undefined) {
+    if (typ.members !== undefined) {
       const read = unionField(typ, field);
       if (read.kind !== "read" || read.type === null) return null;
       // The shared type is already nullable when any member's field may be absent.
@@ -154,8 +154,8 @@ function checkFlowInputContract(name: string, contract: unknown): void {
 }
 
 /**
- * Resolve one `input.X...`, `<id>.output...` or an AGENT's `<id>.new_messages...` path to its
- * exact or projected contract.
+ * Resolve one `input.X...`, `<id>.output...`, `system.X` or an AGENT's `<id>.new_messages...`
+ * path to its exact or projected contract. A system ambient has its scalar type.
  *
  * @param path The dotted reference path.
  * @param producers Node output contracts by producer id, and an AGENT's new messages' contract
@@ -179,6 +179,10 @@ export function referenceContract(
     checkFlowInputContract(name, contract);
     return projectOutputContract(contract, parts.slice(2));
   }
+  if (head === "system") {
+    const kind = parts.length === 2 ? SYSTEM_AMBIENTS.get(parts[1]!) : undefined;
+    return kind === undefined ? null : new ValueContract(Type.scalar(kind));
+  }
   if (parts.length >= 2 && parts[1] === NEW_MESSAGES) {
     const messages = producers.get(messagesKey(parts[0]!));
     return messages === undefined ? null : projectOutputContract(messages, parts.slice(2));
@@ -190,33 +194,6 @@ export function referenceContract(
   if (contract === undefined) return null;
   checkProducerContract(producerId, contract);
   return projectOutputContract(contract, parts.slice(2));
-}
-
-/**
- * Return the field-read error for an output path, else `null`.
- *
- * The error is an undeclared record field, any field on a scalar or list, a field of a `file`
- * other than `uri`, `mime` and `name`, or a field only some members of a union have (unless
- * `partialUnionFields`). An opaque field inside a partial record remains lenient below that
- * field, while the partial record's closed root name set is still enforced. A member-only
- * field's fix names the union from `unionRoot` when it is set, and points at an
- * `isinstance(..., <Type>) and ...` check before the read instead of a case when
- * `isinstanceHint` is set (for a read inside a condition), or at a tag comparison before the
- * read when `tagHint` is set and the union is tagged (for a condition where `isinstance` is not
- * allowed).
- */
-export function outputContractPathError(
-  contract: OutputContract,
-  fields: readonly string[],
-  path: string,
-  options: {
-    partialUnionFields?: boolean;
-    unionRoot?: string | null;
-    isinstanceHint?: boolean;
-    tagHint?: boolean;
-  } = {},
-): string | null {
-  return outputContractFieldError(contract, fields, path, options);
 }
 
 /**
@@ -245,7 +222,7 @@ export function localFieldError(
   const { source = null, partialUnionFields = false } = options;
   let first: string | null = null;
   for (const contract of alternatives) {
-    const error = outputContractPathError(contract, fields, path, { partialUnionFields, unionRoot: source });
+    const error = outputContractFieldError(contract, fields, path, { partialUnionFields, unionRoot: source });
     if (error === null) return null;
     first ??= error;
   }

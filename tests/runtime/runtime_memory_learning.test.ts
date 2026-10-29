@@ -45,7 +45,7 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { computeBackward, driveBackward } from "../../src/runtime/backward.ts";
-import type { AttributedBackwardResult, BackwardOutcome } from "../../src/runtime/contracts.ts";
+import type { BackwardOutcome } from "../../src/runtime/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import {
   BackwardReadyRecord,
@@ -322,7 +322,7 @@ test("owner context projects a synthetic source-free failure only to the root fl
     new MemorySpec("outer", "outer", {}, [ROOT]),
   ];
   const [root, results] = await computeBackward(trace, "original text");
-  const [inner, outer] = learning.projectOwnerContexts(trace, memories, [], "original text", root, results);
+  const [inner, outer] = learning.projectOwnerContexts(trace, memories, [], "original text", results);
   expect(outer!.episodes).toEqual([]);
   expect(inner!.episodes).toEqual([]);
   expect(inner!.feedback).toEqual([]);
@@ -358,7 +358,6 @@ test("root fallback reaches only keys owned by the root flow site", async () => 
     memories,
     [],
     "original text",
-    root,
     results,
   );
   expect(agentNotes!.feedback).toEqual([]);
@@ -417,7 +416,7 @@ function successfulTerminal(): { state: RunState; log: MemoryRunLog; table: Memo
 async function contexts(state: RunState, ...nodeIds: string[]): Promise<Map<string, LearnContext>> {
   const [root, results] = await computeBackward(state.trace!, null);
   const materials = materialsFor(state.trace!, ...nodeIds);
-  const projected = learning.projectOwnerContexts(state.trace!, state.memories!, state.memoryStacks!, null, root, results, {
+  const projected = learning.projectOwnerContexts(state.trace!, state.memories!, state.memoryStacks!, null, results, {
     materials,
   });
   return new Map(projected.map((context) => [context.memory, context]));
@@ -756,7 +755,7 @@ test("owner contexts include general occurrences and empty memories", async () =
     throw new Error("projection invoked backward");
   };
 
-  const projected = learning.projectOwnerContexts(trace, memories, recorded, "review", root, results);
+  const projected = learning.projectOwnerContexts(trace, memories, recorded, "review", results);
 
   expect(projected.map((context) => context.memory)).toEqual(["empty", "local", "outer"]);
   const byKey = new Map(projected.map((context) => [context.memory, context]));
@@ -818,7 +817,7 @@ test.each([false, true])("owner feedback retains literals and opaque local stops
   await built.run();
   const trace = built.state.trace!;
   const [root, results] = await computeBackward(trace, "unchanged");
-  const projected = learning.projectOwnerContexts(trace, memories, recorded, "unchanged", root, results);
+  const projected = learning.projectOwnerContexts(trace, memories, recorded, "unchanged", results);
   const work = feedbackEntries(projected[0]!).filter(
     (entry) => JSON.stringify(entry.owner_static_path) === JSON.stringify(["work"]),
   );
@@ -863,7 +862,7 @@ test.each(["binding", "body", "route"] as const)(
     await built.run();
     const trace = built.state.trace!;
     const [root, results] = await computeBackward(trace, "review failure");
-    const [context, ...rest] = learning.projectOwnerContexts(trace, memories, recorded, "review failure", root, results);
+    const [context, ...rest] = learning.projectOwnerContexts(trace, memories, recorded, "review failure", results);
     expect(rest).toEqual([]);
     const episode = context!.episodes.find(
       (item) => JSON.stringify(item.ownerStaticPath) === JSON.stringify([node.id]),
@@ -891,7 +890,7 @@ test("owner context root default is owned once by the accepted start", async () 
   await built.run();
   const trace = built.state.trace!;
   const [root, results] = await computeBackward(trace, "keep default");
-  const [context] = learning.projectOwnerContexts(trace, memories, recorded, "keep default", root, results);
+  const [context] = learning.projectOwnerContexts(trace, memories, recorded, "keep default", results);
   expect(root.inputFeedback).toEqual({ topic: ["keep default"] });
   expect(feedbackEntries(context!).some((entry) => entry.root)).toBe(false);
   const startInputs = feedbackEntries(context!).filter(
@@ -915,7 +914,7 @@ async function startOnlyRun(): Promise<{
   });
   (start as Node).forward = () => new Route(ELSE_HANDLE);
   start.memoryScope = new MemoryScope([START_ID], { memories: [POLICY] });
-  const flow = CompiledFlow.fromParts(new Map([[START_ID, start]]), []);
+  const flow = new CompiledFlow(new Map([[START_ID, start]]), []);
   // `endId` is readonly and fixed by the constructor.
   (flow as { endId: string }).endId = START_ID;
   const initialPool = new VariablePool(START_ID);
@@ -944,7 +943,7 @@ async function startOnlyRun(): Promise<{
 test("owner context root fallback uses only actual source-zero fields", async () => {
   const { state, memories, stacks: recorded } = await startOnlyRun();
   const [root, results] = await computeBackward(state.trace!, "review");
-  const [context] = learning.projectOwnerContexts(state.trace!, memories, recorded, "review", root, results);
+  const [context] = learning.projectOwnerContexts(state.trace!, memories, recorded, "review", results);
   expect(results.every((item) => !item.invoked)).toBe(true);
   expect(context!.episodes).toHaveLength(1);
   expect(feedbackEntries(context!).map((entry) => [entry.target_name, entry.value])).toEqual([["topic", "review"]]);
@@ -959,7 +958,7 @@ test("an owner context error identifies the receiver without changing forward ac
   expect(trace.terminal!.succeeded).toBe(true);
   expect(trace.terminal!.output).toBe("leaf");
   const [root, results] = await computeBackward(trace, "review");
-  expect(learning.projectOwnerContexts(trace, memories, recorded, "review", root, results)).toHaveLength(1);
+  expect(learning.projectOwnerContexts(trace, memories, recorded, "review", results)).toHaveLength(1);
   const accepted = built.log.records();
   // TS has no memory JSON nesting bound, so the context check of `work`'s occurrence (the second
   // call, after START's) refuses instead.
@@ -973,7 +972,7 @@ test("an owner context error identifies the receiver without changing forward ac
   });
   let caught: unknown;
   try {
-    learning.projectOwnerContexts(trace, memories, recorded, "review", root, results);
+    learning.projectOwnerContexts(trace, memories, recorded, "review", results);
   } catch (error) {
     caught = error;
   } finally {
@@ -993,7 +992,7 @@ test("an owner context error identifies the receiver without changing forward ac
 
 test("a root fallback context failure names no node", async () => {
   const { state, log, memories } = await startOnlyRun();
-  // The second call checks the root fallback: the first checks START's occurrence.
+  // The second call builds the context with the root fallback: the first checks START's occurrence.
   const original = new RangeError("boom");
   const fromFrozen = LearnContext.fromFrozen;
   let calls = 0;
@@ -1029,44 +1028,14 @@ test("owner context authority errors are not context construction failures", asy
   const { engine: built, memories, stacks: recorded } = ownerEngine(workFlow(node), { inputs: { topic: "reef" } });
   await built.run();
   const trace = built.state.trace!;
-  const [root, results] = await computeBackward(trace, "review");
-  const project = (
-    table: readonly MemorySpec[],
-    stackList: readonly MemoryStack[],
-    attributed: readonly AttributedBackwardResult[] = results,
-  ) => learning.projectOwnerContexts(trace, table, stackList, "review", root, attributed);
+  const [, results] = await computeBackward(trace, "review");
+  const project = (table: readonly MemorySpec[], stackList: readonly MemoryStack[]) =>
+    learning.projectOwnerContexts(trace, table, stackList, "review", results);
 
   expectError(
-    () => project(memories, recorded, results.slice(0, -1)),
-    RangeError,
-    "backward results must match the complete accepted occurrence order",
-  );
-  expectError(
-    () => project([], [], results),
+    () => project([], []),
     RangeError,
     "historical memory scope disagrees with its recorded memory stack",
-  );
-  for (const invalid of [null, new Set(memories)]) {
-    expectError(
-      () => project(invalid as unknown as MemorySpec[], recorded),
-      TypeError,
-      "owner contexts require the complete recorded memory table",
-    );
-  }
-  expectError(
-    () => project([...memories, ...memories].reverse(), recorded),
-    RangeError,
-    "owner contexts require a memory table sorted by unique key",
-  );
-  expectError(
-    () => project(memories, new Set(recorded) as unknown as MemoryStack[]),
-    TypeError,
-    "owner contexts require the recorded memory stacks",
-  );
-  expectError(
-    () => project(memories, [...recorded, recorded[0]!]),
-    RangeError,
-    "recorded memory stacks must have unique locators",
   );
   const missing = new Error("missing source authority");
   const lookupSource = trace.lookupSource.bind(trace);
@@ -1083,7 +1052,7 @@ test("owner context projection from replay doesn't reinvoke handlers", async () 
   const original = copyGraph(built.state.flow);
   await built.run();
   const [root, results] = await computeBackward(built.state.trace!, "review");
-  const expected = learning.projectOwnerContexts(built.state.trace!, memories, recorded, "review", root, results);
+  const expected = learning.projectOwnerContexts(built.state.trace!, memories, recorded, "review", results);
   for (const current of original.nodes.values()) {
     current.forward = () => {
       throw new Error("replayed forward");
@@ -1099,7 +1068,7 @@ test("owner context projection from replay doesn't reinvoke handlers", async () 
       throw new Error("read callback");
     },
   });
-  expect(learning.projectOwnerContexts(replayed.trace!, memories, recorded, "review", root, results)).toEqual(expected);
+  expect(learning.projectOwnerContexts(replayed.trace!, memories, recorded, "review", results)).toEqual(expected);
 });
 
 test("an owner context of an empty MAP retains the growth and the unexecuted child memory", async () => {
@@ -1119,7 +1088,7 @@ test("an owner context of an empty MAP retains the growth and the unexecuted chi
   await built.run();
   const trace = built.state.trace!;
   const [root, results] = await computeBackward(trace, null);
-  const [childContext, outer] = learning.projectOwnerContexts(trace, memories, recorded, null, root, results);
+  const [childContext, outer] = learning.projectOwnerContexts(trace, memories, recorded, null, results);
 
   expect(outer!.episodes).toHaveLength(5);
   expect(trace.occurrences).toHaveLength(5);
@@ -1162,7 +1131,6 @@ test.each([false, true])(
       state.memories!,
       state.memoryStacks!,
       "review",
-      root,
       results,
       { materials: materialsFor(state.trace!, "agent") },
     );
@@ -1211,7 +1179,7 @@ test.each([false, true])(
     node.declaredVariables = () => {
       throw new Error("read mutable declarations");
     };
-    const projected = learning.projectOwnerContexts(trace, memories, recorded, "review", root, results);
+    const projected = learning.projectOwnerContexts(trace, memories, recorded, "review", results);
     const entries = feedbackEntries(projected[0]!);
     expect(
       entries.filter((entry) => entry.channel === "variable").map((entry) => [
@@ -1229,7 +1197,7 @@ test.each([false, true])(
     const decoded = decodeRecord(encodeRecord(new RecordEnvelope(SCHEMA_VERSION, built.state.runId!, 0, ready)))
       .record as BackwardReadyRecord;
     expect(
-      learning.projectOwnerContexts(trace, memories, recorded, "review", decoded.rootResult, decoded.attributedResults),
+      learning.projectOwnerContexts(trace, memories, recorded, "review", decoded.attributedResults),
     ).toEqual(projected);
   },
 );

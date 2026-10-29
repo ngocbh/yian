@@ -231,7 +231,7 @@ function wideChild(n: number): CompiledFlow {
     edges.push(new Edge(`__start__->${nodeId}#0`, START_ID, nodeId, { inputGroup: "x" }));
   }
   edges.push(new Edge("n0->__end__#0", "n0", END_ID, { inputGroup: "out" }));
-  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${n0.output}")], wiring });
+  return new CompiledFlow(nodes, edges, { outputs: [new FlowOutput("out", "${n0.output}")], wiring });
 }
 
 test.each([0, 4])("an over-budget expansion trips the node budget (%p workers)", async (numWorkers) => {

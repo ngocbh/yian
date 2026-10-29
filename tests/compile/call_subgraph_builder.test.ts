@@ -247,17 +247,3 @@ test("call subgraph inherits occurrence and keeps child keys", () => {
   }
 });
 
-test("call subgraph revalidates supplied memory scope", () => {
-  const child = childFlow();
-  const occurrence = forged(MemoryOccurrenceSegment, {
-    kind: MemoryOccurrenceKind.MAP_ITEM,
-    staticPath: ["outer"],
-    index: false,
-  });
-  const scope = new MemoryScope(["outer", "call"], { occurrencePath: [occurrence] });
-
-  expect(() => callSubgraph(child, "call", { x: 1n }, { memoryScope: scope })).toThrow(TypeError);
-  expect(() => callSubgraph(child, "call", { x: 1n }, { memoryScope: scope })).toThrow("index must be an integer");
-
-  expect([...child.nodes.values()].every((node) => node.memoryScope === null)).toBe(true);
-});

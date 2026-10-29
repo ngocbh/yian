@@ -19,9 +19,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   type FileLock,
   FileLockError,
+  homeDir,
   insecureTlsWarning,
   isLocked,
+  isSystemError,
+  leavesRoot,
   lockFile,
+  openFilePath,
   openSqlite,
   realScheduler,
   RedirectError,
@@ -33,7 +37,9 @@ import {
   SLEEP_CHUNK_MS,
   type Sqlite,
   sqliteErrorCode,
+  statOrNull,
   stripTypes,
+  syncFolder,
   TypeStripError,
   USER_AGENT,
   VERSION,
@@ -42,6 +48,7 @@ import {
   warn,
   withWarnings,
 } from "../src/platform.ts";
+import { testNode } from "./helpers/test_node.ts";
 
 const realSetTimeout = globalThis.setTimeout;
 
@@ -748,6 +755,183 @@ describe("waitForLock", () => {
   });
 });
 
+describe("syncFolder", () => {
+  /** A Node system error with `code`, as `fs` throws. */
+  const systemError = (code: string) => Object.assign(new Error(code), { code, syscall: "fsync" });
+
+  test("syncs the folder through a descriptor it closes", () => {
+    const opened = new Map<number, string>();
+    const synced: string[] = [];
+    const closed: number[] = [];
+    const open = fs.openSync;
+    const fsync = fs.fsyncSync;
+    const close = fs.closeSync;
+    spyOn(fs, "openSync").mockImplementation(((target: fs.PathLike, ...rest: unknown[]) => {
+      const fd = (open as (...args: unknown[]) => number)(target, ...rest);
+      opened.set(fd, String(target));
+      return fd;
+    }) as typeof fs.openSync);
+    spyOn(fs, "fsyncSync").mockImplementation((fd) => {
+      synced.push(opened.get(fd)!);
+      fsync(fd);
+    });
+    spyOn(fs, "closeSync").mockImplementation((fd) => {
+      closed.push(fd);
+      close(fd);
+    });
+    syncFolder(dir);
+    expect(synced).toEqual([dir]);
+    expect(closed).toEqual([...opened.keys()]);
+  });
+
+  test.each(["EINVAL", "ENOTSUP", "EOPNOTSUPP"])(
+    "does nothing where a folder sync fails %s, open or sync",
+    (code) => {
+      const open = spyOn(fs, "openSync").mockImplementation(() => {
+        throw systemError(code);
+      });
+      expect(syncFolder(dir)).toBeUndefined();
+      open.mockRestore();
+      spyOn(fs, "fsyncSync").mockImplementation(() => {
+        throw systemError(code);
+      });
+      expect(syncFolder(dir)).toBeUndefined();
+    },
+  );
+
+  test.skipIf(process.platform === "win32").each(["EISDIR", "EPERM"])(
+    "a folder sync failing %s off Windows propagates",
+    (code) => {
+      const failure = systemError(code);
+      spyOn(fs, "fsyncSync").mockImplementation(() => {
+        throw failure;
+      });
+      expect(thrown(() => syncFolder(dir))).toBe(failure);
+    },
+  );
+
+  test("any other failure propagates, and the descriptor is still closed", () => {
+    expect(thrown(() => syncFolder(path.join(dir, "missing")))).toMatchObject({ code: "ENOENT" });
+    const failure = systemError("EIO");
+    spyOn(fs, "fsyncSync").mockImplementation(() => {
+      throw failure;
+    });
+    const close = spyOn(fs, "closeSync");
+    expect(thrown(() => syncFolder(dir))).toBe(failure);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("isSystemError", () => {
+  test("holds for an fs error and a code with a syscall or errno", () => {
+    expect(isSystemError(thrown(() => fs.statSync(path.join(dir, "missing"))))).toBe(true);
+    expect(isSystemError(Object.assign(new Error("x"), { code: "EIO", syscall: "read" }))).toBe(true);
+    expect(isSystemError(Object.assign(new Error("x"), { code: "EIO", errno: -5 }))).toBe(true);
+  });
+
+  test("fails for a code alone, a non-string code and a non-Error", () => {
+    expect(isSystemError(Object.assign(new Error("x"), { code: "EIO" }))).toBe(false);
+    expect(isSystemError(Object.assign(new Error("x"), { code: 5, syscall: "read" }))).toBe(false);
+    expect(isSystemError({ code: "EIO", syscall: "read", errno: -5 })).toBe(false);
+    expect(isSystemError(null)).toBe(false);
+  });
+});
+
+describe("statOrNull", () => {
+  test("returns a file's stats", () => {
+    fs.writeFileSync(file, "x");
+    expect(statOrNull(file)?.isFile()).toBe(true);
+    expect(statOrNull(dir)?.isDirectory()).toBe(true);
+  });
+
+  test("returns null for a missing path, a file as a folder and a symlink loop", () => {
+    fs.writeFileSync(file, "x");
+    expect(statOrNull(path.join(dir, "missing"))).toBeNull();
+    expect(statOrNull(path.join(file, "child"))).toBeNull();
+    if (process.platform !== "win32") {
+      fs.symlinkSync("loop", path.join(dir, "loop"));
+      expect(statOrNull(path.join(dir, "loop"))).toBeNull();
+    }
+  });
+
+  test.each(["EBADF", "ENOENT"])("returns null for %s", (code) => {
+    spyOn(fs, "statSync").mockImplementation(() => {
+      throw Object.assign(new Error(code), { code, syscall: "stat" });
+    });
+    expect(statOrNull(file)).toBeNull();
+  });
+
+  test("throws any other error", () => {
+    const failure = Object.assign(new Error("EACCES"), { code: "EACCES", syscall: "stat" });
+    spyOn(fs, "statSync").mockImplementation(() => {
+      throw failure;
+    });
+    expect(thrown(() => statOrNull(file))).toBe(failure);
+  });
+});
+
+describe("openFilePath", () => {
+  // Bun reads the path from the descriptor on macOS too; Node can't there.
+  const known = process.platform === "linux" || (process.platform === "darwin" && runtime === "bun");
+
+  test.if(known)("reads the path from the descriptor, so a link opened through and a later rename show", () => {
+    const real = fs.realpathSync(dir);
+    fs.mkdirSync(path.join(dir, "real"));
+    fs.writeFileSync(path.join(dir, "real", "a.txt"), "x");
+    fs.symlinkSync("real", path.join(dir, "link"));
+    const fd = fs.openSync(path.join(dir, "link", "a.txt"), "r");
+    try {
+      expect(openFilePath(fd)).toBe(path.join(real, "real", "a.txt"));
+      fs.renameSync(path.join(dir, "real", "a.txt"), path.join(dir, "real", "b.txt"));
+      expect(openFilePath(fd)).toBe(path.join(real, "real", "b.txt"));
+    } finally {
+      fs.closeSync(fd);
+    }
+  });
+
+  test.if(process.platform === "win32")("is null on Windows", () => {
+    fs.writeFileSync(file, "x");
+    const fd = fs.openSync(file, "r");
+    try {
+      expect(openFilePath(fd)).toBeNull();
+    } finally {
+      fs.closeSync(fd);
+    }
+  });
+});
+
+describe("leavesRoot", () => {
+  test.each(["..", `..${path.sep}x`, path.resolve("/elsewhere")])("%s leaves the root", (rel) => {
+    expect(leavesRoot(rel)).toBe(true);
+  });
+
+  test.each(["", "x", `x${path.sep}..`, "..x", `...${path.sep}x`])("%j stays inside", (rel) => {
+    expect(leavesRoot(rel)).toBe(false);
+  });
+});
+
+describe("homeDir", () => {
+  /** An `Env` reading only `vars`. */
+  const envOf = (vars: Record<string, string>) => (name: string) => (Object.hasOwn(vars, name) ? vars[name] : undefined);
+
+  test("is HOME from the env", () => {
+    expect(homeDir(envOf({ HOME: "/home/me" }))).toBe("/home/me");
+  });
+
+  test.each<Record<string, string>>([{}, { HOME: "" }])("falls back to the account's home (%j)", (vars) => {
+    spyOn(os, "userInfo").mockReturnValue({ ...os.userInfo(), homedir: "/account" });
+    expect(homeDir(envOf(vars))).toBe("/account");
+  });
+
+  test("throws the account lookup's error when the account has no home", () => {
+    const failure = Object.assign(new Error("no passwd entry"), { code: "ENOENT", syscall: "uv_os_get_passwd" });
+    spyOn(os, "userInfo").mockImplementation(() => {
+      throw failure;
+    });
+    expect(thrown(() => homeDir(envOf({})))).toBe(failure);
+  });
+});
+
 describe("stripTypes", () => {
   const AsyncFunction = (async () => {}).constructor as new (...args: string[]) => (inputs: unknown) => Promise<unknown>;
 
@@ -894,27 +1078,7 @@ const BUILT_URL = pathToFileURL(BUILT).href;
  */
 const ENTRY: string = "@ngocbh/yian/platform";
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node cases skipped.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 /** Spawned tests wait on real processes, well past the default timeout. */
 const SPAWNED_MS = 20_000;

@@ -139,6 +139,34 @@ test("the message names what yaml read", () => {
   );
 });
 
+test.each([
+  ["{role: Literal(a, true, b)}", "true", "a boolean", "Literal(a"],
+  ["{role: Literal(a, b, null, c)}", "null", "null", "Literal(a"],
+  ["{n: Literal(1, 2, 3)}", "2", "an integer", "Literal(1"],
+  ["{t: Dict(str, List(int)), u: Literal(x, 1, y)}", "1", "an integer", "Literal(x"],
+])("a key a flow mapping's comma made names the split value: %s", (written, key, readAs, cut) => {
+  // YAML splits `{role: Literal(a, true, b)}` at each comma, so `true` becomes a key.
+  const text = flowWith("x_block", "n_x_block").replace("  n_x_block: v", `  R: ${written}`);
+
+  const error = parseError(text);
+
+  expect(error.diagnostic.message).toBe(
+    `the key \`${key}\` was read by YAML as ${readAs}, but names in a flow must be text. This ` +
+      `\`{...}\` mapping's comma split the value that starts \`${cut}\`; quote that value or ` +
+      "use block style.",
+  );
+});
+
+test.each([
+  ["a block mapping", "  a: Literal(x\n  true: 1"],
+  ["a closed type", "  R: {a: Literal(x), true: 1}"],
+  ["a mapping value", "  R: {a: {b: Literal(x}, true: 1}"],
+])("a non-text key after %s keeps the plain message", (_label, block) => {
+  const text = flowWith("x_block", "n_x_block").replace("  n_x_block: v", block);
+
+  expect(parseError(text).diagnostic.message).toEndWith('Quote it ("true") or choose another name.');
+});
+
 test("an empty key asks for a name", () => {
   const text = flowWith("x_block", "n_x_block").replace("  n_x_block: v", "  ? \n  : v");
 
@@ -223,6 +251,20 @@ test.each([
 
   expect(error.diagnostic.message).toContain("was read by YAML as an integer");
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(range);
+});
+
+test("an alias key is reported where it is written, not at its anchor", () => {
+  const text =
+    "id: f\nname: f\nnodes:\n  n: !int &k 1\n" +
+    "output:\n  r: ${n.output}\n  *k : ${n.output}\n";
+
+  const error = parseError(text);
+
+  expect(error.diagnostic.message).toBe(
+    "the key `1` was read by YAML as an integer, but names in a flow must be text. " +
+      'Quote it ("1") or choose another name.',
+  );
+  expect(error.diagnostic.frames.at(-1)!.range).toEqual(new SourceRange(7, 3, 7, 5));
 });
 
 test("a numeric input key is a load error not a type error", () => {

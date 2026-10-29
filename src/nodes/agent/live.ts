@@ -33,9 +33,17 @@ import {
   ToolCallStarted,
 } from "../../events.ts";
 import { ERROR_KINDS, type ErrorKind, ProviderError } from "../../llm/errors.ts";
-import { type ChatModel, ReplyAssembler, TextDelta, UsageReport } from "../../llm/events.ts";
+import {
+  type ChatModel,
+  type Event,
+  PartDone,
+  ReasoningDelta,
+  ReplyAssembler,
+  TextDelta,
+  UsageReport,
+} from "../../llm/events.ts";
 import { callWithRetries } from "../../llm/executor.ts";
-import { Message, type Request, Response, TextPart } from "../../llm/messages.ts";
+import { Message, ReasoningPart, type Request, Response, TextPart } from "../../llm/messages.ts";
 import { AuthError, isAuthFailure } from "../../llm_clients/auth/common.ts";
 import { realScheduler, type Scheduler } from "../../platform.ts";
 import { isPending } from "../../tools/context.ts";
@@ -149,6 +157,28 @@ export function errorName(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
 }
 
+/** Where `callModel` writes a call: the node's steps, and the request's digest (`requestSha256`). */
+interface CallRecord {
+  readonly steps: AgentSteps;
+  readonly digest: string;
+}
+
+/** How `callModel` makes a call; see its `options`. */
+interface CallOptions {
+  readonly purpose: ModelCallPurpose;
+  readonly signal?: AbortSignal;
+  readonly interrupt?: AbortSignal;
+  readonly retry?: RetrySettings;
+  readonly record?: CallRecord;
+}
+
+/** What `callModel` returns: the reply, its `model_call` step's `n` (`N`), and whether it was replayed. */
+interface Called<N extends number | null> {
+  readonly response: Response;
+  readonly n: N;
+  readonly replayed: boolean;
+}
+
 /**
  * Make one model call through `callWithRetries`, publishing each attempt to the sinks and, with
  * `record`, writing it as a `model_call` step.
@@ -176,12 +206,15 @@ export function errorName(error: unknown): string {
  * `ModelCallFinished`, with its wait (`retry_in`, `null` when it isn't retried), what arrived and
  * its usage; the reply, with its media stored as run files (`inlineToFile`), before this returns
  * (as settled, since it arrived while the call was live); a reply a host interrupt cut, with
- * finish `interrupted`. A call the stop cut writes nothing, nor does a retry wait an interrupt
- * ended.
+ * finish `interrupted`. A reply whose media can't be stored (data that isn't base64, a refused
+ * `media` folder, a failed write) fails the call, unretried, as a last attempt's error does. A
+ * call the stop cut writes nothing, nor does a retry wait an interrupt ended.
  *
- * With `interrupt`, a host interrupt cuts the call. During an attempt it is checked right before
- * each non-empty `TextDelta` that isn't the attempt's first event (a later chunk, as a host sees
- * it); a cut closes the stream, sends the final chunk when streaming and `ModelCallFinished` with
+ * With `interrupt`, a host interrupt cuts the call. Until an attempt's reply starts (`opensReply`:
+ * any event but reasoning, usage and empty text) it aborts the request at once (a slow first
+ * token, a model thinking, a non-streaming reply), cutting an empty reply that drops any reasoning
+ * so far; after it, the interrupt is checked right before each non-empty `TextDelta` (a later
+ * chunk, as a host sees it). A cut closes the stream, sends the final chunk when streaming and `ModelCallFinished` with
  * the usage of the last `UsageReport` before the cut (else `null`) and no error. A reply whose
  * text had all arrived is never cut. During a retry wait the interrupt ends the wait at once with
  * nothing more emitted. A stop wins over an interrupt.
@@ -191,23 +224,31 @@ export function errorName(error: unknown): string {
  *   `interrupt` is the host's interrupt signal; `retry`'s `scheduler` and `random` run the retry
  *   waits; `record` holds the steps to write to and the request's digest (`requestSha256`).
  * @returns The successful attempt's reply, its media in file form with `record`; with `record`
- *   the `n` of the reply's `model_call` step (`null` without); and whether the reply was replayed.
- * @throws ReplyInterrupted carrying the text shown before the cut and its usage, or an empty
- *   reply and `null` usage for a cut wait; it is never marked.
+ *   the `n` of the reply's `model_call` step (typed `number` then; `null` without); and whether the
+ *   reply was replayed.
+ * @throws ReplyInterrupted carrying the text shown before the cut and its usage (an empty reply
+ *   for an attempt cut before its reply started), or an empty reply and `null` usage for a cut
+ *   wait; it is never marked.
  * @throws CapabilityFault when a recorded call's purpose or digest differs from this one's.
  */
 export async function callModel(
   live: LiveSinks | null,
   model: ChatModel,
   request: Request,
-  options: {
-    purpose: ModelCallPurpose;
-    signal?: AbortSignal;
-    interrupt?: AbortSignal;
-    retry?: RetrySettings;
-    record?: { steps: AgentSteps; digest: string };
-  },
-): Promise<{ response: Response; n: number | null; replayed: boolean }> {
+  options: CallOptions & { record: CallRecord },
+): Promise<Called<number>>;
+export async function callModel(
+  live: LiveSinks | null,
+  model: ChatModel,
+  request: Request,
+  options: CallOptions,
+): Promise<Called<number | null>>;
+export async function callModel(
+  live: LiveSinks | null,
+  model: ChatModel,
+  request: Request,
+  options: CallOptions,
+): Promise<Called<number | null>> {
   const { purpose, signal, interrupt, retry = {}, record } = options;
   let prior: PriorAttempts | undefined;
   if (record !== undefined) {
@@ -245,6 +286,17 @@ export async function callModel(
   let firstTokenAt: number | null = null;
   let arrived = new ReplyAssembler();
   let waiting = false;
+  // With `interrupt`, each attempt streams under its own signal, which the stop aborts and the
+  // interrupt aborts until the reply starts (`opensReply`), so a request still waiting on its first
+  // byte, or a model still thinking, ends at once. `release` detaches the interrupt from the
+  // current attempt; `opened` is whether its reply started.
+  let attemptSignal = signal;
+  let opened = false;
+  let release = () => {};
+  const streamed: ChatModel =
+    interrupt === undefined
+      ? model
+      : { provider: model.provider, model: model.model, stream: (req) => model.stream(req, { signal: attemptSignal }) };
   const call = () => ({
     purpose,
     model: model.model,
@@ -254,7 +306,7 @@ export async function callModel(
   });
   let response: Response;
   try {
-    response = await callWithRetries(model, sent, {
+    response = await callWithRetries(streamed, sent, {
       signal,
       random,
       prior,
@@ -264,18 +316,34 @@ export async function callModel(
         index = 0;
         waiting = false;
         first = true;
+        opened = false;
         shownText = "";
         usage = null;
         firstTokenAt = null;
         arrived = new ReplyAssembler();
         startedAt = record === undefined ? scheduler.now() : record.steps.now();
         emitEvent?.(new ModelCallStarted({ ...identity, n, startedAt }));
+        release();
+        if (interrupt !== undefined) {
+          const cutter = new AbortController();
+          // Nothing of the reply arrived yet, so the cut is empty, with the usage reported so far.
+          const cut = () => cutter.abort(new ReplyInterrupted(new Message({ role: "assistant", parts: [] }), usage));
+          interrupt.addEventListener("abort", cut, { once: true });
+          release = () => interrupt.removeEventListener("abort", cut);
+          if (interrupt.aborted) cut();
+          attemptSignal = signal === undefined ? cutter.signal : AbortSignal.any([signal, cutter.signal]);
+        }
       },
       onEvent: (event) => {
         const text = event instanceof TextDelta ? event.text : "";
-        if (text !== "" && !first && interrupt?.aborted) {
+        // Before the reply started the interrupt aborted the attempt; an event that still got through is cut too.
+        if (interrupt?.aborted && (!opened || text !== "")) {
           const parts = shownText ? [new TextPart(shownText)] : [];
           throw new ReplyInterrupted(new Message({ role: "assistant", parts }), usage);
+        }
+        if (!opened && opensReply(event)) {
+          opened = true;
+          release();
         }
         if (first && record !== undefined) firstTokenAt = record.steps.now();
         first = false;
@@ -290,6 +358,12 @@ export async function callModel(
         emitEvent?.(new ModelCallFinished({ ...identity, n, error: errorName(info.error) }));
       },
     });
+    if (record !== undefined) {
+      // Stored inside the try: the call happened, so media that can't be stored fails it like a
+      // provider error, with its step written and its bracket closed, and a resume doesn't pay again.
+      const { message, usage: used, finishReason, responseId } = response;
+      response = new Response({ message: inlineToFile(message, runDir), usage: used, finishReason, responseId });
+    }
     emitStream?.(chunk("", true));
   } catch (error) {
     if (error instanceof CapabilityFault || signal?.aborted) throw error;
@@ -312,19 +386,26 @@ export async function callModel(
     markModelFailure(error);
     emitEvent?.(new ModelCallFinished({ ...identity, n, error: errorName(error) }));
     throw error;
+  } finally {
+    release();
   }
   let step: number | null = null;
   if (record !== undefined) {
-    const reply = inlineToFile(response.message, runDir);
-    const { usage: used, finishReason, responseId } = response;
-    step = record.steps.modelCall(
-      { ...call(), output: reply, responseId, finish: finishReason, usage: used },
-      { settled: true },
-    );
-    response = new Response({ message: reply, usage: used, finishReason, responseId });
+    const { message: output, usage: used, finishReason: finish, responseId } = response;
+    step = record.steps.modelCall({ ...call(), output, responseId, finish, usage: used }, { settled: true });
   }
   emitEvent?.(new ModelCallFinished({ ...identity, n, usage: usageOf(response) }));
   return { response, n: step, replayed: false };
+}
+
+/**
+ * Whether `event` starts a reply's content: anything but reasoning (its deltas and finished
+ * parts), a usage report and an empty text delta, which show nothing of the reply.
+ */
+function opensReply(event: Event): boolean {
+  if (event instanceof TextDelta) return event.text !== "";
+  if (event instanceof PartDone) return !(event.part instanceof ReasoningPart);
+  return !(event instanceof ReasoningDelta || event instanceof UsageReport);
 }
 
 /**

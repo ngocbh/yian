@@ -324,7 +324,7 @@ import { BranchNode, FailNode, FIXED_CLOCK, noGrowth, RUN_ID } from "../helpers/
  * `alpha` group) waits: END can't be reached whatever `ask` does.
  */
 function unreachableFlow(ask: FakeHost): CompiledFlow {
-  return CompiledFlow.fromParts(
+  return new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["ask", ask],

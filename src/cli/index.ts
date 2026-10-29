@@ -26,6 +26,7 @@ import {
   type CommandSpec,
   abortOnSignal,
   flush,
+  forTerminal,
   helpText,
   HostStop,
   type OptionSpec,
@@ -72,6 +73,13 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
           type: "string",
           path: { exists: true, dir: false, readable: true },
           help: "A JSON file of inputs.",
+        },
+        {
+          name: "inbox",
+          type: "string",
+          help:
+            "The Inbox(str) or Inbox(Message) input to send typed lines to, when the flow has " +
+            "several (on a terminal).",
         },
         {
           name: "log",
@@ -147,11 +155,12 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       ],
     },
     load: async () => {
-      const { run } = await import("./run.ts");
+      const { runOrChat } = await import("./inbox_chat.ts");
       return ({ args, options: o }, io) =>
-        run(
+        runOrChat(
           args["flow"] as string | undefined,
           {
+            inbox: o["inbox"] as string | undefined,
             inputValues: o["input"] as string[],
             inputs: o["inputs"] as string | undefined,
             log: o["log"] as string | undefined,
@@ -175,37 +184,25 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
     spec: {
       name: "chat",
       summary:
-        "Chat with a flow: each line you type is sent to its Inbox(str) or Inbox(Message) input. " +
-        "Opens no MCP servers and loads no skills.",
+        "Chat with Yian, yian's assistant: it runs, writes, edits and improves the flows in this " +
+        "folder with you. With FLOW, the chat is about that flow.",
       positionals: [
         {
           name: "flow",
-          help: "Path to a flow .yaml with an Inbox(str) or Inbox(Message) input",
+          help: "A flow .yaml you want help with; the assistant reads and checks it first",
+          optional: true,
           path: { exists: true, dir: false, readable: true },
         },
       ],
       options: [
         {
-          name: "inbox",
-          type: "string",
-          help: "The Inbox(str) or Inbox(Message) input to send lines to, when the flow has several.",
-        },
-        { name: "input", short: "i", type: "string", multiple: true, help: "Another input as k=v (repeatable)." },
-        {
-          name: "inputs",
-          type: "string",
-          path: { exists: true, dir: false, readable: true },
-          help: "A JSON file of the other inputs.",
-        },
-        {
           name: "log",
           type: "string",
           path: { dir: false },
-          help: "Create the run log at PATH instead of the default location.",
+          help: "Create the chat's run log at PATH instead of the default location.",
         },
-        { name: "num-workers", short: "w", type: "int", min: 0, help: "Worker pool size (default 8; 0 for serial)." },
-        { name: "provider", type: "string", help: "Provider for agents that set none (cascade)." },
-        { name: "model", type: "string", help: "Model for agents that set none (cascade)." },
+        { name: "provider", type: "string", help: "Provider for the assistant and the flows it runs (cascade)." },
+        { name: "model", type: "string", help: "Model for the assistant and the flows it runs (cascade)." },
         { name: "engine-trace", type: "boolean", help: "On a failure, also print the engine traceback." },
       ],
     },
@@ -213,13 +210,9 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       const { chat } = await import("./chat.ts");
       return ({ args, options: o }, io) =>
         chat(
-          args["flow"] as string,
+          args["flow"] as string | undefined,
           {
-            inbox: o["inbox"] as string | undefined,
-            inputValues: o["input"] as string[],
-            inputs: o["inputs"] as string | undefined,
             log: o["log"] as string | undefined,
-            numWorkers: o["num-workers"] as number | undefined,
             provider: o["provider"] as string | undefined,
             model: o["model"] as string | undefined,
             engineTrace: o["engine-trace"] === true,
@@ -515,7 +508,7 @@ export async function main(argv: readonly string[], io: CliIo = processIo()): Pr
     // `process.emitWarning`. The defaults in effect are `io.env`'s, checked above.
     return await withEnv(io.env, () =>
       withWarnings(
-        (message) => void io.stderr.write(`warning: ${message}\n`).catch(() => {}),
+        (message) => void io.stderr.write(`warning: ${forTerminal(message, io.stderr)}\n`).catch(() => {}),
         () => handler(parsed, io),
       ),
     );
@@ -524,7 +517,7 @@ export async function main(argv: readonly string[], io: CliIo = processIo()): Pr
       await io.stderr.write(usageError(spec, error));
       return 2;
     }
-    await io.stderr.write(`${(error instanceof Error && error.stack) || String(error)}\n`);
+    await io.stderr.write(`${forTerminal((error instanceof Error && error.stack) || String(error), io.stderr)}\n`);
     return 1;
   }
 }

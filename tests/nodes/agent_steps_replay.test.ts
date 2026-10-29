@@ -337,6 +337,17 @@ test("the replay cursor takes the recorded replies in order and finds each resul
   expect(steps.recordedResult(2, "c3")).toBeNull();
 });
 
+test("a recorded reply's usage reads back its cache writes; a step written without them reads null", () => {
+  const counts = { input_tokens: 5n, output_tokens: 1n, cache_read_tokens: 2n, cache_creation_tokens: 3n, reasoning_tokens: 0n };
+  const steps = replaying([{ ...callStep(D1, "first"), usage: counts }, callStep(D2, "second")]);
+  const first = steps.takeRecorded("chat", D1) as { response: Response };
+  expect(first.response.usage).toEqual(
+    new Usage({ inputTokens: 5, outputTokens: 1, totalTokens: 6, cacheReadTokens: 2, cacheCreationTokens: 3, reasoningTokens: 0 }),
+  );
+  const second = steps.takeRecorded("chat", D2) as { response: Response };
+  expect(second.response.usage!.cacheCreationTokens).toBeNull();
+});
+
 test("failed attempts after the last reply are the next call's prior attempts, taken once", () => {
   const steps = replaying([callStep(D1, "first"), failedStep(D2, 1.5), failedStep(D2, 3)]);
   expect(steps.takeRecorded("chat", D1)).not.toBeNull();
@@ -749,6 +760,49 @@ test("a recorded cut and honor step replay to null; no model is called", async (
     expect(resumed.output).toBeNull();
     expect(model.requests.length).toBe(0);
     expect(honors(log)).toEqual([interruptSeq(log)]);
+  }
+});
+
+/** `model`, running `hook` as each call's first event is asked for, before the model sends it. */
+function atFirstRead(model: ChatModel, hook: () => void): ChatModel {
+  return {
+    provider: model.provider,
+    model: model.model,
+    stream(request: Request, options: { signal?: AbortSignal } = {}) {
+      const inner = model.stream(request, options);
+      async function* events() {
+        hook();
+        yield* inner;
+      }
+      return new EventStream(events(), () => inner.close());
+    },
+  };
+}
+
+test("a call cut before its first event records an empty reply and replays to null; no model is called", async () => {
+  const flow = flowText([], { steerInbox: true, output: "Optional(str)" });
+  const uncutLog = runLog();
+  const cutting = (log: string) => atFirstRead(new ScriptedModel([cutReply()], CONFIG), () => interruptAt(log));
+  const uncut = await run(cutting(uncutLog), { flow, log: uncutLog });
+  expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+  expect(uncut.result.output).toBeNull();
+  expect(steps(uncutLog).map((step) => [step["kind"], step["finish"] ?? null])).toEqual([
+    ["model_call", "interrupted"],
+    ["interrupted", null],
+  ]);
+  expect(Message.fromJSON(steps(uncutLog)[0]!["output"]).parts).toEqual([]);
+  expect(await newMessages(uncutLog)).toEqual([["user", INTERRUPTED_MARKER]]);
+  for (const kind of ["interrupted", "model_call"]) {
+    // After the honor step, or after the cut call and before the honor step.
+    const log = runLog();
+    await cutRun(seqOf(uncutLog, kind) + 1, cutting(log), { flow, log });
+    const model = new ScriptedModel([], CONFIG);
+    const resumed = await resume(log, model);
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(resumed.output).toBeNull();
+    expect(model.requests.length).toBe(0);
+    expect(honors(log)).toEqual([interruptSeq(log)]);
+    expect(await newMessages(log)).toEqual([["user", INTERRUPTED_MARKER]]);
   }
 });
 

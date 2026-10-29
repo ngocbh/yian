@@ -16,9 +16,10 @@ import { openMcpServers } from "../../src/cli/run.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { loadSkills } from "../../src/compose/skills.ts";
+import { MemoryRegistry } from "../../src/memory_host.ts";
 import { runFlow } from "../../src/run.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
-import { McpServer, mcpServer } from "../../src/tools/mcp.ts";
+import { McpSdkMissingError, McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import { TOOL_REGISTRY } from "../../src/tools/registry.ts";
 import { withAppendHook } from "../helpers/append_hook.ts";
 import { startHttpServer } from "../fixtures/mcp/fake_server.ts";
@@ -239,6 +240,27 @@ test(
     expect(lastLine(result.stdout)).toBe("hi");
     // No server is named `echo`, so every server opened to find it; a and b then closed.
     expect(Object.values(files).map((file) => pids(file).length)).toEqual([1, 1, 1]);
+    await expectNoChildren(...Object.values(files));
+  },
+  SLOW,
+);
+
+test(
+  "probing stops at the first server that supplies the tool",
+  async () => {
+    const files = { none: marker("none.pid"), a: marker("a.pid"), b: marker("b.pid") };
+    const cfg = config(join(tmp, "cfg.json"), {
+      none: stdio("--only", "add", "--marker", files.none),
+      a: stdio("--marker", files.a),
+      b: stdio("--marker", files.b),
+    });
+
+    const result = await run([toolFlow(), "--mcp-config", cfg]);
+
+    expect(result.code, result.output).toBe(0);
+    expect(lastLine(result.stdout)).toBe("hi");
+    // `a` supplies `echo`, so `b`, which lists it too, never starts.
+    expect(Object.values(files).map((file) => pids(file).length)).toEqual([1, 1, 0]);
     await expectNoChildren(...Object.values(files));
   },
   SLOW,
@@ -542,6 +564,38 @@ test(
 );
 
 test(
+  "a memory cleanup failure stays out of a failed server's notes",
+  async () => {
+    const cfg = config(join(tmp, "cfg.json"), {
+      broken: { command: join(tmp, "missing") },
+      gone: { command: join(tmp, "also-missing") },
+    });
+    const flow = flowFile(
+      "id: mcp_memory\nname: mcp_memory\nlong_term_memory: {notes: episodic}\nnodes:\n  call:\n" +
+        '    kind: tool\n    tool_id: echo\n    input: {text: "hi"}\noutput: ${call.output}\n',
+    );
+    const close = MemoryRegistry.prototype.close;
+    MemoryRegistry.prototype.close = async () => {
+      throw new Error("close failed");
+    };
+    let result;
+    try {
+      result = await run([flow, "--mcp-config", cfg, "--json"]);
+    } finally {
+      MemoryRegistry.prototype.close = close;
+    }
+
+    expect(result.code).toBe(1);
+    const { error } = JSON.parse(result.stdout) as { error: { notes: string[] } };
+    expect(error.notes).toHaveLength(2);
+    expect(error.notes[0]).toBe('the flow needs ["echo"], which no started server supplies');
+    expect(error.notes[1]).toContain("MCP server 'gone'");
+    expect(result.stderr).not.toContain("close failed");
+  },
+  SLOW,
+);
+
+test(
   "a broken server the flow doesnt need is a warning",
   async () => {
     const pid = marker();
@@ -680,13 +734,18 @@ test("only the missing mcp sdk import error is a host error", async () => {
       throw error;
     };
   };
+  const SDK = "MCP servers need the MCP SDK; install @modelcontextprotocol/client 2.3.1";
   let reported;
   let other;
+  let worded;
   try {
-    failWith(new Error("MCP servers need the MCP SDK; install @modelcontextprotocol/client 2.3.1"));
+    failWith(new McpSdkMissingError(SDK));
     reported = await run([flow, "--mcp-config", cfg]);
     failWith(new Error("no module named 'x'"));
     other = await run([flow, "--mcp-config", cfg]);
+    // Known by its class, not its message.
+    failWith(new Error(SDK));
+    worded = await run([flow, "--mcp-config", cfg]);
   } finally {
     McpServer.prototype.open = open;
   }
@@ -694,7 +753,10 @@ test("only the missing mcp sdk import error is a host error", async () => {
   expect(reported.code).toBe(1);
   expect(reported.output).toContain("run failed: MCP servers need the MCP SDK");
   // Any other error is a bug: `main` prints its stack, not a `run failed:` line.
-  expect(other.code).toBe(1);
+  for (const bug of [other, worded]) {
+    expect(bug.code).toBe(1);
+    expect(bug.stderr).toContain("\n    at ");
+    expect(bug.stderr).not.toContain("run failed:");
+  }
   expect(other.stderr).toContain("Error: no module named 'x'\n    at ");
-  expect(other.stderr).not.toContain("run failed:");
 });

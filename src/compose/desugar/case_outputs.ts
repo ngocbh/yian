@@ -2,7 +2,8 @@
  * Desugar pass: `${<case>.output}` binding refs to a branch coalesce over the case's leaves.
  *
  * `expandCaseOutputs` (below) walks every binding field (any node's `input:` / mapped-call
- * `over:`) and the flow `output:` bindings, and rewrites each top-level case-output span
+ * `over:`), each AGENT's `llm_config:` values (an adaptive composer's too), the flow `llm_config:`
+ * values and the flow `output:` bindings, and rewrites each top-level case-output span
  * `${<case>.output[.path]}`, whole or embedded in text, to a coalesce
  * `${t1.output[.path] | t2.output… }` over the case's LEAF branch targets (an inner case is
  * flattened to its own leaves).
@@ -26,40 +27,55 @@
  * pipeline imports this back.
  */
 
-import { reprText, type SourceRange } from "../../diagnostics.ts";
-import { conditionRefs, ExpressionError, optionalInsideRoot, parseCondition } from "../../expr/expressions.ts";
-import { findSpanEnd } from "../../expr/grammar.ts";
+import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
+import {
+  conditionRefs,
+  ExpressionError,
+  optionalInsideRoot,
+  parseCondition,
+  type RefStep,
+  splitReference,
+  stepsText,
+} from "../../expr/expressions.ts";
+import { callSuffixOf, type ExprNode, findSpanEnd, parseExpr, Tree } from "../../expr/grammar.ts";
 import { exprRefsOf, scanTemplate, Span } from "../../expr/template.ts";
-import { Assertion, iterSourceStrings } from "../../nodes/contracts.ts";
+import {
+  Assertion,
+  Binding,
+  iterSourceStrings,
+  mapSourceStrings,
+  type ValuePath,
+  ValueTemplate,
+} from "../../nodes/contracts.ts";
 import { poolRootLength } from "../../typesys/pool.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { nth } from "../helpers/source.ts";
-import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
+import { AgentDescriptor } from "../nodes/agent.ts";
+import { type NodeDescriptor, type OriginPresenter, siteKey } from "../nodes/base.ts";
 import { mapBindingStrings } from "../nodes/bindings.ts";
 import { CaseDescriptor } from "../nodes/case.ts";
-import { mapOutputsStrings } from "./inline_calls.ts";
-
-// A clean whole-span case-output ref INTERIOR. Singular only: `<id>.output[.<seg>…]` (group 1 =
-// id, group 2 = the steps after `output`, each `.<seg>` or `?.<seg>`, kept as written). The id and
-// each path segment are reference-path style — a letter/underscore, then letters, digits, `_`, `#`
-// or `/`; no `-`.
-const CASE_OUTPUT_INTERIOR = /^([A-Za-z_][A-Za-z0-9_#/]*)\.output((?:\??\.[A-Za-z_][A-Za-z0-9_#/]*)*)$/;
+import { bindingOrigin, mapOutputsStrings } from "./inline_calls.ts";
 
 /**
  * Expand every `${<case>.output}` binding ref to a coalesce over its branch targets.
  *
- * Walks every binding field (any node's `input:` / a mapped call's `over:`) and the flow `output:`
- * bindings. Rejects (located `LoadError`) a case-value ref in a coalesce or default operand, or in
- * a `case` condition (`on:`/`when:`) or an `assert` — those are not bindings.
+ * Walks every binding field (any node's `input:` / a mapped call's `over:`), each AGENT's
+ * `llm_config:` values, the flow `llm_config:` values and the flow `output:` bindings. Rejects
+ * (located `LoadError`) a case-value ref in a coalesce or default operand, or in a `case` condition
+ * (`on:`/`when:`) or an `assert` — those are not bindings.
  *
  * @param descriptors Node descriptors keyed by node id.
  * @param outputsSection The flow `output:` bindings.
  * @param assertsSection The flow assertions, checked for case refs.
  * @param options.outputsRange Locates a bad ref in the flow outputs.
  * @param options.assertionRangeAt Locates a bad ref in the flow assertion at an index.
+ * @param options.flowLlmConfig The flow `llm_config:` layer.
+ * @param options.flowLlmConfigLabel Names the flow layer in a message; defaults to `flow llm_config`.
+ * @param options.resolveOrigin Locates a bad ref in an `llm_config:` value at its registered site.
  * @param options.diagnostics Source ownership for located errors.
- * @returns `[newDescriptors, newOutputs]`. A flow with no `case` node returns its descriptors (in a
- *   fresh map) and its outputs unchanged.
+ * @param options.spellings Collects each expanded read as written, by expanded span interior.
+ * @returns `[newDescriptors, newOutputs, newFlowLlmConfig]`. A flow with no `case` node returns its
+ *   descriptors (in a fresh map), its outputs and its flow layer unchanged.
  * @throws LoadError when a case-value ref sits in an unsupported position, or a read case has no
  *   resolvable branch value.
  */
@@ -70,34 +86,49 @@ export function expandCaseOutputs(
   options: {
     outputsRange?: SourceRange | null;
     assertionRangeAt?: ((index: number) => SourceRange | null) | null;
+    flowLlmConfig?: unknown;
+    flowLlmConfigLabel?: string;
+    resolveOrigin?: OriginPresenter | null;
     diagnostics?: LoadDiagnostics | null;
     spellings?: Map<string, CaseRead> | null;
   } = {},
-): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown] {
+): [descriptors: Map<string, NodeDescriptor>, outputsSection: unknown, flowLlmConfig: unknown] {
   const { outputsRange = null, assertionRangeAt = null, spellings = null } = options;
+  const { flowLlmConfig = null, flowLlmConfigLabel = "flow llm_config", resolveOrigin = null } = options;
   const diagnostics = options.diagnostics ?? new LoadDiagnostics();
   const caseIds = caseIdsOf(descriptors);
-  if (caseIds.size === 0) return [new Map(descriptors), outputsSection];
+  if (caseIds.size === 0) return [new Map(descriptors), outputsSection, flowLlmConfig];
   const targets = caseLeafTargets(descriptors, caseIds);
+  /** Expand the strings of one `llm_config` layer, each named by its field and located at its value. */
+  const expandLayer = (layer: unknown, label: string, fallback: SourceRange | null): unknown =>
+    mapLayerStrings(layer, resolveOrigin, fallback, (text, path, range) =>
+      expander(caseIds, targets, label + path.map((part) => `.${part}`).join(""), { range, diagnostics, spellings })(
+        text,
+      ),
+    );
 
   const newDescriptors = new Map<string, NodeDescriptor>();
   for (const [nodeId, descriptor] of descriptors) {
-    newDescriptors.set(
-      nodeId,
-      mapBindingStrings(descriptor, (field, key, value) =>
-        expander(caseIds, targets, `node ${reprText(nodeId)}`, {
-          range: bindingRange(descriptor, field, key),
-          diagnostics,
-          spellings,
-        })(value),
-      ),
+    let rewritten = mapBindingStrings(descriptor, (field, key, value) =>
+      expander(caseIds, targets, `node ${reprText(nodeId)}`, {
+        range: bindingOrigin(descriptor, field, key),
+        diagnostics,
+        spellings,
+      })(value),
     );
+    if (rewritten instanceof AgentDescriptor) {
+      const host = rewritten.fieldLabels.get("llm_config") ?? `node ${reprText(nodeId)} llm_config`;
+      const llmConfig = expandLayer(rewritten.llmConfig, host, fieldRange(rewritten, "llm_config"));
+      if (llmConfig !== rewritten.llmConfig) rewritten = rewritten.replace({ llmConfig });
+    }
+    newDescriptors.set(nodeId, rewritten);
   }
 
   const newOutputs = mapOutputsStrings(
     outputsSection,
     expander(caseIds, targets, "flow outputs", { range: outputsRange, diagnostics, spellings }),
   );
+  const newFlowLlmConfig = expandLayer(flowLlmConfig, flowLlmConfigLabel, null);
 
   // A case value in a condition / assert (not a binding) is unsupported — loud.
   for (const [nodeId, d] of descriptors) {
@@ -120,7 +151,7 @@ export function expandCaseOutputs(
     rejectCaseRefs(assertion, caseIds, "assert", { range, diagnostics, condition: true });
   }
 
-  return [newDescriptors, newOutputs];
+  return [newDescriptors, newOutputs, newFlowLlmConfig];
 }
 
 /** A case value read as written: the case and the leaf targets its expansion reads instead. */
@@ -145,17 +176,20 @@ export function caseReadsAsWritten(message: string, text: string, spellings: Rea
 /**
  * Return the ids of the cases read as `${<case>.output[.path]}` in a binding.
  *
- * Walks the same binding fields as `expandCaseOutputs` (every node's binding fields and the flow
- * `output:` bindings), so it must run before that pass rewrites the refs. A read counts whole,
- * dotted, or embedded in text; a malformed span is skipped (the binding parser reports it later).
+ * Walks the same bindings as `expandCaseOutputs` (every node's binding fields, each AGENT's
+ * `llm_config:` values, the flow `llm_config:` values and the flow `output:` bindings), so it must
+ * run before that pass rewrites the refs. A read counts whole, dotted, or embedded in text; a
+ * malformed span is skipped (the binding parser reports it later).
  *
  * @param descriptors Node descriptors keyed by node id.
  * @param outputsSection The flow `output:` bindings.
+ * @param flowLlmConfig The flow `llm_config:` layer.
  * @returns The case ids whose `output` some binding reads.
  */
 export function caseOutputReads(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
   outputsSection: unknown,
+  flowLlmConfig: unknown = null,
 ): ReadonlySet<string> {
   const caseIds = caseIdsOf(descriptors);
   const read = new Set<string>();
@@ -178,7 +212,12 @@ export function caseOutputReads(
     return value;
   };
 
-  for (const descriptor of descriptors.values()) mapBindingStrings(descriptor, (_field, _key, value) => collect(value));
+  for (const descriptor of descriptors.values()) {
+    mapBindingStrings(descriptor, (_field, _key, value) => collect(value));
+    if (!(descriptor instanceof AgentDescriptor)) continue;
+    for (const [, text] of iterSourceStrings(descriptor.llmConfig)) collect(text);
+  }
+  for (const [, text] of iterSourceStrings(flowLlmConfig)) collect(text);
   mapOutputsStrings(outputsSection, collect);
   return read;
 }
@@ -207,13 +246,36 @@ function topLevelSpans(value: string): string[] {
   return spans;
 }
 
-/** Return the narrowest available range for a descriptor binding. */
-function bindingRange(descriptor: NodeDescriptor, field: string, key: string): SourceRange | null {
-  const ranges = descriptor.fieldRanges;
-  if (field === "inputs") {
-    return ranges.get(siteKey("input", key)) ?? ranges.get(siteKey("field", "inputs")) ?? descriptor.range;
+/**
+ * Rebuild an `llm_config` layer with `fn` applied to each template string, given its field path
+ * and the range of its value: the registered site of its key, or of the nearest key above it, else
+ * `fallback`.
+ */
+function mapLayerStrings(
+  layer: unknown,
+  resolveOrigin: OriginPresenter | null,
+  fallback: SourceRange | null,
+  fn: (text: string, path: ValuePath, range: SourceRange | null) => string,
+): unknown {
+  // `mapSourceStrings` visits the strings `iterSourceStrings` yields, in the same order.
+  const paths = [...iterSourceStrings(layer)].map(([path]) => path);
+  let index = 0;
+  return mapSourceStrings(layer, (text) => {
+    const path = paths[index++] ?? [];
+    return fn(text, path, layerRange(layer, path, resolveOrigin) ?? fallback);
+  });
+}
+
+/** Return the resolved range of the nearest registered site at or above `path` in a layer. */
+function layerRange(layer: unknown, path: ValuePath, resolveOrigin: OriginPresenter | null): SourceRange | null {
+  if (resolveOrigin === null) return null;
+  let origin: OriginRef | null = layer instanceof Binding ? layer.origin : null;
+  if (layer instanceof ValueTemplate) {
+    for (let length = path.length; length > 0 && origin === null; length -= 1) {
+      origin = layer.originAt(path.slice(0, length));
+    }
   }
-  return ranges.get(siteKey("field", field)) ?? descriptor.range;
+  return origin !== null ? (resolveOrigin(origin)?.range ?? null) : null;
 }
 
 /** Return a scalar field's range, falling back to its descriptor range. */
@@ -241,8 +303,7 @@ function expander(
   options: { range: SourceRange | null; diagnostics: LoadDiagnostics; spellings: Map<string, CaseRead> | null },
 ): (value: string) => string {
   return (value) => {
-    // Singular only: detect the `.output` marker.
-    if (!value.includes(".output")) return value;
+    if (!value.includes("${")) return value;
     const out: string[] = [];
     let i = 0;
     while (i < value.length) {
@@ -287,29 +348,46 @@ function expandSpan(
   options: { range: SourceRange | null; diagnostics: LoadDiagnostics; spellings: Map<string, CaseRead> | null },
 ): string {
   const { range, diagnostics, spellings } = options;
-  const match = CASE_OUTPUT_INTERIOR.exec(interior.trim());
-  if (match !== null) {
-    const caseId = match[1]!;
-    const suffix = match[2] ?? "";
-    if (caseIds.has(caseId)) {
-      const leaves = targets(caseId);
-      // No then:/else:, or a case-target cycle (the flatten dropped the arm).
-      if (leaves.length === 0) {
-        throw diagnostics.error(
-          `${host}: \${${caseId}.output} — case ${reprText(caseId)} has no resolvable branch value ` +
-            "(a case needs a `then:` or `else:`, and its targets must not form a cycle)",
-          { range },
-        );
-      }
-      // The first step after each branch root is ?.: a branch the route didn't take is skipped.
-      const steps = suffix.startsWith(".") ? "?" + suffix : suffix;
-      const expanded = leaves.map((target) => `${String(target)}.output${steps}`).join(" | ");
-      spellings?.set(expanded, { caseId, leaves: leaves.map(String) });
-      return "${" + expanded + "}";
+  const read = caseRead(interior, caseIds);
+  if (read !== null) {
+    const { caseId, steps } = read;
+    const leaves = targets(caseId);
+    // No then:/else:, or a case-target cycle (the flatten dropped the arm).
+    if (leaves.length === 0) {
+      throw diagnostics.error(
+        `${host}: \${${caseId}.output} — case ${reprText(caseId)} has no resolvable branch value ` +
+          "(a case needs a `then:` or `else:`, and its targets must not form a cycle)",
+        { range },
+      );
     }
+    // The first step after each branch root is ?.: a branch the route didn't take is skipped.
+    const suffix = stepsText(steps.map((step, index) => (index === 0 ? { ...step, optional: true } : step)));
+    const expanded = leaves.map((target) => `${String(target)}.output${suffix}`).join(" | ");
+    spellings?.set(expanded, { caseId, leaves: leaves.map(String) });
+    return "${" + expanded + "}";
   }
   rejectCaseRefs("${" + interior + "}", caseIds, host, { range, diagnostics }); // a non-clean read is loud
   return "${" + interior + "}";
+}
+
+/**
+ * Return the case and the steps after `output` when a span interior is just a case value read,
+ * `<case>.output[.path]` (spaces around a `.` allowed), else `null`; a malformed interior is
+ * `null`, left for the binding parser.
+ */
+function caseRead(interior: string, caseIds: ReadonlySet<string>): { caseId: string; steps: RefStep[] } | null {
+  let tree: ExprNode;
+  try {
+    tree = parseExpr(interior);
+  } catch (error) {
+    if (!(error instanceof ExpressionError)) throw error;
+    return null;
+  }
+  if (!(tree instanceof Tree) || tree.data !== "refcall" || callSuffixOf(tree) !== undefined) return null;
+  const { head, steps } = splitReference(tree);
+  // `${g?.output}` puts ?. inside the root; the rejection below names that.
+  if (!caseIds.has(head) || steps[0]?.name !== "output" || steps[0].optional) return null;
+  return { caseId: head, steps: steps.slice(1) };
 }
 
 /**

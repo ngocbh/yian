@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildGrow } from "../../src/compile/expand.ts";
-import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { copyGraph, END_ID, START_ID } from "../../src/compile/model.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -383,11 +383,11 @@ async function agentGrowthHistory(): Promise<{
 }> {
   const loaded = await load(CALL_AGENT);
   const privateFlow = copyGraph(loaded.compiled);
-  const effective = resolveLlmCascade(
+  const effective = resolveRunLlm(
     privateFlow,
     { openai: { temperature: 0.25 } },
     { defaults: { provider: "openai", model: "recorded-model" } },
-  );
+  ).effective;
   const log = new MemoryRunLog(RECOVERY_RUN_ID);
   const state = startedRun(loaded, log, { effective, privateFlow });
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));

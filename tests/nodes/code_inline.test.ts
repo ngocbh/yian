@@ -6,15 +6,24 @@
  */
 
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { getEventListeners } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { withEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { NodeFailed, NodeSucceeded, type RunEvent } from "../../src/events.ts";
@@ -28,6 +37,7 @@ import { FileRef, Type, TypeCheckError, ValueKind } from "../../src/typesys/valu
 import { loadConformanceFlow } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { drive, engine, graph, rejected } from "../helpers/run_state_fixtures.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 /** Run a CODE node `n` with `code` on the bound `inputs` and return its result's value. */
 async function run(code: string, inputs: Record<string, unknown> = {}): Promise<unknown> {
@@ -155,23 +165,37 @@ for (const [name, code, expectedLine] of [
 
 const HELPER_BODY = 'function helper() {\n  throw new Error("boom")\n}\nhelper()\nreturn 0';
 
-test("a body error's stack names the source file and the authored line", async () => {
+test("a body error's stack names the source file and the node's body line", async () => {
   const error = (await rejected(
     new CodeNode("n", { code: HELPER_BODY, sourceFile: "flows/my flow.yaml" }).run({}),
   )) as CodeError;
 
   expect(error).toBeInstanceOf(CodeError);
-  expect(error.stack).toContain("(flows/my flow.yaml:2:");
-  expect(error.stack).toContain("(flows/my flow.yaml:4:");
+  expect(error.stack).toContain("(flows/my flow.yaml#n:2:");
+  expect(error.stack).toContain("(flows/my flow.yaml#n:4:");
   expect(error.stack).not.toContain("yian-code:");
   // The copy of what the body threw keeps the runtime's own frames.
   expect((error.original as Error).stack).toContain("yian-code:n:4:");
 });
 
+test("a body's frames name the file line and column where the body line starts", async () => {
+  const codeLineStarts = HELPER_BODY.split("\n").map((_, index) => ({ line: 20 + index, column: 7 }));
+  const error = (await rejected(
+    new CodeNode("n", { code: HELPER_BODY, sourceFile: "flow.yaml", codeLineStarts }).run({}),
+  )) as CodeError;
+
+  const raw = /yian-code:n:\d+:(\d+)/.exec((error.original as Error).stack!)!;
+  const frame = /\(flow\.yaml:21:(\d+)\)/.exec(error.stack!);
+  expect(frame).not.toBeNull();
+  // The body column, shifted by the line's start column less one.
+  expect(Number(frame![1])).toBe(Number(raw[1]) + 6);
+  expect(error.stack).toContain("(flow.yaml:23:");
+});
+
 test("a body's frames default to <inline-code>, a first-line column counted from the body", async () => {
   const error = (await failure('throw new Error("boom")')) as CodeError;
 
-  const frame = /<inline-code>:1:(\d+)/.exec(error.stack ?? "");
+  const frame = /<inline-code>#n:1:(\d+)/.exec(error.stack ?? "");
   expect(frame).not.toBeNull();
   // Not shifted by the strict prologue sharing the line: Bun reports 16 and Node 7, 30 and 21
   // uncorrected.
@@ -182,6 +206,41 @@ test("marker text that isn't a body location is left as it is", async () => {
   const error = (await failure('throw new Error("yian-code:n:3:4 x")')) as CodeError;
 
   expect(error.stack).toContain("Error: yian-code:n:3:4 x");
+});
+
+/** A flow whose CODE node `boom` has `code` as its `code:` field's text, from line 6. */
+function throwingFlow(code: string): string {
+  return `id: frames
+name: frames
+nodes:
+  boom:
+    kind: code
+    output: str
+${code}
+output: \${boom.output}
+`;
+}
+
+test("a literal block body's frames name the flow file's line and column", async () => {
+  const flow = throwingFlow('    code: |\n      const x = 1\n        ;throw new Error("boom")\n      return "never"');
+  const result = await runFlow(await loadFlow(flow, { sourceLabel: "flows/f.yaml" }), {});
+
+  expect(result.status).toBe("failed");
+  // The throw is on file line 9, its `throw new Error` at columns 10 to 25 (the body's line 2,
+  // columns 4 to 19): the column a runtime reports is in there, shifted by the block's indent.
+  const column = /\(flows\/f\.yaml:9:(\d+)\)/.exec(result.failure!.traceback!);
+  expect(column).not.toBeNull();
+  expect(Number(column![1])).toBeGreaterThanOrEqual(10);
+  expect(Number(column![1])).toBeLessThanOrEqual(25);
+});
+
+test("a body without exact lines has frames named by node and body line, not as file lines", async () => {
+  const flow = throwingFlow("    code: \"const x = 1\\nthrow new Error('boom')\"");
+  const result = await runFlow(await loadFlow(flow, { sourceLabel: "flows/f.yaml" }), {});
+
+  expect(result.status).toBe("failed");
+  expect(result.failure!.traceback).toContain("(flows/f.yaml#boom:2:");
+  expect(result.failure!.traceback).not.toMatch(/flows\/f\.yaml:\d/);
 });
 
 test("a renamed stack still locates the throwing line", async () => {
@@ -552,6 +611,14 @@ test("a thrown string's text is the string, a thrown record's its text form", as
   expect((error as Error).message).toBe("RangeError: bad");
 });
 
+test("a thrown value nested too deep to copy back reads as its type name", async () => {
+  const error = await failure("let a = []\nfor (let i = 0; i < 200000; i++) a = [a]\nthrow a");
+
+  expect(error).toBeInstanceOf(CodeError);
+  expect((error as Error).message).toBe("Array");
+  expect((error as CodeError).original).toBe("Array");
+});
+
 test("the built-in identity returns the bound field unchanged", async () => {
   const node = new CodeNode("v", { code: { builtin: "identity", field: "v" } });
   const record = { k: [1n] };
@@ -753,28 +820,7 @@ test("an already-aborted signal rejects before a worker starts", async () => {
 
 const BUILT_NODE = join(import.meta.dirname, "..", "..", "dist", "src", "nodes", "code", "node.js");
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set value that
- * can't run, a Node older than the `engines` floor, or a missing build fails the whole file, so a
- * typo can't pass as a run with the Node case skipped. A copy of `terminal.test.ts`'s: importing a
- * test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!existsSync(BUILT_NODE)) throw new Error(`${BUILT_NODE} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT_NODE);
 
 /**
  * Run a script with `command` that loads the CODE node from `module`, aborts a spinning body
@@ -891,6 +937,31 @@ test("the load check refuses a module:function reference", async () => {
     expect((error as Error).message).toBe(
       `\`code:\` value '${code}' looks like a Python \`module:function\` reference; use \`./file.ts:fn\``,
     );
+  }
+});
+
+test("the load check refuses a value that looks like a file reference but breaks the rule", async () => {
+  for (const code of ["./h.mts:fn", "./h x.ts:fn", "/abs/h.ts:fn", "h.ts:fn", "lib/h.py:fn"]) {
+    const error = await rejected(new CodeNode("p", { code }).check());
+
+    expect((error as Error).constructor).toBe(RangeError);
+    expect((error as Error).message).toBe(
+      `\`code:\` value '${code}' looks like a file reference, but a reference is a relative \`./\` or \`../\` ` +
+        "path to a `.ts`, `.js` or `.mjs` file, with no whitespace, then `:` and an export name, like `./file.ts:fn`",
+    );
+  }
+});
+
+test("the load check still builds a body that ends like a reference", async () => {
+  for (const code of [
+    "return inputs.c ? inputs.o.ts:inputs.b",
+    "/* note */ return inputs.c ? inputs.o.a:inputs.b",
+    "return!inputs.ok?inputs.ts:null",
+    'return"a/b"===inputs.p?inputs.x.y:null',
+    "return(inputs.url.includes('/'))?inputs.a.b:null",
+    "return[inputs.a][0]?inputs.x.js:undefined",
+  ]) {
+    await new CodeNode("p", { code }).check();
   }
 });
 
@@ -1053,6 +1124,19 @@ test("inline flow loads and runs", async () => {
   const result = await runFlow(await loadConformanceFlow(INLINE_FLOW), { rating: 3.0 }, { env: hostEnv(helpers) });
   expect(result.status).toBe("succeeded");
   expect(result.output).toBe("r=3.0");
+});
+
+test("a huge thrown message is cut in the logged failure", async () => {
+  const flow = INLINE_FLOW.replace(`return "r=" + inputs['rating'].toFixed(1)`, 'throw new Error("x".repeat(3000000))');
+  const log = join(helpers, "huge_throw.jsonl");
+  const result = await runFlow(await loadConformanceFlow(flow), { rating: 3.0 }, { env: hostEnv(helpers), log });
+  expect(result.status).toBe("failed");
+  expect(result.failure!.message).toMatch(/^Error: x+… \(\d+ more characters\)$/);
+  const failed = readFileSync(log, "utf8")
+    .split("\n")
+    .find((line) => line.includes('"node_failed"'))!;
+  // The message and the traceback are each at most 10,000 characters plus the cut's note.
+  expect(failed.length).toBeLessThan(21_000);
 });
 
 test("inline raise becomes failed run", async () => {

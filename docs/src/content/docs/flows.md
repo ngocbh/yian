@@ -243,7 +243,7 @@ Hello, Ada! Lovely to meet you.
 - The flow `id:` also names the node, so it must be an identifier.
 - Each flow input is passed to the node under its own name, so the prompt reads `${name}`.
 - `output:` is the node's output type, and the flow returns the node's result.
-- `case`, `call`, `map` and `loop` need the full `nodes:` form.
+- `case`, `call`, `map` and `loop` need the full `nodes:` form, and so do `uses:` and `defs:`.
 
 ## Dependencies and ordering
 

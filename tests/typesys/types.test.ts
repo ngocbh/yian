@@ -48,6 +48,7 @@ import {
 } from "../../src/typesys/values.ts";
 import { caseDocument, parametersFromYaml } from "../helpers/declarations.ts";
 import type { Case } from "../conformance/runner.ts";
+import { typeCheckError } from "../helpers/type_errors.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install(BUILTIN));
@@ -296,7 +297,7 @@ describe("typeEquals", () => {
     expect(typeEquals(req("a"), req("b"))).toBe(false);
     const buy = record({ qty: INT });
     const sell = record({ price: FLOAT });
-    const union = (...variants: Type[]) => new Type({ kind: ValueKind.OBJECT, variants });
+    const union = (...members: Type[]) => new Type({ kind: ValueKind.OBJECT, members });
     expect(typeEquals(union(buy, sell), union(record({ qty: INT }), sell))).toBe(true);
     expect(typeEquals(union(buy, sell), union(sell, buy))).toBe(false);
   });
@@ -343,7 +344,7 @@ describe("typeLevels", () => {
   test("counts a union as its deepest member", () => {
     const shallow = record({ a: INT });
     const deep = record({ b: record({ c: record({ d: INT }) }) });
-    expect(typeLevels(new Type({ kind: ValueKind.OBJECT, variants: [shallow, deep] }))).toBe(3);
+    expect(typeLevels(new Type({ kind: ValueKind.OBJECT, members: [shallow, deep] }))).toBe(3);
   });
 
   test("measures a shared type once", () => {
@@ -385,7 +386,7 @@ describe("canonicalTypeLabel", () => {
     [[0.0, 1.5], [0n, 1.5], 'Union({"a":float(0..1.5)},{"a":float(0.0..1.5)})'],
   ] as const)("orders members by the key's float ends: %p, %p", (first, second, label) => {
     const member = (bounds: Bounds) => record({ a: new Type({ kind: ValueKind.NUMBER, bounds }) });
-    const union = new Type({ kind: ValueKind.OBJECT, variants: [member(first), member(second)] });
+    const union = new Type({ kind: ValueKind.OBJECT, members: [member(first), member(second)] });
     expect(canonicalTypeLabel(union)).toBe(label);
   });
 });
@@ -617,6 +618,15 @@ describe("parseType", () => {
     ["Optional(str, int)", malformed("Optional(str, int)", "Optional(...) takes one type")],
     ["dict(str)", malformed("dict(str)", "dict(...) takes 2 types")],
     ["Foo(int)", "unknown type constructor 'Foo' in 'Foo(int)'"],
+    ["list", "'list' takes a type: write list(X)"],
+    ["List", "'List' takes a type: write List(X)"],
+    ["Optional(list)", "'list' takes a type: write list(X)"],
+    ["Optional", "'Optional' takes a type: write Optional(X)"],
+    ["Inbox", "'Inbox' takes a type: write Inbox(X)"],
+    ["dict", "'dict' takes two types: write dict(K, V)"],
+    ["Dict", "'Dict' takes two types: write Dict(K, V)"],
+    ["Union", "'Union' takes records: write Union(A, B)"],
+    ["Literal", "'Literal' takes members: write Literal(a, b)"],
     ["bool(0..1)", "unknown type constructor 'bool' in 'bool(0..1)'"],
     ["", malformed("")],
     ["   ", malformed("")],
@@ -824,8 +834,12 @@ describe("formatTypeExpr", () => {
     expect(formatTypeExpr(parseType("int( -2 .. +4 )"))).toBe("int(-2..4)");
   });
 
-  test("prints a dict as dict", () => {
-    expect(formatTypeExpr(parseType("dict(str, int)"))).toBe("dict");
+  test.each(["dict(str, int)", "dict(str, list(Buy))"])("round-trips the dict %p", (text) => {
+    expect(formatTypeExpr(parseType(text))).toBe(text);
+  });
+
+  test("prints a dict with no key and value types as object", () => {
+    expect(formatTypeExpr({ kind: "dict" })).toBe("object");
   });
 });
 
@@ -1092,6 +1106,12 @@ describe("typeFor", () => {
     expect(typeFor("dict(str, int)", REG).kind).toBe(ValueKind.OBJECT);
   });
 
+  test("a dict's key and value types must name known types", () => {
+    expect(typeForError("dict(str, Bogus)", REG)).toBe("unknown type 'Bogus'");
+    expect(typeForError("dict(Bogus, int)", REG)).toBe("unknown type 'Bogus'");
+    expect(typeForError("list(dict(str, Optional(Bogus)))", REG)).toBe("unknown type 'Bogus'");
+  });
+
   test("records and variants", () => {
     const s = typeFor("Rating", REG);
     expect(s.kind).toBe(ValueKind.OBJECT);
@@ -1147,7 +1167,7 @@ describe("typeFor", () => {
     // `{"a":int,"b":str}` does. Keeping the bracket order keeps manifests stable.
     const reg = readTypedefs({ A: { a: "int(1..2)" }, B: { a: "int", b: "str" } });
     const union = typeFor("Union(A, B)", reg);
-    const [first, second] = union.variants!;
+    const [first, second] = union.members!;
     expect(new Set(first!.fields!.keys())).toEqual(new Set(["a", "b"]));
     const order = canonicalUnionOrder([second!, first!]);
     expect(order[0]).toBe(first!);
@@ -1162,8 +1182,8 @@ describe("typeFor", () => {
       Count: { n: "int" },
       Score: { n: "float", label: "str" },
     });
-    expect(typeFor("Union(Buy, Sell)", reg).variants).toHaveLength(2);
-    expect(typeFor("Union(Count, Score)", reg).variants).toHaveLength(2);
+    expect(typeFor("Union(Buy, Sell)", reg).members).toHaveLength(2);
+    expect(typeFor("Union(Count, Score)", reg).members).toHaveLength(2);
     const tagged = buildValueAs(typeFor("Union(Buy, Sell)", reg), { action: "sell", price: 3n });
     expect((tagged.toObject() as Record<string, unknown>)["price"]).toBe(3n);
     const untagged = buildValueAs(typeFor("Union(Count, Score)", reg), { n: 3n, label: "x" });
@@ -1216,17 +1236,6 @@ describe("typedef names", () => {
     expect(readTypedefs({ [name]: "int" }).has(name)).toBe(true);
   });
 });
-
-/** Return the `TypeCheckError` `run` throws. */
-function typeCheckError(run: () => unknown): TypeCheckError {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(TypeCheckError);
-    return error as TypeCheckError;
-  }
-  throw new Error("expected a TypeCheckError");
-}
 
 describe("bounded numeric values", () => {
   test.each<[string, Bounds, unknown[], unknown[]]>([

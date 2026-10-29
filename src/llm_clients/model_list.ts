@@ -9,12 +9,13 @@
 
 import { current } from "../defaults.ts";
 import { compareCodeUnits } from "../diagnostics.ts";
+import { BasicAuth } from "../llm/auth.ts";
 import { ProviderError } from "../llm/errors.ts";
 import { realScheduler, type Scheduler } from "../platform.ts";
 import { isRecord } from "../typesys/index.ts";
 import { HttpResponse, isVisibleText } from "./auth/common.ts";
 import { request as httpRequest } from "./auth/http.ts";
-import { validateBaseUrl } from "./config.ts";
+import { splitOllamaBaseUrl, stripTrailingSlashes, validateBaseUrl } from "./config.ts";
 import { openaiIdHeaders, validateHeaders } from "./connection_settings.ts";
 import {
   ANTHROPIC_ENDPOINT,
@@ -38,29 +39,34 @@ export const MODEL_LIST_TIMEOUT_SECONDS = 8;
  * The message is one of `HTTP <status>`, `can't reach host`, `timed out`, `invalid request`,
  * `invalid response`, or `unsupported provider`; it never holds the key, a header value, the URL,
  * or the response body. `status` is the HTTP status of an `HTTP <status>` failure, else `null`;
- * hosts read it rather than the message. A status of 401 or 403 makes `isAuthFailure` count the
- * error.
+ * `timedOut` is true for a `timed out` failure; hosts read them rather than the message. A status
+ * of 401 or 403 makes `isAuthFailure` count the error.
  */
 export class ModelListError extends Error {
   override name = "ModelListError";
   readonly status: number | null;
+  readonly timedOut: boolean;
 
-  constructor(message: string, options: { status?: number } = {}) {
+  constructor(message: string, options: { status?: number; timedOut?: boolean } = {}) {
     // No options reach `super`, so the error never has a `cause` key.
     super(message);
     this.status = options.status ?? null;
+    this.timedOut = options.timedOut === true;
   }
 }
 
 /** Options for `listModels`. */
 export interface ListModelsOptions {
-  /** Key sent as the provider's auth header; absent sends none. Ollama never sends one. */
+  /**
+   * Key sent as the provider's auth header; absent sends none. Ollama never sends one: it sends
+   * only the user name and password in its base URL.
+   */
   apiKey?: string | null;
   /**
    * Host to list instead of the provider default. For Anthropic and Google it is the API root
    * without the version path. For OpenAI-compatible providers it is the URL `/models` is appended
-   * to. A trailing `/v1` on an Ollama URL is dropped. When a key is sent it must pass
-   * `validateBaseUrl`.
+   * to. An Ollama URL is read as runs read `OLLAMA_BASE_URL` (`splitOllamaBaseUrl`), its user name
+   * and password sent as Basic auth. When a key is sent it must pass `validateBaseUrl`.
    */
   baseUrl?: string | null;
   /** Seconds for the whole listing, shared by every page; must be positive. Defaults to 8. */
@@ -79,10 +85,13 @@ export interface ListModelsOptions {
   request?: typeof httpRequest;
 }
 
-/** Get one page: GET `path` with `params` and return its JSON object. */
+/**
+ * Get one page: GET `path` with `params` and return its JSON object. Throws `invalid response`
+ * past `YIAN_MAX_MODEL_LIST_PAGES` pages.
+ */
 type GetPage = (path: string, params: Record<string, string>) => Promise<Record<string, unknown>>;
 
-/** Return each page's model ids, unchecked, following every page. */
+/** Return each page's model ids, unchecked, following every page; a cursor seen before is invalid. */
 type Pages = (getPage: GetPage) => Promise<unknown[]>;
 
 /**
@@ -91,14 +100,15 @@ type Pages = (getPage: GetPage) => Promise<unknown[]>;
  *
  * `provider` is case-insensitive: `anthropic`, `google`, `ollama`, `azure`, or any provider routed
  * through the OpenAI client. Anthropic lists `{base}/v1/models` and Google `{base}/v1beta/models`,
- * both following every page; Google keeps only models that support `generateContent`, without
- * the `models/` prefix. OpenAI-compatible providers list `{base}/models`, Ollama its local tags at
- * `{base}/api/tags`. Redirects are refused by the default `request`, so the key and connection
+ * both following every page up to `YIAN_MAX_MODEL_LIST_PAGES`; Google keeps only models that
+ * support `generateContent`, without the `models/` prefix. OpenAI-compatible providers list
+ * `{base}/models`, Ollama its local tags at `{base}/api/tags`. Redirects are refused by the default `request`, so the key and connection
  * settings go only to the host asked.
  *
  * Throws `ModelListError` for an unsupported provider, an invalid key, URL, timeout or connection
  * setting (or one given without a key), a non-2xx status, an unreachable host, an exhausted
- * timeout, or a response that is not a model list. A caller abort rejects with `signal.reason`.
+ * timeout, a response that is not a model list, or pages past the cap or back to a cursor seen
+ * before. A caller abort rejects with `signal.reason`.
  */
 export async function listModels(
   provider: unknown,
@@ -109,6 +119,7 @@ export async function listModels(
   if (name === "azure") return null;
   let base: unknown;
   let pages: Pages;
+  // Headers the provider's protocol or the base URL's credentials fix.
   const protocol: Record<string, string> = {};
   let auth: ((key: string) => Record<string, string>) | null;
   if (name === "anthropic") {
@@ -121,7 +132,18 @@ export async function listModels(
     pages = googleIds;
     auth = (key) => ({ "x-goog-api-key": key });
   } else if (name === "ollama") {
-    base = baseUrl || OLLAMA_ENDPOINT;
+    base = OLLAMA_ENDPOINT;
+    if (baseUrl) {
+      // Read as the run route reads it, so the listing asks the host, port and auth runs use.
+      let credentials: [string, string] | null;
+      try {
+        [base, credentials] = splitOllamaBaseUrl(baseUrl);
+      } catch (error) {
+        if (error instanceof RangeError) throw new ModelListError("invalid request");
+        throw error;
+      }
+      if (credentials !== null) Object.assign(protocol, await new BasicAuth(...credentials).headers());
+    }
     pages = ollamaIds;
     auth = null;
   } else if (OPENAI_COMPATIBLE.includes(name)) {
@@ -150,15 +172,18 @@ export async function listModels(
   const taken = new Set(Object.keys(fixed).map((key) => key.toLowerCase()));
   const kept = Object.entries(settings).filter(([key]) => !taken.has(key.toLowerCase()));
   const headers = { ...Object.fromEntries(kept), ...fixed };
-  let root = (base as string).replace(/\/+$/, "");
-  if (name === "ollama" && root.endsWith("/v1")) root = root.slice(0, -"/v1".length);
+  const root = stripTrailingSlashes(base as string);
 
   const send = options.request ?? httpRequest;
-  const bodyLimit = current().maxModelListBytes;
+  const { maxModelListBytes: bodyLimit, maxModelListPages } = current();
   const deadline = scheduler.now() + timeout * 1000;
+  let pageCount = 0;
   const getPage: GetPage = async (path, params) => {
+    // A host that always has another page would otherwise be read until the deadline.
+    pageCount += 1;
+    if (pageCount > maxModelListPages) throw new ModelListError("invalid response");
     const timeoutMs = deadline - scheduler.now();
-    if (timeoutMs <= 0) throw new ModelListError("timed out");
+    if (timeoutMs <= 0) throw new ModelListError("timed out", { timedOut: true });
     const query = new URLSearchParams(params).toString();
     const url = root + path + (query ? `?${query}` : "");
     let response: unknown;
@@ -166,7 +191,7 @@ export async function listModels(
       response = await send("GET", url, { headers, timeoutMs, bodyLimit, signal, scheduler });
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
-      if (error instanceof ProviderError && error.kind === "timeout") throw new ModelListError("timed out");
+      if (error instanceof ProviderError && error.kind === "timeout") throw new ModelListError("timed out", { timedOut: true });
       if (error instanceof ProviderError && error.kind === "protocol") throw new ModelListError("invalid response");
       throw new ModelListError("can't reach host");
     }
@@ -259,12 +284,13 @@ function text(value: unknown): string {
  */
 async function anthropicIds(getPage: GetPage): Promise<unknown[]> {
   const ids: unknown[] = [];
+  const cursors = new Set<string>();
   let params: Record<string, string> = { limit: PAGE_SIZE };
   for (;;) {
     const page = await getPage("/v1/models", params);
     ids.push(...list(field(page, "data")).map((model) => field(model, "id")));
     if (!page["has_more"]) return ids;
-    params = { limit: PAGE_SIZE, after_id: text(field(page, "last_id")) };
+    params = { limit: PAGE_SIZE, after_id: nextCursor(cursors, field(page, "last_id")) };
   }
 }
 
@@ -276,6 +302,7 @@ async function anthropicIds(getPage: GetPage): Promise<unknown[]> {
  */
 async function googleIds(getPage: GetPage): Promise<unknown[]> {
   const ids: unknown[] = [];
+  const cursors = new Set<string>();
   let params: Record<string, string> = { pageSize: PAGE_SIZE };
   for (;;) {
     const page = await getPage("/v1beta/models", params);
@@ -288,8 +315,19 @@ async function googleIds(getPage: GetPage): Promise<unknown[]> {
     }
     const token = page["nextPageToken"];
     if (!token) return ids;
-    params = { pageSize: PAGE_SIZE, pageToken: text(token) };
+    params = { pageSize: PAGE_SIZE, pageToken: nextCursor(cursors, token) };
   }
+}
+
+/**
+ * Return `cursor` if it is a string not in `seen`, adding it, else throw `invalid response`: a
+ * cursor that comes back would page in a loop.
+ */
+function nextCursor(seen: Set<string>, cursor: unknown): string {
+  const value = text(cursor);
+  if (seen.has(value)) throw new ModelListError("invalid response");
+  seen.add(value);
+  return value;
 }
 
 /** Return model ids from an OpenAI-compatible `/models` listing. */

@@ -4,7 +4,7 @@
  * A question is one prompt the host shows a person: free text by default, or a choice over
  * `options` (single- or multi-select). `parseQuestions` turns the raw list authored in a flow
  * into frozen `QuestionSpec` objects, applying the engine's authoring constraints (1 to
- * `current().maxQuestions` questions, unique headers).
+ * `current().maxQuestions` questions, unique headers, option labels unique within a question).
  *
  * Knows about:   defaults, diagnostics and typesys.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
@@ -34,7 +34,7 @@ export interface QuestionSpec {
   readonly question: string;
   /** A short key, unique within the set, that keys the collected answer. */
   readonly header: string;
-  /** The selectable choices; empty means the question is free text. */
+  /** The selectable choices, each label unique; empty means the question is free text. */
   readonly options: readonly OptionSpec[];
   /** Whether the person may pick more than one option; ignored for free-text questions. */
   readonly multiSelect: boolean;
@@ -56,10 +56,10 @@ const OPTION_KEYS: readonly string[] = ["label", "description"];
  * `question[<i>] is invalid: <problem>`: it is a record; it has no key but `question`, `header`,
  * `options` and `multi_select`; it has `question` and `header`; `question`, then `header`, is
  * text; `options`, when present, is a list whose every entry is a record with no key but
- * `label` and `description`, has `label`, and holds text in both; `multi_select`, when present,
- * is `true` or `false`. A key given as `null` counts as present. Omitted `options` read `[]`, an
- * omitted `description` `""`, an omitted `multi_select` `false`. Each spec, its options and each
- * option are frozen.
+ * `label` and `description`, has `label`, and holds text in both, and no two of whose labels
+ * are the same; `multi_select`, when present, is `true` or `false`. A key given as `null` counts
+ * as present. Omitted `options` read `[]`, an omitted `description` `""`, an omitted
+ * `multi_select` `false`. Each spec, its options and each option are frozen.
  *
  * @throws QuestionSpecError when `raw` is not a list, has too few or too many items, an item is
  *   invalid, or two items share a `header`.
@@ -87,6 +87,31 @@ export function parseQuestions(raw: unknown): QuestionSpec[] {
   return questions;
 }
 
+/**
+ * Return a model-written question list with each option whose label repeats an earlier label of
+ * its question, ignoring case, left out, as `ask_user` drops a model's repeated labels. Anything
+ * that isn't such a list, question or option is kept as given, for `parseQuestions` to report.
+ *
+ * Example: `[{question: "Ship?", header: "s", options: [{label: "Yes"}, {label: "yes"}]}]` reads
+ * `[{question: "Ship?", header: "s", options: [{label: "Yes"}]}]`.
+ */
+export function dropRepeatedLabels(raw: unknown): unknown {
+  if (!isList(raw)) return raw;
+  return raw.map((item) => {
+    if (!isRecord(item) || !isList(item["options"])) return item;
+    const seen = new Set<string>();
+    const options = item["options"].filter((option) => {
+      if (!isRecord(option) || typeof option["label"] !== "string") return true;
+      // Upper then lower case folds case: "Straße" and "STRASSE" are the same label.
+      const key = option["label"].toUpperCase().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    return { ...item, options };
+  });
+}
+
 /** Read one question item; the message names its first problem, without the item prefix. */
 function parseQuestion(item: unknown): QuestionSpec {
   if (!isRecord(item)) throw new QuestionSpecError(`must be a record, got ${valueRepr(item)}`);
@@ -98,6 +123,11 @@ function parseQuestion(item: unknown): QuestionSpec {
     const raw = item["options"];
     if (!isList(raw)) throw new QuestionSpecError(`options must be a list, got ${valueRepr(raw)}`);
     options = Object.freeze(raw.map(parseOption));
+    // The answer is the chosen label, so two options with one label can't be told apart.
+    const labels = options.map((option) => option.label);
+    if (new Set(labels).size !== labels.length) {
+      throw new QuestionSpecError(`option labels must be unique, got ${writeAsText(labels)}`);
+    }
   }
   let multiSelect = false;
   if (Object.hasOwn(item, "multi_select")) {

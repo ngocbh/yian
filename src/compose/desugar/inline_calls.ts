@@ -26,8 +26,8 @@
  * reads its output). NOT `when:`/`on:` (the case condition grammar) and NOT a node-local
  * `asserts:` (those stay node-local, with no inline call). A `case` descriptor carries no walked
  * bindings, so it is untouched. Each leaf string of a value template is checked for the retired
- * span form, but only a whole binding lifts a `call(...)`: a leaf written as one is a located
- * `LoadError`.
+ * span form, but only a whole binding lifts a `call(...)`: an unquoted leaf written as one is a
+ * located `LoadError`, and a quoted one is text.
  *
  * This is also the flow-assert carrier boundary. Raw entries become one ordered `Assertion` per
  * source position; assembly injects an origin lookup by authored index. Desugaring replaces only
@@ -61,11 +61,18 @@
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError, unknownFunctionMessage } from "../../expr/expressions.ts";
-import { exprRefsOf, flowCallCalleesInSpans, InlineCall, splitCallsAware } from "../../expr/template.ts";
-import { Assertion, Binding, iterSourceStrings, mapSourceStrings, ValueTemplate } from "../../nodes/contracts.ts";
+import { exprRefsOf, flowCallCalleesInSpans } from "../../expr/template.ts";
+import {
+  Assertion,
+  Binding,
+  iterSourceStrings,
+  mapSourceStrings,
+  type ValuePath,
+  ValueTemplate,
+} from "../../nodes/contracts.ts";
 import { BUILTIN_TYPE_NAMES } from "../../typesys/types.ts";
 import { isRecord, jsTypeName, type Value } from "../../typesys/values.ts";
-import { CALL_HEAD, matchCallDirective, spanCallFlowId } from "../helpers/directives.ts";
+import { CALL_HEAD, InlineCall, matchCallDirective, spanCallFlowId, splitCallsAware } from "../helpers/directives.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { QUOTED_STYLES, yamlQuoted } from "../helpers/tags.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
@@ -126,9 +133,10 @@ export function synthIdGen(): () => string {
  * `call(...)` directive line). A synth from flow `output:` uses `outputsRange`; one from
  * `asserts:` uses the authored item returned by `assertionRangeAt`.
  *
- * `bindingStyleAt(nodeId, field, key)` and `outputStyleAt(key)` (`null` for a single output)
- * return a binding's YAML scalar style; a quoted value is text, so it is never a directive. A
- * missing lookup or a `null` style reads as plain. An assert is an expression, so its quoting
+ * `bindingStyleAt(nodeId, field, key, path)` and `outputStyleAt(key, path)` (`key` is `null` for
+ * a single output) return the YAML scalar style of a binding, or of the leaf at `path` inside it
+ * (`[]` for the binding itself); a quoted value is text, so it is never a directive. A missing
+ * lookup or a `null` style reads as plain. An assert is an expression, so its quoting
  * never makes it text. `typedOutputs` names the outputs declared with a type (`null` for a single
  * output); like a typed node input, a malformed directive there gets no quoting fix, since quoting
  * would drop the type.
@@ -153,8 +161,8 @@ export function desugarInlineCalls(
     outputsRange?: SourceRange | null;
     assertionRangeAt?: ((index: number) => SourceRange | null) | null;
     assertionOriginAt?: ((index: number) => OriginRef | null) | null;
-    bindingStyleAt?: ((nodeId: string, field: string, key: string) => ScalarStyle | null) | null;
-    outputStyleAt?: ((key: string | null) => ScalarStyle | null) | null;
+    bindingStyleAt?: ((nodeId: string, field: string, key: string, path: ValuePath) => ScalarStyle | null) | null;
+    outputStyleAt?: ((key: string | null, path: ValuePath) => ScalarStyle | null) | null;
     typedOutputs?: ReadonlySet<string | null>;
     nextId?: (() => string) | null;
     typeNames?: ReadonlySet<string>;
@@ -190,7 +198,7 @@ export function desugarInlineCalls(
   for (const [nodeId, desc] of descriptors) {
     const [newDesc, calls, origins, sites, callSites] = desugarDescriptor(desc, mint, {
       host: nodeId,
-      styleAt: bindingStyleAt === null ? null : (field, key) => bindingStyleAt(nodeId, field, key),
+      styleAt: bindingStyleAt === null ? null : (field, key, path) => bindingStyleAt(nodeId, field, key, path),
       typeNames,
       diagnostics,
     });
@@ -314,7 +322,7 @@ export function mapOutputsStrings(outputs: unknown, fn: (text: string) => unknow
  * `call(...)` directive was written on. Falls back to the host node's range when there is no
  * stamped entry (a spanless flow, or a binding shape with no per-entry range).
  */
-function bindingOrigin(desc: NodeDescriptor, field: string, key: string): SourceRange | null {
+export function bindingOrigin(desc: NodeDescriptor, field: string, key: string): SourceRange | null {
   const ranges = desc.fieldRanges;
   if (field === "inputs") {
     return ranges.get(siteKey("input", key)) ?? ranges.get(siteKey("field", "inputs")) ?? desc.range;
@@ -331,8 +339,8 @@ function bindingOrigin(desc: NodeDescriptor, field: string, key: string): Source
  * `sites` with that binding's author-facing phrase (`node 'x' input 'a'`, `value entry 'v'`,
  * `node 'm' map over`) and in `callSites` with its address (`["input", host, key]`, or
  * `["field", host, field]` for a scalar binding field). Nested inner-first calls share their
- * enclosing binding's tags. `styleAt(field, key)` gives each binding's YAML scalar style (plain
- * when absent).
+ * enclosing binding's tags. `styleAt(field, key, path)` gives the YAML scalar style of each
+ * binding, or of the leaf at `path` inside it (plain when absent).
  *
  * @returns `[newDesc, calls, origins, sites, callSites]`.
  */
@@ -341,7 +349,7 @@ function desugarDescriptor(
   mint: () => string,
   options: {
     host: string;
-    styleAt: ((field: string, key: string) => ScalarStyle | null) | null;
+    styleAt: ((field: string, key: string, path: ValuePath) => ScalarStyle | null) | null;
     typeNames: ReadonlySet<string>;
     diagnostics: LoadDiagnostics;
   },
@@ -374,7 +382,7 @@ function desugarDescriptor(
     const before = calls.length;
     const newSource = desugarSource(source, mint, calls, host, {
       range: origin,
-      style: styleAt === null ? null : styleAt(field, key),
+      styleAt: styleAt === null ? null : (path) => styleAt(field, key, path),
       // Quoting a typed binding would drop its type, so no quoting fix is offered.
       quotable: !(field === "inputs" && desc.inputTypes.has(key)),
       typeNames,
@@ -393,8 +401,9 @@ function desugarDescriptor(
 
 /**
  * Desugar one binding source: a string as in `desugarValue`, or each leaf string of a
- * `ValueTemplate`. Only a whole binding lifts a `call(...)` directive, so a leaf string starting
- * with `call(` is a located `LoadError`.
+ * `ValueTemplate`. Only a whole binding lifts a `call(...)` directive, so an unquoted leaf string
+ * starting with `call(` is a located `LoadError`; a quoted one is text. `styleAt(path)` gives the
+ * YAML scalar style at `path` (`[]` for the whole binding).
  */
 function desugarSource(
   source: string | ValueTemplate,
@@ -403,24 +412,30 @@ function desugarSource(
   host: string,
   options: {
     range?: SourceRange | null;
-    style?: ScalarStyle | null;
+    styleAt?: ((path: ValuePath) => ScalarStyle | null) | null;
     quotable?: boolean;
     typeNames: ReadonlySet<string>;
     diagnostics: LoadDiagnostics;
   },
 ): unknown {
-  const { range = null, style = null, quotable = true, typeNames, diagnostics } = options;
+  const { range = null, styleAt = null, quotable = true, typeNames, diagnostics } = options;
   if (!(source instanceof ValueTemplate)) {
+    const style = styleAt === null ? null : styleAt([]);
     return desugarValue(source, mint, calls, host, { range, style, quotable, typeNames, diagnostics });
   }
-  for (const [, text] of iterSourceStrings(source)) {
-    if (CALL_HEAD.test(text.trim())) {
+  for (const [path, text] of iterSourceStrings(source)) {
+    if (!CALL_HEAD.test(text.trim())) continue;
+    if (styleAt === null || !QUOTED_STYLES.has(styleAt(path))) {
       throw diagnostics.error(`${host}: a \`call(...)\` inside a value isn't supported; bind it at the top level`, {
         range,
       });
     }
+    rejectQuotedCallSpan(text, host, { range, diagnostics });
   }
-  return mapSourceStrings(source, (text) => desugarValue(text, mint, calls, host, { range, typeNames, diagnostics }));
+  // The leaves starting with `call(` passed above as quoted text.
+  return mapSourceStrings(source, (text) =>
+    CALL_HEAD.test(text.trim()) ? text : desugarValue(text, mint, calls, host, { range, typeNames, diagnostics }),
+  );
 }
 
 /**
@@ -457,13 +472,7 @@ function desugarValue(
   const { range = null, style = null, quotable = true, expression = false, typeNames, diagnostics } = options;
   const quoted = !expression && QUOTED_STYLES.has(style);
   const isCall = CALL_HEAD.test(value.trim());
-  if (quoted && isCall && value.includes("${")) {
-    throw diagnostics.error(
-      `${host}: a quoted \`call(...)\` is text, so it can't hold \`\${...}\` here; ` +
-        "drop the quotes to call the flow, or reword the text",
-      { range },
-    );
-  }
+  if (quoted && isCall) rejectQuotedCallSpan(value, host, { range, diagnostics });
   if (isCall && !quoted) {
     let newValue: string;
     let found: InlineCall[];
@@ -497,6 +506,23 @@ function desugarValue(
   }
   rejectSpanFlowCalls(value, host, { range, typeNames, diagnostics });
   return value;
+}
+
+/**
+ * Throw a located `LoadError` when quoted text starting with `call(` holds a `${...}` span: its
+ * author most likely meant the call.
+ */
+function rejectQuotedCallSpan(
+  value: string,
+  host: string,
+  options: { range: SourceRange | null; diagnostics: LoadDiagnostics },
+): void {
+  if (!value.includes("${")) return;
+  throw options.diagnostics.error(
+    `${host}: a quoted \`call(...)\` is text, so it can't hold \`\${...}\` here; ` +
+      "drop the quotes to call the flow, or reword the text",
+    { range: options.range },
+  );
 }
 
 /**
@@ -658,9 +684,9 @@ function hasInnerKeyword(parts: readonly string[]): boolean {
 /**
  * Desugar the flow `output:` section.
  *
- * `range` is the `output:` section source range; `styleAt(key)` gives an output's YAML scalar
- * style (`key` is `null` for a single output; plain when absent), and `typed` names the outputs
- * declared with a type.
+ * `range` is the `output:` section source range; `styleAt(key, path)` gives the YAML scalar
+ * style of an output, or of the leaf at `path` inside it (`key` is `null` for a single output;
+ * plain when absent), and `typed` names the outputs declared with a type.
  *
  * @returns `[newOutputs, inlineCalls, sites, callSites]`: `sites` maps each call's synth id to
  *   its output's phrase (`flow output`, `flow output 'r'`) and `callSites` to its address
@@ -671,7 +697,7 @@ function desugarOutputs(
   mint: () => string,
   options: {
     range: SourceRange | null;
-    styleAt: ((key: string | null) => ScalarStyle | null) | null;
+    styleAt: ((key: string | null, path: ValuePath) => ScalarStyle | null) | null;
     typed: ReadonlySet<string | null>;
     typeNames: ReadonlySet<string>;
     diagnostics: LoadDiagnostics;
@@ -686,7 +712,7 @@ function desugarOutputs(
     const before = calls.length;
     const newSource = desugarSource(source, mint, calls, "flow outputs", {
       range,
-      style: styleAt === null ? null : styleAt(key),
+      styleAt: styleAt === null ? null : (path) => styleAt(key, path),
       quotable: !typed.has(key),
       typeNames,
       diagnostics,

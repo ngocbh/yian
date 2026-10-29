@@ -6,9 +6,10 @@
  * schema, where `yes`/`no`/`on`/`off` and `1:30` are text and `017` is decimal, plus two
  * YAML 1.1 extensions, unquoted timestamps and `<<` merge keys. Ints are `bigint`, of any
  * length. `.inf` forms are infinities; `.nan` and a float that overflows are refused,
- * since neither is a yian value. A date or timestamp stays text, checked with yian's
- * `date`/`datetime` grammar, so a date-shaped plain scalar that is not a real date or
- * time, such as `2026-13-45` or an offset of `+05:99`, is an error that says to quote it.
+ * since neither is a yian value. A plain scalar YAML 1.1 reads as a timestamp stays text,
+ * and only yian's `date`/`datetime` forms load unquoted: any other timestamp form YAML 1.1
+ * allows, such as `2001-12-14 21:59:43.10 -5` or `2001-1-1 1:00:00`, and a date or time that
+ * isn't real, such as `2026-13-45` or an offset of `+05:99`, is an error that says to quote it.
  * `composeFlowDocument` composes the text and resolves its aliases; a document nested deeper
  * than `current().maxYamlNesting` levels, or one that expands to more than
  * `current().maxYamlNodes` nodes when each alias counts as a copy of what it names, is a
@@ -87,7 +88,8 @@ const TIME =
   "(?:[Tt]|[ \\t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]*)?" +
   "(?:[ \\t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?";
 // The YAML 1.1 implicit pattern for unquoted timestamps; a date alone needs a 2-digit
-// month and day.
+// month and day. It is wider than yian's `date`/`datetime` grammar, and a match outside that
+// grammar is refused rather than read as text.
 const TIMESTAMP = new RegExp(
   "^(?:[0-9]{4}-[0-9]{2}-[0-9]{2}" +
     "|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}" + TIME + ")$",
@@ -427,7 +429,8 @@ export function resolvePlain(text: string): string {
 /**
  * Build a scalar's value from its text under its resolved or explicit tag.
  *
- * Explicit `!!int`, `!!float` and `!!bool` tags accept only the forms the table resolves.
+ * Explicit `!!null`, `!!int`, `!!float` and `!!bool` tags accept only the forms the table
+ * resolves.
  * A timestamp is checked with yian's date grammar and kept as its text. `plain` means the
  * scalar was written unquoted, so a refused value says to quote it. Under an explicit tag the
  * quoting hint is still given, although quoting doesn't remove the tag.
@@ -446,6 +449,7 @@ export function constructScalar(tag: string, text: string, plain: boolean): Scal
     case STR_TAG:
       return text;
     case NULL_TAG:
+      coreCheck(text, NULL, "null");
       return null;
     case BOOL_TAG:
       coreCheck(text, BOOL, "boolean");

@@ -2,7 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { LoadDiagnostics, LoadError, sourceText } from "../../src/compose/helpers/errors.ts";
+import { LoadDiagnostics, LoadError, locatedError, sourceText } from "../../src/compose/helpers/errors.ts";
 import {
   boundaryFieldRanges,
   isExtensionKey,
@@ -10,7 +10,6 @@ import {
   oneLineText,
 } from "../../src/compose/helpers/source.ts";
 import { SourceAccessError, SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
-import { locatedError } from "../../src/compose/validate/typed_bindings.ts";
 import { Diagnostic, DiagnosticFrame, SourceRange } from "../../src/diagnostics.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 
@@ -169,12 +168,6 @@ describe("LoadDiagnostics", () => {
     expect(() => new LoadDiagnostics(null, "t")).toThrow(
       new RangeError("load diagnostic source requires both label and text"),
     );
-    expect(() => new LoadDiagnostics(3 as never, "t")).toThrow(
-      new TypeError("load diagnostic label must be a string"),
-    );
-    expect(() => new LoadDiagnostics("l", 3 as never)).toThrow(
-      new TypeError("load diagnostic text must be a string"),
-    );
     expect(Object.isFrozen(new LoadDiagnostics("l", "t"))).toBe(true);
   });
 
@@ -189,7 +182,7 @@ describe("LoadDiagnostics", () => {
     expect([owned.label, owned.text]).toEqual(["flow.yaml", document.text]);
   });
 
-  test("diagnostic checks its arguments", () => {
+  test("diagnostic takes a range or frames, not both", () => {
     const document = SourceDocument.parse("value: 1\n", "flow.yaml");
     const range = document.root.child("value").range!;
     const diagnostics = LoadDiagnostics.fromDocument(document);
@@ -198,31 +191,9 @@ describe("LoadDiagnostics", () => {
     expect(() => diagnostics.diagnostic("m", { range, frames: [frame] })).toThrow(
       new RangeError("load diagnostic accepts a range or frames, not both"),
     );
-    expect(() => diagnostics.diagnostic(3 as never)).toThrow(
-      new TypeError("load diagnostic message must be a string"),
-    );
-    expect(() => diagnostics.diagnostic("m", { frames: ["f" as never] })).toThrow(
-      new TypeError("load diagnostic frames must be DiagnosticFrame values"),
-    );
-    expect(() => diagnostics.diagnostic("m", { notes: [3 as never] })).toThrow(
-      new TypeError("load diagnostic notes must be strings"),
-    );
-    expect(() => diagnostics.diagnostic("m", { range: "r" as never })).toThrow(
-      new TypeError("load diagnostic range must be a SourceRange or null"),
-    );
-    expect(() => diagnostics.frame(range, { note: 3 as never })).toThrow(
-      new TypeError("load diagnostic frame note must be a string or null"),
-    );
     expect(diagnostics.diagnostic("m", { frames: [frame] }).frames).toEqual([frame]);
   });
 
-  test("a source-free frame is null before its arguments are checked", () => {
-    const diagnostics = new LoadDiagnostics();
-
-    expect(diagnostics.frame("r" as never)).toBeNull();
-    expect(diagnostics.frame(new SourceRange(1, 1, 1, 2), { note: 3 as never })).toBeNull();
-    expect(diagnostics.diagnostic("m", { range: "r" as never }).frames).toEqual([]);
-  });
 });
 
 describe("sourceText", () => {

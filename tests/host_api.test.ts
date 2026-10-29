@@ -6,6 +6,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
 import {
+  copyFileSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -31,7 +32,7 @@ import { FileLockError, lockFile } from "../src/platform.ts";
 import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { DefaultsMismatchError } from "../src/defaults.ts";
-import { CallClosed, NodeSucceeded, NodeWaiting, type RunEvent, RunStarted, RunWaiting } from "../src/events.ts";
+import { CallClosed, NodeStarted, NodeSucceeded, NodeWaiting, type RunEvent, RunStarted, RunWaiting } from "../src/events.ts";
 import {
   advance,
   cancel,
@@ -266,8 +267,11 @@ test("a node failure while an ask waits leaves pendingCalls empty", async () => 
   expect(pendingCalls(log)).toEqual([]);
 });
 
-/** Write, in a fresh folder, a YAML flow whose CODE node runs `./fn.ts:up`, then a TOOL `ask`. */
-async function codeAskFlow(): Promise<{ dir: string; flow: ComposedFlow }> {
+/**
+ * Write, in a fresh folder, a YAML flow whose CODE node runs `./fn.ts:up`, then a TOOL `ask`;
+ * loaded under the code root `<dir>/..` when `confined`.
+ */
+async function codeAskFlow(confined = false): Promise<{ dir: string; flow: ComposedFlow }> {
   const dir = join(mkdtempSync(join(ROOT, "code-")), "flows");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "fn.ts"), "export function up(inputs: Record<string, any>): string {\n  return `up:${inputs.q}`;\n}\n");
@@ -290,7 +294,8 @@ async function codeAskFlow(): Promise<{ dir: string; flow: ComposedFlow }> {
     "",
   ].join("\n");
   writeFileSync(join(dir, "flow.yaml"), text);
-  return { dir, flow: await loadFlow(text, { searchPaths: [dir], sourceLabel: "flow.yaml" }) };
+  const codeRoot = confined ? join(dir, "..") : null;
+  return { dir, flow: await loadFlow(text, { searchPaths: [dir], sourceLabel: "flow.yaml", codeRoot }) };
 }
 
 test("a refused delivery keeps the idle state: the next one needs no recompile", async () => {
@@ -312,6 +317,40 @@ test("an offline delivery leaves an entry the next delivery reuses", async () =>
   unlinkSync(join(dir, "fn.ts"));
   // The entry the complete left is reused: the log is the file it left, so nothing recompiles.
   expect(await complete(log, `${result.runId}/ask`, { output: "yes" }, { env })).toBeNull();
+});
+
+test("a delivery given the API key and headers leaves an entry an advance with them reuses", async () => {
+  const { dir, flow } = await codeAskFlow();
+  const log = freshLog();
+  const tools = { ask: pendingAsk() };
+  const credentials = { apiKey: "sk-test", headers: { "x-team": "a" } };
+  const result = await runFlow(flow, {}, { log, env, tools });
+  // runFlow's entry holds no key, so this one replays and leaves an entry holding the given ones.
+  await complete(log, `${result.runId}/ask`, { output: "yes" }, { env, ...credentials });
+  unlinkSync(join(dir, "fn.ts"));
+  // A hit: nothing recompiles, so the missing CODE file isn't read.
+  expect((await advance({ log, env, tools, ...credentials })).status).toBe("succeeded");
+});
+
+test("a delivery given no API key keeps the entry's, so an advance with it still reuses the entry", async () => {
+  const { dir, flow } = await codeAskFlow();
+  const log = freshLog();
+  const tools = { ask: pendingAsk() };
+  const llmConfig = { provider: "openai", api_key: "sk-test" };
+  const result = await runFlow(flow, {}, { log, env, tools, llmConfig });
+  await complete(log, `${result.runId}/ask`, { output: "yes" }, { env });
+  unlinkSync(join(dir, "fn.ts"));
+  // A hit: nothing recompiles, so the missing CODE file isn't read.
+  expect((await advance({ log, env, tools, apiKey: "sk-test" })).status).toBe("succeeded");
+});
+
+test("a delivery refuses a header value that can't be sent, appending nothing", async () => {
+  const { log, flow } = await waitingChat();
+  const before = readFileSync(log);
+  const error = await rejected(send(log, "m", "hi", { env, flow, apiKey: "sk-test", headers: { "x-team": "a\nb" } }));
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).not.toContain("a\nb");
+  expect(readFileSync(log).equals(before)).toBe(true);
 });
 
 describe("bad arguments and logs, for every host call", () => {
@@ -438,17 +477,19 @@ test("pendingCalls reads a log another writer holds", async () => {
   }
 });
 
-test("codeRoot: an offline call refuses a CODE file outside it before any append; inside, it appends", async () => {
-  const { dir, flow } = await codeAskFlow();
-  const root = join(dir, "..");
+test("codeRoot: an offline call refuses a CODE file outside the recorded root before any append; inside, it appends", async () => {
+  const { dir, flow } = await codeAskFlow(true);
   const out = mkdtempSync(join(ROOT, "out-"));
+  const ran = freshLog();
+  const result = await runFlow(flow, {}, { log: ran, env, tools: { ask: pendingAsk() } });
+  // A copy has no registry entry, so each call recompiles the recorded flow.
   const log = freshLog();
-  const result = await runFlow(flow, {}, { log, env, tools: { ask: pendingAsk() } });
+  copyFileSync(ran, log);
   const code = readFileSync(join(dir, "fn.ts"));
   renameSync(join(dir, "fn.ts"), join(out, "fn.ts"));
   symlinkSync(join(out, "fn.ts"), join(dir, "fn.ts"));
   const callId = `${result.runId}/ask`;
-  const options = { env, codeRoot: root };
+  const options = { env };
   const before = readFileSync(log);
   for (const call of [
     () => send(log, "m", "hi", options),
@@ -586,8 +627,11 @@ test("registry hit: after advance waits, a call needs no recompile until another
   expect(await rejected(complete(log, `${result.runId}/ask`, { output: "yes" }, { env }))).toBeInstanceOf(LoadError);
 }, 30_000);
 
-/** Write, in a fresh folder, a YAML flow whose CODE node runs `./fn.ts:up` beside a take from inbox `m`. */
-async function codeTakeFlow(): Promise<{ dir: string; flow: ComposedFlow }> {
+/**
+ * Write, in a fresh folder, a YAML flow whose CODE node runs `./fn.ts:up` beside a take from inbox
+ * `m`; loaded under the code root `<dir>/..` when `confined`.
+ */
+async function codeTakeFlow(confined = false): Promise<{ dir: string; flow: ComposedFlow }> {
   const dir = join(mkdtempSync(join(ROOT, "code-take-")), "flows");
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "fn.ts"), "export function up(): string {\n  return \"up\";\n}\n");
@@ -613,7 +657,8 @@ async function codeTakeFlow(): Promise<{ dir: string; flow: ComposedFlow }> {
     "",
   ].join("\n");
   writeFileSync(join(dir, "flow.yaml"), text);
-  return { dir, flow: await loadFlow(text, { searchPaths: [dir], sourceLabel: "flow.yaml" }) };
+  const codeRoot = confined ? join(dir, "..") : null;
+  return { dir, flow: await loadFlow(text, { searchPaths: [dir], sourceLabel: "flow.yaml", codeRoot }) };
 }
 
 test("YAML: a refused send keeps the idle state, so a good send needs no recompile", async () => {
@@ -627,17 +672,20 @@ test("YAML: a refused send keeps the idle state, so a good send needs no recompi
   expect(typeof (await close(log, "m", { env }))).toBe("number");
 });
 
-test("YAML codeRoot: send and close append once the CODE file is inside the root", async () => {
-  const { dir, flow } = await codeTakeFlow();
+test("YAML codeRoot: send and close append once the CODE file is inside the recorded root", async () => {
+  const { dir, flow } = await codeTakeFlow(true);
   const root = join(dir, "..");
   const out = mkdtempSync(join(ROOT, "out-"));
+  const ran = freshLog();
+  expect((await runFlow(flow, {}, { log: ran, env })).status).toBe("waiting");
+  // A copy has no registry entry, so a call recompiles the recorded flow.
   const log = freshLog();
-  expect((await runFlow(flow, {}, { log, env })).status).toBe("waiting");
+  copyFileSync(ran, log);
   const code = readFileSync(join(dir, "fn.ts"));
   renameSync(join(dir, "fn.ts"), join(out, "fn.ts"));
   symlinkSync(join(out, "fn.ts"), join(dir, "fn.ts"));
   const before = readFileSync(log);
-  for (const call of [() => send(log, "m", "hi", { env, codeRoot: root }), () => close(log, "m", { env, codeRoot: root })]) {
+  for (const call of [() => send(log, "m", "hi", { env }), () => close(log, "m", { env, codeRoot: root })]) {
     expect(await rejected(call())).toBeInstanceOf(LoadError);
     expect(readFileSync(log).equals(before)).toBe(true);
   }
@@ -648,28 +696,61 @@ test("YAML codeRoot: send and close append once the CODE file is inside the root
   expect((await advance({ log, env, codeRoot: root })).output).toEqual({ up: "up", heard: { events: ["hi"], closed: true } });
 });
 
-test("a relative codeRoot resolves before a call waits on another holder, so a directory change can't widen it", async () => {
+test("a host call passing another codeRoot than the recorded one is refused before any append", async () => {
+  const { dir, flow } = await codeTakeFlow(true);
+  const log = freshLog();
+  expect((await runFlow(flow, {}, { log, env })).status).toBe("waiting");
+  const before = readFileSync(log);
+  const recorded = realpathSync(join(dir, ".."));
+  for (const call of [() => send(log, "m", "hi", { env, codeRoot: dir }), () => close(log, "m", { env, codeRoot: dir })]) {
+    const error = await rejected(call());
+    expect(error).toBeInstanceOf(RangeError);
+    expect((error as Error).message).toBe(
+      `run log ${log}: codeRoot '${realpathSync(dir)}' isn't the run's code root (the run recorded '${recorded}'); ` +
+        "leave out codeRoot",
+    );
+    expect(readFileSync(log).equals(before)).toBe(true);
+  }
+  expect(typeof (await send(log, "m", "hi", { env, codeRoot: join(dir, "..") }))).toBe("number");
+});
+
+test("a send to a running run passing another codeRoot than the recorded one is refused too", async () => {
+  const { dir, flow } = await codeTakeFlow(true);
+  const log = freshLog();
+  let wrong: Promise<unknown> | null = null;
+  const result = await runFlow(flow, {}, {
+    log,
+    env,
+    onEvent: (event: RunEvent) => {
+      if (event instanceof NodeStarted && event.nodeId === "up") wrong = rejected(send(log, "m", "hi", { env, codeRoot: dir }));
+    },
+  });
+  expect(result.status).toBe("waiting");
+  const error = await wrong!;
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toContain("isn't the run's code root");
+  // Nothing was sent: no record holds the event.
+  expect(readFileSync(log, "utf8")).not.toContain('"hi"');
+});
+
+test("a relative codeRoot resolves before a call waits on another holder, so a directory change can't move it", async () => {
   const cwd = process.cwd();
   for (const call of [
     (log: string) => send(log, "m", "late", { env, codeRoot: ".." }),
     (log: string) => advance({ log, env, codeRoot: ".." }),
   ]) {
-    const { dir, flow } = await codeTakeFlow();
-    // `out/..` is ROOT, which holds the moved file; `dir/..` doesn't.
+    // The run records `dir/..` as its code root; `out/..` is ROOT, another folder.
+    const { dir, flow } = await codeTakeFlow(true);
     const out = mkdtempSync(join(ROOT, "out-"));
     const log = freshLog();
     expect((await runFlow(flow, {}, { log, env })).status).toBe("waiting");
-    renameSync(join(dir, "fn.ts"), join(out, "fn.ts"));
-    symlinkSync(join(out, "fn.ts"), join(dir, "fn.ts"));
     process.chdir(dir);
     try {
       const first = send(log, "m", "hi", { env });
       const second = call(log);
       process.chdir(out);
       expect(typeof (await first)).toBe("number");
-      const error = await rejected(second);
-      expect(error).toBeInstanceOf(LoadError);
-      expect((error as Error).message).toEndWith(" is outside the code root");
+      await second;
     } finally {
       process.chdir(cwd);
     }

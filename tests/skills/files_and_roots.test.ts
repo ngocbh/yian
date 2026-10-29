@@ -5,16 +5,17 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import * as compose from "../../src/compose/index.ts";
 import { defaultSkillRoots, loadSkills } from "../../src/compose/skills.ts";
 import { current } from "../../src/defaults.ts";
+import { openFilePath } from "../../src/platform.ts";
 import { readSkillFile, readSkillText, resolvedPath } from "../../src/skills/catalog.ts";
 import { Skill, SkillError } from "../../src/skills/index.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 let tmp: string;
 let root: string;
@@ -96,6 +97,87 @@ describe("read skill file rejects hidden files", () => {
   });
 });
 
+test("read skill file rejects symlinks to hidden files", () => {
+  mkdirSync(join(root, ".secret"));
+  writeFileSync(join(root, ".secret", "creds"), "token=abc\n");
+  writeFileSync(join(root, ".env"), "TOKEN=1\n");
+  symlinkSync(".secret", join(root, "docs"));
+  symlinkSync(".env", join(root, "notes.txt"));
+  // A chain of visible names that ends at a hidden file, one hop through a folder outside the skill.
+  symlinkSync("notes.txt", join(root, "hop.txt"));
+  symlinkSync(join(root, ".secret", "creds"), join(tmp, "outside-hop"));
+  symlinkSync(join(tmp, "outside-hop"), join(root, "via.txt"));
+  for (const path of ["docs/creds", "notes.txt", "hop.txt", "via.txt"]) {
+    expectSkillError(() => readSkillFile(skill, path), "hidden files and folders are not readable");
+  }
+});
+
+describe("read skill file checks the file it opened", () => {
+  const notes = () => join(root, "pub", "notes.md");
+  // Another process turns `pub/` into a link to `.secret/` after the path checks, before the open.
+  const swapToHidden = () => {
+    renameSync(join(root, "pub"), join(root, "pub-old"));
+    symlinkSync(".secret", join(root, "pub"));
+  };
+  const undoSwap = () => {
+    rmSync(join(root, "pub"));
+    renameSync(join(root, "pub-old"), join(root, "pub"));
+  };
+
+  beforeEach(() => {
+    mkdirSync(join(root, "pub"));
+    writeFileSync(notes(), "public\n");
+    mkdirSync(join(root, ".secret"));
+    writeFileSync(join(root, ".secret", "notes.md"), "token=abc\n");
+  });
+
+  test("an unchanged file reads through the hook", () => {
+    const seen: string[] = [];
+    expect(readSkillFile(skill, "pub/notes.md", { beforeOpen: (path) => seen.push(path) })).toBe("public\n");
+    expect(seen).toEqual([notes()]);
+  });
+
+  test("a folder swapped for a link to a hidden folder is refused", () => {
+    expectSkillError(
+      () => readSkillFile(skill, "pub/notes.md", { beforeOpen: swapToHidden }),
+      "hidden files and folders are not readable",
+    );
+  });
+
+  test("where the descriptor's path is unknown, the path resolved again refuses the swap", () => {
+    expectSkillError(
+      () => readSkillFile(skill, "pub/notes.md", { beforeOpen: swapToHidden, openedPath: () => null }),
+      "hidden files and folders are not readable",
+    );
+  });
+
+  test("a swap undone before the recheck is refused by the file's identity", () => {
+    const openedPath = () => {
+      undoSwap();
+      return null;
+    };
+    expectSkillError(
+      () => readSkillFile(skill, "pub/notes.md", { beforeOpen: swapToHidden, openedPath }),
+      "changed while it was read",
+    );
+  });
+
+  test("a file that vanishes before the open does not exist", () => {
+    expectSkillError(() => readSkillFile(skill, "pub/notes.md", { beforeOpen: (path) => rmSync(path) }), "does not exist");
+  });
+
+  test.each([
+    ["the descriptor's path", openFilePath],
+    ["no descriptor path", () => null],
+  ])("a file removed after the open does not exist, with %s", (_, read) => {
+    const openedPath = (fd: number) => {
+      rmSync(notes());
+      return read(fd);
+    };
+    expectSkillError(() => readSkillFile(skill, "pub/notes.md", { openedPath }), "does not exist");
+  });
+});
+
 test("read skill file rejects missing, directories, binary and large", () => {
   writeFileSync(join(root, "blob.bin"), new Uint8Array([0xff, 0xfe, 0x00]));
   writeFileSync(join(root, "big.txt"), "x".repeat(current().maxSkillFileBytes + 1));
@@ -126,11 +208,6 @@ test("default roots put user before project and stop at git root", () => {
 test("default roots outside git use only cwd", () => {
   const roots = defaultSkillRoots({ cwd: tmp, home: join(tmp, "home") });
   expect(roots.slice(2)).toEqual([join(tmp, ".claude", "skills"), join(tmp, ".agents", "skills")]);
-});
-
-test("compose facade exports the skill loaders", () => {
-  expect(compose.defaultSkillRoots).toBe(defaultSkillRoots);
-  expect(compose.loadSkills).toBe(loadSkills);
 });
 
 // The rows below pin how the home, links and paths are read.
@@ -177,28 +254,7 @@ test("resolved path resolves a symlink above a missing path", () => {
 const ROOT = resolve(import.meta.dirname, "../..");
 const BUILT = join(ROOT, "dist/src/compose/skills.js");
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/platform.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 test.skipIf(!NODE)(
   "the built skills code runs on Node",
@@ -246,6 +302,13 @@ test.skipIf(!NODE)(
         assert.equal(readSkillFile(loaded, "references/api.md"), "GET /items\n");
         assert.throws(() => readSkillFile(loaded, "leak.txt"), /outside/);
         assert.throws(() => readSkillFile(loaded, "blob.bin"), /not UTF-8/);
+        write(join(api, "pub", "notes.md"), "public\n");
+        write(join(api, ".secret", "notes.md"), "token=abc\n");
+        const swap = () => {
+          rmSync(join(api, "pub"), { recursive: true });
+          symlinkSync(".secret", join(api, "pub"));
+        };
+        assert.throws(() => readSkillFile(loaded, "pub/notes.md", { beforeOpen: swap }), /hidden files/);
         assert.equal(invokeLoadSkill(skills, { name: "api" }), "Read references/api.md.\n");
 
         const repo = join(tmp, "outer", "repo");

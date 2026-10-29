@@ -22,6 +22,7 @@
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import type { ExprNode } from "../../expr/grammar.ts";
+import { evaluateWhenRecord } from "../../expr/expressions.ts";
 import { ExpressionError, exprRefs, parseCondition } from "../../expr/index.ts";
 import {
   comparePaths,
@@ -49,6 +50,7 @@ import {
 } from "../helpers/narrowing_facts.ts";
 import { combineOutputContracts, projectOutputContract } from "../../compile/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
+import type { SourceCursor } from "../source/index.ts";
 import {
   type BuildContext,
   type BuildResult,
@@ -149,6 +151,7 @@ export class LoopDescriptor extends NodeDescriptor {
     ranges: Map<string, SourceRange>,
     ownRange: SourceRange | null,
     diagnostics: LoadDiagnostics,
+    cursor: SourceCursor,
   ): void {
     rejectNonText(
       this.kind,
@@ -177,7 +180,7 @@ export class LoopDescriptor extends NodeDescriptor {
         checkWrittenValue(value, `node ${reprText(nodeId)} field ${reprText(key)}`, range, diagnostics);
       }
     }
-    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics);
+    super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
   /**
@@ -250,11 +253,9 @@ export class LoopDescriptor extends NodeDescriptor {
     } else if (present[0] === "times") {
       // A fixed count: exactly N runs, no predicate. `maxIters` doubles as N, so the runtime
       // guard needs no special case.
-      const count = checkedCount(subject, "times", this.times, errors);
       node.predicateKind = "times";
       node.predicate = null;
-      node.times = count;
-      node.maxIters = count;
+      node.maxIters = checkedCount(subject, "times", this.times, errors);
       if (this.max !== null) errors.push(`${subject}: max: is redundant with times: (times bounds the count)`);
     } else {
       const kind = present[0]!;
@@ -387,6 +388,20 @@ export class LoopDescriptor extends NodeDescriptor {
             `never updates; return ${fix} from the body, or add \`max:\``,
         );
       }
+      // Builtins are pure, so a predicate that reads no carried field has the same value on every
+      // check: without `max:`, one that doesn't stop the loop at once never will.
+      if (
+        present.length === 1 &&
+        this.max === null &&
+        tree !== null &&
+        heads.size === 0 &&
+        constantKeepsLooping(predicate, key)
+      ) {
+        errors.push(
+          `${subject}: \`${key}: ${predicate}\` reads no carried field, so it never changes; read one, ` +
+            "or add `max:`",
+        );
+      }
     }
     if (errors.length > 0) throw ctx.diagnostics.error(errors.join("\n  "), { range: this.range });
     return this._finish(node, wiring);
@@ -408,6 +423,20 @@ export class LoopDescriptor extends NodeDescriptor {
       this.fieldRanges.get(siteKey("input", name)) ?? this.fieldRanges.get(siteKey("field", "inputs")) ?? null,
     );
   }
+}
+
+/**
+ * Whether constant predicate `predicate` (one that reads no name) keeps a `key` loop going:
+ * `while:` true or `until:` false. `false` when evaluating it fails, which the run reports.
+ */
+function constantKeepsLooping(predicate: string, key: "while" | "until"): boolean {
+  let truth: boolean;
+  try {
+    truth = evaluateWhenRecord(predicate, {});
+  } catch {
+    return false;
+  }
+  return key === "while" ? truth : !truth;
 }
 
 /**
@@ -563,15 +592,26 @@ export function whileNonNullPaths(kind: string | null, predicate: string | null)
   return [...nonNullBases(proves(tree, true))].map((base) => base.split(".")).toSorted(comparePaths);
 }
 
-/** Return the dotted paths `guard` proves not null (see `whileNonNullPaths`). */
-function nonNullBases(guard: Guard): Set<string> {
+/**
+ * Return the dotted paths `guard` proves not null (see `whileNonNullPaths`).
+ *
+ * `memo` holds each sub-guard's paths by identity: `proves` shares sub-guards, so the guard's
+ * tree grows exponentially with alternating `and`/`or` nesting while its graph stays small.
+ */
+function nonNullBases(guard: Guard, memo: Map<Guard, Set<string>> = new Map()): Set<string> {
+  const known = memo.get(guard);
+  if (known !== undefined) return known;
+  let bases: Set<string>;
   if (guard instanceof Holds) {
-    return guard.check instanceof NotNullCheck && guard.value ? new Set([guard.check.base]) : new Set();
+    bases = guard.check instanceof NotNullCheck && guard.value ? new Set([guard.check.base]) : new Set();
+  } else {
+    const parts = guard.parts.map((part) => nonNullBases(part, memo));
+    if (guard instanceof AllOf) bases = new Set(parts.flatMap((part) => [...part]));
+    else if (parts.length === 0) bases = new Set();
+    else bases = new Set([...parts[0]!].filter((base) => parts.every((part) => part.has(base))));
   }
-  const parts = guard.parts.map(nonNullBases);
-  if (guard instanceof AllOf) return new Set(parts.flatMap((part) => [...part]));
-  if (parts.length === 0) return new Set();
-  return new Set([...parts[0]!].filter((base) => parts.every((part) => part.has(base))));
+  memo.set(guard, bases);
+  return bases;
 }
 
 /**
@@ -593,7 +633,7 @@ function nonNullBases(guard: Guard): Set<string> {
 export function nullableAt(typ: Type, path: readonly string[]): Type {
   const [head, ...rest] = path;
   let changed = typ;
-  if (head !== undefined && typ.variants === undefined && typ.fields?.has(head)) {
+  if (head !== undefined && typ.members === undefined && typ.fields?.has(head)) {
     const fields = new Map(typ.fields);
     fields.set(head, nullableAt(typ.fields.get(head)!, rest));
     const required = new Set(typ.required);

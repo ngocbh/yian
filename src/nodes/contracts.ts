@@ -356,29 +356,6 @@ export class Binding {
     this.contract = contract;
     Object.freeze(this);
   }
-
-  /**
-   * Return this binding with every origin transformed by `mapper`.
-   *
-   * That covers its own origin, its contract's origins, and, for a `ValueTemplate` source, the
-   * template's origins and nested bindings. Any other source is retained by identity.
-   */
-  mapOrigins(mapper: OriginMapper): Binding {
-    const origin = mapOrigin(this.origin, mapper);
-    const contract = this.contract !== null ? this.contract.mapOrigins(mapper) : null;
-    const source = this.source instanceof ValueTemplate ? this.source.mapOrigins(mapper) : this.source;
-    return new Binding(source, { origin, contract });
-  }
-
-  /**
-   * Yield this binding's present origin, then its contract's origins.
-   *
-   * For a `ValueTemplate` source, the template's origins follow, then each nested binding's
-   * origin and contract origins, in tree order.
-   */
-  *iterOrigins(): Generator<OriginRef> {
-    yield* iterOriginCarrier(this, new Set());
-  }
 }
 
 /** A template tree: a record or a list whose leaves are any values. */
@@ -432,14 +409,6 @@ export class ValueTemplate {
     }
     return null;
   }
-
-  /** Return this template with its origins and nested bindings' origins mapped. */
-  mapOrigins(mapper: OriginMapper): ValueTemplate {
-    return new ValueTemplate(
-      mapTree(this.value, (text) => text, mapper) as TemplateTree,
-      this.origins.map(([path, origin]) => [path, mapOrigin(origin, mapper) as OriginRef] as const),
-    );
-  }
 }
 
 /** Yield every binding nested in a template tree, each before those in its source. */
@@ -470,23 +439,19 @@ function* treeStrings(node: unknown, path: ValuePath): Generator<[ValuePath, str
 /**
  * Rebuild a template tree with `fn` applied to each leaf string.
  *
- * Nested bindings keep their contracts; with `mapper` their origins are transformed too. Rebuilt
- * records hold own data properties.
+ * Nested bindings keep their origins and contracts. Rebuilt records hold own data properties.
  */
-function mapTree(node: unknown, fn: (text: string) => unknown, mapper: OriginMapper | null = null): unknown {
+function mapTree(node: unknown, fn: (text: string) => unknown): unknown {
   if (node instanceof Binding) {
-    return new Binding(mapTree(node.source, fn, mapper), {
-      origin: mapper === null ? node.origin : mapOrigin(node.origin, mapper),
-      contract: mapper === null || node.contract === null ? node.contract : node.contract.mapOrigins(mapper),
-    });
+    return new Binding(mapTree(node.source, fn), { origin: node.origin, contract: node.contract });
   }
   if (typeof node === "string") return fn(node);
   if (isRecord(node)) {
     const rebuilt: ValueRecord = {};
-    for (const [key, item] of Object.entries(node)) setField(rebuilt, key, mapTree(item, fn, mapper) as Value);
+    for (const [key, item] of Object.entries(node)) setField(rebuilt, key, mapTree(item, fn) as Value);
     return rebuilt;
   }
-  if (Array.isArray(node)) return node.map((item: unknown) => mapTree(item, fn, mapper));
+  if (Array.isArray(node)) return node.map((item: unknown) => mapTree(item, fn));
   return node;
 }
 
@@ -580,11 +545,6 @@ export class Assertion {
     const origin = mapOrigin(this.origin, mapper);
     return new Assertion(this.expression, this.display, { origin });
   }
-
-  /** Yield this assertion's present origin. */
-  *iterOrigins(): Generator<OriginRef> {
-    yield* iterOriginCarrier(this, new Set());
-  }
 }
 
 /**
@@ -659,11 +619,6 @@ export class ContractOrigins {
     const entries = this.entries.map(([path, origin]) => [path, mapOrigin(origin, mapper) as OriginRef] as const);
     return new ContractOrigins({ default: fallback, entries });
   }
-
-  /** Yield the default, then the nested origins in canonical path order. */
-  *iterOrigins(): Generator<OriginRef> {
-    yield* iterOriginCarrier(this, new Set());
-  }
 }
 
 /** A semantic runtime type paired with source-neutral nested provenance. Frozen. */
@@ -684,16 +639,6 @@ export class ValueContract {
     this.type = type;
     this.origins = origins;
     Object.freeze(this);
-  }
-
-  /** Return this contract with nested origins transformed, retaining its type. */
-  mapOrigins(mapper: OriginMapper): ValueContract {
-    return new ValueContract(this.type, this.origins.mapOrigins(mapper));
-  }
-
-  /** Yield this contract's root and nested origins in canonical order. */
-  *iterOrigins(): Generator<OriginRef> {
-    yield* iterOriginCarrier(this, new Set());
   }
 }
 
@@ -758,18 +703,6 @@ export class PartialRecordContract {
   /** The closed field-name sequence in declaration order. */
   get names(): readonly string[] {
     return this.fields.map(([name]) => name);
-  }
-
-  /** Return this contract with every proven field origin transformed. */
-  mapOrigins(mapper: OriginMapper): PartialRecordContract {
-    return new PartialRecordContract(
-      this.fields.map(([name, contract]) => [name, contract === null ? null : contract.mapOrigins(mapper)] as const),
-    );
-  }
-
-  /** Yield proven field-contract origins in declaration order. */
-  *iterOrigins(): Generator<OriginRef> {
-    yield* iterOriginCarrier(this, new Set());
   }
 }
 
@@ -910,7 +843,7 @@ function memberOnlyFieldError(
     which = `only union members with ${tag} ${tags} have`;
     fix = `read it inside a case on \${${unionPath}.${tag}}`;
   } else {
-    which = `only ${having.length} of ${union.variants!.length} union members have`;
+    which = `only ${having.length} of ${union.members!.length} union members have`;
     fix = `check the member with isinstance(${unionPath}, <Type>) in a case first`;
   }
   if (tagHint && tag !== undefined) {
@@ -1006,7 +939,7 @@ export function outputContractFieldError(
   const walked = unionRoot === null ? [...readWalked] : [unionRoot];
   const start = walked.length;
   for (const fieldName of fields) {
-    if (typ.variants !== undefined) {
+    if (typ.members !== undefined) {
       const read = unionField(typ, fieldName);
       if (read.kind === "absent") {
         return `reference \${${path}} reads unknown field ${reprText(fieldName)} on record`;
@@ -1170,7 +1103,7 @@ export interface CallView {
  * Example:
  * ```ts
  * if (steps !== undefined) {
- *   const attempt = steps.starts + steps.prior.length;
+ *   const attempt = steps.starts + steps.prior.filter((step) => step.event === "started").length;
  *   steps.record({ kind: "tool_attempt", event: "started", attempt: BigInt(attempt) });
  * }
  * ```
@@ -1219,6 +1152,8 @@ export class NodeSteps {
   #next: number;
   /** Reads the node's calls as the run state holds them now; `null` outside a run. */
   readonly #current: (() => readonly CallView[]) | null;
+  /** Reads the `n` the node's next step gets in the run state; `null` outside a run. */
+  readonly #nextStep: (() => number) | null;
 
   /**
    * Check the field types and that the current start is counted; `prior` and `calls` are
@@ -1227,9 +1162,12 @@ export class NodeSteps {
    * @param currentCalls Reads the node's calls as the run state holds them now (answers and
    *   closes since the evaluation began); the engine passes it, and `currentCalls()` gives `calls`
    *   without it.
+   * @param nextStep Reads the `n` the node's next step gets in the run state, which counts the
+   *   steps the engine appends for the node without `record` (a steer read, a host's answer); the
+   *   engine passes it, and `next` counts only `record`'s steps without it.
    * @throws TypeError when `starts` isn't a safe integer, `prior` isn't an array of plain
-   *   records, `record` isn't a function, `calls` isn't an array, or `currentCalls` isn't a
-   *   function or `null`.
+   *   records, `record` isn't a function, `calls` isn't an array, or `currentCalls` or `nextStep`
+   *   isn't a function or `null`.
    * @throws RangeError when `starts` is less than 1 or `maxEventBytes` isn't a positive safe
    *   integer.
    */
@@ -1241,6 +1179,7 @@ export class NodeSteps {
     maxEventBytes: number = MAX_EVENT_BYTES,
     durable: boolean = true,
     currentCalls: (() => readonly CallView[]) | null = null,
+    nextStep: (() => number) | null = null,
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new TypeError("starts must be an int");
     if (starts < 1) throw new RangeError("starts must be at least 1");
@@ -1250,6 +1189,7 @@ export class NodeSteps {
     if (typeof record !== "function") throw new TypeError("record must be callable");
     if (!Array.isArray(calls)) throw new TypeError("calls must be an array");
     if (currentCalls !== null && typeof currentCalls !== "function") throw new TypeError("currentCalls must be callable or null");
+    if (nextStep !== null && typeof nextStep !== "function") throw new TypeError("nextStep must be callable or null");
     if (typeof maxEventBytes !== "number" || !Number.isSafeInteger(maxEventBytes) || maxEventBytes < 1) {
       throw new RangeError("maxEventBytes must be a positive int");
     }
@@ -1260,6 +1200,7 @@ export class NodeSteps {
     this.durable = durable === true;
     this.#next = prior.length + 1;
     this.#current = currentCalls;
+    this.#nextStep = nextStep;
     this.record = (step, options) => {
       const n = record(step, options);
       this.#next = n + 1;
@@ -1269,12 +1210,12 @@ export class NodeSteps {
   }
 
   /**
-   * The `n` the next step recorded through this object gets: one past the last `n` `record`
-   * returned, or past `prior` before any. A call in flight names its step by it before the step is
-   * recorded.
+   * The `n` the node's next step gets: in a run, as the run state counts the node's steps now;
+   * outside one, one past the last `n` `record` returned, or past `prior` before any. A call in
+   * flight names its step by it before the step is recorded.
    */
   get next(): number {
-    return this.#next;
+    return this.#nextStep === null ? this.#next : this.#nextStep();
   }
 
   /**
@@ -1392,20 +1333,6 @@ export class Parameter {
       defaultOrigin: this.defaultOrigin,
       ...changes,
     });
-  }
-
-  /** Transform parameter, default, and nested contract origins without copying data. */
-  mapOrigins(mapper: OriginMapper): Parameter {
-    return this.replace({
-      contract: this.contract !== null ? this.contract.mapOrigins(mapper) : null,
-      origin: mapOrigin(this.origin, mapper),
-      defaultOrigin: mapOrigin(this.defaultOrigin, mapper),
-    });
-  }
-
-  /** Yield contract, declaration, then default origins in stable order. */
-  *iterOrigins(): Generator<OriginRef> {
-    yield* iterOriginCarrier(this, new Set());
   }
 }
 

@@ -20,4 +20,4 @@ expect:
       message: node 'ask' adaptive_questions.llm_config.api_key is a host credential; pass it in the run's llm_config, not in a flow file
       frames:
       - label: flow.yaml
-        range: [12, 19, 12, 31]
+        range: [12, 29, 12, 30]

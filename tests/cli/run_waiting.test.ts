@@ -54,6 +54,12 @@ test("the text form names each wait and how to continue", () => {
   expect(waitingText(waiting)).toBe("run waiting: ask (ask)\ncontinue with: yian run --resume /l.jsonl\n");
 });
 
+test("the command to continue quotes a log path the shell would split", () => {
+  const log = "/my runs/l.jsonl";
+  const spaced = new RunResult({ input: {}, status: "waiting", runId: "r", log, waits: waiting.waits });
+  expect(waitingText(spaced)).toEndWith("continue with: yian run --resume '/my runs/l.jsonl'\n");
+});
+
 const NAP = `id: nap
 name: nap
 nodes:

@@ -1,5 +1,5 @@
-# `warm_cache` runs first, then `fetch` fails `contract.output` before the AGENT runs.
-# The seed's `fetch` output doesn't declare `news`, which `fetch_facts` returns; records are closed.
+# The `depends_on:` edge runs `warm_cache` before `fetch`, though no data flows between them;
+# then the AGENT writes the note from `fetch`'s values.
 kind: run
 flow: |
   # 12 — Explicit run-ordering with depends_on / runs_after.
@@ -36,6 +36,7 @@ flow: |
         topic: ${input.topic}
       output:
         values: list(float)
+        news: list(str)
       code: ./fixtures/seeds.ts:fetch_facts
 
     note:
@@ -47,21 +48,21 @@ flow: |
       prompt: "Write a neutral one-line note on ${topic} given recent closes ${values}. No advice."
 
   output: ${note.output}
-# Run start resolves the AGENT's config even though it never runs: it has no `llm_config:`, so
-# `run.llm_config` gives its provider and model; the key makes the recorded connection source
-# `environment`, which the trace pins.
+# The flow names no provider or model, so `run.llm_config` gives both; run start resolves
+# them, and the key makes the recorded connection source `environment`, which the trace pins.
 env: {OPENAI_API_KEY: "<key:1>"}
 inputs: {topic: rates}
 run: {run_id: r1, num_workers: 0, llm_config: {provider: openai, model: gpt-5.5}}
+host:
+  models:
+    note:
+      agent:
+        - reply:
+            format: yian.message.v1
+            role: assistant
+            parts: [{type: text, text: Rates closed between 99.75 and 102.25.}]
 expect:
-  output:
-    status: failed
-    failure:
-      code: contract.output
-      message: 'record has unknown fields: ["news"]'
-      node: fetch
-      # The declared record `values: list(float)`, from line 34 to the next key.
-      frames: [{label: flow.yaml, range: [34, 7, 35, 5]}]
+  output: {status: succeeded, output: Rates closed between 99.75 and 102.25.}
   trace:
     - - run_started
       - null
@@ -83,10 +84,17 @@ expect:
     - [pool_commit, warm_cache, {value: true}]
     - [node_succeeded, warm_cache, {commit: 9}]
     - [node_started, fetch]
-    - - node_failed
+    - - pool_commit
       - fetch
-      - failure:
-          code: contract.output
-          message: 'record has unknown fields: ["news"]'
-          node: fetch
-          frames: [{label: flow.yaml, range: [34, 7, 35, 5]}]
+      - value:
+          news: ['RATES: quarterly update', 'RATES: reviewer note']
+          values: [100, 101.5, 99.75, 102.25]
+    - [node_succeeded, fetch, {commit: 12}]
+    - [node_started, note]
+    - [node_step, note, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: Rates closed between 99.75 and 102.25., type: text}], role: assistant}, purpose: chat, request_sha256: 6b000b064064803a2ad817123053af251d31619d1be540ae41d22b91947453e5, response_id: null, usage: null}}]
+    - [pool_commit, note, {value: Rates closed between 99.75 and 102.25.}]
+    - [pool_commit, note, {key: note.new_messages, steps: [15]}]
+    - [node_succeeded, note, {commit: 16, messages: 17}]
+    - [node_started, __end__]
+    - [pool_commit, __end__, {value: Rates closed between 99.75 and 102.25.}]
+    - [node_succeeded, __end__, {commit: 20}]

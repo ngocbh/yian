@@ -1,6 +1,11 @@
-/** Canonical, source-owned diagnostics for Compose load failures. */
+/**
+ * Canonical, source-owned diagnostics for Compose load failures, and the helpers the validate
+ * passes share to build them: `locatedError` points an error at a binding's origin, and
+ * `shownLiteral` writes a value the way messages show it.
+ */
 
-import { Diagnostic, DiagnosticFrame, SourceRange } from "../../diagnostics.ts";
+import { Diagnostic, DiagnosticFrame, type OriginRef, type SourceRange } from "../../diagnostics.ts";
+import { type Value, valueRepr, writeAsJson } from "../../typesys/values.ts";
 import type { SourceCursor, SourceDocument } from "../source/index.ts";
 import { oneLineSlice } from "./source.ts";
 
@@ -33,17 +38,10 @@ export class LoadDiagnostics {
    * Create a context owning `label` and `text`, or an unlocated one when both are `null`.
    *
    * @throws RangeError when only one of them is `null`.
-   * @throws TypeError when either is not text.
    */
   constructor(label: string | null = null, text: string | null = null) {
     if ((label === null) !== (text === null)) {
       throw new RangeError("load diagnostic source requires both label and text");
-    }
-    if (label !== null && typeof label !== "string") {
-      throw new TypeError("load diagnostic label must be a string");
-    }
-    if (text !== null && typeof text !== "string") {
-      throw new TypeError("load diagnostic text must be a string");
     }
     this.label = label;
     this.text = text;
@@ -67,18 +65,10 @@ export class LoadDiagnostics {
   /**
    * Resolve one concrete range against this context's source, with an optional `note`
    * printed next to it; `null` when the range or the source is absent.
-   *
-   * @throws TypeError for a range that isn't a `SourceRange`, or a note that isn't text.
    */
   frame(range: SourceRange | null, options: { note?: string | null } = {}): DiagnosticFrame | null {
     const { note = null } = options;
     if (range === null || this.label === null || this.text === null) return null;
-    if (!(range instanceof SourceRange)) {
-      throw new TypeError("load diagnostic range must be a SourceRange or null");
-    }
-    if (note !== null && typeof note !== "string") {
-      throw new TypeError("load diagnostic frame note must be a string or null");
-    }
     return new DiagnosticFrame({ label: this.label, text: this.text, range, note });
   }
 
@@ -86,36 +76,23 @@ export class LoadDiagnostics {
    * Construct one canonical Compose load diagnostic, code `compose.load` unless `code` names a
    * narrower one, such as `expr.nullable_field_read`.
    *
-   * @throws TypeError for a malformed message, frame or note.
    * @throws RangeError when `range` and explicit frames are both given.
    */
   diagnostic(message: string, options: LoadDiagnosticOptions = {}): Diagnostic {
     const { range = null, frames = [], notes = [], code = "compose.load" } = options;
-    if (typeof message !== "string") {
-      throw new TypeError("load diagnostic message must be a string");
-    }
     let ownedFrames = [...frames];
     if (range !== null && ownedFrames.length > 0) {
       throw new RangeError("load diagnostic accepts a range or frames, not both");
-    }
-    for (const frame of ownedFrames) {
-      if (!(frame instanceof DiagnosticFrame)) {
-        throw new TypeError("load diagnostic frames must be DiagnosticFrame values");
-      }
     }
     if (range !== null) {
       const frame = this.frame(range);
       ownedFrames = frame !== null ? [frame] : [];
     }
-    const ownedNotes = [...notes];
-    if (ownedNotes.some((note) => typeof note !== "string")) {
-      throw new TypeError("load diagnostic notes must be strings");
-    }
     return new Diagnostic({
       code,
       message,
       frames: ownedFrames,
-      notes: ownedNotes,
+      notes: [...notes],
     });
   }
 
@@ -190,5 +167,47 @@ export class LoadError extends RangeError {
     super(diagnostic.message, cause === undefined ? undefined : { cause });
     this.diagnostic = diagnostic;
     Object.freeze(this);
+  }
+}
+
+/**
+ * Build the load error, located at the binding's origin when it resolves, code `compose.load`
+ * unless `options.code` names a narrower one, such as `expr.nullable_field_read`.
+ *
+ * @param message The error message.
+ * @param binding The rejected binding, or any carrier of the origin to locate at.
+ * @param fallback The location used when the origin does not resolve.
+ * @param resolveOrigin Resolves a registered origin to its source frame.
+ * @param diagnostics Factory for located load errors.
+ * @param options.code The diagnostic code, when narrower than `compose.load`.
+ * @returns The located error.
+ */
+export function locatedError(
+  message: string,
+  binding: { readonly origin: OriginRef | null },
+  fallback: SourceRange | null,
+  resolveOrigin: ((origin: OriginRef) => DiagnosticFrame | null) | null,
+  diagnostics: LoadDiagnostics,
+  options: { code?: string } = {},
+): LoadError {
+  const { code } = options;
+  const frame = resolveOrigin !== null && binding.origin !== null ? resolveOrigin(binding.origin) : null;
+  if (frame !== null) return diagnostics.error(message, { frames: [frame], code });
+  return diagnostics.error(message, { range: fallback, code });
+}
+
+/**
+ * Render a literal as its text form: compact JSON (`true`, `null`, `"text"`, `[1,"a"]`,
+ * `{"k":2}`), the form messages use for values.
+ *
+ * @param value The literal to render.
+ * @returns `writeAsJson`'s text; `valueRepr` for anything it can't write.
+ */
+export function shownLiteral(value: unknown): string {
+  try {
+    return writeAsJson(value as Value);
+  } catch (error) {
+    if (error instanceof TypeError) return valueRepr(value);
+    throw error;
   }
 }

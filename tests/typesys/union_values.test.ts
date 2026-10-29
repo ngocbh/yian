@@ -17,7 +17,6 @@ import {
   type FieldRead,
   restrictUnion,
   Type,
-  TypeCheckError,
   typeEquals,
   typesOverlap,
   unionField,
@@ -25,6 +24,7 @@ import {
   unionTagFields,
   ValueKind,
 } from "../../src/typesys/values.ts";
+import { typeCheckError } from "../helpers/type_errors.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const INT = Type.scalar(ValueKind.INTEGER);
@@ -58,7 +58,7 @@ function rec(fields: Record<string, Type>): Type {
 }
 
 function union(members: Type[], nullable = false): Type {
-  return new Type({ kind: ValueKind.OBJECT, variants: members, nullable });
+  return new Type({ kind: ValueKind.OBJECT, members: members, nullable });
 }
 
 const buy = rec({ action: lit("buy"), qty: INT });
@@ -80,13 +80,13 @@ describe("union shape", () => {
   test.each([
     [
       "kind",
-      new Type({ kind: ValueKind.STRING, variants: [buy, sell] }),
+      new Type({ kind: ValueKind.STRING, members: [buy, sell] }),
       RangeError,
-      /only object types may declare union variants/,
+      /only object types may declare union members/,
     ],
     [
       "other-refinement",
-      new Type({ kind: ValueKind.OBJECT, fields: new Map([["a", INT]]), variants: [buy, sell] }),
+      new Type({ kind: ValueKind.OBJECT, fields: new Map([["a", INT]]), members: [buy, sell] }),
       RangeError,
       /a type may declare only one structural refinement/,
     ],
@@ -101,9 +101,9 @@ describe("union shape", () => {
     ],
     [
       "not-an-array",
-      new Type({ kind: ValueKind.OBJECT, variants: new Set([buy, sell]) } as never),
+      new Type({ kind: ValueKind.OBJECT, members: new Set([buy, sell]) } as never),
       TypeError,
-      /type variants must be an array/,
+      /type members must be an array/,
     ],
   ] as const)("rejects %s", (_id, typ, cls, message) => {
     expect(() => typ.validateShape()).toThrow(cls);
@@ -250,17 +250,6 @@ describe("typesOverlap", () => {
     expect(typesOverlap(b, a)).toBe(expected);
   });
 });
-
-/** Return the `TypeCheckError` `run` throws. */
-function typeCheckError(run: () => unknown): TypeCheckError {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(TypeCheckError);
-    return error as TypeCheckError;
-  }
-  throw new Error("expected a TypeCheckError");
-}
 
 function deepUntaggedUnion(depth: number): Type {
   let typ = union([rec({ a: STR }), rec({ b: INT })]);

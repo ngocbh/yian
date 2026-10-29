@@ -17,4 +17,4 @@ expect:
       message: 'long_term_memory name ''name'' is reserved (reserved: config, name, type)'
       frames:
       - label: flow.yaml
-        range: [3, 19, 3, 37]
+        range: [3, 20, 3, 24]

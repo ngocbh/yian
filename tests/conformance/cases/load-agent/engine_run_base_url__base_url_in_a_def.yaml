@@ -18,4 +18,4 @@ expect:
       message: 'defs entry ''body'': llm_config.base_url decides where the host''s api_key is sent; pass it with that key in the run''s llm_config, not in a flow file. A flow file sets base_url only beside provider: azure, as the Azure resource endpoint'
       frames:
       - label: flow.yaml
-        range: [5, 17, 5, 63]
+        range: [5, 28, 5, 62]

@@ -27,7 +27,15 @@ import {
 } from "../../src/cli/auth.ts";
 import { type CliIo, type OptionValue, type ParsedArgs, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
-import { ApiKeyCredentials, AuthError, AuthStore, OAuthCredentials } from "../../src/llm_clients/auth/index.ts";
+import {
+  ApiKeyCredentials,
+  AuthError,
+  type AuthRequest,
+  AuthStore,
+  HttpResponse,
+  OAuthCredentials,
+  OpenAIAuth,
+} from "../../src/llm_clients/auth/index.ts";
 import { LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS, validateBaseUrl } from "../../src/llm_clients/config.ts";
 import { ConnectionSnapshot } from "../../src/llm_clients/connection.ts";
 import {
@@ -38,7 +46,7 @@ import {
   validateOrganization,
 } from "../../src/llm_clients/connection_settings.ts";
 import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
-import { type ListModelsOptions, ModelListError } from "../../src/llm_clients/model_list.ts";
+import { type ListModelsOptions, listModels, ModelListError } from "../../src/llm_clients/model_list.ts";
 import { type Event, Finish, PartDone, TextDelta } from "../../src/llm/events.ts";
 import { Message, Request, TextPart } from "../../src/llm/messages.ts";
 import { lockFile, virtualScheduler } from "../../src/platform.ts";
@@ -62,9 +70,11 @@ function sink() {
 
 /**
  * A command's I/O: stdin ended with `stdin` (text or bytes) and marked `isTTY` as given, collected
- * stdout and stderr, and `env` as the environment.
+ * stdout and stderr (TTYs when `outTty`), and `env` as the environment.
  */
-function fakeIo(options: { stdin?: string | Uint8Array; isTTY?: boolean; env?: Record<string, string> } = {}) {
+function fakeIo(
+  options: { stdin?: string | Uint8Array; isTTY?: boolean; outTty?: boolean; env?: Record<string, string> } = {},
+) {
   const stdin = Object.assign(new PassThrough(), { isTTY: options.isTTY });
   stdin.end(options.stdin === undefined ? undefined : Buffer.from(options.stdin));
   const stdout = sink();
@@ -72,8 +82,8 @@ function fakeIo(options: { stdin?: string | Uint8Array; isTTY?: boolean; env?: R
   const env = options.env ?? {};
   const io: CliIo = {
     stdin,
-    stdout: stdout.out,
-    stderr: stderr.out,
+    stdout: { ...stdout.out, isTTY: options.outTty ?? false },
+    stderr: { ...stderr.out, isTTY: options.outTty ?? false },
     stderrStream: new PassThrough(),
     env: (name) => (Object.hasOwn(env, name) ? env[name] : undefined),
   };
@@ -319,13 +329,58 @@ describe("models --provider", () => {
     expect(fake.calls[0]!.options).toEqual({ apiKey: "k", baseUrl: "https://gateway.example/api/v1", timeout: 0.5 });
   });
 
+  /** A `listModels` over a fake transport that records each requested URL and lists `gateway-model`. */
+  function recordedListing() {
+    const urls: string[] = [];
+    const listing: AuthDeps["listModels"] = (provider, options) =>
+      listModels(provider, {
+        ...options,
+        request: async (_method, url) => {
+          urls.push(url);
+          return new HttpResponse(200, { data: [{ id: "gateway-model" }] });
+        },
+      });
+    return { urls, listing };
+  }
+
+  test("openai lists OPENAI_BASE_URL when it is set and sends nothing to api.openai.com", async () => {
+    const recorded = recordedListing();
+    const io = fakeIo({ stdin: "private-key", env: { OPENAI_BASE_URL: "https://gateway.example.com/v1" } });
+    const result = await run(models, modelsArgs({ provider: "openai" }), io, { listModels: recorded.listing });
+    expect(result).toMatchObject({ code: 0, out: "gateway-model\n" });
+    expect(recorded.urls).toEqual(["https://gateway.example.com/v1/models"]);
+    expect(recorded.urls.some((url) => url.includes("api.openai.com"))).toBe(false);
+  });
+
+  test("an invalid OPENAI_BASE_URL fails the openai listing without a request", async () => {
+    const recorded = recordedListing();
+    const io = fakeIo({ stdin: "private-key", env: { OPENAI_BASE_URL: "http://gateway.example.com/v1" } });
+    const result = await run(models, modelsArgs({ provider: "openai" }), io, { listModels: recorded.listing });
+    expect(result.code).toBe(1);
+    expect(result.err).toContain("Couldn't list the openai models: invalid request");
+    expect(result.out + result.err).not.toContain("private-");
+    expect(recorded.urls).toEqual([]);
+  });
+
+  test("--base-url wins over OPENAI_BASE_URL, and other providers ignore OPENAI_BASE_URL", async () => {
+    const fake = fakeListModels();
+    const env = { OPENAI_BASE_URL: "https://gateway.example.com/v1" };
+    const explicit = modelsArgs({ provider: "openai", "base-url": "https://other.example/v1" });
+    await run(models, explicit, fakeIo({ stdin: "k", env }), fake);
+    await run(models, modelsArgs({ provider: "openrouter" }), fakeIo({ stdin: "k", env }), fake);
+    expect(fake.calls.map((call) => call.options["baseUrl"])).toEqual(["https://other.example/v1", null]);
+  });
+
   test.each<[string, string, bigint | null]>([
     ["HTTP 403", "models.failed", 403n],
     ["timed out", "models.timeout", null],
     ["can't reach host", "models.failed", null],
   ])("a listing failing with %s is %s", async (reason, code, status) => {
-    // As `listModels` throws them: an HTTP refusal carries its status.
-    const failure = new ModelListError(reason, status === null ? {} : { status: Number(status) });
+    // As `listModels` throws them: an HTTP refusal carries its status, a timeout its flag.
+    const failure = new ModelListError(reason, {
+      ...(status === null ? {} : { status: Number(status) }),
+      timedOut: reason === "timed out",
+    });
     const fake = fakeListModels(failure);
     const result = await run(models, modelsArgs({ provider: "openrouter", json: true }), fakeIo({ stdin: "k" }), fake);
     expect(result.code).toBe(1);
@@ -336,6 +391,12 @@ describe("models --provider", () => {
     });
     const text = await run(models, modelsArgs({ provider: "openrouter" }), fakeIo({ stdin: "k" }), fake);
     expect(text).toEqual({ code: 1, out: "", err: `${message}\n` });
+  });
+
+  test("a listing's timeout is known by its flag, not its message", async () => {
+    const fake = fakeListModels(new ModelListError("deadline passed", { timedOut: true }));
+    const result = await run(models, modelsArgs({ provider: "openrouter", json: true }), fakeIo({ stdin: "k" }), fake);
+    expect(JSON.parse(result.out).error.code).toBe("models.timeout");
   });
 
   test("the JSON status is an int", async () => {
@@ -357,6 +418,27 @@ describe("models --provider", () => {
     const fake = fakeListModels(["m-a", "m-b"]);
     const result = await run(models, modelsArgs({ provider: "openrouter" }), fakeIo({ stdin: "k" }), fake);
     expect(result).toEqual({ code: 0, out: "m-a\nm-b\n", err: "" });
+  });
+});
+
+describe("models --provider with escape sequences in the provider's text", () => {
+  const raw = "m\x1b]52;c;aGk=\x07-a\x1b[2J";
+
+  test("a model id is stripped on a TTY stdout and kept exactly when piped", async () => {
+    const fake = fakeListModels([raw]);
+    const tty = await run(models, modelsArgs({ provider: "openrouter" }), fakeIo({ stdin: "k", outTty: true }), fake);
+    expect(tty).toEqual({ code: 0, out: "m-a\n", err: "" });
+    const piped = await run(models, modelsArgs({ provider: "openrouter" }), fakeIo({ stdin: "k" }), fake);
+    expect(piped).toEqual({ code: 0, out: `${raw}\n`, err: "" });
+  });
+
+  test("a listing failure is stripped on a TTY stderr and kept exactly when piped", async () => {
+    const fake = fakeListModels(new ModelListError(`HTTP 400: ${raw}`, { status: 400 }));
+    const args = modelsArgs({ provider: "openrouter" });
+    const tty = await run(models, args, fakeIo({ stdin: "k", outTty: true }), fake);
+    expect(tty.err).toBe("Couldn't list the openrouter models: HTTP 400: m-a\n");
+    const piped = await run(models, args, fakeIo({ stdin: "k" }), fake);
+    expect(piped.err).toBe(`Couldn't list the openrouter models: HTTP 400: ${raw}\n`);
   });
 });
 
@@ -1241,6 +1323,20 @@ describe("auth OpenAI setup", () => {
     expect(setup.opened).toEqual(login === "browser" ? ["https://example.invalid/authorize"] : []);
   });
 
+  test.each<[string, boolean, string]>([
+    ["stripped on a TTY", true, "Open https://example.invalid/device and enter code: TEST-CODE\n"],
+    ["kept exactly when piped", false, "Open https://example.invalid/device and enter code: TEST\x1b]52;c;aGk=\x07-CODE\n"],
+  ])("the device sign-in's code is %s", async (_, outTty, shown) => {
+    const setup = setupAuth();
+    const deviceLogin = setup.service.service.deviceLogin;
+    setup.service.service.deviceLogin = (display) =>
+      deviceLogin((url, code) => display(url, code.replace("-", "\x1b]52;c;aGk=\x07-")));
+    const io = fakeIo({ env: setup.env, outTty });
+    const result = await run(auth, authArgs("openai", { method: "subscription", login: "device", model: "gpt-test" }), io, setup.deps);
+    expect(result.code).toBe(0);
+    expect(result.out).toStartWith(shown);
+  });
+
   // Interactive setup defaults to subscription and catalog first model.
   test("interactive setup defaults to a subscription and the catalog's first model", async () => {
     const setup = setupAuth();
@@ -1387,6 +1483,66 @@ describe("auth OpenAI setup", () => {
     ]);
     expect(setup.service.settings).toEqual([{ apiKey: "typed-key", headers: [["X-G", "typed-gw"]] }]);
     expect(result.output).not.toContain("typed-");
+  });
+
+  /** An `openAIAuth` building the real service over a fake transport that records each request. */
+  function recordedService(models: readonly string[]) {
+    const sent: { url: string; headers: Record<string, string> }[] = [];
+    const request: AuthRequest = async (_method, url, options) => {
+      sent.push({ url, headers: options.headers });
+      return new HttpResponse(200, { data: models.map((id) => ({ id })) });
+    };
+    const openAIAuth: AuthDeps["openAIAuth"] = (options) => new OpenAIAuth({ ...options, request });
+    return { sent, openAIAuth };
+  }
+
+  test("API-key setup lists models at OPENAI_BASE_URL and sends nothing to api.openai.com", async () => {
+    const setup = setupAuth();
+    const recorded = recordedService(["gateway-model"]);
+    const result = await runSetup(
+      setup,
+      { method: "api-key", model: "gateway-model", header: ["X-G=GW_TOKEN"] },
+      {
+        env: { OPENAI_BASE_URL: "https://gateway.example.com/v1/", GW_TOKEN: "private-gw" },
+        deps: { openAIAuth: recorded.openAIAuth },
+      },
+    );
+    expect(result.code).toBe(0);
+    expect(recorded.sent.map((request) => request.url)).toEqual(["https://gateway.example.com/v1/models"]);
+    expect(recorded.sent[0]!.headers).toMatchObject({ Authorization: "Bearer private-key", "X-G": "private-gw" });
+    expect(recorded.sent.some((request) => request.url.includes("api.openai.com"))).toBe(false);
+    expect(setup.store.selection("openai")?.model).toBe("gateway-model");
+    expect(result.output).not.toContain("private-");
+  });
+
+  test("API-key setup refuses an invalid OPENAI_BASE_URL before sending the key anywhere", async () => {
+    const setup = setupAuth();
+    const recorded = recordedService(["gpt-test"]);
+    const result = await runSetup(
+      setup,
+      { method: "api-key", model: "gpt-test" },
+      {
+        env: { OPENAI_BASE_URL: "https://user:private-pw@gateway.example.com/v1" },
+        deps: { openAIAuth: recorded.openAIAuth },
+      },
+    );
+    expect(result.code).toBe(1);
+    expect(result.err).toStartWith("Invalid OPENAI_BASE_URL: base_url must be");
+    expect(recorded.sent).toEqual([]);
+    expect(result.output).not.toContain("private-");
+    expect(existsSync(setup.path)).toBe(false);
+  });
+
+  test("API-key setup with an empty OPENAI_BASE_URL lists OpenAI's models, as runs use OpenAI's host", async () => {
+    const setup = setupAuth();
+    const recorded = recordedService(["gpt-test"]);
+    const result = await runSetup(
+      setup,
+      { method: "api-key", model: "gpt-test" },
+      { env: { OPENAI_BASE_URL: "" }, deps: { openAIAuth: recorded.openAIAuth } },
+    );
+    expect(result.code).toBe(0);
+    expect(recorded.sent.map((request) => request.url)).toEqual(["https://api.openai.com/v1/models"]);
   });
 
   test.each<[string, (string | null)[], string]>([
@@ -1794,6 +1950,20 @@ describe("auth provider setup", () => {
       err: "The model didn't answer: NotFoundError: model not found; the previous login is unchanged\n",
     });
     expect(readFileSync(c.path)).toEqual(before);
+  });
+
+  const raw = "m\x1b]52;c;aGk=\x07-a\x1b[2J";
+  test.each<[string, boolean, string]>([
+    ["stripped on a TTY", true, "m-a"],
+    ["kept exactly when piped", false, raw],
+  ])("a provider's error is %s", async (_, outTty, shown) => {
+    const c = checks();
+    c.env["ANTHROPIC_API_KEY"] = "private-key";
+    c.fake.models = [];
+    c.chat.failure = named("NotFoundError", raw);
+    const io = fakeIo({ env: c.env, outTty });
+    const result = await run(auth, authArgs("anthropic", { model: "claude-y" }), io, c.deps);
+    expect(result.err).toBe(`The model didn't answer: NotFoundError: ${shown}; the previous login is unchanged\n`);
   });
 
   // Listing failure falls back to one reply.

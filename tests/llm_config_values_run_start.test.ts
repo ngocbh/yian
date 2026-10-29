@@ -140,7 +140,7 @@ const GOLDEN_RUN_STARTED = {
         provider: "openai",
       },
     },
-    flow: { dir: "<dir>", files: { "<flow>": { refs: {}, text: FLOW } }, root: "<flow>" },
+    flow: { code_root: null, dir: "<dir>", files: { "<flow>": { refs: {}, text: FLOW } }, root: "<flow>" },
     flow_fingerprint: "3d9b9bbd0808d27babce1bded77b3e90b642d179cc9678abcae0f4da66d4bfa7",
     learnable: false,
     memories: null,
@@ -155,7 +155,7 @@ const GOLDEN_RUN_STARTED = {
     yian_version: VERSION,
   },
   run_id: "golden",
-  schema: 23,
+  schema: 25,
   seq: 0,
   at: "<at>",
 };

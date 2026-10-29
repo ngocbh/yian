@@ -1,5 +1,5 @@
 /**
- * The provider key variables, the model catalog, `validateModel`, and the clients, built with
+ * The provider key variables, the model catalog, `isKnownModel`, and the clients, built with
  * `chatModelFromConfig` and checked by their route, protocol and body.
  *
  * Also the `@ngocbh/yian/llm_clients` entry, imported by package self-reference, which resolves
@@ -7,8 +7,8 @@
  * Node binary, also on Node, built.
  */
 
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,11 +46,11 @@ import {
 } from "../../src/llm_clients/config.ts";
 import { OPENAI_COMPATIBLE } from "../../src/llm_clients/endpoints.ts";
 import { chatModelFromConfig, DEDICATED_PROVIDERS } from "../../src/llm_clients/factory.ts";
-import { getKnownModels, getModelOptions, MODEL_OPTIONS } from "../../src/llm_clients/model_catalog.ts";
+import { getKnownModels, getModelOptions, isKnownModel, MODEL_OPTIONS } from "../../src/llm_clients/model_catalog.ts";
 import { listModels, ModelListError } from "../../src/llm_clients/model_list.ts";
 import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
-import { VALID_MODELS, validateModel } from "../../src/llm_clients/validators.ts";
 import { type Send, virtualScheduler } from "../../src/platform.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 // Each test's environment: a private, empty store and only the variables the test sets.
 let home: string;
@@ -126,48 +126,49 @@ test("vllm is the only provider whose key is optional", () => {
 });
 
 test("vllm accepts any model name", () => {
-  expect(validateModel("vllm", "any/arbitrary-served-model")).toBe(true);
+  expect(isKnownModel("vllm", "any/arbitrary-served-model")).toBe(true);
 });
 
 test("ollama and openrouter accept any model name", () => {
-  expect(validateModel("ollama", "any/arbitrary-served-model")).toBe(true);
-  expect(validateModel("openrouter", "any/arbitrary-served-model")).toBe(true);
+  expect(isKnownModel("ollama", "any/arbitrary-served-model")).toBe(true);
+  expect(isKnownModel("openrouter", "any/arbitrary-served-model")).toBe(true);
 });
 
 test("claude mythos 5.1 is a known anthropic model", async () => {
-  expect(validateModel("anthropic", "claude-mythos-5-1")).toBe(true);
+  expect(isKnownModel("anthropic", "claude-mythos-5-1")).toBe(true);
   const warnings: string[] = [];
   const model = await build({ provider: "anthropic", model: "claude-mythos-5-1", api_key: "k" }, { warnings });
   expect(model.protocol).toBeInstanceOf(AnthropicMessages);
   expect(warnings).toEqual([]);
 });
 
-test("validateModel accepts any model for providers outside the catalog", () => {
-  expect(validateModel("azure", "my-deployment")).toBe(true);
-  expect(validateModel("no-such-provider", "anything")).toBe(true);
-  expect(validateModel("toString", "anything")).toBe(true);
-  expect(validateModel("__proto__", "anything")).toBe(true);
+test("isKnownModel accepts any model for providers outside the catalog", () => {
+  expect(isKnownModel("azure", "my-deployment")).toBe(true);
+  expect(isKnownModel("no-such-provider", "anything")).toBe(true);
+  expect(isKnownModel("toString", "anything")).toBe(true);
+  expect(isKnownModel("__proto__", "anything")).toBe(true);
 });
 
-test("validateModel lowercases the provider but not the model", () => {
-  expect(validateModel("OpenAI", "gpt-5.5")).toBe(true);
-  expect(validateModel("openai", "GPT-5.5")).toBe(false);
-  expect(validateModel("openai", "no-such-model")).toBe(false);
-  expect(validateModel("VLLM", "anything")).toBe(true);
+test("isKnownModel lowercases the provider but not the model", () => {
+  expect(isKnownModel("OpenAI", "gpt-5.5")).toBe(true);
+  expect(isKnownModel("openai", "GPT-5.5")).toBe(false);
+  expect(isKnownModel("openai", "no-such-model")).toBe(false);
+  expect(isKnownModel("VLLM", "anything")).toBe(true);
 });
 
 test("the picker's custom sentinel is not a known model", () => {
-  expect(validateModel("glm", "custom")).toBe(false);
-  expect(validateModel("deepseek", "custom")).toBe(false);
-  expect(validateModel("glm-cn", "custom")).toBe(false);
-  expect(validateModel("openai", "custom")).toBe(false);
-  expect(validateModel("anthropic", "custom")).toBe(false);
+  expect(isKnownModel("glm", "custom")).toBe(false);
+  expect(isKnownModel("deepseek", "custom")).toBe(false);
+  expect(isKnownModel("glm-cn", "custom")).toBe(false);
+  expect(isKnownModel("openai", "custom")).toBe(false);
+  expect(isKnownModel("anthropic", "custom")).toBe(false);
 });
 
-test("VALID_MODELS holds the known models of every catalog provider but the any-model ones", () => {
-  const known = getKnownModels();
-  expect(Object.keys(VALID_MODELS)).toEqual(Object.keys(known).filter((p) => p !== "ollama"));
-  for (const [provider, models] of Object.entries(VALID_MODELS)) expect(models).toEqual(known[provider]!);
+test("isKnownModel knows every catalog model of every catalog provider", () => {
+  for (const [provider, models] of Object.entries(getKnownModels())) {
+    for (const model of models) expect(isKnownModel(provider, model)).toBe(true);
+    if (provider !== "ollama") expect(isKnownModel(provider, "no-such-model")).toBe(false);
+  }
 });
 
 test("getKnownModels gives each provider's sorted distinct values", () => {
@@ -220,8 +221,6 @@ test("the catalog tables are frozen", () => {
   expect(Object.isFrozen(MODEL_OPTIONS["openai"])).toBe(true);
   expect(Object.isFrozen(getModelOptions("openai", "quick"))).toBe(true);
   expect(Object.isFrozen(getModelOptions("openai", "quick")[0])).toBe(true);
-  expect(Object.isFrozen(VALID_MODELS)).toBe(true);
-  expect(Object.isFrozen(VALID_MODELS["openai"])).toBe(true);
 });
 
 test("getModelOptions rejects an unknown provider or mode", () => {
@@ -272,6 +271,7 @@ test.each(FACTORY_SUPPORTED_PROVIDERS)("llm config accepts every factory support
 
 test("llm config and factory provider vocabularies match", () => {
   expect(new Set<string>(SUPPORTED_LLM_PROVIDERS)).toEqual(new Set(FACTORY_SUPPORTED_PROVIDERS));
+  expect(FACTORY_SUPPORTED_PROVIDERS).toHaveLength(SUPPORTED_LLM_PROVIDERS.length);
 });
 
 test("llm config still rejects unknown provider", () => {
@@ -363,28 +363,7 @@ const BUILT = join(ROOT, "dist/src/llm_clients/index.js");
  */
 const ENTRY: string = "@ngocbh/yian/llm_clients";
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/platform.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 describe("the @ngocbh/yian/llm_clients entry", () => {
   test.if(process.versions.bun !== undefined)("on Bun it is the source module yian itself uses", async () => {

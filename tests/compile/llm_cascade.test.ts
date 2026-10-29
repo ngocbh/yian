@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { applyEffectiveLlmMap, bindHostCredentials, resolveLlmCascade, resolveRunLlm } from "../../src/compile/llm_cascade.ts";
+import { applyEffectiveLlmMap, bindHostCredentials, resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { type CompiledFlow, copyGraph } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
@@ -24,7 +24,7 @@ const PROVIDER_MODELS = { openai: "openai-default", google: "google-default" };
 
 /** Resolve `flow` under the host layer `host` with the test defaults and saved models. */
 function cascade(flow: CompiledFlow, host: Record<string, unknown> = {}): Record<string, Record<string, unknown>> {
-  return resolveLlmCascade(flow, host, { defaults: DEFAULTS, providerModels: PROVIDER_MODELS });
+  return resolveRunLlm(flow, host, { defaults: DEFAULTS, providerModels: PROVIDER_MODELS }).effective;
 }
 
 /** Return the compiled flow `text` loads to. */
@@ -404,11 +404,11 @@ test("the effective map resolves environment defaults once", async () => {
 });
 
 test("a replay uses the logged map after the environment changes", async () => {
-  const recorded = resolveLlmCascade(
+  const recorded = resolveRunLlm(
     await compiled(SHARED_LEAF_FLOW),
     {},
     { defaults: { provider: "openai", model: "recorded-model" }, providerModels: { anthropic: "recorded-anthropic" } },
-  );
+  ).effective;
   const replayed = await compiled(SHARED_LEAF_FLOW);
   expect(childOf(childOf(replayed, "left"), "leaf_call")).toBe(childOf(childOf(replayed, "right"), "leaf_call"));
 

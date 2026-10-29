@@ -6,7 +6,8 @@
  * them, and deleting the index and building it again gives the same rows. A row keeps the run
  * scan (`RunScan`, folded by `foldRunScan`, read by `scanStatus`), which `inspectRun` folds too, so
  * both read a status from the records by one set of rules; `readRunIndex` puts `running` on top
- * while a writer holds a run's lock.
+ * while a writer holds a run's lock. A run whose log can't be read keeps a row marked unreadable
+ * at the first record yian couldn't read, holding the records before it.
  *
  * Knows about: compile (the END id), diagnostics, platform, runtime/log, runtime/state
  * (`addCrashedAttempts`), runtime/waits (the waits fold), typesys.
@@ -19,8 +20,9 @@ import { END_ID } from "../compile/model.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { openSqlite, type Sqlite, type SqliteRow, sqliteErrorCode, warn } from "../platform.ts";
 import { logJson } from "../typesys/json.ts";
-import { isRecord, valueRepr } from "../typesys/values.ts";
+import { isRecord, shownText, valueRepr } from "../typesys/values.ts";
 import {
+  checkMaxLineBytes,
   isRunLogLocked,
   iterRunRecords,
   NodeExpandedRecord,
@@ -42,34 +44,42 @@ import {
   RunStoppedRecord,
 } from "./log.ts";
 import { addCrashedAttempts } from "./state.ts";
-import { applyWaitsRecord, type WaitInfo, type WaitsJson, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
+import { applyWaitsRecord, type WaitInfo, WaitsState, wakeableNodes, wakeAt, waitInfos } from "./waits.ts";
 
 /** The index file's name in the runs folder. */
 const INDEX_FILE = "index.sqlite";
 
 /** The index layout's version, kept in `PRAGMA user_version`; an index of another is rebuilt. */
-const INDEX_VERSION = 4;
+const INDEX_VERSION = 6;
 
 /** How long an update or read waits for SQLite's lock by default, in milliseconds. */
 const DEFAULT_TIMEOUT_MS = 5000;
 
 // `scan` holds the record scan (`RunScan`, as JSON), so an update goes on where the
 // last one stopped. The status is read from it (`scanStatus`), the rules `inspectRun` uses, so no
-// column holds a status that could drift from them.
+// column holds a status that could drift from them. The `unreadable_*` columns are set for a log
+// that can't be read; `log_size`, `log_mtime` and `max_line_bytes` are what it was read with, so a
+// later update reads it again only when the log changed or a higher limit may read further.
 const SCHEMA = `CREATE TABLE runs (
   run_id TEXT PRIMARY KEY,
   flow TEXT,
-  started_at TEXT NOT NULL,
+  started_at TEXT,
   ended_at TEXT,
   parent_run_id TEXT,
-  last_seq INTEGER NOT NULL,
+  last_seq INTEGER,
   result TEXT,
   input_tokens INTEGER NOT NULL,
   output_tokens INTEGER NOT NULL,
   cache_read_tokens INTEGER NOT NULL,
+  cache_creation_tokens INTEGER NOT NULL,
   reasoning_tokens INTEGER NOT NULL,
   "offset" INTEGER NOT NULL,
-  scan TEXT NOT NULL
+  scan TEXT NOT NULL,
+  unreadable_seq INTEGER,
+  unreadable_reason TEXT,
+  log_size INTEGER,
+  log_mtime REAL,
+  max_line_bytes INTEGER
 )`;
 
 const COLUMNS = [
@@ -83,9 +93,15 @@ const COLUMNS = [
   "input_tokens",
   "output_tokens",
   "cache_read_tokens",
+  "cache_creation_tokens",
   "reasoning_tokens",
   '"offset"',
   "scan",
+  "unreadable_seq",
+  "unreadable_reason",
+  "log_size",
+  "log_mtime",
+  "max_line_bytes",
 ];
 
 const SQLITE_BUSY = 5;
@@ -106,14 +122,14 @@ export interface RunIndexRow {
    * writer holds the log's lock.
    */
   readonly status: RunIndexStatus;
-  /** The time of the run's `run_started` record. */
-  readonly startedAt: string;
+  /** The time of the run's `run_started` record, or `null` when that record can't be read. */
+  readonly startedAt: string | null;
   /** For a `succeeded`, `failed` or `cancelled` run, the time of the log's last record; otherwise `null`. */
   readonly endedAt: string | null;
   /** The id of the run that started this one (`run_started.parent`), or `null`. */
   readonly parentRunId: string | null;
-  /** The seq of the last record the index read. */
-  readonly lastSeq: number;
+  /** The seq of the last record the index read, or `null` when it read none (see `unreadable`). */
+  readonly lastSeq: number | null;
   /**
    * The run's result as a run-log line (`logJson`): the value of the `pool_commit` the top-level
    * END's success names; `null` until the END succeeded.
@@ -125,6 +141,8 @@ export interface RunIndexRow {
   readonly outputTokens: number;
   /** The sum of every `model_call` step's `cache_read_tokens`, failed attempts included. */
   readonly cacheReadTokens: number;
+  /** The sum of every `model_call` step's `cache_creation_tokens`, failed attempts included. */
+  readonly cacheCreationTokens: number;
   /** The sum of every `model_call` step's `reasoning_tokens`, failed attempts included. */
   readonly reasoningTokens: number;
   /** The byte offset the row was built up to: the end of the record at `lastSeq`. */
@@ -135,6 +153,12 @@ export interface RunIndexRow {
   readonly ready: boolean;
   /** For a `waiting` run, the earliest deadline of an open call of a waiting node; `null` otherwise. */
   readonly wakeAt: string | null;
+  /**
+   * For a log yian can't read, the seq of the first record it couldn't read and why; `null`
+   * otherwise. The other fields hold the records before `seq`, so the status is where they leave
+   * the run.
+   */
+  readonly unreadable: { readonly seq: number; readonly reason: string } | null;
 }
 
 /**
@@ -230,7 +254,7 @@ export function runScanFromJson(text: string): RunScan {
     unreachableSeq: seqOrNull("unreachableSeq"),
     runFailureSeq: seqOrNull("runFailureSeq"),
     cancelled: flag("cancelled"),
-    waits: WaitsState.fromJSON(raw["waits"] as unknown as WaitsJson),
+    waits: WaitsState.fromJSON(raw["waits"]),
   };
 }
 
@@ -309,21 +333,35 @@ export function unfinishedStatus(waits: WaitsState, lastStop: number | null): "w
   return lastStop === null ? "crashed" : "stopped";
 }
 
+/**
+ * Where a log stops being readable (`RunIndexRow.unreadable`), and the log's size and mtime and the
+ * `maxLineBytes` it was read with.
+ */
+interface Unreadable {
+  seq: number;
+  reason: string;
+  size: number;
+  mtimeMs: number;
+  maxLineBytes: number | null;
+}
+
 /** A row as the index stores it, and while an update builds it. */
 interface StoredRow {
   runId: string;
   flow: string | null;
-  startedAt: string;
+  startedAt: string | null;
   endedAt: string | null;
   parentRunId: string | null;
-  lastSeq: number;
+  lastSeq: number | null;
   result: string | null;
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
+  cacheCreationTokens: number;
   reasoningTokens: number;
   offset: number;
   scan: RunScan;
+  unreadable: Unreadable | null;
 }
 
 /** Return `timeoutMs` when it is a non-negative safe integer. */
@@ -343,9 +381,12 @@ function checkedTimeout(timeoutMs: unknown): number {
  * replaced (`RunLogChangedError`) is read again from the start. A run folder with no log, or a log
  * with no complete record yet, has no row; a row whose log is gone is deleted. A log that can't be
  * read (an old schema, a damaged line, a first record that isn't `run_started` of the folder's run,
- * or a file error such as no permission) raises a warning through `warn` and keeps its row as it
- * was. A row whose stored scan can't be read is built again from the start of its log. An index
- * of another layout version is dropped and built again.
+ * a line over `maxLineBytes`, or a file error such as no permission) raises a warning through
+ * `warn`. A log whose content can't be read gets a row of the records before the one that failed,
+ * marked unreadable at it (`RunIndexRow.unreadable`), and is read again only once its size or
+ * mtime changed, or with a higher `maxLineBytes` than it was read with. A file error keeps the row
+ * as it was, and the next update tries again. A row whose stored scan can't be read is built
+ * again from the start of its log. An index of another layout version is dropped and built again.
  *
  * The update is one SQLite transaction (`BEGIN IMMEDIATE`), so builders in any process take turns.
  * It waits at most `timeoutMs` for another builder's lock, then throws. Synchronous: it blocks its
@@ -353,13 +394,22 @@ function checkedTimeout(timeoutMs: unknown): number {
  *
  * @param runsDir The runs folder.
  * @param options.timeoutMs How long to wait for the index's lock, in milliseconds; 5000 by default.
+ * @param options.maxLineBytes The most bytes a log line may hold, as `iterRunRecords` takes it;
+ *   no limit by default.
  * @throws RunIndexBusyError when another update holds the lock longer than `timeoutMs`.
- * @throws RangeError when `timeoutMs` isn't a non-negative integer.
+ * @throws RangeError when `timeoutMs` isn't a non-negative integer, or `maxLineBytes` isn't a
+ *   positive integer.
  * @throws Error (code `ENOENT`) when `runsDir` doesn't exist, and SQLite's error when the index
  *   file isn't a database.
  */
-export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } = {}): void {
+export function updateRunIndex(
+  runsDir: string,
+  options: { timeoutMs?: number; maxLineBytes?: number | null } = {},
+): void {
   const timeoutMs = checkedTimeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  const maxLineBytes = options.maxLineBytes ?? null;
+  // Checked here: a log's read errors become warnings, and a bad option must not.
+  checkMaxLineBytes(maxLineBytes);
   const path = join(runsDir, INDEX_FILE);
   createPrivate(path);
   const db = openSqlite(path);
@@ -390,29 +440,31 @@ export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } 
         }
         let built: StoredRow | null;
         try {
-          const size = fs.statSync(log).size;
-          if (saved !== null && saved.offset === size) {
+          const stat = fs.statSync(log);
+          if (saved !== null && readUpTo(saved, stat, maxLineBytes)) {
             kept.add(runId);
             continue;
           }
           try {
-            built = readRun(log, runId, saved);
+            built = readRun(log, runId, saved, stat, maxLineBytes);
           } catch (error) {
             if (!(error instanceof RunLogChangedError) || saved === null) throw error;
-            built = readRun(log, runId, null);
+            built = readRun(log, runId, null, stat, maxLineBytes);
           }
         } catch (error) {
           const code = (error as NodeJS.ErrnoException | null)?.code;
           // No log: a file such as the index, a folder whose run hasn't started, or a run removed since.
           if (code === "ENOENT" || code === "ENOTDIR") continue;
-          if (!(error instanceof RangeError || typeof code === "string")) throw error;
-          // One log yian can't read must not stop the others; its row stays as it was.
+          if (typeof code !== "string") throw error;
+          // One log yian can't read as a file must not stop the others; its row stays as it was, and
+          // the next update tries again.
           warn(`run index skipped ${log}: ${(error as Error).message}`);
           if (saved !== null) kept.add(runId);
           continue;
         }
         // A log with no complete record (one emptied since its last update included) has no row.
         if (built === null) continue;
+        if (built.unreadable !== null) warn(`run index skipped ${log}: ${built.unreadable.reason}`);
         kept.add(runId);
         upsert.run(...toColumns(built));
       }
@@ -435,8 +487,8 @@ export function updateRunIndex(runsDir: string, options: { timeoutMs?: number } 
 }
 
 /**
- * Return the rows of `<runsDir>/index.sqlite`, by start time then run id, as the last update left
- * them, with `running` put on top of a `waiting`, `stopped` or `crashed` run whose log a writer holds now
+ * Return the rows of `<runsDir>/index.sqlite`, by start time then run id (a row with no start time
+ * first), as the last update left them, with `running` put on top of a `waiting`, `stopped` or `crashed` run whose log a writer holds now
  * (`isRunLogLocked`, probed on every read; a lock that can't be probed counts as free). A missing
  * index, or one of another layout version, has no rows. A row whose stored scan can't be read is
  * left out with a warning through `warn`; the next update builds it again. A `waiting` row's
@@ -471,7 +523,7 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = 
       warn(`run index skipped ${columns["run_id"] as string}: ${error.message}`);
       return [];
     }
-    const { scan, ...row } = stored;
+    const { scan, unreadable, ...row } = stored;
     let status: RunIndexStatus = scanStatus(scan);
     if ((status === "waiting" || status === "stopped" || status === "crashed") && locked(join(runsDir, row.runId, "log.jsonl"))) {
       status = "running";
@@ -484,6 +536,7 @@ export function readRunIndex(runsDir: string, options: { timeoutMs?: number } = 
         waits: waiting ? waitInfos(scan.waits) : [],
         ready: waiting && wakeableNodes(scan.waits).length > 0,
         wakeAt: waiting ? wakeAt(scan.waits) : null,
+        unreadable: unreadable === null ? null : { seq: unreadable.seq, reason: unreadable.reason },
       },
     ];
   });
@@ -542,60 +595,101 @@ function busyOr(error: unknown, path: string, timeoutMs: number): unknown {
 }
 
 /**
- * Fold the records of `log` after `saved` (from the start without it) into `saved` itself, a row
- * fresh from the index that a failed read leaves to be discarded, or into a new row; return the
- * row (`saved` unchanged when nothing new was read), or `null` for a log with no complete record.
+ * Return whether `saved` holds all an update can read of the log `stat` describes: every byte, or,
+ * for a log marked unreadable, the same size and mtime read with a `maxLineBytes` at least as high.
+ */
+function readUpTo(saved: StoredRow, stat: fs.Stats, maxLineBytes: number | null): boolean {
+  if (saved.unreadable === null) return saved.offset === stat.size;
+  const { size, mtimeMs, maxLineBytes: readWith } = saved.unreadable;
+  // A higher limit may read the line that was too long.
+  const higher = readWith !== null && (maxLineBytes === null || maxLineBytes > readWith);
+  return size === stat.size && mtimeMs === stat.mtimeMs && !higher;
+}
+
+/**
+ * Fold the records of `log` after `saved` (from the start without it, or when it holds none) into
+ * `saved` itself, a row fresh from the index that a thrown error leaves to be discarded, or into a
+ * new row; return the row (`saved` unchanged when nothing new was read), or `null` for a log with
+ * no complete record. Lines are read with `maxLineBytes`.
+ *
+ * A log whose content can't be read past some record (a `RangeError`) gives the row of the records
+ * before it, marked `unreadable` at it with `stat`, the log as it was before the read, and the
+ * error's message cut by `shownText`.
  *
  * @throws RunLogChangedError when the log no longer continues `saved`.
- * @throws RangeError when the log can't be read or isn't the run `runId`.
+ * @throws Error (a file error, such as `ENOENT` or `EACCES`) when the log can't be read as a file.
  */
-function readRun(log: string, runId: string, saved: StoredRow | null): StoredRow | null {
-  const continuing = saved === null ? {} : { afterOffset: saved.offset, runId, afterSeq: saved.lastSeq };
-  let row = saved;
+function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.Stats, maxLineBytes: number | null): StoredRow | null {
+  const continuing = saved !== null && saved.lastSeq !== null;
+  const options = continuing ? { afterOffset: saved.offset, runId, afterSeq: saved.lastSeq!, maxLineBytes } : { maxLineBytes };
+  let row = continuing ? saved : null;
+  if (row !== null) row.unreadable = null;
   let lastAt: string | null = null;
   // The values of the top-level END's commits read in this pass, by seq; one read earlier is
   // found again through the offsets.
   const endCommits = new Map<number, string | null>();
-  for (const entry of iterRunRecords(log, continuing)) {
-    const record = entry.envelope.record;
-    if (row === null) {
-      if (!(record instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
-      if (entry.runId !== runId) {
-        throw new RangeError(`the log is run ${reprText(entry.runId)}, not its folder's ${reprText(runId)}`);
+  try {
+    for (const entry of iterRunRecords(log, options)) {
+      const record = entry.envelope.record;
+      if (row === null) {
+        if (!(record instanceof RunStartedRecord)) throw new RangeError("the first run log record must be RunStarted");
+        if (entry.runId !== runId) {
+          throw new RangeError(`the log is run ${reprText(entry.runId)}, not its folder's ${reprText(runId)}`);
+        }
+        row = emptyRow(runId);
+        row.flow = record.flow === null ? null : join(record.flow.dir, record.flow.root);
+        row.startedAt = entry.at;
+        row.parentRunId = record.parent?.runId ?? null;
       }
-      row = {
-        runId,
-        flow: record.flow === null ? null : join(record.flow.dir, record.flow.root),
-        startedAt: entry.at,
-        endedAt: null,
-        parentRunId: record.parent?.runId ?? null,
-        lastSeq: 0,
-        result: null,
-        inputTokens: 0,
-        outputTokens: 0,
-        cacheReadTokens: 0,
-        reasoningTokens: 0,
-        offset: 0,
-        scan: emptyRunScan(),
-      };
+      // Read before the row changes, so a failure leaves it at the record before this one.
+      let result = row.result;
+      if (record instanceof PoolCommitRecord) {
+        if (record.nodeId === END_ID) endCommits.set(entry.seq, record.value === null ? null : logJson(record.value.value));
+      } else if (record instanceof NodeSucceededRecord && record.nodeId === END_ID) {
+        result = endCommits.has(record.commit) ? endCommits.get(record.commit)! : committedValue(log, record.commit, maxLineBytes);
+      }
+      row.lastSeq = entry.seq;
+      row.offset = entry.end;
+      row.result = result;
+      lastAt = entry.at;
+      foldRunScan(row.scan, entry.envelope);
+      if (record instanceof NodeStepRecord) addUsage(row, record.step);
     }
-    row.lastSeq = entry.seq;
-    row.offset = entry.end;
-    lastAt = entry.at;
-    foldRunScan(row.scan, entry.envelope);
-    if (record instanceof NodeStepRecord) {
-      addUsage(row, record.step);
-    } else if (record instanceof PoolCommitRecord) {
-      if (record.nodeId === END_ID) endCommits.set(entry.seq, record.value === null ? null : logJson(record.value.value));
-    } else if (record instanceof NodeSucceededRecord && record.nodeId === END_ID) {
-      row.result = endCommits.has(record.commit) ? endCommits.get(record.commit)! : committedValue(log, record.commit);
-    }
+  } catch (error) {
+    // The caller reads a replaced log again from the start. A file error isn't marked: a change
+    // that fixes it (a chmod) may leave the size and mtime as they were.
+    if (!(error instanceof RangeError) || (error instanceof RunLogChangedError && continuing)) throw error;
+    row ??= emptyRow(runId);
+    const seq = row.lastSeq === null ? 0 : row.lastSeq + 1;
+    // The message quotes the line's fields, which may be of any length.
+    row.unreadable = { seq, reason: shownText(error.message), size: stat.size, mtimeMs: stat.mtimeMs, maxLineBytes };
   }
   if (row !== null && lastAt !== null) {
     const status = scanStatus(row.scan);
     row.endedAt = status === "succeeded" || status === "failed" || status === "cancelled" ? lastAt : null;
   }
   return row;
+}
+
+/** Return the row of the run `runId` before any record is read. */
+function emptyRow(runId: string): StoredRow {
+  return {
+    runId,
+    flow: null,
+    startedAt: null,
+    endedAt: null,
+    parentRunId: null,
+    lastSeq: null,
+    result: null,
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreationTokens: 0,
+    reasoningTokens: 0,
+    offset: 0,
+    scan: emptyRunScan(),
+    unreadable: null,
+  };
 }
 
 /**
@@ -613,14 +707,18 @@ function addUsage(row: StoredRow, step: Readonly<Record<string, unknown>>): void
   row.inputTokens += count("input_tokens");
   row.outputTokens += count("output_tokens");
   row.cacheReadTokens += count("cache_read_tokens");
+  row.cacheCreationTokens += count("cache_creation_tokens");
   row.reasoningTokens += count("reasoning_tokens");
 }
 
-/** Return the value (`logJson`) of the `pool_commit` at `seq` in `log`, `null` for a derived one. */
-function committedValue(log: string, seq: number): string | null {
-  const offset = runRecordOffsets(log)[seq];
+/**
+ * Return the value (`logJson`) of the `pool_commit` at `seq` in `log`, `null` for a derived one,
+ * reading lines with `maxLineBytes`.
+ */
+function committedValue(log: string, seq: number, maxLineBytes: number | null): string | null {
+  const offset = runRecordOffsets(log, { maxLineBytes })[seq];
   if (offset === undefined) throw new RangeError(`the log has no record at seq ${seq}`);
-  for (const entry of iterRunRecords(log, { afterOffset: offset })) {
+  for (const entry of iterRunRecords(log, { afterOffset: offset, maxLineBytes })) {
     const record = entry.envelope.record;
     if (!(record instanceof PoolCommitRecord)) throw new RangeError(`the record at seq ${seq} isn't a pool_commit`);
     return record.value === null ? null : logJson(record.value.value);
@@ -641,10 +739,16 @@ function toColumns(row: StoredRow): (string | number | null)[] {
     row.inputTokens,
     row.outputTokens,
     row.cacheReadTokens,
+    row.cacheCreationTokens,
     row.reasoningTokens,
     row.offset,
     // JSON data: ids, seqs, counts, flags, and the waits fold's own JSON form.
     JSON.stringify(row.scan),
+    row.unreadable?.seq ?? null,
+    row.unreadable?.reason ?? null,
+    row.unreadable?.size ?? null,
+    row.unreadable?.mtimeMs ?? null,
+    row.unreadable?.maxLineBytes ?? null,
   ];
 }
 
@@ -653,16 +757,27 @@ function fromColumns(columns: SqliteRow): StoredRow {
   return {
     runId: columns["run_id"] as string,
     flow: columns["flow"] as string | null,
-    startedAt: columns["started_at"] as string,
+    startedAt: columns["started_at"] as string | null,
     endedAt: columns["ended_at"] as string | null,
     parentRunId: columns["parent_run_id"] as string | null,
-    lastSeq: columns["last_seq"] as number,
+    lastSeq: columns["last_seq"] as number | null,
     result: columns["result"] as string | null,
     inputTokens: columns["input_tokens"] as number,
     outputTokens: columns["output_tokens"] as number,
     cacheReadTokens: columns["cache_read_tokens"] as number,
+    cacheCreationTokens: columns["cache_creation_tokens"] as number,
     reasoningTokens: columns["reasoning_tokens"] as number,
     offset: columns["offset"] as number,
     scan: runScanFromJson(columns["scan"] as string),
+    unreadable:
+      columns["unreadable_seq"] === null
+        ? null
+        : {
+            seq: columns["unreadable_seq"] as number,
+            reason: columns["unreadable_reason"] as string,
+            size: columns["log_size"] as number,
+            mtimeMs: columns["log_mtime"] as number,
+            maxLineBytes: columns["max_line_bytes"] as number | null,
+          },
   };
 }

@@ -30,6 +30,7 @@ import {
   SourceSyntaxError,
 } from "../source/index.ts";
 import {
+  bareConstructorHint,
   BUILTIN_TYPE_NAMES,
   encodesAsUtf8,
   typeName,
@@ -366,19 +367,6 @@ export function readVariables(
   return [];
 }
 
-/** Compile authored flow inputs using the shared located declaration reader. */
-export function readSourceFlowInputs(
-  cursor: SourceCursor,
-  registry: TypeRegistry,
-  options: {
-    sitePath: SourceSitePath;
-    catalogBuilder: SourceCatalogBuilder;
-    diagnostics?: LoadDiagnostics | null;
-  },
-): Parameter[] {
-  return readSourceParameters(cursor, registry, options);
-}
-
 /**
  * Read one tagged declaration: the tag is its type, a value after it its default.
  *
@@ -474,6 +462,9 @@ function untaggedDeclarationError(
     for (const [text, fallback] of candidates) {
       const typeText = typeTextWithKnownHead(text, registry);
       if (typeText === null) continue; // value text, not a type
+      // A bare `list` has no tag to suggest; say what it takes instead.
+      const bare = bareConstructorHint(typeText);
+      if (bare !== null) return `${head}: ${bare}`;
       const resolved = resolveTypeText(typeText, registry);
       // Text whose leading name is a type but whose arguments name none still gets its tag,
       // so pasting it back reaches the tag reader's unknown-type error.

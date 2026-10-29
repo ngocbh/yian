@@ -29,7 +29,6 @@ import {
   normalizeFiles,
   normalizeTypedFiles,
   Type,
-  TypeCheckError,
   TypedValue,
   typesOverlap,
   type Value,
@@ -39,6 +38,7 @@ import {
 import { loadConformanceFlow } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { engine, rejected } from "../helpers/run_state_fixtures.ts";
+import { typeCheckError } from "../helpers/type_errors.ts";
 
 const REGISTRY = readTypedefs({
   Rec: { f: "file", n: "int" },
@@ -64,17 +64,6 @@ const REF = new FileRef({ uri: "f" });
 /** A fresh copy of a file's JSON form, `{uri: "f", mime: null, name: null}`. */
 function form(): Value {
   return { uri: "f", mime: null, name: null };
-}
-
-/** Return the `TypeCheckError` `run` throws. */
-function typeCheckError(run: () => unknown): TypeCheckError {
-  try {
-    run();
-  } catch (error) {
-    expect(error).toBeInstanceOf(TypeCheckError);
-    return error as TypeCheckError;
-  }
-  throw new Error("expected a TypeCheckError");
 }
 
 describe("a file slot", () => {
@@ -204,7 +193,7 @@ describe("normalizeFiles", () => {
     ["XObject first", ["XObject", "XFile"], { x: form() }],
   ])("picks an untagged union member like the write check: %s", (_id, members, expected) => {
     // Both members admit `{x: form}`, so the first one decides how `x` reads.
-    const union = new Type({ kind: ValueKind.OBJECT, variants: members.map(t) });
+    const union = new Type({ kind: ValueKind.OBJECT, members: members.map(t) });
     const value = { x: form() };
     expect(normalizeFiles(union, value)).toStrictEqual(expected);
     expect(buildValueAs(union, value).toObject()).toStrictEqual(expected);
@@ -1318,7 +1307,7 @@ test("the backward context holds the files of a typed output as JSON", async () 
   const [occurrence, ...others] = trace.occurrences.filter((item) => item.nodeId === "a");
   expect(others).toEqual([]);
 
-  expect(trace.backwardContext(occurrence!.source).output).toEqual([form(), form()]);
+  expect(trace.backwardContext(occurrence!.source).output as Value).toEqual([form(), form()]);
   expect(trace.lookupSource(occurrence!.source) as Value).toEqual([form(), form()]);
   expect(trace.currentWriters.get("a")!.value).toEqual([REF, REF]);
 });

@@ -2,7 +2,7 @@
  * OpenAI connections: saved logins, subscriptions, refresh and the environment key. The model
  * calls build with `chatModelFromConfig` and answer from a recording `send`
  * (`helpers/run_state_fixtures.ts`'s) that replies with one Responses stream. A pinned login is
- * read at build. The cascade tests go through `resolveLlmCascade` and the run tests through
+ * read at build. The cascade tests go through `resolveRunLlm` and the run tests through
  * `runFlow` with the test's environment.
  */
 
@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
-import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { collect } from "../../src/llm/events.ts";
@@ -139,7 +139,10 @@ test("provider only cascade uses that providers saved model", async () => {
     "id: test\nname: test\n" +
       "nodes:\n  a: {kind: agent, prompt: hi, llm_config: {provider: anthropic}}\noutput: ${a.output}\n",
   );
-  const effective = resolveLlmCascade(flow.compiled, {}, { defaults: snap.defaults, providerModels: snap.providerModels });
+  const { effective } = resolveRunLlm(flow.compiled, {}, {
+    defaults: snap.defaults,
+    providerModels: snap.providerModels,
+  });
   expect(effective["a"]!["model"]).toBe("saved-anthropic");
 });
 
@@ -149,7 +152,10 @@ test("authored model still inherits across provider fields", async () => {
     "id: test\nname: test\nllm_config: {model: authored}\n" +
       "nodes:\n  a: {kind: agent, prompt: hi, llm_config: {provider: anthropic}}\noutput: ${a.output}\n",
   );
-  const effective = resolveLlmCascade(flow.compiled, {}, { defaults: snap.defaults, providerModels: snap.providerModels });
+  const { effective } = resolveRunLlm(flow.compiled, {}, {
+    defaults: snap.defaults,
+    providerModels: snap.providerModels,
+  });
   expect(effective["a"]!["model"]).toBe("authored");
 });
 

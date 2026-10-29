@@ -31,8 +31,6 @@ import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts
 import { RouteModel } from "../../src/llm/executor.ts";
 import {
   Message,
-  ReasoningPart,
-  RefusalPart,
   Response,
   TextPart,
   ToolCallPart,
@@ -55,7 +53,7 @@ import { SKIPPED_TOOL_ERROR } from "../../src/nodes/agent/live.ts";
 import { CallTimeLLM, contractNullable, LLM_CONFIG_KEY, splitLayers } from "../../src/nodes/agent/llm_values.ts";
 import { reportedText, toolText } from "../../src/nodes/agent/memory.ts";
 import { AgentNode, isMaxToolIterations } from "../../src/nodes/agent/node.ts";
-import { pushVisible, textOf } from "../../src/nodes/agent/text.ts";
+import { pushVisible } from "../../src/nodes/agent/text.ts";
 import { BackwardContext, CapabilityFault, Output } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, NodeSteps, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
@@ -74,33 +72,6 @@ import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, graph, NO_ENV, noGrowth, rejected, runWith, serving, textReply } from "../helpers/run_state_fixtures.ts";
-
-test("textOf returns a string as it is", () => {
-  expect(textOf("hello\nworld")).toBe("hello\nworld");
-  expect(textOf("")).toBe("");
-});
-
-test("textOf keeps only a message's text parts, joined with a newline", () => {
-  const message = new Message({
-    role: "assistant",
-    parts: [
-      new ReasoningPart("thinking"),
-      new TextPart("first"),
-      new ToolCallPart({ id: "c1", name: "search", arguments: {} }),
-      new RefusalPart("no"),
-      new TextPart("second"),
-    ],
-  });
-  expect(textOf(message)).toBe("first\nsecond");
-});
-
-test("textOf of a message without text is empty", () => {
-  const message = new Message({
-    role: "assistant",
-    parts: [new ReasoningPart("thinking"), new ToolCallPart({ id: "c1", name: "search", arguments: {} })],
-  });
-  expect(textOf(message)).toBe("");
-});
 
 test("ReplyInterrupted carries the partial reply and the usage so far", () => {
   const reply = new Message({ role: "assistant", parts: [new TextPart("partial")] });

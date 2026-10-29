@@ -70,6 +70,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_TOTAL_NODES` | limit | 10,000 | 1 or more | Most live nodes a run's graph may grow to |
 | `YIAN_MAX_SKIP_WORLDS` | limit | 10,000 | 1 or more | Most branch combinations the skip check explores before giving up |
 | `YIAN_MAX_SHOWN_VALUE_CHARS` | limit | 200 | 2 or more | Longest rendering of a value or key an error message shows |
+| `YIAN_MAX_FAILURE_CHARS` | limit | 10,000 | 1 or more | Longest message or traceback a failure records; a longer one is cut and says how much was cut |
 | `YIAN_AGENT_RETRIES` | setting | 2 | 0 or more | Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none |
 | `YIAN_AGENT_MAX_TOOL_ITERATIONS` | setting | -1 | 1 or more, or -1 for no cap | AGENT tool-call turns when the node sets none; -1 is no cap |
 | `YIAN_TOOL_RETRIES` | setting | 0 | 0 or more | Extra attempts a TOOL node gets after a failed tool call when the node sets none |
@@ -90,11 +91,14 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_REFLECTIVE_MAX_LIMIT_CHARS` | setting | 256 | 256 or more | Characters of the memory limits shown to the reflection model |
 | `YIAN_PROFILE_MAX_CHARS` | setting | 32,000 | 1 or more | Characters a profile memory may hold |
 | `YIAN_PROFILE_INPUT_BUDGET_CHARS` | setting | 24,000 | 1 or more | Characters of run material sent to a profile memory's learner |
+| `YIAN_PROFILE_LOCK_TIMEOUT_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds for another writer to release a profile memory's `.lock` file |
 | `YIAN_MAX_AUTH_RESPONSE_BYTES` | input cap | 1,048,576 | 1 or more | Largest response body read from a sign-in server |
 | `YIAN_MAX_AUTH_STORE_BYTES` | input cap | 1,048,576 | 1 or more | Largest auth store file read or written |
 | `YIAN_MAX_OAUTH_CALLBACK_BYTES` | input cap | 16,384 | 1 or more | Largest request header block read from the sign-in callback |
 | `YIAN_MAX_MODEL_LIST_BYTES` | input cap | 16,777,216 | 1 or more | Largest model listing read from a provider |
-| `YIAN_MAX_MCP_MESSAGE_BYTES` | input cap | 16,777,216 | 1 or more | Largest message read from a stdio MCP server |
+| `YIAN_MAX_MODEL_LIST_PAGES` | input cap | 100 | 1 or more | Most pages read from a provider's model listing |
+| `YIAN_MAX_MCP_MESSAGE_BYTES` | input cap | 16,777,216 | 1 or more | Largest message read from an MCP server: a stdio line, an SSE event or an HTTP reply body |
+| `YIAN_MAX_MODEL_EVENT_BYTES` | input cap | 16,777,216 | 1 or more | Largest event read from a model's reply stream: an SSE event's data or one NDJSON line |
 | `YIAN_MAX_EVENT_BYTES` | input cap | 1,048,576 | 1 or more | Largest event sent to a run's inbox, host call's pending step or completed answer, in run-log JSON bytes |
 | `YIAN_MAX_BASE_URL_CHARS` | input cap | 2,048 | 1 or more | Longest provider base URL accepted |
 | `YIAN_MAX_CONNECTION_HEADERS` | input cap | 32 | 1 or more | Most extra request headers a provider connection may send |
@@ -242,12 +246,12 @@ A run log is a JSON Lines file: one record per line, appended and never rewritte
 compact JSON with its keys sorted:
 
 ```json
-{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":23,"seq":8}
+{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":25,"seq":8}
 ```
 
 | Key | What it holds |
 |---|---|
-| `schema` | The record format, `23`. yian reads only this one. A log of schema 10 to 22 reads as `run log schema N predates schema 23 and is not supported`, any other as `unsupported run-record schema: N` |
+| `schema` | The record format, `25`. yian reads only this one. A log of schema 10 to 24 reads as `run log schema N predates schema 25 and is not supported`, any other as `unsupported run-record schema: N` |
 | `run_id` | The run's id |
 | `seq` | The record's place in the log, from 0 |
 | `at` | When the record was appended, in UTC with milliseconds. Use `seq`, not `at`, for order |
@@ -256,7 +260,7 @@ compact JSON with its keys sorted:
 
 | Kind | What it records |
 |---|---|
-| `run_started` | The run begins: its flow files, settings, model choices, granted tools and skills, and the `YIAN_*` values that differ from the built-in ones |
+| `run_started` | The run begins: its flow files and code root, settings, model choices, granted tools and skills, and the `YIAN_*` values that differ from the built-in ones |
 | `run_resumed` | A resume begins: the unfinished nodes it retries, and its worker count |
 | `run_stopped` | The host stopped the run while nodes were running. The run can be resumed |
 | `run_waiting` | Every unfinished node waits, and the run holds no worker |

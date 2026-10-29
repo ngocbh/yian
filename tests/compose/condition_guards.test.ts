@@ -449,3 +449,18 @@ test("a comprehension's if clause is a boolean position, under the clauses befor
   ]);
   expect(literals[1]!.context).toEqual(new Holds(literals[0]!.check, true));
 });
+
+test("guards of deeply alternating and/or nesting take time linear in the depth", () => {
+  // Each level proves its inner chain for both values; without sharing that work doubles per level.
+  let text = "isinstance(v, T0)";
+  for (let i = 1; i <= 40; i++) text = `(${text} ${i % 2 === 1 ? "and" : "or"} isinstance(v, T${i}))`;
+  const tree = parseCondition(text);
+  const start = performance.now();
+  expect(proves(tree, true)).not.toStrictEqual(NOTHING);
+  expect(proves(tree, false)).not.toStrictEqual(NOTHING);
+  // The guard's tree grows about 1.6x per level; `guardChecks` visits each shared sub-guard once.
+  expect(guardChecks(proves(tree, true))).toHaveLength(41);
+  expect(guardedRefs(tree)).toHaveLength(41);
+  expect(literalsInContext(tree)).toHaveLength(41);
+  expect(performance.now() - start).toBeLessThan(5000);
+});

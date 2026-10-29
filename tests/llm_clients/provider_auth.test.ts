@@ -18,12 +18,14 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 
 import { ENTRIES } from "../../src/defaults.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
+import { OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../../src/llm_clients/api_key_env.ts";
 import {
   ApiKeyCredentials,
   AuthError,
   type Credentials,
   HttpResponse,
   isAuthFailure,
+  isUsableLogin,
   OAuthCredentials,
   ProviderSelection,
 } from "../../src/llm_clients/auth/common.ts";
@@ -34,6 +36,7 @@ import { lockFile, realScheduler, type Scheduler, USER_AGENT, virtualScheduler }
 import { parseJson } from "../../src/typesys/json.ts";
 import { SCENARIOS } from "./auth_both_runtimes.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 const PLATFORM_URL = pathToFileURL(join(import.meta.dirname, "..", "..", "src", "platform.ts")).href;
 
@@ -385,6 +388,16 @@ function wrapped401(depth: number): Error {
   for (let n = 0; n < depth; n += 1) error = new Error(`wrapper ${n}`, { cause: error });
   return error;
 }
+
+describe("isUsableLogin", () => {
+  test("a login without a key is usable exactly for the providers the key list calls keyless", () => {
+    for (const provider of Object.keys(PROVIDER_API_KEY_ENV)) {
+      const keyless = PROVIDER_API_KEY_ENV[provider] === null || OPTIONAL_API_KEY_PROVIDERS.has(provider);
+      const selection = new ProviderSelection({ provider, method: "none", model: "m", credentialId: "c".repeat(32) });
+      expect([provider, isUsableLogin(selection)]).toEqual([provider, keyless]);
+    }
+  });
+});
 
 describe("isAuthFailure", () => {
   const rows: [string, unknown, boolean][] = [
@@ -2125,6 +2138,39 @@ describe("OpenAIAuth", () => {
     expect(error.message).toMatch(/account/);
   });
 
+  const refusedRefreshes: [string, HttpResponse, string][] = [
+    [
+      "an OAuth error string",
+      new HttpResponse(400, { error: "invalid_grant", error_description: "token old-refresh was revoked" }),
+      "OpenAI authentication request failed (HTTP 400, invalid_grant); sign in again",
+    ],
+    [
+      "an error record's code",
+      new HttpResponse(401, { error: { code: "refresh_token_expired", message: "old-refresh expired" } }),
+      "OpenAI authentication request failed (HTTP 401, refresh_token_expired); sign in again",
+    ],
+    [
+      "a known code that leaves the grant usable",
+      new HttpResponse(400, { error: "invalid_scope" }),
+      "OpenAI authentication request failed (HTTP 400, invalid_scope)",
+    ],
+    [
+      "a code off the known list",
+      new HttpResponse(400, { error: "old-refresh" }),
+      "OpenAI authentication request failed (HTTP 400)",
+    ],
+    ["no body", new HttpResponse(502, null), "OpenAI authentication request failed (HTTP 502)"],
+  ];
+  for (const [label, response, message] of refusedRefreshes) {
+    test(`a refused refresh names the token endpoint's error code: ${label}`, async () => {
+      const error = await rejected(new OpenAIAuth({ request: new FakeHttp(response).request }).refresh(OLD()));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(message);
+      expect((error as AuthError).status).toBe(response.status);
+      expect(error.cause).toBeUndefined();
+    });
+  }
+
   const invalidExpiries: [string, unknown][] = [
     ["10n ** 1000n", 10n ** 1000n],
     ["NaN", NaN],
@@ -2236,6 +2282,36 @@ describe("OpenAIAuth", () => {
     });
   });
 
+  test("API key validation lists models at the given endpoint and never at OpenAI's host", async () => {
+    const http = new FakeHttp(new HttpResponse(200, { data: [{ id: "gateway-model" }] }));
+    const credentials = new ApiKeyCredentials("secret", { "X-Gateway": GATEWAY });
+    const auth = new OpenAIAuth({ request: http.request });
+    const models = await auth.apiModels(credentials, { endpoint: "https://gateway.example.com/v1/" });
+    expect(models).toEqual(["gateway-model"]);
+    expect(http.calls.map((call) => call.slice(0, 2))).toEqual([["GET", "https://gateway.example.com/v1/models"]]);
+    expect(http.calls[0]![2].headers).toMatchObject({ Authorization: "Bearer secret", "X-Gateway": GATEWAY });
+  });
+
+  const invalidEndpoints: [string, unknown][] = [
+    ["credentials", "https://user:pw@gateway.example.com/v1"],
+    ["query", "https://gateway.example.com/v1?x=1"],
+    ["scheme", "ftp://gateway.example.com/v1"],
+    ["not a URL", "gateway.example.com"],
+    ["empty", ""],
+    ["number", 5],
+  ];
+  for (const [label, endpoint] of invalidEndpoints) {
+    test(`an invalid endpoint is refused before the key is sent anywhere: ${label}`, async () => {
+      const http = new FakeHttp();
+      const auth = new OpenAIAuth({ request: http.request });
+      const error = await rejected(auth.apiModels(new ApiKeyCredentials("secret"), { endpoint }));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toStartWith("Invalid OPENAI_BASE_URL: base_url ");
+      expect(error.message).not.toContain("secret");
+      expect(http.calls).toEqual([]);
+    });
+  }
+
   test("an organization mismatch is an HTTP error without values", async () => {
     const body = { error: { code: "mismatched_organization", message: `${ORG} ${PROJECT}` } };
     const http = new FakeHttp(new HttpResponse(401, body));
@@ -2290,6 +2366,22 @@ describe("OpenAIAuth", () => {
     expect(asyncError.message).toBe("OpenAI authentication request failed");
     expect(asyncError.cause).toBeUndefined();
   });
+
+  const transportKinds: [ProviderError, string][] = [
+    [new ProviderError("timeout", "HTTP request failed (timeout): sensitive"), "timed out"],
+    [new ProviderError("connection", "HTTP request failed (connection): sensitive"), "could not connect"],
+    [new ProviderError("protocol", "HTTP response is larger than 10 bytes: sensitive"), "reply too large"],
+  ];
+  for (const [transport, words] of transportKinds) {
+    test(`a transport failure keeps its kind but not its text: ${transport.kind}`, async () => {
+      const auth = new OpenAIAuth({ request: async () => Promise.reject(transport) });
+      const error = await rejected(auth.apiModels(new ApiKeyCredentials("key")));
+      expect(error).toBeInstanceOf(AuthError);
+      expect(error.message).toBe(`OpenAI authentication request failed (${words})`);
+      expect(error.cause).toBeUndefined();
+      expect(error.stack).not.toContain("sensitive");
+    });
+  }
 
   test("the subscription catalog uses account routing and visibility order", async () => {
     const http = new FakeHttp(
@@ -2704,7 +2796,7 @@ describe("OpenAIAuth", () => {
             expect(error).toBe(reason);
           } else {
             expect(error).toBeInstanceOf(AuthError);
-            expect(error.message).toBe("OpenAI authentication request failed");
+            expect(error.message).toBe("OpenAI authentication request failed (timed out)");
           }
           expect(performance.now() - start).toBeLessThan(700);
           const peer = await Promise.race([
@@ -2917,6 +3009,34 @@ describe("browser callback listener", () => {
     await expectCallbackPortFree();
   });
 
+  test("a callback with the wrong or no state gets 400 and the login waits for the real one", async () => {
+    const http = new FakeHttp(new HttpResponse(200, tokens()));
+    const mismatch = callbackAnswer("400 Bad Request", "Callback state did not match this login.");
+    const replies: [string, string][] = [];
+    const auth = new OpenAIAuth({ request: http.request, scheduler: realScheduler });
+    const credentials = await auth.browserLogin(
+      async (url) => {
+        const state = new URL(url).searchParams.get("state");
+        const cases: [string, string][] = [
+          ["GET /auth/callback?code=old&state=stale HTTP/1.1\r\n\r\n", mismatch],
+          ["GET /auth/callback?code=old HTTP/1.1\r\n\r\n", mismatch],
+          [`GET /auth/callback?code=old&state=${state}&state=${state} HTTP/1.1\r\n\r\n`, mismatch],
+          [callbackRequest(url), callbackAnswer("200 OK", "Authorization received. Return to Yian.")],
+        ];
+        for (const [data, expected] of cases) {
+          replies.push([(await callbackExchange(data)).toString("latin1"), expected]);
+        }
+      },
+      { timeoutMs: 3000 },
+    );
+    for (const [reply, expected] of replies) expect(reply).toBe(expected);
+    expect(replies).toHaveLength(4);
+    expect(credentials.accountId).toBe("account-test");
+    expect(http.calls).toHaveLength(1);
+    expect(http.calls[0]![2].form!.code).toBe("code");
+    await expectCallbackPortFree();
+  });
+
   test("a taken port is refused before the browser opens", async () => {
     const blocker = net.createServer();
     await new Promise<void>((resolve, reject) => {
@@ -2940,28 +3060,7 @@ describe("browser callback listener", () => {
 
 const BUILT = join(import.meta.dirname, "..", "..", "dist", "tests", "llm_clients", "auth_both_runtimes.js");
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/platform.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!fs.existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 describe("the both-runtime scenarios", () => {
   // More than the cross-process scenario's own 20 s limit, so that limit reports first.

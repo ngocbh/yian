@@ -278,21 +278,18 @@ describe("assertionCursors", () => {
     expect(cursors.map((item) => item!.value)).toEqual(["a", "b"]);
   });
 
-  test("a sequence of another length doesn't align", () => {
-    const document = SourceDocument.parse("asserts: [a, b]\n", "flow.yaml");
-    const cursor = document.root.child("asserts");
-    const error = loadError(() =>
-      assertionCursors(["a"], cursor, LoadDiagnostics.fromDocument(document)),
-    );
+  test("a sequence of another length doesn't align, a compiler bug", () => {
+    const cursor = SourceDocument.parse("asserts: [a, b]\n", "flow.yaml").root.child("asserts");
+    const error = thrown(() => assertionCursors(["a"], cursor, diagnostics));
+    expect(error.constructor).toBe(RangeError);
     expect(error.message).toBe("retained assertion cursor does not align with semantic assertions");
-    expect(error.diagnostic.frames[0]!.range).toEqual(cursor.range!);
   });
 
-  test("a non-sequence has no items to align", () => {
+  test("a non-sequence has no items to align, a compiler bug", () => {
     const cursor = SourceDocument.parse("asserts: a\n").root.child("asserts");
-    expect(loadError(() => assertionCursors(["a"], cursor, diagnostics)).message).toBe(
-      "retained assertion cursor does not align with semantic assertions",
-    );
+    const error = thrown(() => assertionCursors(["a"], cursor, diagnostics));
+    expect(error.constructor).toBe(RangeError);
+    expect(error.message).toBe("retained assertion cursor does not align with semantic assertions");
   });
 });
 
@@ -526,7 +523,7 @@ describe("attachInputContracts", () => {
     const run = () => attachInputContracts(descriptors, new Map([["use", new Map()]]));
     const error = thrown(run);
     expect(error.message).toBe("node 'use': typed input 'qty' has no wiring binding");
-    expect(error.constructor).toBe(Error);
+    expect(error.constructor).toBe(RangeError);
   });
 });
 
@@ -659,18 +656,16 @@ describe("ComposedFlow", () => {
     expect([diagnostic.frames, diagnostic.notes]).toEqual([[], UNAVAILABLE]);
   });
 
-  test("diagnose copies each resolved frame", () => {
+  test("diagnose keeps each resolved frame", () => {
     const diagnostic = resolving(() => frame).diagnose(failure([origin, origin]));
     expect(diagnostic.frames).toEqual([frame, frame]);
-    expect(diagnostic.frames[0]).not.toBe(frame);
+    expect(diagnostic.frames[0]).toBe(frame);
     expect(diagnostic.notes).toEqual([]);
   });
 
   test.each([
     ["no frame", () => null],
-    ["a zero coordinate", () => new DiagnosticFrame({ ...frame, range: new SourceRange(0, 1, 1, 5) })],
-    ["an end before the start", () => new DiagnosticFrame({ ...frame, range: new SourceRange(2, 1, 1, 5) })],
-    ["a non-text note", () => new DiagnosticFrame({ ...frame, note: 5 as unknown as string })],
+    ["a value that isn't a frame", () => ({ ...frame })],
     [
       "a throwing resolver",
       () => {
@@ -1117,25 +1112,23 @@ describe("checkWiringParity", () => {
     checkWiringParity(new Map([["n", result]]), new Map([["n", result.wiring]]));
   });
 
-  test("an orphan source is refused", () => {
+  // A built node's wiring always matches its params, so a mismatch is a yian defect, not a flow's.
+  test("an orphan source is an internal error, not a load error", () => {
     const result = leaf({ x: "${input.x}" });
     const wiring = new Map([...result.wiring, ["orphan", "${input.y}"]]);
-    const error = loadError(() => checkWiringParity(new Map([["n", result]]), new Map([["n", wiring]])));
-    expect(error.message).toBe(
-      `node 'n': flow.wiring keys ["orphan","x"] != declared params + reserved ["x"] (wiring/params key parity)`,
+    expect(() => checkWiringParity(new Map([["n", result]]), new Map([["n", wiring]]))).toThrow(
+      new TypeError(`yian bug: node 'n' has wiring keys ["orphan","x"], but its params and reserved keys are ["x"]`),
     );
   });
 
-  test("a missing source is refused", () => {
+  test("a missing source is an internal error", () => {
     // The node declares param x; its wiring has no entry.
     const result = leaf({ x: "${input.x}" });
-    const error = loadError(() => checkWiringParity(new Map([["n", result]]), new Map([["n", new Map()]])));
-    expect(error.message).toContain("key parity");
+    expect(() => checkWiringParity(new Map([["n", result]]), new Map([["n", new Map()]]))).toThrow(TypeError);
   });
 
-  test("a node absent from the wiring is refused", () => {
+  test("a node absent from the wiring is an internal error", () => {
     const result = leaf({ x: "${input.x}" });
-    const error = loadError(() => checkWiringParity(new Map([["n", result]]), new Map()));
-    expect(error.message).toContain("key parity");
+    expect(() => checkWiringParity(new Map([["n", result]]), new Map())).toThrow(TypeError);
   });
 });

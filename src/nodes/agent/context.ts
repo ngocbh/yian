@@ -3,8 +3,8 @@
  * replies' media go to.
  *
  * Knows about:   diagnostics, events, llm errors, llm messages, llm_clients factory, memory
- *                contracts, nodes/base, nodes/contracts, platform, skills, tools, typesys, node's
- *                crypto and node's fs.
+ *                contracts, nodes/base, nodes/contracts, platform, skills, tools, typesys, peer
+ *                AGENT modules, node's crypto and node's fs.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -19,7 +19,7 @@ import { ProviderError } from "../../llm/errors.ts";
 import { MediaPart, Message, NamedTool, type Part, Request, Response, TextPart, Usage } from "../../llm/messages.ts";
 import type { ModelAccess } from "../../llm_clients/factory.ts";
 import type { MemoryContext } from "../../memory/contracts.ts";
-import { type Scheduler, warn } from "../../platform.ts";
+import { type Scheduler, syncFolder, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolSet } from "../../tools/registry.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
@@ -27,7 +27,7 @@ import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesy
 import { CapabilityFault, type NodeCaps, type SteerInbox } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
 import type { CloserReason } from "./memory.ts";
-import type { SteerRender } from "./messages.ts";
+import { foldSteps, type NumberedStep, type SteerRender, type StepExchange, steerValues } from "./messages.ts";
 
 /** The system prompt of an AGENT that authors none. */
 export const DEFAULT_SYSTEM =
@@ -110,7 +110,7 @@ export interface RetrySettings {
 }
 
 /** The token counts a model call step records. */
-type UsageCounts = Pick<Usage, "inputTokens" | "outputTokens" | "cacheReadTokens" | "reasoningTokens">;
+type UsageCounts = Pick<Usage, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheCreationTokens" | "reasoningTokens">;
 
 /** What every `model_call` step records. Times are epoch milliseconds. */
 interface CallFields {
@@ -162,12 +162,6 @@ export interface ToolResultFields {
   readonly closed?: "skipped" | CloserReason;
 }
 
-/** A recorded step and its `n`. */
-export interface NumberedStep {
-  readonly n: number;
-  readonly step: ValueRecord;
-}
-
 /** A tool call's result as an earlier start recorded it. */
 export interface RecordedResult {
   readonly output: string;
@@ -197,65 +191,6 @@ export interface PriorAttempts {
   readonly retryIn: number;
 }
 
-/** A node's recorded steps as the AGENT loop reads them (`readAgentSteps`). */
-export interface ReadSteps {
-  /** The logical calls, each its failed attempts that were retried, then its reply or its last failure. */
-  readonly calls: (readonly NumberedStep[])[];
-  /** The retried failed attempts after the last logical call: the start of a call not over yet. */
-  readonly trailing: readonly NumberedStep[];
-  /** Each tool result, by the `n` of the reply before it (0 before any), then by call id. */
-  readonly results: Map<number, Map<string, ValueRecord>>;
-  /**
-   * The steer steps, oldest first, by the index in `calls` of the logical call they preceded. A
-   * call can follow several: a resume replays a steer recorded before an unmade call, then reads
-   * live and records another before that call.
-   */
-  readonly steers: Map<number, NumberedStep[]>;
-  /** The `by` of an `interrupted` step, the honor of a host interrupt, else `null`. */
-  readonly honored: number | null;
-}
-
-/**
- * Read a node's recorded steps, in order and numbered from 1 (a step's `n` is its place), as the
- * AGENT loop replays them: each successful `model_call`, and each failed one that wasn't to be
- * retried, ends one logical call, which the failed attempts before it belong to; each
- * `tool_result` is filed under the reply before it, each `steer` under the call after it. Steps of
- * any other kind are skipped.
- */
-export function readAgentSteps(steps: readonly ValueRecord[]): ReadSteps {
-  const calls: NumberedStep[][] = [];
-  const results = new Map<number, Map<string, ValueRecord>>();
-  const steers = new Map<number, NumberedStep[]>();
-  let honored: number | null = null;
-  let attempts: NumberedStep[] = [];
-  for (const [index, step] of steps.entries()) {
-    if (step["kind"] === "model_call") {
-      attempts.push({ n: index + 1, step });
-      // A reply, or a failure with no retry after it, ends the call.
-      if (!Object.hasOwn(step, "error") || step["retry_in"] == null) {
-        calls.push(attempts);
-        attempts = [];
-      }
-    } else if (step["kind"] === "tool_result") {
-      // Call ids repeat across replies (an adapter may number each reply's calls from 0), so a
-      // result is filed under the reply before it; a later start's closer still follows it.
-      const reply = calls.at(-1)?.at(-1)?.n ?? 0;
-      let filed = results.get(reply);
-      if (filed === undefined) results.set(reply, (filed = new Map()));
-      filed.set(step["call_id"] as string, step);
-    } else if (step["kind"] === "steer") {
-      // A steer is read only before a logical call, never between its attempts, so it belongs
-      // to the next call.
-      const before = steers.get(calls.length);
-      if (before === undefined) steers.set(calls.length, [{ n: index + 1, step }]);
-      else before.push({ n: index + 1, step });
-    } else if (step["kind"] === "interrupted") {
-      honored = Number(step["by"]);
-    }
-  }
-  return { calls, trailing: attempts, results, steers, honored };
-}
-
 /**
  * Writes one AGENT start's steps through the engine's `NodeSteps`, each as a JSON object with a
  * `kind`: `model_call` for a model call that returned or an attempt that failed, `tool_result`
@@ -263,7 +198,7 @@ export function readAgentSteps(steps: readonly ValueRecord[]): ReadSteps {
  * engine steps (direct loop tests) it records nothing and numbers the steps itself.
  *
  * It also replays what earlier starts recorded (`NodeSteps.prior`), in order, grouped as
- * `readAgentSteps` reads them: each logical call is taken back (`takeRecorded`) in place of
+ * `foldSteps` groups them: each logical call is taken back (`takeRecorded`) in place of
  * calling the model, and the retried attempts after the last one are the next live call's
  * (`priorAttempts`). Each `tool_result` is found by its reply and its call id (`recordedResult`).
  * The `steer` steps before a logical call are handed back (`takeRecordedSteers`), in order, before
@@ -287,9 +222,9 @@ export class AgentSteps {
   /** The retried failed attempts recorded after the last logical call. */
   #trailing: readonly NumberedStep[];
   /** The recorded tool results, by the `n` of the reply they answer, then by call id. */
-  readonly #results: ReadSteps["results"];
+  readonly #results: ReadonlyMap<number, StepExchange["results"]>;
   /** The recorded steer steps, by the index in `#calls` of the logical call they preceded. */
-  readonly #steers: ReadSteps["steers"];
+  readonly #steers: Map<number, readonly NumberedStep[]>;
   /** The `by` of a recorded `interrupted` step: the interrupt an earlier start honored, else `null`. */
   readonly #honored: number | null;
 
@@ -313,12 +248,14 @@ export class AgentSteps {
     this.#scrub = scrub;
     this.#nodeId = nodeId;
     // Steps are numbered densely from 1 across the node's starts, so a step's `n` is its place.
-    const read = readAgentSteps(steps?.prior ?? []);
-    this.#calls = read.calls;
-    this.#trailing = read.trailing;
-    this.#results = read.results;
-    this.#steers = read.steers;
-    this.#honored = read.honored;
+    const { exchanges, open, honored } = foldSteps(steps?.prior ?? []);
+    this.#calls = exchanges.map((exchange) => exchange.attempts);
+    this.#trailing = open.attempts;
+    this.#results = new Map(exchanges.map((exchange) => [exchange.attempts.at(-1)!.n, exchange.results]));
+    this.#steers = new Map(
+      [...exchanges, open].flatMap((exchange, index) => (exchange.steers.length > 0 ? [[index, exchange.steers]] : [])),
+    );
+    this.#honored = honored === null ? null : Number(honored.step["by"]);
   }
 
   /**
@@ -326,20 +263,19 @@ export class AgentSteps {
    *
    * @returns Each one's step `n` and the values the engine attached to the step's copy; empty when
    *   none was recorded there, or they were taken.
-   * @throws CapabilityFault carrying a RangeError when a step's copy has no values: the steps
-   *   came from somewhere other than the engine.
+   * @throws CapabilityFault carrying a RangeError naming the node and the step when a step's copy
+   *   has no values (`steerValues`): the steps came from somewhere other than the engine.
    */
   takeRecordedSteers(): RecordedSteer[] {
     const recorded = this.#steers.get(this.#taken) ?? [];
     this.#steers.delete(this.#taken);
     return recorded.map(({ n, step }) => {
-      const values = step["values"];
-      if (!Array.isArray(values)) {
-        throw new CapabilityFault(
-          new RangeError(`node ${reprText(this.#nodeId)} step ${n}: a steer step without its values; resume through the engine`),
-        );
+      try {
+        return { n, values: steerValues(step) };
+      } catch (error) {
+        const message = `node ${reprText(this.#nodeId)} step ${n}: ${(error as RangeError).message}; resume through the engine`;
+        throw new CapabilityFault(new RangeError(message, { cause: error }));
       }
-      return { n, values };
     });
   }
 
@@ -409,7 +345,7 @@ export class AgentSteps {
    * `model_call` step is `n`, or `null`.
    */
   recordedResult(n: number, callId: string): RecordedResult | null {
-    const step = this.#results.get(n)?.get(callId);
+    const step = this.#results.get(n)?.get(callId)?.step;
     if (step === undefined) return null;
     const closed = step["closed"];
     return {
@@ -605,6 +541,7 @@ function usageStep(usage: UsageCounts | null): ValueRecord | null {
     input_tokens: count(usage.inputTokens),
     output_tokens: count(usage.outputTokens),
     cache_read_tokens: count(usage.cacheReadTokens),
+    cache_creation_tokens: count(usage.cacheCreationTokens),
     reasoning_tokens: count(usage.reasoningTokens),
   };
 }
@@ -631,6 +568,8 @@ export function recordedResponse(step: ValueRecord): Response {
             // The step doesn't record the total; the provider's is the sum of these two.
             totalTokens: Number(usage["input_tokens"]) + Number(usage["output_tokens"]),
             cacheReadTokens: count(usage["cache_read_tokens"]),
+            // Absent from a step an older version wrote.
+            cacheCreationTokens: count(usage["cache_creation_tokens"]),
             reasoningTokens: count(usage["reasoning_tokens"]),
           }),
     finishReason: step["finish"] as string | null,
@@ -726,6 +665,8 @@ const MEDIA_EXTENSIONS: ReadonlyMap<string, string> = new Map([
  *
  * @returns The file's reference: its path relative to the run folder (`media/<sha256>.<ext>`) as
  *   `uri`, so it still holds when the folder is copied elsewhere; `mime`; and its file name as `name`.
+ * @throws Error, writing no file, when `media` exists but isn't a folder (a symlink included), or,
+ *   on POSIX, is another user's or its group or others can write it.
  */
 export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): FileRef {
   const media = resolve(dir, "media");
@@ -733,6 +674,17 @@ export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): File
     fs.mkdirSync(media, { mode: 0o700 });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+  }
+  // A `media` already there may not be ours (a log in a shared folder such as /tmp): a symlink
+  // would lead writes out, which `fileToInline` then refuses to read, and another writer could
+  // swap the bytes a step names.
+  const info = fs.lstatSync(media);
+  const refused = (why: string) => new Error(`the run's media folder ${media} ${why}; give the run a folder of its own`);
+  if (!info.isDirectory()) throw refused("is not a folder");
+  // Owner and mode are checked only on POSIX: Windows has no `getuid`, and its modes read 0o666.
+  const uid = process.getuid?.();
+  if (uid !== undefined && (info.uid !== uid || (info.mode & 0o022) !== 0)) {
+    throw refused("is another user's or others can write it");
   }
   // A new `media` entry is durable only once the run folder holding it is synced. Synced every
   // time: a crash after an earlier call made `media` may have left the folder unsynced.
@@ -760,16 +712,6 @@ export function writeRunFile(dir: string, bytes: Uint8Array, mime: string): File
   }
   syncFolder(media);
   return new FileRef({ uri: `media/${name}`, mime, name });
-}
-
-/** Flush folder `path`'s entries to disk. */
-function syncFolder(path: string): void {
-  const fd = fs.openSync(path, "r");
-  try {
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
 }
 
 /**

@@ -5,10 +5,11 @@
 // parse every Mermaid block of the pages and of ARCHITECTURE.md with Mermaid's own parser.
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import DOMPurify from "dompurify";
 
-const dist = new URL("../dist/", import.meta.url).pathname;
+const dist = fileURLToPath(new URL("../dist/", import.meta.url));
 const pages = readdirSync(dist, { recursive: true, encoding: "utf8" }).filter((path) => path.endsWith(".html"));
 const problems = [];
 let yamlBlocks = 0;
@@ -27,12 +28,13 @@ for (const page of pages) {
 }
 if (yamlBlocks === 0) problems.push("no YAML block found in the built site");
 
-// Without a DOM, DOMPurify has no hooks and can't sanitize; parsing needs neither, and this is
-// the instance mermaid imports, so stub what mermaid calls before loading it.
+// Without a DOM, DOMPurify has no hooks and can't sanitize; parsing needs neither, so stub what
+// mermaid calls before loading it. package.json declares dompurify in mermaid's range, so the
+// install holds one copy: this one is the instance mermaid imports.
 Object.assign(DOMPurify, { addHook() {}, removeHook() {}, removeHooks() {}, sanitize: (text) => text });
 const { default: mermaid } = await import("mermaid");
-const repo = new URL("../../", import.meta.url).pathname;
-const content = new URL("../src/content/docs/", import.meta.url).pathname;
+const repo = fileURLToPath(new URL("../../", import.meta.url));
+const content = fileURLToPath(new URL("../src/content/docs/", import.meta.url));
 const sources = [
   ...readdirSync(content, { recursive: true, encoding: "utf8" })
     .filter((path) => /\.mdx?$/.test(path))

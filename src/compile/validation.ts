@@ -4,7 +4,8 @@
  * These operate on bare `Type`/edge/path-set inputs, not a built flow, so the Compose loader
  * reuses them directly:
  *
- * - `rejectCycles`: Kahn's-algorithm cycle check over a bare edge list + node-id set.
+ * - `topologicalOrder`: Kahn's order over a node list and its edges.
+ * - `rejectCycles`: a cycle check over a bare edge list + node-id set, through that order.
  * - `classifyPath`: head-resolution for one dotted `${...}` ref. Field reads are checked by the
  *   shared output-contract walk in `nodes/contracts.ts`.
  * - `typesCompatible`: whether every value of a source type fits a sink type.
@@ -34,13 +35,15 @@ import {
 } from "../typesys/values.ts";
 import { END_ID, START_ID } from "./model.ts";
 
-// The ONLY valid ${system.X} ambients, each with its scalar type label:
-//   today=date / now=datetime: the host clock seam; run_id=str: the run-scoped id
-//   (a host-injected ambient, like the clock; seeded once at the boundary, child-inherited)
-const SYSTEM_AMBIENTS: ReadonlyMap<string, string> = new Map([
-  ["today", "date"],
-  ["now", "datetime"],
-  ["run_id", "str"],
+/**
+ * The only valid `${system.X}` ambients, each with its scalar kind: `today` (date) and `now`
+ * (datetime) read the host clock, `run_id` (str) is the run's id. The run seeds each once at its
+ * boundary and a child inherits them.
+ */
+export const SYSTEM_AMBIENTS: ReadonlyMap<string, ValueKind> = new Map([
+  ["today", ValueKind.DATE],
+  ["now", ValueKind.DATETIME],
+  ["run_id", ValueKind.STRING],
 ]);
 
 /**
@@ -65,6 +68,40 @@ export class FlowValidationError extends RangeError {
 }
 
 /**
+ * Order `nodes` so each comes after every node with an edge into it (Kahn's algorithm).
+ *
+ * Ready nodes are taken first in, first out, starting in `nodes` order; a node waits for every
+ * edge into it, a repeated edge included.
+ *
+ * @param nodes The nodes; every edge must name two of them.
+ * @param edges The edges between them.
+ * @returns `order`, the nodes in topological order, and `rest`, the nodes on or behind a cycle
+ *   (in `nodes` order), which `order` leaves out.
+ */
+export function topologicalOrder(
+  nodes: Iterable<string>,
+  edges: Iterable<{ readonly from: string; readonly to: string }>,
+): { order: string[]; rest: string[] } {
+  const all = [...nodes];
+  const indegree = new Map<string, number>(all.map((node) => [node, 0]));
+  const successors = new Map<string, string[]>(all.map((node) => [node, []]));
+  for (const edge of edges) {
+    indegree.set(edge.to, indegree.get(edge.to)! + 1);
+    successors.get(edge.from)!.push(edge.to);
+  }
+  const ready = all.filter((node) => indegree.get(node) === 0);
+  // `ready` is a queue: nodes are taken from the front as they are appended at the back.
+  for (let next = 0; next < ready.length; next++) {
+    for (const successor of successors.get(ready[next]!)!) {
+      const count = indegree.get(successor)! - 1;
+      indegree.set(successor, count);
+      if (count === 0) ready.push(successor);
+    }
+  }
+  return { order: ready, rest: all.filter((node) => indegree.get(node)! > 0) };
+}
+
+/**
  * Throw if the real-node graph has a directed cycle (Kahn's algorithm).
  *
  * Edges touching `__start__`/`__end__` can't be part of a cycle (the sentinels have no
@@ -79,12 +116,7 @@ export function rejectCycles(
   edges: Iterable<{ readonly from: string; readonly to: string }>,
   nodeIds: ReadonlySet<string>,
 ): void {
-  const adjacency = new Map<string, string[]>();
-  const inDegree = new Map<string, number>();
-  for (const nid of nodeIds) {
-    adjacency.set(nid, []);
-    inDegree.set(nid, 0);
-  }
+  const real: { readonly from: string; readonly to: string }[] = [];
   for (const edge of edges) {
     if (edge.from === START_ID || edge.from === END_ID) continue;
     if (edge.to === START_ID || edge.to === END_ID) continue;
@@ -92,24 +124,11 @@ export function rejectCycles(
     for (const end of [edge.from, edge.to]) {
       if (!nodeIds.has(end)) throw new Error(`edge names unknown node ${reprText(end)}`);
     }
-    adjacency.get(edge.from)!.push(edge.to);
-    inDegree.set(edge.to, inDegree.get(edge.to)! + 1);
+    real.push(edge);
   }
-
-  const queue = [...nodeIds].filter((nid) => inDegree.get(nid) === 0);
-  let visited = 0;
-  while (queue.length > 0) {
-    const nid = queue.pop()!;
-    visited += 1;
-    for (const next of adjacency.get(nid)!) {
-      const degree = inDegree.get(next)! - 1;
-      inDegree.set(next, degree);
-      if (degree === 0) queue.push(next);
-    }
-  }
-
-  if (visited !== nodeIds.size) {
-    const stuck = [...nodeIds].filter((nid) => inDegree.get(nid)! > 0).sort(compareCodeUnits);
+  const { rest } = topologicalOrder(nodeIds, real);
+  if (rest.length > 0) {
+    const stuck = rest.sort(compareCodeUnits);
     throw new FlowValidationError(
       `flow has a cycle involving ${writeAsText(stuck)}; flows must be acyclic`,
     );
@@ -139,7 +158,8 @@ function intervalWithin(source: Type, sink: Type): boolean {
 /**
  * Return structural compatibility of a source value type with a sink slot.
  *
- * Same `kind` (with int->number widening, mirroring `coerceScalar`); the singleton `None`
+ * Same `kind` (with int->number widening, mirroring `coerceScalar`, and a date or datetime
+ * fitting `str`, since each is stored as an ISO string, as `typeRelation` counts it); the singleton `None`
  * source may fill any nullable sink; records match structurally (every field the sink REQUIRES
  * is present + compatible); enums by tag-subset (source tags within the sink's accepted tags,
  * so an untagged source cannot fill an enum sink); list elements recurse, treating a bare
@@ -174,26 +194,30 @@ export function typesCompatible(source: Type, sink: Type): boolean {
     if (!(sourceIsList && sinkIsList)) return false;
     return typesCompatible(listElement(source), listElement(sink));
   }
-  if (source.kind !== sink.kind && !(sink.kind === ValueKind.NUMBER && source.kind === ValueKind.INTEGER)) {
+  if (
+    source.kind !== sink.kind &&
+    !(sink.kind === ValueKind.NUMBER && source.kind === ValueKind.INTEGER) &&
+    !(sink.kind === ValueKind.STRING && STRING_STORED.has(source.kind))
+  ) {
     return false;
   }
   if (sink.bounds !== undefined && !intervalWithin(source, sink)) return false;
-  if (sink.variants !== undefined) {
+  if (sink.members !== undefined) {
     let members: readonly Type[];
-    if (source.variants !== undefined) {
-      members = source.variants;
+    if (source.members !== undefined) {
+      members = source.members;
     } else if (source.fields !== undefined) {
       // Members are non-nullable; the union's own nullability was checked above.
       members = [source.replace({ nullable: false })];
     } else {
       return false;
     }
-    const options = sink.variants;
+    const options = sink.members;
     return members.every((member) => options.some((option) => typesCompatible(member, option)));
   }
   if (sink.fields !== undefined) {
     // A union may hold a member other than this record, and load can't tell which.
-    if (source.variants !== undefined) return false;
+    if (source.members !== undefined) return false;
     const sourceFields = source.fields;
     if (sourceFields === undefined) return false;
     for (const fname of sink.required ?? []) {
@@ -307,7 +331,7 @@ function relateNonNull(inferred: Type, declared: Type): TypeRelation {
     return requiresFile(inferred) ? "disjoint" : "narrower";
   }
   if (inferred.kind === ValueKind.ANY) return requiresFile(declared) ? "disjoint" : "narrower";
-  if (inferred.variants !== undefined || declared.variants !== undefined) {
+  if (inferred.members !== undefined || declared.members !== undefined) {
     return relateUnion(inferred, declared);
   }
   const inferredIsList = isListKind(inferred.kind);
@@ -337,8 +361,8 @@ function relateNonNull(inferred: Type, declared: Type): TypeRelation {
  * fits, disjoint when every member is disjoint, and narrower otherwise.
  */
 function relateUnion(inferred: Type, declared: Type): TypeRelation {
-  const inferredMembers = inferred.variants ?? [inferred];
-  const declaredMembers = declared.variants ?? [declared];
+  const inferredMembers = inferred.members ?? [inferred];
+  const declaredMembers = declared.members ?? [declared];
   const relations = new Set(
     inferredMembers.map((member) =>
       strongest(...declaredMembers.map((option) => relateNonNull(member, option))),
@@ -507,8 +531,8 @@ export function classifyPath(
     if (parts[1] === NEW_MESSAGES) {
       if (validTargets.has(messagesKey(head))) return null;
       return (
-        `${ref} reads new_messages, which only an AGENT node has, from a node input, flow output or ` +
-        `flow assert; node ${reprText(head)} isn't one there`
+        `${ref} reads new_messages, which only an AGENT node has, from a node input, case, flow ` +
+        `output or flow assert; node ${reprText(head)} isn't one there`
       );
     }
     // The second segment MUST be the literal `output` (the discriminator).

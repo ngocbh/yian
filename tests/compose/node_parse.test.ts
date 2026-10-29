@@ -323,7 +323,7 @@ gate:
 `;
 
     expect(loadError(() => nodes(text)).message).toBe(
-      "node 'gate' (kind=case): field 'inputs' is not allowed " +
+      "node 'gate' (kind=case): field 'input' is not allowed " +
         "(allowed: cases, depends_on, else, env, kind, node_name, on, output, runs_after)",
     );
   });

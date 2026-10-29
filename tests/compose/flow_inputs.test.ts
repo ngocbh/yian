@@ -247,6 +247,12 @@ describe("float input text", () => {
     [".5", 0.5],
     ["inf", Infinity],
     ["-inf", -Infinity],
+    ["+inf", Infinity],
+    ["Inf", Infinity],
+    [" INF ", Infinity],
+    ["Infinity", Infinity],
+    ["-infinity", -Infinity],
+    ["+INFINITY", Infinity],
     ["-0.0", 0],
   ] as const)("%p reads as %p", (text, value) => {
     expect(coerced(ValueKind.NUMBER, text)).toBe(value);
@@ -266,7 +272,7 @@ describe("float input text", () => {
     expect(call).toThrow(new TypeCheckError("input 'x': number is too large for a float"));
   });
 
-  test.each(["nan", "Infinity", "+inf", "0x10", "1__0", "", " abc "])("%p stays text as given", (text) => {
+  test.each(["nan", "NaN", "+-inf", "infinit", "0x10", "1__0", "", " abc "])("%p stays text as given", (text) => {
     expect(coerced(ValueKind.NUMBER, text)).toBe(text);
   });
 });
@@ -336,4 +342,4 @@ test.each<CaseRow>([
     call: childInput,
     prefix: CHILD,
   },
-])("readSourceFlowInputs: $id", runCase);
+])("readSourceParameters: $id", runCase);

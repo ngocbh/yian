@@ -2,8 +2,9 @@
  * Every default and limit is defined only in `defaults.ts`.
  *
  * The scan reads `src` as text, with comments and strings blanked by `blank`, and never
- * imports it. A flagged literal is an integer of 2 or more or a negative integer (decimal, hex,
- * binary, octal, separators, bigint; floats are not flagged), anywhere in: a top-level
+ * imports it; only the inline-cap tests import `BUILTIN`, for the values to look for. A flagged
+ * literal is an integer of 2 or more or a negative integer (decimal, hex, binary, octal,
+ * separators, bigint; floats are not flagged), anywhere in: a top-level
  * `const`/`let`/`var` value, including inside top-level blocks; a class field value; a
  * parameter default, including inside a destructured parameter; a destructuring default in a
  * declaration (`const { timeoutMs = 30_000 } = options`); and a numeric constant right of `??`
@@ -17,6 +18,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { BUILTIN } from "../../src/defaults.ts";
 import { blank } from "../helpers/source_scan.ts";
 
 const SRC = fileURLToPath(new URL("../../src/", import.meta.url));
@@ -48,16 +50,34 @@ const ALLOWED: Record<string, string> = {
   "tools/mcp.ts: INVALID_REQUEST": "JSON-RPC error code",
   "tools/mcp.ts: INVALID_REQUEST_CODES": "JSON-RPC error codes",
   "llm/framing.ts: LF": "the line feed byte",
+  "tools/mcp.ts: CR": "the carriage return byte",
+  "tools/mcp.ts: LF": "the line feed byte",
   "llm/framing.ts: ASCII_SPACE": "the ASCII whitespace bytes",
   "llm/testing.ts: NULL_BODY_STATUSES": "HTTP statuses whose response has no body",
   // Display and message formatting.
-  "cli/chat.ts: SECOND_PRESS_MS": "how soon a second Ctrl-C cancels the chat's run",
-  "cli/run.ts: ERR_CONTEXT": "lines of YAML shown around an error",
-  "cli/run.ts: flowBanner.||": "terminal width when the output reports none",
-  "cli/run.ts: SGR": "terminal color and style codes",
+  "cli/bundled_skill.ts: HASH_DIGITS": "hex digits of the content hash that names the bundled skill's cache folder",
+  "cli/chat_events.ts: EVENT_BODY_CHARS": "size of a child event's line the chat's model reads",
+  "cli/chat_events.ts: LIST_ITEMS": "asks or waits a child event or status lists for the chat's model",
+  "cli/chat_run_tools.ts: STATUS_TEXT_CHARS": "size of each text field of a child run's status the chat's model reads",
+  "cli/chat_run_tools.ts: WAIT_FLOW_MAX_S": "longest wait_flow waits for a child run to change",
+  "cli/chat_tools.ts: FOCUS_BYTES": "size of the focus flow's text shown the chat's model",
+  "cli/chat_tools.ts: LIST_FLOWS_ENTRIES": "files and folders list_flows looks at before it stops",
+  "cli/chat_tools.ts: LIST_FLOWS_LIMIT": "flow paths list_flows shows the chat's model",
+  "cli/chat_tools.ts: READ_FLOW_BYTES": "size of a flow file read_flow shows the chat's model",
+  "cli/diff.ts: CONTEXT": "lines of context around a change in a diff",
+  "cli/inbox_chat.ts: SECOND_PRESS_MS": "how soon a second Ctrl-C cancels the chat's run",
+  "cli/render.ts: ERR_CONTEXT": "lines of YAML shown around an error",
+  "cli/render.ts: SGR": "terminal color and style codes",
   "cli/run.ts: SPIN_MS": "spinner frame interval",
-  "cli/terminal.ts: Terminal.#runWidget.<arrow>.||": "terminal width when the output reports none",
-  "cli/terminal.ts: writeRule.||": "terminal width when the output reports none",
+  "cli/cells.ts: columnsOf.||": "terminal width when the output reports none",
+  "cli/cells.ts: rowsOf.||": "terminal height when the output reports none",
+  "cli/run_view.ts: KEPT_ROWS": "rows of a child run's progress the chat's run view keeps",
+  "cli/terminal.ts: LIST_MARGIN": "screen rows a prompt's list leaves for what is drawn above the box",
+  "cli/chat.ts: LIST_TICK_MS": "how often the chat's run list is drawn again",
+  "cli/chat.ts: VIEW_TICK_MS": "how often the chat's run view reads its run's log again",
+  "cli/chat_view.ts: SPIN_MS": "the chat's spinner frame interval",
+  "cli/chat_view.ts: ARG_CHARS": "length of an argument value a chat's tool line shows",
+  "cli/chat_view.ts: LABEL_CELLS": "width of the label column in the chat's banner",
   "compose/validate/case_branches.ts: SHOWN_LIMIT": "width of a value shown in a message",
   "run.ts: LITERAL_LABEL_WIDTH": "width of a literal shown in a type label",
   "llm_clients/redact.ts: MIN_VISIBLE": "key characters a masked echo must show to count",
@@ -67,9 +87,12 @@ const ALLOWED: Record<string, string> = {
   "tools/mcp.ts: STDERR_KEEP_CHARS": "MCP server stderr kept for a start error",
   "diagnostics.ts: getCloseMatches.n": "suggestions offered, difflib's own default",
   // Internal sizes that no user input reaches.
+  "cli/diff.ts: MAX_TABLE": "line pairs a diff compares before showing the whole change, internal",
   "expr/lineage.ts: MAX_SNAPSHOT_DEPTH": "diagnostic retention depth, internal",
   "llm/executor.ts: MAX_ERROR_BODY": "bytes of an error response read, internal",
   "runtime/log.ts: READ_CHUNK_BYTES": "bytes of a run log read at a time, internal",
+  "runtime/log.ts: HEADER_DEPTH": "containers a long line's header scan tracks, fixed by the paths it reads",
+  "runtime/log.ts: HEADER_TOKEN_BYTES": "bytes a long line's header scan keeps of a key or number, internal",
   "llm/testing.ts: MIN_BASE64_FRAGMENT": "shortest base64 fragment a cassette check matches, internal",
   "nodes/code/worker.ts: COPY_DEPTH": "depth a CODE result is copied back from its worker, above any value limit",
   "compose/source/scalars.ts: PARSER_DEPTH_STOP":
@@ -642,7 +665,7 @@ test("oauth callback cap is not inline", () => {
   // Every run of constant tokens, and every slice of it that is an expression.
   for (let start = 0; start < tokens.length; start++) {
     for (let end = start + 1; end <= tokens.length && inConstant(tokens[end - 1]!); end++) {
-      if (constantInt(tokens.slice(start, end)) === 16384n) {
+      if (constantInt(tokens.slice(start, end)) === BigInt(BUILTIN.maxOauthCallbackBytes)) {
         inline.add(source.slice(0, tokens[start]!.index).split("\n").length);
       }
     }
@@ -651,5 +674,6 @@ test("oauth callback cap is not inline", () => {
 });
 
 test("question count cap is not inline", () => {
-  expect(comparesLengthTo(readFileSync(join(SRC, "nodes/tool/questions.ts"), "utf8"), 4n)).toBe(false);
+  const source = readFileSync(join(SRC, "nodes/tool/questions.ts"), "utf8");
+  expect(comparesLengthTo(source, BigInt(BUILTIN.maxQuestions))).toBe(false);
 });

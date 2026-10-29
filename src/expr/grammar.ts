@@ -111,8 +111,18 @@
 
 import { current } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
-// expressions.ts imports this module too, so each uses the other's exports only inside functions.
-import { ExpressionError, ISINSTANCE, valueArgs } from "./expressions.ts";
+
+/** An expression could not be parsed or evaluated. */
+export class ExpressionError extends RangeError {
+  override name = "ExpressionError";
+}
+
+/**
+ * The type-test special form `isinstance(x, T)`: its second argument is a type name
+ * looked up in the node's type table, never a reference, so the evaluator, the reference
+ * walkers and rewriters, and type inference treat only its first argument as an expression.
+ */
+export const ISINSTANCE = "isinstance";
 
 /** A terminal of the parse: its type, its source text, and where it sits in the text. */
 export class Token {
@@ -788,9 +798,41 @@ export const EXPRESSION_KEYWORDS: ReadonlySet<string> = new Set([
   "inf",
 ]);
 
+/**
+ * Return why no expression can call a function named `name`, else `null`.
+ *
+ * A callee is one `NAME` token lexed where an operand starts, so `name` must lex as exactly one
+ * there: a literal word (`true`, `inf`) lexes as a literal, even before a `#` or `/`
+ * (`true/x(1)` reads as `true / x(1)`). `isinstance(...)` is always the type test. The operator
+ * words stay callable: `and(x)` is a call, and so is `not(x)` after an operator (`1 + not(x)`).
+ */
+export function uncallableReason(name: string): string | null {
+  const token = lexAt(name, 0, OPERAND_WITHOUT_NOT);
+  if (token !== null && (token.type === "BOOL" || token.type === "NULL" || token.type === "INF")) {
+    return token.endPos === name.length
+      ? `\`${name}\` is a literal`
+      : `it starts with the literal \`${token.value}\``;
+  }
+  if (token?.type !== "NAME" || token.endPos !== name.length) {
+    return "it is no name: a call names a letter or `_` followed by letters, digits and `_`";
+  }
+  if (name === ISINSTANCE) return "`isinstance(x, T)` is the type test";
+  return null;
+}
+
 /** Return the `call_suffix` of the refcall `node`, or undefined when it is a reference. */
 export function callSuffixOf(node: Tree): Tree | undefined {
   return node.children.find((child): child is Tree => child instanceof Tree && child.data === "call_suffix");
+}
+
+/**
+ * Return the `arg` subtrees of a call whose values are expressions.
+ *
+ * Every argument of a builtin is an expression; `isinstance(x, T)` has only `x`.
+ */
+export function valueArgs(callee: string, callSuffix: Tree): Tree[] {
+  const args = callSuffix.children as Tree[];
+  return callee === ISINSTANCE ? args.slice(0, 1) : args;
 }
 
 /**
@@ -1038,7 +1080,7 @@ function rejectDottedCallee(tree: ExprNode): void {
 }
 
 /** Return whether `node` is a `refcall` that is one non-keyword `NAME` with no trailers or call suffix. */
-export function isBareName(node: ExprNode): boolean {
+export function isBareName(node: ExprNode): node is Tree & { readonly data: "refcall" } {
   if (!(node instanceof Tree) || node.data !== "refcall" || node.children.length !== 1) return false;
   const head = node.children[0];
   return head instanceof Token && head.type === "NAME" && !RESERVED_REFERENCE_ROOTS.has(head.value);

@@ -16,6 +16,7 @@ import {
   Failure,
   type FailureCode,
   getCloseMatches,
+  noteCleanup,
   OriginRef,
   type OriginResolver,
   ResolverTable,
@@ -695,6 +696,30 @@ describe("ResolverTable", () => {
       // @ts-expect-error the constructor takes no arguments
       new ResolverTable(new Map());
     }
+  });
+});
+
+describe("noteCleanup", () => {
+  test("notes the cleanup failure under its label, then the notes it carries", () => {
+    const primary = new Error("primary");
+    const cleanup = Object.assign(new RangeError("close failed"), { notes: ["lock kept"] });
+
+    noteCleanup(primary, cleanup, "Memory cleanup failed:");
+
+    expect((primary as Error & { notes?: string[] }).notes).toEqual([
+      "Memory cleanup failed: RangeError: close failed",
+      "lock kept",
+    ]);
+  });
+
+  test("names a thrown non-Error by its type", () => {
+    const primary = new Error("primary");
+
+    noteCleanup(primary, { code: 1 }, "run-log close also raised");
+
+    expect((primary as Error & { notes?: string[] }).notes).toEqual([
+      "run-log close also raised Object: [object Object]",
+    ]);
   });
 });
 

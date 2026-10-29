@@ -15,17 +15,25 @@
  *
  * Knows about: `compile/validation` (the type comparator), `expr` (the binding-null analysis and
  * escape parsing), `compose/helpers` (shared output-contract inference, the `Any` source hint, YAML
- * 1.1 boolean words and load diagnostics), `compose/nodes/loop` (a LOOP body's inputs as its seeds
- * enter them, and its carried field types), `compose/validate/typed_bindings` (literal and
- * `${item}` helpers), and `nodes/binding` (the run boundary's string conversion, named in a hint
- * only).
+ * 1.1 boolean words, load diagnostics and the text form of a literal), `compose/nodes/loop` (a LOOP
+ * body's inputs as its seeds enter them, and its carried field types), and `nodes/binding` (the run
+ * boundary's string conversion, named in a hint only).
  * Never imports: the loader or the compose package facade; only they import this back.
  */
 
 import { typesCompatible } from "../../compile/validation.ts";
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { type ExprNode, Token, Tree } from "../../expr/grammar.ts";
-import { ExpressionError, evalExpr, exprRefs, MISSING_ROOT } from "../../expr/index.ts";
+import { kindName } from "../../expr/builtins.ts";
+import {
+  ExpressionError,
+  evalExpr,
+  exprRefs,
+  MISSING_ROOT,
+  type RefStep,
+  referenceText,
+  splitReference,
+} from "../../expr/index.ts";
 import { bindingCoSkips, scanTemplate, Span } from "../../expr/template.ts";
 import {
   Binding,
@@ -47,8 +55,9 @@ import {
   isList,
   isRecord,
   TypeCheckError,
+  type Value,
 } from "../../typesys/values.ts";
-import { LoadDiagnostics } from "../helpers/errors.ts";
+import { LoadDiagnostics, shownLiteral } from "../helpers/errors.ts";
 import {
   assertExactContracts,
   directReferenceParts,
@@ -60,12 +69,11 @@ import {
   resolveOutputBindingContract,
   type TypeFn,
 } from "../../compile/output_contracts.ts";
-import { anySourceHint, valueFits, yamlQuoted } from "../helpers/tags.ts";
-import { formerBooleanFix } from "../helpers/yaml_words.ts";
+import { anySourceHint, yamlQuoted } from "../helpers/tags.ts";
+import { formerBooleanFix, valueFits } from "../helpers/yaml_words.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
 import type { Narrowing } from "./narrowing.ts";
-import { shownLiteral } from "./typed_bindings.ts";
 
 /**
  * Cross-flow type check for every `call`/`map` binding and `loop` seed (a loader pass).
@@ -354,8 +362,7 @@ function operandPath(node: ExprNode): string | null {
  */
 function operandMismatch(node: ExprNode, decl: Parameter, scope: Scope, options: { nonNull: boolean }): string | null {
   const { nonNull } = options;
-  const path = operandPath(node);
-  if (path !== null) return referenceMismatch(path, decl, scope, { nonNull });
+  if (operandPath(node) !== null) return referenceMismatch(node as Tree, decl, scope, { nonNull });
   if (node instanceof Tree && node.data === "default_expr") {
     const [head, fallback] = node.children as [ExprNode, ExprNode];
     return (
@@ -390,37 +397,73 @@ function operandMismatch(node: ExprNode, decl: Parameter, scope: Scope, options:
 }
 
 /**
- * Return why the value one reference path reads can't fill `decl`, else `null`.
+ * Return why the value one plain reference reads can't fill `decl`, else `null`.
  *
- * @param path The dotted reference path.
+ * Over a literal `over:` list, each element is read as the run reads it, so an element the read
+ * fails on (a missing field after `.`, a `.` step through null or through a value with no fields)
+ * is a mismatch too.
+ *
+ * @param node The parsed reference.
  * @param decl The child input, with a declared contract.
  * @param scope What the node's bindings read.
  * @param options.nonNull Whether a null read here falls through to another operand.
  * @returns The mismatch, or `null` when it fits or is unproven.
  */
-function referenceMismatch(path: string, decl: Parameter, scope: Scope, options: { nonNull: boolean }): string | null {
+function referenceMismatch(node: Tree, decl: Parameter, scope: Scope, options: { nonNull: boolean }): string | null {
   const { nonNull } = options;
-  const [head, ...fields] = path.split(".");
+  const { head, steps } = splitReference(node);
+  const fields = steps.map((step) => step.name);
   if (head !== "item") {
-    const contract = referenceContract(path, scope.producers, scope.flowInputs);
+    const contract = referenceContract([head, ...fields].join("."), scope.producers, scope.flowInputs);
     return contractMismatch(contract, decl, { nonNull, registry: scope.registry });
   }
   if (scope.item !== null) {
     const contract = projectOutputContract(scope.item, fields);
     return contractMismatch(contract, decl, { nonNull, registry: scope.registry });
   }
-  elements: for (const element of scope.items ?? []) {
-    let value = element;
-    for (const field of fields) {
-      // A missing field fails when the element is bound.
-      if (!isRecord(value) || !Object.hasOwn(value, field)) continue elements;
-      value = value[field];
+  for (const [index, element] of (scope.items ?? []).entries()) {
+    const read = readElement(element, steps);
+    if (typeof read === "string") {
+      return `\${${referenceText(node)}} fails on element ${index} of over:, where ${read}`;
     }
-    if (value === null && nonNull) continue;
-    const message = valueMismatch("element", value, decl);
+    if (read.value === null && nonNull) continue;
+    const message = valueMismatch("element", read.value, decl);
     if (message !== null) return message;
   }
   return null;
+}
+
+/**
+ * Read `steps` from one element of a literal `over:` list as the run reads `item` there.
+ *
+ * @param element The element.
+ * @param steps The reference's steps after `item`.
+ * @returns The value read, or why the read fails (`item.a is null; ...`).
+ */
+function readElement(element: unknown, steps: readonly RefStep[]): { value: unknown } | string {
+  let value = element;
+  let shown = "item";
+  for (const step of steps) {
+    if (value === null) {
+      // `?.` on null stops the read with null.
+      if (step.optional) return { value: null };
+      return `${shown} is null; write ${shown}?.${step.name} to read null instead`;
+    }
+    if (isRecord(value) && Object.hasOwn(value, step.name)) {
+      value = value[step.name];
+    } else if (isRecord(value) && step.optional) {
+      value = null;
+    } else if (isRecord(value)) {
+      return (
+        `${shown} has no field ${reprText(step.name)}; add it to every element, or write ` +
+        `${shown}?.${step.name} to read null where it is missing`
+      );
+    } else {
+      return `${shown} is ${kindName(value as Value)}, which has no fields`;
+    }
+    shown += (step.optional ? "?." : ".") + step.name;
+  }
+  return { value };
 }
 
 /**

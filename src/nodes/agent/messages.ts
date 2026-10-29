@@ -7,7 +7,8 @@
  * (`FileRef`). Its role is `user`, `assistant` or `tool`: a system prompt is the agent's own.
  *
  * An AGENT's new messages (`messageSteps`, `rebuildMessages`) are rebuilt from its recorded steps,
- * so the reducer can rebuild them on every append and replay.
+ * so the reducer can rebuild them on every append and replay. The steps fold into exchanges by one
+ * set of rules (`foldSteps`), which the loop's replay and learning read too.
  *
  * Knows about: llm (messages), diagnostics, typesys.
  * Never imports: compose, compile, runtime, the run boundary or the CLI.
@@ -25,7 +26,16 @@ import {
 } from "../../llm/messages.ts";
 import type { JsonObject } from "../../typesys/json.ts";
 import { builtinType, newMessagesType } from "../../typesys/types.ts";
-import { buildValueAs, FileRef, TypeCheckError, type TypedValue, type Value, writeAsJson, writeAsText } from "../../typesys/values.ts";
+import {
+  buildValueAs,
+  FileRef,
+  TypeCheckError,
+  type TypedValue,
+  type Value,
+  type ValueRecord,
+  writeAsJson,
+  writeAsText,
+} from "../../typesys/values.ts";
 
 /** One part of a `Message`, told apart by `type`; `provider_payload` is opaque provider data, kept untouched. */
 export type MessagePart =
@@ -125,6 +135,18 @@ function steerParts(message: Message, onDrop: (part: number) => void): TextPart[
     }
   });
   return parts;
+}
+
+/**
+ * Return the events a `steer` step read, which the engine attaches as `values` to each copy of the
+ * step it hands out; the run log itself holds only their seqs.
+ *
+ * @throws RangeError when the step has no `values`: it didn't come from the engine.
+ */
+export function steerValues(step: Readonly<Record<string, unknown>>): readonly unknown[] {
+  const values = step["values"];
+  if (!Array.isArray(values)) throw new RangeError("a steer step without its values, which only the engine's copy of the step carries");
+  return values;
 }
 
 /** Renders one steer event to text: an AGENT's `render:` template over `${event}`. */
@@ -307,6 +329,75 @@ export function checkModelConversation(messages: readonly ConversationMessage[])
  */
 export const INTERRUPTED_MARKER = "[interrupted by the user]";
 
+/** A recorded AGENT step and its `n`, its place among the node's steps (numbered from 1). */
+export interface NumberedStep<S = ValueRecord> {
+  readonly n: number;
+  readonly step: S;
+}
+
+/** One logical model call of an AGENT, with the steers read before it and the results after it (`foldSteps`). */
+export interface StepExchange<S = ValueRecord> {
+  /**
+   * The `steer` steps read before the call, oldest first. A call can follow several: a resume
+   * replays a steer recorded before an unmade call, then reads live and records another before it.
+   */
+  readonly steers: readonly NumberedStep<S>[];
+  /** The call's `model_call` steps: its failed attempts that were retried, then its reply or its last failure. */
+  readonly attempts: readonly NumberedStep<S>[];
+  /** The `tool_result` steps written after the call, until the next call ends, by call id. */
+  readonly results: ReadonlyMap<string, NumberedStep<S>>;
+}
+
+/** An AGENT's steps as `foldSteps` groups them. */
+export interface FoldedSteps<S = ValueRecord> {
+  /** The logical calls, in order. */
+  readonly exchanges: readonly StepExchange<S>[];
+  /**
+   * What follows the last logical call: the steers read for the next call and its retried failed
+   * attempts so far, the start of a call not over yet. Its results are always empty.
+   */
+  readonly open: StepExchange<S>;
+  /** The `interrupted` step, the honor of a host interrupt, or `null`. */
+  readonly honored: NumberedStep<S> | null;
+}
+
+/**
+ * Fold an AGENT's steps, numbered from 1 in order, into exchanges: each successful `model_call`,
+ * and each failed one that wasn't to be retried, ends one logical call, which the failed attempts
+ * before it belong to; each `tool_result` is filed under the call before it (one before any call
+ * answers nothing), each `steer` under the call after it. Steps of any other kind are skipped. The
+ * AGENT loop replays its calls from this fold; learning and the new messages rebuild from it.
+ */
+export function foldSteps<S extends Readonly<Record<string, unknown>>>(steps: readonly S[]): FoldedSteps<S> {
+  const exchanges: { steers: NumberedStep<S>[]; attempts: NumberedStep<S>[]; results: Map<string, NumberedStep<S>> }[] = [];
+  let steers: NumberedStep<S>[] = [];
+  let attempts: NumberedStep<S>[] = [];
+  let honored: NumberedStep<S> | null = null;
+  for (const [index, step] of steps.entries()) {
+    const numbered = { n: index + 1, step };
+    if (step["kind"] === "model_call") {
+      attempts.push(numbered);
+      // A reply, or a failure with no retry after it, ends the call.
+      if (!Object.hasOwn(step, "error") || step["retry_in"] == null) {
+        exchanges.push({ steers, attempts, results: new Map() });
+        steers = [];
+        attempts = [];
+      }
+    } else if (step["kind"] === "tool_result") {
+      // Call ids repeat across replies (an adapter may number each reply's calls from 0), so a
+      // result is filed under the call before it; a later start's closer still follows it.
+      exchanges.at(-1)?.results.set(step["call_id"] as string, numbered);
+    } else if (step["kind"] === "steer") {
+      // A steer is read only before a logical call, never between its attempts, so it belongs
+      // to the next call.
+      steers.push(numbered);
+    } else if (step["kind"] === "interrupted") {
+      honored = numbered;
+    }
+  }
+  return { exchanges, open: { steers, attempts, results: new Map() }, honored };
+}
+
 /** Whether a `model_call` step's `purpose` is a structured-output call's. */
 function isStructured(purpose: unknown): boolean {
   return purpose === "structured_native" || purpose === "structured_fallback";
@@ -336,8 +427,8 @@ export function messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
 
 /**
  * Rebuild an AGENT's new messages from the steps `messageSteps` picked: each reply, then a `tool`
- * message per call it answered, in call order (results are recorded in finish order and filed
- * under the reply before them). A call with no result (its arguments didn't parse, or its reply
+ * message per call it answered, in call order (results are recorded in finish order; `foldSteps`
+ * files them under the call before them). A call with no result (its arguments didn't parse, or its reply
  * was cut) is left out, so every tool call has a result; so is media held inline, which only a
  * run without a folder keeps. A message left with no parts is left out. The accepted structured
  * call becomes one assistant message holding `output` as JSON text; its recorded reply (an
@@ -352,18 +443,16 @@ export function messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
  *   rendered them.
  * @returns The `list(Message)` value.
  * @throws RangeError when a structured call is given with no output value, or a steer step
- *   without its values.
+ *   without its values (`steerValues`).
  */
 export function rebuildMessages(
-  steps: readonly Readonly<JsonObject>[],
+  steps: readonly Readonly<ValueRecord>[],
   output: TypedValue | null,
   render: SteerRender | null = null,
 ): TypedValue {
   const messages: Message[] = [];
-  let reply: ModelMessage | null = null;
-  let results = new Map<string, Readonly<JsonObject>>();
-  const flush = (): void => {
-    if (reply === null) return;
+  /** Add `reply` and a `tool` message per call `results` answers. */
+  const flush = (reply: ModelMessage, results: StepExchange<Readonly<ValueRecord>>["results"]): void => {
     const kept = reply.parts.filter((part) =>
       part instanceof ToolCallPart ? results.has(part.id) : !(part instanceof MediaPart && part.file === null),
     );
@@ -373,42 +462,36 @@ export function rebuildMessages(
     }
     for (const part of kept) {
       if (!(part instanceof ToolCallPart)) continue;
-      const step = results.get(part.id)!;
+      const { step } = results.get(part.id)!;
       const content = step["output"] as string;
       const answer = new ToolResultPart({ callId: part.id, name: part.name, content, isError: step["is_error"] === true });
       messages.push(fromModelMessage(new ModelMessage({ role: "tool", parts: [answer] })));
     }
-    reply = null;
-    results = new Map();
   };
-  for (const step of steps) {
-    if (step["kind"] === "tool_result") {
-      results.set(step["call_id"] as string, step);
-      continue;
+  const { exchanges, open, honored } = foldSteps(steps);
+  for (const exchange of [...exchanges, open]) {
+    for (const { step } of exchange.steers) {
+      for (const message of steerMessages(steerValues(step), { render })) messages.push(fromModelMessage(message));
     }
-    if (step["kind"] === "steer") {
-      flush();
-      const values = step["values"];
-      if (!Array.isArray(values)) throw new RangeError("a steer step without its values");
-      for (const message of steerMessages(values, { render })) messages.push(fromModelMessage(message));
-      continue;
+    let reply: ModelMessage | null = null;
+    for (const { step } of exchange.attempts) {
+      // Only the call's last reply has results.
+      if (reply !== null) flush(reply, new Map());
+      reply = null;
+      if (isStructured(step["purpose"])) {
+        // The final value as the flow reads it, not the lowered reply that produced it.
+        if (output === null) throw new RangeError("the accepted structured call of an AGENT needs its output value");
+        const text = new TextPart(writeAsJson(output.toObject()));
+        messages.push(fromModelMessage(new ModelMessage({ role: "assistant", parts: [text] })));
+      } else {
+        reply = ModelMessage.fromJSON(step["output"]);
+      }
     }
-    if (step["kind"] === "interrupted") {
-      flush();
-      messages.push(fromModelMessage(new ModelMessage({ role: "user", parts: [new TextPart(INTERRUPTED_MARKER)] })));
-      continue;
-    }
-    if (step["kind"] !== "model_call") continue;
-    flush();
-    if (isStructured(step["purpose"])) {
-      // The final value as the flow reads it, not the lowered reply that produced it.
-      if (output === null) throw new RangeError("the accepted structured call of an AGENT needs its output value");
-      const text = new TextPart(writeAsJson(output.toObject()));
-      messages.push(fromModelMessage(new ModelMessage({ role: "assistant", parts: [text] })));
-    } else {
-      reply = ModelMessage.fromJSON(step["output"]);
-    }
+    if (reply !== null) flush(reply, exchange.results);
   }
-  flush();
+  // The honor is the node's last step: it follows the cut reply and its results.
+  if (honored !== null) {
+    messages.push(fromModelMessage(new ModelMessage({ role: "user", parts: [new TextPart(INTERRUPTED_MARKER)] })));
+  }
   return buildValueAs(newMessagesType(), messages);
 }

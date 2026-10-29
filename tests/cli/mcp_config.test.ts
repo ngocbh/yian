@@ -5,8 +5,8 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,6 +14,7 @@ import { pathToFileURL } from "node:url";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "../../src/cli/mcp_config.ts";
 import type { Env } from "../../src/defaults.ts";
 import { McpServer, type McpServerSpec } from "../../src/tools/mcp.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 let tmp: string;
 
@@ -302,7 +303,6 @@ test.each([
   [{ command: "srv", cwd: 1 }, "cwd"],
   [{ url: 5 }, "url"],
   [{ command: "srv", disabled: "yes" }, "disabled"],
-  [{ command: "srv", disabled: null }, "disabled"],
 ])("test_bad_entries_name_file_server_and_field (%j)", (entry, field) => {
   const path = write("mcp.json", { s: entry });
 
@@ -316,10 +316,10 @@ test.each([
 test("bad entries' messages", () => {
   const cases: [unknown, string][] = [
     ["srv", "the entry must be an object, got a string"],
-    [{ command: "srv", args: null }, "'args' must be a list of strings"],
+    [{ command: "srv", args: "a" }, "'args' must be a list of strings"],
     [{ command: "srv", env: { A: 1 } }, `env["A"] must be a string, got a number`],
     [{ url: "https://x.example.com/mcp", headers: ["A"] }, "'headers' must be an object of strings, got an array"],
-    [{ command: "srv", disabled: null }, "'disabled' must be true or false, got null"],
+    [{ command: "srv", disabled: "yes" }, "'disabled' must be true or false, got a string"],
   ];
   for (const [entry, reason] of cases) {
     const path = write("mcp.json", { s: entry });
@@ -346,15 +346,21 @@ test("no files gives no servers", () => {
   expect(Object.keys(loadMcpConfig([], envOf({})))).toEqual([]);
 });
 
-test("null counts as absent for type, env, headers, cwd and url", () => {
+test("null counts as absent for every key", () => {
   const path = write("mcp.json", {
-    local: { command: "srv", type: null, env: null, cwd: null, url: null },
+    local: { command: "srv", args: null, type: null, env: null, cwd: null, url: null, disabled: null },
     remote: { url: "https://x.example.com/mcp", headers: null, command: null },
   });
 
   const servers = loadMcpConfig([path], envOf({}));
 
-  expect(spec(servers["local"])).toMatchObject({ command: "srv", env: undefined, cwd: undefined, url: undefined });
+  expect(spec(servers["local"])).toMatchObject({
+    command: "srv",
+    args: [],
+    env: undefined,
+    cwd: undefined,
+    url: undefined,
+  });
   expect(spec(servers["remote"])).toMatchObject({ url: "https://x.example.com/mcp", headers: undefined });
 });
 
@@ -380,28 +386,7 @@ function childEnv(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("YIAN_")));
 }
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/memory/profile_memory.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!existsSync(BUILT)) throw new Error(`${BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(BUILT);
 
 describe.skipIf(!NODE)("the built module on Node", () => {
   test("Node loads a stdio and an HTTP entry with expansion as Bun does", () => {

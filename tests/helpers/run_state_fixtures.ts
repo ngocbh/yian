@@ -21,12 +21,9 @@ import { expect } from "bun:test";
 
 import { main } from "../../src/cli/index.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
-import { applyExecutionLayout, resolveExecutionLayout } from "../../src/compile/execution_layout.ts";
-import {
-  applyMemoryLayout,
-  memoryStacks as layoutStacks,
-  resolveMemoryLayout,
-} from "../../src/compile/memory_layout.ts";
+import { stampExecutionScopes } from "../../src/compile/execution_layout.ts";
+import { memoryStacks as layoutStacks, stampMemoryLayout } from "../../src/compile/memory_layout.ts";
+import { buildGrow } from "../../src/compile/expand.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import type { Env } from "../../src/defaults.ts";
@@ -91,7 +88,6 @@ import {
 import {
   decodeRecord,
   encodeRecord,
-  JsonlRunLog,
   MemoryRunLog,
   type OutcomeCarriers,
   RecordEnvelope,
@@ -117,6 +113,7 @@ import {
   type PreparedTransition,
   prepareRunStarted,
   rebuildCommit,
+  replayRecords,
   type RunStartData,
   RunState,
 } from "../../src/runtime/state.ts";
@@ -125,6 +122,7 @@ import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";
 import { Type, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
+import { withAppendHook } from "./append_hook.ts";
 import { loadConformanceFlow } from "./declarations.ts";
 
 /** The run id the run-state tests record. */
@@ -331,7 +329,7 @@ export function flow(): CompiledFlow {
     ["work", new FuncNode("work", (inputs) => inputs)],
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [
+  return new CompiledFlow(nodes, [
     new Edge("start-work", START_ID, "work"),
     new Edge("work-end", "work", END_ID),
   ]);
@@ -345,7 +343,7 @@ export function fanoutFlow(): CompiledFlow {
     ["second", new FuncNode("second", (inputs) => inputs)],
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [
+  return new CompiledFlow(nodes, [
     new Edge("start-first", START_ID, "first"),
     new Edge("start-second", START_ID, "second"),
   ]);
@@ -360,7 +358,7 @@ export function routeFlow(): CompiledFlow {
     ),
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [
+  return new CompiledFlow(nodes, [
     new Edge("start-router", START_ID, "router"),
     new Edge("route-dead", "router", "dead-parent", { sourceHandle: "no" }),
     new Edge("route-chosen", "router", "chosen", { sourceHandle: "yes" }),
@@ -397,7 +395,7 @@ export function terminalSkipRouteFlow(
     nodes.set("unrelated", new FuncNode("unrelated", (inputs) => inputs));
     edges.push(new Edge("start-unrelated", START_ID, "unrelated"));
   }
-  return CompiledFlow.fromParts(nodes, edges);
+  return new CompiledFlow(nodes, edges);
 }
 
 /** The id of `callRedirectFlow`'s child END. */
@@ -428,7 +426,7 @@ export function callRedirectFlow(options: { fallback?: boolean } = {}): Compiled
     edges.splice(1, 0, new Edge("start-fallback", START_ID, "fallback"));
     edges.push(new Edge("fallback-end", "fallback", END_ID, { inputGroup: "result" }));
   }
-  return CompiledFlow.fromParts(nodes, edges);
+  return new CompiledFlow(nodes, edges);
 }
 
 /** Return the complete pool a fresh run of `flow` records under `runId`. */
@@ -464,7 +462,7 @@ export function nodeFlow(
   node: Node,
   wiring: Readonly<Record<string, unknown>> = node instanceof FuncNode ? node.reads : {},
 ): CompiledFlow {
-  return CompiledFlow.fromParts(new Map([[node.id, node]]), [], {
+  return new CompiledFlow(new Map([[node.id, node]]), [], {
     wiring: new Map([[node.id, new Map(Object.entries(wiring))]]),
   });
 }
@@ -853,7 +851,7 @@ export function graph(
   if (outputs.length > 0) {
     wiring.set(END_ID, new Map(outputs.map((output) => [output.name, output.binding])));
   }
-  return CompiledFlow.fromParts(nodeMap, edges, { outputs, wiring });
+  return new CompiledFlow(nodeMap, edges, { outputs, wiring });
 }
 
 /**
@@ -873,7 +871,7 @@ export function learnableStarted(
   } = {},
 ): { state: RunState; log: MemoryRunLog } {
   const inputs = options.inputs ?? {};
-  applyExecutionLayout(flow, resolveExecutionLayout(flow));
+  stampExecutionScopes(flow);
   const state = new RunState(flow);
   const initialPool = new VariablePool(flow.startId);
   initialPool.set(flow.startId, { ...inputs });
@@ -903,7 +901,8 @@ export const noGrowth: GrowBuilder = () => {
 /**
  * Return a direct engine over a fresh in-memory authority for `flow`: `RunStarted` is prepared and committed on a `MemoryRunLog`, so START
  * is ready. The run's id is `runId` (`RUN_ID` by default). The pool primes START with `inputs`,
- * START's wiring reads each as `${input.<name>}`, and the run records `effectiveLlmByStaticPath`
+ * START's wiring is `startWiringOverride`, by default reading each input as `${input.<name>}`, and
+ * the run records `effectiveLlmByStaticPath`
  * (none by default), the memory configuration given and the `yian.defaults` values in `defaults`
  * (none by default). A learnable flow gets its execution layout first. The other options go to
  * `FlowEngine`.
@@ -914,6 +913,7 @@ export function engine(
     inputs?: Readonly<Record<string, unknown>>;
     runId?: string;
     learnable?: boolean;
+    startWiringOverride?: RunStartData["startWiringOverride"];
     effectiveLlmByStaticPath?: RunStartData["effectiveLlmByStaticPath"];
     memories?: readonly MemorySpec[] | null;
     memoryStacks?: readonly MemoryStack[] | null;
@@ -927,6 +927,7 @@ export function engine(
     learnable = false,
     numWorkers = 0,
     growBuilder = noGrowth,
+    startWiringOverride = Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
     effectiveLlmByStaticPath = {},
     memories = null,
     memoryStacks = null,
@@ -934,7 +935,7 @@ export function engine(
     defaults = {},
     ...rest
   } = options;
-  if (learnable) applyExecutionLayout(flow, resolveExecutionLayout(flow));
+  if (learnable) stampExecutionScopes(flow);
   const state = new RunState(flow);
   const initialPool = new VariablePool(flow.startId);
   initialPool.set(flow.startId, { ...inputs });
@@ -943,7 +944,7 @@ export function engine(
   const prepared = prepareRunStarted(state, {
     runId,
     flowFingerprint: FINGERPRINT,
-    startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
+    startWiringOverride,
     effectiveLlmByStaticPath,
     numWorkers,
     learnable,
@@ -1030,8 +1031,7 @@ export const POLICY = "reflective";
 
 /**
  * Return a learnable engine over `flow` whose root flow owns one memory, `POLICY`, with the recorded table and stacks: the flow's
- * `memories` become one root-owned `POLICY` declaration, `resolveMemoryLayout` and
- * `applyMemoryLayout` scope every node, the table and stacks are the layout's, and each snapshot
+ * `memories` become one root-owned `POLICY` declaration, `stampMemoryLayout` scopes every node, the table and stacks are the layout's, and each snapshot
  * is `{}`. It leaves `flow.flowId` at its default (`null`), which the runtime
  * never reads, and applies no effective LLM map.
  */
@@ -1040,8 +1040,7 @@ export function ownerEngine(
   options: { inputs?: Readonly<Record<string, unknown>> } & Partial<FlowEngineOptions> = {},
 ): { engine: FlowEngine; memories: MemorySpec[]; stacks: MemoryStack[] } {
   flow.memories = [new MemoryDecl(POLICY, POLICY, {}, new DeclSite([], ["root"]))];
-  const layout = resolveMemoryLayout(flow);
-  applyMemoryLayout(flow, layout);
+  const layout = stampMemoryLayout(flow);
   const memories = layout.memories.map((memory) => memory.spec);
   const memoryStacks = [...layoutStacks(layout)];
   const memorySnapshots = memories.map((spec) => new MemorySnapshotEnvelope(spec.key, {}));
@@ -1416,6 +1415,31 @@ export function replayTraceSnapshot(trace: RetainedTrace): Record<string, unknow
 }
 
 /**
+ * Run `write` on `state`'s inventories as the reducer writes them: marking `nodeId` for the next
+ * transition's check (`RunState.touched`).
+ */
+export function reducerWrite(state: RunState, nodeId: string, write: () => void): void {
+  write();
+  state.touched.add(nodeId);
+}
+
+/**
+ * Replay `log` over `flow`, letting `corrupt` break the state just before the last record applies.
+ * A write that doesn't mark its node (`reducerWrite`) is found only when the replay ends.
+ */
+export function replayCorrupted(flow: CompiledFlow, log: RunLog, corrupt: (state: RunState) => void): RunState {
+  const records = log.records();
+  // `onPrepared` sees every record after the run start.
+  let left = records.length - 1;
+  return replayRecords(new RunState(flow), records, {
+    growBuilder: buildGrow,
+    onPrepared: (_prepared, state) => {
+      if (--left === 0) corrupt(state);
+    },
+  });
+}
+
+/**
  * Replay `source`'s records over a fresh state of `flow` through `prepareRunStarted` (from the
  * recorded RunStarted fields) and `prepareRecord`; return the state, the new log and each
  * transition's observers.
@@ -1474,7 +1498,7 @@ export function parentFlow(options: { spawner?: Node; sibling?: boolean } = {}):
   if (options.sibling) nodes.set("side", new FuncNode("side", (inputs) => inputs));
   const edges = [new Edge("start-spawn", START_ID, spawner.id), new Edge("spawn-end", spawner.id, END_ID)];
   if (options.sibling) edges.push(new Edge("start-side", START_ID, "side"));
-  return CompiledFlow.fromParts(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])) });
+  return new CompiledFlow(nodes, edges, { wiring: new Map([...nodes.keys()].map((id) => [id, new Map()])) });
 }
 
 /** Return a replay-valid state and log with the static spawner in flight. */
@@ -1552,7 +1576,7 @@ export function canonicalChild(options: { optionalInput?: boolean } = {}): Compi
     [START_ID, new StartNode(START_ID, { params: parameters })],
     [END_ID, EndNode.value(END_ID, { outputName: null })],
   ]);
-  return CompiledFlow.fromParts(nodes, [new Edge("child-boundary", START_ID, END_ID, { ordering: true })], {
+  return new CompiledFlow(nodes, [new Edge("child-boundary", START_ID, END_ID, { ordering: true })], {
     wiring: new Map([
       [START_ID, new Map(options.optionalInput ? [["optional", "${input.optional}"]] : [])],
       [END_ID, new Map()],
@@ -1594,7 +1618,7 @@ export function childFlow(): CompiledFlow {
     [START_ID, new Map([["x", "${input.x}"]])],
     [END_ID, new Map([["out", "${tail.output}"]])],
   ]);
-  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${tail.output}")], wiring });
+  return new CompiledFlow(nodes, edges, { outputs: [new FlowOutput("out", "${tail.output}")], wiring });
 }
 
 /**
@@ -1622,7 +1646,7 @@ export function parentWithSpawner(child: CompiledFlow): CompiledFlow {
     [START_ID, new Map([["x", "${input.x}"]])],
     [END_ID, new Map([["out", "${after.output}"]])],
   ]);
-  return CompiledFlow.fromParts(nodes, edges, { outputs: [new FlowOutput("out", "${after.output}")], wiring });
+  return new CompiledFlow(nodes, edges, { outputs: [new FlowOutput("out", "${after.output}")], wiring });
 }
 
 /** A memory log, holding `prior`'s records, whose append fails before it retains the record. */
@@ -1780,22 +1804,15 @@ export class Crash extends Error {
 }
 
 /**
- * Run `fn` with every durable log refusing appends once it holds `k` records, as a crash after
- * record `k - 1` would; `fn` must reject with that `Crash`. `JsonlRunLog.prototype.append` is
- * patched while `fn` runs and restored after.
+ * Run `fn` with every durable log it and the async work it starts append to refusing appends once
+ * it holds `k` records, as a crash after record `k - 1` would; `fn` must reject with that `Crash`.
  */
 export async function crashAfter(k: number, fn: () => Promise<unknown>): Promise<void> {
-  const append = JsonlRunLog.prototype.append;
   const crash = new Crash(`crash after record ${k - 1}`);
-  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
-    if (this.nextSequence >= k) throw crash;
-    return append.call(this, record);
+  const refuse = (log: RunLog) => {
+    if (log.path !== null && log.nextSequence >= k) throw crash;
   };
-  try {
-    expect(await rejected(fn())).toBe(crash);
-  } finally {
-    JsonlRunLog.prototype.append = append;
-  }
+  expect(await withAppendHook(refuse, () => rejected(fn()))).toBe(crash);
 }
 
 /**
@@ -1821,7 +1838,7 @@ export function startedRun(
 ): RunState {
   const { inputs = {}, numWorkers = 0, effective = {}, learnable = false } = options;
   const privateFlow = options.privateFlow ?? copyGraph(loaded.compiled);
-  if (learnable) applyExecutionLayout(privateFlow, resolveExecutionLayout(privateFlow));
+  if (learnable) stampExecutionScopes(privateFlow);
   const pool = new VariablePool(privateFlow.startId);
   pool.set(privateFlow.startId, structuredClone(inputs));
   seedSystemClock(pool, Date.UTC(2026, 7, 14, 12));
@@ -1883,9 +1900,6 @@ export function progressOf({ status, inFlight, crashedAttempts }: RunInspection)
 }
 
 // ---- Runs of one-AGENT flows over a scripted model, and `yian run` over a fake chat endpoint ----
-
-// Cloned snapshots and nested test values are edited freely.
-export type Mutable = any;
 
 /** The model config `PLAIN_FLOW` names. */
 export const PLAIN_CONFIG = { provider: "openai", model: "test-model" };
@@ -1997,21 +2011,16 @@ export class CrashAt extends ScriptedModel {
 }
 
 /**
- * Await `run`, which must reject with the `Crash` every durable log throws once `model` froze
- * them: a process lost while serving request `at`, so no record of its outcome reaches the log.
+ * Await `run`, which must reject with the `Crash` every durable log it and the async work it
+ * starts append to throws once `model` froze them: a process lost while serving request `at`, so
+ * no record of its outcome reaches the log.
  */
 export async function crashes(model: CrashAt, run: () => Promise<unknown>): Promise<void> {
   const crash = new Crash("process lost");
-  const append = JsonlRunLog.prototype.append;
-  JsonlRunLog.prototype.append = function (this: JsonlRunLog, record: RunRecord) {
-    if (model.frozen) throw crash;
-    return append.call(this, record);
+  const refuse = (log: RunLog) => {
+    if (log.path !== null && model.frozen) throw crash;
   };
-  try {
-    expect(await rejected(run())).toBe(crash);
-  } finally {
-    JsonlRunLog.prototype.append = append;
-  }
+  expect(await withAppendHook(refuse, () => rejected(run()))).toBe(crash);
 }
 
 /** The texts of the messages of `model`'s request `index` (the last by default) after its system prompt. */

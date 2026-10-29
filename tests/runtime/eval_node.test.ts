@@ -9,12 +9,11 @@ import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { processEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { RunSucceeded } from "../../src/events.ts";
+import { SourceRef } from "../../src/expr/lineage.ts";
 import { RouteModel } from "../../src/llm/executor.ts";
 import { Message, replayRecord, Request, TextPart } from "../../src/llm/messages.ts";
 import { defaultModelAccess, type ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
-  AssertionStageError,
-  BindingStageError,
   CapabilityFault,
   Grow,
   Node,
@@ -41,8 +40,8 @@ import {
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { virtualScheduler } from "../../src/platform.ts";
-import { type EvalNodeOptions, EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
-import { ToolSet } from "../../src/tools/registry.ts";
+import { EvaluationFailure, evalNode, rebind } from "../../src/runtime/eval_node.ts";
+import { resolvePoolPath } from "../../src/runtime/trace.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, type Value, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, FuncNode, graph, NO_ENV, nodeFlow, rejected, thrownBy as thrown } from "../helpers/run_state_fixtures.ts";
@@ -358,54 +357,6 @@ const MODELS: ModelAccess = {
   },
 };
 
-describe("evalNode checks its arguments", () => {
-  const node = new FuncNode("n", () => "unused");
-  const pool = new VariablePool();
-
-  for (const [label, options, error] of [
-    ["capture_bindings", { captureBindings: "yes" }, new TypeError("capture_bindings must be a bool")],
-    ["emit_stream", { emitStream: "sink" }, new TypeError("emit_stream must be callable or null")],
-    ["emit_event", { emitEvent: {} }, new TypeError("emit_event must be callable or null")],
-    ["source_resolver", { sourceResolver: 1 }, new TypeError("source_resolver must be callable or null")],
-    [
-      "memory_context_opener",
-      { memoryContextOpener: {} },
-      new TypeError("memory_context_opener must be callable or null"),
-    ],
-    ["tools", { tools: new Map() }, new TypeError("tools must be a ToolSet or null")],
-    ["skills", { skills: { s: {} } }, new TypeError("skills must be a map or null")],
-    ["steps", { steps: { starts: 1, prior: [], record() {} } }, new TypeError("steps must be a NodeSteps or null")],
-    ["steer_inbox", { steerInbox: {} }, new TypeError("steer_inbox must be callable or null")],
-    ["on_fault", { onFault: {} }, new TypeError("on_fault must be callable or null")],
-    ["signal", { signal: new AbortController() }, new TypeError("signal must be an AbortSignal or null")],
-    [
-      "models",
-      { models: { env: NO_ENV } },
-      new TypeError("models must provide env(name) and createModel(config, options), or be null"),
-    ],
-  ] as const) {
-    test(label, async () => {
-      expect(await rejected(evalNode(node, null, pool, options as unknown as EvalNodeOptions))).toEqual(error);
-    });
-  }
-
-  test("well-formed options are accepted", async () => {
-    const options: EvalNodeOptions = {
-      captureBindings: false,
-      emitStream: () => {},
-      emitEvent: () => {},
-      skills: new Map(),
-      tools: new ToolSet(),
-      steps: new NodeSteps(1, [], () => 1),
-      signal: new AbortController().signal,
-      models: MODELS,
-      onFault: () => {},
-    };
-
-    expect((await evalNode(node, null, pool, options)).outcome).toEqual(new Output("unused"));
-  });
-});
-
 /** Record the capabilities each run receives, and return `null`. */
 class CapsNode extends Node {
   readonly kind: NodeKind = NodeKind.CODE;
@@ -429,19 +380,6 @@ class TraitCapsNode extends CapsNode {
   override readonly needsSteps = true;
   override readonly readsSteerInbox = true;
 }
-
-/** The scheduler, random-draw and run-folder options, malformed, with the error each rejects with. */
-const BAD_WAIT_CAPS = [
-  ["scheduler without sleep", { scheduler: { now: () => 0 } }, new TypeError("scheduler must be a Scheduler or null")],
-  [
-    "scheduler whose now isn't a function",
-    { scheduler: { now: 0, sleep: async () => {} } },
-    new TypeError("scheduler must be a Scheduler or null"),
-  ],
-  ["scheduler that isn't an object", { scheduler: "clock" }, new TypeError("scheduler must be a Scheduler or null")],
-  ["random", { random: 0.5 }, new TypeError("random must be a function or null")],
-  ["run folder", { runDir: 3 }, new TypeError("run_dir must be a string or null")],
-] as const;
 
 describe("evalNode gives every node the scheduler, the random draw and the run folder", () => {
   const pool = new VariablePool();
@@ -477,13 +415,6 @@ describe("evalNode gives every node the scheduler, the random draw and the run f
       }
     });
   }
-
-  for (const [label, options, error] of BAD_WAIT_CAPS) {
-    test(`a malformed ${label} is refused`, async () => {
-      const node = new CapsNode("n", []);
-      expect(await rejected(evalNode(node, null, pool, options as unknown as EvalNodeOptions))).toEqual(error);
-    });
-  }
 });
 
 describe("FlowEngine gives every node the scheduler, the random draw and the run folder", () => {
@@ -505,16 +436,6 @@ describe("FlowEngine gives every node the scheduler, the random draw and the run
       expect(caps.runDir).toBe("/runs/r1");
     }
   });
-
-  for (const [label, options, error] of BAD_WAIT_CAPS) {
-    test(`the constructor refuses a malformed ${label}`, () => {
-      const flow = graph([new CapsNode("a", [])], [
-        [START_ID, "a"],
-        ["a", END_ID],
-      ]);
-      expect(() => engine(flow, options as never)).toThrow(error);
-    });
-  }
 });
 
 /** Record the capabilities each evaluation supplies, by node id. */
@@ -838,47 +759,16 @@ class ExceptionCodeNode extends ResultNode {
   }
 }
 
-/** Bypass the base template with an `async` `run` that rejects with `error`. */
-class OverrideRaisesNode extends Node {
-  readonly kind = NodeKind.CODE;
-  readonly error: unknown;
+test("node execution uses the node exception code", async () => {
+  // A body error takes the code the node's hook selects.
+  const node = new ExceptionCodeNode("n", new Error("unauthorized"));
 
-  constructor(nodeId: string, error: unknown) {
-    super(nodeId, { origin: new OriginRef(`node:${nodeId}`) });
-    this.error = error;
-  }
+  const failure = await driveFailure(node);
 
-  override forward(): NodeResult {
-    return new Output("unused");
-  }
-
-  override async run(): Promise<NodeResult> {
-    throw this.error;
-  }
-}
-
-/** Bypass the base template while classifying every body error as `provider.auth`. */
-class OverrideRaisesWithCode extends OverrideRaisesNode {
-  override exceptionCode(): "provider.auth" {
-    return "provider.auth";
-  }
-}
-
-for (const [label, make] of [
-  ["body", () => new ExceptionCodeNode("n", new Error("unauthorized"))],
-  ["run override", () => new OverrideRaisesWithCode("n", new Error("unauthorized"))],
-] as const) {
-  test(`node execution uses the node exception code (${label})`, async () => {
-    // A body error takes the code the node's hook selects.
-    const node: Node = make();
-
-    const failure = await driveFailure(node);
-
-    expect(failure.code).toBe("provider.auth");
-    expect(failure.trace).toEqual([node.origin!]);
-    expect(failure.causeType).toBe("Error");
-  });
-}
+  expect(failure.code).toBe("provider.auth");
+  expect(failure.trace).toEqual([node.origin!]);
+  expect(failure.causeType).toBe("Error");
+});
 
 test("base exception code is node execution", () => {
   // A node without a finer classification reports `node.execute`.
@@ -910,39 +800,6 @@ for (const [label, result, configure, expectedCode] of [
     configure(node);
 
     expect((await driveFailure(node)).code).toBe(expectedCode);
-  });
-}
-
-for (const [label, error, expectedCauseType] of [
-  ["ordinary", new Error("ordinary override failure"), "Error"],
-  ["binding error", new BindingError("spoofed", { failureCode: "binding.evaluate" }), "BindingError"],
-  [
-    "assertion error",
-    new NodeAssertFailed("spoofed", { assertion: new Assertion("true", "true", { origin: new OriginRef("spoofed") }) }),
-    "NodeAssertFailed",
-  ],
-  [
-    "binding stage marker",
-    new BindingStageError(new BindingError("wrapped", { failureCode: "binding.evaluate" })),
-    "BindingError",
-  ],
-  [
-    "assertion stage marker",
-    new AssertionStageError(new NodeAssertFailed("wrapped", { assertion: new Assertion("true", "true") })),
-    "NodeAssertFailed",
-  ],
-] as const) {
-  test(`run override exception is node execution (${label})`, async () => {
-    // A custom run is one undivided node-body stage.
-    const node = new OverrideRaisesNode("n", error);
-
-    const failure = await driveFailure(node);
-
-    expect(failure.code).toBe("node.execute");
-    expect(failure.trace).toEqual([node.origin!]);
-    expect(failure.causeType).toBe(expectedCauseType);
-    expect(failure.traceback).not.toContain("BindingStageError");
-    expect(failure.traceback).not.toContain("AssertionStageError");
   });
 }
 
@@ -1033,4 +890,56 @@ test("per item wrapper default keeps binding stage", async () => {
 
   expect(failure.code).toBe("binding.evaluate");
   expect(failure.trace).toEqual([defaultOrigin]);
+});
+
+describe("rebind collects the capture the evaluator collected", () => {
+  // The run reducer rebuilds a commit's capture through `rebind`, so the two bindings must agree.
+  const pool = new VariablePool();
+  pool.set("up", ["a", "b"]);
+  pool.set("label", "t");
+  const seqs = new Map([
+    ["up", 1],
+    ["label", 2],
+  ]);
+  const sourceResolver = (names: readonly string[]) =>
+    resolvePoolPath(names, pool, (name) => new SourceRef("run", seqs.get(name)!));
+  const resolve = (name: string, seq: number) => ({ value: pool.store.get(name)!, source: new SourceRef("run", seq) });
+
+  test("a MAP's reserved list and its items", async () => {
+    const node = new MapNode("m", { flowId: "child", child: {} });
+    node.params = [new Parameter("x"), new Parameter("tag"), new Parameter("n", { hasDefault: true, default: 3n })];
+    const flow = nodeFlow(node, { over: "${up.output}", x: "${item}", tag: "${label.output}" });
+
+    const evaluated = await evalNode(node, flow, pool, { captureBindings: true, sourceResolver });
+    const { capture, failure } = rebind(node, flow, seqs, resolve, null);
+
+    expect(failure).toBeNull();
+    expect(evaluated.bindings!.items).toHaveLength(2);
+    expect(capture).toEqual(evaluated.bindings!);
+  });
+
+  test("a reserved value a hook made without the binder", async () => {
+    class ReservedNode extends Node {
+      readonly kind = NodeKind.CODE;
+
+      override bindReserved(): Record<string, unknown> {
+        return { made: "here" };
+      }
+
+      override forward(inputs: Record<string, unknown>): NodeResult {
+        return new Output(inputs);
+      }
+    }
+    const node = new ReservedNode("r");
+    node.params = [new Parameter("tag")];
+    const flow = nodeFlow(node, { tag: "${label.output}" });
+
+    const evaluated = await evalNode(node, flow, pool, { captureBindings: true, sourceResolver });
+    const { capture, failure } = rebind(node, flow, new Map([["label", 2]]), resolve, null, {
+      reserved: { made: "here" },
+    });
+
+    expect(failure).toBeNull();
+    expect(capture).toEqual(evaluated.bindings!);
+  });
 });

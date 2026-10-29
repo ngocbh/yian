@@ -1,9 +1,10 @@
 /**
  * Closed run-record vocabulary and canonical JSON codecs.
  *
- * The dispatcher is the sole producer of these durable records. Records contain only transition
- * data; their enclosing `RecordEnvelope` owns run identity, schema version, sequence and the time
- * the log appended the record. This module deliberately knows nothing about the scheduler or
+ * The engine, the host deliveries and the backward driver build these durable records, and each
+ * one reaches a log through `RunLog.append`. Records contain only transition data; their enclosing
+ * `RecordEnvelope` owns run identity, schema version, sequence and the time the log appended the
+ * record. This module deliberately knows nothing about the scheduler or
  * reducer, so the same validated carriers can back memory and JSONL logs without creating an
  * authority cycle.
  *
@@ -13,6 +14,7 @@
  */
 
 import fs from "node:fs";
+import { dirname } from "node:path";
 
 import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.ts";
 import {
@@ -39,7 +41,7 @@ import {
   validateMutations,
 } from "../memory/contracts.ts";
 import { BackwardResult, copyBackwardValue, retainFailure } from "../nodes/base.ts";
-import { type FileLock, FileLockError, isLocked, lockFile, VERSION } from "../platform.ts";
+import { type FileLock, FileLockError, isLocked, lockFile, syncFolder, VERSION } from "../platform.ts";
 import {
   comparePaths,
   ExecutionPosition,
@@ -71,10 +73,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 23;
+export const SCHEMA_VERSION = 25;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -156,12 +158,15 @@ export interface OutcomeCarriers {
   forwardCapture?: ForwardCapture | null;
 }
 
-/** One flow file a load read: its text, and where each `uses:` ref written in it resolved. */
-export interface FlowSourceFile {
+/**
+ * One flow file a load read: its text, and where each `uses:` ref written in it resolved. A type,
+ * not an interface, so it is a `JsonObject` as recorded.
+ */
+export type FlowSourceFile = {
   readonly text: string;
   /** Each `uses:` ref (its path, with `@<version>` when pinned), mapped to the key of its file. */
   readonly refs: Readonly<Record<string, string>>;
-}
+};
 
 /**
  * The flow files a loaded flow was compiled from, as `ComposedFlow.source` holds them and
@@ -179,25 +184,33 @@ export interface FlowSource {
   readonly root: string;
   /** The real path of the folder the root was loaded from. */
   readonly dir: string;
+  /**
+   * The real path of the folder every CODE reference's file had to resolve inside (the load's
+   * `codeRoot`), which a load from the source holds them to again; `null` for none.
+   */
+  readonly codeRoot: string | null;
   /** Each flow file the load read, by key. */
   readonly files: Readonly<Record<string, FlowSourceFile>>;
 }
 
-/** A tool an AGENT of the run grants, as the model is told about it. */
-export interface RecordedTool {
+/**
+ * A tool an AGENT of the run grants, as the model is told about it. A type, not an interface, so
+ * it is a `JsonObject` as recorded.
+ */
+export type RecordedTool = {
   /** The tool's description. */
   readonly description: string;
   /** The tool's parameters, a JSON Schema object. */
   readonly parameters: Readonly<JsonObject>;
-}
+};
 
-/** A skill an AGENT of the run grants. */
-export interface RecordedSkill {
+/** A skill an AGENT of the run grants. A type, not an interface, so it is a `JsonObject` as recorded. */
+export type RecordedSkill = {
   /** When to use the skill. */
   readonly description: string;
   /** The `SKILL.md` body after the frontmatter. */
   readonly instructions: string;
-}
+};
 
 /** The run that started this one: a host-started child run or a learning pass. */
 export interface RunParent {
@@ -412,13 +425,14 @@ function validatedToolGroups(
  * Return a frozen copy of a `RunStarted.flow` value.
  *
  * @throws TypeError when a part has the wrong type.
- * @throws RangeError when the root or folder is empty, or `files` doesn't hold the root or a file a
- *   ref names.
+ * @throws RangeError when the root, folder or code root is empty, or `files` doesn't hold the root
+ *   or a file a ref names.
  */
 function validatedFlowSource(flow: FlowSource): FlowSource {
   if (!isRecord(flow)) throw new TypeError("RunStarted flow must be an object or null");
   const root = requireName(flow.root, "RunStarted flow root");
   const dir = requireName(flow.dir, "RunStarted flow dir");
+  const codeRoot = flow.codeRoot === null ? null : requireName(flow.codeRoot, "RunStarted flow codeRoot");
   const files = validatedEntries(flow.files, "flow files", (file, label) => {
     const refs = file["refs"];
     if (!isRecord(refs)) throw new TypeError(`${label} refs must be an object`);
@@ -432,7 +446,7 @@ function validatedFlowSource(flow: FlowSource): FlowSource {
     return { text, refs: freezeParsed(canonicalCopy(refs)) as Record<string, string> };
   });
   if (!Object.hasOwn(files, root)) throw new RangeError(`RunStarted flow files must hold the root ${reprText(root)}`);
-  return Object.freeze({ root, dir, files });
+  return Object.freeze({ root, dir, codeRoot, files });
 }
 
 /**
@@ -959,14 +973,7 @@ function validatedEventSeqs(events: unknown, label: string): number[] {
  * @throws RangeError when `steps` isn't a list of strictly increasing positive safe integers.
  */
 function validatedSteps(steps: unknown): readonly number[] {
-  const ok =
-    isList(steps) &&
-    [...steps].every(
-      (seq, index, all) =>
-        typeof seq === "number" && Number.isSafeInteger(seq) && seq >= 1 && (index === 0 || (all[index - 1] as number) < seq),
-    );
-  if (!ok) throw new RangeError("steps must be strictly increasing positive integers");
-  return Object.freeze([...(steps as readonly number[])]);
+  return Object.freeze(validatedEventSeqs(steps, "steps"));
 }
 
 /**
@@ -1327,40 +1334,6 @@ export type RunRecord =
 /** A run-record class. */
 type RunRecordClass = new (...args: never[]) => RunRecord;
 
-/** Each record class and its snake_case wire kind. */
-const RECORD_KINDS: ReadonlyMap<RunRecordClass, string> = new Map<RunRecordClass, string>([
-  [RunStartedRecord, "run_started"],
-  [RunResumedRecord, "run_resumed"],
-  [RunStoppedRecord, "run_stopped"],
-  [NodeWaitingRecord, "node_waiting"],
-  [NodeWokenRecord, "node_woken"],
-  [RunWaitingRecord, "run_waiting"],
-  [InboxClosedRecord, "inbox_closed"],
-  [InboxWithdrawnRecord, "inbox_withdrawn"],
-  [InterruptedRecord, "interrupted"],
-  [RunCancelledRecord, "run_cancelled"],
-  [RunFailedRecord, "run_failed"],
-  [NodeStartedRecord, "node_started"],
-  [NodeStepRecord, "node_step"],
-  [PoolCommitRecord, "pool_commit"],
-  [NodeSucceededRecord, "node_succeeded"],
-  [NodeRoutedRecord, "node_routed"],
-  [NodeExpandedRecord, "node_expanded"],
-  [NodeFailedRecord, "node_failed"],
-  [MemoryCommitRequestedRecord, "memory_commit_requested"],
-  [MemoryCommitSucceededRecord, "memory_commit_succeeded"],
-  [MemoryCommitFailedRecord, "memory_commit_failed"],
-  [BackwardStartedRecord, "backward_started"],
-  [BackwardReadyRecord, "backward_ready"],
-  [BackwardFinishedRecord, "backward_finished"],
-]);
-
-/** Every run-record class. */
-export const RUN_RECORD_TYPES: readonly RunRecordClass[] = Object.freeze([...RECORD_KINDS.keys()]);
-
-/** The closed set of wire kinds this schema reads. */
-const WIRE_KINDS: ReadonlySet<string> = new Set(RECORD_KINDS.values());
-
 /**
  * Return `value` when it is a SHA-256 hex digest: 64 lowercase hex digits.
  *
@@ -1527,6 +1500,55 @@ export class RunLogChangedError extends RangeError {
   override name = "RunLogChangedError";
 }
 
+/**
+ * A run-log line is longer than the `maxLineBytes` a reader was given, so it wasn't parsed. It
+ * names where the line sits and what a bounded scan of its bytes read of its envelope, so a host
+ * can index the record and read on from `end`. A `RangeError`.
+ */
+export class RunLogLineTooLongError extends RangeError {
+  override name = "RunLogLineTooLongError";
+  /** The byte offset where the line starts. */
+  readonly offset: number;
+  /** The byte offset just past the line's newline, where a reader can go on. */
+  readonly end: number;
+  /** The line's length in bytes, without its newline. */
+  readonly length: number;
+  /** The `maxLineBytes` the line is over. */
+  readonly limit: number;
+  /** The line's `seq`, or `null` when the scan didn't find a non-negative integer. */
+  readonly seq: number | null;
+  /** The line's `run_id`, or `null` when the scan didn't find a non-empty string. */
+  readonly runId: string | null;
+  /** The line's wire kind, or `null` when the scan didn't find a known kind. */
+  readonly kind: string | null;
+  /** The node the record is about, as `RunLogEntry.nodeId`; `null` too when the scan didn't find it. */
+  readonly nodeId: string | null;
+
+  constructor(
+    message: string,
+    fields: {
+      offset: number;
+      end: number;
+      length: number;
+      limit: number;
+      seq: number | null;
+      runId: string | null;
+      kind: string | null;
+      nodeId: string | null;
+    },
+  ) {
+    super(message);
+    this.offset = fields.offset;
+    this.end = fields.end;
+    this.length = fields.length;
+    this.limit = fields.limit;
+    this.seq = fields.seq;
+    this.runId = fields.runId;
+    this.kind = fields.kind;
+    this.nodeId = fields.nodeId;
+  }
+}
+
 /** The error for a retired schema. */
 function retiredSchema(schema: number): RunLogSchemaError {
   return new RunLogSchemaError(`run log schema ${schema} predates schema ${SCHEMA_VERSION} and is not supported`, schema);
@@ -1613,12 +1635,15 @@ function requireWireSchema(schema: unknown): void {
 }
 
 /**
- * Return a record's wire kind.
+ * Return the codec of a record's kind.
  *
  * @throws TypeError when `record` isn't exactly one of `RUN_RECORD_TYPES`.
  */
-function kindForRecord(record: unknown): string {
-  for (const [cls, kind] of RECORD_KINDS) if (isExactly(record, cls)) return kind;
+function codecForRecord(record: unknown): RecordCodec {
+  if (typeof record === "object" && record !== null) {
+    const codec = CODEC_BY_PROTOTYPE.get(Object.getPrototypeOf(record));
+    if (codec !== undefined) return codec;
+  }
   const name = record === null || record === undefined ? String(record) : Object(record).constructor?.name;
   throw new TypeError(`unsupported run record: ${name}`);
 }
@@ -1662,7 +1687,7 @@ export class RecordEnvelope {
     if (!Number.isSafeInteger(seq) || seq < 0) {
       throw new RangeError("run-record envelope seq must be a non-negative integer");
     }
-    kindForRecord(record);
+    codecForRecord(record);
     this.schema = schema;
     this.runId = runId;
     this.seq = seq;
@@ -1673,14 +1698,21 @@ export class RecordEnvelope {
 
   /** The record's stable snake_case wire kind, such as `node_started`. */
   get kind(): string {
-    return kindForRecord(this.record);
+    return codecForRecord(this.record).kind;
   }
 
   /** The record's deep-frozen canonical JSON payload, counters as `bigint`s. */
   get payload(): Readonly<JsonObject> {
-    return freezeParsed(canonicalCopy(payloadForRecord(this.record)) as JsonObject);
+    return freezeParsed(canonicalCopy(codecForRecord(this.record).encode(this.record)) as JsonObject);
   }
 }
+
+/**
+ * The envelope a log built for its last append, with the line it encoded it from. A live channel
+ * encodes each envelope an append returns, so `encodeRecord` gives back that line instead of
+ * encoding the record again. One slot, so a log's records don't each keep their text.
+ */
+let lastAppended: { readonly envelope: RecordEnvelope; readonly line: string } | null = null;
 
 /**
  * Encode one envelope as its canonical run-log line: compact JSON, keys in code-unit order, no
@@ -1692,13 +1724,15 @@ export class RecordEnvelope {
  */
 export function encodeRecord(envelope: RecordEnvelope): string {
   if (!isExactly(envelope, RecordEnvelope)) throw new TypeError("encodeRecord expects a RecordEnvelope");
+  if (envelope === lastAppended?.envelope) return lastAppended.line;
+  const codec = codecForRecord(envelope.record);
   return logJson({
     schema: BigInt(envelope.schema),
     run_id: envelope.runId,
     seq: BigInt(envelope.seq),
     ...(envelope.at === null ? {} : { at: envelope.at }),
-    kind: envelope.kind,
-    payload: payloadForRecord(envelope.record),
+    kind: codec.kind,
+    payload: codec.encode(envelope.record),
   });
 }
 
@@ -1780,7 +1814,7 @@ function decodeWire(data: string | Uint8Array, requireAt: boolean): WireEnvelope
   const seq = wireInt(envelope["seq"], "run-record envelope seq");
   const at = timed ? requireRecordTime(envelope["at"]) : null;
   const kind = requireText(envelope["kind"], "run-record envelope kind");
-  if (!WIRE_KINDS.has(kind)) {
+  if (!CODEC_BY_KIND.has(kind)) {
     throw new RangeError(`run-record kind ${reprText(kind)} is unsupported in schema ${SCHEMA_VERSION}`);
   }
   const payload = wireObject(envelope["payload"], "run-record envelope payload");
@@ -1794,23 +1828,32 @@ function decodeWire(data: string | Uint8Array, requireAt: boolean): WireEnvelope
  * @throws TypeError, RangeError when that id isn't a non-empty string.
  */
 function wireNodeId(kind: string, payload: JsonObject): string | null {
-  const label = `${kind} payload`;
-  switch (kind) {
-    case "node_started":
-    case "node_step":
-    case "pool_commit":
-    case "node_succeeded":
-    case "node_routed":
-    case "node_waiting":
-    case "node_woken":
-      return requireName(payload["node_id"], `${label} node_id`);
-    case "node_expanded":
-      return requireName(payload["spawner_id"], `${label} spawner_id`);
-    case "node_failed":
-      return requireName(wireObject(payload["failure"], `${label} failure`)["node_id"], `${label} failure node_id`);
-    default:
-      return null;
-  }
+  return CODEC_BY_KIND.get(kind)?.nodeId?.(payload, `${kind} payload`) ?? null;
+}
+
+/** What `decodeRecordHeader` reads of a run-log line. */
+export interface RecordHeader {
+  /** The record's sequence number. */
+  readonly seq: number;
+  /** The record's wire kind, such as `node_step`. */
+  readonly kind: string;
+  /** A `node_step`'s node and step number; `null` for every other kind. */
+  readonly step: { readonly node: string; readonly n: number } | null;
+}
+
+/**
+ * Read one run-log line's seq and kind, and a step's node and number, without building its
+ * record: the envelope is checked as `decodeRecord` checks it, and of the payload only what is
+ * read.
+ *
+ * @throws RunLogSchemaError, RangeError, TypeError as `decodeRecord` does for the envelope, and
+ *   when a step's node id or number isn't valid.
+ */
+export function decodeRecordHeader(data: string | Uint8Array): RecordHeader {
+  const { seq, kind, payload } = decodeWire(data, false);
+  if (kind !== "node_step") return { seq, kind, step: null };
+  const label = "node_step payload";
+  return { seq, kind, step: { node: payloadNodeId(payload, label), n: wireInt(payload["n"], `${label} n`) } };
 }
 
 /**
@@ -2011,8 +2054,9 @@ export class JsonlRunLog implements RunLog {
   }
 
   /**
-   * Create a new owner-only (0600) log at `path` and lock it. An existing path is never replaced.
-   * A failure after the file is created closes it and releases the lock; the empty file stays.
+   * Create a new owner-only (0600) log at `path`, lock it, and sync its folder so the new file
+   * survives a power loss. An existing path is never replaced. A failure after the file is created
+   * closes it and releases the lock; the empty file stays.
    *
    * @param options.clock The clock appends read their times from (default `Date.now`).
    * @throws RangeError when `runId` isn't a non-empty string or holds a lone surrogate; nothing
@@ -2020,7 +2064,8 @@ export class JsonlRunLog implements RunLog {
    * @throws TypeError when the clock isn't a function; nothing is created then.
    * @throws Error `run log <path> is locked by another writer (is the run still active?)`, with
    *   the busy `FileLockError` as `cause`.
-   * @throws the `fs` error (`code` `EEXIST` for an existing path) and other `lockFile` errors.
+   * @throws the `fs` error (`code` `EEXIST` for an existing path, or the folder sync's), and other
+   *   `lockFile` errors.
    */
   static create(path: string, runId: string, options: RunLogOptions = {}): JsonlRunLog {
     const canonicalRunId = validatedRunId(runId);
@@ -2032,6 +2077,7 @@ export class JsonlRunLog implements RunLog {
       // The open's mode is masked by the umask.
       fs.fchmodSync(fd, 0o600);
       lock = lockRunLog(path, fd);
+      syncFolder(dirname(path));
       return new JsonlRunLog(path, canonicalRunId, fd, lock, clock, [], 0);
     } catch (error) {
       releaseAfterFailure(fd, lock);
@@ -2160,13 +2206,15 @@ export class JsonlRunLog implements RunLog {
  * lock and without changing the file. An incomplete last line is ignored; an empty file or one
  * without a complete line gives no records.
  *
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it.
  * @throws RunLogSchemaError when a record's schema isn't `SCHEMA_VERSION`.
  * @throws RunLogChangedError when the file shrank while it was read.
+ * @throws RunLogLineTooLongError when a complete line is longer than `maxLineBytes`.
  * @throws RangeError when a complete line isn't a valid record, or the records don't share one
  *   run id with contiguous sequences from 0; the message names `path`, the line and its seq.
  */
-export function readRunLog(path: string): RecordEnvelope[] {
-  return Array.from(iterRunRecords(path), (entry) => entry.envelope);
+export function readRunLog(path: string, options: Pick<IterRunRecordsOptions, "maxLineBytes"> = {}): RecordEnvelope[] {
+  return Array.from(iterRunRecords(path, { maxLineBytes: options.maxLineBytes ?? null }), (entry) => entry.envelope);
 }
 
 /** The bytes `iterRunRecords` asks for in one read. */
@@ -2217,13 +2265,23 @@ export interface IterRunRecordsOptions {
   runId?: string | null;
   /** The seq of the record that ends at `afterOffset`; the next record must be `afterSeq + 1`. */
   afterSeq?: number | null;
+  /**
+   * The most bytes a line may hold, without its newline; a longer line throws
+   * `RunLogLineTooLongError` instead of being parsed. `null` (the default) sets no limit.
+   */
+  maxLineBytes?: number | null;
 }
 
 /**
  * Stream the records of the run log at `path`, without taking the writer's lock and without
  * changing the file, so a host can read a log another process is writing.
  *
- * The file is read in chunks of 64 KiB, so memory is bounded by the largest line. Reading stops
+ * The file is read in chunks of 64 KiB, so memory is bounded by the largest line, or, given
+ * `maxLineBytes`, by a small multiple of that limit: a longer line is read up to its newline
+ * but not kept, its nesting only counted past the few levels the scan needs, and
+ * throws `RunLogLineTooLongError`, which names it and what a scan of its bytes read of its seq,
+ * run id, kind and node id. The seq and run id it names are checked as any record's are. To go
+ * on, read from its `end`, passing its `runId` and `seq` as `runId` and `afterSeq`. Reading stops
  * at the end of the file; an unterminated last line, which a writer may still be finishing, is
  * not yielded, and a later call reads on from the last entry: a host saves its `end`, `runId`
  * and `seq` and passes them as `afterOffset`, `runId` and `afterSeq`.
@@ -2246,13 +2304,16 @@ export interface IterRunRecordsOptions {
  * @param options.payloads Whether to build and validate each record.
  * @param options.runId The run id of the record that ends at `afterOffset`.
  * @param options.afterSeq The seq of the record that ends at `afterOffset`.
+ * @param options.maxLineBytes The most bytes a line may hold.
  * @returns A generator of `{ seq, offset, end, runId, at, kind, nodeId, envelope }`.
  * @throws RunLogSchemaError when a record's schema isn't `SCHEMA_VERSION`; the message names the
  *   line.
  * @throws RunLogChangedError when the file is shorter than where the reader got to (`afterOffset`
  *   or the end of the last line read), or, given `runId` or `afterSeq`, the offset no longer ends
  *   a line or the first record read doesn't continue the saved one.
- * @throws RangeError when `afterOffset`, `afterSeq` or `runId` isn't valid, `runId` or `afterSeq`
+ * @throws RunLogLineTooLongError when a complete line is longer than `maxLineBytes`; the message
+ *   names `path`, the line (or, after an offset, the byte) and the limit.
+ * @throws RangeError when `afterOffset`, `afterSeq`, `runId` or `maxLineBytes` isn't valid, `runId` or `afterSeq`
  *   is given without an `afterOffset`, `afterOffset` isn't the end of a line, `kinds` names a kind
  *   no record has, or a complete line isn't a valid record, breaks the seq count or names another
  *   run id; the message names `path` and the line (or, after an offset, the byte).
@@ -2274,7 +2335,14 @@ export function* iterRunRecords(
   path: string,
   options: IterRunRecordsOptions = {},
 ): Generator<RunLogEntry<RecordEnvelope | null>, void, undefined> {
-  const { afterOffset = 0, kinds = null, payloads = true, runId: afterRunId = null, afterSeq = null } = options;
+  const {
+    afterOffset = 0,
+    kinds = null,
+    payloads = true,
+    runId: afterRunId = null,
+    afterSeq = null,
+    maxLineBytes = null,
+  } = options;
   if (!Number.isSafeInteger(afterOffset) || afterOffset < 0) {
     throw new RangeError(`afterOffset must be a non-negative integer, got ${valueRepr(afterOffset)}`);
   }
@@ -2285,12 +2353,13 @@ export function* iterRunRecords(
     const shown = typeof afterRunId === "string" ? reprText(afterRunId) : valueRepr(afterRunId);
     throw new RangeError(`runId must be a non-empty string, got ${shown}`);
   }
+  checkMaxLineBytes(maxLineBytes);
   const continuing = afterRunId !== null || afterSeq !== null;
   if (continuing && afterOffset === 0) {
     throw new RangeError("runId and afterSeq describe the record before afterOffset, so they need one");
   }
   const wanted = kinds === null ? null : new Set(kinds);
-  const unknown = wanted === null ? [] : [...wanted].filter((kind) => !WIRE_KINDS.has(kind));
+  const unknown = wanted === null ? [] : [...wanted].filter((kind) => !CODEC_BY_KIND.has(kind));
   if (unknown.length > 0) {
     throw new RangeError(`unknown run-record kinds: ${writeAsText(unknown.sort(compareCodeUnits))}`);
   }
@@ -2312,14 +2381,39 @@ export function* iterRunRecords(
         throw new RangeError(`afterOffset ${afterOffset} isn't the end of a line in run log ${path}`);
       }
     }
-    // `lineStart` is the end of the last complete line; `parts` hold the bytes read past it.
+    // `lineStart` is the end of the last complete line; `parts` hold the bytes read past it, and
+    // `pending` counts them. Past `maxLineBytes`, `parts` are dropped and `scanner` reads on.
     let lineStart = afterOffset;
     let position = afterOffset;
     let parts: Uint8Array[] = [];
+    let pending = 0;
+    let scanner: LineHeaderScanner | null = null;
     let expected: number | null = afterOffset === 0 ? 0 : afterSeq === null ? null : afterSeq + 1;
     let runId: string | null = afterRunId;
     // Whether the next record is the first after a saved offset, which must continue it.
     let checkContinues = continuing;
+    const gather = (bytes: Uint8Array) => {
+      pending += bytes.length;
+      if (scanner !== null) {
+        scanner.feed(bytes);
+      } else if (maxLineBytes !== null && pending > maxLineBytes) {
+        scanner = new LineHeaderScanner(maxLineBytes);
+        for (const part of parts) scanner.feed(part);
+        scanner.feed(bytes);
+        parts = [];
+      } else {
+        parts.push(bytes);
+      }
+    };
+    /** Check that `record`, the first read after a saved offset, continues the saved one. */
+    const checkContinued = (record: { readonly seq: number; readonly runId: string }) => {
+      checkContinues = false;
+      if ((afterSeq !== null && record.seq !== expected) || (afterRunId !== null && record.runId !== afterRunId)) {
+        const saved = [afterSeq === null ? null : `seq ${expected}`, afterRunId === null ? null : `run ${reprText(afterRunId)}`];
+        const found = `seq ${record.seq} of run ${reprText(record.runId)}`;
+        throw discontinued(`expected ${saved.filter((part) => part !== null).join(" of ")}, found ${found}`);
+      }
+    };
     for (;;) {
       const chunk = new Uint8Array(READ_CHUNK_BYTES);
       const count = fs.readSync(fd, chunk, 0, READ_CHUNK_BYTES, position);
@@ -2334,15 +2428,35 @@ export function* iterRunRecords(
       const data = chunk.subarray(0, count);
       let start = 0;
       for (let newline = data.indexOf(0x0a); newline !== -1; newline = data.indexOf(0x0a, start)) {
-        parts.push(data.subarray(start, newline));
-        const line = parts.length === 1 ? parts[0]! : Buffer.concat(parts);
-        parts = [];
+        gather(data.subarray(start, newline));
         start = newline + 1;
         const offset = lineStart;
-        lineStart += line.length + 1;
+        const length = pending;
+        lineStart += length + 1;
+        pending = 0;
         let where = `run log ${path} byte ${offset}`;
-        if (afterOffset === 0) where = `run log ${path} line ${expected! + 1} (seq ${expected})`;
+        if (afterOffset === 0) where = lineWhere(path, expected!);
         else if (expected !== null) where += ` (seq ${expected})`;
+        if (scanner !== null) {
+          // A cast: TypeScript doesn't see `gather` set `scanner`.
+          const header = (scanner as LineHeaderScanner).header();
+          scanner = null;
+          const { seq, runId: lineRunId } = header;
+          if (seq !== null && lineRunId !== null) {
+            if (checkContinues) checkContinued({ seq, runId: lineRunId });
+            checkedLine(where, { seq, runId: lineRunId }, expected, runId);
+          }
+          const limit = maxLineBytes!;
+          throw new RunLogLineTooLongError(`${where}: the line is ${length} bytes, over maxLineBytes ${limit}`, {
+            offset,
+            end: lineStart,
+            length,
+            limit,
+            ...header,
+          });
+        }
+        const line = parts.length === 1 ? parts[0]! : Buffer.concat(parts);
+        parts = [];
         let wire: WireEnvelope;
         let nodeId: string | null;
         let envelope: RecordEnvelope | null = null;
@@ -2356,26 +2470,13 @@ export function* iterRunRecords(
         } catch (error) {
           throw locatedError(where, error);
         }
-        if (checkContinues) {
-          checkContinues = false;
-          if ((afterSeq !== null && wire.seq !== expected) || (afterRunId !== null && wire.runId !== afterRunId)) {
-            const saved = [afterSeq === null ? null : `seq ${expected}`, afterRunId === null ? null : `run ${reprText(afterRunId)}`];
-            const found = `seq ${wire.seq} of run ${reprText(wire.runId)}`;
-            throw discontinued(`expected ${saved.filter((part) => part !== null).join(" of ")}, found ${found}`);
-          }
-        }
-        if (expected !== null && wire.seq !== expected) {
-          throw new RangeError(`${where}: run-log sequence mismatch: expected ${expected}, found ${wire.seq}`);
-        }
-        runId ??= wire.runId;
-        if (wire.runId !== runId) {
-          throw new RangeError(`${where}: run-log run_id mismatch: expected ${reprText(runId)}, found ${reprText(wire.runId)}`);
-        }
+        if (checkContinues) checkContinued(wire);
+        runId = checkedLine(where, wire, expected, runId);
         expected = wire.seq + 1;
         if (wanted !== null && !wanted.has(wire.kind)) continue;
         yield { seq: wire.seq, offset, end: lineStart, runId, at: wire.at!, kind: wire.kind, nodeId, envelope };
       }
-      if (start < data.length) parts.push(data.subarray(start));
+      if (start < data.length) gather(data.subarray(start));
     }
   } finally {
     fs.closeSync(fd);
@@ -2388,10 +2489,249 @@ export function* iterRunRecords(
  * is writing. A reader reads the record at seq `k` with `iterRunRecords(path, {afterOffset:
  * offsets[k]})`.
  *
+ * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it.
  * @throws the errors of `iterRunRecords`.
  */
-export function runRecordOffsets(path: string): number[] {
-  return Array.from(iterRunRecords(path, { payloads: false }), (entry) => entry.offset);
+export function runRecordOffsets(path: string, options: Pick<IterRunRecordsOptions, "maxLineBytes"> = {}): number[] {
+  const maxLineBytes = options.maxLineBytes ?? null;
+  return Array.from(iterRunRecords(path, { payloads: false, maxLineBytes }), (entry) => entry.offset);
+}
+
+/** The keys a header scan wants a value of, each as the object keys leading to it. */
+const HEADER_PATHS = new Set(["kind", "run_id", "seq", "payload/node_id", "payload/spawner_id", "payload/failure/node_id"]);
+/** The most containers a header scan tracks: the depth of `payload/failure/node_id`'s object. */
+const HEADER_DEPTH = 3;
+/** The most bytes a header scan keeps of a key or a number; the keys and seqs it wants are shorter. */
+const HEADER_TOKEN_BYTES = 32;
+
+/**
+ * Reads a run-log line's seq, run id, kind and node id from its bytes, fed in pieces, without
+ * parsing it, for a line too long to parse. It tracks the keys of the outer `HEADER_DEPTH`
+ * containers and only counts deeper ones, and keeps only the values `HEADER_PATHS` names, at
+ * most `limit` bytes of them in all.
+ */
+class LineHeaderScanner {
+  /** Each tracked container: an object's current key (`null` in an array) and whether a key comes next. */
+  readonly #open: { key: string | null; object: boolean; keyNext: boolean }[] = [];
+  /** How many containers are open past the tracked ones. */
+  #deeper = 0;
+  /** The wanted strings and numbers read, by path, kept apart so only a number counts as a seq. */
+  readonly #strings = new Map<string, string>();
+  readonly #numbers = new Map<string, string>();
+  /** The bytes still allowed for wanted string values. */
+  #budget: number;
+  #inString = false;
+  #escaped = false;
+  #inScalar = false;
+  /** Whether the string or scalar being read is kept, its bytes so far and their cap. */
+  #keeping = false;
+  #kept = new Uint8Array(HEADER_TOKEN_BYTES);
+  #keptLength = 0;
+  #keptCap = 0;
+  #keptPath: string | null = null;
+
+  constructor(limit: number) {
+    this.#budget = limit;
+  }
+
+  /** Read the next bytes of the line. */
+  feed(bytes: Uint8Array): void {
+    for (const byte of bytes) {
+      if (this.#inString) {
+        if (this.#escaped) this.#escaped = false;
+        else if (byte === 0x5c) this.#escaped = true;
+        else if (byte === 0x22) {
+          this.#endString();
+          continue;
+        }
+        if (this.#keeping) this.#keep(byte);
+        continue;
+      }
+      if (this.#deeper > 0) {
+        if (byte === 0x22) this.#inString = true;
+        else if (byte === 0x7b || byte === 0x5b) this.#deeper++;
+        else if (byte === 0x7d || byte === 0x5d) this.#deeper--;
+        continue;
+      }
+      const top = this.#open.at(-1);
+      switch (byte) {
+        case 0x22:
+          this.#endScalar();
+          this.#inString = true;
+          if (top?.object && top.keyNext) this.#start(true, null, HEADER_TOKEN_BYTES);
+          else this.#start(false, this.#valuePath(), this.#budget);
+          break;
+        case 0x7b:
+        case 0x5b:
+          this.#endScalar();
+          if (this.#open.length < HEADER_DEPTH) this.#open.push({ key: null, object: byte === 0x7b, keyNext: byte === 0x7b });
+          else this.#deeper = 1;
+          break;
+        case 0x7d:
+        case 0x5d:
+          this.#endScalar();
+          this.#open.pop();
+          break;
+        case 0x2c:
+          this.#endScalar();
+          if (top?.object) {
+            top.key = null;
+            top.keyNext = true;
+          }
+          break;
+        case 0x3a:
+        case 0x20:
+        case 0x09:
+        case 0x0a:
+        case 0x0d:
+          this.#endScalar();
+          break;
+        default:
+          if (!this.#inScalar) {
+            this.#inScalar = true;
+            this.#start(false, this.#valuePath(), HEADER_TOKEN_BYTES);
+          }
+          if (this.#keeping) this.#keep(byte);
+      }
+    }
+  }
+
+  /** What the scan read, each checked; `null` for what it didn't find or isn't valid. */
+  header(): { seq: number | null; runId: string | null; kind: string | null; nodeId: string | null } {
+    this.#endScalar();
+    const text = (path: string) => {
+      const value = this.#strings.get(path);
+      return value === undefined || value === "" ? null : value;
+    };
+    const digits = this.#numbers.get("seq");
+    const counted = digits !== undefined && /^(0|[1-9][0-9]*)$/.test(digits) ? Number(digits) : null;
+    const seq = counted !== null && Number.isSafeInteger(counted) ? counted : null;
+    let kind = text("kind");
+    if (kind !== null && !CODEC_BY_KIND.has(kind)) kind = null;
+    let nodeId: string | null = null;
+    if (kind !== null) {
+      // The kind's own rule picks the node id, from just the members the scan kept.
+      const payload: JsonObject = {};
+      const failure: JsonObject = {};
+      for (const [key, path] of [["node_id", "payload/node_id"], ["spawner_id", "payload/spawner_id"]] as const) {
+        const value = this.#strings.get(path);
+        if (value !== undefined) payload[key] = value;
+      }
+      const failed = this.#strings.get("payload/failure/node_id");
+      if (failed !== undefined) failure["node_id"] = failed;
+      payload["failure"] = failure;
+      try {
+        nodeId = wireNodeId(kind, payload);
+      } catch {
+        nodeId = null;
+      }
+    }
+    return { seq, runId: text("run_id"), kind, nodeId };
+  }
+
+  /** The keys leading to a value that starts now, joined, or `null` when one is in an array. */
+  #valuePath(): string | null {
+    const keys: string[] = [];
+    for (const entry of this.#open) {
+      if (entry.key === null) return null;
+      keys.push(entry.key);
+    }
+    return keys.join("/");
+  }
+
+  /**
+   * Begin a string or scalar: keep up to `cap` bytes of it when it is a key, or a value at a
+   * wanted `path` (`null` for a value with no path, as in an array).
+   */
+  #start(isKey: boolean, path: string | null, cap: number): void {
+    this.#keeping = isKey || (path !== null && HEADER_PATHS.has(path));
+    this.#keptLength = 0;
+    this.#keptCap = cap;
+    this.#keptPath = path;
+  }
+
+  #keep(byte: number): void {
+    if (this.#keptLength === this.#keptCap) {
+      this.#keeping = false;
+      return;
+    }
+    if (this.#keptLength === this.#kept.length) {
+      const grown = new Uint8Array(Math.min(this.#kept.length * 2, this.#keptCap));
+      grown.set(this.#kept);
+      this.#kept = grown;
+    }
+    this.#kept[this.#keptLength++] = byte;
+  }
+
+  #endString(): void {
+    this.#inString = false;
+    if (this.#deeper > 0) return;
+    const top = this.#open.at(-1);
+    const isKey = top?.object === true && top.keyNext;
+    let value: string | null = null;
+    if (this.#keeping) {
+      try {
+        value = JSON.parse(`"${UTF8.decode(this.#kept.subarray(0, this.#keptLength))}"`) as string;
+      } catch {
+        value = null;
+      }
+    }
+    if (isKey) {
+      top!.key = value;
+      top!.keyNext = false;
+    } else if (value !== null && this.#keptPath !== null) {
+      this.#strings.set(this.#keptPath, value);
+      this.#budget -= this.#keptLength;
+    }
+    this.#keeping = false;
+  }
+
+  #endScalar(): void {
+    if (!this.#inScalar) return;
+    this.#inScalar = false;
+    if (this.#keeping && this.#keptPath !== null) {
+      this.#numbers.set(this.#keptPath, String.fromCharCode(...this.#kept.subarray(0, this.#keptLength)));
+    }
+    this.#keeping = false;
+  }
+}
+
+/**
+ * Check a reader's `maxLineBytes` option: a positive integer, or `null` for no limit.
+ *
+ * @throws RangeError when it is neither.
+ */
+export function checkMaxLineBytes(maxLineBytes: unknown): void {
+  if (maxLineBytes !== null && (typeof maxLineBytes !== "number" || !Number.isSafeInteger(maxLineBytes) || maxLineBytes <= 0)) {
+    throw new RangeError(`maxLineBytes must be a positive integer, got ${valueRepr(maxLineBytes)}`);
+  }
+}
+
+/** Where the record of seq `seq` sits in the run log at `path`, read from the start, for errors. */
+function lineWhere(path: string, seq: number): string {
+  return `run log ${path} line ${seq + 1} (seq ${seq})`;
+}
+
+/**
+ * Check that the record read at `where` continues its log: it has seq `expected` (any seq when
+ * `null`) and names the log's run id `runId` (any run id when `null`, as for the first record).
+ * Returns the log's run id.
+ *
+ * @throws RangeError naming `where` when the seq or the run id doesn't match.
+ */
+function checkedLine(
+  where: string,
+  record: { readonly seq: number; readonly runId: string },
+  expected: number | null,
+  runId: string | null,
+): string {
+  if (expected !== null && record.seq !== expected) {
+    throw new RangeError(`${where}: run-log sequence mismatch: expected ${expected}, found ${record.seq}`);
+  }
+  if (runId !== null && record.runId !== runId) {
+    throw new RangeError(`${where}: run-log run_id mismatch: expected ${reprText(runId)}, found ${reprText(record.runId)}`);
+  }
+  return record.runId;
 }
 
 /**
@@ -2524,7 +2864,7 @@ function memorySpecFromPayload(value: unknown, label: string): MemorySpec {
 
 /** Encode a `run_started` flow. */
 function flowPayload(flow: FlowSource): JsonObject {
-  return { root: flow.root, dir: flow.dir, files: flow.files as unknown as JsonObject };
+  return { root: flow.root, dir: flow.dir, code_root: flow.codeRoot, files: flow.files };
 }
 
 /**
@@ -2534,25 +2874,27 @@ function flowPayload(flow: FlowSource): JsonObject {
  * @throws TypeError when a field has the wrong JSON type.
  */
 function flowFromPayload(value: unknown, label: string): FlowSource {
-  const wire = wireObject(value, label, ["root", "dir", "files"]);
+  const wire = wireObject(value, label, ["root", "dir", "code_root", "files"]);
   return {
     root: requireText(wire["root"], `${label} root`),
     dir: requireText(wire["dir"], `${label} dir`),
-    files: wireEntries(wire["files"], `${label} files`, ["text", "refs"]) as never,
+    codeRoot: wire["code_root"] === null ? null : requireText(wire["code_root"], `${label} code_root`),
+    files: wireEntries<FlowSourceFile>(wire["files"], `${label} files`, ["text", "refs"]),
   };
 }
 
 /**
- * Return a by-name object whose every entry is an object with exactly `fields`; `label` names it
- * in errors.
+ * Return a by-name object whose every entry is an object with exactly `fields`, typed as entries
+ * of `T`; `label` names it in errors. Only the fields are checked here: the record's constructor
+ * checks each entry's values.
  *
  * @throws RangeError for an entry's missing or extra fields.
  * @throws TypeError when `value` or an entry isn't an object.
  */
-function wireEntries(value: unknown, label: string, fields: readonly string[]): JsonObject {
+function wireEntries<T extends JsonObject>(value: unknown, label: string, fields: readonly string[]): Record<string, T> {
   const wire = wireObject(value, label);
   for (const [name, item] of Object.entries(wire)) wireObject(item, `${label}[${reprText(name)}]`, fields);
-  return wire;
+  return wire as Record<string, T>;
 }
 
 /**
@@ -2806,6 +3148,7 @@ function capturePayload(capture: ForwardCapture): JsonObject {
     scope: executionScopePayload(capture.scope),
     input_names: [...capture.inputNames],
     variable_names: [...capture.variableNames],
+    bound: capture.bound,
   };
 }
 
@@ -2825,7 +3168,10 @@ function captureFromPayload(value: unknown, label: string): ForwardCapture {
     "scope",
     "input_names",
     "variable_names",
+    "bound",
   ]);
+  const bound = wire["bound"];
+  if (typeof bound !== "boolean") throw new TypeError(`${label} bound must be a boolean`);
   const keys = wireTextArray(wire["evaluated_keys"], `${label} evaluated_keys`);
   if (!strictlyIncreasing(keys, compareCodeUnits)) throw new RangeError("evaluated_keys must be sorted and unique");
   const items = wireArray(wire["items"], `${label} items`).map((item) => {
@@ -2839,6 +3185,7 @@ function captureFromPayload(value: unknown, label: string): ForwardCapture {
     scope: executionScopeFromPayload(wire["scope"], `${label} scope`),
     inputNames: wireTextArray(wire["input_names"], `${label} input_names`),
     variableNames: wireTextArray(wire["variable_names"], `${label} variable_names`),
+    bound,
   });
 }
 
@@ -3171,10 +3518,53 @@ const RUN_STARTED_FIELDS = [
   "parent",
 ];
 
-/** Build the canonical JSON payload of one record; counters are written as `bigint`s. */
-function payloadForRecord(record: RunRecord): JsonObject {
-  if (record instanceof RunStartedRecord) {
-    return {
+/**
+ * How one record kind is written and read: its class, its wire kind, its payload's encoder and
+ * decoder, and the node its payload names. The encoder and decoder are declared as methods, so a
+ * kind's codec, typed by its own class, fits the table: `codecForRecord` hands a codec only
+ * records of its class, and `recordFromPayload` only payloads of its kind.
+ */
+interface RecordCodec<R extends RunRecord = RunRecord> {
+  /** The record class. */
+  readonly cls: new (...args: never[]) => R;
+  /** The class's snake_case wire kind. */
+  readonly kind: string;
+  /** Build the record's canonical JSON payload; counters are written as `bigint`s. */
+  encode(record: R): JsonObject;
+  /**
+   * Build the record from its payload object, through the record's constructor; `label` names
+   * the payload in errors.
+   *
+   * @throws RangeError for missing or extra fields, an empty id or a counter that isn't a safe
+   *   integer, besides the constructor's own errors.
+   * @throws TypeError when a field has the wrong JSON type.
+   */
+  decode(payload: JsonObject, label: string): R;
+  /**
+   * Return the node the payload is about, checking only that id; absent for a kind about no one
+   * node.
+   *
+   * @throws TypeError, RangeError when that id isn't a non-empty string.
+   */
+  nodeId?(payload: JsonObject, label: string): string;
+}
+
+/** Return `codec` as given; it infers the codec's record type from its class. */
+function recordCodec<R extends RunRecord>(codec: RecordCodec<R>): RecordCodec<R> {
+  return codec;
+}
+
+/** Return the `node_id` of a node record's payload; `label` names the payload. */
+function payloadNodeId(payload: JsonObject, label: string): string {
+  return requireName(payload["node_id"], `${label} node_id`);
+}
+
+/** The codec of every record kind, the one place a kind is defined. */
+const RECORD_CODECS: readonly RecordCodec[] = [
+  recordCodec({
+    cls: RunStartedRecord,
+    kind: "run_started",
+    encode: (record) => ({
       flow_fingerprint: record.flowFingerprint,
       start_wiring_override: record.startWiringOverride as JsonObject,
       effective_llm_by_static_path: record.effectiveLlmByStaticPath as JsonObject,
@@ -3187,135 +3577,13 @@ function payloadForRecord(record: RunRecord): JsonObject {
       defaults: record.defaults as JsonObject,
       call_time_llm: record.callTimeLlm as JsonObject | null,
       flow: record.flow === null ? null : flowPayload(record.flow),
-      skills: record.skills as unknown as JsonObject,
-      tools: record.tools as unknown as JsonObject,
+      skills: record.skills,
+      tools: record.tools,
       tool_groups: Object.fromEntries(Object.entries(record.toolGroups).map(([name, members]) => [name, [...members]])),
       yian_version: record.yianVersion,
       parent: record.parent === null ? null : { run_id: record.parent.runId, node: record.parent.node },
-    };
-  }
-  if (record instanceof RunResumedRecord) {
-    return {
-      retry_node_ids: [...record.retryNodeIds],
-      num_workers: BigInt(record.numWorkers),
-      closed_calls: [...record.closedCalls],
-    };
-  }
-  if (record instanceof RunStoppedRecord) {
-    return { reason: record.reason, message: record.message, node_ids: [...record.nodeIds] };
-  }
-  if (record instanceof NodeWaitingRecord) {
-    return {
-      node_id: record.nodeId,
-      call_ids: [...record.callIds],
-      waits: record.waits.map((entry) => ({
-        call_id: entry.callId,
-        tool: entry.tool,
-        inbox: entry.inbox,
-        mode: entry.mode,
-        deadline: entry.deadline,
-      })),
-      steer_inbox: record.steerInbox,
-    };
-  }
-  if (record instanceof NodeWokenRecord) return { node_id: record.nodeId, timed_out: [...record.timedOut] };
-  if (record instanceof RunWaitingRecord) return { node_ids: [...record.nodeIds] };
-  if (record instanceof InboxClosedRecord) return { inbox: record.inbox };
-  if (record instanceof InboxWithdrawnRecord) return { inbox: record.inbox, events: record.events.map(BigInt) };
-  if (record instanceof InterruptedRecord) return { inbox: record.inbox, nodes: [...record.nodes] };
-  if (record instanceof RunCancelledRecord) return {};
-  if (record instanceof RunFailedRecord) return { failure: failurePayload(record.failure) };
-  if (record instanceof NodeStartedRecord) return { node_id: record.nodeId };
-  if (record instanceof NodeStepRecord) {
-    return { node_id: record.nodeId, n: BigInt(record.n), step: record.step as JsonObject };
-  }
-  if (record instanceof PoolCommitRecord) {
-    if (record.value !== null) {
-      return { node_id: record.nodeId, key: record.key, kind: record.value.kind, value: record.value.value as JsonValue };
-    }
-    if (record.take !== null) {
-      const { inbox, events, closed } = record.take;
-      return { node_id: record.nodeId, key: record.key, inbox, events: events.map(BigInt), closed };
-    }
-    if (record.steps !== null) return { node_id: record.nodeId, key: record.key, steps: record.steps.map(BigInt) };
-    const from = Object.fromEntries([...record.from!].map(([name, seq]) => [name, BigInt(seq)]));
-    return { node_id: record.nodeId, key: record.key, from };
-  }
-  if (record instanceof NodeSucceededRecord) {
-    return {
-      node_id: record.nodeId,
-      commit: BigInt(record.commit),
-      messages: record.messages === null ? null : BigInt(record.messages),
-      ...outcomePayload(record),
-    };
-  }
-  if (record instanceof NodeRoutedRecord) {
-    return {
-      node_id: record.nodeId,
-      handle: record.handle,
-      terminal_failure: record.terminalFailure === null ? null : failurePayload(record.terminalFailure),
-      ...outcomePayload(record),
-    };
-  }
-  if (record instanceof NodeExpandedRecord) {
-    return {
-      spawner_id: record.spawnerId,
-      prune_ids: [...record.pruneIds],
-      topology_digest: record.topologyDigest,
-      ...outcomePayload(record),
-    };
-  }
-  if (record instanceof NodeFailedRecord) return { failure: failurePayload(record.failure), ...outcomePayload(record) };
-  if (record instanceof MemoryCommitRequestedRecord) {
-    return {
-      memory: record.memory,
-      commit_id: record.commitId,
-      attempt_id: BigInt(record.attemptId),
-      mutations: record.mutations.map(mutationPayload),
-    };
-  }
-  if (record instanceof MemoryCommitSucceededRecord) {
-    return { memory: record.memory, commit_id: record.commitId, attempt_id: BigInt(record.attemptId) };
-  }
-  if (record instanceof MemoryCommitFailedRecord) {
-    return {
-      memory: record.memory,
-      commit_id: record.commitId,
-      attempt_id: BigInt(record.attemptId),
-      failure: memoryFailurePayload(record.failure),
-    };
-  }
-  if (record instanceof BackwardStartedRecord) {
-    return { attempt_id: BigInt(record.attemptId), feedback: record.feedback as JsonValue };
-  }
-  if (record instanceof BackwardReadyRecord) {
-    return {
-      attempt_id: BigInt(record.attemptId),
-      root_result: backwardResultPayload(record.rootResult),
-      attributed_results: record.attributedResults.map(attributedResultPayload),
-      proposals: record.proposals.map(memoryProposalPayload),
-    };
-  }
-  // The one kind left is backward_finished.
-  return {
-    attempt_id: BigInt(record.attemptId),
-    outcome: backwardOutcomePayload(record.outcome),
-    attributed_results: record.attributedResults.map(attributedResultPayload),
-  };
-}
-
-/**
- * Build the record of wire kind `kind` from its payload object, through the record's
- * constructor.
- *
- * @throws RangeError for an unknown kind, missing or extra fields, an empty id or a counter that
- *   isn't a safe integer, besides the constructor's own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
-  const label = `${kind} payload`;
-  switch (kind) {
-    case "run_started":
+    }),
+    decode: (payload, label) => {
       requireFields(payload, RUN_STARTED_FIELDS, label);
       // The record's constructor checks the fields cast here (the pool, the agents' configs, the
       // defaults and the call-time agents), so a bad value is named by its entry.
@@ -3338,27 +3606,60 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         defaults: wireObject(payload["defaults"], `${label} defaults`) as Record<string, bigint>,
         callTimeLlm: payload["call_time_llm"] as JsonObject | null,
         flow: payload["flow"] === null ? null : flowFromPayload(payload["flow"], `${label} flow`),
-        skills: wireEntries(payload["skills"], `${label} skills`, ["description", "instructions"]) as never,
-        tools: wireEntries(payload["tools"], `${label} tools`, ["description", "parameters"]) as never,
-        toolGroups: wireObject(payload["tool_groups"], `${label} tool_groups`) as never,
+        skills: wireEntries<RecordedSkill>(payload["skills"], `${label} skills`, ["description", "instructions"]),
+        tools: wireEntries<RecordedTool>(payload["tools"], `${label} tools`, ["description", "parameters"]),
+        toolGroups: wireObject(payload["tool_groups"], `${label} tool_groups`) as Record<string, string[]>,
         yianVersion: requireText(payload["yian_version"], `${label} yian_version`),
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),
       });
-    case "run_resumed":
+    },
+  }),
+  recordCodec({
+    cls: RunResumedRecord,
+    kind: "run_resumed",
+    encode: (record) => ({
+      retry_node_ids: [...record.retryNodeIds],
+      num_workers: BigInt(record.numWorkers),
+      closed_calls: [...record.closedCalls],
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["retry_node_ids", "num_workers", "closed_calls"], label);
       return new RunResumedRecord(
         wireTextArray(payload["retry_node_ids"], `${label} retry_node_ids`),
         wireInt(payload["num_workers"], `${label} num_workers`),
         wireTextArray(payload["closed_calls"], `${label} closed_calls`),
       );
-    case "run_stopped":
+    },
+  }),
+  recordCodec({
+    cls: RunStoppedRecord,
+    kind: "run_stopped",
+    encode: (record) => ({ reason: record.reason, message: record.message, node_ids: [...record.nodeIds] }),
+    decode: (payload, label) => {
       requireFields(payload, ["reason", "message", "node_ids"], label);
       return new RunStoppedRecord(
         requireText(payload["reason"], `${label} reason`) as RunStopReason,
         requireText(payload["message"], `${label} message`),
         wireTextArray(payload["node_ids"], `${label} node_ids`),
       );
-    case "node_waiting":
+    },
+  }),
+  recordCodec({
+    cls: NodeWaitingRecord,
+    kind: "node_waiting",
+    encode: (record) => ({
+      node_id: record.nodeId,
+      call_ids: [...record.callIds],
+      waits: record.waits.map((entry) => ({
+        call_id: entry.callId,
+        tool: entry.tool,
+        inbox: entry.inbox,
+        mode: entry.mode,
+        deadline: entry.deadline,
+      })),
+      steer_inbox: record.steerInbox,
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_id", "call_ids", "waits", "steer_inbox"], label);
       return new NodeWaitingRecord(
         requireName(payload["node_id"], `${label} node_id`),
@@ -3368,44 +3669,119 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
           steerInbox: wireNullableText(payload["steer_inbox"], `${label} steer_inbox`),
         },
       );
-    case "node_woken":
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: NodeWokenRecord,
+    kind: "node_woken",
+    encode: (record) => ({ node_id: record.nodeId, timed_out: [...record.timedOut] }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_id", "timed_out"], label);
       return new NodeWokenRecord(
         requireName(payload["node_id"], `${label} node_id`),
         wireTextArray(payload["timed_out"], `${label} timed_out`),
       );
-    case "run_waiting":
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: RunWaitingRecord,
+    kind: "run_waiting",
+    encode: (record) => ({ node_ids: [...record.nodeIds] }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_ids"], label);
       return new RunWaitingRecord(wireTextArray(payload["node_ids"], `${label} node_ids`));
-    case "inbox_closed":
+    },
+  }),
+  recordCodec({
+    cls: InboxClosedRecord,
+    kind: "inbox_closed",
+    encode: (record) => ({ inbox: record.inbox }),
+    decode: (payload, label) => {
       requireFields(payload, ["inbox"], label);
       return new InboxClosedRecord(requireName(payload["inbox"], `${label} inbox`));
-    case "inbox_withdrawn":
+    },
+  }),
+  recordCodec({
+    cls: InboxWithdrawnRecord,
+    kind: "inbox_withdrawn",
+    encode: (record) => ({ inbox: record.inbox, events: record.events.map(BigInt) }),
+    decode: (payload, label) => {
       requireFields(payload, ["inbox", "events"], label);
       return new InboxWithdrawnRecord(
         requireName(payload["inbox"], `${label} inbox`),
         wireItems(payload["events"], `${label} events`, wireInt),
       );
-    case "interrupted":
+    },
+  }),
+  recordCodec({
+    cls: InterruptedRecord,
+    kind: "interrupted",
+    encode: (record) => ({ inbox: record.inbox, nodes: [...record.nodes] }),
+    decode: (payload, label) => {
       requireFields(payload, ["inbox", "nodes"], label);
       return new InterruptedRecord(requireName(payload["inbox"], `${label} inbox`), wireTextArray(payload["nodes"], `${label} nodes`));
-    case "run_cancelled":
+    },
+  }),
+  recordCodec({
+    cls: RunCancelledRecord,
+    kind: "run_cancelled",
+    encode: () => ({}),
+    decode: (payload, label) => {
       requireFields(payload, [], label);
       return new RunCancelledRecord();
-    case "run_failed":
+    },
+  }),
+  recordCodec({
+    cls: RunFailedRecord,
+    kind: "run_failed",
+    encode: (record) => ({ failure: failurePayload(record.failure) }),
+    decode: (payload, label) => {
       requireFields(payload, ["failure"], label);
       return new RunFailedRecord(failureFromPayload(payload["failure"], `${label} failure`));
-    case "node_started":
+    },
+  }),
+  recordCodec({
+    cls: NodeStartedRecord,
+    kind: "node_started",
+    encode: (record) => ({ node_id: record.nodeId }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_id"], label);
       return new NodeStartedRecord(requireName(payload["node_id"], `${label} node_id`));
-    case "node_step":
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: NodeStepRecord,
+    kind: "node_step",
+    encode: (record) => ({ node_id: record.nodeId, n: BigInt(record.n), step: record.step as JsonObject }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_id", "n", "step"], label);
       return new NodeStepRecord(
         requireName(payload["node_id"], `${label} node_id`),
         wireInt(payload["n"], `${label} n`),
         wireObject(payload["step"], `${label} step`),
       );
-    case "pool_commit": {
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: PoolCommitRecord,
+    kind: "pool_commit",
+    encode: (record): JsonObject => {
+      if (record.value !== null) {
+        return { node_id: record.nodeId, key: record.key, kind: record.value.kind, value: record.value.value as JsonValue };
+      }
+      if (record.take !== null) {
+        const { inbox, events, closed } = record.take;
+        return { node_id: record.nodeId, key: record.key, inbox, events: events.map(BigInt), closed };
+      }
+      if (record.steps !== null) return { node_id: record.nodeId, key: record.key, steps: record.steps.map(BigInt) };
+      const from = Object.fromEntries([...record.from!].map(([name, seq]) => [name, BigInt(seq)]));
+      return { node_id: record.nodeId, key: record.key, from };
+    },
+    decode: (payload, label) => {
       // The form is chosen by its marker key, so a payload mixing forms is refused as extra fields.
       const form = Object.hasOwn(payload, "steps")
         ? "steps"
@@ -3425,15 +3801,38 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
           steps: form === "steps" ? wireItems(payload["steps"], `${label} steps`, wireInt) : null,
         },
       );
-    }
-    case "node_succeeded":
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: NodeSucceededRecord,
+    kind: "node_succeeded",
+    encode: (record) => ({
+      node_id: record.nodeId,
+      commit: BigInt(record.commit),
+      messages: record.messages === null ? null : BigInt(record.messages),
+      ...outcomePayload(record),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_id", "commit", "messages", "forward_capture"], label);
       return new NodeSucceededRecord(
         requireName(payload["node_id"], `${label} node_id`),
         wireInt(payload["commit"], `${label} commit`),
         { ...outcomeFromPayload(payload, label), messages: wireNullableInt(payload["messages"], `${label} messages`) },
       );
-    case "node_routed": {
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: NodeRoutedRecord,
+    kind: "node_routed",
+    encode: (record) => ({
+      node_id: record.nodeId,
+      handle: record.handle,
+      terminal_failure: record.terminalFailure === null ? null : failurePayload(record.terminalFailure),
+      ...outcomePayload(record),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["node_id", "handle", "terminal_failure", "forward_capture"], label);
       const failure = payload["terminal_failure"];
       return new NodeRoutedRecord(
@@ -3444,8 +3843,19 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
           ...outcomeFromPayload(payload, label),
         },
       );
-    }
-    case "node_expanded":
+    },
+    nodeId: payloadNodeId,
+  }),
+  recordCodec({
+    cls: NodeExpandedRecord,
+    kind: "node_expanded",
+    encode: (record) => ({
+      spawner_id: record.spawnerId,
+      prune_ids: [...record.pruneIds],
+      topology_digest: record.topologyDigest,
+      ...outcomePayload(record),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["spawner_id", "prune_ids", "topology_digest", "forward_capture"], label);
       return new NodeExpandedRecord(
         requireName(payload["spawner_id"], `${label} spawner_id`),
@@ -3453,13 +3863,33 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         requireText(payload["topology_digest"], `${label} topology_digest`),
         outcomeFromPayload(payload, label),
       );
-    case "node_failed":
+    },
+    nodeId: (payload, label) => requireName(payload["spawner_id"], `${label} spawner_id`),
+  }),
+  recordCodec({
+    cls: NodeFailedRecord,
+    kind: "node_failed",
+    encode: (record) => ({ failure: failurePayload(record.failure), ...outcomePayload(record) }),
+    decode: (payload, label) => {
       requireFields(payload, ["failure", "forward_capture"], label);
       return new NodeFailedRecord(
         failureFromPayload(payload["failure"], `${label} failure`),
         outcomeFromPayload(payload, label),
       );
-    case "memory_commit_requested":
+    },
+    nodeId: (payload, label) =>
+      requireName(wireObject(payload["failure"], `${label} failure`)["node_id"], `${label} failure node_id`),
+  }),
+  recordCodec({
+    cls: MemoryCommitRequestedRecord,
+    kind: "memory_commit_requested",
+    encode: (record) => ({
+      memory: record.memory,
+      commit_id: record.commitId,
+      attempt_id: BigInt(record.attemptId),
+      mutations: record.mutations.map(mutationPayload),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["memory", "commit_id", "attempt_id", "mutations"], label);
       return new MemoryCommitRequestedRecord(
         requireName(payload["memory"], `${label} memory`),
@@ -3467,14 +3897,31 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         wireItems(payload["mutations"], `${label} mutations`, mutationFromPayload),
         wireInt(payload["attempt_id"], `${label} attempt_id`),
       );
-    case "memory_commit_succeeded":
+    },
+  }),
+  recordCodec({
+    cls: MemoryCommitSucceededRecord,
+    kind: "memory_commit_succeeded",
+    encode: (record) => ({ memory: record.memory, commit_id: record.commitId, attempt_id: BigInt(record.attemptId) }),
+    decode: (payload, label) => {
       requireFields(payload, ["memory", "commit_id", "attempt_id"], label);
       return new MemoryCommitSucceededRecord(
         requireName(payload["memory"], `${label} memory`),
         requireName(payload["commit_id"], `${label} commit_id`),
         wireInt(payload["attempt_id"], `${label} attempt_id`),
       );
-    case "memory_commit_failed":
+    },
+  }),
+  recordCodec({
+    cls: MemoryCommitFailedRecord,
+    kind: "memory_commit_failed",
+    encode: (record) => ({
+      memory: record.memory,
+      commit_id: record.commitId,
+      attempt_id: BigInt(record.attemptId),
+      failure: memoryFailurePayload(record.failure),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["memory", "commit_id", "attempt_id", "failure"], label);
       return new MemoryCommitFailedRecord(
         requireName(payload["memory"], `${label} memory`),
@@ -3482,13 +3929,30 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         memoryFailureFromPayload(payload["failure"], `${label} failure`),
         wireInt(payload["attempt_id"], `${label} attempt_id`),
       );
-    case "backward_started":
+    },
+  }),
+  recordCodec({
+    cls: BackwardStartedRecord,
+    kind: "backward_started",
+    encode: (record) => ({ attempt_id: BigInt(record.attemptId), feedback: record.feedback as JsonValue }),
+    decode: (payload, label) => {
       requireFields(payload, ["attempt_id", "feedback"], label);
       return new BackwardStartedRecord(
         wireInt(payload["attempt_id"], `${label} attempt_id`),
         payload["feedback"] as FeedbackValue,
       );
-    case "backward_ready":
+    },
+  }),
+  recordCodec({
+    cls: BackwardReadyRecord,
+    kind: "backward_ready",
+    encode: (record) => ({
+      attempt_id: BigInt(record.attemptId),
+      root_result: backwardResultPayload(record.rootResult),
+      attributed_results: record.attributedResults.map(attributedResultPayload),
+      proposals: record.proposals.map(memoryProposalPayload),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["attempt_id", "root_result", "attributed_results", "proposals"], label);
       return new BackwardReadyRecord(
         wireInt(payload["attempt_id"], `${label} attempt_id`),
@@ -3496,16 +3960,49 @@ function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
         wireItems(payload["attributed_results"], `${label} attributed_results`, attributedResultFromPayload),
         wireItems(payload["proposals"], `${label} proposals`, memoryProposalFromPayload),
       );
-    case "backward_finished":
+    },
+  }),
+  recordCodec({
+    cls: BackwardFinishedRecord,
+    kind: "backward_finished",
+    encode: (record) => ({
+      attempt_id: BigInt(record.attemptId),
+      outcome: backwardOutcomePayload(record.outcome),
+      attributed_results: record.attributedResults.map(attributedResultPayload),
+    }),
+    decode: (payload, label) => {
       requireFields(payload, ["attempt_id", "outcome", "attributed_results"], label);
       return new BackwardFinishedRecord(
         wireInt(payload["attempt_id"], `${label} attempt_id`),
         backwardOutcomeFromPayload(payload["outcome"], `${label} outcome`),
         wireItems(payload["attributed_results"], `${label} attributed_results`, attributedResultFromPayload),
       );
-    default:
-      throw new RangeError(`unknown run-record kind: ${reprText(kind)}`);
-  }
+    },
+  }),
+];
+
+/** Each record kind's codec by wire kind: the closed set of kinds this schema reads. */
+const CODEC_BY_KIND: ReadonlyMap<string, RecordCodec> = new Map(RECORD_CODECS.map((codec) => [codec.kind, codec]));
+
+/** Each record kind's codec by its class's prototype, so a subclass's record isn't one. */
+const CODEC_BY_PROTOTYPE: ReadonlyMap<object, RecordCodec> = new Map(
+  RECORD_CODECS.map((codec) => [codec.cls.prototype as object, codec]),
+);
+
+/** Every run-record class. */
+export const RUN_RECORD_TYPES: readonly RunRecordClass[] = Object.freeze(RECORD_CODECS.map((codec) => codec.cls));
+
+/**
+ * Build the record of wire kind `kind` from its payload object, through the record's
+ * constructor.
+ *
+ * @throws RangeError for an unknown kind, besides the kind's decoder's errors.
+ * @throws TypeError as the kind's decoder.
+ */
+function recordFromPayload(kind: string, payload: JsonObject): RunRecord {
+  const codec = CODEC_BY_KIND.get(kind);
+  if (codec === undefined) throw new RangeError(`unknown run-record kind: ${reprText(kind)}`);
+  return codec.decode(payload, `${kind} payload`);
 }
 
 /**
@@ -3693,22 +4190,14 @@ function decodeCompletePrefix(data: Uint8Array, path: string): RecordEnvelope[] 
   let runId: string | null = null;
   for (let start = 0, sequence = 0; start < data.length; sequence++) {
     const end = data.indexOf(0x0a, start);
-    const where = `run log ${path} line ${sequence + 1} (seq ${sequence})`;
+    const where = lineWhere(path, sequence);
     let envelope: RecordEnvelope;
     try {
       envelope = decodeLine(data.subarray(start, end), true);
     } catch (error) {
       throw locatedError(where, error);
     }
-    if (envelope.seq !== sequence) {
-      throw new RangeError(`${where}: run-log sequence mismatch: expected ${sequence}, found ${envelope.seq}`);
-    }
-    runId ??= envelope.runId;
-    if (envelope.runId !== runId) {
-      throw new RangeError(
-        `${where}: run-log run_id mismatch: expected ${reprText(runId)}, found ${reprText(envelope.runId)}`,
-      );
-    }
+    runId = checkedLine(where, envelope, sequence, runId);
     records.push(envelope);
     start = end + 1;
   }
@@ -3767,7 +4256,9 @@ function canonicalEnvelope(
 ): [string, RecordEnvelope] {
   const at = formatRecordTime(clock());
   const line = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, runId, seq, record, at));
-  return [line, decodeRecord(line)];
+  const envelope = decodeRecord(line);
+  lastAppended = { envelope, line };
+  return [line, envelope];
 }
 
 /**

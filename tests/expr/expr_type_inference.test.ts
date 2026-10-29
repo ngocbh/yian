@@ -2,6 +2,7 @@
 
 import { expect, test } from "bun:test";
 
+import { registerTemplateFn, TEMPLATE_FNS } from "../../src/expr/builtins.ts";
 import { elementType, inferExprType } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
 import { Type, ValueKind } from "../../src/typesys/index.ts";
@@ -67,18 +68,40 @@ test.each([
   "left % right",
   "left ** right",
   "-value",
-  "upper(value)",
 ])("%s stays unknown", (source) => {
   expect(inferExprType(parseExpr(source), unexpectedRef)).toBeNull();
+});
+
+test.each([
+  ["len(value)", ValueKind.INTEGER],
+  ["upper(value)", ValueKind.STRING],
+  ["lower(value)", ValueKind.STRING],
+  ['join(value, ", ")', ValueKind.STRING],
+  ["render_as_json(value)", ValueKind.STRING],
+] as [string, ValueKind][])("a shipped builtin call has its result type, whatever its argument: %s", (source, kind) => {
+  const notAType = (name: string): Type | null => {
+    throw new Error(`inference unexpectedly resolved constructor '${name}'`);
+  };
+  expect(inferExprType(parseExpr(source), () => null, notAType)).toEqual(Type.scalar(kind));
+});
+
+test("a host function registered under a builtin name stays unknown", () => {
+  const shipped = TEMPLATE_FNS.get("len")!;
+  registerTemplateFn("len", { params: [{ name: "obj" }], call: () => "host" });
+  try {
+    expect(inferExprType(parseExpr("len(value)"), () => null)).toBeNull();
+  } finally {
+    TEMPLATE_FNS.set("len", shipped);
+  }
 });
 
 test("a builtin call is not mistaken for a reference", () => {
   const calls: string[] = [];
   const inferred = inferExprType(parseExpr("upper(value)"), (path) => {
     calls.push(path);
-    return Type.scalar(ValueKind.STRING);
+    return Type.scalar(ValueKind.INTEGER);
   });
-  expect(inferred).toBeNull();
+  expect(inferred).toEqual(Type.scalar(ValueKind.STRING));
   expect(calls).toEqual([]);
 });
 
@@ -104,7 +127,7 @@ test.each([
   [new Type({ kind: listKindForElement(str) }), null, false],
   [null, null, false],
   // A union's members are records, never lists, so iterating one has no element type.
-  [new Type({ kind: ValueKind.OBJECT, variants: [Msg, Other] }), null, false],
+  [new Type({ kind: ValueKind.OBJECT, members: [Msg, Other] }), null, false],
 ] as [Type | null, Type | null, boolean][])("elementType(%#)", (iterable, element, nullable) => {
   const got = elementType(iterable);
   if (element === null) expect(got).toBeNull();

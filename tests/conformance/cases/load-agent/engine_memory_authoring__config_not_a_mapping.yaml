@@ -17,4 +17,4 @@ expect:
       message: long_term_memory 'notes' config must be a mapping
       frames:
       - label: flow.yaml
-        range: [3, 19, 3, 58]
+        range: [3, 54, 3, 56]

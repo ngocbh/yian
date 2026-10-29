@@ -1,7 +1,7 @@
 {
   "format": "yian.cassette.v1",
   "source": "synthetic",
-  "description": "a_refuse_mythos_5_1: claude-mythos-5-1 refuses a forced tool: tools only, max_tokens 4096. anthropic/claude-mythos-5-1 on anthropic_messages. Schema Rec (corpus:Rec), name Record. Strategy unforced_tool. Request: tools [Record the function-tool parameters of Rec]; max_tokens 4096. Expected: plan.parse(response) returns {\"answer\":\"x\",\"score\":1}.",
+  "description": "a_refuse_mythos_5_1: claude-mythos-5-1 refuses a forced tool: tools only, max_tokens 128000. anthropic/claude-mythos-5-1 on anthropic_messages. Schema Rec (corpus:Rec), name Record. Strategy unforced_tool. Request: tools [Record the function-tool parameters of Rec]; max_tokens 128000. Expected: plan.parse(response) returns {\"answer\":\"x\",\"score\":1}.",
   "interactions": [
     {
       "request": {
@@ -15,7 +15,7 @@
         },
         "json": {
           "model": "claude-mythos-5-1",
-          "max_tokens": 4096,
+          "max_tokens": 128000,
           "messages": [
             {
               "role": "user",

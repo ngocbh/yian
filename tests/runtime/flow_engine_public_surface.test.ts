@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { buildGrow } from "../../src/compile/expand.ts";
-import { resolveLlmCascade } from "../../src/compile/llm_cascade.ts";
+import { resolveRunLlm } from "../../src/compile/llm_cascade.ts";
 import { CompiledFlow, Edge, END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import {
@@ -61,13 +61,6 @@ async function refused(run: Promise<unknown>, kind: ErrorConstructor): Promise<s
   expect(error).toBeInstanceOf(kind);
   return (error as Error).message;
 }
-
-test("growth builder is a required constructor dependency", () => {
-  const { state, log } = engine(actionFlow());
-  expect(() => new FlowEngine(state, log, { numWorkers: 0 } as FlowEngineOptions)).toThrow(
-    new TypeError("grow_builder must be callable"),
-  );
-});
 
 test("unprepared state is rejected before any node executes", async () => {
   probe.length = 0;
@@ -124,16 +117,6 @@ test("the constructor checks its arguments", () => {
 
   expect(build({}, {})).toThrow(new TypeError("FlowEngine expects a RunState"));
   expect(build({}, state, { runId: RUN_ID, nextSequence: 1 })).toThrow(new TypeError("FlowEngine expects a RunLog"));
-  expect(build({ numWorkers: 1.5 })).toThrow(new TypeError("num_workers must be a non-negative integer"));
-  expect(build({ numWorkers: "1" })).toThrow(new TypeError("num_workers must be a non-negative integer"));
-  expect(build({ numWorkers: -1 })).toThrow(new RangeError("num_workers must be a non-negative integer"));
-  expect(build({ onEvent: 1 })).toThrow(new TypeError("on_event must be callable or null"));
-  expect(build({ onStream: 1 })).toThrow(new TypeError("on_stream must be callable or null"));
-  expect(build({ memoryContextOpener: 1 })).toThrow(new TypeError("memory_context_opener must be callable or null"));
-  expect(build({ skills: {} })).toThrow(new TypeError("skills must be a map or null"));
-  expect(build({ models: { env: NO_ENV, createModel: 1 } })).toThrow(
-    new TypeError("models must provide env(name) and createModel(config, options), or be null"),
-  );
 });
 
 test("the run's tool set is bound to the run id and the run signal", () => {
@@ -210,7 +193,7 @@ test("static run yields only new post durable observers", async () => {
 
 test("stream chunks are callback only and never durable", async () => {
   const stream = new StreamNode("stream", ["hel", "lo"]);
-  const flow = CompiledFlow.fromParts(
+  const flow = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
       ["stream", stream],
@@ -274,7 +257,7 @@ test("direct agent uses the run's model factory", async () => {
   const reply = new Response({ message, finishReason: "stop" });
   const model = new ScriptedModel([reply], { provider: "openai", model: "fake-direct" });
   const flow = (await loadFlow(AGENT_FLOW)).compiled;
-  const effective = resolveLlmCascade(flow, {}, { defaults: { provider: "openai", model: "fake-direct" } });
+  const effective = resolveRunLlm(flow, {}, { defaults: { provider: "openai", model: "fake-direct" } }).effective;
   const models = {
     env: NO_ENV,
     createModel: (config: Readonly<Record<string, unknown>>) => {

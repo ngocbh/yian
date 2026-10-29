@@ -20,7 +20,7 @@ import {
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { LICENSES } from "../../src/cli/licenses.ts";
@@ -58,6 +58,7 @@ import type {
   ValueRecord,
 } from "../../src/run.ts";
 import { stdioOptions } from "../helpers/mcp_helpers.ts";
+import { testNode } from "../helpers/test_node.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const PACKAGE = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
@@ -165,6 +166,7 @@ const NAMES: Record<string, string[]> = {
     "McpInvalidRequestError",
     "McpOutputError",
     "McpRequestError",
+    "McpSdkMissingError",
     "McpServerClosed",
     "McpTimeoutError",
     "McpToolError",
@@ -176,7 +178,7 @@ const NAMES: Record<string, string[]> = {
     "ASK",
   ],
   "./skills": ["loadSkills", "loadSkillDir", "defaultSkillRoots", "Skill", "SkillError"],
-  "./platform": ["lockFile", "waitForLock", "isLocked", "FileLockError", "openSqlite", "sqliteErrorCode"],
+  "./platform": ["lockFile", "waitForLock", "isLocked", "FileLockError", "openSqlite", "sqliteErrorCode", "syncFolder"],
   "./llm_clients": [
     "LLMConfig",
     "LLM_CONFIG_KEYS",
@@ -382,7 +384,10 @@ describe("entry points", () => {
 
 describe("package data", () => {
   test("every file under src is TypeScript, so src and dist/src carry the whole runtime", () => {
-    expect(filesUnder(join(ROOT, "src")).filter((path) => !path.endsWith(".ts"))).toEqual([]);
+    // The bundled flows' sources: the CLI runs them from `src/cli/bundled.ts`, which embeds them.
+    const bundledFlow = (path: string) => path.startsWith(join("src", "cli", "flows") + sep) && path.endsWith(".yaml");
+    const other = filesUnder(join(ROOT, "src")).filter((path) => !path.endsWith(".ts") && !bundledFlow(path));
+    expect(other).toEqual([]);
   });
 });
 
@@ -503,6 +508,11 @@ function bunLicense(): [string, string] {
   return kept;
 }
 
+/** The Bun version Bun's section of `LICENSES` names, or `undefined` when it names none. */
+function bunLicenseVersion(): string | undefined {
+  return /^bun@(\d+\.\d+\.\d+) /.exec(bunLicense()[0])?.[1];
+}
+
 /**
  * Return the header and text of `pkg`'s section. When updating with `YIAN_VENDORED_LICENSES` set,
  * they come from the npm package extracted there (`<dir>/package/`); else from `LICENSES`.
@@ -605,11 +615,8 @@ describe("LICENSES", () => {
     ]);
   });
 
-  test("Bun's section names the running Bun's version", () => {
-    const version = /^bun@(\d+\.\d+\.\d+) /.exec(bunLicense()[0])?.[1];
-    expect(version).toBeDefined();
-    // Node runs the check too, with no Bun version to compare.
-    if (process.versions.bun !== undefined) expect(version).toBe(process.versions.bun);
+  test("Bun's section names a Bun version", () => {
+    expect(bunLicenseVersion()).toBeDefined();
   });
 });
 
@@ -795,6 +802,18 @@ describe.skipIf(!BINARY)("the compiled binary", () => {
     for (const dir of workdirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
 
+  // The binary embeds a Bun, so its license must name that one. Without a binary the version is
+  // only what CI pins, and any Bun may run the suite.
+  test(
+    "Bun's section names the Bun the binary embeds",
+    async () => {
+      const result = await runBinary(workdir(), ["--version"], { env: { BUN_BE_BUN: "1" } });
+      expect(result.code, context(result)).toBe(0);
+      expect(bunLicenseVersion()).toBe(result.stdout.trim());
+    },
+    BINARY_TEST_LIMIT,
+  );
+
   test(
     "--licenses prints LICENSES",
     async () => {
@@ -943,28 +962,7 @@ describe.skipIf(!BINARY)("the compiled binary", () => {
 const CODE_WORKER = "@ngocbh/yian/code-worker";
 const WORKER_BUILT = join(ROOT, "dist/src/nodes/code/worker.js");
 
-/**
- * The Node binary named by `YIAN_TEST_NODE`, or `undefined` when it's unset. A set
- * value that can't run, a Node older than the `engines` floor, or a missing build
- * fails the whole file, so a typo can't pass as a run with the Node case skipped.
- * A copy of `tests/llm_clients/llm_clients.test.ts`'s: importing a test file would run its tests.
- */
-const NODE = ((): string | undefined => {
-  const node = process.env.YIAN_TEST_NODE;
-  if (!node) return undefined;
-  let version: string;
-  try {
-    version = execFileSync(node, ["--version"], { encoding: "utf8" }).trim();
-  } catch (error) {
-    throw new Error(`YIAN_TEST_NODE=${node} doesn't run`, { cause: error });
-  }
-  const [major = 0, minor = 0] = version.replace(/^v/, "").split(".").map(Number);
-  if (major < 22 || (major === 22 && minor < 18)) {
-    throw new Error(`YIAN_TEST_NODE=${node} is Node ${version}; the Node checks need 22.18 or later`);
-  }
-  if (!existsSync(WORKER_BUILT)) throw new Error(`${WORKER_BUILT} is missing; run bun run build first`);
-  return node;
-})();
+const NODE = testNode(WORKER_BUILT);
 
 /** How long compiling a host may take before it is killed. */
 const COMPILE_LIMIT = 30_000;

@@ -30,6 +30,7 @@ import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
 import { runtime } from "../../src/platform.ts";
 import { runFlow } from "../../src/run.ts";
+import { rejected, thrownBy } from "../helpers/run_state_fixtures.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 import {
   assembled,
@@ -739,7 +740,7 @@ test.each([
     "wrong-target",
     "inline body of node 'call_node': final node descriptor does not target its retained inline body",
   ],
-])("registerInlineBodies rejects a bad association, located and redacted: %s", (failure, message) => {
+])("registerInlineBodies rejects a bad association as a compiler bug, redacted: %s", (failure, message) => {
   const [descriptors, bodies] = associationFixture();
   const body = bodies.get("call_node")!;
   const call = descriptors.get("call_node") as CallDescriptor;
@@ -748,17 +749,17 @@ test.each([
   if (failure === "wrong-target") candidate.set("call_node", call.replace({ call: "named" }));
   const registrar = new RecordingRegistrar();
 
-  const error = loadError(() =>
+  const run = () =>
     registerInlineBodies(candidate, new Map([["call_node", body]]), {
       registrar,
       buildChild: () => handChild({ output: null }),
-    }),
-  );
+    });
 
+  const error = thrownBy(run) as Error;
+  expect(error.constructor).toBe(RangeError);
   expect(error.message).toBe(message);
-  expect(error.message).not.toContain(body.flowId);
-  expect(error.message).not.toContain(INLINE_FLOW_PREFIX);
-  expect(error.diagnostic.frames.at(-1)!.range).toEqual(body.nodesCursor.range!);
+  expect(message).not.toContain(body.flowId);
+  expect(message).not.toContain(INLINE_FLOW_PREFIX);
   expect(registrar.registrations).toEqual([]);
 });
 
@@ -768,12 +769,11 @@ test("registerInlineBodies checks every body before the first registration", () 
   broken.delete("loop_node");
   const registrar = new RecordingRegistrar();
 
-  const error = loadError(() =>
-    registerInlineBodies(broken, bodies, { registrar, buildChild: () => handChild({ output: null }) }),
-  );
+  const run = () => registerInlineBodies(broken, bodies, { registrar, buildChild: () => handChild({ output: null }) });
 
+  const error = thrownBy(run) as Error;
+  expect(error.constructor).toBe(RangeError);
   expect(error.message).toBe("inline body of node 'loop_node': no matching composite node descriptor");
-  expect(error.diagnostic.frames.at(-1)!.range).toEqual(bodies.get("loop_node")!.nodesCursor.range!);
   expect(registrar.registrations).toEqual([]);
 });
 
@@ -1604,12 +1604,17 @@ const OPAQUE_OVER = `id: inline-map-opaque-over-no-item
 name: inline_map_opaque_over_no_item
 input:
   primary: !list(str)
-  fallback: !list(str)
   prefix: !str
 nodes:
+  rows:
+    kind: code
+    code: |
+      return inputs["primary"]
+    input:
+      primary: \${input.primary}
   each:
     kind: map
-    over: \${input.primary | input.fallback}
+    over: \${rows.output}
     input:
       constant: fixed
       parent: \${input.prefix}
@@ -1653,7 +1658,7 @@ test("an inline MAP over an opaque list loads when no binding walks the item dir
 });
 
 test("an inline MAP over an opaque list runs when no binding walks the item directly", async () => {
-  const output = await runOutput(OPAQUE_OVER, { primary: ["first", "second"], fallback: ["unused"], prefix: "P" });
+  const output = await runOutput(OPAQUE_OVER, { primary: ["first", "second"], prefix: "P" });
 
   expect(output).toEqual([
     { constant: "fixed", parent: "P", template: "item first", literal: { nested: "P" } },
@@ -1668,11 +1673,16 @@ test.each(["${item}", "${item.name}", "{nested: '${item}'}"])(
 name: inline_map_opaque_over_item
 input:
   primary: !list(str)
-  fallback: !list(str)
 nodes:
+  rows:
+    kind: code
+    code: |
+      return inputs["primary"]
+    input:
+      primary: \${input.primary}
   each:
     kind: map
-    over: \${input.primary | input.fallback}
+    over: \${rows.output}
     input:
       row: ${itemSource}
     nodes:
@@ -1689,13 +1699,41 @@ output: \${each.output}
     const error = loadError(() => assembleText(source));
 
     expect(error.message).toBe(
-      "cannot infer type for inline binding 'each.input.row': a whole-value expression has no supported " +
-        "static scalar type; declare its type with a tag (`row: !<type> ...`) or use an explicitly typed " +
-        "named `defs:` body",
+      "cannot infer type for inline binding 'each.input.row': producer 'rows' has no available static " +
+        "type; declare its type with a tag (`row: !<type> ...`) or use an explicitly typed named `defs:` body",
     );
     expect(error.diagnostic.frames.at(-1)!.range).toEqual(inputRange(source, "each", "row"));
   },
 );
+
+test("an inline MAP over a computed list types its item", async () => {
+  const source = `id: inline-map-computed-over
+name: inline_map_computed_over
+input:
+  primary: !Optional(list(str))
+  fallback: !list(str)
+nodes:
+  each:
+    kind: map
+    over: \${input.primary | input.fallback}
+    input:
+      row: \${item}
+    nodes:
+      echo:
+        kind: code
+        code: ./fixtures/compose_codefns.ts:echo_x
+        input:
+          x: \${input.row}
+        output: str
+    output: \${echo.output}
+output: \${each.output}
+`;
+
+  expect(driver<MapNode>(assembleText(source).flow, "each").childInputs).toEqual([
+    parameter("row", Type.scalar(ValueKind.STRING)),
+  ]);
+  expect(await runOutput(source, { fallback: ["a", "b"] })).toEqual(["a", "b"]);
+});
 
 // Spies on a module export, which only Bun allows (Node's ESM namespaces are frozen); the proof
 // path calls the function directly, with no object or option to observe it through.
@@ -1996,7 +2034,7 @@ ${LOOP_BODY}`);
     }),
   );
   expect(repeat.predicateKind).toBe("times");
-  expect([repeat.times, repeat.maxIters]).toEqual([2, 2]);
+  expect(repeat.maxIters).toBe(2);
 });
 
 test("a basic inline LOOP with `times:` runs", async () => {
@@ -2633,14 +2671,15 @@ output: \${invoke.output}
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(expected);
 });
 
-test("an inline call's resolver failure uses the friendly child label", async () => {
+test("an inline call's resolver bug propagates as is, not as a load error", async () => {
   const resolved: string[] = [];
+  const bug = new TypeError("resolver exploded");
   const resolve = spyOn(CallableScope.prototype, "resolve").mockImplementation((flowId) => {
     resolved.push(flowId);
-    throw new Error("resolver exploded");
+    throw bug;
   });
   try {
-    const error = await loadErrorAsync(
+    const error = await rejected(
       loadConformanceFlow(`id: inline-resolver-failure
 name: inline_resolver_failure
 nodes:
@@ -2659,9 +2698,7 @@ output: \${wrapper.output}
     );
 
     expect(resolved).toEqual([inlineFlowId(["root", "node", "wrapper", "inline"])]);
-    expect(error.message).toBe(
-      "call node 'wrapper': could not resolve inline body of node 'wrapper': resolver exploded",
-    );
+    expect(error).toBe(bug);
   } finally {
     resolve.mockRestore();
   }
@@ -2693,7 +2730,7 @@ test("the callable scope builds a private once and same-owner registration is id
 
   expect(built).toEqual([]);
   expect(scope.resolve(flowId)).toBe(child);
-  expect(scope.resolve(flowId, "ignored-version")).toBe(child);
+  expect(scope.resolve(flowId)).toBe(child);
   expect(built).toEqual(["first"]);
 });
 
@@ -2801,8 +2838,8 @@ test("an eager def can resolve a pre-registered private", () => {
   const events: string[] = [];
   // The def build is module-private, so a subclass fakes it for `outer`.
   class FakeDefScope extends CallableScope {
-    override resolve(name: string, version: string | null = null): ComposedFlow {
-      if (name !== "outer" || events.includes("def:outer")) return super.resolve(name, version);
+    override resolve(name: string): ComposedFlow {
+      if (name !== "outer" || events.includes("def:outer")) return super.resolve(name);
       events.push("def:outer");
       expect(this.resolve(flowId)).toBe(privateChild);
       return defChild;

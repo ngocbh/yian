@@ -137,8 +137,11 @@ describe("readPlainScalar", () => {
 
   test.each([
     ["2026-13-45", "not a valid date: month must be in 1..12"],
-    // YAML's spaced offset is not in yian's datetime grammar.
+    // YAML 1.1 timestamp forms outside yian's datetime grammar.
     ["2026-01-01 10:00:00 +05:00", DATETIME_MSG],
+    ["2001-12-14 21:59:43.10 -5", DATETIME_MSG],
+    ["2001-12-14t21:59:43.10-05:00", DATETIME_MSG],
+    ["2001-1-1 1:00:00", DATETIME_MSG],
   ])("rejects an unbuildable form: %p", (text, message) => {
     // The inline-call error adds the quoting fix and must not echo the value.
     expect(thrown(SourceSyntaxError, () => readPlainScalar(text)).message).toBe(message);

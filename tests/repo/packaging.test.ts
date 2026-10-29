@@ -20,7 +20,7 @@ import {
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { LICENSES } from "../../src/cli/licenses.ts";
@@ -384,7 +384,10 @@ describe("entry points", () => {
 
 describe("package data", () => {
   test("every file under src is TypeScript, so src and dist/src carry the whole runtime", () => {
-    expect(filesUnder(join(ROOT, "src")).filter((path) => !path.endsWith(".ts"))).toEqual([]);
+    // The bundled flows' sources: the CLI runs them from `src/cli/bundled.ts`, which embeds them.
+    const bundledFlow = (path: string) => path.startsWith(join("src", "cli", "flows") + sep) && path.endsWith(".yaml");
+    const other = filesUnder(join(ROOT, "src")).filter((path) => !path.endsWith(".ts") && !bundledFlow(path));
+    expect(other).toEqual([]);
   });
 });
 

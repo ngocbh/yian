@@ -3,17 +3,19 @@
  * the fake server in `tests/fixtures/mcp/`.
  */
 
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { Message, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { runFlow, type RunFlowOptions } from "../../src/run.ts";
+import { isRunLogLocked } from "../../src/runtime/log.ts";
 import type { Skill } from "../../src/skills/catalog.ts";
 import { McpConnectError, McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import type { ToolEntry } from "../../src/tools/registry.ts";
@@ -200,6 +202,47 @@ test(
   },
   SLOW,
 );
+
+const stopped = new Error("stopped");
+const thrown = new Error("onEvent threw");
+
+for (const [name, toolId, inputs, outcome] of [
+  ["succeeds", "echo", '{text: "hi"}', "succeeded"],
+  ["fails", "bad_request", "", "failed"],
+  ["is stopped", "slow", "{seconds: 5}", stopped],
+  ["rejects for a throwing onEvent", "echo", '{text: "hi"}', thrown],
+] as const) {
+  test(
+    `the run's servers close before its log is released when the run ${name}`,
+    async () => {
+      const file = marker();
+      const log = join(dir, "run.jsonl");
+      const server = fake("--marker", file);
+      const locked: boolean[] = [];
+      const close = McpServer.prototype.close;
+      // A delivery or an `advance` waits until the log is released, so the server is closed by then.
+      const spy = spyOn(McpServer.prototype, "close").mockImplementation(function (this: McpServer) {
+        locked.push(isRunLogLocked(log));
+        return close.call(this);
+      });
+      const stop = new AbortController();
+      const onEvent = (event: RunEvent) => {
+        if (outcome === thrown) throw thrown;
+        if (outcome === stopped && event instanceof NodeStarted && event.nodeId === "call") stop.abort(stopped);
+      };
+      try {
+        const running = run(await toolFlow(toolId, inputs), { fake: server }, { log, onEvent, signal: stop.signal });
+        if (typeof outcome === "string") expect((await running).status).toBe(outcome);
+        else expect(await rejection(running)).toBe(outcome);
+      } finally {
+        spy.mockRestore();
+      }
+      expect(locked).toEqual([true]);
+      await expectClosed(server, file);
+    },
+    SLOW,
+  );
+}
 
 test(
   "a host opened server stays open across runs",

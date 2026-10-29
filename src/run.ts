@@ -995,12 +995,7 @@ export async function runFlow(
     const skills = checkSkills(flow.compiled, options.skills ?? null);
     checkCallbacks(options);
     checkTestOptions(options);
-    const runServers = await openRunServers(unopened, signal);
-    try {
-      return await startRun(flow, inputs, { ...options, skills }, runDefaults, env);
-    } finally {
-      await closeRunServers(runServers);
-    }
+    return await startRun(flow, inputs, { ...options, skills }, unopened, runDefaults, env);
   });
 }
 
@@ -1259,11 +1254,15 @@ export function runStartLlm(
   });
 }
 
-/** Check the tools, then record and drive a fresh run whose MCP servers are open. */
+/**
+ * Open the run's MCP servers, check the tools, then record and drive a fresh run. What this opened
+ * closes before the run is released, whatever fails.
+ */
 async function startRun(
   flow: ComposedFlow,
   inputs: Readonly<Record<string, unknown>>,
   options: RunFlowOptions,
+  unopened: readonly [string, McpServer][],
   runDefaults: Defaults,
   env: Env,
 ): Promise<RunResult> {
@@ -1273,89 +1272,91 @@ async function startRun(
   const random = options.random ?? null;
   const scheduler = options.scheduler ?? realScheduler;
   const models = options.models ?? defaultModelAccess(env);
-  const runTools = new ToolSet(tools, { context });
-  checkToolGrants(flow.compiled, runTools);
-  checkToolTypes(flow.compiled, runTools);
-
-  // Identity belongs to the authored program, before cascade resolution or any per-run copy can
-  // change object topology.
-  const authoredFingerprint = flowFingerprint(flow.compiled);
-  const privateFlow = copyGraph(flow.compiled);
-  // Held for a later explicit backward call.
-  const retainedProgram = learnable ? copyGraph(privateFlow) : null;
-
-  // Convert supplied boundary values before RunStarted persists its input. This is the only
-  // string conversion: a value crossing a CALL/MAP/LOOP edge is validated as is, and START stays
-  // the authority for required/default handling and contract validation.
-  const coerced = coerceInputs(flow.input, hostInputs(flow.input, inputs));
-  for (const [name, value] of Object.entries(coerced)) rejectDeepNesting(value, `input ${reprText(name)}`);
-
-  // The key stays out of the cascade so RunStarted never records it. Its base_url and connection
-  // settings stay out too, so no authored layer can pair the key with another. Host intake makes
-  // the copy they are taken from, with an integral number as an int.
-  const runLlmConfig = fromHost(options.llmConfig ?? {}, "llm_config");
-  if (!isRecord(runLlmConfig)) throw new TypeError("llmConfig must be a record or null");
-  const host = popHostCredentials(runLlmConfig);
-  let apiKey = host.apiKey;
-  let headers = host.headers;
-
-  // One selection snapshot determines every static agent before RunStarted, and what each agent
-  // resolved only when it runs binds from.
-  const snapshot = connectionSnapshot({ env });
-  const hostKeyProvider = apiKey === null ? null : (runLlmConfig["provider"] as string);
-  const runLlm = runStartLlm(privateFlow, coerced, runLlmConfig, snapshot);
-  const effectiveLlm = snapshot.bind(runLlm.effective, {
-    hostKeyProvider,
-    hostBaseUrl: host.baseUrl,
-    hostSettings: host,
-  });
-  // Each call-time agent's provider when run start already knows it: it limits the recorded
-  // selection.
-  const known = knownCallTimeProviders(privateFlow, runLlm.callTime, snapshot.defaults);
-  let callTimeLlm: CallTimeLlm | null = null;
-  if (Object.keys(runLlm.callTime).length > 0) {
-    callTimeLlm = {
-      selection: callTimeSelection(snapshot, { known, hostKeyProvider, hostBaseUrl: host.baseUrl, hostSettings: host }),
-      agents: runLlm.callTime,
-    };
-  }
-  applyEffectiveLlmMap(privateFlow, effectiveLlm, callTimeLlm);
-  // A key that neither marks an agent nor is in the call-time agents' selection has nothing to
-  // authenticate, so the run keeps neither it nor its headers.
-  if (apiKey !== null && !usesHostKey(effectiveLlm, callTimeLlm)) {
-    apiKey = null;
-    headers = null;
-  }
-  if (apiKey !== null) bindHostCredentials(privateFlow, apiKey, headers);
-  checkEffectiveLlm(effectiveLlm, apiKey, headers, staticAgentLabels(privateFlow), valueConfigSubjects(privateFlow));
-
-  if (learnable) applyExecutionLayout(privateFlow, resolveExecutionLayout(privateFlow));
-
-  const canonicalRunId = runId ?? defaultRunId();
-  const pool = new VariablePool(privateFlow.startId);
-  pool.set(privateFlow.startId, coerced);
-  seedSystemClock(pool, scheduler.now());
-  pool.addSystem("run_id", canonicalRunId);
-  const startWiringOverride = startWiring(flow.input, coerced);
-
+  let runServers: McpServer[] = [];
   let memoryRuntime: MemoryRuntime | null = null;
-  let layout: MemoryLayoutParts | null = null;
-  if (memory !== null) {
-    layout = resolveRuntimeMemoryLayout(privateFlow);
-    checkRegistryTypes(memory, layout.memories);
-    memoryRuntime = await MemoryRuntime.open({
-      memories: layout.memories,
-      origins: layout.origins,
-      memory,
-      snapshots: null,
-    });
-  }
-
   let authority: RunLog | null = null;
   let primary: { error: unknown } | null = null;
   let runHold: RunHold | null = null;
   let keep: () => IdleRun | null = () => null;
   try {
+    runServers = await openRunServers(unopened, signal);
+    const runTools = new ToolSet(tools, { context });
+    checkToolGrants(flow.compiled, runTools);
+    checkToolTypes(flow.compiled, runTools);
+
+    // Identity belongs to the authored program, before cascade resolution or any per-run copy can
+    // change object topology.
+    const authoredFingerprint = flowFingerprint(flow.compiled);
+    const privateFlow = copyGraph(flow.compiled);
+    // Held for a later explicit backward call.
+    const retainedProgram = learnable ? copyGraph(privateFlow) : null;
+
+    // Convert supplied boundary values before RunStarted persists its input. This is the only
+    // string conversion: a value crossing a CALL/MAP/LOOP edge is validated as is, and START stays
+    // the authority for required/default handling and contract validation.
+    const coerced = coerceInputs(flow.input, hostInputs(flow.input, inputs));
+    for (const [name, value] of Object.entries(coerced)) rejectDeepNesting(value, `input ${reprText(name)}`);
+
+    // The key stays out of the cascade so RunStarted never records it. Its base_url and connection
+    // settings stay out too, so no authored layer can pair the key with another. Host intake makes
+    // the copy they are taken from, with an integral number as an int.
+    const runLlmConfig = fromHost(options.llmConfig ?? {}, "llm_config");
+    if (!isRecord(runLlmConfig)) throw new TypeError("llmConfig must be a record or null");
+    const host = popHostCredentials(runLlmConfig);
+    let apiKey = host.apiKey;
+    let headers = host.headers;
+
+    // One selection snapshot determines every static agent before RunStarted, and what each agent
+    // resolved only when it runs binds from.
+    const snapshot = connectionSnapshot({ env });
+    const hostKeyProvider = apiKey === null ? null : (runLlmConfig["provider"] as string);
+    const runLlm = runStartLlm(privateFlow, coerced, runLlmConfig, snapshot);
+    const effectiveLlm = snapshot.bind(runLlm.effective, {
+      hostKeyProvider,
+      hostBaseUrl: host.baseUrl,
+      hostSettings: host,
+    });
+    // Each call-time agent's provider when run start already knows it: it limits the recorded
+    // selection.
+    const known = knownCallTimeProviders(privateFlow, runLlm.callTime, snapshot.defaults);
+    let callTimeLlm: CallTimeLlm | null = null;
+    if (Object.keys(runLlm.callTime).length > 0) {
+      callTimeLlm = {
+        selection: callTimeSelection(snapshot, { known, hostKeyProvider, hostBaseUrl: host.baseUrl, hostSettings: host }),
+        agents: runLlm.callTime,
+      };
+    }
+    applyEffectiveLlmMap(privateFlow, effectiveLlm, callTimeLlm);
+    // A key that neither marks an agent nor is in the call-time agents' selection has nothing to
+    // authenticate, so the run keeps neither it nor its headers.
+    if (apiKey !== null && !usesHostKey(effectiveLlm, callTimeLlm)) {
+      apiKey = null;
+      headers = null;
+    }
+    if (apiKey !== null) bindHostCredentials(privateFlow, apiKey, headers);
+    checkEffectiveLlm(effectiveLlm, apiKey, headers, staticAgentLabels(privateFlow), valueConfigSubjects(privateFlow));
+
+    if (learnable) applyExecutionLayout(privateFlow, resolveExecutionLayout(privateFlow));
+
+    const canonicalRunId = runId ?? defaultRunId();
+    const pool = new VariablePool(privateFlow.startId);
+    pool.set(privateFlow.startId, coerced);
+    seedSystemClock(pool, scheduler.now());
+    pool.addSystem("run_id", canonicalRunId);
+    const startWiringOverride = startWiring(flow.input, coerced);
+
+    let layout: MemoryLayoutParts | null = null;
+    if (memory !== null) {
+      layout = resolveRuntimeMemoryLayout(privateFlow);
+      checkRegistryTypes(memory, layout.memories);
+      memoryRuntime = await MemoryRuntime.open({
+        memories: layout.memories,
+        origins: layout.origins,
+        memory,
+        snapshots: null,
+      });
+    }
+
     // The result reads its files through the contract a CALL of this flow gets.
     const state = new RunState(privateFlow, { resultContract: childSignature(flow).output });
     const preparedStart = prepareRunStarted(state, {
@@ -1446,7 +1447,7 @@ async function startRun(
     primary = { error };
     throw error;
   } finally {
-    await closeAndRelease({ servers: [], memoryRuntime, authority, primary, hold: runHold, keep });
+    await closeAndRelease({ servers: runServers, memoryRuntime, authority, primary, hold: runHold, keep });
   }
 }
 

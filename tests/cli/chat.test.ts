@@ -201,10 +201,50 @@ test(
     const system = model.requests[0]!.messages[0]!.text();
     expect(system).toContain("Flow in focus: hello.yaml");
     // A snapshot, fenced as data.
-    expect(system).toContain("as they were when the chat opened; read_flow and check_flow give its current state");
+    expect(system).toContain("as they were when the chat opened. read_flow and check_flow give its current state.");
     expect(system).toContain(`<<<FLOW TEXT\n${HELLO}`);
     expect(system).toContain("ok\nname: hello\ninputs:\n  name: str\nFLOW TEXT>>>");
     expect(system.replace(/\s+/g, " ")).toContain("between <<<FLOW TEXT and FLOW TEXT>>>");
+  },
+  TIMEOUT,
+);
+
+test(
+  "a FLOW outside the chat's folder is a snapshot the tools can't reach, and the chat says so",
+  async () => {
+    mkdirSync(join(tmp, "elsewhere"));
+    const path = join(tmp, "elsewhere", "hello.yaml");
+    writeFileSync(path, HELLO);
+    const { io, stdin, stderr } = chatIo();
+    stdin.write("help\n/exit\n");
+    const model = new AnsweringModel(() => textReply("sure"));
+    expect((await runChat(io, model, path)).code).toBe(0);
+    expect(stderr()).toContain(
+      `${path} is outside this folder; to work on it with the tools, run yian chat from its folder\n`,
+    );
+    const system = model.requests[0]!.messages[0]!.text().replace(/\s+/g, " ");
+    expect(system).toContain(`Flow in focus: ${path}`);
+    expect(system).toContain(
+      "It is outside the folder this chat works in, so the tools can't read, write or run it; " +
+        "this snapshot is all you have.",
+    );
+  },
+  TIMEOUT,
+);
+
+test(
+  "the Inbox hint quotes a path the shell would split",
+  async () => {
+    const path = join(root, "my talk.yaml");
+    writeFileSync(
+      path,
+      "id: talk\nname: talk\ninput:\n  messages: !Inbox(str)\nnodes:\n  heard:\n    kind: tool\n" +
+        "    tool_id: take\n    input:\n      from: ${input.messages}\noutput: done\n",
+    );
+    const { io, stdin, stderr } = chatIo();
+    stdin.write("/exit\n");
+    expect((await runChat(io, new AnsweringModel(() => textReply("sure")), path)).code).toBe(0);
+    expect(stderr()).toContain(`to chat with this flow itself, run yian run '${path}'\n`);
   },
   TIMEOUT,
 );

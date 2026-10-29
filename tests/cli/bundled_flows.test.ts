@@ -85,6 +85,11 @@ test("the chat's prompt has write_flow's refusal, checks before runs, and relays
   const text = flowText("chat.yaml").replace(/\s+/g, " ");
   expect(text).toContain("write_flow refuses content that doesn't load; fix what it reports.");
   expect(text).toContain("Check a flow before you run it.");
+  expect(text).toContain(
+    "To explain or change a flow, read it with read_flow first; check_flow only says whether it loads " +
+      "and lists its inputs.",
+  );
+  expect(text).toContain("refuse a path outside it");
   expect(text).not.toContain("Check a flow before you write it");
   for (const phrase of ["message_flow", "close_inbox when the user is done with it", "what a run said"]) {
     expect(text).toContain(phrase);

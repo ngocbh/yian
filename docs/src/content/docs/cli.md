@@ -146,8 +146,9 @@ itself. An `ask` never waits in `yian run`: it prompts at the terminal. See
 
 When stdin and stderr are a terminal, `yian run FLOW` chats with a flow that has an `Inbox(str)`
 or `Inbox(Message)` input: each line you type goes to the inbox, and the output of each node named
-`reply` prints on stdout. Only stdin and stderr are checked, so with stdout redirected it still
-chats and the replies go to the file. It chats when all of these hold:
+`reply` prints on stdout, its escape sequences dropped and its control characters shown. Only
+stdin and stderr are checked, so with stdout redirected it still chats and the replies go to the
+file. It chats when all of these hold:
 
 - The flow has one such input, or `--inbox NAME` picks one of several.
 - The flow declares no memory and grants or calls no MCP tool.
@@ -254,7 +255,8 @@ exit 130. Once the log exists, `yian run --resume` continues it. A second signal
 flows in the folder you start it in, and it reads yian's docs to answer questions about writing
 flows. Give it a flow to start the chat about that flow: at every turn the assistant sees the
 flow's text and whether it loads, as they were when the chat opened. It reads the file again to
-see your later changes.
+see your later changes. A flow outside the folder is only that snapshot, since the tools can't
+reach it; the chat says so when it opens. Run `yian chat` from the flow's folder to work on it.
 
 ```console
 $ yian chat

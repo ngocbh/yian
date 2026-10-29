@@ -988,9 +988,11 @@ function validateBackwardFinished(
     throw new RangeError("backward computation failure requires accepted occurrence attribution");
   }
   const source = new SourceRef(trace.runId, failure.nodeStartedSeq);
-  acceptedOccurrence(trace, source, "backward computation failure requires an accepted occurrence");
-  const context = trace.backwardContext(source);
-  if (failure.nodeId !== context.nodeId || !sameOptional(failure.scope, context.scope, sameExecutionScope)) {
+  const occurrence = acceptedOccurrence(trace, source, "backward computation failure requires an accepted occurrence");
+  // Read off the occurrence, not its backward context: the failure may be that its node data
+  // can't be rebuilt.
+  const scope = occurrence.capture.scope;
+  if (failure.nodeId !== occurrence.nodeId || !sameOptional(failure.scope, scope, sameExecutionScope)) {
     throw new RangeError("backward computation failure must match its recorded invocation");
   }
   if (!sameOptional(outcome.learning, prefixLearning(backward), sameLearningResult)) {
@@ -1366,8 +1368,12 @@ export function projectOwnerContexts(
     const item = attributedResults[index]!;
     const messages = takeOccurrenceMessages(pending, occurrence);
     const key = sourceKey(occurrence.source);
-    // An unreached occurrence sends nothing; only a memory scope reads its context.
-    if (messages.length === 0 && !scopes.has(key)) continue;
+    // An unreached occurrence sends nothing, and its result is empty, so its memories get no
+    // feedback from it; its context isn't read, so node data it can't rebuild doesn't matter.
+    if (messages.length === 0) {
+      if (scopes.has(key)) feedbackBySource.set(key, []);
+      continue;
+    }
     const context = trace.backwardContext(occurrence.source);
     if (scopes.has(key)) {
       feedbackBySource.set(key, ownerFeedback(trace, occurrence, context, messages, item.result, cache));

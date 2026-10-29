@@ -668,8 +668,11 @@ export interface MaterialCaps {
   readonly toolSpecs: (ids: readonly string[]) => readonly ToolSpec[] | null;
   /** Builds the invocation's model to read its request settings off; never called. */
   readonly models: ModelAccess | null;
-  /** Recalls the memory sections against the run's recorded snapshots, as `NodeCaps` does. */
-  readonly openMemoryContext: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
+  /**
+   * Recalls the memory sections against the run's recorded snapshots, as `NodeCaps` does, from the
+   * rendered system prompt without the skill listing and the rendered prompt.
+   */
+  readonly openMemoryContext: (systemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
   /** The declared type of each of the node's locals, as `NodeCaps.localTypes` gives it. */
   readonly localTypes?: ReadonlyMap<string, Type | null>;
 }
@@ -994,10 +997,11 @@ export interface NodeCaps {
     event: ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished | ReplayDegraded,
   ) => void;
   /**
-   * Opens the invocation's memory context once, from the visible base system prompt and the
-   * rendered prompt; supplied to a node that declares `needsMemoryContext`.
+   * Opens the invocation's memory context once, from the rendered system prompt (an AGENT's
+   * without its skill listing, so grants never change recall) and the rendered prompt; supplied to
+   * a node that declares `needsMemoryContext`.
    */
-  readonly openMemoryContext?: (baseSystemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
+  readonly openMemoryContext?: (systemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
   /**
    * Opens the node's steer inbox; supplied to a node declaring `readsSteerInbox` when the engine
    * supplies steps. Opening registers the node as reading `inbox` until its outcome commits.
@@ -1640,10 +1644,13 @@ export abstract class Node {
   /**
    * Return what an invocation's `forward` renders for bound `inputs`, rendered again: the JSON
    * material backward reads beside `captureBackwardContext`'s, with the parts established before
-   * a render that fails. Pure: it renders with the node's authored fields and calls no model.
+   * a render the run refused the same way. Pure: it renders with the node's authored fields and
+   * calls no model.
    *
    * @param localTypes The declared type of each local, as `NodeCaps.localTypes` gives it.
    * @returns The render material, or `null` (the default) for a kind that renders nothing.
+   * @throws CapabilityFault when building the capture fails; any render error that isn't one of
+   *   the run's refusals (a fault), unchanged. The run failed the node on the same error.
    */
   renderCapture(
     inputs: Readonly<Record<string, unknown>>,

@@ -40,7 +40,7 @@
 import { current } from "../../defaults.ts";
 import { compareCodeUnits } from "../../diagnostics.ts";
 import type { ChatModel } from "../../llm/events.ts";
-import { Message, Request, TextPart } from "../../llm/messages.ts";
+import { Message, Request, type Response, TextPart } from "../../llm/messages.ts";
 import { planStructured, StructuredOutputError, structuredTarget } from "../../llm/structured.ts";
 import {
   ModelTextInteraction,
@@ -435,6 +435,52 @@ export function userMessage(text: string): Message {
 }
 
 /**
+ * The conversation one structured generation of `typ` sends: `generateStructured` runs it and
+ * `structuredMaterial` rebuilds it, so learning's digests match the requests the run sent.
+ */
+interface StructuredConversation {
+  /** Whether the schema goes in the prompt (`plan.instruction()` as a user message). */
+  readonly prompted: boolean;
+  /** The purpose each call records: `structured_fallback` for the prompt strategy, else `structured_native`. */
+  readonly purpose: "structured_fallback" | "structured_native";
+  /** Return the next call's request. */
+  request(): Request;
+  /**
+   * Return the reply's checked value (`checkReply`), or, for a reply holding no valid answer or
+   * failing the check, its error, after adding the correction naming it to the conversation.
+   *
+   * @throws Any other error parsing or checking the reply, unchanged.
+   */
+  check(response: Response): { value: Value } | { invalid: StructuredOutputError | TypeCheckError };
+}
+
+/**
+ * Start the structured conversation (`StructuredConversation`) for `typ` with `model` after
+ * `messages`: the schema is sent the way `planStructured` picks for the model, and the prompt
+ * strategy appends its instruction as a user message. An invalid reply is not kept: the next
+ * request has the earlier messages and the correction.
+ */
+function structuredConversation(model: ChatModel, messages: readonly Message[], typ: Type): StructuredConversation {
+  const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
+  const prompted = plan.strategy === "prompt";
+  let conversation = [...messages, ...(prompted ? [userMessage(plan.instruction())] : [])];
+  return {
+    prompted,
+    purpose: prompted ? "structured_fallback" : "structured_native",
+    request: () => plan.apply(new Request({ messages: conversation })),
+    check(response) {
+      try {
+        return { value: checkReply(plan.parse(response), typ) };
+      } catch (error) {
+        if (!(error instanceof StructuredOutputError || error instanceof TypeCheckError)) throw error;
+        conversation = [...conversation, userMessage(plan.correction(error.message))];
+        return { invalid: error };
+      }
+    },
+  };
+}
+
+/**
  * Generate a value of `typ` with `model`, correcting an invalid reply up to `retries` times.
  *
  * The schema is sent the way `planStructured` picks for the model; the prompt strategy appends its
@@ -474,20 +520,16 @@ export async function generateStructured(
 ): Promise<Value> {
   const { live = null, signal, interrupt, retry, steps, baseSystemPrompt = null } = options;
   const retries = options.retries ?? current().agentRetries;
-  const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
-  const prompted = plan.strategy === "prompt";
-  const purpose = prompted ? "structured_fallback" : "structured_native";
-  const instruction = prompted ? [userMessage(plan.instruction())] : [];
-  let conversation = [...messages, ...instruction];
+  const conversation = structuredConversation(model, messages, typ);
   for (let call = 0; ; call++) {
     signal?.throwIfAborted();
     // No model call starts after an interrupt, or once replay passed an earlier start's honor; a
     // replaying call already happened.
     const interrupted = steps === undefined ? interrupt?.aborted === true : interruptRequested(interrupt, steps);
     if (interrupted) throw new ReplyInterrupted(new Message({ role: "assistant", parts: [] }));
-    const request = plan.apply(new Request({ messages: conversation }));
+    const request = conversation.request();
     const { response } = await callModel(live, model, request, {
-      purpose,
+      purpose: conversation.purpose,
       signal,
       interrupt,
       retry,
@@ -497,14 +539,11 @@ export async function generateStructured(
     });
     // A stop that lands during the call wins over its reply.
     signal?.throwIfAborted();
-    try {
-      return checkReply(plan.parse(response), typ);
-    } catch (error) {
-      if (!(error instanceof StructuredOutputError || error instanceof TypeCheckError)) throw error;
-      if (call >= retries) {
-        throw new OutputInvalidError(error.message, { cause: error, path: outputPath(error, typ) });
-      }
-      conversation = [...conversation, userMessage(plan.correction(error.message))];
+    const checked = conversation.check(response);
+    if ("value" in checked) return checked.value;
+    if (call >= retries) {
+      const error = checked.invalid;
+      throw new OutputInvalidError(error.message, { cause: error, path: outputPath(error, typ) });
     }
   }
 }
@@ -528,27 +567,20 @@ export function structuredMaterial(
   steps: readonly ValueRecord[],
   baseSystemPrompt: string | null = null,
 ): { interactions: VisibleInteraction[]; requests: RebuiltRequest[]; digestOk: boolean } {
-  const plan = planStructured(structuredTarget(model), typeToSchema(typ)!);
-  const prompted = plan.strategy === "prompt";
-  const purpose = prompted ? "structured_fallback" : "structured_native";
-  let conversation = [...messages, ...(prompted ? [userMessage(plan.instruction())] : [])];
+  const conversation = structuredConversation(model, messages, typ);
+  const { prompted, purpose } = conversation;
   const interactions: VisibleInteraction[] = [];
   const requests: RebuiltRequest[] = [];
   for (const step of steps) {
-    const request = plan.apply(new Request({ messages: conversation }));
+    const request = conversation.request();
     const digest = requestSha256(digestRequest(request, baseSystemPrompt));
     requests.push({ request, digestOk: step["purpose"] === purpose && step["request_sha256"] === digest });
     // A cut reply was never output: its text so far shows nothing, as in `stepsMaterial`.
     if (Object.hasOwn(step, "error") || step["finish"] === "interrupted") continue;
     const response = recordedResponse(step);
     if (prompted) pushVisible(interactions, () => new ModelTextInteraction(response.message.text()));
-    try {
-      const value = checkReply(plan.parse(response), typ);
-      if (!prompted) pushVisible(interactions, () => new ModelValueInteraction(value));
-    } catch (error) {
-      if (!(error instanceof StructuredOutputError || error instanceof TypeCheckError)) throw error;
-      conversation = [...conversation, userMessage(plan.correction(error.message))];
-    }
+    const checked = conversation.check(response);
+    if (!prompted && "value" in checked) pushVisible(interactions, () => new ModelValueInteraction(checked.value));
   }
   return { interactions, requests, digestOk: requests.every((each) => each.digestOk) };
 }

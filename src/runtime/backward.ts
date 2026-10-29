@@ -66,7 +66,7 @@ import {
 } from "./log.ts";
 import { LearningProposalError, MemoryRuntime } from "./memory_runtime.ts";
 import { commitPrepared, prepareRecord, RunState } from "./state.ts";
-import { occurrenceMaterial, type RetainedTrace, type TraceOccurrence, visibleInputs } from "./trace.ts";
+import { NodeDataError, occurrenceMaterial, type RetainedTrace, type TraceOccurrence, visibleInputs } from "./trace.ts";
 
 /** @internal A callback or result-contract failure attributed to one occurrence; forward state is unchanged. */
 export class BackwardComputeError extends Error {
@@ -81,14 +81,18 @@ export class BackwardComputeError extends Error {
   }
 }
 
-/** Return `error` as a `code` failure of the occurrence `context` describes. */
-function computeFailure(context: BackwardContext, code: string, error: unknown): BackwardComputeError {
+/** Return `error` as a `code` failure of the occurrence `at` describes (its backward context's attribution). */
+function computeFailure(
+  at: Pick<BackwardContext, "scope" | "runId" | "nodeId" | "nodeStartedSeq">,
+  code: string,
+  error: unknown,
+): BackwardComputeError {
   return new BackwardComputeError(
     new BackwardFailure("backward", code, failureMessage(error), {
-      scope: context.scope,
-      runId: context.runId,
-      nodeId: context.nodeId,
-      nodeStartedSeq: context.nodeStartedSeq,
+      scope: at.scope,
+      runId: at.runId,
+      nodeId: at.nodeId,
+      nodeStartedSeq: at.nodeStartedSeq,
       causeType: error instanceof Error ? error.name : jsTypeName(error),
       traceback: tracebackText(error),
     }),
@@ -114,7 +118,8 @@ function computeFailure(context: BackwardContext, code: string, error: unknown):
  *   route/source authority.
  * @throws Error when an occurrence that receives feedback has no retained handler.
  * @throws BackwardComputeError for an attributed callback or result-contract error; any error a
- *   callback throws, a host capability fault included, is attributed.
+ *   callback throws, a host capability fault included, is attributed, and so is node data an
+ *   occurrence that receives feedback can't rebuild (`NodeDataError`, as `backward.execute`).
  */
 export async function computeBackward(
   trace: RetainedTrace,
@@ -137,11 +142,18 @@ export async function computeBackward(
     const source = occurrence.source;
     const messages = takeOccurrenceMessages(pending, occurrence);
     if (messages.length === 0) continue;
-    // Trace lookups stay outside the callback's `try`: their faults aren't the callback's.
-    const context = trace.backwardContext(source, {
-      downstreamContext: messages.map((message, i) => materializeContext(message, i, cache)),
-      material: materials.get(sourceKey(source)) ?? null,
-    });
+    // Trace lookups stay outside the callback's `try`: their faults aren't the callback's. Node
+    // data that can't be rebuilt is the occurrence's failure, attributed as the callback's would be.
+    let context: BackwardContext;
+    try {
+      context = trace.backwardContext(source, {
+        downstreamContext: messages.map((message, i) => materializeContext(message, i, cache)),
+        material: materials.get(sourceKey(source)) ?? null,
+      });
+    } catch (error) {
+      if (!(error instanceof NodeDataError)) throw error;
+      throw computeFailure(error, "backward.execute", error);
+    }
     const received = messages.map((item) => item.feedback);
     const feedback = Object.freeze(received.map((message) => copyBackwardValue(message, "feedback") as FeedbackValue));
     const handler = trace.backwardHandlers.get(sourceKey(source));
@@ -232,10 +244,10 @@ export async function learningMaterials(
   // Recalls for `occurrence` against the recorded snapshots, as its run did.
   const recallFor =
     (occurrence: TraceOccurrence) =>
-    async (baseSystemPrompt: string, prompt: string): Promise<MemoryContext> => {
+    async (systemPrompt: string, prompt: string): Promise<MemoryContext> => {
       const scope = occurrence.memoryScope;
       if (scope === null || scope.memories.length === 0 || memory === null) return new MemoryContext();
-      const recall = new RecallContext(baseSystemPrompt, prompt, visibleInputs(occurrence) ?? {}, scope.staticPath);
+      const recall = new RecallContext(systemPrompt, prompt, visibleInputs(occurrence) ?? {}, scope.staticPath);
       return await memory.openContext(scope, recall, { signal: new AbortController().signal });
     };
   const materials = new Map<string, LearningMaterial>();

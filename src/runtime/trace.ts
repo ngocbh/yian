@@ -45,6 +45,7 @@ import {
   type BackwardResult,
   type LearningMaterial,
   type MaterialCaps,
+  markerMessage,
   type Node,
   retainFailure,
   validateDeclaredNames,
@@ -52,6 +53,7 @@ import {
 import { BindingCapture, BindingError } from "../nodes/binding.ts";
 import {
   type ChildFlowBoundary,
+  type ExecutionScope,
   isExactly,
   type SeedConnection,
   sameExecutionScope,
@@ -311,6 +313,31 @@ export function checkMemoryScope(scope: MemoryScope | null): MemoryScope | null 
 }
 
 /**
+ * An occurrence's node data (`TraceOccurrence.nodeData`) couldn't be rebuilt; the error the
+ * rebuild threw is the `cause`. It names the occurrence as its backward context would.
+ */
+export class NodeDataError extends Error {
+  override name = "NodeDataError";
+  /** The occurrence's execution scope. */
+  readonly scope: ExecutionScope | null;
+  /** The occurrence's run. */
+  readonly runId: string;
+  /** The occurrence's node. */
+  readonly nodeId: string;
+  /** The occurrence's accepted start sequence. */
+  readonly nodeStartedSeq: number;
+
+  constructor(occurrence: TraceOccurrence, cause: unknown) {
+    const { nodeId, source } = occurrence;
+    super(`node ${reprText(nodeId)}: its node data can't be rebuilt: ${markerMessage(cause)}`, { cause });
+    this.scope = occurrence.capture.scope;
+    this.runId = source.runId;
+    this.nodeId = nodeId;
+    this.nodeStartedSeq = source.executionSeq;
+  }
+}
+
+/**
  * One accepted outcome and its derived route, identified by its accepted start. Frozen.
  *
  * Private memory ownership is detached from the physical node before pruning. Replay reconstructs
@@ -480,15 +507,21 @@ export class TraceOccurrence {
    * node and its bound inputs (`rebuildNodeData`): its static material and, for a node whose
    * `forward` rendered, the render and the model config it used. Built on the first read.
    *
-   * @throws RangeError when the occurrence was made without a rebuilder, as `boundInputs` (a
-   *   finished binding whose bound inputs don't rebuild included), or when the run recorded no
-   *   model config for the node.
+   * @throws RangeError when the occurrence was made without a rebuilder.
+   * @throws NodeDataError carrying what the rebuild threw: an error rebinding the inputs (as
+   *   `boundInputs`, a finished binding whose bound inputs don't rebuild included), a run that
+   *   recorded no model config for the node, or a render error that isn't one of the run's refusals
+   *   (`Node.renderCapture`), such as a capture fault.
    */
   get nodeData(): JsonObject {
     if (this.#rebuildNodeData === null) {
       throw new RangeError(`occurrence of ${reprText(this.nodeId)} can't rebuild its node data`);
     }
-    this.#nodeData ??= this.#rebuildNodeData();
+    try {
+      this.#nodeData ??= this.#rebuildNodeData();
+    } catch (error) {
+      throw new NodeDataError(this, error);
+    }
     return this.#nodeData;
   }
 

@@ -88,7 +88,7 @@ import {
 import { type CloserReason, closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
 import { type SteerRender, steerMessages, steerValues } from "./messages.ts";
 import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
-import { pushVisible, textOf } from "./text.ts";
+import { pushVisible } from "./text.ts";
 
 /**
  * Run one AGENT invocation.
@@ -252,7 +252,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       const late = !interruptRequested(interrupt, steps) && iterations !== ctx.maxToolIterations;
       if (late && lateSteer(steps, ctx.steerInbox)) continue;
       if (schema !== null) return await structured();
-      return new Output(textOf(reply));
+      return new Output(reply.text());
     }
 
     if (iterations === ctx.maxToolIterations) {

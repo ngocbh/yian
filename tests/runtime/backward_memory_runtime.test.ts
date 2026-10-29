@@ -13,6 +13,7 @@ import {
   LearningFailure,
   MemoryMutation,
   MemoryOperationError,
+  MemoryContext,
   MemoryOperationFailure,
   MemoryScope,
   MemorySetupError,
@@ -20,6 +21,7 @@ import {
   MemorySpec,
 } from "../../src/memory/contracts.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { type BackwardContext, type BackwardOptions, BackwardResult, CapabilityFault } from "../../src/nodes/base.ts";
 import { computeBackward, driveBackward } from "../../src/runtime/backward.ts";
 import { BackwardFailure, BackwardOutcome, MemoryProposal } from "../../src/runtime/contracts.ts";
@@ -47,6 +49,7 @@ import {
   rejected,
   stacks,
 } from "../helpers/run_state_fixtures.ts";
+import { parametersFromYaml } from "../helpers/declarations.ts";
 import { FakeMemory, FakeSession } from "../helpers/memory_fakes.ts";
 
 const ROOT = new DeclSite([], ["root"]);
@@ -1418,4 +1421,43 @@ test("a thrown undefined still closes the runtime and is rethrown", async () => 
   expect(caught).toBeUndefined();
   expect(memory.closeCount).toBe(1);
   expect(built.state.backwardState.finished).toBeNull();
+});
+
+test("a memory-scoped agent no feedback reaches is learned from its failure though its node data can't be rebuilt", async () => {
+  const work = new RecordingBackwardNode("work", (inputs) => inputs.topic, () => new BackwardResult(), {
+    reads: { topic: "${input.topic}" },
+  });
+  const writer = new AgentNode("writer", {
+    prompt: "${tone}",
+    variables: parametersFromYaml("variables:\n  tone: !str concise\n", new Map(), { field: "variables", requireDefault: true }),
+  });
+  (writer as unknown as { resolveVariables: () => never }).resolveVariables = () => {
+    throw new TypeError("variable resolution failed");
+  };
+  const flow = graph([work, writer], [[START_ID, "work"], ["work", "writer"]], {
+    outputs: [new FlowOutput("answer", "${writer.output}")],
+  });
+  const memories = table("A", "B");
+  writer.memoryScope = new MemoryScope(["writer"], { memories: ["A"] });
+  work.memoryScope = new MemoryScope(["work"], { memories: ["B"] });
+  const built = engine(flow, {
+    inputs: { topic: "reefs" },
+    learnable: true,
+    memories,
+    memoryStacks: stacks(work.memoryScope, writer.memoryScope),
+    memorySnapshots: memories.map((spec) => new MemorySnapshotEnvelope(spec.key, {})),
+    effectiveLlmByStaticPath: { writer: {} },
+    memoryContextOpener: async () => new MemoryContext(),
+  });
+  await built.run();
+  const backends = new Map([["A", new FakeMemory()], ["B", new FakeMemory()]]);
+
+  const outcome = await drive(built, backends, null);
+
+  expect(outcome.status).toBe("succeeded");
+  const [failed] = backends.get("A")!.learnContexts[0]!.episodes;
+  expect(backends.get("A")!.learnContexts[0]!.episodes).toHaveLength(1);
+  expect([failed!.status, failed!.prompt, failed!.interactions]).toEqual(["failed", null, []]);
+  expect(failed!.failure!["code"]).toBe("node.execute");
+  expect(backends.get("B")!.learnContexts[0]!.episodes.map((episode) => episode.status)).toEqual(["succeeded"]);
 });

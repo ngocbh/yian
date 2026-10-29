@@ -298,7 +298,7 @@ function memoryContextCapability(options: {
    *   throws it.
    * @throws CapabilityFault carrying a repeated open or any other opener fault.
    */
-  const enter = async (baseSystemPrompt: string, renderedPrompt: string): Promise<MemoryContext> => {
+  const enter = async (systemPrompt: string, renderedPrompt: string): Promise<MemoryContext> => {
     try {
       if (used) throw new Error("memory context capability was already entered");
       used = true;
@@ -306,7 +306,7 @@ function memoryContextCapability(options: {
       if (canonicalInputs === null) throw new MemoryRecallError("memory recall context is invalid");
       let recall: RecallContext;
       try {
-        recall = new RecallContext(baseSystemPrompt, renderedPrompt, canonicalInputs, scope.staticPath);
+        recall = new RecallContext(systemPrompt, renderedPrompt, canonicalInputs, scope.staticPath);
       } catch (error) {
         if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
         throw new MemoryRecallError("memory recall context is invalid", { cause: error });
@@ -329,10 +329,10 @@ function memoryContextCapability(options: {
     }
   };
 
-  const open = (baseSystemPrompt: string, renderedPrompt: string) => {
+  const open = (systemPrompt: string, renderedPrompt: string) => {
     const opened: Promise<MemoryContext> = closed
       ? Promise.reject(new Error("memory context capability is closed"))
-      : enter(baseSystemPrompt, renderedPrompt);
+      : enter(systemPrompt, renderedPrompt);
     // A node may drop the promise: its rejection must not go unhandled, and the evaluator awaits
     // it, so a fault still reaches `onFault`.
     opened.catch(() => {});
@@ -746,17 +746,17 @@ export function nodeBackwardCapture(node: Node): BackwardCapture {
 /**
  * Rebuild the node data backward reads about one evaluation of `node`, which its record leaves
  * out: none for a binding that didn't finish (`inputs` `null`); else the node's static material
- * (`captureBackwardContext`), and, when the node renders (`renderCapture`) and its pre-asserts
- * hold for `inputs`, so its `forward` ran, that render with the model config the invocation used
- * as `effective_llm_config`: the config bound with its inputs (`boundLlmConfig`), else the run's
- * entry for its static path.
+ * (`captureBackwardContext`), and, when its pre-asserts hold for `inputs` (so its `forward` ran)
+ * and the node renders (`renderCapture`, called only then), that render with the model config the
+ * invocation used as `effective_llm_config`: the config bound with its inputs (`boundLlmConfig`),
+ * else the run's entry for its static path.
  *
  * @param inputs The bound inputs, as binding the node again gives them.
  * @param effectiveLlmByStaticPath The run's recorded model config by static path.
  * @param localTypes The node's locals' declared types (`localTypes`); `null` leaves them undeclared.
  * @returns Canonical JSON.
  * @throws TypeError when the static material isn't a record, TypeCheckError when it or the render
- *   isn't JSON, and the hooks' own errors.
+ *   isn't JSON, and the hooks' own errors (`preAssertsHold`'s, and `renderCapture`'s faults).
  * @throws RangeError when the node renders and the run's map has no entry for its static path, or
  *   its render holds `effective_llm_config` or a key of its static material.
  */
@@ -770,8 +770,9 @@ export function rebuildNodeData(
   const captured: unknown = node.captureBackwardContext();
   if (!isRecord(captured)) throw new TypeError("capture_backward_context must return a record");
   const data: Record<string, unknown> = { ...captured };
-  const render = node.renderCapture(inputs, localTypes);
-  if (render !== null && node.preAssertsHold(inputs, localTypes)) {
+  // Pre-asserts first: an occurrence whose `forward` never ran is never rendered again.
+  const render = node.preAssertsHold(inputs, localTypes) ? node.renderCapture(inputs, localTypes) : null;
+  if (render !== null) {
     if (Object.hasOwn(render, "effective_llm_config")) {
       throw new RangeError("effective_llm_config belongs to the run's model config");
     }

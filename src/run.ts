@@ -2854,11 +2854,11 @@ export async function agentCall(
       ...recordedGrants(state),
       models: options.models ?? defaultModelAccess(env),
       localTypes: localTypes(state.flow, agent),
-      openMemoryContext: async (baseSystemPrompt, prompt) => {
+      openMemoryContext: async (systemPrompt, prompt) => {
         if (opened === null || !recalls) return new MemoryContext();
         const hidden = agent.modelHiddenInputs();
         const visible = Object.fromEntries(Object.entries(inputs!).filter(([name]) => !hidden.has(name)));
-        const recall = new RecallContext(baseSystemPrompt, prompt, canonicalSeed(visible)[0], scope!.staticPath);
+        const recall = new RecallContext(systemPrompt, prompt, canonicalSeed(visible)[0], scope!.staticPath);
         return await opened.openContext(scope!, recall, { signal: new AbortController().signal });
       },
     };

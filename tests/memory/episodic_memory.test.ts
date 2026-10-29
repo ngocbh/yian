@@ -243,22 +243,33 @@ test("snapshot restore rules and recorded defaults", async () => {
   const recorded = snapshotOf(original);
   await withRun(original, (current) => expect(current.snapshot).toEqual(recorded), recorded);
   await withRun(new EpisodicMemory(), (session) => expect(session.snapshot).toEqual(recorded), recorded);
+  /** Assert that restoring `snapshot` into `memory` fails `episodic.invalid_snapshot` with `message`. */
+  const refused = (memory: EpisodicMemory, snapshot: JsonObject, message: string) => {
+    const error = failure(() => memory.openRun({ snapshot }));
+    expect(error.code).toBe("episodic.invalid_snapshot");
+    expect(error.message).toBe(message);
+  };
   const nonpristine = new EpisodicMemory();
   await withRun(nonpristine, () => {});
-  expect(failure(() => nonpristine.openRun({ snapshot: recorded })).code).toBe("episodic.invalid_snapshot");
-  for (const [field, value] of [
-    ["revision", 2n],
-    ["epoch", 1n],
+  refused(nonpristine, recorded, "snapshot namespace cannot replace a non-pristine memory");
+  for (const [field, value, message] of [
+    ["revision", 2n, "snapshot revision is ahead of the memory state"],
+    ["epoch", 1n, "snapshot generation is incompatible after reset"],
   ] as const) {
     const changed: Mutable = structuredClone(recorded);
     changed[field] = value;
-    expect(failure(() => original.openRun({ snapshot: changed })).code).toBe("episodic.invalid_snapshot");
+    refused(original, changed, message);
   }
   const changed: Mutable = structuredClone(recorded);
   changed.config.recall_limit = 3n;
   expect(failure(() => original.openRun({ snapshot: changed })).code).toBe("episodic.config_conflict");
+  const learned = new EpisodicMemory();
+  await withRun(learned, (session) => session.commit("one", session.learn(context())));
+  const emptied: Mutable = structuredClone(snapshotOf(learned));
+  emptied.episodes = [];
+  refused(learned, emptied, "snapshot state does not match the current generation");
   original.reset();
-  expect(failure(() => original.openRun({ snapshot: recorded })).code).toBe("episodic.invalid_snapshot");
+  refused(original, recorded, "snapshot generation is incompatible after reset");
 });
 
 describe("snapshot format is strict", () => {

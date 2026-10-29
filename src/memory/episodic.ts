@@ -401,9 +401,9 @@ function snapshotJson(namespace: string, epoch: number, revision: number, state:
   });
 }
 
-/** Return the stable snapshot-validation failure. */
-function snapshotError(options: { cause?: unknown } = {}): MemoryOperationError {
-  return operationError("openRun", "episodic.invalid_snapshot", "recorded memory snapshot is invalid", options);
+/** Return one snapshot-validation failure, `message` naming what is wrong. */
+function snapshotError(message: string, cause?: unknown): MemoryOperationError {
+  return operationError("openRun", "episodic.invalid_snapshot", message, cause === undefined ? {} : { cause });
 }
 
 /**
@@ -457,7 +457,7 @@ function parseSnapshot(value: unknown): [string, number, number, State] {
     return result;
   } catch (error) {
     if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-    throw snapshotError({ cause: error });
+    throw snapshotError("recorded memory snapshot is invalid", error);
   }
 }
 
@@ -710,16 +710,17 @@ export class EpisodicMemory implements Memory {
             this.state.episodes.length === 0 &&
             this.epoch === 0 &&
             this.revision === 0;
-          if (!pristine) throw snapshotError();
+          if (!pristine) throw snapshotError("snapshot namespace cannot replace a non-pristine memory");
           adopt = true;
         } else {
-          if (epoch !== this.epoch || revision > this.revision) throw snapshotError();
+          if (epoch !== this.epoch) throw snapshotError("snapshot generation is incompatible after reset");
+          if (revision > this.revision) throw snapshotError("snapshot revision is ahead of the memory state");
           if (
             revision === this.revision &&
             logJson(snapshotJson(namespace, epoch, revision, state)) !==
               logJson(snapshotJson(namespace, epoch, revision, this.state))
           ) {
-            throw snapshotError();
+            throw snapshotError("snapshot state does not match the current generation");
           }
         }
       }

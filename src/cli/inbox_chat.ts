@@ -15,6 +15,7 @@
  * run command's helpers.
  */
 
+import { resolveMemoryLayout } from "../compile/memory_layout.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { Diagnostic } from "../diagnostics.ts";
@@ -46,6 +47,7 @@ import {
   indexRun,
   isSetupError,
   mergeInputs,
+  needsMcp,
   readGrantedSkills,
   removeEmptyDir,
   renderRunError,
@@ -94,10 +96,41 @@ const EXIT_LINES = new Set(["/exit", "/quit"]);
  * The inbox lines go to: its name, whether it takes messages (`Inbox(Message)`) or text, and
  * whether the flow has others lines could go to, so it must be named with `--inbox`.
  */
-interface LineInbox {
+export interface LineInbox {
   name: string;
   message: boolean;
   several: boolean;
+}
+
+/** Return `flow`'s `Inbox(str)` and `Inbox(Message)` inputs, in declaration order. */
+function lineInboxes(flow: ComposedFlow): Omit<LineInbox, "several">[] {
+  return flow.input.flatMap((param): Omit<LineInbox, "several">[] => {
+    const type = param.contract?.type ?? null;
+    if (!isInboxType(type)) return [];
+    if (canonicalTypeLabel(type.element) === "str") return [{ name: param.name, message: false }];
+    return typeEquals(type.element, builtinType("Message")!) ? [{ name: param.name, message: true }] : [];
+  });
+}
+
+/**
+ * Return the `Inbox(str)` or `Inbox(Message)` input a chat with `flow` would send lines to:
+ * `chosen` when it is one, else the flow's only one; or `null` when there is none to pick, or the
+ * flow declares memories or needs MCP tools, which the chat doesn't provide. Never throws.
+ */
+export function inboxTarget(flow: ComposedFlow, chosen: string | undefined): LineInbox | null {
+  try {
+    if (resolveMemoryLayout(flow.compiled).enabled || needsMcp(flow)) return null;
+  } catch {
+    // A memory layout that doesn't resolve is left to `yian run` to report.
+    return null;
+  }
+  const inboxes = lineInboxes(flow);
+  const several = inboxes.length > 1;
+  if (chosen !== undefined) {
+    const picked = inboxes.find((inbox) => inbox.name === chosen);
+    return picked === undefined ? null : { ...picked, several };
+  }
+  return several || inboxes.length === 0 ? null : { ...inboxes[0]!, several: false };
 }
 
 /**
@@ -107,12 +140,7 @@ interface LineInbox {
  *   one of them.
  */
 function pickInbox(flow: ComposedFlow, chosen: string | undefined): LineInbox {
-  const inboxes = flow.input.flatMap((param): Omit<LineInbox, "several">[] => {
-    const type = param.contract?.type ?? null;
-    if (!isInboxType(type)) return [];
-    if (canonicalTypeLabel(type.element) === "str") return [{ name: param.name, message: false }];
-    return typeEquals(type.element, builtinType("Message")!) ? [{ name: param.name, message: true }] : [];
-  });
+  const inboxes = lineInboxes(flow);
   const several = inboxes.length > 1;
   const names = inboxes.map((inbox) => inbox.name);
   const id = flow.compiled.flowId ?? flow.name;

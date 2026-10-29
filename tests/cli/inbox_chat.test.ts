@@ -11,8 +11,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { inboxChat, type InboxChatDeps, type InboxChatOptions } from "../../src/cli/inbox_chat.ts";
+import { inboxChat, type InboxChatDeps, type InboxChatOptions, inboxTarget } from "../../src/cli/inbox_chat.ts";
 import { main } from "../../src/cli/index.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { type CliIo, HostStop, type Writer } from "../../src/cli/utils.ts";
 import { FileLockError, lockFile, type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import { cancel, inspectRun, readRunIndex, send } from "../../src/run.ts";
@@ -835,6 +836,43 @@ describe("yian chat's inbox and inputs", () => {
     },
     TIMEOUT,
   );
+});
+
+describe("inboxTarget", () => {
+  /**
+   * A flow `f` whose inputs are `inboxes` (name to element type), each read by a take, with
+   * `extra` top-level YAML and `nodes` added.
+   */
+  const flow = (inboxes: Record<string, string>, { extra = "", nodes = "" } = {}) => {
+    const names = Object.keys(inboxes);
+    const input = names.map((name) => `  ${name}: !Inbox(${inboxes[name]})\n`).join("");
+    const takes = names
+      .map((name) => `  take_${name}:\n    kind: tool\n    tool_id: take\n    input:\n      from: \${input.${name}}\n`)
+      .join("");
+    const node = "  n:\n    kind: code\n    output: str\n    code: return \"x\";\n";
+    const top = `id: f\nname: f\n${extra}${input ? `input:\n${input}` : ""}`;
+    return loadFlow(`${top}nodes:\n${node}${takes}${nodes}output: \${n.output}\n`);
+  };
+
+  test("returns the only Inbox(str) or Inbox(Message) input, or the chosen one", async () => {
+    expect(inboxTarget(await flow({ m: "str", n: "int" }), undefined)).toEqual({ name: "m", message: false, several: false });
+    expect(inboxTarget(await flow({ m: "Message" }), undefined)).toEqual({ name: "m", message: true, several: false });
+    const several = await flow({ a: "str", b: "Message" });
+    expect(inboxTarget(several, "b")).toEqual({ name: "b", message: true, several: true });
+  });
+
+  test("returns null where a chat can't take the flow, never throwing", async () => {
+    expect(inboxTarget(await flow({}), undefined)).toBeNull();
+    expect(inboxTarget(await flow({ n: "int" }), undefined)).toBeNull();
+    const several = await flow({ a: "str", b: "Message", c: "int" });
+    expect(inboxTarget(several, undefined)).toBeNull();
+    expect(inboxTarget(several, "c")).toBeNull();
+    expect(inboxTarget(several, "z")).toBeNull();
+    // The chat builds no memories and opens no MCP servers.
+    expect(inboxTarget(await flow({ m: "str" }, { extra: "long_term_memory: episodic\n" }), undefined)).toBeNull();
+    const agent = "  worker:\n    kind: agent\n    prompt: go\n    tools: [fake]\n";
+    expect(inboxTarget(await flow({ m: "str" }, { nodes: agent }), undefined)).toBeNull();
+  });
 });
 
 /** The chat example (an `Inbox(Message)`): one model call per turn, the history carried by bindings. */

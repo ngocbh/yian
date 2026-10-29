@@ -338,7 +338,6 @@ export function textDraft(text: string): Draft {
   return collapses(text) ? [{ text, number: 1 }] : [text];
 }
 
-
 /** The text `draft` stands for, each token expanded to its paste: what is sent. */
 export function draftText(draft: Draft): string {
   return draft.map((part) => (typeof part === "string" ? part : part.text)).join("");

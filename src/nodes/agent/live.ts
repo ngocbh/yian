@@ -33,9 +33,17 @@ import {
   ToolCallStarted,
 } from "../../events.ts";
 import { ERROR_KINDS, type ErrorKind, ProviderError } from "../../llm/errors.ts";
-import { type ChatModel, ReplyAssembler, TextDelta, UsageReport } from "../../llm/events.ts";
+import {
+  type ChatModel,
+  type Event,
+  PartDone,
+  ReasoningDelta,
+  ReplyAssembler,
+  TextDelta,
+  UsageReport,
+} from "../../llm/events.ts";
 import { callWithRetries } from "../../llm/executor.ts";
-import { Message, type Request, Response, TextPart } from "../../llm/messages.ts";
+import { Message, ReasoningPart, type Request, Response, TextPart } from "../../llm/messages.ts";
 import { AuthError, isAuthFailure } from "../../llm_clients/auth/common.ts";
 import { realScheduler, type Scheduler } from "../../platform.ts";
 import { isPending } from "../../tools/context.ts";
@@ -202,10 +210,11 @@ interface Called<N extends number | null> {
  * `media` folder, a failed write) fails the call, unretried, as a last attempt's error does. A
  * call the stop cut writes nothing, nor does a retry wait an interrupt ended.
  *
- * With `interrupt`, a host interrupt cuts the call. Before an attempt's first event it aborts the
- * request at once (a slow first token, a non-streaming reply), cutting an empty reply; after it,
- * the interrupt is checked right before each non-empty `TextDelta` (a later chunk, as a host sees
- * it). A cut closes the stream, sends the final chunk when streaming and `ModelCallFinished` with
+ * With `interrupt`, a host interrupt cuts the call. Until an attempt's reply starts (`opensReply`:
+ * any event but reasoning, usage and empty text) it aborts the request at once (a slow first
+ * token, a model thinking, a non-streaming reply), cutting an empty reply that drops any reasoning
+ * so far; after it, the interrupt is checked right before each non-empty `TextDelta` (a later
+ * chunk, as a host sees it). A cut closes the stream, sends the final chunk when streaming and `ModelCallFinished` with
  * the usage of the last `UsageReport` before the cut (else `null`) and no error. A reply whose
  * text had all arrived is never cut. During a retry wait the interrupt ends the wait at once with
  * nothing more emitted. A stop wins over an interrupt.
@@ -217,9 +226,9 @@ interface Called<N extends number | null> {
  * @returns The successful attempt's reply, its media in file form with `record`; with `record`
  *   the `n` of the reply's `model_call` step (typed `number` then; `null` without); and whether the
  *   reply was replayed.
- * @throws ReplyInterrupted carrying the text shown before the cut and its usage, or an empty
- *   reply and `null` usage for a cut wait or an attempt cut before its first event; it is never
- *   marked.
+ * @throws ReplyInterrupted carrying the text shown before the cut and its usage (an empty reply
+ *   for an attempt cut before its reply started), or an empty reply and `null` usage for a cut
+ *   wait; it is never marked.
  * @throws CapabilityFault when a recorded call's purpose or digest differs from this one's.
  */
 export async function callModel(
@@ -278,9 +287,11 @@ export async function callModel(
   let arrived = new ReplyAssembler();
   let waiting = false;
   // With `interrupt`, each attempt streams under its own signal, which the stop aborts and the
-  // interrupt aborts until the attempt's first event, so a request still waiting on its first byte
-  // ends at once. `release` detaches the interrupt from the current attempt.
+  // interrupt aborts until the reply starts (`opensReply`), so a request still waiting on its first
+  // byte, or a model still thinking, ends at once. `release` detaches the interrupt from the
+  // current attempt; `opened` is whether its reply started.
   let attemptSignal = signal;
+  let opened = false;
   let release = () => {};
   const streamed: ChatModel =
     interrupt === undefined
@@ -305,6 +316,7 @@ export async function callModel(
         index = 0;
         waiting = false;
         first = true;
+        opened = false;
         shownText = "";
         usage = null;
         firstTokenAt = null;
@@ -314,7 +326,8 @@ export async function callModel(
         release();
         if (interrupt !== undefined) {
           const cutter = new AbortController();
-          const cut = () => cutter.abort(new ReplyInterrupted(new Message({ role: "assistant", parts: [] }), null));
+          // Nothing of the reply arrived yet, so the cut is empty, with the usage reported so far.
+          const cut = () => cutter.abort(new ReplyInterrupted(new Message({ role: "assistant", parts: [] }), usage));
           interrupt.addEventListener("abort", cut, { once: true });
           release = () => interrupt.removeEventListener("abort", cut);
           if (interrupt.aborted) cut();
@@ -322,12 +335,15 @@ export async function callModel(
         }
       },
       onEvent: (event) => {
-        release();
         const text = event instanceof TextDelta ? event.text : "";
-        // Before the first event the interrupt aborted the attempt; an event that still got through is cut too.
-        if (interrupt?.aborted && (first || text !== "")) {
+        // Before the reply started the interrupt aborted the attempt; an event that still got through is cut too.
+        if (interrupt?.aborted && (!opened || text !== "")) {
           const parts = shownText ? [new TextPart(shownText)] : [];
           throw new ReplyInterrupted(new Message({ role: "assistant", parts }), usage);
+        }
+        if (!opened && opensReply(event)) {
+          opened = true;
+          release();
         }
         if (first && record !== undefined) firstTokenAt = record.steps.now();
         first = false;
@@ -380,6 +396,16 @@ export async function callModel(
   }
   emitEvent?.(new ModelCallFinished({ ...identity, n, usage: usageOf(response) }));
   return { response, n: step, replayed: false };
+}
+
+/**
+ * Whether `event` starts a reply's content: anything but reasoning (its deltas and finished
+ * parts), a usage report and an empty text delta, which show nothing of the reply.
+ */
+function opensReply(event: Event): boolean {
+  if (event instanceof TextDelta) return event.text !== "";
+  if (event instanceof PartDone) return !(event.part instanceof ReasoningPart);
+  return !(event instanceof ReasoningDelta || event instanceof UsageReport);
 }
 
 /**

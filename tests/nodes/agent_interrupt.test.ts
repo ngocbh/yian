@@ -32,12 +32,13 @@ import {
   type Event,
   EventStream,
   Finish,
+  PartDone,
   ReasoningDelta,
   TextDelta,
   ToolCallDelta,
   UsageReport,
 } from "../../src/llm/events.ts";
-import { Message, Request, Response, TextPart, ToolCallPart, Usage } from "../../src/llm/messages.ts";
+import { Message, ReasoningPart, Request, Response, TextPart, ToolCallPart, Usage } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
@@ -319,9 +320,9 @@ class Paced implements ChatModel {
 }
 
 /**
- * A model whose call holds its first byte until its signal aborts, then throws the signal's
- * reason, as a slow first token or a non-streaming request does; `waiting` resolves once a read
- * is pending.
+ * A model whose call streams `before`, then holds until its signal aborts and throws the signal's
+ * reason: with nothing before, a slow first token or a non-streaming request; with reasoning
+ * before, a model thinking. `waiting` resolves once the hold starts.
  */
 class Held implements ChatModel {
   readonly provider = "anthropic";
@@ -331,12 +332,19 @@ class Held implements ChatModel {
   readonly waiting = this.#waiting.promise;
   /** The signal the call was made with, once made. */
   signal: AbortSignal | undefined;
+  readonly #before: readonly Event[];
+
+  constructor(before: readonly Event[] = []) {
+    this.#before = before;
+  }
 
   stream(_request: Request, options: { signal?: AbortSignal } = {}): EventStream {
     const signal = options.signal;
     this.signal = signal;
     const waiting = this.#waiting;
+    const before = this.#before;
     async function* held(): AsyncGenerator<Event> {
+      yield* before;
       const { promise, reject } = Promise.withResolvers<never>();
       if (signal?.aborted) reject(signal.reason);
       signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
@@ -842,6 +850,43 @@ test("an interrupt while a model call waits for its first event aborts the reque
   expect(chunked(chunks)).toEqual([["", true]]);
   const finished = events.filter((event) => event instanceof ModelCallFinished);
   expect(finished.map((event) => [event.error, event.usage, event.n])).toEqual([[null, null, 1]]);
+});
+
+test("an interrupt while the model streams reasoning aborts the request at once: the cut drops the reasoning", async () => {
+  const usage = new Usage({ inputTokens: 7, outputTokens: 2, totalTokens: 9 });
+  const model = new Held([
+    new ReasoningDelta(0, "think"),
+    new ReasoningDelta(0, "ing"),
+    new PartDone(0, new ReasoningPart("thinking")),
+    new UsageReport(usage),
+  ]);
+  const events: unknown[] = [];
+  const done = run(chatFlow(), model, { onStream: () => {}, onEvent: (event) => void events.push(event) });
+  await model.waiting;
+  interruptNow();
+  expect(await done).toBeNull();
+  expect(model.signal?.aborted).toBe(true);
+  expect(shape()).toEqual(["cut", "interrupted"]);
+  expect(Message.fromJSON(steps()[0]!["output"]).parts).toEqual([]);
+  const finished = events.filter((event) => event instanceof ModelCallFinished);
+  const used = new TokenUsage({ inputTokens: 7, outputTokens: 2, totalTokens: 9 });
+  expect(finished.map((event) => [event.error, event.usage])).toEqual([[null, used]]);
+});
+
+test("once a reply's tool call starts streaming, an interrupt no longer aborts it: the reply stands, its call is skipped", async () => {
+  const ran: string[] = [];
+  const events: unknown[] = [];
+  const model = new Paced([new ReasoningDelta(0, "hmm"), LOOKUP_CALL, new Finish({ reason: "tool_calls" })], (index) => {
+    if (index === 1) interruptNow();
+  });
+  const lookup = lookupTool((topic) => (ran.push(topic), "found"));
+  const output = await run(chatFlow({ tools: ["lookup"] }), model, {
+    tools: new ToolSet({ lookup }),
+    onEvent: (event) => void events.push(event),
+  });
+  expect(output).toBeNull();
+  expect(ran).toEqual([]);
+  expect(shape()).toEqual(["model_call", "skipped", "interrupted"]);
 });
 
 test("an interrupt as a model call starts cuts it before its reply: its calls never start", async () => {

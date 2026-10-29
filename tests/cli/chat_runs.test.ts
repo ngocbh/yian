@@ -3,7 +3,7 @@
  * loaded confined to a temporary root.
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -56,10 +56,10 @@ async function until(check: () => boolean): Promise<void> {
   while (!check()) await new Promise((resolve) => setTimeout(resolve, 1));
 }
 
-/** Child `id`'s first status from now on that isn't `running`. */
-async function settled(children: ChildRuns, id: string): Promise<ChildStatus> {
+/** Child `id`'s first status numbered after `after` (default: any) that isn't `running`. */
+async function settled(children: ChildRuns, id: string, after = 0): Promise<ChildStatus> {
   let status = children.status(id);
-  while (status.status === "running") status = await children.next(id, status.seq);
+  while (status.seq <= after || status.status === "running") status = await children.next(id, status.seq);
   return status;
 }
 
@@ -134,19 +134,25 @@ nodes:
 output: \${done.output}
 `;
 
-/** NAP after a CODE node that keeps its worker busy for 300 ms, so the engine loops meanwhile. */
-const BUSY_NAP = NAP.replace(
-  "nodes:\n",
-  `nodes:
-  busy:
+/** A CODE node that keeps its worker busy for 300 ms, so the engine loops meanwhile. */
+const BUSY_NODE = `  busy:
     kind: code
     output: str
     code: |
       const until = Date.now() + 300;
       while (Date.now() < until) {}
       return "1m";
-`,
-).replace('for: "1m"', "for: ${busy.output}");
+`;
+
+/** Keep busy, then say "1m". */
+const BUSY = `id: busy
+name: busy
+nodes:
+${BUSY_NODE}output: \${busy.output}
+`;
+
+/** NAP for as long as a busy node says. */
+const BUSY_NAP = NAP.replace("nodes:\n", `nodes:\n${BUSY_NODE}`).replace('for: "1m"', "for: ${busy.output}");
 
 test(
   "a sleeping child wakes at its wakeAt with nothing else moving it",
@@ -184,6 +190,219 @@ test(
     open();
     expect(await children.next("r1")).toMatchObject({ status: "succeeded", output: "rested" });
     expect(advances).toBe(2);
+  },
+  TIMEOUT,
+);
+
+/** Ask whether to proceed, and say the answer. */
+const ASK = `id: ask
+name: ask
+nodes:
+  sure:
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "Proceed?"
+    output: str
+output: \${sure.output}
+`;
+
+/** A chat turn per message: take everything sent and reply with an echo of it, until closed. */
+const ECHO = `id: echo
+name: echo
+input:
+  messages: !Inbox(str)
+defs:
+  turn:
+    input:
+      said: !list(str)
+      closed: !bool
+      messages: !Inbox(str)
+    nodes:
+      heard:
+        kind: tool
+        tool_id: take
+        input:
+          from: \${input.messages}
+          take: all
+      reply:
+        kind: code
+        input:
+          events: \${heard.output.events}
+        output: str
+        code: |
+          return "echo: " + inputs["events"].join(" | ");
+    output:
+      said: \${input.said + heard.output.events}
+      closed: \${heard.output.closed}
+nodes:
+  chat:
+    kind: loop
+    call: turn
+    input:
+      said: []
+      closed: false
+      messages: \${input.messages}
+    while: not closed
+output: \${chat.output.said}
+`;
+
+/** A CODE node that throws. */
+const BOOM = `id: boom
+name: boom
+nodes:
+  boom:
+    kind: code
+    output: str
+    code: |
+      throw new Error("kaboom");
+output: \${boom.output}
+`;
+
+test(
+  "a child's question waits for the answer the chat completes it with",
+  async () => {
+    const children = childRuns();
+    await children.start(await flow(ASK), {});
+    const waiting = await settled(children, "r1");
+    const call = `${CHAT}-r1/sure`;
+    expect(waiting).toMatchObject({ status: "waiting", asks: [{ call, question: "Proceed?" }], wake_at: null });
+    expect((await children.answer("r1", call, "yes")).note).toBeUndefined();
+    expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded", output: "yes" });
+  },
+  TIMEOUT,
+);
+
+test(
+  "an answer the run refuses is a note, not a throw",
+  async () => {
+    const children = childRuns();
+    await children.start(await flow(ASK), {});
+    const waiting = await settled(children, "r1");
+    const nulled = await children.answer("r1", `${CHAT}-r1/sure`, null);
+    expect(nulled).toMatchObject({ status: "waiting", seq: waiting.seq });
+    expect(nulled.note).toContain("an ask's answer can't be null");
+    expect((await children.answer("r1", `${CHAT}-r1/other`, "yes")).note).toContain("other");
+    // The stored status carries no note.
+    expect(children.status("r1").note).toBeUndefined();
+  },
+  TIMEOUT,
+);
+
+test(
+  "an inbox child's reply nodes are the replies of the pass a message starts, and a close ends it",
+  async () => {
+    const children = childRuns();
+    await children.start(await flow(ECHO), {});
+    expect(await settled(children, "r1")).toMatchObject({ status: "waiting", wake_at: null });
+    expect(children.status("r1").replies).toBeUndefined();
+    let seen = children.status("r1").seq;
+    await children.message("r1", "messages", "hi");
+    expect(await settled(children, "r1", seen)).toMatchObject({ status: "waiting", replies: ["echo: hi"] });
+    // The same reply again is a new status.
+    seen = children.status("r1").seq;
+    await children.message("r1", "messages", "hi");
+    expect(await settled(children, "r1", seen)).toMatchObject({ status: "waiting", replies: ["echo: hi"] });
+    seen = children.status("r1").seq;
+    await children.closeInbox("r1", "messages");
+    expect(await settled(children, "r1", seen)).toMatchObject({
+      status: "succeeded",
+      output: ["hi", "hi"],
+      replies: ["echo: "],
+    });
+    expect((await children.message("r1", "messages", "late")).note).toContain("ended");
+    expect((await children.message("r1", "nowhere", "x")).note).toBeDefined();
+  },
+  TIMEOUT,
+);
+
+test(
+  "a child whose node throws fails with the run's failure",
+  async () => {
+    const children = childRuns();
+    await children.start(await flow(BOOM), {});
+    const failed = await settled(children, "r1");
+    expect(failed.status).toBe("failed");
+    expect(failed.failure).toMatchObject({ code: expect.any(String), node: "boom" });
+    expect(failed.failure!.message).toContain("kaboom");
+  },
+  TIMEOUT,
+);
+
+test(
+  "stop cancels a resting child and a running one",
+  async () => {
+    const children = childRuns();
+    await children.start(await flow(NAP), {});
+    const waiting = await settled(children, "r1");
+    expect(waiting).toMatchObject({ status: "waiting" });
+    expect((await children.stop("r1")).note).toBeUndefined();
+    expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "cancelled" });
+    await children.start(await flow(BUSY_NAP), {});
+    await children.stop("r2");
+    expect(await settled(children, "r2")).toMatchObject({ status: "cancelled" });
+    expect(inspectRun(children.status("r2").log).status).toBe("cancelled");
+    expect((await children.stop("r2")).note).toContain("ended");
+  },
+  TIMEOUT,
+);
+
+test(
+  "aborting the signal given with a start doesn't stop the child",
+  async () => {
+    const children = childRuns();
+    const caller = new AbortController();
+    await children.start(await flow(BUSY), {}, { signal: caller.signal });
+    caller.abort(new Error("the tool call ended"));
+    expect(await settled(children, "r1")).toMatchObject({ status: "succeeded", output: "1m" });
+  },
+  TIMEOUT,
+);
+
+test(
+  "dispose cancels running children and leaves waiting ones, saying what each waits on",
+  async () => {
+    const children = childRuns();
+    await children.start(await flow(ASK), {});
+    await children.start(await flow(ECHO), {});
+    await children.start(await flow(NAP), {});
+    await children.start(await flow(GREET), { who: "ada" });
+    for (const id of ["r1", "r2", "r3", "r4"]) await settled(children, id);
+    await children.start(await flow(BUSY_NAP), {});
+    const logs = ["r1", "r2", "r3", "r4", "r5"].map((id) => children.status(id).log);
+    expect(await children.dispose()).toEqual([
+      { run: "r1", kind: "question", log: logs[0]! },
+      { run: "r2", kind: "inbox", log: logs[1]! },
+      { run: "r3", kind: "timer", log: logs[2]! },
+    ]);
+    expect(logs.map((log) => inspectRun(log).status)).toEqual(["waiting", "waiting", "waiting", "succeeded", "cancelled"]);
+    expect(children.status("r5").status).toBe("cancelled");
+    await expect(children.start(await flow(GREET), { who: "x" })).rejects.toThrow("disposed");
+  },
+  TIMEOUT,
+);
+
+test(
+  "cancelWaits resolves the next calls waiting with the current status",
+  async () => {
+    const children = childRuns();
+    await children.start(await flow(ASK), {});
+    const waiting = await settled(children, "r1");
+    const next = children.next("r1");
+    children.cancelWaits();
+    expect(await next).toBe(children.status("r1"));
+    expect((await next).seq).toBe(waiting.seq);
+  },
+  TIMEOUT,
+);
+
+test(
+  "a start the run refuses before it begins throws and leaves no run folder",
+  async () => {
+    const children = childRuns();
+    await expect(children.start(await flow(GREET), { who: "ada", whom: "x" })).rejects.toThrow("whom");
+    expect(existsSync(join(root, "runs", `${CHAT}-r1`))).toBe(false);
+    expect(() => children.status("r1")).toThrow(RangeError);
   },
   TIMEOUT,
 );

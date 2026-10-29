@@ -711,6 +711,154 @@ async function aBracketedPasteKeepsItsNewlinesFramed(): Promise<void> {
   assert.deepEqual(await answer, { value: "x\ny" });
 }
 
+/** A paste of `count` lines, `line 1` to `line <count>`, each ended as a terminal sends it. */
+const pastedLines = (count: number) =>
+  Array.from({ length: count }, (_, i) => `line ${i + 1}\r`).join("");
+
+/** What `pastedLines(count)` reaches the editor as: its lines, each ended by a newline. */
+const pastedText = (count: number) =>
+  Array.from({ length: count }, (_, i) => `line ${i + 1}\n`).join("");
+
+async function aLongPasteInAFramedReadLineIsOneTokenExpandedOnEnter(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  input.write("look " + PASTE_START + pastedLines(40) + PASTE_END);
+  await tick();
+  const box = framed("> look [Pasted text #1 +40 lines]");
+  assert.deepEqual(view().rows, [FRAME_TOP, box, FRAME_BOTTOM, `  ${HINT}`]);
+  assert.deepEqual(view().cursor, { row: 1, col: 35 });
+  input.write(" please" + ENTER);
+  assert.deepEqual(await answer, { value: `look ${pastedText(40)} please` });
+  assert.deepEqual(view().rows, ["> look [Pasted text #1 +40 lines] please"]);
+}
+
+async function aPastedTokenIsAtomicForTheCaretAndTheDeletingKeys(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  input.write("a" + PASTE_START + pastedLines(5) + PASTE_END + "b");
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> a[Pasted text #1 +5 lines]b"));
+  // Left steps over the token in one press, and text goes in on either side of it.
+  input.write(LEFT + LEFT + "<" + RIGHT + ">");
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> a<[Pasted text #1 +5 lines]>b"));
+  assert.deepEqual(view().cursor, { row: 1, col: 32 });
+  // Backspace after it and Delete before it take it whole.
+  input.write(LEFT + BACKSPACE);
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> a<>b"));
+  input.write(PASTE_START + pastedLines(5) + PASTE_END + LEFT + DELETE);
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> a<>b"));
+  // Ctrl-U takes the tokens before the cursor whole too.
+  input.write(PASTE_START + pastedLines(5) + PASTE_END + CTRL_U);
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> >b"));
+  input.write(ENTER);
+  assert.deepEqual(await answer, { value: ">b" });
+}
+
+async function aShortPasteStaysTextAndALongLineIsAToken(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  // Three lines go in as text.
+  input.write(PASTE_START + "x\ry\rz" + PASTE_END + " ");
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> x⏎y⏎z"));
+  // One line longer than the threshold is a token.
+  input.write(PASTE_START + "w".repeat(801) + PASTE_END);
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> x⏎y⏎z [Pasted text #1 +1 line]"));
+  input.write(ENTER);
+  assert.deepEqual(await answer, { value: `x\ny\nz ${"w".repeat(801)}` });
+}
+
+async function twoPastesAreNumberedAndTypedTokenTextStaysText(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  input.write(PASTE_START + pastedLines(4) + PASTE_END + " ");
+  input.write(PASTE_START + pastedLines(6) + PASTE_END);
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> [Pasted text #1 +4 lines] [Pasted text #2 +6 lines]"));
+  input.write(CTRL_U + "[Pasted text #1 +4 lines]");
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> [Pasted text #1 +4 lines]"));
+  input.write(ENTER);
+  assert.deepEqual(await answer, { value: "[Pasted text #1 +4 lines]" });
+}
+
+async function aTokenWiderThanTheBoxIsCut(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 20 });
+  const answer = terminal.readLine("You:", { frame: true, hint: "" });
+  input.write("ab" + PASTE_START + pastedLines(40) + PASTE_END);
+  await tick();
+  // 14 cells to a row: the token takes a row of its own, cut to fit, and the cursor the next.
+  assert.deepEqual(view().rows.slice(1, 4), [
+    `│ > ${"ab".padEnd(14)} │`,
+    `│   ${"[Pasted text …".padEnd(14)} │`,
+    `│   ${"".padEnd(14)} │`,
+  ]);
+  assert.deepEqual(view().cursor, { row: 3, col: 4 });
+  input.write(ENTER);
+  assert.deepEqual(await answer, { value: `ab${pastedText(40)}` });
+}
+
+/** Wait longer than a paste may pause before Escape or Ctrl-C can end it. */
+const pastPastePause = () => new Promise((resolve) => setTimeout(resolve, 800));
+
+async function aPasteSplitByAPauseGoesInWhole(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  let answered = false;
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  void answer.then(() => (answered = true));
+  input.write(PASTE_START + "a\rb");
+  await pastPastePause();
+  // The rest of the paste: its newlines are still newlines, not Enter.
+  input.write("\rc" + PASTE_END);
+  await tick();
+  assert.equal(answered, false);
+  assert.deepEqual(view().rows[1], framed("> a⏎b⏎c"));
+  input.write(ENTER);
+  assert.deepEqual(await answer, { value: "a\nb\nc" });
+}
+
+async function escapeAfterAPauseEndsAPasteThatNeverEnds(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  // The terminal dropped the paste's end.
+  input.write(PASTE_START + "a\rb");
+  await pastPastePause();
+  input.write(ESCAPE);
+  await pastEscape();
+  assert.deepEqual(view().rows[1], framed("> a⏎b"));
+  input.write("c" + ENTER);
+  assert.deepEqual(await answer, { value: "a\nbc" });
+}
+
+async function ctrlCAfterAPauseDropsAPasteThatNeverEnds(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  input.write("x" + PASTE_START + "a\rb");
+  await pastPastePause();
+  // Ctrl-C drops the paste, and only that: the prompt stays.
+  input.write(CTRL_C);
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> x"));
+  input.write("y" + ENTER);
+  assert.deepEqual(await answer, { value: "xy" });
+}
+
+async function aPasteKeepsItsTabsShownAsSpaces(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const answer = terminal.readLine("You:", { frame: true, hint: HINT });
+  input.write(PASTE_START + "a\tb" + PASTE_END);
+  await tick();
+  assert.deepEqual(view().rows[1], framed("> a    b"));
+  assert.deepEqual(view().cursor, { row: 1, col: 10 });
+  input.write(PASTE_START + "\tx\ry\rz\rw" + PASTE_END + ENTER);
+  assert.deepEqual(await answer, { value: "a\tb\tx\ny\nz\nw" });
+}
+
 async function escapeErasesAFramedReadLine(): Promise<void> {
   const { input, output, terminal, view } = setup({ columns: 60 });
   output.write("above\r\n");
@@ -2955,6 +3103,18 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
     aFramedReadLineDrawsABoxAndAHintThenCollapsesToTheLine,
   "a framed readLine folds a long line inside the box": aFramedReadLineFoldsALongLineInsideTheBox,
   "a bracketed paste keeps its newlines in a framed readLine": aBracketedPasteKeepsItsNewlinesFramed,
+  "a long paste in a framed readLine is one token, expanded on Enter":
+    aLongPasteInAFramedReadLineIsOneTokenExpandedOnEnter,
+  "a pasted token is atomic for the caret and the deleting keys":
+    aPastedTokenIsAtomicForTheCaretAndTheDeletingKeys,
+  "a short paste stays text, and a long line is a token": aShortPasteStaysTextAndALongLineIsAToken,
+  "two pastes are numbered, and typed token text stays text":
+    twoPastesAreNumberedAndTypedTokenTextStaysText,
+  "a token wider than the box is cut": aTokenWiderThanTheBoxIsCut,
+  "a paste split by a pause goes in whole": aPasteSplitByAPauseGoesInWhole,
+  "Escape after a pause ends a paste that never ends": escapeAfterAPauseEndsAPasteThatNeverEnds,
+  "Ctrl-C after a pause drops a paste that never ends": ctrlCAfterAPauseDropsAPasteThatNeverEnds,
+  "a paste keeps its tabs, shown as spaces": aPasteKeepsItsTabsShownAsSpaces,
   "Escape erases a framed readLine": escapeErasesAFramedReadLine,
   "a framed readLine with a list moves into it and opens a row": aFramedReadLineWithAListMovesIntoItAndOpensARow,
   "a list row that goes gives the keys back, and the list redraws on its own":

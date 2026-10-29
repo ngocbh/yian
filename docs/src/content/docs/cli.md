@@ -289,6 +289,18 @@ once: the assistant reads it before its next model call, so it can change course
 and Esc work as they do between replies. An approval card or a question takes the box's place
 until you answer it.
 
+A paste of more than 3 lines or 800 characters goes into the box as one token, such as
+`[Pasted text #1 +40 lines]`, numbered within the line. The cursor steps over a token, and
+Backspace, Delete or Ctrl-U removes it whole. On Enter the assistant gets the whole text pasted,
+tabs and all, while the line printed above shows the tokens. Esc puts a line it takes back into
+the box with its tokens; after `/exit`, the line it prints shows them too. Text you type that looks
+like a token stays text. The chat remembers tokens only while it runs: after `yian run --resume`,
+Esc puts a line sent before the stop back as plain text, or as one token
+(`[Pasted text #1 +40 lines]`) when it is as long as a paste that collapses.
+
+If your terminal drops the end of a paste, the box keeps waiting for it. Once the paste has
+paused for half a second, Esc ends it and puts in what arrived, and Ctrl-C drops it.
+
 Under the box, the chat lists the flows the assistant started that are still running or waiting,
 one row each, such as `r1  color.yaml  ● asks · 12s`, and the hint under the box adds `↓ runs`
 when there is room. A flow drops off the list once it ends; its result stays in the chat. The

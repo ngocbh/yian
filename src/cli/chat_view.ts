@@ -454,11 +454,16 @@ export class ChatView {
     this.#redraw();
   }
 
-  /** Print `line`, a line sent from the input box, as the prompt leaves one: `> <line>`. */
+  /**
+   * Print `line`, a line sent from the input box, as the prompt leaves one: `> <line>`, wrapped at
+   * its spaces onto as many rows as it needs.
+   */
   echo(line: string): void {
     this.#last = "other";
-    const text = `${this.#paint(">", "bold")} ${sanitize(line).replaceAll("\n", "⏎")}`;
-    this.#commit([clip(text, this.#width())]);
+    const text = `> ${sanitize(line).replaceAll("\n", "⏎")}`;
+    const rows = wrapLine(text, this.#width()).map(([start, end]) => text.slice(start, end));
+    rows[0] = this.#paint(">", "bold") + rows[0]!.slice(1);
+    this.#commit(rows);
   }
 
   /**

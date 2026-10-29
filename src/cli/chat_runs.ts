@@ -18,8 +18,9 @@
  * registry and the `pending` marker, skills, the CLI's key preflight (`startup.ts`).
  */
 
+import { appendFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { isDeepStrictEqual } from "node:util";
+import { format, isDeepStrictEqual } from "node:util";
 
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import type { Env } from "../defaults.ts";
@@ -47,7 +48,8 @@ import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { builtinType } from "../typesys/types.ts";
 import { isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
 import { removeEmptyDir } from "./run.ts";
-import { sleepUntil } from "./utils.ts";
+import { ensureProviderKeys } from "./startup.ts";
+import { CommandEnv, sleepUntil } from "./utils.ts";
 
 /** Where a child run stands, as the chat's assistant is told. */
 export interface ChildStatus {
@@ -97,6 +99,11 @@ export interface ChildRunsOptions {
   chatRunId: string;
   /** The skills a child's flow grants, as `yian run` reads them, or `null` for none. */
   skillsFor: (flow: ComposedFlow) => ReadonlyMap<string, Skill> | null;
+  /**
+   * The file the console output of the children's CODE nodes is appended to while any pass runs,
+   * so it doesn't land on the chat's terminal; `null` (the default) leaves it on the console.
+   */
+  consoleFile?: string | null;
   /** @internal For tests: the `advance` the drivers call. */
   advance?: typeof advance;
 }
@@ -132,6 +139,9 @@ interface Child {
   done: Promise<void> | null;
 }
 
+/** The console methods a CODE worker's output is replayed through. */
+const CONSOLE_METHODS = ["log", "info", "warn", "error", "debug"] as const;
+
 /** The terminal statuses: no pass follows them. */
 const ENDED: ReadonlySet<ChildStatus["status"]> = new Set(["succeeded", "failed", "cancelled"]);
 
@@ -158,6 +168,9 @@ export class ChildRuns {
   #seq = 0;
   #started = 0;
   #disposed = false;
+  /** The passes running, and the console methods their start replaced. */
+  #passes = 0;
+  #console: Pick<Console, (typeof CONSOLE_METHODS)[number]> | null = null;
 
   constructor(options: ChildRunsOptions) {
     this.#options = options;
@@ -168,6 +181,10 @@ export class ChildRuns {
    * log holds the run's start, while the run goes on in the background. `options.signal` is the
    * caller's: aborting it before the start rejects, and after it, does nothing to the child.
    *
+   * A provider key the flow's agents need is checked first, without a prompt.
+   *
+   * @throws {MissingKeyError} When an agent's provider needs a key that isn't set, before anything
+   *   is written; `ensureProviderKeys`' other errors likewise.
    * @throws {Error} When the chat was disposed; the signal's reason once it aborted; what `runFlow`
    *   throws before the run starts (an input it doesn't declare, say), with no log left behind.
    */
@@ -178,6 +195,11 @@ export class ChildRuns {
   ): Promise<{ id: string; log: string }> {
     if (this.#disposed) throw new Error("the chat's runs were disposed");
     options.signal?.throwIfAborted();
+    const { env, llmConfig } = this.#options;
+    // No terminal: a missing key is reported to the assistant rather than prompted for mid-chat.
+    await ensureProviderKeys(flow, llmConfig, inputs, { env: new CommandEnv(env), terminal: null });
+    options.signal?.throwIfAborted();
+    if (this.#disposed) throw new Error("the chat's runs were disposed");
     const id = `r${++this.#started}`;
     const runId = `${this.#options.chatRunId}-${id}`;
     const log = runLogPath(this.#options.logDir, runId);
@@ -430,14 +452,46 @@ export class ChildRuns {
     }
   }
 
-  /** Run `move` as a pass of `child`. */
+  /** Run `move` as a pass of `child`, the console routed to the console file meanwhile. */
   async #pass(child: Child, move: () => Promise<RunResult>): Promise<RunResult> {
     child.passing = true;
+    if (this.#passes++ === 0) this.#routeConsole();
     try {
       return await move();
     } finally {
       child.passing = false;
+      if (--this.#passes === 0) this.#restoreConsole();
     }
+  }
+
+  /**
+   * Send the console methods to the console file, if there is one. A CODE worker's console lines
+   * are replayed through this process's `console` with no run named, so routing the whole console
+   * while a child runs is the only way to keep them off the chat's terminal; a sink per run would
+   * replace this.
+   */
+  #routeConsole(): void {
+    const file = this.#options.consoleFile ?? null;
+    if (file === null) return;
+    const saved = { log: console.log, info: console.info, warn: console.warn, error: console.error, debug: console.debug };
+    this.#console = saved;
+    for (const method of CONSOLE_METHODS) {
+      console[method] = (...args: unknown[]) => {
+        try {
+          appendFileSync(file, `${format(...args)}\n`);
+        } catch {
+          // A line that can't be kept mustn't fail the node that printed it.
+        }
+      };
+    }
+  }
+
+  /** Put back the console methods `#routeConsole` replaced. */
+  #restoreConsole(): void {
+    const saved = this.#console;
+    if (saved === null) return;
+    this.#console = null;
+    for (const method of CONSOLE_METHODS) console[method] = saved[method];
   }
 
   /**

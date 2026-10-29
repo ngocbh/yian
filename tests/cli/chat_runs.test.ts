@@ -2,13 +2,14 @@
  * The chat's child runs: each driven in process by its own driver over a held clock, from flows
  * loaded confined to a temporary root.
  */
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ChildRuns, type ChildRunsOptions, type ChildStatus } from "../../src/cli/chat_runs.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
+import { MissingKeyError } from "../../src/cli/utils.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { advance, inspectRun } from "../../src/run.ts";
 import { readRunLog, type RunStartedRecord } from "../../src/runtime/log.ts";
@@ -406,3 +407,88 @@ test(
   },
   TIMEOUT,
 );
+
+const AGENT = "id: f\nname: f\nnodes:\n  a: {kind: agent, prompt: hi}\noutput: ${a.output}\n";
+
+test(
+  "a child whose provider has no key isn't started and leaves no log",
+  async () => {
+    const children = childRuns({ llmConfig: { provider: "openai", model: "gpt-5.5" } });
+    await expect(children.start(await flow(AGENT), {})).rejects.toThrow(MissingKeyError);
+    await expect(children.start(await flow(AGENT), {})).rejects.toThrow("$OPENAI_API_KEY is not set");
+    expect(existsSync(join(root, "runs"))).toBe(false);
+  },
+  TIMEOUT,
+);
+
+test(
+  "a child is started once the caller's signal has aborted only if it hadn't before the start",
+  async () => {
+    const children = childRuns();
+    const caller = new AbortController();
+    caller.abort(new Error("gone"));
+    await expect(children.start(await flow(GREET), { who: "a" }, { signal: caller.signal })).rejects.toThrow("gone");
+    expect(existsSync(join(root, "runs"))).toBe(false);
+  },
+  TIMEOUT,
+);
+
+/** Log a line from CODE, then say "ok". */
+const CHATTY = `id: chatty
+name: chatty
+nodes:
+  talk:
+    kind: code
+    output: str
+    code: |
+      console.log("x");
+      console.error("y");
+      return "ok";
+output: \${talk.output}
+`;
+
+// These replace the process's console methods, so they run one at a time (a file's tests do).
+describe("console", () => {
+  test(
+    "a child's CODE console output goes to the console file while it runs, and the console comes back after",
+    async () => {
+      const printed: string[] = [];
+      const original = { log: console.log, error: console.error };
+      const record = (...args: unknown[]) => void printed.push(args.join(" "));
+      console.log = record;
+      console.error = record;
+      try {
+        const consoleFile = join(root, "console.log");
+        const children = childRuns({ consoleFile });
+        await children.start(await flow(CHATTY), {});
+        expect(await settled(children, "r1")).toMatchObject({ status: "succeeded", output: "ok" });
+        expect(readFileSync(consoleFile, "utf8")).toBe("x\ny\n");
+        expect(console.log).toBe(record);
+        expect(console.error).toBe(record);
+        expect(printed).toEqual([]);
+      } finally {
+        console.log = original.log;
+        console.error = original.error;
+      }
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "without a console file a child's console output stays on the console",
+    async () => {
+      const printed: string[] = [];
+      const original = console.log;
+      console.log = (...args: unknown[]) => void printed.push(args.join(" "));
+      try {
+        const children = childRuns();
+        await children.start(await flow(CHATTY.replace('      console.error("y");\n', "")), {});
+        await settled(children, "r1");
+        expect(printed).toEqual(["x"]);
+      } finally {
+        console.log = original;
+      }
+    },
+    TIMEOUT,
+  );
+});

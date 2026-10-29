@@ -526,7 +526,7 @@ function parseInventory(value: unknown): Inventory {
  *
  * ```ts
  * const memory = new EpisodicMemory({ maxEpisodes: 100, recallLimit: 10 });
- * const result = await runFlow(flow, inputs, { memory: { episodic: memory }, learnable: true });
+ * const result = await runFlow(flow, inputs, { memory: new Map([["episodic", memory]]), learnable: true });
  * await result.backward();
  * ```
  *

@@ -319,6 +319,16 @@ test("a whole record type declaring api_key fails", () => {
   expect(lineOf(error)).toBe(lineHolding(text, "llm_config:"));
 });
 
+test("a whole record type declaring base_url beside provider azure names the value rule", () => {
+  const typedefs = "typedefs:\n  Cfg:\n    provider: Literal(azure)\n    model: str\n    base_url: str\n";
+  const error = loadFails(flow("    llm_config: !Cfg ${input.cfg}\n", { typedefs }));
+  expect(error.diagnostic.message).toBe(
+    "node 'a': llm_config: its type declares `base_url`; llm_config.base_url can't come from a value: it " +
+      "decides where the key is sent, which stays with the host or `yian auth`; write the Azure resource " +
+      "endpoint as literal text",
+  );
+});
+
 test("base url from a value fails", () => {
   const text = flow("    llm_config:\n      provider: openai\n      base_url: ${input.u}\n");
   const error = loadFails(text);

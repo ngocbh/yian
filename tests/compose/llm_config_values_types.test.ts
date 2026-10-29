@@ -21,6 +21,10 @@ const TYPEDEFS = `typedefs:
   WithHeaders:
     model: str
     headers: object
+  AzureUrl:
+    provider: Literal(azure)
+    model: str
+    base_url: str
   Fine:
     provider: Optional(str)
     model: str
@@ -43,6 +47,7 @@ const INPUTS = `input:
   bogus: !WithBogus
   url: !WithUrl
   headers: !WithHeaders
+  az: !AzureUrl
   fine: !Fine
   obj: !object
   bad_block: !BadBlock
@@ -132,6 +137,14 @@ test.each([
   const got = message(flow(`    llm_config: ${source}\n`));
   expect(got.startsWith("node 'chat' llm_config: ")).toBe(true);
   expect(got).toContain(`\`${field}\``);
+});
+
+test("a whole record type declaring base_url beside provider azure names the value rule", () => {
+  expect(message(flow("    llm_config: ${input.az}\n"))).toBe(
+    "node 'chat' llm_config: its type declares `base_url`; llm_config.base_url can't come from a value: it " +
+      "decides where the key is sent, which stays with the host or `yian auth`; write the Azure resource " +
+      "endpoint as literal text",
+  );
 });
 
 test("a whole record of allowed fields or object loads", () => {

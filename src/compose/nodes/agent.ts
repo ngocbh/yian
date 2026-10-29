@@ -23,7 +23,13 @@ import { evalBinding } from "../../expr/template.ts";
 import { hostOnlyFieldError, LLMConfig, responsesBlockError } from "../../llm_clients/config.ts";
 import { locatedBlockProblems, PROVIDER_BLOCKS, ValidationError } from "../../llm_clients/provider_blocks.ts";
 import { DeclSite, MemoryDecl } from "../../memory/contracts.ts";
-import { isValue, LLM_CONFIG_KEY, valueLeaves } from "../../nodes/agent/llm_values.ts";
+import {
+  BASE_URL_FROM_VALUE,
+  declaredHostOnlyError,
+  isValue,
+  LLM_CONFIG_KEY,
+  valueLeaves,
+} from "../../nodes/agent/llm_values.ts";
 import { AgentNode, isMaxToolIterations, type PromptItem, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { typeToSchema } from "../../nodes/agent/structured.ts";
 import {
@@ -251,12 +257,6 @@ function hostOnlyMessage(prefix: string, message: string): string {
   return message.startsWith("llm_config") ? prefix + message.slice("llm_config".length) : `${prefix}: ${message}`;
 }
 
-/** Return the field a `hostOnlyFieldError` message names (`llm_config.<field> ...`). */
-function hostOnlyField(message: string): string {
-  const rest = message.startsWith("llm_config.") ? message.slice("llm_config.".length) : message;
-  return rest.split(" ", 1)[0]!;
-}
-
 /** Return the field names a record type, or any member of a record union, declares. */
 function declaredFields(typ: Type): Set<string> {
   const names = new Set(typ.fields?.keys() ?? []);
@@ -295,15 +295,8 @@ export function checkLlmConfigValue(
 ): [ValueTemplate | Binding, boolean] {
   const { allowInherit = true } = options;
   if (cfg instanceof Binding) {
-    if (cfg.contract !== null) {
-      const declared = Object.fromEntries([...declaredFields(cfg.contract.type)].map((name) => [name, null]));
-      const message = hostOnlyFieldError(declared);
-      if (message !== null) {
-        throw diagnostics.error(`${prefix}: its type declares \`${hostOnlyField(message)}\`; ${message}`, {
-          range: sourceRange,
-        });
-      }
-    }
+    const message = cfg.contract === null ? null : declaredHostOnlyError(declaredFields(cfg.contract.type));
+    if (message !== null) throw diagnostics.error(`${prefix}: ${message}`, { range: sourceRange });
     return [cfg, true];
   }
   let tree = cfg.value;
@@ -338,14 +331,11 @@ export function checkLlmConfigValue(
   );
   const hostOnly = hostOnlyFieldError(literal);
   if (hostOnly !== null) {
-    throw diagnostics.error(hostOnlyMessage(prefix, hostOnly), { range: at(hostOnlyField(hostOnly)) });
+    const [field, message] = hostOnly;
+    throw diagnostics.error(hostOnlyMessage(prefix, message), { range: at(field) });
   }
   if (Object.hasOwn(tree, "base_url") && holdsValue(tree["base_url"])) {
-    throw diagnostics.error(
-      `${prefix}.base_url can't come from a value: it decides where the key is sent, which stays with the ` +
-        "host or `yian auth`; write the Azure resource endpoint as literal text",
-      { range: at("base_url") },
-    );
+    throw diagnostics.error(`${prefix}.${BASE_URL_FROM_VALUE}`, { range: at("base_url") });
   }
   checkLiteralFields(literal, prefix, sourceRange, diagnostics, at);
   for (const [key, block] of Object.entries(tree)) {
@@ -454,7 +444,7 @@ function validateLlmConfig(
     );
   }
   const hostOnly = hostOnlyFieldError(rest);
-  if (hostOnly !== null) throw diagnostics.error(hostOnlyMessage(prefix, hostOnly), { range: sourceRange });
+  if (hostOnly !== null) throw diagnostics.error(hostOnlyMessage(prefix, hostOnly[1]), { range: sourceRange });
   checkLiteralFields(rest, prefix, sourceRange, diagnostics);
   checkResponsesBlock(rest["provider"], rest["model"], rest, prefix, diagnostics, () => sourceRange);
   return [rest, inherit];

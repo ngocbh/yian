@@ -58,6 +58,26 @@ export const LLM_CONFIG_KEY = "__llm_config";
 /** Why a host-only field may not come from a value. */
 export const HOST_ONLY_FROM_VALUE = "credentials and where they are sent stay with the host or yian auth";
 
+/** Why `base_url` may not come from a value, even beside `provider: azure`. */
+export const BASE_URL_FROM_VALUE =
+  "base_url can't come from a value: it decides where the key is sent, which stays with the host or " +
+  "`yian auth`; write the Azure resource endpoint as literal text";
+
+/**
+ * Return why a whole-record `llm_config` value whose type declares the fields `names` is refused
+ * for a host-only one, or `null`.
+ *
+ * No value may set a host-only field, so a declared `base_url` is refused beside
+ * `provider: azure` too.
+ */
+export function declaredHostOnlyError(names: Iterable<string>): string | null {
+  // The provider is left out: whatever it is, the value can't set base_url.
+  const hostOnly = hostOnlyFieldError(Object.fromEntries([...names].map((name) => [name, null])));
+  if (hostOnly === null) return null;
+  const [field, message] = hostOnly;
+  return `its type declares \`${field}\`; ${field === "base_url" ? `llm_config.${BASE_URL_FROM_VALUE}` : message}`;
+}
+
 /**
  * What run start fixes for an agent whose `llm_config` resolves only when it runs. Instances are
  * frozen.
@@ -622,8 +642,8 @@ function refusal(written: unknown, resolved: Readonly<Record<string, unknown>>):
     if (hostOnlyFieldError({ [field]: null }) === null) continue;
     if (literal === null || !Object.hasOwn(literal, field)) return [[field], HOST_ONLY_FROM_VALUE];
   }
-  const message = hostOnlyFieldError(literal ?? {});
-  return message === null ? null : [[], message];
+  const hostOnly = hostOnlyFieldError(literal ?? {});
+  return hostOnly === null ? null : [[], hostOnly[1]];
 }
 
 /**

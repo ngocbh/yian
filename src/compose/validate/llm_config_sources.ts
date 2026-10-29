@@ -31,9 +31,9 @@ import { classifyPath, typeRelation } from "../../compile/validation.ts";
 import { compareCodeUnits, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError } from "../../expr/index.ts";
 import { exprRefsOf } from "../../expr/template.ts";
-import { hostOnlyFieldError, LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS } from "../../llm_clients/config.ts";
+import { LLM_CONFIG_KEYS, SUPPORTED_LLM_PROVIDERS } from "../../llm_clients/config.ts";
 import { blockFieldAnnotation, type BlockFieldType, PROVIDER_BLOCKS } from "../../llm_clients/provider_blocks.ts";
-import { valueLeaves } from "../../nodes/agent/llm_values.ts";
+import { declaredHostOnlyError, valueLeaves } from "../../nodes/agent/llm_values.ts";
 import { AgentNode } from "../../nodes/agent/node.ts";
 import { NEW_MESSAGES } from "../../typesys/pool.ts";
 import {
@@ -266,12 +266,8 @@ class Checker {
     for (const member of inferred.variants ?? []) {
       for (const name of member.fields?.keys() ?? []) if (!declared.includes(name)) declared.push(name);
     }
-    // A null value counts as set, as each declared field may be.
-    const hostOnly = hostOnlyFieldError(Object.fromEntries(declared.map((name) => [name, null])));
-    if (hostOnly !== null && owner === "llm_config") {
-      const field = hostOnly.replace(/^llm_config\./, "").split(" ", 1)[0];
-      throw fail(`its type declares \`${field}\`; ${hostOnly}`);
-    }
+    const hostOnly = owner === "llm_config" ? declaredHostOnlyError(declared) : null;
+    if (hostOnly !== null) throw fail(hostOnly);
     for (const name of declared) {
       if (name === "inherit" && owner === "llm_config") {
         throw fail(

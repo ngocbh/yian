@@ -1020,8 +1020,8 @@ function readAuthoredLlmConfig(
     })[0];
   }
   if (!isRecord(llmConfig)) throw diagnostics.error(`${where}: llm_config must be a mapping`, { range: sourceRange });
-  const message = hostOnlyFieldError(llmConfig);
-  if (message !== null) throw diagnostics.error(`${where}: ${message}`, { range: sourceRange });
+  const hostOnly = hostOnlyFieldError(llmConfig);
+  if (hostOnly !== null) throw diagnostics.error(`${where}: ${hostOnly[1]}`, { range: sourceRange });
   try {
     new LLMConfig(llmConfig);
   } catch (error) {

@@ -616,19 +616,20 @@ const HOST_ONLY_FIELDS: ReadonlyMap<string, string> = new Map([
 ]);
 
 /**
- * Return why an authored `llm_config` layer may not be used, or `null`.
+ * Return the first host-only field an authored `llm_config` layer sets and why it may not, or
+ * `null`.
  *
- * Gives the message for the first host-only field the layer sets (`api_key`, `base_url`,
- * `organization`, `project`, `headers`; a `null` value counts). A `base_url` beside
- * `provider: azure` is allowed: it is the Azure resource endpoint, and the Azure key comes from
- * the environment, which flow code can already read, while a host `api_key` for Azure must bring
- * its own `base_url` (see `popHostCredentials`). A non-record has no host-only field.
+ * The fields are `api_key`, `base_url`, `organization`, `project` and `headers`; a `null` value
+ * counts. A `base_url` beside `provider: azure` is allowed: it is the Azure resource endpoint,
+ * and the Azure key comes from the environment, which flow code can already read, while a host
+ * `api_key` for Azure must bring its own `base_url` (see `popHostCredentials`). A non-record has no
+ * host-only field.
  */
-export function hostOnlyFieldError(config: unknown): string | null {
+export function hostOnlyFieldError(config: unknown): readonly [field: string, message: string] | null {
   if (!isRecord(config)) return null;
   for (const [field, message] of HOST_ONLY_FIELDS) {
     if (field === "base_url" && own(config, "provider") === "azure") continue;
-    if (has(config, field)) return message;
+    if (has(config, field)) return [field, message];
   }
   return null;
 }

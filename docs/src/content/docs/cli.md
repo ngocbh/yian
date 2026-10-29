@@ -175,8 +175,9 @@ ends. See [Agents](/agents/) for the file format.
 - The output goes to stdout: a string as it is, any other value in text form (`true`, `[1,"a"]`,
   `{"k":"v"}`).
 - The banner (the flow's name, version and description) and per-node progress go to stderr. Each
-  node shows a spinner, then `✓ node` or `✗ node` with the error below. Off a terminal, only the
-  finished lines print.
+  node shows a spinner, then `✓ node` or `✗ node` with the error below. Each line ends with how
+  long the node has run, counting up while it runs and fixed once it ends (`✓ frame [5s]`,
+  `⠋ debate [1m05s]`). Off a terminal, only the finished lines print.
 - Warnings print as `warning: <message>` lines on stderr.
 - Colour is used only on a terminal, and never when `NO_COLOR` is set.
 - On a terminal, the output, errors and warnings lose their escape sequences and control

@@ -71,6 +71,7 @@ import {
   homeDir,
   isSystemError,
   leavesRoot,
+  realScheduler,
   sqliteErrorCode,
   statOrNull,
   syncFolder,
@@ -395,21 +396,34 @@ function lastSegment(nodeId: string | null): string | null {
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const SPIN_MS = 80;
 
+/** Return `ms` as a bracketed elapsed time in whole units: `[5s]`, `[1m05s]`, `[1h02m]`. */
+export function elapsedTag(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `[${seconds}s]`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `[${minutes}m${String(seconds % 60).padStart(2, "0")}s]`;
+  return `[${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m]`;
+}
+
 /**
  * Per-node progress for `yian run`, drawn on stderr as the engine streams node events.
  *
  * A running node shows a spinner line, then a green `✓ <node>` on success (`✓ <node> → <handle>`
- * for a router) or a red `✗ <node>` with the error on the next line on failure. With `verbose`
- * each node's output follows its check. Several nodes can run at once (a fan-out), so there is
- * one spinner line per running node. On a TTY the spinners are redrawn every 80 ms and each
- * finished line is printed over them; off a TTY only the finished lines are printed. Outputs,
+ * for a router) or a red `✗ <node>` with the error on the next line on failure. Each line ends
+ * with the time since that node started (`elapsedTag`, on the `now` clock), counting up on a
+ * spinner and frozen on the finished line; a node whose start wasn't seen has none. With
+ * `verbose` each node's output follows its check. Several nodes can run at once (a fan-out), so
+ * there is one spinner line per running node. On a TTY the spinners are redrawn every 80 ms and
+ * each finished line is printed over them; off a TTY only the finished lines are printed. Outputs,
  * failure messages and warnings go through `forTerminal`.
  */
 export class ProgressReporter {
   readonly #out: Writer;
   readonly #verbose: boolean;
   readonly #env: Env;
-  readonly #running = new Set<string>();
+  readonly #now: () => number;
+  // Each running node's start time on `#now`.
+  readonly #running = new Map<string, number>();
   // Warning lines raised while paused, printed on `resume` or `stop`.
   readonly #held: string[] = [];
   #paused = false;
@@ -418,10 +432,11 @@ export class ProgressReporter {
   #drawn = 0;
   #timer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(out: Writer, options: { verbose: boolean; env: Env }) {
+  constructor(out: Writer, options: { verbose: boolean; env: Env; now?: () => number }) {
     this.#out = out;
     this.#verbose = options.verbose;
     this.#env = options.env;
+    this.#now = options.now ?? realScheduler.now;
   }
 
   /** Fold one engine event into the display; boundary nodes and other events are ignored. */
@@ -435,11 +450,10 @@ export class ProgressReporter {
     const style = (text: string, s: Style) => paint(text, s, this.#out, this.#env);
     switch (event.type) {
       case "NodeStarted":
-        this.#running.add(event.nodeId);
+        this.#running.set(event.nodeId, this.#now());
         break;
       case "NodeSucceeded": {
-        this.#running.delete(event.nodeId);
-        const lines = [style(`✓ ${event.nodeId}`, "green")];
+        const lines = [style(`✓ ${event.nodeId}${this.#finish(event.nodeId)}`, "green")];
         if (this.#verbose) {
           const bodyLines = splitLines(forTerminal(writeAsText(event.output as Value), this.#out));
           for (const line of bodyLines.length > 0 ? bodyLines : [""]) lines.push(style(`    ${line}`, "dim"));
@@ -449,8 +463,7 @@ export class ProgressReporter {
       }
       case "NodeRouted":
         // A router (CASE) produces no value: it selected an out-edge handle.
-        this.#running.delete(event.nodeId);
-        this.#print(style(`✓ ${event.nodeId} → ${event.handle}`, "green"));
+        this.#print(style(`✓ ${event.nodeId} → ${event.handle}${this.#finish(event.nodeId)}`, "green"));
         break;
       case "NodeExpanded":
         // A spawner grew the graph instead of returning a value; the spliced fragment's terminal
@@ -458,9 +471,9 @@ export class ProgressReporter {
         this.#running.delete(event.nodeId);
         break;
       case "NodeFailed": {
-        if (nodeId !== null) this.#running.delete(nodeId);
+        const took = nodeId === null ? "" : this.#finish(nodeId);
         const message = forTerminal(event.failure.message, this.#out);
-        this.#print(`${style(`✗ ${nodeId}`, "red bold")}\n${style(`    ${message}`, "red")}`);
+        this.#print(`${style(`✗ ${nodeId}${took}`, "red bold")}\n${style(`    ${message}`, "red")}`);
         break;
       }
       default:
@@ -503,6 +516,13 @@ export class ProgressReporter {
     this.#sync();
   }
 
+  /** Forget `nodeId` as running; return ` <elapsed>` since its start, or "" when none was seen. */
+  #finish(nodeId: string): string {
+    const start = this.#running.get(nodeId);
+    this.#running.delete(nodeId);
+    return start === undefined ? "" : ` ${elapsedTag(this.#now() - start)}`;
+  }
+
   /** Print the warning lines held while paused. */
   #flushHeld(): void {
     for (const line of this.#held.splice(0)) this.#print(line);
@@ -529,10 +549,15 @@ export class ProgressReporter {
   #draw(): void {
     const columns = this.#out.columns;
     const frame = SPINNER.charAt(this.#frame);
-    const lines = [...this.#running].map((nodeId) => {
-      // A line wider than the terminal would wrap, and the erase would miss its first part.
-      const fitted = columns === undefined ? nodeId : [...nodeId].slice(0, Math.max(0, columns - 3)).join("");
-      return `${frame} ${paint(fitted, "cyan", this.#out, this.#env)}`;
+    const now = this.#now();
+    const lines = [...this.#running].map(([nodeId, start]) => {
+      const idLength = [...nodeId].length;
+      const text = [...`${nodeId} ${elapsedTag(now - start)}`];
+      // A line wider than the terminal would wrap, and the erase would miss its first part; the
+      // elapsed time is cut before the node id.
+      const fitted = columns === undefined ? text : text.slice(0, Math.max(0, columns - 3));
+      const id = paint(fitted.slice(0, idLength).join(""), "cyan", this.#out, this.#env);
+      return `${frame} ${id}${fitted.slice(idLength).join("")}`;
     });
     this.#write(this.#erase() + lines.join("\n"));
     this.#drawn = lines.length;

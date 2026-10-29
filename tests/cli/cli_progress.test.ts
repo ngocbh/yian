@@ -1,9 +1,10 @@
-// The progress reporter: per-node progress, `✓` on success, `✗` and the error on failure, the
-// output when verbose. Most rows run on a non-TTY writer, the path the CLI takes off a terminal: no
-// spinner, only each node's final line. Also: the spinner a TTY writer gets, `pause`/`resume`, and
-// `warn`'s line above the spinners, held while paused. The CLI-run tests drive a CODE-only flow
-// through `yian run`: `--verbose` prints the output, `--quiet` streams no events, and the worker
-// count is read from the run log's `RunStarted` record.
+// The progress reporter: per-node progress, `✓` on success, `✗` and the error on failure, each
+// with the node's elapsed time on an injected clock, the output when verbose. Most rows run on a
+// non-TTY writer, the path the CLI takes off a terminal: no spinner, only each node's final line.
+// Also: the spinner a TTY writer gets, its elapsed time counting up, `pause`/`resume`, and `warn`'s
+// line above the spinners, held while paused. The CLI-run tests drive a CODE-only flow through
+// `yian run`: `--verbose` prints the output, `--quiet` streams no events, and the worker count is
+// read from the run log's `RunStarted` record.
 
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -22,12 +23,21 @@ import { readRunLog, RunStartedRecord } from "../../src/runtime/log.ts";
 // `NO_COLOR` keeps a TTY writer's text plain, so the tests see only the cursor control.
 const noColor = (name: string) => (name === "NO_COLOR" ? "1" : undefined);
 
-/** A reporter writing to an in-memory writer, a TTY one when `isTTY`, and what it was given. */
-function sinkReporter(options: { verbose?: boolean; isTTY?: boolean } = {}) {
+/**
+ * A reporter writing to an in-memory writer, a TTY one when `isTTY`, on a clock the test moves
+ * with `tick(ms)`; and what it was given.
+ */
+function sinkReporter(options: { verbose?: boolean; isTTY?: boolean; columns?: number } = {}) {
   const chunks: string[] = [];
-  const out: Writer = { write: async (text) => void chunks.push(text), isTTY: options.isTTY ?? false };
-  const reporter = new ProgressReporter(out, { verbose: options.verbose ?? false, env: noColor });
-  return { reporter, chunks, text: () => chunks.join("") };
+  const out: Writer = {
+    write: async (text) => void chunks.push(text),
+    isTTY: options.isTTY ?? false,
+    columns: options.columns,
+  };
+  let clock = 0;
+  const reporter = new ProgressReporter(out, { verbose: options.verbose ?? false, env: noColor, now: () => clock });
+  const tick = (ms: number) => void (clock += ms);
+  return { reporter, chunks, tick, text: () => chunks.join("") };
 }
 
 const started = (nodeId: string) => new NodeStarted({ nodeId });
@@ -41,7 +51,7 @@ test("success renders check", () => {
   const { reporter, text } = sinkReporter();
   reporter.handle(started("frame"));
   reporter.handle(succeeded("frame", "ok"));
-  expect(text()).toBe("✓ frame\n");
+  expect(text()).toBe("✓ frame [0s]\n");
 });
 
 test("failure renders cross and error", () => {
@@ -49,7 +59,7 @@ test("failure renders cross and error", () => {
   reporter.handle(started("verdict"));
   const failure = new Failure({ code: "node.execute", message: "boom", nodeId: "verdict", causeType: "ValueError" });
   reporter.handle(new NodeFailed({ failure }));
-  expect(text()).toBe("✗ verdict\n    boom\n");
+  expect(text()).toBe("✗ verdict [0s]\n    boom\n");
 });
 
 describe("model and tool text with escape sequences", () => {
@@ -75,7 +85,7 @@ describe("model and tool text with escape sequences", () => {
   });
 
   test("is written exactly off a TTY", () => {
-    expect(run(false)).toBe(`✓ a\n    ${raw}\n✗ b\n    ${raw}\nwarning: ${raw}\n`);
+    expect(run(false)).toBe(`✓ a [0s]\n    ${raw}\n✗ b [0s]\n    ${raw}\nwarning: ${raw}\n`);
   });
 });
 
@@ -85,7 +95,7 @@ test("routed renders check with handle", () => {
   const { reporter, text } = sinkReporter();
   reporter.handle(started("gate"));
   reporter.handle(new NodeRouted({ nodeId: "gate", handle: "yes" }));
-  expect(text()).toBe("✓ gate → yes\n");
+  expect(text()).toBe("✓ gate → yes [0s]\n");
 });
 
 test("verbose prints output", () => {
@@ -94,7 +104,7 @@ test("verbose prints output", () => {
   reporter.handle(succeeded("frame", "line one\nline two"));
   reporter.handle(started("count"));
   reporter.handle(succeeded("count", { n: 3n, tags: ["a"] }));
-  expect(text()).toBe('✓ frame\n    line one\n    line two\n✓ count\n    {"n":3,"tags":["a"]}\n');
+  expect(text()).toBe('✓ frame [0s]\n    line one\n    line two\n✓ count [0s]\n    {"n":3,"tags":["a"]}\n');
 });
 
 test("non-verbose omits output", () => {
@@ -123,7 +133,7 @@ test("namespaced boundary nodes are ignored", () => {
   }
   reporter.handle(started("polish#0/critic"));
   reporter.handle(succeeded("polish#0/critic", "x"));
-  expect(text()).toBe("✓ polish#0/critic\n");
+  expect(text()).toBe("✓ polish#0/critic [0s]\n");
 });
 
 test("expanded clears spinner without check", () => {
@@ -138,29 +148,78 @@ test("expanded clears spinner without check", () => {
   const tty = sinkReporter({ isTTY: true });
   tty.reporter.handle(started("polish~1"));
   tty.reporter.handle(new NodeExpanded({ nodeId: "polish~1", grow: { seed: null, prune: new Set() } }));
-  expect(tty.chunks).toEqual(["\r\x1b[K⠋ polish~1", "\r\x1b[K"]);
+  expect(tty.chunks).toEqual(["\r\x1b[K⠋ polish~1 [0s]", "\r\x1b[K"]);
   jest.advanceTimersByTime(400);
   expect(tty.chunks).toHaveLength(2);
 });
 
 test("on a TTY a running node draws a spinner the finish line replaces", () => {
   jest.useFakeTimers();
-  const { reporter, chunks } = sinkReporter({ isTTY: true });
+  const { reporter, chunks, tick } = sinkReporter({ isTTY: true });
   reporter.handle(started("frame"));
-  expect(chunks).toEqual(["\r\x1b[K⠋ frame"]);
+  expect(chunks).toEqual(["\r\x1b[K⠋ frame [0s]"]);
   jest.advanceTimersByTime(80);
-  expect(chunks.at(-1)).toBe("\r\x1b[K⠙ frame");
+  expect(chunks.at(-1)).toBe("\r\x1b[K⠙ frame [0s]");
+  tick(4_000);
   reporter.handle(started("other"));
-  expect(chunks.at(-1)).toBe("\r\x1b[K⠙ frame\n⠙ other"); // one spinner line per running node
+  // One spinner line per running node, each with its own elapsed time.
+  expect(chunks.at(-1)).toBe("\r\x1b[K⠙ frame [4s]\n⠙ other [0s]");
+  tick(1_500);
   reporter.handle(succeeded("frame", "ok"));
   // The finish line erases both spinner lines, then the remaining one is drawn again.
-  expect(chunks.at(-2)).toBe("\r\x1b[K\x1b[A\x1b[K✓ frame\n");
-  expect(chunks.at(-1)).toBe("\r\x1b[K⠙ other");
+  expect(chunks.at(-2)).toBe("\r\x1b[K\x1b[A\x1b[K✓ frame [5s]\n");
+  expect(chunks.at(-1)).toBe("\r\x1b[K⠙ other [1s]");
   reporter.handle(succeeded("other", "ok"));
-  expect(chunks.at(-1)).toBe("\r\x1b[K✓ other\n");
+  expect(chunks.at(-1)).toBe("\r\x1b[K✓ other [1s]\n");
   const count = chunks.length;
   jest.advanceTimersByTime(400);
   expect(chunks).toHaveLength(count); // nothing running: the redraw stopped
+});
+
+test("on a TTY the elapsed time counts up between events", () => {
+  // A long model call sends no events: the redraw alone moves the time on.
+  jest.useFakeTimers();
+  const { reporter, chunks, tick } = sinkReporter({ isTTY: true });
+  reporter.handle(started("think"));
+  tick(12_400);
+  jest.advanceTimersByTime(80);
+  expect(chunks.at(-1)).toBe("\r\x1b[K⠙ think [12s]");
+  tick(60_000);
+  jest.advanceTimersByTime(80);
+  expect(chunks.at(-1)).toBe("\r\x1b[K⠹ think [1m12s]");
+  reporter.stop();
+});
+
+test("a spinner line too wide for the terminal is cut, its elapsed time first", () => {
+  jest.useFakeTimers();
+  const { reporter, chunks } = sinkReporter({ isTTY: true, columns: 12 });
+  reporter.handle(started("abcdefghij"));
+  // Nine columns after `⠋ `, one spare, so the line can't wrap.
+  expect(chunks).toEqual(["\r\x1b[K⠋ abcdefghi"]);
+  reporter.stop();
+});
+
+test("each node's duration runs from its own start, frozen at its end", () => {
+  const { reporter, text, tick } = sinkReporter();
+  reporter.handle(started("a"));
+  tick(2_000);
+  reporter.handle(started("b"));
+  tick(3_000);
+  reporter.handle(succeeded("a", "x"));
+  tick(65_000);
+  const failure = new Failure({ code: "node.execute", message: "boom", nodeId: "b", causeType: "ValueError" });
+  reporter.handle(new NodeFailed({ failure }));
+  tick(3_600_000);
+  reporter.handle(started("gate"));
+  tick(3_725_000);
+  reporter.handle(new NodeRouted({ nodeId: "gate", handle: "yes" }));
+  expect(text()).toBe("✓ a [5s]\n✗ b [1m08s]\n    boom\n✓ gate → yes [1h02m]\n");
+});
+
+test("a node that finishes without a start seen prints no duration", () => {
+  const { reporter, text } = sinkReporter();
+  reporter.handle(succeeded("frame", "ok"));
+  expect(text()).toBe("✓ frame\n");
 });
 
 test("pause and resume stop and restart the redraw", () => {
@@ -168,17 +227,17 @@ test("pause and resume stop and restart the redraw", () => {
   const { reporter, chunks } = sinkReporter({ isTTY: true });
   reporter.handle(started("ask"));
   reporter.pause();
-  expect(chunks).toEqual(["\r\x1b[K⠋ ask", "\r\x1b[K"]);
+  expect(chunks).toEqual(["\r\x1b[K⠋ ask [0s]", "\r\x1b[K"]);
   jest.advanceTimersByTime(400);
   expect(chunks).toHaveLength(2);
   // A node finishing while paused prints its line and draws no spinner.
   reporter.handle(started("other"));
   reporter.handle(succeeded("other", "ok"));
-  expect(chunks.slice(2)).toEqual(["✓ other\n"]);
+  expect(chunks.slice(2)).toEqual(["✓ other [0s]\n"]);
   reporter.resume();
-  expect(chunks.at(-1)).toBe("\r\x1b[K⠋ ask");
+  expect(chunks.at(-1)).toBe("\r\x1b[K⠋ ask [0s]");
   jest.advanceTimersByTime(80);
-  expect(chunks.at(-1)).toBe("\r\x1b[K⠙ ask");
+  expect(chunks.at(-1)).toBe("\r\x1b[K⠙ ask [0s]");
   reporter.stop();
   expect(chunks.at(-1)).toBe("\r\x1b[K");
   const count = chunks.length;
@@ -191,7 +250,7 @@ test("a warning prints on its own line above the spinners", () => {
   const tty = sinkReporter({ isTTY: true });
   tty.reporter.handle(started("frame"));
   tty.reporter.warn("w");
-  expect(tty.chunks).toEqual(["\r\x1b[K⠋ frame", "\r\x1b[Kwarning: w\n", "\r\x1b[K⠋ frame"]);
+  expect(tty.chunks).toEqual(["\r\x1b[K⠋ frame [0s]", "\r\x1b[Kwarning: w\n", "\r\x1b[K⠋ frame [0s]"]);
   tty.reporter.stop();
 
   const plain = sinkReporter();
@@ -206,9 +265,9 @@ test("a warning while paused is held until resume or stop", () => {
   reporter.handle(started("frame"));
   reporter.pause();
   reporter.warn("w");
-  expect(chunks).toEqual(["\r\x1b[K⠋ frame", "\r\x1b[K"]);
+  expect(chunks).toEqual(["\r\x1b[K⠋ frame [0s]", "\r\x1b[K"]);
   reporter.resume();
-  expect(chunks.slice(2)).toEqual(["warning: w\n", "\r\x1b[K⠋ frame"]);
+  expect(chunks.slice(2)).toEqual(["warning: w\n", "\r\x1b[K⠋ frame [0s]"]);
   reporter.pause();
   reporter.warn("x");
   const count = chunks.length;
@@ -258,7 +317,7 @@ test("cli accepts verbose flag", async () => {
   const { code, stdout, stderr } = await runCli(["--verbose"]);
   expect(code).toBe(0);
   expect(stdout).toBe("hello\n");
-  expect(stderr).toContain("✓ a\n    hello\n");
+  expect(stderr).toMatch(/✓ a \[\d+s\]\n    hello\n/);
 });
 
 test("cli quiet suppresses events", async () => {

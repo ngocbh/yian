@@ -56,7 +56,7 @@ import {
   type VisibleInteraction,
 } from "../../memory/contracts.ts";
 import { realScheduler, warn } from "../../platform.ts";
-import type { Skill } from "../../skills/catalog.ts";
+import { type Skill, SkillError } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
 import { ASK_USER, isPending } from "../../tools/context.ts";
 import { isReportedToolError, ReportedToolError } from "../../tools/errors.ts";
@@ -619,8 +619,16 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   const { ctx, toolset, skills } = turn;
   const args = call.arguments!;
   if (skills.size > 0 && call.name === LOAD_SKILL) {
-    // `load_skill` only reads the granted skills.
-    const invoke = async () => invokeLoadSkill(skills, args);
+    // `load_skill` only reads the granted skills. Every `SkillError` it throws refuses the
+    // model's arguments, so the model reads it as the call's result; any other error is a fault.
+    const invoke = async () => {
+      try {
+        return invokeLoadSkill(skills, args);
+      } catch (error) {
+        if (error instanceof SkillError) throw new ReportedToolError(error.message, { cause: error });
+        throw error;
+      }
+    };
     return { planned: { call, index, callId: undefined, deadline: null, invoke }, safe: true };
   }
   if (!turn.granted.includes(call.name)) {

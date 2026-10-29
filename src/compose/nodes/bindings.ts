@@ -23,26 +23,23 @@ function isSource(value: unknown): value is string | ValueTemplate {
 /**
  * Apply `mapper(field, key, source)` to each source in `desc`'s binding fields.
  *
- * The fields are `bindingFields.get(desc.kind)`. A record field (e.g. `inputs`) supplies
+ * The fields are `BINDING_FIELDS.get(desc.kind)`. A record field (e.g. `inputs`) supplies
  * `("inputs", bindingName, source)` for each value; a scalar field (e.g. `over`) supplies
  * `("over", "over", source)`, so the field tells an `input: {over: ...}` key from a scalar
  * `over:`. A source is a string or a `ValueTemplate`, passed whole; any other value is left.
  *
  * @param desc The descriptor to walk.
  * @param mapper Maps one source given its owning field and binding key; it may throw.
- * @param options.bindingFields Kind to binding fields; defaults to `BINDING_FIELDS`.
  * @returns `desc.replace(updates)` when a field was visited, else `desc` itself.
  */
 export function mapBindingSources<D extends NodeDescriptor>(
   desc: D,
   mapper: (field: string, key: string, source: string | ValueTemplate) => unknown,
-  options: { bindingFields?: typeof BINDING_FIELDS } = {},
 ): D {
-  const { bindingFields = BINDING_FIELDS } = options;
-  const fields = bindingFields.get(desc.kind) ?? [];
+  const fields = BINDING_FIELDS.get(desc.kind) ?? [];
   const updates: Record<string, unknown> = {};
   for (const name of fields) {
-    const current = (desc as unknown as Record<string, unknown>)[name];
+    const current: unknown = Reflect.get(desc, name);
     if (isRecord(current)) {
       updates[name] = Object.fromEntries(
         Object.entries(current).map(([key, value]) => [key, isSource(value) ? mapper(name, key, value) : value]),
@@ -63,22 +60,11 @@ export function mapBindingSources<D extends NodeDescriptor>(
  *
  * @param desc The descriptor to walk.
  * @param mapper Maps one template string given its owning field and binding key; it may throw.
- * @param options.bindingFields Kind to binding fields; defaults to `BINDING_FIELDS`.
  * @returns `desc.replace(updates)` when a field was visited, else `desc` itself.
  */
 export function mapBindingStrings<D extends NodeDescriptor>(
   desc: D,
   mapper: (field: string, key: string, text: string) => unknown,
-  options: { bindingFields?: typeof BINDING_FIELDS } = {},
 ): D {
-  return mapBindingSources(
-    desc,
-    (field, key, source) => mapSourceStrings(source, (text) => mapper(field, key, text)),
-    options,
-  );
-}
-
-/** Adapt a text-only mapper to the binding-site callback, ignoring the field and key. */
-export function keyless(fn: (text: string) => unknown): (field: string, key: string, text: string) => unknown {
-  return (_field, _key, text) => fn(text);
+  return mapBindingSources(desc, (field, key, source) => mapSourceStrings(source, (text) => mapper(field, key, text)));
 }

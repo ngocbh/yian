@@ -3,7 +3,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
-import { keyless, mapBindingSources, mapBindingStrings } from "../../src/compose/nodes/bindings.ts";
+import { mapBindingSources, mapBindingStrings } from "../../src/compose/nodes/bindings.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
 import { LoopDescriptor } from "../../src/compose/nodes/loop.ts";
@@ -130,17 +130,5 @@ describe("mapBindingSources", () => {
     ]);
     expect(out.inputs).toEqual({ x: "${replaced}", n: 5 });
     expect(out.over).toBe("${replaced}");
-  });
-});
-
-describe("keyless", () => {
-  test("adapts a value-only mapper, ignoring the field and key", () => {
-    const desc = new AgentDescriptor({ id: "a", inputs: { x: "${src}" } });
-    const out = mapBindingStrings(
-      desc,
-      keyless((value) => value.toUpperCase()),
-    );
-    expect(out.inputs).toEqual({ x: "${SRC}" });
-    expect(keyless((value) => `<${value}>`)("inputs", "x", "v")).toBe("<v>");
   });
 });

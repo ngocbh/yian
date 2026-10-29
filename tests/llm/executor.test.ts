@@ -2,9 +2,9 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { BUILTIN, install } from "../../src/defaults.ts";
+import { BUILTIN, current, install } from "../../src/defaults.ts";
 import { type Scheduler, type Send, USER_AGENT, virtualScheduler } from "../../src/platform.ts";
-import { type Auth, BearerAuth, HeaderKeyAuth, NoAuth } from "../../src/llm/auth.ts";
+import { type Auth, BearerAuth, ExtraHeadersAuth, HeaderKeyAuth, NoAuth } from "../../src/llm/auth.ts";
 import { type ErrorKind, errorFromResponse, ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, type Event, EventStream, Finish, TextDelta, ToolCallDelta } from "../../src/llm/events.ts";
 import {
@@ -100,10 +100,37 @@ describe("Route", () => {
     test(`header value ${JSON.stringify(value)} throws without echoing it`, () => {
       const error = thrown(() => route({ headers: { "x-extra": value } }));
       expect(error).toBeInstanceOf(TypeError);
-      expect(error.message).toBe("route header x-extra must be non-empty HTTP header text");
+      expect(error.message).toBe(
+        "header x-extra value must be non-empty visible ASCII, with spaces or tabs only between characters",
+      );
       expect(error.stack ?? "").not.toContain(value);
     });
   }
+
+  test("header values pass or fail exactly as an extra header's", () => {
+    const limit = current().maxHeaderValueChars;
+    const values: unknown[] = [
+      ...["a\tb", "a b", " a", "a ", "\ta", "a\t", "a\nb", "é", ""],
+      "x".repeat(limit),
+      "x".repeat(limit + 1),
+      42,
+    ];
+    /** Return `"ok"` or the message `check` throws. */
+    const outcome = (check: () => unknown): string => {
+      try {
+        check();
+        return "ok";
+      } catch (error) {
+        return (error as Error).message;
+      }
+    };
+    for (const value of values) {
+      const headers = { x: value as string };
+      expect(outcome(() => route({ headers })), JSON.stringify(value)).toBe(
+        outcome(() => new ExtraHeadersAuth(new NoAuth(), headers)),
+      );
+    }
+  });
 });
 
 // RouteModel

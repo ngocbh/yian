@@ -32,12 +32,12 @@ export interface Auth {
 }
 
 /**
- * Return `value` if it is valid header text, never echoing it on failure.
+ * Return a key or token if it is valid header text, never echoing it on failure.
  *
  * Valid text is a non-empty string of printable ASCII and inner spaces, so `Bearer x` passes
- * while CR, LF, other control characters, non-ASCII and leading or trailing spaces fail. HTTP
- * strips the padding from a header value, so a padded key would send something other than the
- * secret it was given.
+ * while tabs, CR, LF, other control characters, non-ASCII and leading or trailing spaces fail.
+ * HTTP strips the padding from a header value, so a padded key would send something other than
+ * the secret it was given. Connection headers use the looser `checkConnectionHeaderValue`.
  *
  * @param name What the value is, for the error message.
  * @param value The value to check.
@@ -47,6 +47,35 @@ export interface Auth {
 export function checkHeaderValue(name: string, value: unknown): string {
   if (typeof value !== "string" || !/^[\x21-\x7e](?:[\x20-\x7e]*[\x21-\x7e])?$/.test(value)) {
     throw new TypeError(`${name} must be non-empty HTTP header text`);
+  }
+  return value;
+}
+
+// Visible ASCII with spaces or tabs only between characters: RFC 9110 field-value without
+// surrounding whitespace, controls or non-ASCII, which an HTTP client would otherwise reject at
+// request time with the value in the message.
+const FIELD_VALUE = /^[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*$/;
+
+/**
+ * Return a connection header value unchanged if it may be sent, never echoing it on failure.
+ *
+ * Route headers, extra headers and connection settings all check their values here.
+ *
+ * @param name The header's name; messages name it.
+ * @param value The value to check.
+ * @returns `value` unchanged.
+ * @throws TypeError If `value` is not a string, is longer than `maxHeaderValueChars`
+ *   characters, or is not non-empty visible ASCII with spaces or tabs only between characters.
+ */
+export function checkConnectionHeaderValue(name: string, value: unknown): string {
+  if (typeof value !== "string") throw new TypeError(`header ${name} value must be a string`);
+  const limit = current().maxHeaderValueChars;
+  // Spread counts code points, not UTF-16 units.
+  if ([...value].length > limit) throw new TypeError(`header ${name} value must be at most ${limit} characters`);
+  if (!FIELD_VALUE.test(value)) {
+    throw new TypeError(
+      `header ${name} value must be non-empty visible ASCII, with spaces or tabs only between characters`,
+    );
   }
   return value;
 }
@@ -207,34 +236,6 @@ export class BasicAuth implements Auth {
   }
 }
 
-// Visible ASCII with spaces or tabs only between characters, as connection settings allow.
-const FIELD_VALUE = /^[\x21-\x7e]+(?:[ \t]+[\x21-\x7e]+)*$/;
-
-/**
- * Return a connection header value unchanged if it may be sent, never echoing it on failure.
- *
- * The same rule and messages as `validateHeaderValue` in `llm_clients/connection_settings.ts`,
- * which this layer may not import, but throwing `TypeError`.
- *
- * @param name The header's name; messages name it.
- * @param value The value to check.
- * @returns `value` unchanged.
- * @throws TypeError If `value` is not a string, is longer than `maxHeaderValueChars`
- *   characters, or is not non-empty visible ASCII with spaces or tabs only between characters.
- */
-function checkFieldValue(name: string, value: unknown): string {
-  if (typeof value !== "string") throw new TypeError(`header ${name} value must be a string`);
-  const limit = current().maxHeaderValueChars;
-  // Spread counts code points, not UTF-16 units.
-  if ([...value].length > limit) throw new TypeError(`header ${name} value must be at most ${limit} characters`);
-  if (!FIELD_VALUE.test(value)) {
-    throw new TypeError(
-      `header ${name} value must be non-empty visible ASCII, with spaces or tabs only between characters`,
-    );
-  }
-  return value;
-}
-
 /**
  * Send secret extra headers alongside another auth object's, so the scrub knows their values.
  *
@@ -253,7 +254,7 @@ export class ExtraHeadersAuth implements Auth {
     this.#auth = auth;
     // Copied so a caller mutating its own object cannot change what is sent.
     this.#extra = Object.freeze({ ...headers });
-    for (const [name, value] of Object.entries(this.#extra)) checkFieldValue(name, value);
+    for (const [name, value] of Object.entries(this.#extra)) checkConnectionHeaderValue(name, value);
   }
 
   async headers(): Promise<Record<string, string>> {

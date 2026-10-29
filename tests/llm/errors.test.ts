@@ -15,9 +15,8 @@ import {
 import { REDACTED, redactKeys } from "../../src/llm_clients/redact.ts";
 
 /** Return the error for a reply from provider `p` with `status`, header record `headers` and `body`. */
-function reply(status: number, headers: Record<string, string> = {}, body = "", maxRetryAfter?: number | null) {
-  const options = maxRetryAfter === undefined ? { provider: "p" } : { provider: "p", maxRetryAfter };
-  return errorFromResponse(status, new Headers(headers), body, options);
+function reply(status: number, headers: Record<string, string> = {}, body = "") {
+  return errorFromResponse(status, new Headers(headers), body, { provider: "p" });
 }
 
 /** Return the part of `err`'s message after the first ": ". */
@@ -282,12 +281,6 @@ describe("retry policy", () => {
     });
     expect(late.retryAfter).toBe(200);
     expect(late.retryable).toBe(false);
-  });
-
-  test("no maxRetryAfter keeps retry", () => {
-    const err = reply(429, { "retry-after": "500" }, "", null);
-    expect(err.retryable).toBe(true);
-    expect(err.retryAfter).toBe(500);
   });
 
   test.each(["inf", "nan"])("literal infinite retry-after falls through: %s", (value) => {

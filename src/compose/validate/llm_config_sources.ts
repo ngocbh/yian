@@ -175,7 +175,7 @@ class Checker {
     }
   }
 
-  /** Reject an unknown reference (when asked), `isinstance` or a constructor. */
+  /** Reject an unknown reference (when asked), a read of new messages, `isinstance` or a constructor. */
   private names(leaf: unknown, checkRefs: boolean, fail: Fail): void {
     let isinstanceNames: string[];
     let constructors: string[];
@@ -197,9 +197,15 @@ class Checker {
     }
     const inputNames = new Set(this.flowInputs.keys());
     for (const ref of refs) {
+      const [head, second] = ref.split(".");
       // The reference pass accepts an AGENT's new messages for the node's other reads, so a
-      // node layer refuses them here too: its node-id targets have no `<id>.new_messages`.
-      if (!checkRefs && ref.split(".")[1] !== NEW_MESSAGES) continue;
+      // node layer refuses them here too.
+      if (second === NEW_MESSAGES && this.nodeIds.has(head!)) {
+        throw fail(
+          `reference \${${ref}} reads new_messages, which an llm_config value can't read; read it in a node input`,
+        );
+      }
+      if (!checkRefs) continue;
       const problem = classifyPath(ref, this.nodeIds, inputNames);
       if (problem !== null) throw fail(problem);
     }

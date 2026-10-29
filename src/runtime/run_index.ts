@@ -48,7 +48,7 @@ import { applyWaitsRecord, type WaitInfo, WaitsState, wakeableNodes, wakeAt, wai
 const INDEX_FILE = "index.sqlite";
 
 /** The index layout's version, kept in `PRAGMA user_version`; an index of another is rebuilt. */
-const INDEX_VERSION = 4;
+const INDEX_VERSION = 5;
 
 /** How long an update or read waits for SQLite's lock by default, in milliseconds. */
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -67,6 +67,7 @@ const SCHEMA = `CREATE TABLE runs (
   input_tokens INTEGER NOT NULL,
   output_tokens INTEGER NOT NULL,
   cache_read_tokens INTEGER NOT NULL,
+  cache_creation_tokens INTEGER NOT NULL,
   reasoning_tokens INTEGER NOT NULL,
   "offset" INTEGER NOT NULL,
   scan TEXT NOT NULL
@@ -83,6 +84,7 @@ const COLUMNS = [
   "input_tokens",
   "output_tokens",
   "cache_read_tokens",
+  "cache_creation_tokens",
   "reasoning_tokens",
   '"offset"',
   "scan",
@@ -125,6 +127,8 @@ export interface RunIndexRow {
   readonly outputTokens: number;
   /** The sum of every `model_call` step's `cache_read_tokens`, failed attempts included. */
   readonly cacheReadTokens: number;
+  /** The sum of every `model_call` step's `cache_creation_tokens`, failed attempts included. */
+  readonly cacheCreationTokens: number;
   /** The sum of every `model_call` step's `reasoning_tokens`, failed attempts included. */
   readonly reasoningTokens: number;
   /** The byte offset the row was built up to: the end of the record at `lastSeq`. */
@@ -321,6 +325,7 @@ interface StoredRow {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens: number;
+  cacheCreationTokens: number;
   reasoningTokens: number;
   offset: number;
   scan: RunScan;
@@ -574,6 +579,7 @@ function readRun(log: string, runId: string, saved: StoredRow | null): StoredRow
         inputTokens: 0,
         outputTokens: 0,
         cacheReadTokens: 0,
+        cacheCreationTokens: 0,
         reasoningTokens: 0,
         offset: 0,
         scan: emptyRunScan(),
@@ -613,6 +619,7 @@ function addUsage(row: StoredRow, step: Readonly<Record<string, unknown>>): void
   row.inputTokens += count("input_tokens");
   row.outputTokens += count("output_tokens");
   row.cacheReadTokens += count("cache_read_tokens");
+  row.cacheCreationTokens += count("cache_creation_tokens");
   row.reasoningTokens += count("reasoning_tokens");
 }
 
@@ -641,6 +648,7 @@ function toColumns(row: StoredRow): (string | number | null)[] {
     row.inputTokens,
     row.outputTokens,
     row.cacheReadTokens,
+    row.cacheCreationTokens,
     row.reasoningTokens,
     row.offset,
     // JSON data: ids, seqs, counts, flags, and the waits fold's own JSON form.
@@ -661,6 +669,7 @@ function fromColumns(columns: SqliteRow): StoredRow {
     inputTokens: columns["input_tokens"] as number,
     outputTokens: columns["output_tokens"] as number,
     cacheReadTokens: columns["cache_read_tokens"] as number,
+    cacheCreationTokens: columns["cache_creation_tokens"] as number,
     reasoningTokens: columns["reasoning_tokens"] as number,
     offset: columns["offset"] as number,
     scan: runScanFromJson(columns["scan"] as string),

@@ -1963,6 +1963,7 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
       input_tokens: BigInt(row.inputTokens),
       output_tokens: BigInt(row.outputTokens),
       cache_read_tokens: BigInt(row.cacheReadTokens),
+      cache_creation_tokens: BigInt(row.cacheCreationTokens),
       reasoning_tokens: BigInt(row.reasoningTokens),
       ready: row.ready,
       wake_at: row.wakeAt,

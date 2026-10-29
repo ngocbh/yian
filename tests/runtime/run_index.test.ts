@@ -90,7 +90,10 @@ function runStarted(parent: { runId: string; node: string | null } | null = null
 }
 
 /** A `model_call` step with these token counts; `error` makes it a failed attempt. */
-function modelCall(usage: [number, number, number | null, number | null] | null, error = false): Record<string, unknown> {
+function modelCall(
+  usage: [number, number, number | null, number | null, number | null] | null,
+  error = false,
+): Record<string, unknown> {
   const count = (n: number | null) => (n === null ? null : BigInt(n));
   return {
     kind: "model_call",
@@ -102,7 +105,8 @@ function modelCall(usage: [number, number, number | null, number | null] | null,
             input_tokens: count(usage[0]),
             output_tokens: count(usage[1]),
             cache_read_tokens: count(usage[2]),
-            reasoning_tokens: count(usage[3]),
+            cache_creation_tokens: count(usage[3]),
+            reasoning_tokens: count(usage[4]),
           },
     ...(error ? { error: { kind: "server", message: "overloaded" } } : {}),
   };
@@ -136,8 +140,8 @@ function start(log: JsonlRunLog, parent: { runId: string; node: string | null } 
 function succeededRun(log: JsonlRunLog): void {
   start(log, { runId: "parent-run", node: "spawner" });
   log.append(new NodeStartedRecord("agent"));
-  log.append(new NodeStepRecord("agent", 1, modelCall([100, 3, null, null], true)));
-  log.append(new NodeStepRecord("agent", 2, modelCall([120, 30, 64, 8])));
+  log.append(new NodeStepRecord("agent", 1, modelCall([100, 3, null, 4, null], true)));
+  log.append(new NodeStepRecord("agent", 2, modelCall([120, 30, 64, 16, 8])));
   succeed(log, "agent", { kind: "str", value: "rain" });
   log.append(new NodeStartedRecord(END_ID));
   succeed(log, END_ID, { kind: "object", value: { answer: "rain", n: 2n } });
@@ -147,7 +151,7 @@ function succeededRun(log: JsonlRunLog): void {
 function failedRun(log: JsonlRunLog): void {
   start(log);
   log.append(new NodeStartedRecord("agent"));
-  log.append(new NodeStepRecord("agent", 1, modelCall([10, 1, null, null], true)));
+  log.append(new NodeStepRecord("agent", 1, modelCall([10, 1, null, null, null], true)));
   log.append(new NodeFailedRecord(new Failure({ code: "node.execute", message: "boom", nodeId: "agent" })));
 }
 
@@ -162,7 +166,7 @@ function stoppedRun(log: JsonlRunLog): void {
 function runningRun(log: JsonlRunLog): void {
   start(log);
   log.append(new NodeStartedRecord("agent"));
-  log.append(new NodeStepRecord("agent", 1, modelCall([7, 2, null, 1])));
+  log.append(new NodeStepRecord("agent", 1, modelCall([7, 2, null, null, 1])));
 }
 
 /** The rows by run id. */
@@ -200,6 +204,7 @@ describe("updateRunIndex and readRunIndex", () => {
         inputTokens: 220,
         outputTokens: 33,
         cacheReadTokens: 64,
+        cacheCreationTokens: 20,
         reasoningTokens: 8,
         offset: readFileSync(join(runs, "run-succeeded", "log.jsonl")).length,
         waits: [],
@@ -215,6 +220,7 @@ describe("updateRunIndex and readRunIndex", () => {
         inputTokens: 10,
         outputTokens: 1,
         cacheReadTokens: 0,
+        cacheCreationTokens: 0,
         reasoningTokens: 0,
       });
       expect(rows["run-stopped"]).toMatchObject({ status: "stopped", endedAt: null, lastSeq: 3, result: null });
@@ -261,7 +267,7 @@ describe("updateRunIndex and readRunIndex", () => {
       const before = byId(readRunIndex(runs));
       const path = join(runs, "run-b", "log.jsonl");
       const size = readFileSync(path).length;
-      growing.append(new NodeStepRecord("agent", 2, modelCall([5, 5, 5, 5])));
+      growing.append(new NodeStepRecord("agent", 2, modelCall([5, 5, 5, 5, 5])));
       succeed(growing, "agent", { kind: "str", value: "ok" });
       const appended = readFileSync(path).length - size;
       const reads = spyOn(fs, "readSync");
@@ -404,12 +410,24 @@ describe("updateRunIndex and readRunIndex", () => {
     writeRun(runs, "run-1", (log) => {
       start(log);
       log.append(new NodeStartedRecord("agent"));
-      const odd = { input_tokens: "12", output_tokens: 1.5, cache_read_tokens: Infinity, reasoning_tokens: 2n ** 60n };
+      const odd = {
+        input_tokens: "12",
+        output_tokens: 1.5,
+        cache_read_tokens: Infinity,
+        cache_creation_tokens: -0.5,
+        reasoning_tokens: 2n ** 60n,
+      };
       log.append(new NodeStepRecord("agent", 1, { kind: "model_call", usage: odd }));
-      log.append(new NodeStepRecord("agent", 2, modelCall([5, 6, 7, 8])));
+      log.append(new NodeStepRecord("agent", 2, modelCall([5, 6, 7, 9, 8])));
     });
     updateRunIndex(runs);
-    expect(readRunIndex(runs)[0]).toMatchObject({ inputTokens: 5, outputTokens: 6, cacheReadTokens: 7, reasoningTokens: 8 });
+    expect(readRunIndex(runs)[0]).toMatchObject({
+      inputTokens: 5,
+      outputTokens: 6,
+      cacheReadTokens: 7,
+      cacheCreationTokens: 9,
+      reasoningTokens: 8,
+    });
   });
 
   test("a log that turns unreadable keeps the row it had", () => {
@@ -450,10 +468,22 @@ describe("updateRunIndex and readRunIndex", () => {
     try {
       const { scan } = reader.prepare("SELECT scan FROM runs").get() as { scan: string };
       expect(JSON.parse(scan).waits.stops).toEqual([]);
-      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 4 });
+      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 5 });
     } finally {
       reader.close();
     }
+  });
+
+  test("an index of version 4, which has no cache-creation column, is rebuilt with the count", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", succeededRun);
+    updateRunIndex(runs);
+    const db = openSqlite(join(runs, "index.sqlite"));
+    db.exec("ALTER TABLE runs DROP COLUMN cache_creation_tokens; PRAGMA user_version = 4");
+    db.close();
+    expect(readRunIndex(runs)).toEqual([]);
+    updateRunIndex(runs);
+    expect(readRunIndex(runs).map((row) => [row.runId, row.cacheCreationTokens])).toEqual([["run-1", 20]]);
   });
 
   test("a read takes the layout version and the rows from one snapshot, so a rebuild between them can't mix layouts", () => {

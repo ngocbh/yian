@@ -137,14 +137,10 @@ export class CodeDescriptor extends NodeDescriptor {
     let codeLineOrigins = this.codeLineOrigins;
     const lineRanges = codeCursor.scalarSource?.constructedLineRanges ?? null;
     if (lineRanges !== null) {
-      const registered: OriginRef[] = [];
-      for (let index = 0; index < lineRanges.length; index++) {
-        const origin = catalogBuilder.registerConstructedLine([...fieldPath, "line", index], codeCursor, index);
-        if (origin === null) break;
-        registered.push(origin);
-      }
-      // A partial set would claim exact lines it can't back, so only a complete set replaces them.
-      if (registered.length === lineRanges.length) codeLineOrigins = registered;
+      // A cursor with constructed line ranges has a document, so every line registers.
+      codeLineOrigins = lineRanges.map(
+        (_range, index) => catalogBuilder.registerConstructedLine([...fieldPath, "line", index], codeCursor, index)!,
+      );
     }
     return this.replace({ codeOrigin, codeLineOrigins });
   }

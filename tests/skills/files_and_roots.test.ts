@@ -96,6 +96,21 @@ describe("read skill file rejects hidden files", () => {
   });
 });
 
+test("read skill file rejects symlinks to hidden files", () => {
+  mkdirSync(join(root, ".secret"));
+  writeFileSync(join(root, ".secret", "creds"), "token=abc\n");
+  writeFileSync(join(root, ".env"), "TOKEN=1\n");
+  symlinkSync(".secret", join(root, "docs"));
+  symlinkSync(".env", join(root, "notes.txt"));
+  // A chain of visible names that ends at a hidden file, one hop through a folder outside the skill.
+  symlinkSync("notes.txt", join(root, "hop.txt"));
+  symlinkSync(join(root, ".secret", "creds"), join(tmp, "outside-hop"));
+  symlinkSync(join(tmp, "outside-hop"), join(root, "via.txt"));
+  for (const path of ["docs/creds", "notes.txt", "hop.txt", "via.txt"]) {
+    expectSkillError(() => readSkillFile(skill, path), "hidden files and folders are not readable");
+  }
+});
+
 test("read skill file rejects missing, directories, binary and large", () => {
   writeFileSync(join(root, "blob.bin"), new Uint8Array([0xff, 0xfe, 0x00]));
   writeFileSync(join(root, "big.txt"), "x".repeat(current().maxSkillFileBytes + 1));

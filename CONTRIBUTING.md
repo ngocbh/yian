@@ -33,7 +33,11 @@ When you change the docs site (`docs/`), also run:
 ```bash
 bun test ./tests/docs
 (cd docs && bun install --frozen-lockfile && bun run build)
+YIAN_UPDATE_BUNDLE=1 bun test tests/repo/bundled.test.ts   # the docs, skill and flows yian chat carries
 ```
+
+The same regeneration follows a change to the `composing-agents` skill or to `src/cli/flows/`.
+`src/cli/bundled.ts` is generated but committed, so yian runs from a checkout.
 
 [`docs/STYLE.md`](docs/STYLE.md) says how to write a docs page, and
 [`tests/conformance/README.md`](tests/conformance/README.md) how to add a conformance case.

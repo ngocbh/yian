@@ -24,7 +24,7 @@ import {
   ValueKind,
   writeAsText,
 } from "../typesys/values.ts";
-import { ANSI, cells, charCells, columnsOf, fit, wrapLine } from "./cells.ts";
+import { ANSI, cells, charCells, clip, columnsOf, fit, wrapLine } from "./cells.ts";
 import { box } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 
@@ -40,8 +40,8 @@ type Input = NodeJS.ReadableStream & {
   destroyed?: boolean;
 };
 
-/** The output a `Terminal` draws on: only `write` and `columns` are used. */
-type Output = Pick<NodeJS.WritableStream, "write"> & { columns?: number };
+/** The output a `Terminal` draws on: only `write`, `columns` and `rows` are used. */
+type Output = Pick<NodeJS.WritableStream, "write"> & { columns?: number; rows?: number };
 
 export interface TerminalOptions {
   /** Where keys come from; defaults to process.stdin. Raw mode is set only when it is a TTY. */
@@ -91,8 +91,8 @@ export class TerminalStopped extends Error {
   }
 }
 
-/** One keypress, as the key loop hands it to a widget. */
-interface Key {
+/** One keypress, as the key loop hands it to a widget (or to a `watchKeys` editor). */
+export interface Key {
   name: string | undefined;
   ctrl: boolean;
   meta: boolean;
@@ -125,6 +125,10 @@ interface Widget<T> {
    * dropped so the next line is a fresh answer; undefined when nothing was refused.
    */
   refused?(): string | undefined;
+  /** Calls `redraw` when the widget's lines change without a key; returns what stops it. */
+  watch?(redraw: () => void): () => void;
+  /** Drawn on the whole (alternate) screen, which the terminal gives back as it was. */
+  screen?: boolean;
 }
 
 const ESC = "\x1b[";
@@ -132,6 +136,9 @@ const SHOW_CURSOR = `${ESC}?25h`;
 const HIDE_CURSOR = `${ESC}?25l`;
 const PASTE_ON = `${ESC}?2004h`;
 const PASTE_OFF = `${ESC}?2004l`;
+// The alternate screen: switching back restores the main screen and the cursor as they were.
+const ALT_ON = `${ESC}?1049h`;
+const ALT_OFF = `${ESC}?1049l`;
 
 /**
  * `output` for a plain terminal: what is written loses its escape codes and carriage returns, and
@@ -290,7 +297,7 @@ function textWidget(options: {
   mark?: string;
   instruction?: string;
   validate?: (text: string) => string | undefined;
-}): Widget<string> & { text(): string; caret(): number } {
+}): Widget<string> & { text(): string; caret(): number; set(text: string): void } {
   const mark = options.mark ?? "?";
   const chars = Array.from(options.initial ?? "");
   let pos = chars.length;
@@ -340,23 +347,132 @@ function textWidget(options: {
     },
     text: () => chars.join(""),
     caret: () => pos,
+    set(text) {
+      chars.splice(0, chars.length, ...Array.from(text));
+      pos = chars.length;
+      error = undefined;
+    },
   };
 }
 
 /**
- * `text` drawn as a framed prompt `columns()` wide: a box holding `> ` and the text, folded onto
- * as many rows as it needs, and the dim `hint` below it. Once entered it collapses to `> <text>`;
- * any other ending erases it.
+ * A list of rows under a framed prompt (`LineEditor`), which Down moves into: each row is one
+ * item, drawn as given (styled; one row of the screen each). No rows hides the list.
  */
-function framedWidget(
-  text: ReturnType<typeof textWidget>,
-  columns: () => number,
-  hint: string,
-): Widget<string> & { text(): string } {
-  // The rows the text folds onto, each with the index of its first character, and the cursor's.
-  const fold = (): { rows: { start: number; chars: string[] }[]; row: number; width: number } => {
-    const width = Math.max(1, columns() - 6);
-    const chars = Array.from(text.text()).map((char) => (char === "\n" ? "⏎" : char));
+export interface PromptList {
+  rows(): readonly string[];
+  /** Calls `listener` when the rows may have changed; returns what stops it. */
+  subscribe?(listener: () => void): () => void;
+}
+
+/**
+ * What a key did at a `LineEditor`: Enter in the box answers its text (`value`), Enter on a list
+ * row `open`s it, Escape in the box is `escape`, Ctrl-D in an empty box the end of input; `null`
+ * when the key only edited or moved.
+ */
+export type EditorAction = { value: string } | { open: number } | { escape: true } | { stop: "eof" } | null;
+
+/**
+ * A line typed in a framed box `columns()` wide: a box holding `> ` and the text, folded onto as
+ * many rows as it needs, the dim `hint` below it, and under that `list`'s rows when it has any.
+ * The box has the keys, as a line prompt does, until Down on its last row moves them to the
+ * list; there Up and Down move between rows, and Up from the top row, Escape or a typed character
+ * goes back to the box. The text and where the keys are last across prompts, so one editor can
+ * serve a chat's prompt and the box it keeps up while a reply runs.
+ */
+export class LineEditor {
+  readonly #text = textWidget({ label: "", mark: ">" });
+  readonly #columns: () => number;
+  readonly #hint: string;
+  /** The list under the hint, if any. */
+  readonly list: PromptList | null;
+  /** The list row with the keys, or null while the box has them. */
+  #focus: number | null = null;
+
+  constructor(options: { columns: () => number; hint: string; list?: PromptList | null }) {
+    this.#columns = options.columns;
+    this.#hint = options.hint;
+    this.list = options.list ?? null;
+  }
+
+  /** The text typed. */
+  text(): string {
+    return this.#text.text();
+  }
+
+  /** Replace the text, the cursor after it. */
+  set(text: string): void {
+    this.#text.set(text);
+  }
+
+  /** The list row with the keys, or null while the box has them. */
+  focus(): number | null {
+    const count = this.list?.rows().length ?? 0;
+    // A row that went (its run ended) gives the keys to the one above it, or the box.
+    if (this.#focus !== null) this.#focus = count === 0 ? null : Math.min(this.#focus, count - 1);
+    return this.#focus;
+  }
+
+  /** The rows, styled: the box, the hint and the list. */
+  lines(): string[] {
+    const { rows, width } = this.#fold();
+    const edge = "─".repeat(width + 4);
+    const border = (part: string): string => style("2", part);
+    const focus = this.focus();
+    const pointer = (i: number): string => (i === focus ? `${style("1;36", "»")} ` : "  ");
+    const list = (this.list?.rows() ?? []).map((row, i) => pointer(i) + row);
+    return [
+      border(`╭${edge}╮`),
+      ...rows.map((each, i) => {
+        const body = each.chars.join("");
+        return `${border("│")} ${lead(i)}${body}${" ".repeat(width - cells(body))} ${border("│")}`;
+      }),
+      border(`╰${edge}╯`),
+      `  ${style("2", this.#hint)}`,
+      ...list,
+    ];
+  }
+
+  /** The cursor's row among `lines()` and that row's text before it; null while the list has the keys. */
+  cursor(): { row: number; before: string } | null {
+    if (this.focus() !== null) return null;
+    const { rows, row } = this.#fold();
+    const before = rows[row]!.chars.slice(0, this.#text.caret() - rows[row]!.start).join("");
+    return { row: row + 1, before: `│ ${lead(row)}${before}` };
+  }
+
+  /** Apply one key. */
+  key(key: Key): EditorAction {
+    const focus = this.focus();
+    const count = this.list?.rows().length ?? 0;
+    const enter = (key.name === "return" || key.name === "enter") && !key.paste;
+    const plain = !key.ctrl && !key.meta;
+    if (focus !== null) {
+      if (enter) return { open: focus };
+      if (key.name === "escape" || (plain && key.name === "up" && focus === 0)) this.#focus = null;
+      else if (plain && key.name === "up") this.#focus = focus - 1;
+      else if (plain && key.name === "down") this.#focus = Math.min(focus + 1, count - 1);
+      else if (printable(key)) {
+        this.#focus = null;
+        this.#text.key(key);
+      }
+      return null;
+    }
+    if (plain && key.name === "down" && count > 0) {
+      const { rows, row } = this.#fold();
+      if (row === rows.length - 1) this.#focus = 0;
+      return null;
+    }
+    if (key.name === "escape") return { escape: true };
+    const ended = this.#text.key(key);
+    if (ended === undefined) return null;
+    return "value" in ended ? ended : ended.stop === "eof" ? { stop: "eof" } : null;
+  }
+
+  /** The rows the text folds onto, each with the index of its first character, and the cursor's. */
+  #fold(): { rows: { start: number; chars: string[] }[]; row: number; width: number } {
+    const width = Math.max(1, this.#columns() - 6);
+    const chars = Array.from(this.#text.text()).map((char) => (char === "\n" ? "⏎" : char));
     const rows = [{ start: 0, chars: [] as string[], used: 0 }];
     for (const [i, char] of chars.entries()) {
       let last = rows[rows.length - 1]!;
@@ -368,38 +484,45 @@ function framedWidget(
       last.chars.push(char);
       last.used += size;
     }
-    const caret = text.caret();
+    const caret = this.#text.caret();
     // A full last row leaves no cell for the cursor after it: it gets a row of its own.
     const last = rows[rows.length - 1]!;
     if (caret === chars.length && last.used >= width) rows.push({ start: chars.length, chars: [], used: 0 });
     const row = rows.findLastIndex((each) => each.start <= caret);
     return { rows, row, width };
-  };
-  const border = (part: string): string => style("2", part);
-  const lead = (row: number): string => (row === 0 ? `${style("1", ">")} ` : "  ");
+  }
+}
+
+/** What a framed box's row `row` starts with: the bold `>` on the first. */
+function lead(row: number): string {
+  return row === 0 ? `${style("1", ">")} ` : "  ";
+}
+
+/** What a framed `readLine` answers when Enter opens a list row. */
+type Opened = { open: number };
+
+/**
+ * `editor` as a prompt: once entered it collapses to `> <text>`; any other ending erases it.
+ * Escape ends it only with `escape` (answering `ESCAPED`), and Enter on a list row answers
+ * `{open}`.
+ */
+function editorWidget(editor: LineEditor, escape: boolean): Widget<string | typeof ESCAPED | Opened> {
   return {
     preface: "",
-    lines() {
-      const { rows, width } = fold();
-      const edge = "─".repeat(width + 4);
-      return [
-        border(`╭${edge}╮`),
-        ...rows.map((each, i) => {
-          const body = each.chars.join("");
-          return `${border("│")} ${lead(i)}${body}${" ".repeat(width - cells(body))} ${border("│")}`;
-        }),
-        border(`╰${edge}╯`),
-        `  ${style("2", hint)}`,
-      ];
+    lines: () => editor.lines(),
+    cursor: () => editor.cursor(),
+    key(key) {
+      const action = editor.key(key);
+      if (action === null) return undefined;
+      if ("escape" in action) return escape ? { value: ESCAPED } : undefined;
+      if ("open" in action) return { value: action };
+      return action;
     },
-    cursor() {
-      const { rows, row } = fold();
-      const before = rows[row]!.chars.slice(0, text.caret() - rows[row]!.start).join("");
-      return { row: row + 1, before: `│ ${lead(row)}${before}` };
-    },
-    key: (key) => text.key(key),
-    done: (outcome) => ("value" in outcome ? `${style("1", ">")} ${text.text().replaceAll("\n", "⏎")}` : null),
-    text: () => text.text(),
+    done: (outcome) =>
+      "value" in outcome && typeof outcome.value === "string"
+        ? `${style("1", ">")} ${outcome.value.replaceAll("\n", "⏎")}`
+        : null,
+    watch: (redraw) => editor.list?.subscribe?.(redraw) ?? (() => {}),
   };
 }
 
@@ -571,7 +694,9 @@ export class Terminal {
    * The host's handler while `watchKeys` runs, and the raw mode to restore once nothing needs the
    * terminal raw.
    */
-  #watch: { onKey: (key: "escape" | "interrupt") => void; wasRaw: boolean } | undefined;
+  #watch:
+    | { onKey: (key: "escape" | "interrupt") => void; edit: ((key: Key) => boolean) | null; wasRaw: boolean }
+    | undefined;
   /** The last key was a `return`, so an `enter` now is the `\n` of the same `\r\n`. */
   #afterReturn = false;
   #pasting = false;
@@ -612,44 +737,63 @@ export class Terminal {
    *
    * With `frame`, on a terminal that isn't plain, the prompt is a box across the terminal holding
    * `> ` and the text, the dim `hint` below it, instead of the label; once entered it collapses
-   * to `> <line>`.
+   * to `> <line>`. Given `editor`, the box is that editor's (`LineEditor`, its hint instead of
+   * `hint`), its text set to `initial` when it differs, and Enter on a row of its list answers
+   * `{open}` with the row and the draft.
    */
   async readLine<E extends boolean = false>(
     label: string,
-    options: { signal?: AbortSignal; initial?: string; escape?: E; frame?: boolean; hint?: string } = {},
+    options: {
+      signal?: AbortSignal;
+      initial?: string;
+      escape?: E;
+      frame?: boolean;
+      hint?: string;
+      editor?: LineEditor;
+    } = {},
   ): Promise<
     | { value: string }
     | { eof: true }
     | { interrupt: true }
     | { aborted: true; draft: string }
+    | { open: number; draft: string }
     | (E extends true ? Escaped : never)
   > {
     const { signal, initial = "" } = options;
-    const typed = textWidget({ label, mark: ">", initial });
-    const text =
-      options.frame === true && !this.#plain
-        ? framedWidget(typed, () => columnsOf(this.#output), options.hint ?? "")
-        : typed;
-    const widget: Widget<string | typeof ESCAPED> = options.escape
-      ? {
-          ...text,
-          key: (key) => (key.name === "escape" ? { value: ESCAPED } : text.key(key)),
-          done: (outcome) =>
-            "value" in outcome && outcome.value === ESCAPED ? null : text.done(outcome as Outcome<string>),
-        }
-      : text;
+    let widget: Widget<string | typeof ESCAPED | Opened>;
+    let draft: () => string;
+    if (options.frame === true && !this.#plain) {
+      const columns = () => columnsOf(this.#output);
+      const editor = options.editor ?? new LineEditor({ columns, hint: options.hint ?? "" });
+      if (editor.text() !== initial) editor.set(initial);
+      widget = editorWidget(editor, options.escape === true);
+      draft = () => editor.text();
+    } else {
+      const text = textWidget({ label, mark: ">", initial });
+      widget = options.escape
+        ? {
+            ...text,
+            key: (key) => (key.name === "escape" ? { value: ESCAPED } : text.key(key)),
+            done: (outcome) =>
+              "value" in outcome && outcome.value === ESCAPED ? null : text.done(outcome as Outcome<string>),
+          }
+        : text;
+      draft = () => text.text();
+    }
     if (signal?.aborted) return { aborted: true, draft: initial };
-    let ended: { value: string | typeof ESCAPED } | { stop: StopReason };
+    let ended: { value: string | typeof ESCAPED | Opened } | { stop: StopReason };
     try {
       ended = await this.#runTurn(signal, (run) => run(widget), { keepOpen: true });
     } catch (error) {
-      if (signal?.aborted && error === signal.reason) return { aborted: true, draft: text.text() };
+      if (signal?.aborted && error === signal.reason) return { aborted: true, draft: draft() };
       throw error;
     }
     if ("value" in ended) {
+      const { value } = ended;
       // Only an `escape` prompt answers ESCAPED, so E is true here.
-      if (ended.value === ESCAPED) return { escape: true, draft: text.text() } as E extends true ? Escaped : never;
-      return { value: ended.value };
+      if (value === ESCAPED) return { escape: true, draft: draft() } as E extends true ? Escaped : never;
+      if (typeof value !== "string") return { open: value.open, draft: draft() };
+      return { value };
     }
     return ended.stop === "interrupt" ? { interrupt: true } : { eof: true };
   }
@@ -671,6 +815,40 @@ export class Terminal {
     const initial = options.initial === undefined ? 0 : choices.indexOf(options.initial);
     const ended = await this.#runTurn(options.signal, (run) => run(selectWidget({ label, titles: choices.map(visible), initial })));
     return "value" in ended ? choices[ended.value]! : null;
+  }
+
+  /**
+   * Show `draw`'s rows on the whole screen, the alternate one, until Escape, `q`, Enter or Ctrl-C,
+   * or `signal` aborts; then give back the screen as it was. `draw` gets the columns and rows and
+   * is called again on each `subscribe` callback; rows past the screen's height are left out and
+   * each is cut to the width. Does nothing on a plain terminal or an input that isn't a TTY, and
+   * when the terminal is closed. Ctrl-C leaves the terminal open.
+   */
+  async showScreen(options: {
+    draw: (columns: number, rows: number) => readonly string[];
+    subscribe?: (redraw: () => void) => () => void;
+    signal?: AbortSignal;
+  }): Promise<void> {
+    if (this.#plain || this.#input.isTTY !== true || options.signal?.aborted) return;
+    const output = this.#output;
+    const widget: Widget<null> = {
+      preface: "",
+      screen: true,
+      lines: () => [...options.draw(columnsOf(output), output.rows || 24)],
+      cursor: () => null,
+      key(key) {
+        const plain = !key.ctrl && !key.meta && !key.paste;
+        const leave = key.name === "escape" || key.name === "return" || key.name === "enter" || key.str === "q";
+        return plain && leave ? { value: null } : undefined;
+      },
+      done: () => null,
+      watch: options.subscribe,
+    };
+    try {
+      await this.#runTurn(options.signal, (run) => run(widget), { keepOpen: true });
+    } catch (error) {
+      if (!(options.signal?.aborted && error === options.signal.reason)) throw error;
+    }
   }
 
   /**
@@ -788,15 +966,20 @@ export class Terminal {
   /**
    * Watch the keys while no prompt is up, until `signal` aborts: Escape calls `onKey("escape")`
    * and Ctrl-C `onKey("interrupt")`, rather than raising SIGINT, since the input is raw; other keys
-   * wait for the next prompt. A prompt meanwhile takes the keys as usual, and the watch goes on
-   * after it. Does nothing on a plain terminal or an input that isn't a TTY.
+   * wait for the next prompt. Given `edit`, every key but Ctrl-C goes to it first, and only one it
+   * doesn't take (returns false for) goes on as above. A prompt meanwhile takes the keys as usual,
+   * and the watch goes on after it. Does nothing on a plain terminal or an input that isn't a TTY.
    */
-  watchKeys(signal: AbortSignal, onKey: (key: "escape" | "interrupt") => void): void {
+  watchKeys(
+    signal: AbortSignal,
+    onKey: (key: "escape" | "interrupt") => void,
+    edit: ((key: Key) => boolean) | null = null,
+  ): void {
     const input = this.#input;
     if (this.#plain || this.#closed || signal.aborted) return;
     if (input.isTTY !== true || typeof input.setRawMode !== "function") return;
     this.#attach();
-    const watch = { onKey, wasRaw: input.isRaw === true };
+    const watch = { onKey, edit, wasRaw: input.isRaw === true };
     this.#watch = watch;
     // A `process.exit()` elsewhere skips the restore below.
     const onExit = (): void => quietly(() => input.setRawMode!(false));
@@ -839,10 +1022,11 @@ export class Terminal {
       str: alt?.[1] ?? str,
       paste: this.#pasting,
     };
-    const watching = this.#watch !== undefined && this.#turn === undefined;
+    const watch = this.#turn === undefined ? this.#watch : undefined;
     if (this.#active) this.#active.key(key);
-    else if (watching && key.name === "escape") this.#watch!.onKey("escape");
-    else if (watching && key.ctrl && key.name === "c") this.#watch!.onKey("interrupt");
+    else if (watch !== undefined && key.ctrl && key.name === "c") watch.onKey("interrupt");
+    else if (watch?.edit?.(key) === true) return;
+    else if (watch !== undefined && key.name === "escape") watch.onKey("escape");
     else this.#buffer.push(key);
   };
 
@@ -998,6 +1182,8 @@ export class Terminal {
     // Rows from the frame's top to where the cursor was left, so the next draw starts there.
     let cursorRow = 0;
     const erase = (): string => `\r${cursorRow > 0 ? `${ESC}${cursorRow}A` : ""}${ESC}J`;
+    // Whether the cursor is shown: a widget can hide it for a while (a list with the keys).
+    let shown = widget.cursor() !== null;
     const draw = (): void => {
       // A plain prompt is written once, as it opens; a refused line adds only its error, since
       // the cooked tty already echoed the line.
@@ -1008,11 +1194,22 @@ export class Terminal {
       }
       const columns = columnsOf(output);
       const lines = widget.lines();
+      if (widget.screen) {
+        // From the top, one screen row each, so the screen never scrolls.
+        const rows = lines.slice(0, Math.max(1, output.rows || 24)).map((line) => clip(line, columns));
+        output.write(`${ESC}H${rows.map((row) => `${row}${ESC}K`).join("\r\n")}${ESC}J`);
+        return;
+      }
       const cursor = widget.cursor();
+      let modes = "";
+      if ((cursor !== null) !== shown) {
+        shown = cursor !== null;
+        modes = shown ? SHOW_CURSOR : HIDE_CURSOR;
+      }
       const at = cursor === null ? -1 : Array.from(cursor.before.replace(ANSI, "")).length;
       const laid = lines.map((line, i) => layout(line, columns, i === cursor?.row ? at : -1));
       const total = laid.reduce((sum, line) => sum + line.rows, 0);
-      let text = erase() + crlf(lines.join("\n"));
+      let text = modes + erase() + crlf(lines.join("\n"));
       cursorRow = total - 1;
       if (cursor !== null) {
         const place = laid[cursor.row]!.cursor;
@@ -1033,27 +1230,44 @@ export class Terminal {
         finish({ error });
       }
     };
+    let unwatch = (): void => {};
     try {
       if (this.#plain) output.write(`${widget.preface}${widget.lines().join("\n")}\n`);
-      else output.write(widget.preface + PASTE_ON + (widget.cursor() === null ? HIDE_CURSOR : SHOW_CURSOR));
+      else {
+        const screen = widget.screen ? ALT_ON : "";
+        output.write(screen + widget.preface + PASTE_ON + (shown ? SHOW_CURSOR : HIDE_CURSOR));
+      }
       draw();
       this.#active = { key: feed, end: () => stop("eof") };
+      unwatch = widget.watch?.(() => {
+        if (outcome !== undefined) return;
+        try {
+          draw();
+        } catch (error) {
+          finish({ error });
+        }
+      }) ?? unwatch;
       while (outcome === undefined && this.#buffer.length > 0) feed(this.#buffer.shift()!);
       if (outcome === undefined && this.#ended) stop("eof");
       await settled;
       const ended = outcome!;
-      // A `readLine` a deadline took down leaves no line: the prompt comes back after the reply.
-      const vanish = turn.keepOpen && "stop" in ended && ended.stop === "aborted";
-      const line = vanish ? null : widget.done(ended);
-      if (line === null) output.write(erase());
-      else if (!this.#plain) {
-        output.write(erase() + crlf(line) + "\r\n");
-        this.#printed = true;
+      // A screen widget leaves no line: the screen it had is given back (below) as it was.
+      if (!widget.screen) {
+        // A `readLine` a deadline took down leaves no line: the prompt comes back after the reply.
+        const vanish = turn.keepOpen && "stop" in ended && ended.stop === "aborted";
+        const line = vanish ? null : widget.done(ended);
+        if (line === null) output.write(erase());
+        else if (!this.#plain) {
+          output.write(erase() + crlf(line) + "\r\n");
+          this.#printed = true;
+        }
       }
     } catch (error) {
       finish({ error });
     } finally {
       this.#active = undefined;
+      quietly(unwatch);
+      if (widget.screen && !this.#plain) quietly(() => output.write(ALT_OFF));
     }
     const ended = outcome!;
     if ("value" in ended) return ended.value;

@@ -699,6 +699,7 @@ export async function inboxChat(
         interrupt();
         continue;
       }
+      if ("open" in read) continue;
       // A run that ended under the chat (a cancel from outside) refuses the line or the close as
       // `ended`; the move below then reads how it ended, and the loop stops.
       if ("eof" in read || EXIT_LINES.has(read.value.trim())) {

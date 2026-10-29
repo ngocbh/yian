@@ -126,3 +126,16 @@ describe("renderDiagnostic", () => {
     expect(await render(diag, { isTTY: true, env: noColor })).not.toContain("\x1b[");
   });
 });
+
+describe("provider text with escape sequences", () => {
+  const raw = "bad\x1b]8;;https://x.example\x07 request\x1b[1A";
+  const diag = new Diagnostic({ code: "node.execute", message: raw, notes: [raw] });
+
+  test("is stripped from the message and notes on a TTY", async () => {
+    expect(await render(diag, { isTTY: true, env: () => "1" })).toBe("bad request\n  ↳ bad request\n");
+  });
+
+  test("is written exactly off a TTY", async () => {
+    expect(await render(diag)).toBe(`${raw}\n  ↳ ${raw}\n`);
+  });
+});

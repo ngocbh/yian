@@ -26,6 +26,7 @@ import {
   type CommandSpec,
   abortOnSignal,
   flush,
+  forTerminal,
   helpText,
   HostStop,
   type OptionSpec,
@@ -515,7 +516,7 @@ export async function main(argv: readonly string[], io: CliIo = processIo()): Pr
     // `process.emitWarning`. The defaults in effect are `io.env`'s, checked above.
     return await withEnv(io.env, () =>
       withWarnings(
-        (message) => void io.stderr.write(`warning: ${message}\n`).catch(() => {}),
+        (message) => void io.stderr.write(`warning: ${forTerminal(message, io.stderr)}\n`).catch(() => {}),
         () => handler(parsed, io),
       ),
     );
@@ -524,7 +525,7 @@ export async function main(argv: readonly string[], io: CliIo = processIo()): Pr
       await io.stderr.write(usageError(spec, error));
       return 2;
     }
-    await io.stderr.write(`${(error instanceof Error && error.stack) || String(error)}\n`);
+    await io.stderr.write(`${forTerminal((error instanceof Error && error.stack) || String(error), io.stderr)}\n`);
     return 1;
   }
 }

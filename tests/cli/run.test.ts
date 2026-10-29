@@ -854,6 +854,39 @@ describe("warnings during a run", () => {
   }
 });
 
+describe("a provider's text with escape sequences", () => {
+  for (const isTTY of [true, false]) {
+    test(`a warning and the provider's error body are ${isTTY ? "stripped on a TTY" : "kept exactly when piped"}`, async () => {
+      const flow = file(
+        "flow.yaml",
+        `id: w\nname: w\nnodes:\n  agent: {kind: agent, prompt: hi}\noutput: \${agent.output}\n` +
+          `llm_config: {provider: anthropic, model: "m-${isTTY}-${Date.now()}\\e]52;c;aGk=\\a"}\n`,
+      );
+      mkdirSync(join(tmp, "home"), { recursive: true });
+      const plain = testIo({ HOME: join(tmp, "home"), ANTHROPIC_API_KEY: "sk-ant-test", NO_COLOR: "1" });
+      const io = { ...plain.io, stderr: { ...plain.io.stderr, isTTY } };
+      const send = globalThis.fetch;
+      const body = "bad\x1b]8;;https://e.example\x07 key\x1b[2J";
+      globalThis.fetch = (async () => Response.json({ error: { message: body } }, { status: 401 })) as never;
+      try {
+        expect(await main(["run", flow, "-q"], io)).toBe(1);
+      } finally {
+        globalThis.fetch = send;
+      }
+      const stderr = plain.stderr();
+      if (isTTY) {
+        expect(stderr).toMatch(/warning: Model 'm-true-\d+' is not in the known model list/);
+        expect(stderr).toContain("bad key");
+        expect(stderr).not.toContain("\x1b");
+        expect(stderr).not.toContain("\x07");
+      } else {
+        expect(stderr).toMatch(/warning: Model 'm-false-\d+\x1b\]52;c;aGk=\x07' is not in the known model list/);
+        expect(stderr).toContain(body);
+      }
+    });
+  }
+});
+
 const REQUIRED_INPUTS_FLOW = `id: cli_required_inputs
 name: cli_required_inputs
 input:
@@ -1176,6 +1209,67 @@ describe("run setup errors", () => {
     expect(stderr.indexOf("─ traceback ")).toBeGreaterThan(failed);
     expect(stderr).toContain("ENOTDIR");
     expect(stderr).toContain("    at ");
+  });
+});
+
+// A JS string expression holding an OSC 52 clipboard write, an OSC 8 link and a cursor move.
+const ESCAPED_JS = String.raw`"x\u001b]52;c;aGk=\u0007y\u001b]8;;https://e.example\u001b\\z\u001b[2J"`;
+const ESCAPED = "x\x1b]52;c;aGk=\x07y\x1b]8;;https://e.example\x1b\\z\x1b[2J";
+
+/** Run `yian run` on `body` with stdout and stderr TTYs or not, colour off. */
+async function runAt(body: string, argv: readonly string[], isTTY: boolean) {
+  const flow = file("flow.yaml", body);
+  mkdirSync(join(tmp, "home"), { recursive: true });
+  const out = sink();
+  const err = sink();
+  const io: CliIo = {
+    stdout: { ...out.out, isTTY },
+    stderr: { ...err.out, isTTY },
+    stdin: new PassThrough(),
+    stderrStream: new PassThrough(),
+    env: (name) => (name === "NO_COLOR" ? "1" : name === "HOME" ? join(tmp, "home") : NO_ENV(name)),
+  };
+  const code = await main(["run", flow, ...argv], io);
+  return { code, stdout: out.text(), stderr: err.text() };
+}
+
+describe("run's model and tool text with escape sequences", () => {
+  const output = `id: f\nname: f\nnodes:\n  a: {kind: code, output: str, code: 'return ${ESCAPED_JS}'}\noutput: \${a.output}\n`;
+  const failing = output.replace("return ", "throw new Error(").replace("'}", ")'}");
+
+  test("the output is stripped on a TTY and kept exactly when piped", async () => {
+    expect((await runAt(output, ["-q"], true)).stdout).toBe("xyz\n");
+    expect((await runAt(output, ["-q"], false)).stdout).toBe(`${ESCAPED}\n`);
+  });
+
+  test("a verbose node output is stripped on a TTY and kept exactly when piped", async () => {
+    expect((await runAt(output, ["-v"], true)).stderr).toContain("✓ a\n    xyz\n");
+    expect((await runAt(output, ["-v"], false)).stderr).toContain(`✓ a\n    ${ESCAPED}\n`);
+  });
+
+  test("a failure's message and traceback are stripped on a TTY and kept exactly when piped", async () => {
+    const tty = await runAt(failing, ["--engine-trace"], true);
+    expect(tty.code).toBe(1);
+    expect(tty.stderr).toContain("✗ a\n    Error: xyz\n");
+    expect(tty.stderr).toContain("\nError: xyz\n╭─ traceback ");
+    expect(tty.stderr).toContain("│ Error: xyz ");
+    expect(tty.stderr).not.toContain("\x1b]");
+    expect(tty.stderr).not.toContain("\x07");
+    const piped = await runAt(failing, [], false);
+    expect(piped.code).toBe(1);
+    expect(piped.stderr).toContain(`✗ a\n    Error: ${ESCAPED}\n`);
+    expect(piped.stderr).toContain(`\nError: ${ESCAPED}\n`);
+  });
+
+  test("a setup failure's message is stripped on a TTY and kept exactly when piped", async () => {
+    // A log under a file can't be created, and the error names its path.
+    const taken = file("t\x1b]52;c;aGk=\x07", "");
+    const argv = ["-q", "--log", join(taken, "run.jsonl")];
+    const tty = await runAt(output, argv, true);
+    expect(tty.code).toBe(1);
+    expect(tty.stderr).toMatch(/run failed: ENOTDIR\b.*\/t\/run\.jsonl'\n$/);
+    const piped = await runAt(output, argv, false);
+    expect(piped.stderr).toMatch(/run failed: ENOTDIR\b.*\/t\x1b\]52;c;aGk=\x07\/run\.jsonl'\n$/);
   });
 });
 

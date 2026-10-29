@@ -1368,8 +1368,12 @@ export function projectOwnerContexts(
     const item = attributedResults[index]!;
     const messages = takeOccurrenceMessages(pending, occurrence);
     const key = sourceKey(occurrence.source);
-    // An unreached occurrence sends nothing; only a memory scope reads its context.
-    if (messages.length === 0 && !scopes.has(key)) continue;
+    // An unreached occurrence sends nothing, and its result is empty, so its memories get no
+    // feedback from it; its context isn't read, so node data it can't rebuild doesn't matter.
+    if (messages.length === 0) {
+      if (scopes.has(key)) feedbackBySource.set(key, []);
+      continue;
+    }
     const context = trace.backwardContext(occurrence.source);
     if (scopes.has(key)) {
       feedbackBySource.set(key, ownerFeedback(trace, occurrence, context, messages, item.result, cache));

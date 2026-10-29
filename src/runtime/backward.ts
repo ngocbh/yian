@@ -152,13 +152,7 @@ export async function computeBackward(
       });
     } catch (error) {
       if (!(error instanceof NodeDataError)) throw error;
-      const at = {
-        scope: occurrence.capture.scope,
-        runId: source.runId,
-        nodeId: occurrence.nodeId,
-        nodeStartedSeq: source.executionSeq,
-      };
-      throw computeFailure(at, "backward.execute", error);
+      throw computeFailure(error, "backward.execute", error);
     }
     const received = messages.map((item) => item.feedback);
     const feedback = Object.freeze(received.map((message) => copyBackwardValue(message, "feedback") as FeedbackValue));

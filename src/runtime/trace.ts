@@ -53,6 +53,7 @@ import {
 import { BindingCapture, BindingError } from "../nodes/binding.ts";
 import {
   type ChildFlowBoundary,
+  type ExecutionScope,
   isExactly,
   type SeedConnection,
   sameExecutionScope,
@@ -311,15 +312,28 @@ export function checkMemoryScope(scope: MemoryScope | null): MemoryScope | null 
   return scope;
 }
 
-/** An occurrence's node data (`TraceOccurrence.nodeData`) couldn't be rebuilt; the error the rebuild threw is the `cause`. */
+/**
+ * An occurrence's node data (`TraceOccurrence.nodeData`) couldn't be rebuilt; the error the
+ * rebuild threw is the `cause`. It names the occurrence as its backward context would.
+ */
 export class NodeDataError extends Error {
   override name = "NodeDataError";
+  /** The occurrence's execution scope. */
+  readonly scope: ExecutionScope | null;
+  /** The occurrence's run. */
+  readonly runId: string;
   /** The occurrence's node. */
   readonly nodeId: string;
+  /** The occurrence's accepted start sequence. */
+  readonly nodeStartedSeq: number;
 
-  constructor(nodeId: string, cause: unknown) {
+  constructor(occurrence: TraceOccurrence, cause: unknown) {
+    const { nodeId, source } = occurrence;
     super(`node ${reprText(nodeId)}: its node data can't be rebuilt: ${markerMessage(cause)}`, { cause });
+    this.scope = occurrence.capture.scope;
+    this.runId = source.runId;
     this.nodeId = nodeId;
+    this.nodeStartedSeq = source.executionSeq;
   }
 }
 
@@ -506,7 +520,7 @@ export class TraceOccurrence {
     try {
       this.#nodeData ??= this.#rebuildNodeData();
     } catch (error) {
-      throw new NodeDataError(this.nodeId, error);
+      throw new NodeDataError(this, error);
     }
     return this.#nodeData;
   }

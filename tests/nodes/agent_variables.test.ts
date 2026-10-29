@@ -20,7 +20,7 @@ import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type MaterialCaps, Node, NodeKind, Output } from "../../src/nodes/base.ts";
-import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { Assertion, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
 import { driveBackward } from "../../src/runtime/backward.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
@@ -245,9 +245,24 @@ test("a retained agent whose variables fail to resolve fails the node, and its n
   } catch (caught) {
     error = caught;
   }
-  expect(error).toEqual(new NodeDataError("writer", expected));
-  expect((error as NodeDataError).message).toBe("node 'writer': its node data can't be rebuilt: variable resolution failed");
-  expect((error as NodeDataError).cause).toBe(expected);
+  expect(error).toBeInstanceOf(NodeDataError);
+  const { message, cause, nodeId, nodeStartedSeq, runId } = error as NodeDataError;
+  expect(message).toBe("node 'writer': its node data can't be rebuilt: variable resolution failed");
+  expect(cause).toBe(expected);
+  expect([nodeId, nodeStartedSeq, runId]).toEqual(["writer", occurrence.source.executionSeq, occurrence.source.runId]);
+});
+
+test("an agent whose pre-assert failed is not rendered again, so its node data rebuilds", async () => {
+  const node = new AgentNode("writer", { prompt: "${note}", variables: variables("note: !Optional(str) null\n") });
+  node.preAsserts = [new Assertion("false", "never")];
+  spyResolve(node, () => {
+    throw new TypeError("variable resolution failed");
+  });
+
+  const { record, occurrence } = await retainedAgent(node);
+
+  expect((record as NodeFailedRecord).failure.code).toBe("assertion.failed");
+  expect(occurrence.nodeData).not.toHaveProperty("rendered_prompt");
 });
 
 test("backward over an agent whose node data can't be rebuilt finishes with a failure attributed to it", async () => {

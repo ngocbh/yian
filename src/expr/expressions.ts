@@ -45,21 +45,20 @@ import {
 } from "../typesys/values.ts";
 import { bindArguments, builtinResultType, kindName, TEMPLATE_FNS, type TemplateFn } from "./builtins.ts";
 import { ResolvedValue, type RootRead, SourceRef, type TracedValue, ValueRoute } from "./lineage.ts";
-// grammar.ts imports this module too, so its exports are used only inside functions here.
 import {
   callSuffixOf,
   type ExprNode,
+  ExpressionError,
+  ISINSTANCE,
   iterSubtreesTopdown,
   parseExpr,
   Token,
   Tree,
+  valueArgs,
   wholeSpanInterior,
 } from "./grammar.ts";
 
-/** An expression could not be parsed or evaluated. */
-export class ExpressionError extends RangeError {
-  override name = "ExpressionError";
-}
+export { ExpressionError, ISINSTANCE, valueArgs };
 
 /** A `${ref:?message}` whose ref was unbound (the binder maps it to BindingError). */
 export class RequiredError extends ExpressionError {
@@ -70,13 +69,6 @@ export class RequiredError extends ExpressionError {
 export class ConstructorTypeError extends ExpressionError {
   override name = "ConstructorTypeError";
 }
-
-/**
- * The type-test special form `isinstance(x, T)`: its second argument is a type name
- * looked up in the node's type table, never a reference, so the evaluator, the reference
- * walkers and rewriters, and type inference treat only its first argument as an expression.
- */
-export const ISINSTANCE = "isinstance";
 
 /**
  * Return the hint for calling a builtin type name, else `""`.
@@ -399,9 +391,9 @@ function parameterList(fn: TemplateFn): string {
  *
  * @param expression The condition source: any expression the grammar accepts, in any spelling.
  * @returns The reference paths (dotted, `#`/`/` preserved) in source order, not deduped.
- * @throws {ExpressionError} On a malformed condition, or one that calls a function that isn't a
- *   builtin or calls a builtin with arguments it doesn't take (the caller frames it as a located
- *   load error).
+ * @throws {ExpressionError} On a malformed condition, or one that calls a builtin with arguments it
+ *   doesn't take (the caller frames it as a located load error). Any other callee is taken as a
+ *   constructor and left to the caller's typedef check, as `parseCondition` with no `types` does.
  */
 export function conditionRefs(expression: string): string[] {
   return exprRefs(parseCondition(expression));
@@ -1830,16 +1822,6 @@ function fieldReadType(typ: Type, name: string): Type | null {
     return null;
   }
   return typ.nullable ? field.replace({ nullable: true }) : field;
-}
-
-/**
- * Return the `arg` subtrees of a call whose values are expressions.
- *
- * Every argument of a builtin is an expression; `isinstance(x, T)` has only `x`.
- */
-export function valueArgs(callee: string, callSuffix: Tree): Tree[] {
-  const args = callSuffix.children as Tree[];
-  return callee === ISINSTANCE ? args.slice(0, 1) : args;
 }
 
 /** Return the type name of a validated `isinstance(x, T)` call suffix. */

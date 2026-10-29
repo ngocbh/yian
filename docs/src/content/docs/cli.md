@@ -298,6 +298,9 @@ like a token stays text. The chat remembers tokens only while it runs: after `yi
 Esc puts a line sent before the stop back as plain text, or as one token
 (`[Pasted text #1 +40 lines]`) when it is as long as a paste that collapses.
 
+If your terminal drops the end of a paste, the box keeps waiting for it. Once the paste has
+paused for half a second, Esc ends it and puts in what arrived, and Ctrl-C drops it.
+
 Under the box, the chat lists the flows the assistant started that are still running or waiting,
 one row each, such as `r1  color.yaml  ● asks · 12s`, and the hint under the box adds `↓ runs`
 when there is room. A flow drops off the list once it ends; its result stays in the chat. The

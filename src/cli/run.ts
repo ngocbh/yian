@@ -92,7 +92,7 @@ import {
   splitLines,
   type Style,
   tracebackBox,
-  wrapLine,
+  wrapSpans,
   writeEngineTrace,
 } from "./render.ts";
 import {
@@ -203,21 +203,7 @@ export function flowBanner(
   // Rich measures the box before it expands tabs, counting a tab as no cells.
   const widest = Math.max(...lines.map((spans) => cells(spans.map(([text]) => text.replaceAll("\t", "")).join(""))));
   const inner = Math.max(1, Math.min(widest, (out.columns || 80) - 4));
-  const expanded = lines.map(expandTabs);
-  const plains = expanded.map((spans) => spans.map(([text]) => text).join(""));
-  const rows: [string, string][] = [];
-  expanded.forEach((spans, i) => {
-    for (const [start, end] of wrapLine(plains[i]!, inner)) {
-      let printed = "";
-      let at = 0;
-      for (const [text, style] of spans) {
-        const piece = text.slice(Math.max(0, start - at), Math.max(0, end - at));
-        if (piece) printed += style === null ? piece : paint(piece, style, out, env);
-        at += text.length;
-      }
-      rows.push([plains[i]!.slice(start, end), printed]);
-    }
-  });
+  const rows = lines.flatMap((spans) => wrapSpans(expandTabs(spans), inner, out, env));
   return `${box(rows, "cyan", out, env, "", inner)}\n`;
 }
 

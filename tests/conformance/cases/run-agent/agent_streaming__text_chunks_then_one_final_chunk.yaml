@@ -80,7 +80,7 @@ expect:
         purpose: chat
         request_sha256: 0c2d612474786e4d309464090eba530c35a97e3b3432cf6da0b668dd13355633
         response_id: null
-        usage: {cache_read_tokens: null, input_tokens: 5, output_tokens: 3, reasoning_tokens: null}
+        usage: {cache_creation_tokens: null, cache_read_tokens: null, input_tokens: 5, output_tokens: 3, reasoning_tokens: null}
   - - pool_commit
     - writer
     - value: hello big world

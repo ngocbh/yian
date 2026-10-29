@@ -2583,6 +2583,8 @@ export interface AgentCallUsage {
   readonly inputTokens: number | null;
   readonly outputTokens: number | null;
   readonly cacheReadTokens: number | null;
+  /** `null` too for a step an older version wrote, which didn't record it. */
+  readonly cacheCreationTokens: number | null;
   readonly reasoningTokens: number | null;
 }
 
@@ -2949,6 +2951,7 @@ function usageView(usage: unknown): AgentCallUsage | null {
     inputTokens: count("input_tokens"),
     outputTokens: count("output_tokens"),
     cacheReadTokens: count("cache_read_tokens"),
+    cacheCreationTokens: count("cache_creation_tokens"),
     reasoningTokens: count("reasoning_tokens"),
   };
 }

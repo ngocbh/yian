@@ -110,7 +110,7 @@ export interface RetrySettings {
 }
 
 /** The token counts a model call step records. */
-type UsageCounts = Pick<Usage, "inputTokens" | "outputTokens" | "cacheReadTokens" | "reasoningTokens">;
+type UsageCounts = Pick<Usage, "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheCreationTokens" | "reasoningTokens">;
 
 /** What every `model_call` step records. Times are epoch milliseconds. */
 interface CallFields {
@@ -605,6 +605,7 @@ function usageStep(usage: UsageCounts | null): ValueRecord | null {
     input_tokens: count(usage.inputTokens),
     output_tokens: count(usage.outputTokens),
     cache_read_tokens: count(usage.cacheReadTokens),
+    cache_creation_tokens: count(usage.cacheCreationTokens),
     reasoning_tokens: count(usage.reasoningTokens),
   };
 }
@@ -631,6 +632,8 @@ export function recordedResponse(step: ValueRecord): Response {
             // The step doesn't record the total; the provider's is the sum of these two.
             totalTokens: Number(usage["input_tokens"]) + Number(usage["output_tokens"]),
             cacheReadTokens: count(usage["cache_read_tokens"]),
+            // Absent from a step an older version wrote.
+            cacheCreationTokens: count(usage["cache_creation_tokens"]),
             reasoningTokens: count(usage["reasoning_tokens"]),
           }),
     finishReason: step["finish"] as string | null,

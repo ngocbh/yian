@@ -337,6 +337,17 @@ test("the replay cursor takes the recorded replies in order and finds each resul
   expect(steps.recordedResult(2, "c3")).toBeNull();
 });
 
+test("a recorded reply's usage reads back its cache writes; a step written without them reads null", () => {
+  const counts = { input_tokens: 5n, output_tokens: 1n, cache_read_tokens: 2n, cache_creation_tokens: 3n, reasoning_tokens: 0n };
+  const steps = replaying([{ ...callStep(D1, "first"), usage: counts }, callStep(D2, "second")]);
+  const first = steps.takeRecorded("chat", D1) as { response: Response };
+  expect(first.response.usage).toEqual(
+    new Usage({ inputTokens: 5, outputTokens: 1, totalTokens: 6, cacheReadTokens: 2, cacheCreationTokens: 3, reasoningTokens: 0 }),
+  );
+  const second = steps.takeRecorded("chat", D2) as { response: Response };
+  expect(second.response.usage!.cacheCreationTokens).toBeNull();
+});
+
 test("failed attempts after the last reply are the next call's prior attempts, taken once", () => {
   const steps = replaying([callStep(D1, "first"), failedStep(D2, 1.5), failedStep(D2, 3)]);
   expect(steps.takeRecorded("chat", D1)).not.toBeNull();

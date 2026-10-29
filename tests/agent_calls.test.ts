@@ -16,7 +16,7 @@ import { afterAll, expect, test } from "bun:test";
 import { loadFlow } from "../src/compose/loader.ts";
 import { ProviderError } from "../src/llm/errors.ts";
 import { type ChatModel, EventStream, Finish, TextDelta } from "../src/llm/events.ts";
-import { NamedTool, type Request } from "../src/llm/messages.ts";
+import { NamedTool, type Request, Response, Usage } from "../src/llm/messages.ts";
 import { BindingError } from "../src/nodes/binding.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { AuthError } from "../src/llm_clients/auth/index.ts";
@@ -176,6 +176,22 @@ test("a tool loop: each call's request is the one sent, its reply and its two re
   expect(requestOf(second)).toMatchObject(sentView(model.requests[1]!));
   expect(second.reply).toEqual({ role: "assistant", parts: [{ type: "text", text: "done" }] });
   expect(second.toolResults).toEqual([]);
+});
+
+test("an attempt's usage holds every count its step recorded, cache writes included", async () => {
+  const usage = new Usage({ inputTokens: 9, outputTokens: 2, totalTokens: 11, cacheReadTokens: 4, cacheCreationTokens: 3 });
+  const reply = new Response({ message: textReply("done").message, usage, finishReason: "stop" });
+  const model = new ScriptedModel([reply], { provider: "anthropic", model: "claude-test" });
+  const { log, result } = await run(TOOLS, model, { topic: "owls" }, { tools: toolsOf() });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const view = await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV });
+  expect(view.attempts[0]!.usage).toEqual({
+    inputTokens: 9,
+    outputTokens: 2,
+    cacheReadTokens: 4,
+    cacheCreationTokens: 3,
+    reasoningTokens: null,
+  });
 });
 
 /** A chat flow: a list prompt splicing `history`, a steer inbox, the tool `lookup`, output `output`. */

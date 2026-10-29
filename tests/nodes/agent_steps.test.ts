@@ -644,7 +644,7 @@ function recordingSteps(prior: ValueRecord[] = []): { steps: AgentSteps; recorde
 test("AgentSteps writes model_call and tool_result payloads and returns each n", () => {
   const { steps, recorded } = recordingSteps([{ kind: "llm_config" }]);
   const output = new Message({ role: "assistant", parts: [new TextPart("ok")] });
-  const usage = new Usage({ inputTokens: 5, outputTokens: 1, totalTokens: 6, reasoningTokens: 0 });
+  const usage = new Usage({ inputTokens: 5, outputTokens: 1, totalTokens: 6, cacheCreationTokens: 4, reasoningTokens: 0 });
   const n = steps.modelCall(
     {
       purpose: "chat",
@@ -674,7 +674,7 @@ test("AgentSteps writes model_call and tool_result payloads and returns each n",
         output: output.toJSON(),
         response_id: "resp-1",
         finish: "stop",
-        usage: { input_tokens: 5n, output_tokens: 1n, cache_read_tokens: null, reasoning_tokens: 0n },
+        usage: { input_tokens: 5n, output_tokens: 1n, cache_read_tokens: null, cache_creation_tokens: 4n, reasoning_tokens: 0n },
       },
       { settled: true },
     ],

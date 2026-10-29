@@ -171,7 +171,7 @@ test("a schema 22 record, from before inbox_withdrawn and empty interrupted reco
   expectError(() => new RecordEnvelope(22, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, retired(22));
 });
 
-test("a schema 23 record, from before a forward capture recorded whether its binding finished, is retired", () => {
+test("a schema 23 record, from before a forward capture recorded whether its bound inputs are usable, is retired", () => {
   const line = `{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run","schema":23,"seq":0}`;
   const error = expectError(() => decodeRecord(line), RunLogSchemaError, RETIRED_SCHEMA) as RunLogSchemaError;
   expect(error.schema).toBe(23);

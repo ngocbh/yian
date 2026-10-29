@@ -1387,8 +1387,8 @@ export function prepareTrace(
   // routes get their text by binding the node again, which learning does on its first read. A
   // binding that didn't finish bound no inputs, so it is bound again only for that text.
   const fillsText = rebuilt === null && holdsInterpolation(capture);
-  // The capture records whether the binding finished: a failure's code doesn't tell, since a
-  // node's body may fail with a binding code after its binding finished.
+  // The capture records whether the bound inputs are usable: a failure's code doesn't tell,
+  // since a node's body may fail with a binding code after its binding finished.
   const bound = capture.bound;
   if (!bound && !isExactly(record, NodeFailedRecord)) {
     throw new RangeError("only a failure's capture may hold a binding that didn't finish");

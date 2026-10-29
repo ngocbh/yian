@@ -1340,7 +1340,7 @@ test("a node success with a capture encodes its counters as ints", () => {
   expect(encodeRecord(decodeRecord(encoded))).toBe(encoded);
 });
 
-test("a forward capture records whether its binding finished, and decode requires it", () => {
+test("a forward capture records whether its bound inputs are usable, and decode requires it", () => {
   const failure = new Failure({ code: "binding.evaluate", message: "Missing.", nodeId: "work" });
   const capture = new ForwardCapture(ValueRoute.record([]), { bound: false });
   const envelope = new RecordEnvelope(SCHEMA_VERSION, "run", 3, new NodeFailedRecord(failure, { forwardCapture: capture }));

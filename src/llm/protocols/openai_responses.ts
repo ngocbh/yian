@@ -15,7 +15,7 @@
 
 import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { encodeBody, mergeRequestBody, withAuthorWrapper } from "../body.ts";
-import { type ErrorKind, ProviderError } from "../errors.ts";
+import { ProviderError } from "../errors.ts";
 import {
   type Event,
   Finish,
@@ -52,7 +52,14 @@ import {
   ToolResultPart,
   Usage,
 } from "../messages.ts";
-import { eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
+import {
+  eventData,
+  notIntMessage,
+  OPENAI_STREAM_ERROR_KINDS,
+  tokenCount,
+  usageOrProtocolError,
+  wrongPart,
+} from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "openai_responses";
@@ -78,35 +85,6 @@ const ITEM_EVENTS: ReadonlySet<string> = new Set([
 ]);
 // The subscription backend may end a reply with `response.done` instead of `response.completed`.
 const TERMINAL_EVENTS: ReadonlySet<string> = new Set(["response.completed", "response.done", "response.incomplete"]);
-const BAD_REQUEST_CODES = [
-  "invalid_prompt",
-  "invalid_request_error",
-  "invalid_image",
-  "invalid_image_format",
-  "invalid_base64_image",
-  "invalid_image_url",
-  "invalid_image_mode",
-  "image_too_large",
-  "image_too_small",
-  "image_parse_error",
-  "image_file_too_large",
-  "image_file_not_found",
-  "empty_image_file",
-  "unsupported_image_media_type",
-  "failed_to_download_image",
-];
-// In-stream error codes; any other code, or none, is a server error.
-export const STREAM_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string, ErrorKind>([
-  ["rate_limit_exceeded", "rate_limit"],
-  ["server_error", "server"],
-  ["vector_store_timeout", "server"],
-  ["context_length_exceeded", "context_length"],
-  ...BAD_REQUEST_CODES.map((code): [string, ErrorKind] => [code, "bad_request"]),
-  ["image_content_policy_violation", "refused"],
-  ["insufficient_quota", "quota"],
-  ["usage_limit_reached", "quota"],
-  ["usage_not_included", "quota"],
-]);
 
 /** An assistant part that can carry a replay record. */
 type ReplayPart = TextPart | RefusalPart | ReasoningPart | ToolCallPart;
@@ -471,7 +449,7 @@ export class OpenAIResponses implements SseProtocol {
   #streamFailure(error: JsonObject): ProviderError {
     // An error without a string code may still name its kind in `type` (`invalid_request_error`).
     const code = typeof error["code"] === "string" ? error["code"] : error["type"];
-    const kind = (typeof code === "string" ? STREAM_ERROR_KINDS.get(code) : undefined) ?? "server";
+    const kind = (typeof code === "string" ? OPENAI_STREAM_ERROR_KINDS.get(code) : undefined) ?? "server";
     const rawMessage = error["message"];
     const message = typeof rawMessage === "string" && rawMessage ? rawMessage : "no message";
     const text = this.subscription
@@ -688,20 +666,17 @@ function usageOf(usage: JsonValue | undefined, provider: string): Usage | null {
   const notInt = notIntMessage(provider);
   const inputTokens = tokenCount(usage["input_tokens"], notInt) ?? 0;
   const outputTokens = tokenCount(usage["output_tokens"], notInt) ?? 0;
-  try {
-    return new Usage({
+  return usageOrProtocolError(
+    {
       inputTokens,
       outputTokens,
       totalTokens: tokenCount(usage["total_tokens"], notInt) ?? inputTokens + outputTokens,
       cacheReadTokens: tokenCount(inputDetails["cached_tokens"], notInt),
       cacheCreationTokens: tokenCount(inputDetails["cache_write_tokens"], notInt),
       reasoningTokens: tokenCount(outputDetails["reasoning_tokens"], notInt),
-    });
-  } catch (error) {
-    // `Usage` refuses a count past `Number.MAX_SAFE_INTEGER`, which `Number()` rounds.
-    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
-    throw error;
-  }
+    },
+    notInt,
+  );
 }
 
 /**

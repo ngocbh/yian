@@ -29,7 +29,7 @@
 
 import { encodeBody, escapeAuthorTagsInJson, mergeRequestBody, withAuthorWrapper } from "../body.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
-import { kindForStatus, ProviderError } from "../errors.ts";
+import { ProviderError } from "../errors.ts";
 import { type Event, Finish, PartDone, ReasoningDelta, TextDelta, ToolCallDelta, UsageReport } from "../events.ts";
 import type { SseProtocol } from "../executor.ts";
 import type { SSEEvent } from "../framing.ts";
@@ -39,7 +39,6 @@ import {
   isPlainObject,
   MediaPart,
   type Message,
-  MessageFormatError,
   NamedTool,
   type Part,
   ReasoningPart,
@@ -55,7 +54,15 @@ import {
   type ToolSpec,
   Usage,
 } from "../messages.ts";
-import { callId, eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
+import {
+  callId,
+  eventData,
+  httpCodeKind,
+  notIntMessage,
+  tokenCount,
+  usageOrProtocolError,
+  wrongPart,
+} from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "gemini";
@@ -349,9 +356,7 @@ export class Gemini implements SseProtocol {
    */
   #streamFailure(error: JsonObject): ProviderError {
     const code = error["code"];
-    // A 1xx-3xx code would map to kinds that don't fit an error inside a 200 stream.
-    const status = typeof code === "bigint" && code >= 400n && code <= 599n ? Number(code) : null;
-    const kind = status === null ? "server" : kindForStatus(status, encodeBody(error));
+    const kind = httpCodeKind(code, error) ?? "server";
     const text = (key: string): string | null => {
       const value = error[key];
       return typeof value === "string" && value !== "" ? value : null;
@@ -637,20 +642,17 @@ function usageOf(counts: Map<string, number>, provider: string): Usage | null {
   const inputTokens = count("promptTokenCount") + count("toolUsePromptTokenCount");
   const outputTokens = count("candidatesTokenCount") + thoughts;
   if (inputTokens + outputTokens === 0 && count("cachedContentTokenCount") === 0) return null;
-  try {
-    return new Usage({
+  return usageOrProtocolError(
+    {
       inputTokens,
       outputTokens,
       totalTokens: inputTokens + outputTokens,
       cacheReadTokens: counts.get("cachedContentTokenCount") ?? null,
       cacheCreationTokens: null,
       reasoningTokens: thoughts > 0 ? thoughts : null,
-    });
-  } catch (error) {
-    // `Usage` refuses a sum past `Number.MAX_SAFE_INTEGER`, which `Number` arithmetic rounds.
-    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notIntMessage(provider));
-    throw error;
-  }
+    },
+    notIntMessage(provider),
+  );
 }
 
 /**

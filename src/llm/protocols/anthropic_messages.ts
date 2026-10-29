@@ -42,7 +42,6 @@ import {
   isPlainObject,
   MediaPart,
   type Message,
-  MessageFormatError,
   NamedTool,
   type Part,
   ReasoningPart,
@@ -58,7 +57,7 @@ import {
   type ToolSpec,
   Usage,
 } from "../messages.ts";
-import { eventData, notIntMessage, tokenCount, wrongPart } from "./common.ts";
+import { eventData, notIntMessage, tokenCount, usageOrProtocolError, wrongPart } from "./common.ts";
 
 /** The protocol id, in `Finish.protocol` and replay records. */
 export const PROTOCOL = "anthropic_messages";
@@ -710,20 +709,17 @@ function usageOf(usage: JsonObject, provider: string): Usage {
   const cacheWrite = breakdown > 0 ? breakdown : tokenCount(usage["cache_creation_input_tokens"], notInt);
   const inputTokens = (tokenCount(usage["input_tokens"], notInt) ?? 0) + (cacheRead ?? 0) + (cacheWrite ?? 0);
   const outputTokens = tokenCount(usage["output_tokens"], notInt) ?? 0;
-  try {
-    return new Usage({
+  return usageOrProtocolError(
+    {
       inputTokens,
       outputTokens,
       totalTokens: inputTokens + outputTokens,
       cacheReadTokens: cacheRead,
       cacheCreationTokens: cacheWrite,
       reasoningTokens: tokenCount(outputDetails["thinking_tokens"], notInt),
-    });
-  } catch (error) {
-    // `Usage` refuses a sum past `Number.MAX_SAFE_INTEGER`, which `Number` arithmetic rounds.
-    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
-    throw error;
-  }
+    },
+    notInt,
+  );
 }
 
 /** Return the text of `blocks` when they are one text block, else `null`. */

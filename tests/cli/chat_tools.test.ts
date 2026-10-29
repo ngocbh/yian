@@ -6,8 +6,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { confine, ToolRefused } from "../../src/cli/chat_tools.ts";
+import { type ChatToolHost, chatFileTools, confine, ToolRefused } from "../../src/cli/chat_tools.ts";
+import { ToolContext } from "../../src/tools/context.ts";
 import { isReportedToolError } from "../../src/tools/errors.ts";
+import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 
 let tmp: string;
 let root: string;
@@ -23,6 +25,45 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
+
+/** A host over `root` whose approvals `approve` answers; no docs unless given. */
+function host(fields: Partial<ChatToolHost> = {}): ChatToolHost {
+  return {
+    root,
+    approve: async () => {
+      throw new Error("not expected to ask");
+    },
+    env: NO_ENV,
+    docs: new Map(),
+    ...fields,
+  };
+}
+
+/** Call the tool `name` of `chatFileTools(chatHost)` with `args`, returning its result. */
+async function call(name: string, args: Record<string, unknown>, chatHost: ChatToolHost = host()): Promise<unknown> {
+  const found = chatFileTools(chatHost).find((each) => each.name === name);
+  if (found === undefined) throw new Error(`no tool ${name}`);
+  const ctx = new ToolContext({
+    callId: "run-1/chat",
+    attempt: 1,
+    toolName: name,
+    runId: "run-1",
+    node: "chat",
+    context: undefined,
+    signal: new AbortController().signal,
+  });
+  return found.execute(args, ctx);
+}
+
+/** What `promise` rejected with. */
+async function rejection(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("expected a rejection");
+}
 
 /** What `action` threw. */
 function thrown(action: () => unknown): unknown {
@@ -69,5 +110,77 @@ describe("confine", () => {
 
   test("accepts a new file whose nearest existing folder is inside", () => {
     expect(confine(root, "sub/new/b.yaml")).toBe(join(root, "sub", "new", "b.yaml"));
+  });
+});
+
+describe("list_flows", () => {
+  test("lists the YAML files under the root, sorted, skipping node_modules and dot-folders", async () => {
+    mkdirSync(join(root, "node_modules", "x"), { recursive: true });
+    mkdirSync(join(root, ".git"));
+    mkdirSync(join(root, "B"));
+    writeFileSync(join(root, "node_modules", "x", "f.yaml"), "");
+    writeFileSync(join(root, ".git", "f.yaml"), "");
+    writeFileSync(join(root, "B", "c.yml"), "");
+    writeFileSync(join(root, "b.yaml"), "");
+    writeFileSync(join(root, "notes.txt"), "");
+    writeFileSync(join(root, ".env"), "");
+    expect(await call("list_flows", {})).toBe(["B/c.yml", "b.yaml", "sub/a.yaml"].join("\n"));
+  });
+
+  test("lists one folder, paths still relative to the root", async () => {
+    writeFileSync(join(root, "b.yaml"), "");
+    expect(await call("list_flows", { dir: "sub" })).toBe("sub/a.yaml");
+  });
+
+  test("says when there are none", async () => {
+    mkdirSync(join(root, "empty"));
+    expect(await call("list_flows", { dir: "empty" })).toBe("no flows");
+  });
+
+  test("stops at the limit with a note", async () => {
+    mkdirSync(join(root, "many"));
+    for (let i = 0; i < 501; i++) writeFileSync(join(root, "many", `${String(i).padStart(3, "0")}.yaml`), "");
+    const lines = String(await call("list_flows", { dir: "many" })).split("\n");
+    expect(lines).toHaveLength(501);
+    expect(lines[0]).toBe("many/000.yaml");
+    expect(lines[499]).toBe("many/499.yaml");
+    expect(lines[500]).toBe("(stopped at 500 flows; pass dir to list one folder)");
+  });
+
+  test("refuses a folder outside the root", async () => {
+    expect(await rejection(call("list_flows", { dir: ".." }))).toBeInstanceOf(ToolRefused);
+  });
+});
+
+describe("read_flow", () => {
+  test("returns a flow's text", async () => {
+    expect(await call("read_flow", { path: "sub/a.yaml" })).toBe("id: a\n");
+  });
+
+  test("reads only YAML files", async () => {
+    writeFileSync(join(root, ".env"), "KEY=secret\n");
+    symlinkSync(join(root, ".env"), join(root, "env.yaml"));
+    for (const path of [".env", "env.yaml"]) {
+      const error = await rejection(call("read_flow", { path }));
+      expect(error).toBeInstanceOf(ToolRefused);
+      expect(error.message).not.toContain("secret");
+    }
+  });
+
+  test("refuses a file over the size cap", async () => {
+    writeFileSync(join(root, "big.yaml"), "#".repeat(256 * 1024 + 1));
+    const error = await rejection(call("read_flow", { path: "big.yaml" }));
+    expect(error).toBeInstanceOf(ToolRefused);
+    expect(error.message).toContain("262144");
+  });
+
+  test("a missing file is an error the model reads", async () => {
+    const error = await rejection(call("read_flow", { path: "missing.yaml" }));
+    expect(isReportedToolError(error)).toBe(true);
+    expect(error.message).toContain("missing.yaml");
+  });
+
+  test("refuses a path outside the root", async () => {
+    expect(await rejection(call("read_flow", { path: "../outside.yaml" }))).toBeInstanceOf(ToolRefused);
   });
 });

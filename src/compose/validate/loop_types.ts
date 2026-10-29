@@ -41,7 +41,14 @@ import type { TypeRegistry } from "../../typesys/types.ts";
 import { canonicalTypeLabel, isList, isRecord, jsTypeName, type Type, ValueKind } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
-import { assertExactContracts, resolveOutputBindingContract } from "../../compile/output_contracts.ts";
+import {
+  assertExactContracts,
+  literalContract,
+  literalValue,
+  NOT_LITERAL,
+  resolveOutputBindingContract,
+  type TypeFn,
+} from "../../compile/output_contracts.ts";
 import { anySourceHint, suggestTag, tagText } from "../helpers/tags.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
@@ -125,8 +132,8 @@ export function checkLoopTypeContract(
       // A returned field's carried type is the body's own field type.
       const bodyField = carriedFields.get(fieldName);
       if (bodyField === undefined) continue; // name mismatch caught in build
-      const sourceContract = resolveOutputBindingContract(src, producers, flowInputs, { typeFn });
-      if (sourceContract === null) continue; // literal, coalesce or opaque seed source: lenient
+      const sourceContract = seedContract(src, producers, flowInputs, typeFn);
+      if (sourceContract === null) continue; // coalesce or opaque seed source: lenient
       if (isExactly(sourceContract, PartialRecordContract)) continue; // no exact type to compare
       if (!isExactly(sourceContract, ValueContract)) {
         throw new TypeError(
@@ -147,6 +154,31 @@ export function checkLoopTypeContract(
     }
     checkReturnedFields(result, carriedFields, wiring, registry, diagnostics, { inline: inlineLoops.has(nodeId) });
   }
+}
+
+/**
+ * Resolve a loop seed's contract, typing a literal seed by its value.
+ *
+ * A zero-iteration loop outputs its seed as is, so a literal seed must fit the carried type as a
+ * reference seed must. Each literal keeps its exact type, so a text seed fits a `Literal` field
+ * that names it.
+ *
+ * @param seed The seed binding, raw or a `Binding`.
+ * @param producers Each producer node's output contract.
+ * @param flowInputs The flow's declared input contracts.
+ * @param typeFn Resolves a constructor name to its type.
+ * @returns The seed's exact or partial contract, or `null` when it is unproven.
+ */
+function seedContract(
+  seed: unknown,
+  producers: ReadonlyMap<string, OutputContract>,
+  flowInputs: ReadonlyMap<string, ValueContract>,
+  typeFn: TypeFn | null,
+): OutputContract | null {
+  const typed = seed instanceof Binding && seed.contract !== null;
+  const literal = typed ? NOT_LITERAL : literalValue(bindingSource(seed));
+  if (literal !== NOT_LITERAL) return literalContract(literal, { exactLiterals: true });
+  return resolveOutputBindingContract(seed, producers, flowInputs, { typeFn });
 }
 
 /**

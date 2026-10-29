@@ -71,3 +71,12 @@ test("a folder another chat renames into place first is used, and the call's own
   expect(readFileSync(join(folder, "theirs.txt"), "utf8")).toBe("theirs\n");
   expect(readdirSync(join(home, ".yian", "cache", "skills"))).toEqual([basename(folder)]);
 });
+
+test("a damaged folder whose SKILL.md doesn't load is written again", () => {
+  const folder = bundledSkill(env).directory!;
+  writeFileSync(join(folder, "SKILL.md"), "no frontmatter\n");
+  const skill = bundledSkill(env);
+  expect(skill.directory).toBe(folder);
+  expect(readFileSync(join(folder, "SKILL.md"), "utf8")).toBe(SKILL["SKILL.md"]!);
+  expect(readdirSync(join(home, ".yian", "cache", "skills"))).toEqual([basename(folder)]);
+});

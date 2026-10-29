@@ -15,7 +15,7 @@ import { loadSkillDir } from "../compose/skills.ts";
 import type { Env } from "../defaults.ts";
 import { compareCodeUnits } from "../diagnostics.ts";
 import { isSystemError } from "../platform.ts";
-import { type Skill } from "../skills/catalog.ts";
+import { type Skill, SkillError } from "../skills/catalog.ts";
 import { SKILL } from "./bundled.ts";
 
 /** The bundled skill's name, which its folder's name starts with. */
@@ -38,6 +38,23 @@ function makeDirs(dir: string): void {
   mkdirSync(dir, { recursive: true, mode: 0o700 });
 }
 
+/** A name for a folder in `cache` this call alone uses, beside the skill's folder. */
+function scratchName(cache: string, what: string): string {
+  return join(cache, `.${NAME}.${what}-${process.pid}-${randomBytes(6).toString("hex")}`);
+}
+
+/** Move `folder` aside and remove it; one another chat moved first is left to it. */
+function discard(cache: string, folder: string): void {
+  const aside = scratchName(cache, "damaged");
+  try {
+    renameSync(folder, aside);
+  } catch (error) {
+    if (isSystemError(error) && error.code === "ENOENT") return;
+    throw error;
+  }
+  rmSync(aside, { recursive: true, force: true });
+}
+
 /**
  * Return the bundled `composing-agents` skill, loaded from
  * `~/.yian/cache/skills/composing-agents-<hash>/` (`HOME` read from `env`, the process user's home
@@ -45,7 +62,8 @@ function makeDirs(dir: string): void {
  *
  * The folder is written whole under a temporary name beside it and renamed into place, so a chat
  * never reads a half-written one. When another chat renamed its own into place first, that one is
- * used and this call's is removed. A folder that exists is never written again.
+ * used and this call's is removed. A folder that exists is never written again, unless its
+ * `SKILL.md` doesn't load: then it is moved aside, removed and written again.
  *
  * @param options.beforeRename For tests: runs just before the rename.
  * @throws {Error} A system error when the folder can't be written or read.
@@ -54,9 +72,17 @@ function makeDirs(dir: string): void {
 export function bundledSkill(env: Env, options: { beforeRename?: () => void } = {}): Skill {
   const cache = join(env("HOME") || homedir(), ".yian", "cache", "skills");
   const folder = join(cache, `${NAME}-${contentHash(SKILL).slice(0, HASH_DIGITS)}`);
-  if (statSync(folder, { throwIfNoEntry: false })?.isDirectory()) return loadSkillDir(folder);
+  if (statSync(folder, { throwIfNoEntry: false })?.isDirectory()) {
+    try {
+      return loadSkillDir(folder);
+    } catch (error) {
+      if (!(error instanceof SkillError)) throw error;
+      // Damaged (an edited or half-deleted SKILL.md, say): moved aside and written again.
+      discard(cache, folder);
+    }
+  }
   makeDirs(cache);
-  const temporary = join(cache, `.${NAME}.tmp-${process.pid}-${randomBytes(6).toString("hex")}`);
+  const temporary = scratchName(cache, "tmp");
   try {
     for (const [path, text] of Object.entries(SKILL)) {
       const file = join(temporary, ...path.split("/"));

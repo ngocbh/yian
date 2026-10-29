@@ -2409,7 +2409,8 @@ async function approveShowsItsTextSanitized(): Promise<void> {
   for (const sent of ["\x1b[2J", "\x1b]", "\x07", "\u202e", "\x1b[1A"]) {
     assert.ok(!output.text.includes(sent), JSON.stringify(sent));
   }
-  for (const shown of ["Write a.yaml", "body \\u{202e}end", "+line", "Approve^G"]) {
+  // A sequence is shown rather than dropped, so the card never hides what the text holds.
+  for (const shown of ["Write^[[2J a.yaml", "body^[]52;c;aGk=^G \\u{202e}end", "+line^[[1A", "Approve^G"]) {
     assert.ok(output.text.includes(shown), JSON.stringify(shown));
   }
 }

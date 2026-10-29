@@ -584,18 +584,21 @@ export class Terminal {
   /**
    * Ask the user to approve an action: write `body` and the unified `diff` when there is one, then
    * select among `choices` under `title`, the first preselected. All the text is drawn through
-   * `sanitize`. Returns the chosen choice; the last one (the reject) for Ctrl-C, which leaves the
-   * terminal open; null without drawing or reading when the terminal is plain, closed or its input
-   * isn't a TTY, and null when the input ends or `signal` aborts.
+   * `sanitize`, its escape sequences shown rather than dropped. Returns the chosen choice; the
+   * last one (the reject) for Ctrl-C, which leaves the terminal open; null without drawing or
+   * reading when the terminal is plain, closed or its input isn't a TTY, and null when the input
+   * ends or `signal` aborts.
    */
   async approve(request: ApproveRequest): Promise<string | null> {
     const { choices, signal } = request;
     if (choices.length === 0) throw new RangeError("approve needs at least one choice");
     // Only a person at a terminal can approve: piped input could approve on their behalf.
     if (this.#plain || this.#input.isTTY !== true || signal?.aborted) return null;
-    const label = sanitize(request.title);
-    const card = [request.body, request.diff ?? ""].filter((text) => text !== "").map((text) => sanitize(text));
-    const titles = choices.map((choice) => sanitize(choice));
+    // A sequence is shown, not dropped: what the user approves must not hide anything it holds.
+    const shown = (text: string): string => sanitize(text, { sequences: "show" });
+    const label = shown(request.title);
+    const card = [request.body, request.diff ?? ""].filter((text) => text !== "").map(shown);
+    const titles = choices.map(shown);
     let ended: { value: number } | { stop: StopReason };
     try {
       ended = await this.#runTurn(

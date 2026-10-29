@@ -73,7 +73,8 @@ Inputs come from three places, later ones winning:
    `--input times=2` fills an `int` input. An `Any` input keeps the text as is.
 3. A prompt, for each input still missing, when stdin is a terminal.
 
-A name the flow doesn't declare is a usage error that lists the declared inputs. Off a terminal,
+A name the flow doesn't declare, or a value for an inbox input, is a usage error; an undeclared name
+lists the declared inputs. Off a terminal,
 missing optional inputs stay unset (their defaults apply), and missing required inputs are a usage
 error that names them all.
 
@@ -434,7 +435,7 @@ instead. `error.code` is one of the [CLI error codes](/reference/#cli-error-code
 |---|---|
 | `0` | Success. Also a run that ends waiting, and `yian status` whatever the status |
 | `1` | A reported problem: a failed run, a flow that doesn't load, a setup error, a bad `YIAN_*` value, a cancelled input prompt, a failed check, login or listing. With `--json`, its document is on stdout |
-| `2` | A usage error: an unknown flag, a missing argument, an undeclared input, missing required inputs off a terminal, or flags that don't go together. The message is on stderr and there is no document |
+| `2` | A usage error: an unknown flag, a missing argument, an undeclared input or a value for an inbox input, missing required inputs off a terminal, or flags that don't go together. The message is on stderr and there is no document |
 | `130` | Stopped by a signal, or by Ctrl-C during the run. There is no document |
 
 Any other exit, a crash included, prints no document; treat it as an internal error.

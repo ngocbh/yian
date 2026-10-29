@@ -1002,6 +1002,18 @@ test("an ask off a terminal writes its prompt with no escape codes", async () =>
   expect(output.text).not.toContain("\x1b");
 });
 
+test("a value for an inbox input is a usage error, as in chat", async () => {
+  const flow =
+    "id: f\nname: f\ninput:\n  messages: !Inbox(str)\nnodes:\n" +
+    "  heard:\n    kind: tool\n    tool_id: take\n    input:\n      from: ${input.messages}\n" +
+    "output: ${heard.output}\n";
+  const { code, stdout, stderr } = await runFlowCli(flow, ["-q", "-i", "messages=hello"]);
+  expect(code).toBe(2);
+  expect(stdout).toBe("");
+  expect(stderr).toContain('input "messages" is an inbox; it takes messages through send, not a value');
+  expect(stderr).not.toContain("Run log: ");
+});
+
 describe("run's stops", () => {
   test("Ctrl-C at a prompt during the run: cancelled by user, exit 130, no document", async () => {
     const ctrlC = (keys: FakeInput) => keys.write("\x03");

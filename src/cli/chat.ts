@@ -12,15 +12,9 @@
  * `wakeAt` and the record-time reader, compose, the terminal and the run command's helpers.
  */
 
-import { basename, dirname } from "node:path";
-
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
-import { LoadError } from "../compose/helpers/errors.ts";
-import { loadFlow } from "../compose/loader.ts";
+import { Diagnostic } from "../diagnostics.ts";
 import { NodeSucceeded, type RunEvent } from "../events.ts";
-import { AuthError } from "../llm_clients/auth/index.ts";
-import { checkInputNames } from "../nodes/binding.ts";
-import type { Parameter } from "../nodes/contracts.ts";
 import { realScheduler, type Scheduler, SLEEP_CHUNK_MS } from "../platform.ts";
 import {
   advance,
@@ -41,24 +35,26 @@ import { defaultRunId } from "../typesys/seeding.ts";
 import { builtinType } from "../typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
 import {
-  defaultRunLogPath,
-  ensureProviderKeys,
+  checkSuppliedInputs,
+  cliLayer,
+  freshLog,
   gatherMissingInputs,
-  INPUTS_HINT,
+  indexRun,
   isSetupError,
+  loadFlowFile,
   mergeInputs,
-  NotUtf8Error,
-  readFlowText,
+  preflightKeys,
+  printStyled,
   readGrantedSkills,
   removeEmptyDir,
-  renderDiagnostic,
   renderRunError,
   reportRunLog,
   validateRunLogOptions,
   waitingText,
+  writeEngineTrace,
 } from "./run.ts";
 import { Terminal, TerminalStopped } from "./terminal.ts";
-import { atTerminal, type CliIo, CommandEnv, HostStop, MissingKeyError, UsageError } from "./utils.ts";
+import { atTerminal, type CliIo, CommandEnv, HostStop, UsageError } from "./utils.ts";
 
 /**
  * The options `chat` reads; an absent option is `undefined`, an absent repeatable one an empty
@@ -180,10 +176,11 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
  * run that ends waiting after the inbox closed, with no deadline to wake it, prints what it waits
  * on and exits 0.
  *
- * The flow loads, inputs, provider keys and log path are handled as `yian run`'s, except that the
- * inbox input is never asked for or supplied. Skills are read as `yian run` reads them, once per
- * chat, before any input prompt. The chat opens no MCP servers and builds no memories. A host
- * failure prints `chat failed: <message>` and exits 1.
+ * The flow loads, inputs, provider keys, log path and run index are handled as `yian run`'s
+ * (`--engine-trace` included), except that the inbox input is never asked for or supplied. Skills
+ * are read as `yian run` reads them, once per chat, before any input prompt. The chat opens no MCP
+ * servers and builds no memories. A host failure prints `chat failed: <message>`, its stack below
+ * under `engineTrace`, and exits 1.
  *
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a flow without exactly
  *   one `Inbox(str)` or `Inbox(Message)` input to pick; for an input the flow doesn't declare
@@ -191,32 +188,11 @@ async function sleepUntil(scheduler: Scheduler, at: number, signal: AbortSignal)
  */
 export async function chat(flowPath: string, options: ChatOptions, io: CliIo, deps: ChatDeps = {}): Promise<number> {
   validateRunLogOptions({ ...options, flow: flowPath });
-  let text: string;
-  try {
-    text = readFlowText(flowPath);
-  } catch (error) {
-    if (!(error instanceof NotUtf8Error)) throw error;
-    await io.stderr.write(`can't read ${flowPath}: not UTF-8 text\n`);
-    return 1;
-  }
-  let flow: ComposedFlow;
-  try {
-    flow = await loadFlow(text, { searchPaths: [dirname(flowPath)], sourceLabel: basename(flowPath), env: io.env });
-  } catch (error) {
-    if (!(error instanceof LoadError)) throw error;
-    await renderDiagnostic(error.diagnostic, io.stderr, io.env);
-    return 1;
-  }
+  const flow = await loadFlowFile(flowPath, options.engineTrace, io);
+  if (flow instanceof Diagnostic) return 1;
   const inbox = pickInbox(flow, options.inbox);
-  // An inbox takes events through `send`, never a value at the start.
-  const values: Parameter[] = flow.input.filter((param) => !isInboxType(param.contract?.type ?? null));
   const supplied = mergeInputs(options.inputs, options.inputValues);
-  try {
-    checkInputNames(values, supplied);
-  } catch (error) {
-    if (!(error instanceof RangeError)) throw error;
-    throw new UsageError(`${INPUTS_HINT}: ${error.message}`);
-  }
+  checkSuppliedInputs(flow.input, supplied);
 
   const scheduler = deps.scheduler ?? realScheduler;
   const signals = deps.signals ?? process;
@@ -336,30 +312,25 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     // Read once: every `advance` must pass the skills the run recorded at its start.
     const skills = await readGrantedSkills(flow, env.read, io);
     const prompter = io.stdin.isTTY === true ? terminal : null;
-    const gathered = await gatherMissingInputs(values, supplied, prompter);
+    const gathered = await gatherMissingInputs(flow.input, supplied, prompter);
     stop.signal.throwIfAborted();
     if (gathered === null) {
       await io.stderr.write("chat cancelled\n");
       return 1;
     }
     Object.assign(supplied, gathered);
-    // The flags supply the outermost cascade layer, as `yian run`'s.
-    const cliCfg: Record<string, string> = {};
-    if (options.provider) cliCfg["provider"] = options.provider;
-    if (options.model) cliCfg["model"] = options.model;
-    try {
-      await ensureProviderKeys(flow, cliCfg, supplied, { env, terminal: prompter });
-    } catch (error) {
-      stop.signal.throwIfAborted();
-      if (!(error instanceof MissingKeyError || error instanceof AuthError)) throw error;
-      await io.stderr.write(`${error.message}\n`);
+    const cliCfg = cliLayer(options);
+    const missing = await preflightKeys(flow, cliCfg, supplied, { env, terminal: prompter }, stop.signal);
+    if (missing !== null) {
+      await printStyled(io, missing, "red");
       return 1;
     }
     stop.signal.throwIfAborted();
 
     const runId = defaultRunId();
-    const path = options.log ?? defaultRunLogPath(runId, io.env);
-    if (options.log === undefined) runDir = dirname(path);
+    const fresh = freshLog(options.log, runId, io.env);
+    const path = fresh.log;
+    runDir = fresh.runDir;
     await reportRunLog(path, io.stderr, io.env);
     log = path;
     // A node named `reply`, at any depth, is what the chat says.
@@ -518,6 +489,7 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     // Another writer holding the run's log is a busy run, not a bug.
     if (!(error instanceof RunBusyError || isSetupError(error))) throw error;
     await io.stderr.write(`chat failed: ${error.message}\n`);
+    await writeEngineTrace(error, options.engineTrace, io);
     return 1;
   } finally {
     await interrupting;
@@ -525,6 +497,7 @@ export async function chat(flowPath: string, options: ChatOptions, io: CliIo, de
     terminal.close();
     for (const [name, listener] of listeners) signals.off(name, listener);
     outside?.removeEventListener("abort", forwardStop);
+    if (log !== null) await indexRun(log, io);
     if (runDir !== null) removeEmptyDir(runDir);
   }
 }

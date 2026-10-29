@@ -18,6 +18,8 @@
  * - `mergeInputs` reads `--inputs` then `--input k=v` (`readInputsJson`, `parseKv`).
  * - `validateRunLogOptions` and `defaultRunLogPath` pick the run's log under `defaultRunsDir`;
  *   `reportRunLog` prints it.
+ * - `loadFlowFile`, `checkSuppliedInputs`, `cliLayer`, `preflightKeys`, `freshLog` and `indexRun`
+ *   are the steps of a fresh run's start and end that `yian chat` shares.
  * - `ensureProviderKeys` checks the keys of the connections `agentConnections` finds before a run.
  * - `readGrantedSkills` reads the skill folders when a flow's AGENTs grant skills.
  *
@@ -118,8 +120,8 @@ function paint(text: string, style: Style, out: Writer, env: Env): string {
   return `\x1b[${codes.join(";")}m${text}\x1b[0m`;
 }
 
-/** Write `text` in `style` and a newline to `io.stderr`. */
-function printStyled(io: CliIo, text: string, style: Style): Promise<void> {
+/** @internal Write `text` in `style` and a newline to `io.stderr`. */
+export function printStyled(io: CliIo, text: string, style: Style): Promise<void> {
   return io.stderr.write(`${paint(text, style, io.stderr, io.env)}\n`);
 }
 
@@ -620,6 +622,29 @@ export function mergeInputs(inputs: string | undefined, inputValues: readonly st
 export const INPUTS_HINT = "Invalid value for '--input' / '--inputs'";
 
 /**
+ * @internal Check that each name in `supplied` is one of `decls`' inputs that take a value at the
+ * start; an inbox input takes events through `send`, so a value for one is refused too.
+ *
+ * @throws {UsageError} For a name of an inbox input, or one no input has.
+ */
+export function checkSuppliedInputs(decls: readonly Parameter[], supplied: Readonly<Record<string, unknown>>): void {
+  // An inbox takes events through `send`, never a value at the start.
+  const isInbox = (decl: Parameter) => isInboxType(decl.contract?.type ?? null);
+  const inbox = decls.filter((decl) => isInbox(decl) && Object.hasOwn(supplied, decl.name)).map((decl) => decl.name);
+  if (inbox.length > 0) {
+    const name = JSON.stringify(inbox.sort(compareCodeUnits)[0]);
+    throw new UsageError(`${INPUTS_HINT}: input ${name} is an inbox; it takes messages through send, not a value`);
+  }
+  const values = decls.filter((decl) => !isInbox(decl));
+  try {
+    checkInputNames(values, supplied);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw new UsageError(`${INPUTS_HINT}: ${error.message}`);
+  }
+}
+
+/**
  * @internal Return the inputs to add to `supplied`: each declaration it lacks (key presence)
  * answered at `terminal`'s prompts, or `{}` without a terminal, leaving optional and defaulted
  * inputs absent for START. An inbox input is never asked for. Returns null when a prompt is
@@ -741,11 +766,12 @@ export function defaultRunsDir(env: Env): string {
 }
 
 /**
- * Update the run index of `~/.yian/runs` (`updateRunIndex`, waiting at most a second for another
- * update) after the run in `log` ended, when `log` is a run folder's log there; a failed update is
- * a `warning:` line on stderr, and the logs it skips aren't reported (`yian status` reports them).
+ * @internal Update the run index of `~/.yian/runs` (`updateRunIndex`, waiting at most a second for
+ * another update) after the run in `log` ended, when `log` is a run folder's log there; a failed
+ * update is a `warning:` line on stderr, and the logs it skips aren't reported (`yian status`
+ * reports them).
  */
-async function indexRun(log: string, io: CliIo): Promise<void> {
+export async function indexRun(log: string, io: CliIo): Promise<void> {
   const runsDir = defaultRunsDir(io.env);
   // Real paths, so a log reached through a symlinked HOME still counts; a missing folder can't.
   const real = (path: string) => {
@@ -791,6 +817,87 @@ export function readFlowText(path: string): string {
     throw error;
   }
   return text.replace(/\r\n?/g, "\n");
+}
+
+/** @internal Write `error`'s stack in a traceback box on stderr when `engineTrace` is set. */
+export async function writeEngineTrace(error: Error, engineTrace: boolean, io: CliIo): Promise<void> {
+  if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
+}
+
+/**
+ * @internal Read and load the flow file at `path` for a fresh run. A file that isn't UTF-8 text or
+ * a flow that doesn't load is reported on stderr (a load error located, its stack below under
+ * `engineTrace`), and its diagnostic is returned instead of the flow.
+ *
+ * @throws {Error} A system error when the file can't be read.
+ */
+export async function loadFlowFile(path: string, engineTrace: boolean, io: CliIo): Promise<ComposedFlow | Diagnostic> {
+  let text: string;
+  try {
+    text = readFlowText(path);
+  } catch (error) {
+    if (!(error instanceof NotUtf8Error)) throw error;
+    const message = `can't read ${path}: not UTF-8 text`;
+    await printStyled(io, message, "red");
+    return new Diagnostic({ code: "compose.load", message });
+  }
+  try {
+    return await loadFlow(text, { searchPaths: [dirname(path)], sourceLabel: basename(path), env: io.env });
+  } catch (error) {
+    if (!(error instanceof LoadError)) throw error;
+    // Where in the `.yaml` the flow broke, not the engine's internals, unless asked for.
+    await renderDiagnostic(error.diagnostic, io.stderr, io.env);
+    await writeEngineTrace(error, engineTrace, io);
+    return error.diagnostic;
+  }
+}
+
+/**
+ * @internal Return the outermost `llmConfig` layer of a fresh run: `provider` and `model`, those
+ * given. It fills the gaps rather than overriding: an agent's own llm_config and the flow's still
+ * win.
+ */
+export function cliLayer(options: { provider?: string | undefined; model?: string | undefined }): Record<string, string> {
+  const layer: Record<string, string> = {};
+  if (options.provider) layer["provider"] = options.provider;
+  if (options.model) layer["model"] = options.model;
+  return layer;
+}
+
+/**
+ * @internal Check every key `flow`'s agents need before a fresh run creates its log
+ * (`ensureProviderKeys`), and return the message of a missing key or of a login that doesn't
+ * resolve, else null.
+ *
+ * @throws `signal`'s reason once it has aborted: a key prompt the stop closed is the stop, not a
+ *   missing key. Any other failure, as `ensureProviderKeys` throws it.
+ */
+export async function preflightKeys(
+  flow: ComposedFlow,
+  cliCfg: Readonly<Record<string, string>>,
+  supplied: Readonly<Record<string, unknown>>,
+  context: PromptContext,
+  signal: AbortSignal,
+): Promise<string | null> {
+  try {
+    await ensureProviderKeys(flow, cliCfg, supplied, context);
+  } catch (error) {
+    signal.throwIfAborted();
+    if (!(error instanceof MissingKeyError || error instanceof AuthError)) throw error;
+    return error.message;
+  }
+  return null;
+}
+
+/**
+ * @internal Return the log a fresh run writes, `log`, else `defaultRunLogPath`'s in a fresh run
+ * folder, and that folder (`runDir`; null for a given `log`), which the caller removes
+ * (`removeEmptyDir`) once the command ends, so a run that never created its log leaves none.
+ */
+export function freshLog(log: string | undefined, runId: string, env: Env): { log: string; runDir: string | null } {
+  if (log !== undefined) return { log, runDir: null };
+  const path = defaultRunLogPath(runId, env);
+  return { log: path, runDir: dirname(path) };
 }
 
 /**
@@ -1240,7 +1347,7 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * A succeeded run prints its output on stdout, as text; a failed one prints its diagnostic on
  * stderr and exits 1. A run that ends waiting prints `run waiting: <node> (<tool>), ...` and the
  * `yian run --resume <log>` that continues it on stderr and exits 0; a cancelled one prints
- * `run cancelled` and exits 1 (`run.cancelled`). An inbox input is never asked for. A host failure (a bad option value, a log that can't be created, an MCP
+ * `run cancelled` and exits 1 (`run.cancelled`). An inbox input is never asked for or supplied. A host failure (a bad option value, a log that can't be created, an MCP
  * server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr, and
  * when no started server supplies a needed tool the missing ids and the other failed servers on the
  * lines below, and exits 1.
@@ -1266,8 +1373,8 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * run prints `run cancelled` and exits 1 (`run.cancelled`). The first stop wins.
  *
  * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a memory flag value
- *   the flow can't take; for an input the flow doesn't declare; off a TTY, for missing required
- *   inputs.
+ *   the flow can't take; for an input the flow doesn't declare (or an inbox); off a TTY, for
+ *   missing required inputs.
  */
 export async function run(flowPath: string | undefined, options: RunOptions, io: CliIo): Promise<number> {
   const controller = new AbortController();
@@ -1351,9 +1458,7 @@ async function startRun(
     await printStyled(io, message, "red");
     return fail(new Diagnostic({ code: "run.setup", message }));
   };
-  const writeStack = async (error: Error) => {
-    if (engineTrace) await io.stderr.write(tracebackBox(error.stack ?? String(error), io.stderr, io.env));
-  };
+  const writeStack = (error: Error) => writeEngineTrace(error, engineTrace, io);
   const action = options.resume === undefined ? "run" : "resume";
   // Only the MCP selection's lines follow the message; the error's own notes, such as a memory
   // cleanup failure, stay out of it.
@@ -1387,26 +1492,9 @@ async function startRun(
     }
     flow = recorded;
   } else {
-    const path = flowPath!;
-    let text: string;
-    try {
-      text = readFlowText(path);
-    } catch (error) {
-      if (!(error instanceof NotUtf8Error)) throw error;
-      const message = `can't read ${path}: not UTF-8 text`;
-      await printStyled(io, message, "red");
-      return fail(new Diagnostic({ code: "compose.load", message }));
-    }
-    try {
-      const loading = { searchPaths: [dirname(path)], sourceLabel: basename(path), env: io.env };
-      flow = await loadFlow(text, loading);
-    } catch (error) {
-      if (!(error instanceof LoadError)) throw error;
-      // Where in the `.yaml` the flow broke, not the engine's internals, unless asked for.
-      await renderDiagnostic(error.diagnostic, io.stderr, io.env);
-      await writeStack(error);
-      return fail(error.diagnostic);
-    }
+    const loaded = await loadFlowFile(flowPath!, engineTrace, io);
+    if (loaded instanceof Diagnostic) return fail(loaded);
+    flow = loaded;
   }
 
   const commandEnv = new CommandEnv(io.env);
@@ -1516,12 +1604,7 @@ async function startRun(
       }
       const supplied = mergeInputs(options.inputs, options.inputValues);
       // Before prompting, so a typo'd name fails instead of prompting for the real one.
-      try {
-        checkInputNames(flow.input, supplied);
-      } catch (error) {
-        if (!(error instanceof RangeError)) throw error;
-        throw new UsageError(`${INPUTS_HINT}: ${error.message}`);
-      }
+      checkSuppliedInputs(flow.input, supplied);
       // A signal during the load stops the command before it prompts.
       controller.signal.throwIfAborted();
       const prompter = io.stdin.isTTY === true ? terminal : null;
@@ -1531,23 +1614,14 @@ async function startRun(
       if (gathered === null) return cancelled();
       Object.assign(supplied, gathered);
 
-      // The flags supply the outermost cascade layer (fill the gap), not an override: an agent's
-      // own llm_config and the flow's still win.
-      const cliCfg: Record<string, string> = {};
-      if (options.provider) cliCfg["provider"] = options.provider;
-      if (options.model) cliCfg["model"] = options.model;
+      const cliCfg = cliLayer(options);
       // Any required key is asked for before the run creates its log.
-      try {
-        await ensureProviderKeys(flow, cliCfg, supplied, { env: commandEnv, terminal: prompter });
-      } catch (error) {
-        // A key prompt the stop closed is the stop, not a missing key.
-        controller.signal.throwIfAborted();
-        if (!(error instanceof MissingKeyError || error instanceof AuthError)) throw error;
-        return refused(error.message);
-      }
+      const context = { env: commandEnv, terminal: prompter };
+      const missing = await preflightKeys(flow, cliCfg, supplied, context, controller.signal);
+      if (missing !== null) return refused(missing);
 
       const runId = defaultRunId();
-      const log = options.log ?? defaultRunLogPath(runId, io.env);
+      const { log, runDir } = freshLog(options.log, runId, io.env);
       return startLogged(
         log,
         (tools) =>
@@ -1563,7 +1637,7 @@ async function startRun(
             env: commandEnv.read,
             signal: controller.signal,
           }),
-        options.log === undefined ? dirname(log) : null,
+        runDir,
       );
     });
   } catch (error) {

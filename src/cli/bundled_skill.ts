@@ -7,7 +7,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -15,7 +15,7 @@ import { loadSkillDir } from "../compose/skills.ts";
 import type { Env } from "../defaults.ts";
 import { compareCodeUnits } from "../diagnostics.ts";
 import { isSystemError } from "../platform.ts";
-import { type Skill, SkillError } from "../skills/catalog.ts";
+import { Skill, SkillError } from "../skills/catalog.ts";
 import { SKILL } from "./bundled.ts";
 
 /** The bundled skill's name, which its folder's name starts with. */
@@ -56,14 +56,35 @@ function discard(cache: string, folder: string): void {
 }
 
 /**
+ * The skill in `folder` when it holds every file of the bundled one and loads; `absent` when there
+ * is no folder (or it went away meanwhile), `damaged` otherwise.
+ */
+function loadIntact(folder: string): Skill | "absent" | "damaged" {
+  if (!statSync(folder, { throwIfNoEntry: false })?.isDirectory()) return "absent";
+  const whole = Object.keys(SKILL).every((path) =>
+    statSync(join(folder, ...path.split("/")), { throwIfNoEntry: false })?.isFile(),
+  );
+  if (!whole) return "damaged";
+  try {
+    return loadSkillDir(folder);
+  } catch (error) {
+    if (error instanceof SkillError) return "damaged";
+    if (isSystemError(error) && error.code === "ENOENT") return "absent";
+    throw error;
+  }
+}
+
+/**
  * Return the bundled `composing-agents` skill, loaded from
  * `~/.yian/cache/skills/composing-agents-<hash>/` (`HOME` read from `env`, the process user's home
  * when it is unset or empty), writing the folder first when it doesn't exist.
  *
  * The folder is written whole under a temporary name beside it and renamed into place, so a chat
  * never reads a half-written one. When another chat renamed its own into place first, that one is
- * used and this call's is removed. A folder that exists is never written again, unless its
- * `SKILL.md` doesn't load: then it is moved aside, removed and written again.
+ * used and this call's is removed. A folder that exists is never written again, unless it is
+ * damaged (a file of the skill missing, or a `SKILL.md` that doesn't load) on two looks in a row,
+ * the second for a chat that is replacing it: then it is moved aside, removed and written again.
+ * The folders are the owner's alone, as `~/.yian` is.
  *
  * @param options.beforeRename For tests: runs just before the rename.
  * @throws {Error} A system error when the folder can't be written or read.
@@ -72,15 +93,10 @@ function discard(cache: string, folder: string): void {
 export function bundledSkill(env: Env, options: { beforeRename?: () => void } = {}): Skill {
   const cache = join(env("HOME") || homedir(), ".yian", "cache", "skills");
   const folder = join(cache, `${NAME}-${contentHash(SKILL).slice(0, HASH_DIGITS)}`);
-  if (statSync(folder, { throwIfNoEntry: false })?.isDirectory()) {
-    try {
-      return loadSkillDir(folder);
-    } catch (error) {
-      if (!(error instanceof SkillError)) throw error;
-      // Damaged (an edited or half-deleted SKILL.md, say): moved aside and written again.
-      discard(cache, folder);
-    }
-  }
+  let found = loadIntact(folder);
+  if (found === "damaged") found = loadIntact(folder);
+  if (found instanceof Skill) return found;
+  if (found === "damaged") discard(cache, folder);
   makeDirs(cache);
   const temporary = scratchName(cache, "tmp");
   try {
@@ -89,8 +105,6 @@ export function bundledSkill(env: Env, options: { beforeRename?: () => void } = 
       makeDirs(dirname(file));
       writeFileSync(file, text);
     }
-    // Readable as an installed skill folder is, once it is whole.
-    chmodSync(temporary, 0o755);
     options.beforeRename?.();
     try {
       renameSync(temporary, folder);

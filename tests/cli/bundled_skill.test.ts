@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -79,4 +79,17 @@ test("a damaged folder whose SKILL.md doesn't load is written again", () => {
   expect(skill.directory).toBe(folder);
   expect(readFileSync(join(folder, "SKILL.md"), "utf8")).toBe(SKILL["SKILL.md"]!);
   expect(readdirSync(join(home, ".yian", "cache", "skills"))).toEqual([basename(folder)]);
+});
+
+test("a folder missing one of the skill's files is written again", () => {
+  const folder = bundledSkill(env).directory!;
+  rmSync(join(folder, "reference.md"));
+  bundledSkill(env);
+  expect(readFileSync(join(folder, "reference.md"), "utf8")).toBe(SKILL["reference.md"]!);
+});
+
+test("the folder and its files are the owner's alone", () => {
+  const folder = bundledSkill(env).directory!;
+  expect(statSync(folder).mode & 0o777).toBe(0o700);
+  expect(statSync(join(folder, "templates")).mode & 0o777).toBe(0o700);
 });

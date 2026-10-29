@@ -47,8 +47,8 @@ import {
 } from "../../typesys/values.ts";
 import { LoadDiagnostics, shownLiteral, sourceText } from "../helpers/errors.ts";
 import { assertExactContracts, resolveOutputBindingContract } from "../../compile/output_contracts.ts";
-import { valueFits, yamlQuoted } from "../helpers/tags.ts";
-import { formerBooleanFix } from "../helpers/yaml_words.ts";
+import { yamlQuoted } from "../helpers/tags.ts";
+import { formerBooleanFix, valueFits } from "../helpers/yaml_words.ts";
 import type { NodeDescriptor } from "../nodes/base.ts";
 import { CaseDescriptor, onMatchKey } from "../nodes/case.ts";
 import { parseYamlLiteral, SourceSyntaxError } from "../source/index.ts";

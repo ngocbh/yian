@@ -1080,7 +1080,7 @@ function rejectDottedCallee(tree: ExprNode): void {
 }
 
 /** Return whether `node` is a `refcall` that is one non-keyword `NAME` with no trailers or call suffix. */
-export function isBareName(node: ExprNode): boolean {
+export function isBareName(node: ExprNode): node is Tree & { readonly data: "refcall" } {
   if (!(node instanceof Tree) || node.data !== "refcall" || node.children.length !== 1) return false;
   const head = node.children[0];
   return head instanceof Token && head.type === "NAME" && !RESERVED_REFERENCE_ROOTS.has(head.value);

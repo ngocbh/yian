@@ -1391,17 +1391,17 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * `warning:` line on stderr, above the spinners. On a TTY stdin, each input not supplied is
  * prompted for on stderr, and a cancelled prompt prints `run cancelled` and exits 1. Off a terminal
  * (stdin or stderr isn't a TTY), each prompt, an `ask` node's included, is written once, with no
- * escape codes. `provider` and
- * `model`, those given, are the run's outermost `llmConfig` layer. Before the log exists, every key
- * the agents need is checked (`ensureProviderKeys`), prompted for on a TTY stdin; a missing one is
- * printed and exits 1. The log is `log`, else `~/.yian/runs/<run id>/log.jsonl` in a fresh folder.
- * A succeeded run prints its output on stdout, as text; a failed one prints its diagnostic on
- * stderr and exits 1. A run that ends waiting prints `run waiting: <node> (<tool>), ...` and the
- * `yian run --resume <log>` that continues it on stderr and exits 0; a cancelled one prints
- * `run cancelled` and exits 1 (`run.cancelled`). An inbox input is never asked for or supplied. A host failure (a bad option value, a log that can't be created, an MCP
- * server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr, and
- * when no started server supplies a needed tool the missing ids and the other failed servers on the
- * lines below, and exits 1.
+ * escape codes. `provider` and `model`, those given, are the run's outermost `llmConfig` layer.
+ * Before the log exists, every key the agents need is checked (`ensureProviderKeys`), prompted for
+ * on a TTY stdin; a missing one is printed and exits 1. The log is `log`, else
+ * `~/.yian/runs/<run id>/log.jsonl` in a fresh folder. A succeeded run prints its output on stdout,
+ * as text; a failed one prints its diagnostic on stderr and exits 1. A run that ends waiting prints
+ * `run waiting: <node> (<tool>), ...` and the `yian run --resume <log>` that continues it on stderr
+ * and exits 0; a cancelled one prints `run cancelled` and exits 1 (`run.cancelled`). An inbox input
+ * is never asked for or supplied. A host failure (a bad option value, a log that can't be created,
+ * an MCP server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr,
+ * and when no started server supplies a needed tool the missing ids and the other failed servers on
+ * the lines below, and exits 1.
  *
  * With `resume` there is no `flowPath`: the flow the log recorded is compiled (`loadRecordedFlow`),
  * never a file on disk, and its memories, skills and MCP config are read as for a fresh run; then
@@ -1963,16 +1963,16 @@ export async function status(log: string | undefined, { json }: { json: boolean 
  * Update the run index of `~/.yian/runs` (`updateRunIndex`) and list its rows (`readRunIndex`), by
  * start time; returns the exit code. A missing runs folder lists nothing.
  *
- * As text, a header and one line per run on stdout, in aligned columns: run id, status (`unreadable
- * at seq N` for a log yian can't read from seq N), start time and flow file (`-` for none, or a
- * flow built in code); nothing when there are no runs. With `json`, one document whose `runs` holds
- * each row: `run_id`, `flow`, `status`, `started_at`, `ended_at`, `parent_run_id`, `last_seq`,
- * `result` (the run's output, `null` until it succeeded), the token sums, for a waiting run `ready`
- * and `wake_at` (`false` and `null` otherwise), and `unreadable` (`seq` and `reason`, or `null`). A
- * log the update can't read is a `warning:` line on stderr: once until it changes, or on every
- * update for a file error such as no permission, which leaves the run's row as it was. An index that can't be
- * updated (another update held it too long, or it isn't a database) prints its message on stderr
- * and exits 1 (`run.setup`).
+ * As text, a header and one line per run on stdout, in aligned columns: run id, status
+ * (`unreadable at seq N` for a log yian can't read from seq N), start time and flow file (`-` for
+ * none, or a flow built in code); nothing when there are no runs. With `json`, one document whose
+ * `runs` holds each row: `run_id`, `flow`, `status`, `started_at`, `ended_at`, `parent_run_id`,
+ * `last_seq`, `result` (the run's output, `null` until it succeeded), the token sums, for a waiting
+ * run `ready` and `wake_at` (`false` and `null` otherwise), and `unreadable` (`seq` and `reason`,
+ * or `null`). A log the update can't read is a `warning:` line on stderr: once until it changes, or
+ * on every update for a file error such as no permission, which leaves the run's row as it was. An
+ * index that can't be updated (another update held it too long, or it isn't a database) prints its
+ * message on stderr and exits 1 (`run.setup`).
  */
 async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number> {
   const runsDir = defaultRunsDir(io.env);

@@ -54,7 +54,7 @@ import { AgentDescriptor } from "../nodes/agent.ts";
 import { type NodeDescriptor, type OriginPresenter, siteKey } from "../nodes/base.ts";
 import { mapBindingStrings } from "../nodes/bindings.ts";
 import { CaseDescriptor } from "../nodes/case.ts";
-import { mapOutputsStrings } from "./inline_calls.ts";
+import { bindingOrigin, mapOutputsStrings } from "./inline_calls.ts";
 
 /**
  * Expand every `${<case>.output}` binding ref to a coalesce over its branch targets.
@@ -111,7 +111,7 @@ export function expandCaseOutputs(
   for (const [nodeId, descriptor] of descriptors) {
     let rewritten = mapBindingStrings(descriptor, (field, key, value) =>
       expander(caseIds, targets, `node ${reprText(nodeId)}`, {
-        range: bindingRange(descriptor, field, key),
+        range: bindingOrigin(descriptor, field, key),
         diagnostics,
         spellings,
       })(value),
@@ -244,15 +244,6 @@ function topLevelSpans(value: string): string[] {
     }
   }
   return spans;
-}
-
-/** Return the narrowest available range for a descriptor binding. */
-function bindingRange(descriptor: NodeDescriptor, field: string, key: string): SourceRange | null {
-  const ranges = descriptor.fieldRanges;
-  if (field === "inputs") {
-    return ranges.get(siteKey("input", key)) ?? ranges.get(siteKey("field", "inputs")) ?? descriptor.range;
-  }
-  return ranges.get(siteKey("field", field)) ?? descriptor.range;
 }
 
 /**

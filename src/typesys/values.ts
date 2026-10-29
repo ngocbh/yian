@@ -1245,8 +1245,8 @@ export function inboxType(element: Type): Type {
   return new Type({ kind: ValueKind.INBOX, element });
 }
 
-/** Whether `typ` is an `Inbox(...)` type. */
-export function isInboxType(typ: Type | null | undefined): boolean {
+/** Whether `typ` is an `Inbox(...)` type, which always has an element type. */
+export function isInboxType(typ: Type | null | undefined): typ is Type & { readonly element: Type } {
   return typ != null && typ.kind === ValueKind.INBOX;
 }
 

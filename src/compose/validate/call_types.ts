@@ -69,8 +69,8 @@ import {
   resolveOutputBindingContract,
   type TypeFn,
 } from "../../compile/output_contracts.ts";
-import { anySourceHint, valueFits, yamlQuoted } from "../helpers/tags.ts";
-import { formerBooleanFix } from "../helpers/yaml_words.ts";
+import { anySourceHint, yamlQuoted } from "../helpers/tags.ts";
+import { formerBooleanFix, valueFits } from "../helpers/yaml_words.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
 import type { Narrowing } from "./narrowing.ts";

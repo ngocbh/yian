@@ -1376,7 +1376,7 @@ export abstract class Node {
    * @throws TypeError for a node that doesn't produce messages.
    */
   rebuildMessages(
-    _steps: readonly Readonly<JsonObject>[],
+    _steps: readonly Readonly<ValueRecord>[],
     _output: TypedValue | null,
     _localTypes: ReadonlyMap<string, Type | null> | null = null,
   ): TypedValue {
@@ -1460,10 +1460,10 @@ export abstract class Node {
    *
    * Declared defaults are filled first, then node-owned setup is validated (including that every
    * assertion and kind predicate parses), the pre-asserts run against the bound record, `forward`
-   * runs, and the post-asserts check an `Output` against the inputs as bound. The promise
-   * resolves to exactly one `NodeResult` (`Output | Route | Grow | Pending`). Every failure rejects it, with the original
-   * error; the checks and the synchronous part of `forward` (up to its first `await`) still run
-   * before the promise is returned.
+   * runs, and the post-asserts check an `Output` against the inputs as bound. The promise resolves
+   * to exactly one `NodeResult` (`Output | Route | Grow | Pending`). Every failure rejects it, with
+   * the original error; the checks and the synchronous part of `forward` (up to its first `await`)
+   * still run before the promise is returned.
    *
    * The evaluator runs the same template through `runForEvaluator`, so a kind changes what it
    * does through `forward`, never by overriding this.

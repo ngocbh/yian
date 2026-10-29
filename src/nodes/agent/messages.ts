@@ -446,13 +446,13 @@ export function messageSteps(steps: readonly Readonly<JsonObject>[]): number[] {
  *   without its values (`steerValues`).
  */
 export function rebuildMessages(
-  steps: readonly Readonly<JsonObject>[],
+  steps: readonly Readonly<ValueRecord>[],
   output: TypedValue | null,
   render: SteerRender | null = null,
 ): TypedValue {
   const messages: Message[] = [];
   /** Add `reply` and a `tool` message per call `results` answers. */
-  const flush = (reply: ModelMessage, results: StepExchange<Readonly<JsonObject>>["results"]): void => {
+  const flush = (reply: ModelMessage, results: StepExchange<Readonly<ValueRecord>>["results"]): void => {
     const kept = reply.parts.filter((part) =>
       part instanceof ToolCallPart ? results.has(part.id) : !(part instanceof MediaPart && part.file === null),
     );

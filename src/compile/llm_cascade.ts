@@ -239,6 +239,9 @@ class RunInputs {
   }
 }
 
+/** A CALL, MAP or LOOP node, the only kinds with a static child flow, which each name by `flowId`. */
+type Callsite = Node & { readonly flowId: string };
+
 /**
  * An `llm_config` value in an enclosing flow's layer that a child flow's agent inherits. Frozen.
  *
@@ -250,7 +253,7 @@ export class InheritedValue {
   /** The static path of the callsite whose flow holds the layer; empty for the run's flow. */
   readonly owner: readonly string[];
   /** The CALL, MAP or LOOP node at `owner`; `null` for the run's flow. */
-  readonly callsite: Node | null;
+  readonly callsite: Callsite | null;
   /** The value's field path in its layer; empty for a whole record. */
   readonly field: ValuePath;
   /** The value's authored site, when known. */
@@ -263,7 +266,7 @@ export class InheritedValue {
   /** Record one inherited value. */
   constructor(fields: {
     owner: readonly string[];
-    callsite: Node | null;
+    callsite: Callsite | null;
     field: ValuePath;
     origin: OriginRef | null;
     agent: readonly string[];
@@ -315,7 +318,7 @@ interface Enclosing {
   readonly layer: unknown;
   readonly nullable: Nullable;
   readonly owner: readonly string[];
-  readonly callsite: Node | null;
+  readonly callsite: Callsite | null;
 }
 
 /** Answer from the static types Compose proved for a flow layer's values, else from tags. */
@@ -328,7 +331,7 @@ function flowNullable(flow: CascadeFlow, layer: unknown): Nullable {
 function findInherited(
   flow: CascadeFlow,
   path: readonly string[],
-  callsite: Node | null,
+  callsite: Callsite | null,
   enclosing: readonly Enclosing[],
 ): InheritedValue | null {
   const layer = flow.flowLlmConfig ?? {};
@@ -341,7 +344,7 @@ function findInherited(
     }
     const child = nodeChild(node);
     if (child !== null) {
-      const found = findInherited(child, nodePath, node, [...enclosing, own]);
+      const found = findInherited(child, nodePath, node as Callsite, [...enclosing, own]);
       if (found !== null) return found;
     }
   }

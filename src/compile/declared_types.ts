@@ -254,7 +254,7 @@ export function localTypes(flow: Flow, node: Node): ReadonlyMap<string, Type | n
     if (name === "output") return nodeOutputType(flow, node);
     if (name === "event" && wiring.has(STEER_INBOX_KEY)) {
       const inbox = contractType(resolveOutputBindingContract(wiring.get(STEER_INBOX_KEY), producers, inputs, { typeFn }));
-      return inbox !== null && isInboxType(inbox) ? (inbox.element ?? null) : null;
+      return inbox !== null && isInboxType(inbox) ? inbox.element : null;
     }
     const param = params.get(name)!;
     if (param.contract !== null) return param.contract.type;

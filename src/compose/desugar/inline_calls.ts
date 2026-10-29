@@ -322,7 +322,7 @@ export function mapOutputsStrings(outputs: unknown, fn: (text: string) => unknow
  * `call(...)` directive was written on. Falls back to the host node's range when there is no
  * stamped entry (a spanless flow, or a binding shape with no per-entry range).
  */
-function bindingOrigin(desc: NodeDescriptor, field: string, key: string): SourceRange | null {
+export function bindingOrigin(desc: NodeDescriptor, field: string, key: string): SourceRange | null {
   const ranges = desc.fieldRanges;
   if (field === "inputs") {
     return ranges.get(siteKey("input", key)) ?? ranges.get(siteKey("field", "inputs")) ?? desc.range;

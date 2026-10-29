@@ -620,10 +620,10 @@ export class CodeNode extends Node {
    * Return the most precise authored origin for one body error.
    *
    * A built-in's is the node's, and a result host intake refuses is located by the base, in the
-   * output contract. A reference's is the whole `code:` origin, else the node's. Otherwise the first `yian-code:<id>`
-   * frame of what the code threw selects the authored line, falling back to the whole `code:`
-   * origin, then the node's (a thrown non-`Error` has no stack, and a native error thrown after an
-   * `await` has no body frame on Bun).
+   * output contract. A reference's is the whole `code:` origin, else the node's. Otherwise the
+   * first `yian-code:<id>` frame of what the code threw selects the authored line, falling back to
+   * the whole `code:` origin, then the node's (a thrown non-`Error` has no stack, and a native
+   * error thrown after an `await` has no body frame on Bun).
    */
   override exceptionOrigin(error: unknown): OriginRef | null {
     if (this.mode === "builtin" || error instanceof HostOutputError) return super.exceptionOrigin(error);

@@ -59,12 +59,12 @@
 
 import { readlinkSync, realpathSync, statSync } from "node:fs";
 import { availableParallelism } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { SHARE_ENV, Worker } from "node:worker_threads";
 
 import { current } from "../../defaults.ts";
 import { OriginRef, reprText } from "../../diagnostics.ts";
-import { TypeStripError } from "../../platform.ts";
+import { leavesRoot, TypeStripError } from "../../platform.ts";
 import {
   fromHost,
   isRecord,
@@ -110,15 +110,6 @@ function looksLikeReference(code: string): boolean {
   const stem = match[1]!;
   if (/^(?:\.\.?\/|\/(?![*/]))/.test(stem)) return true;
   return !/\s/.test(stem) && (/[/\\]/.test(stem) || /^[cm]?[jt]sx?$/.test(match[2]!));
-}
-
-// Mirrors the CLI's `leavesRoot` in `cli/run.ts`; nodes may not import the CLI.
-/**
- * Whether a path relative to a root (`relative(root, file)`) leaves that root: `..`, a `../`
- * prefix, or an absolute path (another drive).
- */
-function leavesRoot(rel: string): boolean {
-  return rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel);
 }
 
 /**

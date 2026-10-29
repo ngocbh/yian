@@ -19,6 +19,7 @@ import { Message, Request, type Response, TextPart } from "../llm/messages.ts";
 import { type HostConnection, popHostCredentials } from "../llm_clients/config.ts";
 import { resolveModelConfig, scrubCallCredentials } from "../llm_clients/connection.ts";
 import { chatModelFromConfig } from "../llm_clients/factory.ts";
+import { isSystemError } from "../platform.ts";
 import { logJson, type JsonObject as StoreObject } from "../typesys/json.ts";
 import { fromHost, isList, isRecord, type Value, writeAsJson } from "../typesys/values.ts";
 import {
@@ -34,7 +35,6 @@ import {
 } from "./contracts.ts";
 import { boundedJsonMaterial, visibleInteractionJson } from "./reflective.ts";
 import { type MarkdownStore, MarkdownVersionMismatch } from "./storage/markdown.ts";
-import { isSystemError } from "./storage/sqlite.ts";
 
 const SNAPSHOT_FORMAT = "yian.profile_memory";
 const SNAPSHOT_VERSION = 1n;

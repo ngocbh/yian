@@ -8,13 +8,11 @@
  */
 
 import { readFileSync } from "node:fs";
-import { userInfo } from "node:os";
 import { join } from "node:path";
 
 import type { Env } from "../defaults.ts";
 import { reprText } from "../diagnostics.ts";
-import { warn as platformWarn } from "../platform.ts";
-import { isSystemError } from "../skills/catalog.ts";
+import { homeDir, isSystemError, warn as platformWarn } from "../platform.ts";
 import { type McpServer, mcpServer } from "../tools/mcp.ts";
 import { RESERVED_TOOL_NAMES } from "../tools/registry.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, parseJson } from "../typesys/json.ts";
@@ -47,7 +45,7 @@ export class McpConfigError extends RangeError {
  * under `HOME` from `env` when set and non-empty, else the account's home directory.
  */
 export function userMcpConfig(env: Env): string {
-  return join(env("HOME") || userInfo().homedir, ".yian", "mcp.json");
+  return join(homeDir(env), ".yian", "mcp.json");
 }
 
 /**

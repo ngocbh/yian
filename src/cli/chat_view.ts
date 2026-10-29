@@ -72,13 +72,18 @@ export function loginLabel(connection: unknown): string | null {
   return method === "api_key" && source !== "missing" ? "API key" : null;
 }
 
-/** `path` with `home` (when set and not the root) shown as `~`. */
-export function homePath(path: string, home: string | undefined): string {
-  const trimmed = home?.replace(/[\\/]+$/, "");
-  if (!trimmed) return path;
-  if (path === trimmed) return "~";
-  for (const sep of ["/", "\\"]) {
-    if (path.startsWith(trimmed + sep)) return `~${path.slice(trimmed.length)}`;
+/**
+ * `path` with the home shown as `~`: `home`, or else `realHome` (the home's real path, for a home
+ * reached through a symlink), each when set and not the root.
+ */
+export function homePath(path: string, home: string | undefined, realHome?: string): string {
+  for (const each of [home, realHome]) {
+    const trimmed = each?.replace(/[\\/]+$/, "");
+    if (!trimmed) continue;
+    if (path === trimmed) return "~";
+    for (const sep of ["/", "\\"]) {
+      if (path.startsWith(trimmed + sep)) return `~${path.slice(trimmed.length)}`;
+    }
   }
   return path;
 }

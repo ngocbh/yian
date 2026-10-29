@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -146,6 +146,12 @@ describe("the banner's pieces", () => {
     expect(homePath("/srv", "/")).toBe("/srv");
   });
 
+  test("homePath also shows the home's real path as ~, for a home reached through a symlink", () => {
+    expect(homePath("/real/ada/proj", "/home/ada", "/real/ada")).toBe("~/proj");
+    expect(homePath("/home/ada/proj", "/home/ada", "/real/ada")).toBe("~/proj");
+    expect(homePath("/real/adam", "/home/ada", "/real/ada")).toBe("/real/adam");
+  });
+
   test("a long value wraps under its label, and the text is sanitized", () => {
     const output = Object.assign(new FakeOutput({ columns: COLUMNS }), { isTTY: true });
     const info = { model: "openai/gpt\x1b[31m", login: "ChatGPT login", cwd: `~/${"deep/".repeat(12)}x`, focus: null };
@@ -181,6 +187,23 @@ describe("yian chat on a terminal", () => {
       stdin.write(`/exit${ENTER}`);
       expect(await chatting).toBe(0);
       expect(rows()).toContain("> /exit");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "names the folder from ~ when the home is a symlink to where the folder really is",
+    async () => {
+      const real = join(tmp, "real");
+      renameSync(home, real);
+      symlinkSync(real, home);
+      root = join(real, "proj");
+      const { io, stdin, rows } = terminalIo();
+      const chatting = runChat(io, new AnsweringModel(() => textReply("hello")));
+      await until(() => rows().includes(HINT));
+      expect(rows()[3]).toBe(row("  cwd     ~/proj"));
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
     },
     TIMEOUT,
   );

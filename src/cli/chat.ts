@@ -130,6 +130,16 @@ function focusName(root: string, path: string): { name: string; outside: boolean
   return leavesRoot(inside) ? { name: real, outside: true } : { name: slashed(inside), outside: false };
 }
 
+/** The real path of `home`, or undefined when it is unset or doesn't resolve. */
+function realHome(home: string | undefined): string | undefined {
+  if (!home) return undefined;
+  try {
+    return realpathSync(home);
+  } catch {
+    return undefined;
+  }
+}
+
 /** `path` as a shell word: as it is when it has nothing the shell reads, else single-quoted. */
 function shellWord(path: string): string {
   return /^[\w./@%+=:,-]+$/.test(path) ? path : `'${path.replaceAll("'", "'\\''")}'`;
@@ -261,7 +271,8 @@ export async function chat(
   if (view !== null) io = { ...io, stdout: view.writer, stderr: view.writer };
   const focus = flowPath === undefined ? null : (inputs["flow"] as string);
   if (view !== null) {
-    const info = { ...model, cwd: homePath(root, env("HOME")), focus };
+    const home = env("HOME");
+    const info = { ...model, cwd: homePath(root, home, realHome(home)), focus };
     await io.stderr.write(`${chatBanner(info, io.stderrStream, env)}${view.note(sanitize(hint))}`);
   } else {
     const banner = [`yian chat`, model.model, focus === null ? null : `focus: ${focus}`]

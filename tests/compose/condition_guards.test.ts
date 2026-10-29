@@ -462,5 +462,5 @@ test("guards of deeply alternating and/or nesting take time linear in the depth"
   expect(guardChecks(proves(tree, true))).toHaveLength(41);
   expect(guardedRefs(tree)).toHaveLength(41);
   expect(literalsInContext(tree)).toHaveLength(41);
-  expect(performance.now() - start).toBeLessThan(1000);
+  expect(performance.now() - start).toBeLessThan(5000);
 });

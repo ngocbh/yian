@@ -19,7 +19,6 @@ import {
   parseKv,
   readInputsJson,
   skillsCheck,
-  stopOnSignals,
 } from "../../src/cli/run.ts";
 import { childCommand, main } from "../../src/cli/index.ts";
 import { LICENSES } from "../../src/cli/licenses.ts";
@@ -28,6 +27,7 @@ import {
   type CliIo,
   HostStop,
   printJson,
+  stopOnSignals,
   UsageError,
   type Writer,
 } from "../../src/cli/utils.ts";
@@ -329,44 +329,6 @@ describe("flowBanner", () => {
     expect(text).toContain("\x1b[1mRunning flow: \x1b[0m");
     expect(text).toContain("\x1b[1mDescription: \x1b[0m");
     expect(text).toContain("\x1b[36m╭");
-  });
-});
-
-describe("stopOnSignals", () => {
-  const SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-  const listeners = (target: EventEmitter) => SIGNALS.map((name) => target.listenerCount(name));
-
-  test("each signal aborts with a HostStop naming it and removes all three listeners", () => {
-    for (const name of SIGNALS) {
-      const target = new EventEmitter();
-      const controller = new AbortController();
-      stopOnSignals(controller, target);
-      expect(listeners(target)).toEqual([1, 1, 1]);
-      target.emit(name);
-      expect(controller.signal.reason).toBeInstanceOf(HostStop);
-      expect(controller.signal.reason.signal).toBe(name);
-      expect(listeners(target)).toEqual([0, 0, 0]);
-    }
-  });
-
-  test("the disposer removes the listeners", () => {
-    const target = new EventEmitter();
-    const controller = new AbortController();
-    const dispose = stopOnSignals(controller, target);
-    dispose();
-    expect(listeners(target)).toEqual([0, 0, 0]);
-    expect(controller.signal.aborted).toBe(false);
-  });
-
-  test("an already aborted controller keeps its reason and still removes them", () => {
-    const target = new EventEmitter();
-    const controller = new AbortController();
-    const first = new HostStop("SIGINT");
-    controller.abort(first);
-    stopOnSignals(controller, target);
-    target.emit("SIGTERM");
-    expect(controller.signal.reason).toBe(first);
-    expect(listeners(target)).toEqual([0, 0, 0]);
   });
 });
 

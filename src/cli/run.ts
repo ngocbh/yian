@@ -1,7 +1,7 @@
 /**
  * The flow commands, `yian run`, `yian check`, `yian status` and `yian skills check`, and `yian
  * run`'s helpers: what it prints on stderr, the inputs it reads from flags, its run-log options and
- * default log path, and the signals that stop a run.
+ * default log path.
  *
  * - `run` checks the run-log options, loads the flow, builds its memories, reads skills and MCP
  *   servers when it needs them, runs it on a fresh log or recovers the run recorded on a
@@ -20,7 +20,6 @@
  *   `reportRunLog` prints it.
  * - `ensureProviderKeys` checks the keys of the connections `agentConnections` finds before a run.
  * - `readGrantedSkills` reads the skill folders when a flow's AGENTs grant skills.
- * - `stopOnSignals` stops a run's controller with a `HostStop` on SIGINT, SIGTERM or SIGHUP.
  *
  * Output is raw ANSI on stderr, coloured only on a TTY without `NO_COLOR`.
  */
@@ -101,6 +100,7 @@ import {
   osReason,
   printJson,
   type PromptContext,
+  stopOnSignals,
   UsageError,
   type Writer,
 } from "./utils.ts";
@@ -767,33 +767,6 @@ async function indexRun(log: string, io: CliIo): Promise<void> {
 /** Write the run's log path to `out`, even when progress is quiet. */
 export async function reportRunLog(path: string, out: Writer, env: Env): Promise<void> {
   await out.write(`${paint(`Run log: ${path}`, "dim", out, env)}\n`);
-}
-
-const STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-
-/**
- * Abort `controller` with a `HostStop` on the first SIGINT, SIGTERM or SIGHUP `target` emits, and
- * return a disposer that removes the listeners.
- *
- * The first signal removes all three listeners, so a second one gets the default action and ends
- * the process. An already aborted controller keeps its reason.
- */
-export function stopOnSignals(
-  controller: AbortController,
-  target: Pick<NodeJS.EventEmitter, "on" | "off"> = process,
-): () => void {
-  const listeners = STOP_SIGNALS.map((signal) => {
-    const listener = () => {
-      dispose();
-      controller.abort(new HostStop(signal));
-    };
-    return [signal, listener] as const;
-  });
-  const dispose = () => {
-    for (const [signal, listener] of listeners) target.off(signal, listener);
-  };
-  for (const [signal, listener] of listeners) target.on(signal, listener);
-  return dispose;
 }
 
 /** @internal A flow or inputs file holding bytes that aren't UTF-8. */

@@ -39,7 +39,7 @@ import { realScheduler, type Scheduler } from "../platform.ts";
 import { isRecord } from "../typesys/index.ts";
 import { parseJson } from "../typesys/json.ts";
 import { Terminal } from "./terminal.ts";
-import { type CliIo, type ParsedArgs, printJson, UsageError, type Writer } from "./utils.ts";
+import { type CliIo, type ParsedArgs, printJson, stopOnSignals, UsageError, type Writer } from "./utils.ts";
 
 const KINDS: Readonly<Record<string, string>> = { api_key: "api-key", subscription: "subscription", none: "none" };
 const CANCELLED = "Authentication cancelled; the previous login is unchanged";
@@ -727,27 +727,6 @@ async function setupProvider(
 }
 
 /**
- * Abort `controller` on the first of the signals `names` that `target` emits, and return the
- * function that stops listening. The first signal stops listening, so a second one gets the
- * signal's default action (for a process, it ends it).
- */
-function onStopSignals(
-  names: readonly NodeJS.Signals[],
-  controller: AbortController,
-  target: Pick<EventEmitter, "on" | "off">,
-): () => void {
-  const off = () => {
-    for (const name of names) target.off(name, stop);
-  };
-  const stop = () => {
-    off();
-    controller.abort();
-  };
-  for (const name of names) target.on(name, stop);
-  return off;
-}
-
-/**
  * List, set up, choose the default among, or remove saved provider logins.
  *
  * `yian auth` lists the saved logins and the default.
@@ -816,7 +795,7 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
     deps.terminal !== undefined ? deps.terminal : io.stdin.isTTY === true ? new Terminal({ input: io.stdin }) : null;
   const ctx: SetupContext = { io, deps, terminal, signal: stop.signal };
   // Installed right before the `try` whose `finally` removes them.
-  const off = onStopSignals(names, stop, deps.signals ?? process);
+  const off = stopOnSignals(stop, deps.signals ?? process, names);
   try {
     if (provider === undefined) {
       const { method, login, model, apiKeyEnv, endpoint, organization, project } = options;

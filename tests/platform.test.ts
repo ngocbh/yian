@@ -25,6 +25,7 @@ import {
   isSystemError,
   leavesRoot,
   lockFile,
+  openFilePath,
   openSqlite,
   realScheduler,
   RedirectError,
@@ -866,6 +867,36 @@ describe("statOrNull", () => {
       throw failure;
     });
     expect(thrown(() => statOrNull(file))).toBe(failure);
+  });
+});
+
+describe("openFilePath", () => {
+  // Bun reads the path from the descriptor on macOS too; Node can't there.
+  const known = process.platform === "linux" || (process.platform === "darwin" && runtime === "bun");
+
+  test.if(known)("reads the path from the descriptor, so a link opened through and a later rename show", () => {
+    const real = fs.realpathSync(dir);
+    fs.mkdirSync(path.join(dir, "real"));
+    fs.writeFileSync(path.join(dir, "real", "a.txt"), "x");
+    fs.symlinkSync("real", path.join(dir, "link"));
+    const fd = fs.openSync(path.join(dir, "link", "a.txt"), "r");
+    try {
+      expect(openFilePath(fd)).toBe(path.join(real, "real", "a.txt"));
+      fs.renameSync(path.join(dir, "real", "a.txt"), path.join(dir, "real", "b.txt"));
+      expect(openFilePath(fd)).toBe(path.join(real, "real", "b.txt"));
+    } finally {
+      fs.closeSync(fd);
+    }
+  });
+
+  test.if(process.platform === "win32")("is null on Windows", () => {
+    fs.writeFileSync(file, "x");
+    const fd = fs.openSync(file, "r");
+    try {
+      expect(openFilePath(fd)).toBeNull();
+    } finally {
+      fs.closeSync(fd);
+    }
   });
 });
 

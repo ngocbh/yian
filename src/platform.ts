@@ -3,7 +3,7 @@
  * on Node and Bun: runtime detection, whether this is a compiled binary, a SQLite
  * wrapper over `bun:sqlite` or `node:sqlite`, loaded lazily for the runtime in use,
  * an exclusive file lock built on it, `syncFolder` for durable folder entries, the OS
- * error, missing-path, path-confinement and home-directory helpers, the
+ * error, missing-path, open-file path, path-confinement and home-directory helpers, the
  * scheduler that clocks and timed waits go through, the TypeScript stripper for CODE
  * bodies, loaded lazily too, `safeFetch`, the one way out to the network: no redirects,
  * yian's User-Agent, and a warning when TLS checks are off, and `warn`, the path every
@@ -452,14 +452,39 @@ export function isSystemError(error: unknown): error is NodeJS.ErrnoException & 
 /** The errors that make a path read as missing, so neither a file nor a directory. */
 const MISSING_PATH_CODES = new Set(["ENOENT", "ENOTDIR", "ELOOP", "EBADF"]);
 
+/** @internal Whether `error` is one of the OS errors that make a path read as missing. */
+export function isMissingPath(error: unknown): boolean {
+  return isSystemError(error) && MISSING_PATH_CODES.has(error.code);
+}
+
 /** @internal `fs.statSync`, or `null` for the errors that make a path read as missing. */
 export function statOrNull(path: string): fs.Stats | null {
   try {
     return fs.statSync(path);
   } catch (error) {
-    if (isSystemError(error) && MISSING_PATH_CODES.has(error.code)) return null;
+    if (isMissingPath(error)) return null;
     throw error;
   }
+}
+
+/**
+ * @internal The path the OS holds for open file `fd`, read from the descriptor rather than
+ * resolved again from a path, or `null` where the runtime can't tell (Node on macOS, Linux
+ * without `/proc`, Windows). On Linux an unlinked file's path ends in ` (deleted)`.
+ */
+export function openFilePath(fd: number): string | null {
+  try {
+    // One readlink: resolving the target again would walk paths another process can change.
+    if (process.platform === "linux") return fs.readlinkSync(`/proc/self/fd/${fd}`);
+    if (process.platform === "darwin") {
+      // Bun answers from the descriptor (`F_GETPATH`); Node walks `/dev/fd` and returns a `/dev` path.
+      const path = fs.realpathSync(`/dev/fd/${fd}`);
+      return path.startsWith("/dev/") ? null : path;
+    }
+  } catch (error) {
+    if (!isSystemError(error)) throw error;
+  }
+  return null;
 }
 
 /**

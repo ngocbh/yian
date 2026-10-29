@@ -24,7 +24,7 @@ import {
   ValueKind,
   writeAsText,
 } from "../typesys/values.ts";
-import { ANSI, cells, charCells, clip, columnsOf, fit, wrapLine } from "./cells.ts";
+import { ANSI, cells, charCells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
 import { box } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 
@@ -713,6 +713,11 @@ export class Terminal {
     this.#onActive = options.onActive;
   }
 
+  /** A `LineEditor` as wide as this terminal's output. */
+  lineEditor(options: { hint: string; list?: PromptList | null }): LineEditor {
+    return new LineEditor({ ...options, columns: () => columnsOf(this.#output) });
+  }
+
   /** A free-text or hidden prompt; null when the user cancels or the terminal is closed. */
   async askText(
     label: string,
@@ -834,12 +839,14 @@ export class Terminal {
     const widget: Widget<null> = {
       preface: "",
       screen: true,
-      lines: () => [...options.draw(columnsOf(output), output.rows || 24)],
+      lines: () => [...options.draw(columnsOf(output), rowsOf(output))],
       cursor: () => null,
       key(key) {
-        const plain = !key.ctrl && !key.meta && !key.paste;
-        const leave = key.name === "escape" || key.name === "return" || key.name === "enter" || key.str === "q";
-        return plain && leave ? { value: null } : undefined;
+        if (key.paste) return undefined;
+        const plain = !key.ctrl && !key.meta;
+        const leave = key.name === "return" || key.name === "enter" || key.str === "q";
+        // A lone Escape can arrive marked meta.
+        return key.name === "escape" || (plain && leave) ? { value: null } : undefined;
       },
       done: () => null,
       watch: options.subscribe,
@@ -1196,7 +1203,7 @@ export class Terminal {
       const lines = widget.lines();
       if (widget.screen) {
         // From the top, one screen row each, so the screen never scrolls.
-        const rows = lines.slice(0, Math.max(1, output.rows || 24)).map((line) => clip(line, columns));
+        const rows = lines.slice(0, rowsOf(output)).map((line) => clip(line, columns));
         output.write(`${ESC}H${rows.map((row) => `${row}${ESC}K`).join("\r\n")}${ESC}J`);
         return;
       }

@@ -102,8 +102,8 @@ export function fit(text: string, width: number): string {
 }
 
 /**
- * `row`, which may hold ANSI sequences, cut to at most `width` cells; its styles are reset when it
- * is cut.
+ * `row`, which may hold ANSI sequences, cut to at most `width` cells; its styles, when it has
+ * any, are reset when it is cut.
  */
 export function clip(row: string, width: number): string {
   if (cells(row) <= width) return row;
@@ -124,10 +124,15 @@ export function clip(row: string, width: number): string {
     used += charCells(char);
     at += char.length;
   }
-  return `${kept}\x1b[0m`;
+  return row.search(ANSI) === -1 ? kept : `${kept}\x1b[0m`;
 }
 
 /** The columns `out` is wide: as it reports, else 80. */
 export function columnsOf(out: { readonly columns?: number }): number {
   return out.columns || 80;
+}
+
+/** The rows `out` is high: as it reports, else 24. */
+export function rowsOf(out: { readonly rows?: number }): number {
+  return out.rows || 24;
 }

@@ -217,7 +217,7 @@ const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const SPIN_MS = 80;
 
 /** Return `ms` as a bracketed elapsed time in whole units: `[5s]`, `[1m05s]`, `[1h02m]`. */
-function elapsedTag(ms: number): string {
+export function elapsedTag(ms: number): string {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   if (seconds < 60) return `[${seconds}s]`;
   const minutes = Math.floor(seconds / 60);

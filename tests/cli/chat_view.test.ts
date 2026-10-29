@@ -18,9 +18,12 @@ import {
   homePath,
   loginLabel,
   richChat,
+  runRows,
   shortArgs,
   summary,
 } from "../../src/cli/chat_view.ts";
+import type { ChildStatus, LiveChild } from "../../src/cli/chat_runs.ts";
+import { LineEditor } from "../../src/cli/terminal.ts";
 import { cells } from "../../src/cli/cells.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import type { Env } from "../../src/defaults.ts";
@@ -39,7 +42,7 @@ import { Finish, PartDone, TextDelta } from "../../src/llm/events.ts";
 import { TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { callReply, serving, textReply } from "../helpers/run_state_fixtures.ts";
-import { ENTER, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
+import { DOWN, ENTER, ESCAPE, FakeInput, FakeOutput, screen } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 20_000;
 const COLUMNS = 60;
@@ -593,6 +596,100 @@ describe("the chat's view", () => {
   });
 });
 
+describe("the input box during a turn", () => {
+  /** A box row 60 columns wide holding `text`, as the prompt draws it. */
+  const boxed = (text: string) => `│ ${text.padEnd(COLUMNS - 4)} │`;
+  const SPIN = "· Thinking… (0s · esc to interrupt)";
+
+  test("stays under the spinner, below a reply streaming, with the cursor in it", () => {
+    const { view, output, rows } = viewOn();
+    const editor = new LineEditor({ columns: () => COLUMNS, hint: HINT.trim() });
+    view.turn(true);
+    view.input(editor);
+    view.onStream(chunk(1, "Once upon\na"));
+    expect(rows()).toEqual(["", "⏺ Once upon", "  a", SPIN, TOP, boxed(">"), BOTTOM, HINT]);
+    editor.set("also blue");
+    view.refresh();
+    expect(rows().slice(-4)).toEqual([TOP, boxed("> also blue"), BOTTOM, HINT]);
+    // The cursor is after the text, on the box's row, and shown there.
+    expect(screen(output.text, COLUMNS).cursor).toEqual({ row: 5, col: 13 });
+    expect(screen(output.text, COLUMNS).modes.at(-1)).toBe("?25h");
+    // A line printed for good lands above the live rows, which come back whole.
+    view.echo("also blue");
+    expect(rows()).toEqual(["", "⏺ Once upon", "> also blue", "  a", SPIN, TOP, boxed("> also blue"), BOTTOM, HINT]);
+    view.turn(false);
+    // The prompt takes the box's place once the turn ends.
+    expect(rows()).toEqual(["", "⏺ Once upon", "> also blue", "  a"]);
+    expect(screen(output.text, COLUMNS).modes.at(-1)).toBe("?25h");
+  });
+
+  test("goes while a prompt has the terminal and comes back after it", () => {
+    const { view, output, rows } = viewOn();
+    const editor = new LineEditor({ columns: () => COLUMNS, hint: HINT.trim() });
+    view.turn(true);
+    view.input(editor);
+    view.active(true);
+    expect(rows()).toEqual([]);
+    output.write("? Run color.yaml Approve\r\n");
+    view.active(false, true);
+    expect(rows()).toEqual(["? Run color.yaml Approve", SPIN, TOP, boxed(">"), BOTTOM, HINT]);
+    view.turn(false);
+  });
+
+  test("leaves the reply room on a short screen: the box and spinner stay, the block's top is printed", () => {
+    const { view, output, rows } = viewOn(12);
+    const editor = new LineEditor({ columns: () => COLUMNS, hint: HINT.trim() });
+    view.turn(true);
+    view.input(editor);
+    view.onStream(chunk(1, "1\n2\n3\n4\n5\n6\n7\n8\nnine"));
+    const ups = [...output.text.matchAll(/\x1b\[(\d+)A/g)].map((match) => Number(match[1]));
+    expect(Math.max(0, ...ups)).toBeLessThanOrEqual(11);
+    expect(rows().slice(-7)).toEqual(["  8", "  nine", SPIN, TOP, boxed(">"), BOTTOM, HINT]);
+    view.turn(false);
+  });
+
+  test("while held, nothing is written; let go, all of it is, in order", () => {
+    const { view, output, rows } = viewOn();
+    view.turn(true);
+    view.hold(true);
+    const before = output.text;
+    view.print("a child said hi\n");
+    view.turn(false);
+    expect(output.text).toBe(before);
+    view.hold(false);
+    expect(rows()).toEqual(["a child said hi"]);
+  });
+});
+
+describe("the run list", () => {
+  const status = (fields: Partial<ChildStatus>): ChildStatus => ({ run: "r1", seq: 1, log: "l", status: "running", ...fields });
+  const children: LiveChild[] = [
+    { id: "r1", name: "color.yaml", since: 0, status: status({}) },
+    { id: "r2", name: "ask.yaml", since: 5_000, status: status({ status: "waiting", asks: [{ call: "c", question: "?" }] }) },
+    { id: "r10", name: "notes.yaml", since: 0, status: status({ status: "waiting", waits: [{ tool: "take", settled: false }] }) },
+    { id: "r11", name: "nap.yaml", since: 0, status: status({ status: "waiting", waits: [{ tool: "sleep", settled: false }] }) },
+  ];
+
+  test("has a row per run, its columns lined up, coloured by what the run does", () => {
+    const out = { isTTY: true };
+    const rows = runRows(children, 72_000, 60, out, () => undefined);
+    expect(rows.map((row) => row.replace(/\x1b\[[0-9;]*m/g, ""))).toEqual([
+      "r1   color.yaml  ● running · 1m12s",
+      "r2   ask.yaml    ● asks · 1m07s",
+      "r10  notes.yaml  ● waits for a message · 1m12s",
+      "r11  nap.yaml    ● waits · 1m12s",
+    ]);
+    expect(rows[0]).toContain("\x1b[36m● running");
+    expect(rows[1]).toContain("\x1b[33m● asks");
+    expect(rows[3]).toContain("\x1b[2m● waits");
+  });
+
+  test("is plain with NO_COLOR, and each row is cut to the width", () => {
+    const rows = runRows(children.slice(0, 1), 0, 20, { isTTY: true }, (name) => (name === "NO_COLOR" ? "1" : undefined));
+    expect(rows).toEqual(["r1  color.yaml  ● ru"]);
+  });
+});
+
 describe("the view's helpers", () => {
   test("richChat needs stdin, stdout and stderr on a TTY and NO_COLOR unset", () => {
     const io = (stdout: boolean, noColor = false): CliIo => ({
@@ -722,6 +819,148 @@ describe("a session on a terminal", () => {
       ]);
       expect(text).not.toContain("⏺");
       expect(text).not.toContain("╭");
+    },
+    TIMEOUT,
+  );
+});
+
+/**
+ * A model whose first reply streams "Once upon", then waits for `open` before it ends; each later
+ * reply is "Short.".
+ */
+class GatedModel implements ChatModel {
+  readonly provider = "xai";
+  readonly model = "grok-4.3";
+  readonly requests: Request[] = [];
+  readonly #gate = Promise.withResolvers<void>();
+  readonly open = () => this.#gate.resolve();
+
+  stream(request: Request): EventStream {
+    this.requests.push(request);
+    const first = this.requests.length === 1;
+    const gate = this.#gate.promise;
+    async function* events() {
+      if (first) {
+        yield new TextDelta(0, "Once upon");
+        await gate;
+        yield new TextDelta(0, " a time.");
+      }
+      const text = first ? "Once upon a time." : "Short.";
+      if (!first) yield new TextDelta(0, text);
+      yield new PartDone(0, new TextPart(text));
+      yield new Finish({ reason: "stop" });
+    }
+    return new EventStream(events());
+  }
+}
+
+/** Whether a request's messages hold `text` in a user message. */
+const asked = (request: Request, text: string) =>
+  request.messages.some((message) => message.role === "user" && message.text().includes(text));
+
+/** Wait past readline's escape timeout, so a lone Escape written before arrives as the Escape key. */
+const pastEscape = () => new Promise((resolve) => setTimeout(resolve, 600));
+
+describe("the input box while a reply runs", () => {
+  test(
+    "stays up under the spinner, and a line entered there steers the reply at once",
+    async () => {
+      const { io, stdin, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      // The box is under the spinner, ready for a line.
+      expect(rows().slice(-5)).toEqual(["· Thinking… (0s · esc to interrupt)", TOP, row(">"), BOTTOM, HINT]);
+      stdin.write("make it short");
+      await until(() => rows().includes(row("> make it short")));
+      stdin.write(ENTER);
+      await until(() => rows().includes("> make it short"));
+      // The reply hasn't ended: the line went to the inbox while it ran, and it reads it next.
+      expect(model.requests.length).toBe(1);
+      model.open();
+      await until(() => model.requests.length === 2 && rows().includes("⏺ Short."));
+      expect(asked(model.requests[1]!, "make it short")).toBe(true);
+      await until(() => rows().at(-1) === HINT && !rows().some((line) => line.includes("Thinking")));
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+      const shown = rows();
+      expect(shown.slice(shown.indexOf("> tell me a story"))).toEqual([
+        "> tell me a story",
+        "",
+        // Printed for good above the reply's line still streaming, which goes on below it.
+        "> make it short",
+        "⏺ Once upon a time.",
+        "",
+        "⏺ Short.",
+        "",
+        "> /exit",
+        "session ended",
+      ]);
+    },
+    TIMEOUT,
+  );
+});
+
+const COLOR_FLOW = `id: color
+name: color
+nodes:
+  pick:
+    kind: tool
+    tool_id: ask
+    input:
+      prompt: "Which colour?"
+    output: str
+output: \${pick.output}
+`;
+
+describe("the run list under the input box", () => {
+  test(
+    "lists a run waiting on its question; Down moves into it, Esc back, and Enter opens its view",
+    async () => {
+      writeFileSync(join(root, "color.yaml"), COLOR_FLOW);
+      const { io, stdin, output, rows } = terminalIo();
+      const script: ScriptedReply[] = [
+        callReply(["start_flow", { path: "color.yaml", inputs: {} }, "c1"]),
+        textReply("Started color.yaml (r1)."),
+        textReply("r1 asks which colour you want."),
+      ];
+      const model = new AnsweringModel((_, count) => script[count - 1] ?? textReply("noted"));
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`pick a colour${ENTER}`);
+      await until(() => output.text.includes("Run color.yaml"));
+      stdin.write(ENTER);
+      const listed = /^ {2}r1 {2}color\.yaml {2}● asks · \d+s$/;
+      await until(() => model.requests.length >= 3 && rows().at(-1)!.match(listed) !== null);
+      const before = rows();
+      expect(before.slice(-5, -1)).toEqual([TOP, row(">"), BOTTOM, HINT]);
+      stdin.write(DOWN);
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      // Esc in the list goes back to the box and withdraws nothing.
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().at(-1)!.match(listed) !== null);
+      expect(output.text).not.toContain("withdrew");
+      expect(output.text).not.toContain("stopping the reply");
+      stdin.write(DOWN);
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      stdin.write(ENTER);
+      await until(() => rows()[0] === "r1  color.yaml  ● asks");
+      const view = rows();
+      expect(view[1]).toMatch(/^log {2}\/\S+$/);
+      expect(view).toContainEqual(expect.stringMatching(/^◷ pick \[\d+s\] waiting$/));
+      expect(view.slice(-3)).toEqual(["? Which colour?", "", "esc to go back to the chat"]);
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().at(-1)!.startsWith("» r1"));
+      // The chat comes back as it was, the row still in focus.
+      expect(rows().slice(0, -1)).toEqual(before.slice(0, -1));
+      // A typed character goes back to the box.
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+      expect(rows()).toContain("> /exit");
     },
     TIMEOUT,
   );

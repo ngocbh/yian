@@ -868,7 +868,11 @@ async function showScreenDrawsOnTheAlternateScreenAndGivesTheScreenBack(): Promi
   assert.equal(redraw, null);
   assert.deepEqual(view().rows, ["chat line"]);
   assert.deepEqual(view().cursor, { row: 1, col: 0 });
-  // Ctrl-C leaves it too, and the terminal stays open.
+  // Escape leaves it too, and so does Ctrl-C, which leaves the terminal open.
+  const escaped = terminal.showScreen({ draw: () => ["x"] });
+  input.write(ESCAPE);
+  await pastEscape();
+  await escaped;
   const again = terminal.showScreen({ draw: () => ["x"] });
   input.write(CTRL_C);
   await again;

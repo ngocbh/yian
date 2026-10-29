@@ -31,15 +31,31 @@ import { DOCS, FLOWS } from "./bundled.ts";
 import { bundledSkill } from "./bundled_skill.ts";
 import { EventQueue, InFlight, trackInFlight } from "./chat_events.ts";
 import { chatRunTools } from "./chat_run_tools.ts";
-import { chatBanner, ChatView, homePath, loginLabel, richChat } from "./chat_view.ts";
+import {
+  chatBanner,
+  ChatView,
+  homePath,
+  loginLabel,
+  richChat,
+  runRows,
+  type ViewStream,
+} from "./chat_view.ts";
 import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
+import { columnsOf } from "./cells.ts";
 import { inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { type Colored, paint, printStyled, type Style } from "./render.ts";
 import { CHAT_FLOW_FILE, removeEmptyDir, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
+import { RunProgress, runScreen } from "./run_view.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
+import type { Terminal } from "./terminal.ts";
 import type { CliIo } from "./utils.ts";
+
+/** How often the run list under the input box is drawn again, for its times. */
+const LIST_TICK_MS = 1_000;
+/** How often an open run view reads its run's log again. */
+const VIEW_TICK_MS = 500;
 
 /** The label the bundled flow's diagnostics and recorded source go by. */
 const CHAT_LABEL = CHAT_FLOW_FILE;
@@ -157,6 +173,60 @@ function fenced(text: string): string {
 /** The file the children's CODE console output goes to: beside the chat's log, named after it. */
 function consoleFileFor(log: string): string {
   return join(dirname(log), `${basename(log, extname(log))}.child-output.log`);
+}
+
+/** Call `listener` every `ms` on `clock` until the function returned is called. */
+function every(clock: Scheduler, ms: number, listener: () => void): () => void {
+  const stop = new AbortController();
+  void (async () => {
+    while (!stop.signal.aborted) {
+      try {
+        await clock.sleep(ms, stop.signal);
+      } catch {
+        return;
+      }
+      listener();
+    }
+  })();
+  return () => stop.abort();
+}
+
+/**
+ * The run list under the chat's input box (`runRows` of the children still live, their times on
+ * `scheduler`), drawn again each `LIST_TICK_MS` on `ticker`, and the run view Enter on a row opens:
+ * the run's screen (`runScreen`), read again from its log each `VIEW_TICK_MS`, while the chat's
+ * view holds what it draws.
+ */
+function runList(
+  runs: ChildRuns,
+  view: ChatView,
+  clocks: { scheduler: Scheduler; ticker: Scheduler },
+  out: ViewStream,
+  env: Env,
+): NonNullable<InboxChatHost["rows"]> {
+  const { scheduler, ticker } = clocks;
+  return {
+    list: {
+      // Each row comes after the list's two-cell pointer.
+      rows: () => runRows(runs.live(), scheduler.now(), columnsOf(out) - 2, out, env),
+      subscribe: (listener) => every(ticker, LIST_TICK_MS, listener),
+    },
+    async open(index: number, terminal: Terminal) {
+      const child = runs.live()[index];
+      if (child === undefined) return;
+      const progress = new RunProgress(child.status.log, () => columnsOf(out), out, env);
+      const info = () => ({ id: child.id, name: child.name, status: runs.status(child.id) });
+      view.hold(true);
+      try {
+        await terminal.showScreen({
+          draw: (columns, rows) => runScreen(info(), progress.rows(scheduler.now()), columns, rows, out, env),
+          subscribe: (redraw) => every(ticker, VIEW_TICK_MS, redraw),
+        });
+      } finally {
+        view.hold(false);
+      }
+    },
+  };
 }
 
 /**
@@ -343,6 +413,10 @@ export async function chat(
         tools,
         events: { queue, inFlight, wake, onInterrupt: () => runs.cancelWaits() },
         view,
+        rows:
+          view === null
+            ? null
+            : runList(runs, view, { scheduler, ticker: deps.ticker ?? realScheduler }, io.stderrStream, env),
       },
     );
   } finally {

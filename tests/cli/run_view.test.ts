@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -59,6 +59,18 @@ nodes:
 output: \${sure.output}
 `;
 
+/** A CODE node that fails with a long message holding a tab. */
+const BOOM = `id: boom
+name: boom
+nodes:
+  boom:
+    kind: code
+    output: str
+    code: |
+      throw new Error("a\\tb " + "word ".repeat(12));
+output: \${boom.output}
+`;
+
 /** Run PICK to its question on a virtual clock, the agent scripted; return its log. */
 async function pickToQuestion(): Promise<string> {
   const log = join(tmp, "log.jsonl");
@@ -91,7 +103,8 @@ describe("a run's progress", () => {
     async () => {
       const log = await pickToQuestion();
       const progress = new RunProgress(log, () => 60, COLOR, NO_ENV);
-      const rows = progress.rows(Date.parse("2026-01-01T00:01:05Z"));
+      const { lines: rows, earlier } = progress.rows(Date.parse("2026-01-01T00:01:05Z"));
+      expect(earlier).toBe(0);
       expect(shown(rows)).toEqual([
         "⏺ options()",
         "  ⎿  red · blue",
@@ -102,14 +115,58 @@ describe("a run's progress", () => {
       ]);
       expect(rows[3]).toContain("\x1b[32m✓ choose");
       // Read again, it adds only what the log gained: nothing here.
-      expect(progress.rows(Date.parse("2026-01-01T00:01:05Z"))).toEqual(rows);
+      expect(progress.rows(Date.parse("2026-01-01T00:01:05Z")).lines).toEqual(rows);
+    },
+    20_000,
+  );
+
+  test(
+    "reads only what the log gained, not a line still being written, and all again once it is rewritten",
+    async () => {
+      const full = readFileSync(await pickToQuestion(), "utf8");
+      const lines = full.split("\n").filter(Boolean);
+      const log = join(tmp, "grow.jsonl");
+      const at = lines.findIndex((line) => line.includes('"node_succeeded"') && line.includes('"choose"'));
+      // Up to the agent's success, then half of the next line.
+      writeFileSync(log, `${lines.slice(0, at).join("\n")}\n${lines[at]!.slice(0, 20)}`);
+      const progress = new RunProgress(log, () => 60, PLAIN, NO_ENV);
+      const now = Date.parse("2026-01-01T00:00:00Z");
+      expect(progress.rows(now).lines).toEqual(["⏺ options()", "  ⎿  red · blue", "⏺ blue", "· choose [0s]"]);
+      writeFileSync(log, full);
+      expect(progress.rows(now).lines).toEqual([
+        "⏺ options()",
+        "  ⎿  red · blue",
+        "⏺ blue",
+        "✓ choose [0s]",
+        "✓ route → sure [0s]",
+        "◷ sure [0s] waiting",
+      ]);
+      // Shorter than what was read: read again from the start, at once.
+      writeFileSync(log, `${lines.slice(0, at).join("\n")}\n`);
+      expect(progress.rows(now).lines).toEqual(["⏺ options()", "  ⎿  red · blue", "⏺ blue", "· choose [0s]"]);
+    },
+    20_000,
+  );
+
+  test(
+    "wraps a long failure under its indent at the screen's width, its tabs expanded",
+    async () => {
+      const log = join(tmp, "fail.jsonl");
+      const flow = await loadFlow(BOOM, { env: NO_ENV });
+      const result = await runFlow(flow, {}, { log, env: NO_ENV });
+      expect(result.status).toBe("failed");
+      const { lines } = new RunProgress(log, () => 30, PLAIN, NO_ENV).rows(0);
+      expect(lines[0]).toMatch(/^✗ boom \[\d+s\]$/);
+      expect(lines.slice(1).every((line) => line.startsWith("    ") && line.length <= 30)).toBe(true);
+      expect(lines.join(" ")).toContain("a    b");
+      expect(lines.join("")).not.toContain("\t");
     },
     20_000,
   );
 
   test("of a log not written yet is empty", () => {
     const progress = new RunProgress(join(tmp, "none.jsonl"), () => 60, PLAIN, NO_ENV);
-    expect(progress.rows(0)).toEqual([]);
+    expect(progress.rows(0)).toEqual({ lines: [], earlier: 0 });
   });
 });
 
@@ -123,7 +180,8 @@ describe("a run's screen", () => {
   };
 
   test("has the run, its flow, status and log, its progress and the question it waits on", () => {
-    const rows = runScreen({ id: "r1", name: "pick.yaml", status }, ["✓ choose [0s]"], 60, 24, COLOR, NO_ENV);
+    const progress = { lines: ["✓ choose [0s]"], earlier: 0 };
+    const rows = runScreen({ id: "r1", name: "pick.yaml", status }, progress, 60, 24, COLOR, NO_ENV);
     expect(shown(rows)).toEqual([
       "r1  pick.yaml  ● asks",
       "log  /runs/chat-r1/log.jsonl",
@@ -138,17 +196,20 @@ describe("a run's screen", () => {
   });
 
   test("says in yellow when the chat waits on the user behind it", () => {
-    const rows = runScreen({ id: "r1", name: "pick.yaml", status }, [], 60, 24, COLOR, NO_ENV, true);
+    const rows = runScreen({ id: "r1", name: "pick.yaml", status }, { lines: [], earlier: 0 }, 60, 24, COLOR, NO_ENV, true);
     expect(shown(rows).at(-1)).toBe("the chat waits on you · esc to answer");
     expect(rows.at(-1)).toContain("\x1b[33m");
   });
 
   test("keeps the last rows of a long progress, under a count of those left out", () => {
-    const progress = Array.from({ length: 30 }, (_, i) => `✓ n${i}`);
+    const lines = Array.from({ length: 30 }, (_, i) => `✓ n${i}`);
     const done: ChildStatus = { run: "r1", status: "succeeded", seq: 9, log: "l", output: "ok" };
-    const rows = runScreen({ id: "r1", name: "x.yaml", status: done }, progress, 60, 10, PLAIN, NO_ENV);
+    const rows = runScreen({ id: "r1", name: "x.yaml", status: done }, { lines, earlier: 0 }, 60, 10, PLAIN, NO_ENV);
     const kept = ["… 26 earlier rows", "✓ n26", "✓ n27", "✓ n28", "✓ n29"];
     expect(rows).toEqual(["r1  x.yaml  ● succeeded", "log  l", "", ...kept, "", "esc to go back to the chat"]);
     expect(rows.length).toBe(10);
+    // The rows the progress no longer keeps count too.
+    const few = runScreen({ id: "r1", name: "x.yaml", status: done }, { lines: ["✓ n"], earlier: 5 }, 60, 10, PLAIN, NO_ENV);
+    expect(few.slice(3, 5)).toEqual(["… 5 earlier rows", "✓ n"]);
   });
 });

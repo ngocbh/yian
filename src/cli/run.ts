@@ -86,6 +86,9 @@ import { buildCliMemories, MemoryOptionError } from "./memory.ts";
 import {
   box,
   diagnosticJson,
+  elapsedTag,
+  endedNodeText,
+  failedNodeText,
   paint,
   printStyled,
   renderDiagnostic,
@@ -216,15 +219,6 @@ function lastSegment(nodeId: string | null): string | null {
 const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const SPIN_MS = 80;
 
-/** Return `ms` as a bracketed elapsed time in whole units: `[5s]`, `[1m05s]`, `[1h02m]`. */
-export function elapsedTag(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 60) return `[${seconds}s]`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `[${minutes}m${String(seconds % 60).padStart(2, "0")}s]`;
-  return `[${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m]`;
-}
-
 /**
  * Per-node progress for `yian run`, drawn on stderr as the engine streams node events.
  *
@@ -274,7 +268,7 @@ export class ProgressReporter {
         this.#running.set(event.nodeId, this.#now());
         break;
       case "NodeSucceeded": {
-        const lines = [style(`✓ ${event.nodeId}${this.#finish(event.nodeId)}`, "green")];
+        const lines = [style(endedNodeText(event.nodeId, this.#finish(event.nodeId)), "green")];
         if (this.#verbose) {
           const bodyLines = splitLines(forTerminal(writeAsText(event.output as Value), this.#out));
           for (const line of bodyLines.length > 0 ? bodyLines : [""]) lines.push(style(`    ${line}`, "dim"));
@@ -284,7 +278,7 @@ export class ProgressReporter {
       }
       case "NodeRouted":
         // A router (CASE) produces no value: it selected an out-edge handle.
-        this.#print(style(`✓ ${event.nodeId} → ${event.handle}${this.#finish(event.nodeId)}`, "green"));
+        this.#print(style(endedNodeText(event.nodeId, this.#finish(event.nodeId), event.handle), "green"));
         break;
       case "NodeExpanded":
         // A spawner grew the graph instead of returning a value; the spliced fragment's terminal
@@ -294,7 +288,8 @@ export class ProgressReporter {
       case "NodeFailed": {
         const took = nodeId === null ? "" : this.#finish(nodeId);
         const message = forTerminal(event.failure.message, this.#out);
-        this.#print(`${style(`✗ ${nodeId}${took}`, "red bold")}\n${style(`    ${message}`, "red")}`);
+        const head = style(failedNodeText(String(nodeId), took), "red bold");
+        this.#print(`${head}\n${style(`    ${message}`, "red")}`);
         break;
       }
       default:

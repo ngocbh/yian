@@ -20,26 +20,28 @@ import {
   recordTimeMs,
   RunLogChangedError,
 } from "../runtime/log.ts";
-import { fit } from "./cells.ts";
+import { cells, fit, wrapLine } from "./cells.ts";
 import type { ChildStatus } from "./chat_runs.ts";
 import { runStatusLabel, shortArgs, summary } from "./chat_view.ts";
-import { type Colored, paint, type Style } from "./render.ts";
-import { elapsedTag } from "./run.ts";
+import { TAB } from "./markdown.ts";
+import {
+  type Colored,
+  elapsedTag,
+  endedNodeText,
+  failedNodeText,
+  paint,
+  type Style,
+} from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 
-/** The record kinds the progress reads. */
-const KINDS = [
-  "node_started",
-  "node_woken",
-  "node_waiting",
-  "node_succeeded",
-  "node_routed",
-  "node_failed",
-  "node_step",
-];
+/** The most rows of a run's progress the view keeps: the last ones, the rest counted. */
+const KEPT_ROWS = 2_000;
 
-/** One row of the progress, before it is styled. */
-type Row = { text: string; style: Style | null };
+/**
+ * One row of the progress: what its first line starts with (`lead`) and its later ones (`indent`)
+ * when it wraps, its text, and its style.
+ */
+type Row = { lead: string; indent: string; text: string; style: Style | null };
 
 /** Whether `nodeId` is a boundary node the engine adds, which has no authored meaning. */
 function boundary(nodeId: string): boolean {
@@ -47,9 +49,15 @@ function boundary(nodeId: string): boolean {
   return last === START_ID || last === END_ID;
 }
 
+/** `text` safe to draw on one row of the screen: sanitized, its tabs expanded. */
+function shown(text: string): string {
+  return sanitize(text).replaceAll("\t", TAB);
+}
+
 /**
  * A child run's progress, read from its log as it grows: each `rows` call reads the records
- * appended since the last one (the whole log again if it was rewritten under the reader).
+ * appended since the last one (the whole log again if it was rewritten under the reader). Each row
+ * is wrapped and styled once for the screen's width, and only the last `KEPT_ROWS` are kept.
  */
 export class RunProgress {
   readonly #log: string;
@@ -60,12 +68,17 @@ export class RunProgress {
   #from: { afterOffset: number; runId: string; afterSeq: number } | null = null;
   /** The rows of the nodes that ended, and the agents' text and tool calls, in log order. */
   #rows: Row[] = [];
+  /** Each row's lines, wrapped to `#width` and styled. */
+  #lines: string[][] = [];
+  #width = 0;
+  /** How many lines the rows dropped from the head of `#rows` took. */
+  #dropped = 0;
   /** The nodes started and not ended, in start order: when each started, and whether it waits. */
   #open = new Map<string, { at: number; waiting: boolean }>();
   /** Why the log couldn't be read, shown in place of the rows; null when it could. */
   #error: string | null = null;
 
-  /** @param columns The screen's width, which a tool result's summary is cut to as it is read. */
+  /** @param columns The screen's width, which the rows are wrapped to. */
   constructor(log: string, columns: () => number, out: Colored, env: Env) {
     this.#log = log;
     this.#columns = columns;
@@ -73,32 +86,47 @@ export class RunProgress {
     this.#env = env;
   }
 
-  /** The progress rows, styled: what ended, then each node still open with its time so far at `now`. */
-  rows(now: number): string[] {
+  /**
+   * The progress, as lines of the screen, styled: what ended, then each node still open with its
+   * time so far at `now`; and how many lines before them are no longer kept (`earlier`).
+   */
+  rows(now: number): { lines: string[]; earlier: number } {
+    const width = Math.max(1, this.#columns());
+    if (width !== this.#width) {
+      this.#width = width;
+      this.#lines = this.#rows.map((row) => this.#wrap(row));
+    }
     this.#read();
-    if (this.#error !== null) return [this.#paint(`can't read the run's log: ${this.#error}`, "red")];
+    if (this.#error !== null) {
+      const why = this.#paint(`can't read the run's log: ${this.#error}`, "red");
+      return { lines: [why], earlier: 0 };
+    }
     const open = [...this.#open].map(([node, { at, waiting }]) => {
       const mark = waiting ? "◷" : "·";
-      return this.#paint(`${mark} ${sanitize(node)} ${elapsedTag(now - at)}${waiting ? " waiting" : ""}`, "dim");
+      const text = `${mark} ${shown(node)} ${elapsedTag(now - at)}${waiting ? " waiting" : ""}`;
+      return this.#paint(text, "dim");
     });
-    const done = this.#rows.map((row) => (row.style === null ? row.text : this.#paint(row.text, row.style)));
-    return [...done, ...open];
+    return { lines: [...this.#lines.flat(), ...open], earlier: this.#dropped };
   }
 
-  /** Read the records appended since the last read. */
-  #read(): void {
+  /** Read the records appended since the last read; all again, at once, if it was rewritten. */
+  #read(again = true): void {
     try {
-      for (const entry of iterRunRecords(this.#log, { ...this.#from, kinds: KINDS })) {
+      // Every record moves the offset, the ones the progress skips too.
+      for (const entry of iterRunRecords(this.#log, { ...this.#from })) {
         this.#from = { afterOffset: entry.end, runId: entry.runId, afterSeq: entry.seq };
         this.#take(entry.kind, entry.nodeId, recordTimeMs(entry.at), entry.envelope.record);
       }
       this.#error = null;
     } catch (error) {
       if (error instanceof RunLogChangedError) {
-        // Rewritten under the reader (a failed append rolled back): read it all again next time.
+        // Rewritten under the reader (a failed append rolled back): read it all again.
         this.#from = null;
         this.#rows = [];
+        this.#lines = [];
+        this.#dropped = 0;
         this.#open.clear();
+        if (again) this.#read(false);
         return;
       }
       // A log not written yet reads as nothing so far.
@@ -107,14 +135,35 @@ export class RunProgress {
     }
   }
 
+  /** Add a row, keeping only the last `KEPT_ROWS`. */
+  #push(row: Row): void {
+    this.#rows.push(row);
+    this.#lines.push(this.#wrap(row));
+    if (this.#rows.length <= KEPT_ROWS) return;
+    this.#rows.shift();
+    this.#dropped += this.#lines.shift()!.length;
+  }
+
+  /** `row`'s lines at the screen's width, its later ones under its indent, styled. */
+  #wrap(row: Row): string[] {
+    const room = Math.max(1, this.#width - cells(row.lead));
+    const ranges = row.text === "" ? [[0, 0] as const] : wrapLine(row.text, room);
+    const parts = ranges.map(([start, end]) => row.text.slice(start, end));
+    return parts.map((part, i) => {
+      const line = `${i === 0 ? row.lead : row.indent}${part}`;
+      return row.style === null ? line : this.#paint(line, row.style);
+    });
+  }
+
   /** Fold one record into the rows. */
   #take(kind: string, nodeId: string | null, at: number, record: unknown): void {
     if (kind === "node_failed") {
       const { failure } = record as NodeFailedRecord;
       const node = failure.nodeId ?? "";
-      this.#rows.push({ text: `✗ ${sanitize(node)}${this.#took(node, at)}`, style: "red bold" });
-      for (const line of sanitize(failure.message).split("\n")) {
-        this.#rows.push({ text: `    ${line}`, style: "red" });
+      const text = failedNodeText(shown(node), this.#took(node, at));
+      this.#push({ lead: "", indent: "  ", text, style: "red bold" });
+      for (const line of shown(failure.message).split("\n")) {
+        this.#push({ lead: "    ", indent: "    ", text: line, style: "red" });
       }
       return;
     }
@@ -123,21 +172,20 @@ export class RunProgress {
     else if (kind === "node_waiting" || kind === "node_woken") {
       const open = this.#open.get(nodeId);
       if (open !== undefined) open.waiting = kind === "node_waiting";
-    } else if (kind === "node_succeeded") {
-      this.#rows.push({ text: `✓ ${sanitize(nodeId)}${this.#took(nodeId, at)}`, style: "green" });
-    } else if (kind === "node_routed") {
-      const handle = sanitize((record as NodeRoutedRecord).handle);
-      this.#rows.push({ text: `✓ ${sanitize(nodeId)} → ${handle}${this.#took(nodeId, at)}`, style: "green" });
+    } else if (kind === "node_succeeded" || kind === "node_routed") {
+      const handle = kind === "node_routed" ? shown((record as NodeRoutedRecord).handle) : null;
+      const text = endedNodeText(shown(nodeId), this.#took(nodeId, at), handle);
+      this.#push({ lead: "", indent: "  ", text, style: "green" });
     } else if (kind === "node_step") this.#step(record as NodeStepRecord);
   }
 
   /** An agent's step: a model call's text and tool calls, or a tool call's result. */
   #step({ step }: NodeStepRecord): void {
     if (step["kind"] === "tool_result") {
-      const output = typeof step["output"] === "string" ? step["output"] : "";
+      const output = typeof step["output"] === "string" ? step["output"].replaceAll("\t", TAB) : "";
       const style = step["is_error"] === true ? "red" : "dim";
-      for (const [i, row] of summary(output, this.#columns() - 5).entries()) {
-        this.#rows.push({ text: `${i === 0 ? "  ⎿  " : "     "}${row}`, style });
+      for (const [i, row] of summary(output, this.#width - 5).entries()) {
+        this.#push({ lead: i === 0 ? "  ⎿  " : "     ", indent: "     ", text: row, style });
       }
       return;
     }
@@ -145,14 +193,14 @@ export class RunProgress {
     const message = step["output"] as { parts?: unknown } | null;
     const parts = (message?.parts ?? []) as readonly Record<string, unknown>[];
     for (const part of parts) {
-      if (part["type"] === "text" && typeof part["text"] === "string" && part["text"].trim() !== "") {
-        const lines = sanitize(part["text"].trim()).split("\n");
-        for (const [i, line] of lines.entries()) {
-          this.#rows.push({ text: `${i === 0 ? "⏺ " : "  "}${line}`, style: null });
+      const text = typeof part["text"] === "string" ? part["text"].trim() : "";
+      if (part["type"] === "text" && text !== "") {
+        for (const [i, line] of shown(text).split("\n").entries()) {
+          this.#push({ lead: i === 0 ? "⏺ " : "  ", indent: "  ", text: line, style: null });
         }
       } else if (part["type"] === "tool_call" && typeof part["name"] === "string") {
-        const args = sanitize(shortArgs(part["arguments"] ?? null));
-        this.#rows.push({ text: `⏺ ${sanitize(part["name"])}(${args})`, style: null });
+        const text = `${shown(part["name"])}(${shown(shortArgs(part["arguments"] ?? null))})`;
+        this.#push({ lead: "⏺ ", indent: "  ", text, style: null });
       }
     }
   }
@@ -179,13 +227,14 @@ export interface RunViewInfo {
 
 /**
  * The run view's screen, `rows` high (each row is cut to the width when drawn): the header (the
- * run, its flow and its status, then its log), the `progress` rows, as many of the last as fit
- * under a dim count of those left out, the questions it waits on, and how to go back: in yellow,
- * saying so, when the chat `waiting` waits on the user (an approval or a question behind the view).
+ * run, its flow and its status, then its log), the `progress` lines, as many of the last as fit
+ * under a dim count of those left out (and of the `earlier` ones no longer kept), the questions it
+ * waits on, and how to go back: in yellow, saying so, when the chat `waiting` waits on the user
+ * (an approval or a question behind the view).
  */
 export function runScreen(
   info: RunViewInfo,
-  progress: readonly string[],
+  progress: { readonly lines: readonly string[]; readonly earlier: number },
   columns: number,
   rows: number,
   out: Colored,
@@ -207,10 +256,11 @@ export function runScreen(
     : style("esc to go back to the chat", "dim");
   const foot = [...(asks.length > 0 ? ["", ...asks] : []), "", back];
   const room = Math.max(1, rows - head.length - foot.length);
-  let body = progress.length > 0 ? [...progress] : [style("(nothing yet)", "dim")];
-  if (body.length > room) {
-    const kept = body.slice(body.length - (room - 1));
-    body = [style(`… ${body.length - kept.length} earlier rows`, "dim"), ...kept];
+  const { lines, earlier } = progress;
+  let body = lines.length > 0 ? [...lines] : [style("(nothing yet)", "dim")];
+  if (body.length > room || earlier > 0) {
+    const kept = body.slice(Math.max(0, body.length - (room - 1)));
+    body = [style(`… ${earlier + lines.length - kept.length} earlier rows`, "dim"), ...kept];
   }
   return [...head, ...body, ...foot];
 }

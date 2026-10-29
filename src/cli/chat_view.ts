@@ -27,8 +27,7 @@ import type { ChildEvent } from "./chat_events.ts";
 import type { ChildStatus, LiveChild } from "./chat_runs.ts";
 import { MarkdownLines, renderMarkdown, TAB } from "./markdown.ts";
 import { ANSI, cells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
-import { box, type Colored, paint, type Span, type Style, wrapSpans } from "./render.ts";
-import { elapsedTag } from "./run.ts";
+import { box, type Colored, elapsedTag, paint, type Span, type Style, wrapSpans } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 import type { CliIo, Writer } from "./utils.ts";
 

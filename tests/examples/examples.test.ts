@@ -1,6 +1,7 @@
 /**
  * Every shipped example loads and compiles (no live LLM), one test per `examples/*.yaml` loaded
- * with the examples directory as the search path, and the debate agents are tool-free. Also the
+ * with the examples directory as the search path, an example that is also a skill template holds
+ * the template's flow, and the debate agents are tool-free. Also the
  * shape of `human-approval.yaml`'s `ask` gate, `chat.yaml` on its `Inbox(Message)` input with a
  * steerable `Optional(str)` reply, run end to end on a scripted model, and `compact_history.yaml`
  * alone (pass-through, `keep`, a budget of text parts, a failed summary), and a learnable chat
@@ -12,6 +13,8 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { parseDocument, visit } from "yaml";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
@@ -43,6 +46,21 @@ const EXAMPLES = readdirSync(EXAMPLES_DIR)
 const load = (name: string) =>
   loadFlow(readFileSync(join(EXAMPLES_DIR, name), "utf8"), { searchPaths: [EXAMPLES_DIR] });
 
+const TEMPLATES_DIR = fileURLToPath(new URL("../../.claude/skills/composing-agents/templates", import.meta.url));
+
+/** Return the YAML of `path` without its comments and blank lines, tags and values kept. */
+function withoutComments(path: string): string {
+  const doc = parseDocument(readFileSync(path, "utf8"));
+  doc.commentBefore = doc.comment = null;
+  visit(doc, {
+    Node(_, node) {
+      node.commentBefore = node.comment = null;
+      node.spaceBefore = false;
+    },
+  });
+  return doc.toString({ lineWidth: 0 });
+}
+
 test.each(EXAMPLES)("example %s loads and compiles", async (name) => {
   const loaded = await load(name);
   expect(loaded.compiled).toBeDefined();
@@ -52,6 +70,16 @@ test.each(EXAMPLES)("example %s loads and compiles", async (name) => {
 test("examples present", () => {
   for (const name of ["hello.yaml", "summarize.yaml", "classify.yaml"]) {
     expect(EXAMPLES).toContain(name);
+  }
+});
+
+// An example that is also a skill template is the same flow with other comments, so a fix to one
+// can't miss the other.
+test("an example and the skill template of its name hold the same flow", () => {
+  const shared = readdirSync(TEMPLATES_DIR).filter((name) => EXAMPLES.includes(name)).sort();
+  expect(shared).toEqual(["chat.yaml", "compact_history.yaml"]);
+  for (const name of shared) {
+    expect(withoutComments(join(TEMPLATES_DIR, name)), name).toBe(withoutComments(join(EXAMPLES_DIR, name)));
   }
 });
 

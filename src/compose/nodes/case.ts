@@ -52,7 +52,7 @@ import {
   Parameter,
   validateOptionalOrigin,
 } from "../../nodes/contracts.ts";
-import { poolRootLength } from "../../typesys/pool.ts";
+import { NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import { typeName } from "../../typesys/types.ts";
 import { isRecord, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
@@ -343,12 +343,13 @@ export class CaseDescriptor extends NodeDescriptor {
    * Lower this `case` to a strict `CaseNode`, its flow-owned wiring (`__rN` or `__on` to its
    * source) and its edges.
    *
-   * The edges are the data edges (one per `${<id>.output}` a generated input's source reads,
-   * keyed by the input's name) followed by the control edges (this node to each `then:` or `else:`
-   * target, keyed by the branch handle). Exhaustiveness is not checked here: that pass needs the
-   * assembled producers' types. Each generated input's range goes into the build result's
-   * `fieldRanges` under `siteKey("input", name)`, and its label (`cases[N].when`, `on:`) into the
-   * node's `wiringLabels`, so a reference error names the authored site, not the generated name.
+   * The edges are the data edges (one per `${<id>.output}` or `${<id>.new_messages}` a generated
+   * input's source reads, keyed by the input's name) followed by the control edges (this node to
+   * each `then:` or `else:` target, keyed by the branch handle). Exhaustiveness is not checked
+   * here: that pass needs the assembled producers' types. Each generated input's range goes into
+   * the build result's `fieldRanges` under `siteKey("input", name)`, and its label
+   * (`cases[N].when`, `on:`) into the node's `wiringLabels`, so a reference error names the
+   * authored site, not the generated name.
    *
    * @throws RangeError when `whenOrigins` no longer aligns with `cases`.
    * @throws LoadError when a case lacks its `when:` or `then:`, an `on:` case's `when:` value
@@ -377,10 +378,13 @@ interface Lowering {
   paramLabels: Map<string, string>;
 }
 
-/** Return the producing node id of reference path `<id>.output[...]`, else `null`. */
-function outputsProducer(ref: string): string | null {
+/**
+ * Return the producing node id of reference path `<id>.output[...]` or an AGENT's
+ * `<id>.new_messages[...]`, else `null`.
+ */
+function nodeProducer(ref: string): string | null {
   const parts = ref.split(".");
-  return parts.length >= 2 && parts[1] === "output" ? parts[0]! : null;
+  return parts.length >= 2 && (parts[1] === "output" || parts[1] === NEW_MESSAGES) ? parts[0]! : null;
 }
 
 /**
@@ -476,8 +480,8 @@ function matchCondition(
 }
 
 /**
- * Return the data edges of a lowered `case`: one per `${<id>.output}` reference a generated
- * input's source reads.
+ * Return the data edges of a lowered `case`: one per `${<id>.output}` or AGENT
+ * `${<id>.new_messages}` reference a generated input's source reads.
  *
  * Each edge's `inputGroup` is the input's name and its `sourceHandle` is `null`, the opposite of
  * a control edge, so the flat edge list splits back by that attribute.
@@ -500,7 +504,7 @@ function dataEdges(nodeId: string, wiring: ReadonlyMap<string, unknown>): Edge[]
         throw error;
       }
       for (const ref of refs) {
-        const producer = outputsProducer(ref);
+        const producer = nodeProducer(ref);
         if (producer === null) continue;
         const index = counts.get(producer) ?? 0;
         counts.set(producer, index + 1);
@@ -587,17 +591,17 @@ interface SearchedParams {
 
 /**
  * Return the binding source of one `when:` reference occurrence, also the key its local is
- * deduped by: the read's root only (`x.output`, `input.k`), so the steps after it stay in the
- * `when:`, where `and`/`or` guards keep them lazy.
+ * deduped by: the read's root only (`x.output`, `x.new_messages`, `input.k`), so the steps after
+ * it stay in the `when:`, where `and`/`or` guards keep them lazy.
  *
- * A node-output read inside an escape is `${root :- null}`: it reads the same value (a miss is
- * already null) but takes an optional edge, so the escape decides as it does in a binding. Any
- * other read (outside an escape, or of an input or `system.*`, which has no producer edge) is the
- * plain `${root}`.
+ * A read of a node's output or an AGENT's new messages inside an escape is `${root :- null}`: it
+ * reads the same value (a miss is already null) but takes an optional edge, so the escape decides
+ * as it does in a binding. Any other read (outside an escape, or of an input or `system.*`, which
+ * has no producer edge) is the plain `${root}`.
  */
 function readSource(read: ConditionRead): string {
   const root = readRoot(read);
-  if (read.escape === null || outputsProducer(read.path) === null) return `\${${root}}`;
+  if (read.escape === null || nodeProducer(read.path) === null) return `\${${root}}`;
   return `\${${root} :- null}`;
 }
 
@@ -611,21 +615,23 @@ function readRoot(read: ConditionRead): string {
  * Return one join source per co-skipping escape that reads a node output, in source order.
  *
  * A binding of such an escape skips only when all its producers skip; the join
- * `${<p1>.output | <p2>.output ...}` gives the gate that same required input group.
+ * `${<root1> | <root2> ...}` gives the gate that same required input group. Each producer's
+ * first root is the one joined (`p.output` or an AGENT's `p.new_messages`), so a join of one
+ * root reuses a plain read of it.
  *
  * @param reads One `when:`'s reference occurrences, in `conditionReads` order.
  * @returns One join source per such escape, each producer listed once in first-read order.
  */
 function joinSources(reads: readonly ConditionRead[]): string[] {
-  const producers = new Map<number, string[]>();
+  const roots = new Map<number, Map<string, string>>();
   for (const read of reads) {
-    const producer = outputsProducer(read.path);
+    const producer = nodeProducer(read.path);
     if (read.escape === null || !read.coSkips || producer === null) continue;
-    const seen = producers.get(read.escape) ?? [];
-    producers.set(read.escape, seen);
-    if (!seen.includes(producer)) seen.push(producer);
+    const seen = roots.get(read.escape) ?? new Map<string, string>();
+    roots.set(read.escape, seen);
+    if (!seen.has(producer)) seen.set(producer, readRoot(read));
   }
-  return [...producers.values()].map((group) => `\${${group.map((producer) => `${producer}.output`).join(" | ")}}`);
+  return [...roots.values()].map((group) => `\${${[...group.values()].join(" | ")}}`);
 }
 
 /**

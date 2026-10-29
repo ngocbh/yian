@@ -1430,12 +1430,11 @@ export class CallableScope implements AssemblyScope {
    *
    * @param flowId The callable name: a compiler-generated callable, a `defs:` entry or a `uses:`
    *   alias.
-   * @param _version Unused; a `uses:` alias takes its version from its own ref.
    * @returns The built callable, cached for later calls.
    * @throws LoadError when the callable is unknown, recursive, fails to build, or is an alias that
    *   wasn't resolved first.
    */
-  resolve(flowId: string, _version: string | null = null): ComposedFlow {
+  resolve(flowId: string): ComposedFlow {
     const built = this.#built.get(flowId);
     if (built !== undefined) return built;
     const privateCallable = this.#private.get(flowId);

@@ -49,7 +49,7 @@ import { checkEnvValues } from "../helpers/value_nesting.ts";
 import { yamlReadAs } from "../helpers/yaml_words.ts";
 import type { SourceCatalogBuilder } from "../source/catalog.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
-import type { ChildResolver } from "./resolver.ts";
+import type { CallableResolver } from "./resolver.ts";
 
 /**
  * A key path written as an author reads it, such as `questions[0].options[1].label`: the string
@@ -337,8 +337,8 @@ export type BindingContractReader = (
 export class BuildContext {
   /** The flow's named types, for reading declared types. */
   readonly registry: TypeRegistry;
-  /** Resolves a child flow by id and version for call, map and loop; `null` for leaves. */
-  readonly resolver: ChildResolver | null;
+  /** Resolves a callable by id for call, map and loop; `null` for leaves. */
+  readonly resolver: CallableResolver | null;
   /** The opaque file name an inline CODE body reports in its errors. */
   readonly sourceFile: string;
   /** The directory a CODE reference resolves against; `null` when not known. */
@@ -363,7 +363,7 @@ export class BuildContext {
    */
   constructor(options: {
     registry: TypeRegistry;
-    resolver?: ChildResolver | null;
+    resolver?: CallableResolver | null;
     sourceFile?: string;
     baseDir?: string | null;
     resolveOrigin?: OriginPresenter | null;

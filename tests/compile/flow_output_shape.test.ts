@@ -1,7 +1,7 @@
 /**
  * A flow's `output:` shape decides a child's signature and a run's result: a one-field record
  * stays a record, a value output is the value, and an empty record is refused where a value is
- * needed; also `ChildSignature`'s constructor checks.
+ * needed.
  */
 
 import { mkdtempSync, rmSync } from "node:fs";
@@ -12,10 +12,10 @@ import { afterAll, expect, test } from "bun:test";
 
 import { END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { combineOutputContracts } from "../../src/compile/output_contracts.ts";
-import { ChildSignature, childSignature } from "../../src/compose/nodes/resolver.ts";
+import { childSignature } from "../../src/compose/nodes/resolver.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BackwardResult } from "../../src/nodes/base.ts";
-import { isExactly, type OutputContract, sameOutputContract, ValueContract } from "../../src/nodes/contracts.ts";
+import { isExactly, sameOutputContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { computeBackward } from "../../src/runtime/backward.ts";
@@ -62,27 +62,10 @@ async function run(text: string, inputs: Record<string, unknown> = {}): Promise<
   return result.output;
 }
 
-/** Return the error `run` throws, failing when it returns. */
-function thrown(run: () => unknown): Error {
-  try {
-    run();
-  } catch (error) {
-    return error as Error;
-  }
-  throw new Error("expected an error");
-}
-
-/** Expect `run` to throw exactly `cls` with `message`. */
-function expectError(run: () => unknown, cls: typeof Error, message: string): void {
-  const error = thrown(run);
-  expect(error.constructor).toBe(cls);
-  expect(error.message).toBe(message);
-}
-
 test("the child signature of a one-field record is its exact record", async () => {
   const sig = childSignature(await loadFlow(shapeFlow("output:\n  order: ${step.output}\n")));
 
-  expect(sig.returnsRecord).toBe(true);
+  expect(sig.outputNames).toEqual(["order"]);
   expect(isExactly(sig.output, ValueContract)).toBe(true);
   const output = sig.output as ValueContract;
   expect(output.type.kind).toBe(ValueKind.OBJECT);
@@ -93,7 +76,7 @@ test("the child signature of a one-field record is its exact record", async () =
 test("the child signature of a value output is the value contract", async () => {
   const sig = childSignature(await loadFlow(shapeFlow("output: ${step.output}\n")));
 
-  expect(sig.returnsRecord).toBe(false);
+  expect(sig.outputNames).toEqual(["result"]);
   expect(isExactly(sig.output, ValueContract)).toBe(true);
   expect(typeEquals((sig.output as ValueContract).type, STR)).toBe(true);
 });
@@ -101,98 +84,8 @@ test("the child signature of a value output is the value contract", async () => 
 test("the child signature of an empty record is the empty record contract", async () => {
   const sig = childSignature(await loadFlow(shapeFlow("output: {}\n")));
 
-  expect(sig.returnsRecord).toBe(true);
-  expect(sameOutputContract(sig.output, combineOutputContracts(new Map()))).toBe(true);
-});
-
-test("a direct child signature must say it returns a record", () => {
-  const text = new ValueContract(STR);
-  expectError(
-    () =>
-      new ChildSignature({
-        inputs: [],
-        output: combineOutputContracts(
-          new Map([
-            ["a", text],
-            ["b", text],
-          ]),
-        ),
-        declaredOutputs: [
-          ["a", text],
-          ["b", text],
-        ],
-        returnsRecord: false,
-      }),
-    RangeError,
-    "a child that does not return a record declares at most one output",
-  );
-});
-
-test("the ChildSignature constructor rejects malformed output evidence", () => {
-  const text = new ValueContract(STR);
-  const forged = "x" as unknown as OutputContract;
-
-  expectError(
-    () => new ChildSignature({ inputs: [], output: forged }),
-    TypeError,
-    "child output must be ValueContract, PartialRecordContract, or null, got string",
-  );
-  expectError(
-    () =>
-      new ChildSignature({
-        inputs: [],
-        output: text,
-        declaredOutputs: "result" as never,
-      }),
-    TypeError,
-    "declared child outputs must be an array",
-  );
-  expectError(
-    () =>
-      new ChildSignature({
-        inputs: [],
-        output: text,
-        declaredOutputs: [["result"]] as never,
-      }),
-    TypeError,
-    "declared child outputs must be (name, optional contract) tuples",
-  );
-  expectError(
-    () => new ChildSignature({ inputs: [], output: text, declaredOutputs: [["", text]] }),
-    TypeError,
-    "declared child output names must be non-empty strings",
-  );
-  expectError(
-    () =>
-      new ChildSignature({
-        inputs: [],
-        output: text,
-        declaredOutputs: [
-          ["a", text],
-          ["a", text],
-        ],
-        returnsRecord: true,
-      }),
-    RangeError,
-    "duplicate declared child output 'a'",
-  );
-  expectError(
-    () => new ChildSignature({ inputs: [], output: text, declaredOutputs: [["a", forged]] }),
-    TypeError,
-    "declared child output contracts must be ValueContract, PartialRecordContract, or null, got string for 'a'",
-  );
-});
-
-test("a ChildSignature with no declared evidence skips the evidence check", () => {
-  const text = new ValueContract(STR);
-  const sig = new ChildSignature({ inputs: [], output: text });
-
-  expect(sig.output).toBe(text);
-  expect(sig.declaredOutputs).toEqual([]);
   expect(sig.outputNames).toEqual([]);
-  expect(sig.returnsRecord).toBe(false);
-  expect(Object.isFrozen(sig)).toBe(true);
-  expect(Object.isFrozen(sig.inputs)).toBe(true);
+  expect(sameOutputContract(sig.output, combineOutputContracts(new Map()))).toBe(true);
 });
 
 /** A parent mapping its def `child` (output lines `defOutput`) over `items`. */

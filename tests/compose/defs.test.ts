@@ -93,7 +93,7 @@ test("the callable scope eagerly builds defs and memoizes resolution", async () 
   expect(scope.resolve("local")).toBe(local);
 
   const first = await scope.resolveAlias("remote");
-  const second = scope.resolve("remote", "another-caller-version");
+  const second = scope.resolve("remote");
   expect(seen).toEqual([["library/child", "declared-v1"]]);
   expect(first).not.toBe(externalChild);
   expect(first.compiled).not.toBe(externalChild.compiled);

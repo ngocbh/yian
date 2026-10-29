@@ -448,7 +448,7 @@ export interface CallableScope extends PrivateRegistrar {
   /** The one mutable origin registry owned by this source file. */
   readonly catalogBuilder: SourceCatalogBuilder;
   /** Resolve one named or compiler-owned callable in this file scope. */
-  resolve(flowId: string, version?: string | null): ComposedFlow;
+  resolve(flowId: string): ComposedFlow;
 }
 
 /**
@@ -2040,7 +2040,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // empty entry for every node so the key-parity check ranges over all nodes.
   const ctxBase = new BuildContext({
     registry,
-    resolver: (childId, childVersion) => scope.resolve(childId, childVersion),
+    resolver: (childId) => scope.resolve(childId),
     sourceFile: flowLabel,
     resolveOrigin,
     diagnostics,

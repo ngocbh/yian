@@ -30,7 +30,7 @@ import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
 import { runtime } from "../../src/platform.ts";
 import { runFlow } from "../../src/run.ts";
-import { thrownBy } from "../helpers/run_state_fixtures.ts";
+import { rejected, thrownBy } from "../helpers/run_state_fixtures.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 import {
   assembled,
@@ -2671,14 +2671,15 @@ output: \${invoke.output}
   expect(error.diagnostic.frames.at(-1)!.range).toEqual(expected);
 });
 
-test("an inline call's resolver failure uses the friendly child label", async () => {
+test("an inline call's resolver bug propagates as is, not as a load error", async () => {
   const resolved: string[] = [];
+  const bug = new TypeError("resolver exploded");
   const resolve = spyOn(CallableScope.prototype, "resolve").mockImplementation((flowId) => {
     resolved.push(flowId);
-    throw new Error("resolver exploded");
+    throw bug;
   });
   try {
-    const error = await loadErrorAsync(
+    const error = await rejected(
       loadConformanceFlow(`id: inline-resolver-failure
 name: inline_resolver_failure
 nodes:
@@ -2697,9 +2698,7 @@ output: \${wrapper.output}
     );
 
     expect(resolved).toEqual([inlineFlowId(["root", "node", "wrapper", "inline"])]);
-    expect(error.message).toBe(
-      "call node 'wrapper': could not resolve inline body of node 'wrapper': resolver exploded",
-    );
+    expect(error).toBe(bug);
   } finally {
     resolve.mockRestore();
   }
@@ -2731,7 +2730,7 @@ test("the callable scope builds a private once and same-owner registration is id
 
   expect(built).toEqual([]);
   expect(scope.resolve(flowId)).toBe(child);
-  expect(scope.resolve(flowId, "ignored-version")).toBe(child);
+  expect(scope.resolve(flowId)).toBe(child);
   expect(built).toEqual(["first"]);
 });
 
@@ -2839,8 +2838,8 @@ test("an eager def can resolve a pre-registered private", () => {
   const events: string[] = [];
   // The def build is module-private, so a subclass fakes it for `outer`.
   class FakeDefScope extends CallableScope {
-    override resolve(name: string, version: string | null = null): ComposedFlow {
-      if (name !== "outer" || events.includes("def:outer")) return super.resolve(name, version);
+    override resolve(name: string): ComposedFlow {
+      if (name !== "outer" || events.includes("def:outer")) return super.resolve(name);
       events.push("def:outer");
       expect(this.resolve(flowId)).toBe(privateChild);
       return defChild;

@@ -5,7 +5,16 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,7 +46,9 @@ const NOW = Date.UTC(2026, 9, 29, 14, 3, 5, 250);
 
 const REPORTS = () => join(home, ".yian", "reports");
 
-/** A runner where gh is installed and logged in, recording each call; `create` answers the create. */
+/**
+ * A runner where gh is installed and logged in, recording each call; `create` answers the create.
+ */
 function ghRunner(create: { code: number; stdout?: string; stderr?: string } = { code: 0 }) {
   const calls: { command: string; args: readonly string[]; input?: string | undefined }[] = [];
   const run: Runner = async (command, args, options = {}) => {
@@ -61,6 +72,7 @@ function host(choice: string | null, fields: Partial<FileIssueHost> = {}) {
       asked.push(request);
       return choice;
     },
+    canApprove: () => true,
     env: (name) => (name === "HOME" ? home : undefined),
     now: () => NOW,
     run: noGh,
@@ -102,6 +114,8 @@ test("the card shows the whole title and body and offers only the ways that work
   expect(card.diff).toBeNull();
   // No gh and no token: the link, the save and the cancel.
   expect(card.choices).toEqual(["Open a prefilled link in the browser", "Save it only", "Cancel"]);
+  // A stray Enter saves; filing takes a choice of its own.
+  expect(card.preselect).toBe("Save it only");
   expect(saved()).toEqual([]);
   const { asked: both, fileHost: ready } = host("Cancel", {
     run: ghRunner().run,
@@ -115,6 +129,7 @@ test("the card shows the whole title and body and offers only the ways that work
     "Save it only",
     "Cancel",
   ]);
+  expect(both[0]!.preselect).toBe("Save it only");
   expect(JSON.stringify(both[0])).not.toContain("ghp_secret");
 });
 
@@ -126,11 +141,27 @@ test("gh files the issue with the body on its stdin, and the report is saved too
     "filed with gh: https://github.com/ngocbh/yian/issues/7\n" +
       "saved to ~/.yian/reports/2026-10-29T14-03-05Z.md",
   );
-  expect(gh.calls.at(-1)).toEqual({
-    command: "gh",
-    args: ["issue", "create", "-R", "ngocbh/yian", "--title", TITLE, "--body-file", "-"],
-    input: BODY,
-  });
+  expect(gh.calls).toEqual([
+    {
+      command: "gh",
+      args: ["auth", "status", "--hostname", "github.com", "--active"],
+      input: undefined,
+    },
+    {
+      command: "gh",
+      // `--title=`, so a title starting with `-` can't read as a flag.
+      args: [
+        "issue",
+        "create",
+        "-R",
+        "github.com/ngocbh/yian",
+        `--title=${TITLE}`,
+        "--body-file",
+        "-",
+      ],
+      input: BODY,
+    },
+  ]);
   const file = join(REPORTS(), "2026-10-29T14-03-05Z.md");
   expect(readFileSync(file, "utf8")).toBe(`# ${TITLE}\n\n${BODY}\n`);
   expect(statSync(file).mode & 0o777).toBe(0o600);
@@ -172,8 +203,22 @@ test("GITHUB_TOKEN files the issue with one API call, and never shows the token"
   expect(result).not.toContain("ghp_secret");
 });
 
+test("a GITHUB_TOKEN call that can't reach GitHub says so, without the token", async () => {
+  const send: Send = async () => {
+    throw new TypeError("fetch failed");
+  };
+  const { fileHost } = host("File it with GITHUB_TOKEN", {
+    send,
+    env: (name) => ({ HOME: home, GITHUB_TOKEN: "ghp_secret" })[name],
+  });
+  const result = await fileIssue(fileHost, TITLE, BODY);
+  expect(result).toStartWith("not filed: can't reach GitHub: fetch failed\nsaved to ");
+  expect(result).not.toContain("ghp_secret");
+});
+
 test("a refused GITHUB_TOKEN says what GitHub answered, without the token", async () => {
-  const send: Send = async () => new Response(JSON.stringify({ message: "Bad credentials" }), { status: 401 });
+  const send: Send = async () =>
+    new Response(JSON.stringify({ message: "Bad credentials" }), { status: 401 });
   const { fileHost } = host("File it with GITHUB_TOKEN", {
     send,
     env: (name) => ({ HOME: home, GITHUB_TOKEN: "ghp_secret" })[name],
@@ -188,7 +233,8 @@ test("the browser link is prefilled and saved beside it", async () => {
   const result = await fileIssue(fileHost, TITLE, BODY);
   const link = issueLink(TITLE, BODY, "~/.yian/reports/2026-10-29T14-03-05Z.md").url;
   expect(result).toBe(
-    `not filed yet: open this link to file it: ${link}\n` + "saved to ~/.yian/reports/2026-10-29T14-03-05Z.md",
+    `not filed yet: open this link to file it: ${link}\n` +
+      "saved to ~/.yian/reports/2026-10-29T14-03-05Z.md",
   );
   expect(saved()).toEqual(["2026-10-29T14-03-05Z.md"]);
   // However long the body, the whole outcome fits what the chat's model reads of a run's output.
@@ -197,7 +243,9 @@ test("the browser link is prefilled and saved beside it", async () => {
   expect(long.length).toBeLessThanOrEqual(4000);
 });
 
-test("save only saves the report, and a second report the same second gets its own file", async () => {
+test("save only saves the report, and a second the same second gets its own file", async () => {
+  // A reports folder left open to others is made private again.
+  mkdirSync(REPORTS(), { recursive: true, mode: 0o755 });
   const { fileHost } = host("Save it only");
   expect(await fileIssue(fileHost, TITLE, BODY)).toBe(
     "not filed: saved only\nsaved to ~/.yian/reports/2026-10-29T14-03-05Z.md",
@@ -208,13 +256,36 @@ test("save only saves the report, and a second report the same second gets its o
   expect(statSync(REPORTS()).mode & 0o777).toBe(0o700);
 });
 
-test("without a terminal to approve on, nothing is filed or saved", async () => {
-  const { fileHost } = host(null);
+test("without a terminal to approve on, gh isn't asked and nothing is filed or saved", async () => {
+  const gh = ghRunner();
+  const { asked, fileHost } = host("Save it only", { run: gh.run, canApprove: () => false });
   expect(await fileIssue(fileHost, TITLE, BODY)).toBe(
+    "not filed: not approved (no terminal, or the prompt ended); nothing was saved",
+  );
+  expect(gh.calls).toEqual([]);
+  expect(asked).toEqual([]);
+  // A prompt that ends unanswered is the same.
+  const { fileHost: ended } = host(null);
+  expect(await fileIssue(ended, TITLE, BODY)).toBe(
     "not filed: not approved (no terminal, or the prompt ended); nothing was saved",
   );
   expect(saved()).toEqual([]);
 });
+
+test(
+  "a gh that hangs on its login check isn't offered once the check times out",
+  async () => {
+    const hung: Runner = (_command, _args, options = {}) =>
+      new Promise((_, reject) => {
+        const signal = options.signal!;
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    const { asked, fileHost } = host("Cancel", { run: hung });
+    await fileIssue(fileHost, TITLE, BODY);
+    expect(asked[0]!.choices).not.toContain("File it with gh");
+  },
+  10_000,
+);
 
 test("the link encodes the title and body so they read back unchanged", () => {
   const title = "a & b = c? #1 100%";
@@ -238,18 +309,32 @@ test("an over-long body is cut to fit the link, which says so and where the rest
   expect(shown.split("\n")[0]).toMatch(/^(😀)+$/);
 });
 
-test("the host's facts name the version, runtime, platform and the chat's log under ~", () => {
-  const facts = hostFacts(join(home, ".yian", "runs", "c1", "log.jsonl"), home);
-  expect(facts).toMatch(/^yian version: \d+\.\d+\.\d+\nruntime: (Bun|Node) \S+\nplatform: \S+ \S+\n/);
-  expect(facts).toEndWith("chat run log: ~/.yian/runs/c1/log.jsonl");
+test("an over-long title is cut to fit the link too", () => {
+  const { url, cut } = issueLink("😀".repeat(LINK_CHARS), "short", "~/r.md");
+  expect(cut).toBe(true);
+  expect(url.length).toBeLessThanOrEqual(LINK_CHARS);
+  const params = new URL(url).searchParams;
+  expect(params.get("title")).toMatch(/^(😀)+…$/);
+  expect(params.get("body")).toBe("short\n\n(cut to fit a link; the whole report is in ~/r.md)");
 });
 
-test("the bundled report flow loads, with problem, context and home inputs", async () => {
+test("the host's facts name the version, runtime, platform and the chat's log under ~", () => {
+  const facts = hostFacts(join(home, ".yian", "runs", "c1", "log.jsonl"), [home]);
+  expect(facts).toMatch(
+    /^yian version: \d+\.\d+\.\d+\nruntime: (Bun|Node) \S+\nplatform: \S+ \S+\n/,
+  );
+  expect(facts).toEndWith("chat run log: ~/.yian/runs/c1/log.jsonl");
+  // A home reached through a symlink is ~ by its real path too.
+  const real = hostFacts("/real/ada/c.jsonl", ["/home/ada", "/real/ada"]);
+  expect(real).toEndWith("chat run log: ~/c.jsonl");
+});
+
+test("the bundled report flow loads, with problem, context and homes inputs", async () => {
   const flow = await loadReportFlow((name) => (name === "HOME" ? home : undefined));
   expect(flow.compiled.flowId).toBe("report_issue");
   expect(flow.input.map((param) => [param.name, param.required && !param.hasDefault])).toEqual([
     ["problem", true],
     ["context", true],
-    ["home", false],
+    ["homes", false],
   ]);
 });

@@ -52,8 +52,8 @@ const START_CHOICES = ["Approve", "Approve this flow for this chat", "Reject"] a
 export interface ReportOptions {
   /** The chat's own facts (`hostFacts`), first in the report's context. */
   facts: string;
-  /** The home folder, which the report shows as `~`. */
-  home: string;
+  /** The home folder, as set and as its real path, which the report shows as `~`. */
+  homes: readonly string[];
   /** The `file_issue` tool the report flow files with; no other run gets it. */
   fileIssue: FunctionTool;
 }
@@ -412,26 +412,31 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
     return tool({
       name: "report_issue",
       description:
-        "Help the user report something unexpected yian did, as an issue for its maintainers at " +
-        "github.com/ngocbh/yian. Starts a background run that drafts the report, may ask the user for " +
-        "missing facts (relay its questions as for any run), redacts what looks like a secret, then shows " +
-        "the user the report on their terminal to file (gh, GITHUB_TOKEN or a browser link) or only save. " +
-        "The chat adds yian's version, the runtime, the platform and this chat's log path. In context, give " +
-        "what you know: the command or flow run, the error text and a run's log path; never a log's " +
-        `contents, a token or a password. ${STATUS}`,
+        "Help the user report something unexpected yian did, as an issue for its maintainers " +
+        "at github.com/ngocbh/yian. Starts a background run that drafts the report, may ask the " +
+        "user for missing facts (relay its questions as for any run), redacts what looks like a " +
+        "secret, then shows the user the report on their terminal to file (gh, GITHUB_TOKEN or a " +
+        "browser link) or only save. The chat adds yian's version, the runtime, the platform and " +
+        "this chat's log path. In context, give what you know: the command or flow run, the " +
+        `error text and a run's log path; never a log's contents, a token or a password. ${STATUS}`,
       parameters: stringArguments(
         ["problem", "What went wrong, in a sentence or two.", true],
-        ["context", "What you know about it: the command or flow, the error text, a run's log path.", false],
+        [
+          "context",
+          "What you know about it: the command or flow, the error text, a run's log path.",
+          false,
+        ],
       ),
       execute: async (args, ctx) => {
         const problem = stringArg(args, "problem");
         const known = args["context"] === undefined ? "" : stringArg(args, "context");
         const context = [options.facts, known].filter((part) => part !== "").join("\n");
+        const inputs = { problem, context, homes: options.homes };
         let id: string;
         try {
           const flow = await loadReportFlow(host.env);
           const tools = { file_issue: options.fileIssue };
-          ({ id } = await runs.start(flow, { problem, context, home: options.home }, { signal: ctx.signal, tools }));
+          ({ id } = await runs.start(flow, inputs, { signal: ctx.signal, tools }));
         } catch (error) {
           if (error instanceof Error) return `not started: ${error.message}`;
           throw error;

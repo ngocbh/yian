@@ -105,10 +105,10 @@ test("the prompt reads before explaining, checks before runs, and relays inbox r
 });
 
 /**
- * Run the bundled report flow on `problem` and `home`, its draft answered with `report` by a
+ * Run the bundled report flow on `problem` and `homes`, its draft answered with `report` by a
  * scripted model; return what reached file_issue and the flow's output.
  */
-async function runReport(report: { title: string; body: string }, home = "") {
+async function runReport(report: { title: string; body: string }, homes: string[] = []) {
   const flow = await loadFlow(flowText("report_issue.yaml"), { sourceLabel: "report_issue.yaml", env: NO_ENV });
   const filed: Record<string, unknown>[] = [];
   const fileIssue = tool({
@@ -129,7 +129,7 @@ async function runReport(report: { title: string; body: string }, home = "") {
   const model = new ScriptedModel(replies, { provider: "xai", model: "grok-4.3" });
   const result = await runFlow(
     flow,
-    { problem: "check crashed", context: "yian version: 0.0.4", home },
+    { problem: "check crashed", context: "yian version: 0.0.4", homes },
     {
       env: NO_ENV,
       tools: { file_issue: fileIssue, ask: () => pending() },
@@ -167,6 +167,28 @@ test("the report flow's scrub redacts each kind of secret and shows the home as 
     ["password=hunter2", "password=[redacted]"],
     ['"api_key": "abc123"', '"api_key": [redacted]'],
     ["token: abc123", "token: [redacted]"],
+    ["https://ada:hunter2@example.com/x", "https://[redacted]@example.com/x"],
+    ["DATABASE_URL=postgres://u:pw@db/x", "DATABASE_URL=postgres://[redacted]@db/x"],
+    ["x-api-key: abc123def", "x-api-key: [redacted]"],
+    ["OPENAI_API_KEY=abcdefghijklmnopqrstu", "OPENAI_API_KEY=[redacted]"],
+    ["AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG", "AWS_SECRET_ACCESS_KEY=[redacted]"],
+    ["AZURE_OPENAI_KEY=abcdef", "AZURE_OPENAI_KEY=[redacted]"],
+    ["ANTHROPIC_API_KEY = 'abc def'", "ANTHROPIC_API_KEY = [redacted]"],
+    ["export GITHUB_TOKEN=ghp_short", "export GITHUB_TOKEN=[redacted]"],
+    ["client_secret: abc", "client_secret: [redacted]"],
+    ["pass: hunter2", "pass: [redacted]"],
+    ["pwd=hunter2", "pwd=[redacted]"],
+    ['{"api_key":"abc"}', '{"api_key":[redacted]}'],
+    ["https://x.io/?key=abc123&x=1", "https://x.io/?key=[redacted]&x=1"],
+    ["--api-key abc123", "--api-key [redacted]"],
+    ["--token=abc123", "--token=[redacted]"],
+    ["Cookie: session=abcdef123", "Cookie: [redacted]"],
+    ["set-cookie: id=abc; Path=/", "set-cookie: [redacted]"],
+    ["Bearer: abc", "Bearer: [redacted]"],
+    ["sk_live_abcdefghijklmnopqrstuv", "[redacted]"],
+    ["hf_abcdefghijklmnopqrstuvwxyz123456", "[redacted]"],
+    ["npm_abcdefghijklmnopqrstuvwxyz0123456789", "[redacted]"],
+    ["QmFzZTY0U2VjcmV0VmFsdWVUaGF0SXNMb25nRW5vdWdoVG9CZUFLZXk=", "[redacted]"],
     [
       "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----",
       "[redacted private key]",
@@ -174,15 +196,19 @@ test("the report flow's scrub redacts each kind of secret and shows the home as 
   ];
   const body = [
     ...secrets.map(([secret]) => secret),
-    "log: /home/ada/.yian/runs/r1/log.jsonl",
+    "log: /home/ada/.yian/runs/9eccdeca88574a9f96cba63e7564b67e/log.jsonl",
+    "real: /gpfs/real/ada/x.yaml",
     "not hers: /home/adam/x",
+    "yian check nap.yaml",
   ].join("\n");
   const title = "crash with ghp_abcdefghijklmnopqrstuvwxyz0123456789";
-  const { filed } = await runReport({ title, body }, "/home/ada");
+  const { filed } = await runReport({ title, body }, ["/home/ada", "/gpfs/real/ada/"]);
   expect(filed[0]!["title"]).toBe("crash with [redacted]");
   expect((filed[0]!["body"] as string).split("\n")).toEqual([
     ...secrets.flatMap(([, redacted]) => redacted!.split("\n")),
-    "log: ~/.yian/runs/r1/log.jsonl",
+    "log: ~/.yian/runs/9eccdeca88574a9f96cba63e7564b67e/log.jsonl",
+    "real: ~/x.yaml",
     "not hers: /home/adam/x",
+    "yian check nap.yaml",
   ]);
 });

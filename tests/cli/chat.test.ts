@@ -26,7 +26,7 @@ import { type Request, Response, ToolResultPart } from "../../src/llm/messages.t
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { inspectRun } from "../../src/run.ts";
 import { callReply, serving, textReply } from "../helpers/run_state_fixtures.ts";
-import { DOWN, ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
+import { ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 20_000;
 
@@ -659,7 +659,8 @@ test(
     stdin.write(ENTER);
     await new Promise((resolve) => setTimeout(resolve, 600));
     expect(existsSync(join(home, ".yian", "reports"))).toBe(false);
-    stdin.write(DOWN + ENTER);
+    // Save it only is preselected.
+    stdin.write(ENTER);
     await until(() => stdout().includes("saved it"));
     stdin.write(`/exit${ENTER}`);
     expect((await chatting).code).toBe(0);

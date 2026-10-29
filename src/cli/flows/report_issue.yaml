@@ -1,15 +1,15 @@
 # report_issue — help the user report something unexpected yian did, as an issue for
 # github.com/ngocbh/yian. `yian chat` runs it as a child run when its assistant calls
 # report_issue: `problem` is what went wrong, `context` the chat's facts (the yian version, the
-# runtime, the platform, the run log's path, and what the assistant knows), `home` the home
-# folder, shown as ~.
+# runtime, the platform, the run log's path, and what the assistant knows), `homes` the home
+# folder as given and as its real path, each shown as ~.
 #
 # `draft` writes the report, asking the user for what it lacks (the chat relays the questions);
 # `scrub` redacts anything that looks like a secret; `file` calls the host's file_issue, which
 # shows the report to the user to approve and files it the way they pick, or only saves it.
 id: report_issue
 name: report_issue
-description: Draft an issue report about yian with the user, redact secrets, and file it once they approve.
+description: Draft a yian issue report with the user, redact secrets, file it once approved.
 
 typedefs:
   Report: {title: str, body: str}
@@ -17,7 +17,7 @@ typedefs:
 input:
   problem: !str
   context: !str
-  home: !str ""
+  homes: !list(str) []
 
 nodes:
   draft:
@@ -48,37 +48,54 @@ nodes:
     kind: code
     input:
       report: ${draft.output}
-      home: ${input.home}
+      homes: ${input.homes}
     output: Report
     code: |
       // Each is a shape secrets take and what replaces a match, keeping any label before it.
-      const label = String.raw`((?:password|passwd|secret|token|api[_-]?key|access[_-]?key)` +
-        String.raw`["']?\s*[:=]\s*)`;
-      const value = String.raw`("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;&]+)`;
+      const word = String.raw`(?:key|token|secret|passw(?:or)?d|pass|pwd)`;
+      const label = String.raw`([A-Za-z0-9_-]*` + word + String.raw`["']?\s*[:=]\s*)`;
+      const value = String.raw`("[^"\r\n]*"|'[^'\r\n]*'|[^\s,;&"]+)`;
+      const flag = String.raw`(--[A-Za-z0-9-]*` + word + String.raw`(?:=|\s+))`;
+      // A long run of letters and digits, as a key or token is; a path's `/` breaks it up.
+      const long = String.raw`(?<![A-Za-z0-9+_-])(?=[A-Za-z0-9+_-]*\d)(?=[A-Za-z0-9+_-]*[A-Za-z])` +
+        String.raw`[A-Za-z0-9+_-]{40,}={0,2}`;
       const patterns: [RegExp, string][] = [
         [
           /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
           "[redacted private key]",
         ],
+        [/\b([a-z][a-z0-9+.-]*:\/\/)[^\s\/?#@:]+:[^\s\/?#@]+@/gi, "$1[redacted]@"],
         [/(authorization["']?\s*[:=]\s*)[^\r\n]+/gi, "$1[redacted]"],
-        [/(bearer\s+)[A-Za-z0-9._~+\/=-]+/gi, "$1[redacted]"],
+        [/((?:set-)?cookie["']?\s*[:=]\s*)[^\r\n]+/gi, "$1[redacted]"],
+        [/(bearer\s*[:=]?\s*)[A-Za-z0-9._~+\/=-]+/gi, "$1[redacted]"],
+        [new RegExp(flag + value, "gi"), "$1[redacted]"],
         [new RegExp(label + value, "gi"), "$1[redacted]"],
         [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}/g, "[redacted]"],
+        [/\bsk_(?:live|test)_[A-Za-z0-9]{10,}/g, "[redacted]"],
         [/\bgh[pousr]_[A-Za-z0-9]{20,}/g, "[redacted]"],
         [/\bgithub_pat_[A-Za-z0-9_]{20,}/g, "[redacted]"],
+        [/\b(?:hf|npm)_[A-Za-z0-9]{20,}/g, "[redacted]"],
         [/\bxox[abprs]-[A-Za-z0-9-]{10,}/g, "[redacted]"],
         [/\bAKIA[0-9A-Z]{16}\b/g, "[redacted]"],
         [/\bAIza[0-9A-Za-z_-]{35}/g, "[redacted]"],
         [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, "[redacted]"],
+        [new RegExp(long, "g"), "[redacted]"],
       ];
-      const home: string = inputs.home.replace(/[\\/]+$/, "");
-      // The home folder where it is a whole path part: /home/ada, not /home/adam.
-      const escaped = home.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&");
-      const homeAt = home === "" ? null : new RegExp(escaped + String.raw`(?=[\\/]|$|[^\w.-])`, "g");
+      // Each home folder (as given and its real path), where it is a whole path part: /home/ada,
+      // not /home/adam; the longest first, so one inside another goes whole.
+      const homes = inputs.homes
+        .map((home: string) => home.replace(/[\\/]+$/, ""))
+        .filter((home: string) => home !== "")
+        .sort((a: string, b: string) => b.length - a.length)
+        .map((home: string) => {
+          const escaped = home.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&");
+          return new RegExp(escaped + String.raw`(?=[\\/]|$|[^\w.-])`, "g");
+        });
       const clean = (text: string): string => {
         let out = text;
         for (const [pattern, replacement] of patterns) out = out.replace(pattern, replacement);
-        return homeAt === null ? out : out.replace(homeAt, "~");
+        for (const home of homes) out = out.replace(home, "~");
+        return out;
       };
       return { title: clean(inputs.report.title), body: clean(inputs.report.body) };
   file:

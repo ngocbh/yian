@@ -415,8 +415,16 @@ export async function chat(
     const approve: ChatToolHost["approve"] = (request) => terminal.approve({ ...request, frame: view !== null });
     const host: ChatToolHost = { root, approve, env, docs };
     const home = homeDir(env);
-    const fileIssue = fileIssueTool({ approve, env, now: () => scheduler.now(), ...deps.filing });
-    const report = { facts: hostFacts(fresh.path, home), home, fileIssue };
+    const real = realHome(home);
+    const homes = real === undefined || real === home ? [home] : [home, real];
+    const fileIssue = fileIssueTool({
+      approve,
+      canApprove: () => terminal.canApprove,
+      env,
+      now: () => scheduler.now(),
+      ...deps.filing,
+    });
+    const report = { facts: hostFacts(fresh.path, homes), homes, fileIssue };
     const all = trackInFlight(
       [...chatFileTools(host), ...chatRunTools(host, runs, { seen: queue, scheduler, report })],
       inFlight,

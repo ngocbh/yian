@@ -544,7 +544,7 @@ describe("report_issue", () => {
         },
       });
       const tools = chatRunTools(host({ env }), runs, {
-        report: { facts: "yian version: 0.0.4\nchat run log: ~/c.jsonl", home: "/home/ada", fileIssue },
+        report: { facts: "yian version: 0.0.4\nchat run log: ~/c.jsonl", homes: ["/home/ada"], fileIssue },
       });
       const reportIssue = tools.find((each) => each.name === "report_issue")!;
       const ctx = new ToolContext({

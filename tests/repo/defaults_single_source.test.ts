@@ -72,6 +72,8 @@ const ALLOWED: Record<string, string> = {
   "cli/cells.ts: columnsOf.||": "terminal width when the output reports none",
   "cli/cells.ts: rowsOf.||": "terminal height when the output reports none",
   "cli/report_issue.ts: LINK_CHARS": "longest prefilled new-issue link, so the chat's model reads it whole",
+  "cli/report_issue.ts: LINK_TITLE_CHARS": "most of a prefilled link its title takes, encoded",
+  "cli/report_issue.ts: GH_CHECK_MS": "how long file_issue waits for gh's login check",
   "cli/report_issue.ts: SAME_SECOND_REPORTS": "reports saved in one second before file_issue finds no free name",
   "cli/run_view.ts: KEPT_ROWS": "rows of a child run's progress the chat's run view keeps",
   "cli/terminal.ts: YIELD_GRACE_MS": "how long a prompt that took a chat line's place drops keys",

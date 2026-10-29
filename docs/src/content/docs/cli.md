@@ -379,9 +379,10 @@ When yian does something unexpected, the assistant offers to report it. `report_
 flow bundled with yian, in the background like any flow the assistant runs. The flow drafts the
 report (what you ran, what you expected, what happened, the error, the yian version and platform,
 and the run log's path) and asks you, through the assistant, for what it lacks. It gives a run
-log's path, never its contents. Then it replaces what looks like a secret (API keys, `sk-`, `ghp_`
-and `github_pat_` tokens, `Authorization` and `Bearer` values, `password=`) with `[redacted]`, and
-your home folder with `~`.
+log's path, never its contents. Then it replaces what looks like a secret with `[redacted]`: API
+keys and tokens of the usual shapes (`sk-`, `ghp_`, `github_pat_`, `hf_`, long random strings),
+`Authorization`, `Bearer` and cookie values, values after a name like `password=`, `API_KEY=` or
+`--token`, and a URL's `user:password@`. Your home folder becomes `~`.
 
 Last, a card shows the whole report and the ways to file it that work on your machine:
 
@@ -393,7 +394,9 @@ Last, a card shows the whole report and the ways to file it that work on your ma
 | Save it only | Keeps the report, to send another way |
 | Cancel | Files and saves nothing |
 
-Every choice but Cancel also saves the report to `~/.yian/reports/<time>.md`. The issue tracker
+Save it only is preselected. When the card takes the input box's place while you type, it ignores
+keys for a moment, so an Enter meant for the box files nothing. Every choice but Cancel also saves
+the report to `~/.yian/reports/<time>.md`. The issue tracker
 is private for now, so gh and the token file only for people with access to it; the link and the
 saved file work for anyone.
 

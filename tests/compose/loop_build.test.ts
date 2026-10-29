@@ -162,7 +162,6 @@ test("a predicate loop with max keeps its limit", () => {
 test("times with a null max builds", () => {
   const node = loopOf(swap(TIMES_GOOD, "    times: 3\n", "    times: 3\n    max: null\n"), goodBody());
 
-  expect(node.times).toBe(3);
   expect(node.maxIters).toBe(3);
 });
 
@@ -179,7 +178,6 @@ test("a times loop builds with number counts", () => {
   expect(node.predicateKind).toBe("times");
   expect(node.predicate).toBeNull();
   // YAML reads `3` as the bigint 3n; the node holds the number.
-  expect(node.times).toBe(3);
   expect(node.maxIters).toBe(3);
 });
 

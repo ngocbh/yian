@@ -2034,7 +2034,7 @@ ${LOOP_BODY}`);
     }),
   );
   expect(repeat.predicateKind).toBe("times");
-  expect([repeat.times, repeat.maxIters]).toEqual([2, 2]);
+  expect(repeat.maxIters).toBe(2);
 });
 
 test("a basic inline LOOP with `times:` runs", async () => {

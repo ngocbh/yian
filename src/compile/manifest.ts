@@ -128,7 +128,6 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "child",
     "predicateKind",
     "predicate",
-    "times",
     "maxIters",
     "iteration",
     "returnedFields",
@@ -880,9 +879,9 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
         manifest.max_iters = count(spawner.maxIters, `${path}.maxIters`, true);
         manifest.predicate = canonicalValue(spawner.predicate, ctx, `${path}.predicate`);
         manifest.predicate_kind = spawner.predicateKind;
-        // `times` is a typed value; it passes `count` first, so a forged
-        // float is refused rather than written as a float.
-        const times = spawner.times === null ? null : BigInt(count(spawner.times, `${path}.times`, false));
+        // A `times` loop keeps its count in `maxIters`, which passed `count` above; `times` is
+        // written as a typed value.
+        const times = spawner.predicateKind !== "times" || spawner.maxIters === null ? null : BigInt(spawner.maxIters);
         manifest.times = canonicalValue(times, ctx, `${path}.times`);
         // Left out for a total loop so the feature doesn't change the identity of flows that don't
         // use it.

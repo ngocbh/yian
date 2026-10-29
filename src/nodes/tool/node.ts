@@ -52,7 +52,7 @@ import {
 } from "../base.ts";
 import { BindingError } from "../binding.ts";
 import { acceptsNull, type CallView, HostToolCall, outputContractType } from "../contracts.ts";
-import { parseQuestions } from "./questions.ts";
+import { dropRepeatedLabels, parseQuestions } from "./questions.ts";
 
 /**
  * A TOOL call failed after at least one retry; the message lists every attempt.
@@ -413,7 +413,8 @@ export class ToolNode extends Node {
 
   /**
    * Ask through the run's ask handler: yian's base surface (`prompt`, `questions` or
-   * `__questions`, parsed first; `timeout` as a deadline) plus the host's extras. An inline answer
+   * `__questions`, parsed first, the latter without a composer's repeated option labels; `timeout`
+   * as a deadline) plus the host's extras. An inline answer
    * is the output; `pending()` records the call with its deadline and waits.
    *
    * @throws QuestionSpecError when the question list is invalid, before the handler runs.
@@ -427,7 +428,9 @@ export class ToolNode extends Node {
     callId: string | null,
   ): Promise<Output | Pending> {
     const { prompt = null, questions = null, __questions = null, timeout = null, ...extra } = inputs;
-    const raw = questions ?? __questions;
+    // Authored questions must be right as written; a composer model's repeated labels are dropped
+    // instead, so a model's slip doesn't fail the run.
+    const raw = questions ?? (__questions === null ? null : dropRepeatedLabels(__questions));
     const parsed = raw === null ? null : parseQuestions(raw);
     const seconds = durationSeconds(timeout, ASK, "timeout");
     // Computed before the handler runs so the request carries it; recorded only on pending().

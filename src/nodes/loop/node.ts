@@ -116,8 +116,6 @@ export class LoopNode extends Node {
    * record); `null` for `times`.
    */
   predicate: string | null;
-  /** The fixed run count when `predicateKind` is `times`; `null` otherwise. */
-  times: number | null;
   /** The runaway guard for `while`/`until` (`null` is no limit); for `times`, the count N. */
   maxIters: number | null;
   /**
@@ -139,12 +137,14 @@ export class LoopNode extends Node {
    * @param options.childInputs The body's canonical parameters; omitted, none.
    * @param options.predicateKind `while` (the default), `until` or `times`.
    * @param options.predicate The `while`/`until` boolean source; `null` for `times`.
-   * @param options.times The fixed run count of a `times` loop.
+   * @param options.times The fixed run count of a `times` loop, kept as `maxIters`.
    * @param options.maxIters The runaway guard, or the `times` count; `null` is no limit.
    * @param options.title A display title.
    * @param options.iteration This driver's iteration index; defaults to 0.
    * @param options.originId The origin loop id; omitted, the node's own id.
    * @param options.returnedFields The carried fields the body returns; `null` for all of them.
+   * @throws RangeError when `times` is given for a `while`/`until` loop, or beside a different
+   *   `maxIters`.
    */
   constructor(
     nodeId: string,
@@ -178,14 +178,23 @@ export class LoopNode extends Node {
       returnedFields = null,
     } = options;
     super(nodeId, { title });
+    if (times !== null && predicateKind !== "times") {
+      throw new RangeError(
+        `loop node ${reprText(nodeId)}: times: is the count of a times loop, not of a ${predicateKind} loop`,
+      );
+    }
+    if (times !== null && maxIters !== null && maxIters !== times) {
+      throw new RangeError(
+        `loop node ${reprText(nodeId)}: a times loop's count is times: ${times}, but maxIters is ${maxIters}`,
+      );
+    }
     this.flowId = flowId;
     this.flowVersion = flowVersion;
     this.child = child;
     this.childInputs = childInputs ?? [];
     this.predicateKind = predicateKind;
     this.predicate = predicate;
-    this.times = times;
-    this.maxIters = maxIters;
+    this.maxIters = times ?? maxIters;
     this.returnedFields = returnedFields;
     this.iteration = iteration;
     // The compiled `L` sets originId to its own id (uniform); a clone `L~k` carries the origin.
@@ -225,13 +234,26 @@ export class LoopNode extends Node {
   }
 
   /**
-   * Require the body flow that Compose must bake before execution.
+   * Require the body flow that Compose must bake before execution, a `while`/`until` loop's
+   * predicate and a `times` loop's count.
    *
    * @throws Error when the body flow isn't baked.
+   * @throws RangeError when a `while`/`until` loop has no predicate or a `times` loop no count.
+   * @throws TypeError when the predicate isn't a string.
    */
   override validateExecutionSetup(): void {
     super.validateExecutionSetup();
     if (this.child === null) throw new Error(`loop node ${reprText(this.id)} was not baked with a body child`);
+    if (this.predicateKind === "times") {
+      if (this.maxIters === null) throw new RangeError(`loop node ${reprText(this.id)} has no \`times\` count`);
+      return;
+    }
+    if (this.predicate === null) {
+      throw new RangeError(`loop node ${reprText(this.id)} has no \`${this.predicateKind}\` expression`);
+    }
+    if (typeof this.predicate !== "string") {
+      throw new TypeError(`loop node ${reprText(this.id)} \`${this.predicateKind}\` must be a string`);
+    }
   }
 
   /**
@@ -244,7 +266,8 @@ export class LoopNode extends Node {
   override validateConditions(options: { path?: string | null } = {}): void {
     super.validateConditions(options);
     const { path = null } = options;
-    if ((this.predicateKind === "while" || this.predicateKind === "until") && typeof this.predicate === "string") {
+    // A missing or non-string predicate is rejected by `validateExecutionSetup`.
+    if (this.predicateKind !== "times" && typeof this.predicate === "string") {
       parseNamedCondition(
         this.predicate,
         `node ${reprText(path || this.id)} \`${this.predicateKind}:\` ${reprText(this.predicate)}`,
@@ -330,7 +353,6 @@ export class LoopNode extends Node {
       childInputs: this.childInputs,
       predicateKind: this.predicateKind,
       predicate: this.predicate,
-      times: this.times,
       maxIters: this.maxIters,
       title: this.title,
       iteration: k,

@@ -13,7 +13,7 @@ import { type SourceCursor, SourceDocument } from "../../src/compose/source/inde
 import { OriginRef, type OriginResolver } from "../../src/diagnostics.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
-import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
+import { ContractOrigins, iterOriginCarrier, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { StartNode } from "../../src/nodes/start/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
@@ -220,7 +220,7 @@ output:
   const variables = [child.compiled, ...fragments].map(
     (fragment) => ([...fragment.nodes.values()].find((node) => node instanceof AgentNode) as AgentNode).variables[0]!,
   );
-  const origins = variables.map((variable) => [...variable.iterOrigins()]);
+  const origins = variables.map((variable) => [...iterOriginCarrier(variable, new Set())]);
   expect(origins.every((sites) => sites.length === 3)).toBe(true);
   for (let index = 0; index < 3; index++) {
     expect(distinct(...origins.map((sites) => sites[index]!))).toBe(3);

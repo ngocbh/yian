@@ -1983,7 +1983,11 @@ test.each([
   ["loop-child", () => loopNode(), () => loopNode({ child: replaceBody(fragment()) })],
   ["loop-predicate-kind", () => loopNode({ predicateKind: "while" }), () => loopNode({ predicateKind: "until" })],
   ["loop-predicate", () => loopNode({ predicate: "first" }), () => loopNode({ predicate: "second" })],
-  ["loop-times", () => loopNode({ times: 1 }), () => loopNode({ times: 2 })],
+  [
+    "loop-times",
+    () => loopNode({ predicateKind: "times", times: 1 }),
+    () => loopNode({ predicateKind: "times", times: 2 }),
+  ],
   ["loop-max-iters", () => loopNode({ maxIters: 1 }), () => loopNode({ maxIters: 2 })],
   ["loop-max-iters-none", () => loopNode({ maxIters: null }), () => loopNode({ maxIters: 5 })],
   ["loop-iteration", () => loopNode({ iteration: 1 }), () => loopNode({ iteration: 2 })],
@@ -2122,7 +2126,6 @@ test("a LOOP's times is a typed int, or null for a while loop", () => {
 });
 
 test.each([
-  ["times", 1.5, "1.5"],
   ["maxIters", Infinity, "Infinity"],
   ["iteration", 0.5, "0.5"],
 ] as const)("a forged LOOP %s count is refused with its path", (field, value, text) => {

@@ -20,9 +20,13 @@ export const LIST_ITEMS = 20;
 /** The type of the event a queue push or the last tool call ending dispatches on the wake target. */
 export const CHAT_WAKE = "wake";
 
-/** One child event: the line the assistant reads, and the status it came from. */
+/**
+ * One child event: the line the assistant reads, and the status it came from. `run` is `null` (and
+ * `seq` 0) for one that came from no status of the chat's: a message authored `yian` the chat
+ * didn't send, taken back from the inbox.
+ */
 export interface ChildEvent {
-  readonly run: string;
+  readonly run: string | null;
   readonly seq: number;
   readonly text: string;
 }
@@ -136,11 +140,12 @@ export class EventQueue {
     this.#queued = this.#queued.filter((queued) => queued.event.run !== run || queued.event.seq > seq);
   }
 
-  /** Take every queued event, oldest first, marking each read (`markRead`). */
+  /** Take every queued event, oldest first, marking each one of a run read (`markRead`). */
   takeAll(): ChildEvent[] {
     const taken = this.#queued.map((queued) => queued.event);
     this.#queued = [];
     for (const event of taken) {
+      if (event.run === null) continue;
       this.#see(event.run, event.seq);
       this.#markRead?.(event.run, event.seq);
     }

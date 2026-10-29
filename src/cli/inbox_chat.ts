@@ -434,7 +434,7 @@ export async function inboxChat(
         events.queue.requeueFront(
           relayed.map(
             // One the chat didn't send is put back under no run.
-            (event) => sentEvents.get(event.seq) ?? { run: "", seq: 0, text: valueText(event.value, true) },
+            (event) => sentEvents.get(event.seq) ?? { run: null, seq: 0, text: valueText(event.value, true) },
           ),
         );
         back = back.filter((event) => !isEvent(event));

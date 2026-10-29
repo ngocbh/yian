@@ -148,6 +148,18 @@ describe("EventQueue", () => {
     expect([queue.seen("r1"), queue.seen("r2")]).toEqual([4, 3]);
   });
 
+  test("an event under no run is taken without marking any run read or seen", () => {
+    const queue = new EventQueue({
+      markRead: (run) => {
+        if (run !== "r1") throw new RangeError(`no run '${run}' in this chat`);
+      },
+    });
+    queue.push(status("r1", 2, { status: "cancelled" }));
+    queue.requeueFront([{ run: null, seq: 0, text: "run r9 was cancelled" }]);
+    expect(queue.takeAll().map((event) => event.text)).toEqual(["run r9 was cancelled", "run r1 was cancelled"]);
+    expect(queue.seen("r1")).toBe(2);
+  });
+
   test("requeued events go first, in order, and a newer status doesn't replace them", () => {
     const queue = new EventQueue();
     queue.push(status("r1", 1, { replies: ["a"] }));

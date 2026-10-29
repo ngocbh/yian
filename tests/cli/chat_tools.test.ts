@@ -139,6 +139,23 @@ describe("confine", () => {
     expect(isReportedToolError(thrown(() => confine(root, "loop.yaml")))).toBe(true);
   });
 
+  test("refuses a path with a control character, naming it", () => {
+    for (const path of ["a\x00.yaml", "a\x1b[2J.yaml", "a\x7f.yaml", "a\x9b.yaml", "a\n.yaml"]) {
+      const error = thrown(() => confine(root, path));
+      expect(error).toBeInstanceOf(ToolRefused);
+      expect((error as Error).message).not.toMatch(/[\x00-\x1f\x7f-\x9f]/);
+    }
+    expect((thrown(() => confine(root, "a\x00.yaml")) as Error).message).toContain("'a\\x00.yaml'");
+  });
+
+  test("refuses a path through a symlink to a missing folder", () => {
+    symlinkSync(join(tmp, "newdir"), join(root, "dl"));
+    const error = thrown(() => confine(root, "dl/x.yaml"));
+    expect(error).toBeInstanceOf(ToolRefused);
+    expect((error as Error).message).toContain("goes through a symlink to a missing folder");
+    expect(thrown(() => confine(root, "dl/deeper/x.yaml"))).toBeInstanceOf(ToolRefused);
+  });
+
   test("accepts a new file whose nearest existing folder is inside", () => {
     expect(confine(root, "sub/new/b.yaml")).toBe(join(root, "sub", "new", "b.yaml"));
   });

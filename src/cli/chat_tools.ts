@@ -60,6 +60,9 @@ export interface ChatToolHost {
   docs: ReadonlyMap<string, string>;
 }
 
+/** A C0 or C1 control character, or DEL. */
+const CONTROL = /[\x00-\x1f\x7f-\x9f]/;
+
 /** A tool refused a call, for a path outside the root say; the model reads the message. */
 export class ToolRefused extends ReportedToolError {
   override name = "ToolRefused";
@@ -69,10 +72,14 @@ export class ToolRefused extends ReportedToolError {
  * Return the real path `path` (relative to `root`, or absolute) names, which must be inside
  * `root`. A path that doesn't exist yet resolves through its nearest existing folder.
  *
- * @throws {ToolRefused} When the path leaves `root`, or is a symlink whose target doesn't exist.
+ * @throws {ToolRefused} When the path has a control character, leaves `root`, or is or goes
+ *   through a symlink whose target doesn't exist.
  * @throws {ReportedToolError} When the path can't be resolved, through a symlink loop say.
  */
 export function confine(root: string, path: string): string {
+  // A NUL makes the file system calls throw, and any control character could forge what the
+  // approval card shows.
+  if (CONTROL.test(path)) throw new ToolRefused(`${reprText(path)} has a control character, which a path can't`);
   const realRoot = realpathSync(root);
   const target = resolve(realRoot, path);
   let real: string;
@@ -83,14 +90,33 @@ export function confine(root: string, path: string): string {
     if (error.code !== "ENOENT" && error.code !== "ENOTDIR") {
       throw new ReportedToolError(`can't resolve ${path}: ${osReason(error)}`);
     }
-    // A dangling symlink would create its target, wherever that is.
-    if (lstatOrNull(target)?.isSymbolicLink()) throw new ToolRefused(`${path} is a symlink to a missing file`);
+    refuseDanglingLink(path, target);
     real = resolvedPath(target);
   }
   if (leavesRoot(relative(realRoot, real))) {
     throw new ToolRefused(`${path} is outside the folder the chat started in`);
   }
   return real;
+}
+
+/**
+ * Refuse `path` (at `target`, which doesn't fully exist) when the nearest part of it that exists is
+ * a symlink to something missing: creating the path would create that, wherever it is.
+ */
+function refuseDanglingLink(path: string, target: string): void {
+  for (let at = target; at !== dirname(at); at = dirname(at)) {
+    const stats = lstatOrNull(at);
+    if (stats === null) continue;
+    if (!stats.isSymbolicLink()) return;
+    try {
+      realpathSync(at);
+      return;
+    } catch (error) {
+      if (!isSystemError(error)) throw error;
+    }
+    if (at === target) throw new ToolRefused(`${path} is a symlink to a missing file`);
+    throw new ToolRefused(`${path} goes through a symlink to a missing folder`);
+  }
 }
 
 /** `path`'s own status, a symlink not followed, or null when it doesn't exist. */

@@ -5,7 +5,7 @@
  * log path under `defaultRunsDir`.
  *
  * Knows about: compose, the run boundary's input and LLM-cascade helpers, connections and saved
- * logins, the platform's home and folder helpers, the CLI's rendering and key prompt.
+ * logins, run ids, the platform's home and folder helpers, the CLI's rendering and key prompt.
  */
 
 import { chmodSync, mkdirSync, readFileSync, statSync } from "node:fs";
@@ -24,17 +24,23 @@ import { type Connection, connectionCredentials, connectionSnapshot } from "../l
 import { coerceInputs } from "../nodes/binding.ts";
 import { homeDir, syncFolder } from "../platform.ts";
 import { hostInputs, runLogPath, runStartLlm } from "../run.ts";
+import { defaultRunId } from "../typesys/seeding.ts";
 import { printStyled, renderDiagnostic, writeEngineTrace } from "./render.ts";
 import { type CliIo, ensureEnvKey, MissingKeyError, type PromptContext } from "./utils.ts";
 
 /**
- * @internal Read and load the flow file at `path` for a fresh run. A file that isn't UTF-8 text or
- * a flow that doesn't load is reported on stderr (a load error located, its stack below under
- * `engineTrace`), and its diagnostic is returned instead of the flow.
+ * Read the flow file at `path` and load it, returning the flow; or, for a file that isn't UTF-8
+ * or a flow that doesn't load, write why to `io.stderr` and return its `Diagnostic` (the command
+ * then exits 1). A load error is its located diagnostic; with `engineTrace`, the error's stack
+ * follows it, boxed.
  *
  * @throws {Error} A system error when the file can't be read.
  */
-export async function loadFlowFile(path: string, engineTrace: boolean, io: CliIo): Promise<ComposedFlow | Diagnostic> {
+export async function loadFlowFile(
+  path: string,
+  io: CliIo,
+  { engineTrace }: { engineTrace: boolean },
+): Promise<ComposedFlow | Diagnostic> {
   let text: string;
   try {
     text = readFlowText(path);
@@ -56,51 +62,62 @@ export async function loadFlowFile(path: string, engineTrace: boolean, io: CliIo
 }
 
 /**
- * @internal Return the outermost `llmConfig` layer of a fresh run: `provider` and `model`, those
- * given. It fills the gaps rather than overriding: an agent's own llm_config and the flow's still
- * win.
+ * Return the LLM config layer `--provider` and `--model` supply: only the flags that are set. It is
+ * the cascade's outermost layer (it fills the gap, not an override): an agent's own `llm_config`
+ * and the flow's still win.
  */
-export function cliLayer(options: { provider?: string | undefined; model?: string | undefined }): Record<string, string> {
+export function cliLayer(flags: { provider?: string | undefined; model?: string | undefined }): Record<string, string> {
   const layer: Record<string, string> = {};
-  if (options.provider) layer["provider"] = options.provider;
-  if (options.model) layer["model"] = options.model;
+  if (flags.provider) layer["provider"] = flags.provider;
+  if (flags.model) layer["model"] = flags.model;
   return layer;
 }
 
 /**
- * @internal Check every key `flow`'s agents need before a fresh run creates its log
- * (`ensureProviderKeys`), and return the message of a missing key or of a login that doesn't
- * resolve, else null.
+ * Check that every provider `flow`'s agents use under `layer` and the `supplied` inputs has its
+ * key (`ensureProviderKeys`, which prompts at `context.terminal`), returning `null`; or, for a
+ * missing key or a failed saved login, write the message to `io.stderr` and return it as a
+ * `run.setup` `Diagnostic` (the command then exits 1).
  *
- * @throws `signal`'s reason once it has aborted: a key prompt the stop closed is the stop, not a
- *   missing key. Any other failure, as `ensureProviderKeys` throws it.
+ * @throws `context.signal`'s reason once it aborted: a key prompt the stop closed is the stop, not
+ *   a missing key.
+ * @throws Any other error `ensureProviderKeys` throws.
  */
 export async function preflightKeys(
   flow: ComposedFlow,
-  cliCfg: Readonly<Record<string, string>>,
+  layer: Readonly<Record<string, string>>,
   supplied: Readonly<Record<string, unknown>>,
-  context: PromptContext,
-  signal: AbortSignal,
-): Promise<string | null> {
+  io: CliIo,
+  context: PromptContext & { signal?: AbortSignal },
+): Promise<Diagnostic | null> {
   try {
-    await ensureProviderKeys(flow, cliCfg, supplied, context);
+    await ensureProviderKeys(flow, layer, supplied, context);
+    return null;
   } catch (error) {
-    signal.throwIfAborted();
+    context.signal?.throwIfAborted();
     if (!(error instanceof MissingKeyError || error instanceof AuthError)) throw error;
-    return error.message;
+    await printStyled(io, error.message, "red");
+    return new Diagnostic({ code: "run.setup", message: error.message });
   }
-  return null;
+}
+
+/** A new run's id and log path, and the run folder made for it (`null` for a given log). */
+export interface FreshLog {
+  runId: string;
+  path: string;
+  runDir: string | null;
 }
 
 /**
- * @internal Return the log a fresh run writes, `log`, else `defaultRunLogPath`'s in a fresh run
- * folder, and that folder (`runDir`; null for a given `log`), which the caller removes
- * (`removeEmptyDir`) once the command ends, so a run that never created its log leaves none.
+ * Return a new run id and its log path: `log` when given, else `log.jsonl` in a new run folder
+ * under `~/.yian/runs` (`defaultRunLogPath`, `HOME` read from `env`), returned as `runDir` so the
+ * command can remove it when the run never created its log there.
  */
-export function freshLog(log: string | undefined, runId: string, env: Env): { log: string; runDir: string | null } {
-  if (log !== undefined) return { log, runDir: null };
+export function freshLog(log: string | undefined, env: Env): FreshLog {
+  const runId = defaultRunId();
+  if (log !== undefined) return { runId, path: log, runDir: null };
   const path = defaultRunLogPath(runId, env);
-  return { log: path, runDir: dirname(path) };
+  return { runId, path, runDir: dirname(path) };
 }
 
 /** @internal A flow or inputs file holding bytes that aren't UTF-8. */

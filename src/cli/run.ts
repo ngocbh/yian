@@ -80,7 +80,6 @@ import { wakeAt } from "../runtime/waits.ts";
 import { ASK_USER, BUILTIN_TOOL_IDS } from "../tools/context.ts";
 import { McpConnectError, McpSdkMissingError, type McpServer } from "../tools/mcp.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
-import { defaultRunId } from "../typesys/seeding.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
 import { buildCliMemories, MemoryOptionError } from "./memory.ts";
 import {
@@ -1153,7 +1152,7 @@ async function startRun(
     }
     flow = recorded;
   } else {
-    const loaded = await loadFlowFile(flowPath!, engineTrace, io);
+    const loaded = await loadFlowFile(flowPath!, io, { engineTrace });
     if (loaded instanceof Diagnostic) return fail(loaded);
     flow = loaded;
   }
@@ -1276,12 +1275,14 @@ async function startRun(
 
       const cliCfg = cliLayer(options);
       // Any required key is asked for before the run creates its log.
-      const context = { env: commandEnv, terminal: prompter };
-      const missing = await preflightKeys(flow, cliCfg, supplied, context, controller.signal);
-      if (missing !== null) return refused(missing);
+      const keyRefusal = await preflightKeys(flow, cliCfg, supplied, io, {
+        env: commandEnv,
+        terminal: prompter,
+        signal: controller.signal,
+      });
+      if (keyRefusal !== null) return fail(keyRefusal);
 
-      const runId = defaultRunId();
-      const { log, runDir } = freshLog(options.log, runId, io.env);
+      const { runId, path: log, runDir } = freshLog(options.log, io.env);
       return startLogged(
         log,
         (tools) =>

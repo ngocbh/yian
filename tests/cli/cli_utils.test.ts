@@ -1,5 +1,6 @@
 // The key prompt, with a fake terminal standing in for a TTY; the argument parser, the usage text
-// and `printJson`; and `ensureProviderKeys`, which also resolves a saved login without a prompt.
+// and `printJson`; and startup.ts's `ensureProviderKeys`, which also resolves a saved login without
+// a prompt (kept here for the private home and auth store these tests share).
 // The provider-key rows load the hello-agent seed from its harvested case,
 // `load-core/seed_00_hello_agent`, and set a default provider and model where they rely on one.
 

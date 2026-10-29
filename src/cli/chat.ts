@@ -11,7 +11,8 @@
  *
  * Knows about: the run boundary (`runFlow`, `advance`, `send`, `close`, `cancel`,
  * `loadRecordedFlow`, `inspectRun`), the waits' `wakeAt`, the record-time reader and the log's
- * records, compose, the terminal and the run command's helpers.
+ * records, compose, the terminal, the start-up it shares with `yian run` (`startup.ts`) and the
+ * run command's helpers.
  */
 
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
@@ -36,7 +37,6 @@ import {
 import { type InboxClosedRecord, iterRunRecords, recordTimeMs } from "../runtime/log.ts";
 import { wakeAt } from "../runtime/waits.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
-import { defaultRunId } from "../typesys/seeding.ts";
 import { builtinType } from "../typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
 import { printStyled, renderDiagnostic, writeEngineTrace } from "./render.ts";
@@ -265,7 +265,7 @@ export async function chat(
   const resumed = options.resume ?? null;
   const flow =
     resumed === null
-      ? await loadFlowFile(flowPath!, options.engineTrace, io)
+      ? await loadFlowFile(flowPath!, io, { engineTrace: options.engineTrace })
       : await recordedFlow(resumed, options.engineTrace, io);
   if (flow === null || flow instanceof Diagnostic) return 1;
   const inbox = pickInbox(flow, options.inbox);
@@ -390,9 +390,10 @@ export async function chat(
     // Read once: every `advance` must pass the skills the run recorded at its start.
     const skills = await readGrantedSkills(flow, env.read, io);
     const prompter = io.stdin.isTTY === true ? terminal : null;
-    const runId = defaultRunId();
     const cliCfg = cliLayer(options);
     let path: string;
+    // A fresh chat's run id; a resumed one keeps the id its log recorded.
+    let runId: string | null = null;
     if (resumed === null) {
       const gathered = await gatherMissingInputs(flow.input, supplied, prompter);
       stop.signal.throwIfAborted();
@@ -401,14 +402,16 @@ export async function chat(
         return 1;
       }
       Object.assign(supplied, gathered);
-      const missing = await preflightKeys(flow, cliCfg, supplied, { env, terminal: prompter }, stop.signal);
-      if (missing !== null) {
-        await printStyled(io, missing, "red");
-        return 1;
-      }
+      const keyRefusal = await preflightKeys(flow, cliCfg, supplied, io, {
+        env,
+        terminal: prompter,
+        signal: stop.signal,
+      });
+      if (keyRefusal !== null) return 1;
       stop.signal.throwIfAborted();
-      const fresh = freshLog(options.log, runId, io.env);
-      path = fresh.log;
+      const fresh = freshLog(options.log, io.env);
+      runId = fresh.runId;
+      path = fresh.path;
       runDir = fresh.runDir;
     } else {
       path = resumed;

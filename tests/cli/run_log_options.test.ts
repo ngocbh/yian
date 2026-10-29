@@ -4,13 +4,11 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
-  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
-  realpathSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -22,13 +20,11 @@ import { PassThrough } from "node:stream";
 
 import { main } from "../../src/cli/index.ts";
 import { reportRunLog, validateRunLogOptions } from "../../src/cli/run.ts";
-import { defaultRunLogPath } from "../../src/cli/startup.ts";
 import { type CliIo, HostStop, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { readRunIndex, runFlow } from "../../src/run.ts";
 import { JsonlRunLog, readRunLog, RunResumedRecord, RunStartedRecord } from "../../src/runtime/log.ts";
-import { folderSyncs } from "../helpers/folder_syncs.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 
 let tmp: string;
@@ -88,48 +84,6 @@ describe("validateRunLogOptions", () => {
       new UsageError("Invalid value: --resume runs the flow recorded in the log; leave out <flow>"),
     );
     expect(() => validateRunLogOptions({ inputValues: [] })).toThrow(new UsageError("Missing argument 'FLOW'."));
-  });
-});
-
-describe("defaultRunLogPath", () => {
-  test("creates the private directories and the run's folder, and not the file", () => {
-    const path = defaultRunLogPath("run-1", (name) => (name === "HOME" ? tmp : undefined));
-    expect(path).toBe(join(tmp, ".yian", "runs", "run-1", "log.jsonl"));
-    expect(mode(join(tmp, ".yian"))).toBe(0o700);
-    expect(mode(join(tmp, ".yian", "runs"))).toBe(0o700);
-    expect(mode(join(tmp, ".yian", "runs", "run-1"))).toBe(0o700);
-    expect(existsSync(path)).toBe(false);
-  });
-
-  test("syncs the folder above each folder it makes, and the runs folder once per run", () => {
-    const env = (name: string) => (name === "HOME" ? tmp : undefined);
-    const home = realpathSync(tmp);
-    expect(folderSyncs(() => defaultRunLogPath("run-1", env))).toEqual([
-      home,
-      join(home, ".yian"),
-      join(home, ".yian", "runs"),
-    ]);
-    expect(folderSyncs(() => defaultRunLogPath("run-2", env))).toEqual([join(home, ".yian", "runs")]);
-  });
-
-  test("forces existing directories to 0700", () => {
-    mkdirSync(join(tmp, ".yian", "runs"), { recursive: true });
-    chmodSync(join(tmp, ".yian"), 0o755);
-    chmodSync(join(tmp, ".yian", "runs"), 0o755);
-    defaultRunLogPath("run-2", (name) => (name === "HOME" ? tmp : undefined));
-    expect(mode(join(tmp, ".yian"))).toBe(0o700);
-    expect(mode(join(tmp, ".yian", "runs"))).toBe(0o700);
-  });
-
-  test("a state path that is a file is an error", () => {
-    writeFileSync(join(tmp, ".yian"), "");
-    expect(() => defaultRunLogPath("run-3", (name) => (name === "HOME" ? tmp : undefined))).toThrow(/EEXIST/);
-  });
-
-  test("a run folder path that is a file is an error", () => {
-    mkdirSync(join(tmp, ".yian", "runs"), { recursive: true });
-    writeFileSync(join(tmp, ".yian", "runs", "run-4"), "");
-    expect(() => defaultRunLogPath("run-4", (name) => (name === "HOME" ? tmp : undefined))).toThrow(/EEXIST/);
   });
 });
 

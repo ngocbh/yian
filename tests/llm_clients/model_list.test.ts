@@ -228,6 +228,9 @@ describe("ollama lists tags", () => {
     [null, "http://localhost:11434/api/tags"],
     ["http://127.0.0.1:11434/v1", "http://127.0.0.1:11434/api/tags"],
     ["http://127.0.0.1:11434/v1/", "http://127.0.0.1:11434/api/tags"],
+    // Read as runs read OLLAMA_BASE_URL: no scheme gets http://, an upper-case scheme gets :11434.
+    ["localhost:11434", "http://localhost:11434/api/tags"],
+    ["HTTP://gpu-box", "http://gpu-box:11434/api/tags"],
   ];
   for (const [baseUrl, url] of rows) {
     test(String(baseUrl), async () => {
@@ -248,6 +251,15 @@ test("ollama sends no key even when given one", async () => {
   expect(call.url).toBe("http://192.168.1.5:11434/api/tags");
   expect(AUTH_HEADERS.filter((name) => name in call.headers)).toEqual([]);
   expect(JSON.stringify(call)).not.toContain(KEY);
+});
+
+test("ollama sends the base url's user name and password as basic auth", async () => {
+  const fake = ok({ models: [{ name: "m" }] });
+  expect(await listModels("ollama", { baseUrl: "http://user:pw@gpu-box:11434", request: fake })).toEqual(["m"]);
+  const call = fake.calls[0]!;
+  // The userinfo leaves the URL, which Node's fetch would refuse.
+  expect(call.url).toBe("http://gpu-box:11434/api/tags");
+  expect(call.headers["authorization"]).toBe(`Basic ${btoa("user:pw")}`);
 });
 
 test("azure has no listing", async () => {
@@ -300,6 +312,9 @@ describe("invalid request sends nothing", () => {
     ["openai", "gateway.example.com/v1", null, 8],
     ["vllm", "ftp://localhost/v1", null, 8],
     ["vllm", "http://[::1/v1", null, 8],
+    // An OLLAMA_BASE_URL runs would refuse.
+    ["ollama", "gpu-box", null, 8],
+    ["ollama", "http://user:secret-pw@gpu-box:70000", null, 8],
     // A key the HTTP client would refuse in a header.
     ["openai", null, `${KEY}\n`, 8],
     ["openai", null, "sk-é", 8],

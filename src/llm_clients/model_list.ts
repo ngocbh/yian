@@ -9,12 +9,13 @@
 
 import { current } from "../defaults.ts";
 import { compareCodeUnits } from "../diagnostics.ts";
+import { BasicAuth } from "../llm/auth.ts";
 import { ProviderError } from "../llm/errors.ts";
 import { realScheduler, type Scheduler } from "../platform.ts";
 import { isRecord } from "../typesys/index.ts";
 import { HttpResponse, isVisibleText } from "./auth/common.ts";
 import { request as httpRequest } from "./auth/http.ts";
-import { validateBaseUrl } from "./config.ts";
+import { splitOllamaBaseUrl, validateBaseUrl } from "./config.ts";
 import { openaiIdHeaders, validateHeaders } from "./connection_settings.ts";
 import {
   ANTHROPIC_ENDPOINT,
@@ -56,13 +57,16 @@ export class ModelListError extends Error {
 
 /** Options for `listModels`. */
 export interface ListModelsOptions {
-  /** Key sent as the provider's auth header; absent sends none. Ollama never sends one. */
+  /**
+   * Key sent as the provider's auth header; absent sends none. Ollama never sends one: it sends
+   * only the user name and password in its base URL.
+   */
   apiKey?: string | null;
   /**
    * Host to list instead of the provider default. For Anthropic and Google it is the API root
    * without the version path. For OpenAI-compatible providers it is the URL `/models` is appended
-   * to. A trailing `/v1` on an Ollama URL is dropped. When a key is sent it must pass
-   * `validateBaseUrl`.
+   * to. An Ollama URL is read as runs read `OLLAMA_BASE_URL` (`splitOllamaBaseUrl`), its user name
+   * and password sent as Basic auth. When a key is sent it must pass `validateBaseUrl`.
    */
   baseUrl?: string | null;
   /** Seconds for the whole listing, shared by every page; must be positive. Defaults to 8. */
@@ -111,6 +115,7 @@ export async function listModels(
   if (name === "azure") return null;
   let base: unknown;
   let pages: Pages;
+  // Headers the provider's protocol or the base URL's credentials fix.
   const protocol: Record<string, string> = {};
   let auth: ((key: string) => Record<string, string>) | null;
   if (name === "anthropic") {
@@ -123,7 +128,18 @@ export async function listModels(
     pages = googleIds;
     auth = (key) => ({ "x-goog-api-key": key });
   } else if (name === "ollama") {
-    base = baseUrl || OLLAMA_ENDPOINT;
+    base = OLLAMA_ENDPOINT;
+    if (baseUrl) {
+      // Read as the run route reads it, so the listing asks the host, port and auth runs use.
+      let credentials: [string, string] | null;
+      try {
+        [base, credentials] = splitOllamaBaseUrl(baseUrl);
+      } catch (error) {
+        if (error instanceof RangeError) throw new ModelListError("invalid request");
+        throw error;
+      }
+      if (credentials !== null) Object.assign(protocol, await new BasicAuth(...credentials).headers());
+    }
     pages = ollamaIds;
     auth = null;
   } else if (OPENAI_COMPATIBLE.includes(name)) {
@@ -152,8 +168,7 @@ export async function listModels(
   const taken = new Set(Object.keys(fixed).map((key) => key.toLowerCase()));
   const kept = Object.entries(settings).filter(([key]) => !taken.has(key.toLowerCase()));
   const headers = { ...Object.fromEntries(kept), ...fixed };
-  let root = (base as string).replace(/\/+$/, "");
-  if (name === "ollama" && root.endsWith("/v1")) root = root.slice(0, -"/v1".length);
+  const root = (base as string).replace(/\/+$/, "");
 
   const send = options.request ?? httpRequest;
   const bodyLimit = current().maxModelListBytes;

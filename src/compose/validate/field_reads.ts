@@ -1069,7 +1069,12 @@ export function fieldReadErrors(
   } = options;
   const readRoots: ReadRoots = {
     contracts: (root) => roots.get(root) ?? (opaqueRoots.has(root) ? [null] : undefined),
-    baseContract: (root) => (roots.has(root) ? roots.get(root)![0] ?? null : opaqueRoots.has(root) ? null : undefined),
+    baseContract: (root) => {
+      const alternatives = roots.get(root);
+      if (alternatives === undefined) return opaqueRoots.has(root) ? null : undefined;
+      const distinctOnes = distinct(alternatives);
+      return distinctOnes.length === 1 ? distinctOnes[0]! : null;
+    },
     rootLength,
     nullable: (root) => nullableRoots.has(root),
     why,

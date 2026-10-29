@@ -24,6 +24,7 @@ import {
   type StandardResult,
   type StandardSchemaV1,
   tool,
+  withExecute,
 } from "../../src/tools/function_tools.ts";
 import { registeredTools, registerTool, TOOL_REGISTRY, ToolSet } from "../../src/tools/registry.ts";
 import { toolTypes } from "../../src/tools/types.ts";
@@ -312,6 +313,34 @@ describe("FunctionTool construction", () => {
     expect(isFunctionTool(build({}))).toBe(true);
     expect(isFunctionTool({ ...FIELDS })).toBe(false);
     expect(isFunctionTool(null)).toBe(false);
+  });
+});
+
+describe("withExecute", () => {
+  test("keeps every field but the call", async () => {
+    const validator = z.object({ n: z.number() });
+    const original = tool({
+      name: "t",
+      description: "d",
+      parameters: validator,
+      output: z.string(),
+      isConcurrencySafe: () => true,
+      execute: () => "old",
+    });
+    const copy = withExecute(original, () => "new");
+    expect(copy).toBeInstanceOf(FunctionTool);
+    for (const field of [
+      "name",
+      "description",
+      "parametersJsonSchema",
+      "isConcurrencySafe",
+      "parametersValidator",
+      "outputJsonSchema",
+      "outputValidator",
+    ] as const) {
+      expect(copy[field]).toEqual(original[field]);
+    }
+    expect(copy.execute({}, undefined as never)).toBe("new");
   });
 });
 

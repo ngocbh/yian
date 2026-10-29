@@ -8,7 +8,7 @@
  */
 
 import { TAKE } from "../tools/context.ts";
-import { FunctionTool } from "../tools/function_tools.ts";
+import { type FunctionTool, withExecute } from "../tools/function_tools.ts";
 import type { ChildStatus } from "./chat_runs.ts";
 
 /** The most characters of a child event's line. */
@@ -157,14 +157,14 @@ export class EventQueue {
     return this.#queued.map((queued) => queued.event);
   }
 
-  /** Advance `run`'s last seen seq to `seq`. */
-  #see(run: string, seq: number): void {
-    this.#seen.set(run, Math.max(seq, this.seen(run)));
-  }
-
   /** Put `events`, taken before and not delivered after all, back at the front, in their order. */
   requeueFront(events: readonly ChildEvent[]): void {
     this.#queued = [...events.map((event) => ({ event, taken: true })), ...this.#queued];
+  }
+
+  /** Advance `run`'s last seen seq to `seq`. */
+  #see(run: string, seq: number): void {
+    this.#seen.set(run, Math.max(seq, this.seen(run)));
   }
 }
 
@@ -197,24 +197,14 @@ export class InFlight {
 
 /** `tools`, each counted in `counter` from its call until it returns or throws. */
 export function trackInFlight(tools: readonly FunctionTool[], counter: InFlight): FunctionTool[] {
-  return tools.map(
-    (each) =>
-      new FunctionTool({
-        name: each.name,
-        description: each.description,
-        parametersJsonSchema: each.parametersJsonSchema,
-        isConcurrencySafe: each.isConcurrencySafe,
-        parametersValidator: each.parametersValidator,
-        outputJsonSchema: each.outputJsonSchema,
-        outputValidator: each.outputValidator,
-        execute: async (args, ctx) => {
-          counter.enter();
-          try {
-            return await each.execute(args, ctx);
-          } finally {
-            counter.leave();
-          }
-        },
-      }),
+  return tools.map((each) =>
+    withExecute(each, async (args, ctx) => {
+      counter.enter();
+      try {
+        return await each.execute(args, ctx);
+      } finally {
+        counter.leave();
+      }
+    }),
   );
 }

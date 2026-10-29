@@ -322,7 +322,7 @@ input's type before the run starts:
 | Input type | Text it converts |
 |---|---|
 | `int` | A whole number, such as `42` |
-| `float` | A number, such as `2.5`, `1e3` or `inf` |
+| `float` | A number, such as `2.5` or `1e3`, or infinity: `inf` or `infinity` in any case, with an optional sign, such as `-Infinity` |
 | `bool` | `true`, `yes`, `y`, `on`, `1` and `false`, `no`, `n`, `off`, `0`, in any case |
 | `Any` | None: `--input x=3` gives the text `"3"` |
 

@@ -603,6 +603,17 @@ export function nodeChild(node: Node, fail: GraphWalkError = plainWalkError): Fl
 }
 
 /**
+ * Replace the static child flow of a node that has one (CALL, MAP, LOOP) with `child`.
+ *
+ * @throws What `nodeChild` throws, or a RangeError when the node has no static child.
+ */
+export function setNodeChild(node: Node, child: Flow): void {
+  if (nodeChild(node) === null) throw new RangeError(`node ${reprText(node.id)} has no static child to replace`);
+  // Every kind with a static child keeps it in its `child` field, which `originChildren` returns.
+  (node as Node & { child: Flow }).child = child;
+}
+
+/**
  * Reject a layout's duplicate target paths, or one node object reached through several paths.
  *
  * @param targets The layout's targets, each a root-relative locator and the node there.

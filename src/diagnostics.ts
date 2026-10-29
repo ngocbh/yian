@@ -6,10 +6,10 @@
  * `Failure` carries stable meaning plus opaque `OriginRef` instances; a front end
  * implements `OriginResolver` to turn those references into concrete presentation
  * frames. `ResolverTable` composes those namespaces through exact immutable routes.
- * `compareCodeUnits` is the one string order for sorting, `reprText` quotes text the
- * way CPython 3.12's `repr` does, and `getCloseMatches` finds "did you mean" suggestions the
- * way CPython 3.12's `difflib` does. `addNote`, `errorTypeName` and `noteCleanup` help report
- * a thrown error.
+ * `compareCodeUnits` is the one string order for sorting (`compareCodePoints` serves formats fixed
+ * to code-point order), `reprText` quotes text the way CPython 3.12's `repr` does, and
+ * `getCloseMatches` finds "did you mean" suggestions the way CPython 3.12's `difflib` does.
+ * `addNote`, `errorTypeName` and `noteCleanup` help report a thrown error.
  */
 
 /**
@@ -19,6 +19,22 @@
  */
 export function compareCodeUnits(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Compare two strings by code point, for the few formats fixed to that order (a memory file's JSON
+ * keys, prompt choices); everything else sorts with `compareCodeUnits`.
+ */
+export function compareCodePoints(a: string, b: string): number {
+  // Equal code points take equal code units, so one index walks both strings.
+  let i = 0;
+  while (i < a.length && i < b.length) {
+    const x = a.codePointAt(i)!;
+    const y = b.codePointAt(i)!;
+    if (x !== y) return x - y;
+    i += x > 0xffff ? 2 : 1;
+  }
+  return a.length - b.length;
 }
 
 // Reproduces CPython 3.12's `repr` of a `str` (`unicode_repr`); the printable table is

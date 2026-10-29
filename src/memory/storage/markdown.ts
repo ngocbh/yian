@@ -12,7 +12,7 @@ import fs from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { current as currentDefaults } from "../../defaults.ts";
-import { reprText } from "../../diagnostics.ts";
+import { compareCodePoints, reprText } from "../../diagnostics.ts";
 import {
   type FileLock,
   FileLockError,
@@ -96,19 +96,6 @@ export interface MarkdownStore {
 export function markdownVersion(text: string): string {
   if (!text.isWellFormed()) throw new RangeError("text holds a lone surrogate, which has no UTF-8 encoding");
   return `sha256:${createHash("sha256").update(text, "utf8").digest("hex")}`;
-}
-
-/** Compare two strings by code point. */
-function compareCodePoints(a: string, b: string): number {
-  // Equal code points take equal code units, so one index walks both strings.
-  let i = 0;
-  while (i < a.length && i < b.length) {
-    const x = a.codePointAt(i)!;
-    const y = b.codePointAt(i)!;
-    if (x !== y) return x - y;
-    i += x > 0xffff ? 2 : 1;
-  }
-  return a.length - b.length;
 }
 
 /**

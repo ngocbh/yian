@@ -46,6 +46,7 @@ import { resolvedPath } from "../skills/catalog.ts";
 import { isReportedToolError, ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
 import { buildValueAs, canonicalTypeLabel, isInboxType } from "../typesys/values.ts";
+import { LIST_ITEMS } from "./chat_events.ts";
 import type { ChildRuns, ChildStatus } from "./chat_runs.ts";
 import { loadConfinedText } from "./confined_load.ts";
 import { unifiedDiff } from "./diff.ts";
@@ -608,10 +609,11 @@ const START_CHOICES = ["Approve", "Approve this flow for this chat", "Reject"] a
 /** What the run tools need beside the file tools' host. */
 export interface ChatRunToolsOptions {
   /**
-   * Told each status a run tool hands the model, by run and seq, so the child events up to it
-   * aren't relayed again; `null` for none.
+   * The chat's record of what the model has seen (its `EventQueue`): told each status a run tool
+   * hands the model, by run and seq, so the child events up to it aren't relayed again; and asked
+   * the last seq of a run the model has seen, a relayed event included. `null` for none.
    */
-  seen?: { markSeen(run: string, seq: number): void } | null;
+  seen?: { markSeen(run: string, seq: number): void; seen(run: string): number } | null;
   /** The clock `wait_flow` times out on; the real one by default. */
   scheduler?: Scheduler;
 }
@@ -622,10 +624,18 @@ function cutText(text: string): string {
   return `${text.slice(0, STATUS_TEXT_CHARS)}... (cut at ${STATUS_TEXT_CHARS} characters)`;
 }
 
-/** `status` as the model reads it: its text fields cut, without the seq it doesn't need. */
-function shownStatus(status: ChildStatus): Record<string, unknown> {
-  const { seq: _, output, failure, asks, replies, note, ...rest } = status;
+/**
+ * @internal `status` as the model reads it: its text fields cut, its asks and waits listed up to
+ * `LIST_ITEMS` each (`not_shown` says how many more), without the seq it doesn't need.
+ */
+export function shownStatus(status: ChildStatus): Record<string, unknown> {
+  const { seq: _, output, failure, asks, replies, note, waits, ...rest } = status;
   const shown: Record<string, unknown> = { ...rest };
+  const more: string[] = [];
+  if (waits !== undefined) {
+    shown["waits"] = waits.slice(0, LIST_ITEMS);
+    if (waits.length > LIST_ITEMS) more.push(`${waits.length - LIST_ITEMS} more waits`);
+  }
   if (output !== undefined) {
     // An output too long as JSON is shown as its cut JSON text.
     const json = JSON.stringify(output) ?? "null";
@@ -633,9 +643,13 @@ function shownStatus(status: ChildStatus): Record<string, unknown> {
     else shown["output"] = json.length > STATUS_TEXT_CHARS ? cutText(json) : output;
   }
   if (failure !== undefined) shown["failure"] = { ...failure, message: cutText(failure.message) };
-  if (asks !== undefined) shown["asks"] = asks.map((ask) => ({ ...ask, question: cutText(ask.question) }));
+  if (asks !== undefined) {
+    shown["asks"] = asks.slice(0, LIST_ITEMS).map((ask) => ({ ...ask, question: cutText(ask.question) }));
+    if (asks.length > LIST_ITEMS) more.unshift(`${asks.length - LIST_ITEMS} more asks`);
+  }
   if (replies !== undefined) shown["replies"] = replies.map(cutText);
   if (note !== undefined) shown["note"] = cutText(note);
+  if (more.length > 0) shown["not_shown"] = `${more.join(" and ")}; the run's log has all`;
   return shown;
 }
 
@@ -793,12 +807,13 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
   const { seen = null, scheduler = realScheduler } = options;
   // The approvals given "for this chat", by real path: the digest of what was approved.
   const approved = new Map<string, string>();
-  // By child, the last seq a tool showed the model, so `wait_flow` returns at once for a newer one.
+  // By child, the last seq a tool showed the model; with `seen`'s, what `wait_flow` waits past.
   const shown = new Map<string, number>();
+  const lastSeen = (run: string) => Math.max(shown.get(run) ?? 0, seen?.seen(run) ?? 0);
   const show = (status: ChildStatus): string => {
+    const last = lastSeen(status.run);
     runs.markRead(status.run, status.seq);
     seen?.markSeen(status.run, status.seq);
-    const last = shown.get(status.run) ?? 0;
     shown.set(status.run, Math.max(status.seq, last));
     // The stored status keeps the replies it was published with; once shown, they are read.
     const { replies: _, ...unrepeated } = status;
@@ -872,7 +887,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
         if (ctx.signal.aborted) end();
         scheduler.sleep(Math.min(seconds, WAIT_FLOW_MAX_S) * 1000, done.signal).then(end, () => {});
         try {
-          return show(await runs.next(id, shown.get(id) ?? 0, { signal: done.signal }));
+          return show(await runs.next(id, lastSeen(id), { signal: done.signal }));
         } finally {
           ctx.signal.removeEventListener("abort", end);
           end();

@@ -19,6 +19,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import { EventQueue } from "../../src/cli/chat_events.ts";
 import { ChildRuns } from "../../src/cli/chat_runs.ts";
 import {
   type ChatToolHost,
@@ -27,6 +28,7 @@ import {
   checkFocus,
   confine,
   listFlows,
+  shownStatus,
   ToolRefused,
 } from "../../src/cli/chat_tools.ts";
 import type { ApproveRequest } from "../../src/cli/terminal.ts";
@@ -731,7 +733,11 @@ output: done
 `;
 
   /** The run tools over a fresh `ChildRuns` on a held clock, approvals answered by `answer`. */
-  function runTools(answer: string | null = "Approve", scheduler = heldScheduler().scheduler) {
+  function runTools(
+    answer: string | null = "Approve",
+    scheduler = heldScheduler().scheduler,
+    queue: EventQueue | null = null,
+  ) {
     runs = new ChildRuns({
       root,
       logDir: join(tmp, "runs"),
@@ -751,7 +757,16 @@ output: done
         },
       }),
       runs,
-      { seen: { markSeen: (run, seq) => void seen.push([run, seq]) }, scheduler },
+      {
+        seen: {
+          markSeen: (run, seq) => {
+            seen.push([run, seq]);
+            queue?.markSeen(run, seq);
+          },
+          seen: (run) => queue?.seen(run) ?? 0,
+        },
+        scheduler,
+      },
     );
     const signal = new AbortController();
     const invoke = async (name: string, args: Record<string, unknown>, abort: AbortSignal = signal.signal) => {
@@ -1033,6 +1048,41 @@ output: done
     },
     TIMEOUT,
   );
+
+  test(
+    "a status the chat relayed as an event counts as seen: wait_flow waits past it and doesn't repeat its replies",
+    async () => {
+      writeFileSync(join(root, "echo.yaml"), ECHO);
+      const queue = new EventQueue();
+      const { json, runs: children } = runTools("Approve", heldScheduler().scheduler, queue);
+      await json("start_flow", { path: "echo.yaml", inputs: {} });
+      await settledJson(json, "r1");
+      const asked = children.status("r1").seq;
+      await json("message_flow", { run: "r1", inbox: "messages", text: "hi" });
+      let relayed = children.status("r1");
+      while (relayed.seq <= asked + 1 || relayed.status === "running") relayed = await children.next("r1", relayed.seq);
+      queue.push(relayed);
+      // The flusher sends it: the model has seen it.
+      expect(queue.takeAll().map((event) => event.seq)).toEqual([relayed.seq]);
+      children.markRead("r1", relayed.seq);
+      const waited = json("wait_flow", { run: "r1", seconds: 60 });
+      await until(() => children.waitingNexts() === 1);
+      children.cancelWaits();
+      const status = await waited;
+      expect(status).toMatchObject({ status: "waiting" });
+      expect(status["replies"]).toBeUndefined();
+    },
+    TIMEOUT,
+  );
+
+  test("a status lists at most 20 asks and waits, with a note", () => {
+    const asks = Array.from({ length: 25 }, (_, n) => ({ call: `c${n}`, question: "q" }));
+    const waits = Array.from({ length: 22 }, (_, n) => ({ node: `n${n}` }));
+    const shown = shownStatus({ run: "r1", status: "waiting", asks, waits, log: "l", seq: 1 });
+    expect((shown["asks"] as unknown[]).length).toBe(20);
+    expect((shown["waits"] as unknown[]).length).toBe(20);
+    expect(shown["not_shown"]).toBe("5 more asks and 2 more waits; the run's log has all");
+  });
 
   test("only the reading tools may run beside other calls", () => {
     const { tools } = runTools();

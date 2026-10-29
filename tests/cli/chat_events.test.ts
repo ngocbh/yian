@@ -82,6 +82,13 @@ describe("childEvent", () => {
     expect(childEvent(status("r1", 1, { waits: [timer], replies: ["z"] }))?.text).toBe('run r1 said "z"');
   });
 
+  test("a question list is cut at 20, with a note", () => {
+    const asks = Array.from({ length: 23 }, (_, n) => ({ call: `c${n}`, question: "q" }));
+    const text = childEvent(status("r1", 1, { asks }))!.text;
+    expect(text).toContain('(call c19): "q", (3 more; flow_status shows all)');
+    expect(text).not.toContain("c20");
+  });
+
   test("a long line is cut, with a note", () => {
     const text = childEvent(status("r1", 1, { replies: ["x".repeat(3000)] }))!.text;
     expect(text).toBe(`run r1 said "${"x".repeat(2000 - 'run r1 said "'.length)}... (cut; flow_status shows all)`);
@@ -129,6 +136,16 @@ describe("EventQueue", () => {
     queue.markSeen("r2", 1);
     expect(queue.takeAll().map((event) => event.run)).toEqual(["r2"]);
     expect(read).toEqual([["r2", 2]]);
+  });
+
+  test("seen is the last seq marked seen or taken, by run", () => {
+    const queue = new EventQueue();
+    expect(queue.seen("r1")).toBe(0);
+    queue.push(status("r1", 4, { status: "cancelled" }));
+    queue.markSeen("r2", 3);
+    queue.takeAll();
+    queue.markSeen("r1", 2);
+    expect([queue.seen("r1"), queue.seen("r2")]).toEqual([4, 3]);
   });
 
   test("requeued events go first, in order, and a newer status doesn't replace them", () => {

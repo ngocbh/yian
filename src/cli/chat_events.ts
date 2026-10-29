@@ -14,6 +14,9 @@ import type { ChildStatus } from "./chat_runs.ts";
 /** The most characters of a child event's line. */
 const EVENT_BODY_CHARS = 2000;
 
+/** The most asks, or waits, a child event or a status shown to the model lists. */
+export const LIST_ITEMS = 20;
+
 /** The type of the event a queue push or the last tool call ending dispatches on the wake target. */
 export const CHAT_WAKE = "wake";
 
@@ -52,7 +55,10 @@ export function childEvent(status: ChildStatus): ChildEvent | null {
         : `failed (${failure.code}${failure.node === null ? "" : ` at ${failure.node}`}): ${quote(failure.message)}`,
     );
   } else if ((status.asks ?? []).length > 0) {
-    clauses.push(`asks ${status.asks!.map((ask) => `(call ${ask.call}): ${quote(ask.question)}`).join(", ")}`);
+    const asks = status.asks!.slice(0, LIST_ITEMS).map((ask) => `(call ${ask.call}): ${quote(ask.question)}`);
+    const more = status.asks!.length - LIST_ITEMS;
+    if (more > 0) asks.push(`(${more} more; flow_status shows all)`);
+    clauses.push(`asks ${asks.join(", ")}`);
   } else {
     const waits = (status.waits ?? []) as readonly Wait[];
     const inbox = waits.find((wait) => wait.tool === TAKE && wait.settled !== true && typeof wait.inbox === "string");
@@ -89,6 +95,8 @@ export class EventQueue {
   readonly #wake: EventTarget | null;
   readonly #markRead: ((run: string, seq: number) => void) | null;
   #queued: Queued[] = [];
+  /** By run, the last seq marked seen or taken. */
+  readonly #seen = new Map<string, number>();
 
   /**
    * @param options.wake Gets a `CHAT_WAKE` event each time a push queues something.
@@ -117,8 +125,14 @@ export class EventQueue {
     this.#wake?.dispatchEvent(new Event(CHAT_WAKE));
   }
 
+  /** The last seq of `run` the assistant has seen: marked seen, or taken to be sent; 0 for none. */
+  seen(run: string): number {
+    return this.#seen.get(run) ?? 0;
+  }
+
   /** Drop `run`'s events up to status `seq`: the assistant has seen that status. */
   markSeen(run: string, seq: number): void {
+    this.#see(run, seq);
     this.#queued = this.#queued.filter((queued) => queued.event.run !== run || queued.event.seq > seq);
   }
 
@@ -126,8 +140,21 @@ export class EventQueue {
   takeAll(): ChildEvent[] {
     const taken = this.#queued.map((queued) => queued.event);
     this.#queued = [];
-    for (const event of taken) this.#markRead?.(event.run, event.seq);
+    for (const event of taken) {
+      this.#see(event.run, event.seq);
+      this.#markRead?.(event.run, event.seq);
+    }
     return taken;
+  }
+
+  /** The queued events, oldest first, left queued. */
+  peek(): readonly ChildEvent[] {
+    return this.#queued.map((queued) => queued.event);
+  }
+
+  /** Advance `run`'s last seen seq to `seq`. */
+  #see(run: string, seq: number): void {
+    this.#seen.set(run, Math.max(seq, this.seen(run)));
   }
 
   /** Put `events`, taken before and not delivered after all, back at the front, in their order. */

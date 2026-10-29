@@ -193,6 +193,43 @@ describe("registerTemplateFn", () => {
       "expression function 'shout', default of 'times': NaN is not a yian value",
     );
   });
+
+  test.each([
+    ["my-fn", "it is no name: a call names a letter or `_` followed by letters, digits and `_`"],
+    ["1fn", "it is no name: a call names a letter or `_` followed by letters, digits and `_`"],
+    ["", "it is no name: a call names a letter or `_` followed by letters, digits and `_`"],
+    ["a.b", "it is no name: a call names a letter or `_` followed by letters, digits and `_`"],
+    ["true", "`true` is a literal"],
+    ["none", "`none` is a literal"],
+    ["inf", "`inf` is a literal"],
+    ["true/x", "it starts with the literal `true`"],
+    ["inf#a", "it starts with the literal `inf`"],
+    ["isinstance", "`isinstance(x, T)` is the type test"],
+  ])("a name no expression can call is refused: %p", (name, reason) => {
+    saved.push([name, TEMPLATE_FNS.get(name)]);
+    const fn: TemplateFn = { params: [], call: () => null };
+    const error = (() => {
+      try {
+        registerTemplateFn(name, fn);
+      } catch (e) {
+        return e;
+      }
+      return undefined;
+    })();
+    expect(error).toBeInstanceOf(RangeError);
+    expect((error as Error).message).toBe(
+      `expression function ${name === "" ? "''" : `'${name}'`} can never be called: ${reason}`,
+    );
+    expect(TEMPLATE_FNS.has(name)).toBe(false);
+  });
+
+  test.each(["and", "not", "item", "input", "int", "Order", "_x", "node#0", "a/b", "trueish", "none_x"])(
+    "a name a call can reach registers: %p",
+    (name) => {
+      standIn(name, [{ name: "v" }]);
+      expect(TEMPLATE_FNS.has(name)).toBe(true);
+    },
+  );
 });
 
 // ---------- loading ----------

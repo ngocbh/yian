@@ -464,7 +464,8 @@ function sourceRefs(route: ValueRoute): SourceRef[] {
  * @returns Ordered, independent source-shaped contributions and stopped feedback with
  *   expression/result/source interpretation data; it, its arrays and its entries are frozen.
  * @throws TypeError for unsupported feedback data.
- * @throws RangeError for feedback that does not match the result shape.
+ * @throws RangeError for feedback that does not match the result shape, or a concat route whose
+ *   sizes don't pair with its children.
  */
 export function routeFeedback(
   route: ValueRoute,
@@ -569,6 +570,11 @@ export function routeFeedback(
         );
       });
     } else if (current.kind === "concat") {
+      if (current.sizes.length !== current.children.length) {
+        throw new RangeError(
+          `concat route has ${current.sizes.length} recorded sizes for its ${current.children.length} children`,
+        );
+      }
       const total = current.sizes.reduce((sum, size) => sum + size, 0);
       const first = selection[0];
       if (first !== undefined && !(typeof first === "number" && Number.isInteger(first) && 0 <= first && first < total)) {
@@ -576,8 +582,7 @@ export function routeFeedback(
       }
       let offset = 0;
       current.children.forEach((child, index) => {
-        const size = current.sizes[index];
-        if (size === undefined) return;
+        const size = current.sizes[index]!;
         if (first !== undefined && !(offset <= first && first < offset + size)) {
           offset += size;
           return;

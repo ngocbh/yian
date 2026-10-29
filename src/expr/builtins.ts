@@ -17,13 +17,14 @@
  * shipped builtin always returns, so the loader can reject a field read on its result.
  *
  * Knows about: `typesys` (`Value`, `FileRef`, `InboxRef`, `Type`, `ValueKind`, `fromHost`,
- * `valueRepr`, `writeAsText`, `writeAsJson`) and `diagnostics` (`reprText`). Never imports: `expressions`,
- * `template`, or anything above them.
+ * `valueRepr`, `writeAsText`, `writeAsJson`), `diagnostics` (`reprText`) and `grammar`
+ * (`uncallableReason`). Never imports: `expressions`, `template`, or anything above them.
  */
 
 import { reprText } from "../diagnostics.ts";
 import { FileRef, InboxRef, Type, type Value, ValueKind } from "../typesys/index.ts";
 import { fromHost, valueRepr, writeAsJson, writeAsText } from "../typesys/values.ts";
+import { uncallableReason } from "./grammar.ts";
 
 /** One parameter of a builtin; one with an own `default` is optional. */
 export interface TemplateParam {
@@ -45,13 +46,19 @@ export const TEMPLATE_FNS = new Map<string, TemplateFn>();
 /**
  * Register `fn` as the builtin `name`, replacing any builtin of that name (last writer wins).
  *
+ * `name` must be one a call can reach: a name (`my-fn` would read as `my - fn`), not a literal
+ * word (`true`, `none`, `inf`) and not `isinstance`.
+ *
  * Each param's `default` is read as a host value, so `{name: "indent", default: 2}` gives the int
  * `2n`. `fn` must be pure and deterministic: replay and learning bind a node again from the run
  * log, calling it again with the same arguments.
  *
+ * @throws {RangeError} If no expression can call `name`.
  * @throws {TypeCheckError} If a default is no yian value (`fromHost`'s message).
  */
 export function registerTemplateFn(name: string, fn: TemplateFn): void {
+  const uncallable = uncallableReason(name);
+  if (uncallable !== null) throw new RangeError(`expression function ${reprText(name)} can never be called: ${uncallable}`);
   const params = fn.params.map((p) => {
     if (!Object.hasOwn(p, "default")) return { name: p.name };
     const where = `expression function ${reprText(name)}, default of ${reprText(p.name)}`;

@@ -61,7 +61,7 @@
 
 import { type OriginRef, reprText, type SourceRange } from "../../diagnostics.ts";
 import { ExpressionError, unknownFunctionMessage } from "../../expr/expressions.ts";
-import { exprRefsOf, flowCallCalleesInSpans, InlineCall, splitCallsAware } from "../../expr/template.ts";
+import { exprRefsOf, flowCallCalleesInSpans } from "../../expr/template.ts";
 import {
   Assertion,
   Binding,
@@ -72,7 +72,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { BUILTIN_TYPE_NAMES } from "../../typesys/types.ts";
 import { isRecord, jsTypeName, type Value } from "../../typesys/values.ts";
-import { CALL_HEAD, matchCallDirective, spanCallFlowId } from "../helpers/directives.ts";
+import { CALL_HEAD, InlineCall, matchCallDirective, spanCallFlowId, splitCallsAware } from "../helpers/directives.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
 import { QUOTED_STYLES, yamlQuoted } from "../helpers/tags.ts";
 import { type NodeDescriptor, siteKey } from "../nodes/base.ts";

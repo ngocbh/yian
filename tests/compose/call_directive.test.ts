@@ -14,7 +14,14 @@ import { afterEach, expect, test } from "bun:test";
 
 import { INLINE_FLOW_PREFIX } from "../../src/compose/desugar/inline_bodies.ts";
 import { ArgumentValueError, desugarInlineCalls, synthIdGen } from "../../src/compose/desugar/inline_calls.ts";
-import { CALL_HEAD, matchCallDirective } from "../../src/compose/helpers/directives.ts";
+import {
+  CALL_HEAD,
+  findParenEnd,
+  InlineCall,
+  matchCallDirective,
+  spanCallDirectiveText,
+  splitCallsAware,
+} from "../../src/compose/helpers/directives.ts";
 import { LoadDiagnostics, type LoadError } from "../../src/compose/helpers/errors.ts";
 import type { NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CallDescriptor } from "../../src/compose/nodes/call.ts";
@@ -23,7 +30,6 @@ import { parseYamlLiteral } from "../../src/compose/source/index.ts";
 import { forget } from "../../src/defaults.ts";
 import { OriginRef, SourceRange } from "../../src/diagnostics.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
-import { findParenEnd, InlineCall, splitCallsAware } from "../../src/expr/template.ts";
 import { Assertion } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
 import {
@@ -127,6 +133,16 @@ test.each([
   ["", ",", [""]],
 ] as const)("splitCallsAware(%p, %p) splits at top level only", (text, sep, expected) => {
   expect(splitCallsAware(text, sep)).toEqual([...expected]);
+});
+
+test.each([
+  ["a call in text", "see ${call(enrich, topic=input.topic)}", "call(enrich, topic=input.topic)"],
+  ["the first span", "${call(a)} ${call(b)}", "call(a)"],
+  ["the outer of nested calls", "${call(outer, x=call(inner))}", "call(outer, x=call(inner))"],
+  ["a call inside an expression", "${upper(call (my-flow))}", "call (my-flow)"],
+  ["no call", "${review(x)}", null],
+])("the source of a span call(...): %s", (_name, text, source) => {
+  expect(spanCallDirectiveText(text)).toBe(source);
 });
 
 test("an InlineCall is frozen and keeps its fields", () => {

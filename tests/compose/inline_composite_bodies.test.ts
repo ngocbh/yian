@@ -30,6 +30,7 @@ import type { LoopNode } from "../../src/nodes/loop/node.ts";
 import type { MapNode } from "../../src/nodes/map/node.ts";
 import { runtime } from "../../src/platform.ts";
 import { runFlow } from "../../src/run.ts";
+import { thrownBy } from "../helpers/run_state_fixtures.ts";
 import { Type, type Value, ValueKind, type ValueRecord } from "../../src/typesys/values.ts";
 import {
   assembled,
@@ -739,7 +740,7 @@ test.each([
     "wrong-target",
     "inline body of node 'call_node': final node descriptor does not target its retained inline body",
   ],
-])("registerInlineBodies rejects a bad association, located and redacted: %s", (failure, message) => {
+])("registerInlineBodies rejects a bad association as a compiler bug, redacted: %s", (failure, message) => {
   const [descriptors, bodies] = associationFixture();
   const body = bodies.get("call_node")!;
   const call = descriptors.get("call_node") as CallDescriptor;
@@ -748,17 +749,17 @@ test.each([
   if (failure === "wrong-target") candidate.set("call_node", call.replace({ call: "named" }));
   const registrar = new RecordingRegistrar();
 
-  const error = loadError(() =>
+  const run = () =>
     registerInlineBodies(candidate, new Map([["call_node", body]]), {
       registrar,
       buildChild: () => handChild({ output: null }),
-    }),
-  );
+    });
 
+  const error = thrownBy(run) as Error;
+  expect(error.constructor).toBe(RangeError);
   expect(error.message).toBe(message);
-  expect(error.message).not.toContain(body.flowId);
-  expect(error.message).not.toContain(INLINE_FLOW_PREFIX);
-  expect(error.diagnostic.frames.at(-1)!.range).toEqual(body.nodesCursor.range!);
+  expect(message).not.toContain(body.flowId);
+  expect(message).not.toContain(INLINE_FLOW_PREFIX);
   expect(registrar.registrations).toEqual([]);
 });
 
@@ -768,12 +769,11 @@ test("registerInlineBodies checks every body before the first registration", () 
   broken.delete("loop_node");
   const registrar = new RecordingRegistrar();
 
-  const error = loadError(() =>
-    registerInlineBodies(broken, bodies, { registrar, buildChild: () => handChild({ output: null }) }),
-  );
+  const run = () => registerInlineBodies(broken, bodies, { registrar, buildChild: () => handChild({ output: null }) });
 
+  const error = thrownBy(run) as Error;
+  expect(error.constructor).toBe(RangeError);
   expect(error.message).toBe("inline body of node 'loop_node': no matching composite node descriptor");
-  expect(error.diagnostic.frames.at(-1)!.range).toEqual(bodies.get("loop_node")!.nodesCursor.range!);
   expect(registrar.registrations).toEqual([]);
 });
 

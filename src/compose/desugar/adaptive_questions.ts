@@ -51,12 +51,6 @@ import { type NodeDescriptor, siteKey } from "../nodes/base.ts";
 import { QUESTIONS_INPUT, ToolDescriptor } from "../nodes/tool.ts";
 
 /**
- * Reserved ask input name: the wire from the synth composer's output into the ask's questions.
- * Authors never write it; the desugar owns the namespace.
- */
-export const QPARAM = QUESTIONS_INPUT;
-
-/**
  * Lower each TOOL `ask` with `adaptive_questions:` into a synth agent + rewritten ask.
  *
  * Returns a NEW descriptor map. A non-adaptive descriptor passes through untouched; an adaptive
@@ -91,21 +85,25 @@ export function desugarAdaptiveQuestions(
     // The composer reads the ask's context: every input but its own question surface and
     // timeout, so a context input reaches the host as an extra too. The ask's parse refused an
     // authored `__questions`.
-    const { timeout: _timeout, questions: _questions, [QPARAM]: _reserved, ...context } = desc.inputs;
-    newDescriptors.set(synthId, composerFor(gid, desc, context));
+    const { timeout: _timeout, questions: _questions, [QUESTIONS_INPUT]: _reserved, ...context } = desc.inputs;
+    newDescriptors.set(synthId, composerFor(gid, synthId, desc, context));
     const wire = `\${${synthId}.output}`;
-    newDescriptors.set(gid, desc.replace({ adaptiveQuestions: null, inputs: { ...desc.inputs, [QPARAM]: wire } }));
+    newDescriptors.set(
+      gid,
+      desc.replace({ adaptiveQuestions: null, inputs: { ...desc.inputs, [QUESTIONS_INPUT]: wire } }),
+    );
   }
   return newDescriptors;
 }
 
 /**
  * Return the synth composer agent for the asking node `desc` (id `gid`) that carries an
- * `adaptive_questions:` block: id `<gid>__compose`, the block's brief as its prompt, `inputs` as its
+ * `adaptive_questions:` block: id `synthId`, the block's brief as its prompt, `inputs` as its
  * context inputs with their declared types, the question list as its output, and `gid` as its host.
  */
 function composerFor(
   gid: string,
+  synthId: string,
   desc: NodeDescriptor & { readonly adaptiveQuestions: unknown },
   inputs: Readonly<Record<string, unknown>>,
 ): AgentDescriptor {
@@ -133,7 +131,7 @@ function composerFor(
     fieldLabels.set(`input ${reprText(p)}`, `node ${reprText(gid)} input ${reprText(p)}`);
   }
   const agentFields: AgentDescriptorFields = {
-    id: `${gid}__compose`,
+    id: synthId,
     prompt: auto["prompt"] as string,
     // The composer reads the asking node's context inputs, so it checks their declared types too.
     inputs: { ...inputs },

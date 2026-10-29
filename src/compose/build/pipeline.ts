@@ -91,8 +91,8 @@ import type { SourceCatalogBuilder, SourceSitePath } from "../source/catalog.ts"
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
 import { AgentDescriptor, readLlmConfig } from "../nodes/agent.ts";
 import { siteKey } from "../nodes/base.ts";
-import { ToolDescriptor } from "../nodes/tool.ts";
-import { desugarAdaptiveQuestions, QPARAM } from "../desugar/adaptive_questions.ts";
+import { QUESTIONS_INPUT, ToolDescriptor } from "../nodes/tool.ts";
+import { desugarAdaptiveQuestions } from "../desugar/adaptive_questions.ts";
 import { type CaseRead, caseOutputReads, expandCaseOutputs } from "../desugar/case_outputs.ts";
 import { desugarCaseCallTargets } from "../desugar/case_targets.ts";
 import { extractInlineBodies, type InlineBody } from "../desugar/inline_bodies.ts";
@@ -172,8 +172,44 @@ function locateSourceAccess<T>(diagnostics: LoadDiagnostics, fn: () => T): T {
   }
 }
 
+// Each `nodes:` cursor's node entries, normalized. A cursor never changes, so the passes of one
+// assembly share one normalization per node.
+const normalizedNodes = new WeakMap<SourceCursor, Map<string, SourceCursor>>();
+
+/**
+ * Return the value at `path` inside one authored node's normalized entry (`input:` read as
+ * `inputs`), or the entry itself for an empty `path`.
+ *
+ * A text step selects a mapping key; an index step selects a sequence item the caller knows is
+ * there. Don't call it for a value entry, which has no node body.
+ *
+ * @param nodesCursor Retained view of the flow's node mapping.
+ * @param nodeId The node whose entry is read.
+ * @param path The steps inside the entry.
+ * @returns The cursor, or `null` when the node or a key along `path` is absent.
+ * @throws SourceAccessError when the retained source can't be traversed.
+ */
+function authoredField(nodesCursor: SourceCursor, nodeId: string, ...path: (string | number)[]): SourceCursor | null {
+  if (!nodesCursor.has(nodeId)) return null;
+  let entries = normalizedNodes.get(nodesCursor);
+  if (entries === undefined) {
+    entries = new Map();
+    normalizedNodes.set(nodesCursor, entries);
+  }
+  let cursor = entries.get(nodeId);
+  if (cursor === undefined) {
+    cursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+    entries.set(nodeId, cursor);
+  }
+  for (const step of path) {
+    if (typeof step === "string" && !cursor.has(step)) return null;
+    cursor = cursor.child(step);
+  }
+  return cursor;
+}
+
 /** One active descriptor build and the dependency edge that requested it; frozen. */
-export class BuildRequest {
+class BuildRequest {
   /** The node being built. */
   readonly nodeId: string;
   /** The requesting edge's label, or `null` for none. */
@@ -361,8 +397,9 @@ export class ComposedFlow {
   /**
    * Resolve one semantic failure through this flow's source authority.
    *
-   * Resolution is presentation-only. A missing, incomplete, malformed, or failing resolver
-   * produces an unlocated diagnostic without changing the semantic failure fields.
+   * Resolution is presentation-only. A missing resolver, or one that throws or answers an origin
+   * with anything but a `DiagnosticFrame`, produces an unlocated diagnostic without changing the
+   * semantic failure fields. Each frame is kept as the resolver returns it.
    *
    * @param failure Valid source-neutral failure whose trace is ordered outermost to innermost.
    * @returns The unchanged semantic fields plus every resolved frame in trace order, or no
@@ -388,34 +425,9 @@ export class ComposedFlow {
     const frames: DiagnosticFrame[] = [];
     for (const origin of failure.trace) {
       try {
-        const frame: unknown = resolver.resolve(origin);
+        const frame = resolver.resolve(origin);
         if (!(frame instanceof DiagnosticFrame)) return unavailable;
-
-        const { label, text, range, note } = frame;
-        if (
-          typeof label !== "string" ||
-          typeof text !== "string" ||
-          (note !== null && typeof note !== "string") ||
-          !(range instanceof SourceRange)
-        ) {
-          return unavailable;
-        }
-
-        const { startLine, startCol, endLine, endCol } = range;
-        const coordinates = [startLine, startCol, endLine, endCol];
-        if (coordinates.some((coordinate) => !Number.isInteger(coordinate) || coordinate <= 0)) {
-          return unavailable;
-        }
-        if (endLine < startLine || (endLine === startLine && endCol < startCol)) return unavailable;
-
-        frames.push(
-          new DiagnosticFrame({
-            label,
-            text,
-            range: new SourceRange(startLine, startCol, endLine, endCol),
-            note,
-          }),
-        );
+        frames.push(frame);
       } catch {
         return unavailable;
       }
@@ -450,25 +462,21 @@ export interface CallableScope extends PrivateRegistrar {
  * @param descriptors The final node descriptors by id.
  * @param bodies The retained inline bodies by node id.
  * @param options.registrar Where each body's lazy builder is registered.
- * @param options.diagnostics Factory for located load errors (default: from the first body's
- *   `nodes:` cursor).
  * @param options.buildChild Builds one body's child flow under its labelled descriptor.
  * @returns A new descriptor map with each inline composite labelled.
- * @throws LoadError when a body has no descriptor, its descriptor is not a CALL, MAP or LOOP, or
- *   the descriptor does not call the body's private id.
+ * @throws RangeError, a compiler bug, when a body has no descriptor, its descriptor is not a
+ *   CALL, MAP or LOOP, or the descriptor does not call the body's private id: body extraction
+ *   gives every body such a descriptor.
  */
 export function registerInlineBodies(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
   bodies: ReadonlyMap<string, InlineBody>,
   options: {
     registrar: PrivateRegistrar;
-    diagnostics?: LoadDiagnostics | null;
     buildChild: (body: InlineBody, descriptor: CallDescriptor | LoopDescriptor) => ComposedFlow;
   },
 ): Map<string, NodeDescriptor> {
   const { registrar, buildChild } = options;
-  const diagnostics =
-    options.diagnostics ?? LoadDiagnostics.fromCursor(bodies.values().next().value?.nodesCursor ?? null);
   const associated = new Map(descriptors);
   const registrations: [InlineBody, CallDescriptor | LoopDescriptor, string][] = [];
 
@@ -476,17 +484,13 @@ export function registerInlineBodies(
     const label = `inline body of node ${reprText(body.nodeId)}`;
     const descriptor = descriptors.get(body.nodeId);
     if (descriptor === undefined) {
-      throw diagnostics.error(`${label}: no matching composite node descriptor`, { range: body.nodesCursor.range });
+      throw new RangeError(`${label}: no matching composite node descriptor`);
     }
     if (!(descriptor instanceof CallDescriptor || descriptor instanceof LoopDescriptor)) {
-      throw diagnostics.error(`${label}: final node descriptor is not CALL, MAP, or LOOP`, {
-        range: body.nodesCursor.range,
-      });
+      throw new RangeError(`${label}: final node descriptor is not CALL, MAP, or LOOP`);
     }
     if (descriptor.call !== body.flowId) {
-      throw diagnostics.error(`${label}: final node descriptor does not target its retained inline body`, {
-        range: body.nodesCursor.range,
-      });
+      throw new RangeError(`${label}: final node descriptor does not target its retained inline body`);
     }
 
     const labelledDescriptor = descriptor.replace({ childLabel: label });
@@ -508,7 +512,9 @@ export function registerInlineBodies(
  * @param assertsCursor Retained authored sequence, or `null` for a generated or source-free list.
  * @param diagnostics Factory for located load errors.
  * @returns One item cursor per assertion. Source-free lists contain `null` entries.
- * @throws LoadError when the retained sequence does not align with the semantic list.
+ * @throws RangeError, a compiler bug, when the retained sequence does not align with the semantic
+ *   list.
+ * @throws LoadError when the retained sequence cannot be traversed.
  */
 export function assertionCursors(
   assertions: readonly unknown[],
@@ -518,9 +524,7 @@ export function assertionCursors(
   if (assertsCursor === null) return assertions.map(() => null);
   const cursors = locateSourceAccess(diagnostics, () => assertsCursor.children());
   if (cursors.length !== assertions.length) {
-    throw diagnostics.error("retained assertion cursor does not align with semantic assertions", {
-      range: assertsCursor.range,
-    });
+    throw new RangeError("retained assertion cursor does not align with semantic assertions");
   }
   return cursors;
 }
@@ -619,7 +623,7 @@ export function stampNodeWiringOrigins(
       if (isValueEntry(descriptor)) {
         inputCursors = new Map([[nodeId, nodesCursor.child(nodeId)]]);
       } else {
-        const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
+        const nodeCursor = authoredField(nodesCursor, nodeId)!;
 
         for (const key of [...node.reservedWiringKeys()].sort(compareCodeUnits)) {
           if (!wiring.has(key) || !nodeCursor.has(key)) continue;
@@ -630,8 +634,8 @@ export function stampNodeWiringOrigins(
           if (bindingOrigin !== null) wiring.set(key, withOrigin(wiring.get(key), bindingOrigin));
         }
 
-        if (Object.keys(descriptor.inputs).length === 0 || !nodeCursor.has("inputs")) return;
-        const inputsCursor = nodeCursor.child("inputs");
+        const inputsCursor = authoredField(nodesCursor, nodeId, "inputs");
+        if (Object.keys(descriptor.inputs).length === 0 || inputsCursor === null) return;
         inputCursors = new Map();
         for (const name of Object.keys(descriptor.inputs)) {
           if (inputsCursor.has(name)) inputCursors.set(name, inputsCursor.child(name));
@@ -780,11 +784,7 @@ export function splitTypedInputs(
     const inputTypes = new Map(descriptor.inputTypes);
     const changed = locateSourceAccess(diagnostics, () => {
       let changed = false;
-      let inputsCursor: SourceCursor | null = null;
-      if (nodesCursor.has(nodeId)) {
-        const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-        if (nodeCursor.has("inputs")) inputsCursor = nodeCursor.child("inputs");
-      }
+      const inputsCursor = authoredField(nodesCursor, nodeId, "inputs");
       for (const [name, value] of Object.entries(descriptor.inputs)) {
         const cursor = inputsCursor !== null && inputsCursor.has(name) ? inputsCursor.child(name) : null;
         const typed = splitTypedValue(value, cursor, {
@@ -840,7 +840,6 @@ function splitTypedLlmConfig(
   const split = new Map(descriptors);
   locateSourceAccess(diagnostics, () => {
     for (const [nodeId, descriptor] of descriptors) {
-      if (!nodesCursor.has(nodeId)) continue;
       let path: readonly string[];
       let written: unknown;
       let prefix: string;
@@ -859,11 +858,7 @@ function splitTypedLlmConfig(
       } else {
         continue;
       }
-      let cursor: SourceCursor | null = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-      for (const key of path) {
-        cursor = cursor.has(key) ? cursor.child(key) : null;
-        if (cursor === null) break;
-      }
+      const cursor = authoredField(nodesCursor, nodeId, ...path);
       if (cursor === null || !cursor.holds(written as Value)) continue;
       const [layer, ranges] = readLlmConfig(cursor, registry, {
         prefix,
@@ -983,14 +978,8 @@ function bindingStyle(
       if (field !== "inputs" || key !== nodeId) return null;
       return styleAlong(nodesCursor.child(nodeId), path);
     }
-    let cursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-    if (!cursor.has(field)) return null;
-    cursor = cursor.child(field);
-    if (key !== field) {
-      if (!cursor.has(key)) return null;
-      cursor = cursor.child(key);
-    }
-    return styleAlong(cursor, path);
+    const cursor = authoredField(nodesCursor, nodeId, ...(key === field ? [field] : [field, key]));
+    return cursor === null ? null : styleAlong(cursor, path);
   });
 }
 
@@ -1049,11 +1038,7 @@ function caseOutputCursor(
   options: { diagnostics: LoadDiagnostics },
 ): SourceCursor | null {
   const { diagnostics } = options;
-  return locateSourceAccess(diagnostics, () => {
-    if (!nodesCursor.has(nodeId)) return null;
-    const cursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-    return cursor.has("outputs") ? cursor.child("outputs") : null;
-  });
+  return locateSourceAccess(diagnostics, () => authoredField(nodesCursor, nodeId, "outputs"));
 }
 
 /**
@@ -1065,7 +1050,8 @@ function caseOutputCursor(
  *
  * @param descriptors Final descriptors keyed by node id.
  * @param flowWiring Mutable final binding maps keyed by node id.
- * @throws Error when a node has a declared input type but no wiring binding by that name.
+ * @throws RangeError, a compiler bug, when a node has a declared input type but no wiring binding
+ *   by that name.
  */
 export function attachInputContracts(
   descriptors: ReadonlyMap<string, NodeDescriptor>,
@@ -1078,7 +1064,7 @@ export function attachInputContracts(
       // Every kind keeps its authored inputs in its wiring, so a declared type with no binding
       // to land on would be silently unchecked at runtime.
       if (!wiring.has(name)) {
-        throw new Error(`node ${reprText(nodeId)}: typed input ${reprText(name)} has no wiring binding`);
+        throw new RangeError(`node ${reprText(nodeId)}: typed input ${reprText(name)} has no wiring binding`);
       }
       const binding = asBinding(wiring.get(name));
       wiring.set(name, new Binding(binding.source, { origin: binding.origin, contract }));
@@ -1274,22 +1260,17 @@ function stampInlineCallOrigins(
   /** Register and return the origin of one CASE `then:` or `else:` branch. */
   const branchOrigin = (address: readonly (string | number | null)[]): OriginRef | null => {
     const caseId = address[1] as string;
-    if (!nodesCursor.has(caseId)) return null;
-    let cursor = normalizeNodeSignatureCursor(nodesCursor.child(caseId));
+    let cursor: SourceCursor | null;
     let path: SourceSitePath;
     if (address[0] === "else") {
-      if (!cursor.has("else")) return null;
+      cursor = authoredField(nodesCursor, caseId, "else");
       path = [...owner, "node", caseId, "field", "else"];
-      cursor = cursor.child("else");
     } else {
       const index = address[2] as number;
-      if (!cursor.has("cases")) return null;
-      const item = cursor.child("cases").child(index);
-      if (!item.has("then")) return null;
+      cursor = authoredField(nodesCursor, caseId, "cases", index, "then");
       path = [...owner, "node", caseId, "case", index, "then"];
-      cursor = item.child("then");
     }
-    return catalogBuilder.register(path, cursor);
+    return cursor === null ? null : catalogBuilder.register(path, cursor);
   };
 
   /** Return the origin of the authored binding at one `callSite` address. */
@@ -1697,10 +1678,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     index: number,
   ): readonly [OriginRef | null, SourceRange | null] | null => {
     const cursor = locateSourceAccess(diagnostics, () => {
-      if (valueEntries.has(nodeId) || !authoredNodesCursor.has(nodeId)) return null;
-      const nodeCursor = normalizeNodeSignatureCursor(authoredNodesCursor.child(nodeId));
-      if (!nodeCursor.has("asserts")) return null;
-      return nodeCursor.child("asserts").child(index);
+      if (valueEntries.has(nodeId)) return null;
+      return authoredField(authoredNodesCursor, nodeId, "asserts", index);
     });
     if (cursor === null) return null;
     return [
@@ -1719,11 +1698,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
    */
   const readAuthoredNodeOutput = (nodeId: string, outputSpec: unknown): ValueContract | null => {
     return locateSourceAccess(diagnostics, () => {
-      if (valueEntries.has(nodeId) || !nodesCursor.has(nodeId)) return null;
-      const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-      if (!nodeCursor.has("outputs")) return null;
-      const outputCursor = nodeCursor.child("outputs");
-      if (outputCursor.range === null) return null;
+      if (valueEntries.has(nodeId)) return null;
+      const outputCursor = authoredField(nodesCursor, nodeId, "outputs");
+      if (outputCursor === null || outputCursor.range === null) return null;
       // `withValue` refuses a non-YAML value itself.
       return readValueContract(outputCursor.withValue(outputSpec as Value), registry, {
         sitePath: [...owner, "node", nodeId, "output", "contract"],
@@ -1736,11 +1713,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   /** Compile one physical node's variables through its normalized cursor. */
   const readAuthoredNodeVariables = (nodeId: string, declarations: unknown): Parameter[] | null => {
     return locateSourceAccess(diagnostics, () => {
-      if (valueEntries.has(nodeId) || !nodesCursor.has(nodeId)) return null;
-      const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-      if (!nodeCursor.has("variables")) return null;
-      const variablesCursor = nodeCursor.child("variables");
-      if (variablesCursor.range === null) return null;
+      if (valueEntries.has(nodeId)) return null;
+      const variablesCursor = authoredField(nodesCursor, nodeId, "variables");
+      if (variablesCursor === null || variablesCursor.range === null) return null;
       return readSourceParameters(variablesCursor.withValue(declarations as Value), registry, {
         sitePath: [...owner, "node", nodeId],
         catalogBuilder,
@@ -1806,15 +1781,16 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       }
       locatedDescriptors.set(
         nodeId,
-        located.withSourceOrigins(normalizeNodeSignatureCursor(authoredCursor), { sitePath: nodePath, catalogBuilder }),
+        located.withSourceOrigins(authoredField(nodesCursor, nodeId)!, { sitePath: nodePath, catalogBuilder }),
       );
     }
     return locatedDescriptors;
   });
 
   // A `uses:` alias shares the callable namespace, so it must not collide with a node id (the
-  // resolver only sees a bare name; the author conflates them). The loader checks the authored
-  // node ids before it resolves aliases; this covers the assembled ids.
+  // resolver only sees a bare name; the author conflates them). The loader already checks the
+  // authored node ids before it resolves aliases; this runs before any desugar, so it repeats
+  // that check for a caller of `assemble` that skips the loader.
   const collide = [...new Set(usesAliases)].filter((alias) => descriptors.has(alias)).sort(compareCodeUnits);
   if (collide.length > 0) throw diagnostics.error(`uses: alias ${writeAsText(collide)} collides with a node id`);
 
@@ -1831,7 +1807,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       }
     } catch (error) {
       if (!(error instanceof SourceAccessError)) throw error;
-      // Swallowed: a bare `output:` value has no named children, so the whole range stands in.
+      // Swallowed: an `output:` at a recursive alias can't be walked, so the whole range stands in.
     }
     return outputsRange;
   };
@@ -1851,10 +1827,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   locateSourceAccess(diagnostics, () => {
     for (const [nodeId, descriptor] of descriptors) {
       if (descriptor.kind === "case") continue;
-      if (!valueEntries.has(nodeId) && nodesCursor.has(nodeId)) {
-        const nodeCursor = normalizeNodeSignatureCursor(nodesCursor.child(nodeId));
-        if (nodeCursor.has("outputs")) rejectTaggedOutput(nodeCursor.child("outputs"), diagnostics);
-      }
+      if (valueEntries.has(nodeId)) continue;
+      const outputCursor = authoredField(nodesCursor, nodeId, "outputs");
+      if (outputCursor !== null) rejectTaggedOutput(outputCursor, diagnostics);
     }
   });
 
@@ -1879,10 +1854,10 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     diagnostics,
   });
 
-  // Desugar inline `${ f(...) }` call expressions: each becomes a synth `call` node
+  // Desugar each whole-value `call(<flow>, ...)` binding: it becomes a synth `call` node
   // (CallDescriptor, over=null) and its host binding is rewritten to `${<synth>.output}`. Pure
   // sugar — the rest of the pipeline treats the synth nodes as ordinary `call` nodes
-  // (build/edges/validate/DAG run unchanged).
+  // (build/edges/validate/DAG run unchanged). The retired `${ f(...) }` form is refused here.
   const mint = synthIdGen(); // ONE synth-id minter shared by both inline-call desugars (no collision)
   let assertsSection: Assertion[];
   [descriptors, outputsSection, assertsSection] = desugarInlineCalls(descriptors, outputsSection, {
@@ -1908,8 +1883,8 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   // wiring like any author-written agent.
   descriptors = desugarAdaptiveQuestions(descriptors, { diagnostics });
 
-  // `then:/else: ${call}`: a `case` branch target that is an inline call becomes a synth `call`
-  // node, the then:/else: rewritten to its id. Runs BEFORE expandCaseOutputs (so the synth args +
+  // `then:/else: call(...)`: a `case` branch target that is a call directive becomes a synth
+  // `call` node, the then:/else: rewritten to its id. Runs BEFORE expandCaseOutputs (so the synth args +
   // the rewritten then-targets are visible to it) and shares `mint`.
   descriptors = desugarCaseCallTargets(descriptors, mint, { diagnostics });
 
@@ -1949,7 +1924,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
       if (!descriptors.has(producerId)) return null;
 
       const cache = descriptorCache;
-      if (cache === null) throw new Error("descriptor cache was not initialized before inline child resolution");
+      if (cache === null) throw new RangeError("descriptor cache was not initialized before inline child resolution");
       const node = cache.buildOne(producerId, bindingLabel, bindingRange).node;
       if (messages) {
         if (node.producesMessages) return new ValueContract(newMessagesType());
@@ -2044,7 +2019,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
   /** Resolve one parent binding's contract, building referenced producers on demand. */
   const readBindingContract: BindingContractReader = (bindingLabel, binding, bindingRange) => {
     const cache = descriptorCache;
-    if (cache === null) throw new Error("descriptor cache was not initialized before binding contract resolution");
+    if (cache === null) throw new RangeError("descriptor cache was not initialized before binding contract resolution");
     const producers = new Map<string, OutputContract>();
     for (const producerId of new Set(bindingProducers(binding))) {
       if (!descriptors.has(producerId)) continue;
@@ -2055,11 +2030,7 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     return resolveOutputBindingContract(binding, producers, flowInputContracts, { typeFn: constructorType });
   };
 
-  descriptors = registerInlineBodies(descriptors, inlineBodies, {
-    registrar: scope,
-    diagnostics,
-    buildChild: buildInlineChild,
-  });
+  descriptors = registerInlineBodies(descriptors, inlineBodies, { registrar: scope, buildChild: buildInlineChild });
 
   // Build EVERY node kind-blind through its own descriptor's `build(ctx)` — leaf, call/map (a
   // map rides the call descriptor, no branch), loop, AND case (which lowers in its own `build`,
@@ -2387,7 +2358,9 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     if (descriptor.host !== null && descriptor.fieldLabels.size > 0) synthHosts.set(nodeId, descriptor.host);
   }
   const synthWires = new Set(
-    edges.filter((edge) => synthHosts.get(edge.from) === edge.to && edge.inputGroup === QPARAM).map((edge) => edge.id),
+    edges
+      .filter((edge) => synthHosts.get(edge.from) === edge.to && edge.inputGroup === QUESTIONS_INPUT)
+      .map((edge) => edge.id),
   );
   rejectCycles(edges, nodeIds, {
     nodeRanges,

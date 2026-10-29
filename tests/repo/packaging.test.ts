@@ -504,6 +504,11 @@ function bunLicense(): [string, string] {
   return kept;
 }
 
+/** The Bun version Bun's section of `LICENSES` names, or `undefined` when it names none. */
+function bunLicenseVersion(): string | undefined {
+  return /^bun@(\d+\.\d+\.\d+) /.exec(bunLicense()[0])?.[1];
+}
+
 /**
  * Return the header and text of `pkg`'s section. When updating with `YIAN_VENDORED_LICENSES` set,
  * they come from the npm package extracted there (`<dir>/package/`); else from `LICENSES`.
@@ -606,11 +611,8 @@ describe("LICENSES", () => {
     ]);
   });
 
-  test("Bun's section names the running Bun's version", () => {
-    const version = /^bun@(\d+\.\d+\.\d+) /.exec(bunLicense()[0])?.[1];
-    expect(version).toBeDefined();
-    // Node runs the check too, with no Bun version to compare.
-    if (process.versions.bun !== undefined) expect(version).toBe(process.versions.bun);
+  test("Bun's section names a Bun version", () => {
+    expect(bunLicenseVersion()).toBeDefined();
   });
 });
 
@@ -794,6 +796,12 @@ describe.skipIf(!BINARY)("the compiled binary", () => {
     // Groups first, so nothing still writes into a dir being removed.
     for (const pid of groups.splice(0)) killGroup(pid);
     for (const dir of workdirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  // `build:bin` compiles with the running Bun, so the binary embeds that Bun and its license must
+  // name it. Without a binary the version is only what CI pins, and any Bun may run the suite.
+  test("Bun's section names the Bun the binary embeds", () => {
+    expect(bunLicenseVersion()).toBe(process.versions.bun);
   });
 
   test(

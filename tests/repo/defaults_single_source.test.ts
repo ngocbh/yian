@@ -73,6 +73,8 @@ const ALLOWED: Record<string, string> = {
   "cli/cells.ts: rowsOf.||": "terminal height when the output reports none",
   "cli/run_view.ts: KEPT_ROWS": "rows of a child run's progress the chat's run view keeps",
   "cli/terminal.ts: LIST_MARGIN": "screen rows a prompt's list leaves for what is drawn above the box",
+  "cli/terminal.ts: PASTE_LINES": "lines of a paste the input box shows as text, not a token",
+  "cli/terminal.ts: PASTE_CHARS": "characters of a paste the input box shows as text, not a token",
   "cli/chat.ts: LIST_TICK_MS": "how often the chat's run list is drawn again",
   "cli/chat.ts: VIEW_TICK_MS": "how often the chat's run view reads its run's log again",
   "cli/chat_view.ts: SPIN_MS": "the chat's spinner frame interval",

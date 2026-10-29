@@ -9,7 +9,16 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
-import { inputLabel, parseStructuredInput, Terminal } from "../../src/cli/terminal.ts";
+import {
+  draftLabel,
+  draftText,
+  inputLabel,
+  joinDrafts,
+  type Key,
+  LineEditor,
+  parseStructuredInput,
+  Terminal,
+} from "../../src/cli/terminal.ts";
 import { BUILTIN, install } from "../../src/defaults.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import type { AskUserHandler } from "../../src/tools/registry.ts";
@@ -61,6 +70,43 @@ test("terminal.ts imports only node: modules and relative yian modules", () => {
   expect(specifiers).toContain("node:readline");
   for (const specifier of specifiers) expect(specifier).toMatch(/^(node:|\.\.?\/)/);
   expect(source).not.toMatch(/\bimport\(|\brequire\(/);
+});
+
+/** A bracketed paste of `text`, as the terminal hands it to an editor: one key. */
+const paste = (text: string): Key => ({
+  name: undefined,
+  ctrl: false,
+  meta: false,
+  str: text,
+  paste: true,
+});
+
+describe("a draft with pasted tokens", () => {
+  test("keeps its tokens through set, expanded by draftText and labelled by draftLabel", () => {
+    const editor = new LineEditor({ columns: () => 60, hint: "" });
+    editor.key({ name: "s", ctrl: false, meta: false, str: "see ", paste: false });
+    editor.key(paste("a\nb\nc\nd"));
+    const draft = editor.draft();
+    expect(draftText(draft)).toBe("see a\nb\nc\nd");
+    expect(draftLabel(draft)).toBe("see [Pasted text #1 +4 lines]");
+    expect(editor.text()).toBe("see a\nb\nc\nd");
+    editor.set("");
+    expect(editor.draft()).toEqual([]);
+    editor.set(draft);
+    expect(editor.draft()).toEqual(draft);
+    // Backspace takes the token whole: it is still a token after the round trip.
+    editor.key({ name: "backspace", ctrl: false, meta: false, str: "\x7f", paste: false });
+    expect(editor.text()).toBe("see ");
+  });
+
+  test("joinDrafts joins with spaces, skipping empty drafts, and numbers the tokens from 1", () => {
+    const editor = new LineEditor({ columns: () => 60, hint: "" });
+    editor.key(paste("1\n2\n3\n4"));
+    const first = editor.draft();
+    const joined = joinDrafts([first, [], first, ["tail"]]);
+    expect(draftLabel(joined)).toBe("[Pasted text #1 +4 lines] [Pasted text #2 +4 lines] tail");
+    expect(draftText(joined)).toBe("1\n2\n3\n4 1\n2\n3\n4 tail");
+  });
 });
 
 /** One source-free flow parameter of type `type`. */

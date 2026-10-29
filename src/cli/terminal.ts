@@ -98,7 +98,10 @@ export interface Key {
   meta: boolean;
   /** The text the key types, when it types any. */
   str: string | undefined;
-  /** Whether the key arrived inside a bracketed paste. */
+  /**
+   * Whether the key is a bracketed paste: one key, whose `str` holds all the text pasted, each
+   * line break as `\n`.
+   */
   paste: boolean;
 }
 
@@ -291,7 +294,85 @@ function printable(key: Key): key is Key & { str: string } {
   return key.str !== undefined && key.str !== "" && !key.ctrl && !key.meta && !/[\x00-\x1f\x7f]/.test(key.str);
 }
 
-/** A one-line text editor; `mask` draws `*` per character and keeps the answer off the screen. */
+/** A paste longer than this many lines goes into a `LineEditor` as one token. */
+const PASTE_LINES = 3;
+/** A paste longer than this many characters goes into a `LineEditor` as one token. */
+const PASTE_CHARS = 800;
+
+/** A paste a `LineEditor` holds as one token, `[Pasted text #<number> +<lines> lines]`. */
+export interface PastedText {
+  /** The text pasted, which the token stands for. */
+  readonly text: string;
+  /** The token's number among those of its message. */
+  readonly number: number;
+}
+
+/** What a `LineEditor` holds: typed text and pasted tokens, in order. */
+export type Draft = readonly (string | PastedText)[];
+
+/** The token a paste is drawn as: `[Pasted text #1 +40 lines]`. */
+function pasteLabel(paste: PastedText): string {
+  // A newline that ends the text starts no line.
+  const lines = paste.text.replace(/\n$/, "").split("\n").length;
+  return `[Pasted text #${paste.number} +${lines} line${lines === 1 ? "" : "s"}]`;
+}
+
+/** Whether a paste of `text` goes into a `LineEditor` as a token rather than as text. */
+function collapses(text: string): boolean {
+  const lines = text.replace(/\n$/, "").split("\n").length;
+  return lines > PASTE_LINES || Array.from(text).length > PASTE_CHARS;
+}
+
+/** The text `draft` stands for, each token expanded to its paste: what is sent. */
+export function draftText(draft: Draft): string {
+  return draft.map((part) => (typeof part === "string" ? part : part.text)).join("");
+}
+
+/** `draft` as it is shown, each token as its label: what is echoed. */
+export function draftLabel(draft: Draft): string {
+  return draft.map((part) => (typeof part === "string" ? part : pasteLabel(part))).join("");
+}
+
+/**
+ * `drafts` as one draft: those holding anything, a space between them, their tokens numbered
+ * afresh from 1, since they become one message.
+ */
+export function joinDrafts(drafts: readonly Draft[]): Draft {
+  const joined: (string | PastedText)[] = [];
+  let number = 0;
+  for (const draft of drafts.filter((each) => each.length > 0 && draftText(each) !== "")) {
+    if (joined.length > 0) joined.push(" ");
+    for (const part of draft) {
+      joined.push(typeof part === "string" ? part : { text: part.text, number: ++number });
+    }
+  }
+  return joined;
+}
+
+/** One unit of a text widget: a character, or a pasted token, which the keys treat as one. */
+type Unit = string | PastedText;
+
+/** `draft` as units: each character of its text, each token whole. */
+function unitsOf(draft: string | Draft): Unit[] {
+  const parts: Draft = typeof draft === "string" ? [draft] : draft;
+  return parts.flatMap((part): Unit[] => (typeof part === "string" ? Array.from(part) : [part]));
+}
+
+/** What `unit` draws: a newline as `⏎`, a token as its label. */
+function drawn(unit: Unit): string {
+  return typeof unit !== "string" ? pasteLabel(unit) : unit === "\n" ? "⏎" : unit;
+}
+
+/** Whether `a` and `b` hold the same characters and the very same tokens. */
+function sameUnits(a: readonly Unit[], b: readonly Unit[]): boolean {
+  return a.length === b.length && a.every((unit, i) => unit === b[i]);
+}
+
+/**
+ * A one-line text editor; `mask` draws `*` per character and keeps the answer off the screen. With
+ * `collapse`, a long paste (more than `PASTE_LINES` lines or `PASTE_CHARS` characters) goes in as
+ * one token, which the caret and the deleting keys treat as one character and the answer expands.
+ */
 function textWidget(options: {
   label: string;
   initial?: string;
@@ -299,18 +380,32 @@ function textWidget(options: {
   mark?: string;
   instruction?: string;
   validate?: (text: string) => string | undefined;
-}): Widget<string> & { text(): string; caret(): number; set(text: string): void } {
+  collapse?: boolean;
+}): Widget<string> & {
+  text(): string;
+  caret(): number;
+  units(): readonly Unit[];
+  set(text: string | Draft): void;
+} {
   const mark = options.mark ?? "?";
-  const chars = Array.from(options.initial ?? "");
+  const chars: Unit[] = Array.from(options.initial ?? "");
   let pos = chars.length;
   let error: string | undefined;
-  const shown = (part: readonly string[]): string =>
-    options.mask ? "*".repeat(part.length) : part.map((char) => (char === "\n" ? "⏎" : char)).join("");
+  const shown = (part: readonly Unit[]): string =>
+    options.mask ? "*".repeat(part.length) : part.map((unit) => drawn(unit)).join("");
   const head = (): string => `${promptHead(mark, options.label, options.instruction)} `;
-  const insert = (text: string): void => {
-    const added = Array.from(text);
+  const text = (): string => draftText(chars);
+  const insert = (added: readonly Unit[]): void => {
     chars.splice(pos, 0, ...added);
     pos += added.length;
+  };
+  const paste = (pasted: string): void => {
+    // A paste keeps its newlines and drops the other control characters; a token keeps its tabs.
+    if (options.collapse && collapses(pasted)) {
+      const numbers = chars.map((unit) => (typeof unit === "string" ? 0 : unit.number));
+      const text = pasted.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+      insert([{ text, number: Math.max(0, ...numbers) + 1 }]);
+    } else insert(Array.from(pasted.replace(/[\x00-\x09\x0b-\x1f\x7f]/g, "")));
   };
   return {
     preface: labelPreface(mark, options.label),
@@ -319,11 +414,11 @@ function textWidget(options: {
     key(key) {
       const newline = key.name === "return" || key.name === "enter";
       error = undefined;
-      if (newline && key.paste) insert("\n");
+      if (key.paste) paste(key.str ?? "");
       else if (newline) {
-        const text = chars.join("");
-        error = options.validate?.(text);
-        if (error === undefined) return { value: text };
+        const answer = text();
+        error = options.validate?.(answer);
+        if (error === undefined) return { value: answer };
       } else if (key.ctrl && key.name === "d") {
         if (chars.length === 0) return { stop: "eof" };
       } else if (key.name === "home" || (key.ctrl && key.name === "a")) pos = 0;
@@ -336,7 +431,7 @@ function textWidget(options: {
       else if (key.name === "backspace") {
         if (pos > 0) chars.splice(--pos, 1);
       } else if (key.name === "delete") chars.splice(pos, 1);
-      else if (printable(key)) insert(key.str);
+      else if (printable(key)) insert(Array.from(key.str));
       return undefined;
     },
     done: (outcome) =>
@@ -347,10 +442,11 @@ function textWidget(options: {
       pos = 0;
       return error;
     },
-    text: () => chars.join(""),
+    text,
     caret: () => pos,
+    units: () => chars,
     set(text) {
-      chars.splice(0, chars.length, ...Array.from(text));
+      chars.splice(0, chars.length, ...unitsOf(text));
       pos = chars.length;
       error = undefined;
     },
@@ -397,11 +493,14 @@ const LIST_MARGIN = 4;
  * Down on its last row moves them to the list; there Up and Down move between rows, and Up from
  * the top row, Escape or a typed character goes back to the box. On a short screen the list shows
  * as many rows as fit (`rows()` high, leaving `LIST_MARGIN` rows), the row with the keys among
- * them, and a dim `+N more` for the others. The text and where the keys are last across prompts,
- * so one editor can serve a chat's prompt and the box it keeps up while a reply runs.
+ * them, and a dim `+N more` for the others. A long paste (more than `PASTE_LINES` lines or
+ * `PASTE_CHARS` characters) goes in as one token, `[Pasted text #1 +40 lines]`, numbered among
+ * the tokens of the box: the caret steps over it, Backspace, Delete and Ctrl-U take it whole, and
+ * the text answered holds the paste. The text and where the keys are last across prompts, so one
+ * editor can serve a chat's prompt and the box it keeps up while a reply runs.
  */
 export class LineEditor {
-  readonly #text = textWidget({ label: "", mark: ">" });
+  readonly #text = textWidget({ label: "", mark: ">", collapse: true });
   readonly #columns: () => number;
   readonly #rows: () => number;
   readonly #hint: string;
@@ -423,13 +522,24 @@ export class LineEditor {
     this.list = options.list ?? null;
   }
 
-  /** The text typed. */
+  /** The text typed, each pasted token expanded to its paste. */
   text(): string {
     return this.#text.text();
   }
 
-  /** Replace the text, the cursor after it. */
-  set(text: string): void {
+  /** The text typed and the pasted tokens, in order. */
+  draft(): Draft {
+    const draft: (string | PastedText)[] = [];
+    for (const unit of this.#text.units()) {
+      const last = draft.length - 1;
+      if (typeof unit === "string" && typeof draft[last] === "string") draft[last] += unit;
+      else draft.push(unit);
+    }
+    return draft;
+  }
+
+  /** Replace the text (and its tokens, given a draft), the cursor after it. */
+  set(text: string | Draft): void {
     this.#text.set(text);
   }
 
@@ -519,7 +629,8 @@ export class LineEditor {
 
   /** Apply one key. */
   key(key: Key): EditorAction {
-    // A paste is text, whatever keys it holds: it goes into the box, its newlines kept.
+    // A paste is text, whatever keys it holds: it goes into the box, its newlines kept, or a long
+    // one as a token.
     if (key.paste) {
       this.#focus = null;
       this.#text.key(key);
@@ -552,14 +663,20 @@ export class LineEditor {
     return "value" in ended ? ended : ended.stop === "eof" ? { stop: "eof" } : null;
   }
 
-  /** The rows the text folds onto, each with the index of its first character, and the cursor's. */
+  /**
+   * The rows the text folds onto, each with the index of its first unit (a character or a token)
+   * and what each unit draws, and the cursor's row.
+   */
   #fold(): { rows: { start: number; chars: string[] }[]; row: number; width: number } {
     const width = Math.max(1, this.#columns() - 6);
-    const chars = Array.from(this.#text.text()).map((char) => (char === "\n" ? "⏎" : char));
+    // A token is drawn whole on one row, cut to fit when it is wider than one.
+    const chars = this.#text
+      .units()
+      .map((unit) => (typeof unit === "string" ? drawn(unit) : fit(pasteLabel(unit), width)));
     const rows = [{ start: 0, chars: [] as string[], used: 0 }];
     for (const [i, char] of chars.entries()) {
       let last = rows[rows.length - 1]!;
-      const size = charCells(char);
+      const size = cells(char);
       if (last.used + size > width && last.chars.length > 0) {
         last = { start: i, chars: [], used: 0 };
         rows.push(last);
@@ -604,9 +721,10 @@ function editorWidget(
       if ("open" in action) return { value: action };
       return action;
     },
+    // The line entered as it was shown: its tokens, not the text they stand for.
     done: (outcome) =>
       "value" in outcome && typeof outcome.value === "string"
-        ? `${style("1", ">")} ${outcome.value.replaceAll("\n", "⏎")}`
+        ? `${style("1", ">")} ${draftLabel(editor.draft()).replaceAll("\n", "⏎")}`
         : null,
     watch: (redraw) => editor.list?.subscribe?.(redraw) ?? (() => {}),
   };
@@ -789,7 +907,8 @@ export class Terminal {
     | undefined;
   /** The last key was a `return`, so an `enter` now is the `\n` of the same `\r\n`. */
   #afterReturn = false;
-  #pasting = false;
+  /** The text of the bracketed paste arriving, or null outside one. */
+  #pasting: string[] | null = null;
   /** Whether the turn holding the terminal left rows on the screen. */
   #printed = false;
   /** Whether a widget has the whole (alternate) screen, which an exit must give back. */
@@ -840,15 +959,17 @@ export class Terminal {
    *
    * With `frame`, on a terminal that isn't plain, the prompt is a box across the terminal holding
    * `> ` and the text, the dim `hint` below it, instead of the label; once entered it collapses
-   * to `> <line>`. Given `editor`, the box is that editor's (`LineEditor`, its hint instead of
-   * `hint`), its text set to `initial` when it differs, and Enter on a row of its list answers
-   * `{open}` with the row's key and the draft.
+   * to `> <line>`, its pasted tokens shown as they were. Given `editor`, the box is that editor's
+   * (`LineEditor`, its hint instead of `hint`), its text set to `initial` (a `Draft`, tokens and
+   * all, when it holds pasted tokens) when it differs, and Enter on a row of its list answers
+   * `{open}` with the row's key and the draft. An answer and a draft are text, each token
+   * expanded; the editor's `draft()` keeps the tokens.
    */
   async readLine<E extends boolean = false>(
     label: string,
     options: {
       signal?: AbortSignal;
-      initial?: string;
+      initial?: string | Draft;
       escape?: E;
       frame?: boolean;
       hint?: string;
@@ -868,11 +989,11 @@ export class Terminal {
     if (options.frame === true && !this.#plain) {
       const columns = () => columnsOf(this.#output);
       const editor = options.editor ?? new LineEditor({ columns, hint: options.hint ?? "" });
-      if (editor.text() !== initial) editor.set(initial);
+      if (!sameUnits(unitsOf(editor.draft()), unitsOf(initial))) editor.set(initial);
       widget = editorWidget(editor, options.escape === true);
       draft = () => editor.text();
     } else {
-      const text = textWidget({ label, mark: ">", initial });
+      const text = textWidget({ label, mark: ">", initial: draftText(unitsOf(initial)) });
       widget = options.escape
         ? {
             ...text,
@@ -885,7 +1006,7 @@ export class Terminal {
         : text;
       draft = () => text.text();
     }
-    if (signal?.aborted) return { aborted: true, draft: initial };
+    if (signal?.aborted) return { aborted: true, draft: draftText(unitsOf(initial)) };
     let ended: { value: string | typeof ESCAPED | Opened } | { stop: StopReason };
     try {
       ended = await this.#runTurn(signal, (run) => run(widget), { keepOpen: true, wants: false });
@@ -1088,7 +1209,7 @@ export class Terminal {
    * and Ctrl-C `onKey("interrupt")`, rather than raising SIGINT, since the input is raw; other keys
    * wait for the next prompt. Given `edit`, every key but Ctrl-C goes to it first, and only one it
    * doesn't take (returns false for) goes on as above; bracketed paste is then on while the watch
-   * runs, so a paste reaches it as typed text, its newlines kept. A prompt meanwhile takes the keys
+   * runs, so a paste reaches it as one key holding the text, its newlines kept. A prompt meanwhile takes the keys
    * as usual, and the watch goes on after it. Does nothing on a plain terminal or an input that
    * isn't a TTY.
    */
@@ -1134,8 +1255,8 @@ export class Terminal {
     // A key typed soon after a lone Escape arrives as Alt+key. No prompt binds Alt, so the Escape
     // is dropped and the key stays the one typed.
     const alt = raw?.meta === true ? /^\x1b([^\x00-\x1f\x7f])$/su.exec(raw.sequence ?? "") : null;
-    if (name === "paste-start" || name === "paste-end") {
-      this.#pasting = name === "paste-start";
+    if (name === "paste-start") {
+      this.#pasting = [];
       return;
     }
     if (name === "enter" && this.#afterReturn) {
@@ -1143,13 +1264,22 @@ export class Terminal {
       return;
     }
     this.#afterReturn = name === "return";
-    const key: Key = {
-      name,
-      ctrl: raw?.ctrl === true,
-      meta: raw?.meta === true && alt === null,
-      str: alt?.[1] ?? str,
-      paste: this.#pasting,
-    };
+    // A paste reaches the widget as one key holding its text, so a long one can become a token:
+    // its newlines kept, the keys it holds (arrows, Escape, Ctrl-C) only text.
+    if (this.#pasting !== null && name !== "paste-end") {
+      this.#pasting.push(name === "return" || name === "enter" ? "\n" : (str ?? ""));
+      return;
+    }
+    let key: Key;
+    if (name === "paste-end") {
+      const text = this.#pasting?.join("") ?? "";
+      this.#pasting = null;
+      if (text === "") return;
+      key = { name: undefined, ctrl: false, meta: false, str: text, paste: true };
+    } else {
+      const meta = raw?.meta === true && alt === null;
+      key = { name, ctrl: raw?.ctrl === true, meta, str: alt?.[1] ?? str, paste: false };
+    }
     const watch = this.#turn === undefined ? this.#watch : undefined;
     if (this.#active) this.#active.key(key);
     else if (watch !== undefined && key.ctrl && key.name === "c") watch.onKey("interrupt");

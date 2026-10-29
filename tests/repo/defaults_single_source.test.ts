@@ -55,6 +55,11 @@ const ALLOWED: Record<string, string> = {
   "llm/framing.ts: ASCII_SPACE": "the ASCII whitespace bytes",
   "llm/testing.ts: NULL_BODY_STATUSES": "HTTP statuses whose response has no body",
   // Display and message formatting.
+  "cli/chat_tools.ts: FOCUS_BYTES": "size of the focus flow's text shown the chat's model",
+  "cli/chat_tools.ts: LIST_FLOWS_ENTRIES": "files and folders list_flows looks at before it stops",
+  "cli/chat_tools.ts: LIST_FLOWS_LIMIT": "flow paths list_flows shows the chat's model",
+  "cli/chat_tools.ts: READ_FLOW_BYTES": "size of a flow file read_flow shows the chat's model",
+  "cli/diff.ts: CONTEXT": "lines of context around a change in a diff",
   "cli/inbox_chat.ts: SECOND_PRESS_MS": "how soon a second Ctrl-C cancels the chat's run",
   "cli/render.ts: ERR_CONTEXT": "lines of YAML shown around an error",
   "cli/render.ts: SGR": "terminal color and style codes",
@@ -71,6 +76,7 @@ const ALLOWED: Record<string, string> = {
   "tools/mcp.ts: STDERR_KEEP_CHARS": "MCP server stderr kept for a start error",
   "diagnostics.ts: getCloseMatches.n": "suggestions offered, difflib's own default",
   // Internal sizes that no user input reaches.
+  "cli/diff.ts: MAX_TABLE": "line pairs a diff compares before showing the whole change, internal",
   "expr/lineage.ts: MAX_SNAPSHOT_DEPTH": "diagnostic retention depth, internal",
   "llm/executor.ts: MAX_ERROR_BODY": "bytes of an error response read, internal",
   "runtime/log.ts: READ_CHUNK_BYTES": "bytes of a run log read at a time, internal",

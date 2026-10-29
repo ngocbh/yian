@@ -132,7 +132,15 @@ export class NotUtf8Error extends Error {
  * @throws {Error} A system error when the file can't be read.
  */
 export function readFlowText(path: string): string {
-  const bytes = readFileSync(path);
+  return decodeFlowText(readFileSync(path), path);
+}
+
+/**
+ * @internal Decode `bytes`, read from `path`, as `readFlowText` reads a file.
+ *
+ * @throws {NotUtf8Error} When the bytes aren't UTF-8 text.
+ */
+export function decodeFlowText(bytes: Uint8Array, path: string): string {
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);

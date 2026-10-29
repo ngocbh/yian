@@ -24,6 +24,7 @@ import {
   ValueKind,
   writeAsText,
 } from "../typesys/values.ts";
+import { sanitize } from "./sanitize.ts";
 
 /** Why a prompt stopped without an answer. */
 type StopReason = "interrupt" | "eof" | "closed";
@@ -54,6 +55,20 @@ export interface TerminalOptions {
    * input in cooked mode: for an output or input that isn't a terminal.
    */
   plain?: boolean;
+}
+
+/** What `Terminal.approve` asks the user to approve. */
+export interface ApproveRequest {
+  /** What is to be done, such as `Write a.yaml`; the select's label. */
+  title: string;
+  /** More about it, written above the select; empty for none. */
+  body: string;
+  /** A unified diff of the change, or null for none. */
+  diff: string | null;
+  /** The answers, the approving one first and the rejecting one last. */
+  choices: readonly string[];
+  /** Ends the prompt, with no answer, when it aborts. */
+  signal?: AbortSignal;
 }
 
 /** A prompt ended because the terminal closed (Ctrl-C, end of input, or close()). */
@@ -564,6 +579,42 @@ export class Terminal {
     const initial = options.initial === undefined ? 0 : choices.indexOf(options.initial);
     const ended = await this.#runTurn(options.signal, (run) => run(selectWidget({ label, titles: choices.map(visible), initial })));
     return "value" in ended ? choices[ended.value]! : null;
+  }
+
+  /**
+   * Ask the user to approve an action: write `body` and the unified `diff` when there is one, then
+   * select among `choices` under `title`, the first preselected. All the text is drawn through
+   * `sanitize`, its escape sequences shown rather than dropped. Returns the chosen choice; the
+   * last one (the reject) for Ctrl-C, which leaves the terminal open; null without drawing or
+   * reading when the terminal is plain, closed or its input isn't a TTY, and null when the input
+   * ends or `signal` aborts.
+   */
+  async approve(request: ApproveRequest): Promise<string | null> {
+    const { choices, signal } = request;
+    if (choices.length === 0) throw new RangeError("approve needs at least one choice");
+    // Only a person at a terminal can approve: piped input could approve on their behalf.
+    if (this.#plain || this.#input.isTTY !== true || signal?.aborted) return null;
+    // A sequence is shown, not dropped: what the user approves must not hide anything it holds.
+    const shown = (text: string): string => sanitize(text, { sequences: "show" });
+    const label = shown(request.title);
+    const card = [request.body, request.diff ?? ""].filter((text) => text !== "").map(shown);
+    const titles = choices.map(shown);
+    let ended: { value: number } | { stop: StopReason };
+    try {
+      ended = await this.#runTurn(
+        signal,
+        (run) => {
+          for (const text of card) this.#output.write(crlf(text.replace(/\n$/, "")) + "\r\n");
+          return run(selectWidget({ label, titles }));
+        },
+        { keepOpen: true },
+      );
+    } catch (error) {
+      if (signal?.aborted && error === signal.reason) return null;
+      throw error;
+    }
+    if ("value" in ended) return choices[ended.value]!;
+    return ended.stop === "interrupt" ? choices[choices.length - 1]! : null;
   }
 
   /**
@@ -1134,17 +1185,13 @@ async function promptInput(run: RunWidget, decl: Parameter): Promise<unknown> {
 const OTHER = "✎ Other (write your own)";
 
 /**
- * `text` safe to draw: `\r\n` read as `\n`, then each control character but `\n` (C0, DEL and
- * C1, ESC included) shown as `^X` (`^[` for ESC, `^?` for DEL) or, for C1, U+FFFD. An ask's text
- * comes from the flow or a model, and a raw escape sequence in it could move the cursor, set the
- * clipboard or forge a link.
+ * `text` safe to draw, through `sanitize`: escape sequences are shown rather than dropped (`^[`
+ * for ESC), a tab as `^I`, and BIDI and zero-width characters kept. An ask's text comes from the
+ * flow or a model, and a raw escape sequence in it could move the cursor, set the clipboard or
+ * forge a link.
  */
 function visible(text: string): string {
-  return text.replaceAll("\r\n", "\n").replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f]/g, (char) => {
-    const code = char.charCodeAt(0);
-    if (code === 0x7f) return "^?";
-    return code < 0x20 ? `^${String.fromCharCode(code + 64)}` : "\uFFFD";
-  });
+  return sanitize(text, { sequences: "show", tabs: "show", invisible: "keep" });
 }
 
 /**

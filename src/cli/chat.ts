@@ -223,6 +223,7 @@ function runList(
       // Each row comes after the list's two-cell pointer.
       rows: () => runRows(runs.live(), scheduler.now(), columnsOf(out) - 2, out, env),
       subscribe: (listener) => every(ticker, LIST_TICK_MS, listener),
+      hint: "↓ runs",
     },
     async open(index: number, terminal: Terminal) {
       const child = runs.live()[index];

@@ -953,6 +953,7 @@ describe("the run list under the input box", () => {
       const listed = /^ {2}r1 {2}color\.yaml {2}● asks · \d+s$/;
       await until(() => model.requests.length >= 3 && rows().at(-1)!.match(listed) !== null);
       const before = rows();
+      // At 60 columns the list's hint doesn't fit after the box's.
       expect(before.slice(-5, -1)).toEqual([TOP, row(">"), BOTTOM, HINT]);
       stdin.write(DOWN);
       await until(() => rows().at(-1)!.startsWith("» r1"));

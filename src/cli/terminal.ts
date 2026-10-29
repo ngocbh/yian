@@ -363,6 +363,8 @@ function textWidget(options: {
  */
 export interface PromptList {
   rows(): readonly string[];
+  /** Added to the prompt's hint while the list has rows (how to reach it, say). */
+  hint?: string;
   /** Calls `listener` when the rows may have changed; returns what stops it. */
   subscribe?(listener: () => void): () => void;
 }
@@ -376,10 +378,10 @@ export type EditorAction = { value: string } | { open: number } | { escape: true
 
 /**
  * A line typed in a framed box `columns()` wide: a box holding `> ` and the text, folded onto as
- * many rows as it needs, the dim `hint` below it, and under that `list`'s rows when it has any.
- * The box has the keys, as a line prompt does, until Down on its last row moves them to the
- * list; there Up and Down move between rows, and Up from the top row, Escape or a typed character
- * goes back to the box. The text and where the keys are last across prompts, so one editor can
+ * many rows as it needs, the dim `hint` below it (and the list's own after it, when it fits), and
+ * under that `list`'s rows when it has any. The box has the keys, as a line prompt does, until
+ * Down on its last row moves them to the list; there Up and Down move between rows, and Up from
+ * the top row, Escape or a typed character goes back to the box. The text and where the keys are last across prompts, so one editor can
  * serve a chat's prompt and the box it keeps up while a reply runs.
  */
 export class LineEditor {
@@ -423,6 +425,9 @@ export class LineEditor {
     const focus = this.focus();
     const pointer = (i: number): string => (i === focus ? `${style("1;36", "»")} ` : "  ");
     const list = (this.list?.rows() ?? []).map((row, i) => pointer(i) + row);
+    const both = list.length > 0 && this.list?.hint ? `${this.#hint} · ${this.list.hint}` : this.#hint;
+    // The list's hint only when it fits on the row: the box's hint matters more.
+    const hint = cells(both) + 2 <= this.#columns() ? both : this.#hint;
     return [
       border(`╭${edge}╮`),
       ...rows.map((each, i) => {
@@ -430,7 +435,7 @@ export class LineEditor {
         return `${border("│")} ${lead(i)}${body}${" ".repeat(width - cells(body))} ${border("│")}`;
       }),
       border(`╰${edge}╯`),
-      `  ${style("2", this.#hint)}`,
+      `  ${style("2", hint)}`,
       ...list,
     ];
   }

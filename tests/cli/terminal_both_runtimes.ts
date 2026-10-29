@@ -781,16 +781,19 @@ async function aFramedReadLineWithAListMovesIntoItAndOpensARow(): Promise<void> 
 async function aListRowThatGoesGivesTheKeysBackAndTheListRedrawsOnItsOwn(): Promise<void> {
   const { input, terminal, view } = setup({ columns: 60 });
   const rows = ["r1  a.yaml"];
-  const list = rowList(rows);
-  const editor = new LineEditor({ columns: () => 60, hint: HINT, list });
+  const list = { ...rowList(rows), hint: "↓ runs" };
+  const editor = new LineEditor({ columns: () => 60, hint: "esc withdraws", list });
   const line = terminal.readLine("You:", { frame: true, escape: true, editor });
+  await tick();
+  // The list's hint follows the box's while it has rows.
+  assert.deepEqual(view().rows.slice(-2), ["  esc withdraws · ↓ runs", "  r1  a.yaml"]);
   input.write(DOWN);
   await tick();
   assert.equal(editor.focus(), 0);
   rows.pop();
   list.changed();
   await tick();
-  assert.deepEqual(view().rows, [FRAME_TOP, framed(">"), FRAME_BOTTOM, `  ${HINT}`]);
+  assert.deepEqual(view().rows, [FRAME_TOP, framed(">"), FRAME_BOTTOM, "  esc withdraws"]);
   assert.equal(editor.focus(), null);
   // With no rows, Down stays in the box.
   input.write(DOWN + "x" + ENTER);

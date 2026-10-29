@@ -136,6 +136,20 @@ describe("recursive type compatibility", () => {
     },
   );
 
+  // A date or datetime is stored as an ISO string, so it fits `str`, as `typeRelation` counts it.
+  test.each([
+    ["date", "str", true],
+    ["datetime", "str", true],
+    ["date", "Optional(str)", true],
+    ["Optional(date)", "str", false],
+    ["list(date)", "list(str)", true],
+    ["date", "Literal(a, b)", false],
+    ["str", "date", false],
+    ["date", "datetime", false],
+  ])("a date or datetime fits str: %s into %s", (source, sink, ok) => {
+    expect(typesCompatible(t(source), t(sink))).toBe(ok);
+  });
+
   // An untagged source cannot prove membership, like an unbounded numeric source.
   test.each([
     ["Literal(a, b)", "Literal(a, b)", true],

@@ -141,7 +141,8 @@ function intervalWithin(source: Type, sink: Type): boolean {
 /**
  * Return structural compatibility of a source value type with a sink slot.
  *
- * Same `kind` (with int->number widening, mirroring `coerceScalar`); the singleton `None`
+ * Same `kind` (with int->number widening, mirroring `coerceScalar`, and a date or datetime
+ * fitting `str`, since each is stored as an ISO string, as `typeRelation` counts it); the singleton `None`
  * source may fill any nullable sink; records match structurally (every field the sink REQUIRES
  * is present + compatible); enums by tag-subset (source tags within the sink's accepted tags,
  * so an untagged source cannot fill an enum sink); list elements recurse, treating a bare
@@ -176,7 +177,11 @@ export function typesCompatible(source: Type, sink: Type): boolean {
     if (!(sourceIsList && sinkIsList)) return false;
     return typesCompatible(listElement(source), listElement(sink));
   }
-  if (source.kind !== sink.kind && !(sink.kind === ValueKind.NUMBER && source.kind === ValueKind.INTEGER)) {
+  if (
+    source.kind !== sink.kind &&
+    !(sink.kind === ValueKind.NUMBER && source.kind === ValueKind.INTEGER) &&
+    !(sink.kind === ValueKind.STRING && STRING_STORED.has(source.kind))
+  ) {
     return false;
   }
   if (sink.bounds !== undefined && !intervalWithin(source, sink)) return false;

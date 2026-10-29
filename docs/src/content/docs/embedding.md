@@ -218,9 +218,9 @@ Your program reaches a waiting run by its log path:
 
 Apart from `cancel`, which ends the run, none of them moves the run on: call `advance` next. If
 your process is running the run right now, the call goes straight to it instead. For a run started
-with `llmConfig.api_key`, pass these calls the `apiKey` and `headers` you pass `advance`: they are
-never recorded, but the `advance` after the call then reuses the state it left instead of replaying
-the log again. This flow waits for notes:
+with `llmConfig.api_key`, pass these calls the `apiKey` and `headers` you pass `advance`. They are
+never recorded; passing them lets the next `advance` reuse the state the call left instead of
+replaying the log again. This flow waits for notes:
 
 ```yaml title="notes.yaml"
 id: notes

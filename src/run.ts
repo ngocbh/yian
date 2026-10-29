@@ -415,11 +415,7 @@ export class RunResult {
     const { apiKey = null, headers = null, onEvent = null } = options;
     handle.busy = true;
     try {
-      return await handle.backward(taken as FeedbackValue, {
-        apiKey: apiKey === null ? null : secretKey(apiKey),
-        headers: headers === null ? null : validateHeaders(headers, null),
-        onEvent,
-      });
+      return await handle.backward(taken as FeedbackValue, { ...hostCredentials(apiKey, headers), onEvent });
     } finally {
       this.#backwardOutcome = handle.outcome;
       handle.busy = false;
@@ -1155,6 +1151,17 @@ function secretKey(raw: string): string {
   return new LLMConfig({ api_key: raw }).apiKey!;
 }
 
+/** Validate a host key and the headers sent with it, without echoing a value; a missing one is `null`. */
+function hostCredentials(
+  apiKey: string | null | undefined,
+  headers: Readonly<Record<string, string>> | null | undefined,
+): { apiKey: string | null; headers: Record<string, string> | null } {
+  return {
+    apiKey: apiKey == null ? null : secretKey(apiKey),
+    headers: headers == null ? null : validateHeaders(headers, null),
+  };
+}
+
 /**
  * Reject any agent config its model call would reject, before the run starts.
  *
@@ -1668,9 +1675,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       throw new TypeError("advance's flow must be a ComposedFlow or null");
     }
     const unopened = checkDriveOptions(options);
-    const { apiKey: rawKey = null, headers: rawHeaders = null } = options;
-    let apiKey = rawKey === null ? null : secretKey(rawKey);
-    let headers = rawHeaders === null ? null : validateHeaders(rawHeaders, null);
+    let { apiKey, headers } = hostCredentials(options.apiKey, options.headers);
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);
     // The registry's key: the file itself, however the path names it (throws ENOENT when missing).
@@ -2003,13 +2008,7 @@ async function deliverTo(
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
       throw new TypeError("a host call's flow must be a ComposedFlow or null");
     }
-    const given =
-      apiKey === null && headers === null
-        ? null
-        : {
-            apiKey: apiKey === null ? null : secretKey(apiKey),
-            headers: headers === null ? null : validateHeaders(headers, null),
-          };
+    const given = apiKey === null && headers === null ? null : hostCredentials(apiKey, headers);
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);
     // The registry's key: the file itself, however the path names it (throws ENOENT when missing).
@@ -2066,8 +2065,8 @@ async function deliverTo(
  * it next takes from the inbox.
  *
  * Through this process's engine when it is moving the run (the options are ignored then, though a
- * `codeRoot` other than the recorded one is still refused); else under the log's lock, taken
- * without blocking, reusing the state of a waiting run this process left while the log is
+ * `codeRoot` other than the recorded one, or a refused `apiKey` or `headers`, is still refused);
+ * else under the log's lock, taken without blocking, reusing the state of a waiting run this process left while the log is
  * unchanged, or compiling the recorded flow and replaying the log as `advance` does. A send doesn't move the run: `advance` does (or the live engine).
  *
  * @param log The run's JSONL log.
@@ -2895,8 +2894,7 @@ export async function agentCall(
 ): Promise<AgentCallView> {
   const { nodeId, n } = call;
   const missing = () => new RangeError(`run log ${log} has no model call ${n} of node ${reprText(nodeId)}`);
-  const apiKey = options.apiKey == null ? null : secretKey(options.apiKey);
-  const headers = options.headers == null ? null : validateHeaders(options.headers, null);
+  const { apiKey, headers } = hostCredentials(options.apiKey, options.headers);
   const env = options.env ?? processEnv;
   const root = resolvedRoot(options.codeRoot);
   const entries = [...iterRunRecords(log, { maxLineBytes: options.maxLineBytes ?? null })];

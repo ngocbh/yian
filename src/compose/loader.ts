@@ -55,8 +55,6 @@ import {
   reprText,
   type SourceRange,
 } from "../diagnostics.ts";
-import { hostOnlyFieldError, LLMConfig } from "../llm_clients/config.ts";
-import { ValidationError } from "../llm_clients/provider_blocks.ts";
 import { DeclSite, MemorySetupError } from "../memory/contracts.ts";
 import { isMaxToolIterations } from "../nodes/agent/node.ts";
 import type { Node } from "../nodes/base.ts";
@@ -81,8 +79,8 @@ import { boundaryFieldRanges, pathText } from "./helpers/source.ts";
 import { rejectUnreadTags } from "./helpers/tags.ts";
 import { parseUsesRef } from "./helpers/uses.ts";
 import { checkEnvValues } from "./helpers/value_nesting.ts";
-import { checkLlmConfigValue, checkResponsesBlock, readLlmConfig } from "./nodes/agent.ts";
-import { notTextDetail, notTextError, valueTypeError } from "./nodes/base.ts";
+import { readLlmConfig, validateLlmConfig } from "./nodes/agent.ts";
+import { notTextError, valueTypeError } from "./nodes/base.ts";
 import { KINDS, REMOVED_KINDS } from "./nodes/index.ts";
 import { checkFlowCode, type CodeCheckOptions } from "./nodes/code.ts";
 import { callNestingScope } from "./nodes/resolver.ts";
@@ -961,14 +959,10 @@ function refuseInheritedLlmValues(flow: ComposedFlow): void {
 /**
  * Read a flow- or def-level `llm_config` with its values and tags, and check it.
  *
- * The layer is read through its tags the way an AGENT node's own is: a layer holding `${...}`
- * values becomes a `ValueTemplate`, or a `Binding` for a whole record written as one value, and is
- * checked by `checkLlmConfigValue`. Otherwise it must be a mapping of `LLMConfig` fields without
- * `api_key`, `organization`, `project`, `headers`, or `base_url` other than beside
- * `provider: azure`, which only the host sets. A text field YAML read as non-text (such as
- * `model: 5`) is named by `notTextError`; any other violation keeps the `LLMConfig` message. A
- * provider block beside a model routed to the Responses API is refused (`checkResponsesBlock`).
- * `inherit` is an AGENT-only key.
+ * The layer is read through its tags and checked the way an AGENT node's own is
+ * (`validateLlmConfig`): a layer holding `${...}` values becomes a `ValueTemplate`, or a `Binding`
+ * for a whole record written as one value; otherwise it must be a mapping of `LLMConfig` fields
+ * without the fields only the host sets. `inherit` is an AGENT-only key.
  *
  * @param llmConfig The authored layer; `null` means absent.
  * @param where The layer's owner in messages, such as `flow`.
@@ -1014,29 +1008,9 @@ function readAuthoredLlmConfig(
       }
     }
   }
-  if (llmConfig instanceof ValueTemplate || llmConfig instanceof Binding) {
-    return checkLlmConfigValue(llmConfig, `${where}: llm_config`, sourceRange, diagnostics, ranges, {
-      allowInherit: false,
-    })[0];
-  }
-  if (!isRecord(llmConfig)) throw diagnostics.error(`${where}: llm_config must be a mapping`, { range: sourceRange });
-  const hostOnly = hostOnlyFieldError(llmConfig);
-  if (hostOnly !== null) throw diagnostics.error(`${where}: ${hostOnly[1]}`, { range: sourceRange });
-  try {
-    new LLMConfig(llmConfig);
-  } catch (error) {
-    if (error instanceof ValidationError) {
-      const detail = notTextDetail(error, llmConfig);
-      throw diagnostics.error(`${where}: llm_config: ` + (detail !== null ? notTextError(...detail) : error.message), {
-        range: sourceRange,
-        cause: error,
-      });
-    }
-    throw diagnostics.error(`${where}: llm_config: ${errorText(error)}`, { range: sourceRange, cause: error });
-  }
-  const { provider, model } = llmConfig;
-  checkResponsesBlock(provider, model, llmConfig, `${where}: llm_config`, diagnostics, () => sourceRange);
-  return llmConfig;
+  return validateLlmConfig(llmConfig, `${where}: llm_config`, sourceRange, diagnostics, ranges, {
+    allowInherit: false,
+  })[0];
 }
 
 /**

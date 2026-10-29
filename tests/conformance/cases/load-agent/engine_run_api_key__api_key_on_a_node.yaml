@@ -12,4 +12,4 @@ expect:
       message: 'node ''agent'': llm_config.api_key is a host credential; pass it in the run''s llm_config, not in a flow file'
       frames:
       - label: flow.yaml
-        range: [4, 48, 4, 79]
+        range: [4, 58, 4, 78]

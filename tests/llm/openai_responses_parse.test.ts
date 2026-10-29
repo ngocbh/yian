@@ -1231,6 +1231,63 @@ describe("invalid event JSON", () => {
   });
 });
 
+describe("provider names", () => {
+  const azure = () => new OpenAIResponses({ model: "gpt-5.5", provider: "azure" });
+  const CASES: [string, (JsonObject | SSEEvent)[], string][] = [
+    ["invalid JSON", [new SSEEvent({ data: "{not json" })], "invalid JSON in azure stream event"],
+    [
+      "no output_index",
+      [{ type: "response.output_text.delta", content_index: 0, delta: "Hi" }],
+      "azure stream event response.output_text.delta has no output_index",
+    ],
+    ["no response", [{ type: "response.completed" }], "azure response.completed event has no response"],
+    ["no terminal event", [created()], "azure stream ended before a complete response"],
+    ["an incomplete reply", [incomplete(null)], "azure response did not complete (unknown)"],
+    ["a failed reply", [failed("server_error", "It broke.")], "azure stream failed (server): It broke."],
+    [
+      "usage details",
+      [completed([], { usage: { ...USAGE, input_tokens_details: 3n } })],
+      "azure response usage details are not objects",
+    ],
+    [
+      "a usage count",
+      [completed([], { usage: { ...USAGE, input_tokens: "3" } })],
+      "azure response usage has a count that is not an int",
+    ],
+    ["an output item", [completed([3])], "azure response has an output item that is not an object"],
+    [
+      "message content",
+      [done(0, { ...MESSAGE, content: "Hello" }), completed()],
+      "azure response message content is not a list",
+    ],
+    [
+      "output_text",
+      [done(0, { ...MESSAGE, content: [{ type: "output_text", text: 3 }] }), completed()],
+      "azure response output_text has no text",
+    ],
+    [
+      "a refusal",
+      [done(0, { ...MESSAGE, content: [{ type: "refusal" }] }), completed()],
+      "azure response refusal has no text",
+    ],
+    [
+      "a function_call",
+      [done(0, { ...CALL, name: 3 }), completed()],
+      "azure response function_call needs call_id, name and arguments",
+    ],
+  ];
+
+  test.each(CASES)("an error for %s names the route's provider", async (_, events, message) => {
+    expect((await failure(events, azure())).message).toBe(message);
+  });
+
+  test("an invalid item names the route's provider", async () => {
+    install({ ...BUILTIN, maxValueNesting: 3 });
+    const error = await failure([done(0, REASONING), completed()], azure());
+    expect(error.message).toMatch(/^azure response has an invalid reasoning item: /);
+  });
+});
+
 describe("replay records", () => {
   const ACCOUNT_KEY: ReplayKey = { ...KEY, account: "acct_1" };
   const FINAL_URL: JsonObject = { type: "url_citation", url: "https://example.com" };

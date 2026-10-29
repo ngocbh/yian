@@ -107,7 +107,6 @@ export const STREAM_ERROR_KINDS: ReadonlyMap<string, ErrorKind> = new Map<string
   ["usage_limit_reached", "quota"],
   ["usage_not_included", "quota"],
 ]);
-const USAGE_NOT_INT = notIntMessage("openai");
 
 /** An assistant part that can carry a replay record. */
 type ReplayPart = TextPart | RefusalPart | ReasoningPart | ToolCallPart;
@@ -261,7 +260,7 @@ export class OpenAIResponses implements SseProtocol {
       if (frame.data.startsWith("[DONE]")) break;
       // Some gateways send keep-alive frames with empty data.
       if (frame.data === "") continue;
-      const data = eventData(frame.data, "openai");
+      const data = eventData(frame.data, this.provider);
       if (!isPlainObject(data)) continue;
       const rawType = data["type"] || frame.event;
       const type = typeof rawType === "string" ? rawType : null;
@@ -273,7 +272,7 @@ export class OpenAIResponses implements SseProtocol {
       if (type !== null && ITEM_EVENTS.has(type)) {
         const raw = data["output_index"];
         if (typeof raw !== "bigint") {
-          throw new ProviderError("protocol", `openai stream event ${type} has no output_index`);
+          throw new ProviderError("protocol", `${this.provider} stream event ${type} has no output_index`);
         }
         outputIndex = Number(raw);
         if (typeof data["item_id"] === "string") sawIds(outputIndex, [data["item_id"]]);
@@ -338,7 +337,9 @@ export class OpenAIResponses implements SseProtocol {
         }
       } else if (type !== null && TERMINAL_EVENTS.has(type)) {
         const response = data["response"];
-        if (!isPlainObject(response)) throw new ProviderError("protocol", `openai ${type} event has no response`);
+        if (!isPlainObject(response)) {
+          throw new ProviderError("protocol", `${this.provider} ${type} event has no response`);
+        }
         const rawOutput = response["output"];
         const output = Array.isArray(rawOutput) ? rawOutput : [];
         const started = new Set([...opened.keys(), ...indexes.keys()]);
@@ -410,7 +411,7 @@ export class OpenAIResponses implements SseProtocol {
     }
     const message = this.subscription
       ? "OpenAI subscription stream ended before a complete response"
-      : "openai stream ended before a complete response";
+      : `${this.provider} stream ended before a complete response`;
     throw new ProviderError("incomplete", message, { retryable: true });
   }
 
@@ -444,13 +445,13 @@ export class OpenAIResponses implements SseProtocol {
     } else if (status === "failed" && isPlainObject(response["error"])) {
       throw this.#streamFailure(response["error"]);
     } else {
-      const prefix = this.subscription ? "OpenAI subscription response" : "openai response";
+      const prefix = this.subscription ? "OpenAI subscription response" : `${this.provider} response`;
       const shown = typeof reason === "string" && reason ? reason : "unknown";
       const kind = reason === "content_filter" ? "refused" : "incomplete";
       throw new ProviderError(kind, `${prefix} did not complete (${shown})`);
     }
     const events: Event[] = [];
-    const usage = usageOf(response["usage"]);
+    const usage = usageOf(response["usage"], this.provider);
     if (usage !== null) events.push(new UsageReport(usage));
     // `||`, not `??`: an empty id counts as none.
     const id = strOrNull(response["id"]) || responseId;
@@ -475,7 +476,7 @@ export class OpenAIResponses implements SseProtocol {
     const message = typeof rawMessage === "string" && rawMessage ? rawMessage : "no message";
     const text = this.subscription
       ? `OpenAI subscription stream ended before a complete response: ${message}`
-      : `openai stream failed (${kind}): ${message}`;
+      : `${this.provider} stream failed (${kind}): ${message}`;
     return new ProviderError(kind, text);
   }
 
@@ -677,27 +678,28 @@ function strOrNull(value: JsonValue | undefined): string | null {
  * @throws {ProviderError} A count is not an int within `Number.MAX_SAFE_INTEGER`, or the
  *   details are not objects (kind `protocol`).
  */
-function usageOf(usage: JsonValue | undefined): Usage | null {
+function usageOf(usage: JsonValue | undefined, provider: string): Usage | null {
   if (!isPlainObject(usage)) return null;
   const inputDetails = usage["input_tokens_details"] ?? {};
   const outputDetails = usage["output_tokens_details"] ?? {};
   if (!isPlainObject(inputDetails) || !isPlainObject(outputDetails)) {
-    throw new ProviderError("protocol", "openai response usage details are not objects");
+    throw new ProviderError("protocol", `${provider} response usage details are not objects`);
   }
-  const inputTokens = tokenCount(usage["input_tokens"], USAGE_NOT_INT) ?? 0;
-  const outputTokens = tokenCount(usage["output_tokens"], USAGE_NOT_INT) ?? 0;
+  const notInt = notIntMessage(provider);
+  const inputTokens = tokenCount(usage["input_tokens"], notInt) ?? 0;
+  const outputTokens = tokenCount(usage["output_tokens"], notInt) ?? 0;
   try {
     return new Usage({
       inputTokens,
       outputTokens,
-      totalTokens: tokenCount(usage["total_tokens"], USAGE_NOT_INT) ?? inputTokens + outputTokens,
-      cacheReadTokens: tokenCount(inputDetails["cached_tokens"], USAGE_NOT_INT),
-      cacheCreationTokens: tokenCount(inputDetails["cache_write_tokens"], USAGE_NOT_INT),
-      reasoningTokens: tokenCount(outputDetails["reasoning_tokens"], USAGE_NOT_INT),
+      totalTokens: tokenCount(usage["total_tokens"], notInt) ?? inputTokens + outputTokens,
+      cacheReadTokens: tokenCount(inputDetails["cached_tokens"], notInt),
+      cacheCreationTokens: tokenCount(inputDetails["cache_write_tokens"], notInt),
+      reasoningTokens: tokenCount(outputDetails["reasoning_tokens"], notInt),
     });
   } catch (error) {
     // `Usage` refuses a count past `Number.MAX_SAFE_INTEGER`, which `Number()` rounds.
-    if (error instanceof MessageFormatError) throw new ProviderError("protocol", USAGE_NOT_INT);
+    if (error instanceof MessageFormatError) throw new ProviderError("protocol", notInt);
     throw error;
   }
 }
@@ -712,7 +714,7 @@ function usageOf(usage: JsonValue | undefined): Usage | null {
  */
 function itemParts(item: JsonValue, key: ReplayKey): [number, Part][] {
   if (!isPlainObject(item)) {
-    throw new ProviderError("protocol", "openai response has an output item that is not an object");
+    throw new ProviderError("protocol", `${key.provider} response has an output item that is not an object`);
   }
   const type = item["type"];
   try {
@@ -724,7 +726,7 @@ function itemParts(item: JsonValue, key: ReplayKey): [number, Part][] {
     return [];
   } catch (error) {
     if (error instanceof MessageFormatError) {
-      throw new ProviderError("protocol", `openai response has an invalid ${type} item: ${error.message}`);
+      throw new ProviderError("protocol", `${key.provider} response has an invalid ${type} item: ${error.message}`);
     }
     throw error;
   }
@@ -744,20 +746,26 @@ function reasoningPart(item: JsonObject, key: ReplayKey): ReasoningPart {
 /** Build a message item's text and refusal parts, keyed by content index. */
 function messageParts(item: JsonObject, key: ReplayKey): [number, Part][] {
   const content = item["content"] ?? [];
-  if (!Array.isArray(content)) throw new ProviderError("protocol", "openai response message content is not a list");
+  if (!Array.isArray(content)) {
+    throw new ProviderError("protocol", `${key.provider} response message content is not a list`);
+  }
   const fields = contentFields(item["id"], item["phase"]);
   const parts: [number, Part][] = [];
   for (const [contentIndex, entry] of content.entries()) {
     if (!isPlainObject(entry)) continue;
     if (entry["type"] === "output_text") {
       const text = entry["text"];
-      if (typeof text !== "string") throw new ProviderError("protocol", "openai response output_text has no text");
+      if (typeof text !== "string") {
+        throw new ProviderError("protocol", `${key.provider} response output_text has no text`);
+      }
       const annotations = entry["annotations"];
       const kept = Array.isArray(annotations) ? dropNulls(annotations) : [];
       parts.push([contentIndex, new TextPart(text, replayRecord(key, { ...fields, annotations: kept }))]);
     } else if (entry["type"] === "refusal") {
       const refusal = entry["refusal"];
-      if (typeof refusal !== "string") throw new ProviderError("protocol", "openai response refusal has no text");
+      if (typeof refusal !== "string") {
+        throw new ProviderError("protocol", `${key.provider} response refusal has no text`);
+      }
       parts.push([contentIndex, new RefusalPart(refusal, replayRecord(key, fields))]);
     }
   }
@@ -787,7 +795,7 @@ function callPart(item: JsonObject, key: ReplayKey): ToolCallPart {
   const payload = dropNulls(item);
   const { call_id: id, name, arguments: text } = payload;
   if (typeof id !== "string" || typeof name !== "string" || typeof text !== "string") {
-    throw new ProviderError("protocol", "openai response function_call needs call_id, name and arguments");
+    throw new ProviderError("protocol", `${key.provider} response function_call needs call_id, name and arguments`);
   }
   const [args, raw] = parseArguments(text);
   const providerPayload = replayRecord(key, { item: payload });

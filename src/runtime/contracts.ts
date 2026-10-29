@@ -365,12 +365,13 @@ export class ForwardCapture {
 }
 
 /**
- * One input message transfer and its sender's incoming positions. Frozen.
+ * Where one backward message came from. Frozen.
  *
- * Sender, input and message identify a returned input batch slot; the contribution is its ordinal
- * in the existing pure route transfer. Parents index the sender's ordered received messages. A
- * root seed has no sender or parents. These coordinates keep expression stops and contexts
- * without copying source data.
+ * The sender, input name and message index name the entry in the sender's returned input
+ * feedback that the message came from; routing that entry through the input's route splits it
+ * into contributions, and the contribution index is the message's position among them. Parents
+ * are the positions, among the messages the sender received, that the entry answers. The root
+ * seed has no sender and no parents.
  */
 export class BackwardAttribution {
   /** The accepted occurrence that sent the message, or `null` for a root seed. */

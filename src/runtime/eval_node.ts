@@ -210,11 +210,12 @@ function steerInboxCapability(
 export type WorkerOutcome = Output | Route | Grow | Pending | EvaluationFailure;
 
 /**
- * One raw worker outcome with its optional binding and backward capture. Frozen.
+ * One raw worker outcome with what its evaluation captured. Frozen.
  *
- * Binding values and routes travel with the common inventories and static material, as separate
- * lower binding and runtime carriers. Neither is accepted history until the dispatcher records
- * this outcome.
+ * `bindings` holds the inputs the node was bound to and the routes evaluated while binding them;
+ * `backwardCapture` holds what backward later reads of the invocation (its routes, evaluated keys
+ * and scope). Either is `null` when the evaluation captured none. Neither is accepted history
+ * until the dispatcher records this outcome.
  */
 export class EvaluatedOutcome {
   readonly outcome: WorkerOutcome;

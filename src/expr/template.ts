@@ -161,8 +161,11 @@ export function scanTemplate(text: string): TemplateSegment[] {
       segments.push(new Span(parseExpr(interior), interior));
       i = end + 1;
     } else {
-      literal += text[i];
-      i += 1;
+      // Copy the whole run up to the next `$` at once: a per-char `+=` builds one rope node per char.
+      const next = text.indexOf("$", i + 1);
+      const stop = next < 0 ? text.length : next;
+      literal += text.slice(i, stop);
+      i = stop;
     }
   }
   if (literal) segments.push(new Literal(literal));
@@ -389,8 +392,11 @@ export function rewriteTemplateRefs<T>(source: T, rename: RefRename): T | string
       out += "${" + rewriteExprRefs(source.slice(i + 2, end), rename) + "}";
       i = end + 1;
     } else {
-      out += source[i];
-      i += 1;
+      // Copy the whole run up to the next `$` at once, as `scanTemplate` does.
+      const next = source.indexOf("$", i + 1);
+      const stop = next < 0 ? source.length : next;
+      out += source.slice(i, stop);
+      i = stop;
     }
   }
   return out;

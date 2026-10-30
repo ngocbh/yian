@@ -282,7 +282,10 @@ top names the model, how it is reached (an API key or a ChatGPT login), the fold
 focus. The reply streams in as it is written, with its Markdown (bold, italic, code, headings,
 lists, code blocks) drawn. Each tool call shows as a `⏺` line with its result under it, and so does
 each event of a flow the assistant runs. A spinner runs while the assistant works, and you type in
-a framed box. Set `NO_COLOR`, or redirect any of the three, to get the plain lines above.
+a framed box. Each line you send is printed on a gray band across the terminal, so your lines stand
+out from the replies. The chat redraws only the rows that change, in place, so the box, the list
+and the reply streaming in don't flicker. Set `NO_COLOR`, or redirect any of the three, to get the
+plain lines above.
 
 The box stays up under the spinner while the assistant works. Press Enter there to send the line at
 once: the assistant reads it before its next model call, so it can change course mid-reply. Ctrl-C

@@ -22,6 +22,7 @@ import {
   ResolverTable,
   reprText,
   sameFailure,
+  shellQuote,
   SourceRange,
 } from "../src/diagnostics.ts";
 import { importStatements } from "./helpers/source_scan.ts";
@@ -728,5 +729,18 @@ describe("the diagnostics module", () => {
     // The diagnostic value spine must stay below every other module.
     const path = fileURLToPath(new URL("../src/diagnostics.ts", import.meta.url));
     expect(importStatements(readFileSync(path, "utf8"))).toEqual([]);
+  });
+});
+
+describe("shellQuote", () => {
+  test("a word of safe characters stays as it is", () => {
+    expect(shellQuote("/home/ada/.yian/runs/4f1c/log.jsonl")).toBe("/home/ada/.yian/runs/4f1c/log.jsonl");
+    expect(shellQuote("a-b_c=d:e,f@g%h+i")).toBe("a-b_c=d:e,f@g%h+i");
+  });
+
+  test("anything else is single-quoted, each quote closed, escaped and reopened", () => {
+    expect(shellQuote("/tmp/my runs/log.jsonl")).toBe("'/tmp/my runs/log.jsonl'");
+    expect(shellQuote("it's $HOME")).toBe("'it'\\''s $HOME'");
+    expect(shellQuote("")).toBe("''");
   });
 });

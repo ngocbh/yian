@@ -34,7 +34,7 @@ import { LoadError } from "../compose/helpers/errors.ts";
 import { loadFlow } from "../compose/loader.ts";
 import { defaultSkillRoots, loadSkillDir, loadSkills } from "../compose/skills.ts";
 import { current, type Env } from "../defaults.ts";
-import { compareCodeUnits, Diagnostic, noteCleanup, reprText } from "../diagnostics.ts";
+import { compareCodeUnits, Diagnostic, noteCleanup, reprText, shellQuote } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
 import { type Skill, SkillError } from "../skills/catalog.ts";
 import { LOAD_SKILL } from "../skills/tool.ts";
@@ -119,7 +119,6 @@ import {
   osReason,
   printJson,
   type PromptContext,
-  shellQuote,
   stopOnSignals,
   UsageError,
   type Writer,

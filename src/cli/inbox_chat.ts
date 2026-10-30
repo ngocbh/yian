@@ -24,7 +24,7 @@
 import { resolveMemoryLayout } from "../compile/memory_layout.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
-import { Diagnostic } from "../diagnostics.ts";
+import { Diagnostic, shellQuote } from "../diagnostics.ts";
 import { NodeSucceeded, type RunEvent, RunStarted, type StreamChunk } from "../events.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import { realScheduler, type Scheduler } from "../platform.ts";
@@ -84,7 +84,7 @@ import {
   TerminalStopped,
   textDraft,
 } from "./terminal.ts";
-import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, shellQuote, sleepUntil, UsageError } from "./utils.ts";
+import { atTerminal, type CliIo, CommandEnv, forTerminal, HostStop, sleepUntil, UsageError } from "./utils.ts";
 
 /**
  * The options `inboxChat` reads, for `yian chat`'s assistant and the chats `runOrChat` hands over; an

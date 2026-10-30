@@ -26,7 +26,6 @@ import {
   type ParsedArgs,
   parseCommand,
   printJson,
-  shellQuote,
   stopOnSignals,
   streamWriter,
   stripControls,
@@ -660,18 +659,5 @@ describe("forTerminal", () => {
   test("keeps text written elsewhere exactly", () => {
     expect(forTerminal(text, { write: async () => {}, isTTY: false })).toBe(text);
     expect(forTerminal(text, { write: async () => {} })).toBe(text);
-  });
-});
-
-describe("shellQuote", () => {
-  test("a word of safe characters stays as it is", () => {
-    expect(shellQuote("/home/ada/.yian/runs/4f1c/log.jsonl")).toBe("/home/ada/.yian/runs/4f1c/log.jsonl");
-    expect(shellQuote("a-b_c=d:e,f@g%h+i")).toBe("a-b_c=d:e,f@g%h+i");
-  });
-
-  test("anything else is single-quoted, each quote closed, escaped and reopened", () => {
-    expect(shellQuote("/tmp/my runs/log.jsonl")).toBe("'/tmp/my runs/log.jsonl'");
-    expect(shellQuote("it's $HOME")).toBe("'it'\\''s $HOME'");
-    expect(shellQuote("")).toBe("''");
   });
 });

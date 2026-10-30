@@ -263,6 +263,38 @@ describe("SSE", () => {
   });
 });
 
+describe("SSE line count", () => {
+  /** Return how many SSE lines `stats` counted in `text`, sent in chunks of `size` bytes. */
+  async function count(text: string, size = 3): Promise<number> {
+    const raw = utf8(text);
+    const chunks: Uint8Array[] = [];
+    for (let i = 0; i < raw.length; i += size) chunks.push(raw.subarray(i, i + size));
+    const stats = { sseLines: 0 };
+    await collect(iterSse(chunks, undefined, stats));
+    return stats.sseLines;
+  }
+
+  test("comments and data, event, id and retry fields count", async () => {
+    expect(await count(": keep-alive\ndata: a\nevent: x\nid: 1\nretry: 5\ndata\n\n")).toBe(6);
+  });
+
+  test("unknown fields and blank lines don't count", async () => {
+    expect(await count('{"error": {"message": "bad key"}}\n\n<html>\nfoo: bar\n\r\n')).toBe(0);
+  });
+
+  test("an unfinished last line counts when it is a comment or a known field", async () => {
+    expect(await count('data: {"id": "chatcmpl-1", "choices": [')).toBe(1);
+    expect(await count("event: message_st")).toBe(1);
+    expect(await count(": OPENROUTER PROC")).toBe(1);
+    expect(await count('{"error": {"message": "bad key"}}')).toBe(0);
+    expect(await count("<html>gateway</html>")).toBe(0);
+  });
+
+  test("no stats leaves parsing unchanged", async () => {
+    expect(await sse(": c\nfoo: bar\ndata: a\n\n")).toEqual([new SSEEvent({ data: "a" })]);
+  });
+});
+
 describe("NDJSON", () => {
   test("lines split at every offset", async () => {
     const raw = utf8('{"a": 1}\n{"b": [2, 3]}\n');

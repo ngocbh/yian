@@ -46,12 +46,17 @@ export class SSEEvent {
  * dispatches the event if it had a `data` field. An event still open at the end of the
  * stream is dropped.
  *
+ * With `stats`, `stats.sseLines` grows by one for each comment and each `data`, `event`, `id`
+ * or `retry` line, the unfinished last line included; blank lines and unknown fields, such as
+ * a line of JSON or HTML, don't count.
+ *
  * Throws `ProviderError` (kind `protocol`, not retryable) when an event's `data` so far plus
  * the line being read pass `maxEventBytes` UTF-8 bytes; the message gives the line number.
  */
 export async function* iterSse(
   chunks: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
   maxEventBytes: number = current().maxModelEventBytes,
+  stats?: SseStats,
 ): AsyncGenerator<SSEEvent> {
   // The default decoder removes one leading BOM, even one split across chunks.
   const decoder = new TextDecoder();
@@ -90,6 +95,7 @@ export async function* iterSse(
         event = null;
         continue;
       }
+      if (stats && isSseLine(line)) stats.sseLines += 1;
       if (line.startsWith(":")) continue;
       const colon = line.indexOf(":");
       const name = colon === -1 ? line : line.slice(0, colon);
@@ -109,6 +115,21 @@ export async function* iterSse(
       pending.push(piece);
     }
   }
+  if (stats && pending.length > 0 && isSseLine(pending.join(""))) stats.sseLines += 1;
+}
+
+/** What `iterSse` counts while it reads. */
+export interface SseStats {
+  /** The comment and known-field lines read so far. */
+  sseLines: number;
+}
+
+const SSE_FIELDS: ReadonlySet<string> = new Set(["data", "event", "id", "retry"]);
+
+/** Return whether a non-blank `line` is an SSE comment or a field SSE defines. */
+function isSseLine(line: string): boolean {
+  const colon = line.indexOf(":");
+  return colon === 0 || SSE_FIELDS.has(colon === -1 ? line : line.slice(0, colon));
 }
 
 /**

@@ -49,6 +49,7 @@ import {
 } from "../typesys/values.ts";
 import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
 import { AuthError } from "../llm_clients/auth/index.ts";
+import { StorageError } from "../llm_clients/auth/store.ts";
 import {
   type AgentConfig,
   type Connection,
@@ -812,6 +813,20 @@ export async function openMcpServers<T>(
   }
 }
 
+/**
+ * Return `error`'s message with what lets the run resume. A resume needs the saved login it
+ * pinned, so deleting a damaged file's logins and logging in again means a new run.
+ */
+function resumeAdvice(error: StorageError): string {
+  if (error.damaged) {
+    return (
+      `${error.message}. Only restoring the file lets this run resume; after deleting its logins, log in ` +
+      "again and start a new run"
+    );
+  }
+  return `${error.message}. Resume again once it is fixed`;
+}
+
 /** @internal A resumed run's recorded provider credentials are not available. */
 export class ResumeKeyError extends Error {
   override name = "ResumeKeyError";
@@ -954,7 +969,7 @@ async function checkResumeCredentials(
       await connectionCredentials(connection, provider, { env: context.env.read });
     } catch (error) {
       if (!(error instanceof AuthError)) throw error;
-      throw new ResumeKeyError(error.message, { cause: error });
+      throw new ResumeKeyError(error instanceof StorageError ? resumeAdvice(error) : error.message, { cause: error });
     }
   }
   for (const provider of providers) {

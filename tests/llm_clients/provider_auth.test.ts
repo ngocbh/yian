@@ -31,7 +31,7 @@ import {
 } from "../../src/llm_clients/auth/common.ts";
 import { request } from "../../src/llm_clients/auth/http.ts";
 import { type AuthRequest, OpenAIAuth } from "../../src/llm_clients/auth/openai.ts";
-import { AuthStore } from "../../src/llm_clients/auth/store.ts";
+import { AuthStore, StorageError } from "../../src/llm_clients/auth/store.ts";
 import { lockFile, realScheduler, type Scheduler, USER_AGENT, virtualScheduler } from "../../src/platform.ts";
 import { parseJson } from "../../src/typesys/json.ts";
 import { SCENARIOS } from "./auth_both_runtimes.ts";
@@ -513,6 +513,18 @@ describe("AuthStore", () => {
     return JSON.stringify({ version: 1, default_provider: null, providers: { [provider]: value } });
   }
 
+  /** The error a malformed or oversized store at `path` reports, its fix after `problem`. */
+  const damagedMessage = (path: string, problem = "is malformed") =>
+    `Credential storage at ${path} ${problem}; restore it, or delete every saved login in it and log ` +
+    `in again (yian auth --remove --auth-file ${path})`;
+  /** The error a store file, folder or lock at `path` that is not the kind it must be reports. */
+  const notRegular = (path: string, what: "at" | "folder" | "lock" = "at") =>
+    what === "folder"
+      ? `Credential storage folder ${path} must be a folder, not a symbolic link or a file`
+      : `Credential storage ${what} ${path} must be a regular file with one link, not a symbolic link`;
+  /** The error a store folder replaced while in use reports. */
+  const changed = () => `Credential storage folder ${join(tmp, "auth")} changed while in use; try again`;
+
   /** A saved openai API-key login. */
   const savedStore = {
     version: 1,
@@ -581,7 +593,7 @@ describe("AuthStore", () => {
       writeRaw(file, contents);
       const error = thrown(() => new AuthStore(file).read());
       expect(error).toBeInstanceOf(AuthError);
-      expect(error.message).toBe("Credential storage is malformed; reconnect after repairing it");
+      expect(error.message).toBe(damagedMessage(file));
       expect(error.message).not.toContain("do-not-echo");
       expect(error.cause).toBeUndefined();
     });
@@ -592,9 +604,7 @@ describe("AuthStore", () => {
     const at = text.indexOf("m".charCodeAt(0));
     text[at] = 0xff;
     writeRaw(file, text);
-    expect(thrown(() => new AuthStore(file).read()).message).toBe(
-      "Credential storage is malformed; reconnect after repairing it",
-    );
+    expect(thrown(() => new AuthStore(file).read()).message).toBe(damagedMessage(file));
   });
 
   test("a store reads a null endpoint", () => {
@@ -625,16 +635,84 @@ describe("AuthStore", () => {
     fs.symlinkSync(join(tmp, "real"), join(tmp, "auth"));
     const error = thrown(() => new AuthStore(file).read());
     expect(error).toBeInstanceOf(AuthError);
-    expect(error.message).toBe("Could not access private credential storage");
+    expect(error.message).toBe(notRegular(join(tmp, "auth"), "folder"));
     expect(error.cause).toBeUndefined();
+  });
+
+  test("a store whose folder path is a file is refused", () => {
+    fs.writeFileSync(join(tmp, "auth"), "", { mode: 0o600 });
+    const error = thrown(() => new AuthStore(file).read());
+    expect(error).toBeInstanceOf(AuthError);
+    expect(error.message).toBe(notRegular(join(tmp, "auth"), "folder"));
+  });
+
+  test("a store file that is a symlink is refused by name", () => {
+    writeStore(join(tmp, "auth", "other.json"), savedStore);
+    fs.symlinkSync(join(tmp, "auth", "other.json"), file);
+    expect(thrown(() => new AuthStore(file).read()).message).toBe(notRegular(file));
+  });
+
+  test("a store file others can read names the file and the chmod that fixes it", () => {
+    writeStore(file, savedStore);
+    fs.chmodSync(file, 0o644);
+    const error = thrown(() => new AuthStore(file).read());
+    expect(error).toBeInstanceOf(StorageError);
+    expect(error.message).toBe(`Credential storage at ${file} must be private to its owner; fix it with: chmod 600 ${file}`);
+  });
+
+  test("a missing store in a folder others can read names the folder for reads and saves", async () => {
+    const directory = join(tmp, "auth");
+    fs.mkdirSync(directory, { mode: 0o755 });
+    fs.chmodSync(directory, 0o755);
+    const message = `Credential storage folder ${directory} must be private to its owner; fix it with: chmod 700 ${directory}`;
+    expect(thrown(() => new AuthStore(file).read()).message).toBe(message);
+    expect((await rejected(new AuthStore(file).save("openai", new ApiKeyCredentials("k"), "m"))).message).toBe(message);
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  test("a store folder of another user says so instead of a chmod", () => {
+    writeStore(file, savedStore);
+    const uid = process.getuid!();
+    const spy = spyOn(process, "getuid").mockReturnValue(uid + 1);
+    let error: Error;
+    try {
+      error = thrown(() => new AuthStore(file).read());
+    } finally {
+      spy.mockRestore();
+    }
+    expect(error.message).toBe(
+      `Credential storage folder ${join(tmp, "auth")} belongs to another user; keep logins in a folder of your ` +
+        "own, such as the default ~/.config/yian",
+    );
+    expect(error.message).not.toContain("chmod");
+  });
+
+  test("a path the shell would split is quoted in the advice", () => {
+    const directory = join(tmp, "my auth");
+    const path = join(directory, "auth.json");
+    writeRaw(path, "not json");
+    expect(thrown(() => new AuthStore(path).read()).message).toContain(`--auth-file '${path}')`);
+    fs.chmodSync(directory, 0o755);
+    expect(thrown(() => new AuthStore(path).read()).message).toContain(`chmod 700 '${directory}'`);
+  });
+
+  test("storage errors keep the name AuthError and say when the file's logins can't be read", () => {
+    // A failed model call is recorded by its error's name, and only "AuthError" replays as one.
+    writeRaw(file, "not json");
+    const damaged = thrown(() => new AuthStore(file).read());
+    expect(damaged).toBeInstanceOf(StorageError);
+    expect(damaged.name).toBe("AuthError");
+    expect((damaged as StorageError).damaged).toBe(true);
+    fs.chmodSync(file, 0o644);
+    const exposed = thrown(() => new AuthStore(file).read());
+    expect(exposed.name).toBe("AuthError");
+    expect((exposed as StorageError).damaged).toBe(false);
   });
 
   test("a store rejects a hard-linked file", () => {
     writeStore(file, savedStore);
     fs.linkSync(file, join(tmp, "auth", "alias"));
-    expect(thrown(() => new AuthStore(file).read()).message).toBe(
-      "Credential storage must use a regular private path",
-    );
+    expect(thrown(() => new AuthStore(file).read()).message).toBe(notRegular(file));
   });
 
   test("a store rejects a FIFO", () => {
@@ -642,9 +720,7 @@ describe("AuthStore", () => {
     fs.unlinkSync(file);
     execFileSync("mkfifo", [file]);
     fs.chmodSync(file, 0o600);
-    expect(thrown(() => new AuthStore(file).read()).message).toBe(
-      "Credential storage must use a regular private path",
-    );
+    expect(thrown(() => new AuthStore(file).read()).message).toBe(notRegular(file));
   });
 
   test("a directory swapped during the file open is refused", () => {
@@ -664,7 +740,7 @@ describe("AuthStore", () => {
       const error = thrown(() => new AuthStore(file).read());
       expect(swapped).toBe(true);
       expect(error).toBeInstanceOf(AuthError);
-      expect(error.message).toBe("Credential storage must use a regular private path");
+      expect(error.message).toBe(changed());
     } finally {
       spy.mockRestore();
     }
@@ -688,7 +764,7 @@ describe("AuthStore", () => {
       const error = thrown(() => new AuthStore(file).read());
       expect(swapped).toBe(true);
       expect(error).toBeInstanceOf(AuthError);
-      expect(error.message).toBe("Credential storage must use a regular private path");
+      expect(error.message).toBe(changed());
     } finally {
       spy.mockRestore();
     }
@@ -716,7 +792,7 @@ describe("AuthStore", () => {
     }
     expect(swapped).toBe(true);
     expect(error).toBeInstanceOf(AuthError);
-    expect(error.message).toBe("Credential storage must use a regular private path");
+    expect(error.message).toBe(changed());
     expect(fs.readdirSync(directory).filter((name) => name === "auth.json" || name.startsWith(".auth-"))).toEqual(
       [],
     );
@@ -1349,7 +1425,10 @@ describe("AuthStore", () => {
       fs.chmodSync(join(tmp, "auth"), 0o755);
       const error = await rejected(new AuthStore(file).delete());
       expect(error).toBeInstanceOf(AuthError);
-      expect(error.message).toBe("Credential storage must be private to its owner");
+      const directory = join(tmp, "auth");
+      expect(error.message).toBe(
+        `Credential storage folder ${directory} must be private to its owner; fix it with: chmod 700 ${directory}`,
+      );
       expect(fs.existsSync(file)).toBe(saved);
     });
   }
@@ -1514,7 +1593,9 @@ describe("AuthStore", () => {
     fs.chmodSync(`${file}.lock`, 0o644);
     const error = await rejected(store.save("openai", new ApiKeyCredentials("new"), "model"));
     expect(error).toBeInstanceOf(AuthError);
-    expect(error.message).toBe("Credential storage must be private to its owner");
+    expect(error.message).toBe(
+      `Credential storage lock ${file}.lock must be private to its owner; fix it with: chmod 600 ${file}.lock`,
+    );
     expect(store.selection()).toEqual(selection);
   });
 
@@ -1574,7 +1655,7 @@ describe("AuthStore", () => {
     fs.mkdirSync(`${file}.lock`);
     const error = await rejected(new AuthStore(file).save("openai", new ApiKeyCredentials("key"), "model"));
     expect(error).toBeInstanceOf(AuthError);
-    expect(error.message).toBe("Credential storage must use a regular private path");
+    expect(error.message).toBe(notRegular(`${file}.lock`, "lock"));
     expect(fs.existsSync(file)).toBe(false);
   });
 

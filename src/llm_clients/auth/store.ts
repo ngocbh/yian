@@ -7,7 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import process from "node:process";
 
 import { current, type Env, processEnv } from "../../defaults.ts";
-import { compareCodeUnits } from "../../diagnostics.ts";
+import { compareCodeUnits, shellQuote } from "../../diagnostics.ts";
 import { FileLockError, type FileLock, homeDir, realScheduler, type Scheduler, waitForLock } from "../../platform.ts";
 import { isRecord } from "../../typesys/index.ts";
 import { parseJson } from "../../typesys/json.ts";
@@ -28,10 +28,7 @@ const ENTRY_KEYS = ["method", "model", "credential_id", "credentials"];
 const STORE_KEYS = ["version", "default_provider", "providers"];
 const OAUTH_KEYS = ["access_token", "refresh_token", "expires_at", "account_id"];
 
-const REGULAR = "Credential storage must use a regular private path";
-const NOT_PRIVATE = "Credential storage must be private to its owner";
 const OVERSIZED = "Credential storage exceeds its size limit";
-const MALFORMED = "Credential storage is malformed; reconnect after repairing it";
 
 /** Saved logins by provider, in file order. */
 type Providers = Map<string, [ProviderSelection, Credentials | null]>;
@@ -87,9 +84,74 @@ function hasKeys(value: Record<string, unknown>, keys: readonly string[]): boole
   return own.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 }
 
+/**
+ * An `AuthError` the store's file, folder or lock causes, so logging in again can't fix it but
+ * fixing the file can. `damaged` is set when the file's logins can't be read back, so only
+ * restoring the file keeps them.
+ *
+ * Its name stays "AuthError": a failed model call is recorded by its error's name, and only that
+ * name replays as an `AuthError`.
+ */
+export class StorageError extends AuthError {
+  readonly damaged: boolean;
+
+  constructor(message: string, damaged = false) {
+    super(message);
+    this.damaged = damaged;
+  }
+}
+
+/** What a store path names: the store file, its folder, or its lock file. */
+type Part = "file" | "folder" | "lock";
+
+/** The start of a message about `part` at `path`. */
+function named(part: Part, path: string): string {
+  if (part === "folder") return `Credential storage folder ${path}`;
+  return part === "lock" ? `Credential storage lock ${path}` : `Credential storage at ${path}`;
+}
+
+/**
+ * Return the error for `part` at `path` being readable by others. `owned` says whether this user
+ * owns it: only then can a chmod fix it; `null` when unknown.
+ */
+function notPrivate(part: Part, path: string, owned: boolean | null): StorageError {
+  // A folder such as /tmp belongs to root: changing its mode would not help, and doing it with
+  // sudo would break the system.
+  if (owned === false) {
+    return new StorageError(
+      `${named(part, path)} belongs to another user; keep logins in a folder of your own, such as the ` +
+        "default ~/.config/yian",
+    );
+  }
+  const fix = owned ? `; fix it with: chmod ${part === "folder" ? 700 : 600} ${shellQuote(path)}` : "";
+  return new StorageError(`${named(part, path)} must be private to its owner${fix}`);
+}
+
+/** Return the error for `part` at `path` not being a folder, or a regular file with one link. */
+function notRegular(part: Part, path: string): StorageError {
+  const kind = part === "folder"
+    ? "a folder, not a symbolic link or a file"
+    : "a regular file with one link, not a symbolic link";
+  return new StorageError(`${named(part, path)} must be ${kind}`);
+}
+
+/** Return the error for `part` at `path` being replaced while the store used it. */
+function changed(part: Part, path: string): StorageError {
+  return new StorageError(`${named(part, path)} changed while in use; try again`);
+}
+
+/** Return the error for the store file at `path` whose logins can't be read, `problem` saying why. */
+function damaged(path: string, problem: string): StorageError {
+  return new StorageError(
+    `${named("file", path)} ${problem}; restore it, or delete every saved login in it and log in again ` +
+      `(yian auth --remove --auth-file ${shellQuote(path)})`,
+    true,
+  );
+}
+
 /** Return the storage access error; it has no cause, so no path or system detail shows. */
-function accessError(): AuthError {
-  return new AuthError("Could not access private credential storage");
+function accessError(): StorageError {
+  return new StorageError("Could not access private credential storage");
 }
 
 /** Run a `node:fs` call, turning anything it throws into the storage access error. */
@@ -106,27 +168,43 @@ function isMissing(error: unknown): boolean {
   return (error as { code?: unknown } | null)?.code === "ENOENT";
 }
 
+/** Whether `error` is the `node:fs` error a no-follow open gives for a symbolic link, or a file opened as a folder. */
+function isWrongKind(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return code === "ELOOP" || code === "ENOTDIR";
+}
+
+/** Whether this user owns `path`, without following a link; `null` if it can't be checked. */
+function ownedByUser(path: string): boolean | null {
+  try {
+    return fs.lstatSync(path, { bigint: true }).uid === BigInt(process.getuid!());
+  } catch {
+    return null;
+  }
+}
+
 /** Close `fd`, turning a failure into the storage access error. */
 function closeFd(fd: number): void {
   access(() => fs.closeSync(fd));
 }
 
 /**
- * Check that the open descriptor `fd` is a private directory or regular file; return its status.
+ * Check that the open descriptor `fd`, the store `part` at `path`, is a private folder or regular
+ * file; return its status.
  *
- * Throws `AuthError` unless it is the kind asked for (a file with at most one link), owned by
- * this user, and without group or other permission bits.
+ * Throws `StorageError` naming `path` unless it is the kind asked for (a file with at most one
+ * link), owned by this user, and without group or other permission bits.
  */
-function checkPrivate(fd: number, directory = false): fs.BigIntStats {
+function checkPrivate(fd: number, path: string, part: "file" | "folder"): fs.BigIntStats {
   const info = access(() => fs.fstatSync(fd, { bigint: true }));
+  const directory = part === "folder";
   // An atomic replacement can unlink a snapshot already opened by a reader. Its descriptor
   // remains valid; multiple links would expose the secrets.
   if (!(directory ? info.isDirectory() : info.isFile()) || (!directory && info.nlink > 1n)) {
-    throw new AuthError(REGULAR);
+    throw notRegular(part, path);
   }
-  if (info.uid !== BigInt(process.getuid!()) || (info.mode & 0o077n) !== 0n) {
-    throw new AuthError(NOT_PRIVATE);
-  }
+  const owned = info.uid === BigInt(process.getuid!());
+  if (!owned || (info.mode & 0o077n) !== 0n) throw notPrivate(part, path, owned);
   return info;
 }
 
@@ -295,10 +373,11 @@ export class AuthStore {
       fd = fs.openSync(directory, fs.constants.O_RDONLY | fs.constants.O_DIRECTORY | fs.constants.O_NOFOLLOW);
     } catch (error) {
       if (!create && isMissing(error)) return null;
+      if (isWrongKind(error)) throw notRegular("folder", directory);
       throw accessError();
     }
     try {
-      const info = checkPrivate(fd, true);
+      const info = checkPrivate(fd, directory, "folder");
       return { fd, dev: info.dev, ino: info.ino };
     } catch (error) {
       closeFd(fd);
@@ -314,7 +393,7 @@ export class AuthStore {
    */
   #checkSameDirectory(directory: Directory): void {
     const info = access(() => fs.lstatSync(dirname(this.path), { bigint: true }));
-    if (info.dev !== directory.dev || info.ino !== directory.ino) throw new AuthError(REGULAR);
+    if (info.dev !== directory.dev || info.ino !== directory.ino) throw changed("folder", dirname(this.path));
   }
 
   /** Read the default provider and saved logins from the store in `directory`; empty if none. */
@@ -327,6 +406,7 @@ export class AuthStore {
     try {
       fd = fs.openSync(this.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     } catch (error) {
+      if (isWrongKind(error)) throw notRegular("file", this.path);
       if (!isMissing(error)) throw accessError();
       // A missing file in a swapped-in directory says nothing about the checked one.
       this.#checkSameDirectory(directory);
@@ -335,7 +415,7 @@ export class AuthStore {
     let size = 0;
     try {
       this.#checkSameDirectory(directory);
-      checkPrivate(fd);
+      checkPrivate(fd, this.path, "file");
       while (size < raw.length) {
         const n = access(() => fs.readSync(fd, raw, size, raw.length - size, null));
         if (n === 0) break;
@@ -344,11 +424,11 @@ export class AuthStore {
     } finally {
       closeFd(fd);
     }
-    if (size > limit) throw new AuthError(OVERSIZED);
+    if (size > limit) throw damaged(this.path, "exceeds its size limit");
     try {
       return parseStore(new TextDecoder("utf-8", { fatal: true }).decode(raw.subarray(0, size)));
     } catch {
-      throw new AuthError(MALFORMED);
+      throw damaged(this.path, "is malformed");
     }
   }
 
@@ -370,9 +450,10 @@ export class AuthStore {
    * would drop this process's lock.
    */
   async #locked<T>(body: () => T | Promise<T>): Promise<T> {
+    const path = `${this.path}.lock`;
     let lock: FileLock;
     try {
-      lock = await waitForLock(`${this.path}.lock`, {
+      lock = await waitForLock(path, {
         private: true,
         timeoutMs: this.#lockTimeoutMs,
         signal: this.#signal,
@@ -381,8 +462,9 @@ export class AuthStore {
     } catch (error) {
       if (this.#signal?.aborted && error === this.#signal.reason) throw error;
       if (!(error instanceof FileLockError)) throw accessError();
-      if (error.reason === "busy") throw new AuthError("Timed out waiting for credential storage");
-      throw new AuthError(error.reason === "not-private" ? NOT_PRIVATE : REGULAR);
+      if (error.reason === "busy") throw new StorageError("Timed out waiting for credential storage");
+      if (error.reason === "not-private") throw notPrivate("lock", path, ownedByUser(path));
+      throw error.reason === "changed" ? changed("lock", path) : notRegular("lock", path);
     }
     try {
       return await body();
@@ -428,7 +510,7 @@ export class AuthStore {
       let written: fs.BigIntStats;
       try {
         written = access(() => fs.fstatSync(fd, { bigint: true }));
-        if (written.dev !== directory.dev) throw new AuthError(REGULAR);
+        if (written.dev !== directory.dev) throw changed("folder", dirname(this.path));
         let offset = 0;
         while (offset < raw.length) offset += access(() => fs.writeSync(fd, raw, offset));
         access(() => fs.fsyncSync(fd));
@@ -438,7 +520,7 @@ export class AuthStore {
       this.#signal?.throwIfAborted();
       access(() => fs.renameSync(temporary, this.path));
       const target = access(() => fs.lstatSync(this.path, { bigint: true }));
-      if (target.dev !== written.dev || target.ino !== written.ino) throw new AuthError(REGULAR);
+      if (target.dev !== written.dev || target.ino !== written.ino) throw changed("file", this.path);
       this.#checkSameDirectory(directory);
       access(() => fs.fsyncSync(directory.fd));
     } finally {

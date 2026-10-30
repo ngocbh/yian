@@ -104,7 +104,9 @@ test("auth store cap", () => {
     expect(new AuthStore(file).read().selections).not.toEqual([]);
     install({ ...BUILTIN, maxAuthStoreBytes: 10 });
     expect(() => new AuthStore(file).read()).toThrow(AuthError);
-    expect(() => new AuthStore(file).read()).toThrow("Credential storage exceeds its size limit");
+    expect(() => new AuthStore(file).read()).toThrow(
+      `Credential storage at ${file} exceeds its size limit; restore it, or delete every saved login in it`,
+    );
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

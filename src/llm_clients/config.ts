@@ -73,14 +73,14 @@ const CODEX_REMOVED =
   "and remove sandbox/cwd. Yian tools are granted explicitly and run on the host.";
 
 const LOCAL_HOSTS: readonly string[] = ["localhost", "127.0.0.1", "::1"];
-// RFC 3986 characters minus "?" and "#", since a query or fragment is refused anyway. Everything
-// else (whitespace, controls, non-ASCII) is something a URL parser or HTTP client would strip,
-// normalise, or encode, so the string sent would differ from the one checked here.
-const URL_CHARACTERS = /^[A-Za-z0-9\-._~:/\[\]@!$&'()*+,;=%]*$/;
+// RFC 3986 characters. Everything else (whitespace, controls, non-ASCII) is something a URL parser
+// or HTTP client would strip, normalise, or encode, so the string sent would differ from the one
+// checked here.
+const URL_CHARACTERS = /^[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]*$/;
 // A DNS name or bracketed IPv6 literal, an optional all-digit port, then a path. The host part has
-// no "@", so userinfo never matches.
+// no "@" and the path no "?" or "#", so userinfo, a query, or a fragment never matches.
 const URL_SHAPE =
-  /^(?<scheme>https?):\/\/(?<host>[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::(?<port>[0-9]{1,5}))?(?<path>\/.*)?$/;
+  /^(?<scheme>https?):\/\/(?<host>[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])(?::(?<port>[0-9]{1,5}))?(?<path>\/[^?#]*)?$/;
 
 const PROVIDER_CHOICES = `Input should be ${choices(SUPPORTED_LLM_PROVIDERS)}`;
 

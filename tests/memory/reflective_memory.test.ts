@@ -11,11 +11,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BUILTIN, current, type Env, install } from "../../src/defaults.ts";
+import { NoAuth } from "../../src/llm/auth.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
-import type { ChatModel } from "../../src/llm/events.ts";
-import type { RetryInfo } from "../../src/llm/executor.ts";
-import { Message, type Request, Response, TextPart } from "../../src/llm/messages.ts";
-import { StructuredOutputError } from "../../src/llm/structured.ts";
+import type { ChatModel, EventStream } from "../../src/llm/events.ts";
+import { type RetryInfo, RouteModel } from "../../src/llm/executor.ts";
+import { Message, RefusalPart, type Request, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
+import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
+import { Route } from "../../src/llm/route.ts";
+import { MissingToolCallError, StructuredOutputError } from "../../src/llm/structured.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { ApiKeyCredentials } from "../../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
@@ -145,6 +148,23 @@ function textReply(text: string): Response {
 /** A scripted reflector reply whose text is the JSON of `{actions}`. */
 function reply(actions: readonly Action[]): Response {
   return textReply(JSON.stringify({ actions }));
+}
+
+/** A `RouteModel` on OpenAI Chat (`gpt-5.5`, so the forced tool strategy) that replays `replies`. */
+class ToolRoute extends RouteModel {
+  readonly script: ScriptedModel;
+
+  constructor(replies: Response[]) {
+    super({
+      route: new Route({ provider: "openai", baseUrl: "https://api.example", path: "x", auth: new NoAuth() }),
+      protocol: new OpenAIChat({ model: "gpt-5.5", provider: "openai" }),
+    });
+    this.script = new ScriptedModel(replies, { provider: "openai", model: "gpt-5.5" });
+  }
+
+  override stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    return this.script.stream(request, options);
+  }
 }
 
 /**
@@ -1053,10 +1073,56 @@ test("structured output parser failure is a final contract error", async () => {
   const error = await withRun(memory, (session) => rejection(session.learn(context())));
   expect([error.code, error.message, error.retryable]).toEqual([
     "reflective.contract",
-    "reflector returned invalid structured output",
+    "reflector returned invalid structured output: the reply held no JSON object",
     false,
   ]);
   expect(error.cause).toBeInstanceOf(StructuredOutputError);
+});
+
+test("a refused reflector reply is a contract error that says so without the refusal's text", async () => {
+  const refused = new Response({
+    message: new Message({ role: "assistant", parts: [new RefusalPart("refusal-secret")] }),
+  });
+  const model = installModel([refused]);
+  const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
+  const error = await withRun(memory, (session) => rejection(session.learn(context())));
+  expect([error.code, error.message, error.retryable]).toEqual([
+    "reflective.contract",
+    "reflector returned invalid structured output: the model refused",
+    false,
+  ]);
+  expect(error.cause).toBeInstanceOf(StructuredOutputError);
+});
+
+test("a tool-strategy reflector reply without a valid answer names the defect", async () => {
+  const call = new ToolCallPart({ id: "c1", name: "_ReflectionResponse", arguments: { actions: [] } });
+  const replies = [
+    textReply('{"actions":[{"action":"noop"}]}'),
+    new Response({ message: new Message({ role: "assistant", parts: [call] }) }),
+  ];
+  const models: ToolRoute[] = [];
+  const createModel = () => {
+    const model = new ToolRoute([replies[models.length]!]);
+    models.push(model);
+    return model;
+  };
+  const memory = newMemory({ llmConfig: { provider: "openai", model: "gpt-5.5" }, createModel });
+  const missing = await withRun(memory, (session) => rejection(session.learn(context())));
+  expect([missing.code, missing.message, missing.retryable]).toEqual([
+    "reflective.contract",
+    "reflector returned invalid structured output: the reply did not call the _ReflectionResponse tool; call it with the answer",
+    false,
+  ]);
+  expect(missing.cause).toBeInstanceOf(MissingToolCallError);
+  expect(models[0]!.script.requests[0]!.tools.map((tool) => tool.name)).toEqual(["_ReflectionResponse"]);
+
+  const empty = await withRun(memory, (session) => rejection(session.learn(context())));
+  expect([empty.code, empty.message, empty.retryable]).toEqual([
+    "reflective.contract",
+    "reflector returned invalid structured output: actions must not be empty",
+    false,
+  ]);
+  expect(empty.cause).toBeInstanceOf(TypeError);
 });
 
 test("parsed response validation failure is final and sanitized", async () => {
@@ -1073,19 +1139,29 @@ test("parsed response validation failure is final and sanitized", async () => {
     { actions: [{ action: "add", lesson_id: 1, text: "text-secret" }] },
     { actions: [{ action: "add", lesson_id: "one", text: ["text-secret"] }] },
   ];
+  const defects = [
+    "actions[0] may hold only action, lesson_id and text",
+    "the reply must have exactly the key actions",
+    "the reply must have exactly the key actions",
+    "actions must be an array",
+    "actions must not be empty",
+    "actions[0] must be an object",
+    "actions[0].action must be add, revise, remove or noop",
+    "actions[0].action must be add, revise, remove or noop",
+    "actions[0].lesson_id must be a string or null",
+    "actions[0].text must be a string or null",
+  ];
   const model = installModel(replies.map((value) => textReply(JSON.stringify(value))));
   const memory = newMemory({ llmConfig: OLLAMA, createModel: model.createModel });
-  for (const _ of replies) {
+  for (const defect of defects) {
     const error = await withRun(memory, (session) => rejection(session.learn(context())));
     expect([error.code, error.message, error.retryable]).toEqual([
       "reflective.contract",
-      "reflector returned invalid structured output",
+      `reflector returned invalid structured output: ${defect}`,
       false,
     ]);
     expect(error.cause).toBeInstanceOf(TypeError);
-    const cause = (error.cause as Error).message;
-    expect(cause).not.toContain("response-secret");
-    expect(cause).not.toContain("text-secret");
+    expect((error.cause as Error).message).toBe(defect);
   }
 
   // Absent `lesson_id` and `text` are `null`.

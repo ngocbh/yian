@@ -1350,6 +1350,143 @@ async function watchKeysWithAnEditorGivesItTheKeysButCtrlC(): Promise<void> {
   assert.deepEqual(await line, { value: "c" });
 }
 
+async function aHeldTerminalStaysRawAcrossPromptsAndWatchesUntilReleased(): Promise<void> {
+  const { input, terminal, exitHooks } = setup();
+  const release = terminal.holdRaw();
+  assert.deepEqual(input.rawCalls, [true]);
+  assert.equal(process.listenerCount("exit"), exitHooks + 1);
+  const line = terminal.readLine("You:");
+  input.write("a" + ENTER);
+  assert.deepEqual(await line, { value: "a" });
+  // Raw, so the tty keeps what is typed now; paused, so it waits there.
+  assert.equal(input.isRaw, true);
+  assert.equal(input.isPaused(), true);
+  const watch = new AbortController();
+  terminal.watchKeys(watch.signal, () => {});
+  watch.abort();
+  assert.equal(input.isRaw, true);
+  assert.equal(input.isPaused(), true);
+  const answer = terminal.askText("Sure?");
+  input.write("y" + ENTER);
+  assert.equal(await answer, "y");
+  assert.equal(input.isRaw, true);
+  assert.ok(!input.rawCalls.includes(false));
+  release();
+  assert.equal(input.isRaw, false);
+  assert.equal(input.isPaused(), true);
+  assert.equal(process.listenerCount("exit"), exitHooks);
+  release();
+  assert.equal(input.rawCalls.filter((mode) => !mode).length, 1);
+}
+
+async function aHeldTerminalReleasedWhileAPromptOrWatchRunsIsCookedOnceItEnds(): Promise<void> {
+  const { input, terminal, exitHooks } = setup();
+  const release = terminal.holdRaw();
+  const answer = terminal.askText("Sure?");
+  await tick();
+  release();
+  assert.equal(input.isRaw, true);
+  input.write("y" + ENTER);
+  assert.equal(await answer, "y");
+  assert.equal(input.isRaw, false);
+  assert.equal(input.isPaused(), true);
+  const again = terminal.holdRaw();
+  const watch = new AbortController();
+  terminal.watchKeys(watch.signal, () => {});
+  again();
+  assert.equal(input.isRaw, true);
+  assert.equal(input.isPaused(), false);
+  watch.abort();
+  assert.equal(input.isRaw, false);
+  assert.equal(input.isPaused(), true);
+  assert.equal(process.listenerCount("exit"), exitHooks);
+}
+
+async function closingAHeldTerminalGivesBackCookedMode(): Promise<void> {
+  const { input, terminal, exitHooks } = setup();
+  const release = terminal.holdRaw();
+  terminal.close();
+  assert.deepEqual(input.rawCalls, [true, false]);
+  assert.equal(process.listenerCount("exit"), exitHooks);
+  release();
+  assert.deepEqual(input.rawCalls, [true, false]);
+  // A closed, plain or non-TTY terminal isn't held.
+  terminal.holdRaw()();
+  assert.deepEqual(input.rawCalls, [true, false]);
+  const plain = new FakeInput();
+  new Terminal({ input: plain, output: new FakeOutput(), plain: true }).holdRaw()();
+  const piped = new FakeInput({ tty: false });
+  new Terminal({ input: piped, output: new FakeOutput() }).holdRaw()();
+  assert.deepEqual([plain.rawCalls, piped.rawCalls], [[], []]);
+  assert.equal(process.listenerCount("exit"), exitHooks);
+}
+
+async function linesTypedInOneBurstBetweenHeldPromptsReachTheNextPromptsInOrder(): Promise<void> {
+  const { input, terminal } = setup();
+  const release = terminal.holdRaw();
+  const first = terminal.readLine("You:");
+  input.write("a" + ENTER + "b" + ENTER + "c" + ENTER);
+  assert.deepEqual(await first, { value: "a" });
+  assert.deepEqual(await terminal.readLine("You:"), { value: "b" });
+  assert.deepEqual(await terminal.readLine("You:"), { value: "c" });
+  const last = terminal.readLine("You:");
+  input.write("d" + ENTER);
+  assert.deepEqual(await last, { value: "d" });
+  release();
+}
+
+async function aWatchWithAnEditorGetsTheKeysTypedBeforeItFirst(): Promise<void> {
+  const { input, terminal } = setup();
+  const line = terminal.readLine("You:");
+  input.write("w" + ENTER + "x" + ENTER);
+  assert.deepEqual(await line, { value: "w" });
+  const edited: string[] = [];
+  const watch = new AbortController();
+  terminal.watchKeys(
+    watch.signal,
+    () => {},
+    (key) => {
+      edited.push(key.name ?? key.str ?? "?");
+      return true;
+    },
+  );
+  input.write("y" + ENTER);
+  await tick();
+  assert.deepEqual(edited, ["x", "return", "y", "return"]);
+  watch.abort();
+}
+
+async function aWatchStartedWhileAPromptIsUpLeavesTheWaitingKeysToThePrompt(): Promise<void> {
+  const edited: string[] = [];
+  const watch = new AbortController();
+  let watching = false;
+  const { input, terminal } = setup({
+    // Starts the watch as the next turn takes the terminal, before its prompt reads the keys.
+    onActive: (active) => {
+      if (!active || !watching) return;
+      watching = false;
+      terminal.watchKeys(
+        watch.signal,
+        () => {},
+        (key) => {
+          edited.push(key.name ?? key.str ?? "?");
+          return true;
+        },
+      );
+    },
+  });
+  const line = terminal.readLine("You:");
+  input.write("w" + ENTER + "x" + ENTER);
+  assert.deepEqual(await line, { value: "w" });
+  watching = true;
+  assert.equal(await terminal.askText("Sure?"), "x");
+  assert.deepEqual(edited, []);
+  input.write("y" + ENTER);
+  await tick();
+  assert.deepEqual(edited, ["y", "return"]);
+  watch.abort();
+}
+
 async function showScreenDrawsOnTheAlternateScreenAndGivesTheScreenBack(): Promise<void> {
   const { input, output, terminal, view } = setup({ columns: 20 });
   output.rows = 3;
@@ -3613,6 +3750,17 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "Down on a folded line moves into the list only from its last row":
     downOnAFoldedLineMovesIntoTheListOnlyFromItsLastRow,
   "watchKeys with an editor gives it the keys but Ctrl-C": watchKeysWithAnEditorGivesItTheKeysButCtrlC,
+  "a held terminal stays raw across prompts and watches until released":
+    aHeldTerminalStaysRawAcrossPromptsAndWatchesUntilReleased,
+  "a held terminal released while a prompt or watch runs is cooked once it ends":
+    aHeldTerminalReleasedWhileAPromptOrWatchRunsIsCookedOnceItEnds,
+  "closing a held terminal gives back cooked mode": closingAHeldTerminalGivesBackCookedMode,
+  "lines typed in one burst between held prompts reach the next prompts in order":
+    linesTypedInOneBurstBetweenHeldPromptsReachTheNextPromptsInOrder,
+  "a watch with an editor gets the keys typed before it first":
+    aWatchWithAnEditorGetsTheKeysTypedBeforeItFirst,
+  "a watch started while a prompt is up leaves the waiting keys to the prompt":
+    aWatchStartedWhileAPromptIsUpLeavesTheWaitingKeysToThePrompt,
   "showScreen draws on the alternate screen and gives the screen back":
     showScreenDrawsOnTheAlternateScreenAndGivesTheScreenBack,
   "showScreen says when a prompt waits behind it, and closes before that prompt":

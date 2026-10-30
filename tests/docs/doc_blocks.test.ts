@@ -1,6 +1,9 @@
 /** The docs block reader and the `yian` line check that `examples.test.ts` uses. */
 
 import { expect, test } from "bun:test";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   asYian,
@@ -11,6 +14,7 @@ import {
   readInvocations,
   readMeta,
   shellWords,
+  writePageFiles,
 } from "./doc_blocks.ts";
 
 const PAGE = [
@@ -115,4 +119,48 @@ test("console blocks run the CLI with or without the $ prompt", () => {
     { line: 3, argv: ["yian", "run", "a.yaml"] },
     { line: 4, argv: ["yian", "check", "a.yaml"] },
   ]);
+});
+
+/** Run `body` with a fresh temporary folder, removed afterwards. */
+function inTempDir(body: (dir: string) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), "doc-blocks-"));
+  try {
+    body(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const FILES_PAGE = [
+  '```yaml title="common/clean.yaml"',
+  "id: clean",
+  "```",
+  '```yaml title="app/report.yaml"',
+  "id: report",
+  "```",
+  '```yaml title="app/part.yaml" check=fragment',
+  "a: 1",
+  "```",
+  "```yaml",
+  "id: untitled",
+  "```",
+].join("\n");
+
+test("a page's titled YAML blocks are written at their title paths", () => {
+  inTempDir((dir) => {
+    const blocks = readBlocks(FILES_PAGE, "p.md");
+    const files = writePageFiles(blocks, dir);
+    expect([...files.values()]).toEqual([join(dir, "common", "clean.yaml"), join(dir, "app", "report.yaml")]);
+    expect(files.get(blocks[1]!)).toBe(join(dir, "app", "report.yaml"));
+    expect(readFileSync(join(dir, "app", "report.yaml"), "utf8")).toBe("id: report\n");
+  });
+});
+
+test("a title that leaves the page folder or repeats another is an error", () => {
+  inTempDir((dir) => {
+    const out = readBlocks('```yaml title="../x.yaml"\nid: x\n```\n', "p.md");
+    expect(() => writePageFiles(out, dir)).toThrow("p.md:1: title=../x.yaml is outside the page's folder");
+    const twice = readBlocks('```yaml title="a.yaml"\nid: a\n```\n```yaml title="a.yaml"\nid: b\n```\n', "p.md");
+    expect(() => writePageFiles(twice, dir)).toThrow("p.md:4: title=a.yaml is also the title of p.md:1");
+  });
 });

@@ -8,6 +8,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { loadConfined, loadConfinedText } from "../../src/cli/confined_load.ts";
 import { LoadError } from "../../src/compose/helpers/errors.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import type { Env } from "../../src/defaults.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 
 const FLOW = "id: f\nname: f\ninput:\n  n: !int\nnodes: {}\noutput: ${input.n}\n";
@@ -18,6 +20,37 @@ function parentFlow(ref: string): string {
     "id: main\nname: main\ninput:\n  n: !int\nnodes:\n  work:\n    kind: call\n    call: child\n" +
     `    input:\n      n: \${input.n}\noutput: \${work.output}\nuses:\n  child: ${ref}\n`
   );
+}
+
+/** A flow calling the flow `ref` twice, through the `uses:` aliases `a` and `b`. */
+function twiceFlow(id: string, ref: string, refB: string = ref): string {
+  return (
+    `id: ${id}\nname: ${id}\nnodes:\n  x:\n    kind: call\n    call: a\n  y:\n    kind: call\n    call: b\n` +
+    `output: \${x.output}\nuses:\n  a: ${ref}\n  b: ${refB}\n`
+  );
+}
+
+/**
+ * Write the diamond chain `l0.yaml` .. `l<depth>.yaml` into `dir`: each level calls the next one
+ * through two aliases, so the last level is reached along 2^depth import paths.
+ */
+function writeDiamond(dir: string, depth: number): void {
+  for (let i = 0; i < depth; i++) writeFileSync(join(dir, `l${i}.yaml`), twiceFlow(`l${i}`, `l${i + 1}`));
+  writeFileSync(join(dir, `l${depth}.yaml`), `id: l${depth}\nname: l${depth}\nnodes:\n  v: !str leaf\noutput: \${v.output}\n`);
+}
+
+/**
+ * An env that otherwise acts as `NO_ENV`, and how many flows have loaded through it so far: every
+ * `loadFlow` call reads each `YIAN_*` variable once, before it loads, so the reads of one variable
+ * count the loads (the file reader is a named import, which a spy can't see).
+ */
+function countingEnv(): { env: Env; loads: () => number } {
+  let reads = 0;
+  const env: Env = (name) => {
+    if (name === "YIAN_MAX_CALL_NESTING") reads++;
+    return NO_ENV(name);
+  };
+  return { env, loads: () => reads };
 }
 
 let tmp: string;
@@ -51,6 +84,42 @@ describe("loadConfined", () => {
     const flow = await loadConfined(root, join(root, "main.yaml"), new Set(), NO_ENV);
     expect(flow.name).toBe("main");
   });
+
+  test("a uses: child imported along several paths loads once", async () => {
+    writeDiamond(root, 4);
+    const { env, loads } = countingEnv();
+    await loadConfined(root, join(root, "l0.yaml"), new Set(), env);
+    expect(loads()).toBe(5);
+  });
+
+  test("a cycle through a child imported twice is still a cycle", async () => {
+    writeFileSync(join(root, "l0.yaml"), twiceFlow("l0", "l1"));
+    const l1 = "id: l1\nname: l1\nnodes:\n  x:\n    kind: call\n    call: c\noutput: ${x.output}\nuses:\n  c: l0\n";
+    writeFileSync(join(root, "l1.yaml"), l1);
+    const error = await loadError(loadConfined(root, join(root, "l0.yaml"), new Set(), NO_ENV));
+    expect(error.diagnostic.code).toBe("compose.load");
+    expect(error.diagnostic.message).toContain("flow-reference cycle at l0.yaml");
+  });
+
+  test("a child imported under two aliases is held to each alias's pinned version", async () => {
+    writeFileSync(join(root, "main.yaml"), twiceFlow("main", "lib/child", "lib/child@2"));
+    const child = 'id: child\nname: child\nversion: "1"\nnodes:\n  v: !str leaf\noutput: ${v.output}\n';
+    writeFileSync(join(root, "lib", "child.yaml"), child);
+    const error = await loadError(loadConfined(root, join(root, "main.yaml"), new Set(), NO_ENV));
+    expect(error.diagnostic.code).toBe("compose.load");
+    expect(error.diagnostic.message).toContain("pinned lib/child@2");
+  });
+
+  // Guards against a regression: the default loader also shares one flow per file between importers.
+  test("loads a diamond to the flow the default loader loads", async () => {
+    writeDiamond(root, 3);
+    const confined = await loadConfined(root, join(root, "l0.yaml"), new Set(), NO_ENV);
+    const options = { searchPaths: [root], baseDir: root, codeRoot: root, sourceLabel: "l0.yaml", env: NO_ENV };
+    const searched = await loadFlow(twiceFlow("l0", "l1"), options);
+    expect(confined.source).toEqual(searched.source);
+    expect(confined.name).toBe(searched.name);
+    expect(confined.input).toEqual(searched.input);
+  });
 });
 
 describe("loadConfinedText", () => {
@@ -59,6 +128,13 @@ describe("loadConfinedText", () => {
     const flow = await loadConfinedText(root, join(root, "new.yaml"), parentFlow("lib/child"), NO_ENV);
     expect(flow.name).toBe("main");
     expect(flow.input.map((decl) => decl.name)).toEqual(["n"]);
+  });
+
+  test("a uses: child imported along several paths loads once", async () => {
+    writeDiamond(root, 4);
+    const { env, loads } = countingEnv();
+    await loadConfinedText(root, join(root, "new.yaml"), twiceFlow("new", "l1"), env);
+    expect(loads()).toBe(5);
   });
 
   test("refuses a uses: child outside the root", async () => {

@@ -56,7 +56,7 @@ export async function loadConfined(
   loading: ReadonlySet<string>,
   env: Env,
 ): Promise<ComposedFlow> {
-  return loadConfinedSource(root, path, null, loading, env);
+  return loadConfinedSource(root, path, null, loading, env, new Map());
 }
 
 /**
@@ -73,16 +73,22 @@ export async function loadConfinedText(
   text: string,
   env: Env,
 ): Promise<ComposedFlow> {
-  return loadConfinedSource(root, virtualPath, text.replace(/\r\n?/g, "\n"), new Set(), env);
+  return loadConfinedSource(root, virtualPath, text.replace(/\r\n?/g, "\n"), new Set(), env, new Map());
 }
 
-/** Load the flow at `path`, from `text` when given, else read from the file, as `loadConfined` describes. */
+/**
+ * Load the flow at `path`, from `text` when given, else read from the file, as `loadConfined` describes.
+ *
+ * @param loaded The flows already loaded by this top-level load, by resolved path; a child found
+ *   there is reused, and each child this loads is added.
+ */
 async function loadConfinedSource(
   root: string,
   path: string,
   given: string | null,
   loading: ReadonlySet<string>,
   env: Env,
+  loaded: Map<string, ComposedFlow>,
 ): Promise<ComposedFlow> {
   // Resolved paths are compared, so a symlinked root (/var -> /private/var on macOS) works.
   const resolved = resolveFlowPath(path);
@@ -92,6 +98,11 @@ async function loadConfinedSource(
     throw new LoadError(new Diagnostic({ code: "compose.outside_root", message }));
   }
   if (loading.has(resolved)) throw new Error(`flow-reference cycle at ${shown}`);
+  // One flow per file serves every importer, as the default file resolver does: the loader copies
+  // a child per alias, and a file reached along several paths (a diamond) would otherwise load
+  // once per path, exponentially many times. Only finished flows are kept; any failure ends the load.
+  const done = loaded.get(resolved);
+  if (done !== undefined) return done;
   const text = given ?? readFlowText(resolved);
   const doc = parseSourceDocument(text, shown).root.value;
   // The loader doesn't search `system.paths` when given a child resolver, so such a flow would
@@ -106,8 +117,6 @@ async function loadConfinedSource(
   }
   const dir = dirname(resolved);
   const importing = new Set([...loading, resolved]);
-  // Unlike the default file resolver, this keeps no reuse cache, so a child imported along several
-  // paths loads once per path; that is fine for a check.
   const childResolver = async (ref: string, version: string | null): Promise<ComposedFlow> => {
     const childPath = join(dir, `${ref}.yaml`);
     // A missing child outside the root is reported as outside, by `loadConfinedSource`.
@@ -116,9 +125,12 @@ async function loadConfinedSource(
       throw new Error(`flow ${reprText(ref)} not found: ${relative(root, childPath)}`);
     }
     // The loader holds the child to a pinned `@<version>`.
-    return loadConfinedSource(root, childPath, null, importing, env);
+    return loadConfinedSource(root, childPath, null, importing, env, loaded);
   };
   // `CodeNode.check()` resolves a `./file.ts:fn` reference against `baseDir`, here and in a child,
   // and refuses one outside `codeRoot`; a child is loaded here, so it gets the root too.
-  return loadFlow(text, { childResolver, sourceLabel: shown, baseDir: dir, codeRoot: root, env });
+  const flow = await loadFlow(text, { childResolver, sourceLabel: shown, baseDir: dir, codeRoot: root, env });
+  // Given text isn't the file's, so it is never the flow for that path.
+  if (given === null) loaded.set(resolved, flow);
+  return flow;
 }

@@ -141,57 +141,24 @@ itself. An `ask` never waits in `yian run`: it prompts at the terminal. See
 
 ### Chatting on a terminal
 
-When stdin and stderr are a terminal, `yian run FLOW` chats with a flow that has an `Inbox(str)`
-or `Inbox(Message)` input: each line you type goes to the inbox, and the output of each node named
-`reply` prints on stdout, its escape sequences dropped and its control characters shown. Only
-stdin and stderr are checked, so with stdout redirected it still chats and the replies go to the
-file. It chats when all of these hold:
-
-- The flow has one such input, or `--inbox NAME` picks one of several.
-- The flow declares no memory and grants or calls no MCP tool.
-- There is no `--json`, `--memory-root` or `--memory-storage`; with `--resume`, see below.
-
-Otherwise the run goes as above, and a `take` on the inbox leaves it waiting. To chat with a flow
-from a script or a pipe, drive it from your own program with `send` and `advance` (see
-[Inbox calls](/embedding/#inbox-calls)). When the rest holds
-but `--inbox NAME` names none of the flow's inbox inputs, the command is a usage error. A chat takes
-`--input`, `--inputs`, `--log`, `-w`, `--provider`, `--model` and `--engine-trace`, and shows no
-banner or per-node progress.
+On a terminal, `yian run FLOW` chats with a flow that has an `Inbox(str)` or `Inbox(Message)`
+input: each line you type goes to the inbox, and each node named `reply` prints its output. It
+chats when stdin and stderr are a terminal, the flow has one such input (or `--inbox NAME` picks
+one), it uses no memory or MCP tool, and there is no `--json` or memory flag. Otherwise a `take`
+on the inbox leaves the run waiting; from a script, use [`send` and `advance`](/embedding/#inbox-calls).
 
 ```console
 $ yian run chat.yaml
-$ yian run support.yaml --inbox questions --input team=billing
 ```
 
-- Each time the run waits, a `> You:` prompt shows on stderr. Your line goes to the inbox and the
-  run moves on. The replies are cleaned on a terminal as `yian run`'s output is.
-- An `Inbox(Message)` gets your line as a user message with one text part.
-- `/exit`, `/quit` or Ctrl-D closes the inbox; once the flow finishes: `session ended`, exit 0.
-- Ctrl-C while a reply runs interrupts it, and the prompt comes back. A second Ctrl-C within 2
-  seconds, or Ctrl-C at the prompt, cancels the run: `chat cancelled`, exit 130.
-- SIGTERM, SIGHUP, or Ctrl-C at an `ask` prompt stops the run: `chat stopped; the run is in LOG`
-  and `continue with: yian run --resume LOG` (with `--inbox NAME` when the flow has several), exit
-  130.
-- Esc takes back the lines the run hasn't read yet into the prompt and stops the reply. It never
-  cancels the run.
-- A line the inbox refuses prints `not sent: REASON`, and the chat goes on.
-- While the prompt is up, the chat wakes the run when a `sleep` or a timeout is due.
-- A failed run prints its error and exits 1; `yian status LOG` shows where it stands.
+| Key | What it does |
+|---|---|
+| Enter | Sends the line |
+| Esc | Takes back the lines the flow hasn't read yet, and stops the reply |
+| Ctrl-C | Stops the reply. A second Ctrl-C within 2 seconds, or one at the prompt, cancels the run |
+| `/exit`, `/quit` or Ctrl-D | Ends the chat once the flow has read your lines |
 
-On a terminal, `yian run --resume LOG` picks up a chat that stopped, or that was waiting for your
-next line when it ended, when the flow the log recorded is one it would chat with. It runs that
-flow, so you leave out `FLOW`, `-i`, `--inputs`, `--provider`, `--model` and `--log`. Pass
-`--inbox` again if the flow has several.
-
-- The chat first moves the run on. A reply the stop cut runs again and prints; replies printed
-  before don't print again. Then the `> You:` prompt comes back as usual.
-- If the inbox was closed before the stop, no prompt comes back: the chat waits for the run to
-  finish.
-- Before the run calls a model, the chat checks the provider keys the run started with, as
-  `yian run --resume` does. A missing, changed or declined key prints why and exits 1.
-
-A chat reads skills once, when it starts, so a skill edited during the chat takes effect in the
-next one. See [Inboxes and waiting](/inboxes/) for how a flow reads its inbox.
+A chat that stops prints `continue with: yian run --resume LOG`; run it on a terminal to go on.
 
 ### Memory
 
@@ -246,12 +213,9 @@ exit 130. Once the log exists, `yian run --resume` continues it. A second signal
 
 ## yian chat
 
-`yian chat` opens a chat with yian's assistant. It helps you find, read, check, write and run the
-flows in the folder you start it in, and it reads yian's docs to answer questions about writing
-flows. Give it a flow to start the chat about that flow: at every turn the assistant sees the
-flow's text and whether it loads, as they were when the chat opened. It reads the file again to
-see your later changes. A flow outside the folder is only that snapshot, since the tools can't
-reach it; the chat says so when it opens. Run `yian chat` from the flow's folder to work on it.
+`yian chat` opens a chat with yian's assistant. It finds, reads, checks, writes and runs the flows
+in the folder you start it in, and answers questions from these docs. Give it a flow to talk about
+that flow; start it from the flow's folder, since it reaches no file outside it.
 
 ```console
 $ yian chat
@@ -261,206 +225,98 @@ $ yian chat hello.yaml
 | Flag | Value | What it does |
 |---|---|---|
 | `FLOW` | path | A flow `.yaml` you want help with |
-| `--log` | path | Write the chat's run log here instead of the default location. The path must not exist |
-| `--provider` | name | Provider for the assistant and the flows it runs, when they set none |
-| `--model` | name | Model for the assistant and the flows it runs, when they set none |
+| `--log` | path | Where to write the chat's run log. The path must not exist |
+| `--provider` | name | Provider for the assistant and its flows, when they set none |
+| `--model` | name | Model for the assistant and its flows, when they set none |
 | `--engine-trace` | | On a failure, also print the engine's stack trace |
 
-The assistant is an agent, so it needs a provider and model: set a default with `yian auth`, or pass
-`--provider` and `--model`. A line on stderr names the model and the flow in focus. When that flow
-has an inbox input, a second line says to chat with the flow itself through `yian run FLOW` (see
-[Chatting on a terminal](#chatting-on-a-terminal)). The prompt, `/exit`, Ctrl-C and Esc work as
-there, and the assistant's replies print on stdout.
-
-When stdin, stdout and stderr are all a terminal, the chat draws its own look instead: a box at the
-top names the model, how it is reached (an API key or a ChatGPT login), the folder and the flow in
-focus. The reply streams in as it is written, with its Markdown (bold, italic, code, headings,
-lists, code blocks) drawn. Each tool call shows as a `⏺` line with its result under it, and so does
-each event of a flow the assistant runs. A spinner runs while the assistant works, and you type in
-a framed box. Each line you send is printed on a gray band across the terminal, so your lines stand
-out from the replies. The chat redraws only the rows that change, in place, so the box, the list
-and the reply streaming in don't flicker. Set `NO_COLOR`, or redirect any of the three, to get the
-plain lines above.
-
-The box stays up under the spinner while the assistant works. Press Enter there to send the line at
-once: the assistant reads it before its next model call, so it can change course mid-reply. Ctrl-C
-and Esc work as they do between replies. An approval card or a question takes the box's place
-until you answer it. It ignores keys for a moment as it opens, so an Enter meant for the box
-answers nothing.
-
-A paste of more than 3 lines or 800 characters goes into the box as one token, such as
-`[Pasted text #1 +40 lines]`, numbered within the line. The cursor steps over a token, and
-Backspace, Delete or Ctrl-U removes it whole. On Enter the assistant gets the whole text pasted,
-tabs and all, while the line printed above shows the tokens. Esc puts a line it takes back into
-the box with its tokens; after `/exit`, the line it prints shows them too. Text you type that looks
-like a token stays text. The chat remembers tokens only while it runs: after `yian run --resume`,
-Esc puts a line sent before the stop back as plain text, or as one token
-(`[Pasted text #1 +40 lines]`) when it is as long as a paste that collapses.
-
-If your terminal drops the end of a paste, the box keeps waiting for it. Once the paste has
-paused for half a second, Esc ends it and puts in what arrived, and Ctrl-C drops it.
-
-Under the box, the chat lists the flows the assistant started that are still running or waiting,
-one row each, such as `r1  color.yaml  ● asks · 12s`, and the hint under the box adds `↓ runs`
-when there is room. A flow drops off the list once it ends; its result stays in the chat. The
-list's keys:
+It needs a model: set one with `yian auth`, or pass `--provider` and `--model`. Off a terminal, or
+with `NO_COLOR`, it prints plain lines.
 
 | Key | What it does |
 |---|---|
-| ↓ | From the box's last line, moves into the list; then moves to the next row |
-| ↑ | Moves to the row above; from the top row, back to the box |
-| Esc | In the list, goes back to the box. It takes nothing back |
-| Enter | Opens the flow's view |
+| Enter | Sends the line. During a reply, the assistant reads it before its next step |
+| Esc | Takes back the lines the assistant hasn't read yet, and stops the reply |
+| Ctrl-C | Stops the reply. A second Ctrl-C within 2 seconds, or one at the prompt, ends the chat |
+| `/exit`, `/quit` or Ctrl-D | Leaves the chat |
+| ↓, ↑ | Move between the box and the list of running flows under it |
+| Enter on a flow | Opens its view: its progress, its log and any question it waits on |
+| Esc in the list or a view | Goes back to the box |
 
-A flow's view fills the screen with the flow, its run id, where it stands and its log, then what
-it has done so far, as `yian run` draws it, and the question it waits on, if any. It updates as
-the flow goes on. It only shows the flow: you still answer through the assistant. Press Esc to go
-back to the chat, which kept going meanwhile. When the chat needs you (an approval card or a
-question), the view says so in its last line, and Esc takes you to it.
+A long paste shows as a token such as `[Pasted text #1 +40 lines]`; the assistant gets all of it.
 
 ### What the assistant can do
 
 | Tool | What it does |
 |---|---|
-| `list_flows` | Lists the `.yaml` and `.yml` files under the folder, skipping `node_modules` and dot-folders |
-| `read_flow` | Reads a flow file, up to 256 KiB |
-| `check_flow` | Loads a flow without running it, as `yian check` does, and lists its inputs; or checks a draft's text as that file without writing it |
-| `write_flow` | Writes a flow file that loads, once you approve it |
-| `read_docs` | Reads a page of these docs |
-| `start_flow` | Starts a flow in the background, or a draft's text as that file, once you approve it |
-| `flow_status`, `wait_flow` | Read where a flow it started stands, now or once it changes |
-| `answer_flow` | Answers a question a flow it started asks, with your answer |
-| `message_flow`, `close_inbox` | Send a message to, or close, an inbox input of a flow it started |
-| `stop_flow` | Cancels a flow it started |
-| `report_issue` | Helps you report something yian did wrong (see [Reporting a problem](#reporting-a-problem)) |
-| `author_flow` | Builds a new flow with you, or reworks one (see [Building and reviewing flows](#building-and-reviewing-flows)) |
+| `list_flows`, `read_flow`, `read_docs` | Lists the flows in the folder, reads one, or reads a page of these docs |
+| `check_flow` | Loads a flow or a draft without running it, as `yian check` does |
+| `write_flow` | Writes a flow that loads, once you approve |
+| `start_flow` | Starts a flow or a draft in the background, once you approve |
+| `flow_status`, `wait_flow`, `answer_flow`, `message_flow`, `close_inbox`, `stop_flow` | Follows, answers, messages or cancels a flow it started |
+| `report_issue` | Reports a problem with yian (see [Reporting a problem](#reporting-a-problem)) |
+| `author_flow` | Builds or reworks a flow with you (see [Building and reviewing flows](#building-and-reviewing-flows)) |
 | `review_flow` | Reviews a flow for security, reliability, cost and clarity |
 
-It also has the `composing-agents` skill, yian's guide to writing flows. Every path
-stays inside the folder the chat started in: a path that leaves it, through `..`, an absolute path
-or a symlink, is refused. A flow it checks or starts must find its `uses:` flows and code files
-inside the folder too.
+It also has the `composing-agents` skill, yian's guide to writing flows.
 
 ### Approvals
 
-Before a write or a start, the chat shows a card on the terminal and waits for your choice:
-
-- `write_flow` shows the change as a diff (on a terminal, framed, with line numbers, removed lines
-  red and added lines green). Approve writes the file; Reject leaves it alone.
-- `start_flow` shows the inputs and what the flow can do: its node kinds, the tools and skills its
-  agents get, and the code files it runs; for a draft not yet written, its whole text too. Approve
-  starts it; "Approve this flow for this chat" also starts it again later without asking, until
-  the flow or its code files change.
-
-Off a terminal nothing is approved, and the assistant is told so. `report_issue`, `author_flow`
-and `review_flow` start their flows without a card: those flows only read and check until they
-write, run or file something, and each of those asks on its own card first.
+A write shows its diff on a card, and a start shows the inputs and what the flow can do; each
+waits for you. "Approve this flow for this chat" lets it start again without asking until the flow
+or its code changes. Off a terminal nothing is approved. `report_issue`, `author_flow` and
+`review_flow` start without a card, but anything they write, run or file asks on its own.
 
 ### Flows the assistant runs
 
-A flow the assistant starts runs in the background while you chat. The chat tells the assistant
-what each one does: the questions it asks, what its nodes named `reply` say, a wait for a message,
-and its output or failure. The assistant passes a question on to you and sends your answer back,
-and it sends your messages to a flow that reads an inbox. A flow's `ask` never prompts on the
-terminal: its question goes through the assistant.
-
-- Each flow's run log is `~/.yian/runs/<chat run id>-r<n>/log.jsonl`, where `r1`, `r2`, ... number
-  the flows the chat started.
-- What the flows' `code` nodes print goes to a file beside the chat's log, named after it:
-  `log.child-output.log` beside `log.jsonl`.
-- A flow's agents use `--provider` and `--model` as yian run's do, and the keys they need must be set
-  before it starts; the chat doesn't prompt for one. Skills are read from the skill folders as
-  [`yian run`](#skills-and-mcp-servers) reads them, from the chat's folder.
-
-After Ctrl-C or Esc, news from the flows waits for your next line and reaches the assistant just
-before it. Each waiting event shows above the prompt as
-`(child event waiting; sent with your next message: ...)`.
+A flow the assistant starts runs in the background. Its questions reach you through the
+assistant, which sends your answers back. The keys its agents need must already be set. Its log is
+`~/.yian/runs/<chat run id>-r<n>/log.jsonl`.
 
 ### Building and reviewing flows
 
-For a new flow or a major change, the assistant uses `author_flow`, which starts a flow bundled
-with yian that goes the same careful way each time; a small edit it makes with `write_flow`
-directly. The flow asks you its questions through the assistant:
+For a new flow or a major change the assistant runs `author_flow`, which asks you through the
+assistant and goes step by step; small edits it makes with `write_flow`.
 
-1. **Goal**: what the flow is for, who runs it and how often, its inputs and output, and what
-   "done" looks like.
-2. **Contract**: the typed inputs and output, the nodes in outline, sample inputs to try it on,
-   and its path, which you confirm before any YAML is written. A path that isn't a `.yaml` or
-   `.yml` file inside the folder is asked for again, three times at most.
-3. **Draft**: written with the `composing-agents` skill and these docs.
-4. **Check**: `check_flow` until the draft loads, fixing load errors itself, three tries at most.
-5. **Review**: `review_flow`, below, for a draft that loads.
-6. **Try**: runs the draft on the sample inputs, once you approve the run's card (titled "a draft,
-   for author_flow"). A draft isn't tried when the review found a high-severity security problem,
-   or when it takes an inbox input; you're told why. A try still going when `author_flow` ends is
-   cancelled.
-7. **Refine**: says what it found and suggests improvements; you choose to refine it again (five
-   rounds at most), write it, or stop.
-8. **Write**: `write_flow`, with its usual card.
+1. **Goal**: what the flow is for, its inputs and output, and what "done" means.
+2. **Contract**: types, nodes in outline, sample inputs and the path, which you confirm.
+3. **Draft**: written with the `composing-agents` skill.
+4. **Check**: fixes load errors, three tries at most.
+5. **Review**: runs `review_flow`.
+6. **Try**: runs the draft on the samples once you approve; skipped after a high-severity security
+   finding or for a flow with an inbox input.
+7. **Refine**: you refine again (five rounds at most), write it, or stop.
+8. **Write**: `write_flow`, with its card.
 
-`review_flow` starts another bundled flow, on its own or from `author_flow`. Its output is a list
-of findings, the most severe first, each with a severity (`high`, `medium` or `low`), an area, the
-node, the problem and a fix:
-
-| Area | It looks at |
-|---|---|
-| security | `code` nodes; the shell, file and network tools granted; untrusted input reaching a prompt or code; secrets in the YAML; agents granted more tools than they need |
-| reliability | What happens when a model, tool or code node fails; timeouts, retries and unbounded loops |
-| cost | Model calls inside loops, and prompts heavier than the step needs |
-| clarity | Names, descriptions and types |
-
-`author_flow` gets `check_flow`, `read_flow`, `read_docs`, `write_flow`, `start_flow` and
-`wait_flow`, and `review_flow` only `read_flow` and `read_docs`, held to the chat's folder and its
-cards as the assistant is; no other flow, a try included, gets them. Each of their agents has a
-cap on its turns. A flow `author_flow` tries runs as any flow the assistant starts, so its questions and
-its output reach you through the assistant.
+`review_flow` lists findings, most severe first, each with a severity, the node, the problem and a
+fix, in four areas: security, reliability, cost and clarity.
 
 ### Reporting a problem
 
-When yian does something unexpected, the assistant offers to report it. `report_issue` starts a
-flow bundled with yian, in the background like any flow the assistant runs. The flow drafts the
-report (what you ran, what you expected, what happened, the error, the yian version and platform,
-and the run log's path) and asks you, through the assistant, for what it lacks. It gives a run
-log's path, never its contents. Then it replaces what looks like a secret with `[redacted]`: API
-keys and tokens of the usual shapes (`sk-`, `ghp_`, `github_pat_`, `hf_`, long random strings),
-`Authorization`, `Bearer` and cookie values, values after a name like `password=`, `API_KEY=` or
-`--token`, and a URL's `user:password@`. Your home folder becomes `~`.
-
-Last, a card shows the whole report and the ways to file it that work on your machine:
+When yian does something unexpected, the assistant offers to report it. `report_issue` drafts the
+report, asks you for what's missing, and replaces what looks like a secret with `[redacted]`. A
+card then shows the report and the ways to file it that work on your machine:
 
 | Choice | What it does |
 |---|---|
-| File it with gh | Runs `gh issue create`, when the `gh` CLI is installed and logged in |
-| File it with GITHUB_TOKEN | Makes one GitHub API call with the `GITHUB_TOKEN` in your environment. yian reads the token itself: the assistant never sees it, and no log holds it |
-| Open a prefilled link in the browser | Gives a link to GitHub's new-issue page with the report filled in. A body too long for a link is cut, and says so |
-| Save it only | Keeps the report, to send another way |
+| File it with gh | Runs `gh issue create` |
+| File it with GITHUB_TOKEN | Files it with your `GITHUB_TOKEN`; the assistant never sees it |
+| Open a prefilled link in the browser | Gives a filled-in link to GitHub's new-issue page |
+| Save it only | Saves the report only |
 | Cancel | Files and saves nothing |
 
-Save it only is preselected. When the card takes the input box's place while you type, it ignores
-keys for a moment, so an Enter meant for the box files nothing. Every choice but Cancel also saves
-the report to `~/.yian/reports/<time>.md`. The issue tracker
-is private for now, so gh and the token file only for people with access to it; the link and the
-saved file work for anyone.
-
-Never paste a password or token into the chat: the model reads it, and the chat's run log keeps
-it. If you pasted one, revoke it.
+Save it only is preselected. Every choice but Cancel saves the report to
+`~/.yian/reports/<time>.md`. Never paste a password or token into the chat: the model reads it
+and the run log keeps it. If you did, revoke it.
 
 ### Leaving the chat
 
-When the chat ends, the flows still running are cancelled. Each flow left waiting prints its log
-and how to go on:
+When the chat ends, running flows are cancelled. A flow left waiting prints its log:
 
-| It waits for | What to do |
-|---|---|
-| A timer (a `sleep` or a timeout) | `yian run --resume LOG` continues it |
-| An answer to a question, or a message | It can't be continued outside the chat yet |
+- waiting on a timer (a `sleep` or a timeout): `yian run --resume LOG` continues it;
+- waiting on an answer or a message: it can't be continued outside the chat.
 
-Ctrl-C while the chat ends stops every flow at once, cancelled or not, and the chat still prints
-where each one is: a flow stopped while it ran prints `run rN was stopped while it ran` and its log.
-
-The chat's own run can't be resumed: `yian run --resume` on its log exits 1. It tells a chat's log
-by its flow, `id: yian-chat` in a file named `chat.yaml`, so a flow of yours with both is refused
-too.
+The chat itself can't be resumed.
 
 ## yian check
 

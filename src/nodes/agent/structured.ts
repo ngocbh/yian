@@ -61,6 +61,7 @@ import {
   setField,
   type Type,
   TypeCheckError,
+  unionMemberForTag,
   unionTagFields,
   type Value,
   type ValueRecord,
@@ -679,10 +680,8 @@ function normalizeUnion(value: ValueRecord, typ: Type): Value {
   const members = typ.members!;
   const [tagField] = unionTagFields(typ);
   if (tagField !== undefined) {
-    const tag = value[tagField];
-    const member =
-      typeof tag === "string" ? members.find((each) => each.fields!.get(tagField)!.tags!.has(tag)) : undefined;
-    return member === undefined ? value : normalize(value, member, true);
+    const member = unionMemberForTag(typ, value[tagField], tagField);
+    return member === null ? value : normalize(value, member, true);
   }
   for (const member of members) {
     const normalized = normalize(value, member, true);

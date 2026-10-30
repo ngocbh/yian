@@ -1367,3 +1367,51 @@ output: \${a.output}
     expect(result.output).toEqual(value);
   });
 });
+
+describe("a tagged union reply, through checkReply", () => {
+  const typ = t("Union(Buy, Sell)", TRADES);
+
+  test("a reply without its tag, with a non-string tag or with an unknown tag is refused at the tag", () => {
+    expect(refused(typ, { value: { qty: 1n } }).message).toStartWith(
+      "structured output at action: missing tag field 'action'",
+    );
+    expect(refused(typ, { value: { action: 3n, qty: 1n } }).message).toStartWith(
+      "structured output at action: 3 is not a tag of the union",
+    );
+    expect(refused(typ, { value: { action: "wait", qty: 1n } }).message).toStartWith(
+      'structured output at action: "wait" is not a tag of the union',
+    );
+  });
+
+  test("many items of a large tagged union read member fields a bounded number of times per item", () => {
+    // Counting field reads, not time: normalizing each item must not look its member up by
+    // scanning every member.
+    const gets = { count: 0 };
+    class CountingMap extends Map<string, Type> {
+      override get(key: string): Type | undefined {
+        gets.count += 1;
+        return super.get(key);
+      }
+    }
+    const size = 50;
+    const members = Array.from({ length: size }, (_, i) => {
+      return new Type({
+        kind: ValueKind.OBJECT,
+        fields: new CountingMap([
+          ["tag", new Type({ kind: ValueKind.STRING, tags: new Set([`t${i}`]) })],
+          [`f${i}`, Type.scalar(ValueKind.INTEGER)],
+        ]),
+        required: new Set(["tag", `f${i}`]),
+      });
+    });
+    const union = new Type({ kind: ValueKind.OBJECT, members });
+    const list = new Type({ kind: ValueKind.LIST_OBJECT, element: union });
+    const items = 1000;
+    const replies = Array.from({ length: items }, (_, i) => {
+      const k = i % size;
+      return { tag: `t${k}`, [`f${k}`]: BigInt(i) };
+    });
+    expect(checkReply({ items: replies }, list)).toEqual(replies);
+    expect(gets.count).toBeLessThan(items * 12 + size * size);
+  });
+});

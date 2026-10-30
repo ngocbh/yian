@@ -4,7 +4,7 @@
  * that cross-node asserts need.
  */
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import { Edge } from "../../src/compile/model.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
@@ -347,6 +347,13 @@ test("a flow assert on a producer that may skip needs ?. or a guard", () => {
   expect(
     expressions(lower(["emit.output != null and emit.output.n >= 1"], { producers: REC, skips: SKIPS }).endPost),
   ).toHaveLength(1);
+});
+
+test("a flow with no asserts asks the skip model nothing", () => {
+  const skips = new SkipModel(["gate", "emit"], [new Edge("t", "gate", "emit", { sourceHandle: "then" })], new Set());
+  const query = spyOn(skips, "maySkipWhileRunning");
+  expect(lower([], { producers: REC, skips }).endPost).toEqual([]);
+  expect(query).not.toHaveBeenCalled();
 });
 
 test("a flow assert on a producer that always runs loads with .", () => {

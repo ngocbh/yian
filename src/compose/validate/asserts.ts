@@ -245,9 +245,12 @@ export function lowerFlowAsserts(
   // An opaque producer (no contract) gets no name check, but its reads are still checked for null.
   const targetRoots = [...validTargets].map(valueRoot);
   const opaqueRoots = new Set(targetRoots.filter((root) => !roots.has(root)));
-  // The producers that may be skipped while END runs, which then read null.
+  // The producers that may be skipped while END runs, which then read null. Only an assert reads
+  // them, and each costs a skip query.
   const producerRoots = new Set(
-    targetRoots.filter((root) => skips !== null && skips.maySkipWhileRunning([root.split(".")[0]!], null)),
+    assertList.length === 0 || skips === null
+      ? []
+      : targetRoots.filter((root) => skips.maySkipWhileRunning([root.split(".")[0]!], null)),
   );
 
   assertList.forEach((assertion, i) => {

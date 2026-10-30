@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -15,7 +15,8 @@ import { invokeLoadSkill } from "../../src/skills/tool.ts";
 let home: string;
 
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "yian-bundled-skill-"));
+  // The real path: the skill's directory is resolved, and macOS's temp folder is behind a symlink.
+  home = realpathSync(mkdtempSync(join(tmpdir(), "yian-bundled-skill-")));
 });
 
 afterEach(() => {

@@ -188,10 +188,10 @@ export function tick(): Promise<void> {
 
 /** A fresh fake terminal: its input, output and the `Terminal` over them. */
 function setup(
-  options: { tty?: boolean; columns?: number; throwOn?: number } & Pick<
+  options: { tty?: boolean; columns?: number; throwOn?: number } & Partial<Pick<
     TerminalOptions,
-    "onStop" | "onActive" | "now"
-  > = {},
+    "onStop" | "onActive" | "now" | "noColor"
+  >> = {},
 ): { input: FakeInput; output: FakeOutput; terminal: Terminal; view: () => Screen; exitHooks: number } {
   const input = new FakeInput({ tty: options.tty });
   const output = new FakeOutput({ columns: options.columns, throwOn: options.throwOn });
@@ -200,6 +200,7 @@ function setup(
     output,
     onStop: options.onStop,
     onActive: options.onActive,
+    noColor: options.noColor,
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   const exitHooks = process.listenerCount("exit");
@@ -841,6 +842,46 @@ async function aFramedReadLineWithAnEditorKeepsItsBoxEmptiedUnderTheLine(): Prom
   // The line entered is on the user's gray band, across the width.
   const band = `\x1b[48;5;237;38;5;252m\x1b[1m>\x1b[22m hello${" ".repeat(53)}\x1b[0m`;
   assert.ok(output.text.includes(band));
+}
+
+async function aFramedReadLineEntersItsLineAtTheWidthOfTheTerminalThen(): Promise<void> {
+  const { input, output, terminal } = setup({ columns: 60 });
+  const editor = new LineEditor({ columns: () => output.columns, hint: HINT });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  input.write("hello");
+  await tick();
+  output.columns = 40;
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "hello" });
+  assert.ok(output.text.includes(`hello${" ".repeat(33)}\x1b[0m`));
+}
+
+async function aFramedReadLineWithNoColorEntersAPlainLine(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 60, noColor: true });
+  const editor = new LineEditor({ columns: () => 60, hint: HINT });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  input.write("hello" + ENTER);
+  assert.deepEqual(await line, { value: "hello" });
+  assert.equal(view().rows[0], "> hello");
+  assert.ok(!output.text.includes("48;5;237"));
+}
+
+async function aQuestionsRuleIsAsWideAsTheTerminalWhenItIsDrawn(): Promise<void> {
+  const { input, output, terminal } = setup({ columns: 60 });
+  const questions = parseQuestions([
+    { question: "Why?", header: "Why" },
+    { question: "Notes?", header: "Notes" },
+  ]);
+  const answer = terminal.askUser(request({ question: "Q", questions }), toolContext());
+  await tick();
+  output.columns = 40;
+  input.write("x" + ENTER);
+  await tick();
+  input.write("y" + ENTER);
+  await answer;
+  const rule = /Question 2 of 2[^─]*?(─+)/.exec(output.text)!;
+  // `Question 2 of 2 · Notes`, a space, and the rule across the rest of the 40 columns.
+  assert.equal(rule[1]!.length, 40 - 23 - 1);
 }
 
 async function aFramedReadLineFoldsALongLineInsideTheBox(): Promise<void> {
@@ -3275,6 +3316,11 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
     aFramedReadLineDrawsABoxAndAHintThenCollapsesToTheLine,
   "a framed readLine with an editor keeps its box, emptied, under the line entered":
     aFramedReadLineWithAnEditorKeepsItsBoxEmptiedUnderTheLine,
+  "a framed readLine enters its line at the terminal's width then":
+    aFramedReadLineEntersItsLineAtTheWidthOfTheTerminalThen,
+  "a framed readLine with noColor enters a plain line": aFramedReadLineWithNoColorEntersAPlainLine,
+  "a question's rule is as wide as the terminal when it is drawn":
+    aQuestionsRuleIsAsWideAsTheTerminalWhenItIsDrawn,
   "a framed readLine folds a long line inside the box": aFramedReadLineFoldsALongLineInsideTheBox,
   "a bracketed paste keeps its newlines in a framed readLine": aBracketedPasteKeepsItsNewlinesFramed,
   "a long paste in a framed readLine is one token, expanded on Enter":

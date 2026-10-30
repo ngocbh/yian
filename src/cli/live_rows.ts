@@ -21,7 +21,7 @@ export const SYNC_OFF = `${ESC}?2026l`;
 const SHOW_CURSOR = `${ESC}?25h`;
 const HIDE_CURSOR = `${ESC}?25l`;
 
-/** Where the cursor goes in a frame: on line `line`, after `before` (its text before the cursor). */
+/** Where the cursor goes in a frame: on line `line`, after `before`, its text before the cursor. */
 export interface RowCursor {
   readonly line: number;
   readonly before: string;
@@ -61,6 +61,32 @@ export function layout(
   return { rows: row + 1, end: col, cursor: cursor ?? { row, col: Math.min(col, columns - 1) } };
 }
 
+/**
+ * `line` with a clear (`ESC[K`) before each wide character that doesn't fit in the rest of its
+ * row: the terminal moves it to the next row and leaves the cell it skipped as it was.
+ */
+function wrapClears(line: string, columns: number): string {
+  let out = "";
+  let col = 0;
+  for (const piece of line.split(/(\x1b\[[0-9;?]*[A-Za-z])/)) {
+    if (piece.startsWith("\x1b[")) {
+      out += piece;
+      continue;
+    }
+    for (const char of piece) {
+      const width = charCells(char);
+      if (char === "\n") col = 0;
+      else if (col + width > columns) {
+        // A full row needs no clear, and one there would take its last character.
+        if (col < columns) out += `${ESC}K`;
+        col = width;
+      } else col += width;
+      out += char;
+    }
+  }
+  return out;
+}
+
 /** What a `LiveRows` writes on. */
 export type LiveOutput = { write(text: string): unknown; readonly columns?: number };
 
@@ -89,15 +115,10 @@ export class LiveRows {
   /** Whether the terminal shows the cursor now. */
   #visible = true;
   /** Whether a frame that doesn't place the cursor leaves it hidden. */
-  hidden = false;
+  #hidden = false;
 
   constructor(output: LiveOutput) {
     this.#output = output;
-  }
-
-  /** The lines on screen, or those the next flush draws. */
-  lines(): readonly string[] {
-    return this.#want?.lines ?? this.#lines;
   }
 
   /** Print `rows` for good above the live rows at the next flush. */
@@ -116,19 +137,22 @@ export class LiveRows {
     this.flush(write);
   }
 
-  /** The terminal may have reflowed the rows on screen (it was resized): the next frame starts over. */
+  /** The terminal may have reflowed the rows on screen (a resize): the next frame starts over. */
   lose(): void {
     this.#lost = true;
   }
 
   /**
-   * Keep the cursor shown (`true`) or hidden when a frame doesn't place it; returns what shows or
-   * hides it now, for the caller to write.
+   * Keep the cursor hidden (`true`) or shown where a frame doesn't place it, from the next flush
+   * on: a flush shows or hides it even when no row changed.
    */
-  cursorMode(visible: boolean): string {
-    this.hidden = !visible;
-    this.#visible = visible;
-    return visible ? SHOW_CURSOR : HIDE_CURSOR;
+  hideCursor(hidden: boolean): void {
+    this.#hidden = hidden;
+  }
+
+  /** Whether the cursor is kept hidden where a frame doesn't place it (`hideCursor`). */
+  get cursorHidden(): boolean {
+    return this.#hidden;
   }
 
   /**
@@ -169,6 +193,9 @@ export class LiveRows {
     while (kept < staged.length && kept < prev.length && staged[kept] === prev[kept]) kept++;
     const shift = heights.slice(0, kept).reduce((sum, rows) => sum + rows, 0);
     row -= shift;
+    // Where the cursor was placed, counted from the live rows' new top.
+    const last = this.#placed;
+    let before = last === null ? null : { row: last.row - shift, col: last.col };
     stale -= shift;
     prev = prev.slice(kept);
     heights = heights.slice(kept);
@@ -177,7 +204,8 @@ export class LiveRows {
     // would take the last character.
     const put = (line: string): number => {
       const laid = layout(line, columns, -1);
-      out += line.replaceAll("\n", "\r\n") + (laid.end < columns ? `${ESC}K` : "");
+      const clear = laid.end < columns ? `${ESC}K` : "";
+      out += wrapClears(line, columns).replaceAll("\n", "\r\n") + clear;
       return laid.rows;
     };
     for (const line of staged.slice(kept)) {
@@ -188,6 +216,7 @@ export class LiveRows {
       stale = Math.max(0, stale - rows);
       // The rows below moved down: none of them is where it was.
       prev = [];
+      before = null;
     }
     const lines = want.lines;
     const tops: number[] = [];
@@ -215,13 +244,13 @@ export class LiveRows {
       const at = Array.from(cursor.before.replace(ANSI, "")).length;
       const spot = layout(lines[cursor.line]!, columns, at).cursor;
       placed = { row: tops[cursor.line]! + spot.row, col: spot.col };
-      const moved = placed.row !== this.#placed?.row || placed.col !== this.#placed.col;
+      const moved = placed.row !== before?.row || placed.col !== before.col;
       if (out !== "" || moved || !this.#visible) {
         moveTo(placed.row);
         out += `${ESC}${placed.col + 1}G`;
       }
     }
-    const show = placed !== null || !this.hidden;
+    const show = placed !== null || !this.#hidden;
     this.#lines = lines;
     this.#cursor = cursor;
     this.#width = columns;

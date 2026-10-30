@@ -63,6 +63,8 @@ export interface TerminalOptions {
    * input in cooked mode: for an output or input that isn't a terminal.
    */
   plain?: boolean;
+  /** Draw a line entered at a framed prompt plain, without the user's band: for `NO_COLOR`. */
+  noColor?: boolean;
 }
 
 /** What `Terminal.approve` asks the user to approve. */
@@ -148,6 +150,7 @@ interface Widget<T> {
 
 const ESC = "\x1b[";
 const SHOW_CURSOR = `${ESC}?25h`;
+const HIDE_CURSOR = `${ESC}?25l`;
 const PASTE_ON = `${ESC}?2004h`;
 const PASTE_OFF = `${ESC}?2004l`;
 // The alternate screen: switching back restores the main screen and the cursor as they were.
@@ -718,16 +721,15 @@ type Opened = { open: string };
 
 /**
  * `editor` as a prompt: once entered it collapses to `> <text>` on the user's band (`userRows`,
- * `columns` wide) and the editor is emptied (`LineEditor.enter`); any other ending erases it. With
- * `keeps`, the box stays drawn under it. Escape ends it only with `escape` (answering `ESCAPED`),
- * and Enter on a list row answers `{open}`.
+ * `columns()` wide, plain without `colour`) and the editor is emptied (`LineEditor.enter`); any
+ * other ending erases it. With `keeps`, the box stays drawn under it. Escape ends it only with
+ * `escape` (answering `ESCAPED`), and Enter on a list row answers `{open}`.
  */
 function editorWidget(
   editor: LineEditor,
-  escape: boolean,
-  columns: number,
-  keeps: boolean,
+  options: { escape: boolean; columns: () => number; colour: boolean; keeps: boolean },
 ): Widget<string | typeof ESCAPED | Opened> {
+  const { escape, columns, colour, keeps } = options;
   return {
     keeps,
     preface: "",
@@ -743,7 +745,7 @@ function editorWidget(
     // The line entered as it was shown: its tokens, not the text they stand for.
     done(outcome) {
       if (!("value" in outcome && typeof outcome.value === "string")) return null;
-      const rows = userRows(draftLabel(editor.draft()).replaceAll("\n", "⏎"), columns, true);
+      const rows = userRows(draftLabel(editor.draft()).replaceAll("\n", "⏎"), columns(), colour);
       editor.enter();
       return rows.join("\n");
     },
@@ -905,6 +907,7 @@ export class Terminal {
   readonly #onStop: TerminalOptions["onStop"];
   readonly #onActive: TerminalOptions["onActive"];
   readonly #plain: boolean;
+  readonly #noColor: boolean;
   #attached = false;
   #closed = false;
   /** Set once the input has ended or failed; the next widget ends with the EOF outcome. */
@@ -957,6 +960,7 @@ export class Terminal {
   constructor(options: TerminalOptions = {}) {
     this.#input = options.input ?? process.stdin;
     this.#plain = options.plain === true;
+    this.#noColor = options.noColor === true;
     const output = options.output ?? process.stderr;
     this.#output = this.#plain ? plainOutput(output) : output;
     this.#live = liveRows(this.#output);
@@ -1090,8 +1094,12 @@ export class Terminal {
       const columns = () => columnsOf(this.#output);
       const editor = options.editor ?? new LineEditor({ columns, hint: options.hint ?? "" });
       if (!sameUnits(unitsOf(editor.draft()), unitsOf(initial))) editor.set(initial);
-      const keeps = options.editor !== undefined;
-      widget = editorWidget(editor, options.escape === true, columns(), keeps);
+      widget = editorWidget(editor, {
+        escape: options.escape === true,
+        columns,
+        colour: !this.#noColor,
+        keeps: options.editor !== undefined,
+      });
       draft = () => editor.text();
     } else {
       const text = textWidget({ label, mark: ">", initial: textOf(initial) });
@@ -1296,7 +1304,7 @@ export class Terminal {
   readonly askUser = async (request: AskUserRequest, ctx: ToolContext): Promise<unknown> => {
     const signal = ctx.signal;
     const print = (rows: readonly string[]): void => this.#print(rows);
-    const columns = columnsOf(this.#output);
+    const columns = (): number => columnsOf(this.#output);
     const ended = await this.#runTurn(signal, (run) => promptRequest(run, print, columns, request));
     if ("value" in ended) return ended.value;
     if (ended.stop !== "eof" && signal.aborted) throw signal.reason;
@@ -1568,10 +1576,10 @@ export class Terminal {
         // The host draws its live rows over what the turn left, the rows it printed for good
         // above them, in one write; what it doesn't draw goes out after. The cursor shows again
         // unless the host hides it.
-        this.#live.hidden = false;
+        this.#live.hideCursor(false);
         quietly(() => this.#onActive?.(false, this.#printed));
         if (!this.#plain) quietly(() => this.#live.flush());
-        const cursor = this.#live.hidden ? "" : this.#live.cursorMode(true);
+        const cursor = this.#live.cursorHidden ? "" : SHOW_CURSOR;
         // A watch with an editor still takes pastes.
         quietly(() => output.write(cursor + (watch?.edit ? PASTE_ON : PASTE_OFF)));
       }
@@ -1668,7 +1676,8 @@ export class Terminal {
         const screen = widget.screen ? ALT_ON : "";
         this.#onScreen = widget.screen === true;
         // The cursor shows only where a frame places it.
-        output.write(screen + PASTE_ON + live.cursorMode(false));
+        live.hideCursor(true);
+        output.write(screen + PASTE_ON + HIDE_CURSOR);
       }
       draw();
       this.#active = { key: feed, end: () => stop("eof") };
@@ -1976,16 +1985,16 @@ function writePanel(print: Print, title: string, prompt: string, count: number):
   print(lines);
 }
 
-/** Print a blank line and the `Question i of N · <header>` rule across `columns`. */
+/** Print a blank line and the `Question i of N · <header>` rule across `columns()`. */
 function writeRule(
   print: Print,
-  columns: number,
+  columns: () => number,
   index: number,
   total: number,
   header: string,
 ): void {
   const title = style("1", `Question ${index} of ${total}`) + (header ? ` ${style("2", `· ${header}`)}` : "");
-  const fill = Math.max(0, columns - cells(title) - 1);
+  const fill = Math.max(0, columns() - cells(title) - 1);
   print(["", `${title} ${style("36", "─".repeat(fill))}`]);
 }
 
@@ -2023,7 +2032,7 @@ async function askQuestion(run: RunWidget, question: Omit<QuestionSpec, "header"
 async function promptRequest(
   run: RunWidget,
   print: Print,
-  columns: number,
+  columns: () => number,
   request: AskUserRequest,
 ): Promise<unknown> {
   const questions = (request.questions ?? []) as QuestionSpec[];

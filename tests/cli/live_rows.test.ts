@@ -15,7 +15,8 @@ function setup() {
   const output = new FakeOutput({ columns: COLUMNS });
   const live = new LiveRows(output);
   const writes: string[] = [];
-  const draw = (lines: string[], cursor: { line: number; before: string } | null = null) => {
+  type Cursor = { line: number; before: string } | null;
+  const draw = (lines: string[], cursor: Cursor = null) => {
     const before = output.text.length;
     live.draw(lines, cursor);
     const text = output.text.slice(before);
@@ -34,7 +35,7 @@ describe("a frame", () => {
     expect(text.endsWith(SYNC_OFF)).toBe(true);
   });
 
-  test("that keeps the row count clears nothing below and rewrites only the row that changed", () => {
+  test("that keeps the row count clears nothing below and rewrites only the changed row", () => {
     const { draw, view } = setup();
     draw(["head", "· spin 1s", "box", "hint"]);
     const text = draw(["head", "✢ spin 1s", "box", "hint"]);
@@ -108,6 +109,15 @@ describe("staged rows", () => {
     expect(view().rows).toEqual(["line 1", "line 2", "line 3", "partial!", "spin"]);
   });
 
+  test("kept in place move the cursor down with the rows under them", () => {
+    const { live, draw, view } = setup();
+    draw(["a", "b", "c"], { line: 1, before: "b" });
+    live.stage(["a"]);
+    // Nothing changes on screen: the cursor goes down a row, to "c" where it now is.
+    draw(["b", "c"], { line: 1, before: "c" });
+    expect(view().cursor).toEqual({ row: 2, col: 1 });
+  });
+
   test("wait for the next flush", () => {
     const { live, output, view } = setup();
     live.stage(["later"]);
@@ -141,6 +151,26 @@ test("a line wider than the terminal takes the rows it wraps onto", () => {
   draw(["x".repeat(25), "next"]);
   draw(["x".repeat(25), "then"]);
   expect(view().rows).toEqual(["x".repeat(COLUMNS), "xxxxx", "then"]);
+});
+
+test("a wide character wrapped at the last column leaves no old cell behind it", () => {
+  const { draw, view } = setup();
+  draw(["y".repeat(COLUMNS)]);
+  draw([`${"x".repeat(COLUMNS - 1)}日本`]);
+  expect(view().rows).toEqual(["x".repeat(COLUMNS - 1), "日本"]);
+});
+
+describe("the cursor", () => {
+  test("stays hidden after a frame that doesn't place it while hidden, and shows once not", () => {
+    const { live, draw, view } = setup();
+    live.hideCursor(true);
+    draw(["a"]);
+    expect(view().modes.at(-1)).toBe("?25l");
+    live.hideCursor(false);
+    live.flush();
+    expect(view().modes.at(-1)).toBe("?25h");
+    expect(live.cursorHidden).toBe(false);
+  });
 });
 
 test("one output has one set of live rows, shared by all that draw on it", () => {

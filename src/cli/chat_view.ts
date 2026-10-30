@@ -380,7 +380,7 @@ export class ChatView {
       if (this.#turn !== null) this.turn(false);
       this.#flushPending();
       this.#input = null;
-      this.#live.hidden = false;
+      this.#live.hideCursor(false);
       this.#redraw();
     });
   }
@@ -416,7 +416,7 @@ export class ChatView {
         this.#last = "other";
         this.#output.on?.("resize", this.#onResize);
         process.once("exit", this.#showOnExit);
-        this.#live.hidden = true;
+        this.#live.hideCursor(true);
         void this.#spin(this.#turn.stop.signal);
         this.#redraw();
         return;
@@ -432,7 +432,7 @@ export class ChatView {
         if (this.#turnPrinted) this.#blankLine();
         this.#turnPrinted = false;
         this.#last = null;
-        this.#live.hidden = false;
+        this.#live.hideCursor(false);
         this.#redraw();
       } finally {
         this.#turn?.stop.abort();
@@ -440,7 +440,7 @@ export class ChatView {
         this.#output.off?.("resize", this.#onResize);
         process.removeListener("exit", this.#showOnExit);
         // The frame drawn as this call ends shows the cursor again.
-        this.#live.hidden = false;
+        this.#live.hideCursor(false);
       }
     });
   }
@@ -455,7 +455,7 @@ export class ChatView {
       if (active) return;
       if (printed) this.#blank = false;
       // The prompt shows the cursor as it ends; the turn hides it again.
-      if (this.#turn !== null) this.#live.hidden = true;
+      if (this.#turn !== null) this.#live.hideCursor(true);
       this.#redraw();
     });
   }

@@ -52,10 +52,9 @@ The same regeneration follows a change to the `composing-agents` skill or to `sr
 2. Post a short plan as a comment on the issue.
 3. Branch from `main` as `dev/<area>/<short-name>`.
 4. Make small commits, each with its tests passing. Add a test for every behavior change.
-5. If the engine's behavior changed (flow syntax or semantics, the CLI, the host API), update the
-   docs page that describes it, briefly, in the same pull request, and regenerate the bundle
-   `yian chat` carries (`YIAN_UPDATE_BUNDLE=1 bun test tests/repo/bundled.test.ts`). Fixes,
-   refactors, tests and internal changes need no docs edit.
+5. When behavior changes, update the docs page that describes it, concisely, in the same pull
+   request, and regenerate the bundle `yian chat` carries
+   (`YIAN_UPDATE_BUNDLE=1 bun test tests/repo/bundled.test.ts`).
 6. Open a pull request from the template, with `Fixes #<issue>` and the exact checks you ran.
 
 The work is done when the pull request merges into `main`.

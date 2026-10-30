@@ -103,8 +103,9 @@ import { pushVisible } from "./text.ts";
  * `ctx.steps`, each model call and failed attempt is recorded as a `model_call` step and each
  * tool result as a `tool_result` step, a failed attempt's error scrubbed of every credential the
  * call may have sent; the steps earlier starts recorded are replayed first (`callModel`,
- * `replayToolCalls`), and the host's interrupt is read only once they end (a recorded honor step
- * ends the loop there); recorded steers are fed back as replay reaches them.
+ * `replayToolCalls`), and the host's interrupt is read only once they end, a late steer recorded
+ * after the last recorded call included (a recorded honor step ends the loop there); recorded
+ * steers are fed back as replay reaches them.
  *
  * The model reads the system prompt (with the recalled memory sections), the prompt's messages,
  * then each iteration's steers, replies and tool results; a final structured call after tools
@@ -244,6 +245,11 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       (part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null,
     );
     if (calls.length === 0) {
+      // A late steer an earlier start recorded here was its choice to continue, made before any
+      // interrupt or cap check of this start: replay follows it, and the loop top honors an
+      // interrupt that cut the next call or its retry wait. A resume runs with the run's recorded
+      // settings and flow files, so a recorded steer never sits at the cap.
+      if (steps.hasRecordedSteer()) continue;
       // A final answer that arrived before the loop saw an interrupt stands: nothing is left to
       // cut. An interrupt seen now beats a late steer: the answer stands as if it never came (no
       // steer, no honor step), and queued steers stay for the next reader. At the cap the answer
@@ -251,7 +257,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
       // be sent. A structured agent's trailing call is cut like any model call, and never starts
       // once an interrupt is seen (an earlier start's honor included).
       const late = !interruptRequested(interrupt, steps) && iterations !== ctx.maxToolIterations;
-      if (late && lateSteer(steps, ctx.steerInbox)) continue;
+      if (late && queuedSteer(steps, ctx.steerInbox)) continue;
       if (schema !== null) return await structured();
       return new Output(reply.text());
     }
@@ -278,13 +284,11 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
 }
 
 /**
- * Whether a steer joins after a final answer: one was recorded before the next call (replay of a
- * run that steered late), or, once replay is over and no recorded attempt continues the call, the
- * inbox has events queued now. The loop top reads them; nothing awaits between this check and
- * that read.
+ * Whether a live steer joins after a final answer: once replay is over and no recorded attempt
+ * continues the call, the inbox has events queued now. The loop top reads them; nothing awaits
+ * between this check and that read.
  */
-function lateSteer(steps: AgentSteps, inbox: SteerInbox | undefined): boolean {
-  if (steps.hasRecordedSteer()) return true;
+function queuedSteer(steps: AgentSteps, inbox: SteerInbox | undefined): boolean {
   return inbox !== undefined && !steps.replaying() && !steps.continuesCall() && inbox.queued();
 }
 

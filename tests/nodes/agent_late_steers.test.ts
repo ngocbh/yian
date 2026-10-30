@@ -10,6 +10,8 @@ import { join } from "node:path";
 import { afterAll, expect, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
+import { ModelCallFinished } from "../../src/events.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
 
 import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import { Message, type Request, TextPart } from "../../src/llm/messages.ts";
@@ -21,8 +23,8 @@ import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Output, SteerInbox } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { withWarnings } from "../../src/platform.ts";
-import { send } from "../../src/run.ts";
-import { NodeStepRecord, PoolCommitRecord, readRunLog } from "../../src/runtime/log.ts";
+import { interrupt, send } from "../../src/run.ts";
+import { InterruptedRecord, NodeStepRecord, PoolCommitRecord, readRunLog } from "../../src/runtime/log.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
@@ -365,6 +367,104 @@ test("a crash after the late model_call: replay takes it with a matching digest"
   expect(resumed.output).toBe("final");
   expect(model.requests).toEqual([]);
   expect(steps(log).filter((step) => step === "model_call")).toHaveLength(2);
+});
+
+/** FLOW with `Optional(str)` output, so an interrupted agent succeeds null and the flow says "(stopped)". */
+const STOPPABLE = FLOW.replace("    output: str\noutput: ${chat.output}", '    output: Optional(str)\noutput: ${chat.output :- "(stopped)"}');
+
+/**
+ * A model answering "draft" while it sends "and cite" to `log`'s `notes`; its second call's stream
+ * fails with whatever `second(signal)` rejects with.
+ */
+function steeringThen(log: string, second: (signal: AbortSignal | undefined) => Promise<never>): ChatModel & { requests: Request[] } {
+  const first = hooked(new ScriptedModel([textReply("draft")], CONFIG), () => send(log, "notes", "and cite"));
+  return {
+    provider: first.provider,
+    model: first.model,
+    requests: first.requests,
+    stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+      if (first.requests.length === 0) return first.stream(request, options);
+      first.requests.push(request);
+      return new EventStream(
+        (async function* () {
+          yield await second(options.signal);
+        })(),
+      );
+    },
+  };
+}
+
+/** Interrupt `log`'s `notes`, then hold until the call's signal cuts it. */
+const interruptAndHold = (log: string) => async (signal: AbortSignal | undefined) => {
+  const { promise, reject } = Promise.withResolvers<never>();
+  signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+  await interrupt(log, "notes");
+  if (signal?.aborted) reject(signal.reason);
+  return await promise;
+};
+
+/** The seq of the log's first `interrupted` record. */
+const interruptedSeq = (log: string) => readRunLog(log).find(({ record }) => record instanceof InterruptedRecord)!.seq;
+
+/** The `by` of each honor step in the log at `log`. */
+const honors = (log: string) =>
+  readRunLog(log).flatMap(({ record }) =>
+    record instanceof NodeStepRecord && record.step["kind"] === "interrupted" ? [Number(record.step["by"])] : [],
+  );
+
+test("a crash after an interrupt cut the late-steered call: the resume honors it, with no model call", async () => {
+  const uncut = freshLog();
+  const done = await runWith(await loadFlow(STOPPABLE), {}, null, steeringThen(uncut, interruptAndHold(uncut)), { log: uncut });
+  expect(done.output).toBe("(stopped)");
+  const log = freshLog();
+  await crashAfter(interruptedSeq(uncut) + 1, async () =>
+    runWith(await loadFlow(STOPPABLE), {}, null, steeringThen(log, interruptAndHold(log)), { log }),
+  );
+  expect(steps(log).at(-1)).toMatchObject({ kind: "steer" });
+  const model = new ScriptedModel([], CONFIG);
+  const resumed = await resumeWith(await loadFlow(STOPPABLE), log, null, model);
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("(stopped)");
+  expect(model.requests).toEqual([]);
+  expect(steps(log).map((step) => (typeof step === "string" ? step : step["kind"]))).toEqual(["model_call", "steer", "interrupted"]);
+  expect(honors(log)).toEqual([interruptedSeq(log)]);
+});
+
+test("a crash after an interrupt honored in the late-steered call's retry wait: the resume honors it again", async () => {
+  // The second call fails retryably; the interrupt lands in the retry wait, which writes no cut call.
+  const failing = async () => {
+    throw new ProviderError("server", "boom", { retryAfter: 60 });
+  };
+  const interrupting = (log: string) => {
+    const landed: Promise<unknown>[] = [];
+    const onEvent = (event: unknown) => {
+      if (event instanceof ModelCallFinished && event.error !== null) landed.push(interrupt(log, "notes"));
+    };
+    return { landed, onEvent };
+  };
+  const uncut = freshLog();
+  const first = interrupting(uncut);
+  const done = await runWith(await loadFlow(STOPPABLE), {}, null, steeringThen(uncut, failing), { log: uncut, onEvent: first.onEvent });
+  await Promise.all(first.landed);
+  expect(done.output).toBe("(stopped)");
+  expect(steps(uncut).map((step) => (typeof step === "string" ? step : step["kind"]))).toEqual([
+    "model_call",
+    "steer",
+    "model_call",
+    "interrupted",
+  ]);
+  const log = freshLog();
+  const second = interrupting(log);
+  await crashAfter(stepSeq(uncut, "interrupted") + 1, async () =>
+    runWith(await loadFlow(STOPPABLE), {}, null, steeringThen(log, failing), { log, onEvent: second.onEvent }),
+  );
+  await Promise.all(second.landed);
+  const model = new ScriptedModel([], CONFIG);
+  const resumed = await resumeWith(await loadFlow(STOPPABLE), log, null, model);
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("(stopped)");
+  expect(model.requests).toEqual([]);
+  expect(honors(log)).toEqual([interruptedSeq(log)]);
 });
 
 test("a loaded render whose field is null at run time falls back for that event; the steer step stands", async () => {

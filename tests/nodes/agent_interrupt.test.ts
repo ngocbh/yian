@@ -500,6 +500,73 @@ test("a resumed start past the honor after a trailing structured attempt makes n
   expect([run.result, run.requests, run.resumed]).toEqual([new Interrupted(7), 0, []]);
 });
 
+/**
+ * The steps of a start that answered "draft" and read a late steer after it, as the engine writes
+ * them, before a crash: `extra` sets up the agent, and `replies` follow "draft" for the live run.
+ */
+async function draftThenSteer(extra: Partial<AgentRunContext>, replies: Response[] = []): Promise<ValueRecord[]> {
+  const { steps, written } = recorded();
+  await runAgent(agentContext(new ScriptedModel([reply("draft"), ...replies], CONFIG), { ...extra, steps }));
+  const steer = { kind: "steer", inbox: "owner", from: [100n], values: ["and cite"] } as unknown as ValueRecord;
+  return [written[0]!, steer];
+}
+
+/** The `[kind, by]` of each step, `by` only on an honor step. */
+const honorShape = (steps: readonly ValueRecord[]) =>
+  steps.map((step) => (step["kind"] === "interrupted" ? ["interrupted", Number(step["by"])] : [step["kind"]]));
+
+test("a resumed start past a recorded late steer honors the interrupt that cut the call after it: no live call", async () => {
+  const prior = await draftThenSteer({});
+  // The crash came after the interrupted record, before the honor step: the interrupt is pending.
+  const host = interruptible();
+  host.interrupt(12);
+  const resumed: ValueRecord[] = [];
+  const steps = new NodeSteps(2, prior, (step) => resumed.push(step));
+  const model = new ScriptedModel([], CONFIG);
+  expect(await runAgent(agentContext(model, { steerInbox: host.steerInbox, steps }))).toEqual(new Interrupted(12));
+  expect(model.requests).toEqual([]);
+  expect(honorShape(resumed)).toEqual([["interrupted", 12]]);
+});
+
+test("a resumed start past a recorded late steer and an honor in its call's retry wait honors it again: no live call", async () => {
+  install({ ...BUILTIN, modelRetries: 1 });
+  const prior = await draftThenSteer({});
+  // The start after the steer: its call fails, and the interrupt lands in the retry wait, which writes no cut call.
+  const host = interruptible();
+  const scheduler = waitingScheduler();
+  const written: ValueRecord[] = [];
+  const failing = new ScriptedModel([new ProviderError("server", "boom", { retryAfter: 60 })], CONFIG);
+  const cut = runAgent(agentContext(failing, { steerInbox: host.steerInbox, steps: new NodeSteps(2, prior, (step) => written.push(step)), scheduler }));
+  await scheduler.slept;
+  host.interrupt(12);
+  expect(await cut).toEqual(new Interrupted(12));
+  expect(honorShape(written)).toEqual([["model_call"], ["interrupted", 12]]);
+  expect(Object.hasOwn(written[0]!, "error")).toBe(true);
+
+  // A crash before the commit: the honor step deleted the pending interrupt, so the signal is unset.
+  const resumed: ValueRecord[] = [];
+  const steps = new NodeSteps(3, [...prior, ...written], (step) => resumed.push(step));
+  const model = new ScriptedModel([], CONFIG);
+  expect(await runAgent(agentContext(model, { steerInbox: interruptible().steerInbox, steps, scheduler }))).toEqual(new Interrupted(12));
+  expect(model.requests).toEqual([]);
+  expect(resumed).toEqual([]);
+});
+
+test("a resumed structured agent past a recorded late steer honors the interrupt: its trailing call never starts", async () => {
+  const toolset = () => new ToolSet({ lookup: lookupTool((topic) => `found ${topic}`) });
+  const extra = { outputType: recordA(true), tools: ["lookup"] };
+  const prior = await draftThenSteer({ ...extra, toolset: toolset() }, [reply('{"value": {"a": 1}}')]);
+  const host = interruptible();
+  host.interrupt(12);
+  const resumed: ValueRecord[] = [];
+  const steps = new NodeSteps(2, prior, (step) => resumed.push(step));
+  const model = new ScriptedModel([reply('{"a": 1}')], CONFIG);
+  const ctx = agentContext(model, { ...extra, toolset: toolset(), steerInbox: host.steerInbox, steps });
+  expect(await runAgent(ctx)).toEqual(new Interrupted(12));
+  expect(model.requests).toEqual([]);
+  expect(honorShape(resumed)).toEqual([["interrupted", 12]]);
+});
+
 test("generateStructured doesn't retry a cut call", async () => {
   const interruptSignal = new AbortController();
   const model = new Paced(words('{"a"', ": x", "}", new Finish({ reason: "stop" })), (index) => {

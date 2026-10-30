@@ -2762,6 +2762,8 @@ export function normalizeTypedFiles(typ: Type | null, typed: TypedValue): TypedV
   return Object.is(value, typed.value) ? typed : new TypedValue(typed.kind, value);
 }
 
+const READS_FILES = new WeakMap<Type, boolean>();
+
 /**
  * Whether `typ` has a `file`, `Inbox(T)` or unrefined `object` position at any depth, so
  * reading a value through it may change how a file or inbox handle is held. Unlike `hasFile`,
@@ -2769,6 +2771,17 @@ export function normalizeTypedFiles(typ: Type | null, typed: TypedValue): TypedV
  * mappings.
  */
 function readsFiles(typ: Type): boolean {
+  // `normalizeFiles` asks this of the same types for every item, so the answer is kept per type.
+  let reads = READS_FILES.get(typ);
+  if (reads === undefined) {
+    reads = computeReadsFiles(typ);
+    READS_FILES.set(typ, reads);
+  }
+  return reads;
+}
+
+/** `readsFiles` without the cache for `typ` itself. */
+function computeReadsFiles(typ: Type): boolean {
   if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
   if (isPlainObject(typ)) return true;
   if (typ.kind === ValueKind.LIST_OBJECT && typ.element === undefined) return true;

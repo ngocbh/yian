@@ -172,6 +172,17 @@ describe("sends", () => {
     expect(invalid.cause).toBeInstanceOf(TypeCheckError);
   });
 
+  test("a refused event names where inside it the check failed", () => {
+    const lists = new Parameter("lists", {
+      contract: new ValueContract(inboxType(Type.scalar(ValueKind.LIST_INTEGER))),
+    });
+    const run = started(paramFlow([MSGS, lists], tool("heard", "take")));
+    const inner = refused(run.state, run.log, () => prepareSend(run.state, "lists", [1n, "x"]));
+    expect(inner.message).toBe("inbox 'lists' refuses the event at [1]: list element \"x\" is not int (declared list(int))");
+    const root = refused(run.state, run.log, () => prepareSend(run.state, "msgs", 3));
+    expect(root.message).toBe("inbox 'msgs' refuses the event: 3.0 does not match declared type str");
+  });
+
   test("the size cap is the run's MAX_EVENT_BYTES over the value's run-log JSON", () => {
     const run = started(waitFlow(tool("heard", "take")), { defaults: { MAX_EVENT_BYTES: 7n } });
     send(run.log, run.state, "hello");

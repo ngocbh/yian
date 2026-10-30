@@ -446,6 +446,67 @@ test("a success checks an ordinary target against its output contract's type", (
   expect(state.ready).toEqual(["after"]);
 });
 
+/** Return `START -> filler -> END` with `filler` in flight under `outputContract`. */
+function fillerWorking(outputContract: OutputContract | null): { state: RunState; log: MemoryRunLog } {
+  const flow = new CompiledFlow(
+    new Map<string, Node>([
+      [START_ID, new StartNode(START_ID)],
+      ["filler", func("filler", { outputContract })],
+      [END_ID, EndNode.value(END_ID, { outputName: null })],
+    ]),
+    [new Edge("start-filler", START_ID, "filler"), new Edge("filler-end", "filler", END_ID)],
+  );
+  const { state, log } = initializedAndStarted(flow);
+  commitStartSuccess(state, log);
+  commitPrepared(log, state, prepareNodeStarted(state, "filler"));
+  return { state, log };
+}
+
+const N_RECORD = new Type({
+  kind: ValueKind.OBJECT,
+  fields: new Map([["n", Type.scalar(ValueKind.INTEGER)]]),
+  required: new Set(["n"]),
+});
+
+test.each<[string, OutputContract, unknown, string, (string | number)[]]>([
+  [
+    "a list element's field",
+    new ValueContract(new Type({ kind: ValueKind.LIST_OBJECT, element: N_RECORD })),
+    [{ n: 1n }, { n: "x" }],
+    'output at [1].n: "x" does not match declared type int',
+    [1, "n"],
+  ],
+  [
+    "a root record's missing field",
+    new ValueContract(N_RECORD),
+    {},
+    'output at n: record missing required fields: ["n"]',
+    ["n"],
+  ],
+])("a contract failure inside the output names where: %s", (_name, contract, output, message, path) => {
+  const { state, log } = fillerWorking(contract);
+
+  const caught = expectNodeData(() => prepareOutput(log, state, "filler", output), TypeCheckError, message);
+
+  expect((caught.original as TypeCheckError).path).toEqual(path);
+});
+
+test("an output nested too deep names its place once", () => {
+  const { state, log } = fillerWorking(null);
+  let output: unknown = 1n;
+  for (let level = 0; level < 102; level++) output = [output];
+
+  let caught: unknown;
+  try {
+    prepareOutput(log, state, "filler", output);
+  } catch (error) {
+    caught = error;
+  }
+
+  expect(caught).toBeInstanceOf(NodeDataError);
+  expect(((caught as NodeDataError).original as Error).message).toMatch(/^output at (\[0\])+: value nests deeper than 100 levels, /);
+});
+
 const MALFORMED_CONTRACT =
   "output contract must be an exact ValueContract, PartialRecordContract, or null, got Type";
 
@@ -751,7 +812,7 @@ test.each([
   const caught = expectNodeData(
     () => prepareOutput(log, state, "work", output),
     TypeCheckError,
-    "NaN is not a yian value",
+    `output at ${path.join(".")}: NaN is not a yian value`,
   );
 
   expect((caught.original as TypeCheckError).path).toEqual(path);

@@ -33,6 +33,7 @@ import {
   jsonPart,
   jsonSafeText,
   jsTypeName,
+  renderValuePath,
   shownText,
   type Type,
   TypeCheckError,
@@ -472,7 +473,17 @@ export class ToolNode extends Node {
     if (this.builtin === ASK && output === null) {
       throw new TypeCheckError(`${where}: an ask's answer can't be null; null means nobody answered in time`);
     }
-    const value = typ === null ? buildValue(output) : buildValueAs(typ, output);
+    let value: TypedValue;
+    try {
+      value = typ === null ? buildValue(output) : buildValueAs(typ, output);
+    } catch (error) {
+      // The check's reason is bare; name where in the answer it failed, as host intake does.
+      if (!(error instanceof TypeCheckError) || error.path.length === 0) throw error;
+      throw new TypeCheckError(`${where} at ${renderValuePath(error.path)}: ${error.message}`, {
+        path: error.path,
+        cause: error,
+      });
+    }
     return { kind: "tool_result", call_id: call.callId, output: value.toWire() as JsonObject };
   }
 

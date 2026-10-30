@@ -299,6 +299,13 @@ describe("host calls", () => {
       error: { type: "CompletedError", message: "boom" },
     });
     expect(() => node.waitResultStep(view, { output: 5 })).toThrow(TypeCheckError);
+    // A failure inside the value names where, as host intake does; a root one stays bare.
+    const listed = new ToolNode("send", { toolId: "codex_send" });
+    listed.outputContract = new ValueContract(Type.scalar(ValueKind.LIST_INTEGER));
+    expect(() => listed.waitResultStep(view, { output: [1, "x"] })).toThrow(
+      "complete('r1/send') output at [1]: list element \"x\" is not int (declared list(int))",
+    );
+    expect(() => node.waitResultStep(view, { output: 5 })).toThrow(/^5 does not match declared type str$/);
     // With no declared output the value keeps its natural kind.
     const free = new ToolNode("send", { toolId: "codex_send" });
     expect(free.waitResultStep(view, { output: 5n })).toEqual({

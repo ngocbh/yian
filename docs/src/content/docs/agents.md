@@ -264,12 +264,8 @@ reviewer:
 The model sees only each skill's name and description. When it needs one, it calls the built-in
 `load_skill` tool, which returns the instructions, or a file in the skill's folder such as
 `references/checklist.md`. Files must be UTF-8 text of at most 256 KiB; paths outside the folder
-and hidden files are refused, including through symlinks. Against another process swapping
-folders in a skill folder while it's read, this holds on Linux with `/proc` and with Bun on
-macOS; elsewhere (Node on macOS, Windows) it is best effort. A hard link to a hidden file reads like any other file, so
-don't keep hard links to secrets in a skill folder. A call the model gets wrong (a skill it wasn't
-granted, a missing or refused file, bad arguments) doesn't fail the node: the model reads the
-refusal as the call's error result and carries on.
+and hidden files are refused, including through symlinks. A refused call doesn't fail the node:
+the model gets the error and carries on.
 
 - `skills: [name, ...]` grants those skills; `skills: all` grants every skill the run has.
 - Names use lowercase letters, digits and single hyphens, up to 64 characters.
@@ -320,9 +316,9 @@ output: ${worker.output :- "(stopped)"}
 - **Render.** `steer_inbox: {from: ${input.notes}, render: "From the owner: ${event}"}` wraps each
   message in a template. The template reads only `${event}`.
 - **Interrupts.** A host can interrupt every agent reading an inbox. The agent stops at its next
-  safe point: before a model call, while a model call waits or thinks before its reply starts
-  (the request is aborted at once), between streamed chunks, or before a tool call. A running tool call
-  finishes. In `yian run`'s chat, Ctrl-C or Esc during a turn does this.
+  safe point: before a model call, while it waits for a reply, between streamed chunks, or before
+  a tool call. A running tool call finishes. In `yian run`'s chat, Ctrl-C or Esc during a turn
+  does this.
 - **The result.** An interrupted agent's output is null. With an `Optional(...)` output it
   succeeds, so the flow can route on null as above. Any other output fails the node with
   `agent.interrupted`.

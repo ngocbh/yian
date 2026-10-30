@@ -115,9 +115,12 @@ function charWidth(char: string): number {
 
 /**
  * Replay `text` on a `columns`-wide terminal. It knows text, `\r`, `\n` (down one row, as with
- * output newline translation off), `ESC[nA`, `ESC[J`, `ESC[2J` (its rows go to the scrollback, the
- * cursor stays), `ESC[K`, `ESC[nG`, `ESC[r;cH` and the alternate screen (`ESC[?1049h` and `l`, which gives back the main screen and its cursor);
+ * output newline translation off), `ESC[nA`, `ESC[J`, `ESC[2J`, `ESC[K`, `ESC[nG`, `ESC[r;cH` and
+ * the alternate screen (`ESC[?1049h` and `l`, which gives back the main screen and its cursor);
  * colours are ignored. Writing past the last column wraps on the next character, as terminals do.
+ * `ESC[2J` moves the rows to the scrollback and leaves the cursor, as VTE, tmux and kitty do; xterm
+ * drops them. So the scrollback here is one terminal's; that the program never sends `ESC[3J` is
+ * what keeps the scrollback everywhere.
  */
 export function screen(text: string, columns = 80): Screen {
   let rows: string[][] = [[]];
@@ -3284,7 +3287,6 @@ async function anAbortedApproveReturnsNull(): Promise<void> {
   assert.equal(await next, "Approve");
 }
 
-/** The scenarios by name, in the order `main` runs them. */
 /**
  * What `output` was written from `before` (a length of its text) on: one write, synchronized,
  * clearing the visible screen but not the scrollback.
@@ -3418,16 +3420,45 @@ async function ctrlLOnAPlainTerminalOrOffATtyChangesNothing(): Promise<void> {
   assert.equal(plainOutput.text, "> You: \n");
 }
 
+async function ctrlLOnALaterQuestionRedrawsThePanelAndTheAnswersAboveIt(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 60 });
+  output.write("above\r\n");
+  const questions = parseQuestions([
+    { question: "Why?", header: "Why" },
+    { question: "Notes?", header: "Notes" },
+  ]);
+  const answer = terminal.askUser(request({ question: "Q", questions }), toolContext());
+  await tick();
+  input.write("x" + ENTER);
+  await tick();
+  input.write("y");
+  await tick();
+  const asked = view().rows.slice(1);
+  assert.ok(asked.some((row) => row.includes("human input")));
+  assert.ok(asked.some((row) => row.includes("Question 2 of 2")));
+  const before = { text: output.text.length, writes: output.writes };
+  input.write(CTRL_L);
+  await tick();
+  assertOneClearingFrame(output, before);
+  assert.deepEqual(view().rows, asked);
+  input.write(ENTER);
+  assert.deepEqual(await answer, { Why: "x", Notes: "y" });
+}
+
+async function ctrlLInsideAPasteNeitherRedrawsNorAddsText(): Promise<void> {
+  const { input, output, terminal } = setup({ columns: 60 });
+  const line = terminal.readLine("You:", { frame: true, hint: HINT });
+  await tick();
+  const before = output.text.length;
+  input.write(PASTE_START + "a" + CTRL_L + "b" + PASTE_END);
+  await tick();
+  assert.ok(!output.text.slice(before).includes("\x1b[2J"));
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "ab" });
+}
+
+/** The scenarios by name, in the order `main` runs them. */
 export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
-  "Ctrl-L at a framed readLine redraws it at the top, keeping the focus":
-    ctrlLAtAFramedReadLineRedrawsItAtTheTopKeepingTheFocus,
-  "Ctrl-L while the live box takes keys redraws the live rows at the top":
-    ctrlLWhileTheLiveBoxTakesKeysRedrawsTheLiveRowsAtTheTop,
-  "Ctrl-L in a card or a question redraws it, even in the grace":
-    ctrlLInACardOrAQuestionRedrawsItEvenInTheGrace,
-  "Ctrl-L in a screen redraws it": ctrlLInAScreenRedrawsIt,
-  "Ctrl-L on a plain terminal or off a TTY changes nothing":
-    ctrlLOnAPlainTerminalOrOffATtyChangesNothing,
   "typing a line returns it": typingALineReturnsIt,
   "an initial value can be edited": anInitialValueCanBeEdited,
   "a blank answer returns an empty string": aBlankAnswerReturnsAnEmptyString,
@@ -3612,6 +3643,18 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "approve off a TTY returns null without reading": approveOffATtyReturnsNullWithoutReading,
   "Ctrl-C in approve rejects and keeps the terminal open": ctrlCInApproveRejectsAndKeepsTheTerminalOpen,
   "an aborted approve returns null": anAbortedApproveReturnsNull,
+  "Ctrl-L at a framed readLine redraws it at the top, keeping the focus":
+    ctrlLAtAFramedReadLineRedrawsItAtTheTopKeepingTheFocus,
+  "Ctrl-L while the live box takes keys redraws the live rows at the top":
+    ctrlLWhileTheLiveBoxTakesKeysRedrawsTheLiveRowsAtTheTop,
+  "Ctrl-L in a card or a question redraws it, even in the grace":
+    ctrlLInACardOrAQuestionRedrawsItEvenInTheGrace,
+  "Ctrl-L in a screen redraws it": ctrlLInAScreenRedrawsIt,
+  "Ctrl-L on a plain terminal or off a TTY changes nothing":
+    ctrlLOnAPlainTerminalOrOffATtyChangesNothing,
+  "Ctrl-L on a later question redraws the panel and the answers above it":
+    ctrlLOnALaterQuestionRedrawsThePanelAndTheAnswersAboveIt,
+  "Ctrl-L inside a paste neither redraws nor adds text": ctrlLInsideAPasteNeitherRedrawsNorAddsText,
 };
 
 /** Run every scenario, printing `{"name", "ok", "error"?}` per line; return how many failed. */

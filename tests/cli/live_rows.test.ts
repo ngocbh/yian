@@ -146,7 +146,7 @@ describe("after a resize", () => {
 });
 
 describe("after a clear", () => {
-  test("the next frame erases the screen, not the scrollback, and draws every row at the top", () => {
+  test("the next frame erases the screen, not the scrollback, and draws every row", () => {
     const { output, live, draw, view, writes } = setup();
     output.write("printed for good\r\n");
     draw(["reply", "spin", "box"], { line: 2, before: "b" });
@@ -161,7 +161,7 @@ describe("after a clear", () => {
     expect(view().cursor).toEqual({ row: 2, col: 1 });
   });
 
-  test("a flush with nothing set draws the rows on screen again, then frames go on as usual", () => {
+  test("a flush with nothing set redraws the rows on screen, then frames go on", () => {
     const { live, draw, view } = setup();
     draw(["a", "b"]);
     live.clear();

@@ -96,8 +96,10 @@ export class FakeOutput extends Writable {
 export interface Screen {
   rows: string[];
   cursor: { row: number; col: number };
-  /** Each private mode written, in order, such as `?25l` or `?2004h`. */
+  /** Each private mode written, in order, such as `?25l` or `?2004h`; not synchronized output. */
   modes: string[];
+  /** Each start (`?2026h`) and end (`?2026l`) of synchronized output, in order. */
+  syncs: string[];
 }
 
 /** Display width of one character: 2 for the CJK and fullwidth ranges the scenarios use. */
@@ -116,6 +118,7 @@ function charWidth(char: string): number {
 export function screen(text: string, columns = 80): Screen {
   let rows: string[][] = [[]];
   const modes: string[] = [];
+  const syncs: string[] = [];
   let row = 0;
   let col = 0;
   // The main screen while the alternate one is up.
@@ -150,7 +153,7 @@ export function screen(text: string, columns = 80): Screen {
     }
     const n = args === "" ? 1 : Number(args);
     if (priv === "?") {
-      modes.push(`?${args}${command}`);
+      (args === "2026" ? syncs : modes).push(`?${args}${command}`);
       if (args === "1049" && command === "h" && main === null) {
         main = { rows, row, col };
         rows = [[]];
@@ -175,7 +178,7 @@ export function screen(text: string, columns = 80): Screen {
   }
   const shown = rows.map((cells) => cells.join("").trimEnd());
   while (shown.length > 0 && shown[shown.length - 1] === "") shown.pop();
-  return { rows: shown, cursor: { row, col }, modes };
+  return { rows: shown, cursor: { row, col }, modes, syncs };
 }
 
 /** Let the streams deliver what was written: they do it in next-tick callbacks and microtasks. */

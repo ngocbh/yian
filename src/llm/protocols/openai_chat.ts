@@ -113,6 +113,8 @@ interface CallAssembly {
   args: string;
   /** The wire `index` of the entry that opened it, or `null`. */
   wireIndex: bigint | null;
+  /** Its part index in the reply. */
+  at: number;
 }
 
 /** One `tool_calls` entry of a delta; an `id` or `name` that is not a non-empty string is `null`. */
@@ -289,31 +291,54 @@ export class OpenAIChat implements SseProtocol {
     const provider = this.provider;
     // The reply's parts by index: dense, in the order each is first seen.
     const parts: Assembly[] = [];
+    // Lookups beside `parts`, so a piece finds its part without scanning the reply: a scan per
+    // piece made a streamed reply of many calls quadratic.
+    const textAt = new Map<TextAssembly["kind"], number>();
+    let lastCall: CallAssembly | undefined;
+    const lastAtIndex = new Map<bigint, CallAssembly>();
+    // The last call (by part index) with each id, overall and at each wire index.
+    const withId = new Map<string, CallAssembly>();
+    const withIdAtIndex = new Map<bigint, Map<string, CallAssembly>>();
     // A reply has one choice, so at most one reasoning, text and refusal part.
     const append = (kind: TextAssembly["kind"], text: string, field: string | null = null): number => {
-      const part = parts.find((each): each is TextAssembly => each.kind === kind);
-      if (part === undefined) return parts.push({ kind, text, field }) - 1;
-      part.text += text;
-      return parts.indexOf(part);
+      const at = textAt.get(kind);
+      if (at === undefined) {
+        textAt.set(kind, parts.length);
+        return parts.push({ kind, text, field }) - 1;
+      }
+      (parts[at] as TextAssembly).text += text;
+      return at;
     };
     // Return the call a tool-call entry joins, opening one when none fits.
     const callFor = (piece: CallPiece): CallAssembly => {
-      const calls = parts.filter(isCall);
       let call: CallAssembly | undefined;
       if (piece.wireIndex !== null) {
         // Some vendors send two calls at the same index, told apart by their ids: an entry joins
         // the call there with its id, else the last call there unless both ids are set and differ.
-        const atIndex = calls.filter((each) => each.wireIndex === piece.wireIndex);
-        call = (piece.id === null ? undefined : atIndex.findLast((each) => each.id === piece.id)) ?? atIndex.at(-1);
+        const sameId = piece.id === null ? undefined : withIdAtIndex.get(piece.wireIndex)?.get(piece.id);
+        call = sameId ?? lastAtIndex.get(piece.wireIndex);
         if (call?.id && piece.id && call.id !== piece.id) call = undefined;
       } else {
-        call = piece.id === null ? calls.at(-1) : calls.findLast((each) => each.id === piece.id);
+        call = piece.id === null ? lastCall : withId.get(piece.id);
       }
       if (call === undefined) {
-        call = { kind: "call", id: null, name: null, args: "", wireIndex: piece.wireIndex };
+        call = { kind: "call", id: null, name: null, args: "", wireIndex: piece.wireIndex, at: parts.length };
         parts.push(call);
+        lastCall = call;
+        if (piece.wireIndex !== null) lastAtIndex.set(piece.wireIndex, call);
       }
       return call;
+    };
+    // Record that `call` took `id`. An earlier call can take an id after a later one did, so the
+    // later part keeps it.
+    const tookId = (call: CallAssembly, id: string): void => {
+      const latest = withId.get(id);
+      if (latest === undefined || latest.at < call.at) withId.set(id, call);
+      if (call.wireIndex === null) return;
+      let atIndex = withIdAtIndex.get(call.wireIndex);
+      if (atIndex === undefined) withIdAtIndex.set(call.wireIndex, (atIndex = new Map()));
+      const latestAtIndex = atIndex.get(id);
+      if (latestAtIndex === undefined || latestAtIndex.at < call.at) atIndex.set(id, call);
     };
     let finishReason: string | null = null;
     let usage: Usage | null = null;
@@ -360,10 +385,13 @@ export class OpenAIChat implements SseProtocol {
         // A delta carries an id or name only when it is the call's first, which wins.
         const id = call.id === null ? piece.id : null;
         const name = call.name === null ? piece.name : null;
-        call.id ??= id;
+        if (id !== null) {
+          call.id = id;
+          tookId(call, id);
+        }
         call.name ??= name;
         call.args += piece.args;
-        yield new ToolCallDelta({ index: parts.indexOf(call), id, name, arguments: piece.args });
+        yield new ToolCallDelta({ index: call.at, id, name, arguments: piece.args });
       }
     }
     if (finishReason === null) {
@@ -393,7 +421,7 @@ export class OpenAIChat implements SseProtocol {
     if (responseModel !== null) fields["response_model"] = responseModel;
     const providerPayload = replayRecord(this.#key, fields);
     // `length` says the calls may be cut short, so it wins; any other reason with calls is a tool call finish.
-    const reason = finishReason !== "length" && parts.some(isCall) ? "tool_calls" : finishReason;
+    const reason = finishReason !== "length" && lastCall !== undefined ? "tool_calls" : finishReason;
     yield new Finish({ reason, responseId, protocol: PROTOCOL, providerPayload });
   }
 

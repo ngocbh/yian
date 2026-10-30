@@ -1062,6 +1062,34 @@ describe("tool calls", () => {
     ]);
   });
 
+  test("interleaved calls after text: each delta names its call's part index", async () => {
+    const events = await parse([
+      chunk({ content: "Let me." }),
+      calls(wire(0, "call_a", "double", '{"value":'), wire(1, "call_b", "double", '{"value":')),
+      calls(wire(2, "call_c", "double", '{"value":'), wire(1, undefined, undefined, "4}")),
+      calls(wire(0, undefined, undefined, "3}"), wire(2, undefined, undefined, "5}")),
+      CALLS_DONE,
+    ]);
+    expect(events.filter((event) => event instanceof ToolCallDelta).map((event) => event.index)).toEqual([1, 2, 3, 2, 1, 3]);
+    expect(events.filter((event) => event instanceof PartDone).map((event) => event.part)).toEqual([
+      new TextPart("Let me."),
+      callPart("call_a", '{"value":3}'),
+      callPart("call_b", '{"value":4}'),
+      callPart("call_c", '{"value":5}'),
+    ]);
+  });
+
+  test("a delta without an index joins the last call with its id, even when an earlier call took the id later", async () => {
+    const parts = await partsOf([
+      calls(wire(0, undefined, "double", '{"value":')),
+      calls(wire(1, "call_x", "double", '{"value":')),
+      calls(wire(0, "call_x", undefined, "3}")),
+      calls(wire(undefined, "call_x", undefined, "4}")),
+      CALLS_DONE,
+    ]);
+    expect(parts).toEqual([callPart("call_x", '{"value":3}'), callPart("yian_call_1", '{"value":4}')]);
+  });
+
   test("an open call without an id takes a later delta's id", async () => {
     const events = await parse([
       calls(wire(0, undefined, "double", '{"value"')),

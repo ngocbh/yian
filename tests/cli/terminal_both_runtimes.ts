@@ -828,6 +828,21 @@ async function aFramedReadLineDrawsABoxAndAHintThenCollapsesToTheLine(): Promise
   assertRestored(input, output, exitHooks);
 }
 
+async function aFramedReadLineWithAnEditorKeepsItsBoxEmptiedUnderTheLine(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 60 });
+  const editor = new LineEditor({ columns: () => 60, hint: HINT });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  input.write("hello" + ENTER);
+  assert.deepEqual(await line, { value: "hello" });
+  // The box stays, emptied, for what draws next to repaint over; the editor holds what was entered.
+  assert.deepEqual(view().rows, ["> hello", FRAME_TOP, framed(">"), FRAME_BOTTOM, `  ${HINT}`]);
+  assert.deepEqual(editor.entered(), ["hello"]);
+  assert.equal(editor.text(), "");
+  // The line entered is on the user's gray band, across the width.
+  const band = `\x1b[48;5;237;38;5;252m\x1b[1m>\x1b[22m hello${" ".repeat(53)}\x1b[0m`;
+  assert.ok(output.text.includes(band));
+}
+
 async function aFramedReadLineFoldsALongLineInsideTheBox(): Promise<void> {
   const { input, terminal, view } = setup({ columns: 60 });
   const line = terminal.readLine("You:", { frame: true, hint: HINT });
@@ -1072,7 +1087,8 @@ async function aFramedReadLineWithAListMovesIntoItAndOpensARow(): Promise<void> 
   assert.equal(editor.focus(), null);
   input.write(DOWN + DOWN + ENTER);
   assert.deepEqual(await line, { open: "r2", draft: "hi!" });
-  assert.deepEqual(view().rows, []);
+  // The editor's box stays drawn, for what draws next to repaint over.
+  assert.deepEqual(view().rows, [...typed, "  r1  a.yaml", "» r2  b.yaml"]);
   // The editor keeps the text and the row for the next prompt.
   assert.equal(editor.focus(), 1);
   assert.equal(list.subscribed(), false);
@@ -3257,6 +3273,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,
   "a framed readLine draws a box and a hint, then collapses to the line":
     aFramedReadLineDrawsABoxAndAHintThenCollapsesToTheLine,
+  "a framed readLine with an editor keeps its box, emptied, under the line entered":
+    aFramedReadLineWithAnEditorKeepsItsBoxEmptiedUnderTheLine,
   "a framed readLine folds a long line inside the box": aFramedReadLineFoldsALongLineInsideTheBox,
   "a bracketed paste keeps its newlines in a framed readLine": aBracketedPasteKeepsItsNewlinesFramed,
   "a long paste in a framed readLine is one token, expanded on Enter":

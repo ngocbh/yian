@@ -31,12 +31,12 @@ export interface RowCursor {
  * Lay `line` out on a `columns`-wide terminal as the terminal wraps it: a character that doesn't
  * fit in the rest of a row (a wide one in the last column) starts the next row, and so does a `\n`.
  * Returns the rows it takes, the cells its last row uses, and where the character at code-point
- * offset `at` (ANSI sequences not counted) sits.
+ * offset `at` (ANSI sequences not counted; -1 for none) sits.
  */
 export function layout(
   line: string,
   columns: number,
-  at = -1,
+  at: number,
 ): { rows: number; end: number; cursor: { row: number; col: number } } {
   let row = 0;
   let col = 0;
@@ -89,7 +89,7 @@ export class LiveRows {
   /** Whether the terminal shows the cursor now. */
   #visible = true;
   /** Whether a frame that doesn't place the cursor leaves it hidden. */
-  #hidden = false;
+  hidden = false;
 
   constructor(output: LiveOutput) {
     this.#output = output;
@@ -126,7 +126,7 @@ export class LiveRows {
    * hides it now, for the caller to write.
    */
   cursorMode(visible: boolean): string {
-    this.#hidden = !visible;
+    this.hidden = !visible;
     this.#visible = visible;
     return visible ? SHOW_CURSOR : HIDE_CURSOR;
   }
@@ -153,7 +153,7 @@ export class LiveRows {
     const lost = this.#lost || (this.#width !== null && this.#width !== columns);
     this.#lost = false;
     let prev = this.#lines;
-    let heights = prev.map((line) => layout(line, columns).rows);
+    let heights = prev.map((line) => layout(line, columns, -1).rows);
     // The screen rows from the live rows' top that hold what was drawn before.
     let stale = heights.reduce((sum, rows) => sum + rows, 0);
     if (lost) {
@@ -176,7 +176,7 @@ export class LiveRows {
     // last row. A row it fills is left whole: the cursor waits in its last column, where a clear
     // would take the last character.
     const put = (line: string): number => {
-      const laid = layout(line, columns);
+      const laid = layout(line, columns, -1);
       out += line.replaceAll("\n", "\r\n") + (laid.end < columns ? `${ESC}K` : "");
       return laid.rows;
     };
@@ -221,7 +221,7 @@ export class LiveRows {
         out += `${ESC}${placed.col + 1}G`;
       }
     }
-    const show = placed !== null || !this.#hidden;
+    const show = placed !== null || !this.hidden;
     this.#lines = lines;
     this.#cursor = cursor;
     this.#width = columns;

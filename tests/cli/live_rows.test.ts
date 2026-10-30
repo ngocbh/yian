@@ -136,7 +136,7 @@ describe("after a resize", () => {
 });
 
 test("a line wider than the terminal takes the rows it wraps onto", () => {
-  expect(layout("x".repeat(25), COLUMNS)).toMatchObject({ rows: 2, end: 5 });
+  expect(layout("x".repeat(25), COLUMNS, -1)).toMatchObject({ rows: 2, end: 5 });
   const { draw, view } = setup();
   draw(["x".repeat(25), "next"]);
   draw(["x".repeat(25), "then"]);

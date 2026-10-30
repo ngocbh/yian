@@ -186,6 +186,7 @@ import {
   prepareRunStarted,
   RunState,
   replayRecords,
+  stepIndexAt,
   stepsWithSteerValues,
 } from "./runtime/state.ts";
 import { Skill } from "./skills/catalog.ts";
@@ -2359,7 +2360,7 @@ function openHostCalls(waits: WaitsState, argumentsOf: (call: Call) => JsonObjec
  */
 function stateArguments(state: RunState, call: Call): JsonObject | null {
   const steps = state.nodeSteps.get(call.nodeId) ?? [];
-  const step = steps.find((entry) => entry["kind"] === "pending" && entry["call_id"] === call.callId);
+  const step = call.pendingSeq === null ? undefined : steps[stepIndexAt(state, call.nodeId, call.pendingSeq)];
   return step === undefined ? null : pendingArguments((n) => steps[n - 1], step);
 }
 

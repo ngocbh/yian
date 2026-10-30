@@ -132,6 +132,21 @@ describe("an agent's pending step", () => {
     step(log, state, "a", reply(["c9", "lookup", {}]));
     refuse("a", pendingOf("a", 1, 0, "c1")); // an earlier reply
   });
+  test("the latest reply survives a resume, and a later reply takes its place", () => {
+    const { log, state } = started(paramFlow([], agent("a")));
+    start(log, state, "a");
+    step(log, state, "a", reply(["c1", "ask_user", { question: "q" }]));
+    commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
+    start(log, state, "a");
+    step(log, state, "a", pendingOf("a", 1, 0, "c1"));
+    step(log, state, "a", result("c1"));
+    step(log, state, "a", reply(["c2", "ask_user", { question: "q" }]));
+    expect(() => prepareNodeStep(state, "a", pendingOf("a", 1, 0, "c2"))).toThrow(
+      "an agent's pending reply must be node 'a''s latest model_call step 4, got 1",
+    );
+    step(log, state, "a", pendingOf("a", 4, 0, "c2"));
+    expect(state.waits.calls.get(agentCall("a", 4, 0))!.state).toBe("open");
+  });
 });
 
 describe("an agent's tool_result", () => {

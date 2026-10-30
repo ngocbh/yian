@@ -1590,9 +1590,8 @@ function callView(state: RunState, call: Call): CallView {
 export function callResultStep(state: RunState, callId: string): Readonly<JsonObject> | null {
   const call = state.waits.calls.get(callId);
   if (call === undefined || call.state !== "answered" || call.resultSeq === null) return null;
-  // The waits fold recorded the answering step's seq; `nodeStepSeqs` is index-aligned with `nodeSteps`.
-  const at = state.nodeStepSeqs.get(call.nodeId)?.indexOf(call.resultSeq);
-  return at === undefined || at < 0 ? null : state.nodeSteps.get(call.nodeId)![at]!;
+  // The waits fold recorded the answering step's seq.
+  return state.nodeSteps.get(call.nodeId)?.[stepIndexAt(state, call.nodeId, call.resultSeq)] ?? null;
 }
 
 /**
@@ -4515,7 +4514,9 @@ function stepInt(value: unknown): number | null {
 
 /** The `n` of `nodeId`'s latest `model_call` step, or `null` before any. */
 function latestReply(state: RunState, nodeId: string): number | null {
-  const at = (state.nodeSteps.get(nodeId) ?? []).findLastIndex((step) => step["kind"] === "model_call");
+  // The waits fold keeps the step's seq; scanning the steps for it cost O(steps) per call result.
+  const seq = state.waits._replies.get(nodeId);
+  const at = seq === undefined ? -1 : stepIndexAt(state, nodeId, seq);
   return at < 0 ? null : at + 1;
 }
 
@@ -4584,8 +4585,27 @@ function resultCall(state: RunState, nodeId: string, key: unknown): Call | undef
 
 /** The `pending` step that registered `call` on its node, or `undefined` (a take or sleep). */
 function pendingStepOf(state: RunState, call: Call): Readonly<JsonObject> | undefined {
-  const steps = state.nodeSteps.get(call.nodeId) ?? [];
-  return steps.find((step) => step["kind"] === "pending" && step["call_id"] === call.callId);
+  if (call.pendingSeq === null) return undefined;
+  return state.nodeSteps.get(call.nodeId)?.[stepIndexAt(state, call.nodeId, call.pendingSeq)];
+}
+
+/**
+ * Return the index in `nodeId`'s `nodeSteps` of the step it recorded at `seq`, or -1 when none of
+ * its steps has that seq.
+ */
+export function stepIndexAt(state: RunState, nodeId: string, seq: number): number {
+  // A node's step seqs only increase, so a binary search finds it.
+  const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
+  let low = 0;
+  let high = seqs.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >>> 1;
+    const at = seqs[mid]!;
+    if (at === seq) return mid;
+    if (at < seq) low = mid + 1;
+    else high = mid - 1;
+  }
+  return -1;
 }
 
 /**

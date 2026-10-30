@@ -879,7 +879,9 @@ export interface RunFlowOptions {
   /**
    * The per-run outer model configuration layer, taken through host intake (`{max_tokens: 1000}`
    * holds the int `1000n`). Its `api_key` goes only to the agents of its `provider`, with its
-   * `base_url`, `organization`, `project` and `headers`; none of them is recorded.
+   * `base_url`, `organization`, `project` and `headers`. The key and the header values are never
+   * recorded; `base_url`, `organization`, `project` and the header names are, on the agents that
+   * use the key. A key no agent uses is dropped with its headers.
    */
   llmConfig?: Readonly<Record<string, unknown>> | null;
   /**

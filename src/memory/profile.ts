@@ -21,7 +21,7 @@ import { resolveModelConfig, scrubCallCredentials } from "../llm_clients/connect
 import { chatModelFromConfig } from "../llm_clients/factory.ts";
 import { isSystemError } from "../platform.ts";
 import { logJson, type JsonObject as StoreObject } from "../typesys/json.ts";
-import { fromHost, isList, isRecord, type Value, writeAsJson } from "../typesys/values.ts";
+import { codePointCount, fromHost, isList, isRecord, type Value, writeAsJson } from "../typesys/values.ts";
 import {
   type JsonObject,
   type JsonValue,
@@ -94,11 +94,6 @@ function readError(stage: string, cause: unknown): MemoryOperationError {
   throw cause;
 }
 
-/** The number of code points in `text`. */
-function codePoints(text: string): number {
-  return Array.from(text).length;
-}
-
 /**
  * @internal Extract and bound the document the learner wrote between the profile tags. The
  * reply's text parts are joined with `""`; a reply without text parts reads as `""`.
@@ -123,7 +118,7 @@ export function parseReply(response: Response, currentText: string, maxChars: nu
   if (!text && currentText.trim()) {
     throw error("learn", "profile.contract", "profile learner returned an empty document");
   }
-  const length = codePoints(text);
+  const length = codePointCount(text);
   if (length > maxChars) {
     throw error(
       "learn",
@@ -549,7 +544,7 @@ export class ProfileSession implements MemorySession {
       };
       const whole = writeAsJson(item as Value);
       const encoded = kept.length === 0 ? boundedJsonMaterial(item, limit) : whole;
-      const length = codePoints(encoded);
+      const length = codePointCount(encoded);
       if (kept.length > 0 && used + length > limit) break;
       used += length;
       // A trimmed summary holds only strings, booleans and small ints, so JSON.parse reads it exactly.

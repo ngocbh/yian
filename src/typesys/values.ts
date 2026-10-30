@@ -48,6 +48,13 @@ export function jsonSafeText(text: string): string {
   return text.replace(/\p{Cs}/gu, "?");
 }
 
+/** The number of code points in `text`: a surrogate pair counts as one, a lone surrogate as one. */
+export function codePointCount(text: string): number {
+  let count = 0;
+  for (let index = 0; index < text.length; index += text.codePointAt(index)! > 0xffff ? 2 : 1) count++;
+  return count;
+}
+
 /**
  * Cut text to `YIAN_MAX_SHOWN_VALUE_CHARS` (200 by default) for a message, counting code points.
  *

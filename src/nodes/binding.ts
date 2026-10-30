@@ -492,6 +492,20 @@ function bindingWhere(name: string, path: ValuePath, label: ErrorLabel | null): 
   return path.length > 0 ? `${label} at ${renderValuePath(path)}` : label;
 }
 
+/**
+ * Name a typed binding's failure location: the binding (`bindingWhere`) and, when the check
+ * failed inside the value, ` at <valuePath>` there.
+ *
+ * `valuePath` comes from the data, so it is rendered only as `renderValuePath` renders it
+ * (keys quoted and cut). A text label already names its template path that way, so it is
+ * `<label> at <path><valuePath>`.
+ */
+function bindingValueWhere(name: string, path: ValuePath, label: ErrorLabel | null, valuePath: ValuePath): string {
+  if (valuePath.length === 0) return bindingWhere(name, path, label);
+  if (typeof label === "string") return bindingWhere(name, [...path, ...valuePath], label);
+  return `${bindingWhere(name, path, label)} at ${renderValuePath(valuePath)}`;
+}
+
 /** A source part's value, its route, and whether it evaluated a `${...}` span. */
 type SourceRead = [value: unknown, route: ValueRoute | null, evaluated: boolean];
 
@@ -577,7 +591,8 @@ class SourceReader {
         try {
           // A value that is not a yian value fails as such, not as a type mismatch.
           rejectInvalidBinding(value, where, node.origin);
-          value = checkBindingType(where, node, node.contract, value);
+          const at = (valuePath: ValuePath) => bindingValueWhere(name, path, label, valuePath);
+          value = checkBindingType(at, node, node.contract, value);
         } catch (error) {
           if (error instanceof BindingError && error.origin === null) {
             error.origin = template.originAt(path) ?? origin;
@@ -721,7 +736,8 @@ function failureCodeOf(error: ExpressionError): BindingFailureCode {
  * becomes its record. Nothing else converts (an int declared `float` stays an int), and a string
  * never satisfies a non-string declared type.
  *
- * @param where Names the binding in the failure message, e.g. `binding 'p'`.
+ * @param where Names the binding and the rejected place inside its value (the error's path) in
+ *   the failure message, e.g. `binding 'p' at [1].mode`.
  * @param binding The typed binding, whose origin is the fallback location.
  * @param contract The binding's declared contract.
  * @param value The value the binding's source resolved to, already checked to be a yian value.
@@ -729,12 +745,17 @@ function failureCodeOf(error: ExpressionError): BindingFailureCode {
  * @throws BindingError with `failureCode` `binding.type` when the value violates the declared
  *   type, located at the nearest contract origin for the rejected path, else the binding's origin.
  */
-function checkBindingType(where: string, binding: Binding, contract: ValueContract, value: unknown): Value {
+function checkBindingType(
+  where: (valuePath: ValuePath) => string,
+  binding: Binding,
+  contract: ValueContract,
+  value: unknown,
+): Value {
   try {
     buildValueAs(contract.type, value);
   } catch (error) {
     if (error instanceof TypeCheckError) {
-      throw new BindingError(`${where}: ${error.message}`, {
+      throw new BindingError(`${where(error.path)}: ${error.message}`, {
         failureCode: "binding.type",
         origin: contract.origins.at(error.path) ?? binding.origin,
         cause: error,
@@ -850,7 +871,12 @@ export function bindParams(
       });
       rejectInvalidBinding(value, inputWhere, sourceOrigin(source));
       if (present && source instanceof Binding && source.contract !== null) {
-        value = checkBindingType(bindingWhere(p.name, [], label), source, source.contract, value);
+        value = checkBindingType(
+          (valuePath) => bindingValueWhere(p.name, [], label, valuePath),
+          source,
+          source.contract,
+          value,
+        );
       }
       if (value === null) {
         // Only an omitted input fills its declared default or fails when required: a present
@@ -883,7 +909,8 @@ export function bindParams(
           checked = buildValueAs(p.contract.type, value);
         } catch (error) {
           if (!(error instanceof TypeCheckError)) throw error;
-          throw new BindingError(`${inputWhere}: ${error.message}`, {
+          const where = error.path.length > 0 ? `${inputWhere} at ${renderValuePath(error.path)}` : inputWhere;
+          throw new BindingError(`${where}: ${error.message}`, {
             failureCode: usedDefault ? "binding.evaluate" : "contract.input",
             origin: usedDefault ? (p.defaultOrigin ?? p.origin) : (p.contract.origins.at(error.path) ?? p.origin),
             cause: error,

@@ -14,6 +14,14 @@ import { drive, FuncNode } from "../helpers/run_state_fixtures.ts";
 
 const START_ID = "__start__";
 const INT = new ValueContract(Type.scalar(ValueKind.INTEGER));
+const N_RECORD = new Type({
+  kind: ValueKind.OBJECT,
+  fields: new Map([["n", Type.scalar(ValueKind.INTEGER)]]),
+  required: new Set(["n"]),
+});
+const RECORD = new ValueContract(N_RECORD);
+const ITEMS = new ValueContract(new Type({ kind: ValueKind.LIST_OBJECT, element: N_RECORD }));
+const BAD_ITEMS = { items: [{ n: 1n }, { n: "x" }] };
 
 /** Return a pool whose flow input holds `inputs`. */
 function poolOf(inputs: Record<string, unknown>): VariablePool {
@@ -103,6 +111,51 @@ const CASES: Case[] = [
     "input 'p': \"x\" does not match declared type int",
     "contract.input",
   ],
+  [
+    "typed-binding-at-path",
+    new Binding("${input.items}", { contract: ITEMS }),
+    BAD_ITEMS,
+    null,
+    'flow output at [1].n: "x" does not match declared type int',
+    "binding 'p' at [1].n: \"x\" does not match declared type int",
+    "binding.type",
+  ],
+  [
+    "nested-typed-binding-at-path",
+    new ValueTemplate({ a: new Binding("${input.items}", { contract: ITEMS }) }),
+    BAD_ITEMS,
+    null,
+    'flow output at a[1].n: "x" does not match declared type int',
+    "binding 'p.a' at [1].n: \"x\" does not match declared type int",
+    "binding.type",
+  ],
+  [
+    "typed-binding-unknown-key",
+    new Binding("${input.r}", { contract: RECORD }),
+    { r: { n: 1n, "a.b": 1n } },
+    null,
+    'flow output at ["a.b"]: record has unknown fields: ["a.b"]',
+    "binding 'p' at [\"a.b\"]: record has unknown fields: [\"a.b\"]",
+    "binding.type",
+  ],
+  [
+    "contract-input-at-path",
+    "${input.items}",
+    BAD_ITEMS,
+    new Parameter("p", { contract: ITEMS }),
+    'flow output at [1].n: "x" does not match declared type int',
+    "input 'p' at [1].n: \"x\" does not match declared type int",
+    "contract.input",
+  ],
+  [
+    "contract-input-missing-field",
+    "${input.r}",
+    { r: {} },
+    new Parameter("p", { contract: RECORD }),
+    'flow output at n: record missing required fields: ["n"]',
+    "input 'p' at n: record missing required fields: [\"n\"]",
+    "contract.input",
+  ],
 ];
 
 test.each(CASES)("a label replaces the param name: %s", (_id, source, inputs, param, labeled, _unlabeled, code) => {
@@ -149,6 +202,23 @@ test("a function label names a failing template leaf by its path", () => {
   expect(error).toBeInstanceOf(BindingError);
   const failure = error as BindingError;
   expect([failure.message, failure.failureCode]).toEqual(["field a.b: division by zero: 1 / 0", "binding.evaluate"]);
+});
+
+test("a function label names a typed binding's path, then the failing place in its value", () => {
+  const source = new ValueTemplate({ a: new Binding("${input.items}", { contract: ITEMS }) });
+  let error: unknown;
+  try {
+    resolveSource(source, poolOf(BAD_ITEMS), { name: "p", label: (path) => `field ${path.join(".")}` });
+  } catch (caught) {
+    error = caught;
+  }
+
+  expect(error).toBeInstanceOf(BindingError);
+  const failure = error as BindingError;
+  expect([failure.message, failure.failureCode]).toEqual([
+    'field a at [1].n: "x" does not match declared type int',
+    "binding.type",
+  ]);
 });
 
 test("eval node uses the node binding labels", async () => {

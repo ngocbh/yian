@@ -744,10 +744,9 @@ output: \${hi.output}
         callReply(["ask_user", { question: "Here is the contract. Does it look right?" }, "c1"]),
         textReply("Confirmed."),
         textReply(JSON.stringify(contract)),
-        textReply("Drafted."),
-        textReply(JSON.stringify({ text: "id: greet\nnodes: [\n" })),
-        textReply("Fixed."),
-        textReply(JSON.stringify({ text: GREET })),
+        textReply("id: greet\nnodes: [\n"),
+        // A fenced reply is taken from inside its fence.
+        textReply(`Here is the fixed flow:\n\n\`\`\`yaml\n${GREET}\`\`\`\n`),
         textReply("Reviewed."),
         textReply(JSON.stringify({ findings: [finding] })),
         callReply(["start_flow", draftArgs, "t1"]),

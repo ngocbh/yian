@@ -435,6 +435,45 @@ describe("yian chat", () => {
   );
 
   test(
+    "a chat keeps the terminal raw between turns until the inbox closes",
+    async () => {
+      const { io, stdin, stdout } = chatIo({ tty: true });
+      stdin.write("hi" + ENTER + "there" + ENTER + "/exit" + ENTER);
+      const { code } = await runChat(flowFile(ECHO), io);
+      expect(code).toBe(0);
+      expect(stdout()).toBe("echo: hi\necho: there\necho: \n");
+      // Cooked once as /exit closes the inbox, then once more as the closing turn's watch ends.
+      expect(stdin.rawCalls.filter((mode) => !mode).length).toBe(2);
+      expect(stdin.rawCalls.at(-1)).toBe(false);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a chat that exits while its run waits on a deadline waits on a cooked terminal",
+    async () => {
+      const { scheduler } = heldScheduler();
+      const { io, stdin, stderr } = chatIo({ tty: true });
+      stdin.write("hi" + ENTER + "/exit" + ENTER);
+      const chatting = runChat(flowFile(NAP), io, {}, { scheduler });
+      const log = join(tmp, "run.jsonl");
+      await until(
+        () =>
+          existsSync(log) &&
+          records(log).some((record) => record instanceof InboxClosedRecord) &&
+          records(log).at(-1) instanceof RunWaitingRecord,
+      );
+      // Cooked, so Ctrl-C raises SIGINT, which cancels the run during the wait.
+      await until(() => !stdin.isRaw);
+      signals.emit("SIGINT");
+      expect((await chatting).code).toBe(130);
+      expect(stderr()).toContain("chat cancelled");
+      expect(stdin.isRaw).toBe(false);
+    },
+    TIMEOUT,
+  );
+
+  test(
     "an ask prompts at the terminal while the run moves",
     async () => {
       const { io, stdin, stdout, stderr } = chatIo({ tty: true });

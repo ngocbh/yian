@@ -334,9 +334,10 @@ function inboxClosed(log: string, inbox: string): boolean {
  * back in the prompt (`(withdrew N messages; back in the prompt)`; after `/exit` it prints them),
  * then stops the turn (`interrupt`; `(stopping the reply)` when a Stop is recorded): a running
  * reply is cut, and during a sleep or an approval the reply after it stops before its first model
- * call. At the take Esc does nothing; it never cancels. While a turn runs on a terminal, the
- * input is raw, so Ctrl-C arrives as a key with the same rule, Ctrl-Z and Ctrl-\ raise no signal,
- * and other keys are kept for the next prompt (unless the box stays up, below). SIGTERM, SIGHUP or
+ * call. At the take Esc does nothing; it never cancels. On a terminal the input stays raw from
+ * the first turn until the inbox closes, between turns too, so no key typed ahead is lost: Ctrl-C
+ * arrives as a key with the same rule, Ctrl-Z and Ctrl-\ raise no signal, and other keys are
+ * kept, in order, for the next prompt (unless the box stays up, below). SIGTERM, SIGHUP or
  * `io.stop` stops the run and leaves its log (`chat stopped; the run is in <log>` and the
  * `yian run --resume <log>` that continues it, exit 130), as does Ctrl-C at an `ask` prompt,
  * which ignores Esc. While the prompt is up, the run is advanced
@@ -353,7 +354,8 @@ function inboxClosed(log: string, inbox: string): boolean {
  * hint. On a terminal the framed box then stays up while a turn runs, under the spinner, holding
  * what was typed: Enter there sends the line to the inbox at once (an agent reading it as its
  * steer inbox reads it before its next model call; `/exit` or `/quit` closes the inbox, a blank
- * line is not sent), and the keys are kept for no later prompt. Ctrl-C and Esc keep their
+ * line is not sent), and the keys are kept for no later prompt: those typed before the turn
+ * started go to the box first, in order. Ctrl-C and Esc keep their
  * meanings there; a prompt the run shows (an ask, an approval) takes the terminal from the box,
  * which comes back after it. A line sent once the engine stopped moves the run again, as a child
  * event does. A long paste is a token in the box (`LineEditor`): the inbox gets the text it
@@ -454,6 +456,8 @@ export async function inboxChat(
   let lineSending: Promise<void> | null = null;
   // Set while a turn ends: the box sends no more lines, and keys typed into it wait for the prompt.
   let ending = false;
+  // Ends the terminal's raw hold between turns, taken while lines can still be typed.
+  let releaseRaw = (): void => {};
   const move = deps.advance ?? advance;
   const deliver = deps.send ?? send;
   const view = host.view ?? null;
@@ -693,6 +697,7 @@ export async function inboxChat(
       if (exit) {
         exiting = true;
         view?.input(null);
+        releaseRaw();
       }
       else pressedAt = null;
       liveSends = liveSends
@@ -826,6 +831,10 @@ export async function inboxChat(
     };
     const advanceRun = () => settle(() => move({ log: path, checkLlmConfigs, ...shared }));
     const moveOn = () => inTurn(advanceRun);
+    // Raw between turns too: a cooked tty drops what is typed past its queue (about 2 KB on macOS)
+    // while the flow replies. Released once the inbox closes, so Ctrl-C raises SIGINT again while
+    // the chat waits for a deadline.
+    if (!closed) releaseRaw = terminal.holdRaw();
     let result: RunResult = await inTurn(() =>
       settle(() =>
         resumed === null
@@ -960,6 +969,7 @@ export async function inboxChat(
       // A run that ended under the chat (a cancel from outside) refuses the line or the close as
       // `ended`; the move after it then reads how it ended, and the loop stops.
       if ("eof" in read || EXIT_LINES.has(read.value.trim())) {
+        releaseRaw();
         // No turn comes to send them in: they are printed instead.
         await flusher?.printLeft();
         try {
@@ -1006,6 +1016,8 @@ export async function inboxChat(
         result = moved;
       }
     }
+    // The notes below go out on the terminal as it was.
+    releaseRaw();
     // A cancel that lost to the run's end is refused; its other failures are the chat's.
     if (cancelling !== null) await cancelling;
     if (cancelled || result.status === "cancelled") {
@@ -1019,6 +1031,7 @@ export async function inboxChat(
     await renderRunError(result, flow, options.engineTrace, io.stderr, io.env);
     return 1;
   } catch (error) {
+    releaseRaw();
     if (error instanceof HostStop || (error instanceof TerminalStopped && error.reason === "eof")) {
       await note(log === null ? "chat cancelled\n" : stoppedText(log, inbox));
       return error instanceof HostStop ? 130 : 1;
@@ -1033,6 +1046,7 @@ export async function inboxChat(
     await writeEngineTrace(error, options.engineTrace, io);
     return 1;
   } finally {
+    releaseRaw();
     await interrupting;
     flusher?.dispose();
     // Pushed after /exit, or held when the run was cancelled: printed, as /exit prints them.

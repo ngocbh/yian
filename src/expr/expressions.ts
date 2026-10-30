@@ -1851,15 +1851,14 @@ function isinstanceTypeName(callSuffix: Tree): string {
  */
 export function isinstanceTypeNames(tree: ExprNode): string[] {
   if (!(tree instanceof Tree)) return [];
-  const names: string[] = [];
+  const names = new Set<string>();
   for (const node of iterSubtreesTopdown(tree)) {
     if (node.data !== "refcall" || String(node.children[0]) !== ISINSTANCE) continue;
     const callSuffix = callSuffixOf(node);
     if (callSuffix === undefined) continue;
-    const name = isinstanceTypeName(callSuffix);
-    if (!names.includes(name)) names.push(name);
+    names.add(isinstanceTypeName(callSuffix));
   }
-  return names;
+  return [...names];
 }
 
 /**
@@ -1876,13 +1875,13 @@ export function isinstanceTypeNames(tree: ExprNode): string[] {
  */
 export function constructorNames(tree: ExprNode): string[] {
   if (!(tree instanceof Tree)) return [];
-  const names: string[] = [];
+  const names = new Set<string>();
   for (const node of iterSubtreesTopdown(tree)) {
     if (node.data !== "refcall" || callSuffixOf(node) === undefined) continue;
     const name = String(node.children[0]);
-    if (name !== ISINSTANCE && !TEMPLATE_FNS.has(name) && !names.includes(name)) names.push(name);
+    if (name !== ISINSTANCE && !TEMPLATE_FNS.has(name)) names.add(name);
   }
-  return names;
+  return [...names];
 }
 
 /**

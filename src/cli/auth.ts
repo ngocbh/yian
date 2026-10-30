@@ -955,7 +955,7 @@ export async function configCheck(command: ParsedArgs, io: CliIo): Promise<numbe
   } else if (errors.length === 0) {
     await io.stdout.write("ok\n");
   } else {
-    for (const { field, message } of errors) await io.stderr.write(`${field ? `${field}: ${message}` : message}\n`);
+    await io.stderr.write(errors.map(({ field, message }) => `${field ? `${field}: ${message}` : message}\n`).join(""));
   }
   return errors.length === 0 ? 0 : 1;
 }
@@ -1111,6 +1111,7 @@ export async function models(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}
   }
   if (json) await printJson({ models: listed === null ? null : [...listed] }, io.stdout);
   else if (listed === null) await io.stderr.write(`${provider} has no model listing\n`);
-  else for (const model of listed) await io.stdout.write(`${forTerminal(model, io.stdout)}\n`);
+  // One write for the whole listing: a write per id costs a round trip each on long lists.
+  else if (listed.length > 0) await io.stdout.write(listed.map((model) => `${forTerminal(model, io.stdout)}\n`).join(""));
   return 0;
 }

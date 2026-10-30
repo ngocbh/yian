@@ -65,7 +65,7 @@ afterEach(() => {
 function sink() {
   const chunks: string[] = [];
   const out: Writer = { write: async (text) => void chunks.push(text) };
-  return { out, text: () => chunks.join("") };
+  return { out, text: () => chunks.join(""), writes: () => chunks.length };
 }
 
 /**
@@ -87,7 +87,7 @@ function fakeIo(
     stderrStream: new PassThrough(),
     env: (name) => (Object.hasOwn(env, name) ? env[name] : undefined),
   };
-  return { io, out: stdout.text, err: stderr.text };
+  return { io, out: stdout.text, err: stderr.text, outWrites: stdout.writes, errWrites: stderr.writes };
 }
 
 /** The `ParsedArgs` of a command with no positionals, `--json` as given. */
@@ -236,6 +236,13 @@ describe("configCheck", () => {
     });
   });
 
+  test("text writes every error line at once", async () => {
+    const io = fakeIo({ stdin: '{"provider": "openai", "openai": {"temperature": "hot"}, "x": 1}' });
+    const result = await run(configCheck, jsonArgs(false), io);
+    expect(result.err).toBe(`openai.temperature: Input should be a valid number\n${EXTRA_FIELD}\n`);
+    expect(io.errWrites()).toBe(1);
+  });
+
   test("JSON prints ok and the errors", async () => {
     const valid = await run(configCheck, jsonArgs(true), fakeIo({ stdin: '{"provider": "openai"}' }));
     expect(valid.code).toBe(0);
@@ -342,6 +349,21 @@ describe("models --provider", () => {
       });
     return { urls, listing };
   }
+
+  test("text writes every listed id at once, one per line", async () => {
+    const fake = fakeListModels(["m-c", "m-a", "m-b"]);
+    const io = fakeIo({ stdin: "k" });
+    const result = await run(models, modelsArgs({ provider: "openrouter" }), io, fake);
+    expect(result).toEqual({ code: 0, out: "m-c\nm-a\nm-b\n", err: "" });
+    expect(io.outWrites()).toBe(1);
+  });
+
+  test("text writes nothing for an empty listing", async () => {
+    const io = fakeIo({ stdin: "k" });
+    const result = await run(models, modelsArgs({ provider: "openrouter" }), io, fakeListModels([]));
+    expect(result).toEqual({ code: 0, out: "", err: "" });
+    expect(io.outWrites()).toBe(0);
+  });
 
   test("--timeout past the safe milliseconds lists", async () => {
     const listing: AuthDeps["listModels"] = (provider, options) =>

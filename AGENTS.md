@@ -25,6 +25,7 @@ Read before you change code:
   pure nodes, a kind-blind engine, one-way imports, a closed list of failure codes.
 - Put a new external dependency behind a small injected function. Runtime-specific APIs go in
   `src/platform.ts`, and environment reads in `src/defaults.ts`.
+- Keep the docs up to date: update them when behavior changes. Keep them concise and direct.
 - A change to flow syntax also updates the `composing-agents` skill in `.claude/skills/`, in the
   same pull request as its docs page. A change to the docs, the skill or `src/cli/flows/` also
   regenerates the bundle `yian chat` carries (`YIAN_UPDATE_BUNDLE=1 bun test tests/repo/bundled.test.ts`).

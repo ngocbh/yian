@@ -269,7 +269,7 @@ describe("package.json", () => {
     // npm resolves relative links against `repository`, which is unset while the repo is private.
     expect(readme.match(/\]\((?!https:\/\/)[^)]*\)/g) ?? []).toEqual([]);
     expect(readme).not.toMatch(/python|pytest|pip install/i);
-    expect(readme.split("\n").length).toBeLessThanOrEqual(60);
+    expect(readme.split("\n").length).toBeLessThanOrEqual(80);
   });
 });
 

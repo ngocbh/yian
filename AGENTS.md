@@ -25,6 +25,11 @@ Read before you change code:
   pure nodes, a kind-blind engine, one-way imports, a closed list of failure codes.
 - Put a new external dependency behind a small injected function. Runtime-specific APIs go in
   `src/platform.ts`, and environment reads in `src/defaults.ts`.
+- Change the docs only when the engine's behavior changes: flow syntax or semantics, the CLI, or
+  the host API. A fix that makes yian do what the docs already say, a refactor, a test or an
+  internal change needs no docs edit.
+- Keep docs short and direct: say what a reader needs, once. No restating, no background, no
+  narrating the change.
 - A change to flow syntax also updates the `composing-agents` skill in `.claude/skills/`, in the
   same pull request as its docs page. A change to the docs, the skill or `src/cli/flows/` also
   regenerates the bundle `yian chat` carries (`YIAN_UPDATE_BUNDLE=1 bun test tests/repo/bundled.test.ts`).

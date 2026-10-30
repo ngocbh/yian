@@ -289,6 +289,17 @@ export function readFlow(path: string, real: string): string {
   }
 }
 
+/**
+ * @internal The real path of the flow file `path` in `root`, as `confine` gives it.
+ *
+ * @throws {ToolRefused} As `confine` does, and when it isn't a .yaml or .yml file.
+ */
+export function confineFlow(root: string, path: string): string {
+  const real = confine(root, path);
+  if (!isFlowFile(real)) throw new ToolRefused(`${path} is not a .yaml or .yml file`);
+  return real;
+}
+
 /** @internal `diag` as `yian check` writes it, without colour. */
 export async function renderedDiagnostic(diag: Diagnostic, env: Env): Promise<string> {
   let text = "";
@@ -365,6 +376,20 @@ export async function checkFocus(path: string, env: Env): Promise<{ text: string
   return { text: focusText(text), check, inbox };
 }
 
+/**
+ * @internal Refuse `content` given for the flow file `path` (at `real`) unless the path names a
+ * YAML file and the content is at most `READ_FLOW_BYTES`, as a file the chat's tools read is.
+ *
+ * @throws {ToolRefused} When it is refused.
+ */
+export function refuseContent(path: string, real: string, content: string): void {
+  if (!isFlowFile(real)) throw new ToolRefused(`${path} is not a .yaml or .yml file`);
+  if (Buffer.byteLength(content) > READ_FLOW_BYTES) {
+    const most = `${READ_FLOW_BYTES} bytes, the most the chat's file tools take`;
+    throw new ToolRefused(`the content is over ${most}`);
+  }
+}
+
 /** The approval answers `write_flow` offers: the first writes, the last (Ctrl-C's) doesn't. */
 const WRITE_CHOICES = ["Approve", "Reject"] as const;
 
@@ -409,10 +434,7 @@ function sameSnapshot(a: Snapshot, b: Snapshot): boolean {
 async function writeFlow(host: ChatToolHost, path: string, content: string, signal: AbortSignal): Promise<string> {
   const root = resolveRoot(host.root);
   const real = confine(root, path);
-  if (!isFlowFile(real)) throw new ToolRefused(`${path} is not a .yaml or .yml file`);
-  if (Buffer.byteLength(content) > READ_FLOW_BYTES) {
-    throw new ToolRefused(`the content is over ${READ_FLOW_BYTES} bytes, the most write_flow writes`);
-  }
+  refuseContent(path, real, content);
   const shown = slashed(relative(root, real));
   // Taken first, so a file write_flow can't replace is refused before the content is checked.
   const before = snapshot(path, real);
@@ -571,12 +593,18 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
       description:
         "Check that a flow file in the chat's folder loads, running nothing: ok with its name and inputs, " +
         "or invalid with the error. Flows it imports (uses:) and code files it references must also be " +
-        "inside the chat's folder; system.paths isn't supported.",
-      parameters: stringArguments(["path", "The flow file, relative to the chat's folder.", true]),
+        "inside the chat's folder; system.paths isn't supported. With content, checks that " +
+        "text as the file at path would be, without writing it: a draft.",
+      parameters: stringArguments(
+        ["path", "The flow file, relative to the chat's folder.", true],
+        ["content", "A draft's whole text, checked in place of the file's.", false],
+      ),
       execute: async (args) => {
         const path = stringArg(args, "path");
         const real = confine(root, path);
-        return checkText(resolveRoot(root), real, readFlow(path, real), host.env);
+        const content = optionalStringArg(args, "content");
+        if (content !== undefined) refuseContent(path, real, content);
+        return checkText(resolveRoot(root), real, content ?? readFlow(path, real), host.env);
       },
     }),
     tool({

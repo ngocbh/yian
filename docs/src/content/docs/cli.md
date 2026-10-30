@@ -329,15 +329,17 @@ question), the view says so in its last line, and Esc takes you to it.
 |---|---|
 | `list_flows` | Lists the `.yaml` and `.yml` files under the folder, skipping `node_modules` and dot-folders |
 | `read_flow` | Reads a flow file, up to 256 KiB |
-| `check_flow` | Loads a flow without running it, as `yian check` does, and lists its inputs |
+| `check_flow` | Loads a flow without running it, as `yian check` does, and lists its inputs; or checks a draft's text as that file without writing it |
 | `write_flow` | Writes a flow file that loads, once you approve it |
 | `read_docs` | Reads a page of these docs |
-| `start_flow` | Starts a flow in the background, once you approve it |
+| `start_flow` | Starts a flow in the background, or a draft's text as that file, once you approve it |
 | `flow_status`, `wait_flow` | Read where a flow it started stands, now or once it changes |
 | `answer_flow` | Answers a question a flow it started asks, with your answer |
 | `message_flow`, `close_inbox` | Send a message to, or close, an inbox input of a flow it started |
 | `stop_flow` | Cancels a flow it started |
 | `report_issue` | Helps you report something yian did wrong (see [Reporting a problem](#reporting-a-problem)) |
+| `author_flow` | Builds a new flow with you, or reworks one (see [Building and reviewing flows](#building-and-reviewing-flows)) |
+| `review_flow` | Reviews a flow for security, reliability, cost and clarity |
 
 It also has the `composing-agents` skill, yian's guide to writing flows. Every path
 stays inside the folder the chat started in: a path that leaves it, through `..`, an absolute path
@@ -351,11 +353,13 @@ Before a write or a start, the chat shows a card on the terminal and waits for y
 - `write_flow` shows the change as a diff (on a terminal, framed, with line numbers, removed lines
   red and added lines green). Approve writes the file; Reject leaves it alone.
 - `start_flow` shows the inputs and what the flow can do: its node kinds, the tools and skills its
-  agents get, and the code files it runs. Approve starts it; "Approve this flow for this chat"
-  also starts it again later without asking, until the flow or its code files change.
+  agents get, and the code files it runs; for a draft not yet written, its whole text too. Approve
+  starts it; "Approve this flow for this chat" also starts it again later without asking, until
+  the flow or its code files change.
 
-Off a terminal nothing is approved, and the assistant is told so. `report_issue` starts its flow
-without a card: that flow's own card comes before anything leaves your machine.
+Off a terminal nothing is approved, and the assistant is told so. `report_issue`, `author_flow`
+and `review_flow` start their flows without a card: those flows only read and check until they
+write, run or file something, and each of those asks on its own card first.
 
 ### Flows the assistant runs
 
@@ -376,6 +380,45 @@ terminal: its question goes through the assistant.
 After Ctrl-C or Esc, news from the flows waits for your next line and reaches the assistant just
 before it. Each waiting event shows above the prompt as
 `(child event waiting; sent with your next message: ...)`.
+
+### Building and reviewing flows
+
+For a new flow or a major change, the assistant uses `author_flow`, which starts a flow bundled
+with yian that goes the same careful way each time; a small edit it makes with `write_flow`
+directly. The flow asks you its questions through the assistant:
+
+1. **Goal**: what the flow is for, who runs it and how often, its inputs and output, and what
+   "done" looks like.
+2. **Contract**: the typed inputs and output, the nodes in outline, sample inputs to try it on,
+   and its path, which you confirm before any YAML is written. A path that isn't a `.yaml` or
+   `.yml` file inside the folder is asked for again, three times at most.
+3. **Draft**: written with the `composing-agents` skill and these docs.
+4. **Check**: `check_flow` until the draft loads, fixing load errors itself, three tries at most.
+5. **Review**: `review_flow`, below, for a draft that loads.
+6. **Try**: runs the draft on the sample inputs, once you approve the run's card (titled "a draft,
+   for author_flow"). A draft isn't tried when the review found a high-severity security problem,
+   or when it takes an inbox input; you're told why. A try still going when `author_flow` ends is
+   cancelled.
+7. **Refine**: says what it found and suggests improvements; you choose to refine it again (five
+   rounds at most), write it, or stop.
+8. **Write**: `write_flow`, with its usual card.
+
+`review_flow` starts another bundled flow, on its own or from `author_flow`. Its output is a list
+of findings, the most severe first, each with a severity (`high`, `medium` or `low`), an area, the
+node, the problem and a fix:
+
+| Area | It looks at |
+|---|---|
+| security | `code` nodes; the shell, file and network tools granted; untrusted input reaching a prompt or code; secrets in the YAML; agents granted more tools than they need |
+| reliability | What happens when a model, tool or code node fails; timeouts, retries and unbounded loops |
+| cost | Model calls inside loops, and prompts heavier than the step needs |
+| clarity | Names, descriptions and types |
+
+`author_flow` gets `check_flow`, `read_flow`, `read_docs`, `write_flow`, `start_flow` and
+`wait_flow`, and `review_flow` only `read_flow` and `read_docs`, held to the chat's folder and its
+cards as the assistant is; no other flow, a try included, gets them. Each of their agents has a
+cap on its turns. A flow `author_flow` tries runs as any flow the assistant starts, so its questions and
+its output reach you through the assistant.
 
 ### Reporting a problem
 

@@ -118,9 +118,41 @@ function spacedJson(value: unknown): string {
   return `{${keys.map((key) => `${spacedJson(key)}: ${spacedJson(object[key])}`).join(", ")}}`;
 }
 
-/** Return the UTF-8 text of `source` exactly: line endings and a BOM kept. */
+/**
+ * Return a Node system error for `path`, whose `stats` show something other than a regular file:
+ * `EISDIR` for a directory, `EINVAL` otherwise.
+ */
+function notRegularFile(path: string, stats: fs.Stats, syscall: string): Error {
+  const code = stats.isDirectory() ? "EISDIR" : "EINVAL";
+  return Object.assign(new Error(`not a regular file: ${path}`), { code, syscall });
+}
+
+/**
+ * Open the regular file at `path` with `flags` and return its descriptor.
+ *
+ * @throws Error a Node system error when the open fails or `path` isn't a regular file.
+ */
+function openRegular(path: string, flags: number, mode?: number): number {
+  // Non-blocking, so a FIFO's open returns (or fails ENXIO for writing) instead of blocking the
+  // thread until a peer opens it; regular files ignore the flag. Both flags are missing on Windows.
+  const { O_NOCTTY, O_NONBLOCK } = fs.constants;
+  const fd = fs.openSync(path, flags | (O_NONBLOCK ?? 0) | (O_NOCTTY ?? 0), mode);
+  // Checked on the open descriptor, so a swap after a path check can't slip through.
+  const stats = fs.fstatSync(fd);
+  if (stats.isFile()) return fd;
+  fs.closeSync(fd);
+  throw notRegularFile(path, stats, "open");
+}
+
+/** Return the UTF-8 text of the regular file `source` exactly: line endings and a BOM kept. */
 function readExact(source: string): string {
-  const bytes = fs.readFileSync(source);
+  const fd = openRegular(source, fs.constants.O_RDONLY);
+  let bytes: Buffer;
+  try {
+    bytes = fs.readFileSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
   try {
     // Fatal, so invalid bytes fail instead of turning into U+FFFD and a version of other bytes.
     return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
@@ -199,7 +231,7 @@ export class FileMarkdownStore implements MarkdownStore {
    * @throws TypeError when `createParent` isn't a boolean.
    * @throws MemoryOperationError `storage.path` when `path` isn't a local file path: not a
    *   string, empty, `:memory:`, a `file:` URI, or text with a NUL or a lone surrogate. A
-   *   directory is detected on first use.
+   *   directory, FIFO or other path that isn't a regular file fails on first use.
    */
   constructor(path: unknown, { createParent = false }: { createParent?: boolean } = {}) {
     if (typeof createParent !== "boolean") throw new TypeError("create_parent must be a bool");
@@ -273,22 +305,24 @@ export class FileMarkdownStore implements MarkdownStore {
     return this.#locked(signal, () => {
       const current = markdownVersion(this.#current());
       if (current !== baseVersion) throw new MarkdownVersionMismatch(baseVersion, current);
-      this.#keep(newVersion, text);
-      replace(this.path, text);
+      // Opened before anything is written, so a log that can't be opened leaves no replaced
+      // document without its log line.
       const { O_APPEND, O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
       let created = true;
       let fd: number;
       try {
         // Private like the document: provenance can hold the learner's feedback.
-        fd = fs.openSync(this.#writes, O_CREAT | O_EXCL | O_WRONLY | O_APPEND, 0o600);
+        fd = openRegular(this.#writes, O_CREAT | O_EXCL | O_WRONLY | O_APPEND, 0o600);
       } catch (error) {
         if (!isSystemError(error) || error.code !== "EEXIST") throw error;
         created = false;
-        fd = fs.openSync(this.#writes, O_WRONLY | O_APPEND);
+        fd = openRegular(this.#writes, O_WRONLY | O_APPEND);
       }
       try {
         // The open's mode is masked by the umask; fchmod isn't.
         if (created) fs.fchmodSync(fd, 0o600);
+        this.#keep(newVersion, text);
+        replace(this.path, text);
         fs.appendFileSync(fd, line);
         fs.fsyncSync(fd);
       } finally {
@@ -350,12 +384,20 @@ export class FileMarkdownStore implements MarkdownStore {
     return VERSION.test(version) ? join(this.#versions, `${version.slice("sha256:".length)}.md`) : null;
   }
 
-  /** Store one content-addressed copy unless it already exists. */
+  /**
+   * Store one content-addressed copy unless it already exists.
+   *
+   * @throws Error a Node system error when the copy's path holds something other than a file.
+   */
   #keep(version: string, text: string): void {
     const kept = this.#versionPath(version);
-    if (kept !== null && statOrNull(kept) === null) {
+    if (kept === null) return;
+    const stats = statOrNull(kept);
+    if (stats === null) {
       makeDirectory(this.#versions);
       replace(kept, text);
+    } else if (!stats.isFile()) {
+      throw notRegularFile(kept, stats, "stat");
     }
   }
 }

@@ -21,6 +21,7 @@ import {
 } from "../../src/llm/events.ts";
 import { SSEEvent } from "../../src/llm/framing.ts";
 import {
+  isPlainObject,
   Message,
   type Part,
   readReplayRecord,
@@ -849,7 +850,116 @@ describe("terminal matching", () => {
     const { matches } = matchTerminal(output, new Set(), new Set([2]), ids([[2, ["a"]]]));
     expect([...matches]).toEqual([[2, output[0]!]]);
   });
+
+  // Each bound is a few times what the match takes and well under what a scan per index takes.
+  test("8000 indexes matched by id take linear time", () => {
+    const output = Array.from({ length: 8000 }, (_, n) => call(`fc_${n}`, `call_${n}`));
+    const streamed = new Set(output.keys());
+    const start = performance.now();
+    const { matches, rest } = matchTerminal(output, streamed, new Set(), ids([...streamed].map((n) => [n, [`fc_${n}`]])));
+    expect(performance.now() - start).toBeLessThan(200);
+    expect(matches.size).toBe(8000);
+    expect(matches.get(7999)).toBe(output[7999]!);
+    expect(rest).toEqual([]);
+  });
+
+  test("16000 unfinished indexes without ids past the output take the items left in linear time", () => {
+    const output = Array.from({ length: 16000 }, (_, n) => msg(`m_${n}`));
+    const started = new Set(Array.from({ length: 16000 }, (_, n) => n + 16000));
+    const start = performance.now();
+    const { matches, rest } = matchTerminal(output, started, new Set(), ids([]));
+    expect(performance.now() - start).toBeLessThan(200);
+    expect(matches.size).toBe(16000);
+    expect(matches.get(31999)).toBe(output[15999]!);
+    expect(rest).toEqual([]);
+  });
+
+  test("random outputs and streams match as a scan over the output for each index does", () => {
+    let seed = 1495;
+    // mulberry32: a small seeded generator, so a failing case can be replayed.
+    const random = (): number => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const below = (n: number): number => Math.floor(random() * n);
+    const pick = <T>(each: readonly T[]): T => each[below(each.length)]!;
+    const pool = ["a", "b", "c", "d", "e", "f", "g", "h"];
+    const item = (position: number): JsonValue => {
+      const shape = below(10);
+      if (shape === 0) return pick([null, `s${position}`, position, [pick(pool)]]);
+      if (shape === 1) return { type: "message", n: position };
+      if (shape === 2) return { type: "message", id: position, n: position };
+      if (shape <= 5) return { type: "message", id: pick(pool), n: position };
+      if (shape === 6) return { type: "function_call", call_id: pick(pool), n: position };
+      return { type: "function_call", id: pick(pool), call_id: pick(pool), n: position };
+    };
+    let fallbacks = 0;
+    for (let round = 0; round < 3000; round++) {
+      const output = Array.from({ length: below(9) }, (_, position) => item(position));
+      const indexes = Array.from({ length: output.length + 4 }, (_, n) => n);
+      const started = new Set(indexes.filter(() => random() < 0.5));
+      const finished = new Set(indexes.filter(() => random() < 0.3));
+      const streamedIds = new Map<number, Set<string>>();
+      for (const each of [...started, ...finished]) {
+        if (random() < 0.5) streamedIds.set(each, new Set(Array.from({ length: below(3) }, () => pick(pool))));
+      }
+      const { matches, rest } = matchTerminal(output, started, finished, streamedIds);
+      const expected = scanMatch(output, started, finished, streamedIds);
+      expect([...matches]).toEqual([...expected.matches]);
+      expect(rest).toEqual(expected.rest);
+      for (const [each, taken] of matches) {
+        if (!finished.has(each) && (streamedIds.get(each)?.size ?? 0) === 0 && taken !== output[each]) fallbacks += 1;
+      }
+    }
+    // The cases reach the last rule, which skips claimed, id-less and streamed items.
+    expect(fallbacks).toBeGreaterThan(500);
+  });
 });
+
+/** Match as `matchTerminal` did with a scan over `output` for each index: the reference its rules are checked against. */
+function scanMatch(
+  output: readonly JsonValue[],
+  started: ReadonlySet<number>,
+  finished: ReadonlySet<number>,
+  streamedIds: ReadonlyMap<number, ReadonlySet<string>>,
+): { matches: Map<number, JsonValue>; rest: JsonValue[] } {
+  const itemIds = (item: JsonValue): string[] => {
+    if (!isPlainObject(item)) return [];
+    const ids = [item["id"], item["type"] === "function_call" ? item["call_id"] : undefined];
+    return ids.filter((id) => typeof id === "string");
+  };
+  const seenIds = new Set([...streamedIds.values()].flatMap((ids) => [...ids]));
+  const streamed = [...new Set([...started, ...finished])].sort((a, b) => a - b);
+  const unfinished = [...started].filter((each) => !finished.has(each)).sort((a, b) => a - b);
+  const matches = new Map<number, JsonValue>();
+  const claimed = new Set<number>();
+  const take = (each: number, position: number): void => {
+    if (position < 0 || claimed.has(position) || matches.has(each)) return;
+    claimed.add(position);
+    matches.set(each, output[position]!);
+  };
+  const fresh = (item: JsonValue): boolean => !itemIds(item).some((id) => seenIds.has(id));
+  for (const each of streamed) {
+    const ids = streamedIds.get(each);
+    if (ids !== undefined && ids.size > 0) {
+      take(each, output.findIndex((item) => itemIds(item).some((id) => ids.has(id))));
+    }
+  }
+  for (const each of streamed) {
+    if (each < output.length && fresh(output[each]!)) take(each, each);
+  }
+  for (const each of unfinished) {
+    if (matches.has(each) || (streamedIds.get(each)?.size ?? 0) > 0) continue;
+    take(
+      each,
+      output.findIndex((item, position) => !claimed.has(position) && itemIds(item).length > 0 && fresh(item)),
+    );
+  }
+  const rest = output.filter((item, position) => !claimed.has(position) && fresh(item));
+  return { matches, rest };
+}
 
 describe("item errors", () => {
   test("an output item that isn't an object", async () => {

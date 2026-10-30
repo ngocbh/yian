@@ -199,9 +199,8 @@ A tag on a literal is checked when the flow loads, using YAML's rules for unquot
 | `2026-10-14` | Text, checked as a date when the slot is a `date` |
 | `2026-10-14 10:30:00` | Text, checked as a datetime when the slot is a `datetime` |
 
-An unquoted value shaped like a date or time must be a real one in the `date` or `datetime`
-form. Other forms YAML reads as a time, such as `2026-1-5 9:00:00` or `2026-10-14t10:30:00`,
-fail with a message to quote them.
+An unquoted date or time must be a real one. Other forms YAML reads as a time, such as
+`2026-1-5 9:00:00`, fail with a message to quote them.
 
 So `!str 30` fails with ``quote it to keep it as text: `v: !str "30"` ``, `!bool yes` fails
 with `` `yes` is text; write `true` ``, and `!int "5"` fails because quoted text stays text.
@@ -322,7 +321,7 @@ input's type before the run starts:
 | Input type | Text it converts |
 |---|---|
 | `int` | A whole number, such as `42` |
-| `float` | A number, such as `2.5` or `1e3`, or infinity: `inf` or `infinity` in any case, with an optional sign, such as `-Infinity` |
+| `float` | A number, such as `2.5`, `1e3` or `-inf` (`inf` and `infinity` in any case) |
 | `bool` | `true`, `yes`, `y`, `on`, `1` and `false`, `no`, `n`, `off`, `0`, in any case |
 | `Any` | None: `--input x=3` gives the text `"3"` |
 

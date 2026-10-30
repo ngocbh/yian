@@ -674,8 +674,8 @@ export class FlowEngine {
   #nodeSteps(nodeId: string, signal: AbortSignal): NodeSteps | null {
     const { state, log } = this;
     if (state.flow.nodes.get(nodeId)!.needsSteps !== true) return null;
-    // The recorded steps are frozen; the node gets copies it may change, each steer step's with
-    // the values it consumed.
+    // The state owns the recorded steps and appends to them in place; the node gets copies it may
+    // change, each steer step's with the values it consumed.
     const prior = stepsWithSteerValues(state, nodeId);
     const record: NodeSteps["record"] = (step, options) => {
       // A stopping run takes only a settled call's step, until it has a result; the stop is

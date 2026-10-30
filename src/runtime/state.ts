@@ -356,10 +356,11 @@ export class RunState {
   nodeStarts = new Map<string, number>();
   /**
    * The canonical steps each unsettled node recorded, in record order. They survive a resume and
-   * go when the node's outcome is applied.
+   * go when the node's outcome is applied. The reducer appends to a node's list in place, so a
+   * reader copies it to keep a snapshot.
    */
   nodeSteps = new Map<string, readonly JsonObject[]>();
-  /** The seq of each step in `nodeSteps`, by node, index for index. */
+  /** The seq of each step in `nodeSteps`, by node, index for index; appended in place like it. */
   nodeStepSeqs = new Map<string, readonly number[]>();
   /**
    * The number of accepted starts of each node that a later `RunResumed` retried with no
@@ -3311,14 +3312,9 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       break;
     case "step":
       state.touched.add(delta.nodeId);
-      state.nodeSteps.set(
-        delta.nodeId,
-        Object.freeze([...(state.nodeSteps.get(delta.nodeId) ?? []), delta.step]),
-      );
-      state.nodeStepSeqs.set(
-        delta.nodeId,
-        Object.freeze([...(state.nodeStepSeqs.get(delta.nodeId) ?? []), prepared.expectedSequence]),
-      );
+      // In place: copying the list per step cost O(steps^2) for a wide reply, live and on fold.
+      appendTo(state.nodeSteps, delta.nodeId, delta.step);
+      appendTo(state.nodeStepSeqs, delta.nodeId, prepared.expectedSequence);
       break;
     case "stopped":
       state.lastStopSequence = prepared.expectedSequence;
@@ -4617,6 +4613,13 @@ function countUnadmitted(state: RunState, nodeId: string, by: number): void {
   const count = (state.unadmittedCommits.get(nodeId) ?? 0) + by;
   if (count === 0) state.unadmittedCommits.delete(nodeId);
   else state.unadmittedCommits.set(nodeId, count);
+}
+
+/** Append `item` to `key`'s list in `lists`, which only the reducer writes, creating the list on the first. */
+function appendTo<T>(lists: Map<string, readonly T[]>, key: string, item: T): void {
+  const list = lists.get(key) as T[] | undefined;
+  if (list === undefined) lists.set(key, [item]);
+  else list.push(item);
 }
 
 /**

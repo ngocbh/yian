@@ -555,6 +555,7 @@ export async function inboxChat(
       if (log !== null) stop.abort(reason === "interrupt" ? new HostStop("SIGINT") : new TerminalStopped("eof"));
     },
     onActive: view === null ? undefined : (active, printed) => view.active(active, printed),
+    noColor: Boolean(io.env("NO_COLOR")),
   });
   // With the chat's look on a terminal, the prompt's box stays up while a turn runs.
   const editor =
@@ -616,6 +617,8 @@ export async function inboxChat(
       // A chat that ended with /exit before it stopped shows no prompt: no line can be sent.
       closed = inboxClosed(path, inbox.name);
     }
+    // The box is up from the start, so the first prompt and the first turn draw over the same box.
+    if (editor !== null && !closed) view?.input(editor);
     await reportRunLog(path, io.stderr, io.env);
     log = path;
     // A resume runs with the configs the log recorded: each move that can call a model first
@@ -891,6 +894,8 @@ export async function inboxChat(
         }
         closed = true;
         flusher?.close();
+        // No line comes after it: the box goes.
+        view?.input(null);
       } else {
         pressedAt = null;
         // The hold ends with this line: held events, and those withdrawn, go before it.

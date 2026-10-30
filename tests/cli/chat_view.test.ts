@@ -1099,6 +1099,31 @@ describe("the input box while a reply runs", () => {
   );
 });
 
+describe("the first line of a chat", () => {
+  test(
+    "repaints the box in place from Enter through the reply's start, clearing nothing below",
+    async () => {
+      const { io, stdin, output, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      const before = output.text.length;
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      expect(output.text.slice(before)).not.toContain("\x1b[J");
+      model.open();
+      const idle = () => rows().at(-1) === HINT && !rows().some((line) => line.includes("Thinking"));
+      await until(idle);
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+      // /exit at the prompt takes the box down: what the chat prints after it draws no box.
+      expect(output.text.slice(output.text.lastIndexOf("session ended"))).not.toContain("╭");
+      expect(rows().at(-1)).toBe("session ended");
+    },
+    TIMEOUT,
+  );
+});
+
 describe("the input box after a line is entered while a reply runs", () => {
   test(
     "/exit there takes the box down, and keys after it go nowhere",

@@ -12,6 +12,7 @@ import { getEventListeners } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
+import { liveRows } from "../../src/cli/live_rows.ts";
 import { LineEditor, Terminal, type TerminalOptions, TerminalStopped } from "../../src/cli/terminal.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { parseQuestions } from "../../src/nodes/tool/questions.ts";
@@ -31,6 +32,7 @@ export const CTRL_A = "\x01";
 export const CTRL_C = "\x03";
 export const CTRL_D = "\x04";
 export const CTRL_E = "\x05";
+export const CTRL_L = "\x0c";
 export const CTRL_N = "\x0e";
 export const CTRL_P = "\x10";
 export const CTRL_Q = "\x11";
@@ -100,6 +102,8 @@ export interface Screen {
   modes: string[];
   /** Each start (`?2026h`) and end (`?2026l`) of synchronized output, in order. */
   syncs: string[];
+  /** The rows an erase of the whole screen (`ESC[2J`) moved off it, oldest first. */
+  scrollback: string[];
 }
 
 /** Display width of one character: 2 for the CJK and fullwidth ranges the scenarios use. */
@@ -111,12 +115,16 @@ function charWidth(char: string): number {
 
 /**
  * Replay `text` on a `columns`-wide terminal. It knows text, `\r`, `\n` (down one row, as with
- * output newline translation off), `ESC[nA`, `ESC[J`, `ESC[K`, `ESC[nG`, `ESC[r;cH` and the
- * alternate screen (`ESC[?1049h` and `l`, which gives back the main screen and its cursor);
+ * output newline translation off), `ESC[nA`, `ESC[J`, `ESC[2J`, `ESC[K`, `ESC[nG`, `ESC[r;cH` and
+ * the alternate screen (`ESC[?1049h` and `l`, which gives back the main screen and its cursor);
  * colours are ignored. Writing past the last column wraps on the next character, as terminals do.
+ * `ESC[2J` moves the rows to the scrollback and leaves the cursor, as VTE, tmux and kitty do; xterm
+ * drops them. So the scrollback here is one terminal's; that the program never sends `ESC[3J` is
+ * what keeps the scrollback everywhere.
  */
 export function screen(text: string, columns = 80): Screen {
   let rows: string[][] = [[]];
+  const scrollback: string[][] = [];
   const modes: string[] = [];
   const syncs: string[] = [];
   let row = 0;
@@ -171,14 +179,18 @@ export function screen(text: string, columns = 80): Screen {
     else if (command === "A") row = Math.max(0, row - n);
     else if (command === "G") col = Math.max(1, Math.min(n, columns)) - 1;
     else if (command === "K") line().length = Math.min(line().length, col);
-    else if (command === "J") {
+    else if (command === "J" && n === 2) {
+      scrollback.push(...rows);
+      rows = [[]];
+    } else if (command === "J") {
       line().length = Math.min(line().length, col);
       rows.length = row + 1;
     } else if (command !== "m") throw new Error(`the replayer doesn't know ESC[${args}${command}`);
   }
   const shown = rows.map((cells) => cells.join("").trimEnd());
   while (shown.length > 0 && shown[shown.length - 1] === "") shown.pop();
-  return { rows: shown, cursor: { row, col }, modes, syncs };
+  const scrolled = scrollback.map((cells) => cells.join("").trimEnd());
+  return { rows: shown, cursor: { row, col }, modes, syncs, scrollback: scrolled };
 }
 
 /** Let the streams deliver what was written: they do it in next-tick callbacks and microtasks. */
@@ -3275,6 +3287,176 @@ async function anAbortedApproveReturnsNull(): Promise<void> {
   assert.equal(await next, "Approve");
 }
 
+/**
+ * What `output` was written from `before` (a length of its text) on: one write, synchronized,
+ * clearing the visible screen but not the scrollback.
+ */
+function assertOneClearingFrame(
+  output: FakeOutput,
+  before: { text: number; writes: number },
+): void {
+  const text = output.text.slice(before.text);
+  assert.equal(output.writes, before.writes + 1, JSON.stringify(text));
+  assert.ok(text.startsWith("\x1b[?2026h") && text.endsWith("\x1b[?2026l"), JSON.stringify(text));
+  assert.ok(text.includes("\x1b[2J\x1b[H"), JSON.stringify(text));
+  assert.ok(!text.includes("\x1b[3J"));
+}
+
+async function ctrlLAtAFramedReadLineRedrawsItAtTheTopKeepingTheFocus(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 60 });
+  output.write("above\r\n");
+  const list = rowList(["r1  a.yaml"]);
+  const editor = new LineEditor({ columns: () => 60, hint: HINT, list });
+  const line = terminal.readLine("You:", { frame: true, escape: true, editor, initial: "hi" });
+  await tick();
+  input.write(DOWN);
+  await tick();
+  const shown = view().rows.slice(1);
+  const before = { text: output.text.length, writes: output.writes };
+  input.write(CTRL_L);
+  await tick();
+  assertOneClearingFrame(output, before);
+  assert.deepEqual(view().rows, shown);
+  assert.deepEqual(view().scrollback[0], "above");
+  // The list keeps the focus, and nothing reached the box.
+  assert.equal(editor.focus(), 0);
+  input.write(UP + "!" + ENTER);
+  assert.deepEqual(await line, { value: "hi!" });
+}
+
+async function ctrlLWhileTheLiveBoxTakesKeysRedrawsTheLiveRowsAtTheTop(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 60 });
+  const live = liveRows(output);
+  live.stage(["above"]);
+  const rows = ["⏺ a reply", "· Thinking", "│ > hi"];
+  live.draw(rows, { line: 2, before: "│ > hi" });
+  const edited: string[] = [];
+  const watch = new AbortController();
+  terminal.watchKeys(
+    watch.signal,
+    () => {},
+    (key) => {
+      edited.push(key.name ?? key.str ?? "?");
+      return true;
+    },
+  );
+  const before = { text: output.text.length, writes: output.writes };
+  input.write(CTRL_L);
+  await tick();
+  assertOneClearingFrame(output, before);
+  const text = output.text.slice(before.text);
+  for (const row of rows) assert.equal(text.split(row).length, 2, row);
+  assert.deepEqual(view().rows, rows);
+  assert.equal(view().scrollback[0], "above");
+  assert.deepEqual(view().cursor, { row: 2, col: 6 });
+  // The editor never saw it.
+  assert.deepEqual(edited, []);
+  watch.abort();
+}
+
+async function ctrlLInACardOrAQuestionRedrawsItEvenInTheGrace(): Promise<void> {
+  let clock = 0;
+  const { input, output, terminal, view } = setup({ columns: 60, now: () => clock });
+  output.write("above\r\n");
+  const watch = new AbortController();
+  terminal.watchKeys(watch.signal, () => {}, () => true);
+  const answer = terminal.approve(approval());
+  await tick();
+  const card = view().rows.slice(1);
+  let before = { text: output.text.length, writes: output.writes };
+  input.write(CTRL_L);
+  await tick();
+  assertOneClearingFrame(output, before);
+  assert.deepEqual(view().rows, card);
+  // It isn't typing: the grace drops keys as long as before, and no longer.
+  input.write(ENTER);
+  await tick();
+  clock += 1000;
+  input.write(DOWN + ENTER);
+  assert.equal(await answer, "Reject");
+  watch.abort();
+  // A question's lines above its last are redrawn with it.
+  const question = terminal.askText("Pick a name\nfor the run:");
+  input.write("ada");
+  await tick();
+  const asked = view().rows.slice(-2);
+  assert.deepEqual(asked, ["? Pick a name", "for the run: ada"]);
+  before = { text: output.text.length, writes: output.writes };
+  input.write(CTRL_L);
+  await tick();
+  assertOneClearingFrame(output, before);
+  assert.deepEqual(view().rows, asked);
+  input.write(ENTER);
+  assert.equal(await question, "ada");
+}
+
+async function ctrlLInAScreenRedrawsIt(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 20 });
+  output.rows = 3;
+  const screenUp = terminal.showScreen({ draw: () => ["one", "two"] });
+  await tick();
+  output.write("\x1b[Hgarbled");
+  const before = { text: output.text.length, writes: output.writes };
+  input.write(CTRL_L);
+  await tick();
+  assertOneClearingFrame(output, before);
+  assert.deepEqual(view().rows, ["one", "two"]);
+  input.write("q");
+  await screenUp;
+}
+
+async function ctrlLOnAPlainTerminalOrOffATtyChangesNothing(): Promise<void> {
+  const { input, output, terminal } = setup({ tty: false });
+  const line = terminal.readLine("You:");
+  input.write("a" + CTRL_L + "b" + ENTER);
+  assert.deepEqual(await line, { value: "ab" });
+  assert.ok(!output.text.includes("\x1b[2J"));
+  const plainInput = new FakeInput();
+  const plainOutput = new FakeOutput();
+  const plain = new Terminal({ input: plainInput, output: plainOutput, plain: true });
+  const typed = plain.readLine("You:");
+  plainInput.write("a" + CTRL_L + "b" + ENTER);
+  assert.deepEqual(await typed, { value: "ab" });
+  assert.equal(plainOutput.text, "> You: \n");
+}
+
+async function ctrlLOnALaterQuestionRedrawsThePanelAndTheAnswersAboveIt(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 60 });
+  output.write("above\r\n");
+  const questions = parseQuestions([
+    { question: "Why?", header: "Why" },
+    { question: "Notes?", header: "Notes" },
+  ]);
+  const answer = terminal.askUser(request({ question: "Q", questions }), toolContext());
+  await tick();
+  input.write("x" + ENTER);
+  await tick();
+  input.write("y");
+  await tick();
+  const asked = view().rows.slice(1);
+  assert.ok(asked.some((row) => row.includes("human input")));
+  assert.ok(asked.some((row) => row.includes("Question 2 of 2")));
+  const before = { text: output.text.length, writes: output.writes };
+  input.write(CTRL_L);
+  await tick();
+  assertOneClearingFrame(output, before);
+  assert.deepEqual(view().rows, asked);
+  input.write(ENTER);
+  assert.deepEqual(await answer, { Why: "x", Notes: "y" });
+}
+
+async function ctrlLInsideAPasteNeitherRedrawsNorAddsText(): Promise<void> {
+  const { input, output, terminal } = setup({ columns: 60 });
+  const line = terminal.readLine("You:", { frame: true, hint: HINT });
+  await tick();
+  const before = output.text.length;
+  input.write(PASTE_START + "a" + CTRL_L + "b" + PASTE_END);
+  await tick();
+  assert.ok(!output.text.slice(before).includes("\x1b[2J"));
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "ab" });
+}
+
 /** The scenarios by name, in the order `main` runs them. */
 export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "typing a line returns it": typingALineReturnsIt,
@@ -3461,6 +3643,18 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "approve off a TTY returns null without reading": approveOffATtyReturnsNullWithoutReading,
   "Ctrl-C in approve rejects and keeps the terminal open": ctrlCInApproveRejectsAndKeepsTheTerminalOpen,
   "an aborted approve returns null": anAbortedApproveReturnsNull,
+  "Ctrl-L at a framed readLine redraws it at the top, keeping the focus":
+    ctrlLAtAFramedReadLineRedrawsItAtTheTopKeepingTheFocus,
+  "Ctrl-L while the live box takes keys redraws the live rows at the top":
+    ctrlLWhileTheLiveBoxTakesKeysRedrawsTheLiveRowsAtTheTop,
+  "Ctrl-L in a card or a question redraws it, even in the grace":
+    ctrlLInACardOrAQuestionRedrawsItEvenInTheGrace,
+  "Ctrl-L in a screen redraws it": ctrlLInAScreenRedrawsIt,
+  "Ctrl-L on a plain terminal or off a TTY changes nothing":
+    ctrlLOnAPlainTerminalOrOffATtyChangesNothing,
+  "Ctrl-L on a later question redraws the panel and the answers above it":
+    ctrlLOnALaterQuestionRedrawsThePanelAndTheAnswersAboveIt,
+  "Ctrl-L inside a paste neither redraws nor adds text": ctrlLInsideAPasteNeitherRedrawsNorAddsText,
 };
 
 /** Run every scenario, printing `{"name", "ok", "error"?}` per line; return how many failed. */

@@ -44,6 +44,7 @@ import { TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { callReply, serving, textReply } from "../helpers/run_state_fixtures.ts";
 import {
+  CTRL_L,
   DOWN,
   ENTER,
   ESCAPE,
@@ -831,6 +832,64 @@ describe("the live rows' frames", () => {
     expect(output.text.slice(before)).not.toContain("\x1b[J");
     view.turn(false);
     expect(rows()).toEqual(["> hi", ...atPrompt]);
+  });
+});
+
+describe("Ctrl-L", () => {
+  const SPIN = "· Thinking… (0s · esc to interrupt)";
+  const boxed = (text: string) => `│ ${text.padEnd(COLUMNS - 4)} │`;
+
+  test("at the prompt and mid-reply clears the screen, then draws each live row once", async () => {
+    const { view, output, rows } = viewOn();
+    const input = new FakeInput({ tty: true });
+    stdin = input;
+    const onActive = (active: boolean, printed: boolean) => view.active(active, printed);
+    const terminal = new Terminal({ input, output, onActive });
+    const list = { rows: () => [{ key: "r1", text: "r1  color.yaml" }], hint: "↓ runs" };
+    const editor = terminal.lineEditor({ hint: view.hint, list });
+    view.print("earlier\n");
+    view.input(editor);
+    /** Press Ctrl-L, and check it wrote one clearing frame holding each row of `live` once. */
+    const press = async (live: string[]) => {
+      const before = { text: output.text.length, writes: output.writes };
+      input.write(CTRL_L);
+      await tick();
+      const text = output.text.slice(before.text);
+      expect(output.writes).toBe(before.writes + 1);
+      expect(text.startsWith(SYNC_ON)).toBe(true);
+      expect(text.endsWith(SYNC_OFF)).toBe(true);
+      expect(text).toContain("\x1b[2J\x1b[H");
+      expect(text).not.toContain("\x1b[3J");
+      const plain = text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+      for (const row of live) expect(plain.split(row.trim())).toHaveLength(2);
+      expect(rows()).toEqual(live);
+      expect(screen(output.text, COLUMNS).scrollback).toContain("earlier");
+    };
+    const read = terminal.readLine("You:", { frame: true, escape: true, editor });
+    input.write("hi");
+    await tick();
+    await press([TOP, boxed("> hi"), BOTTOM, HINT, "  r1  color.yaml"]);
+    input.write(ENTER);
+    expect(await read).toEqual({ value: "hi" });
+    // Mid-reply, as the chat runs a turn: the box under the spinner takes the keys.
+    const keys = new AbortController();
+    terminal.watchKeys(keys.signal, () => {}, (key) => {
+      editor.key(key);
+      view.refresh();
+      return true;
+    });
+    view.turn(true);
+    view.onStream(chunk(1, "Once upon\na dragon"));
+    input.write("more");
+    await tick();
+    const reply = ["⏺ Once upon", "  a dragon", SPIN];
+    await press([...reply, TOP, boxed("> more"), BOTTOM, HINT, "  r1  color.yaml"]);
+    expect(screen(output.text, COLUMNS).cursor).toEqual({ row: 4, col: 8 });
+    // The next frame goes on from there, rewriting only what changed.
+    view.onStream(chunk(1, " slept"));
+    expect(rows().slice(0, 3)).toEqual(["⏺ Once upon", "  a dragon slept", SPIN]);
+    keys.abort();
+    view.turn(false);
   });
 });
 

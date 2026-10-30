@@ -239,6 +239,7 @@ with `NO_COLOR`, it prints plain lines.
 | Esc | Takes back the lines the assistant hasn't read yet, and stops the reply |
 | Ctrl-C | Stops the reply. A second Ctrl-C within 2 seconds, or one at the prompt, ends the chat |
 | `/exit`, `/quit` or Ctrl-D | Leaves the chat |
+| Ctrl-L | Clears the screen and redraws it; the scrollback stays |
 | ↓, ↑ | Move between the box and the list of running flows under it |
 | Enter on a flow | Opens its view: its progress, its log and any question it waits on |
 | Esc in the list or a view | Goes back to the box |

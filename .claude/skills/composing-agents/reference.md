@@ -140,8 +140,9 @@ False values are `false`, `null`, `0`, `0.0`, `""`, `[]` and an empty record. Bu
 | `Message` | Built in: `role` (`user`, `assistant`, `tool`) and `parts` (text, tool calls, ...) |
 | `Inbox(X)` | A flow input whose events arrive while the run goes on |
 
-Records are closed: an extra field fails the check. Every field is required except an
-`Optional(...)` one. A typedef can't take a built-in name such as `Message`.
+Records are closed: an extra field fails the check (an agent's record reply drops it instead; a
+union member's reply gets a correction). Every field is required except an `Optional(...)` one.
+A typedef can't take a built-in name such as `Message`.
 
 ```yaml
 typedefs:
@@ -157,7 +158,8 @@ typedefs:
 Into a child's input (`call`, `map`, `loop`), `list(int)` fits `list(Optional(int))`, a record
 fits `object`, and `Literal(small)` fits `Literal(small, large)`. `str` doesn't fit a `Literal`,
 `Optional(str)` doesn't fit `str`, and a union doesn't fit one of its members: tag the binding to
-check it at run time, or narrow it first.
+check it at run time, or narrow it first. A tagged loop seed is the same: under `acc: !int 0` the
+body may return `Optional(int)`, and a `null` fails the next run of the body.
 
 ## Models
 

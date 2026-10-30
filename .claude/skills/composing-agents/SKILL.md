@@ -170,7 +170,9 @@ output:
 ### Child flows: `call`, `map`, `loop`
 
 - **`call:` names a `defs:` entry first, then a `uses:` alias** (`uses: {summarize:
-  child-summarize}` loads `child-summarize.yaml` beside the flow).
+  child-summarize}` loads `child-summarize.yaml` beside the flow). A ref is a path relative to the
+  importing file, without the extension (only `.yaml` files are found); `@<version>` must equal
+  the child's quoted `version:` text (`clean: ../common/clean@1`).
 - **Write exactly one of `call:` and an inline body** (`nodes:` plus `output:`). An inline body
   can't see its parent's inputs, nodes or `${item}`: pass them through the node's `input:`, and
   read them inside as `${input.<name>}`.

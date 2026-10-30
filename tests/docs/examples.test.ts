@@ -6,9 +6,10 @@
  * how writers mark blocks.
  */
 
-import { expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseDocument } from "yaml";
@@ -30,6 +31,7 @@ import {
   readCommands,
   readDocs,
   readInvocations,
+  writePageFiles,
 } from "./doc_blocks.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -47,6 +49,16 @@ const SHELLS = new Set(["sh", "bash", "shell", "zsh"]);
 const STRAY = /^\s*(?:\$\s+)?(?:yian\b|(?:npx|bunx)\s+(?:-\S+\s+)*@ngocbh\/yian\b)/;
 // Any provider and model: the scripted model answers whichever the flow asks for.
 const LLM_CONFIG = { provider: "anthropic", model: "claude-test" };
+
+// Each page's titled blocks are files in their own folder, so a `uses:` ref finds another
+// titled block of its page before a flow of examples/.
+const PAGES_DIR = mkdtempSync(join(tmpdir(), "yian-docs-"));
+afterAll(() => rmSync(PAGES_DIR, { recursive: true, force: true }));
+const PAGE_FILES = new Map(
+  [...Map.groupBy(YAML_BLOCKS, (block) => block.file)].flatMap(([file, blocks]) => [
+    ...writePageFiles(blocks, join(PAGES_DIR, file)),
+  ]),
+);
 
 const where = (block: Block) => `${block.file}:${block.line}`;
 
@@ -97,7 +109,9 @@ test.each(YAML_BLOCKS.map((block) => [where(block), block] as const))("%s", asyn
     expect(parseDocument(block.text).errors.map(String)).toEqual([]);
     return;
   }
-  const load = () => loadFlow(block.text, { sourceLabel: label, searchPaths: [EXAMPLES] });
+  const path = PAGE_FILES.get(block);
+  const searchPaths = path === undefined ? [EXAMPLES] : [dirname(path), EXAMPLES];
+  const load = () => loadFlow(block.text, { sourceLabel: label, searchPaths });
   if (check === "fails") {
     await expectShownError(block, load);
     return;

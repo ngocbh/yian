@@ -158,6 +158,8 @@ $ yian run chat.yaml
 | Ctrl-C | Stops the reply. A second Ctrl-C within 2 seconds, or one at the prompt, cancels the run |
 | `/exit`, `/quit` or Ctrl-D | Ends the chat once the flow has read your lines |
 
+Lines you type or paste while the flow replies wait, in order, for the next prompt.
+
 A chat that stops prints `continue with: yian run --resume LOG`; run it on a terminal to go on.
 
 ### Memory

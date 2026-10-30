@@ -1,6 +1,6 @@
 /** The skip model: which nodes of a flow level CASE routing may skip, and together. */
 
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 
 import { Edge } from "../../src/compile/model.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
@@ -222,6 +222,69 @@ test("past the world limit the queries fall back safely", () => {
   const bounded = manyCases({ limit: 1 });
   expect(bounded.mayAllSkip(["a", "b"])).toBe(true);
   expect(bounded.maySkipWhileRunning(["x"], null)).toBe(false);
+});
+
+/**
+ * A chain of `stages` exhaustive CASEs: `c{i}` routes `a{i}`/`b{i}`, `v{i}` reads `a{i} | b{i}`,
+ * and `c{i+1}` reads `v{i}`. `y` is `c0`'s other route and reads the last `v`.
+ */
+function chain(stages: number, options: { limit?: number | null } = {}): SkipModel {
+  const nodes: string[] = [];
+  const edges: Edge[] = [];
+  for (let i = 0; i < stages; i++) {
+    nodes.push(`c${i}`, `a${i}`, `b${i}`, `v${i}`);
+    edges.push(ctl(`c${i}`, "then", `a${i}`), ctl(`c${i}`, "else", `b${i}`));
+    edges.push(data(`a${i}`, `v${i}`), data(`b${i}`, `v${i}`));
+    if (i > 0) edges.push(data(`v${i - 1}`, `c${i}`, "on"));
+  }
+  nodes.push("y");
+  edges.push(ctl("c0", "then", "y"), data(`v${stages - 1}`, "y"));
+  return new SkipModel(nodes, edges, new Set(nodes.filter((node) => node.startsWith("c"))), options);
+}
+
+test("a chained CASE level answers exactly within a small world limit", () => {
+  // Every `v{i}` runs whatever its CASE picks, so the routes before a stage don't change what
+  // comes after it: the search rules each such state out once, not once per route to it.
+  const m = chain(30, { limit: 200 });
+  expect(m.maySkipWhileRunning(["y"], null)).toBe(true);
+  expect(m.mayAllSkip(["v29"])).toBe(false);
+  expect(m.mayAllSkip(["a29", "b29"])).toBe(false);
+  expect(m.maySkipWhileRunning(["a29"], "v29")).toBe(true);
+});
+
+test("a level with no CASE is not searched", () => {
+  // Without a CASE nothing skips, so no query needs a search.
+  const m = model("a b c", [data("a", "b"), data("b", "c"), order("a", "c")]);
+  const search = spyOn(m as unknown as { search: () => boolean }, "search");
+  expect(m.mayAllSkip(["b"])).toBe(false);
+  expect(m.maySkipWhileRunning(["b", "c"], null)).toBe(false);
+  expect(search).not.toHaveBeenCalled();
+});
+
+test("a CASE whose targets come after a later CASE keeps its pick apart", () => {
+  // `t` comes after `c2`, so states at `c2` that differ only in `c0`'s pick have different futures.
+  const edges = [ctl("c0", "then", "t"), ctl("c0", "else", "u"), ...route("c2"), data("a", "t"), data("b", "t")];
+  const m = model("c0 c2 a b t u", edges, ["c0", "c2"]);
+  expect(m.maySkipWhileRunning(["t"], null)).toBe(true);
+  expect(m.mayAllSkip(["t"])).toBe(true);
+  expect(m.mayAllSkip(["t", "u"])).toBe(false);
+});
+
+test("states ruled out again count toward the world limit", () => {
+  // Twenty CASEs `k{i}` may skip `t{i}`, but `z` runs anyway since the root `r` shares each of its
+  // groups. Each of the 2^20 routes reaches `g` with a state already ruled out there, and each
+  // counts as one assignment: past the limit the query falls back to true. Counting only the
+  // assignments that fail would explore all 2^20 routes and answer false.
+  const nodes = ["r"];
+  const edges = [ctl("g", "then", "x"), ctl("g", "else", "w"), data("z", "g")];
+  for (let i = 0; i < 20; i++) {
+    nodes.push(`k${i}`, `t${i}`);
+    edges.push(ctl(`k${i}`, "then", `t${i}`), data(`t${i}`, "z", `in${i}`), data("r", "z", `in${i}`));
+  }
+  nodes.push("z", "g", "x", "w");
+  const m = new SkipModel(nodes, edges, new Set(["g"]), { limit: 50 });
+  expect(m.mayAllSkip(["x", "w"])).toBe(true);
+  expect(new SkipModel(nodes, edges, new Set(["g"])).mayAllSkip(["x"])).toBe(true);
 });
 
 /** An `on: ${cls.output}` CASE listing tags `a` and `b`. */

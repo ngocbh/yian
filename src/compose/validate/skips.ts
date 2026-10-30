@@ -13,7 +13,9 @@
  * is skipped, which is a false positive only when `a` cannot be null while it runs.
  *
  * The enumeration is bounded by `current().maxSkipWorlds` assignments (complete or cut short) per
- * query. Past the bound each query falls back to the answer that is safe for its caller:
+ * query. A partial assignment that reaches a CASE in a state already ruled out there (the same
+ * picks and skips among the nodes still to be read) is not explored again, and counts as one
+ * assignment. Past the bound each query falls back to the answer that is safe for its caller:
  * `mayAllSkip` says true (the output gets a null default it may not need) and
  * `maySkipWhileRunning` says false (nothing is reported). A level whose edges have a cycle has no
  * skippable nodes here; the cycle check reports the cycle.
@@ -98,8 +100,37 @@ class Join {
   }
 }
 
-/** One pending search state: the next node index, the skipped nodes so far, and CASE choices. */
-type SearchState = readonly [index: number, done: ReadonlySet<string>, choices: ReadonlyMap<string, string | null>];
+/**
+ * The nodes the search has passed that are still read later and are skipped or picked a branch,
+ * newest first. Partial assignments share their common start.
+ */
+type Trail = { readonly index: number; readonly state: number; readonly previous: Trail | null };
+
+/** A CASE the search is branching on, with the search state on arriving at it. */
+type Frame = {
+  readonly index: number;
+  /** The next of the CASE's choices to try. */
+  next: number;
+  readonly hash: number;
+  readonly live: number;
+  readonly trail: Trail | null;
+};
+
+/** A `Join` over the indexes of one search's nodes, keeping only edges that can skip. */
+type IndexedJoin = {
+  /** `[case, choice]` per control edge; empty when some control edge is always taken. */
+  readonly control: readonly (readonly [caseIndex: number, choice: number])[];
+  readonly groups: readonly (readonly number[])[];
+  readonly requiredOrder: readonly number[];
+};
+
+/** A 32-bit hash of node `index` in `state`; the search XORs one per live node into a state hash. */
+function stateHash(index: number, state: number): number {
+  let h = Math.imul(index ^ 0x9e3779b9, 0x85ebca6b) ^ Math.imul(state + 0x632be5ab, 0xc2b2ae35);
+  h = Math.imul(h ^ (h >>> 16), 0x7feb352d);
+  h = Math.imul(h ^ (h >>> 15), 0x846ca68b);
+  return h ^ (h >>> 16);
+}
 
 /**
  * Which nodes of one flow level may be skipped by its CASE routing.
@@ -116,7 +147,8 @@ export class SkipModel {
   /** A CASE's choices: each branch, then "no branch" (`null`) unless it is exhaustive. */
   private readonly choices = new Map<string, readonly (string | null)[]>();
   private readonly parents = new Map<string, Set<string>>();
-  private readonly skipTargets = new Map<string, Set<string>>();
+  /** Each node's index in topological order, or `null` when the level has a cycle. */
+  private readonly position: Map<string, number> | null;
   private readonly order: string[] | null;
 
   /**
@@ -167,15 +199,10 @@ export class SkipModel {
       const sources = this.joins.get(node)!.skipSources();
       this.parents.set(node, new Set([...sources].filter((source) => this.known.has(source))));
     }
-    // A CASE's choice matters only to the nodes its control edges reach; its data and ordering
-    // edges are taken on every route.
-    for (const caseId of this.choices.keys()) this.skipTargets.set(caseId, new Set());
-    for (const node of this.nodeIds) {
-      for (const [caseId] of this.joins.get(node)!.control) this.skipTargets.get(caseId)?.add(node);
-    }
     const graphEdges = [...graphParents].flatMap(([node, sources]) => [...sources].map((from) => ({ from, to: node })));
     const { order, rest } = topologicalOrder(this.nodeIds, graphEdges);
     this.order = rest.length === 0 ? order : null;
+    this.position = this.order === null ? null : new Map(this.order.map((node, index) => [node, index]));
   }
 
   /** The level's node ids. */
@@ -216,13 +243,26 @@ export class SkipModel {
     return this.search(targets, consumer !== null && this.known.has(consumer) ? consumer : null, false);
   }
 
-  /** Return whether `targets` is a non-empty set of the level's nodes and the level is acyclic. */
+  /**
+   * Return whether `targets` is a non-empty set of the level's nodes, and the level is acyclic and
+   * has a CASE (without one nothing skips).
+   */
   private queryable(targets: ReadonlySet<string>): boolean {
-    return targets.size > 0 && [...targets].every((target) => this.known.has(target)) && this.order !== null;
+    return (
+      this.hasCases && targets.size > 0 && [...targets].every((target) => this.known.has(target)) && this.order !== null
+    );
   }
 
   /**
    * Depth-first search for a CASE assignment that skips `targets` and runs `consumer`.
+   *
+   * It walks the queried nodes and their ancestors in topological order and branches on each
+   * running CASE whose pick can skip one of them, trying its choices in order. Whether a later
+   * node skips depends only on the nodes it reads, so arriving at a CASE with the same picks and
+   * skips among the nodes still to be read as a state already ruled out there has the same
+   * outcome: that state is ruled out at once and counts as one assignment. A ruled-out state
+   * stands in for at least one failed assignment, so the search never counts more than a plain
+   * enumeration and gives the same answer wherever that one stays within the bound.
    *
    * @param targets Node ids in the level that must all be skipped.
    * @param consumer A node id in the level that must run, or `null` for no such node.
@@ -234,72 +274,182 @@ export class SkipModel {
     if (consumer !== null) queried.add(consumer);
     const closure = new Set(queried);
     const pending = [...queried];
+    let branches = false;
     while (pending.length > 0) {
-      for (const parent of this.parents.get(pending.pop()!)!) {
+      const node = pending.pop()!;
+      for (const [caseId] of this.joins.get(node)!.control) if (this.choices.has(caseId)) branches = true;
+      for (const parent of this.parents.get(node)!) {
         if (!closure.has(parent)) {
           closure.add(parent);
           pending.push(parent);
         }
       }
     }
-    const nodes = this.order!.filter((node) => closure.has(node));
-    const branching = new Set<string>();
-    for (const [caseId, reached] of this.skipTargets) {
-      if (closure.has(caseId) && [...reached].some((node) => closure.has(node))) branching.add(caseId);
+    // With no CASE that can skip one of them, every node runs, so the first target fails.
+    if (!branches) return false;
+    const order = this.order!;
+    const position = this.position!;
+    const indexes = Int32Array.from(closure, (node) => position.get(node)!).sort((a, b) => a - b);
+    const nodes = [...indexes].map((index) => order[index]!);
+    const at = new Map(nodes.map((node, index) => [node, index]));
+    const count = nodes.length;
+    const isTarget = nodes.map((node) => targets.has(node));
+    const consumerAt = consumer === null ? -1 : at.get(consumer)!;
+    // The choices of each CASE whose pick can skip a node here.
+    const options: (readonly (string | null)[] | undefined)[] = new Array(count);
+    for (const node of nodes) {
+      for (const [caseId] of this.joins.get(node)!.control) {
+        const choices = this.choices.get(caseId);
+        if (choices !== undefined) options[at.get(caseId)!] = choices;
+      }
     }
-    const stack: SearchState[] = [[0, new Set(), new Map()]];
+    const joins = nodes.map((node) => this.indexedJoin(node, at, options));
+    // A node's state matters to the search until its last reader; past it, the node is dropped
+    // from the state that decides whether two partial assignments have the same future.
+    const lastUse = new Int32Array(count).fill(-1);
+    for (let index = 0; index < count; index++) {
+      for (const parent of this.parents.get(nodes[index]!)!) lastUse[at.get(parent)!] = index;
+    }
+    const expiring: (number[] | undefined)[] = new Array(count);
+    for (let index = 0; index < count; index++) {
+      const last = lastUse[index]!;
+      if (last > index) (expiring[last] ??= []).push(index);
+    }
+
+    // Each node's state: 0 runs (a CASE with one choice picks it), 1 is skipped, 2 + k is a CASE
+    // that runs and picks its choice k.
+    const state = new Int32Array(count);
+    // XOR of `stateHash` over the live nodes (passed, read later, state not 0), and their count.
+    let hash = 0;
+    let live = 0;
+    let trail: Trail | null = null;
+    const frames: Frame[] = [];
+    // The trails of the states ruled out at each CASE index, by state hash.
+    const failed: (Map<number, (Trail | null)[]> | undefined)[] = new Array(count);
     let worlds = 0;
-    while (stack.length > 0) {
-      if (worlds >= this.limit) return onLimit;
-      let [index, done, choices] = stack.pop()!;
-      const skipped = new Set(done);
+
+    /** Whether the join rule marks the node at `index` dead in the current state. */
+    const dead = (index: number): boolean => {
+      const join = joins[index]!;
+      if (
+        join.control.length > 0 &&
+        join.control.every(([caseIndex, choice]) => {
+          const picked = state[caseIndex]!;
+          return picked === 1 || (picked === 0 ? 0 : picked - 2) !== choice;
+        })
+      ) {
+        return true;
+      }
+      // A data or ordering edge carries no handle, so the runtime takes it on every route of a
+      // CASE that runs; it is skipped only when its producer is.
+      for (const producers of join.groups) if (producers.every((producer) => state[producer] === 1)) return true;
+      return join.requiredOrder.some((producer) => state[producer] === 1);
+    };
+    /** Set the node at `index` to `value`, and drop the nodes whose last reader it is. */
+    const pass = (index: number, value: number): void => {
+      state[index] = value;
+      if (value !== 0 && lastUse[index]! > index) {
+        hash ^= stateHash(index, value);
+        live += 1;
+        trail = { index, state: value, previous: trail };
+      }
+      for (const done of expiring[index] ?? []) {
+        if (state[done] !== 0) {
+          hash ^= stateHash(done, state[done]!);
+          live -= 1;
+        }
+      }
+    };
+    /** Whether the live nodes at `index` have the states `stored` recorded there. */
+    const same = (stored: Trail | null, index: number): boolean => {
+      let matched = 0;
+      for (let entry = stored; entry !== null; entry = entry.previous) {
+        if (lastUse[entry.index]! < index) continue;
+        if (state[entry.index] !== entry.state) return false;
+        matched += 1;
+      }
+      return matched === live;
+    };
+
+    let index = 0;
+    for (;;) {
       let complete = true;
-      for (const node of nodes.slice(index)) {
-        index += 1;
-        const dead = this.skips(node, skipped, choices);
-        if (dead) skipped.add(node);
-        if ((targets.has(node) && !dead) || (node === consumer && dead)) {
-          worlds += 1;
+      for (; index < count; index++) {
+        const skipped = dead(index);
+        if ((isTarget[index] && !skipped) || (index === consumerAt && skipped)) {
           complete = false;
           break;
         }
-        if (branching.has(node) && !dead) {
-          const [first, ...rest] = this.choices.get(node)!;
-          for (const choice of rest.reverse()) {
-            stack.push([index, new Set(skipped), new Map([...choices, [node, choice]])]);
+        const picks = skipped ? undefined : options[index];
+        if (picks !== undefined && picks.length > 1) {
+          if (failed[index]?.get(hash)?.some((stored) => same(stored, index))) {
+            complete = false;
+            break;
           }
-          choices = new Map([...choices, [node, first!]]);
+          frames.push({ index, next: 1, hash, live, trail });
+          pass(index, 2);
+        } else {
+          pass(index, skipped ? 1 : 0);
         }
       }
       if (complete) return true;
+      worlds += 1;
+      // Back to the newest CASE with a choice left; each CASE left behind rules out its state.
+      for (;;) {
+        const frame = frames.at(-1);
+        if (frame === undefined) return false;
+        state.fill(0, frame.index, index);
+        index = frame.index;
+        hash = frame.hash;
+        live = frame.live;
+        trail = frame.trail;
+        if (frame.next < options[index]!.length) {
+          if (worlds >= this.limit) return onLimit;
+          pass(index, 2 + frame.next);
+          frame.next += 1;
+          index += 1;
+          break;
+        }
+        frames.pop();
+        const byHash = (failed[index] ??= new Map());
+        if (!byHash.has(hash)) byHash.set(hash, []);
+        byHash.get(hash)!.push(trail);
+      }
     }
-    return false;
   }
 
   /**
-   * Return whether `node` is skipped, given its skipped ancestors and CASE choices.
+   * Return `node`'s join over the search's indexes.
    *
-   * @param node A node id in the level.
-   * @param skipped The skipped nodes among the ones before `node` in topological order.
-   * @param choices The branch each running CASE before `node` picked; `null` is no branch.
-   * @returns Whether the join rule marks `node` dead.
+   * @param node A node of the search.
+   * @param at Each node of the search to its index.
+   * @param options The choices of each CASE of the search that a node here reads.
+   * @returns Its edges that can make it skip. A control edge from an id outside the level is
+   *   always taken, and a producer outside the level never skips.
    */
-  private skips(node: string, skipped: ReadonlySet<string>, choices: ReadonlyMap<string, string | null>): boolean {
+  private indexedJoin(
+    node: string,
+    at: ReadonlyMap<string, number>,
+    options: readonly (readonly (string | null)[] | undefined)[],
+  ): IndexedJoin {
     const join = this.joins.get(node)!;
-    if (
-      join.control.length > 0 &&
-      join.control.every(
-        ([caseId, handle]) => skipped.has(caseId) || (this.choices.has(caseId) && choices.get(caseId) !== handle),
-      )
-    ) {
-      return true;
+    const control: [number, number][] = [];
+    for (const [caseId, handle] of join.control) {
+      const caseIndex = at.get(caseId);
+      if (caseIndex === undefined || !this.choices.has(caseId)) {
+        control.length = 0;
+        break;
+      }
+      control.push([caseIndex, options[caseIndex]!.indexOf(handle)]);
     }
-    // A data or ordering edge carries no handle, so the runtime takes it on every route of a CASE
-    // that runs; it is skipped only when its producer is.
+    const groups: number[][] = [];
     for (const [optional, producers] of join.groups.values()) {
-      if (!optional && producers.every((producer) => skipped.has(producer))) return true;
+      if (!optional && producers.every((producer) => at.has(producer))) {
+        groups.push(producers.map((producer) => at.get(producer)!));
+      }
     }
-    return join.requiredOrder.some((producer) => skipped.has(producer));
+    const requiredOrder = join.requiredOrder.filter((producer) => at.has(producer));
+    return { control, groups, requiredOrder: requiredOrder.map((producer) => at.get(producer)!) };
   }
 }
 

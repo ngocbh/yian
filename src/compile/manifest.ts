@@ -152,8 +152,9 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   ],
   // `mode` is derived from `code`; CODE origins are diagnostic metadata resolved only by the
   // authoring front end; `baseDir` is where a reference resolves, not what it names; `sourceFile`
-  // and `codeLineStarts` only label a failing body's stack frames.
-  [NodeKind.CODE]: ["mode", "baseDir", "sourceFile", "codeLineStarts", "codeOrigin", "codeLineOrigins"],
+  // and `codeLineStarts` only label a failing body's stack frames; `stripped` caches the inline
+  // body's JavaScript, derived from `code`.
+  [NodeKind.CODE]: ["mode", "baseDir", "sourceFile", "codeLineStarts", "codeOrigin", "codeLineOrigins", "stripped"],
   // `inputTypes` is derived from wiring and producer contracts; the run-start tool check reads it.
   [NodeKind.TOOL]: ["inputTypes"],
   [NodeKind.CASE]: [],

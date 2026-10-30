@@ -8,7 +8,7 @@ import { afterAll, expect, test } from "bun:test";
 
 import { flowFingerprint, flowManifest } from "../../src/compile/manifest.ts";
 import { cloneChild } from "../../src/compile/expand.ts";
-import type { CompiledFlow } from "../../src/compile/model.ts";
+import { type CompiledFlow, copyGraph } from "../../src/compile/model.ts";
 import { rewriteFlowOrigins } from "../../src/compile/origins.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -289,6 +289,20 @@ test("code origins are noncanonical manifest and fingerprint metadata", async ()
   expect(rewrittenNode.codeLineOrigins).not.toEqual(originalNode.codeLineOrigins);
   expect(flowManifest(rewritten)).toEqual(flowManifest(original));
   expect(flowFingerprint(rewritten)).toBe(flowFingerprint(original));
+});
+
+test("the stripped body a CODE node keeps is carried by a copy and is no manifest or fingerprint data", async () => {
+  const original = (await loadFlow(LITERAL_FLOW)).compiled;
+  const node = original.nodes.get("worker") as CodeNode;
+  const copy = copyGraph(original);
+  const copied = copy.nodes.get("worker") as CodeNode;
+
+  // The load check stripped the body; the copy reuses it instead of stripping again.
+  expect(node.stripped?.code).toBe(node.code as string);
+  expect(copied.stripped).toBe(node.stripped);
+  copied.stripped = null;
+  expect(flowManifest(copy)).toEqual(flowManifest(original));
+  expect(flowFingerprint(copy)).toBe(flowFingerprint(original));
 });
 
 test("multi node def code origins use the definition lexical path", async () => {

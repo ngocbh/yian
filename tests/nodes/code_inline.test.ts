@@ -30,7 +30,7 @@ import { NodeFailed, NodeSucceeded, type RunEvent } from "../../src/events.ts";
 import { HostOutputError, Output } from "../../src/nodes/base.ts";
 import { ContractOrigins, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { classifyCodeSource, CodeError, CodeNode, selectInlineCodeOrigin } from "../../src/nodes/code/node.ts";
-import { runtime, TypeStripError } from "../../src/platform.ts";
+import { runtime, stripTypes, TypeStripError } from "../../src/platform.ts";
 import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure } from "../../src/runtime/eval_node.ts";
 import { FileRef, Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
@@ -291,6 +291,14 @@ beforeAll(() => {
   helpers = mkdtempSync(join(tmpdir(), "yian-code-"));
   writeFileSync(join(helpers, "nothing.mjs"), "export function nothing(inputs) {}\n");
   writeFileSync(join(helpers, "broken.mjs"), 'throw new RangeError("cannot load")\n');
+  // amaro is CommonJS, so its modules land in the require cache of the thread that loads it.
+  writeFileSync(
+    join(helpers, "stripper.mjs"),
+    'import { createRequire } from "node:module";\n' +
+      "export function stripperModules() {\n" +
+      '  return Object.keys(createRequire(import.meta.url).cache).filter((key) => key.includes("/amaro/")).length;\n' +
+      "}\n",
+  );
 });
 
 afterAll(() => {
@@ -718,6 +726,40 @@ test("two serial calls reuse one thread", async () => {
   expect(await run(body)).toBe(first + 1n);
 });
 
+test("an inline body's worker never loads the type stripper", async () => {
+  expect(await run("const x: number = 1\nreturn x")).toBe(1n);
+
+  // A serial call reuses the thread the body just ran on.
+  const probe = new CodeNode("r", { code: "./stripper.mjs:stripperModules", baseDir: helpers });
+  expect(await probe.run({})).toEqual(new Output(0n));
+});
+
+test("a body the load check never saw that fails to strip rejects with the strip's TypeStripError", async () => {
+  const code = "const a: number = 1\nreturn (";
+  const expected = (await rejected(stripTypes(code))) as TypeStripError;
+
+  const error = await failure(code);
+
+  expect(error).toBeInstanceOf(TypeStripError);
+  expect((error as TypeStripError).message).toBe(expected.message);
+  expect([(error as TypeStripError).line, (error as TypeStripError).column]).toEqual([2, expected.column]);
+});
+
+test("a body the load check never saw that the constructor refuses rejects with a SyntaxError", async () => {
+  const error = await failure("let inputs = 1\nreturn inputs");
+
+  expect((error as Error).constructor).toBe(SyntaxError);
+});
+
+test("a body whose code changed after the load check runs the new code", async () => {
+  const node = new CodeNode("n", { code: "return 1" });
+  await node.check();
+
+  node.code = "const two: number = 2\nreturn two";
+
+  expect(await node.run({})).toEqual(new Output(2n));
+});
+
 test("a worker shares the host's live environment both ways", async () => {
   try {
     // A call first, so the next one lands on a thread that started before the host's change.
@@ -809,6 +851,19 @@ test(
   },
   30_000,
 );
+
+test("a stop that arrives while an unchecked body is stripped wins, and the next call works", async () => {
+  const controller = new AbortController();
+  const reason = new Error("stop");
+  const node = new CodeNode("n", { code: "await new Promise(() => {})\nreturn 1" });
+
+  // `run` reaches the strip's first await before it returns, so this abort lands during the strip.
+  const pending = rejected(node.run({}, { signal: controller.signal }));
+  queueMicrotask(() => controller.abort(reason));
+
+  expect(await pending).toBe(reason);
+  expect(await run("return 2")).toBe(2n);
+});
 
 test("an already-aborted signal rejects before a worker starts", async () => {
   const controller = new AbortController();

@@ -38,7 +38,7 @@ import {
   userRows,
   wrapSpans,
 } from "./render.ts";
-import { sanitize } from "./sanitize.ts";
+import { sanitize, sequenceSpans } from "./sanitize.ts";
 import type { CliIo, Writer } from "./utils.ts";
 
 /** The hint under the chat's framed prompt. */
@@ -667,13 +667,31 @@ export class ChatView {
    */
   #splitRaw(raw: string, cut: number): [string, string] {
     const whole = this.#partialText(raw);
-    let best: [string, string] = ["", raw];
-    for (let at = 0; at <= raw.length; at += at < raw.length ? String.fromCodePoint(raw.codePointAt(at)!).length : 1) {
-      const head = this.#partialText(raw.slice(0, at));
-      if (head.length > cut) break;
-      if (whole.startsWith(head)) best = [head, raw.slice(at)];
+    if (whole === raw) {
+      const at = cut > 0 && /[\udc00-\udfff]/.test(raw[cut] ?? "") ? cut - 1 : cut;
+      return [raw.slice(0, at), raw.slice(at)];
     }
-    return best;
+    // A split goes between code points outside the whole line's sequences: there the head draws as
+    // the start of the whole, longer the further in it is, so the last that fits is a binary search
+    // away. A head ending in an ESC, or a CSI's start, that the whole shows draws as if it weren't
+    // there, so a split after it would lose it.
+    const inside = new Uint8Array(raw.length + 1);
+    for (const [start, end] of sequenceSpans(raw)) inside.fill(1, start + 1, end);
+    for (const match of raw.matchAll(/\x1b(?:\[[0-?]*[ -/]*)?/g)) {
+      inside.fill(1, match.index + 1, Math.min(match.index + match[0].length + 1, raw.length));
+    }
+    const splits: number[] = [];
+    for (let at = 0; at <= raw.length; at += at < raw.length ? String.fromCodePoint(raw.codePointAt(at)!).length : 1) {
+      if (inside[at] === 0) splits.push(at);
+    }
+    let [low, high] = [0, splits.length - 1];
+    while (low < high) {
+      const mid = Math.ceil((low + high) / 2);
+      if (this.#partialText(raw.slice(0, splits[mid])).length <= cut) low = mid;
+      else high = mid - 1;
+    }
+    const head = this.#partialText(raw.slice(0, splits[low]));
+    return whole.startsWith(head) ? [head, raw.slice(splits[low])] : ["", raw];
   }
 
   /** Print `rows` of a result under the line above: `  ⎿  ` before the first. */

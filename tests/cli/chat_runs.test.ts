@@ -13,9 +13,11 @@ import { MissingKeyError } from "../../src/cli/utils.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { advance, inspectRun } from "../../src/run.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import { readRunLog, type RunStartedRecord } from "../../src/runtime/log.ts";
+import { Skill } from "../../src/skills/catalog.ts";
 import { tool } from "../../src/tools/function_tools.ts";
-import { NO_ENV } from "../helpers/run_state_fixtures.ts";
+import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 import { heldScheduler } from "../helpers/schedulers.ts";
 
 const TIMEOUT = 10_000;
@@ -149,6 +151,42 @@ output: \${loud.output}
     const started = await children.start(shout, {}, { tools });
     expect((await settled(children, started.id)).output).toBe("HI");
     expect(children.start(shout, {})).rejects.toThrow("shout");
+  },
+  TIMEOUT,
+);
+
+test(
+  "a child started with skills of its own gets them in place of the chat folder's",
+  async () => {
+    const env = (name: string) => (name === "XAI_API_KEY" ? "test-xai-key" : NO_ENV(name));
+    const model = new ScriptedModel([textReply("done")], { provider: "xai", model: "grok-4.3" });
+    const children = childRuns({
+      env,
+      llmConfig: { provider: "xai", model: "grok-4.3" },
+      models: serving(model, env),
+      skillsFor: () => {
+        throw new Error("not expected to read the folder's skills");
+      },
+    });
+    const guided = await flow(`id: guided
+name: guided
+nodes:
+  write:
+    kind: agent
+    skills: [guide]
+    prompt: Write.
+output: \${write.output}
+`);
+    const guide = new Skill({
+      name: "guide",
+      description: "How to write.",
+      instructions: "Be brief.",
+    });
+    const started = await children.start(guided, {}, { skills: new Map([["guide", guide]]) });
+    expect((await settled(children, started.id)).output).toBe("done");
+    expect(model.requests[0]!.tools.map((each) => each.name)).toContain("load_skill");
+    const texts = model.requests[0]!.messages.map((m) => m.text());
+    expect(JSON.stringify(texts)).toContain("How to write.");
   },
   TIMEOUT,
 );

@@ -101,8 +101,14 @@ test("bundled.ts holds the flows, the composing-agents skill and the docs pages 
   }
 });
 
-test("FLOWS holds the chat, its compaction and the report flow, and DOCS the cli page", () => {
-  expect(Object.keys(FLOWS)).toEqual(["chat.yaml", "compact_history.yaml", "report_issue.yaml"]);
+test("FLOWS holds the chat, its compaction, report and authoring flows; DOCS the cli page", () => {
+  expect(Object.keys(FLOWS)).toEqual([
+    "author_flow.yaml",
+    "chat.yaml",
+    "compact_history.yaml",
+    "report_issue.yaml",
+    "review_flow.yaml",
+  ]);
   expect(SKILL["SKILL.md"]).toContain("name: composing-agents");
   expect(SKILL["reference.md"]).toBeDefined();
   expect(DOCS["cli"]).toContain("yian chat");

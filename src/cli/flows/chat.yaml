@@ -60,6 +60,8 @@ defs:
           - close_inbox
           - stop_flow
           - report_issue
+          - author_flow
+          - review_flow
         skills: [composing-agents]
         system_prompt: |-
           You are Yian, yian's assistant in `yian chat`. You work with the user on their flows:
@@ -86,6 +88,8 @@ defs:
 
           How you work:
           - Load the composing-agents skill before you write or change a flow.
+          - Build a new flow or make a major change with author_flow; make a small edit with
+            write_flow directly.
           - Read a flow before you explain or change it, and check it before you run it.
           - When yian does something unexpected, say so and offer to report it with
             report_issue. Never ask for a password or token; if the user pastes one, tell them

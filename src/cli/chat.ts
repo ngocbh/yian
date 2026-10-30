@@ -288,8 +288,9 @@ function waitingLines(children: readonly WaitingChild[], out: Colored, env: Env)
  * it. The assistant gets the file tools (`chatFileTools`, over the docs bundle) and the run tools
  * (`chatRunTools`) over the chat's child runs, whose logs go in new run folders under
  * `~/.yian/runs` and whose CODE console output goes to a file beside the chat's log, `report_issue`
- * among them, its report filed through `file_issue` (`fileIssueTool`, on `deps.filing`); and the
- * bundled `composing-agents` skill (`bundledSkill`). When stdin, stdout and stderr are a terminal
+ * among them, its report filed through `file_issue` (`fileIssueTool`, on `deps.filing`), and
+ * `author_flow` and `review_flow`, their runs given the bundled skill too; and the bundled
+ * `composing-agents` skill (`bundledSkill`). When stdin, stdout and stderr are a terminal
  * and `NO_COLOR` is unset (`richChat`), all of it is drawn through the chat's view (`ChatView`)
  * instead: a banner box naming the model, how it is reached, the folder and the focus; the reply
  * streamed as Markdown; tool calls, child events and approvals as cards; a spinner on
@@ -425,8 +426,12 @@ export async function chat(
       ...deps.filing,
     });
     const report = { facts: hostFacts(fresh.path, homes), homes, fileIssue };
+    const authoring = { skills: new Map([[skill.name, skill]]) };
     const all = trackInFlight(
-      [...chatFileTools(host), ...chatRunTools(host, runs, { seen: queue, scheduler, report })],
+      [
+        ...chatFileTools(host),
+        ...chatRunTools(host, runs, { seen: queue, scheduler, report, authoring }),
+      ],
       inFlight,
     );
     return Object.fromEntries(all.map((each) => [each.name, each]));

@@ -817,6 +817,36 @@ async function aBracketedPasteKeepsItsNewlines(): Promise<void> {
   assert.equal(await answer, "x\ny");
 }
 
+/** Over a million characters: more than a call can take as separate arguments. */
+const HUGE_PASTE = "z".repeat(1_200_000);
+
+async function aPasteOfOverAMillionCharactersAnswersAQuestionWhole(): Promise<void> {
+  const { input, terminal } = setup();
+  const answer = terminal.askUser(request({ question: "Q?" }), toolContext());
+  input.write(PASTE_START + HUGE_PASTE + PASTE_END);
+  input.write(ENTER);
+  assert.equal(await answer, HUGE_PASTE);
+}
+
+async function aPasteOfOverAMillionCharactersGoesIntoAnUnframedReadLineWhole(): Promise<void> {
+  const { input, terminal } = setup();
+  const line = terminal.readLine("You:");
+  input.write(PASTE_START + HUGE_PASTE + PASTE_END);
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: HUGE_PASTE });
+}
+
+async function aLongPipedAnswerOnAPlainTerminalComesBackQuickly(): Promise<void> {
+  const input = new FakeInput({ tty: false });
+  const output = new FakeOutput({ tty: false });
+  const terminal = new Terminal({ input, output, plain: true });
+  const answer = terminal.askUser(request({ question: "Q?" }), toolContext());
+  // Each piped character is its own key, so typing at the end must stay cheap per key.
+  const typed = "z".repeat(200_000);
+  input.write(typed + "\n");
+  assert.equal(await answer, typed);
+}
+
 const HINT = "/exit to leave · ctrl-c interrupts · esc withdraws";
 const FRAME_TOP = `╭${"─".repeat(58)}╮`;
 const FRAME_BOTTOM = `╰${"─".repeat(58)}╯`;
@@ -3494,6 +3524,11 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a plain terminal writes a refused line's error and reads the next line afresh":
     aPlainTerminalWritesARefusedLinesErrorAndReadsTheNextLineAfresh,
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,
+  "a paste of over a million characters answers a question whole":
+    aPasteOfOverAMillionCharactersAnswersAQuestionWhole,
+  "a paste of over a million characters goes into an unframed readLine whole":
+    aPasteOfOverAMillionCharactersGoesIntoAnUnframedReadLineWhole,
+  "a long piped answer on a plain terminal comes back quickly": aLongPipedAnswerOnAPlainTerminalComesBackQuickly,
   "a framed readLine draws a box and a hint, then collapses to the line":
     aFramedReadLineDrawsABoxAndAHintThenCollapsesToTheLine,
   "a framed readLine with an editor keeps its box, emptied, under the line entered":

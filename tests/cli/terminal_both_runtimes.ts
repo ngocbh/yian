@@ -96,8 +96,10 @@ export class FakeOutput extends Writable {
 export interface Screen {
   rows: string[];
   cursor: { row: number; col: number };
-  /** Each private mode written, in order, such as `?25l` or `?2004h`. */
+  /** Each private mode written, in order, such as `?25l` or `?2004h`; not synchronized output. */
   modes: string[];
+  /** Each start (`?2026h`) and end (`?2026l`) of synchronized output, in order. */
+  syncs: string[];
 }
 
 /** Display width of one character: 2 for the CJK and fullwidth ranges the scenarios use. */
@@ -116,6 +118,7 @@ function charWidth(char: string): number {
 export function screen(text: string, columns = 80): Screen {
   let rows: string[][] = [[]];
   const modes: string[] = [];
+  const syncs: string[] = [];
   let row = 0;
   let col = 0;
   // The main screen while the alternate one is up.
@@ -150,7 +153,7 @@ export function screen(text: string, columns = 80): Screen {
     }
     const n = args === "" ? 1 : Number(args);
     if (priv === "?") {
-      modes.push(`?${args}${command}`);
+      (args === "2026" ? syncs : modes).push(`?${args}${command}`);
       if (args === "1049" && command === "h" && main === null) {
         main = { rows, row, col };
         rows = [[]];
@@ -175,7 +178,7 @@ export function screen(text: string, columns = 80): Screen {
   }
   const shown = rows.map((cells) => cells.join("").trimEnd());
   while (shown.length > 0 && shown[shown.length - 1] === "") shown.pop();
-  return { rows: shown, cursor: { row, col }, modes };
+  return { rows: shown, cursor: { row, col }, modes, syncs };
 }
 
 /** Let the streams deliver what was written: they do it in next-tick callbacks and microtasks. */
@@ -185,10 +188,10 @@ export function tick(): Promise<void> {
 
 /** A fresh fake terminal: its input, output and the `Terminal` over them. */
 function setup(
-  options: { tty?: boolean; columns?: number; throwOn?: number } & Pick<
+  options: { tty?: boolean; columns?: number; throwOn?: number } & Partial<Pick<
     TerminalOptions,
-    "onStop" | "onActive" | "now"
-  > = {},
+    "onStop" | "onActive" | "now" | "noColor"
+  >> = {},
 ): { input: FakeInput; output: FakeOutput; terminal: Terminal; view: () => Screen; exitHooks: number } {
   const input = new FakeInput({ tty: options.tty });
   const output = new FakeOutput({ columns: options.columns, throwOn: options.throwOn });
@@ -197,6 +200,7 @@ function setup(
     output,
     onStop: options.onStop,
     onActive: options.onActive,
+    noColor: options.noColor,
     ...(options.now === undefined ? {} : { now: options.now }),
   });
   const exitHooks = process.listenerCount("exit");
@@ -825,6 +829,61 @@ async function aFramedReadLineDrawsABoxAndAHintThenCollapsesToTheLine(): Promise
   assertRestored(input, output, exitHooks);
 }
 
+async function aFramedReadLineWithAnEditorKeepsItsBoxEmptiedUnderTheLine(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 60 });
+  const editor = new LineEditor({ columns: () => 60, hint: HINT });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  input.write("hello" + ENTER);
+  assert.deepEqual(await line, { value: "hello" });
+  // The box stays, emptied, for what draws next to repaint over; the editor holds what was entered.
+  assert.deepEqual(view().rows, ["> hello", FRAME_TOP, framed(">"), FRAME_BOTTOM, `  ${HINT}`]);
+  assert.deepEqual(editor.entered(), ["hello"]);
+  assert.equal(editor.text(), "");
+  // The line entered is on the user's gray band, across the width.
+  const band = `\x1b[48;5;237;38;5;252m\x1b[1m>\x1b[22m hello${" ".repeat(53)}\x1b[0m`;
+  assert.ok(output.text.includes(band));
+}
+
+async function aFramedReadLineEntersItsLineAtTheWidthOfTheTerminalThen(): Promise<void> {
+  const { input, output, terminal } = setup({ columns: 60 });
+  const editor = new LineEditor({ columns: () => output.columns, hint: HINT });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  input.write("hello");
+  await tick();
+  output.columns = 40;
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "hello" });
+  assert.ok(output.text.includes(`hello${" ".repeat(33)}\x1b[0m`));
+}
+
+async function aFramedReadLineWithNoColorEntersAPlainLine(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 60, noColor: true });
+  const editor = new LineEditor({ columns: () => 60, hint: HINT });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  input.write("hello" + ENTER);
+  assert.deepEqual(await line, { value: "hello" });
+  assert.equal(view().rows[0], "> hello");
+  assert.ok(!output.text.includes("48;5;237"));
+}
+
+async function aQuestionsRuleIsAsWideAsTheTerminalWhenItIsDrawn(): Promise<void> {
+  const { input, output, terminal } = setup({ columns: 60 });
+  const questions = parseQuestions([
+    { question: "Why?", header: "Why" },
+    { question: "Notes?", header: "Notes" },
+  ]);
+  const answer = terminal.askUser(request({ question: "Q", questions }), toolContext());
+  await tick();
+  output.columns = 40;
+  input.write("x" + ENTER);
+  await tick();
+  input.write("y" + ENTER);
+  await answer;
+  const rule = /Question 2 of 2[^─]*?(─+)/.exec(output.text)!;
+  // `Question 2 of 2 · Notes`, a space, and the rule across the rest of the 40 columns.
+  assert.equal(rule[1]!.length, 40 - 23 - 1);
+}
+
 async function aFramedReadLineFoldsALongLineInsideTheBox(): Promise<void> {
   const { input, terminal, view } = setup({ columns: 60 });
   const line = terminal.readLine("You:", { frame: true, hint: HINT });
@@ -1069,7 +1128,8 @@ async function aFramedReadLineWithAListMovesIntoItAndOpensARow(): Promise<void> 
   assert.equal(editor.focus(), null);
   input.write(DOWN + DOWN + ENTER);
   assert.deepEqual(await line, { open: "r2", draft: "hi!" });
-  assert.deepEqual(view().rows, []);
+  // The editor's box stays drawn, for what draws next to repaint over.
+  assert.deepEqual(view().rows, [...typed, "  r1  a.yaml", "» r2  b.yaml"]);
   // The editor keeps the text and the row for the next prompt.
   assert.equal(editor.focus(), 1);
   assert.equal(list.subscribed(), false);
@@ -3254,6 +3314,13 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a bracketed paste keeps its newlines": aBracketedPasteKeepsItsNewlines,
   "a framed readLine draws a box and a hint, then collapses to the line":
     aFramedReadLineDrawsABoxAndAHintThenCollapsesToTheLine,
+  "a framed readLine with an editor keeps its box, emptied, under the line entered":
+    aFramedReadLineWithAnEditorKeepsItsBoxEmptiedUnderTheLine,
+  "a framed readLine enters its line at the terminal's width then":
+    aFramedReadLineEntersItsLineAtTheWidthOfTheTerminalThen,
+  "a framed readLine with noColor enters a plain line": aFramedReadLineWithNoColorEntersAPlainLine,
+  "a question's rule is as wide as the terminal when it is drawn":
+    aQuestionsRuleIsAsWideAsTheTerminalWhenItIsDrawn,
   "a framed readLine folds a long line inside the box": aFramedReadLineFoldsALongLineInsideTheBox,
   "a bracketed paste keeps its newlines in a framed readLine": aBracketedPasteKeepsItsNewlinesFramed,
   "a long paste in a framed readLine is one token, expanded on Enter":

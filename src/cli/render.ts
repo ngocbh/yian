@@ -31,6 +31,28 @@ export function paint(text: string, style: Style, out: Colored, env: Env): strin
   return `\x1b[${codes.join(";")}m${text}\x1b[0m`;
 }
 
+/**
+ * The band a line the user sent is drawn on: a dark gray background (256-colour 237) under light
+ * gray text (252). The text's colour is set with the band's, so it reads on a light theme as on a
+ * dark one, where the terminal's own text colour might not.
+ */
+const USER_BAND = "\x1b[48;5;237;38;5;252m";
+
+/**
+ * @internal Return a line the user sent, `text` (already safe to print), as the transcript shows
+ * it: `> <text>` wrapped at its spaces to `width` cells, each row on the user's gray band across
+ * the width with the `>` bold; with `colour` false, the plain rows.
+ */
+export function userRows(text: string, width: number, colour: boolean): string[] {
+  const line = `> ${text}`;
+  const rows = wrapLine(line, Math.max(1, width)).map(([start, end]) => line.slice(start, end));
+  if (!colour) return rows;
+  return rows.map((row, i) => {
+    const body = i === 0 ? `\x1b[1m>\x1b[22m${row.slice(1)}` : row;
+    return `${USER_BAND}${body}${" ".repeat(Math.max(0, width - cells(row)))}\x1b[0m`;
+  });
+}
+
 /** @internal Write `text` in `style` and a newline to `io.stderr`. */
 export function printStyled(io: CliIo, text: string, style: Style): Promise<void> {
   return io.stderr.write(`${paint(forTerminal(text, io.stderr), style, io.stderr, io.env)}\n`);

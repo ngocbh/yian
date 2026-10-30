@@ -27,6 +27,7 @@ import type { ChildEvent } from "./chat_events.ts";
 import type { ChildStatus, LiveChild } from "./chat_runs.ts";
 import { MarkdownLines, renderMarkdown, TAB } from "./markdown.ts";
 import { ANSI, cells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
+import { liveRows, type LiveRows, type RowCursor } from "./live_rows.ts";
 import {
   box,
   type Colored,
@@ -34,6 +35,7 @@ import {
   paint,
   type Span,
   type Style,
+  userRows,
   wrapSpans,
 } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
@@ -238,7 +240,6 @@ function isReply(nodeId: string): boolean {
 }
 
 const SHOW_CURSOR = "\x1b[?25h";
-const HIDE_CURSOR = "\x1b[?25l";
 
 /** The spinner's frames, drawn in turn. */
 const SPIN_FRAMES = ["·", "✢", "✳", "✶", "✻", "✽"];
@@ -290,13 +291,15 @@ const CARD_STYLE: Readonly<Record<string, Style>> = {
  * The chat's view on a terminal, drawn on `output`: what `inboxChat` and `yian chat` print goes
  * through `writer`, the run's events through `onEvent` and `onStream`.
  *
- * The bottom of the screen is live: the reply streaming in and, while a turn runs and no prompt
- * has the terminal, the spinner and under it the input box (`input`). Text reaches the screen
- * three ways. `print` (the writer) takes
- * whole lines from the rest of the chat; `#commit` prints rows for good above the live rows, which
- * it erases first and draws again after; `#redraw` draws the live rows again in place, and is the
- * only way they change. Before anything is printed for good, the rows of the reply finished so far
- * are printed for good too (`#settleBlock`), so nothing printed lands above text it came after.
+ * The bottom of the screen is live: the reply streaming in, while a turn runs the spinner, and
+ * while no prompt has the terminal the input box (`input`) under them. The live rows are the
+ * output's shared `LiveRows`, which the prompts draw on too, so a prompt opens over the box as it
+ * is and the box comes back where the prompt left it. Text reaches the screen three ways. `print`
+ * (the writer) takes whole lines from the rest of the chat; `#commit` prints rows for good above
+ * the live rows, in the same write that draws them again; `#redraw` repaints the live rows in
+ * place, only those that changed. Before anything is printed for good, the rows of the reply
+ * finished so far are printed for good too (`#settleBlock`), so nothing printed lands above text
+ * it came after.
  *
  * The reply's model calls are tracked by `#block` (the call streaming in), `#streamed` (whether
  * the reply's last call streamed, so its output isn't printed again) and `#failed` (an attempt
@@ -310,12 +313,8 @@ export class ChatView {
   readonly #output: ViewStream;
   readonly #env: Env;
   readonly #clock: Scheduler;
-  /** How many live rows are on screen. */
-  #drawn = 0;
-  /** The live row the cursor is on: the last one's end, or the input box's cursor. */
-  #cursorRow = 0;
-  /** Whether the view shows the cursor in the input box. */
-  #cursorShown = false;
+  /** The live rows on the output, shared with the prompts drawn on it. */
+  readonly #live: LiveRows;
   /** The input box drawn under the spinner, if any. */
   #input: LiveInput | null = null;
   /** What is written while held (`hold`), written once let go; null while not held. */
@@ -329,13 +328,15 @@ export class ChatView {
    * `(retrying)` follows them once the next attempt starts, `(failed)` if the turn ends first.
    */
   #failed: { node: string; rows: string[] } | null = null;
-  readonly #onResize = () => {
-    // The live rows were drawn one screen row each; a terminal that reflowed them took more,
-    // which leaves fragments above, but erasing from higher could wipe text printed for good on
-    // one that cut them instead.
-    this.#trim();
-    this.#redraw();
-  };
+  readonly #onResize = () =>
+    this.#batch(() => {
+      // The live rows were drawn one screen row each; a terminal that reflowed them took more,
+      // which leaves fragments above, but erasing from higher could wipe text printed for good on
+      // one that cut them instead.
+      this.#live.lose();
+      this.#trim();
+      this.#redraw();
+    });
   /** What was printed last, for the blank line before the next item. */
   #last: "tool" | "text" | "other" | null = null;
   /** Whether the last row printed for good is blank, so no second blank row follows it. */
@@ -347,6 +348,9 @@ export class ChatView {
   #frame = 0;
   /** Set while a prompt has the terminal. */
   #paused = false;
+  /** How deep the calls drawing one frame are (`#batch`), and whether that frame is due. */
+  #depth = 0;
+  #due = false;
   /** Shows the cursor if the process exits while a turn has it hidden. */
   readonly #showOnExit = () => this.#output.write(SHOW_CURSOR);
 
@@ -357,6 +361,7 @@ export class ChatView {
     this.#output = output;
     this.#env = env;
     this.#clock = clock;
+    this.#live = liveRows(output);
     this.writer = {
       write: async (text) => this.print(text),
       isTTY: true,
@@ -366,10 +371,18 @@ export class ChatView {
     };
   }
 
-  /** End the view: a turn still running ends, and a line left unfinished is printed. */
+  /**
+   * End the view: a turn still running ends, a line left unfinished is printed, and the input box
+   * goes.
+   */
   close(): void {
-    if (this.#turn !== null) this.turn(false);
-    this.#flushPending();
+    this.#batch(() => {
+      if (this.#turn !== null) this.turn(false);
+      this.#flushPending();
+      this.#input = null;
+      this.#live.hideCursor(false);
+      this.#redraw();
+    });
   }
 
   /**
@@ -377,11 +390,13 @@ export class ChatView {
    * rest of its line (or the turn's end, or `close`).
    */
   print(text: string): void {
-    const lines = (this.#pending + text).split(/\r?\n/);
-    this.#pending = lines.pop()!;
-    if (lines.length === 0) return;
-    this.#last = "other";
-    this.#commit(lines);
+    this.#batch(() => {
+      const lines = (this.#pending + text).split(/\r?\n/);
+      this.#pending = lines.pop()!;
+      if (lines.length === 0) return;
+      this.#last = "other";
+      this.#commit(lines);
+    });
   }
 
   /** `text` (whole lines) dim, for the chat's notes. */
@@ -394,76 +409,86 @@ export class ChatView {
    * redraws the live rows; the end prints what is left.
    */
   turn(active: boolean): void {
-    if (active) {
-      if (this.#turn !== null) return;
-      this.#turn = { start: this.#clock.now(), stop: new AbortController() };
-      this.#last = "other";
-      this.#output.on?.("resize", this.#onResize);
-      process.once("exit", this.#showOnExit);
-      this.#emit(HIDE_CURSOR);
-      void this.#spin(this.#turn.stop.signal);
-      this.#redraw();
-      return;
-    }
-    if (this.#turn === null) return;
-    try {
-      this.#finishBlock();
-      this.#settleFailed("(failed)");
-      this.#flushPending();
-      this.#turn.stop.abort();
-      this.#turn = null;
-      // A blank line between what the turn printed and the prompt.
-      if (this.#turnPrinted) this.#blankLine();
-      this.#turnPrinted = false;
-      this.#last = null;
-      this.#redraw();
-    } finally {
-      this.#turn?.stop.abort();
-      this.#turn = null;
-      this.#output.off?.("resize", this.#onResize);
-      process.removeListener("exit", this.#showOnExit);
-      this.#cursorShown = false;
-      this.#emit(SHOW_CURSOR);
-    }
+    this.#batch(() => {
+      if (active) {
+        if (this.#turn !== null) return;
+        this.#turn = { start: this.#clock.now(), stop: new AbortController() };
+        this.#last = "other";
+        this.#output.on?.("resize", this.#onResize);
+        process.once("exit", this.#showOnExit);
+        this.#live.hideCursor(true);
+        void this.#spin(this.#turn.stop.signal);
+        this.#redraw();
+        return;
+      }
+      if (this.#turn === null) return;
+      try {
+        this.#finishBlock();
+        this.#settleFailed("(failed)");
+        this.#flushPending();
+        this.#turn.stop.abort();
+        this.#turn = null;
+        // A blank line between what the turn printed and the prompt.
+        if (this.#turnPrinted) this.#blankLine();
+        this.#turnPrinted = false;
+        this.#last = null;
+        this.#live.hideCursor(false);
+        this.#redraw();
+      } finally {
+        this.#turn?.stop.abort();
+        this.#turn = null;
+        this.#output.off?.("resize", this.#onResize);
+        process.removeListener("exit", this.#showOnExit);
+        // The frame drawn as this call ends shows the cursor again.
+        this.#live.hideCursor(false);
+      }
+    });
   }
 
   /**
    * A prompt takes the terminal (`true`) or gives it back, having left rows on the screen when
-   * `printed`: the live rows go meanwhile.
+   * `printed`. Meanwhile the prompt draws over the live rows, and they come back as it ends.
    */
   active(active: boolean, printed = false): void {
-    this.#paused = active;
-    if (!active && printed) this.#blank = false;
-    // The prompt shows the cursor as it ends; the turn hides it again.
-    if (!active && this.#turn !== null) this.#emit(HIDE_CURSOR);
-    this.#cursorShown = false;
-    this.#redraw();
+    this.#batch(() => {
+      this.#paused = active;
+      if (active) return;
+      if (printed) this.#blank = false;
+      // The prompt shows the cursor as it ends; the turn hides it again.
+      if (this.#turn !== null) this.#live.hideCursor(true);
+      this.#redraw();
+    });
   }
 
   /**
-   * Keep `input` under the spinner while a turn runs (`null` for none), its cursor shown there;
-   * call `refresh` once it changes.
+   * Keep `input` under the live rows (`null` for none), under the spinner while a turn runs, its
+   * cursor shown there; call `refresh` once it changes. Between turns it stays where the prompt
+   * that comes next draws the same box.
    */
   input(input: LiveInput | null): void {
-    this.#input = input;
-    this.#redraw();
+    this.#batch(() => {
+      this.#input = input;
+      this.#redraw();
+    });
   }
 
   /** Draw the live rows again: the input box changed. */
   refresh(): void {
-    this.#redraw();
+    this.#batch(() => {
+      this.#redraw();
+    });
   }
 
   /**
-   * Print `line`, a line sent from the input box, as the prompt leaves one: `> <line>`, wrapped at
-   * its spaces onto as many rows as it needs.
+   * Print `line`, a line sent from the input box, as the prompt leaves one (`userRows`): `> <line>`
+   * on the user's gray band, wrapped at its spaces onto as many rows as it needs.
    */
   echo(line: string): void {
-    this.#last = "other";
-    const text = `> ${sanitize(line).replaceAll("\n", "⏎")}`;
-    const rows = wrapLine(text, this.#width()).map(([start, end]) => text.slice(start, end));
-    rows[0] = this.#paint(">", "bold") + rows[0]!.slice(1);
-    this.#commit(rows);
+    this.#batch(() => {
+      this.#last = "other";
+      const colour = this.#output.isTTY === true && !this.#env("NO_COLOR");
+      this.#commit(userRows(sanitize(line).replaceAll("\n", "⏎"), this.#width(), colour));
+    });
   }
 
   /**
@@ -482,70 +507,80 @@ export class ChatView {
 
   /** A chunk of streamed text: a reply's is drawn after `⏺ `, a new model call starting a block. */
   onStream(chunk: StreamChunk): void {
-    if (!isReply(chunk.nodeId) || chunk.n === null || chunk.chunk === "") return;
-    let block = this.#block;
-    if (block === null || block.node !== chunk.nodeId || block.n !== chunk.n) {
-      this.#finishBlock();
-      // Its width is fixed now: after a resize its rows are cut to the new width, not wrapped again.
-      const markdown = new MarkdownLines(this.#width() - 2, this.#output, this.#env);
-      const fresh = { markdown, rows: [], printed: 0, partial: "", opened: false };
-      block = { node: chunk.nodeId, n: chunk.n, ...fresh };
-      this.#block = block;
-      this.#streamed = true;
-    }
-    block.partial += chunk.chunk;
-    // A `\r` at the end may be half of a `\r\n`: it waits for the next chunk.
-    const held = block.partial.endsWith("\r");
-    const lines = (held ? block.partial.slice(0, -1) : block.partial).split(/\r\n|\n|\r/);
-    block.partial = lines.pop()! + (held ? "\r" : "");
-    const rows = lines.flatMap((line) => block.markdown.line(line));
-    if (!this.#open(block, rows)) return;
-    block.rows.push(...rows);
-    if (!this.#trim()) this.#redraw();
+    this.#batch(() => {
+      if (!isReply(chunk.nodeId) || chunk.n === null || chunk.chunk === "") return;
+      let block = this.#block;
+      if (block === null || block.node !== chunk.nodeId || block.n !== chunk.n) {
+        this.#finishBlock();
+        // Its width is fixed now: after a resize its rows are cut to the new width, not wrapped
+        // again.
+        const markdown = new MarkdownLines(this.#width() - 2, this.#output, this.#env);
+        const fresh = { markdown, rows: [], printed: 0, partial: "", opened: false };
+        block = { node: chunk.nodeId, n: chunk.n, ...fresh };
+        this.#block = block;
+        this.#streamed = true;
+      }
+      block.partial += chunk.chunk;
+      // A `\r` at the end may be half of a `\r\n`: it waits for the next chunk.
+      const held = block.partial.endsWith("\r");
+      const lines = (held ? block.partial.slice(0, -1) : block.partial).split(/\r\n|\n|\r/);
+      block.partial = lines.pop()! + (held ? "\r" : "");
+      const rows = lines.flatMap((line) => block.markdown.line(line));
+      if (!this.#open(block, rows)) return;
+      block.rows.push(...rows);
+      if (!this.#trim()) this.#redraw();
+    });
   }
 
   /** The run's events: the reply's model and tool calls, and its end. */
   onEvent(event: RunEvent): void {
-    if (!("nodeId" in event) || !isReply(event.nodeId)) return;
-    if (event instanceof ModelCallStarted) {
-      this.#streamed = false;
-      if (this.#failed?.node === event.nodeId) this.#settleFailed("(retrying)");
-    } else if (event instanceof ModelCallFinished) {
-      const block = this.#block;
-      if (block === null || block.node !== event.nodeId || block.n !== event.n) return;
-      if (event.error === null) return this.#finishBlock();
-      // A failed attempt's text is taken back; a next attempt streams a block of its own.
-      this.#block = null;
-      this.#streamed = false;
-      this.#failed = { node: block.node, rows: block.printed > 0 ? this.#prefixed(block.rows, block.printed) : [] };
-      this.#redraw();
-    } else if (event instanceof ToolCallStarted) {
-      this.#finishBlock();
-      this.#gap("tool");
-      const name = sanitize(event.name);
-      const args = fit(sanitize(shortArgs(event.arguments)), Math.max(1, this.#width() - cells(name) - 4));
-      this.#commit([`${this.#paint("⏺", "cyan")} ${this.#paint(name, "bold")}(${args})`]);
-    } else if (event instanceof ToolCallFinished) {
-      const { error, result } = event;
-      const text = error === null ? (result ?? "") : error === "interrupted" ? error : `error: ${error}`;
-      const style = error === null ? "dim" : error === "interrupted" ? "yellow" : "red";
-      this.#result(summary(text, this.#width() - 5), style);
-      this.#last = "tool";
-    } else if (event instanceof NodeSucceeded) this.#finishBlock();
+    this.#batch(() => {
+      if (!("nodeId" in event) || !isReply(event.nodeId)) return;
+      if (event instanceof ModelCallStarted) {
+        this.#streamed = false;
+        if (this.#failed?.node === event.nodeId) this.#settleFailed("(retrying)");
+      } else if (event instanceof ModelCallFinished) {
+        const block = this.#block;
+        if (block === null || block.node !== event.nodeId || block.n !== event.n) return;
+        if (event.error === null) return this.#finishBlock();
+        // A failed attempt's text is taken back; a next attempt streams a block of its own.
+        this.#block = null;
+        this.#streamed = false;
+        const rows = block.printed > 0 ? this.#prefixed(block.rows, block.printed) : [];
+        this.#failed = { node: block.node, rows };
+        this.#redraw();
+      } else if (event instanceof ToolCallStarted) {
+        this.#finishBlock();
+        this.#gap("tool");
+        const name = sanitize(event.name);
+        const room = Math.max(1, this.#width() - cells(name) - 4);
+        const args = fit(sanitize(shortArgs(event.arguments)), room);
+        this.#commit([`${this.#paint("⏺", "cyan")} ${this.#paint(name, "bold")}(${args})`]);
+      } else if (event instanceof ToolCallFinished) {
+        const { error, result } = event;
+        const text =
+          error === null ? (result ?? "") : error === "interrupted" ? error : `error: ${error}`;
+        const style = error === null ? "dim" : error === "interrupted" ? "yellow" : "red";
+        this.#result(summary(text, this.#width() - 5), style);
+        this.#last = "tool";
+      } else if (event instanceof NodeSucceeded) this.#finishBlock();
+    });
   }
 
   /** The reply's output, `text`: drawn as a block unless its model call streamed it already. */
   reply(text: string): void {
-    if (this.#streamed) {
-      this.#streamed = false;
-      return;
-    }
-    // A reply of only tool calls ends with no text: it has nothing to show.
-    if (text.trim() === "") return;
-    this.#finishBlock();
-    this.#gap("text");
-    const rows = renderMarkdown(text, this.#width() - 2, this.#output, this.#env).split("\n");
-    this.#commit(this.#prefixed(rows, 0));
+    this.#batch(() => {
+      if (this.#streamed) {
+        this.#streamed = false;
+        return;
+      }
+      // A reply of only tool calls ends with no text: it has nothing to show.
+      if (text.trim() === "") return;
+      this.#finishBlock();
+      this.#gap("text");
+      const rows = renderMarkdown(text, this.#width() - 2, this.#output, this.#env).split("\n");
+      this.#commit(this.#prefixed(rows, 0));
+    });
   }
 
   /**
@@ -553,14 +588,17 @@ export class ChatView {
    * a reply still streaming, which goes on below it.
    */
   childEvent(event: ChildEvent): void {
-    this.#gap("tool");
-    const card = event.card;
-    const style = card === undefined ? "cyan" : CARD_STYLE[card.status]!;
-    const head = card === undefined ? "yian" : `${sanitize(event.run ?? "")} ${card.verb}`;
-    this.#commit([`${this.#paint("⏺", style)} ${this.#paint(fit(head, this.#width() - 2), "bold")}`]);
-    const body = card === undefined ? event.text : card.body;
-    if (body !== "") this.#result(summary(body, this.#width() - 5), "dim");
-    this.#last = "tool";
+    this.#batch(() => {
+      this.#gap("tool");
+      const card = event.card;
+      const style = card === undefined ? "cyan" : CARD_STYLE[card.status]!;
+      const head = card === undefined ? "yian" : `${sanitize(event.run ?? "")} ${card.verb}`;
+      const title = this.#paint(fit(head, this.#width() - 2), "bold");
+      this.#commit([`${this.#paint("⏺", style)} ${title}`]);
+      const body = card === undefined ? event.text : card.body;
+      if (body !== "") this.#result(summary(body, this.#width() - 5), "dim");
+      this.#last = "tool";
+    });
   }
 
   /** Print what a failed attempt left, then `note` dim in place of its text. */
@@ -602,7 +640,7 @@ export class ChatView {
     const block = this.#block;
     if (block === null) return false;
     // The spinner and the input box stay below the block.
-    const input = this.#turn !== null && !this.#paused ? this.#input : null;
+    const input = this.#paused ? null : this.#input;
     const below = input === null ? 0 : input.lines().length;
     const keep = Math.max(1, rowsOf(this.#output) - 4 - below);
     const partial = this.#partialRows(block);
@@ -706,9 +744,11 @@ export class ChatView {
     return rows.map((row, i) => `${from + i === 0 ? "⏺ " : "  "}${row}`);
   }
 
-  /** The live rows, each cut to the width: the block streaming in, then the spinner. */
-  #liveRows(): string[] {
-    if (this.#paused) return [];
+  /**
+   * The live rows, each cut to the width: the block streaming in, the spinner while a turn runs,
+   * and the input box; and the cursor in the box while a turn runs.
+   */
+  #liveRows(): { rows: string[]; cursor: RowCursor | null } {
     const rows: string[] = [];
     const block = this.#block;
     if (block !== null && block.opened) {
@@ -720,18 +760,17 @@ export class ChatView {
       const seconds = Math.floor((this.#clock.now() - this.#turn.start) / 1000);
       const frame = SPIN_FRAMES[this.#frame % SPIN_FRAMES.length]!;
       rows.push(`${this.#paint(frame, "cyan")} ${this.#paint(`Thinking… (${seconds}s · esc to interrupt)`, "dim")}`);
-      if (this.#input !== null) rows.push(...this.#input.lines());
     }
+    const input = this.#input?.lines() ?? [];
+    rows.push(...input);
     // Each row fits the width, so each takes one row of the screen; and no more rows than the
-    // screen has, less one, are drawn, or each redraw would leave a copy above in the scrollback.
+    // screen has, less one, are drawn, or the cursor couldn't reach the top ones to repaint them.
     const kept = rows.slice(Math.max(0, rows.length - (rowsOf(this.#output) - 1)));
-    return kept.map((row) => clip(row, this.#width()));
-  }
-
-  /** The text that erases the live rows, leaving the cursor at the start of where they began. */
-  #erase(): string {
-    if (this.#drawn === 0) return "";
-    return `\r${this.#cursorRow > 0 ? `\x1b[${this.#cursorRow}A` : ""}\x1b[J`;
+    const shown = this.#turn === null ? null : (this.#input?.cursor() ?? null);
+    const line = shown === null ? -1 : kept.length - input.length + shown.row;
+    // A cursor on a row cut off the top isn't shown.
+    const cursor = shown !== null && line >= 0 ? { line, before: shown.before } : null;
+    return { rows: kept.map((row) => clip(row, this.#width())), cursor };
   }
 
   /** Print `rows` for good above the live rows, after the reply's finished rows, then draw those again. */
@@ -742,40 +781,44 @@ export class ChatView {
     this.#redraw();
   }
 
-  /** Erase the live rows and print `rows` for good in their place; the live rows are left off. */
+  /** Print `rows` for good above the live rows with the next draw of them (`#redraw`). */
   #write(rows: readonly string[]): void {
     if (rows.length === 0) return;
     if (this.#turn !== null) this.#turnPrinted = true;
     this.#blank = blank(rows.at(-1)!);
-    this.#emit(this.#hideCursor() + this.#erase() + rows.map((row) => `${row}\r\n`).join(""));
-    this.#drawn = 0;
-    this.#cursorRow = 0;
+    this.#live.stage(rows);
   }
 
-  /** Draw the live rows again in place of those on screen, the cursor in the input box if any. */
+  /**
+   * Draw the live rows again, in place of those on screen, with the rows to print for good above
+   * them. While a prompt has the terminal, only those rows are printed, above the prompt.
+   */
   #redraw(): void {
-    const rows = this.#liveRows();
-    let text = this.#hideCursor() + this.#erase() + rows.join("\r\n");
-    this.#drawn = rows.length;
-    this.#cursorRow = Math.max(0, rows.length - 1);
-    const cursor = this.#turn !== null && !this.#paused ? (this.#input?.cursor() ?? null) : null;
-    const target = cursor === null ? -1 : rows.length - this.#input!.lines().length + cursor.row;
-    // A cursor on a row cut off the top isn't shown.
-    if (cursor !== null && target >= 0) {
-      const col = Math.min(cells(cursor.before.replace(ANSI, "")), this.#width() - 1);
-      if (this.#cursorRow > target) text += `\x1b[${this.#cursorRow - target}A`;
-      text += `\r\x1b[${col + 1}G${SHOW_CURSOR}`;
-      this.#cursorRow = target;
-      this.#cursorShown = true;
+    if (this.#depth > 0) {
+      this.#due = true;
+      return;
     }
-    if (text !== "") this.#emit(text);
+    const emit = (text: string) => this.#emit(text);
+    if (this.#paused) return this.#live.flush(emit);
+    const { rows, cursor } = this.#liveRows();
+    this.#live.draw(rows, cursor, emit);
   }
 
-  /** The text that hides the cursor the input box shows, before the live rows are drawn again. */
-  #hideCursor(): string {
-    if (!this.#cursorShown) return "";
-    this.#cursorShown = false;
-    return HIDE_CURSOR;
+  /**
+   * Run `draw`, whose redraws make one frame drawn as the outermost such call ends: each call of
+   * the view draws at most once.
+   */
+  #batch(draw: () => void): void {
+    this.#depth += 1;
+    try {
+      draw();
+    } finally {
+      this.#depth -= 1;
+      if (this.#depth === 0 && this.#due) {
+        this.#due = false;
+        this.#redraw();
+      }
+    }
   }
 
   /** Write `text` on the output, or keep it while held. */

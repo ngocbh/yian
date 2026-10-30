@@ -555,6 +555,7 @@ export async function inboxChat(
       if (log !== null) stop.abort(reason === "interrupt" ? new HostStop("SIGINT") : new TerminalStopped("eof"));
     },
     onActive: view === null ? undefined : (active, printed) => view.active(active, printed),
+    noColor: Boolean(io.env("NO_COLOR")),
   });
   // With the chat's look on a terminal, the prompt's box stays up while a turn runs.
   const editor =
@@ -616,6 +617,8 @@ export async function inboxChat(
       // A chat that ended with /exit before it stopped shows no prompt: no line can be sent.
       closed = inboxClosed(path, inbox.name);
     }
+    // The box is up from the start, so the first prompt and the first turn draw over the same box.
+    if (editor !== null && !closed) view?.input(editor);
     await reportRunLog(path, io.stderr, io.env);
     log = path;
     // A resume runs with the configs the log recorded: each move that can call a model first
@@ -720,12 +723,12 @@ export async function inboxChat(
       const onKey = (key: "escape" | "interrupt") => (key === "escape" ? escape() : interrupt());
       terminal.watchKeys(keys.signal, onKey, live ? liveKey : null);
       flusher?.beginTurn();
+      view?.input(live ? editor : null);
       view?.turn(true);
-      if (live) view?.input(editor);
       try {
         return await step();
       } finally {
-        view?.input(null);
+        // The box stays up as the turn ends, where the prompt coming next draws the same box.
         view?.turn(false);
         keys.abort();
         if (live) draft = editor.draft();
@@ -835,8 +838,16 @@ export async function inboxChat(
         ...framing,
         ...(editor === null ? {} : { editor }),
       });
-      // The box keeps the tokens a draft holds; a plain prompt has none.
-      const typed = editor?.draft() ?? ("draft" in read ? [read.draft] : []);
+      // The box keeps the tokens a draft holds; a plain prompt has none. A line entered has left
+      // the box, empty for the next.
+      const typed =
+        editor === null
+          ? "draft" in read
+            ? [read.draft]
+            : []
+          : "value" in read
+            ? editor.entered()
+            : editor.draft();
       const kept = "aborted" in read || "yielded" in read || "escape" in read || "open" in read;
       draft = kept ? typed : [];
       timer.abort();
@@ -883,6 +894,8 @@ export async function inboxChat(
         }
         closed = true;
         flusher?.close();
+        // No line comes after it: the box goes.
+        view?.input(null);
       } else {
         pressedAt = null;
         // The hold ends with this line: held events, and those withdrawn, go before it.

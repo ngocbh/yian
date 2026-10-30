@@ -24,8 +24,9 @@ import {
   ValueKind,
   writeAsText,
 } from "../typesys/values.ts";
-import { ANSI, cells, charCells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
-import { box } from "./render.ts";
+import { ANSI, cells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
+import { liveRows, type LiveRows } from "./live_rows.ts";
+import { box, userRows } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 
 /** Why a prompt stopped without an answer. */
@@ -62,6 +63,8 @@ export interface TerminalOptions {
    * input in cooked mode: for an output or input that isn't a terminal.
    */
   plain?: boolean;
+  /** Draw a line entered at a framed prompt plain, without the user's band: for `NO_COLOR`. */
+  noColor?: boolean;
 }
 
 /** What `Terminal.approve` asks the user to approve. */
@@ -138,6 +141,11 @@ interface Widget<T> {
   screen?: boolean;
   /** Called once the widget has left the screen, before the turn behind it can draw. */
   closed?(): void;
+  /**
+   * Its rows stay drawn once it has ended, under the line it collapses to, for what draws on the
+   * live rows next to repaint over rather than erase.
+   */
+  keeps?: boolean;
 }
 
 const ESC = "\x1b[";
@@ -219,44 +227,9 @@ export function diffCard(title: string, body: string, diff: string, columns: num
   return card.split("\n");
 }
 
-/** `text` with each `\n` written as `\r\n`, since raw mode may not translate it. */
-function crlf(text: string): string {
-  return text.replaceAll("\n", "\r\n");
-}
-
 /** Wrap `text` in the SGR `codes`. */
 function style(codes: string, text: string): string {
   return `${ESC}${codes}m${text}${ESC}0m`;
-}
-
-/**
- * Lay `line` out on a `columns`-wide terminal as the terminal wraps it: a character that doesn't
- * fit in the rest of a row (a wide one in the last column) starts the next row, and so does a `\n`.
- * Returns the rows it takes and where the character at code-point offset `at` (ANSI sequences not
- * counted) sits.
- */
-function layout(line: string, columns: number, at: number): { rows: number; cursor: { row: number; col: number } } {
-  let row = 0;
-  let col = 0;
-  let cursor: { row: number; col: number } | undefined;
-  for (const [i, char] of Array.from(line.replace(ANSI, "")).entries()) {
-    if (i === at) cursor = { row, col: Math.min(col, columns - 1) };
-    if (char === "\n") {
-      row++;
-      col = 0;
-      continue;
-    }
-    const width = charCells(char);
-    if (col + width > columns) {
-      row++;
-      col = 0;
-      if (i === at) cursor = { row, col };
-    }
-    col += width;
-  }
-  // At the end of a line that fills its last row, the terminal holds the cursor in the last
-  // column until the next character wraps it; the cursor stays there rather than adding a row.
-  return { rows: row + 1, cursor: cursor ?? { row, col: Math.min(col, columns - 1) } };
 }
 
 /**
@@ -540,6 +513,8 @@ export class LineEditor {
   readonly list: PromptList | null;
   /** The list row with the keys, its key and place, or null while the box has them. */
   #focus: { key: string; index: number } | null = null;
+  /** The draft last entered at a framed prompt (`enter`). */
+  #entered: Draft = [];
 
   /** @param options.rows The screen's height, which the list keeps within; no bound when absent. */
   constructor(options: {
@@ -573,6 +548,17 @@ export class LineEditor {
   /** Replace the text (and its tokens, given a draft), the cursor after it. */
   set(text: string | Draft): void {
     this.#text.set(text);
+  }
+
+  /** Take the draft as entered (`entered`), leaving the box empty. */
+  enter(): void {
+    this.#entered = this.draft();
+    this.set("");
+  }
+
+  /** The draft last taken by `enter`: the line a framed prompt answered, its tokens kept. */
+  entered(): Draft {
+    return this.#entered;
   }
 
   /** Where the list row with the keys is, or null while the box has them. */
@@ -734,15 +720,18 @@ function lead(row: number): string {
 type Opened = { open: string };
 
 /**
- * `editor` as a prompt: once entered it collapses to `> <text>`; any other ending erases it.
- * Escape ends it only with `escape` (answering `ESCAPED`), and Enter on a list row answers
- * `{open}`.
+ * `editor` as a prompt: once entered it collapses to `> <text>` on the user's band (`userRows`,
+ * `columns()` wide, plain without `colour`) and the editor is emptied (`LineEditor.enter`); any
+ * other ending erases it. With `keeps`, the box stays drawn under it. Escape ends it only with
+ * `escape` (answering `ESCAPED`), and Enter on a list row answers `{open}`.
  */
 function editorWidget(
   editor: LineEditor,
-  escape: boolean,
+  options: { escape: boolean; columns: () => number; colour: boolean; keeps: boolean },
 ): Widget<string | typeof ESCAPED | Opened> {
+  const { escape, columns, colour, keeps } = options;
   return {
+    keeps,
     preface: "",
     lines: () => editor.lines(),
     cursor: () => editor.cursor(),
@@ -754,10 +743,12 @@ function editorWidget(
       return action;
     },
     // The line entered as it was shown: its tokens, not the text they stand for.
-    done: (outcome) =>
-      "value" in outcome && typeof outcome.value === "string"
-        ? `${style("1", ">")} ${draftLabel(editor.draft()).replaceAll("\n", "⏎")}`
-        : null,
+    done(outcome) {
+      if (!("value" in outcome && typeof outcome.value === "string")) return null;
+      const rows = userRows(draftLabel(editor.draft()).replaceAll("\n", "⏎"), columns(), colour);
+      editor.enter();
+      return rows.join("\n");
+    },
     watch: (redraw) => editor.list?.subscribe?.(redraw) ?? (() => {}),
   };
 }
@@ -911,9 +902,12 @@ function quietly(action: () => unknown): void {
 export class Terminal {
   readonly #input: Input;
   readonly #output: Output;
+  /** The live rows the prompts draw on, shared with what else draws on the output. */
+  readonly #live: LiveRows;
   readonly #onStop: TerminalOptions["onStop"];
   readonly #onActive: TerminalOptions["onActive"];
   readonly #plain: boolean;
+  readonly #noColor: boolean;
   #attached = false;
   #closed = false;
   /** Set once the input has ended or failed; the next widget ends with the EOF outcome. */
@@ -966,8 +960,10 @@ export class Terminal {
   constructor(options: TerminalOptions = {}) {
     this.#input = options.input ?? process.stdin;
     this.#plain = options.plain === true;
+    this.#noColor = options.noColor === true;
     const output = options.output ?? process.stderr;
     this.#output = this.#plain ? plainOutput(output) : output;
+    this.#live = liveRows(this.#output);
     this.#onStop = options.onStop;
     this.#onActive = options.onActive;
     this.#now = options.now ?? Date.now;
@@ -1009,10 +1005,12 @@ export class Terminal {
    *
    * With `frame`, on a terminal that isn't plain, the prompt is a box across the terminal holding
    * `> ` and the text, the dim `hint` below it, instead of the label; once entered it collapses
-   * to `> <line>`, its pasted tokens shown as they were. Given `editor`, the box is that editor's
-   * (`LineEditor`, its hint instead of `hint`), its text set to `initial` (a `Draft`, tokens and
-   * all, when it holds pasted tokens) when it differs, and Enter on a row of its list answers
-   * `{open}` with the row's key and the draft. An answer and a draft are text, each token
+   * to `> <line>` on the user's band (`userRows`), its pasted tokens shown as they were. Given
+   * `editor`, the box is that editor's (`LineEditor`, its hint instead of `hint`), its text set to
+   * `initial` (a `Draft`, tokens and all, when it holds pasted tokens) when it differs, and Enter
+   * on a row of its list answers `{open}` with the row's key and the draft. The editor's box then
+   * stays drawn as the prompt ends, emptied once a line is entered (`LineEditor.entered` holds
+   * it), for the host's live rows to repaint over. An answer and a draft are text, each token
    * expanded; the editor's `draft()` keeps the tokens.
    *
    * With `yields`, the prompt gives way to a prompt that wants an answer (any but a `readLine`)
@@ -1096,7 +1094,12 @@ export class Terminal {
       const columns = () => columnsOf(this.#output);
       const editor = options.editor ?? new LineEditor({ columns, hint: options.hint ?? "" });
       if (!sameUnits(unitsOf(editor.draft()), unitsOf(initial))) editor.set(initial);
-      widget = editorWidget(editor, options.escape === true);
+      widget = editorWidget(editor, {
+        escape: options.escape === true,
+        columns,
+        colour: !this.#noColor,
+        keeps: options.editor !== undefined,
+      });
       draft = () => editor.text();
     } else {
       const text = textWidget({ label, mark: ">", initial: textOf(initial) });
@@ -1244,7 +1247,7 @@ export class Terminal {
       ended = await this.#runTurn(
         signal,
         (run) => {
-          for (const text of card) this.#output.write(crlf(text.replace(/\n$/, "")) + "\r\n");
+          for (const text of card) this.#print(text.replace(/\n$/, "").split("\n"));
           return run(selectWidget({ label, titles, initial }));
         },
         { keepOpen: true },
@@ -1300,7 +1303,9 @@ export class Terminal {
   // A field, so a host can pass `terminal.askUser` unbound as the `ask` handler.
   readonly askUser = async (request: AskUserRequest, ctx: ToolContext): Promise<unknown> => {
     const signal = ctx.signal;
-    const ended = await this.#runTurn(signal, (run) => promptRequest(run, this.#output, request));
+    const print = (rows: readonly string[]): void => this.#print(rows);
+    const columns = (): number => columnsOf(this.#output);
+    const ended = await this.#runTurn(signal, (run) => promptRequest(run, print, columns, request));
     if ("value" in ended) return ended.value;
     if (ended.stop !== "eof" && signal.aborted) throw signal.reason;
     throw new TerminalStopped(ended.stop);
@@ -1565,12 +1570,18 @@ export class Terminal {
         const watch = this.#watch;
         if (watch !== undefined) watch.wasRaw = wasRaw;
         if (setsRaw) quietly(() => input.setRawMode!(watch !== undefined || wasRaw));
-        // A watch with an editor still takes pastes.
-        quietly(() => output.write(SHOW_CURSOR + (watch?.edit ? PASTE_ON : PASTE_OFF)));
         quietly(() => process.removeListener("exit", onExit));
         if (watch === undefined) quietly(() => input.pause());
         if (this.#closed) quietly(() => this.#detach());
+        // The host draws its live rows over what the turn left, the rows it printed for good
+        // above them, in one write; what it doesn't draw goes out after. The cursor shows again
+        // unless the host hides it.
+        this.#live.hideCursor(false);
         quietly(() => this.#onActive?.(false, this.#printed));
+        if (!this.#plain) quietly(() => this.#live.flush());
+        const cursor = this.#live.cursorHidden ? "" : SHOW_CURSOR;
+        // A watch with an editor still takes pastes.
+        quietly(() => output.write(cursor + (watch?.edit ? PASTE_ON : PASTE_OFF)));
       }
     }
     const ending = turn.ending;
@@ -1584,6 +1595,12 @@ export class Terminal {
     if (signal?.aborted) throw signal.reason;
     if (result !== undefined && "value" in result) return result;
     throw result!.error;
+  }
+
+  /** Print `rows` for good above the prompt drawn next: written now on a plain terminal. */
+  #print(rows: readonly string[]): void {
+    if (this.#plain) this.#output.write(`${rows.join("\r\n")}\r\n`);
+    else this.#live.stage(rows);
   }
 
   /** Change the count of turns that wait for an answer by `by`, and tell the listeners. */
@@ -1619,11 +1636,7 @@ export class Terminal {
       finish({ stop: turn.ending });
     };
     turn.wake = () => finish({ stop: turn.ending! });
-    // Rows from the frame's top to where the cursor was left, so the next draw starts there.
-    let cursorRow = 0;
-    const erase = (): string => `\r${cursorRow > 0 ? `${ESC}${cursorRow}A` : ""}${ESC}J`;
-    // Whether the cursor is shown: a widget can hide it for a while (a list with the keys).
-    let shown = widget.cursor() !== null;
+    const live = this.#live;
     const draw = (): void => {
       // A plain prompt is written once, as it opens; a refused line adds only its error, since
       // the cooked tty already echoed the line.
@@ -1632,33 +1645,16 @@ export class Terminal {
         if (refused !== undefined) output.write(`${refused}\n`);
         return;
       }
-      const columns = columnsOf(output);
       const lines = widget.lines();
       if (widget.screen) {
         // From the top, one screen row each, so the screen never scrolls.
+        const columns = columnsOf(output);
         const rows = lines.slice(0, rowsOf(output)).map((line) => clip(line, columns));
         output.write(`${ESC}H${rows.map((row) => `${row}${ESC}K`).join("\r\n")}${ESC}J`);
         return;
       }
       const cursor = widget.cursor();
-      let modes = "";
-      if ((cursor !== null) !== shown) {
-        shown = cursor !== null;
-        modes = shown ? SHOW_CURSOR : HIDE_CURSOR;
-      }
-      const at = cursor === null ? -1 : Array.from(cursor.before.replace(ANSI, "")).length;
-      const laid = lines.map((line, i) => layout(line, columns, i === cursor?.row ? at : -1));
-      const total = laid.reduce((sum, line) => sum + line.rows, 0);
-      let text = modes + erase() + crlf(lines.join("\n"));
-      cursorRow = total - 1;
-      if (cursor !== null) {
-        const place = laid[cursor.row]!.cursor;
-        const target = laid.slice(0, cursor.row).reduce((sum, line) => sum + line.rows, 0) + place.row;
-        if (cursorRow > target) text += `${ESC}${cursorRow - target}A`;
-        text += `\r${ESC}${place.col + 1}G`;
-        cursorRow = target;
-      }
-      output.write(text);
+      live.draw(lines, cursor === null ? null : { line: cursor.row, before: cursor.before });
     };
     const feed = (key: Key): void => {
       try {
@@ -1674,9 +1670,14 @@ export class Terminal {
     try {
       if (this.#plain) output.write(`${widget.preface}${widget.lines().join("\n")}\n`);
       else {
+        // The rows printed for good so far go out on the main screen, before another is up.
+        if (widget.screen) live.flush();
+        else live.stage(widget.preface.split("\r\n").slice(0, -1));
         const screen = widget.screen ? ALT_ON : "";
         this.#onScreen = widget.screen === true;
-        output.write(screen + widget.preface + PASTE_ON + (shown ? SHOW_CURSOR : HIDE_CURSOR));
+        // The cursor shows only where a frame places it.
+        live.hideCursor(true);
+        output.write(screen + PASTE_ON + HIDE_CURSOR);
       }
       draw();
       this.#active = { key: feed, end: () => stop("eof") };
@@ -1697,10 +1698,11 @@ export class Terminal {
         // A `readLine` a deadline took down leaves no line: the prompt comes back after the reply.
         const vanish = turn.keepOpen && "stop" in ended && ended.stop === "aborted";
         const line = vanish ? null : widget.done(ended);
-        if (line === null) output.write(erase());
-        else if (!this.#plain) {
-          output.write(erase() + crlf(line) + "\r\n");
-          this.#printed = true;
+        // Drawn with the next frame: the host's live rows as the turn ends, or the next widget's.
+        if (!this.#plain) {
+          if (line !== null) live.stage(line.split("\n"));
+          live.set(widget.keeps === true ? widget.lines() : [], null);
+          this.#printed ||= line !== null;
         }
       }
     } catch (error) {
@@ -1957,11 +1959,14 @@ function visible(text: string): string {
   return sanitize(text, { sequences: "show", tabs: "show", invisible: "keep" });
 }
 
+/** Prints rows for good above the prompt that comes next. */
+type Print = (rows: readonly string[]) => void;
+
 /**
- * Write the box that opens a question set: who needs the input (`title`), the prompt when there is
+ * Print the box that opens a question set: who needs the input (`title`), the prompt when there is
  * one, and how many questions follow. Rich's `Panel` look, with no wrapping.
  */
-function writePanel(output: Output, title: string, prompt: string, count: number): void {
+function writePanel(print: Print, title: string, prompt: string, count: number): void {
   const body = [
     style("1", "Your input is needed for ") + style("1;36", title),
     ...(prompt ? prompt.split("\n") : []),
@@ -1977,14 +1982,20 @@ function writePanel(output: Output, title: string, prompt: string, count: number
     ...body.map((line) => `${style("36", "│")} ${line}${" ".repeat(inner - 2 - cells(line))} ${style("36", "│")}`),
     style("36", `╰${"─".repeat(inner)}╯`),
   ];
-  output.write(lines.join("\r\n") + "\r\n");
+  print(lines);
 }
 
-/** Write a blank line and the `Question i of N · <header>` rule across the terminal. */
-function writeRule(output: Output, index: number, total: number, header: string): void {
+/** Print a blank line and the `Question i of N · <header>` rule across `columns()`. */
+function writeRule(
+  print: Print,
+  columns: () => number,
+  index: number,
+  total: number,
+  header: string,
+): void {
   const title = style("1", `Question ${index} of ${total}`) + (header ? ` ${style("2", `· ${header}`)}` : "");
-  const fill = Math.max(0, columnsOf(output) - cells(title) - 1);
-  output.write(`\r\n${title} ${style("36", "─".repeat(fill))}\r\n`);
+  const fill = Math.max(0, columns() - cells(title) - 1);
+  print(["", `${title} ${style("36", "─".repeat(fill))}`]);
 }
 
 /**
@@ -2018,14 +2029,19 @@ async function askQuestion(run: RunWidget, question: Omit<QuestionSpec, "header"
  * `options` are one choice; otherwise a text prompt labelled with the question. The request's
  * text is drawn through `visible`; the answers keep its labels and headers as they are.
  */
-async function promptRequest(run: RunWidget, output: Output, request: AskUserRequest): Promise<unknown> {
+async function promptRequest(
+  run: RunWidget,
+  print: Print,
+  columns: () => number,
+  request: AskUserRequest,
+): Promise<unknown> {
   const questions = (request.questions ?? []) as QuestionSpec[];
   if (questions.length > 0) {
     const title = visible(request.title || request.nodeId || "this step");
-    writePanel(output, title, visible(request.question), questions.length);
+    writePanel(print, title, visible(request.question), questions.length);
     const answers: [string, unknown][] = [];
     for (const [i, question] of questions.entries()) {
-      writeRule(output, i + 1, questions.length, visible(question.header));
+      writeRule(print, columns, i + 1, questions.length, visible(question.header));
       answers.push([question.header, await askQuestion(run, question)]);
     }
     // `fromEntries` defines each key as data, so a header `__proto__` stays an entry.

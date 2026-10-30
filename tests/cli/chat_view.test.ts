@@ -23,8 +23,9 @@ import {
   summary,
 } from "../../src/cli/chat_view.ts";
 import type { ChildStatus, LiveChild } from "../../src/cli/chat_runs.ts";
-import { LineEditor } from "../../src/cli/terminal.ts";
+import { LineEditor, Terminal } from "../../src/cli/terminal.ts";
 import { cells } from "../../src/cli/cells.ts";
+import { liveRows, SYNC_OFF, SYNC_ON } from "../../src/cli/live_rows.ts";
 import type { CliIo, Writer } from "../../src/cli/utils.ts";
 import type { Env } from "../../src/defaults.ts";
 import {
@@ -51,6 +52,7 @@ import {
   PASTE_END,
   PASTE_START,
   screen,
+  tick,
 } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 20_000;
@@ -394,7 +396,8 @@ describe("the chat's view", () => {
     output.columns = 20;
     output.emit("resize");
     // One row was drawn: the cursor never goes up past it, whatever the terminal did to it.
-    expect(output.text.slice(before)).toBe("\r\x1b[J\x1b[36m·\x1b[0m \x1b[2mThinking… (0s · es\x1b[0m");
+    const spin = "\x1b[36m·\x1b[0m \x1b[2mThinking… (0s · es\x1b[0m";
+    expect(output.text.slice(before)).toBe(`${SYNC_ON}\r\x1b[J\r${spin}${SYNC_OFF}`);
     view.turn(false);
     // It listens only while a turn draws live rows, and not at all once closed.
     expect(output.listenerCount("resize")).toBe(0);
@@ -413,19 +416,24 @@ describe("the chat's view", () => {
     expect(rows().slice(-5)).toEqual(["  7", "  8", "  9", "  ten", "· Thinking… (0s · esc to interrupt)"]);
     const before = output.text.length;
     view.onStream(chunk(1, "!"));
+    // Only the row that changed is written again: the cursor goes up from the spinner to it.
     const ups = [...output.text.slice(before).matchAll(/\x1b\[(\d+)A/g)].map((match) => Number(match[1]));
-    expect(ups).toEqual([4]);
+    expect(ups).toEqual([1]);
     view.turn(false);
     expect(rows()).toEqual(["", "⏺ 1", "  2", "  3", "  4", "  5", "  6", "  7", "  8", "  9", "  ten!"]);
   });
 
-  test("a prompt taking the terminal while a reply streams hides it, and gives it back below", () => {
+  test("a prompt opening while a reply streams draws over it, and gives it back", () => {
     const { view, output, rows } = viewOn();
     view.turn(true);
     view.onStream(chunk(1, "a\nb"));
     view.active(true);
-    expect(rows()).toEqual([]);
-    output.write("? Run hello.yaml Approve\r\n");
+    // The prompt draws on the same live rows, over the reply's.
+    const live = liveRows(output);
+    live.draw(["? Run hello.yaml Approve (Use arrow keys)", " » Approve"], null);
+    expect(rows()).toEqual(["", "? Run hello.yaml Approve (Use arrow keys)", " » Approve"]);
+    live.stage(["? Run hello.yaml Approve"]);
+    live.set([], null);
     view.active(false);
     expect(rows()).toEqual(["", "? Run hello.yaml Approve", "⏺ a", "  b", "· Thinking… (0s · esc to interrupt)"]);
   });
@@ -558,7 +566,7 @@ describe("the chat's view", () => {
   });
 
   test("the spinner ticks on its own clock, keeps clear of lines printed, and goes when the turn ends", async () => {
-    const { view, clock, rows } = viewOn();
+    const { view, clock, output, rows } = viewOn();
     view.turn(true);
     expect(rows()).toEqual(["· Thinking… (0s · esc to interrupt)"]);
     await clock.advance(3_000);
@@ -569,9 +577,12 @@ describe("the chat's view", () => {
     await view.writer.write("warning: a skill didn't load\n");
     expect(rows()).toEqual(["warning: a skill didn't load", rows()[1]!]);
     expect(rows()[1]).toContain("Thinking… (3s");
-    // A prompt has the terminal: the spinner goes until it gives it back.
+    // A prompt has the terminal: it draws over the spinner, which comes back once it is given back.
     view.active(true);
-    expect(rows()).toEqual(["warning: a skill didn't load"]);
+    liveRows(output).draw(["? Pick"], null);
+    await clock.advance(250);
+    expect(rows()).toEqual(["warning: a skill didn't load", "? Pick"]);
+    liveRows(output).set([], null);
     view.active(false);
     expect(rows()[1]).toContain("Thinking…");
     view.turn(false);
@@ -651,8 +662,9 @@ describe("the input box during a turn", () => {
     view.echo("also blue");
     expect(rows()).toEqual(["", "⏺ Once upon", "> also blue", "  a", SPIN, TOP, boxed("> also blue"), BOTTOM, HINT]);
     view.turn(false);
-    // The prompt takes the box's place once the turn ends.
-    expect(rows()).toEqual(["", "⏺ Once upon", "> also blue", "  a"]);
+    // The box stays as the turn ends, where the prompt coming next draws the same box.
+    const box = [TOP, boxed("> also blue"), BOTTOM, HINT];
+    expect(rows()).toEqual(["", "⏺ Once upon", "> also blue", "  a", "", ...box]);
     expect(screen(output.text, COLUMNS).modes.at(-1)).toBe("?25h");
   });
 
@@ -662,8 +674,11 @@ describe("the input box during a turn", () => {
     view.turn(true);
     view.input(editor);
     view.active(true);
-    expect(rows()).toEqual([]);
-    output.write("? Run color.yaml Approve\r\n");
+    const live = liveRows(output);
+    live.draw(["? Run color.yaml Approve (Use arrow keys)"], null);
+    expect(rows()).toEqual(["? Run color.yaml Approve (Use arrow keys)"]);
+    live.stage(["? Run color.yaml Approve"]);
+    live.set([], null);
     view.active(false, true);
     expect(rows()).toEqual(["? Run color.yaml Approve", SPIN, TOP, boxed(">"), BOTTOM, HINT]);
     view.turn(false);
@@ -722,6 +737,122 @@ describe("the input box during a turn", () => {
     expect(output.text).toBe(before);
     view.hold(false);
     expect(rows()).toEqual(["a child said hi"]);
+  });
+});
+
+describe("the live rows' frames", () => {
+  const SPIN = "· Thinking… (0s · esc to interrupt)";
+  const boxed = (text: string) => `│ ${text.padEnd(COLUMNS - 4)} │`;
+  /** What each write from here on writes, as `output` collects it. */
+  const recorder = (output: FakeOutput) => {
+    const writes: string[] = [];
+    const write = output.write.bind(output);
+    output.write = ((chunk: unknown, ...rest: unknown[]) => {
+      writes.push(String(chunk));
+      return (write as (...args: unknown[]) => boolean)(chunk, ...rest);
+    }) as typeof output.write;
+    return writes;
+  };
+
+  test("each frame is one write, wrapped in synchronized output, and each call draws one", () => {
+    const { view, output } = viewOn();
+    const writes = recorder(output);
+    view.turn(true);
+    view.onStream(chunk(1, "one\ntw"));
+    view.onStream(chunk(1, "o"));
+    const status = { run: "r1", seq: 1, log: "l", status: "succeeded" as const, output: "ok" };
+    view.childEvent(childEvent(status)!);
+    expect(writes).toHaveLength(4);
+    for (const write of writes) {
+      expect(write.startsWith(SYNC_ON)).toBe(true);
+      expect(write.endsWith(SYNC_OFF)).toBe(true);
+    }
+  });
+
+  test("a spinner tick rewrites only the spinner row, and clears nothing below", async () => {
+    const { view, clock, output } = viewOn();
+    const editor = new LineEditor({ columns: () => COLUMNS, hint: HINT.trim() });
+    view.input(editor);
+    view.turn(true);
+    view.onStream(chunk(1, "Once upon\na time"));
+    const writes = recorder(output);
+    await clock.advance(250);
+    expect(writes).toHaveLength(1);
+    const tick = writes[0]!.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+    // Up to the spinner's row, the row, and down again to the box's cursor.
+    expect(tick.trimEnd()).toBe("\r✢ Thinking… (0s · esc to interrupt)");
+    expect(writes[0]).not.toContain("\x1b[J");
+  });
+
+  test("a long reply streamed in 200 pieces never clears below, and writes each line once", () => {
+    const { view, output, rows } = viewOn(16);
+    const editor = new LineEditor({ columns: () => COLUMNS, rows: () => 16, hint: HINT.trim() });
+    view.input(editor);
+    view.turn(true);
+    const lines = Array.from({ length: 40 }, (_, i) => `line ${String(i + 1).padStart(3, "0")}`);
+    const text = `${lines.join("\n")}\n`;
+    const writes = recorder(output);
+    const size = Math.ceil(text.length / 200);
+    for (let at = 0; at < text.length; at += size) {
+      view.onStream(chunk(1, text.slice(at, at + size)));
+    }
+    expect(writes.length).toBeGreaterThan(150);
+    for (const write of writes) expect(write).not.toContain("\x1b[J");
+    // A line is written whole once: as it ends, where it was streaming. Printed for good as the
+    // reply outgrows the screen, it stays where it is.
+    const all = writes.join("");
+    for (const line of lines) expect(all.split(line).length - 1).toBe(1);
+    view.onEvent(finished(1));
+    view.turn(false);
+    expect(rows().filter((row) => row.includes("line ")).map((row) => row.slice(2))).toEqual(lines);
+  });
+
+  test("the box, its hint and the run list are the same at the prompt and mid-reply", async () => {
+    const { view, output, rows } = viewOn();
+    const input = new FakeInput({ tty: true });
+    stdin = input;
+    const onActive = (active: boolean, printed: boolean) => view.active(active, printed);
+    const terminal = new Terminal({ input, output, onActive });
+    const row = { key: "r1", text: "r1  color.yaml  ● running · 3s" };
+    const list = { rows: () => [row], hint: "↓ runs" };
+    const editor = terminal.lineEditor({ hint: view.hint, list });
+    // Between turns the view keeps the box, as the chat leaves it.
+    view.input(editor);
+    const read = terminal.readLine("You:", { frame: true, escape: true, editor });
+    await tick();
+    const atPrompt = rows();
+    expect(atPrompt).toEqual([TOP, boxed(">"), BOTTOM, HINT, "  r1  color.yaml  ● running · 3s"]);
+    const before = output.text.length;
+    input.write("hi\r");
+    expect(await read).toEqual({ value: "hi" });
+    view.turn(true);
+    expect(rows()).toEqual(["> hi", SPIN, ...atPrompt]);
+    // Neither the prompt ending nor the turn starting cleared the screen below.
+    expect(output.text.slice(before)).not.toContain("\x1b[J");
+    view.turn(false);
+    expect(rows()).toEqual(["> hi", ...atPrompt]);
+  });
+});
+
+describe("the user's lines", () => {
+  test("are on a gray band across the width, the > bold, wrapped rows banded too", () => {
+    const { view, output, rows } = viewOn();
+    view.echo(`${"word ".repeat(15)}end`);
+    const band = "\x1b[48;5;237;38;5;252m";
+    const written = output.text.split("\r\n").filter((row) => row.includes(band));
+    expect(written).toHaveLength(2);
+    expect(written[0]).toContain(`${band}\x1b[1m>\x1b[22m word word`);
+    for (const row of written) expect(cells(row.slice(row.indexOf(band)))).toBe(COLUMNS);
+    expect(rows()).toEqual([`> ${"word ".repeat(11).trim()}`, `${"word ".repeat(4)}end`]);
+  });
+
+  test("are plain `> text` with NO_COLOR", () => {
+    const output = Object.assign(new FakeOutput({ columns: COLUMNS }), { isTTY: true });
+    const env = (name: string) => (name === "NO_COLOR" ? "1" : undefined);
+    const view = new ChatView(output, env, manualClock());
+    view.echo("hello there");
+    expect(output.text).toContain("> hello there\x1b[K");
+    expect(output.text.replace(/\x1b\[\?[0-9]+[hl]|\x1b\[K|\r|\n/g, "")).toBe("> hello there");
   });
 });
 
@@ -963,6 +1094,31 @@ describe("the input box while a reply runs", () => {
         "> /exit",
         "session ended",
       ]);
+    },
+    TIMEOUT,
+  );
+});
+
+describe("the first line of a chat", () => {
+  test(
+    "repaints the box in place from Enter through the reply's start, clearing nothing below",
+    async () => {
+      const { io, stdin, output, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      const before = output.text.length;
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      expect(output.text.slice(before)).not.toContain("\x1b[J");
+      model.open();
+      const idle = () => rows().at(-1) === HINT && !rows().some((line) => line.includes("Thinking"));
+      await until(idle);
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+      // /exit at the prompt takes the box down: what the chat prints after it draws no box.
+      expect(output.text.slice(output.text.lastIndexOf("session ended"))).not.toContain("╭");
+      expect(rows().at(-1)).toBe("session ended");
     },
     TIMEOUT,
   );

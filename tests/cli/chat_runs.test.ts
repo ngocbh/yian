@@ -177,11 +177,16 @@ nodes:
     prompt: Write.
 output: \${write.output}
 `);
-    const guide = new Skill({ name: "guide", description: "How to write.", instructions: "Be brief." });
+    const guide = new Skill({
+      name: "guide",
+      description: "How to write.",
+      instructions: "Be brief.",
+    });
     const started = await children.start(guided, {}, { skills: new Map([["guide", guide]]) });
     expect((await settled(children, started.id)).output).toBe("done");
     expect(model.requests[0]!.tools.map((each) => each.name)).toContain("load_skill");
-    expect(JSON.stringify(model.requests[0]!.messages.map((m) => m.text()))).toContain("How to write.");
+    const texts = model.requests[0]!.messages.map((m) => m.text());
+    expect(JSON.stringify(texts)).toContain("How to write.");
   },
   TIMEOUT,
 );

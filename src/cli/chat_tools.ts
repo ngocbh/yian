@@ -289,6 +289,17 @@ export function readFlow(path: string, real: string): string {
   }
 }
 
+/**
+ * @internal The real path of the flow file `path` in `root`, as `confine` gives it.
+ *
+ * @throws {ToolRefused} As `confine` does, and when it isn't a .yaml or .yml file.
+ */
+export function confineFlow(root: string, path: string): string {
+  const real = confine(root, path);
+  if (!isFlowFile(real)) throw new ToolRefused(`${path} is not a .yaml or .yml file`);
+  return real;
+}
+
 /** @internal `diag` as `yian check` writes it, without colour. */
 export async function renderedDiagnostic(diag: Diagnostic, env: Env): Promise<string> {
   let text = "";
@@ -374,7 +385,8 @@ export async function checkFocus(path: string, env: Env): Promise<{ text: string
 export function refuseContent(path: string, real: string, content: string): void {
   if (!isFlowFile(real)) throw new ToolRefused(`${path} is not a .yaml or .yml file`);
   if (Buffer.byteLength(content) > READ_FLOW_BYTES) {
-    throw new ToolRefused(`the content is over ${READ_FLOW_BYTES} bytes, the most the chat's file tools take`);
+    const most = `${READ_FLOW_BYTES} bytes, the most the chat's file tools take`;
+    throw new ToolRefused(`the content is over ${most}`);
   }
 }
 
@@ -581,8 +593,8 @@ export function chatFileTools(host: ChatToolHost): FunctionTool[] {
       description:
         "Check that a flow file in the chat's folder loads, running nothing: ok with its name and inputs, " +
         "or invalid with the error. Flows it imports (uses:) and code files it references must also be " +
-        "inside the chat's folder; system.paths isn't supported. With content, checks that text as the " +
-        "file at path would be, without writing it: a draft.",
+        "inside the chat's folder; system.paths isn't supported. With content, checks that " +
+        "text as the file at path would be, without writing it: a draft.",
       parameters: stringArguments(
         ["path", "The flow file, relative to the chat's folder.", true],
         ["content", "A draft's whole text, checked in place of the file's.", false],

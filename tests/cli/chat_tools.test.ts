@@ -339,7 +339,8 @@ describe("check_flow", () => {
   test("content is held to the same paths and size as a file", async () => {
     const outside = call("check_flow", { path: "../draft.yaml", content: FLOW });
     expect(await rejection(outside)).toBeInstanceOf(ToolRefused);
-    expect(await rejection(call("check_flow", { path: "a.txt", content: FLOW }))).toBeInstanceOf(ToolRefused);
+    const text = call("check_flow", { path: "a.txt", content: FLOW });
+    expect(await rejection(text)).toBeInstanceOf(ToolRefused);
     const huge = call("check_flow", { path: "big.yaml", content: "#".repeat(256 * 1024 + 1) });
     expect(await rejection(huge)).toBeInstanceOf(ToolRefused);
     const typed = await rejection(call("check_flow", { path: "d.yaml", content: 1 }));

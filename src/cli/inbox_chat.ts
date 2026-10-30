@@ -104,13 +104,15 @@ export interface InboxChatOptions {
 
 /**
  * @internal Test seams: the clock the run and the chat's timers share, the source of the process
- * signals, the model builder AGENT nodes use, and the `advance` each turn after the first calls.
+ * signals, the model builder AGENT nodes use, the `advance` each turn after the first calls, and
+ * the `send` the lines and child events go through.
  */
 export interface InboxChatDeps {
   scheduler?: Scheduler;
   signals?: Pick<NodeJS.EventEmitter, "on" | "off">;
   models?: ModelAccess | null;
   advance?: typeof advance;
+  send?: typeof send;
 }
 
 /**
@@ -325,14 +327,16 @@ function inboxClosed(log: string, inbox: string): boolean {
  * stderr and the chat exits 0. Ctrl-C (SIGINT) while a turn runs interrupts the agents reading the
  * inbox as their steer inbox (`interrupt`): the reply is cut, `(interrupted)` goes to stderr and
  * the chat waits for the next line. A second Ctrl-C within 2 s, or one at the prompt, cancels the
- * run (`chat cancelled`, exit 130). On a terminal, Esc, during a turn or at the prompt, takes back
- * the lines the run hasn't read yet (`withdraw`) and puts their text back in the prompt
- * (`(withdrew N messages; back in the prompt)`; after `/exit` it prints them), then stops the
- * turn (`interrupt`; `(stopping the reply)` when a Stop is recorded): a running reply is cut, and
- * during a sleep or an approval the reply after it stops before its first model call. At the take
- * Esc does nothing; it never cancels. While a turn runs on a terminal, the input is raw, so Ctrl-C
- * arrives as a key with the same rule, Ctrl-Z and Ctrl-\ raise no signal, and other keys are kept
- * for the next prompt (unless the box stays up, below). SIGTERM, SIGHUP or
+ * run (`chat cancelled`, exit 130). A line's turn starts as the prompt takes it, before it is sent,
+ * and ends once the run has settled, so a Ctrl-C typed with the line or right after it counts as
+ * one during the turn and stops the reply that line starts. On a terminal, Esc, during a turn or
+ * at the prompt, takes back the lines the run hasn't read yet (`withdraw`) and puts their text
+ * back in the prompt (`(withdrew N messages; back in the prompt)`; after `/exit` it prints them),
+ * then stops the turn (`interrupt`; `(stopping the reply)` when a Stop is recorded): a running
+ * reply is cut, and during a sleep or an approval the reply after it stops before its first model
+ * call. At the take Esc does nothing; it never cancels. While a turn runs on a terminal, the
+ * input is raw, so Ctrl-C arrives as a key with the same rule, Ctrl-Z and Ctrl-\ raise no signal,
+ * and other keys are kept for the next prompt (unless the box stays up, below). SIGTERM, SIGHUP or
  * `io.stop` stops the run and leaves its log (`chat stopped; the run is in <log>` and the
  * `yian run --resume <log>` that continues it, exit 130), as does Ctrl-C at an `ask` prompt,
  * which ignores Esc. While the prompt is up, the run is advanced
@@ -445,7 +449,13 @@ export async function inboxChat(
   const liveSeqs: number[] = [];
   // Set once `/exit` or `/quit` was entered in the box: it takes no more keys.
   let exiting = false;
+  // The send of the line the prompt took, while it runs (its turn has started): a Ctrl-C or Esc
+  // meanwhile acts once the line is in the log, so it stops the reply that line starts.
+  let lineSending: Promise<void> | null = null;
+  // Set while a turn ends: the box sends no more lines, and keys typed into it wait for the prompt.
+  let ending = false;
   const move = deps.advance ?? advance;
+  const deliver = deps.send ?? send;
   const view = host.view ?? null;
   // The chat's own notes, styled when it draws its look.
   const note = (text: string): Promise<void> => io.stderr.write(view === null ? text : view.note(text));
@@ -455,7 +465,7 @@ export async function inboxChat(
       ? null
       : new ChatFlusher(host.events, {
           message: inbox.message,
-          send: (value) => send(log!, inbox.name, value, { env: env.read }),
+          send: (value) => deliver(log!, inbox.name, value, { env: env.read }),
           write: note,
           fault: (error) => stop.abort(error),
           sent: view === null ? undefined : (event) => view.childEvent(event),
@@ -469,21 +479,34 @@ export async function inboxChat(
       throw error;
     }
   };
+  /**
+   * Hold the child events for the next line (`ChatFlusher.interrupted`), once the line being sent
+   * is in the log: its send ends the hold.
+   */
+  const hold = (during: boolean): void => {
+    if (lineSending === null) flusher?.interrupted(during);
+    else void lineSending.then(() => flusher?.interrupted(during));
+  };
   const interrupt = (): void => {
     if (log === null) {
       stop.abort(new HostStop("SIGINT"));
       return;
     }
+    const path = log;
     const now = scheduler.now();
-    if (turning) flusher?.interrupted(true);
+    if (turning) hold(true);
     // A press while a turn runs interrupts its reply; a second within 2 s, or one at the prompt,
     // cancels.
     if (turning && (pressedAt === null || now - pressedAt > SECOND_PRESS_MS)) {
       pressedAt = now;
       void note(`${INTERRUPTING}\n`).catch(() => {});
+      const line = lineSending;
       // The live engine takes it at once. With no reply running it records the Stop for the turn,
       // or nothing when the chat waits at the take.
-      const sent = interruptReply(log, inbox.name, { env: env.read }).catch((error: unknown) => {
+      const sent = (async () => {
+        if (line !== null) await line;
+        await interruptReply(path, inbox.name, { env: env.read });
+      })().catch((error: unknown) => {
         if (!(error instanceof DeliveryRefused)) stop.abort(error);
       });
       interrupting = Promise.all([interrupting, sent]).then(() => {});
@@ -502,9 +525,10 @@ export async function inboxChat(
   const escape = (): void => {
     if (log === null) return;
     const path = log;
-    flusher?.interrupted(turning);
+    hold(turning);
     const done = (async () => {
-      // A line entered in the box just before is in the log first, so Esc takes it back too.
+      // The line the prompt took, or one entered in the box just before, is in the log first, so
+      // Esc takes it back too.
       await liveSends;
       // The lines a withdraw may take back; one sent meanwhile is kept for the next.
       const known = [...sent.keys()];
@@ -684,7 +708,7 @@ export async function inboxChat(
           // The hold ends with this line: held events, and those withdrawn, go before it.
           await flusher?.lineSent();
           const event = lineEvent(line, inbox.message);
-          const seq = await send(path, inbox.name, event, { env: env.read });
+          const seq = await deliver(path, inbox.name, event, { env: env.read });
           liveSeqs.push(seq);
           sent.set(seq, entered);
         })
@@ -696,8 +720,9 @@ export async function inboxChat(
     };
     /** A key at the input box while a turn runs; false for one it leaves to `watchKeys` (Esc). */
     const liveKey = (key: Key): boolean => {
-      // Once the inbox is closing, no prompt comes back: the keys go to no box.
-      if (closed || exiting) return false;
+      // Once the inbox is closing, no prompt comes back: the keys go to no box. Once the turn is
+      // ending, they wait for the prompt, which sends a line entered then.
+      if (closed || exiting || ending) return false;
       const action = editor!.key(key);
       if (action !== null && "escape" in action) return false;
       if (action !== null && "value" in action) {
@@ -711,42 +736,54 @@ export async function inboxChat(
       return true;
     };
     /**
-     * Run `move` as a turn: a Ctrl-C meanwhile interrupts the reply instead of cancelling, and on a
+     * Run `body` as a turn: a Ctrl-C meanwhile interrupts the reply instead of cancelling, and on a
      * terminal, Esc withdraws and stops it (`escape`). With the chat's look, the input box stays
-     * up under the spinner, its lines sent at once (`sendLive`).
+     * up under the spinner, its lines sent at once (`sendLive`). The keys typed since the last
+     * prompt ended count as typed in the turn. It ends once `body` has, and the interrupts and the
+     * lines sent during it have landed, so the next line goes after them.
      */
-    const turn = async (step: () => Promise<RunResult>): Promise<RunResult> => {
+    const inTurn = async <T>(body: () => Promise<T>): Promise<T> => {
       turning = true;
       const keys = new AbortController();
       const live = editor !== null && !closed && !exiting;
       if (live) editor.set(draft);
-      const onKey = (key: "escape" | "interrupt") => (key === "escape" ? escape() : interrupt());
-      terminal.watchKeys(keys.signal, onKey, live ? liveKey : null);
-      flusher?.beginTurn();
       view?.input(live ? editor : null);
       view?.turn(true);
+      const onKey = (key: "escape" | "interrupt") => (key === "escape" ? escape() : interrupt());
       try {
-        return await step();
+        // Last: it hands the keys typed since the prompt ended to the turn at once.
+        terminal.watchKeys(keys.signal, onKey, live ? liveKey : null);
+        return await body();
       } finally {
         // The box stays up as the turn ends, where the prompt coming next draws the same box.
         view?.turn(false);
+        ending = true;
+        // Still watched, so a Ctrl-C while they land interrupts rather than cancels.
+        for (;;) {
+          const landing = [interrupting, liveSends] as const;
+          await Promise.all(landing);
+          if (landing[0] === interrupting && landing[1] === liveSends) break;
+        }
+        interrupting = null;
         keys.abort();
         if (live) draft = editor.draft();
+        ending = false;
         turning = false;
-        // An interrupt sent during the turn lands before the next line is sent, and so do the
-        // lines sent during it.
-        await interrupting;
-        interrupting = null;
-        await liveSends;
       }
     };
+    /** Run `step` as a move of the turn: the flusher sends child events at once meanwhile. */
+    const moveStep = (step: () => Promise<RunResult>): Promise<RunResult> => {
+      flusher?.beginTurn();
+      return step();
+    };
     /**
-     * Run `first` as a turn, then, while it leaves the run waiting with an event it sent unread,
+     * Run `first` as a move, then, while it leaves the run waiting with an event it sent unread,
      * advance it again: a send made once the engine's loop had ended is appended to the log after
-     * its last `run_waiting`, and only a move reads it.
+     * its last `run_waiting`, and only a move reads it. Runs inside a turn (`inTurn`), so a press
+     * between the moves counts as one during them.
      */
     const settle = async (first: () => Promise<RunResult>): Promise<RunResult> => {
-      let settled = await turn(first);
+      let settled = await moveStep(first);
       for (;;) {
         const seqs = flusher === null ? [] : await flusher.endTurn();
         // The lines sent from the input box during the turn, which may be stranded the same way.
@@ -758,21 +795,24 @@ export async function inboxChat(
         const last = lastWaitingSeq(path);
         const events = tracked && flusher!.afterTurn(seqs, last);
         if (!events && !lines.some((seq) => seq > last)) break;
-        settled = await turn(() => move({ log: path, checkLlmConfigs, ...shared }));
+        settled = await moveStep(() => move({ log: path, checkLlmConfigs, ...shared }));
       }
       return settled;
     };
-    const moveOn = () => settle(() => move({ log: path, checkLlmConfigs, ...shared }));
-    let result: RunResult = await settle(() =>
-      resumed === null
-        ? runFlow(flow, supplied, {
-            log: path,
-            runId,
-            llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
-            numWorkers: options.numWorkers,
-            ...shared,
-          })
-        : move({ log: path, numWorkers: options.numWorkers ?? null, checkLlmConfigs, ...shared }),
+    const advanceRun = () => settle(() => move({ log: path, checkLlmConfigs, ...shared }));
+    const moveOn = () => inTurn(advanceRun);
+    let result: RunResult = await inTurn(() =>
+      settle(() =>
+        resumed === null
+          ? runFlow(flow, supplied, {
+              log: path,
+              runId,
+              llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
+              numWorkers: options.numWorkers,
+              ...shared,
+            })
+          : move({ log: path, numWorkers: options.numWorkers ?? null, checkLlmConfigs, ...shared }),
+      ),
     );
     let cancelled = false;
     // The deadline the run was last moved at. A node is due once any of its calls passes its
@@ -790,8 +830,10 @@ export async function inboxChat(
       }
       if (flusher?.ready()) {
         // Events queued while the prompt was down, or that took it down: a turn of their own.
-        await flusher.sendQueued();
-        result = await moveOn();
+        result = await inTurn(async () => {
+          await flusher.sendQueued();
+          return advanceRun();
+        });
         continue;
       }
       // None of the lines sent so far can be withdrawn any more.
@@ -883,7 +925,7 @@ export async function inboxChat(
         continue;
       }
       // A run that ended under the chat (a cancel from outside) refuses the line or the close as
-      // `ended`; the move below then reads how it ended, and the loop stops.
+      // `ended`; the move after it then reads how it ended, and the loop stops.
       if ("eof" in read || EXIT_LINES.has(read.value.trim())) {
         // No turn comes to send them in: they are printed instead.
         await flusher?.printLeft();
@@ -896,23 +938,42 @@ export async function inboxChat(
         flusher?.close();
         // No line comes after it: the box goes.
         view?.input(null);
+        result = await moveOn();
       } else {
         pressedAt = null;
-        // The hold ends with this line: held events, and those withdrawn, go before it.
-        await flusher?.lineSent();
-        try {
-          const event = lineEvent(read.value, inbox.message);
-          const seq = await send(path, inbox.name, event, { env: env.read });
+        const entered = read.value;
+        const sending = (async () => {
+          // The hold ends with this line: held events, and those withdrawn, go before it.
+          await flusher?.lineSent();
+          const seq = await deliver(path, inbox.name, lineEvent(entered, inbox.message), { env: env.read });
           if (editor !== null) sent.set(seq, typed);
-        } catch (error) {
-          if (!(error instanceof DeliveryRefused)) throw error;
-          if (error.reason !== "ended") {
-            await note(`not sent: ${forTerminal(error.message, io.stderr)}\n`);
-            continue;
+        })();
+        // Settled however the send ends, for the presses and box lines that wait for it. Set
+        // before the turn starts, as the keys typed with the line reach the turn as it starts.
+        const line = sending.catch(() => {});
+        lineSending = line;
+        liveSends = liveSends.then(() => line);
+        // The turn starts with the send, so a Ctrl-C from here on interrupts rather than cancels.
+        const moved = await inTurn(async () => {
+          try {
+            await sending;
+          } catch (error) {
+            if (!(error instanceof DeliveryRefused)) throw error;
+            // A run that ended under the chat refuses it as `ended`; the move reads how it ended.
+            if (error.reason !== "ended") {
+              await note(`not sent: ${forTerminal(error.message, io.stderr)}\n`);
+              return null;
+            }
+          } finally {
+            lineSending = null;
           }
-        }
+          // A press while the line was sent goes first: its Stop is for the reply the line starts.
+          await interrupting;
+          return advanceRun();
+        });
+        if (moved === null) continue;
+        result = moved;
       }
-      result = await moveOn();
     }
     // A cancel that lost to the run's end is refused; its other failures are the chat's.
     if (cancelling !== null) await cancelling;

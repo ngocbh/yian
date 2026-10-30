@@ -31,7 +31,8 @@ you leave out; for an API key it reads the provider's key variable or asks with 
 | `yian models --provider P` | List the models P offers to the key read from stdin (not for Azure) |
 
 Logins live in `~/.config/yian/auth.json` (or `$XDG_CONFIG_HOME/yian/auth.json`), a file only
-you can read. Set `YIAN_AUTH_FILE`, or pass `--auth-file F`, to use another file. The
+you can read. Set `YIAN_AUTH_FILE`, or pass `--auth-file F`, to use another file. Its folder must
+be yours too: mode `0700` and not a symbolic link. yian creates a missing folder that way. The
 [CLI](/cli/) page lists every flag.
 
 ## Providers

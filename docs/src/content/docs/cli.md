@@ -409,7 +409,7 @@ $ yian auth anthropic --remove
 | `--header` | `NAME=VARIABLE` or `NAME` | An extra request header saved with the key, its value read from `VARIABLE` or a hidden prompt. Repeat it for more |
 | `--default` | | Make an already-saved provider the default |
 | `--remove` | | Delete the provider's login. Without a provider, delete the whole `--auth-file` |
-| `--auth-file` | path | Use this file instead of `$YIAN_AUTH_FILE` or the default (see [Files and folders](/reference/#files-and-folders)) |
+| `--auth-file` | path | Use this file instead of `$YIAN_AUTH_FILE` or the default (see [Files and folders](/reference/#files-and-folders)). Its folder must be yours, mode `0700` |
 | `--json` | | For `--remove` and for OpenAI device sign-in only |
 
 Setup changes nothing until sign-in and a check of the model succeed. The first provider you save
@@ -551,3 +551,4 @@ Any other exit, a crash included, prints no document; treat it as an internal er
 | A model setting is refused | Check the layer with `yian config check` before you pass it to a run |
 | A skill isn't found | `yian skills check DIR` shows why it doesn't load |
 | A resume names a `YIAN_*` variable | Set or unset it as the message says, then resume again |
+| `Credential storage at F is malformed` | Restore F from a backup, or delete its logins with `yian auth --remove --auth-file F` and log in again. A run that used F resumes only after a restore |

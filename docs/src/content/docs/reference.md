@@ -140,7 +140,7 @@ Provider API keys and base URLs, such as `ANTHROPIC_API_KEY`, are listed on
 
 | Path | What it holds |
 |---|---|
-| `~/.config/yian/auth.json` | Your saved provider logins. `$YIAN_AUTH_FILE`, or `$XDG_CONFIG_HOME/yian/auth.json`, takes its place. Written with mode `0600`, beside a `.lock` file |
+| `~/.config/yian/auth.json` | Your saved provider logins. `$YIAN_AUTH_FILE`, or `$XDG_CONFIG_HOME/yian/auth.json`, takes its place. Written with mode `0600`, beside a `.lock` file, in a folder that is yours with mode `0700` and not a symbolic link |
 | `~/.yian/mcp.json` | MCP servers `yian run` reads, when a flow needs a tool yian doesn't have |
 | `~/.yian/runs/<run_id>/log.jsonl` | A run's log, written by `yian run` and `yian chat` |
 | `~/.yian/runs/<run_id>/log.jsonl.lock` | The lock the process writing the log holds |

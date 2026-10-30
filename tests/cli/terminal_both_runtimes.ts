@@ -100,6 +100,8 @@ export interface Screen {
   modes: string[];
   /** Each start (`?2026h`) and end (`?2026l`) of synchronized output, in order. */
   syncs: string[];
+  /** The rows an erase of the whole screen (`ESC[2J`) moved off it, oldest first. */
+  scrollback: string[];
 }
 
 /** Display width of one character: 2 for the CJK and fullwidth ranges the scenarios use. */
@@ -111,12 +113,13 @@ function charWidth(char: string): number {
 
 /**
  * Replay `text` on a `columns`-wide terminal. It knows text, `\r`, `\n` (down one row, as with
- * output newline translation off), `ESC[nA`, `ESC[J`, `ESC[K`, `ESC[nG`, `ESC[r;cH` and the
- * alternate screen (`ESC[?1049h` and `l`, which gives back the main screen and its cursor);
+ * output newline translation off), `ESC[nA`, `ESC[J`, `ESC[2J` (its rows go to the scrollback, the
+ * cursor stays), `ESC[K`, `ESC[nG`, `ESC[r;cH` and the alternate screen (`ESC[?1049h` and `l`, which gives back the main screen and its cursor);
  * colours are ignored. Writing past the last column wraps on the next character, as terminals do.
  */
 export function screen(text: string, columns = 80): Screen {
   let rows: string[][] = [[]];
+  const scrollback: string[][] = [];
   const modes: string[] = [];
   const syncs: string[] = [];
   let row = 0;
@@ -171,14 +174,18 @@ export function screen(text: string, columns = 80): Screen {
     else if (command === "A") row = Math.max(0, row - n);
     else if (command === "G") col = Math.max(1, Math.min(n, columns)) - 1;
     else if (command === "K") line().length = Math.min(line().length, col);
-    else if (command === "J") {
+    else if (command === "J" && n === 2) {
+      scrollback.push(...rows);
+      rows = [[]];
+    } else if (command === "J") {
       line().length = Math.min(line().length, col);
       rows.length = row + 1;
     } else if (command !== "m") throw new Error(`the replayer doesn't know ESC[${args}${command}`);
   }
   const shown = rows.map((cells) => cells.join("").trimEnd());
   while (shown.length > 0 && shown[shown.length - 1] === "") shown.pop();
-  return { rows: shown, cursor: { row, col }, modes, syncs };
+  const scrolled = scrollback.map((cells) => cells.join("").trimEnd());
+  return { rows: shown, cursor: { row, col }, modes, syncs, scrollback: scrolled };
 }
 
 /** Let the streams deliver what was written: they do it in next-tick callbacks and microtasks. */

@@ -145,6 +145,35 @@ describe("after a resize", () => {
   });
 });
 
+describe("after a clear", () => {
+  test("the next frame erases the screen, not the scrollback, and draws every row at the top", () => {
+    const { output, live, draw, view, writes } = setup();
+    output.write("printed for good\r\n");
+    draw(["reply", "spin", "box"], { line: 2, before: "b" });
+    live.clear();
+    const text = draw(["reply", "spin", "box"], { line: 2, before: "b" });
+    expect(writes).toHaveLength(2);
+    expect(text.startsWith(`${SYNC_ON}\x1b[?25l\x1b[2J\x1b[H`)).toBe(true);
+    expect(text).not.toContain("\x1b[3J");
+    for (const row of ["reply", "spin", "box"]) expect(text.split(row)).toHaveLength(2);
+    expect(view().rows).toEqual(["reply", "spin", "box"]);
+    expect(view().scrollback).toEqual(["printed for good", "reply", "spin", "box"]);
+    expect(view().cursor).toEqual({ row: 2, col: 1 });
+  });
+
+  test("a flush with nothing set draws the rows on screen again, then frames go on as usual", () => {
+    const { live, draw, view } = setup();
+    draw(["a", "b"]);
+    live.clear();
+    live.stage(["card"]);
+    live.flush();
+    expect(view().rows).toEqual(["card", "a", "b"]);
+    const text = draw(["a", "c"]);
+    expect(text).not.toContain("\x1b[2J");
+    expect(view().rows).toEqual(["card", "a", "c"]);
+  });
+});
+
 test("a line wider than the terminal takes the rows it wraps onto", () => {
   expect(layout("x".repeat(25), COLUMNS, -1)).toMatchObject({ rows: 2, end: 5 });
   const { draw, view } = setup();

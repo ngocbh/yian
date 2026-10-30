@@ -6,7 +6,8 @@
  *
  * Each frame is one write wrapped in synchronized output, the cursor hidden while it draws. It
  * writes only the rows that changed, each over the old one, clearing what is left of it, and
- * clears below only when the frame takes fewer rows than the last.
+ * clears below only when the frame takes fewer rows than the last. After `clear`, a frame erases
+ * the screen (not the scrollback) and draws every row from its top.
  *
  * Knows about: the terminal's cell widths.
  */
@@ -108,6 +109,8 @@ export class LiveRows {
   #width: number | null = null;
   /** Set once the terminal may have reflowed the lines (a resize): the next frame starts over. */
   #lost = false;
+  /** Set by `clear`: the next frame erases the screen and draws from its top. */
+  #cleared = false;
   /** The rows to print for good above the live rows at the next flush. */
   #staged: string[] = [];
   /** The lines and cursor the next flush draws, or null to keep those on screen. */
@@ -143,6 +146,14 @@ export class LiveRows {
   }
 
   /**
+   * Forget what is on screen: the next frame erases the visible screen, keeping the scrollback, and
+   * draws every row from the screen's top. A `flush` with nothing set draws the rows on screen.
+   */
+  clear(): void {
+    this.#cleared = true;
+  }
+
+  /**
    * Keep the cursor hidden (`true`) or shown where a frame doesn't place it, from the next flush
    * on: a flush shows or hides it even when no row changed.
    */
@@ -174,13 +185,19 @@ export class LiveRows {
       out += target > row ? "\r\n".repeat(target - row) : "\r";
       row = target;
     };
+    const cleared = this.#cleared;
+    this.#cleared = false;
     const lost = this.#lost || (this.#width !== null && this.#width !== columns);
     this.#lost = false;
-    let prev = this.#lines;
+    let prev = cleared ? [] : this.#lines;
     let heights = prev.map((line) => layout(line, columns, -1).rows);
     // The screen rows from the live rows' top that hold what was drawn before.
     let stale = heights.reduce((sum, rows) => sum + rows, 0);
-    if (lost) {
+    if (cleared) {
+      // Erases the visible screen only: `ESC[3J` would take the scrollback with it.
+      out += `${ESC}2J${ESC}H`;
+      row = 0;
+    } else if (lost) {
       moveTo(0);
       out += `${ESC}J`;
       prev = [];
@@ -194,7 +211,7 @@ export class LiveRows {
     const shift = heights.slice(0, kept).reduce((sum, rows) => sum + rows, 0);
     row -= shift;
     // Where the cursor was placed, counted from the live rows' new top.
-    const last = this.#placed;
+    const last = cleared ? null : this.#placed;
     let before = last === null ? null : { row: last.row - shift, col: last.col };
     stale -= shift;
     prev = prev.slice(kept);

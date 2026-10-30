@@ -75,10 +75,9 @@ Inputs come from three places, later ones winning:
    `--input times=2` fills an `int` input. An `Any` input keeps the text as is.
 3. A prompt, for each input still missing, when stdin is a terminal.
 
-A name the flow doesn't declare, or a value for an inbox input, is a usage error; an undeclared name
-lists the declared inputs. Off a terminal,
-missing optional inputs stay unset (their defaults apply), and missing required inputs are a usage
-error that names them all.
+A name the flow doesn't declare is a usage error that lists the declared inputs; so is a value for
+an inbox input. Off a terminal, missing optional inputs stay unset (their defaults apply), and
+missing required inputs are a usage error that names them all.
 
 <!-- yian-test {"replies": ["Hi Ada! Hi Ada!"]} -->
 ```yaml check=runnable title="greet.yaml"
@@ -105,9 +104,7 @@ input offers `Set null`. Ctrl-C or the end of input cancels: `run cancelled`, ex
 
 A fresh run writes its log to `~/.yian/runs/<run_id>/log.jsonl`, in a folder of its own, and
 prints `Run log: PATH` on stderr before it starts, even with `--quiet`. With `--log PATH`, choose a
-path in a folder no other run uses: that folder is the run's folder, and the run keeps its lock
-file and its `media` folder beside the log. A model call whose reply holds media fails if `media`
-is a symlink, another user's, or writable by others.
+path in a folder no other run uses: the run keeps its lock file and media files beside the log.
 
 The log holds the run's inputs, node outputs, model replies and errors. Treat it as private data.
 yian creates `~/.yian` and the run folders with mode `0700` and the log with mode `0600`.
@@ -232,13 +229,11 @@ ends. See [Agents](/agents/) for the file format.
   `{"k":"v"}`).
 - The banner (the flow's name, version and description) and per-node progress go to stderr. Each
   node shows a spinner, then `✓ node` or `✗ node` with the error below. Each line ends with how
-  long the node has run, counting up while it runs and fixed once it ends (`✓ frame [5s]`,
-  `⠋ debate [1m05s]`). Off a terminal, only the finished lines print.
+  long the node has run (`✓ frame [5s]`). Off a terminal, only the finished lines print.
 - Warnings print as `warning: <message>` lines on stderr.
 - Colour is used only on a terminal, and never when `NO_COLOR` is set.
-- On a terminal, the output, errors and warnings lose their escape sequences and control
-  characters (all but newlines and tabs), so text from a model or tool can't move the cursor, set
-  the clipboard or add a link. Piped or redirected output keeps every byte.
+- On a terminal, escape sequences and control characters other than newlines and tabs
+  are dropped from what prints. Piped or redirected output keeps every byte.
 
 A load error shows where the flow broke: the lines around it, the line marked `❱`, and the message
 below. A runtime error points at the line it came from the same way. Add `--engine-trace` only to
@@ -526,10 +521,8 @@ time and flow file. It first updates the run index, `~/.yian/runs/index.sqlite`,
 from the logs and safe to delete. With `--json`, each run also has its end time, result and token
 counts.
 
-A run whose log yian can't read shows `unreadable at seq N` as its status: N is the first record
-it couldn't read, such as a damaged line. The update warns once, and again only after the log
-changes. `yian status LOG` says what is wrong. With `--json`, such a run has `unreadable` with
-`seq` and `reason` (`null` for other runs), and its other fields describe the records before seq N.
+A run whose log yian can't read from record N on shows `unreadable at seq N`; `yian status LOG`
+says what is wrong. With `--json`, it has `unreadable: {seq, reason}` (`null` for other runs).
 
 ## yian auth
 
@@ -564,8 +557,7 @@ Setup changes nothing until sign-in and a check of the model succeed. The first 
 becomes the default. Listing never prints a secret. Off a terminal, give every value the setup
 would ask for.
 
-An OpenAI API key is checked by listing the models at `OPENAI_BASE_URL` when it is set, else at
-OpenAI's API, so the key goes only to the host runs use.
+An OpenAI API key is checked against `OPENAI_BASE_URL` when it is set.
 
 ## yian providers
 
@@ -612,7 +604,7 @@ $ printf '%s' "$OPENROUTER_API_KEY" | yian models --provider openrouter
 
 Give exactly one of `--auth-file` and `--provider`. The key comes from stdin, never from the
 command line or the environment; an empty stdin, or a terminal, sends none. Without `--base-url`,
-`--provider openai` lists `OPENAI_BASE_URL` when it is set, the host runs use. Azure has no model
+`--provider openai` uses `OPENAI_BASE_URL` when it is set. Azure has no model
 listing. A failed listing exits 1.
 
 ## yian config check

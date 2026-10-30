@@ -10,7 +10,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { AUTHORING_TOOLS, loadAuthorFlow, loadReviewFlow } from "../../src/cli/authoring.ts";
+import {
+  AUTHOR_TOOLS,
+  loadAuthorFlow,
+  loadReviewFlow,
+  REVIEW_TOOLS,
+} from "../../src/cli/authoring.ts";
 import { FLOWS } from "../../src/cli/bundled.ts";
 import { chatFileTools } from "../../src/cli/chat_tools.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
@@ -49,19 +54,31 @@ test("both flows are bundled as written and load", async () => {
   ]);
 });
 
-test("the flows' agents use only ask_user and the tools the chat grants them", async () => {
-  const granted = new Set<string>([...AUTHORING_TOOLS, "ask_user"]);
-  for (const flow of [await loadAuthorFlow(NO_ENV), await loadReviewFlow(NO_ENV)]) {
+test("the flows' agents use only ask_user and the tools the chat grants each", async () => {
+  const flows = [
+    [await loadAuthorFlow(NO_ENV), AUTHOR_TOOLS],
+    [await loadReviewFlow(NO_ENV), REVIEW_TOOLS],
+  ] as const;
+  for (const [flow, grants] of flows) {
+    const granted = new Set<string>([...grants, "ask_user"]);
     for (const [, node] of staticNodes(flow)) {
       for (const name of node.grantedTools()) expect(granted.has(name)).toBe(true);
       const call = node.hostToolCall();
       if (call !== null) expect(granted.has(call.toolId)).toBe(true);
     }
   }
-  const nodes = staticNodes(await loadReviewFlow(NO_ENV));
-  const reviewer = nodes.find(([path]) => path.endsWith("review"));
-  // The review only reads: it may neither write nor run what it reviews.
-  expect((reviewer![1] as AgentNode).tools).toEqual(["read_flow", "read_docs"]);
+});
+
+test("every agent of the flows that calls tools has a cap on its turns", async () => {
+  for (const flow of [await loadAuthorFlow(NO_ENV), await loadReviewFlow(NO_ENV)]) {
+    for (const [path, node] of staticNodes(flow)) {
+      if (node.kind !== "agent") continue;
+      const agent = node as AgentNode;
+      if (agent.tools.length === 0) continue;
+      const cap = agent.maxToolIterations();
+      expect(cap > 0 ? path : `${path} has no cap`).toBe(path);
+    }
+  }
 });
 
 /** A flow whose CODE node runs what an untrusted input says. */

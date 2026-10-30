@@ -31,6 +31,7 @@ import {
   type ChatToolHost,
   chatFileTools,
   confine,
+  confineFlow,
   readFlow,
   refuseContent,
   renderedDiagnostic,
@@ -39,7 +40,7 @@ import {
   stringArg,
   stringArguments,
 } from "./chat_tools.ts";
-import { AUTHORING_TOOLS, loadAuthorFlow, loadReviewFlow } from "./authoring.ts";
+import { AUTHOR_TOOLS, loadAuthorFlow, loadReviewFlow, REVIEW_TOOLS } from "./authoring.ts";
 import { loadConfinedText } from "./confined_load.ts";
 import { unifiedDiff } from "./diff.ts";
 import { loadReportFlow } from "./report_issue.ts";
@@ -74,6 +75,10 @@ interface View {
   known(args: Record<string, unknown>): string;
   /** Note that this view started `run`. */
   started(run: string): void;
+  /** The runs this view started. */
+  mine(): readonly string[];
+  /** Who starts runs through this view, for the approval card: a bundled flow, or null. */
+  readonly requester: string | null;
 }
 
 /** What `author_flow` and `review_flow` start their runs with. */
@@ -106,6 +111,17 @@ export interface ChatRunToolsOptions {
   report?: ReportOptions | null;
   /** What `author_flow` and `review_flow` need; without it, there are neither. */
   authoring?: AuthoringOptions | null;
+}
+
+/**
+ * The start card's title for `file`: a draft says it isn't written, and a start a bundled flow
+ * (`requester`) asks for names it.
+ */
+function startTitle(file: string, draft: boolean, requester: string | null): string {
+  const notes = [draft ? "a draft" : null, requester === null ? null : `for ${requester}`];
+  const shown = notes.filter((note) => note !== null);
+  if (draft && requester === null) shown.push("not written");
+  return shown.length === 0 ? `Run ${file}` : `Run ${file} (${shown.join(", ")})`;
 }
 
 /** `text` cut to `STATUS_TEXT_CHARS` characters, with a note when it was cut. */
@@ -381,10 +397,10 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
 
   /**
    * How a set of run tools shows runs: `marks`, for the assistant's own, marks each status it
-   * shows read and seen, so the chat doesn't relay it again; a child's set marks nothing, and
-   * reads only the runs it started (`started`), so the assistant still hears of them.
+   * shows read and seen, so the chat doesn't relay it again; a child's set (`requester`'s) marks
+   * nothing, and reads only the runs it started (`started`), so the assistant still hears of them.
    */
-  function view(marks: boolean): View {
+  function view(marks: boolean, requester: string | null = null): View {
     // By run, the last seq this view showed; with `seen`'s, what `wait_flow` waits past.
     const shown = new Map<string, number>();
     const mine = new Set<string>();
@@ -409,7 +425,27 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
         return id;
       },
       started: (id) => void mine.add(id),
+      mine: () => [...mine],
+      requester,
     };
+  }
+
+  /**
+   * Once child `id` ends, cancel each run it started through `own` that still goes, such as a try
+   * it stopped waiting for. A child the chat stops without its end is left to the chat's end.
+   */
+  async function cancelWhenEnded(id: string, own: View): Promise<void> {
+    const ended = (status: ChildStatus) => !["running", "waiting"].includes(status.status);
+    let status = runs.status(id);
+    while (!ended(status)) {
+      const next = await runs.next(id, status.seq);
+      // The same status back: its driver stopped without ending it.
+      if (next.seq === status.seq) return;
+      status = next;
+    }
+    for (const run of own.mine()) {
+      if (!ended(runs.status(run))) await runs.stop(run);
+    }
   }
 
   /** The `start_flow` tool, its runs shown through `through`. */
@@ -488,22 +524,24 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
 
   /**
    * `author_flow` and `review_flow`, which start the bundled authoring flows as child runs
-   * without asking: each run gets `AUTHORING_TOOLS` (the file tools over `host`, and its own
-   * `start_flow` and `wait_flow`), whose writes and starts ask the user as the assistant's do,
-   * and `options.skills`.
+   * without asking. The author run gets `AUTHOR_TOOLS` (the file tools over `host`, and its own
+   * `start_flow` and `wait_flow`), whose writes and starts ask the user as the assistant's do;
+   * the review run only `REVIEW_TOOLS`; both `options.skills`. Once a run ends, the runs it
+   * started that still go are cancelled. A path `author_flow` is given is refused at once unless
+   * it names a flow file in the chat's folder.
    */
   function authoringTools(options: AuthoringOptions): FunctionTool[] {
     const start = async (
+      name: string,
+      grants: readonly string[],
       load: () => Promise<ComposedFlow>,
       inputs: Record<string, unknown>,
       signal: AbortSignal,
     ): Promise<string> => {
-      const own = view(false);
+      const own = view(false, name);
       const granted: FunctionTool[] = [...chatFileTools(host), startTool(own), waitTool(own)];
       const tools = Object.fromEntries(
-        granted
-          .filter((each) => (AUTHORING_TOOLS as readonly string[]).includes(each.name))
-          .map((each) => [each.name, each]),
+        granted.filter((each) => grants.includes(each.name)).map((each) => [each.name, each]),
       );
       let id: string;
       try {
@@ -513,6 +551,8 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
         if (error instanceof Error) return `not started: ${error.message}`;
         throw error;
       }
+      // A failure here leaves the child's runs to the chat's end, which cancels them too.
+      cancelWhenEnded(id, own).catch(() => {});
       return show(runs.status(id));
     };
     return [
@@ -536,7 +576,10 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
         execute: (args, ctx) => {
           const goal = stringArg(args, "goal");
           const path = args["path"] === undefined ? null : stringArg(args, "path");
-          return start(() => loadAuthorFlow(host.env), { goal, path }, ctx.signal);
+          // Refused now, before the user answers anything for a flow that can't be written.
+          if (path !== null) confineFlow(host.root, path);
+          const load = () => loadAuthorFlow(host.env);
+          return start("author_flow", AUTHOR_TOOLS, load, { goal, path }, ctx.signal);
         },
       }),
       tool({
@@ -553,7 +596,8 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
         execute: (args, ctx) => {
           const path = stringArg(args, "path");
           const text = readFlow(path, confine(resolveRoot(host.root), path));
-          return start(() => loadReviewFlow(host.env), { path, text }, ctx.signal);
+          const load = () => loadReviewFlow(host.env);
+          return start("review_flow", REVIEW_TOOLS, load, { path, text }, ctx.signal);
         },
       }),
     ];
@@ -620,7 +664,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
       // A draft is on no disk for the user to read, so the card shows all of it.
       const draft = content !== undefined;
       const answer = await host.approve({
-        title: draft ? `Run ${file} (a draft, not written)` : `Run ${file}`,
+        title: startTitle(file, draft, through.requester),
         body: [
           `Starts ${draft ? "the draft " : ""}${file} in the background.`,
           `inputs: ${cutText(JSON.stringify(inputs))}`,

@@ -31,6 +31,8 @@ nodes:
       path: ${input.path}
       text: ${input.text}
     tools: [read_flow, read_docs]
+    env:
+      max_tool_iterations: 8
     output: Review
     system_prompt: |-
       You review flows written in yian, a YAML language for flows of agent, code, tool, case,

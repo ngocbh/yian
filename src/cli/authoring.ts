@@ -2,7 +2,7 @@
  * The bundled flows `yian chat`'s assistant writes and reviews flows with: `author_flow.yaml`,
  * which builds or reworks a flow with the user, and `review_flow.yaml`, which reviews one and
  * which the first calls on each draft. The chat starts each as a child run, granting it the
- * chat's tools `AUTHORING_TOOLS`.
+ * chat's tools `AUTHOR_TOOLS` or `REVIEW_TOOLS`.
  *
  * Knows about: compose and the bundle.
  */
@@ -18,17 +18,20 @@ const REVIEW_FILE = "review_flow.yaml";
 const REVIEW_ALIAS = "review_flow";
 
 /**
- * The chat's tools the authoring flows are granted, each under the same confinement and
- * approvals as the assistant's own; no other child run gets them.
+ * The chat's tools the author flow is granted, each under the same confinement and approvals as
+ * the assistant's own; no other child run gets them. Its `start_flow` and `wait_flow` are its own.
  */
-export const AUTHORING_TOOLS = [
+export const AUTHOR_TOOLS: readonly string[] = [
   "check_flow",
   "read_flow",
   "read_docs",
   "write_flow",
   "start_flow",
   "wait_flow",
-] as const;
+];
+
+/** The chat's tools the review flow is granted: it only reads. */
+export const REVIEW_TOOLS: readonly string[] = ["read_flow", "read_docs"];
 
 /**
  * Load the bundled review flow.

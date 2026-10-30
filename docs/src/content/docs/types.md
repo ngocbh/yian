@@ -219,6 +219,10 @@ A tag on a `${...}` compares the type yian infers for the value with the tag:
 A failed check at run time fails the reading node with `binding.type`. A check never converts
 a value: an int in a `float` slot stays an int.
 
+A check that fails inside a list or record says where, here in the second leg of a flow output
+tagged `!list(Leg)`: `flow output at [1].mode: "boat" is not one of Literal(car, train)`. Flow
+inputs, node inputs and node outputs name the place the same way.
+
 ## Wiring between flows
 
 When a value goes into a child flow's input (through `call`, `map` or `loop`), its type must fit

@@ -281,6 +281,25 @@ export function errorFromResponse(
   });
 }
 
+/**
+ * Build the error for a 2xx reply to a streamed request whose body holds no server-sent event
+ * line, such as a JSON error object or an HTML gateway page; `body` must already be stripped of
+ * credentials. It names the reply's media type and the body's detail, and is a `protocol`
+ * error, not retryable: sending the request again gets the same reply.
+ */
+export function nonStreamError(
+  status: number,
+  headers: Headers,
+  body: string,
+  { provider, credentials = [] }: ErrorFromResponseOptions,
+): ProviderError {
+  const type = (headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
+  const what = type ? `content-type ${type}` : "no content-type";
+  const detail = bodyDetail(body, credentials);
+  const message = `${provider} returned a reply that is not an event stream (${what}): ${detail}`;
+  return new ProviderError("protocol", message, { status, provider });
+}
+
 /** Return whether a reply allows a retry, in the order openai checks. */
 function isRetryable(status: number, kind: ErrorKind, headers: Headers, retryAfter: number | null): boolean {
   if (retryAfter !== null && Number.isFinite(retryAfter) && retryAfter > MAX_RETRY_AFTER_SECONDS) return false;

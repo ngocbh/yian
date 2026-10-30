@@ -324,6 +324,27 @@ describe("check_flow", () => {
     expect(await rejection(call("check_flow", { path: ".env" }))).toBeInstanceOf(ToolRefused);
     expect(await rejection(call("check_flow", { path: "../outside.yaml" }))).toBeInstanceOf(ToolRefused);
   });
+
+  test("checks given content as the file at the path, without writing it", async () => {
+    writeFileSync(join(root, "sub", "child.yaml"), FLOW);
+    const ok = await call("check_flow", { path: "draft.yaml", content: parentFlow("sub/child") });
+    expect(ok).toBe("ok\nname: main\ninputs:\n  n: int");
+    const bad = String(await call("check_flow", { path: "sub/a.yaml", content: "id: [\n" }));
+    expect(bad).toStartWith("invalid:\n");
+    expect(bad).toContain("a.yaml");
+    expect(existsSync(join(root, "draft.yaml"))).toBe(false);
+    expect(readFileSync(join(root, "sub", "a.yaml"), "utf8")).toBe("id: a\n");
+  });
+
+  test("content is held to the same paths and size as a file", async () => {
+    const outside = call("check_flow", { path: "../draft.yaml", content: FLOW });
+    expect(await rejection(outside)).toBeInstanceOf(ToolRefused);
+    expect(await rejection(call("check_flow", { path: "a.txt", content: FLOW }))).toBeInstanceOf(ToolRefused);
+    const huge = call("check_flow", { path: "big.yaml", content: "#".repeat(256 * 1024 + 1) });
+    expect(await rejection(huge)).toBeInstanceOf(ToolRefused);
+    const typed = await rejection(call("check_flow", { path: "d.yaml", content: 1 }));
+    expect(typed.message).toBe("content must be a string");
+  });
 });
 
 describe("checkFocus", () => {

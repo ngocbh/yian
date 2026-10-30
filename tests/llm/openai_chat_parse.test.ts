@@ -1263,6 +1263,92 @@ describe("tool calls", () => {
     const parts = await partsOf([HEAD, calls(wire(0, "call_1", "double", '{"value":3}')), CALLS_DONE]);
     expect(parts).toEqual([callPart("call_1", '{"value":3}')]);
   });
+
+  test("a late id makes a call joinable by that id at its index after a second call opens there", async () => {
+    const parts = await partsOf([
+      calls(wire(0, undefined, "double", '{"value":')),
+      calls(wire(0, "call_x", undefined, "")),
+      calls(wire(0, "call_y", "double", '{"value":4}')),
+      calls(wire(0, "call_x", undefined, "3}")),
+      CALLS_DONE,
+    ]);
+    expect(parts).toEqual([callPart("call_x", '{"value":3}'), callPart("call_y", '{"value":4}')]);
+  });
+
+  test("a delta without an index joins the latest part holding its id, even when an earlier call got it later", async () => {
+    // The first call takes call_x after the second opened with it; the second is the later part.
+    const later = await partsOf([
+      calls(wire(0, undefined, "double", '{"value":')),
+      calls(wire(1, "call_x", "double", '{"value":')),
+      calls(wire(0, "call_x", undefined, "3}")),
+      calls(wire(undefined, "call_x", undefined, "4}")),
+      CALLS_DONE,
+    ]);
+    expect(later).toEqual([callPart("call_x", '{"value":3}'), callPart("yian_call_1", '{"value":4}')]);
+    // The second call takes call_x late, so it is the latest part holding it.
+    const earlier = await partsOf([
+      calls(wire(0, "call_x", "double", '{"value":')),
+      calls(wire(1, undefined, "double", '{"value":')),
+      calls(wire(1, "call_x", undefined, "")),
+      calls(wire(undefined, "call_x", undefined, "4}")),
+      calls(wire(0, undefined, undefined, "3}")),
+      CALLS_DONE,
+    ]);
+    expect(earlier).toEqual([callPart("call_x", '{"value":3}'), callPart("yian_call_1", '{"value":4}')]);
+  });
+
+  test("many calls at one index each take later deltas by id", async () => {
+    const opened = Array.from({ length: 5 }, (_, n) => calls(wire(0, `call_${n}`, "double", '{"value":')));
+    const closed = [3, 0, 4, 1, 2].map((n) => calls(wire(0, `call_${n}`, undefined, `${n}}`)));
+    const parts = await partsOf([...opened, ...closed, CALLS_DONE]);
+    expect(parts).toEqual(Array.from({ length: 5 }, (_, n) => callPart(`call_${n}`, `{"value":${n}}`)));
+  });
+});
+
+/** Return how long, in milliseconds, parsing `chunks` takes, and the reply's parts. */
+async function timedParts(chunks: JsonValue[]): Promise<[number, readonly Part[]]> {
+  const events = sse(chunks);
+  const start = performance.now();
+  const reply = await collect(xai().parse(frames(events)));
+  return [performance.now() - start, reply.message.parts];
+}
+
+// Each bound is a few times what the parser takes and well under what a scan per entry takes.
+describe("scaling", () => {
+  test("8000 calls streamed in pieces at their own indexes parse in linear time", async () => {
+    const chunks: JsonValue[] = [];
+    for (let n = 0; n < 8000; n++) {
+      chunks.push(calls(wire(n, `call_${n}`, "double", "")));
+      for (const piece of ['{"value"', ":", String(n), "}"]) chunks.push(calls(wire(n, undefined, undefined, piece)));
+    }
+    chunks.push(CALLS_DONE);
+    const [ms, parts] = await timedParts(chunks);
+    expect(parts.length).toBe(8000);
+    expect(parts[7999]).toEqual(callPart("call_7999", '{"value":7999}'));
+    expect(ms).toBeLessThan(1000);
+  });
+
+  test("8000 calls at one index, each joined again by id, parse in linear time", async () => {
+    const chunks: JsonValue[] = [];
+    for (let n = 0; n < 8000; n++) chunks.push(calls(wire(0, `call_${n}`, "double", '{"value":')));
+    for (let n = 0; n < 8000; n++) chunks.push(calls(wire(0, `call_${n}`, undefined, `${n}}`)));
+    chunks.push(CALLS_DONE);
+    const [ms, parts] = await timedParts(chunks);
+    expect(parts.length).toBe(8000);
+    expect(parts[1234]).toEqual(callPart("call_1234", '{"value":1234}'));
+    expect(ms).toBeLessThan(1000);
+  });
+
+  test("text after 8000 calls streams in linear time", async () => {
+    const chunks: JsonValue[] = [];
+    for (let n = 0; n < 8000; n++) chunks.push(calls(wire(n, `call_${n}`, "double", "{}")));
+    for (let n = 0; n < 80000; n++) chunks.push(chunk({ content: "a" }));
+    chunks.push(CALLS_DONE);
+    const [ms, parts] = await timedParts(chunks);
+    expect(parts.length).toBe(8001);
+    expect(parts[8000]).toEqual(new TextPart("a".repeat(80000)));
+    expect(ms).toBeLessThan(1000);
+  });
 });
 
 describe("round trips", () => {

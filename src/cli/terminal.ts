@@ -878,8 +878,8 @@ interface Turn {
   /** Ends the active widget once `ending` is set; a no-op while no widget runs. */
   wake: () => void;
   /**
-   * The rows printed for good for the widget up now (a card, a label's lines above its last),
-   * which Ctrl-L draws again with it.
+   * The rows the turn printed for good (a card, a question set's panel, a label's lines above its
+   * last, the lines earlier widgets collapsed to), which Ctrl-L draws again above the widget up.
    */
   shown: string[];
 }
@@ -1730,7 +1730,10 @@ export class Terminal {
         const line = vanish ? null : widget.done(ended);
         // Drawn with the next frame: the host's live rows as the turn ends, or the next widget's.
         if (!this.#plain) {
-          if (line !== null) live.stage(line.split("\n"));
+          if (line !== null) {
+            live.stage(line.split("\n"));
+            turn.shown.push(...line.split("\n"));
+          }
           live.set(widget.keeps === true ? widget.lines() : [], null);
           this.#printed ||= line !== null;
         }
@@ -1739,7 +1742,6 @@ export class Terminal {
       finish({ error });
     } finally {
       this.#active = undefined;
-      turn.shown = [];
       quietly(unwatch);
       if (widget.screen && !this.#plain) quietly(() => output.write(ALT_OFF));
       if (widget.screen) this.#onScreen = false;

@@ -7,7 +7,7 @@
  * rows.
  */
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs, {
   existsSync,
   mkdirSync,
@@ -512,6 +512,64 @@ describe("updateRunIndex and readRunIndex", () => {
     withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
     expect(warnings).toEqual([]);
     expect(readRunIndex(runs)[0]).toMatchObject({ lastSeq: 4, unreadable: null });
+  });
+
+  test.skipIf(process.platform === "win32")("a FIFO or a /dev/zero symlink at a run's log is skipped with one warning each, and the other runs are listed", () => {
+    const runs = freshRuns();
+    writeRun(runs, "good", succeededRun);
+    const fifo = join(runs, "fifo", "log.jsonl");
+    mkdirSync(join(runs, "fifo"));
+    execFileSync("mkfifo", [fifo]);
+    const zero = join(runs, "zero", "log.jsonl");
+    mkdirSync(join(runs, "zero"));
+    symlinkSync("/dev/zero", zero);
+    const url = (file: string) => JSON.stringify(pathToFileURL(join(TS_ROOT, file)).href);
+    // In a child, so a scan that hangs fails at the timeout instead of stalling this process.
+    const child = `
+const { readRunIndex, updateRunIndex } = await import(${url("src/run.ts")});
+const { withWarnings } = await import(${url("src/platform.ts")});
+const warnings = [];
+withWarnings((message) => warnings.push(message), () => updateRunIndex(${JSON.stringify(runs)}));
+console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)}).map((row) => row.runId) }));
+`;
+    const result = spawnSync(process.execPath, ["-e", child], { cwd: TS_ROOT, encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" });
+    expect([result.status, result.signal, result.stderr]).toEqual([0, null, ""]);
+    expect(JSON.parse(result.stdout)).toEqual({
+      warnings: [
+        `run index skipped ${fifo}: EINVAL: not a regular file, open '${fifo}'`,
+        `run index skipped ${zero}: EINVAL: not a regular file, open '${zero}'`,
+      ],
+      runs: ["good"],
+    });
+  }, 15_000);
+
+  test.skipIf(process.platform === "win32")("a log replaced by a FIFO keeps the row it had, and the scan never opens it", () => {
+    const runs = freshRuns();
+    writeRun(runs, "run-1", stoppedRun);
+    updateRunIndex(runs);
+    const before = readRunIndex(runs);
+    const path = join(runs, "run-1", "log.jsonl");
+    rmSync(path);
+    execFileSync("mkfifo", [path]);
+    const realOpen = fs.openSync;
+    const opened: string[] = [];
+    // Refused here rather than opened, so a scan that would open the FIFO fails instead of hanging.
+    const openSpy = spyOn(fs, "openSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => {
+      if (file === path) {
+        opened.push(String(file));
+        throw new Error("the scan opened the FIFO");
+      }
+      return Reflect.apply(realOpen, fs, [file, ...rest]);
+    }) as typeof fs.openSync);
+    const warnings: string[] = [];
+    try {
+      withWarnings((message) => warnings.push(message), () => updateRunIndex(runs));
+    } finally {
+      openSpy.mockRestore();
+    }
+    expect(opened).toEqual([]);
+    expect(warnings).toEqual([`run index skipped ${path}: EINVAL: not a regular file, open '${path}'`]);
+    expect(readRunIndex(runs)).toEqual(before);
   });
 
   test("the reason stored for an unreadable log is cut to 200 characters", () => {

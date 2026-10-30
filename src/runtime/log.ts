@@ -14,6 +14,7 @@
  */
 
 import fs from "node:fs";
+import os from "node:os";
 import { dirname } from "node:path";
 
 import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.ts";
@@ -2101,12 +2102,15 @@ export class JsonlRunLog implements RunLog {
    * @throws TypeError when the clock isn't a function; the file isn't opened then.
    * @throws Error the busy message, as `create`; `run log <path> was replaced while being opened`
    *   when `path` stops naming the opened file before the lock is taken.
-   * @throws the `fs` error (`code` `ENOENT` for a missing log, which creates no lock file) and
-   *   other `lockFile` errors.
+   * @throws Error (code `EINVAL`, `EINVAL: not a regular file, open '<path>'`) when `path` is a
+   *   FIFO or a device; it is never read, and no lock file is created.
+   * @throws the `fs` error (`code` `ENOENT` for a missing log, `EISDIR` for a folder, neither of
+   *   which creates a lock file) and other `lockFile` errors.
    */
   static resume(path: string, options: RunLogOptions = {}): JsonlRunLog {
     const clock = logClock(options);
-    const fd = fs.openSync(path, fs.constants.O_RDWR);
+    // Checked before the lock, so a FIFO or a device gets no lock file beside it.
+    const fd = openRegular(path, fs.constants.O_RDWR);
     let lock: FileLock | undefined;
     try {
       lock = lockRunLog(path, fd);
@@ -2317,6 +2321,8 @@ export interface IterRunRecordsOptions {
  *   is given without an `afterOffset`, `afterOffset` isn't the end of a line, `kinds` names a kind
  *   no record has, or a complete line isn't a valid record, breaks the seq count or names another
  *   run id; the message names `path` and the line (or, after an offset, the byte).
+ * @throws Error (code `EINVAL`, `EINVAL: not a regular file, open '<path>'`) when `path` isn't a
+ *   regular file (a FIFO, a device or a folder); it is never read.
  * @throws Error (code `ENOENT`) when `path` doesn't exist, and the `fs` error of a failed read.
  */
 export function iterRunRecords(
@@ -2363,7 +2369,7 @@ export function* iterRunRecords(
   if (unknown.length > 0) {
     throw new RangeError(`unknown run-record kinds: ${writeAsText(unknown.sort(compareCodeUnits))}`);
   }
-  const fd = fs.openSync(path, "r");
+  const fd = openRegular(path, fs.constants.O_RDONLY);
   try {
     const shrank = (size: number, at: number) =>
       new RunLogChangedError(`run log ${path} shrank to ${size} bytes under its reader at byte ${at}; it was truncated or replaced`);
@@ -4274,6 +4280,39 @@ function rollbackAppend(fd: number, prefixSize: number): unknown[] {
     }
   }
   return errors;
+}
+
+/**
+ * @internal The `EINVAL` error for a run log at `path` that isn't a regular file (a FIFO, a device
+ * or a folder), shaped as Node's own file errors: `EINVAL: not a regular file, open '<path>'`.
+ */
+export function notRegularFile(path: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`EINVAL: not a regular file, open '${path}'`), {
+    code: "EINVAL",
+    errno: -os.constants.errno.EINVAL,
+    syscall: "open",
+    path,
+  });
+}
+
+/**
+ * Open the run log at `path` with `flags` and return its descriptor.
+ *
+ * @throws Error `notRegularFile(path)` when the file opened isn't a regular file; it is closed.
+ * @throws the `fs` error of a failed open.
+ */
+function openRegular(path: string, flags: number): number {
+  // Non-blocking, so a FIFO with no writer can't hang the open, and without O_NOCTTY a tty
+  // opened here could become the controlling terminal.
+  const fd = fs.openSync(path, flags | (fs.constants.O_NONBLOCK ?? 0) | (fs.constants.O_NOCTTY ?? 0));
+  try {
+    // The descriptor's type, not the path's, so a file swapped in after a check can't slip by.
+    if (!fs.fstatSync(fd).isFile()) throw notRegularFile(path);
+  } catch (error) {
+    fs.closeSync(fd);
+    throw error;
+  }
+  return fd;
 }
 
 /** Release `fd` and `lock` after a failed `create` or `resume`, ignoring release errors. */

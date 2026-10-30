@@ -209,9 +209,8 @@ $ yian run collect.yaml
 
 A message larger than `YIAN_MAX_EVENT_BYTES` (1 MiB by default) is refused, and the chat prints
 `not sent: <reason>`. While the prompt is up, the chat moves the run on when a `sleep` or a
-`timeout` comes due. A chat that stopped goes on with `yian run --resume LOG`, which calls
-`advance` and then reads your lines again. [Chatting on a terminal](/cli/#chatting-on-a-terminal)
-lists when `yian run` chats.
+`timeout` comes due. `yian run --resume LOG` picks up a chat that stopped. See
+[Chatting on a terminal](/cli/#chatting-on-a-terminal).
 
 ## Suspend and resume
 

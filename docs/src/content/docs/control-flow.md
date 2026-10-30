@@ -90,9 +90,8 @@ A condition skips the `case` when it reads a skipped node, unless the read has a
 [expression](/expressions/) syntax, and `and` and `or` stop early, so
 `x.output != null and x.output.k > 1` reads `x.output.k` only when `x.output` is set.
 
-A condition or an `on:` can also read an agent's new messages (see [Agents](/agents/)):
-`len(reply.new_messages) > 1` is true when agent `reply` added more than its reply, such as a
-tool call. The `case` then runs after `reply`, and the same skip and default rules apply.
+A condition or an `on:` can read an agent's new messages: `len(reply.new_messages) > 1` is true
+when agent `reply` added more than its reply, such as a tool call.
 
 ### Branch targets
 

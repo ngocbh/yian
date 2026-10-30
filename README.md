@@ -25,6 +25,14 @@ Or `bun add @ngocbh/yian`. yian runs on Node ≥ 22.18 or Bun ≥ 1.4. To put th
 your PATH, install it globally with `npm i -g @ngocbh/yian`, or run it with `npx @ngocbh/yian`
 or `bunx --bun @ngocbh/yian`. Plain `npx yian` fetches an unrelated package.
 
+From a clone of the repository, `install.sh` puts that checkout's `yian` on your PATH. It installs
+Bun if you have none and writes a `yian` wrapper into `~/.local/bin`, so the command runs your
+checkout and follows `git pull`. `./uninstall.sh` takes it back out.
+
+```console
+$ ./install.sh
+```
+
 ## Set up a model
 
 yian has no built-in model. Save a login for a provider; [the docs](https://yian.readthedocs.io/models/)
@@ -52,6 +60,17 @@ prompt: Write a one-sentence greeting for ${name}.
 $ yian run hello.yaml --input name=Ada
 Hello, Ada!
 ```
+
+## Chat with Yian
+
+```console
+$ yian chat
+$ yian chat hello.yaml
+```
+
+`yian chat` opens Yian, yian's assistant, in the current folder. Yian runs, writes, edits and
+improves flows with you, and asks before it writes a file or starts a flow. With a flow named,
+the chat is about that flow. See [the CLI docs](https://yian.readthedocs.io/cli/).
 
 ## Documentation and license
 

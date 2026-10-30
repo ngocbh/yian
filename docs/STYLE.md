@@ -12,6 +12,8 @@ published.
 ## Voice
 
 - Use plain words and short sentences. Write to "you".
+- Be concise and direct. Say each thing once, in as few words as it needs; cut what a reader
+  doesn't need to use yian.
 - Open each page with a sentence or two on what it is for.
 - Give one example per concept. Put anything readers look up (flags, defaults, codes) in a table.
 - Describe yian as it is. No history: no "used to", "now", "new", "changed" or "no longer".

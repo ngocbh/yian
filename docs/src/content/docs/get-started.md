@@ -153,16 +153,16 @@ A run that stops to wait, for example for a person's answer, prints the
 ## Chat with yian's assistant
 
 `yian chat` opens a chat with yian's assistant. Ask it to find, explain, check, write or run the
-flows in the current folder. It asks before it writes a file or runs a flow, and it tells you what
-a flow it runs asks and returns. Like any agent, it needs the provider login you set up above.
+flows in the current folder. It asks before it writes a file or runs a flow, and it needs the
+provider login you set up above.
 
 ```console
 $ yian chat
 $ yian chat hello.yaml
 ```
 
-With a flow, the chat is about that flow: the assistant reads it and checks it first. Type
-`/exit` or press Ctrl-D to leave. [`yian chat`](/cli/#yian-chat) lists what the assistant can do.
+Give it a flow to talk about that flow. Type `/exit` or press Ctrl-D to leave. See
+[`yian chat`](/cli/#yian-chat).
 
 ## Chat with a flow
 

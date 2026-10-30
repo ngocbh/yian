@@ -198,8 +198,8 @@ $ yian run support.yaml --input question="Hi" --memory-root ./mem --memory-stora
 - A `.sqlite` file has one owner at a time: a second run on it fails with `storage.busy` until the
   first ends. A `profile`'s `.md` file is plain text you can edit. Beside it, `.<name>.versions/`
   and `.<name>.writes.jsonl` keep every version, and writers take turns through `.<name>.lock`.
-  A run or backward pass waiting longer than `YIAN_PROFILE_LOCK_TIMEOUT_SECONDS` (30 by default)
-  for the lock fails with `profile.store_unavailable`, which is retryable.
+  A wait for the lock longer than `YIAN_PROFILE_LOCK_TIMEOUT_SECONDS` (30 by default) fails with
+  `profile.store_unavailable`.
 - Changing an `episodic` or `reflective` limit against an existing file fails with
   `episodic.config_conflict` or `reflective.config_conflict`.
 - Give `--resume` the same flags, so a resumed run reopens the memories it started with.

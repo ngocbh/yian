@@ -77,9 +77,8 @@ export function countWords(inputs: { text: string }): number {
 
 The export gets the same `inputs` record an inline body gets, so a body moves into a file
 unchanged. At load, yian checks that the file exists; it doesn't import it until the node runs.
-A `module:function` value with no `./`, such as `text:countWords`, fails at load. So does a value
-that looks like a file reference but breaks the rule, such as `text.ts:countWords` (no `./`),
-`/abs/text.ts:countWords`, `./text.mts:countWords` or a path with a space.
+A value that breaks this form fails at load: `text:countWords` or `text.ts:countWords` (no `./`),
+an absolute path, another extension, or a path with a space.
 
 ### Values in and out
 

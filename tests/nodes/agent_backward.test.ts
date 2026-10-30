@@ -13,7 +13,7 @@ import { legacyConnectionConfig } from "../../src/llm_clients/connection.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
-import { Message, Response, TextPart } from "../../src/llm/messages.ts";
+import { Message, RefusalPart, Response, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { sourceKey } from "../../src/expr/lineage.ts";
 import { backwardAgent } from "../../src/nodes/agent/backward.ts";
@@ -544,6 +544,9 @@ const FAILURE_ROWS: [string, Response | Error, string][] = [
   ["an extra channel", text(EXTRA), "backward.execute"],
   ["a duplicate channel", text(DUPLICATE), "backward.execute"],
   ["a lone surrogate", text(SURROGATE), "backward.execute"],
+  ["a fence around no JSON", text("```json\nnot JSON\n```"), "backward.execute"],
+  ["a fenced duplicate channel", text("```json\n" + DUPLICATE + "\n```"), "backward.execute"],
+  ["a fenced lone surrogate", text("```json\n" + SURROGATE + "\n```"), "backward.execute"],
   ["a flat batch", reply({ input_feedback: { tags: "flat batch" } }), "backward.execute"],
   ["a null self message", reply({ self_feedback: [null] }), "backward.execute"],
   ["an int variable message", reply({ variable_feedback: { tone: [1] } }), "backward.execute"],
@@ -574,6 +577,64 @@ for (const [label, response, code] of FAILURE_ROWS) {
     expect(snapshot()).toEqual(before);
   });
 }
+
+const FENCED_BODY = JSON.stringify({
+  input_feedback: { topic: ["Name the reef."] },
+  self_feedback: ["Lead with steps."],
+  variable_feedback: {},
+});
+
+test.each([
+  ["a json fence", "```json\n" + FENCED_BODY + "\n```"],
+  ["a bare fence", "```\n" + FENCED_BODY + "\n```"],
+  ["prose before the fence", "Here it is:\n```json\n" + FENCED_BODY + "\n```"],
+  ["whitespace around the object", "\n  " + FENCED_BODY + "  \n"],
+])("AGENT backward reads a reply holding its object in %s", async (_label, body) => {
+  const chat = new ScriptedModel([text(body)]);
+
+  const result = await backwardAgent(context(), ["Review."], { models: serving(chat) });
+
+  expect(result.inputFeedback).toEqual({ topic: ["Name the reef."] });
+  expect(result.selfFeedback).toEqual(["Lead with steps."]);
+});
+
+const NO_OBJECT = "AGENT backward reply is not a JSON object with input_feedback, self_feedback and variable_feedback";
+
+test.each([
+  ["no JSON", "not JSON"],
+  ["a fence around no JSON", "```json\nnot JSON\n```"],
+  ["an array", "[]"],
+  ["a fenced duplicate channel", "```json\n" + DUPLICATE + "\n```"],
+  ["a fenced lone surrogate", "```json\n" + SURROGATE + "\n```"],
+])("AGENT backward names the expected channels when the reply holds %s", async (_label, body) => {
+  const chat = new ScriptedModel([text(body)]);
+
+  const error = await rejected(backwardAgent(context(), ["Review."], { models: serving(chat) }));
+
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toBe(NO_OBJECT);
+});
+
+test("AGENT backward names the model's refusal when the reply holds no JSON object", async () => {
+  const message = new Message({ role: "assistant", parts: [new RefusalPart("I can't review this.")] });
+  const chat = new ScriptedModel([new Response({ message, finishReason: "stop" })]);
+
+  const error = await rejected(backwardAgent(context(), ["Review."], { models: serving(chat) }));
+
+  expect((error as Error).message).toBe(`${NO_OBJECT}; the model refused: I can't review this.`);
+});
+
+test("a fenced AGENT backward reply routes its feedback through the backward pass", async () => {
+  const { trace, occurrence } = await retainedEngine();
+  const chat = new ScriptedModel([text("```json\n" + FENCED_BODY + "\n```")]);
+
+  const [root, attributed] = await computeBackward(trace, "Review.", { models: serving(chat) });
+
+  expect(root.inputFeedback).toEqual({ topic: ["Name the reef."] });
+  const writer = attributed.find((item) => item.source.executionSeq === occurrence.source.executionSeq)!;
+  expect(writer.result.selfFeedback).toEqual(["Lead with steps."]);
+  validateAttributedBackward(trace, "Review.", root, attributed);
+});
 
 test("AGENT backward reads no live render, model or variable state", async () => {
   const { node, trace } = await retainedEngine();

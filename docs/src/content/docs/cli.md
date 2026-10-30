@@ -370,8 +370,10 @@ crashed attempts: draft=1
 | `stopped` | A signal or the host stopped the run; `--resume` continues it |
 | `crashed` | The process ended mid-run; `--resume` continues it |
 
-With `--json`, the document also has `ready` (a waiting node can be woken now) and `wake_at` (the
-earliest deadline it waits on, or `null`). A log it can't read exits 1.
+With `--json`, the document also has `ready` and `wake_at`. `ready` is `true` when a waiting node
+can wake now: every call it waits on is settled, or an interrupt stops it. `wake_at` is the
+earliest deadline a waiting node waits on, or `null`. Once `wake_at` has passed, `--resume` runs
+on too, though `ready` stays `false`. A log it can't read exits 1.
 
 `yian status` with no `LOG` lists the runs in `~/.yian/runs`, oldest first: run id, status, start
 time and flow file. It first updates the run index, `~/.yian/runs/index.sqlite`, which is rebuilt

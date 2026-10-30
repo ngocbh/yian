@@ -158,6 +158,47 @@ test("adjacent spans are two spans and concatenate", () => {
   expect(evaluate("${a}${b}", from({ a: 1n, b: 2n }))).toBe("12");
 });
 
+test("a $ at the end of the text stays literal", () => {
+  expect(scanTemplate("end$")).toEqual([new Literal("end$")]);
+});
+
+test("a lone $ before text stays in the same literal run", () => {
+  expect(scanTemplate("a$b")).toEqual([new Literal("a$b")]);
+});
+
+test("$$ right before or after a span collapses to one $", () => {
+  expect(scanTemplate("$$${x}$$")).toEqual([new Literal("$"), ...scanTemplate("${x}"), new Literal("$")]);
+});
+
+test("$$ before a brace escapes the span", () => {
+  expect(scanTemplate("$${x}")).toEqual([new Literal("${x}")]);
+});
+
+test("non-ASCII text around a span is kept whole", () => {
+  expect(scanTemplate("héllo 🎉 ${x} 世界 $$ 🎉")).toEqual([
+    new Literal("héllo 🎉 "),
+    ...scanTemplate("${x}"),
+    new Literal(" 世界 $ 🎉"),
+  ]);
+});
+
+test("a large literal around spans and $$ escapes scans to the same segments quickly", () => {
+  const big = "lorem ipsum ".repeat(420_000);
+  const text = big + "$$" + big + "${a.b}" + big + "$" + big + "$$${x}" + big;
+  text.indexOf("\u0000"); // flatten the concatenation so only the scan is timed
+  const start = performance.now();
+  const segments = scanTemplate(text);
+  const elapsed = performance.now() - start;
+  expect(segments).toEqual([
+    new Literal(big + "$" + big),
+    ...scanTemplate("${a.b}"),
+    new Literal(big + "$" + big + "$"),
+    ...scanTemplate("${x}"),
+    new Literal(big),
+  ]);
+  expect(elapsed).toBeLessThan(100);
+});
+
 // --- templateRefs --- //
 
 test("templateRefs keeps source order without dedupe", () => {

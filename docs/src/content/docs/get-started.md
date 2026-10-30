@@ -177,13 +177,8 @@ one folder, then run:
 $ yian run chat.yaml
 ```
 
-| Key | What it does |
-|---|---|
-| Enter | Sends the line |
-| Ctrl-C while a reply runs | Cuts short an agent that reads the inbox as its `steer_inbox`; the chat waits for your next line |
-| Ctrl-C again within 2 seconds, or at the prompt | Cancels the run |
-| Esc | Takes back lines the flow hasn't read yet, then stops the reply |
-| `/exit`, `/quit` or Ctrl-D | Ends the chat once the queued lines are answered |
+Type a line and press Enter to send it; `/exit` or Ctrl-D ends the chat.
+[Chatting on a terminal](/cli/#chatting-on-a-terminal) lists the other keys.
 
 Use `--inbox NAME` when the flow has more than one inbox input. Inboxes are covered in
 [Inboxes and waiting](/inboxes/).

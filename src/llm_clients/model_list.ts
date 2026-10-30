@@ -176,7 +176,7 @@ export async function listModels(
 
   const send = options.request ?? httpRequest;
   const { maxModelListBytes: bodyLimit, maxModelListPages } = current();
-  const deadline = scheduler.now() + timeout * 1000;
+  const deadline = scheduler.now() + timeoutMilliseconds(timeout);
   let pageCount = 0;
   const getPage: GetPage = async (path, params) => {
     // A host that always has another page would otherwise be read until the deadline.
@@ -208,6 +208,15 @@ export async function listModels(
   const ids = await pages(getPage);
   if (!ids.every((id): id is string => typeof id === "string")) throw new ModelListError("invalid response");
   return Object.freeze([...new Set(ids)].sort(compareCodeUnits));
+}
+
+/**
+ * Return `seconds` (finite, above 0) in milliseconds, at most `Number.MAX_SAFE_INTEGER`.
+ *
+ * Past about 1.8e305 s the product overflows to `Infinity`, which a sleep refuses.
+ */
+export function timeoutMilliseconds(seconds: number): number {
+  return Math.min(seconds * 1000, Number.MAX_SAFE_INTEGER);
 }
 
 /** Whether the URL, key and timeout can make a request; `checkUrl` holds `base` to `validateBaseUrl`. */

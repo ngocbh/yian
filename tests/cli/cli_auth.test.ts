@@ -343,6 +343,21 @@ describe("models --provider", () => {
     return { urls, listing };
   }
 
+  test("--timeout past the safe milliseconds lists", async () => {
+    const listing: AuthDeps["listModels"] = (provider, options) =>
+      listModels(provider, {
+        ...options,
+        request: async (_method, _url, { timeoutMs }) => {
+          // The real transport's sleep refuses a non-finite timeout the same way.
+          if (!Number.isFinite(timeoutMs)) throw new RangeError(`sleep needs a finite number of milliseconds, got ${timeoutMs}`);
+          return new HttpResponse(200, { data: [{ id: "gpt-a" }] });
+        },
+      });
+    const io = fakeIo({ stdin: "k" });
+    const result = await run(models, modelsArgs({ provider: "openai", timeout: 1e308 }), io, { listModels: listing });
+    expect(result).toEqual({ code: 0, out: "gpt-a\n", err: "" });
+  });
+
   test("openai lists OPENAI_BASE_URL when it is set and sends nothing to api.openai.com", async () => {
     const recorded = recordedListing();
     const io = fakeIo({ stdin: "private-key", env: { OPENAI_BASE_URL: "https://gateway.example.com/v1" } });

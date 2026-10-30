@@ -4,10 +4,10 @@
 
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { EventEmitter, getEventListeners } from "node:events";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os, { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
 
@@ -1836,6 +1836,54 @@ function spawnEntry(args: string[]) {
   });
   return { child, streams, closed };
 }
+
+/**
+ * Run the entry with `args` in `tmp` (as its HOME) and wait for it, at most 20 seconds, so a
+ * command that hangs fails the test instead of stalling the suite.
+ */
+function runEntrySync(args: string[]) {
+  const runtime = process.versions.bun !== undefined ? ["--no-install", "--no-env-file"] : [];
+  return spawnSync(process.execPath, [...runtime, CLI_ENTRY, ...args], {
+    cwd: tmp,
+    env: { HOME: tmp },
+    encoding: "utf8",
+    timeout: 20_000,
+    killSignal: "SIGKILL",
+  });
+}
+
+describe.skipIf(process.platform === "win32")("a FIFO at a run log's path", () => {
+  test("status of it is run.setup, exit 1; the list skips a run folder's FIFO log with a warning", () => {
+    const fifo = join(tmp, "fifo.jsonl");
+    execFileSync("mkfifo", [fifo]);
+    const inspected = runEntrySync(["status", fifo]);
+    expect([inspected.status, inspected.signal, inspected.stdout, inspected.stderr]).toEqual([
+      1,
+      null,
+      "",
+      `can't read ${fifo}: Not a regular file\n`,
+    ]);
+    const log = join(tmp, ".yian", "runs", "ffff", "log.jsonl");
+    mkdirSync(dirname(log), { recursive: true });
+    execFileSync("mkfifo", [log]);
+    const listed = runEntrySync(["status"]);
+    expect([listed.status, listed.signal, listed.stdout, listed.stderr]).toEqual([
+      0,
+      null,
+      "",
+      `warning: run index skipped ${log}: EINVAL: not a regular file, open '${log}'\n`,
+    ]);
+  }, 45_000);
+
+  test("run --resume of it is a resume failure without a stack", () => {
+    const fifo = join(tmp, "fifo.jsonl");
+    execFileSync("mkfifo", [fifo]);
+    const resumed = runEntrySync(["run", "--resume", fifo, "-q"]);
+    expect([resumed.status, resumed.signal]).toEqual([1, null]);
+    expect(resumed.stderr).toStartWith(`resume failed: EINVAL: not a regular file, open '${fifo}'\n`);
+    expect(resumed.stderr).not.toContain("    at ");
+  }, 25_000);
+});
 
 describe("childCommand", () => {
   test("a binary re-runs itself with the marker; a script passes its runtime flags and its path", () => {

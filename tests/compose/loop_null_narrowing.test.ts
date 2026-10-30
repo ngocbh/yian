@@ -809,7 +809,7 @@ test("inline body returns null into a literal seed under a while null check", as
 test("an inline returned field of the wrong type names the seed type", () => {
   expect(loadError(() => loadInline(inlinePages({ seed: "p1" }), "Optional(int)")).message).toBe(
     "loop node 'pages': the body returns 'cursor' as Optional(int), but the carried field is typed str " +
-      "from its seed; declare the seed's type: `cursor: !Optional(int) \"p1\"`",
+      'from its seed; the seed "p1" is not of type int: seed one that is, e.g. `cursor: !Optional(int) 0`',
   );
 });
 

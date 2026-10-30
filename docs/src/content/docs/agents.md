@@ -141,6 +141,9 @@ $ yian run extract.yaml --input text="Ada loved the new release."
   `2026-10-14` or `2026-10-14T10:30:00Z`.
 - A reply that doesn't fit gets a correction and another try, up to `retries:` times. Then the
   node fails with `agent.output_invalid`.
+- A record reply keeps only the fields its type declares, and drops any other field without a
+  correction. A [union](/types/#unions) member is stricter: a field it, or a record inside it,
+  doesn't declare gets a correction and another try.
 - `output:` can't hold `file` or `None`, and nests at most 16 levels. Build such a value in a
   [CODE node](/code-and-tools/).
 

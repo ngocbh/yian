@@ -1,12 +1,21 @@
 // The chat assistant's run tools: flows in a temporary root started as child runs.
 
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import { EventQueue } from "../../src/cli/chat_events.ts";
+import { AUTHORING_TOOLS } from "../../src/cli/authoring.ts";
 import { chatRunTools, shownStatus } from "../../src/cli/chat_run_tools.ts";
 import { ChildRuns } from "../../src/cli/chat_runs.ts";
 import {
@@ -15,12 +24,17 @@ import {
   stringArguments,
   ToolRefused,
 } from "../../src/cli/chat_tools.ts";
+import { loadConfinedText } from "../../src/cli/confined_load.ts";
 import type { ApproveRequest } from "../../src/cli/terminal.ts";
+import type { Response } from "../../src/llm/messages.ts";
+import { compareCodeUnits } from "../../src/diagnostics.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { Skill } from "../../src/skills/catalog.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { isReportedToolError } from "../../src/tools/errors.ts";
-import { tool } from "../../src/tools/function_tools.ts";
-import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
+import type { ToolEntry } from "../../src/tools/registry.ts";
+import { callReply, NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 import { heldScheduler } from "../helpers/schedulers.ts";
 
 let tmp: string;
@@ -604,6 +618,269 @@ describe("report_issue", () => {
       expect(runs.live()).toEqual([]);
       // Without its options, the chat's run tools have no report_issue.
       expect(chatRunTools(host(), runs).some((each) => each.name === "report_issue")).toBe(false);
+    },
+    TIMEOUT,
+  );
+});
+
+describe("author_flow and review_flow", () => {
+  const TIMEOUT = 20_000;
+  const env = (name: string) => (name === "XAI_API_KEY" ? "test-xai-key" : NO_ENV(name));
+  const guide = new Skill({
+    name: "composing-agents",
+    description: "How to write flows.",
+    instructions: "Write small typed nodes.",
+  });
+  let runs: ChildRuns | null = null;
+
+  afterEach(async () => {
+    await runs?.dispose();
+    runs = null;
+  });
+
+  const GREET = `id: greet
+name: greet
+input:
+  who: !str
+nodes:
+  hi:
+    kind: code
+    input:
+      who: \${input.who}
+    output: str
+    code: |
+      return "hi " + inputs["who"];
+output: \${hi.output}
+`;
+
+  /**
+   * The run tools with the authoring tools, over runs whose agents `replies` answer and whose
+   * approvals `answer` answers; `requests` holds each approval asked.
+   */
+  function authoringTools(replies: Response[], answer: string | null = "Approve") {
+    const model = new ScriptedModel(replies, { provider: "xai", model: "grok-4.3" });
+    runs = new ChildRuns({
+      root,
+      logDir: join(tmp, "runs"),
+      env,
+      llmConfig: { provider: "xai", model: "grok-4.3" },
+      models: serving(model, env),
+      scheduler: heldScheduler().scheduler,
+      chatRunId: "chat-1",
+      skillsFor: () => null,
+    });
+    const requests: ApproveRequest[] = [];
+    const approve = async (request: ApproveRequest) => {
+      requests.push(request);
+      return answer;
+    };
+    const queue = new EventQueue();
+    const tools = chatRunTools(host({ env, approve, docs: new Map([["flows", "page"]]) }), runs, {
+      seen: queue,
+      authoring: { skills: new Map([[guide.name, guide]]) },
+    });
+    const invoke = async (name: string, args: Record<string, unknown>) => {
+      const ctx = new ToolContext({
+        callId: "chat-1/reply",
+        attempt: 1,
+        toolName: name,
+        runId: "chat-1",
+        node: "reply",
+        context: undefined,
+        signal: new AbortController().signal,
+      });
+      return tools.find((each) => each.name === name)!.execute(args, ctx);
+    };
+    return { runs, model, requests, invoke, queue };
+  }
+
+  /**
+   * Drive child `id` to its end, answering each question it asks with the next of `answers`;
+   * return its last status and the questions asked.
+   */
+  async function drive(children: ChildRuns, id: string, answers: string[]) {
+    const asked: string[] = [];
+    let status = children.status(id);
+    for (;;) {
+      if (status.status === "running") status = await children.next(id, status.seq);
+      else if (status.status === "waiting" && (status.asks ?? []).length > 0) {
+        const ask = status.asks![0]!;
+        asked.push(ask.question);
+        const reply = answers.shift();
+        if (reply === undefined) throw new Error(`no answer left for ${ask.question}`);
+        status = await children.answer(id, ask.call, reply);
+      } else return { status, asked };
+    }
+  }
+
+  test(
+    "author_flow goes from the goal through a fixed check failure and a review to a write",
+    async () => {
+      const brief = {
+        purpose: "Greet someone.",
+        runs: "The user, daily.",
+        inputs: "who",
+        output: "a greeting",
+        done: "It says hi.",
+      };
+      const contract = {
+        path: "greet.yaml",
+        inputs: "who: !str",
+        output: "str",
+        outline: ["hi: code, greets who"],
+      };
+      const finding = {
+        severity: "low",
+        area: "clarity",
+        node: "flow",
+        problem: "No description.",
+        fix: "Add one.",
+      };
+      const draftArgs = { path: "greet.yaml", content: GREET, inputs: { who: "ada" } };
+      const { runs, model, requests, invoke } = authoringTools([
+        callReply(["ask_user", { question: "Who runs it, and how often?" }, "b1"]),
+        textReply("Got it."),
+        textReply(JSON.stringify(brief)),
+        callReply(["ask_user", { question: "Here is the contract. Does it look right?" }, "c1"]),
+        textReply("Confirmed."),
+        textReply(JSON.stringify(contract)),
+        textReply("Drafted."),
+        textReply(JSON.stringify({ text: "id: greet\nnodes: [\n" })),
+        textReply("Fixed."),
+        textReply(JSON.stringify({ text: GREET })),
+        textReply("Reviewed."),
+        textReply(JSON.stringify({ findings: [finding] })),
+        callReply(["start_flow", draftArgs, "t1"]),
+        callReply(["wait_flow", { run: "r2", seconds: 60 }, "t2"]),
+        textReply("With who=ada it said hi ada."),
+        callReply(["ask_user", { question: "It loads and said hi ada. Write it?" }, "p1"]),
+        textReply("Writing."),
+        textReply(JSON.stringify({ next: "write", changes: "" })),
+      ]);
+      const goal = "greet someone by name";
+      const started = JSON.parse(String(await invoke("author_flow", { goal })));
+      expect(started).toMatchObject({ run: "r1", status: "running" });
+      const answers = ["Me, daily.", "Yes.", "Write it."];
+      const { status, asked } = await drive(runs, "r1", answers);
+      expect(status.failure ?? null).toBeNull();
+      expect(status).toMatchObject({
+        status: "succeeded",
+        output: { path: "greet.yaml", outcome: "wrote greet.yaml" },
+      });
+      expect(asked).toEqual([
+        "Who runs it, and how often?",
+        "Here is the contract. Does it look right?",
+        "It loads and said hi ada. Write it?",
+      ]);
+      expect(readFileSync(join(root, "greet.yaml"), "utf8")).toBe(GREET);
+      // The try ran the draft before it was written, and the write asked last.
+      expect(requests.map((each) => each.title)).toEqual([
+        "Run greet.yaml (a draft, not written)",
+        "Write greet.yaml",
+      ]);
+      expect(runs.status("r2")).toMatchObject({ status: "succeeded", output: "hi ada" });
+      const prompts = model.requests.map((request) => request.messages.at(-1)!.text());
+      // The fix saw the check's error, and the review the fixed flow.
+      const fix = model.requests.find((r) => r.messages[0]!.text().startsWith("You fix a yian"));
+      expect(fix!.messages.at(-1)!.text()).toContain("invalid:");
+      expect(prompts.some((each) => each.startsWith("Review the flow greet.yaml:"))).toBe(true);
+      const plan = model.requests.find((r) => r.messages[0]!.text().includes("finish a yian"));
+      expect(plan!.messages.map((each) => each.text()).join("\n")).toContain("No description.");
+      const drafting = model.requests.find((r) =>
+        r.messages[0]!.text().includes("You write flows"),
+      );
+      expect(drafting!.tools.map((each) => each.name)).toContain("load_skill");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "review_flow starts the review of a file with no start card, and the output is its findings",
+    async () => {
+      writeFileSync(join(root, "greet.yaml"), GREET);
+      const finding = {
+        severity: "medium",
+        area: "security",
+        node: "hi",
+        problem: "Code runs.",
+        fix: "Check it.",
+      };
+      const { runs, requests, invoke, model } = authoringTools([
+        textReply("Reviewed."),
+        textReply(JSON.stringify({ findings: [finding] })),
+      ]);
+      const started = JSON.parse(String(await invoke("review_flow", { path: "greet.yaml" })));
+      expect(started).toMatchObject({ run: "r1" });
+      const { status } = await drive(runs, "r1", []);
+      expect(status).toMatchObject({ status: "succeeded", output: [finding] });
+      expect(requests).toEqual([]);
+      expect(model.requests[0]!.messages.at(-1)!.text()).toContain('return "hi " + inputs["who"];');
+      const outside = await rejection(
+        Promise.resolve(invoke("review_flow", { path: "../x.yaml" })),
+      );
+      expect(outside).toBeInstanceOf(ToolRefused);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "only the authoring runs get the tools, and their runs stay the assistant's to relay",
+    async () => {
+      writeFileSync(join(root, "greet.yaml"), GREET);
+      const { runs, invoke, queue } = authoringTools([
+        textReply("Reviewed."),
+        textReply(JSON.stringify({ findings: [] })),
+      ]);
+      const names = chatRunTools(host(), runs).map((each) => each.name);
+      expect(names).not.toContain("author_flow");
+      expect(names).not.toContain("review_flow");
+      // A flow the user wrote can't call the tools the authoring runs are granted.
+      const greedy = await loadConfinedText(
+        root,
+        join(root, "greedy.yaml"),
+        "id: g\nname: g\nnodes:\n  w: {kind: tool, tool_id: write_flow, input: {path: a.yaml, " +
+          "content: x}}\noutput: ${w.output}\n",
+        NO_ENV,
+      );
+      await expect(runs.start(greedy, {})).rejects.toThrow("write_flow");
+      // The tools the review run is started with.
+      let granted: Record<string, ToolEntry> = {};
+      const start = runs.start.bind(runs);
+      runs.start = (flow, inputs, options = {}) => {
+        granted = { ...options.tools };
+        return start(flow, inputs, options);
+      };
+      await invoke("review_flow", { path: "greet.yaml" });
+      runs.start = start;
+      expect(Object.keys(granted).sort(compareCodeUnits)).toEqual(
+        [...AUTHORING_TOOLS].sort(compareCodeUnits),
+      );
+      expect((await drive(runs, "r1", [])).status).toMatchObject({ status: "succeeded" });
+      const ctx = new ToolContext({
+        callId: "chat-1-r1/review",
+        attempt: 1,
+        toolName: "wait_flow",
+        runId: "chat-1-r1",
+        node: "review",
+        context: undefined,
+        signal: new AbortController().signal,
+      });
+      const call = (name: string, args: Record<string, unknown>) =>
+        (granted[name] as FunctionTool).execute(args, ctx);
+      // Its wait_flow reads only the runs it started.
+      const other = await rejection(Promise.resolve(call("wait_flow", { run: "r1", seconds: 0 })));
+      expect(other.message).toBe("no run 'r1' started here");
+      const tried = JSON.parse(
+        String(await call("start_flow", { path: "greet.yaml", inputs: { who: "ada" } })),
+      );
+      expect(tried).toMatchObject({ run: "r2" });
+      let status = JSON.parse(String(await call("wait_flow", { run: "r2", seconds: 60 })));
+      while (status.status === "running") {
+        status = JSON.parse(String(await call("wait_flow", { run: "r2", seconds: 60 })));
+      }
+      expect(status).toMatchObject({ status: "succeeded", output: "hi ada" });
+      // What it saw isn't marked seen: the chat still tells the assistant how the run ended.
+      expect(queue.seen("r2")).toBe(0);
     },
     TIMEOUT,
   );

@@ -6,8 +6,8 @@
  * `ReportedToolError` it reads.
  *
  * Knows about: the host tool API and its errors, confined loading, the run boundary's flow readers
- * and input intake, CODE references, the chat's file tools' helpers, its child runs and its
- * events.
+ * and input intake, CODE references, the chat's file tools and their helpers, its child runs, its
+ * events and its bundled flows.
  */
 
 import { createHash } from "node:crypto";
@@ -21,6 +21,7 @@ import { coerceInputs } from "../nodes/binding.ts";
 import { splitReference } from "../nodes/code/worker.ts";
 import { isSystemError, realScheduler, type Scheduler } from "../platform.ts";
 import { hostInputs, skillGrants, staticNodes } from "../run.ts";
+import type { Skill } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
 import { buildValueAs, isInboxType } from "../typesys/values.ts";
@@ -28,6 +29,7 @@ import { LIST_ITEMS } from "./chat_events.ts";
 import type { ChildRuns, ChildStatus } from "./chat_runs.ts";
 import {
   type ChatToolHost,
+  chatFileTools,
   confine,
   readFlow,
   refuseContent,
@@ -37,6 +39,7 @@ import {
   stringArg,
   stringArguments,
 } from "./chat_tools.ts";
+import { AUTHORING_TOOLS, loadAuthorFlow, loadReviewFlow } from "./authoring.ts";
 import { loadConfinedText } from "./confined_load.ts";
 import { unifiedDiff } from "./diff.ts";
 import { loadReportFlow } from "./report_issue.ts";
@@ -49,6 +52,35 @@ const STATUS_TEXT_CHARS = 4000;
 
 /** The approval answers `start_flow` offers: the first two start, the last (Ctrl-C's) doesn't. */
 const START_CHOICES = ["Approve", "Approve this flow for this chat", "Reject"] as const;
+
+/** The run tools' word for a run's id, and for the status each returns. */
+const RUN = "The run's id, as start_flow returned it (r1, r2, ...).";
+const STATUS =
+  "Returns the run's status as JSON: status (running, waiting, succeeded, failed or cancelled), " +
+  "output, failure, waits, asks (questions with their call ids), replies (what it said since " +
+  "you last looked), note (something that couldn't be done) and log.";
+
+/** How a set of run tools reads and shows the chat's runs (`chatRunTools`' `view`). */
+interface View {
+  /** `status` as JSON for the model, marked shown. */
+  show(status: ChildStatus): string;
+  /** The last seq of `run` this view has shown (or the chat has, for the assistant's). */
+  lastSeen(run: string): number;
+  /**
+   * The run a tool call's `run` names.
+   *
+   * @throws {ReportedToolError} When no child has the id, or this view may not read it.
+   */
+  known(args: Record<string, unknown>): string;
+  /** Note that this view started `run`. */
+  started(run: string): void;
+}
+
+/** What `author_flow` and `review_flow` start their runs with. */
+export interface AuthoringOptions {
+  /** The skills the authoring flows' agents load: the bundled `composing-agents`. */
+  skills: ReadonlyMap<string, Skill>;
+}
 
 /** What `report_issue` starts its run with, beside what the model passes. */
 export interface ReportOptions {
@@ -72,6 +104,8 @@ export interface ChatRunToolsOptions {
   scheduler?: Scheduler;
   /** What `report_issue` needs; without it, there is no `report_issue`. */
   report?: ReportOptions | null;
+  /** What `author_flow` and `review_flow` need; without it, there are neither. */
+  authoring?: AuthoringOptions | null;
 }
 
 /** `text` cut to `STATUS_TEXT_CHARS` characters, with a note when it was cut. */
@@ -264,108 +298,31 @@ async function loadForStart(
  * `STATUS_TEXT_CHARS`, and marks it read (`runs.markRead`, `options.seen`). An unknown run, or an
  * argument of the wrong type, is a `ReportedToolError`. With `options.report`, also
  * `report_issue`, which starts the bundled report flow as a child run without asking: only that
- * run gets `file_issue`, whose own approval card guards anything that leaves the machine.
+ * run gets `file_issue`, whose own approval card guards anything that leaves the machine. With
+ * `options.authoring`, also `author_flow` and `review_flow`, which start the bundled authoring
+ * flows likewise (`authoringTools`).
  */
 export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatRunToolsOptions = {}): FunctionTool[] {
-  const { seen = null, scheduler = realScheduler, report = null } = options;
+  const { seen = null, scheduler = realScheduler, report = null, authoring = null } = options;
   // The approvals given "for this chat", by real path: the digest of what was approved.
   const approved = new Map<string, string>();
-  // By child, the last seq a tool showed the model; with `seen`'s, what `wait_flow` waits past.
-  const shown = new Map<string, number>();
-  const lastSeen = (run: string) => Math.max(shown.get(run) ?? 0, seen?.seen(run) ?? 0);
-  const show = (status: ChildStatus): string => {
-    const last = lastSeen(status.run);
-    runs.markRead(status.run, status.seq);
-    seen?.markSeen(status.run, status.seq);
-    shown.set(status.run, Math.max(status.seq, last));
-    // The stored status keeps the replies it was published with; once shown, they are read.
-    const { replies: _, ...unrepeated } = status;
-    return JSON.stringify(shownStatus(status.seq <= last ? unrepeated : status));
-  };
+  const chatView = view(true);
+  const { show } = chatView;
   const runArgument = (description: string, ...more: [name: string, description: string][]) =>
     stringArguments(
       ["run", description, true],
       ...more.map(([name, text]): [string, string, boolean] => [name, text, true]),
     );
-  const RUN = "The run's id, as start_flow returned it (r1, r2, ...).";
-  const STATUS =
-    "Returns the run's status as JSON: status (running, waiting, succeeded, failed or cancelled), output, " +
-    "failure, waits, asks (questions with their call ids), replies (what it said since you last looked), note " +
-    "(something that couldn't be done) and log.";
   return [
-    tool({
-      name: "start_flow",
-      description:
-        "Start a flow file (.yaml, .yml) in the chat's folder as a background run of this chat, once the user " +
-        "approves it on their terminal. Run check_flow first to learn its inputs, and ask the user for input " +
-        "values you don't know rather than inventing them; an Inbox input is never given here (use " +
-        "message_flow). With content, runs that text as the file at path would run, without " +
-        `writing it: a draft. ${STATUS} The status's run is the id the other run tools take. ` +
-        "Returns `not started: <why>` when the user rejects it or it can't start; don't retry a " +
-        "rejected start unchanged.",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string", description: "The flow file, relative to the chat's folder." },
-          inputs: { type: "object", description: "The flow's inputs by name; {} for none." },
-          content: {
-            type: "string",
-            description: "A draft's whole text, run in place of the file's.",
-          },
-        },
-        required: ["path", "inputs"],
-        additionalProperties: false,
-      },
-      execute: (args, ctx) => {
-        const content = args["content"] === undefined ? undefined : stringArg(args, "content");
-        return startFlow(stringArg(args, "path"), args["inputs"], content, ctx.signal);
-      },
-    }),
+    startTool(chatView),
     tool({
       name: "flow_status",
       description: `Read where a run this chat started stands now, without waiting. ${STATUS}`,
       parameters: runArgument(RUN),
       isConcurrencySafe: () => true,
-      execute: (args) => show(runs.status(knownRun(runs, args))),
+      execute: (args) => show(runs.status(chatView.known(args))),
     }),
-    tool({
-      name: "wait_flow",
-      description:
-        "Wait for a run this chat started to change (a reply, a question, its end), up to `seconds` " +
-        `(at most ${WAIT_FLOW_MAX_S}), and return its status then, or at the timeout. Returns at once when ` +
-        `it changed since you last saw it. ${STATUS}`,
-      parameters: {
-        type: "object",
-        properties: {
-          run: { type: "string", description: RUN },
-          seconds: {
-            type: "number",
-            description: `How long to wait at most, in seconds (at most ${WAIT_FLOW_MAX_S}).`,
-          },
-        },
-        required: ["run", "seconds"],
-        additionalProperties: false,
-      },
-      isConcurrencySafe: () => true,
-      execute: async (args, ctx) => {
-        const id = knownRun(runs, args);
-        const seconds = args["seconds"];
-        if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
-          throw new ReportedToolError("seconds must be a number of seconds, 0 or more");
-        }
-        const done = new AbortController();
-        const end = () => done.abort();
-        ctx.signal.addEventListener("abort", end, { once: true });
-        if (ctx.signal.aborted) end();
-        scheduler.sleep(Math.min(seconds, WAIT_FLOW_MAX_S) * 1000, done.signal).then(end, () => {});
-        try {
-          return show(await runs.next(id, lastSeen(id), { signal: done.signal }));
-        } finally {
-          ctx.signal.removeEventListener("abort", end);
-          end();
-        }
-      },
-    }),
+    waitTool(chatView),
     tool({
       name: "answer_flow",
       description:
@@ -419,7 +376,188 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
       execute: async (args) => show(await runs.stop(knownRun(runs, args))),
     }),
     ...(report === null ? [] : [reportTool(report)]),
+    ...(authoring === null ? [] : authoringTools(authoring)),
   ];
+
+  /**
+   * How a set of run tools shows runs: `marks`, for the assistant's own, marks each status it
+   * shows read and seen, so the chat doesn't relay it again; a child's set marks nothing, and
+   * reads only the runs it started (`started`), so the assistant still hears of them.
+   */
+  function view(marks: boolean): View {
+    // By run, the last seq this view showed; with `seen`'s, what `wait_flow` waits past.
+    const shown = new Map<string, number>();
+    const mine = new Set<string>();
+    const lastSeen = (run: string) =>
+      Math.max(shown.get(run) ?? 0, marks ? (seen?.seen(run) ?? 0) : 0);
+    return {
+      lastSeen,
+      show: (status) => {
+        const last = lastSeen(status.run);
+        if (marks) {
+          runs.markRead(status.run, status.seq);
+          seen?.markSeen(status.run, status.seq);
+        }
+        shown.set(status.run, Math.max(status.seq, last));
+        // The stored status keeps the replies it was published with; once shown, they are read.
+        const { replies: _, ...unrepeated } = status;
+        return JSON.stringify(shownStatus(status.seq <= last ? unrepeated : status));
+      },
+      known: (args) => {
+        const id = knownRun(runs, args);
+        if (!marks && !mine.has(id)) throw new ReportedToolError(`no run '${id}' started here`);
+        return id;
+      },
+      started: (id) => void mine.add(id),
+    };
+  }
+
+  /** The `start_flow` tool, its runs shown through `through`. */
+  function startTool(through: View): FunctionTool {
+    return tool({
+      name: "start_flow",
+      description:
+        "Start a flow file (.yaml, .yml) in the chat's folder as a background run of this chat, " +
+        "once the user approves it on their terminal. Run check_flow first to learn its inputs, " +
+        "and ask the user for input values you don't know rather than inventing them; an Inbox " +
+        "input is never given here (use message_flow). With content, runs that text as the file " +
+        `at path would run, without writing it: a draft. ${STATUS} The status's run is the id ` +
+        "the other run tools take. Returns `not started: <why>` when the user rejects it or it " +
+        "can't start; don't retry a rejected start unchanged.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "The flow file, relative to the chat's folder." },
+          inputs: { type: "object", description: "The flow's inputs by name; {} for none." },
+          content: {
+            type: "string",
+            description: "A draft's whole text, run in place of the file's.",
+          },
+        },
+        required: ["path", "inputs"],
+        additionalProperties: false,
+      },
+      execute: (args, ctx) => {
+        const content = args["content"] === undefined ? undefined : stringArg(args, "content");
+        return startFlow(through, stringArg(args, "path"), args["inputs"], content, ctx.signal);
+      },
+    });
+  }
+
+  /** The `wait_flow` tool, its runs read and shown through `through`. */
+  function waitTool(through: View): FunctionTool {
+    return tool({
+      name: "wait_flow",
+      description:
+        "Wait for a run this chat started to change (a reply, a question, its end), up to " +
+        `\`seconds\` (at most ${WAIT_FLOW_MAX_S}), and return its status then, or at the ` +
+        `timeout. Returns at once when it changed since you last saw it. ${STATUS}`,
+      parameters: {
+        type: "object",
+        properties: {
+          run: { type: "string", description: RUN },
+          seconds: {
+            type: "number",
+            description: `How long to wait at most, in seconds (at most ${WAIT_FLOW_MAX_S}).`,
+          },
+        },
+        required: ["run", "seconds"],
+        additionalProperties: false,
+      },
+      isConcurrencySafe: () => true,
+      execute: async (args, ctx) => {
+        const id = through.known(args);
+        const seconds = args["seconds"];
+        if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds < 0) {
+          throw new ReportedToolError("seconds must be a number of seconds, 0 or more");
+        }
+        const done = new AbortController();
+        const end = () => done.abort();
+        ctx.signal.addEventListener("abort", end, { once: true });
+        if (ctx.signal.aborted) end();
+        scheduler.sleep(Math.min(seconds, WAIT_FLOW_MAX_S) * 1000, done.signal).then(end, () => {});
+        try {
+          return through.show(await runs.next(id, through.lastSeen(id), { signal: done.signal }));
+        } finally {
+          ctx.signal.removeEventListener("abort", end);
+          end();
+        }
+      },
+    });
+  }
+
+  /**
+   * `author_flow` and `review_flow`, which start the bundled authoring flows as child runs
+   * without asking: each run gets `AUTHORING_TOOLS` (the file tools over `host`, and its own
+   * `start_flow` and `wait_flow`), whose writes and starts ask the user as the assistant's do,
+   * and `options.skills`.
+   */
+  function authoringTools(options: AuthoringOptions): FunctionTool[] {
+    const start = async (
+      load: () => Promise<ComposedFlow>,
+      inputs: Record<string, unknown>,
+      signal: AbortSignal,
+    ): Promise<string> => {
+      const own = view(false);
+      const granted: FunctionTool[] = [...chatFileTools(host), startTool(own), waitTool(own)];
+      const tools = Object.fromEntries(
+        granted
+          .filter((each) => (AUTHORING_TOOLS as readonly string[]).includes(each.name))
+          .map((each) => [each.name, each]),
+      );
+      let id: string;
+      try {
+        const flow = await load();
+        ({ id } = await runs.start(flow, inputs, { signal, tools, skills: options.skills }));
+      } catch (error) {
+        if (error instanceof Error) return `not started: ${error.message}`;
+        throw error;
+      }
+      return show(runs.status(id));
+    };
+    return [
+      tool({
+        name: "author_flow",
+        description:
+          "Build a new flow with the user, or rework one, step by step: a background run pins " +
+          "down the goal, agrees the typed inputs, output and nodes with the user, drafts the " +
+          "flow, checks it until it loads, reviews it, tries it on sample inputs (the user " +
+          "approves the run), refines it with the user, and writes it once they approve the " +
+          "write. Relay its questions as for any run. For a small edit, use write_flow instead. " +
+          STATUS,
+        parameters: stringArguments(
+          ["goal", "What the user wants the flow to do, in their words.", true],
+          [
+            "path",
+            "The flow to rework, or where the new one goes, relative to the chat's folder.",
+            false,
+          ],
+        ),
+        execute: (args, ctx) => {
+          const goal = stringArg(args, "goal");
+          const path = args["path"] === undefined ? null : stringArg(args, "path");
+          return start(() => loadAuthorFlow(host.env), { goal, path }, ctx.signal);
+        },
+      }),
+      tool({
+        name: "review_flow",
+        description:
+          "Review a flow file in the chat's folder for security, reliability, cost and clarity, " +
+          "in a background run whose output is its findings, the most severe first: each a " +
+          `severity, an area, the node, the problem and a fix. ${STATUS}`,
+        parameters: stringArguments([
+          "path",
+          "The flow file, relative to the chat's folder.",
+          true,
+        ]),
+        execute: (args, ctx) => {
+          const path = stringArg(args, "path");
+          const text = readFlow(path, confine(resolveRoot(host.root), path));
+          return start(() => loadReviewFlow(host.env), { path, text }, ctx.signal);
+        },
+      }),
+    ];
+  }
 
   /** The `report_issue` tool over `report`. */
   function reportTool(options: ReportOptions): FunctionTool {
@@ -462,9 +600,11 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
 
   /**
    * Start the flow at `path`, or the draft `content` as that file, with `inputs` once the user
-   * approves it, as `start_flow` describes. Every outcome once the user is asked is returned.
+   * approves it, as `start_flow` describes, showing it through `through`. Every outcome once the
+   * user is asked is returned.
    */
   async function startFlow(
+    through: View,
     path: string,
     inputs: unknown,
     content: string | undefined,
@@ -503,6 +643,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
       if (error instanceof Error) return `not started: ${error.message}`;
       throw error;
     }
-    return show(runs.status(id));
+    through.started(id);
+    return through.show(runs.status(id));
   }
 }

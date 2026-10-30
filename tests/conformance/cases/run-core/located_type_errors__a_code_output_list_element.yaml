@@ -1,0 +1,27 @@
+# A CODE node's output check names the list element and field that failed.
+kind: run
+flow: |
+  id: located-output
+  name: located_output
+  typedefs:
+    Leg:
+      to: str
+      mode: Literal(train, car)
+  nodes:
+    make:
+      kind: code
+      output: list(Leg)
+      code: |
+        return [{to: "a", mode: "train"}, {to: "b", mode: "boat"}];
+  output: ${make.output}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.output
+      message: 'output at [1].mode: "boat" is not one of Literal(car, train)'
+      frames:
+      - label: flow.yaml
+        range: [10, 13, 10, 22]
+      node: make

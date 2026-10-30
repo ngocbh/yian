@@ -24,7 +24,7 @@ expect:
     status: failed
     failure:
       code: contract.output
-      message: '"not-an-int" does not match declared type int'
+      message: 'output at score: "not-an-int" does not match declared type int'
       node: calc
       # The declared type `int` of `score` on line 13.
       frames: [{label: flow.yaml, range: [13, 14, 13, 17]}]
@@ -42,6 +42,6 @@ expect:
       - calc
       - failure:
           code: contract.output
-          message: '"not-an-int" does not match declared type int'
+          message: 'output at score: "not-an-int" does not match declared type int'
           node: calc
           frames: [{label: flow.yaml, range: [13, 14, 13, 17]}]

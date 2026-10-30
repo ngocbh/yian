@@ -30,7 +30,7 @@ expect:
       frames:
       - label: flow.yaml
         range: [17, 17, 17, 33]
-      message: 'binding ''decision'': record missing required fields: ["action"]'
+      message: 'binding ''decision'' at action: record missing required fields: ["action"]'
       node: use
   trace:
   - - run_started
@@ -72,7 +72,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [17, 17, 17, 33]
-        message: 'binding ''decision'': record missing required fields: ["action"]'
+        message: 'binding ''decision'' at action: record missing required fields: ["action"]'
         node: use
   events:
   - [RunStarted]
@@ -97,7 +97,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [17, 17, 17, 33]
-        message: 'binding ''decision'': record missing required fields: ["action"]'
+        message: 'binding ''decision'' at action: record missing required fields: ["action"]'
         node: use
   - - RunFailed
     - failure:
@@ -105,5 +105,5 @@ expect:
         frames:
         - label: flow.yaml
           range: [17, 17, 17, 33]
-        message: 'binding ''decision'': record missing required fields: ["action"]'
+        message: 'binding ''decision'' at action: record missing required fields: ["action"]'
         node: use

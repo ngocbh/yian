@@ -45,7 +45,7 @@ expect:
     status: failed
     failure:
       code: contract.output
-      message: '"rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
+      message: 'output at type: "rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
       frames:
       - label: flow.yaml
         range: [13, 13, 13, 24]
@@ -79,7 +79,7 @@ expect:
     - place
     - failure:
         code: contract.output
-        message: '"rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
+        message: 'output at type: "rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
         frames:
         - label: flow.yaml
           range: [13, 13, 13, 24]
@@ -97,7 +97,7 @@ expect:
   - - NodeFailed
     - failure:
         code: contract.output
-        message: '"rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
+        message: 'output at type: "rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
         frames:
         - label: flow.yaml
           range: [13, 13, 13, 24]
@@ -105,7 +105,7 @@ expect:
   - - RunFailed
     - failure:
         code: contract.output
-        message: '"rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
+        message: 'output at type: "rejected" is not a tag of the union (expected one of ["filled","interrupted"])'
         frames:
         - label: flow.yaml
           range: [13, 13, 13, 24]

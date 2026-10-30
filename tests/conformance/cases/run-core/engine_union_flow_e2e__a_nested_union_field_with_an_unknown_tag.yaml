@@ -39,7 +39,7 @@ expect:
       frames:
       - label: flow.yaml
         range: [21, 17, 21, 25]
-      message: '"bid" is not a tag of the union (expected one of ["buy","sell"])'
+      message: 'output at decision.action: "bid" is not a tag of the union (expected one of ["buy","sell"])'
       node: d
   trace:
   - - run_started
@@ -81,7 +81,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [21, 17, 21, 25]
-        message: '"bid" is not a tag of the union (expected one of ["buy","sell"])'
+        message: 'output at decision.action: "bid" is not a tag of the union (expected one of ["buy","sell"])'
         node: d
   events:
   - [RunStarted]
@@ -104,7 +104,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [21, 17, 21, 25]
-        message: '"bid" is not a tag of the union (expected one of ["buy","sell"])'
+        message: 'output at decision.action: "bid" is not a tag of the union (expected one of ["buy","sell"])'
         node: d
   - - RunFailed
     - failure:
@@ -112,5 +112,5 @@ expect:
         frames:
         - label: flow.yaml
           range: [21, 17, 21, 25]
-        message: '"bid" is not a tag of the union (expected one of ["buy","sell"])'
+        message: 'output at decision.action: "bid" is not a tag of the union (expected one of ["buy","sell"])'
         node: d

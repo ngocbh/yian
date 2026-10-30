@@ -45,7 +45,7 @@ expect:
       frames:
       - label: flow.yaml
         range: [17, 12, 17, 20]
-      message: 'input ''payload'': "not-an-int" does not match declared type int'
+      message: 'input ''payload'' at profile.age: "not-an-int" does not match declared type int'
       node: __start__
   trace:
   - - run_started
@@ -78,7 +78,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [17, 12, 17, 20]
-        message: 'input ''payload'': "not-an-int" does not match declared type int'
+        message: 'input ''payload'' at profile.age: "not-an-int" does not match declared type int'
         node: __start__
   events:
   - [RunStarted]
@@ -90,7 +90,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [17, 12, 17, 20]
-        message: 'input ''payload'': "not-an-int" does not match declared type int'
+        message: 'input ''payload'' at profile.age: "not-an-int" does not match declared type int'
         node: __start__
   - - RunFailed
     - failure:
@@ -98,5 +98,5 @@ expect:
         frames:
         - label: flow.yaml
           range: [17, 12, 17, 20]
-        message: 'input ''payload'': "not-an-int" does not match declared type int'
+        message: 'input ''payload'' at profile.age: "not-an-int" does not match declared type int'
         node: __start__

@@ -32,7 +32,7 @@ expect:
       frames:
       - label: flow.yaml
         range: [21, 13, 21, 18]
-      message: 0 is below the inclusive int minimum 1
+      message: 'output at qty: 0 is below the inclusive int minimum 1'
       node: order
   trace:
   - - run_started
@@ -68,7 +68,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [21, 13, 21, 18]
-        message: 0 is below the inclusive int minimum 1
+        message: 'output at qty: 0 is below the inclusive int minimum 1'
         node: order
   events:
   - [RunStarted]
@@ -88,7 +88,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [21, 13, 21, 18]
-        message: 0 is below the inclusive int minimum 1
+        message: 'output at qty: 0 is below the inclusive int minimum 1'
         node: order
   - - RunFailed
     - failure:
@@ -96,5 +96,5 @@ expect:
         frames:
         - label: flow.yaml
           range: [21, 13, 21, 18]
-        message: 0 is below the inclusive int minimum 1
+        message: 'output at qty: 0 is below the inclusive int minimum 1'
         node: order

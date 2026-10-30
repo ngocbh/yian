@@ -35,7 +35,7 @@ expect:
         range: [18, 3, 18, 4]
       - label: flow.yaml
         range: [10, 10, 10, 14]
-      message: 'input ''p'': 5 does not match declared type str'
+      message: 'input ''p'' at a: 5 does not match declared type str'
       node: c/__start__
   trace:
   - - run_started
@@ -82,7 +82,7 @@ expect:
           range: [18, 3, 18, 4]
         - label: flow.yaml
           range: [10, 10, 10, 14]
-        message: 'input ''p'': 5 does not match declared type str'
+        message: 'input ''p'' at a: 5 does not match declared type str'
         node: c/__start__
   events:
   - [RunStarted]
@@ -118,7 +118,7 @@ expect:
           range: [18, 3, 18, 4]
         - label: flow.yaml
           range: [10, 10, 10, 14]
-        message: 'input ''p'': 5 does not match declared type str'
+        message: 'input ''p'' at a: 5 does not match declared type str'
         node: c/__start__
   - - RunFailed
     - failure:
@@ -128,5 +128,5 @@ expect:
           range: [18, 3, 18, 4]
         - label: flow.yaml
           range: [10, 10, 10, 14]
-        message: 'input ''p'': 5 does not match declared type str'
+        message: 'input ''p'' at a: 5 does not match declared type str'
         node: c/__start__

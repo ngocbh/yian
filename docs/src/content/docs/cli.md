@@ -389,15 +389,18 @@ directly. The flow asks you its questions through the assistant:
 
 1. **Goal**: what the flow is for, who runs it and how often, its inputs and output, and what
    "done" looks like.
-2. **Contract**: the typed inputs and output, and the nodes in outline, which you confirm before
-   any YAML is written.
+2. **Contract**: the typed inputs and output, the nodes in outline, sample inputs to try it on,
+   and its path, which you confirm before any YAML is written. A path that isn't a `.yaml` or
+   `.yml` file inside the folder is asked for again, three times at most.
 3. **Draft**: written with the `composing-agents` skill and these docs.
 4. **Check**: `check_flow` until the draft loads, fixing load errors itself, three tries at most.
-5. **Review**: `review_flow`, below.
-6. **Try**: runs the draft on sample inputs, once you approve the run's card, unless the review
-   found a serious security problem.
-7. **Refine**: says what it found and suggests improvements; you choose to refine it again (up to
-   five rounds), write it, or stop.
+5. **Review**: `review_flow`, below, for a draft that loads.
+6. **Try**: runs the draft on the sample inputs, once you approve the run's card (titled "a draft,
+   for author_flow"). A draft isn't tried when the review found a high-severity security problem,
+   or when it takes an inbox input; you're told why. A try still going when `author_flow` ends is
+   cancelled.
+7. **Refine**: says what it found and suggests improvements; you choose to refine it again (five
+   rounds at most), write it, or stop.
 8. **Write**: `write_flow`, with its usual card.
 
 `review_flow` starts another bundled flow, on its own or from `author_flow`. Its output is a list
@@ -411,9 +414,10 @@ node, the problem and a fix:
 | cost | Model calls inside loops, and prompts heavier than the step needs |
 | clarity | Names, descriptions and types |
 
-Both flows get `check_flow`, `read_flow`, `read_docs`, `write_flow`, `start_flow` and `wait_flow`,
-held to the chat's folder and its cards as the assistant is; no other flow the assistant starts
-gets them. A flow `author_flow` tries runs as any flow the assistant starts, so its questions and
+`author_flow` gets `check_flow`, `read_flow`, `read_docs`, `write_flow`, `start_flow` and
+`wait_flow`, and `review_flow` only `read_flow` and `read_docs`, held to the chat's folder and its
+cards as the assistant is; no other flow, a try included, gets them. Each of their agents has a
+cap on its turns. A flow `author_flow` tries runs as any flow the assistant starts, so its questions and
 its output reach you through the assistant.
 
 ### Reporting a problem

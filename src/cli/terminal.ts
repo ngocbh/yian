@@ -1342,9 +1342,10 @@ export class Terminal {
    * and Ctrl-C `onKey("interrupt")`, rather than raising SIGINT, since the input is raw; other keys
    * wait for the next prompt. Given `edit`, every key but Ctrl-C goes to it first, and only one it
    * doesn't take (returns false for) goes on as above; bracketed paste is then on while the watch
-   * runs, so a paste reaches it as one key holding the text, its newlines kept. A prompt meanwhile
-   * takes the keys as usual, and the watch goes on after it. Does nothing on a plain terminal or an
-   * input that isn't a TTY.
+   * runs, so a paste reaches it as one key holding the text, its newlines kept. Started with no
+   * prompt up, the watch first takes the keys that came since the last prompt ended, in order and
+   * the same way, before it returns. A prompt meanwhile takes the keys as usual, and the watch goes
+   * on after it. Does nothing on a plain terminal or an input that isn't a TTY.
    */
   watchKeys(
     signal: AbortSignal,
@@ -1377,6 +1378,14 @@ export class Terminal {
       quietly(() => input.pause());
     };
     signal.addEventListener("abort", end, { once: true });
+    // Keys typed just after a prompt ended (with its line, say) are as much the watch's as those
+    // typed a moment later. Each goes through `#dispatch` again, last, since a handler may end the
+    // watch: what the watch leaves, or what comes after it ended, waits for the next prompt.
+    if (this.#turn === undefined) {
+      const typed = this.#buffer;
+      this.#buffer = [];
+      for (const key of typed) this.#dispatch(key);
+    }
   }
 
   /** Normalize one keypress and hand it to the active widget, or buffer it for the next one. */

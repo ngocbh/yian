@@ -151,8 +151,8 @@ llm_config:
   be set. Setting one fails at load and says why.
 - On Azure and the Chat Completions providers, a model whose name starts with `gpt-5-pro`,
   `gpt-5.2-pro`, `gpt-5.4-pro`, `gpt-5.5-pro` or `gpt-5.6-sol`, or contains `codex`, is called
-  through the Responses API; its block must then be empty. A block there fails at load when one
-  `llm_config:` writes the provider, the model and the block, and otherwise before the agent runs.
+  through the Responses API; its block must then be empty. A block there fails at load, or before
+  the agent runs when the provider or model is set elsewhere.
 - A setting one model doesn't accept passes the load check; the provider's error then fails the
   node.
 

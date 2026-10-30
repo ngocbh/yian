@@ -25,7 +25,7 @@ import {
   writeAsText,
 } from "../typesys/values.ts";
 import { ANSI, cells, clip, columnsOf, fit, rowsOf, wrapLine } from "./cells.ts";
-import { liveRows, type LiveRows } from "./live_rows.ts";
+import { liveRows, type LiveRows, SYNC_OFF, SYNC_ON } from "./live_rows.ts";
 import { box, userRows } from "./render.ts";
 import { sanitize } from "./sanitize.ts";
 
@@ -877,6 +877,11 @@ interface Turn {
   ending: Ending | undefined;
   /** Ends the active widget once `ending` is set; a no-op while no widget runs. */
   wake: () => void;
+  /**
+   * The rows printed for good for the widget up now (a card, a label's lines above its last),
+   * which Ctrl-L draws again with it.
+   */
+  shown: string[];
 }
 
 /** Runs one widget inside a turn: its answer, or a throw when it stops, fails or the turn aborts. */
@@ -1435,15 +1440,26 @@ export class Terminal {
   /** Hand `key` to the active widget or the watch, or buffer it for the next widget. */
   #dispatch(key: Key): void {
     const watch = this.#turn === undefined ? this.#watch : undefined;
-    // Ctrl-C still works in the grace after a prompt took a line's place.
+    const redraw = this.#redraws(key);
+    // Ctrl-C still works in the grace after a prompt took a line's place, and so does Ctrl-L,
+    // which answers nothing.
     const graced =
       this.#graced !== undefined && this.#turn === this.#graced && this.#now() < this.#graceUntil;
-    if (graced && !(key.ctrl && key.name === "c")) return;
+    if (graced && !(key.ctrl && key.name === "c") && !redraw) return;
     if (this.#active) this.#active.key(key);
-    else if (watch !== undefined && key.ctrl && key.name === "c") watch.onKey("interrupt");
+    else if (redraw && this.#turn === undefined) {
+      // The live rows are the host's (a watch's box under a reply): drawn again as they are.
+      this.#live.clear();
+      this.#live.flush();
+    } else if (watch !== undefined && key.ctrl && key.name === "c") watch.onKey("interrupt");
     else if (watch?.edit?.(key) === true) return;
     else if (watch !== undefined && key.name === "escape") watch.onKey("escape");
     else this.#buffer.push(key);
+  }
+
+  /** Whether `key` is Ctrl-L, which clears the screen and redraws: on a TTY, not plain. */
+  #redraws(key: Key): boolean {
+    return key.ctrl && !key.meta && key.name === "l" && !this.#plain && this.#input.isTTY === true;
   }
 
   /** The input ended or failed (EIO when the terminal goes away): the active or next widget ends. */
@@ -1501,7 +1517,7 @@ export class Terminal {
     const { promise: finished, resolve: release } = Promise.withResolvers<void>();
     // The turn behind this one waits for the one ahead too, even when this one leaves early.
     this.#tail = ahead.then(() => finished);
-    const turn: Turn = { signal, keepOpen, ending: undefined, wake: () => {} };
+    const turn: Turn = { signal, keepOpen, ending: undefined, wake: () => {}, shown: [] };
     const { promise: queuedAbort, resolve: leaveQueue } = Promise.withResolvers<void>();
     const onAbort = (): void => {
       // A queued turn whose signal aborts after the terminal closed is refused as closed.
@@ -1600,7 +1616,10 @@ export class Terminal {
   /** Print `rows` for good above the prompt drawn next: written now on a plain terminal. */
   #print(rows: readonly string[]): void {
     if (this.#plain) this.#output.write(`${rows.join("\r\n")}\r\n`);
-    else this.#live.stage(rows);
+    else {
+      this.#live.stage(rows);
+      this.#turn?.shown.push(...rows);
+    }
   }
 
   /** Change the count of turns that wait for an answer by `by`, and tell the listeners. */
@@ -1637,7 +1656,8 @@ export class Terminal {
     };
     turn.wake = () => finish({ stop: turn.ending! });
     const live = this.#live;
-    const draw = (): void => {
+    // With `clear`, the screen is erased first and the widget drawn at its top (Ctrl-L).
+    const draw = (clear = false): void => {
       // A plain prompt is written once, as it opens; a refused line adds only its error, since
       // the cooked tty already echoed the line.
       if (this.#plain) {
@@ -1650,8 +1670,13 @@ export class Terminal {
         // From the top, one screen row each, so the screen never scrolls.
         const columns = columnsOf(output);
         const rows = lines.slice(0, rowsOf(output)).map((line) => clip(line, columns));
-        output.write(`${ESC}H${rows.map((row) => `${row}${ESC}K`).join("\r\n")}${ESC}J`);
+        const frame = `${ESC}H${rows.map((row) => `${row}${ESC}K`).join("\r\n")}${ESC}J`;
+        output.write(clear ? `${SYNC_ON}${ESC}2J${frame}${SYNC_OFF}` : frame);
         return;
+      }
+      if (clear) {
+        live.clear();
+        live.stage(turn.shown);
       }
       const cursor = widget.cursor();
       live.draw(lines, cursor === null ? null : { line: cursor.row, before: cursor.before });
@@ -1659,6 +1684,7 @@ export class Terminal {
     const feed = (key: Key): void => {
       try {
         if (key.ctrl && key.name === "c") return stop("interrupt");
+        if (this.#redraws(key)) return draw(true);
         const ended = widget.key(key);
         if (ended !== undefined) return "value" in ended ? finish(ended) : stop(ended.stop);
         draw();
@@ -1672,7 +1698,11 @@ export class Terminal {
       else {
         // The rows printed for good so far go out on the main screen, before another is up.
         if (widget.screen) live.flush();
-        else live.stage(widget.preface.split("\r\n").slice(0, -1));
+        else {
+          const preface = widget.preface.split("\r\n").slice(0, -1);
+          live.stage(preface);
+          turn.shown.push(...preface);
+        }
         const screen = widget.screen ? ALT_ON : "";
         this.#onScreen = widget.screen === true;
         // The cursor shows only where a frame places it.
@@ -1709,6 +1739,7 @@ export class Terminal {
       finish({ error });
     } finally {
       this.#active = undefined;
+      turn.shown = [];
       quietly(unwatch);
       if (widget.screen && !this.#plain) quietly(() => output.write(ALT_OFF));
       if (widget.screen) this.#onScreen = false;

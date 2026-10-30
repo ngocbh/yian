@@ -11,8 +11,10 @@ import { ChildRuns, type ChildRunsOptions, type ChildStatus } from "../../src/cl
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
 import { MissingKeyError } from "../../src/cli/utils.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
 import { advance, inspectRun } from "../../src/run.ts";
 import { readRunLog, type RunStartedRecord } from "../../src/runtime/log.ts";
+import { tool } from "../../src/tools/function_tools.ts";
 import { NO_ENV } from "../helpers/run_state_fixtures.ts";
 import { heldScheduler } from "../helpers/schedulers.ts";
 
@@ -113,6 +115,40 @@ test(
     expect((await settled(children, "r2")).output).toBe("hi b");
     expect((await settled(children, "r1")).output).toBe("hi a");
     expect(inspectRun(second.log).runId).toBe(`${CHAT}-r2`);
+  },
+  TIMEOUT,
+);
+
+test(
+  "a child started with tools of its own can call them, and only that child",
+  async () => {
+    const children = childRuns();
+    const shout = await flow(`id: shout
+name: shout
+nodes:
+  loud:
+    kind: tool
+    tool_id: shout
+    input:
+      text: hi
+    output: str
+output: \${loud.output}
+`);
+    const tools = {
+      shout: tool({
+        name: "shout",
+        description: "Shout the text.",
+        parameters: {
+          type: "object",
+          properties: { text: { type: "string" } },
+          required: ["text"],
+        },
+        execute: (args) => String(args["text"]).toUpperCase(),
+      }),
+    };
+    const started = await children.start(shout, {}, { tools });
+    expect((await settled(children, started.id)).output).toBe("HI");
+    expect(children.start(shout, {})).rejects.toThrow("shout");
   },
   TIMEOUT,
 );
@@ -283,6 +319,19 @@ test(
     expect(answered).toEqual({ run: "r1", status: "running", log: waiting.log, seq: waiting.seq + 1 });
     expect(children.status("r1")).toBe(answered);
     expect(await settled(children, "r1", waiting.seq)).toMatchObject({ status: "succeeded", output: "yes" });
+  },
+  TIMEOUT,
+);
+
+test(
+  "a child loaded with no code root, as a bundled flow is, takes its answer too",
+  async () => {
+    const children = childRuns();
+    await children.start(await loadFlow(ASK, { sourceLabel: "ask.yaml", env: NO_ENV }), {});
+    const waiting = await settled(children, "r1");
+    expect((await children.answer("r1", `${CHAT}-r1/sure`, "yes")).status).toBe("running");
+    const done = await settled(children, "r1", waiting.seq);
+    expect(done).toMatchObject({ status: "succeeded", output: "yes" });
   },
   TIMEOUT,
 );

@@ -9,11 +9,14 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadFlow } from "../../src/compose/loader.ts";
+import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
-import { staticNodes } from "../../src/run.ts";
+import { runFlow, staticNodes } from "../../src/run.ts";
+import { pending } from "../../src/tools/context.ts";
+import { tool } from "../../src/tools/function_tools.ts";
 import { builtinType } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals } from "../../src/typesys/values.ts";
-import { NO_ENV } from "../helpers/run_state_fixtures.ts";
+import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const FLOWS = fileURLToPath(new URL("../../src/cli/flows/", import.meta.url));
 
@@ -78,6 +81,7 @@ test("the reply agent gets the tools, the skill and steering, with no tool-call 
     "message_flow",
     "close_inbox",
     "stop_flow",
+    "report_issue",
   ]);
   expect(reply.skills).toEqual(["composing-agents"]);
   expect(reply.steerInbox).toBe(true);
@@ -93,7 +97,133 @@ test("the prompt reads before explaining, checks before runs, and relays inbox r
     "message_flow",
     "close_inbox when the user is done with it",
     "what a run said",
+    "offer to report it with report_issue",
+    "if the user pastes one, tell them to revoke it",
   ]) {
     expect(text).toContain(phrase);
   }
+});
+
+/**
+ * Run the bundled report flow on `problem` and `homes`, its draft answered with `report` by a
+ * scripted model; return what reached file_issue and the flow's output.
+ */
+async function runReport(report: { title: string; body: string }, homes: string[] = []) {
+  const flow = await loadFlow(flowText("report_issue.yaml"), {
+    sourceLabel: "report_issue.yaml",
+    env: NO_ENV,
+  });
+  const filed: Record<string, unknown>[] = [];
+  const fileIssue = tool({
+    name: "file_issue",
+    description: "Take the report.",
+    parameters: {
+      type: "object",
+      properties: { title: { type: "string" }, body: { type: "string" } },
+      required: ["title", "body"],
+    },
+    execute: (args) => {
+      filed.push(args);
+      return "not filed: saved only";
+    },
+  });
+  // With a tool granted, the agent's tool loop ends in text, and a structured call follows.
+  const replies = [textReply("Drafted."), textReply(JSON.stringify(report))];
+  const model = new ScriptedModel(replies, { provider: "xai", model: "grok-4.3" });
+  const result = await runFlow(
+    flow,
+    { problem: "check crashed", context: "yian version: 0.0.4", homes },
+    {
+      env: NO_ENV,
+      tools: { file_issue: fileIssue, ask: () => pending() },
+      llmConfig: { provider: "xai", model: "grok-4.3" },
+      models: serving(model),
+    },
+  );
+  return { filed, result, model };
+}
+
+test("the report flow drafts, scrubs and hands the report to file_issue", async () => {
+  const { filed, result, model } = await runReport({ title: "check crashes", body: "It crashed." });
+  expect(result.failure?.message ?? null).toBeNull();
+  expect(result.status).toBe("succeeded");
+  expect(result.output).toBe("not filed: saved only");
+  expect(filed).toEqual([{ title: "check crashes", body: "It crashed." }]);
+  const system = model.requests[0]!.messages[0]!.text();
+  expect(system).toContain("never paste a log's contents");
+  expect(model.requests[0]!.tools.map((each) => each.name)).toContain("ask_user");
+});
+
+test("the report flow's scrub redacts each kind of secret and shows the home as ~", async () => {
+  const secrets = [
+    ["sk-proj-abcdefghijklmnopqrstuv", "[redacted]"],
+    ["sk-ant-api03-abcdefghijklmnop_QRST", "[redacted]"],
+    ["ghp_abcdefghijklmnopqrstuvwxyz0123456789", "[redacted]"],
+    ["gho_abcdefghijklmnopqrstuvwxyz0123456789", "[redacted]"],
+    ["github_pat_11ABCDEFG0123456789_abcdefghijklmnop", "[redacted]"],
+    ["xoxb-1234567890-abcdefghij", "[redacted]"],
+    ["AKIAABCDEFGHIJKLMNOP", "[redacted]"],
+    ["AIzaSyA1234567890abcdefghijklmnopqrstuv", "[redacted]"],
+    ["eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abcdefghijklmnop", "[redacted]"],
+    ["Authorization: token abc123", "Authorization: [redacted]"],
+    ["curl -H 'Bearer abc.def-123'", "curl -H 'Bearer [redacted]'"],
+    ["password=hunter2", "password=[redacted]"],
+    ['"api_key": "abc123"', '"api_key": [redacted]'],
+    ["token: abc123", "token: [redacted]"],
+    ["https://ada:hunter2@example.com/x", "https://[redacted]@example.com/x"],
+    ["DATABASE_URL=postgres://u:pw@db/x", "DATABASE_URL=postgres://[redacted]@db/x"],
+    ["x-api-key: abc123def", "x-api-key: [redacted]"],
+    ["OPENAI_API_KEY=abcdefghijklmnopqrstu", "OPENAI_API_KEY=[redacted]"],
+    ["AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG", "AWS_SECRET_ACCESS_KEY=[redacted]"],
+    ["AZURE_OPENAI_KEY=abcdef", "AZURE_OPENAI_KEY=[redacted]"],
+    ["ANTHROPIC_API_KEY = 'abc def'", "ANTHROPIC_API_KEY = [redacted]"],
+    ["export GITHUB_TOKEN=ghp_short", "export GITHUB_TOKEN=[redacted]"],
+    ["client_secret: abc", "client_secret: [redacted]"],
+    ["pass: hunter2", "pass: [redacted]"],
+    ["pwd=hunter2", "pwd=[redacted]"],
+    ['{"api_key":"abc"}', '{"api_key":[redacted]}'],
+    ["https://x.io/?key=abc123&x=1", "https://x.io/?key=[redacted]&x=1"],
+    ["--api-key abc123", "--api-key [redacted]"],
+    ["--token=abc123", "--token=[redacted]"],
+    ["Cookie: session=abcdef123", "Cookie: [redacted]"],
+    ["set-cookie: id=abc; Path=/", "set-cookie: [redacted]"],
+    ["Bearer: abc", "Bearer: [redacted]"],
+    ["sk_live_abcdefghijklmnopqrstuv", "[redacted]"],
+    ["hf_abcdefghijklmnopqrstuvwxyz123456", "[redacted]"],
+    ["npm_abcdefghijklmnopqrstuvwxyz0123456789", "[redacted]"],
+    ["QmFzZTY0U2VjcmV0VmFsdWVUaGF0SXNMb25nRW5vdWdoVG9CZUFLZXk=", "[redacted]"],
+    ["AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEf", "[redacted]"],
+    [
+      "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----",
+      "[redacted private key]",
+    ],
+  ];
+  const body = [
+    ...secrets.map(([secret]) => secret),
+    "log: /home/ada/.yian/runs/9eccdeca88574a9f96cba63e7564b67e/log.jsonl",
+    "real: /gpfs/real/ada/x.yaml",
+    "not hers: /home/adam/x",
+    // Kept: a commit SHA, a sha256 digest, a child run's id, long identifiers.
+    "commit 3e8c4a51e2b0c9d8f7a6b5c4d3e2f1a0b9c8d7e6",
+    "sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "run 9eccdeca88574a9f96cba63e7564b67e-r10-r2",
+    "node chat_answered_reply_with_a_long_name_and_digit_1_in_it",
+    "path src/cli/flows/report_issue_with_a_much_longer_name_v2.yaml",
+    "yian check nap.yaml",
+  ].join("\n");
+  const title = "crash with ghp_abcdefghijklmnopqrstuvwxyz0123456789";
+  const { filed } = await runReport({ title, body }, ["/home/ada", "/gpfs/real/ada/"]);
+  expect(filed[0]!["title"]).toBe("crash with [redacted]");
+  expect((filed[0]!["body"] as string).split("\n")).toEqual([
+    ...secrets.flatMap(([, redacted]) => redacted!.split("\n")),
+    "log: ~/.yian/runs/9eccdeca88574a9f96cba63e7564b67e/log.jsonl",
+    "real: ~/x.yaml",
+    "not hers: /home/adam/x",
+    "commit 3e8c4a51e2b0c9d8f7a6b5c4d3e2f1a0b9c8d7e6",
+    "sha256 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "run 9eccdeca88574a9f96cba63e7564b67e-r10-r2",
+    "node chat_answered_reply_with_a_long_name_and_digit_1_in_it",
+    "path src/cli/flows/report_issue_with_a_much_longer_name_v2.yaml",
+    "yian check nap.yaml",
+  ]);
 });

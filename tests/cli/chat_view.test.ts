@@ -121,6 +121,12 @@ class AnsweringModel implements ChatModel {
   }
 }
 
+/**
+ * Wait out the moment a card that opens over the input box drops keys, so a key meant for it
+ * counts.
+ */
+const pastGrace = () => new Promise((resolve) => setTimeout(resolve, 450));
+
 /** Run `yian chat` in `root`, its log in `tmp`. */
 function runChat(io: CliIo, model: ChatModel, flow?: string, deps: ChatDeps = {}): Promise<number> {
   return chat(flow, { engineTrace: false, log: join(tmp, "chat.jsonl") }, io, {
@@ -813,6 +819,7 @@ describe("a session on a terminal", () => {
     await until(() => rows().some((line) => line.startsWith(prompt)));
     stdin.write(`run hello for Ada${ENTER}`);
     await until(() => output.text.includes("Run hello.yaml"));
+    await pastGrace();
     stdin.write(ENTER);
     await until(() => model.requests.length >= 4 && rows().some((line) => line.startsWith(prompt)));
     stdin.write(`/exit${ENTER}`);
@@ -1186,6 +1193,7 @@ describe("the run list under the input box", () => {
       await until(() => rows().includes(HINT));
       stdin.write(`pick a colour${ENTER}`);
       await until(() => output.text.includes("Run color.yaml"));
+      await pastGrace();
       stdin.write(ENTER);
       const listed = /^ {2}r1 {2}color\.yaml {2}● asks · \d+s$/;
       await until(() => model.requests.length >= 3 && rows().at(-1)!.match(listed) !== null);
@@ -1301,6 +1309,7 @@ describe("a run's view while the chat goes on", () => {
       await until(() => rows().includes(HINT));
       stdin.write(`pick a colour${ENTER}`);
       await until(() => output.text.includes("Run color.yaml"));
+      await pastGrace();
       stdin.write(ENTER);
       await until(idle);
       stdin.write(`write it${ENTER}`);
@@ -1331,6 +1340,7 @@ describe("a run's view while the chat goes on", () => {
       const call = shown.findIndex((line) => line.startsWith("⏺ write_flow(blue.yaml"));
       expect(call).toBeGreaterThan(-1);
       expect(call).toBeLessThan(shown.findIndex((line) => line.startsWith("╭─ Write blue.yaml")));
+      await pastGrace();
       stdin.write(ENTER);
       await until(() => rows().includes("⏺ done.") && idle());
       stdin.write(`/exit${ENTER}`);
@@ -1357,6 +1367,7 @@ describe("a run's view while the chat goes on", () => {
       await until(() => rows().includes(HINT));
       stdin.write(`start nap${ENTER}`);
       await until(() => output.text.includes("Run nap.yaml"));
+      await pastGrace();
       stdin.write(ENTER);
       await until(() => rows().at(-1)!.includes("● waits") && !rows().some((line) => line.includes("Thinking")));
       stdin.write(DOWN);

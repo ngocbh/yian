@@ -4,7 +4,16 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -591,6 +600,94 @@ test(
     const resumed = chatIo();
     expect(await main(["run", "--resume", log, "--quiet"], resumed.io)).toBe(0);
     expect(resumed.stdout()).toBe("Hi Ada\n");
+  },
+  TIMEOUT,
+);
+
+test(
+  "report_issue drafts a report with the user, scrubs it, and saves it once they pick save only",
+  async () => {
+    const { io, stdin, stdout, screen } = chatIo({ tty: true });
+    const report = {
+      title: "yian check crashes",
+      body:
+        "What I ran: yian check a.yaml with password=hunter2\n" +
+        `Run log: ${join(home, "r", "log.jsonl")}`,
+    };
+    // The report run's draft asks once, then writes; the assistant relays the question.
+    let drafts = 0;
+    let answered = false;
+    const model = new AnsweringModel((request) => {
+      if (request.messages[0]!.text().startsWith("You write a bug report about yian")) {
+        drafts += 1;
+        if (drafts === 1) {
+          return callReply(["ask_user", { question: "What did you expect?" }, "q1"]);
+        }
+        return drafts === 2 ? textReply("Drafted.") : textReply(JSON.stringify(report));
+      }
+      const reported = request.messages.some((message) =>
+        message.parts.some(
+          (part) => part instanceof ToolResultPart && part.name === "report_issue",
+        ),
+      );
+      if (!reported) {
+        const args = { problem: "yian check crashed", context: "ran yian check a.yaml" };
+        return callReply(["report_issue", args, "c1"]);
+      }
+      const asked = request.messages
+        .filter((message) => message.author === "yian")
+        .map((message) => /\(call ([^)\s]+)\): "What did you expect\?"/.exec(message.text()))
+        .find((match) => match !== null);
+      if (!answered && asked) {
+        answered = true;
+        const args = { run: "r1", call: asked[1]!, answer: "an error message" };
+        return callReply(["answer_flow", args, "c2"]);
+      }
+      return textReply(shown(request).includes("succeeded with output") ? "saved it" : "on it");
+    });
+    const chatting = runChat(io, model, undefined, {
+      deps: {
+        runId: "chat-9",
+        filing: {
+          run: async () => {
+            throw new Error("gh isn't installed");
+          },
+        },
+      },
+    });
+    await until(() => screen().includes("You:"));
+    stdin.write(`yian check crashed, please report it${ENTER}`);
+    // The card shows the report, scrubbed, and the ways to file without gh or a token.
+    await until(() => screen().includes("Report this issue to github.com/ngocbh/yian?"));
+    expect(screen()).toContain("password=[redacted]");
+    expect(screen()).not.toContain("hunter2");
+    expect(screen()).toContain("Open a prefilled link in the browser");
+    expect(screen()).not.toContain("File it with gh");
+    // An Enter meant for the input box, typed as the card takes its place, files nothing.
+    stdin.write(ENTER);
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(existsSync(join(home, ".yian", "reports"))).toBe(false);
+    // Save it only is preselected.
+    stdin.write(ENTER);
+    await until(() => stdout().includes("saved it"));
+    stdin.write(`/exit${ENTER}`);
+    expect((await chatting).code).toBe(0);
+    const reports = join(home, ".yian", "reports");
+    const [file] = readdirSync(reports);
+    const text = readFileSync(join(reports, file!), "utf8");
+    expect(text).toBe(
+      "# yian check crashes\n\nWhat I ran: yian check a.yaml with password=[redacted]\n" +
+        "Run log: ~/r/log.jsonl\n",
+    );
+    const child = inspectRun(join(home, ".yian", "runs", "chat-9-r1", "log.jsonl"));
+    expect(child.status).toBe("succeeded");
+    // The draft was given the chat's facts and the user's answer.
+    const draft = model.requests.filter((request) =>
+      request.messages[0]!.text().startsWith("You write a bug report about yian"),
+    );
+    const facts = `chat run log: ${join(tmp, "chat.jsonl")}\\nran yian check a.yaml`;
+    expect(shown(draft[0]!)).toContain(facts);
+    expect(shown(draft.at(-1)!)).toContain("an error message");
   },
   TIMEOUT,
 );

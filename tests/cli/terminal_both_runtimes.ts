@@ -185,11 +185,20 @@ export function tick(): Promise<void> {
 
 /** A fresh fake terminal: its input, output and the `Terminal` over them. */
 function setup(
-  options: { tty?: boolean; columns?: number; throwOn?: number } & Pick<TerminalOptions, "onStop" | "onActive"> = {},
+  options: { tty?: boolean; columns?: number; throwOn?: number } & Pick<
+    TerminalOptions,
+    "onStop" | "onActive" | "now"
+  > = {},
 ): { input: FakeInput; output: FakeOutput; terminal: Terminal; view: () => Screen; exitHooks: number } {
   const input = new FakeInput({ tty: options.tty });
   const output = new FakeOutput({ columns: options.columns, throwOn: options.throwOn });
-  const terminal = new Terminal({ input, output, onStop: options.onStop, onActive: options.onActive });
+  const terminal = new Terminal({
+    input,
+    output,
+    onStop: options.onStop,
+    onActive: options.onActive,
+    ...(options.now === undefined ? {} : { now: options.now }),
+  });
   const exitHooks = process.listenerCount("exit");
   return { input, output, terminal, view: () => screen(output.text, output.columns), exitHooks };
 }
@@ -454,6 +463,139 @@ async function anAbortedReadLineReturnsItsDraftForTheNextPrompt(): Promise<void>
   // Aborted before it draws, the draft is the initial text.
   const early = terminal.readLine("You:", { initial: "kept", signal: AbortSignal.abort(new Error("woke")) });
   assert.deepEqual(await early, { aborted: true, draft: "kept" });
+}
+
+async function aYieldingReadLineGivesWayToAPromptQueuedBehindIt(): Promise<void> {
+  let clock = 0;
+  const { input, terminal, view } = setup({ tty: true, now: () => clock });
+  const line = terminal.readLine("You:", { yields: true });
+  input.write("half");
+  await tick();
+  const answer = terminal.approve(approval());
+  // An Enter typed as the prompt gives way, meant for the line, answers nothing.
+  input.write(ENTER);
+  assert.deepEqual(await line, { yielded: true, draft: "half" });
+  await tick();
+  assert.equal(view().rows.at(-3), "? Write a.yaml (Use arrow keys)");
+  // The next prompt waits behind the approval, which was queued first.
+  const next = terminal.readLine("You:", { initial: "half", yields: true });
+  // Keys just after the card opens are dropped too; once it has been up a while, they count.
+  input.write(ENTER);
+  await tick();
+  assert.equal(view().rows.at(-3), "? Write a.yaml (Use arrow keys)");
+  clock += 1000;
+  input.write(ENTER);
+  assert.equal(await answer, "Approve");
+  await tick();
+  input.write(" done" + ENTER);
+  assert.deepEqual(await next, { value: "half done" });
+  // A line prompt behind it doesn't take it down, and neither does one without `yields`.
+  const kept = terminal.readLine("You:", { yields: true });
+  const behind = terminal.readLine("You:");
+  await tick();
+  input.write("one" + ENTER);
+  assert.deepEqual(await kept, { value: "one" });
+  const plain = terminal.readLine("You:");
+  const asked = terminal.askText("Name:");
+  input.write("two" + ENTER);
+  assert.deepEqual(await behind, { value: "two" });
+  input.write("three" + ENTER);
+  assert.deepEqual(await plain, { value: "three" });
+  input.write("ada" + ENTER);
+  assert.equal(await asked, "ada");
+  // A prompt queued behind it before it is up takes it down as it comes up; one ahead doesn't.
+  const ahead = terminal.askText("Name:");
+  await tick();
+  const queued = terminal.readLine("You:", { initial: "kept", yields: true });
+  const later = terminal.approve(approval());
+  await tick();
+  input.write("bo" + ENTER);
+  assert.equal(await ahead, "bo");
+  assert.deepEqual(await queued, { yielded: true, draft: "kept" });
+  clock += 1000;
+  input.write(ENTER);
+  assert.equal(await later, "Approve");
+}
+
+async function aPromptOpeningWhileTheLiveBoxTakesKeysDropsThemForAWhile(): Promise<void> {
+  let clock = 0;
+  const { input, terminal, view } = setup({ tty: true, now: () => clock });
+  const editor = new LineEditor({ columns: () => 60, hint: "" });
+  const sent: string[] = [];
+  const watch = new AbortController();
+  terminal.watchKeys(
+    watch.signal,
+    () => {},
+    (key) => {
+      const action = editor.key(key);
+      if (action !== null && "value" in action) sent.push(action.value);
+      return true;
+    },
+  );
+  input.write("steer");
+  await tick();
+  clock += 100;
+  // The card opens as the user presses Enter, meant to send the line.
+  const answer = terminal.approve(approval());
+  await tick();
+  input.write(ENTER);
+  await tick();
+  assert.equal(view().rows.at(-3), "? Write a.yaml (Use arrow keys)");
+  clock += 1000;
+  input.write(ENTER);
+  assert.equal(await answer, "Approve");
+  assert.deepEqual(sent, []);
+  // Long after the last key in the box, while it is still up, a card drops keys at first too.
+  clock += 1000;
+  const later = terminal.approve(approval());
+  await tick();
+  input.write(ENTER);
+  await tick();
+  assert.equal(view().rows.at(-3), "? Write a.yaml (Use arrow keys)");
+  // Ctrl-C still reaches it, as the reject.
+  input.write(CTRL_C);
+  assert.equal(await later, "Reject");
+  // A paste that ends in the grace is dropped whole, like any key; after it, a paste counts.
+  clock += 1000;
+  const question = terminal.askText("Name:");
+  await tick();
+  input.write(PASTE_START + "meant\rfor the box" + PASTE_END);
+  await tick();
+  clock += 1000;
+  input.write(PASTE_START + "ada" + PASTE_END + ENTER);
+  assert.equal(await question, "ada");
+  watch.abort();
+  // With the box down, a card takes keys at once.
+  const after = terminal.approve(approval());
+  await tick();
+  input.write(ENTER);
+  assert.equal(await after, "Approve");
+}
+
+async function aLinePromptAfterAWithdrawnCardTakesKeysAtOnce(): Promise<void> {
+  const { input, terminal } = setup({ tty: true, now: () => 0 });
+  const line = terminal.readLine("You:", { yields: true });
+  await tick();
+  const withdrawn = new AbortController();
+  const card = terminal.approve({ ...approval(), signal: withdrawn.signal });
+  assert.deepEqual(await line, { yielded: true, draft: "" });
+  // The card is withdrawn before it opens; the line comes back and takes the first keys.
+  withdrawn.abort();
+  assert.equal(await card, null);
+  const next = terminal.readLine("You:", { yields: true });
+  await tick();
+  input.write("hi" + ENTER);
+  assert.deepEqual(await next, { value: "hi" });
+}
+
+async function approvePreselectsTheChoiceItNames(): Promise<void> {
+  const { input, terminal, view } = setup();
+  const choices = ["Go", "Save", "Cancel"];
+  const answer = terminal.approve({ ...approval(), choices, preselect: "Save" });
+  await tick();
+  assert.deepEqual(view().rows.slice(-3), ["   Go", " » Save", "   Cancel"]);
+  input.write(ENTER);
+  assert.equal(await answer, "Save");
 }
 
 async function onActiveSaysWhetherATurnLeftRows(): Promise<void> {
@@ -1129,7 +1271,8 @@ async function showScreenSaysWhenAPromptWaitsBehindItAndClosesFirst(): Promise<v
 }
 
 async function aWatchWithAnEditorTurnsBracketedPasteOnAndAPasteStaysOneLine(): Promise<void> {
-  const { input, output, terminal } = setup({ columns: 60 });
+  let clock = 0;
+  const { input, output, terminal } = setup({ columns: 60, now: () => clock });
   const modes = () => screen(output.text).modes.filter((mode) => mode.startsWith("?2004"));
   const editor = new LineEditor({ columns: () => 60, hint: "" });
   const sent: string[] = [];
@@ -1149,9 +1292,10 @@ async function aWatchWithAnEditorTurnsBracketedPasteOnAndAPasteStaysOneLine(): P
   await tick();
   assert.deepEqual(sent, []);
   assert.equal(editor.text(), "one\n/exit\nthree");
-  // A prompt meanwhile leaves it on for the watch.
+  // A prompt meanwhile leaves it on for the watch; past its grace, it takes keys.
   const answer = terminal.askText("Name:");
   await tick();
+  clock += 1000;
   input.write("x" + ENTER);
   assert.equal(await answer, "x");
   assert.equal(modes().at(-1), "?2004h");
@@ -3034,6 +3178,8 @@ async function aFramedApprovalCutsALongTitle(): Promise<void> {
 
 async function approveOffATtyReturnsNullWithoutReading(): Promise<void> {
   const { input, output, terminal } = setup({ tty: false });
+  assert.equal(terminal.canApprove, false);
+  assert.equal(setup().terminal.canApprove, true);
   input.write(ENTER);
   assert.equal(await terminal.approve(approval()), null);
   assert.equal(output.text, "");
@@ -3088,6 +3234,13 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an aborted readLine keeps later keys": anAbortedReadLineKeepsLaterKeys,
   "a non-TTY readLine reads one line per call": aNonTtyReadLineReadsOneLinePerCall,
   "an aborted readLine returns its draft for the next prompt": anAbortedReadLineReturnsItsDraftForTheNextPrompt,
+  "a yielding readLine gives way to a prompt queued behind it":
+    aYieldingReadLineGivesWayToAPromptQueuedBehindIt,
+  "approve preselects the choice it names": approvePreselectsTheChoiceItNames,
+  "a prompt opening while the live box takes keys drops them for a while":
+    aPromptOpeningWhileTheLiveBoxTakesKeysDropsThemForAWhile,
+  "a line prompt after a withdrawn card takes keys at once":
+    aLinePromptAfterAWithdrawnCardTakesKeysAtOnce,
   "onActive says whether a turn left rows on the screen": onActiveSaysWhetherATurnLeftRows,
   "Escape at readLine with escape returns the draft": escapeAtReadLineReturnsTheDraft,
   "Escape at readLine without escape is ignored": escapeAtReadLineWithoutTheOptionIsIgnored,

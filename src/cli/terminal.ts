@@ -44,6 +44,8 @@ type Input = NodeJS.ReadableStream & {
 type Output = Pick<NodeJS.WritableStream, "write"> & { columns?: number; rows?: number };
 
 export interface TerminalOptions {
+  /** The clock the keys after a prompt gives way are timed on, in milliseconds; `Date.now`. */
+  now?: () => number;
   /** Where keys come from; defaults to process.stdin. Raw mode is set only when it is a TTY. */
   input?: Input;
   /** Where prompts are drawn; defaults to process.stderr (stdout stays the run's result). */
@@ -76,6 +78,8 @@ export interface ApproveRequest {
   signal?: AbortSignal;
   /** Draw the body and diff as a framed card (`diffCard`), rather than as plain lines. */
   frame?: boolean;
+  /** The choice preselected, one of `choices`; the first when absent. */
+  preselect?: string;
 }
 
 /** A prompt ended because the terminal closed (Ctrl-C, end of input, or close()). */
@@ -507,6 +511,12 @@ export type EditorAction =
 
 /** The screen rows a prompt's list leaves for what is drawn above the box. */
 const LIST_MARGIN = 4;
+
+/**
+ * How long a prompt drops keys, in milliseconds, once it takes a yielding `readLine`'s place or
+ * opens over a watch's editor (the live box): an Enter meant for the line mustn't answer it.
+ */
+const YIELD_GRACE_MS = 400;
 
 /**
  * A line typed in a framed box `columns()` wide: a box holding `> ` and the text, folded onto as
@@ -945,6 +955,12 @@ export class Terminal {
   #waiting = 0;
   /** Told each time `#waiting` changes. */
   readonly #onWaiting = new Set<() => void>();
+  readonly #now: () => number;
+  /** Set when a `readLine` yields: the next turn to start took its place. */
+  #yielded = false;
+  /** The turn that drops keys until `#graceUntil` (`#now` time), having taken a line's place. */
+  #graced: Turn | undefined = undefined;
+  #graceUntil = 0;
 
   /** Build a terminal over `options.input` and `options.output`; touches neither stream. */
   constructor(options: TerminalOptions = {}) {
@@ -954,6 +970,12 @@ export class Terminal {
     this.#output = this.#plain ? plainOutput(output) : output;
     this.#onStop = options.onStop;
     this.#onActive = options.onActive;
+    this.#now = options.now ?? Date.now;
+  }
+
+  /** Whether `approve` can ask: the terminal isn't plain or closed, and its input is a TTY. */
+  get canApprove(): boolean {
+    return !this.#plain && !this.#closed && this.#input.isTTY === true;
   }
 
   /** A `LineEditor` as wide as this terminal's output. */
@@ -992,6 +1014,12 @@ export class Terminal {
    * all, when it holds pasted tokens) when it differs, and Enter on a row of its list answers
    * `{open}` with the row's key and the draft. An answer and a draft are text, each token
    * expanded; the editor's `draft()` keeps the tokens.
+   *
+   * With `yields`, the prompt gives way to a prompt that wants an answer (any but a `readLine`)
+   * queued behind it while it is up: it ends as `{yielded}` with the draft, erased as an abort
+   * erases it, and a `readLine` called next waits behind that prompt. The prompt that took its
+   * place drops the keys typed before it opened, and those of its first `YIELD_GRACE_MS` but
+   * Ctrl-C; so does any other prompt that opens while a watch's editor (the live box) is up.
    */
   async readLine<E extends boolean = false>(
     label: string,
@@ -1002,7 +1030,57 @@ export class Terminal {
       frame?: boolean;
       hint?: string;
       editor?: LineEditor;
+      yields?: boolean;
     } = {},
+  ): Promise<
+    | { value: string }
+    | { eof: true }
+    | { interrupt: true }
+    | { aborted: true; draft: string }
+    | { yielded: true; draft: string }
+    | { open: string; draft: string }
+    | (E extends true ? Escaped : never)
+  > {
+    const { initial = "" } = options;
+    if (options.yields !== true) return this.#readLine(label, options);
+    // Only prompts queued while this one is up are behind it; one counted before may be ahead.
+    let up = false;
+    const yielding = new AbortController();
+    const onWaiting = () => {
+      if (up && this.#waiting > 0) yielding.abort(new Error("a prompt waits behind the line"));
+    };
+    this.#onWaiting.add(onWaiting);
+    const signal =
+      options.signal === undefined
+        ? yielding.signal
+        : AbortSignal.any([options.signal, yielding.signal]);
+    try {
+      const read = await this.#readLine(label, { ...options, signal, initial }, () => {
+        up = true;
+        onWaiting();
+      });
+      if ("aborted" in read && yielding.signal.aborted && options.signal?.aborted !== true) {
+        this.#yielded = true;
+        return { yielded: true, draft: read.draft };
+      }
+      return read;
+    } finally {
+      this.#onWaiting.delete(onWaiting);
+    }
+  }
+
+  /** `readLine` without `yields`; `onUp` is called once the prompt holds the terminal. */
+  async #readLine<E extends boolean = false>(
+    label: string,
+    options: {
+      signal?: AbortSignal;
+      initial?: string | Draft;
+      escape?: E;
+      frame?: boolean;
+      hint?: string;
+      editor?: LineEditor;
+    },
+    onUp?: () => void,
   ): Promise<
     | { value: string }
     | { eof: true }
@@ -1037,7 +1115,14 @@ export class Terminal {
     if (signal?.aborted) return { aborted: true, draft: textOf(initial) };
     let ended: { value: string | typeof ESCAPED | Opened } | { stop: StopReason };
     try {
-      ended = await this.#runTurn(signal, (run) => run(widget), { keepOpen: true, wants: false });
+      ended = await this.#runTurn(
+        signal,
+        (run) => {
+          onUp?.();
+          return run(widget);
+        },
+        { keepOpen: true, wants: false },
+      );
     } catch (error) {
       if (signal?.aborted && error === signal.reason) return { aborted: true, draft: draft() };
       throw error;
@@ -1114,7 +1199,8 @@ export class Terminal {
       closed: options.onClose,
     };
     try {
-      await this.#runTurn(options.signal, (run) => run(widget), { keepOpen: true });
+      // The user opened it, so no key of theirs is dropped.
+      await this.#runTurn(options.signal, (run) => run(widget), { keepOpen: true, grace: false });
     } catch (error) {
       if (!(options.signal?.aborted && error === options.signal.reason)) throw error;
     }
@@ -1122,8 +1208,8 @@ export class Terminal {
 
   /**
    * Ask the user to approve an action: write `body` and the unified `diff` when there is one (with
-   * `frame`, as a card: `diffCard`), then select among `choices` under `title`, the first
-   * preselected. All the text is drawn through
+   * `frame`, as a card: `diffCard`), then select among `choices` under `title`, `preselect` (or
+   * the first) preselected. All the text is drawn through
    * `sanitize`, its escape sequences shown rather than dropped. Returns the chosen choice; the
    * last one (the reject) for Ctrl-C, which leaves the terminal open; null without drawing or
    * reading when the terminal is plain, closed or its input isn't a TTY, and null when the input
@@ -1148,13 +1234,18 @@ export class Terminal {
         ]
       : [request.body, request.diff ?? ""].filter((text) => text !== "").map(shown);
     const titles = choices.map(shown);
+    if (request.preselect !== undefined && !choices.includes(request.preselect)) {
+      const named = JSON.stringify(request.preselect);
+      throw new RangeError(`approve's preselect ${named} is not one of the choices`);
+    }
+    const initial = request.preselect === undefined ? 0 : choices.indexOf(request.preselect);
     let ended: { value: number } | { stop: StopReason };
     try {
       ended = await this.#runTurn(
         signal,
         (run) => {
           for (const text of card) this.#output.write(crlf(text.replace(/\n$/, "")) + "\r\n");
-          return run(selectWidget({ label, titles }));
+          return run(selectWidget({ label, titles, initial }));
         },
         { keepOpen: true },
       );
@@ -1339,6 +1430,10 @@ export class Terminal {
   /** Hand `key` to the active widget or the watch, or buffer it for the next widget. */
   #dispatch(key: Key): void {
     const watch = this.#turn === undefined ? this.#watch : undefined;
+    // Ctrl-C still works in the grace after a prompt took a line's place.
+    const graced =
+      this.#graced !== undefined && this.#turn === this.#graced && this.#now() < this.#graceUntil;
+    if (graced && !(key.ctrl && key.name === "c")) return;
     if (this.#active) this.#active.key(key);
     else if (watch !== undefined && key.ctrl && key.name === "c") watch.onKey("interrupt");
     else if (watch?.edit?.(key) === true) return;
@@ -1383,16 +1478,18 @@ export class Terminal {
    * Run `fn` as one turn of the FIFO: wait for the turns before it, take the terminal (raw mode,
    * listeners, input flowing), let `fn` run widgets, then restore the terminal on every outcome.
    * A plain terminal sets raw mode only with `raw`. While it waits behind another, it counts as
-   * wanting an answer (`showScreen` says so) unless `wants` is false.
+   * wanting an answer (`showScreen` says so) unless `wants` is false. One that wants an answer
+   * and opens over the live box or in a yielded line's place drops keys for `YIELD_GRACE_MS`
+   * unless `grace` is false.
    * Returns `fn`'s value, or the stop that ended the turn (Ctrl-C, end of input, a closed
    * terminal); throws `signal`'s reason when it aborted first, else `fn`'s error.
    */
   async #runTurn<R>(
     signal: AbortSignal | undefined,
     fn: (run: RunWidget) => Promise<R>,
-    options: { keepOpen?: boolean; raw?: boolean; wants?: boolean } = {},
+    options: { keepOpen?: boolean; raw?: boolean; wants?: boolean; grace?: boolean } = {},
   ): Promise<{ value: R } | { stop: StopReason }> {
-    const { keepOpen = false, raw = false, wants = true } = options;
+    const { keepOpen = false, raw = false, wants = true, grace = true } = options;
     if (this.#closed) return { stop: "closed" };
     signal?.throwIfAborted();
     const ahead = this.#tail;
@@ -1433,6 +1530,16 @@ export class Terminal {
       if (turn.ending === undefined) {
         started = true;
         this.#turn = turn;
+        // A prompt over the live box (a watch's editor) or in a yielded line's place: the user
+        // may have been typing in the line, and what they typed for it answers nothing here. A
+        // line prompt is the line itself coming back, so it takes its keys.
+        const overLine = this.#yielded || (this.#watch?.edit ?? null) !== null;
+        this.#yielded = false;
+        if (wants && grace && overLine) {
+          this.#buffer = [];
+          this.#graced = turn;
+          this.#graceUntil = this.#now() + YIELD_GRACE_MS;
+        }
         this.#printed = false;
         quietly(() => this.#onActive?.(true, false));
         this.#attach();

@@ -830,17 +830,22 @@ export async function inboxChat(
         signal: prompt.signal,
         initial: draft,
         escape: true,
+        // An approval or a question a child run's tool asks waits behind the prompt otherwise.
+        yields: true,
         ...framing,
         ...(editor === null ? {} : { editor }),
       });
       // The box keeps the tokens a draft holds; a plain prompt has none.
       const typed = editor?.draft() ?? ("draft" in read ? [read.draft] : []);
-      draft = "aborted" in read || "escape" in read || "open" in read ? typed : [];
+      const kept = "aborted" in read || "yielded" in read || "escape" in read || "open" in read;
+      draft = kept ? typed : [];
       timer.abort();
       line = null;
       const flushed = flusher?.promptDown() ?? false;
       stop.signal.throwIfAborted();
       if (cancelling !== null) continue;
+      // The prompt comes back once the one queued behind it is answered.
+      if ("yielded" in read) continue;
       if ("escape" in read) {
         // Offline: a turn that waits mid-way (a sleep, an approval) has the Stop recorded for its
         // reply; at the take it is a no-op.

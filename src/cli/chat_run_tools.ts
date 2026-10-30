@@ -30,6 +30,7 @@ import {
   type ChatToolHost,
   confine,
   readFlow,
+  refuseContent,
   renderedDiagnostic,
   resolveRoot,
   slashed,
@@ -37,6 +38,7 @@ import {
   stringArguments,
 } from "./chat_tools.ts";
 import { loadConfinedText } from "./confined_load.ts";
+import { unifiedDiff } from "./diff.ts";
 import { loadReportFlow } from "./report_issue.ts";
 
 /** The longest `wait_flow` waits, in seconds. */
@@ -228,7 +230,8 @@ function knownRun(runs: ChildRuns, args: Record<string, unknown>): string {
 }
 
 /**
- * Load the flow file `path` in `host.root` for `start_flow`: its real path, text and flow.
+ * Load the flow file `path` in `host.root` for `start_flow`, or `content` as that file when
+ * given: its real path, text and flow.
  *
  * @throws {ToolRefused} For a path that is refused, or a file that isn't a flow file or is too large.
  * @throws {ReportedToolError} For a file that can't be read, or a flow that doesn't load.
@@ -236,10 +239,12 @@ function knownRun(runs: ChildRuns, args: Record<string, unknown>): string {
 async function loadForStart(
   host: ChatToolHost,
   path: string,
+  content: string | undefined,
 ): Promise<{ real: string; shown: string; text: string; flow: ComposedFlow }> {
   const root = resolveRoot(host.root);
   const real = confine(root, path);
-  const text = readFlow(path, real);
+  if (content !== undefined) refuseContent(path, real, content);
+  const text = content ?? readFlow(path, real);
   try {
     const flow = await loadConfinedText(root, real, text, host.env);
     return { real, shown: slashed(relative(root, real)), text, flow };
@@ -294,18 +299,27 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
         "Start a flow file (.yaml, .yml) in the chat's folder as a background run of this chat, once the user " +
         "approves it on their terminal. Run check_flow first to learn its inputs, and ask the user for input " +
         "values you don't know rather than inventing them; an Inbox input is never given here (use " +
-        `message_flow). ${STATUS} The status's run is the id the other run tools take. Returns \`not ` +
-        "started: <why>` when the user rejects it or it can't start; don't retry a rejected start unchanged.",
+        "message_flow). With content, runs that text as the file at path would run, without " +
+        `writing it: a draft. ${STATUS} The status's run is the id the other run tools take. ` +
+        "Returns `not started: <why>` when the user rejects it or it can't start; don't retry a " +
+        "rejected start unchanged.",
       parameters: {
         type: "object",
         properties: {
           path: { type: "string", description: "The flow file, relative to the chat's folder." },
           inputs: { type: "object", description: "The flow's inputs by name; {} for none." },
+          content: {
+            type: "string",
+            description: "A draft's whole text, run in place of the file's.",
+          },
         },
         required: ["path", "inputs"],
         additionalProperties: false,
       },
-      execute: (args, ctx) => startFlow(stringArg(args, "path"), args["inputs"], ctx.signal),
+      execute: (args, ctx) => {
+        const content = args["content"] === undefined ? undefined : stringArg(args, "content");
+        return startFlow(stringArg(args, "path"), args["inputs"], content, ctx.signal);
+      },
     }),
     tool({
       name: "flow_status",
@@ -447,21 +461,34 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
   }
 
   /**
-   * Start the flow at `path` with `inputs` once the user approves it, as `start_flow` describes.
-   * Every outcome once the user is asked is returned.
+   * Start the flow at `path`, or the draft `content` as that file, with `inputs` once the user
+   * approves it, as `start_flow` describes. Every outcome once the user is asked is returned.
    */
-  async function startFlow(path: string, inputs: unknown, signal: AbortSignal): Promise<string> {
-    const { real, shown: file, text, flow } = await loadForStart(host, path);
+  async function startFlow(
+    path: string,
+    inputs: unknown,
+    content: string | undefined,
+    signal: AbortSignal,
+  ): Promise<string> {
+    const { real, shown: file, text, flow } = await loadForStart(host, path, content);
     checkStartInputs(flow, inputs);
     const files = codeFiles(flow);
     const root = resolveRoot(host.root);
     const can = capabilities(flow, files.map((each) => slashed(relative(root, each))));
     const digest = startDigest(flow, text, files, can);
     if (approved.get(real) !== digest) {
+      // A draft is on no disk for the user to read, so the card shows all of it.
+      const draft = content !== undefined;
       const answer = await host.approve({
-        title: `Run ${file}`,
-        body: [`Starts ${file} in the background.`, `inputs: ${cutText(JSON.stringify(inputs))}`, ...can].join("\n"),
-        diff: null,
+        title: draft ? `Run ${file} (a draft, not written)` : `Run ${file}`,
+        body: [
+          `Starts ${draft ? "the draft " : ""}${file} in the background.`,
+          `inputs: ${cutText(JSON.stringify(inputs))}`,
+          ...can,
+        ].join("\n"),
+        diff: draft
+          ? unifiedDiff("", text, { oldLabel: "/dev/null", newLabel: `${file} (draft)` })
+          : null,
         choices: START_CHOICES,
         signal,
       });

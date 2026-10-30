@@ -219,6 +219,30 @@ output: done
   );
 
   test(
+    "a draft's content starts once approved, its whole text on the card, nothing written",
+    async () => {
+      const { requests, json, invoke } = runTools();
+      const args = { path: "sub/greet.yaml", content: GREET, inputs: { who: "ada" } };
+      expect(await json("start_flow", args)).toMatchObject({ run: "r1" });
+      expect(requests[0]!.title).toBe("Run sub/greet.yaml (a draft, not written)");
+      const first = requests[0]!.body.split("\n")[0];
+      expect(first).toBe("Starts the draft sub/greet.yaml in the background.");
+      expect(requests[0]!.diff).toContain("+++ sub/greet.yaml (draft)");
+      expect(requests[0]!.diff).toContain('+      return "hi " + inputs["who"];');
+      const settled = await settledJson(json, "r1");
+      expect(settled).toMatchObject({ status: "succeeded", output: "hi ada" });
+      expect(existsSync(join(root, "sub", "greet.yaml"))).toBe(false);
+      const outside = { path: "../greet.yaml", content: GREET, inputs: {} };
+      const refused = await rejection(Promise.resolve(invoke("start_flow", outside)));
+      expect(refused).toBeInstanceOf(ToolRefused);
+      const bad = { ...args, content: "id: [\n" };
+      const broken = await rejection(Promise.resolve(invoke("start_flow", bad)));
+      expect(broken.message).toStartWith("invalid:\n");
+    },
+    TIMEOUT,
+  );
+
+  test(
     "the approval card cuts long inputs",
     async () => {
       writeFileSync(join(root, "greet.yaml"), GREET);

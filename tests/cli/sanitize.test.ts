@@ -27,6 +27,22 @@ describe("sanitize", () => {
     expect(sanitize("an unended \x1b]0;title")).toBe("an unended ^[]0;title");
   });
 
+  test("a C1 character ends an OSC or DCS body: the body is shown, not dropped with what follows", () => {
+    expect(sanitize("\x9d0;ti\x85tle\x07after")).toBe("\uFFFD0;ti\uFFFDtle^Gafter");
+    expect(sanitize("a\x90q\x9d#0\x9cb")).toBe("a\uFFFDqb");
+  });
+
+  test("takes linear time on many unended 8-bit introducers", () => {
+    for (const introducer of ["\x9d", "\x90", "\x9f"]) {
+      const start = performance.now();
+      expect(sanitize(introducer.repeat(64_000))).toBe("\uFFFD".repeat(64_000));
+      expect(performance.now() - start).toBeLessThan(1000);
+    }
+    const start = performance.now();
+    expect(sanitize("see \x9d".repeat(16_000))).toBe("see \uFFFD".repeat(16_000));
+    expect(performance.now() - start).toBeLessThan(1000);
+  });
+
   test("shows BIDI controls and zero-width characters as escapes", () => {
     expect(sanitize("a\u202eb\u2066c\u2069d")).toBe("a\\u{202e}b\\u{2066}c\\u{2069}d");
     expect(sanitize("a\u200bb\u200fc\u2060d\ufeffe")).toBe("a\\u{200b}b\\u{200f}c\\u{2060}d\\u{feff}e");

@@ -22,14 +22,20 @@ export interface SanitizeOptions {
 /** A CSI sequence, in its 7-bit or 8-bit form: parameters, intermediates and a final byte. */
 const CSI = String.raw`(?:\x1b\[|\x9b)[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]`;
 
+// The string bodies below stop at the first ESC or C1 character (ST and every introducer among
+// them), so an unended one scans only to the next sequence and matching all of a text stays linear.
+
 /** An OSC sequence, in its 7-bit or 8-bit form, ended by BEL or ST. */
-const OSC = String.raw`(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)`;
+const OSC = String.raw`(?:\x1b\]|\x9d)[^\x07\x1b\x80-\x9f]*(?:\x07|\x1b\\|\x9c)`;
 
 /** A DCS, SOS, PM or APC string, in its 7-bit or 8-bit form, ended by ST. */
-const STRING = String.raw`(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x9c]*(?:\x1b\\|\x9c)`;
+const STRING = String.raw`(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x80-\x9f]*(?:\x1b\\|\x9c)`;
+
+/** The source of a pattern matching one whole CSI, OSC or DCS (or SOS, PM, APC) sequence. */
+export const SEQUENCE_SOURCE = `${CSI}|${OSC}|${STRING}`;
 
 // An unended sequence isn't matched, so its characters are shown instead.
-const SEQUENCE = new RegExp(`${CSI}|${OSC}|${STRING}`, "g");
+const SEQUENCE = new RegExp(SEQUENCE_SOURCE, "g");
 
 /**
  * The BIDI marks, embeddings, overrides and isolates, the zero-width and other invisible format
@@ -61,4 +67,9 @@ export function sanitize(text: string, options: SanitizeOptions = {}): string {
     safe = safe.replace(INVISIBLE, (char) => `\\u{${char.codePointAt(0)!.toString(16)}}`);
   }
   return safe;
+}
+
+/** The `[start, end)` spans of the whole escape sequences in `text` that `sanitize` drops. */
+export function sequenceSpans(text: string): [number, number][] {
+  return [...text.matchAll(SEQUENCE)].map((match) => [match.index, match.index + match[0].length]);
 }

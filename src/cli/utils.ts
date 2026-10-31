@@ -28,6 +28,7 @@ import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
 import { type Scheduler, SLEEP_CHUNK_MS } from "../platform.ts";
 import { logJson } from "../typesys/json.ts";
+import { SEQUENCE_SOURCE } from "./sanitize.ts";
 import type { Terminal } from "./terminal.ts";
 
 /** The `format` of every document a `--json` command prints. */
@@ -57,12 +58,10 @@ export interface CliIo {
   stop?: AbortSignal;
 }
 
-// An escape sequence, matched whole: CSI (7-bit or C1) to its final byte; OSC through BEL or ST;
-// DCS, SOS, PM and APC through ST; or ESC with intermediates and a final byte (`ESC 7`, `ESC ( B`).
-// The string bodies stop at the first ESC, BEL or C1 character (ST and every introducer among them),
-// so an unended one scans only to the next sequence and the whole match stays linear.
-const ESCAPE_SEQUENCE =
-  /(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]|(?:\x1b\]|\x9d)[^\x07\x1b\x80-\x9f]*(?:\x07|\x1b\\|\x9c)|(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x80-\x9f]*(?:\x1b\\|\x9c)|\x1b[ -/]*[0-~]/g;
+// An escape sequence, matched whole: the CSI, OSC and DCS (SOS, PM, APC) sequences `sanitize`
+// drops, or ESC with intermediates and a final byte (`ESC 7`, `ESC ( B`). That last one also
+// matches `ESC ]` and `ESC P`, so it goes last: an OSC or DCS is matched whole first.
+const ESCAPE_SEQUENCE = new RegExp(String.raw`${SEQUENCE_SOURCE}|\x1b[ -/]*[0-~]`, "g");
 // Each C0 control but `\t` and `\n`, DEL and each C1 control.
 const CONTROL = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
 

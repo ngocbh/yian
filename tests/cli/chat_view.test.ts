@@ -501,6 +501,56 @@ describe("the chat's view", () => {
     expect(rows().slice(-2)).toEqual([expect.stringMatching(/word red end$/), "  next"]);
   });
 
+  test("one long chunk with no newline is split in time, whatever its characters", () => {
+    for (const [unit, size] of [["a", 128 * 1024], ["ab\tc", 32 * 1024], ["y\u00e9\u202e", 16 * 1024]] as const) {
+      const { view } = viewOn(24);
+      const start = performance.now();
+      view.onStream(chunk(1, unit.repeat(size / unit.length)));
+      expect(performance.now() - start).toBeLessThan(1000);
+    }
+  });
+
+  test("a long chunk of tabs or BIDI characters is printed in rows as it was drawn", () => {
+    const tabs = viewOn(6);
+    tabs.view.onStream(chunk(1, "ab\tc".repeat(40)));
+    expect(tabs.rows()).toEqual([
+      "",
+      "⏺ ab    cab    cab    cab    cab    cab    cab    cab    cab",
+      "  cab    cab    cab    cab    cab    cab    cab    cab",
+      "  cab    cab    cab    cab    cab    cab    cab    cab",
+      "  cab    cab    cab    cab    cab    cab    cab    cab",
+      "  cab    cab    cab    cab    cab    cab    cab    c",
+    ]);
+    const bidi = viewOn(6);
+    bidi.view.onStream(chunk(1, "y\u00e9\u202e".repeat(40)));
+    expect(bidi.rows()).toEqual([
+      "",
+      "⏺ yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202",
+      "  e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{2",
+      "  02e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u",
+      "  {202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé",
+      "  \\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}",
+      "  yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202",
+      "  e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}yé\\u{202e}",
+    ]);
+  });
+
+  test("a long chunk printed in part is cut where its rows were drawn, a sequence across the cut included", () => {
+    // Drawn, each is 290 characters: five rows of 58, of which the top three are printed for good.
+    const link = "\x1b]8;;https://e.example\x1b\\link\x1b]8;;\x1b\\";
+    const cases = [
+      [`${"x".repeat(170)}${link}${"y".repeat(116)}`, `${"x".repeat(170)}link${"y".repeat(116)}`],
+      [`${"x".repeat(172)}\x1b7${"y".repeat(115)}`, `${"x".repeat(172)}^[7${"y".repeat(115)}`],
+    ];
+    for (const [raw, drawn] of cases) {
+      const { view, rows } = viewOn(6);
+      view.onStream(chunk(1, raw!));
+      const shown = rows().slice(1);
+      expect(shown.length).toBeGreaterThan(3);
+      expect(shown.map((row) => row.slice(2)).join("")).toBe(drawn!);
+    }
+  });
+
   test("streamed text is sanitized", () => {
     const { view, output, rows } = viewOn();
     view.onStream(chunk(1, "a\x1b[2Jb\x1b]52;c;eA==\x07 \u202e"));

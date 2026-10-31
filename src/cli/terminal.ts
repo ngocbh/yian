@@ -649,9 +649,7 @@ export class LineEditor {
    * names leave room for it, cut to fit after the indent. The highlighted row is cyan, the
    * others' descriptions dim.
    */
-  #menuRows(room: number): string[] {
-    const matches = this.#matches();
-    if (matches.length === 0) return [];
+  #menuRows(matches: readonly PromptCommand[], room: number): string[] {
     const highlight = this.#highlighted(matches);
     const typed = Array.from(this.#text.text()).length;
     const columns = Math.max(1, this.#columns() - 2);
@@ -671,23 +669,23 @@ export class LineEditor {
     return cut(rows, highlight, room);
   }
 
-  /** The list's rows as drawn: at most what fits, the focused one among them, then `+N more`. */
-  #listRows(boxRows: number): string[] {
-    const list = this.list?.rows() ?? [];
-    const focus = this.#find(list);
-    const room = Math.max(1, this.#rows() - boxRows - 1 - LIST_MARGIN);
-    const pointer = (i: number): string => (i === focus ? `${style("1;36", "»")} ` : "  ");
-    return cut(list.map((row, i) => pointer(i) + row.text), focus, room);
-  }
-
   /**
-   * The menu's rows above the box, as many as the screen leaves once the box, the hint and the
-   * list are drawn and one row is kept free (the live rows draw one fewer than the screen has).
+   * The menu's rows above the box and the list's under the hint, each at most what fits, its
+   * focused row among them, then `+N more`. Both leave `LIST_MARGIN` rows free above them, for
+   * what is drawn above the box; an open menu takes its rows first, leaving the list at least one.
    */
-  #menuAbove(): string[] {
+  #around(): { menu: string[]; list: string[] } {
     const { start, end } = this.#window();
-    const below = end - start + 3 + this.#listRows(end - start + 2).length;
-    return this.#menuRows(Math.max(1, this.#rows() - 1 - below));
+    // The box's text rows, its two edges and the hint.
+    const room = this.#rows() - LIST_MARGIN - (end - start + 3);
+    const list = this.list?.rows() ?? [];
+    const matches = this.#matches();
+    const free = Math.max(1, room - Math.min(1, list.length));
+    const menu = matches.length === 0 ? [] : this.#menuRows(matches, free);
+    const focus = this.#find(list);
+    const pointer = (i: number): string => (i === focus ? `${style("1;36", "»")} ` : "  ");
+    const drawn = list.map((row, i) => pointer(i) + row.text);
+    return { menu, list: cut(drawn, focus, Math.max(1, room - menu.length)) };
   }
 
   /** The rows, styled: the menu, the box, the hint and the list. */
@@ -701,13 +699,14 @@ export class LineEditor {
       const label = `─ ${arrow} ${count} more `;
       return label + "─".repeat(Math.max(0, width + 4 - cells(label)));
     };
-    const list = this.#listRows(end - start + 2);
-    const extra = list.length > 0 ? this.list?.hint : undefined;
+    const { menu, list } = this.#around();
+    // Down moves the menu's highlight, not into the list, while the menu is open.
+    const extra = list.length > 0 && menu.length === 0 ? this.list?.hint : undefined;
     const both = extra ? `${this.#hint} · ${extra}` : this.#hint;
     // The list's hint only when it fits on the row: the box's hint matters more.
     const hint = cells(both) + 2 <= this.#columns() ? both : this.#hint;
     return [
-      ...this.#menuAbove(),
+      ...menu,
       border(`╭${edge(start, "↑")}╮`),
       ...rows.slice(start, end).map((each, i) => {
         const body = each.chars.join("");
@@ -725,7 +724,7 @@ export class LineEditor {
     if (this.focus() !== null) return null;
     const { rows, row } = this.#fold();
     const before = rows[row]!.chars.slice(0, this.#text.caret() - rows[row]!.start).join("");
-    const above = this.#menuAbove().length;
+    const above = this.#around().menu.length;
     return { row: above + row - this.#window().start + 1, before: `│ ${lead(row)}${before}` };
   }
 
@@ -842,6 +841,8 @@ export class LineEditor {
  */
 function cut(rows: readonly string[], focus: number | null, room: number): string[] {
   if (rows.length <= room) return [...rows];
+  // No room for `+N more` beside a row: the focused one alone.
+  if (room <= 1) return [rows[focus ?? 0]!];
   const shown = Math.max(1, room - 1);
   const start = Math.min(Math.max(0, (focus ?? 0) - shown + 1), rows.length - shown);
   return [...rows.slice(start, start + shown), `  ${style("2", `+${rows.length - shown} more`)}`];

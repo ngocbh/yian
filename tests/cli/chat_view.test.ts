@@ -1387,6 +1387,35 @@ describe("the command menu over the box", () => {
     keys.abort();
     view.turn(false);
   });
+  test("capped to a short screen mid-reply, it leaves the spinner and reply drawn", async () => {
+    const { view, output, rows } = viewOn(16);
+    const input = new FakeInput({ tty: true });
+    stdin = input;
+    const onActive = (active: boolean, printed: boolean) => view.active(active, printed);
+    const terminal = new Terminal({ input, output, onActive });
+    const many = Array.from({ length: 12 }, (_, i) => ({ name: `/c${i}`, description: "" }));
+    const list = { rows: () => [{ key: "r1", text: "r1  color.yaml" }], hint: "↓ runs" };
+    const editor = terminal.lineEditor({ hint: view.hint, list, commands: many });
+    view.input(editor);
+    const keys = new AbortController();
+    terminal.watchKeys(keys.signal, () => {}, (key) => {
+      editor.key(key);
+      view.refresh();
+      return true;
+    });
+    view.turn(true);
+    view.onStream(chunk(1, "Once upon"));
+    input.write("/");
+    await tick();
+    // Sixteen rows: the menu keeps `LIST_MARGIN` rows free, for the reply and the spinner.
+    const menu = [...Array.from({ length: 6 }, (_, i) => `  /c${i}`), "  +6 more"];
+    const box = [TOP, boxed("> /"), BOTTOM, HINT, "  r1  color.yaml"];
+    expect(rows().slice(-14)).toEqual(["⏺ Once upon", SPIN, ...menu, ...box]);
+    // The reply's line is still live, not printed for good above the live rows.
+    expect(output.text.split("Once upon").length - 1).toBe(1);
+    keys.abort();
+    view.turn(false);
+  });
 });
 
 describe("the input box after a line is entered while a reply runs", () => {

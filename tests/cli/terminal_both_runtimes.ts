@@ -1517,16 +1517,18 @@ async function aTallCommandMenuShowsWhatFitsAboveTheBoxAndList(): Promise<void> 
   const { input, terminal, view } = setup({ columns: 60 });
   const letters = ["a", "b", "c", "d", "e"];
   const commands = letters.map((name) => ({ name: `/${name}`, description: `Does ${name}` }));
-  // Ten rows high: one is kept free, the box takes three, the hint one and the list one, leaving
-  // the menu four, three of its rows and `+2 more`.
+  // Thirteen rows high: `LIST_MARGIN` rows stay free above it, the box takes three, the hint one
+  // and the list one, leaving the menu four, three of its rows and `+2 more`.
+  let height = 13;
   const list = rowList(["r1"]);
-  const editor = new LineEditor({ columns: () => 60, rows: () => 10, hint: HINT, list, commands });
+  const rows = () => height;
+  const editor = new LineEditor({ columns: () => 60, rows, hint: HINT, list, commands });
   const line = terminal.readLine("You:", { frame: true, editor });
   input.write("/");
   await tick();
   const below = [FRAME_TOP, framed("> /"), FRAME_BOTTOM, `  ${HINT}`, "  r1"];
-  const shown = (...names: string[]) =>
-    [...names.map((name) => `  /${name}  Does ${name}`), "  +2 more"];
+  const row = (name: string) => `  /${name}  Does ${name}`;
+  const shown = (...names: string[]) => [...names.map(row), "  +2 more"];
   assert.deepEqual(view().rows, [...shown("a", "b", "c"), ...below]);
   assert.deepEqual(view().cursor, { row: 5, col: 5 });
   // The highlight stays among the rows shown.
@@ -1534,8 +1536,50 @@ async function aTallCommandMenuShowsWhatFitsAboveTheBoxAndList(): Promise<void> 
   await tick();
   assert.deepEqual(view().rows, [...shown("b", "c", "d"), ...below]);
   assert.equal(editor.lines()[2], styledMenuRow("/d", "Does d", "/", true, 4));
+  // With room for one row, it is the highlighted one alone.
+  height = 9;
+  input.write(UP);
+  await tick();
+  assert.deepEqual(view().rows.slice(0, 2), [row("c"), FRAME_TOP]);
   input.write(ENTER);
-  assert.deepEqual(await line, { value: "/d" });
+  assert.deepEqual(await line, { value: "/c" });
+}
+
+async function anOpenCommandMenuTakesItsRowsFromTheListFirst(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const commands = ["a", "b", "c", "d", "e"].map((name) => ({ name: `/${name}`, description: "" }));
+  const runs = rowList(["r1", "r2", "r3", "r4", "r5", "r6"]);
+  // Sixteen rows high: the menu's five rows and `LIST_MARGIN` free leave the list three rows.
+  const size = { columns: () => 60, rows: () => 16 };
+  const editor = new LineEditor({ ...size, hint: "", list: runs, commands });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  await tick();
+  assert.deepEqual(view().rows.slice(4), ["  r1", "  r2", "  r3", "  r4", "  r5", "  r6"]);
+  input.write("/");
+  await tick();
+  const menu = ["  /a", "  /b", "  /c", "  /d", "  /e"];
+  const box = [FRAME_TOP, framed("> /"), FRAME_BOTTOM, ""];
+  assert.deepEqual(view().rows, [...menu, ...box, "  r1", "  r2", "  +4 more"]);
+  input.write(ESCAPE);
+  await pastEscape();
+  assert.deepEqual(view().rows.slice(4), ["  r1", "  r2", "  r3", "  r4", "  r5", "  r6"]);
+  input.write(CTRL_U + ENTER);
+  assert.deepEqual(await line, { value: "" });
+}
+
+async function theListsHintGoesWhileTheCommandMenuIsOpen(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 80 });
+  const list = { ...rowList(["r1  a.yaml"]), hint: "↓ runs" };
+  const editor = new LineEditor({ columns: () => 80, hint: HINT, list, commands: MENU_COMMANDS });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  await tick();
+  // Down moves the menu's highlight, not into the list, so the list's hint goes while it is open.
+  assert.deepEqual(view().rows.slice(-2), [`  ${HINT} · ↓ runs`, "  r1  a.yaml"]);
+  input.write("/");
+  await tick();
+  assert.deepEqual(view().rows.slice(-2), [`  ${HINT}`, "  r1  a.yaml"]);
+  input.write(CTRL_U + ENTER);
+  assert.deepEqual(await line, { value: "" });
 }
 
 async function aPastedSlashOpensNoCommandMenu(): Promise<void> {
@@ -4049,6 +4093,9 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
     aCommandMenuBoldsTheTypedCharactersAndMarksItsHighlightedRow,
   "a tall command menu shows what fits above the box and list":
     aTallCommandMenuShowsWhatFitsAboveTheBoxAndList,
+  "an open command menu takes its rows from the list first":
+    anOpenCommandMenuTakesItsRowsFromTheListFirst,
+  "the list's hint goes while the command menu is open": theListsHintGoesWhileTheCommandMenuIsOpen,
   "Enter in the command menu runs the highlighted command":
     enterInTheCommandMenuRunsTheHighlightedCommand,
   "a pasted slash opens no command menu": aPastedSlashOpensNoCommandMenu,

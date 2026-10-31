@@ -270,7 +270,7 @@ function inlineSeedAdvice(
   shownSeed: string,
   registry: TypeRegistry | null,
 ): string {
-  const literal = isTemplateText(source) ? NOT_LITERAL : literalValue(source);
+  const literal = literalValue(source);
   if (literal === NOT_LITERAL || holds(bodyField, literal)) {
     return "declare the seed's type: " + suggestTag(fieldName, bodyField, shownSeed, { registry });
   }

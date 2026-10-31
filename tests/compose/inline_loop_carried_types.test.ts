@@ -334,6 +334,20 @@ test("a null seed for an Any body field suggests a non-null seed that loads", ()
   assembleText(seededLoop(suggestedSeed(error, "n"), "Any", '"a"'));
 });
 
+test.each([
+  { seed: '"$${x}"', shown: "$${x}" },
+  { seed: '"a $${x}"', shown: "a $${x}" },
+  { seed: '"call(x)"', shown: "call(x)" },
+])("an escaped or quoted text seed $seed for an int body field suggests an int seed that loads", ({ seed, shown }) => {
+  const error = message(seededLoop(seed));
+
+  expect(error).toBe(
+    "loop node 'repeat': the body returns 'n' as int, but the carried field is typed str from its seed; " +
+      `the seed ${shown} is not of type int: seed one that is, e.g. \`n: !int 0\``,
+  );
+  assembleText(seededLoop(suggestedSeed(error, "n")));
+});
+
 test("a seed of another kind with no example value names the type", () => {
   const typedefs = "typedefs:\n  Rec:\n    a: int\n";
 

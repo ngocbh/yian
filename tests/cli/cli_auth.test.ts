@@ -205,7 +205,9 @@ describe("configErrors", () => {
       { field: "deepseek", message: responsesBlock("deepseek", "gpt-5-pro") },
     ]);
     const azure = { provider: "azure", model: "my-codex", azure: { temperature: 1 } };
-    expect(configErrors({ ...azure, base_url: "https://res.openai.azure.com/" })).toEqual([{ field: "azure", message: responsesBlock("azure", "my-codex") }]);
+    expect(configErrors({ ...azure, base_url: "https://res.openai.azure.com/" })).toEqual([
+      { field: "azure", message: responsesBlock("azure", "my-codex") },
+    ]);
   });
 
   test("an Azure Responses model with a block and no base_url has only the block problem", () => {
@@ -218,7 +220,10 @@ describe("configErrors", () => {
   test.each<[string, Record<string, unknown>]>([
     ["no model, which another layer may set", { provider: "deepseek", deepseek: { temperature: 1 } }],
     ["a block of only nulls", { provider: "deepseek", model: "gpt-5-pro", deepseek: { temperature: null } }],
-    ["openai, whose block follows the model's API", { provider: "openai", model: "gpt-5-pro", openai: { temperature: 1 } }],
+    [
+      "openai, whose block follows the model's API",
+      { provider: "openai", model: "gpt-5-pro", openai: { temperature: 1 } },
+    ],
     ["a Chat Completions model", { provider: "deepseek", model: "deepseek-chat", deepseek: { temperature: 1 } }],
   ])("a provider block passes with %s", (_, layer) => {
     expect(configErrors(layer)).toEqual([]);

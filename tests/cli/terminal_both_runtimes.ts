@@ -691,6 +691,52 @@ async function watchKeysSendsEscapeAndCtrlCAndBuffersTheRest(): Promise<void> {
   assert.deepEqual(keys, ["escape", "interrupt"]);
 }
 
+async function watchKeysFirstTakesTheKeysTypedSinceTheLastPrompt(): Promise<void> {
+  const { input, terminal } = setup();
+  const keys: string[] = [];
+  const line = terminal.readLine("You:");
+  // Typed with the line, after its Enter: no prompt is up to take them.
+  input.write("hi" + ENTER + CTRL_C + "ab" + ESCAPE);
+  assert.deepEqual(await line, { value: "hi" });
+  await pastEscape();
+  const watch = new AbortController();
+  terminal.watchKeys(watch.signal, (key) => keys.push(key));
+  assert.deepEqual(keys, ["interrupt", "escape"]);
+  watch.abort();
+  // The other keys still wait for the next prompt.
+  const next = terminal.readLine("You:");
+  input.write(ENTER);
+  assert.deepEqual(await next, { value: "ab" });
+  assert.deepEqual(keys, ["interrupt", "escape"]);
+}
+
+async function watchKeysWithAnEditorFirstGivesItTheKeysTypedSinceTheLastPrompt(): Promise<void> {
+  const { input, terminal } = setup();
+  const keys: string[] = [];
+  const edited: string[] = [];
+  const line = terminal.readLine("You:");
+  input.write("hi" + ENTER + "ab" + ENTER + CTRL_C + ESCAPE);
+  assert.deepEqual(await line, { value: "hi" });
+  await pastEscape();
+  const watch = new AbortController();
+  terminal.watchKeys(
+    watch.signal,
+    (key) => keys.push(key),
+    (key) => {
+      if (key.name === "escape") return false;
+      edited.push(key.name ?? key.str ?? "?");
+      return true;
+    },
+  );
+  assert.deepEqual(edited, ["a", "b", "return"]);
+  assert.deepEqual(keys, ["interrupt", "escape"]);
+  watch.abort();
+  // Nothing was kept for the next prompt.
+  const next = terminal.readLine("You:");
+  input.write("c" + ENTER);
+  assert.deepEqual(await next, { value: "c" });
+}
+
 async function aPromptDuringWatchTakesTheKeysThenWatchingResumes(): Promise<void> {
   const { input, terminal } = setup();
   const keys: string[] = [];
@@ -3517,6 +3563,9 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "Escape at readLine with escape returns the draft": escapeAtReadLineReturnsTheDraft,
   "Escape at readLine without escape is ignored": escapeAtReadLineWithoutTheOptionIsIgnored,
   "watchKeys sends Escape and Ctrl-C and buffers the rest": watchKeysSendsEscapeAndCtrlCAndBuffersTheRest,
+  "watchKeys first takes the keys typed since the last prompt": watchKeysFirstTakesTheKeysTypedSinceTheLastPrompt,
+  "watchKeys with an editor first gives it the keys typed since the last prompt":
+    watchKeysWithAnEditorFirstGivesItTheKeysTypedSinceTheLastPrompt,
   "a prompt during a watch takes the keys, then watching resumes": aPromptDuringWatchTakesTheKeysThenWatchingResumes,
   "watchKeys on a plain or non-TTY terminal does nothing": watchKeysOnAPlainOrNonTtyTerminalDoesNothing,
   "a plain terminal writes no escapes and sets no raw mode": aPlainTerminalWritesNoEscapesAndSetsNoRawMode,

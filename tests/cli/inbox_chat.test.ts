@@ -20,11 +20,13 @@ import {
   runOrChat,
   type RunOrChatOptions,
 } from "../../src/cli/inbox_chat.ts";
+import { EventQueue, InFlight } from "../../src/cli/chat_events.ts";
+import type { ChatEvents } from "../../src/cli/chat_flush.ts";
 import { ChatView } from "../../src/cli/chat_view.ts";
 import { main } from "../../src/cli/index.ts";
 import { type CliIo, HostStop, UsageError, type Writer } from "../../src/cli/utils.ts";
 import { FileLockError, lockFile, virtualScheduler } from "../../src/platform.ts";
-import { cancel, inspectRun, readRunIndex, send } from "../../src/run.ts";
+import { advance, cancel, inspectRun, readRunIndex, send } from "../../src/run.ts";
 import {
   InboxClosedRecord,
   InboxWithdrawnRecord,
@@ -449,8 +451,11 @@ describe("yian chat", () => {
     "Ctrl-C at an ask prompt stops the run and leaves its log",
     async () => {
       const { io, stdin, stderr } = chatIo({ tty: true });
-      stdin.write("hi" + ENTER + CTRL_C);
-      const { code, log } = await runChat(flowFile(ASK_ONCE), io);
+      stdin.write("hi" + ENTER);
+      const chatting = runChat(flowFile(ASK_ONCE), io);
+      await until(() => (io.stderrStream as FakeOutput).text.includes("Sure about hi?"));
+      stdin.write(CTRL_C);
+      const { code, log } = await chatting;
       expect(code).toBe(130);
       expect(stderr()).toContain(`chat stopped; the run is in ${log}`);
       expect(records(log).at(-1)).toBeInstanceOf(RunStoppedRecord);
@@ -1296,6 +1301,387 @@ test(
     expect(stderr()).toContain("chat cancelled");
     expect(records(log).filter((record) => record instanceof InterruptedRecord).length).toBe(1);
     expect(records(log).at(-1)).toBeInstanceOf(RunCancelledRecord);
+  },
+  TIMEOUT,
+);
+
+/** Mock `fetch` with the `SEVEN` stream, counting its calls; `restore` puts `fetch` back. */
+function sevenStream() {
+  const counter = { calls: 0 };
+  const original = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    counter.calls += 1;
+    return new Response(SEVEN, { headers: { "content-type": "text/event-stream" } });
+  }) as unknown as typeof fetch;
+  return { counter, restore: () => (globalThis.fetch = original) };
+}
+
+/** The text of a sent inbox value: a `str` as it is, a message's first part. */
+function sentText(value: unknown): unknown {
+  return typeof value === "string" ? value : (value as { parts: { text: string }[] }).parts[0]!.text;
+}
+
+/**
+ * A `send` that holds each send whose text `holds` matches until the test's `release`; `reached`
+ * settles once the first is held.
+ */
+function heldSend(holds: (text: unknown) => boolean) {
+  const { promise: reached, resolve: reach } = Promise.withResolvers<void>();
+  const { promise: gate, resolve: open } = Promise.withResolvers<void>();
+  release = open;
+  const held: typeof send = async (log, inbox, value, options) => {
+    if (holds(sentText(value))) {
+      reach();
+      await gate;
+    }
+    return send(log, inbox, value, options);
+  };
+  return { reached, send: held };
+}
+
+/** The example chat's log after a press stopped its first reply: the Stop comes after the line, and nothing cancels. */
+function expectStoppedAfterTheLine(log: string): void {
+  const all = readRunLog(log).map((envelope) => envelope.record);
+  const line = all.findIndex((record) => record instanceof PoolCommitRecord && record.key === "__start__.owner_messages");
+  const stop = all.findIndex((record) => record instanceof InterruptedRecord);
+  expect(line).toBeGreaterThan(-1);
+  expect(stop).toBeGreaterThan(line);
+  expect(all.some((record) => record instanceof RunCancelledRecord)).toBe(false);
+}
+
+test(
+  "Ctrl-C in the same read as Enter stops the reply that line starts and never cancels",
+  async () => {
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true, env: XAI });
+    const { counter, restore } = sevenStream();
+    try {
+      stdin.write("hi" + ENTER + CTRL_C);
+      const chatting = runChat(EXAMPLE_CHAT, io);
+      await until(() => stderr().includes("(interrupted)") || stderr().includes("chat cancelled"));
+      stdin.write("/exit" + ENTER);
+      const { code, log } = await chatting;
+      expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
+      expect(stderr()).not.toContain("chat cancelled");
+      expect(stderr().indexOf(INTERRUPTING)).toBeLessThan(stderr().indexOf("(interrupted)"));
+      // Stopped before its model call.
+      expect(counter.calls).toBe(0);
+      expect(stdout()).toBe("");
+      expectStoppedAfterTheLine(log);
+    } finally {
+      restore();
+    }
+  },
+  TIMEOUT,
+);
+
+test(
+  "SIGINT while the line is still being sent stops the reply that line starts; the turn has the terminal raw already",
+  async () => {
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true, env: XAI });
+    const { counter, restore } = sevenStream();
+    const held = heldSend((text) => text === "hi");
+    try {
+      stdin.write("hi" + ENTER);
+      const chatting = runChat(EXAMPLE_CHAT, io, {}, { send: held.send });
+      await held.reached;
+      // Raw, a Ctrl-C typed now is a key the turn reads, not a SIGINT that cancels.
+      const raw = stdin.isRaw;
+      signals.emit("SIGINT");
+      release!();
+      await until(() => stderr().includes("(interrupted)") || stderr().includes("chat cancelled"));
+      stdin.write("/exit" + ENTER);
+      const { code, log } = await chatting;
+      expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
+      expect(stderr()).not.toContain("chat cancelled");
+      expect(counter.calls).toBe(0);
+      expect(stdout()).toBe("");
+      expectStoppedAfterTheLine(log);
+      expect(raw).toBe(true);
+    } finally {
+      restore();
+    }
+  },
+  TIMEOUT,
+);
+
+test(
+  "Esc while the line is still being sent takes it back to the prompt and never cancels",
+  async () => {
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true });
+    const held = heldSend((text) => text === "hi");
+    stdin.write("hi" + ENTER);
+    const chatting = runChat(flowFile(ECHO), io, {}, { send: held.send });
+    await held.reached;
+    stdin.write(ESCAPE);
+    await pastEscapeTimeout();
+    release!();
+    await until(() => stderr().includes("(withdrew 1 message; back in the prompt)") || stdout() !== "");
+    expect(stdout()).toBe("");
+    await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You: hi");
+    stdin.write(ENTER);
+    await until(() => stdout().includes("echo: hi"));
+    stdin.write("/exit" + ENTER);
+    const { code, log } = await chatting;
+    expect(code).toBe(0);
+    expect(stdout()).toBe("echo: hi\necho: \n");
+    expect(stderr()).not.toContain("chat cancelled");
+    expect(records(log).filter((record) => record instanceof InboxWithdrawnRecord).length).toBe(1);
+  },
+  TIMEOUT,
+);
+
+test(
+  "SIGINT between two turns the chat runs for one line doesn't cancel; the terminal stays raw",
+  async () => {
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true });
+    const wake = new EventTarget();
+    const events: ChatEvents = { queue: new EventQueue({ wake }), inFlight: new InFlight(wake), wake };
+    const held = heldSend((text) => text === "run r1 was cancelled");
+    const { promise: moved, resolve: move } = Promise.withResolvers<void>();
+    let moves = 0;
+    const step: typeof advance = async (options) => {
+      // Queued while the line's turn runs, so it is sent at once; its send outlasts the move.
+      if (++moves === 1) events.queue.push({ run: "r1", status: "cancelled", log: "/logs/r1", seq: 5 });
+      const result = await advance(options);
+      if (moves === 1) move();
+      return result;
+    };
+    stdin.write("hi" + ENTER);
+    const chatting = runChat(flowFile(ECHO), io, {}, { events, advance: step, send: held.send });
+    await held.reached;
+    await moved;
+    // Past the move, while the chat waits on the send to know whether to move again.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const raw = stdin.isRaw;
+    signals.emit("SIGINT");
+    await until(() => stderr().includes(INTERRUPTING) || stderr().includes("chat cancelled"));
+    release!();
+    await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You:" || stderr().includes("chat cancelled"));
+    stdin.write("/exit" + ENTER);
+    const { code, log } = await chatting;
+    expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
+    expect(stderr()).not.toContain("chat cancelled");
+    expect(stdout()).toStartWith("echo: hi\n");
+    expect(records(log).some((record) => record instanceof RunCancelledRecord)).toBe(false);
+    expect(raw).toBe(true);
+  },
+  TIMEOUT,
+);
+
+test(
+  "Ctrl-C with a line the inbox refuses has no reply to stop and never cancels",
+  async () => {
+    const { io, stdin, stdout, stderr } = chatIo({ tty: true, env: { YIAN_MAX_EVENT_BYTES: "16" } });
+    stdin.write("x".repeat(40) + ENTER + CTRL_C);
+    const chatting = runChat(flowFile(ECHO), io);
+    await until(() => stderr().includes("not sent: ") && stderr().includes(INTERRUPTING));
+    await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You:" || stderr().includes("chat cancelled"));
+    stdin.write("hi" + ENTER + "/exit" + ENTER);
+    const { code, log } = await chatting;
+    expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
+    expect(stderr()).not.toContain("chat cancelled");
+    expect(stdout()).toBe("echo: hi\necho: \n");
+    expect(records(log).some((record) => record instanceof InterruptedRecord)).toBe(false);
+  },
+  TIMEOUT,
+);
+
+test(
+  "with the framed box, a line typed in the same read as Enter is sent after it",
+  async () => {
+    const { io, stdin } = chatIo({ tty: true });
+    const scheduler = virtualScheduler(Date.parse("2026-01-01T00:00:00Z"));
+    const view = new ChatView(io.stderrStream as FakeOutput, io.env, scheduler);
+    const held = heldSend((text) => text === "hi");
+    const log = join(tmp, "run.jsonl");
+    stdin.write("hi" + ENTER + "there" + ENTER);
+    const chatting = inboxChat(
+      flowFile(ECHO),
+      { inputValues: [], engineTrace: false, log },
+      { ...io, stdout: view.writer, stderr: view.writer },
+      { scheduler, signals, send: held.send },
+      { view },
+    );
+    await held.reached;
+    // Long enough for a line sent out of order to land first.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release!();
+    const sent = () =>
+      records(log).flatMap((record) =>
+        record instanceof PoolCommitRecord && record.key === "__start__.messages"
+          ? [(record.value as { value: unknown }).value]
+          : [],
+      );
+    await until(() => sent().length === 2);
+    stdin.write(CTRL_U + "/exit" + ENTER);
+    expect(await chatting).toBe(0);
+    expect(sent().slice(0, 2)).toEqual(["hi", "there"]);
+  },
+  TIMEOUT,
+);
+
+test(
+  "with the framed box, a line typed while the move runs, whose send lands after the move ended, is read before the prompt",
+  async () => {
+    const { io, stdin } = chatIo({ tty: true });
+    const scheduler = virtualScheduler(Date.parse("2026-01-01T00:00:00Z"));
+    let moves = 0;
+    let returned = 0;
+    // The moves made each time a prompt takes the terminal.
+    const prompts: number[] = [];
+    class Watched extends ChatView {
+      override active(active: boolean, printed = false): void {
+        if (active) prompts.push(moves);
+        super.active(active, printed);
+      }
+    }
+    const view = new Watched(io.stderrStream as FakeOutput, io.env, scheduler);
+    const held = heldSend((text) => text === "there");
+    const { promise: started, resolve: start } = Promise.withResolvers<void>();
+    const { promise: gate, resolve: open } = Promise.withResolvers<void>();
+    const step: typeof advance = async (options) => {
+      const n = ++moves;
+      if (n === 1) {
+        start();
+        await gate;
+      }
+      const result = await advance(options);
+      returned = n;
+      return result;
+    };
+    const log = join(tmp, "run.jsonl");
+    const chatting = inboxChat(
+      flowFile(ECHO),
+      { inputValues: [], engineTrace: false, log },
+      { ...io, stdout: view.writer, stderr: view.writer },
+      { scheduler, signals, send: held.send, advance: step },
+      { view },
+    );
+    stdin.write("hi" + ENTER);
+    await started;
+    stdin.write("there" + ENTER);
+    await held.reached;
+    open();
+    await until(() => returned === 1);
+    // Past the move, while the chat looks for the lines it sent that the run hasn't read.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release!();
+    await until(() => prompts.some((made) => made > 0));
+    const all = records(log);
+    const there = all.findIndex(
+      (record) =>
+        record instanceof PoolCommitRecord &&
+        record.key === "__start__.messages" &&
+        (record.value as { value: unknown }).value === "there",
+    );
+    const lastWaiting = all.findLastIndex((record) => record instanceof RunWaitingRecord);
+    stdin.write(CTRL_U + "/exit" + ENTER);
+    expect(await chatting).toBe(0);
+    expect(there).toBeGreaterThan(-1);
+    expect({ moves: prompts.find((made) => made > 0), read: lastWaiting > there }).toEqual({ moves: 2, read: true });
+  },
+  TIMEOUT,
+);
+
+/**
+ * Chat ECHO in the framed box with a 16-byte event limit, enter a line the inbox refuses, and a
+ * box line ("hi") typed with it (`oneRead`) or while its send is held. Returns the moves made
+ * before the second prompt, and whether a move read "hi" by then.
+ */
+async function boxLineAfterRefusedLine(oneRead: boolean) {
+  const { io, stdin } = chatIo({ tty: true, env: { YIAN_MAX_EVENT_BYTES: "16" } });
+  const scheduler = virtualScheduler(Date.parse("2026-01-01T00:00:00Z"));
+  let moves = 0;
+  // The moves made each time a prompt takes the terminal.
+  const prompts: number[] = [];
+  class Watched extends ChatView {
+    override active(active: boolean, printed = false): void {
+      if (active) prompts.push(moves);
+      super.active(active, printed);
+    }
+  }
+  const view = new Watched(io.stderrStream as FakeOutput, io.env, scheduler);
+  const big = "x".repeat(40);
+  const held = heldSend((text) => !oneRead && text === big);
+  const step: typeof advance = async (options) => {
+    moves++;
+    return advance(options);
+  };
+  const log = join(tmp, "run.jsonl");
+  const chatting = inboxChat(
+    flowFile(ECHO),
+    { inputValues: [], engineTrace: false, log },
+    { ...io, stdout: view.writer, stderr: view.writer },
+    { scheduler, signals, send: held.send, advance: step },
+    { view },
+  );
+  await until(() => prompts.length >= 1);
+  if (oneRead) {
+    stdin.write(big + ENTER + "hi" + ENTER);
+  } else {
+    stdin.write(big + ENTER);
+    await held.reached;
+    stdin.write("hi" + ENTER);
+    // Long enough for the box line to be sent while the refused one is held.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release!();
+  }
+  await until(() => prompts.length >= 2);
+  const all = records(log);
+  const hi = all.findIndex(
+    (record) =>
+      record instanceof PoolCommitRecord &&
+      record.key === "__start__.messages" &&
+      (record.value as { value: unknown }).value === "hi",
+  );
+  const lastWaiting = all.findLastIndex((record) => record instanceof RunWaitingRecord);
+  stdin.write(CTRL_U + "/exit" + ENTER);
+  expect(await chatting).toBe(0);
+  return { moves: prompts[1], read: hi > -1 && lastWaiting > hi };
+}
+
+test(
+  "with the framed box, a line typed while a refused line is sent is read before the prompt comes back",
+  async () => {
+    expect(await boxLineAfterRefusedLine(false)).toEqual({ moves: 1, read: true });
+  },
+  TIMEOUT,
+);
+
+test(
+  "with the framed box, a line typed in the same read as a refused line is read before the prompt comes back",
+  async () => {
+    expect(await boxLineAfterRefusedLine(true)).toEqual({ moves: 1, read: true });
+  },
+  TIMEOUT,
+);
+
+test(
+  "Ctrl-C while child events queued at the prompt are still being sent stops the reply they start and never cancels",
+  async () => {
+    const { io, stdin, stderr } = chatIo({ tty: true });
+    const wake = new EventTarget();
+    const events: ChatEvents = { queue: new EventQueue({ wake }), inFlight: new InFlight(wake), wake };
+    const held = heldSend((text) => text === "run r1 was cancelled");
+    const chatting = runChat(flowFile(ECHO), io, {}, { events, send: held.send });
+    await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You:");
+    // Takes the prompt down, for a turn that sends it.
+    events.queue.push({ run: "r1", status: "cancelled", log: "/logs/r1", seq: 5 });
+    await held.reached;
+    stdin.write(CTRL_C);
+    await until(() => stderr().includes(INTERRUPTING) || stderr().includes("chat cancelled"));
+    release!();
+    await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You:" || stderr().includes("chat cancelled"));
+    stdin.write("/exit" + ENTER);
+    const { code, log } = await chatting;
+    expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
+    expect(stderr()).not.toContain("chat cancelled");
+    const all = records(log);
+    const event = all.findIndex((record) => record instanceof PoolCommitRecord && record.key === "__start__.messages");
+    const stop = all.findIndex((record) => record instanceof InterruptedRecord);
+    expect(event).toBeGreaterThan(-1);
+    expect(stop).toBeGreaterThan(event);
+    expect(all.some((record) => record instanceof RunCancelledRecord)).toBe(false);
   },
   TIMEOUT,
 );

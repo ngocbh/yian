@@ -60,9 +60,9 @@ import {
   chatSessions,
   type ModelChoice,
   modelMessage,
+  sessionChoice,
   type SessionSeed,
   sessionSeed,
-  sessionTitle,
 } from "./chat_sessions.ts";
 import { type ChatCommandOutcome, inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { type Colored, paint, printStyled, type Style } from "./render.ts";
@@ -71,7 +71,7 @@ import { CHAT_FLOW_FILE, removeEmptyDir, validateRunLogOptions } from "./run.ts"
 import { sanitize } from "./sanitize.ts";
 import { RunProgress, runScreen } from "./run_view.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
-import type { Key, PromptCommand, Terminal } from "./terminal.ts";
+import type { Key, PickChoice, PromptCommand, Terminal } from "./terminal.ts";
 import { type CliIo, UsageError } from "./utils.ts";
 
 /** How often the run list under the input box is drawn again, for its times. */
@@ -188,28 +188,30 @@ function loginOf(provider: string, env: Env): string | null {
 }
 
 /**
- * Ask which of `titles` under `label` through `terminal`: a picker (Esc or Ctrl-C cancels it), or,
- * when `plain`, the titles numbered (written through `write`) and a line for the number. Returns
- * the index, or null when none was picked (a cancel, the end of input, a blank line or a number
- * out of range).
+ * Ask which of `choices` under `label` through `terminal`: a searchable picker (`askPick`, Esc or
+ * Ctrl-C cancels it) starting on choice `initial`, or, when `plain`, the choices numbered, each
+ * its title and detail cut to `width` cells (written through `write`), and a line for the number.
+ * Returns the index, or null when none was picked (a cancel, the end of input, a blank line or a
+ * number out of range).
  */
 async function pickOne(
   terminal: Terminal,
   plain: boolean,
   write: (text: string) => Promise<void>,
   label: string,
-  titles: readonly string[],
+  choices: readonly PickChoice[],
+  { initial = 0, width }: { initial?: number; width: number },
 ): Promise<number | null> {
-  if (!plain) {
-    const picked = await terminal.askChoice(label, titles, { cancellable: true });
-    return picked === null ? null : titles.indexOf(picked);
-  }
-  const rows = titles.map((title, i) => `  ${i + 1}. ${sanitize(title)}\n`);
+  if (!plain) return terminal.askPick(label, choices, { initial });
+  const rows = choices.map((choice, i) => {
+    const line = choice.detail === undefined ? choice.title : `${choice.title} · ${choice.detail}`;
+    return `  ${i + 1}. ${sanitize(fit(line, width))}\n`;
+  });
   await write(`${label}:\n${rows.join("")}`);
   const read = await terminal.readLine("Number (Enter for none):");
   if (!("value" in read) || read.value.trim() === "") return null;
   const n = Number(read.value.trim());
-  return Number.isInteger(n) && n >= 1 && n <= titles.length ? n - 1 : null;
+  return Number.isInteger(n) && n >= 1 && n <= choices.length ? n - 1 : null;
 }
 
 /**
@@ -444,6 +446,7 @@ export async function chat(
     focus: null,
     model: null,
     transcript: null,
+    title: null,
   };
   let hint = "";
   if (flowPath !== undefined) {
@@ -564,6 +567,7 @@ export async function chat(
       ...inputs,
       model: current,
       transcript: seed?.transcript ?? null,
+      title: seed?.title ?? null,
     };
     const wake = new EventTarget();
     const runs: ChildRuns = new ChildRuns({
@@ -608,23 +612,26 @@ export async function chat(
       );
       return Object.fromEntries(all.map((each) => [each.name, each]));
     };
-    // A title fits on one line in the picker and once picked, after its label.
+    // A numbered row fits on one line, after its label.
     const titleCells = (label: string) => columnsOf(out.stderrStream) - cells(label) - 4;
-    const sessionTitles = (sessions: readonly ChatSession[]) =>
-      sessions.map((each) => sessionTitle(each, titleCells(RESUME_LABEL)));
-    const pick = (terminal: Terminal, label: string, titles: readonly string[]) =>
-      pickOne(terminal, view === null, note, label, titles);
+    const sessionChoices = (sessions: readonly ChatSession[]) =>
+      sessions.map((each) => sessionChoice(each, scheduler.now()));
+    const pick = (terminal: Terminal, label: string, choices: readonly PickChoice[], initial = 0) =>
+      pickOne(terminal, view === null, note, label, choices, { initial, width: titleCells(label) });
+    /** Choices of `titles` alone. */
+    const titled = (titles: readonly string[]): PickChoice[] => titles.map((title) => ({ title }));
     /** Go on from `from`: its transcript and model are the run's, its children left are listed. */
     const goOn = (from: SessionSeed): void => {
       current = seededModel(from);
       sessionInputs["model"] = current;
       sessionInputs["transcript"] = from.transcript;
+      sessionInputs["title"] = from.title;
       runs.setLlmConfig(current === null ? cliLayer(options) : { ...current });
     };
     const start = async (terminal: Terminal): Promise<number | null> => {
       if (picking !== null) {
         const sessions = picking;
-        const index = await pick(terminal, RESUME_LABEL, sessionTitles(sessions));
+        const index = await pick(terminal, RESUME_LABEL, sessionChoices(sessions));
         if (index === null) {
           await note("chat cancelled\n");
           return 130;
@@ -671,11 +678,10 @@ export async function chat(
         await note(`(no ${provider} models to choose from)\n`);
         return null;
       }
-      const width = titleCells(MODEL_LABEL);
-      const titles = offered.map((each, i) =>
-        fit(`${each.provider}/${each.model}${keeps && i === 0 ? " (current)" : ""}`, width),
+      const titles = offered.map(
+        (each, i) => `${each.provider}/${each.model}${keeps && i === 0 ? " (current)" : ""}`,
       );
-      const index = await pick(terminal, MODEL_LABEL, titles);
+      const index = await pick(terminal, MODEL_LABEL, titled(titles));
       if (index === null || (keeps && index === 0)) return null;
       return choose({ provider: offered[index]!.provider, model: offered[index]!.model });
     };
@@ -706,21 +712,21 @@ export async function chat(
       const shown = current ?? defaults;
       const saved = savedLogins(plainIo);
       if (saved === null) await note("(couldn't read the saved logins)\n");
-      const width = titleCells(PROVIDER_LABEL);
       // A key set in the environment, with no saved login, can serve the chat as it is.
       const keys = new Map(
         SUPPORTED_LLM_PROVIDERS.map((name) => [name, keyVariable(name, plainIo)]),
       );
-      const titles = SUPPORTED_LLM_PROVIDERS.map((name) => {
+      const choices = SUPPORTED_LLM_PROVIDERS.map((name): PickChoice => {
         const variable = keys.get(name);
         const login = saved?.has(name)
           ? "logged in"
           : variable
             ? `key from ${variable}`
             : "not logged in";
-        return fit(`${name} · ${login}${name === shown.provider ? " (current)" : ""}`, width);
+        return { title: name, detail: `${login}${name === shown.provider ? " (current)" : ""}` };
       });
-      const index = await pick(terminal, PROVIDER_LABEL, titles);
+      const at = Math.max(0, SUPPORTED_LLM_PROVIDERS.findIndex((name) => name === shown.provider));
+      const index = await pick(terminal, PROVIDER_LABEL, choices, at);
       if (index === null) return null;
       const provider = SUPPORTED_LLM_PROVIDERS[index]!;
       if (saved?.has(provider)) return chooseModel(terminal, provider);
@@ -728,7 +734,7 @@ export async function chat(
       if (variable) {
         // Off a terminal nothing is saved: the key serves this chat only.
         const tty = plainIo.stdin.isTTY === true;
-        const answer = tty ? await pick(terminal, SAVE_KEY_LABEL, SAVE_KEY_ANSWERS) : 0;
+        const answer = tty ? await pick(terminal, SAVE_KEY_LABEL, titled(SAVE_KEY_ANSWERS)) : 0;
         if (answer === null) return null;
         if (answer === 0) {
           const models = await keyModels(provider, variable, plainIo, deps.auth);
@@ -755,10 +761,9 @@ export async function chat(
           terminal.askChoice(label, titles, { ...ask, cancellable: true }),
         close: () => {},
       };
-      const width = titleCells(MODEL_LABEL);
       const pickModel = async (models: readonly string[]) => {
-        const titles = models.map((model) => fit(`${provider}/${model}`, width));
-        const picked = await pick(terminal, MODEL_LABEL, titles);
+        const titles = models.map((model) => `${provider}/${model}`);
+        const picked = await pick(terminal, MODEL_LABEL, titled(titles));
         return picked === null ? null : models[picked]!;
       };
       // What `yian auth` prints goes out as the chat's notes; off a terminal no step prompts.
@@ -796,7 +801,7 @@ export async function chat(
         await note("(no earlier yian chat in this folder to resume)\n");
         return null;
       }
-      const index = await pick(terminal, RESUME_LABEL, sessionTitles(sessions));
+      const index = await pick(terminal, RESUME_LABEL, sessionChoices(sessions));
       if (index === null) return null;
       next = sessions[index]!;
       return { exit: true };

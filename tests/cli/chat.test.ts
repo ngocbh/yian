@@ -25,7 +25,13 @@ import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import { type Request, Response, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { inspectRun } from "../../src/run.ts";
-import { callReply, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import {
+  callReply,
+  chatServing,
+  namingRequest,
+  serving,
+  textReply,
+} from "../helpers/run_state_fixtures.ts";
 import { ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 const TIMEOUT = 20_000;
@@ -80,11 +86,15 @@ function chatIo({ tty = false, environment = env } = {}) {
   return { io, stdin, stdout: out.text, stderr: err.text, screen: () => stderrStream.text };
 }
 
-/** A model answering each request with `answer` of it and its count (from 1); it keeps each. */
+/**
+ * A model answering each request with `answer` of it and its count (from 1); it keeps each. The
+ * call naming the chat is kept apart (`named`) and answered `About <the first line>`.
+ */
 class AnsweringModel implements ChatModel {
   readonly provider = "xai";
   readonly model = "grok-4.3";
   readonly requests: Request[] = [];
+  readonly named: Request[] = [];
   readonly #answer: (request: Request, count: number) => Response;
 
   constructor(answer: (request: Request, count: number) => Response) {
@@ -92,6 +102,11 @@ class AnsweringModel implements ChatModel {
   }
 
   stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    if (namingRequest(request)) {
+      this.named.push(request);
+      const name = `About ${request.messages.at(-1)!.text().split("\n")[0]}`;
+      return new ScriptedModel([textReply(name)], this).stream(request, options);
+    }
     this.requests.push(request);
     return new ScriptedModel([this.#answer(request, this.requests.length)], this).stream(
       request,
@@ -123,7 +138,7 @@ async function runChat(
   const log = join(tmp, "chat.jsonl");
   const code = await chat(flow, { engineTrace: false, log, ...options }, io, {
     root,
-    models: serving(model, env),
+    models: chatServing(model, env),
     // The test's own, so no real signal reaches the chat.
     signals: new EventEmitter(),
     ...deps,
@@ -709,7 +724,7 @@ async function homeChat(
   model: ChatModel,
   options: Partial<ChatOptions> = {},
 ): Promise<{ code: number; access: ReturnType<typeof serving> }> {
-  const access = serving(model, env);
+  const access = chatServing(model, env);
   const code = await chat(undefined, { engineTrace: false, ...options }, io, {
     root,
     models: access,
@@ -731,8 +746,10 @@ test(
       "Model for the next replies:\n  1. xai/grok-4.3 (current)\n  2. xai/grok-4\n",
     );
     expect(first.stderr()).toContain("(model: xai/grok-4, from the next reply)");
-    // The choice got no reply of its own: one request, on the chosen model.
+    // The choice got no reply of its own: one request, on the chosen model, and one more after
+    // it that names the chat.
     expect(model.requests).toHaveLength(1);
+    expect(model.named).toHaveLength(1);
     expect(builtWith(access)).toEqual(["xai/grok-4"]);
     expect(shown(model.requests[0]!)).not.toContain("/model");
 
@@ -777,13 +794,17 @@ test(
     stdin.write("/resume\n2\nwhat did I say?\n/exit\n");
     const model = new AnsweringModel(() => textReply("you said it"));
     expect((await homeChat(io, model)).code).toBe(0);
-    const listed = /Resume which chat\?:\n {2}1\. [-\d :]+ · xai\/grok-4\.3 · the newer one\n/;
-    expect(stderr()).toMatch(listed);
-    expect(stderr()).toContain("· the old one\n");
+    // Each chat by the name it gave itself after its first reply, then when, its messages and
+    // model.
+    const row = (n: number, line: string) => `  ${n}\\. About ${line} · \\d+s ago · 2 messages`;
+    const listed = `Resume which chat\\?:\n${row(1, "the newer one")} · xai/grok-4\\.3\n`;
+    expect(stderr()).toMatch(new RegExp(listed + row(2, "the old one")));
     expect(stderr()).toContain(
       "session ended\nyian chat · xai/grok-4.3\n(going on from an earlier chat",
     );
     expect(model.requests).toHaveLength(1);
+    // It keeps the name of the chat it goes on from.
+    expect(model.named).toEqual([]);
     expect(shown(model.requests[0]!)).toContain("the old one");
     expect(shown(model.requests[0]!)).not.toContain("the newer one");
   },
@@ -846,7 +867,7 @@ test(
     const { io, stdin, stderr } = chatIo();
     stdin.write("/provider\n3\nhello\n/exit\n");
     const model = new AnsweringModel(() => textReply("noted"));
-    const access = serving(model, env);
+    const access = chatServing(model, env);
     const code = await chat(undefined, { engineTrace: false }, io, {
       root,
       models: access,
@@ -873,7 +894,7 @@ test(
     const model = new AnsweringModel(() => textReply("noted"));
     const chatting = chat(undefined, { engineTrace: false }, io, {
       root,
-      models: serving(model, env),
+      models: chatServing(model, env),
       signals: new EventEmitter(),
     });
     // The store breaks once the chat has started.
@@ -898,7 +919,7 @@ test(
     const { io, stdin, stderr, stdout } = chatIo({ environment });
     stdin.write("/provider\n3\n2\nhello\n/exit\n");
     const model = new AnsweringModel(() => textReply("noted"));
-    const access = serving(model, environment);
+    const access = chatServing(model, environment);
     const sent: (string | null)[] = [];
     const listModels = async (_: unknown, options: { apiKey?: string | null } = {}) => {
       sent.push(options.apiKey ?? null);

@@ -236,8 +236,10 @@ $ yian chat hello.yaml
 
 It needs a model: set one with `yian auth`, or pass `--provider` and `--model`. A chat going on from
 an earlier one keeps the model that chat chose with `/model`, unless you pass `--provider` or
-`--model`. A chat whose `--log` is outside `~/.yian/runs` can't be resumed. Off a terminal, or
-with `NO_COLOR`, it prints plain lines.
+`--model`. A chat whose `--log` is outside `~/.yian/runs` can't be resumed. After its first
+reply, a chat names itself in a few words with one call to its model; `/resume` lists the chats by
+name and searches their names and first lines as you type, as `/model` and `/provider` search
+theirs. Off a terminal, or with `NO_COLOR`, it prints plain lines and numbered lists.
 
 | Key | What it does |
 |---|---|

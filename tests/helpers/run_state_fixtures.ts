@@ -2117,3 +2117,26 @@ export function interruptible(): { steerInbox: SteerInbox; interrupt: (by?: numb
     },
   };
 }
+
+/**
+ * `serving(model, env)` for a `yian chat` run, whose `configs` leave out the models built for the
+ * call that names the chat (its AGENT `naming`), so they hold the replies' and compactions'.
+ */
+export function chatServing(
+  model: ChatModel,
+  env: Env = NO_ENV,
+): ModelAccess & { built: number; configs: Readonly<Record<string, unknown>>[] } {
+  const access = serving(model, env);
+  const build = access.createModel;
+  access.createModel = (...args: Parameters<typeof build>) => {
+    const built = build(...args);
+    if (args[1].nodeId.endsWith("/naming")) access.configs.pop();
+    return built;
+  };
+  return access;
+}
+
+/** Whether `request` is the call that names a `yian chat`. */
+export const namingRequest = (request: Request): boolean =>
+  request.messages[0]?.text().startsWith("You name conversations") === true;
+

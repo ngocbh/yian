@@ -53,7 +53,12 @@ import type { Request, Response } from "../../src/llm/messages.ts";
 import { Finish, PartDone, TextDelta } from "../../src/llm/events.ts";
 import { TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
-import { callReply, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import {
+  callReply,
+  chatServing,
+  namingRequest,
+  textReply,
+} from "../helpers/run_state_fixtures.ts";
 import {
   CTRL_C,
   CTRL_L,
@@ -119,11 +124,15 @@ function terminalIo({ noColor = false, extra = {} as Record<string, string> } = 
   return { io, stdin, output, rows: () => screen(output.text, COLUMNS).rows };
 }
 
-/** A model answering each request with `answer` of it and its count (from 1). */
+/**
+ * A model answering each request with `answer` of it and its count (from 1). The call naming the
+ * chat is kept apart (`named`) and answered `A chat`.
+ */
 class AnsweringModel implements ChatModel {
   readonly provider = "xai";
   readonly model = "grok-4.3";
   readonly requests: Request[] = [];
+  readonly named: Request[] = [];
   readonly #answer: (request: Request, count: number) => ScriptedReply;
 
   constructor(answer: (request: Request, count: number) => ScriptedReply) {
@@ -131,6 +140,10 @@ class AnsweringModel implements ChatModel {
   }
 
   stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
+    if (namingRequest(request)) {
+      this.named.push(request);
+      return new ScriptedModel([textReply("A chat")], this).stream(request, options);
+    }
     this.requests.push(request);
     return new ScriptedModel([this.#answer(request, this.requests.length)], this).stream(request, options);
   }
@@ -146,7 +159,7 @@ const pastGrace = () => new Promise((resolve) => setTimeout(resolve, 450));
 function runChat(io: CliIo, model: ChatModel, flow?: string, deps: ChatDeps = {}): Promise<number> {
   return chat(flow, { engineTrace: false, log: join(tmp, "chat.jsonl") }, io, {
     root,
-    models: serving(model, io.env),
+    models: chatServing(model, io.env),
     signals: new EventEmitter(),
     ...deps,
   });
@@ -1094,7 +1107,10 @@ describe("a session on a terminal", () => {
     await until(() => output.text.includes("Run hello.yaml"));
     await pastGrace();
     stdin.write(ENTER);
-    await until(() => model.requests.length >= 4 && rows().some((line) => line.startsWith(prompt)));
+    // The turn ends once the chat has named itself, its spinner gone.
+    const ended = () =>
+      model.named.length === 1 && !rows().some((line) => line.includes("Thinking…"));
+    await until(() => ended() && rows().some((line) => line.startsWith(prompt)));
     stdin.write(`/exit${ENTER}`);
     expect(await chatting).toBe(0);
     const shown = rows();
@@ -1646,7 +1662,13 @@ describe("the run list under the input box", () => {
       await pastGrace();
       stdin.write(ENTER);
       const listed = /^ {2}r1 {2}color\.yaml {2}● asks · \d+s$/;
-      await until(() => model.requests.length >= 3 && rows().at(-1)!.match(listed) !== null);
+      // The turn ends once the chat has named itself, its spinner gone.
+      await until(
+        () =>
+          model.named.length === 1 &&
+          !rows().some((line) => line.includes("Thinking…")) &&
+          rows().at(-1)!.match(listed) !== null,
+      );
       const before = rows();
       // At 60 columns the list's hint doesn't fit after the box's.
       expect(before.slice(-5, -1)).toEqual([TOP, row(">"), BOTTOM, HINT]);
@@ -1861,7 +1883,7 @@ describe("/provider", () => {
       const { io, stdin, output, rows } = terminalIo();
       const screen = () => output.text;
       const model = new AnsweringModel(() => textReply("noted"));
-      const access = serving(model, io.env);
+      const access = chatServing(model, io.env);
       const log = join(tmp, "chat.jsonl");
       const chatting = chat(undefined, { engineTrace: false, log }, io, {
         root,
@@ -1876,10 +1898,12 @@ describe("/provider", () => {
       let from = screen().length;
       stdin.write(`/provider${ENTER}`);
       await until(() => shownSince(from, "Provider for the next replies"));
-      // Each title fits on one line after the label once picked: at 60 columns, 27 cells.
-      expect(screen()).toContain("xai · key from XAI_API_KEY…");
-      expect(screen()).toContain("deepseek · not logged in");
-      stdin.write(DOWN + DOWN + ENTER);
+      // A searchable picker, on the current provider, each login dim after its name.
+      await until(() => rows().includes("» xai  key from XAI_API_KEY (current)"));
+      expect(rows()).toContain("  deepseek  not logged in");
+      stdin.write("deeps");
+      await until(() => rows().at(-1) === "» deepseek  not logged in");
+      stdin.write(ENTER);
       await until(() => shownSince(from, "deepseek API key:"));
       stdin.write(key + ENTER);
       // The chat's model picker stands for yian auth's "Model:": the login is saved with its pick.
@@ -1892,9 +1916,8 @@ describe("/provider", () => {
       // Logged in now: picking it again goes straight to its models.
       from = screen().length;
       stdin.write(`/provider${ENTER}`);
-      await until(() => shownSince(from, "Provider for the next replies"));
-      expect(screen().slice(from)).toContain("deepseek · logged in (curr…");
-      stdin.write(DOWN + DOWN + ENTER);
+      await until(() => rows().includes("» deepseek  logged in (current)"));
+      stdin.write(ENTER);
       await until(() => shownSince(from, "Model for the next replies"));
       expect(screen().slice(from)).not.toContain("API key:");
       stdin.write(ESCAPE);
@@ -1903,7 +1926,7 @@ describe("/provider", () => {
       from = screen().length;
       stdin.write(`/provider${ENTER}`);
       await until(() => shownSince(from, "Provider for the next replies"));
-      stdin.write(ENTER);
+      stdin.write(`openai${ENTER}`);
       await until(() => shownSince(from, "OpenAI authentication method:"));
       stdin.write(ESCAPE);
       await until(() => shownSince(from, "the model is unchanged"));
@@ -1939,7 +1962,7 @@ describe("/provider", () => {
         }) as unknown as ReturnType<NonNullable<NonNullable<ChatDeps["auth"]>["openAIAuth"]>>;
       const { io, stdin, output, rows } = terminalIo();
       const model = new AnsweringModel(() => textReply("noted"));
-      const access = serving(model, io.env);
+      const access = chatServing(model, io.env);
       const chatting = chat(undefined, { engineTrace: false, log: join(tmp, "chat.jsonl") }, io, {
         root,
         models: access,
@@ -1954,7 +1977,7 @@ describe("/provider", () => {
         stdin.write(`/provider${ENTER}`);
         await until(() => shownSince(from, "Provider for the next replies"));
         // openai: a subscription, signed in in the browser.
-        stdin.write(ENTER);
+        stdin.write(`openai${ENTER}`);
         await until(() => shownSince(from, "OpenAI authentication method:"));
         stdin.write(ENTER);
         await until(() => shownSince(from, "Subscription sign-in:"));
@@ -1982,7 +2005,7 @@ describe("/provider", () => {
       const listModels = async () => DEEPSEEK_MODELS;
       const { io, stdin, output, rows } = terminalIo({ extra: { DEEPSEEK_API_KEY: key } });
       const model = new AnsweringModel(() => textReply("noted"));
-      const access = serving(model, io.env);
+      const access = chatServing(model, io.env);
       const log = join(tmp, "chat.jsonl");
       const chatting = chat(undefined, { engineTrace: false, log }, io, {
         root,
@@ -1998,14 +2021,14 @@ describe("/provider", () => {
         const from = output.text.length;
         stdin.write(`/provider${ENTER}`);
         await until(() => shownSince(from, "Provider for the next replies"));
-        stdin.write(DOWN + DOWN + ENTER);
+        stdin.write("deepseek");
+        await until(() => rows().at(-1)!.startsWith("» deepseek  key from DEEPSEEK_API_KEY"));
+        stdin.write(ENTER);
         await until(() => shownSince(from, "Save this key as a yian login?"));
         return from;
       };
       await until(() => rows().includes(HINT));
       let from = await pickDeepseek();
-      // Cut to fit after the label at 60 columns.
-      expect(output.text.slice(from)).toContain("deepseek · key from DEEPSE…");
       // Esc changes nothing.
       stdin.write(ESCAPE);
       await pastEscape();

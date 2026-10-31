@@ -65,6 +65,8 @@ export interface TerminalOptions {
   plain?: boolean;
   /** Draw a line entered at a framed prompt plain, without the user's band: for `NO_COLOR`. */
   noColor?: boolean;
+  /** Keys typed ahead before this terminal (another's `typedAhead`), fed to its first widgets. */
+  typed?: readonly Key[];
 }
 
 /** What `Terminal.approve` asks the user to approve. */
@@ -981,6 +983,12 @@ export class Terminal {
     this.#onStop = options.onStop;
     this.#onActive = options.onActive;
     this.#now = options.now ?? Date.now;
+    this.#buffer = [...(options.typed ?? [])];
+  }
+
+  /** The keys typed that no widget has read yet, which `close` drops: for a terminal after it. */
+  typedAhead(): Key[] {
+    return [...this.#buffer];
   }
 
   /** Whether `approve` can ask: the terminal isn't plain or closed, and its input is a TTY. */

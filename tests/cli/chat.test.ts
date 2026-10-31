@@ -568,6 +568,10 @@ test(
     const { code, log } = await chatting;
     expect(code).toBe(130);
     expect(inspectRun(log).status).toBe("waiting");
+    // A chat goes on with yian chat, which yian run --resume isn't.
+    expect(stderr()).toContain(
+      `chat stopped; the run is in ${log}\ncontinue with: yian chat --resume, in ${root}\n`,
+    );
     const resumed = chatIo();
     expect(await main(["run", "--resume", log], resumed.io)).toBe(1);
     expect(resumed.stderr()).toContain(
@@ -798,6 +802,40 @@ test(
     expect((await homeChat(io, model, { resume: true })).code).toBe(0);
     expect(stderr()).toStartWith("Resume which chat?:\n  1. ");
     expect(shown(model.requests[0]!)).toContain("remember 9");
+  },
+  TIMEOUT,
+);
+
+test(
+  "--continue takes the model only an earlier choice made, and --model wins over it",
+  async () => {
+    // One chat on the defaults, then one that chose grok-4.
+    const plain = chatIo();
+    plain.stdin.write("on the defaults\n/exit\n");
+    expect((await homeChat(plain.io, new AnsweringModel(() => textReply("ok")))).code).toBe(0);
+    const later = (environment: typeof env) => {
+      const io = chatIo({ environment });
+      io.stdin.write("and now?\n/exit\n");
+      return io;
+    };
+    // The defaults changed since: a chat that chose nothing goes on with them.
+    const changed = (name: string) => (name === "YIAN_DEFAULT_MODEL" ? "grok-4.1" : env(name));
+    const onDefaults = await homeChat(later(changed).io, new AnsweringModel(() => textReply("a")), {
+      continue: true,
+    });
+    expect(builtWith(onDefaults.access)).toEqual(["xai/grok-4.1"]);
+    const chose = chatIo();
+    chose.stdin.write("/model\n2\npicked\n/exit\n");
+    expect((await homeChat(chose.io, new AnsweringModel(() => textReply("ok")))).code).toBe(0);
+    const kept = await homeChat(later(env).io, new AnsweringModel(() => textReply("b")), {
+      continue: true,
+    });
+    expect(builtWith(kept.access)).toEqual(["xai/grok-4"]);
+    const flagged = await homeChat(later(env).io, new AnsweringModel(() => textReply("c")), {
+      continue: true,
+      model: "grok-4.2",
+    });
+    expect(builtWith(flagged.access)).toEqual(["xai/grok-4.2"]);
   },
   TIMEOUT,
 );

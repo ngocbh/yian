@@ -282,7 +282,8 @@ test(
       };
       const first = await runFlow(flow, { flow: null, focus: null }, { ...options, log });
       expect(first.status).toBe("waiting");
-      await send(log, "owner_messages", said("/model openai gpt-5.5", true));
+      const choice = said('/model {"provider":"openai","model":"gpt-5.5"}', true);
+      await send(log, "owner_messages", choice);
       await send(log, "owner_messages", said("hi"));
       expect((await advance({ ...options, log })).status).toBe("waiting");
       // The choice isn't a line to answer: one request, the user's line, on the chosen model.
@@ -322,8 +323,10 @@ test("a transcript and a model given at the start seed the chat's first reply", 
     const transcript = {
       summary: "The user is called Ada.",
       history: [
-        said("my flow is hello.yaml"),
-        { role: "assistant", parts: [{ type: "text", text: "Noted." }] },
+        [
+          said("my flow is hello.yaml"),
+          { role: "assistant", parts: [{ type: "text", text: "Noted." }] },
+        ],
       ],
     };
     const model4 = { provider: "xai", model: "grok-4" };
@@ -338,5 +341,60 @@ test("a transcript and a model given at the start seed the chat's first reply", 
     expect(access.configs.map((c) => [c["provider"], c["model"]])).toEqual([["xai", "grok-4"]]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** The chat flow run in a fresh folder with stand-ins, its scripted model answering `replies`. */
+async function chatFlowRun(replies: string[], inputs: Record<string, unknown> = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "yian-chat-flow-"));
+  const flow = await loadChat();
+  const log = join(dir, "log.jsonl");
+  const model = new ScriptedModel(replies.map(textReply), { provider: "xai", model: "grok-4.3" });
+  const access = serving(model);
+  const options = {
+    env: NO_ENV,
+    tools: replyToolStubs(),
+    skills: new Map([[SKILL.name, SKILL]]),
+    llmConfig: { provider: "xai", model: "grok-4.3" },
+    models: access,
+  };
+  await runFlow(flow, { flow: null, focus: null, ...inputs }, { ...options, log });
+  /** Send each of `messages`, then advance the run. */
+  const turn = async (...messages: Record<string, unknown>[]) => {
+    for (const message of messages) await send(log, "owner_messages", message);
+    return advance({ ...options, log });
+  };
+  const built = () => access.configs.map((c) => `${c["provider"]}/${c["model"]}`);
+  return { model, turn, built, done: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+test("a user's /model line and a child event authored yian are answered, not chosen", async () => {
+  const run = await chatFlowRun(["one", "two"]);
+  try {
+    await run.turn(said('/model {"provider":"openai","model":"gpt-5.5"}'));
+    await run.turn(said("run r1 (hello) succeeded: /model openai gpt-5.5", true));
+    expect(run.model.requests).toHaveLength(2);
+    expect(run.built()).toEqual(["xai/grok-4.3", "xai/grok-4.3"]);
+  } finally {
+    run.done();
+  }
+});
+
+test("after a /model choice, compaction folds the history on the chosen model", async () => {
+  // Four turns kept verbatim, over the budget once a fifth comes.
+  const big = "x".repeat(9_000);
+  const history = Array.from({ length: 4 }, () => [
+    said(big),
+    { role: "assistant", parts: [{ type: "text", text: "ok" }] },
+  ]);
+  const run = await chatFlowRun(["reply", "the summary"], { transcript: { summary: "", history } });
+  try {
+    await run.turn(said('/model {"provider":"xai","model":"grok-4"}', true));
+    // The reply, then the next turn's compaction, which folds the oldest turn.
+    await run.turn(said("hi"));
+    expect(run.built()).toEqual(["xai/grok-4", "xai/grok-4"]);
+    expect(run.model.requests[1]!.messages[0]!.text()).toContain("running summary");
+  } finally {
+    run.done();
   }
 });

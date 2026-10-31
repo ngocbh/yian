@@ -15,17 +15,19 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 
-import { copyGraph } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { loadFlow } from "../compose/loader.ts";
 import { defaultSkillRoots, loadSkills } from "../compose/skills.ts";
 import type { Env } from "../defaults.ts";
 import { AuthError } from "../llm_clients/auth/index.ts";
-import { connectionSnapshot, type ConnectionSnapshot } from "../llm_clients/connection.ts";
+import {
+  connectionSnapshot,
+  type ConnectionSnapshot,
+  resolveModelConfig,
+} from "../llm_clients/connection.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import { coerceInputs } from "../nodes/binding.ts";
 import { homeDir, isSystemError, leavesRoot, realScheduler, type Scheduler } from "../platform.ts";
-import { hostInputs, runStartLlm, skillGrants } from "../run.ts";
+import { skillGrants } from "../run.ts";
 import { type Skill, SkillError } from "../skills/catalog.ts";
 import { DOCS, FLOWS } from "./bundled.ts";
 import { bundledSkill } from "./bundled_skill.ts";
@@ -42,7 +44,7 @@ import {
 } from "./chat_view.ts";
 import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
-import { cells, columnsOf } from "./cells.ts";
+import { cells, columnsOf, fit } from "./cells.ts";
 import { loginModels } from "./auth.ts";
 import {
   type ChatSession,
@@ -70,12 +72,6 @@ const VIEW_TICK_MS = 500;
 
 /** The label the bundled flow's diagnostics and recorded source go by. */
 const CHAT_LABEL = CHAT_FLOW_FILE;
-
-/**
- * The path of the bundled flow's summarizer, which sets no model of its own: its model is the one
- * the run's layers give, which the reply agent uses too while no model is chosen.
- */
-const DEFAULT_PATH = "chat/compacted/folded/summarize";
 
 /** The options `chat` reads; an absent option is `undefined`, an absent flag `false`. */
 export interface ChatOptions {
@@ -110,8 +106,9 @@ export interface ChatDeps {
   modelChoices?: () => Promise<{ models: readonly ModelChoice[]; failed: readonly string[] }>;
 }
 
-/** The label of the picker of earlier chats. */
+/** The labels of the pickers of earlier chats and of models. */
 const RESUME_LABEL = "Resume which chat?";
+const MODEL_LABEL = "Model for the next replies";
 
 /** The chat's own commands, beside `/exit`. */
 const COMMANDS: ReadonlySet<string> = new Set(["/model", "/resume"]);
@@ -124,42 +121,38 @@ const COMMANDS: ReadonlySet<string> = new Set(["/model", "/resume"]);
  * @throws {LoadError} Never for the bundle as committed; the bundle test loads it.
  */
 export async function loadChatFlow(env: Env, root: string): Promise<ComposedFlow> {
-  const compaction = await loadFlow(FLOWS["compact_history.yaml"]!, { sourceLabel: "compact_history.yaml", env });
+  const compaction = await loadFlow(FLOWS["compact_history.yaml"]!, {
+    sourceLabel: "compact_history.yaml",
+    env,
+  });
   return loadFlow(FLOWS[CHAT_LABEL]!, {
     sourceLabel: CHAT_LABEL,
     env,
-    baseDir: root,
+    // Real, as `chatSessions` compares it.
+    baseDir: realpathSync(root),
     childResolver: async () => compaction,
   });
 }
 
-/** The message the LLM cascade's `RangeError` has for an agent no layer gives a provider and model. */
-const NO_MODEL = /has no (provider or model|model for provider)/;
+/** The message `resolveModelConfig`'s `RangeError` has when no layer gives a provider and model. */
+const NO_MODEL = /^No model is set/;
 
 /**
- * The provider and model the assistant's replies use under `layer` while none is chosen, or `null`
- * when no layer gives them.
+ * The provider and model the chat's agents use under `layer` (`--provider`, `--model`) and the
+ * saved defaults while none is chosen, or `null` when nothing gives them.
  *
- * @throws {RangeError} As the LLM cascade does for anything else, a bad default in `env` say.
+ * @throws {RangeError} As `resolveModelConfig` does for anything else, a bad default in `env` say.
  * @throws {AuthError} When the saved logins can't be read.
  */
-function replyModel(
-  flow: ComposedFlow,
-  layer: Readonly<Record<string, string>>,
-  env: Env,
-): ModelChoice | null {
-  let config: Readonly<Record<string, unknown>> | undefined;
+function defaultModel(layer: Readonly<Record<string, string>>, env: Env): ModelChoice | null {
+  let config: Readonly<Record<string, unknown>>;
   try {
-    const inputs = coerceInputs(flow.input, hostInputs(flow.input, {}));
-    const snapshot = connectionSnapshot({ env });
-    const resolved = runStartLlm(copyGraph(flow.compiled), inputs, { ...layer }, snapshot);
-    config = resolved.effective[DEFAULT_PATH];
+    config = resolveModelConfig({ ...layer }, { env });
   } catch (error) {
     if (error instanceof RangeError && NO_MODEL.test(error.message)) return null;
     throw error;
   }
-  if (typeof config?.["provider"] !== "string" || typeof config["model"] !== "string") return null;
-  return { provider: config["provider"], model: config["model"] };
+  return { provider: config["provider"] as string, model: config["model"] as string };
 }
 
 /** How `provider` is reached under `env`'s logins (`loginLabel`); null when they can't be read. */
@@ -389,7 +382,9 @@ function waitingLines(children: readonly WaitingChild[], out: Colored, env: Env)
  * banner's and spinner's model follows it. `/resume` lists the folder's earlier chats
  * (`chatSessions`) the same way and ends this one (as `/exit` does) to go on from the one picked
  * in a new chat: its transcript and model are the new run's inputs (`sessionSeed`), and its
- * children left waiting are listed, not restarted. `options.continue` starts from the folder's
+ * children left waiting are listed, not restarted; the model it chose carries over unless
+ * `--provider` or `--model` is given, and a chat that chose none goes on with the defaults; the
+ * compactions follow the model as the replies do. `options.continue` starts from the folder's
  * latest chat, and `options.resume` from one picked at the start; with none, they print
  * `no earlier yian chat in this folder to resume` and exit 1.
  *
@@ -453,7 +448,7 @@ export async function chat(
   }
   let defaults: ModelChoice | null;
   try {
-    defaults = replyModel(flow, cliLayer(options), env);
+    defaults = defaultModel(cliLayer(options), env);
   } catch (error) {
     if (!(error instanceof RangeError || error instanceof AuthError)) throw error;
     await printStyled(io, `chat failed: ${error.message}`, "red");
@@ -472,7 +467,8 @@ export async function chat(
   mkdirSync(runsDir, { recursive: true, mode: 0o700 });
   // `--continue` goes on from the folder's latest chat; `--resume` picks one at the start.
   let seed: SessionSeed | null = null;
-  let picking = false;
+  // The chats `--resume` picks among.
+  let picking: ChatSession[] | null = null;
   if (options.continue || options.resume) {
     const sessions = chatSessions(runsDir, root);
     if (sessions.length === 0) {
@@ -482,8 +478,11 @@ export async function chat(
     if (options.continue) {
       seed = await seedFrom(sessions[0]!, runsDir, io);
       if (seed === null) return 1;
-    } else picking = true;
+    } else picking = sessions;
   }
+  // `--provider` and `--model` win over the model an earlier chat chose.
+  const seededModel = (from: SessionSeed | null): ModelChoice | null =>
+    options.provider || options.model ? null : (from?.model ?? null);
   // On a terminal, everything the chat prints from here on goes through its view, which holds
   // nothing to release until a turn starts.
   const ticker = deps.ticker ?? realScheduler;
@@ -533,13 +532,13 @@ export async function chat(
    */
   const session = async (
     seed: SessionSeed | null,
-    picking: boolean,
+    picking: readonly ChatSession[] | null,
     log: string | undefined,
     runId: string | undefined,
   ): Promise<{ code: number; next: ChatSession | null }> => {
     let next: ChatSession | null = null;
     // The model chosen for the replies; null keeps the defaults.
-    let current: ModelChoice | null = seed?.model ?? null;
+    let current: ModelChoice | null = seededModel(seed);
     const fresh = freshLog(log, env);
     const chatRunId = runId ?? fresh.runId;
     const sessionInputs: Record<string, unknown> = {
@@ -590,34 +589,37 @@ export async function chat(
       );
       return Object.fromEntries(all.map((each) => [each.name, each]));
     };
-    // A session's title fits on one line in the picker and once picked, after its label.
-    const titleCells = () => columnsOf(out.stderrStream) - cells(RESUME_LABEL) - 4;
+    // A title fits on one line in the picker and once picked, after its label.
+    const titleCells = (label: string) => columnsOf(out.stderrStream) - cells(label) - 4;
+    const sessionTitles = (sessions: readonly ChatSession[]) =>
+      sessions.map((each) => sessionTitle(each, titleCells(RESUME_LABEL)));
     const pick = (terminal: Terminal, label: string, titles: readonly string[]) =>
       pickOne(terminal, view === null, note, label, titles);
     /** Go on from `from`: its transcript and model are the run's, its children left are listed. */
-    const goOn = async (from: SessionSeed): Promise<void> => {
-      current = from.model;
+    const goOn = (from: SessionSeed): void => {
+      current = seededModel(from);
       sessionInputs["model"] = current;
       sessionInputs["transcript"] = from.transcript;
       runs.setLlmConfig(current === null ? cliLayer(options) : { ...current });
     };
     const start = async (terminal: Terminal): Promise<number | null> => {
-      if (picking) {
-        const sessions = chatSessions(runsDir, root);
-        const index = await pick(terminal, RESUME_LABEL, sessions.map((each) => sessionTitle(each, titleCells())));
+      if (picking !== null) {
+        const sessions = picking;
+        const index = await pick(terminal, RESUME_LABEL, sessionTitles(sessions));
         if (index === null) {
           await note("chat cancelled\n");
           return 130;
         }
         seed = await seedFrom(sessions[index]!, runsDir, out);
         if (seed === null) return 1;
-        await goOn(seed);
+        goOn(seed);
       }
       await banner(current ?? defaults);
       if (seed !== null) {
         const { summary, history } = seed.transcript;
         const summarized = summary === "" ? "" : " and a summary";
-        await note(`(going on from an earlier chat: ${history.length} messages${summarized})\n`);
+        const count = history.flat().length;
+        await note(`(going on from an earlier chat: ${count} messages${summarized})\n`);
         if (seed.waiting.length > 0) {
           await note("(its runs left waiting aren't restarted)\n");
           await out.stderr.write(waitingLines(seed.waiting, plainOr(out.stderr), env));
@@ -634,18 +636,22 @@ export async function chat(
       const same = (a: ModelChoice, b: ModelChoice) =>
         a.provider === b.provider && a.model === b.model;
       const offered = [shown, ...models.filter((each) => !same(each, shown))];
-      const titles = offered.map(
-        (each, i) => `${each.provider}/${each.model}${i === 0 ? " (current)" : ""}`,
+      const width = titleCells(MODEL_LABEL);
+      const titles = offered.map((each, i) =>
+        fit(`${each.provider}/${each.model}${i === 0 ? " (current)" : ""}`, width),
       );
-      const index = await pick(terminal, "Model for the next replies", titles);
+      const index = await pick(terminal, MODEL_LABEL, titles);
       if (index === null || index === 0) return null;
-      const chosen = offered[index]!;
-      current = { provider: chosen.provider, model: chosen.model };
-      runs.setLlmConfig({ ...current });
-      const name = `${current.provider}/${current.model}`;
-      view?.model(name);
-      await note(`(model: ${sanitize(name)}, from the next reply)\n`);
-      return { send: modelMessage(current) };
+      const chosen = { provider: offered[index]!.provider, model: offered[index]!.model };
+      // Taken once the run has the choice: a refused send changes nothing.
+      const sent = () => {
+        current = chosen;
+        runs.setLlmConfig({ ...chosen });
+        const name = `${chosen.provider}/${chosen.model}`;
+        view?.model(name);
+        void note(`(model: ${sanitize(name)}, from the next reply)\n`).catch(() => {});
+      };
+      return { send: modelMessage(chosen), sent };
     };
     const chooseSession = async (terminal: Terminal): Promise<ChatCommandOutcome> => {
       const sessions = chatSessions(runsDir, root).filter((each) => each.runId !== chatRunId);
@@ -653,7 +659,7 @@ export async function chat(
         await note("(no earlier yian chat in this folder to resume)\n");
         return null;
       }
-      const index = await pick(terminal, RESUME_LABEL, sessions.map((each) => sessionTitle(each, titleCells())));
+      const index = await pick(terminal, RESUME_LABEL, sessionTitles(sessions));
       if (index === null) return null;
       next = sessions[index]!;
       return { exit: true };
@@ -683,6 +689,10 @@ export async function chat(
               ? null
               : runList(runs, view, { scheduler, ticker }, out.stderrStream, env),
           start,
+          // `yian run --resume` refuses a chat's log: an earlier chat goes on in a new one.
+          stopped: (path) =>
+            `chat stopped; the run is in ${path}\n` +
+            `continue with: yian chat --resume, in ${reachedAs(root, env("PWD"))}\n`,
           typed,
           onTyped: (keys) => {
             typed = keys;
@@ -718,7 +728,7 @@ export async function chat(
     while (next !== null) {
       const from = await seedFrom(next, runsDir, out);
       if (from === null) return 1;
-      ({ code, next } = await session(from, false, undefined, undefined));
+      ({ code, next } = await session(from, null, undefined, undefined));
     }
     return code;
   } finally {

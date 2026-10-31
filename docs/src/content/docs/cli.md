@@ -234,7 +234,9 @@ $ yian chat hello.yaml
 | `--continue` | | Goes on from the latest chat in this folder |
 | `--engine-trace` | | On a failure, also print the engine's stack trace |
 
-It needs a model: set one with `yian auth`, or pass `--provider` and `--model`. Off a terminal, or
+It needs a model: set one with `yian auth`, or pass `--provider` and `--model`. A chat going on from
+an earlier one keeps the model that chat chose with `/model`, unless you pass `--provider` or
+`--model`. A chat whose `--log` is outside `~/.yian/runs` can't be resumed. Off a terminal, or
 with `NO_COLOR`, it prints plain lines.
 
 | Key | What it does |
@@ -243,7 +245,7 @@ with `NO_COLOR`, it prints plain lines.
 | Esc | Takes back the lines the assistant hasn't read yet, and stops the reply |
 | Ctrl-C | Stops the reply. A second Ctrl-C within 2 seconds, or one at the prompt, ends the chat |
 | `/model` | Picks the model of the next replies, and of the flows the assistant starts after it, from your logins |
-| `/resume` | Picks an earlier chat in this folder and goes on from it in a new chat; its waiting flows stay as they are |
+| `/resume` | Ends this chat, as `/exit` does, and goes on from an earlier chat in this folder in a new one; its waiting flows stay as they are |
 | `/exit`, `/quit` or Ctrl-D | Leaves the chat |
 | Ctrl-L | Rerenders the screen |
 | ↓, ↑ | Move between the box and the list of running flows under it |

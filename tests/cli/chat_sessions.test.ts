@@ -97,8 +97,13 @@ async function chatRun(
 test("a model message reads back as its choice, and no other message does", () => {
   const choice = { provider: "openai", model: "gpt-5.5" };
   expect(chosenModel(modelMessage(choice))).toEqual(choice);
-  expect(chosenModel(line("/model openai gpt-5.5"))).toBeNull();
+  // A user's line isn't a choice, even one written as one.
+  expect(chosenModel(line('/model {"provider":"a","model":"b"}'))).toBeNull();
   expect(chosenModel({ ...line("hi"), author: "yian" })).toBeNull();
+  expect(chosenModel({ ...line("/model {not json"), author: "yian" })).toBeNull();
+  // A name with a space or a newline goes through whole.
+  const odd = { provider: "vllm", model: "my model\nv2" };
+  expect(chosenModel(modelMessage(odd))).toEqual(odd);
 });
 
 test(
@@ -109,9 +114,11 @@ test(
     await chatRun("s3", root, [], { end: true });
     await chatRun("s4", root, ["second chat", "more"], { end: false });
     const sessions = chatSessions(runsDir, root);
-    expect(sessions.map((each) => [each.runId, each.firstLine, each.model])).toEqual([
-      ["s4", "second chat", { provider: "xai", model: "grok-4.3" }],
-      ["s1", "first chat", { provider: "xai", model: "grok-4" }],
+    // A chat shows the model it chose, else the one its last reply used; only a choice carries.
+    const grok4 = { provider: "xai", model: "grok-4" };
+    expect(sessions.map((each) => [each.runId, each.firstLine, each.model, each.chosen])).toEqual([
+      ["s4", "second chat", { provider: "xai", model: "grok-4.3" }, null],
+      ["s1", "first chat", grok4, grok4],
     ]);
     const title = /^\d{4}-\d\d-\d\d \d\d:\d\d · xai\/grok-4 · first chat$/;
     expect(sessionTitle(sessions[1]!, 80)).toMatch(title);
@@ -130,10 +137,16 @@ test(
     const finished = await sessionSeed(done!, runsDir, NO_ENV);
     expect(finished.model).toEqual({ provider: "xai", model: "grok-4" });
     expect(finished.transcript.summary).toBe("");
+    // Turn by turn.
     const texts = (seed: typeof finished) =>
-      seed.transcript.history.map((m) => (m as { parts: { text?: string }[] }).parts[0]!.text);
-    expect(texts(finished)).toEqual(["remember 7", "re: 1"]);
-    expect(texts(await sessionSeed(left!, runsDir, NO_ENV))).toEqual(["remember 9", "re: 1"]);
+      seed.transcript.history.map((turn) =>
+        turn.map((m) => (m as { parts: { text?: string }[] }).parts[0]!.text),
+      );
+    expect(texts(finished)).toEqual([["remember 7", "re: 1"]]);
+    const waiting = await sessionSeed(left!, runsDir, NO_ENV);
+    expect(texts(waiting)).toEqual([["remember 9", "re: 1"]]);
+    // It ran on the defaults, which a chat going on from it uses too.
+    expect(waiting.model).toBeNull();
   },
   TIMEOUT,
 );

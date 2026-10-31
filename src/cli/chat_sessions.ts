@@ -17,7 +17,12 @@ import type { Env } from "../defaults.ts";
 import { compareCodeUnits } from "../diagnostics.ts";
 import { withWarnings } from "../platform.ts";
 import { foldRunLog } from "../run.ts";
-import { iterRunRecords, PoolCommitRecord, RunStartedRecord } from "../runtime/log.ts";
+import {
+  iterRunRecords,
+  NodeStepRecord,
+  PoolCommitRecord,
+  RunStartedRecord,
+} from "../runtime/log.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../runtime/run_index.ts";
 import { toHost } from "../typesys/values.ts";
 import { fit } from "./cells.ts";
@@ -33,12 +38,13 @@ export interface ModelChoice {
   readonly model: string;
 }
 
-/** A message authored `yian` with this text chooses the model (`chat.yaml`'s turn reads it). */
-const MODEL_TEXT = /^\/model (\S+) (\S+)$/;
+/** What a choice's text starts with, before its JSON (`chat.yaml`'s turn reads it so). */
+const MODEL_PREFIX = "/model ";
 
-/** The message `/model` sends to the chat's inbox for `choice`. */
+/** The message `/model` sends to the chat's inbox for `choice`: authored `yian`, its JSON. */
 export function modelMessage(choice: ModelChoice): Record<string, unknown> {
-  const text = `/model ${choice.provider} ${choice.model}`;
+  const json = JSON.stringify({ provider: choice.provider, model: choice.model });
+  const text = `${MODEL_PREFIX}${json}`;
   return { role: "user", author: "yian", parts: [{ type: "text", text }] };
 }
 
@@ -53,8 +59,14 @@ function onlyText(message: unknown): string | null {
 /** The model a message sent to the chat chooses, or null for any other message. */
 export function chosenModel(message: unknown): ModelChoice | null {
   if ((message as { author?: unknown } | null)?.author !== "yian") return null;
-  const match = MODEL_TEXT.exec(onlyText(message) ?? "");
-  return match === null ? null : { provider: match[1]!, model: match[2]! };
+  const text = onlyText(message) ?? "";
+  if (!text.startsWith(`${MODEL_PREFIX}{`)) return null;
+  try {
+    return recordedModel(JSON.parse(text.slice(MODEL_PREFIX.length)));
+  } catch {
+    // Not a choice: text the chat didn't write as one.
+    return null;
+  }
 }
 
 /** An earlier chat, as `/resume` lists it. */
@@ -65,12 +77,14 @@ export interface ChatSession {
   readonly startedAt: string;
   /** The first line the user typed. */
   readonly firstLine: string;
-  /** The model its last reply would use, or null when the log doesn't say. */
+  /** The model it chose, or else the one its last reply used; null when the log doesn't say. */
   readonly model: ModelChoice | null;
+  /**
+   * The model it chose, with `/model` or as it started from an earlier chat's choice; null when it
+   * ran on the defaults, which a chat going on from it then uses too.
+   */
+  readonly chosen: ModelChoice | null;
 }
-
-/** The agents whose recorded model is the chat's: the reply's when literal, else the default. */
-const MODEL_PATHS = ["chat/answered/reply", "chat/compacted/folded/summarize"];
 
 /** The provider and model a recorded `llm_config` names, or null. */
 function recordedModel(config: unknown): ModelChoice | null {
@@ -78,36 +92,67 @@ function recordedModel(config: unknown): ModelChoice | null {
   return typeof provider === "string" && typeof model === "string" ? { provider, model } : null;
 }
 
+/** Where a record the cheap pass over a log found sits, so it can be read alone. */
+type Spot = { readonly after: { afterOffset: number; afterSeq: number; runId: string } | null };
+
+/** The record at `spot` in `log`, built and checked. */
+function recordAt(log: string, spot: Spot): unknown {
+  for (const entry of iterRunRecords(log, spot.after ?? {})) return entry.envelope.record;
+  return null;
+}
+
+/** A reply's model call records its model on a step of this kind. */
+const LLM_STEP = "llm_config";
+
 /**
- * Read the session in `log`: its first user line and model; null when it isn't the bundled chat's
- * or the user typed nothing in it.
+ * Read the session in `log`: its first user line and models; null when it isn't the bundled chat's
+ * or the user typed nothing in it. A first pass reads only where the records are; then only the
+ * run's start, the sends and the reply's last steps are built.
  */
 function readSession(row: RunIndexRow, log: string): ChatSession | null {
-  let model: ModelChoice | null = null;
-  let firstLine: string | null = null;
-  for (const entry of iterRunRecords(log, { kinds: ["run_started", "pool_commit"] })) {
-    const record = entry.envelope.record;
-    if (record instanceof RunStartedRecord) {
-      const text = record.flow?.files[record.flow.root]?.text ?? "";
-      const ours = new RegExp(`^id: ${CHAT_FLOW_ID}$`, "m").test(text);
-      if (record.flow?.root !== CHAT_FLOW_FILE || !ours) return null;
-      const effective = record.effectiveLlmByStaticPath;
-      const models = MODEL_PATHS.map((path) => recordedModel(effective[path]));
-      model = models.find((each) => each !== null) ?? null;
-      continue;
+  let start: Spot | null = null;
+  const sends: Spot[] = [];
+  const replySteps: Spot[] = [];
+  let after: Spot["after"] = null;
+  for (const entry of iterRunRecords(log, { payloads: false })) {
+    const spot = { after };
+    if (entry.kind === "run_started") start = spot;
+    else if (entry.kind === "pool_commit" && entry.nodeId === "__start__") sends.push(spot);
+    else if (entry.kind === "node_step" && entry.nodeId?.endsWith("/answered/reply")) {
+      replySteps.push(spot);
     }
-    if (!(record instanceof PoolCommitRecord) || record.nodeId !== "__start__") continue;
+    after = { afterOffset: entry.end, afterSeq: entry.seq, runId: entry.runId };
+  }
+  const started = start === null ? null : recordAt(log, start);
+  if (!(started instanceof RunStartedRecord)) return null;
+  const text = started.flow?.files[started.flow.root]?.text ?? "";
+  const ours = new RegExp(`^id: ${CHAT_FLOW_ID}$`, "m").test(text);
+  if (started.flow?.root !== CHAT_FLOW_FILE || !ours) return null;
+  let chosen: ModelChoice | null = null;
+  let firstLine: string | null = null;
+  for (const spot of sends) {
+    const record = recordAt(log, spot);
+    if (!(record instanceof PoolCommitRecord)) continue;
     const value = record.value?.value as Record<string, unknown> | undefined;
     if (record.key === "__start__") {
-      model = recordedModel(value?.["model"]) ?? model;
+      chosen = recordedModel(value?.["model"]) ?? chosen;
     } else if (record.key === "__start__.owner_messages") {
-      const chosen = chosenModel(value);
-      if (chosen !== null) model = chosen;
+      const choice = chosenModel(value);
+      if (choice !== null) chosen = choice;
       else if (firstLine === null && value?.["author"] == null) firstLine = onlyText(value);
     }
   }
   if (firstLine === null || row.startedAt === null) return null;
-  return { runId: row.runId, log, startedAt: row.startedAt, firstLine, model };
+  // The reply's last model call: its config step is among its last few steps.
+  let used: ModelChoice | null = null;
+  for (let i = replySteps.length - 1; i >= 0 && used === null; i--) {
+    const step = recordAt(log, replySteps[i]!);
+    if (step instanceof NodeStepRecord && step.step["kind"] === LLM_STEP) {
+      used = recordedModel(step.step["effective_llm_config"]);
+    }
+  }
+  const { runId, startedAt } = row;
+  return { runId, log, startedAt, firstLine, model: chosen ?? used, chosen };
 }
 
 /** The real path of `path`, or `path` when it doesn't resolve. */
@@ -143,25 +188,32 @@ function indexRows(runsDir: string): RunIndexRow[] {
  */
 export function chatSessions(runsDir: string, root: string): ChatSession[] {
   const flow = join(real(root), CHAT_FLOW_FILE);
-  const sessions = indexRows(runsDir).flatMap((row) => {
-    if (row.parentRunId !== null || row.flow !== flow || row.status === "running") return [];
-    const log = join(runsDir, row.runId, "log.jsonl");
-    try {
-      const session = readSession(row, log);
-      return session === null ? [] : [session];
-    } catch {
-      return [];
-    }
-  });
-  sessions.sort(
-    (a, b) => compareCodeUnits(b.startedAt, a.startedAt) || compareCodeUnits(b.runId, a.runId),
+  const rows = indexRows(runsDir).filter(
+    (row) => row.parentRunId === null && row.flow === flow && row.status !== "running",
   );
-  return sessions.slice(0, SESSIONS_LISTED);
+  // Newest first, so the logs are read only until enough chats are found.
+  const newer = (a: RunIndexRow, b: RunIndexRow) =>
+    compareCodeUnits(b.startedAt ?? "", a.startedAt ?? "") || compareCodeUnits(b.runId, a.runId);
+  rows.sort(newer);
+  const sessions: ChatSession[] = [];
+  for (const row of rows) {
+    if (sessions.length === SESSIONS_LISTED) break;
+    let session: ChatSession | null;
+    try {
+      session = readSession(row, join(runsDir, row.runId, "log.jsonl"));
+    } catch {
+      // A log that can't be read isn't a chat to go on from.
+      continue;
+    }
+    if (session !== null) sessions.push(session);
+  }
+  return sessions;
 }
 
 /** What a new chat starts from: an earlier one's transcript and model, and its children left. */
 export interface SessionSeed {
-  readonly transcript: { summary: string; history: unknown[] };
+  /** Its summary, and its messages as turns. */
+  readonly transcript: { summary: string; history: unknown[][] };
   readonly model: ModelChoice | null;
   /** The earlier chat's child runs left waiting or stopped; they aren't restarted. */
   readonly waiting: WaitingChild[];
@@ -172,8 +224,8 @@ const TURN_END = /^chat#\d+\/__end__$/;
 
 /**
  * The seed a new chat takes from `session`: its transcript as its last turn left it (the summary,
- * and every turn's messages), read by folding its log, and the model it chose; and its children
- * in `runsDir` left waiting or stopped.
+ * and every turn's messages), read by folding its log, and the model it chose, if it chose one;
+ * and its children in `runsDir` left waiting or stopped.
  *
  * @throws What `foldRunLog` throws for a log it can't replay.
  */
@@ -190,7 +242,7 @@ export async function sessionSeed(
       state = toHost(value.value) as typeof state;
     }
   }
-  const transcript = { summary: state.summary, history: state.history.flat() };
+  const transcript = { summary: state.summary, history: state.history };
   const waiting = indexRows(runsDir).flatMap((row): WaitingChild[] => {
     if (row.parentRunId !== session.runId) return [];
     const log = join(runsDir, row.runId, "log.jsonl");
@@ -202,7 +254,7 @@ export async function sessionSeed(
     const kind = tools.includes("ask") ? "question" : tools.includes("take") ? "inbox" : "timer";
     return [{ run: row.runId, kind, log }];
   });
-  return { transcript, model: session.model, waiting };
+  return { transcript, model: session.chosen, waiting };
 }
 
 /**

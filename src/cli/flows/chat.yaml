@@ -8,10 +8,11 @@
 # null). The chat also sends what its child runs do (a question, a reply, an output, a failure)
 # to `owner_messages` as user messages authored `yian`.
 #
-# A message authored `yian` whose text is `/model <provider> <model>` chooses the model of the
-# replies after it: the turn keeps it in its state instead of answering it, so the choice is in the
-# run log and a resume replays it. `model` is the choice the chat starts with (null for the run's
-# defaults), and `transcript` an earlier chat's, which this one goes on from.
+# A message authored `yian` whose text is `/model ` and a JSON `{"provider", "model"}` chooses the
+# model of the replies and compactions after it: the turn keeps it in its state instead of
+# answering it, so the choice is in the run log and a resume replays it. `model` is the choice the
+# chat starts with (null for the run's defaults), and `transcript` an earlier chat's, which this
+# one goes on from.
 #
 # `yian chat` gives `reply` its tools; `flow` and `focus` name and show the flow the user opened
 # the chat with (`yian chat FLOW`), null without one.
@@ -32,7 +33,7 @@ input:
 typedefs:
   Model: {provider: str, model: str}
   State: {summary: str, history: list(list(Message)), closed: bool, model: Optional(Model)}
-  Transcript: {summary: str, history: list(Message)}
+  Transcript: {summary: str, history: list(list(Message))}   # history: one list per turn
   Heard: {said: list(Message), model: Optional(Model)}   # what a turn answers, and its model
 
 defs:
@@ -141,7 +142,7 @@ defs:
       compacted:
         kind: call
         call: compact_history
-        input: {summary: "${input.summary}", history: "${input.history}"}
+        input: {summary: "${input.summary}", history: "${input.history}", model: "${input.model}"}
       heard:
         kind: tool
         tool_id: take                    # waits until a message arrives or the inbox closes
@@ -155,14 +156,25 @@ defs:
           model: ${input.model}
         output: Heard
         code: |
+          // A choice is the chat's own message: authored yian, its one text part `/model {...}`.
+          const choice = (message) => {
+            const text = message.parts.length === 1 ? message.parts[0].text : undefined;
+            if (message.author !== "yian" || !text?.startsWith("/model {")) return null;
+            try {
+              const { provider, model } = JSON.parse(text.slice("/model ".length));
+              return typeof provider === "string" && typeof model === "string"
+                ? { provider, model }
+                : null;
+            } catch {
+              return null;
+            }
+          };
           let model = inputs.model;
           const said = [];
           for (const message of inputs.events) {
-            const text = message.parts.length === 1 ? message.parts[0].text : undefined;
-            const yian = message.author === "yian" ? (text ?? "") : "";
-            const chosen = /^\/model (\S+) (\S+)$/.exec(yian);
+            const chosen = choice(message);
             if (chosen === null) said.push(message);
-            else model = { provider: chosen[1], model: chosen[2] };
+            else model = chosen;
           }
           return { said, model };
       route:
@@ -193,7 +205,7 @@ nodes:
     call: turn
     input:
       summary: ${input.transcript?.summary :- ""}
-      history: !list(list(Message)) "${[h for h in [input.transcript?.history :- []] if h != []]}"
+      history: !list(list(Message)) ${input.transcript?.history :- []}
       closed: false
       model: !Optional(Model) ${input.model}
       flow: ${input.flow}
@@ -202,4 +214,4 @@ nodes:
     while: not closed
 output: !Transcript
   summary: ${chat.output.summary}
-  history: ${[m for t in chat.output.history for m in t]}
+  history: ${chat.output.history}

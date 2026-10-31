@@ -185,6 +185,64 @@ describe("after a rerender", () => {
     expect(live.printed).toBe(mark + 1);
   });
 
+  test("draws no more rows than the screen holds, so none goes to the scrollback twice", () => {
+    const { output, live, draw } = setup();
+    output.rows = 10;
+    const card = Array.from({ length: 12 }, (_, i) => `card${i + 1}`);
+    const box = ["top", "> hi", "bottom", "hint"];
+    live.stage(card);
+    draw(box, { line: 1, before: "> hi" });
+    const shown = screen(output.text, COLUMNS, 10);
+    for (let press = 0; press < 3; press++) {
+      live.rerender(card.length);
+      live.flush();
+    }
+    const after = screen(output.text, COLUMNS, 10);
+    expect(after.scrollback).toEqual(shown.scrollback);
+    expect(after.scrollback).toEqual(card.slice(0, 6));
+    expect(after.rows).toEqual(shown.rows);
+    expect(after.cursor).toEqual(shown.cursor);
+  });
+
+  test("after the width changed, draws only the live rows, not those laid out before", () => {
+    const { output, live, draw, view } = setup();
+    live.stage(["card"]);
+    draw(["one", "two"]);
+    output.columns = 30;
+    live.rerender(1);
+    const before = output.text.length;
+    live.flush();
+    const text = output.text.slice(before);
+    expect(text).toContain("\x1b[1A\r\x1b[J");
+    expect(text).not.toContain("card");
+    expect(view().rows).toEqual(["card", "one", "two"]);
+    // A frame at the new width doesn't make them safe to draw again either.
+    live.rerender(1);
+    live.flush();
+    expect(output.text.slice(before)).not.toContain("card");
+    // Rows printed at the new width are.
+    live.stage(["new"]);
+    draw(["one", "two"]);
+    live.rerender(1);
+    const again = output.text.length;
+    live.flush();
+    expect(output.text.slice(again)).toContain("new");
+    expect(view().rows).toEqual(["card", "new", "one", "two"]);
+  });
+
+  test("after a resize, draws only the live rows", () => {
+    const { output, live, draw } = setup();
+    live.stage(["card"]);
+    draw(["one", "two"]);
+    live.lose();
+    live.rerender(1);
+    const before = output.text.length;
+    live.flush();
+    const text = output.text.slice(before);
+    expect(text).toContain("\x1b[1A\r\x1b[J");
+    expect(text).not.toContain("card");
+  });
+
   test("draws only the rows above that are still on the screen", () => {
     const { output, live, draw } = setup();
     output.rows = 3;

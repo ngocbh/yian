@@ -212,10 +212,14 @@ export class LiveRows {
     let heights = prev.map((line) => layout(line, columns, -1).rows);
     // The screen rows from the live rows' top that hold what was drawn before.
     let stale = heights.reduce((sum, rows) => sum + rows, 0);
+    // The rows printed before a resize may have been reflowed, or not: where they are is unknown.
+    if (lost) this.#recent = [];
     if (above !== null) {
-      // The cursor can't go up into the scrollback, so only the rows above still on the screen
-      // are drawn again: the screen holds at most its height less the live rows over the cursor.
-      const room = rowsOf(this.#output) - 1 - row;
+      // Only the rows above that still fit on the screen with the live rows are drawn again: the
+      // cursor can't go up into the scrollback, and a frame taller than the screen would scroll
+      // its top rows into the scrollback once more.
+      const height = this.#lines.reduce((sum, line) => sum + layout(line, columns, -1).rows, 0);
+      const room = rowsOf(this.#output) - Math.max(row + 1, height);
       let up = 0;
       let first = this.#recent.length;
       // The rows staged since are among the `above`, and are printed after these.

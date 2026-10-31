@@ -120,9 +120,11 @@ function charWidth(char: string): number {
  * colours are ignored. Writing past the last column wraps on the next character, as terminals do.
  * `ESC[2J` moves the rows to the scrollback and leaves the cursor, as VTE, tmux and kitty do; xterm
  * drops them. So the scrollback here is one terminal's; that the program never sends `ESC[3J` is
- * what keeps the scrollback everywhere.
+ * what keeps the scrollback everywhere. Given a `height`, a row past the screen's last scrolls the
+ * top one into the scrollback (on the alternate screen, off it); without one the screen never
+ * scrolls.
  */
-export function screen(text: string, columns = 80): Screen {
+export function screen(text: string, columns = 80, height?: number): Screen {
   let rows: string[][] = [[]];
   const scrollback: string[][] = [];
   const modes: string[] = [];
@@ -135,12 +137,21 @@ export function screen(text: string, columns = 80): Screen {
     while (rows.length <= row) rows.push([]);
     return rows[row]!;
   };
+  // Down one row, scrolling the screen once past its last.
+  const down = (): void => {
+    row++;
+    if (height === undefined || row < height) return;
+    line();
+    const top = rows.shift()!;
+    if (main === null) scrollback.push(top);
+    row = height - 1;
+  };
   const pattern = /\x1b\[([?]?)([0-9;]*)([A-Za-z])|([\s\S])/gu;
   for (const match of text.matchAll(pattern)) {
     const [, priv, args, command, char] = match;
     if (char !== undefined) {
       if (char === "\r") col = 0;
-      else if (char === "\n") row++;
+      else if (char === "\n") down();
       else {
         const width = charWidth(char);
         if (width === 0) {
@@ -149,7 +160,7 @@ export function screen(text: string, columns = 80): Screen {
           continue;
         }
         if (col + width > columns) {
-          row++;
+          down();
           col = 0;
         }
         const cells = line();

@@ -33,6 +33,7 @@ import {
   NodeSucceededRecord,
   NodeWaitingRecord,
   NodeWokenRecord,
+  notRegularFile,
   PoolCommitRecord,
   RunCancelledRecord,
   RunFailedRecord,
@@ -381,10 +382,11 @@ function checkedTimeout(timeoutMs: unknown): number {
  * replaced (`RunLogChangedError`) is read again from the start. A run folder with no log, or a log
  * with no complete record yet, has no row; a row whose log is gone is deleted. A log that can't be
  * read (an old schema, a damaged line, a first record that isn't `run_started` of the folder's run,
- * a line over `maxLineBytes`, or a file error such as no permission) raises a warning through
- * `warn`. A log whose content can't be read gets a row of the records before the one that failed,
- * marked unreadable at it (`RunIndexRow.unreadable`), and is read again only once its size or
- * mtime changed, or with a higher `maxLineBytes` than it was read with. A file error keeps the row
+ * a line over `maxLineBytes`, or a file error such as no permission, or a log that isn't a
+ * regular file, `EINVAL: not a regular file, open '<log>'`, which is never opened) raises a
+ * warning through `warn`. A log whose content can't be read gets a row of the records before the
+ * one that failed, marked unreadable at it (`RunIndexRow.unreadable`), and is read again only once
+ * its size or mtime changed, or with a higher `maxLineBytes` than it was read with. A file error keeps the row
  * as it was, and the next update tries again. A row whose stored scan can't be read is built
  * again from the start of its log. An index of another layout version is dropped and built again.
  *
@@ -441,6 +443,8 @@ export function updateRunIndex(
         let built: StoredRow | null;
         try {
           const stat = fs.statSync(log);
+          // Before `readUpTo`: a FIFO or a device reads as size 0, and is never opened here.
+          if (!stat.isFile()) throw notRegularFile(log);
           if (saved !== null && readUpTo(saved, stat, maxLineBytes)) {
             kept.add(runId);
             continue;

@@ -1233,6 +1233,73 @@ test("resuming a missing log throws ENOENT and creates no lock file", () => {
   expect(fs.readdirSync(dir)).toEqual([]);
 });
 
+/** The fields of the error `iterRunRecords` and `resume` throw for a `file` that isn't a regular file. */
+function notRegularFields(file: string) {
+  return {
+    code: "EINVAL",
+    errno: -os.constants.errno.EINVAL,
+    syscall: "open",
+    path: file,
+    message: `EINVAL: not a regular file, open '${file}'`,
+  };
+}
+
+/**
+ * Call `iterRunRecords` and then `JsonlRunLog.resume` on `file` in a child Bun, which a hang can't
+ * stall past the timeout as it would this process, and return the fields of what each threw.
+ */
+function readInChild(file: string): { status: number | null; signal: string | null; stderr: string; errors: unknown[] } {
+  const child = `
+import { iterRunRecords, JsonlRunLog } from ${JSON.stringify(LOG_URL)};
+const file = ${JSON.stringify(file)};
+const fields = (call) => {
+  try {
+    call();
+    return "no error";
+  } catch (error) {
+    const { code, errno, syscall, path, message } = error;
+    return { code, errno, syscall, path, message };
+  }
+};
+console.log(JSON.stringify([fields(() => [...iterRunRecords(file)]), fields(() => JsonlRunLog.resume(file).close())]));
+`;
+  const result = spawnSync(process.execPath, ["-e", child], { encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" });
+  return {
+    status: result.status,
+    signal: result.signal,
+    stderr: result.stderr,
+    errors: result.status === 0 ? JSON.parse(result.stdout) : [],
+  };
+}
+
+describe.skipIf(process.platform === "win32")("a log path that isn't a regular file", () => {
+  test("a FIFO with no writer: iterRunRecords and resume throw EINVAL at once, and resume takes no lock", () => {
+    const file = path.join(dir, "fifo.jsonl");
+    execFileSync("mkfifo", [file]);
+    const result = readInChild(file);
+    expect(result).toMatchObject({ status: 0, signal: null, stderr: "" });
+    expect(result.errors).toEqual([notRegularFields(file), notRegularFields(file)]);
+    expect(fs.readdirSync(dir)).toEqual(["fifo.jsonl"]);
+  }, 15_000);
+
+  test("a symlink to /dev/zero: iterRunRecords and resume throw EINVAL at once, without reading it", () => {
+    const file = path.join(dir, "zero.jsonl");
+    fs.symlinkSync("/dev/zero", file);
+    const result = readInChild(file);
+    expect(result).toMatchObject({ status: 0, signal: null, stderr: "" });
+    expect(result.errors).toEqual([notRegularFields(file), notRegularFields(file)]);
+  }, 15_000);
+
+  test("a folder: iterRunRecords throws EINVAL, and resume the open's EISDIR", () => {
+    const file = path.join(dir, "folder.jsonl");
+    fs.mkdirSync(file);
+    const result = readInChild(file);
+    expect(result).toMatchObject({ status: 0, signal: null, stderr: "" });
+    expect(result.errors).toEqual([notRegularFields(file), expect.objectContaining({ code: "EISDIR", syscall: "open" })]);
+    expect(fs.readdirSync(dir)).toEqual(["folder.jsonl"]);
+  }, 15_000);
+});
+
 test("jsonl create is exclusive and preserves an existing file", () => {
   const file = path.join(dir, "run.jsonl");
   fs.writeFileSync(file, "already here\n");

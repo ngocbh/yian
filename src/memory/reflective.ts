@@ -17,8 +17,14 @@ import { current, type Env, processEnv } from "../defaults.ts";
 import { addNote, errorTypeName } from "../diagnostics.ts";
 import type { ChatModel } from "../llm/events.ts";
 import { callWithRetries, type RetryInfo, RouteModel } from "../llm/executor.ts";
-import { Message, Request, type Response, TextPart } from "../llm/messages.ts";
-import { planStructured, StructuredOutputError, type StructuredPlan, structuredTarget } from "../llm/structured.ts";
+import { Message, RefusalPart, Request, type Response, TextPart } from "../llm/messages.ts";
+import {
+  MissingToolCallError,
+  planStructured,
+  StructuredOutputError,
+  type StructuredPlan,
+  structuredTarget,
+} from "../llm/structured.ts";
 import { LLMConfig } from "../llm_clients/config.ts";
 import {
   legacyConnectionConfig,
@@ -1308,7 +1314,8 @@ export class ReflectiveSession implements MemorySession {
    *   `LearnContext`; `reflective.stale_generation` before or after the call;
    *   `reflective.model_construction` when the model can't be built; `reflective.structured_output`
    *   when it can't stream or has no native structured output; `reflective.provider` (retryable)
-   *   when the call fails; `reflective.contract` for an invalid reply or action;
+   *   when the call fails; `reflective.contract` for an invalid reply or action, its message
+   *   naming the reply's defect without the reply's text;
    *   `reflective.max_items`; the session or backend is closed. Causes are scrubbed of the call's
    *   credentials.
    */
@@ -1380,21 +1387,29 @@ export class ReflectiveSession implements MemorySession {
           cause: scrub(error),
         });
       }
-      const invalid = (cause: unknown) =>
-        operationError("learn", "reflective.contract", "reflector returned invalid structured output", { cause });
+      const invalid = (reason: string, cause: unknown) =>
+        operationError("learn", "reflective.contract", `reflector returned invalid structured output: ${reason}`, {
+          cause,
+        });
       let reply: JsonObject;
       try {
         reply = plan.parse(response);
       } catch (error) {
         if (!(error instanceof StructuredOutputError)) throw error;
-        throw invalid(scrub(error));
+        const cause = scrub(error);
+        // A missing tool call's message is fixed text and the tool name; a text strategy's quotes
+        // the reply, which a failure must not carry, so it gets a fixed phrase instead.
+        let reason = "the reply held no JSON object";
+        if (error instanceof MissingToolCallError) reason = cause.message;
+        else if (response.message.parts.some((part) => part instanceof RefusalPart)) reason = "the model refused";
+        throw invalid(reason, cause);
       }
       let actions: ReflectionAction[];
       try {
         actions = checkReply(reply);
       } catch (error) {
         // The check's defect names no reply text, so it needs no scrub.
-        throw invalid(error);
+        throw invalid((error as Error).message, error);
       }
       const proposals = this.validateActions(context, actions);
       this.ensureOpen();

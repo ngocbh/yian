@@ -164,12 +164,12 @@ expect:
         failure:
           cause:
             code: reflective.contract
-            message: reflector returned invalid structured output
+            message: "reflector returned invalid structured output: actions[0] may hold only action, lesson_id and text"
             retryable: false
             stage: learn
           code: reflective.contract
           memory: lessons
-          message: reflector returned invalid structured output
+          message: "reflector returned invalid structured output: actions[0] may hold only action, lesson_id and text"
           node_id: null
           node_started_seq: null
           run_id: null
@@ -183,7 +183,7 @@ expect:
           failures:
           - failure:
               code: reflective.contract
-              message: reflector returned invalid structured output
+              message: "reflector returned invalid structured output: actions[0] may hold only action, lesson_id and text"
               retryable: false
               stage: learn
             memory: lessons
@@ -221,12 +221,12 @@ expect:
   - failure:
       cause:
         code: reflective.contract
-        message: reflector returned invalid structured output
+        message: "reflector returned invalid structured output: actions[0] may hold only action, lesson_id and text"
         retryable: false
         stage: learn
       code: reflective.contract
       memory: lessons
-      message: reflector returned invalid structured output
+      message: "reflector returned invalid structured output: actions[0] may hold only action, lesson_id and text"
       node_id: null
       node_started_seq: null
       run_id: null
@@ -240,7 +240,7 @@ expect:
       failures:
       - failure:
           code: reflective.contract
-          message: reflector returned invalid structured output
+          message: "reflector returned invalid structured output: actions[0] may hold only action, lesson_id and text"
           retryable: false
           stage: learn
         memory: lessons

@@ -477,9 +477,11 @@ export class ToolNode extends Node {
     try {
       value = typ === null ? buildValue(output) : buildValueAs(typ, output);
     } catch (error) {
-      // The check's reason is bare; name where in the answer it failed, as host intake does.
-      if (!(error instanceof TypeCheckError) || error.path.length === 0) throw error;
-      throw new TypeCheckError(`${where} at ${renderValuePath(error.path)}: ${error.message}`, {
+      // The check's reason is bare; name the answer, and where in it the check failed, as host
+      // intake does.
+      if (!(error instanceof TypeCheckError)) throw error;
+      const at = error.path.length > 0 ? ` at ${renderValuePath(error.path)}` : "";
+      throw new TypeCheckError(`${where}${at}: ${error.message}`, {
         path: error.path,
         cause: error,
       });

@@ -69,10 +69,9 @@ import {
   type AgentRunContext,
   AgentSteps,
   checkStopped,
-  digestRequest,
   interruptRequested,
   recordedResponse,
-  requestSha256,
+  RequestDigest,
   sentCredentials,
   ToolIterationLimitError,
 } from "./context.ts";
@@ -208,6 +207,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
   if (skills.size > 0) bound.push(loadSkillTool());
   let iterations = 0;
   let reply: Message | null = null;
+  const digests = new RequestDigest(ctx.baseSystemPrompt);
 
   while (true) {
     checkStopped(ctx);
@@ -224,7 +224,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
         signal: ctx.signal,
         interrupt,
         retry,
-        record: { steps, digest: requestSha256(digestRequest(request, ctx.baseSystemPrompt)) },
+        record: { steps, digest: digests.digest(request) },
       });
     } catch (error) {
       // The cut reply's text is recorded; its calls, partial or not, never run. A stop that lands
@@ -365,7 +365,7 @@ function steerReads(steps: AgentSteps, inbox: SteerInbox | undefined): (readonly
  *   (no chat request then matches); `structured` builds the model the structured calls read
  *   their plan off and gives the output type, or `null` when it can't (no structured request
  *   then matches); `baseSystemPrompt` is the system prompt without recalled memory, which each
- *   request's digest reads in place of the system message (`digestRequest`); `renderSteer` is
+ *   request's digest reads in place of the system message (`RequestDigest`); `renderSteer` is
  *   the agent's steer render, which steer steps render through as the live loop did.
  * @returns The interactions; each `model_call` step's rebuilt request, by its index in `steps`
  *   (a step after a reply that failed the node, or after a steer step without its values, has
@@ -383,6 +383,7 @@ export async function stepsMaterial(
   },
 ): Promise<{ interactions: VisibleInteraction[]; requests: Map<number, RebuiltRequest>; digestOk: boolean }> {
   const messages = [...options.messages];
+  const digests = new RequestDigest(options.baseSystemPrompt);
   const interactions: VisibleInteraction[] = [];
   const requests = new Map<number, RebuiltRequest>();
   let digestOk = true;
@@ -421,7 +422,7 @@ export async function stepsMaterial(
         return { interactions, requests, digestOk: digestOk && material.digestOk };
       }
       const request = options.tools === null ? null : new Request({ messages, tools: options.tools });
-      const digest = request === null ? null : requestSha256(digestRequest(request, options.baseSystemPrompt));
+      const digest = request === null ? null : digests.digest(request);
       const matched = digest !== null && step["request_sha256"] === digest;
       requests.set(n - 1, { request, digestOk: matched });
       if (!matched) digestOk = false;

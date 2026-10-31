@@ -70,10 +70,9 @@ import type { RebuiltRequest } from "../base.ts";
 import type { ValuePath } from "../contracts.ts";
 import {
   type AgentSteps,
-  digestRequest,
   interruptRequested,
   recordedResponse,
-  requestSha256,
+  RequestDigest,
   type RetrySettings,
 } from "./context.ts";
 import { ReplyInterrupted } from "./interrupts.ts";
@@ -516,7 +515,7 @@ function structuredConversation(model: ChatModel, messages: readonly Message[], 
  *   replay is over, ends the calls before the next one starts, as an honor step an earlier start
  *   recorded in `steps` does; `retry` is each call's retry settings; with `steps`, each call is
  *   written as a `model_call` step (`callModel`), its digest taken with the system message
- *   reduced to `baseSystemPrompt` (`digestRequest`; absent or `null` hashes the request as it is).
+ *   reduced to `baseSystemPrompt` (`RequestDigest`; absent or `null` hashes the request as it is).
  * @returns The checked value, unwrapped.
  * @throws OutputInvalidError once `retries + 1` replies were invalid.
  * @throws ReplyInterrupted when a host interrupt cut a call, or was set or recorded honored before
@@ -540,6 +539,7 @@ export async function generateStructured(
   const { live = null, signal, interrupt, retry, steps, baseSystemPrompt = null } = options;
   const retries = options.retries ?? current().agentRetries;
   const conversation = structuredConversation(model, messages, typ);
+  const digests = new RequestDigest(baseSystemPrompt);
   for (let call = 0; ; call++) {
     signal?.throwIfAborted();
     // No model call starts after an interrupt, or once replay passed an earlier start's honor; a
@@ -553,8 +553,7 @@ export async function generateStructured(
       interrupt,
       retry,
       // A structured call reads the steers already in `messages`.
-      record:
-        steps === undefined ? undefined : { steps, digest: requestSha256(digestRequest(request, baseSystemPrompt)) },
+      record: steps === undefined ? undefined : { steps, digest: digests.digest(request) },
     });
     // A stop that lands during the call wins over its reply.
     signal?.throwIfAborted();
@@ -575,7 +574,7 @@ export async function generateStructured(
  *
  * @param steps The structured calls' `model_call` steps.
  * @param baseSystemPrompt The system prompt without recalled memory, which each digest reads in
- *   place of the system message (`digestRequest`); `null` hashes each request as it is.
+ *   place of the system message (`RequestDigest`); `null` hashes each request as it is.
  * @returns The interactions; each step's rebuilt request and whether the step recorded its
  *   purpose and digest, index for index; and whether every step did.
  */
@@ -590,9 +589,10 @@ export function structuredMaterial(
   const { prompted, purpose } = conversation;
   const interactions: VisibleInteraction[] = [];
   const requests: RebuiltRequest[] = [];
+  const digests = new RequestDigest(baseSystemPrompt);
   for (const step of steps) {
     const request = conversation.request();
-    const digest = requestSha256(digestRequest(request, baseSystemPrompt));
+    const digest = digests.digest(request);
     requests.push({ request, digestOk: step["purpose"] === purpose && step["request_sha256"] === digest });
     // A cut reply was never output: its text so far shows nothing, as in `stepsMaterial`.
     if (Object.hasOwn(step, "error") || step["finish"] === "interrupted") continue;

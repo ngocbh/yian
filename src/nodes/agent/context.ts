@@ -597,45 +597,78 @@ export function interruptRequested(interrupt: AbortSignal | undefined, steps: Ag
 }
 
 /**
- * Return `request` with its leading system message reduced to `baseSystemPrompt`, the system
- * prompt without recalled memory: a request's digest covers what the flow and the conversation
- * decide, not what memory recalled, so recorded calls replay whatever a later recall returns.
- * `null`, or a request that doesn't start with a system message, returns `request` as it is.
- */
-export function digestRequest(request: Request, baseSystemPrompt: string | null): Request {
-  const [first, ...rest] = request.messages;
-  if (baseSystemPrompt === null || first?.role !== "system") return request;
-  return new Request({
-    messages: [new Message({ role: "system", parts: [new TextPart(baseSystemPrompt)] }), ...rest],
-    tools: request.tools,
-    toolChoice: request.toolChoice,
-    parallelToolCalls: request.parallelToolCalls,
-    outputFormat: request.outputFormat,
-  });
-}
-
-/**
  * Return the digest a `model_call` step records for `request`: the SHA-256 of the `logJson` text
  * (canonical layout; ints of any size, so a long int argument hashes) of its messages, tools,
  * tool choice, parallel tool calls and output format. Media is hashed in the form the request
  * holds it, the file form for a reply.
  */
 export function requestSha256(request: Request): string {
-  const choice = request.toolChoice;
-  const format = request.outputFormat;
-  const json = {
-    messages: request.messages.map((message) => message.toJSON()),
-    tools: request.tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-      strict: tool.strict,
-    })),
-    tool_choice: choice instanceof NamedTool ? { name: choice.name } : choice,
-    parallel_tool_calls: request.parallelToolCalls,
-    output_format: format === null ? null : { name: format.name, schema: format.schema, strict: format.strict },
-  };
-  return createHash("sha256").update(logJson(json), "utf8").digest("hex");
+  return new RequestDigest(null).digest(request);
+}
+
+// The log JSON of a request opens with its messages: `logJson` sorts keys, and the other keys sort
+// after `messages`. A message object has three keys or more, so none is written escaped.
+const MESSAGES_OPEN = '{"messages":[';
+
+/**
+ * Takes the digests of a series of requests, each the one `requestSha256` gives for the request
+ * with its leading system message reduced to `baseSystemPrompt`, the system prompt without
+ * recalled memory: a request's digest covers what the flow and the conversation decide, not what
+ * memory recalled, so recorded calls replay whatever a later recall returns. A `null`
+ * `baseSystemPrompt`, or a request that doesn't start with a system message, hashes the request as
+ * it is.
+ *
+ * A request whose messages start with the last request's messages, the same objects, hashes only
+ * the messages it adds, so a growing tool loop serializes each message once; any other request
+ * hashes all of its messages.
+ */
+export class RequestDigest {
+  /** The log JSON of the system message a digest reads in place of the request's, or `null`. */
+  readonly #system: string | null;
+  /** The messages hashed so far, the last request's. */
+  #messages: readonly Message[] = [];
+  /** The hash of `MESSAGES_OPEN` and the log JSON of `#messages`, comma separated. */
+  #hash = createHash("sha256").update(MESSAGES_OPEN, "utf8");
+
+  constructor(baseSystemPrompt: string | null) {
+    this.#system =
+      baseSystemPrompt === null
+        ? null
+        : logJson(new Message({ role: "system", parts: [new TextPart(baseSystemPrompt)] }).toJSON());
+  }
+
+  /** Return the digest a `model_call` step records for `request`. */
+  digest(request: Request): string {
+    const { messages } = request;
+    const extending =
+      messages.length >= this.#messages.length && this.#messages.every((message, i) => messages[i] === message);
+    const from = extending ? this.#messages.length : 0;
+    // All new messages are serialized before any is hashed, so one that can't be leaves the state as it was.
+    const texts = messages.slice(from).map((message, i) => {
+      const at = from + i;
+      const system = at === 0 && this.#system !== null && message.role === "system";
+      const text = system ? this.#system! : logJson(message.toJSON());
+      return at === 0 ? text : `,${text}`;
+    });
+    if (!extending) this.#hash = createHash("sha256").update(MESSAGES_OPEN, "utf8");
+    for (const text of texts) this.#hash.update(text, "utf8");
+    this.#messages = messages;
+    const choice = request.toolChoice;
+    const format = request.outputFormat;
+    const rest = logJson({
+      tools: request.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+        strict: tool.strict,
+      })),
+      tool_choice: choice instanceof NamedTool ? { name: choice.name } : choice,
+      parallel_tool_calls: request.parallelToolCalls,
+      output_format: format === null ? null : { name: format.name, schema: format.schema, strict: format.strict },
+    });
+    // `rest` without its opening brace continues the request's object after its messages.
+    return this.#hash.copy().update(`],${rest.slice(1)}`, "utf8").digest("hex");
+  }
 }
 
 // --------------------------------------------------------------------------------------- //

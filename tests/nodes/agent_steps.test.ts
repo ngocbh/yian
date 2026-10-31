@@ -16,7 +16,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
@@ -27,6 +27,7 @@ import {
   MediaPart,
   Message,
   NamedTool,
+  OutputFormat,
   Request,
   Response,
   TextPart,
@@ -36,15 +37,16 @@ import {
   Usage,
 } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
+import { AgentSteps, RequestDigest, requestSha256 } from "../../src/nodes/agent/context.ts";
+import { stepsMaterial } from "../../src/nodes/agent/loop.ts";
 import { SKIPPED_TOOL_RESULT } from "../../src/nodes/agent/memory.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { decodeRecord, InterruptedRecord, NodeStepRecord, readRunLog, type RecordEnvelope } from "../../src/runtime/log.ts";
-import { advance, interrupt, runFlow } from "../../src/run.ts";
+import { advance, complete, interrupt, pendingCalls, runFlow } from "../../src/run.ts";
 import { virtualScheduler, withWarnings } from "../../src/platform.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
-import type { ToolContext } from "../../src/tools/context.ts";
+import { pending, type ToolContext } from "../../src/tools/context.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
 import { crashAfter, NO_ENV, rejected, serving, textReply, thrownBy } from "../helpers/run_state_fixtures.ts";
@@ -536,6 +538,122 @@ test("requestSha256 hashes the request's log JSON, every message", () => {
   const call = new ToolCallPart({ id: "c1", name: "save", arguments: { n: 2n ** 70n } });
   const long = new Request({ messages: [user, new Message({ role: "assistant", parts: [call] })] });
   expect(requestSha256(long)).toMatch(/^[0-9a-f]{64}$/);
+});
+
+/** The digest a step records for `request`, its system message read as `base`, hashed whole from its log JSON. */
+function fullDigest(request: Request, base: string | null): string {
+  const [first, ...rest] = request.messages;
+  const messages =
+    base !== null && first?.role === "system"
+      ? [new Message({ role: "system", parts: [new TextPart(base)] }), ...rest]
+      : request.messages;
+  const choice = request.toolChoice;
+  const format = request.outputFormat;
+  const json = {
+    messages: messages.map((message) => message.toJSON()),
+    tools: request.tools.map((tool) => ({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      strict: tool.strict,
+    })),
+    tool_choice: choice instanceof NamedTool ? { name: choice.name } : choice,
+    parallel_tool_calls: request.parallelToolCalls,
+    output_format: format === null ? null : { name: format.name, schema: format.schema, strict: format.strict },
+  };
+  return createHash("sha256").update(logJson(json), "utf8").digest("hex");
+}
+
+test("an incremental request digest matches the full digest on every round of a growing conversation", () => {
+  const tools = [
+    new ToolSpec({ name: "save", description: "Save.", parameters: { type: "object" } }),
+    new ToolSpec({ name: "lookup", description: "Look up ✓.", parameters: { type: "object" }, strict: true }),
+  ];
+  const format = new OutputFormat({ name: "answer", schema: { type: "object" }, strict: true });
+  const shapes: ConstructorParameters<typeof Request>[0][] = [
+    { messages: [], tools },
+    { messages: [], tools, toolChoice: new NamedTool("save") },
+    { messages: [], outputFormat: format },
+    { messages: [], tools, toolChoice: "required", parallelToolCalls: false },
+  ];
+  // The system message as recalled memory left it, with fields a digest of the base prompt drops.
+  const system = new Message({
+    role: "system",
+    parts: [new TextPart("Be brief.\n\nRecalled: the user likes tea.")],
+    author: "memory",
+    providerPayload: { cache: true },
+  });
+  for (const base of [null, "Be brief."]) {
+    const digest = new RequestDigest(base);
+    const check = (request: Request) => expect(digest.digest(request)).toBe(fullDigest(request, base));
+    check(new Request({ messages: [] }));
+    const user = new Message({ role: "user", parts: [new TextPart("hi 日本 😀 there")], author: "ann" });
+    const messages = [system, user];
+    for (let round = 0; round < 8; round++) {
+      check(new Request({ ...shapes[round % shapes.length]!, messages }));
+      const call = new ToolCallPart({ id: `c${round}`, name: "save", arguments: { n: 2n ** 70n, round } });
+      const parts: (MediaPart | ToolCallPart)[] = [call];
+      if (round === 2) parts.unshift(new MediaPart({ mime: "image/png", file: { uri: "media/a.png" } }));
+      const result = new ToolResultPart({ callId: `c${round}`, name: "save", content: "ok" });
+      messages.push(
+        new Message({ role: "assistant", parts, protocol: "catalog:openai", providerPayload: { id: `r${round}` } }),
+        new Message({ role: "tool", parts: [result] }),
+      );
+    }
+    // A structured correction extends the conversation by one message it doesn't keep.
+    const correction = new Message({ role: "user", parts: [new TextPart("That broke the schema; try again.")] });
+    check(new Request({ messages: [...messages, correction], outputFormat: format }));
+    check(new Request({ messages: [...messages, correction], outputFormat: format }));
+    // Requests that don't extend the last one: a shorter one, another system message, none.
+    check(new Request({ messages: messages.slice(0, -1), tools }));
+    const other = new Message({ role: "system", parts: [new TextPart("Other.")] });
+    check(new Request({ messages: [other, ...messages.slice(1)] }));
+    check(new Request({ messages: messages.slice(1), tools }));
+    check(new Request({ messages: [] }));
+    check(new Request({ messages, tools }));
+  }
+});
+
+test("a 200-turn tool loop serializes each message a bounded number of times: live, in its material, on replay", async () => {
+  const turns = 200;
+  const replies = Array.from({ length: turns }, (_, i) => calls([`c${i}`, "lookup", `t${i}`]));
+  replies.push(calls(["h", "hold", "h"]));
+  const model = new ScriptedModel(replies, CONFIG);
+  const tools = { lookup: topicTool("lookup"), hold: topicTool("hold", { run: () => pending() }) };
+  const flow = flowText(["lookup", "hold"]);
+  const spy = spyOn(Message.prototype, "toJSON");
+  try {
+    const { log, result } = await run(model, { tools, flow });
+    expect(result.status, result.failure?.message).toBe("waiting");
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(10 * turns);
+
+    spy.mockClear();
+    const recorded = steps(log);
+    const [request] = model.requests;
+    const material = await stepsMaterial(recorded, {
+      messages: request!.messages,
+      tools: request!.tools,
+      structured: async () => null,
+      baseSystemPrompt: request!.messages[0]!.text(),
+    });
+    expect(material.digestOk).toBe(true);
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(10 * turns);
+
+    const [held] = pendingCalls(log);
+    await complete(log, held!.callId, { output: "held" });
+    spy.mockClear();
+    const resumed = await advance({
+      log,
+      tools,
+      env: retriesEnv(0),
+      scheduler: virtualScheduler(START),
+      models: serving(new ScriptedModel([textReply("done")], CONFIG)),
+    });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(10 * turns);
+  } finally {
+    spy.mockRestore();
+  }
 });
 
 const PNG = Buffer.from("not really a png").toString("base64");

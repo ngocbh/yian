@@ -523,6 +523,19 @@ describe("yian chat", () => {
   );
 
   test(
+    "a pasted line of over a million characters is refused as too large, and the chat goes on",
+    async () => {
+      const { io, stdin, stdout, stderr } = chatIo({ tty: true });
+      stdin.write(PASTE_START + "x".repeat(1_200_000) + PASTE_END + ENTER + "hi" + ENTER + "/exit" + ENTER);
+      const { code } = await runChat(flowFile(ECHO), io);
+      expect(code).toBe(0);
+      expect(stderr()).toContain("not sent: ");
+      expect(stdout()).toBe("echo: hi\necho: \n");
+    },
+    TIMEOUT,
+  );
+
+  test(
     "a run cancelled from outside ends the chat at the next line with the run's end",
     async () => {
       const { io, stdin, stdout, stderr } = chatIo();

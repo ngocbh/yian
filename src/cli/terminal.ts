@@ -394,7 +394,11 @@ function textWidget(options: {
   const head = (): string => `${promptHead(mark, options.label, options.instruction)} `;
   const text = (): string => draftText(chars);
   const insert = (added: readonly Unit[]): void => {
-    chars.splice(pos, 0, ...added);
+    // Loops, not `splice(pos, 0, ...added)`, whose one argument per character a long paste would
+    // overflow; and in place, so typing at the end stays cheap per key.
+    const tail = chars.splice(pos);
+    for (const unit of added) chars.push(unit);
+    for (const unit of tail) chars.push(unit);
     pos += added.length;
   };
   const paste = (pasted: string): void => {

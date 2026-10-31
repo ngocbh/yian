@@ -1124,12 +1124,14 @@ function validateCallArguments(tree: ExprNode): void {
     if (node.data !== "refcall") continue;
     const callSuffix = callSuffixOf(node);
     if (callSuffix === undefined) continue;
-    const keywords = (callSuffix.children as Tree[])
-      .filter((arg) => arg.children.length === 2)
-      .map((arg) => String(arg.children[0]));
-    const repeated = keywords.find((keyword, i) => keywords.indexOf(keyword) < i);
-    if (repeated !== undefined) {
-      throw new ExpressionError(`${String(node.children[0])}(...) repeats the keyword ${reprText(repeated)}`);
+    const seen = new Set<string>();
+    for (const arg of callSuffix.children as Tree[]) {
+      if (arg.children.length !== 2) continue;
+      const keyword = String(arg.children[0]);
+      if (seen.has(keyword)) {
+        throw new ExpressionError(`${String(node.children[0])}(...) repeats the keyword ${reprText(keyword)}`);
+      }
+      seen.add(keyword);
     }
   }
 }

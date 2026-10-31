@@ -783,6 +783,7 @@ describe("check order", () => {
     ["isinstance(b) and f(isinstance(a, 1))", typeName],
     ["f(a=1, a=2) and g(b=1,b=2)", "f(...) repeats the keyword 'a'"],
     ["f(a=1,a=2) + g(h(b=1,b=2))", "h(...) repeats the keyword 'b'"],
+    ["f(a=1, b=1, b=2, a=2)", "f(...) repeats the keyword 'b'"],
     ["isinstance(y) + a.b(x)", DOTTED_CALLEE],
   ];
   for (const [text, message] of cases) {
@@ -874,6 +875,24 @@ describe("subscripts", () => {
     const small = fastest(4096);
     // Linear growth gives about 8x; quadratic gives about 64x.
     expect(fastest(32768) / Math.max(small, 1)).toBeLessThan(24);
+  });
+
+  test("a call's repeated-keyword check is linear in its keywords", () => {
+    // A check that scanned the keywords once per keyword would be quadratic. Compare 8x the
+    // keywords against the fastest of three runs each, as above.
+    const fastest = (keywords: number) => {
+      const text = `Point(${Array.from({ length: keywords }, (_, i) => `f${i}=1`).join(", ")})`;
+      let best = Infinity;
+      for (let i = 0; i < 3; i++) {
+        const start = performance.now();
+        parseExpr(text);
+        best = Math.min(best, performance.now() - start);
+      }
+      return best;
+    };
+    const small = fastest(2000);
+    // Linear growth gives about 8x; quadratic gives about 64x.
+    expect(fastest(16000) / Math.max(small, 1)).toBeLessThan(24);
   });
 
   test.each([

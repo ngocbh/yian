@@ -313,6 +313,60 @@ test.each([
   expect(evaluate(text, fromRecord({ x: 2n }))).toEqual(expected);
 });
 
+test("a long list `+` chain evaluates in linear time", () => {
+  // A fold that copied the running list at each step would be quadratic in the operands. Compare
+  // 4x the operands against the fastest of three runs each, which keeps the check about growth,
+  // not about the machine's speed.
+  const resolve = fromRecord({ a: Array(20_000).fill(1n) });
+  const fastest = (operands: number) => {
+    const tree = parseExpr(Array(operands).fill("a").join(" + "));
+    let best = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const start = performance.now();
+      expect(evalExpr(tree, resolve) as Value[]).toHaveLength(operands * 20_000);
+      best = Math.min(best, performance.now() - start);
+    }
+    return best;
+  };
+  const small = fastest(32);
+  // Linear growth gives about 4x; quadratic gives about 16x.
+  expect(fastest(128) / Math.max(small, 1)).toBeLessThan(9);
+});
+
+test("a list `+` chain leaves its operand lists unchanged", () => {
+  const a = [1n, 2n];
+  const b = ["x"];
+  const resolve = fromRecord({ a, b });
+  expect(evaluate("a + b + a", resolve)).toEqual([1n, 2n, "x", 1n, 2n]);
+  expect(evaluate("[1] + a + [2] + b + a", resolve)).toEqual([1n, 1n, 2n, 2n, "x", 1n, 2n]);
+  expect(evaluate("a + a + a", resolve)).toEqual([1n, 2n, 1n, 2n, 1n, 2n]);
+  expect(a).toEqual([1n, 2n]);
+  expect(b).toEqual(["x"]);
+});
+
+test.each([
+  ["e + e + e", []],
+  ["a + e + a", [1n, 1n]],
+  ["a + (a + a) + a", [1n, 1n, 1n, 1n]],
+  ["s + s + s", "ababab"],
+  ["a + a + 1", 'type error evaluating [1,1] + 1: unsupported operand kinds for `+`: `list` and `int`'],
+  ["a + a - a", 'type error evaluating [1,1] - [1]: unsupported operand kinds for `-`: `list` and `list`'],
+  ["a + a + a + 1", 'type error evaluating [1,1,1] + 1: unsupported operand kinds for `+`: `list` and `int`'],
+  ["a + a + a - a", 'type error evaluating [1,1,1] - [1]: unsupported operand kinds for `-`: `list` and `list`'],
+  ["a + a + s", 'type error evaluating [1,1] + "ab": unsupported operand kinds for `+`: `list` and `str`'],
+  ["a + a * 2", "type error evaluating [1] * 2: unsupported operand kinds for `*`: `list` and `int`"],
+] as [string, Value][])("a list chain gives the same result or error: %s", (text, expected) => {
+  const resolve = fromRecord({ a: [1n], e: [], s: "ab" });
+  let got: Value;
+  try {
+    got = evaluate(text, resolve);
+  } catch (error) {
+    expect(error).toBeInstanceOf(ExpressionError);
+    got = (error as Error).message;
+  }
+  expect(got).toEqual(expected);
+});
+
 test("a long power chain folds from the right", () => {
   // 2 ** (3 ** (1 ** ... ** 1)) is 8; a left fold or a dropped operand would differ.
   const text = "2 ** 3 ** " + Array(2998).fill("1").join(" ** ");

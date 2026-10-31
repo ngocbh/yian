@@ -78,6 +78,28 @@ describe("collecting names", () => {
     const condition = "Sell(x).price > 0 and Buy(x).qty > Sell(y).price";
     expect(collectConstructorNames(condition, { condition: true })).toEqual(["Sell", "Buy"]);
   });
+
+  test.each<[string, (source: unknown, options: { condition?: boolean }) => string[], (i: number) => string]>([
+    ["collectConstructorNames", collectConstructorNames, (i) => `A${i}()`],
+    ["collectIsinstanceNames", collectIsinstanceNames, (i) => `isinstance(x, A${i})`],
+  ])("%s is linear in the distinct names", (_, collectNames, call) => {
+    // Deduping by a scan of the names found so far would be quadratic. Compare 8x the names
+    // against the fastest of three runs each, which keeps the check about growth, not about the
+    // machine's speed.
+    const fastest = (count: number) => {
+      const condition = `[${Array.from({ length: count }, (_, i) => call(i)).join(", ")}]`;
+      let best = Infinity;
+      for (let i = 0; i < 3; i++) {
+        const start = performance.now();
+        expect(collectNames(condition, { condition: true })).toHaveLength(count);
+        best = Math.min(best, performance.now() - start);
+      }
+      return best;
+    };
+    const small = fastest(4000);
+    // Linear growth gives about 8x; quadratic gives about 64x.
+    expect(fastest(32000) / Math.max(small, 1)).toBeLessThan(24);
+  });
 });
 
 describe("expressionTrees", () => {

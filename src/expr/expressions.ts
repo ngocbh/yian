@@ -1511,9 +1511,18 @@ class EvalExpr {
     let acc = this.asValue(this.walk(operands[0]!));
     // The operand values, kept only when tracing (for the route).
     const values: Value[] | null = this.#trace ? [acc] : null;
+    // True while `acc` is the fresh list a list `+` step built, which nothing else holds: the
+    // next list `+` can then append in place instead of copying the running list again.
+    let owned = false;
     for (const [i, op] of operators.entries()) {
       const rhs = this.asValue(this.walk(operands[i + 1]!));
-      acc = applyStep(op, acc, rhs);
+      if (owned && op === "+" && Array.isArray(rhs)) {
+        // A loop, not `push(...rhs)`, which overflows the stack for a long list.
+        for (const item of rhs) (acc as Value[]).push(item);
+      } else {
+        acc = applyStep(op, acc, rhs);
+        owned = op === "+" && Array.isArray(acc);
+      }
       values?.push(rhs);
     }
     if (
@@ -1842,15 +1851,14 @@ function isinstanceTypeName(callSuffix: Tree): string {
  */
 export function isinstanceTypeNames(tree: ExprNode): string[] {
   if (!(tree instanceof Tree)) return [];
-  const names: string[] = [];
+  const names = new Set<string>();
   for (const node of iterSubtreesTopdown(tree)) {
     if (node.data !== "refcall" || String(node.children[0]) !== ISINSTANCE) continue;
     const callSuffix = callSuffixOf(node);
     if (callSuffix === undefined) continue;
-    const name = isinstanceTypeName(callSuffix);
-    if (!names.includes(name)) names.push(name);
+    names.add(isinstanceTypeName(callSuffix));
   }
-  return names;
+  return [...names];
 }
 
 /**
@@ -1867,13 +1875,13 @@ export function isinstanceTypeNames(tree: ExprNode): string[] {
  */
 export function constructorNames(tree: ExprNode): string[] {
   if (!(tree instanceof Tree)) return [];
-  const names: string[] = [];
+  const names = new Set<string>();
   for (const node of iterSubtreesTopdown(tree)) {
     if (node.data !== "refcall" || callSuffixOf(node) === undefined) continue;
     const name = String(node.children[0]);
-    if (name !== ISINSTANCE && !TEMPLATE_FNS.has(name) && !names.includes(name)) names.push(name);
+    if (name !== ISINSTANCE && !TEMPLATE_FNS.has(name)) names.add(name);
   }
-  return names;
+  return [...names];
 }
 
 /**

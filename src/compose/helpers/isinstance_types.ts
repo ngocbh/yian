@@ -112,13 +112,11 @@ function collect(
   condition: boolean,
   namesOf: (tree: ExprNode) => string[],
 ): string[] {
-  const names: string[] = [];
+  const names = new Set<string>();
   for (const tree of expressionTrees(source, { condition })) {
-    for (const name of namesOf(tree)) {
-      if (!names.includes(name)) names.push(name);
-    }
+    for (const name of namesOf(tree)) names.add(name);
   }
-  return names;
+  return [...names];
 }
 
 /**

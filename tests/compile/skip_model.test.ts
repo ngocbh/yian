@@ -1,6 +1,6 @@
 /** The skip model: which nodes of a flow level CASE routing may skip, and together. */
 
-import { expect, spyOn, test } from "bun:test";
+import { expect, test } from "bun:test";
 
 import { Edge } from "../../src/compile/model.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
@@ -252,13 +252,46 @@ test("a chained CASE level answers exactly within a small world limit", () => {
   expect(m.maySkipWhileRunning(["a29"], "v29")).toBe(true);
 });
 
-test("a level with no CASE is not searched", () => {
-  // Without a CASE nothing skips, so no query needs a search.
-  const m = model("a b c", [data("a", "b"), data("b", "c"), order("a", "c")]);
-  const search = spyOn(m as unknown as { search: () => boolean }, "search");
+test("a level with no CASE answers without a search", () => {
+  // Without a CASE nothing skips. A search with no assignment to examine would give its fallback,
+  // so the `false` here shows no search ran.
+  const m = model("a b c", [data("a", "b"), data("b", "c"), order("a", "c")], [], { limit: 0 });
   expect(m.mayAllSkip(["b"])).toBe(false);
   expect(m.maySkipWhileRunning(["b", "c"], null)).toBe(false);
-  expect(search).not.toHaveBeenCalled();
+});
+
+test("a level with a CASE and no assignment to examine falls back", () => {
+  // Exactly, `c` always skips one of `a` and `b`, and its first pick skips `b`.
+  const m = model("c a b", route("c"), ["c"], { limit: 0 });
+  expect(m.mayAllSkip(["a", "b"])).toBe(true);
+  expect(m.maySkipWhileRunning(["b"], null)).toBe(false);
+});
+
+test("a CASE upstream of a long chain gives each link its answer", () => {
+  // `c` routes `v0` or `w`; `v{i}` reads `v{i-1}`, so `c`'s other route skips the whole chain.
+  const nodes = ["c", "w"];
+  const edges = [ctl("c", "then", "v0"), ctl("c", "else", "w")];
+  for (let i = 0; i < 500; i++) {
+    nodes.push(`v${i}`);
+    if (i > 0) edges.push(data(`v${i - 1}`, `v${i}`));
+  }
+  const m = new SkipModel(nodes, edges, new Set(["c"]));
+  for (const i of [0, 1, 250, 499]) {
+    expect(m.maySkipWhileRunning([`v${i}`], null)).toBe(true);
+    expect(m.maySkipWhileRunning([`v${i}`], "w")).toBe(true);
+    expect(m.mayAllSkip([`v${i}`, "w"])).toBe(false);
+    expect(m.maySkipWhileRunning(["w"], `v${i}`)).toBe(true);
+  }
+});
+
+test("one query leaves no state behind for the next", () => {
+  const m = chain(5);
+  for (let round = 0; round < 2; round++) {
+    expect(m.maySkipWhileRunning(["y"], null)).toBe(true);
+    expect(m.mayAllSkip(["a4", "b4"])).toBe(false);
+    expect(m.maySkipWhileRunning(["a4"], "v4")).toBe(true);
+    expect(m.maySkipWhileRunning(["v4"], null)).toBe(false);
+  }
 });
 
 test("a CASE whose targets come after a later CASE keeps its pick apart", () => {

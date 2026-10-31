@@ -46,7 +46,15 @@ import {
 import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
 import { cells, columnsOf, fit } from "./cells.ts";
-import { type AuthDeps, type AuthTerminal, loginModels, savedLogins, signIn } from "./auth.ts";
+import {
+  type AuthDeps,
+  type AuthTerminal,
+  keyModels,
+  keyVariable,
+  loginModels,
+  savedLogins,
+  signIn,
+} from "./auth.ts";
 import {
   type ChatSession,
   chatSessions,
@@ -113,6 +121,9 @@ export interface ChatDeps {
 const RESUME_LABEL = "Resume which chat?";
 const MODEL_LABEL = "Model for the next replies";
 const PROVIDER_LABEL = "Provider for the next replies";
+const SAVE_KEY_LABEL = "Save this key as a yian login?";
+/** The answers to `SAVE_KEY_LABEL`, No first: a key is saved only when asked to. */
+const SAVE_KEY_ANSWERS = ["No, use it for this chat only", "Yes, save it as a yian login"];
 
 /** The chat's own commands, beside `/exit`. */
 const COMMANDS: readonly PromptCommand[] = [
@@ -636,15 +647,17 @@ export async function chat(
       return null;
     };
     /**
-     * Pick the model of the next replies among the logins' (`choices`), or only `provider`'s, the
-     * current one first when it is among them; picking it again changes nothing.
+     * Pick the model of the next replies among the logins' (`choices`), or only `provider`'s, or
+     * among `given`, the current one first when it is among them; picking it again changes
+     * nothing.
      */
     const chooseModel = async (
       terminal: Terminal,
       provider: string | null = null,
+      given: readonly ModelChoice[] | null = null,
     ): Promise<ChatCommandOutcome> => {
       const shown = current ?? defaults;
-      const { models, failed } = await choices();
+      const { models, failed } = given === null ? await choices() : { models: given, failed: [] };
       for (const each of failed) {
         if (provider !== null && each !== provider) continue;
         await note(`(couldn't list the ${each} models; showing its saved one)\n`);
@@ -681,7 +694,10 @@ export async function chat(
     /**
      * Pick a provider among those yian supports, then one of its models (`chooseModel`); one with
      * no saved login is signed in to first, as `yian auth` does, its model picked in the chat's
-     * picker. Esc or Ctrl-C at any step, the sign-in's wait included, or `stop`, keeps the model.
+     * picker. One whose key variable is set asks first whether to save the key: No, and off a
+     * terminal, leaves the store alone and lists the models that key is offered, for the chat to
+     * use the key as it is. Esc or Ctrl-C at any step, the sign-in's wait included, or `stop`,
+     * keeps the model.
      */
     const chooseProvider = async (
       terminal: Terminal,
@@ -691,14 +707,38 @@ export async function chat(
       const saved = savedLogins(plainIo);
       if (saved === null) await note("(couldn't read the saved logins)\n");
       const width = titleCells(PROVIDER_LABEL);
+      // A key set in the environment, with no saved login, can serve the chat as it is.
+      const keys = new Map(
+        SUPPORTED_LLM_PROVIDERS.map((name) => [name, keyVariable(name, plainIo)]),
+      );
       const titles = SUPPORTED_LLM_PROVIDERS.map((name) => {
-        const login = saved?.has(name) ? "logged in" : "not logged in";
+        const variable = keys.get(name);
+        const login = saved?.has(name)
+          ? "logged in"
+          : variable
+            ? `key from ${variable}`
+            : "not logged in";
         return fit(`${name} · ${login}${name === shown.provider ? " (current)" : ""}`, width);
       });
       const index = await pick(terminal, PROVIDER_LABEL, titles);
       if (index === null) return null;
       const provider = SUPPORTED_LLM_PROVIDERS[index]!;
       if (saved?.has(provider)) return chooseModel(terminal, provider);
+      const variable = keys.get(provider);
+      if (variable) {
+        // Off a terminal nothing is saved: the key serves this chat only.
+        const tty = plainIo.stdin.isTTY === true;
+        const answer = tty ? await pick(terminal, SAVE_KEY_LABEL, SAVE_KEY_ANSWERS) : 0;
+        if (answer === null) return null;
+        if (answer === 0) {
+          const models = await keyModels(provider, variable, plainIo, deps.auth);
+          if (models === null) {
+            await note(`(couldn't list the ${provider} models; the model is unchanged)\n`);
+            return null;
+          }
+          return chooseModel(terminal, provider, models.map((model) => ({ provider, model })));
+        }
+      }
       const model = await signInTo(provider, terminal, stop);
       return model === null ? null : choose({ provider, model });
     };

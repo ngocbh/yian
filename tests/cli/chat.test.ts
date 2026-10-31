@@ -855,7 +855,7 @@ test(
     expect(code).toBe(0);
     expect(stderr()).toContain(
       "Provider for the next replies:\n  1. openai · not logged in\n" +
-        "  2. xai · not logged in (current)\n  3. deepseek · not logged in\n",
+        "  2. xai · key from XAI_API_KEY (current)\n  3. deepseek · not logged in\n",
     );
     expect(stderr()).toContain(
       "(signing in to deepseek needs a terminal; run yian auth deepseek first; " +
@@ -886,6 +886,43 @@ test(
       "(couldn't read the saved logins)\nProvider for the next replies:\n" +
         "  1. openai · not logged in\n",
     );
+  },
+  TIMEOUT,
+);
+
+test(
+  "/provider off a terminal uses a key from the environment for the chat, saving nothing",
+  async () => {
+    const key = "sk-deepseek-env-secret";
+    const environment = (name: string) => (name === "DEEPSEEK_API_KEY" ? key : env(name));
+    const { io, stdin, stderr, stdout } = chatIo({ environment });
+    stdin.write("/provider\n3\n2\nhello\n/exit\n");
+    const model = new AnsweringModel(() => textReply("noted"));
+    const access = serving(model, environment);
+    const sent: (string | null)[] = [];
+    const listModels = async (_: unknown, options: { apiKey?: string | null } = {}) => {
+      sent.push(options.apiKey ?? null);
+      return ["deepseek-chat", "deepseek-reasoner"];
+    };
+    const log = join(tmp, "chat.jsonl");
+    const code = await chat(undefined, { engineTrace: false, log }, io, {
+      root,
+      models: access,
+      signals: new EventEmitter(),
+      auth: { listModels },
+    });
+    expect(code).toBe(0);
+    expect(stderr()).toContain("  3. deepseek · key from DEEPSEEK_API_KEY\n");
+    expect(stderr()).not.toContain("Save this key");
+    expect(stderr()).toContain(
+      "Model for the next replies:\n  1. deepseek/deepseek-chat\n  2. deepseek/deepseek-reasoner\n",
+    );
+    expect(builtWith(access)).toEqual(["deepseek/deepseek-reasoner"]);
+    expect(sent).toEqual([key]);
+    expect(existsSync(join(home, ".config", "yian", "auth.json"))).toBe(false);
+    for (const text of [stderr(), stdout(), readFileSync(log, "utf8")]) {
+      expect(text).not.toContain(key);
+    }
   },
   TIMEOUT,
 );

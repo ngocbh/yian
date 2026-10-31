@@ -836,6 +836,39 @@ export async function signIn(provider: string, io: CliIo, options: SignInOptions
   return saveLogin(new AuthStore(null, { env: io.env, signal }), name, setup, sources, ctx);
 }
 
+/** The first of `provider`'s API-key variables set in `io.env`, or null for none. */
+export function keyVariable(provider: string, io: Pick<CliIo, "env">): string | null {
+  return apiKeyEnvNames(provider).find((name) => io.env(name)) ?? null;
+}
+
+/**
+ * The models the key in `variable` is offered for `provider`, as `loginModels` lists a saved key's
+ * (`OPENAI_BASE_URL` and the like followed); null when there is no listing (azure, or a variable
+ * in `ELSEWHERE_ENV` sends runs to another host) or it failed. The listing gets `timeout` seconds.
+ */
+export async function keyModels(
+  provider: string,
+  variable: string,
+  io: Pick<CliIo, "env">,
+  deps: AuthDeps = {},
+  timeout: number = MODEL_LIST_TIMEOUT_SECONDS,
+): Promise<readonly string[] | null> {
+  if (provider === "azure" || (ELSEWHERE_ENV[provider] ?? []).some((name) => io.env(name))) {
+    return null;
+  }
+  const base = provider === "openai" ? "OPENAI_BASE_URL" : BASE_URL_ENV[provider];
+  const baseUrl = (base && io.env(base)) || null;
+  try {
+    const apiKey = io.env(variable) ?? null;
+    const listed = await (deps.listModels ?? listModels)(provider, { apiKey, baseUrl, timeout });
+    if (listed === null) return null;
+    return provider === "openai" ? textModels(listed) : listed;
+  } catch (error) {
+    if (error instanceof ModelListError) return null;
+    throw error;
+  }
+}
+
 /** The providers with a usable login saved in `io.env`'s store; null when it can't be read. */
 export function savedLogins(io: Pick<CliIo, "env">): ReadonlySet<string> | null {
   try {

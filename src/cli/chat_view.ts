@@ -42,7 +42,7 @@ import { sanitize, sequenceSpans } from "./sanitize.ts";
 import type { CliIo, Writer } from "./utils.ts";
 
 /** The hint under the chat's framed prompt. */
-export const CHAT_HINT = "/exit to leave · ctrl-c interrupts · esc withdraws";
+export const CHAT_HINT = "/model /resume /exit · ctrl-c interrupts · esc withdraws";
 
 /** What the chat's banner shows. */
 export interface BannerInfo {
@@ -346,6 +346,8 @@ export class ChatView {
   /** Set while a turn runs: its start time on the clock, and what stops its spinner. */
   #turn: { start: number; stop: AbortController } | null = null;
   #frame = 0;
+  /** The model the spinner names, if any (`model`). */
+  #model: string | null = null;
   /** Set while a prompt has the terminal. */
   #paused = false;
   /** How deep the calls drawing one frame are (`#batch`), and whether that frame is due. */
@@ -396,6 +398,14 @@ export class ChatView {
       if (lines.length === 0) return;
       this.#last = "other";
       this.#commit(lines);
+    });
+  }
+
+  /** Name `model` (`provider/model`) on the spinner from now on; none when null. */
+  model(model: string | null): void {
+    this.#batch(() => {
+      this.#model = model;
+      this.#redraw();
     });
   }
 
@@ -777,7 +787,9 @@ export class ChatView {
     if (this.#turn !== null) {
       const seconds = Math.floor((this.#clock.now() - this.#turn.start) / 1000);
       const frame = SPIN_FRAMES[this.#frame % SPIN_FRAMES.length]!;
-      rows.push(`${this.#paint(frame, "cyan")} ${this.#paint(`Thinking… (${seconds}s · esc to interrupt)`, "dim")}`);
+      const model = this.#model === null ? "" : ` · ${sanitize(this.#model)}`;
+      const status = `Thinking… (${seconds}s${model} · esc to interrupt)`;
+      rows.push(`${this.#paint(frame, "cyan")} ${this.#paint(status, "dim")}`);
     }
     const input = this.#input?.lines() ?? [];
     rows.push(...input);

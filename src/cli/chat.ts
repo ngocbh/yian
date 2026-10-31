@@ -15,17 +15,19 @@
 import { mkdirSync, realpathSync } from "node:fs";
 import { basename, dirname, extname, join, relative } from "node:path";
 
-import { copyGraph } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { loadFlow } from "../compose/loader.ts";
 import { defaultSkillRoots, loadSkills } from "../compose/skills.ts";
 import type { Env } from "../defaults.ts";
 import { AuthError } from "../llm_clients/auth/index.ts";
-import { connectionSnapshot, type ConnectionSnapshot } from "../llm_clients/connection.ts";
+import {
+  connectionSnapshot,
+  type ConnectionSnapshot,
+  resolveModelConfig,
+} from "../llm_clients/connection.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import { coerceInputs } from "../nodes/binding.ts";
 import { homeDir, isSystemError, leavesRoot, realScheduler, type Scheduler } from "../platform.ts";
-import { hostInputs, runStartLlm, skillGrants } from "../run.ts";
+import { skillGrants } from "../run.ts";
 import { type Skill, SkillError } from "../skills/catalog.ts";
 import { DOCS, FLOWS } from "./bundled.ts";
 import { bundledSkill } from "./bundled_skill.ts";
@@ -42,16 +44,26 @@ import {
 } from "./chat_view.ts";
 import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
-import { columnsOf } from "./cells.ts";
-import { inboxChat, type InboxChatHost } from "./inbox_chat.ts";
+import { cells, columnsOf, fit } from "./cells.ts";
+import { loginModels } from "./auth.ts";
+import {
+  type ChatSession,
+  chatSessions,
+  type ModelChoice,
+  modelMessage,
+  type SessionSeed,
+  sessionSeed,
+  sessionTitle,
+} from "./chat_sessions.ts";
+import { type ChatCommandOutcome, inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { type Colored, paint, printStyled, type Style } from "./render.ts";
 import { type FileIssueHost, fileIssueTool, hostFacts } from "./report_issue.ts";
 import { CHAT_FLOW_FILE, removeEmptyDir, validateRunLogOptions } from "./run.ts";
 import { sanitize } from "./sanitize.ts";
 import { RunProgress, runScreen } from "./run_view.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
-import type { Terminal } from "./terminal.ts";
-import type { CliIo } from "./utils.ts";
+import type { Key, Terminal } from "./terminal.ts";
+import { type CliIo, UsageError } from "./utils.ts";
 
 /** How often the run list under the input box is drawn again, for its times. */
 const LIST_TICK_MS = 1_000;
@@ -61,15 +73,16 @@ const VIEW_TICK_MS = 500;
 /** The label the bundled flow's diagnostics and recorded source go by. */
 const CHAT_LABEL = CHAT_FLOW_FILE;
 
-/** The path of the assistant's reply agent in the bundled flow, whose model the banner names. */
-const REPLY_PATH = "chat/answered/reply";
-
 /** The options `chat` reads; an absent option is `undefined`, an absent flag `false`. */
 export interface ChatOptions {
   log?: string | undefined;
   provider?: string | undefined;
   model?: string | undefined;
   engineTrace: boolean;
+  /** Pick an earlier chat of the folder to go on from, at the start. */
+  resume?: boolean;
+  /** Go on from the folder's latest chat. */
+  continue?: boolean;
 }
 
 /**
@@ -89,49 +102,114 @@ export interface ChatDeps {
   ticker?: Scheduler;
   /** How `file_issue` runs gh and sends to GitHub, for a test that mustn't file a real issue. */
   filing?: Pick<FileIssueHost, "run" | "send">;
+  /** The models `/model` offers (`loginModels`), for a test that mustn't read logins or list. */
+  modelChoices?: () => Promise<{ models: readonly ModelChoice[]; failed: readonly string[] }>;
 }
 
+/** The labels of the pickers of earlier chats and of models. */
+const RESUME_LABEL = "Resume which chat?";
+const MODEL_LABEL = "Model for the next replies";
+
+/** The chat's own commands, beside `/exit`. */
+const COMMANDS: ReadonlySet<string> = new Set(["/model", "/resume"]);
+
 /**
- * Load the bundled chat flow, its `uses:` resolved to the bundled compaction flow.
+ * Load the bundled chat flow, its `uses:` resolved to the bundled compaction flow, as loaded in
+ * the folder `root`: its run records that folder as its flow's, which is how `/resume` finds the
+ * chats of a folder.
  *
  * @throws {LoadError} Never for the bundle as committed; the bundle test loads it.
  */
-export async function loadChatFlow(env: Env): Promise<ComposedFlow> {
-  const compaction = await loadFlow(FLOWS["compact_history.yaml"]!, { sourceLabel: "compact_history.yaml", env });
-  return loadFlow(FLOWS[CHAT_LABEL]!, { sourceLabel: CHAT_LABEL, env, childResolver: async () => compaction });
+export async function loadChatFlow(env: Env, root: string): Promise<ComposedFlow> {
+  const compaction = await loadFlow(FLOWS["compact_history.yaml"]!, {
+    sourceLabel: "compact_history.yaml",
+    env,
+  });
+  return loadFlow(FLOWS[CHAT_LABEL]!, {
+    sourceLabel: CHAT_LABEL,
+    env,
+    // Real, as `chatSessions` compares it.
+    baseDir: realpathSync(root),
+    childResolver: async () => compaction,
+  });
 }
 
-/** The message the LLM cascade's `RangeError` has for an agent no layer gives a provider and model. */
-const NO_MODEL = /has no (provider or model|model for provider)/;
+/** The message `resolveModelConfig`'s `RangeError` has when no layer gives a provider and model. */
+const NO_MODEL = /^No model is set/;
 
 /**
- * `provider/model` the assistant's replies use under `layer` and how it is reached (`loginLabel`),
- * or `null` when no layer gives them.
+ * The provider and model the chat's agents use under `layer` (`--provider`, `--model`) and the
+ * saved defaults while none is chosen, or `null` when nothing gives them.
  *
- * @throws {RangeError} As the LLM cascade does for anything else, a bad default in `env` say.
+ * @throws {RangeError} As `resolveModelConfig` does for anything else, a bad default in `env` say.
  * @throws {AuthError} When the saved logins can't be read.
  */
-function replyModel(
-  flow: ComposedFlow,
-  layer: Readonly<Record<string, string>>,
-  env: Env,
-): { model: string; login: string | null } | null {
-  let config: Readonly<Record<string, unknown>> | undefined;
-  let snapshot: ConnectionSnapshot;
+function defaultModel(layer: Readonly<Record<string, string>>, env: Env): ModelChoice | null {
+  let config: Readonly<Record<string, unknown>>;
   try {
-    const inputs = coerceInputs(flow.input, hostInputs(flow.input, {}));
-    snapshot = connectionSnapshot({ env });
-    const resolved = runStartLlm(copyGraph(flow.compiled), inputs, { ...layer }, snapshot);
-    config = resolved.effective[REPLY_PATH];
+    config = resolveModelConfig({ ...layer }, { env });
   } catch (error) {
     if (error instanceof RangeError && NO_MODEL.test(error.message)) return null;
     throw error;
   }
-  if (typeof config?.["provider"] !== "string" || typeof config["model"] !== "string") return null;
-  const connection = Object.hasOwn(snapshot.connections, config["provider"])
-    ? snapshot.connections[config["provider"]]
-    : null;
-  return { model: `${config["provider"]}/${config["model"]}`, login: loginLabel(connection) };
+  return { provider: config["provider"] as string, model: config["model"] as string };
+}
+
+/** How `provider` is reached under `env`'s logins (`loginLabel`); null when they can't be read. */
+function loginOf(provider: string, env: Env): string | null {
+  let snapshot: ConnectionSnapshot;
+  try {
+    snapshot = connectionSnapshot({ env });
+  } catch (error) {
+    if (error instanceof RangeError || error instanceof AuthError) return null;
+    throw error;
+  }
+  const { connections } = snapshot;
+  return loginLabel(Object.hasOwn(connections, provider) ? connections[provider] : null);
+}
+
+/**
+ * Ask which of `titles` under `label` through `terminal`: a picker (Esc or Ctrl-C cancels it), or,
+ * when `plain`, the titles numbered (written through `write`) and a line for the number. Returns
+ * the index, or null when none was picked (a cancel, the end of input, a blank line or a number
+ * out of range).
+ */
+async function pickOne(
+  terminal: Terminal,
+  plain: boolean,
+  write: (text: string) => Promise<void>,
+  label: string,
+  titles: readonly string[],
+): Promise<number | null> {
+  if (!plain) {
+    const picked = await terminal.askChoice(label, titles, { cancellable: true });
+    return picked === null ? null : titles.indexOf(picked);
+  }
+  const rows = titles.map((title, i) => `  ${i + 1}. ${sanitize(title)}\n`);
+  await write(`${label}:\n${rows.join("")}`);
+  const read = await terminal.readLine("Number (Enter for none):");
+  if (!("value" in read) || read.value.trim() === "") return null;
+  const n = Number(read.value.trim());
+  return Number.isInteger(n) && n >= 1 && n <= titles.length ? n - 1 : null;
+}
+
+/**
+ * What a new chat takes from `session` (`sessionSeed`), or null once `chat failed: ...` is printed
+ * for a log that can't be read or replayed.
+ */
+async function seedFrom(
+  session: ChatSession,
+  runsDir: string,
+  io: CliIo,
+): Promise<SessionSeed | null> {
+  try {
+    return await sessionSeed(session, runsDir, io.env);
+  } catch (error) {
+    // A bug isn't a log that can't be read.
+    if (!(error instanceof Error) || error instanceof TypeError) throw error;
+    await printStyled(io, `chat failed: can't go on from ${session.log}: ${error.message}`, "red");
+    return null;
+  }
 }
 
 /**
@@ -297,13 +375,27 @@ function waitingLines(children: readonly WaitingChild[], out: Colored, env: Env)
  * `deps.ticker`; a framed prompt. A child granted skills gets them as
  * `yian run` reads them from the chat's folder.
  *
+ * `/model` picks the model of the next replies among the current one and those the saved logins
+ * offer (`loginModels`, or `deps.modelChoices`): a picker, or off the chat's view, a numbered list
+ * and a line for the number. The choice goes to the run as a message (`modelMessage`) that the
+ * flow keeps in its state, so the log holds it; the children started after it get it too, and the
+ * banner's and spinner's model follows it. `/resume` lists the folder's earlier chats
+ * (`chatSessions`) the same way and ends this one (as `/exit` does) to go on from the one picked
+ * in a new chat: its transcript and model are the new run's inputs (`sessionSeed`), and its
+ * children left waiting are listed, not restarted; the model it chose carries over unless
+ * `--provider` or `--model` is given, and a chat that chose none goes on with the defaults; the
+ * compactions follow the model as the replies do. `options.continue` starts from the folder's
+ * latest chat, and `options.resume` from one picked at the start; with none, they print
+ * `no earlier yian chat in this folder to resume` and exit 1.
+ *
  * When the chat ends, the children still running are cancelled, and each child left waiting is
  * printed with its log and how to go on: one waiting for a timer resumes with `yian run --resume`;
  * one waiting for an answer or a message can't be continued outside the chat. A Ctrl-C meanwhile
  * halts every child (`ChildRuns.haltAll`), so the chat ends at once and prints each one it stopped
  * while it ran.
  *
- * @throws {UsageError} As `validateRunLogOptions` does for `--log`.
+ * @throws {UsageError} As `validateRunLogOptions` does for `--log`; for both `options.resume` and
+ *   `options.continue`.
  */
 export async function chat(
   flowPath: string | undefined,
@@ -312,9 +404,12 @@ export async function chat(
   deps: ChatDeps = {},
 ): Promise<number> {
   validateRunLogOptions({ flow: CHAT_LABEL, inputValues: [], log: options.log });
+  if (options.resume && options.continue) {
+    throw new UsageError("--resume and --continue can't be used together");
+  }
   const root = deps.root ?? process.cwd();
   const env = io.env;
-  const flow = await loadChatFlow(env);
+  const flow = await loadChatFlow(env, root);
   let skill: Skill;
   try {
     skill = bundledSkill(env);
@@ -324,8 +419,13 @@ export async function chat(
     return 1;
   }
 
-  // Both always given, so neither is asked for at the terminal.
-  const inputs: Record<string, unknown> = { flow: null, focus: null };
+  // Each always given, so none is asked for at the terminal.
+  const inputs: Record<string, unknown> = {
+    flow: null,
+    focus: null,
+    model: null,
+    transcript: null,
+  };
   let hint = "";
   if (flowPath !== undefined) {
     const focus = await checkFocus(flowPath, env);
@@ -346,136 +446,292 @@ export async function chat(
     }
     if (focus.inbox) hint += `to chat with this flow itself, run yian run ${shellWord(flowPath)}\n`;
   }
-  let model: { model: string; login: string | null } | null;
+  let defaults: ModelChoice | null;
   try {
-    model = replyModel(flow, cliLayer(options), env);
+    defaults = defaultModel(cliLayer(options), env);
   } catch (error) {
     if (!(error instanceof RangeError || error instanceof AuthError)) throw error;
     await printStyled(io, `chat failed: ${error.message}`, "red");
     return 1;
   }
-  if (model === null) {
+  if (defaults === null) {
     const message =
       "chat failed: the assistant has no provider or model; run 'yian auth <provider>', or pass " +
       "--provider and --model";
     await printStyled(io, message, "red");
     return 1;
   }
+  const runsDir = defaultRunsDir(env);
+  // The children's run folders go under `~/.yian/runs` even when `--log` puts the chat's log
+  // elsewhere, and `freshLog` makes that folder only for a default log.
+  mkdirSync(runsDir, { recursive: true, mode: 0o700 });
+  // `--continue` goes on from the folder's latest chat; `--resume` picks one at the start.
+  let seed: SessionSeed | null = null;
+  // The chats `--resume` picks among.
+  let picking: ChatSession[] | null = null;
+  if (options.continue || options.resume) {
+    const sessions = chatSessions(runsDir, root);
+    if (sessions.length === 0) {
+      await io.stderr.write("no earlier yian chat in this folder to resume\n");
+      return 1;
+    }
+    if (options.continue) {
+      seed = await seedFrom(sessions[0]!, runsDir, io);
+      if (seed === null) return 1;
+    } else picking = sessions;
+  }
+  // `--provider` and `--model` win over the model an earlier chat chose.
+  const seededModel = (from: SessionSeed | null): ModelChoice | null =>
+    options.provider || options.model ? null : (from?.model ?? null);
   // On a terminal, everything the chat prints from here on goes through its view, which holds
   // nothing to release until a turn starts.
   const ticker = deps.ticker ?? realScheduler;
   const view = richChat(io) ? new ChatView(io.stderrStream, env, ticker) : null;
+  const plainIo = io;
   if (view !== null) io = { ...io, stdout: view.writer, stderr: view.writer };
+  const out = io;
+  // The plain lines stay plain.
+  const plainOr = (stream: Colored): Colored => (view === null ? { isTTY: false } : stream);
+  const note = (text: string): Promise<void> =>
+    out.stderr.write(view === null ? text : view.note(text));
   const focus = flowPath === undefined ? null : (inputs["flow"] as string);
-  if (view !== null) {
-    const home = env("HOME");
-    const cwd = homePath(reachedAs(root, env("PWD")), home, realHome(home));
-    const info = { ...model, cwd, focus };
-    await io.stderr.write(`${chatBanner(info, io.stderrStream, env)}${view.note(sanitize(hint))}`);
-  } else {
-    const banner = [`yian chat`, model.model, focus === null ? null : `focus: ${focus}`]
-      .filter((part) => part !== null)
-      .join(" · ");
-    await io.stderr.write(`${sanitize(banner)}\n${sanitize(hint)}`);
-  }
-
-  const fresh = freshLog(options.log, env);
-  const logDir = defaultRunsDir(env);
-  // The children's run folders go under `~/.yian/runs` even when `--log` puts the chat's log
-  // elsewhere, and `freshLog` makes that folder only for a default log.
-  mkdirSync(logDir, { recursive: true, mode: 0o700 });
+  /** Print the banner naming `model`, the folder and the focus. */
+  const banner = async (model: ModelChoice): Promise<void> => {
+    const name = `${model.provider}/${model.model}`;
+    if (view !== null) {
+      const home = env("HOME");
+      const cwd = homePath(reachedAs(root, env("PWD")), home, realHome(home));
+      const info = { model: name, login: loginOf(model.provider, env), cwd, focus };
+      const box = chatBanner(info, out.stderrStream, env);
+      await out.stderr.write(`${box}${view.note(sanitize(hint))}`);
+      view.model(name);
+    } else {
+      const parts = [`yian chat`, name, focus === null ? null : `focus: ${focus}`];
+      const line = parts.filter((part) => part !== null).join(" · ");
+      await out.stderr.write(`${sanitize(line)}\n${sanitize(hint)}`);
+    }
+  };
   let rootSkills: Map<string, Skill> | null = null;
   const skillsFor = (child: ComposedFlow): ReadonlyMap<string, Skill> | null => {
     if (skillGrants(child.compiled).length === 0) return null;
     rootSkills ??= loadSkills(defaultSkillRoots({ cwd: root, env }), {
       skipInvalid: true,
-      warn: (message) => void printStyled(io, `warning: ${message}`, "yellow").catch(() => {}),
+      warn: (message) => void printStyled(out, `warning: ${message}`, "yellow").catch(() => {}),
     });
     return rootSkills;
   };
   const scheduler = deps.scheduler ?? realScheduler;
-  const wake = new EventTarget();
-  const runs: ChildRuns = new ChildRuns({
-    root,
-    logDir,
-    env,
-    llmConfig: cliLayer(options),
-    models: deps.models ?? null,
-    scheduler,
-    chatRunId: deps.runId ?? fresh.runId,
-    skillsFor,
-    consoleFile: consoleFileFor(fresh.path),
-    onStatus: (status) => queue.push(status),
-    ...deps.children,
-  });
-  const queue = new EventQueue({ wake, markRead: runs.markRead.bind(runs) });
-  const inFlight = new InFlight(wake);
-  const docs = new Map(Object.entries(DOCS));
-  const tools: InboxChatHost["tools"] = (terminal) => {
-    // On a terminal, the approval is drawn as a framed card.
-    const approve: ChatToolHost["approve"] = (request) => terminal.approve({ ...request, frame: view !== null });
-    const host: ChatToolHost = { root, approve, env, docs };
-    const home = homeDir(env);
-    const real = realHome(home);
-    const homes = real === undefined || real === home ? [home] : [home, real];
-    const fileIssue = fileIssueTool({
-      approve,
-      canApprove: () => terminal.canApprove,
+  const choices = deps.modelChoices ?? (() => loginModels(plainIo));
+  // The keys typed ahead that a chat `/resume` ended didn't read, for the chat after it.
+  let typed: readonly Key[] = [];
+
+  /**
+   * Run one chat, from `seed` when given (`picking`: from the one picked at its start), its log at
+   * `log` (a new run folder when absent); return its exit code, and the earlier chat `/resume`
+   * picked to go on with, if any.
+   */
+  const session = async (
+    seed: SessionSeed | null,
+    picking: readonly ChatSession[] | null,
+    log: string | undefined,
+    runId: string | undefined,
+  ): Promise<{ code: number; next: ChatSession | null }> => {
+    let next: ChatSession | null = null;
+    // The model chosen for the replies; null keeps the defaults.
+    let current: ModelChoice | null = seededModel(seed);
+    const fresh = freshLog(log, env);
+    const chatRunId = runId ?? fresh.runId;
+    const sessionInputs: Record<string, unknown> = {
+      ...inputs,
+      model: current,
+      transcript: seed?.transcript ?? null,
+    };
+    const wake = new EventTarget();
+    const runs: ChildRuns = new ChildRuns({
+      root,
+      logDir: runsDir,
       env,
-      now: () => scheduler.now(),
-      ...deps.filing,
+      llmConfig: current === null ? cliLayer(options) : { ...current },
+      models: deps.models ?? null,
+      scheduler,
+      chatRunId,
+      skillsFor,
+      consoleFile: consoleFileFor(fresh.path),
+      onStatus: (status) => queue.push(status),
+      ...deps.children,
     });
-    const report = { facts: hostFacts(fresh.path, homes), homes, fileIssue };
-    const authoring = { skills: new Map([[skill.name, skill]]) };
-    const all = trackInFlight(
-      [
-        ...chatFileTools(host),
-        ...chatRunTools(host, runs, { seen: queue, scheduler, report, authoring }),
-      ],
-      inFlight,
-    );
-    return Object.fromEntries(all.map((each) => [each.name, each]));
-  };
-  try {
-    return await inboxChat(
-      CHAT_LABEL,
-      {
-        inputValues: [],
-        log: fresh.path,
-        provider: options.provider,
-        model: options.model,
-        engineTrace: options.engineTrace,
-      },
-      io,
-      { scheduler, signals: deps.signals, models: deps.models },
-      {
-        flow,
-        runId: deps.runId ?? fresh.runId,
-        inputs,
-        skills: new Map([[skill.name, skill]]),
-        tools,
-        events: { queue, inFlight, wake, onInterrupt: () => runs.cancelWaits() },
-        view,
-        rows:
-          view === null
-            ? null
-            : runList(runs, view, { scheduler, ticker }, io.stderrStream, env),
-      },
-    );
-  } finally {
-    // The chat's own listener is gone. A Ctrl-C now halts the children instead of ending the
-    // process, so the cleanup ends promptly and still says where each child is.
-    const signals = deps.signals ?? process;
-    const halt = () => runs.haltAll();
-    signals.on("SIGINT", halt);
+    const queue = new EventQueue({ wake, markRead: runs.markRead.bind(runs) });
+    const inFlight = new InFlight(wake);
+    const docs = new Map(Object.entries(DOCS));
+    const tools: InboxChatHost["tools"] = (terminal) => {
+      // On a terminal, the approval is drawn as a framed card.
+      const approve: ChatToolHost["approve"] = (request) =>
+        terminal.approve({ ...request, frame: view !== null });
+      const host: ChatToolHost = { root, approve, env, docs };
+      const home = homeDir(env);
+      const real = realHome(home);
+      const homes = real === undefined || real === home ? [home] : [home, real];
+      const fileIssue = fileIssueTool({
+        approve,
+        canApprove: () => terminal.canApprove,
+        env,
+        now: () => scheduler.now(),
+        ...deps.filing,
+      });
+      const report = { facts: hostFacts(fresh.path, homes), homes, fileIssue };
+      const authoring = { skills: new Map([[skill.name, skill]]) };
+      const all = trackInFlight(
+        [
+          ...chatFileTools(host),
+          ...chatRunTools(host, runs, { seen: queue, scheduler, report, authoring }),
+        ],
+        inFlight,
+      );
+      return Object.fromEntries(all.map((each) => [each.name, each]));
+    };
+    // A title fits on one line in the picker and once picked, after its label.
+    const titleCells = (label: string) => columnsOf(out.stderrStream) - cells(label) - 4;
+    const sessionTitles = (sessions: readonly ChatSession[]) =>
+      sessions.map((each) => sessionTitle(each, titleCells(RESUME_LABEL)));
+    const pick = (terminal: Terminal, label: string, titles: readonly string[]) =>
+      pickOne(terminal, view === null, note, label, titles);
+    /** Go on from `from`: its transcript and model are the run's, its children left are listed. */
+    const goOn = (from: SessionSeed): void => {
+      current = seededModel(from);
+      sessionInputs["model"] = current;
+      sessionInputs["transcript"] = from.transcript;
+      runs.setLlmConfig(current === null ? cliLayer(options) : { ...current });
+    };
+    const start = async (terminal: Terminal): Promise<number | null> => {
+      if (picking !== null) {
+        const sessions = picking;
+        const index = await pick(terminal, RESUME_LABEL, sessionTitles(sessions));
+        if (index === null) {
+          await note("chat cancelled\n");
+          return 130;
+        }
+        seed = await seedFrom(sessions[index]!, runsDir, out);
+        if (seed === null) return 1;
+        goOn(seed);
+      }
+      await banner(current ?? defaults);
+      if (seed !== null) {
+        const { summary, history } = seed.transcript;
+        const summarized = summary === "" ? "" : " and a summary";
+        const count = history.flat().length;
+        await note(`(going on from an earlier chat: ${count} messages${summarized})\n`);
+        if (seed.waiting.length > 0) {
+          await note("(its runs left waiting aren't restarted)\n");
+          await out.stderr.write(waitingLines(seed.waiting, plainOr(out.stderr), env));
+        }
+      }
+      return null;
+    };
+    const chooseModel = async (terminal: Terminal): Promise<ChatCommandOutcome> => {
+      const shown = current ?? defaults;
+      const { models, failed } = await choices();
+      for (const provider of failed) {
+        await note(`(couldn't list the ${provider} models; showing its saved one)\n`);
+      }
+      const same = (a: ModelChoice, b: ModelChoice) =>
+        a.provider === b.provider && a.model === b.model;
+      const offered = [shown, ...models.filter((each) => !same(each, shown))];
+      const width = titleCells(MODEL_LABEL);
+      const titles = offered.map((each, i) =>
+        fit(`${each.provider}/${each.model}${i === 0 ? " (current)" : ""}`, width),
+      );
+      const index = await pick(terminal, MODEL_LABEL, titles);
+      if (index === null || index === 0) return null;
+      const chosen = { provider: offered[index]!.provider, model: offered[index]!.model };
+      // Taken once the run has the choice: a refused send changes nothing.
+      const sent = () => {
+        current = chosen;
+        runs.setLlmConfig({ ...chosen });
+        const name = `${chosen.provider}/${chosen.model}`;
+        view?.model(name);
+        void note(`(model: ${sanitize(name)}, from the next reply)\n`).catch(() => {});
+      };
+      return { send: modelMessage(chosen), sent };
+    };
+    const chooseSession = async (terminal: Terminal): Promise<ChatCommandOutcome> => {
+      const sessions = chatSessions(runsDir, root).filter((each) => each.runId !== chatRunId);
+      if (sessions.length === 0) {
+        await note("(no earlier yian chat in this folder to resume)\n");
+        return null;
+      }
+      const index = await pick(terminal, RESUME_LABEL, sessionTitles(sessions));
+      if (index === null) return null;
+      next = sessions[index]!;
+      return { exit: true };
+    };
     try {
-      const waiting = await runs.dispose();
-      // The plain lines stay plain.
-      await io.stderr.write(waitingLines(waiting, view === null ? { isTTY: false } : io.stderr, env));
-      if (fresh.runDir !== null) removeEmptyDir(fresh.runDir);
+      const code = await inboxChat(
+        CHAT_LABEL,
+        {
+          inputValues: [],
+          log: fresh.path,
+          provider: options.provider,
+          model: options.model,
+          engineTrace: options.engineTrace,
+        },
+        out,
+        { scheduler, signals: deps.signals, models: deps.models },
+        {
+          flow,
+          runId: chatRunId,
+          inputs: sessionInputs,
+          skills: new Map([[skill.name, skill]]),
+          tools,
+          events: { queue, inFlight, wake, onInterrupt: () => runs.cancelWaits() },
+          view,
+          rows:
+            view === null
+              ? null
+              : runList(runs, view, { scheduler, ticker }, out.stderrStream, env),
+          start,
+          // `yian run --resume` refuses a chat's log: an earlier chat goes on in a new one.
+          stopped: (path) =>
+            `chat stopped; the run is in ${path}\n` +
+            `continue with: yian chat --resume, in ${reachedAs(root, env("PWD"))}\n`,
+          typed,
+          onTyped: (keys) => {
+            typed = keys;
+          },
+          commands: {
+            names: COMMANDS,
+            run: (name, terminal) =>
+              name === "/model" ? chooseModel(terminal) : chooseSession(terminal),
+          },
+        },
+      );
+      return { code, next };
     } finally {
-      signals.off("SIGINT", halt);
-      view?.close();
+      // The chat's own listener is gone. A Ctrl-C now halts the children instead of ending the
+      // process, so the cleanup ends promptly and still says where each child is.
+      const signals = deps.signals ?? process;
+      const halt = () => runs.haltAll();
+      signals.on("SIGINT", halt);
+      try {
+        const waiting = await runs.dispose();
+        // The plain lines stay plain.
+        await out.stderr.write(waitingLines(waiting, plainOr(out.stderr), env));
+        if (fresh.runDir !== null) removeEmptyDir(fresh.runDir);
+      } finally {
+        signals.off("SIGINT", halt);
+      }
     }
+  };
+
+  try {
+    let { code, next } = await session(seed, picking, options.log, deps.runId);
+    // `/resume` ended the chat to go on from an earlier one, in a new run.
+    while (next !== null) {
+      const from = await seedFrom(next, runsDir, out);
+      if (from === null) return 1;
+      ({ code, next } = await session(from, null, undefined, undefined));
+    }
+    return code;
+  } finally {
+    view?.close();
   }
 }

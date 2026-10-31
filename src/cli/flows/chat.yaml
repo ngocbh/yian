@@ -8,6 +8,12 @@
 # null). The chat also sends what its child runs do (a question, a reply, an output, a failure)
 # to `owner_messages` as user messages authored `yian`.
 #
+# A message authored `yian` whose text is `/model ` and a JSON `{"provider", "model"}` chooses the
+# model of the replies and compactions after it: the turn keeps it in its state instead of
+# answering it, so the choice is in the run log and a resume replays it. `model` is the choice the
+# chat starts with (null for the run's defaults), and `transcript` an earlier chat's, which this
+# one goes on from.
+#
 # `yian chat` gives `reply` its tools; `flow` and `focus` name and show the flow the user opened
 # the chat with (`yian chat FLOW`), null without one.
 id: yian-chat
@@ -21,10 +27,14 @@ input:
   owner_messages: !Inbox(Message)
   flow: !Optional(str)        # the path of the flow in focus
   focus: !Optional(str)       # its text and its check, for the system prompt
+  model: !Optional(Model)     # the replies' model; null for the run's defaults
+  transcript: !Optional(Transcript)   # an earlier chat's, to go on from
 
 typedefs:
-  State: {summary: str, history: list(list(Message)), closed: bool}
-  Transcript: {summary: str, history: list(Message)}
+  Model: {provider: str, model: str}
+  State: {summary: str, history: list(list(Message)), closed: bool, model: Optional(Model)}
+  Transcript: {summary: str, history: list(list(Message))}   # history: one list per turn
+  Heard: {said: list(Message), model: Optional(Model)}   # what a turn answers, and its model
 
 defs:
   respond:
@@ -34,10 +44,14 @@ defs:
       said: !list(Message)
       flow: !Optional(str)
       focus: !Optional(str)
+      model: !Optional(Model)
       owner_messages: !Inbox(Message)
     nodes:
       reply:
         kind: agent
+        llm_config:
+          provider: ${input.model?.provider}
+          model: ${input.model?.model}
         input:
           summary: ${input.summary}
           history: ${input.history}
@@ -120,6 +134,7 @@ defs:
       summary: !str
       history: !list(list(Message))
       closed: !bool
+      model: !Optional(Model)
       flow: !Optional(str)
       focus: !Optional(str)
       owner_messages: !Inbox(Message)
@@ -127,17 +142,45 @@ defs:
       compacted:
         kind: call
         call: compact_history
-        input: {summary: "${input.summary}", history: "${input.history}"}
+        input: {summary: "${input.summary}", history: "${input.history}", model: "${input.model}"}
       heard:
         kind: tool
         tool_id: take                    # waits until a message arrives or the inbox closes
         input:
           from: ${input.owner_messages}
           take: all
+      sorted:                            # model choices apart from what the turn answers
+        kind: code
+        input:
+          events: ${heard.output.events}
+          model: ${input.model}
+        output: Heard
+        code: |
+          // A choice is the chat's own message: authored yian, its one text part `/model {...}`.
+          const choice = (message) => {
+            const text = message.parts.length === 1 ? message.parts[0].text : undefined;
+            if (message.author !== "yian" || !text?.startsWith("/model {")) return null;
+            try {
+              const { provider, model } = JSON.parse(text.slice("/model ".length));
+              return typeof provider === "string" && typeof model === "string"
+                ? { provider, model }
+                : null;
+            } catch {
+              return null;
+            }
+          };
+          let model = inputs.model;
+          const said = [];
+          for (const message of inputs.events) {
+            const chosen = choice(message);
+            if (chosen === null) said.push(message);
+            else model = chosen;
+          }
+          return { said, model };
       route:
         kind: case
         cases:
-          - when: ${heard.output.events != []}   # skipped when the inbox closed with nothing left
+          - when: ${sorted.output.said != []}   # skipped for only model choices, or a closed inbox
             then: answered
       answered:
         kind: call
@@ -145,27 +188,30 @@ defs:
         input:
           summary: ${compacted.output.summary}
           history: ${[m for t in compacted.output.history for m in t]}
-          said: ${heard.output.events}
+          said: ${sorted.output.said}
           flow: ${input.flow}
           focus: ${input.focus}
+          model: ${sorted.output.model}
           owner_messages: ${input.owner_messages}
     output: !State
       summary: ${compacted.output.summary}
       history: ${compacted.output.history + (answered.output :- [])}
       closed: ${heard.output.closed}
+      model: ${sorted.output.model}
 
 nodes:
   chat:
     kind: loop
     call: turn
     input:
-      summary: ""
-      history: []
+      summary: ${input.transcript?.summary :- ""}
+      history: !list(list(Message)) ${input.transcript?.history :- []}
       closed: false
+      model: !Optional(Model) ${input.model}
       flow: ${input.flow}
       focus: ${input.focus}
       owner_messages: ${input.owner_messages}
     while: not closed
 output: !Transcript
   summary: ${chat.output.summary}
-  history: ${[m for t in chat.output.history for m in t]}
+  history: ${chat.output.history}

@@ -16,20 +16,29 @@ description: Keep a chat history's text under a budget by folding older turns in
 
 typedefs:
   Compacted: {summary: str, history: list(list(Message))}   # history: one list of messages per turn
+  Model: {provider: str, model: str}
 
 input:
   summary: !str
   history: !list(list(Message))
   budget: !int 32000      # characters of message text before compacting
   keep: !int 4            # whole turns kept verbatim; 0 (or less) folds every turn
+  model: !Optional(Model) null   # the summarizer's model; null for the run's defaults
 
 defs:
   fold:                   # one model call: the old summary and the older turns give a new summary
-    input: {summary: !str, older: !list(list(Message)), recent: !list(list(Message))}
+    input:
+      summary: !str
+      older: !list(list(Message))
+      recent: !list(list(Message))
+      model: !Optional(Model)
     nodes:
       summarize:          # never `reply`: `yian run`'s chat prints any node named `reply`
         kind: agent
         input: {summary: "${input.summary}", older: "${input.older}"}
+        llm_config:
+          provider: ${input.model?.provider}
+          model: ${input.model?.model}
         output: str
         system_prompt: |-
           You keep a running summary of a conversation between a user and an assistant, so the
@@ -63,6 +72,7 @@ nodes:
       summary: ${input.summary}
       older: "${input.history[:len(input.history) - input.keep]}"    # folded into the summary
       recent: "${input.history[len(input.history) - input.keep:]}"   # kept verbatim
+      model: ${input.model}
 output: !Compacted
   summary: ${folded.output?.summary :- input.summary}
   history: ${folded.output?.history :- input.history}

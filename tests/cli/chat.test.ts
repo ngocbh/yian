@@ -568,6 +568,10 @@ test(
     const { code, log } = await chatting;
     expect(code).toBe(130);
     expect(inspectRun(log).status).toBe("waiting");
+    // A chat goes on with yian chat, which yian run --resume isn't.
+    expect(stderr()).toContain(
+      `chat stopped; the run is in ${log}\ncontinue with: yian chat --resume, in ${root}\n`,
+    );
     const resumed = chatIo();
     expect(await main(["run", "--resume", log], resumed.io)).toBe(1);
     expect(resumed.stderr()).toContain(
@@ -688,6 +692,150 @@ test(
     const facts = `chat run log: ${join(tmp, "chat.jsonl")}\\nran yian check a.yaml`;
     expect(shown(draft[0]!)).toContain(facts);
     expect(shown(draft.at(-1)!)).toContain("an error message");
+  },
+  TIMEOUT,
+);
+
+/** The models `/model` offers in these tests: the default's provider's other model. */
+const offered = async () => ({ models: [{ provider: "xai", model: "grok-4" }], failed: [] });
+
+/** Each model a chat's agents were built with, as `provider/model`. */
+const builtWith = (access: ReturnType<typeof serving>) =>
+  access.configs.map((config) => `${config["provider"]}/${config["model"]}`);
+
+/** Run `yian chat` in `root`, its log in a new run folder under the home, where `/resume` reads. */
+async function homeChat(
+  io: CliIo,
+  model: ChatModel,
+  options: Partial<ChatOptions> = {},
+): Promise<{ code: number; access: ReturnType<typeof serving> }> {
+  const access = serving(model, env);
+  const code = await chat(undefined, { engineTrace: false, ...options }, io, {
+    root,
+    models: access,
+    signals: new EventEmitter(),
+    modelChoices: offered,
+  });
+  return { code, access };
+}
+
+test(
+  "/model picks the model of the next replies, off a terminal by number, and --continue keeps it",
+  async () => {
+    const first = chatIo();
+    first.stdin.write("/model\n2\nremember 7\n/exit\n");
+    const model = new AnsweringModel(() => textReply("noted"));
+    const { code, access } = await homeChat(first.io, model);
+    expect(code).toBe(0);
+    expect(first.stderr()).toContain(
+      "Model for the next replies:\n  1. xai/grok-4.3 (current)\n  2. xai/grok-4\n",
+    );
+    expect(first.stderr()).toContain("(model: xai/grok-4, from the next reply)");
+    // The choice got no reply of its own: one request, on the chosen model.
+    expect(model.requests).toHaveLength(1);
+    expect(builtWith(access)).toEqual(["xai/grok-4"]);
+    expect(shown(model.requests[0]!)).not.toContain("/model");
+
+    const next = chatIo();
+    next.stdin.write("what did I say?\n/exit\n");
+    const again = new AnsweringModel(() => textReply("7"));
+    const resumed = await homeChat(next.io, again, { continue: true });
+    expect(resumed.code).toBe(0);
+    expect(next.stderr()).toStartWith(
+      "yian chat · xai/grok-4\n(going on from an earlier chat: 2 messages)\n",
+    );
+    expect(shown(again.requests[0]!)).toContain("remember 7");
+    expect(builtWith(resumed.access)).toEqual(["xai/grok-4"]);
+  },
+  TIMEOUT,
+);
+
+test(
+  "--continue and --resume with no earlier chat in the folder say so and exit 1",
+  async () => {
+    for (const flag of [{ continue: true }, { resume: true }]) {
+      const { io, stderr } = chatIo();
+      const model = new AnsweringModel(() => textReply("hello"));
+      expect((await homeChat(io, model, flag)).code).toBe(1);
+      expect(stderr()).toBe("no earlier yian chat in this folder to resume\n");
+      expect(model.requests).toEqual([]);
+    }
+  },
+  TIMEOUT,
+);
+
+test(
+  "/resume ends the chat and goes on from the one picked, newest first, in a new chat",
+  async () => {
+    for (const line of ["the old one", "the newer one"]) {
+      const before = chatIo();
+      before.stdin.write(`${line}\n/exit\n`);
+      expect((await homeChat(before.io, new AnsweringModel(() => textReply("ok")))).code).toBe(0);
+    }
+    const { io, stdin, stderr } = chatIo();
+    // The lines typed ahead of the new chat go to it.
+    stdin.write("/resume\n2\nwhat did I say?\n/exit\n");
+    const model = new AnsweringModel(() => textReply("you said it"));
+    expect((await homeChat(io, model)).code).toBe(0);
+    const listed = /Resume which chat\?:\n {2}1\. [-\d :]+ · xai\/grok-4\.3 · the newer one\n/;
+    expect(stderr()).toMatch(listed);
+    expect(stderr()).toContain("· the old one\n");
+    expect(stderr()).toContain(
+      "session ended\nyian chat · xai/grok-4.3\n(going on from an earlier chat",
+    );
+    expect(model.requests).toHaveLength(1);
+    expect(shown(model.requests[0]!)).toContain("the old one");
+    expect(shown(model.requests[0]!)).not.toContain("the newer one");
+  },
+  TIMEOUT,
+);
+
+test(
+  "--resume picks the chat to go on from before the chat starts",
+  async () => {
+    const before = chatIo();
+    before.stdin.write("remember 9\n/exit\n");
+    expect((await homeChat(before.io, new AnsweringModel(() => textReply("ok")))).code).toBe(0);
+    const { io, stdin, stderr } = chatIo();
+    stdin.write("1\nand?\n/exit\n");
+    const model = new AnsweringModel(() => textReply("9"));
+    expect((await homeChat(io, model, { resume: true })).code).toBe(0);
+    expect(stderr()).toStartWith("Resume which chat?:\n  1. ");
+    expect(shown(model.requests[0]!)).toContain("remember 9");
+  },
+  TIMEOUT,
+);
+
+test(
+  "--continue takes the model only an earlier choice made, and --model wins over it",
+  async () => {
+    // One chat on the defaults, then one that chose grok-4.
+    const plain = chatIo();
+    plain.stdin.write("on the defaults\n/exit\n");
+    expect((await homeChat(plain.io, new AnsweringModel(() => textReply("ok")))).code).toBe(0);
+    const later = (environment: typeof env) => {
+      const io = chatIo({ environment });
+      io.stdin.write("and now?\n/exit\n");
+      return io;
+    };
+    // The defaults changed since: a chat that chose nothing goes on with them.
+    const changed = (name: string) => (name === "YIAN_DEFAULT_MODEL" ? "grok-4.1" : env(name));
+    const onDefaults = await homeChat(later(changed).io, new AnsweringModel(() => textReply("a")), {
+      continue: true,
+    });
+    expect(builtWith(onDefaults.access)).toEqual(["xai/grok-4.1"]);
+    const chose = chatIo();
+    chose.stdin.write("/model\n2\npicked\n/exit\n");
+    expect((await homeChat(chose.io, new AnsweringModel(() => textReply("ok")))).code).toBe(0);
+    const kept = await homeChat(later(env).io, new AnsweringModel(() => textReply("b")), {
+      continue: true,
+    });
+    expect(builtWith(kept.access)).toEqual(["xai/grok-4"]);
+    const flagged = await homeChat(later(env).io, new AnsweringModel(() => textReply("c")), {
+      continue: true,
+      model: "grok-4.2",
+    });
+    expect(builtWith(flagged.access)).toEqual(["xai/grok-4.2"]);
   },
   TIMEOUT,
 );

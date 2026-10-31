@@ -20,6 +20,7 @@ import {
   configCheck,
   configErrors,
   EXTRA_FIELD,
+  loginModels,
   modelAnswers,
   models,
   openBrowser,
@@ -2477,5 +2478,35 @@ describe("openBrowser", () => {
       },
     });
     expect(out.text()).toBe(SHOWN);
+  });
+});
+
+describe("loginModels", () => {
+  test("a login offers its saved model, then its listing; a failed one its own only", async () => {
+    const setup = setupAuth();
+    await saveEachKind(setup.store);
+    const listed: [unknown, ListModelsOptions][] = [];
+    const listing = async (provider: unknown, options: ListModelsOptions = {}) => {
+      listed.push([provider, options]);
+      if (provider === "ollama") throw new ModelListError("refused", { status: 500 });
+      return ["claude-other", "claude-test"];
+    };
+    const { io } = fakeIo({ env: setup.env });
+    const result = await loginModels(io, { ...setup.deps, listModels: listing });
+    expect(result.models.map((each) => `${each.provider}/${each.model}`)).toEqual([
+      "anthropic/claude-test",
+      "anthropic/claude-other",
+      "azure/gpt-azure",
+      "ollama/llama-test",
+      "openai/gpt-test",
+      "openai/gpt-other",
+    ]);
+    expect(result.failed).toEqual(["ollama"]);
+    // The anthropic listing sent the saved key; ollama's sent none; azure has no listing. The
+    // listings run at once, in any order.
+    const keys = listed.map(([provider, options]) => [provider, options.apiKey]);
+    expect(keys).toHaveLength(2);
+    expect(keys).toContainEqual(["anthropic", "private-key"]);
+    expect(keys).toContainEqual(["ollama", null]);
   });
 });

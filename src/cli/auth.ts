@@ -16,6 +16,7 @@ import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { collect } from "../llm/events.ts";
 import { Message, Request, TextPart } from "../llm/messages.ts";
 import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../llm_clients/api_key_env.ts";
+import { isUsableLogin } from "../llm_clients/auth/common.ts";
 import { ApiKeyCredentials, AuthError, AuthStore, type OAuthCredentials, OpenAIAuth } from "../llm_clients/auth/index.ts";
 import {
   LLM_CONFIG_KEYS,
@@ -1022,6 +1023,63 @@ async function subscriptionModels(
       throw error;
     }
   });
+}
+
+/** A model a saved login offers, as `loginModels` lists it. */
+export interface LoginModel {
+  readonly provider: string;
+  readonly model: string;
+}
+
+/**
+ * The models the saved logins of `io.env`'s store offer, for `yian chat`'s `/model`: for each
+ * usable login, in the store's order, its saved model, then the others its listing gives (an
+ * openai subscription's, or its key's, as `yian models` lists them; `OPENAI_BASE_URL` and the
+ * like are followed). A login whose listing fails, or that has none (azure), offers its saved
+ * model only, and `failed` names its provider. Each listing gets `timeout` seconds.
+ */
+export async function loginModels(
+  io: CliIo,
+  deps: AuthDeps = {},
+  timeout: number = MODEL_LIST_TIMEOUT_SECONDS,
+): Promise<{ models: LoginModel[]; failed: string[] }> {
+  const store = new AuthStore(null, { env: io.env });
+  const failed: string[] = [];
+  const lists = await Promise.all(
+    store.read().selections.filter(isUsableLogin).map(async (selection) => {
+      const { provider } = selection;
+      let listed: readonly string[] = [];
+      try {
+        if (selection.method === "subscription") {
+          listed = await subscriptionModels(store.path, timeoutMilliseconds(timeout), io, deps);
+        } else if (provider !== "azure") {
+          const variable = provider === "openai" ? "OPENAI_BASE_URL" : BASE_URL_ENV[provider];
+          const baseUrl = (variable && io.env(variable)) || null;
+          const credentials =
+            selection.method === "api_key"
+              ? await store.credentials(provider, selection.credentialId)
+              : null;
+          const key = credentials instanceof ApiKeyCredentials ? credentials : null;
+          listed = (await (deps.listModels ?? listModels)(provider, {
+            apiKey: key?.apiKey ?? null,
+            headers: key === null ? null : Object.fromEntries(key.headers),
+            organization: selection.organization,
+            project: selection.project,
+            baseUrl,
+            timeout,
+          })) ?? [];
+          if (provider === "openai") listed = textModels(listed);
+        }
+      } catch (error) {
+        const listing = error instanceof TimeoutError || error instanceof ModelListError;
+        if (!(listing || error instanceof AuthError)) throw error;
+        failed.push(provider);
+      }
+      const names = [selection.model, ...listed.filter((model) => model !== selection.model)];
+      return names.map((model) => ({ provider, model }));
+    }),
+  );
+  return { models: lists.flat(), failed };
 }
 
 /**

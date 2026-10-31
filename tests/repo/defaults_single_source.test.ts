@@ -58,6 +58,7 @@ const ALLOWED: Record<string, string> = {
   "cli/bundled_skill.ts: HASH_DIGITS": "hex digits of the content hash that names the bundled skill's cache folder",
   "cli/chat_events.ts: EVENT_BODY_CHARS": "size of a child event's line the chat's model reads",
   "cli/chat_events.ts: LIST_ITEMS": "asks or waits a child event or status lists for the chat's model",
+  "cli/chat_sessions.ts: SESSIONS_LISTED": "earlier chats /resume lists",
   "cli/chat_run_tools.ts: STATUS_TEXT_CHARS": "size of each text field of a child run's status the chat's model reads",
   "cli/chat_run_tools.ts: WAIT_FLOW_MAX_S": "longest wait_flow waits for a child run to change",
   "cli/chat_tools.ts: FOCUS_BYTES": "size of the focus flow's text shown the chat's model",

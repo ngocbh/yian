@@ -65,6 +65,8 @@ export interface TerminalOptions {
   plain?: boolean;
   /** Draw a line entered at a framed prompt plain, without the user's band: for `NO_COLOR`. */
   noColor?: boolean;
+  /** Keys typed ahead before this terminal (another's `typedAhead`), fed to its first widgets. */
+  typed?: readonly Key[];
 }
 
 /** What `Terminal.approve` asks the user to approve. */
@@ -765,13 +767,14 @@ type Escaped = { escape: true; draft: string };
 
 /**
  * A picker over `titles`, answering the chosen index, so equal titles stay apart. `indicator`
- * draws `●`/`○` before each title.
+ * draws `●`/`○` before each title; with `escapes`, Esc ends it as Ctrl-C does.
  */
 function selectWidget(options: {
   label: string;
   titles: readonly string[];
   initial?: number;
   indicator?: boolean;
+  escapes?: boolean;
 }): Widget<number> {
   const count = options.titles.length;
   let index = options.initial ?? 0;
@@ -789,6 +792,7 @@ function selectWidget(options: {
       if (key.name === "return" || key.name === "enter") return { value: index };
       // questionary binds Ctrl-Q like Ctrl-C in its pickers.
       if (key.ctrl && key.name === "q") return { stop: "interrupt" };
+      if (options.escapes && key.name === "escape") return { stop: "interrupt" };
       index = moved(key, index, count);
       return undefined;
     },
@@ -981,6 +985,12 @@ export class Terminal {
     this.#onStop = options.onStop;
     this.#onActive = options.onActive;
     this.#now = options.now ?? Date.now;
+    this.#buffer = [...(options.typed ?? [])];
+  }
+
+  /** The keys typed that no widget has read yet, which `close` drops: for a terminal after it. */
+  typedAhead(): Key[] {
+    return [...this.#buffer];
   }
 
   /** Whether `approve` can ask: the terminal isn't plain or closed, and its input is a TTY. */
@@ -1159,12 +1169,13 @@ export class Terminal {
 
   /**
    * A single choice among strings; null when cancelled or closed. Each choice is drawn through
-   * `visible` (a provider's model ids are choices) and answered as given.
+   * `visible` (a provider's model ids are choices) and answered as given. With `cancellable`, Esc
+   * or Ctrl-C answers null and leaves the terminal open; otherwise Ctrl-C closes it.
    */
   async askChoice(
     label: string,
     choices: readonly string[],
-    options: { initial?: string; signal?: AbortSignal } = {},
+    options: { initial?: string; signal?: AbortSignal; cancellable?: boolean } = {},
   ): Promise<string | null> {
     // questionary's select refuses both too.
     if (choices.length === 0) throw new RangeError("askChoice needs at least one choice");
@@ -1172,7 +1183,12 @@ export class Terminal {
       throw new RangeError(`askChoice's initial ${JSON.stringify(options.initial)} is not one of the choices`);
     }
     const initial = options.initial === undefined ? 0 : choices.indexOf(options.initial);
-    const ended = await this.#runTurn(options.signal, (run) => run(selectWidget({ label, titles: choices.map(visible), initial })));
+    const escapes = options.cancellable === true;
+    const ended = await this.#runTurn(
+      options.signal,
+      (run) => run(selectWidget({ label, titles: choices.map(visible), initial, escapes })),
+      { keepOpen: escapes },
+    );
     return "value" in ended ? choices[ended.value]! : null;
   }
 

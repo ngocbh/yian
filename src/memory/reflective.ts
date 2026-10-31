@@ -34,7 +34,7 @@ import {
 } from "../llm_clients/connection.ts";
 import { chatModelFromConfig } from "../llm_clients/factory.ts";
 import { logJson, type JsonObject as SchemaObject } from "../typesys/json.ts";
-import { fromHost, type Value, writeAsJson } from "../typesys/values.ts";
+import { codePointCount, fromHost, type Value, writeAsJson } from "../typesys/values.ts";
 import {
   freezeJsonObject,
   type JsonObject,
@@ -468,35 +468,61 @@ export function visibleInteractionJson(interaction: VisibleInteraction): JsonObj
   throw new TypeError("unsupported visible interaction");
 }
 
+/** The UTF-16 index just after the first `count` code points of `text`. */
+function prefixEnd(text: string, count: number): number {
+  let index = 0;
+  for (let taken = 0; taken < count && index < text.length; taken++) {
+    index += text.codePointAt(index)! > 0xffff ? 2 : 1;
+  }
+  return index;
+}
+
+/** The UTF-16 index where the last `count` code points of `text` start. */
+function suffixStart(text: string, count: number): number {
+  let index = text.length;
+  for (let taken = 0; taken < count && index > 0; taken++) {
+    // A low surrogate pairs only with a high surrogate right before it, so this splits the text
+    // into the same code points a forward walk does.
+    const pair = index >= 2 && text.codePointAt(index - 2)! > 0xffff;
+    index -= pair ? 2 : 1;
+  }
+  return index;
+}
+
 /**
  * @internal Encode JSON as its text form under a deterministic cap of `limit` code points. Longer
  * text becomes the summary `{original_chars, prefix, sha256, suffix, truncated}`, keeping both
  * ends of the text, shrunk until it fits or its ends are empty.
  */
 export function boundedJsonMaterial(value: JsonValue, limit: number): string {
-  const material = writeAsJson(value as Value);
+  return boundedJsonText(writeAsJson(value as Value), limit);
+}
+
+/** @internal `boundedJsonMaterial` for JSON the caller has already written as `material`. */
+export function boundedJsonText(material: string, limit: number): string {
   // UTF-16 length is at least the code-point count, so short material never needs the split below.
   if (material.length <= limit) return material;
-  // Code points, so a cut never splits a surrogate pair.
-  const chars = Array.from(material);
-  if (chars.length <= limit) return material;
+  // Code points, so a cut never splits a surrogate pair. The cuts walk the string in place: the
+  // material can be many megabytes, and a copy per code point would take several times that.
+  const total = codePointCount(material);
+  if (total <= limit) return material;
   const digest = crypto.createHash("sha256").update(material).digest("hex");
   const summary = (chunk: number) =>
     writeAsJson({
-      original_chars: BigInt(chars.length),
-      prefix: chars.slice(0, chunk).join(""),
+      original_chars: BigInt(total),
+      prefix: material.slice(0, prefixEnd(material, chunk)),
       sha256: digest,
-      suffix: chunk ? chars.slice(-chunk).join("") : "",
+      suffix: chunk ? material.slice(suffixStart(material, chunk)) : "",
       truncated: true,
     });
   let chunk = Math.max(0, Math.floor((limit - 200) / 2));
   let encoded = summary(chunk);
-  let length = Array.from(encoded).length;
+  let length = codePointCount(encoded);
   while (length > limit && chunk) {
     const reduction = Math.max(1, Math.floor((length - limit + 1) / 2));
     chunk = Math.max(0, chunk - reduction);
     encoded = summary(chunk);
-    length = Array.from(encoded).length;
+    length = codePointCount(encoded);
   }
   return encoded;
 }

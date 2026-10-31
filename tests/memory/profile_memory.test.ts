@@ -381,8 +381,17 @@ test("parse reply enforces tags content and budget", () => {
       "profile.over_budget",
       "profile learner returned 101 characters; the limit is 100",
     ],
+    [
+      textReply(`<profile>${"😀".repeat(101)}</profile>`),
+      "profile.over_budget",
+      "profile learner returned 101 characters; the limit is 100",
+    ],
     [noText, "profile.contract", noTags],
   ];
+  // A surrogate pair counts as one character, so a document of exactly 100 emoji fits.
+  expect(parseReply(textReply(`<profile>${"😀".repeat(100)}</profile>`), "# Ada\n", 100)).toBe(
+    `${"😀".repeat(100)}\n`,
+  );
   for (const [reply, code, message] of rows) {
     let caught: unknown;
     try {

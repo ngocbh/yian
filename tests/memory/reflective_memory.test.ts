@@ -4,8 +4,8 @@
  * makes the backend's `createModel` answer with one scripted reply per learn.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import crypto, { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,12 +39,14 @@ import {
 } from "../../src/memory/contracts.ts";
 import {
   boundedJsonMaterial,
+  boundedJsonText,
   REFLECTION_SCHEMA,
   ReflectiveMemory,
   type ReflectiveSession,
   visibleInteractionJson,
 } from "../../src/memory/reflective.ts";
 import { logJson } from "../../src/typesys/json.ts";
+import { type Value, writeAsJson } from "../../src/typesys/values.ts";
 
 // Cloned snapshots and nested test values are edited freely.
 type Mutable = any;
@@ -1300,6 +1302,74 @@ test("boundedJsonMaterial counts code points and keeps both ends", () => {
   expect(summary.prefix.isWellFormed() && summary.suffix.isWellFormed()).toBe(true);
   expect(summary.sha256).toBe(createHash("sha256").update(JSON.stringify(text)).digest("hex"));
   expect(summary.truncated).toBe(true);
+});
+
+/** The summary boundedJsonMaterial gives, cut from an array of the material's code points. */
+function arrayBoundedMaterial(value: JsonObject | string, limit: number): string {
+  const material = writeAsJson(value as Value);
+  const chars = Array.from(material);
+  if (chars.length <= limit) return material;
+  const digest = createHash("sha256").update(material).digest("hex");
+  const summary = (chunk: number) =>
+    writeAsJson({
+      original_chars: BigInt(chars.length),
+      prefix: chars.slice(0, chunk).join(""),
+      sha256: digest,
+      suffix: chunk ? chars.slice(-chunk).join("") : "",
+      truncated: true,
+    });
+  let chunk = Math.max(0, Math.floor((limit - 200) / 2));
+  let encoded = summary(chunk);
+  while (Array.from(encoded).length > limit && chunk) {
+    const reduction = Math.max(1, Math.floor((Array.from(encoded).length - limit + 1) / 2));
+    chunk = Math.max(0, chunk - reduction);
+    encoded = summary(chunk);
+  }
+  return encoded;
+}
+
+test("boundedJsonMaterial and boundedJsonText cut the same text as a code-point array would", () => {
+  // Odd-length runs put surrogate pairs on both sides of every cut point across the limits.
+  const values: (JsonObject | string)[] = [
+    "a😀é".repeat(700),
+    `x${"😀".repeat(1500)}`,
+    { lone: "\ud800 then \udc00", runs: ["é😀".repeat(333), `😀${"ab😀".repeat(401)}`] },
+    "y".repeat(3000),
+  ];
+  for (const value of values) {
+    for (const limit of [0, 1, 199, 200, 201, 250, 300, 301, 1000, 5000]) {
+      const material = boundedJsonMaterial(value, limit);
+      expect(material).toBe(arrayBoundedMaterial(value, limit));
+      expect(boundedJsonText(writeAsJson(value as Value), limit)).toBe(material);
+      expect(material.isWellFormed()).toBe(true);
+      if (limit >= 300) expect(codePoints(material)).toBeLessThanOrEqual(limit);
+    }
+  }
+});
+
+// Needs Bun.gc to settle the heap before each sample, so it does not run under the Node suite.
+test.skipIf(typeof Bun === "undefined")("boundedJsonMaterial keeps no per-code-point copy of long material", () => {
+  // Above Latin-1, so each code point would be its own string rather than a cached one.
+  const text = "é😀x".repeat(1_000_000);
+  Bun.gc(true);
+  const before = process.memoryUsage().heapUsed;
+  let peak = before;
+  const realHash = crypto.createHash;
+  // Sampled once the length is known and before the summary is written.
+  const hashSpy = spyOn(crypto, "createHash").mockImplementation(((...args: Parameters<typeof crypto.createHash>) => {
+    Bun.gc(true);
+    peak = Math.max(peak, process.memoryUsage().heapUsed);
+    return Reflect.apply(realHash, crypto, args) as ReturnType<typeof crypto.createHash>;
+  }) as typeof crypto.createHash);
+  let material: string;
+  try {
+    material = boundedJsonMaterial(text, 1000);
+  } finally {
+    hashSpy.mockRestore();
+  }
+  // The material itself is about 8 MB; an array of its code points is several times that.
+  expect(peak - before).toBeLessThan(32 * 1024 * 1024);
+  expect(JSON.parse(material).original_chars).toBe(3_000_002);
 });
 
 test("visibleInteractionJson writes each interaction with sorted keys", () => {

@@ -15,6 +15,7 @@ import { outputContractOrigin, Parameter } from "../../src/nodes/contracts.ts";
 import { runFlow } from "../../src/run.ts";
 import {
   buildValueAs,
+  codePointCount,
   cutText,
   FileRef,
   renderValuePath,
@@ -160,6 +161,14 @@ describe("cutText", () => {
     expect(cutText("😀".repeat(4), 4)).toBe("😀".repeat(4));
     expect(cutText("😀".repeat(7), 4)).toBe("😀".repeat(4) + "… (3 more characters)");
     expect(cutText("ab😀😀", 3)).toBe("ab😀… (1 more characters)");
+  });
+});
+
+describe("codePointCount", () => {
+  test("counts a surrogate pair as one and a lone surrogate as one, as Array.from does", () => {
+    for (const text of ["", "abc", "😀", "a😀é", "\ud800𐀀", "𐀀\udc00", "\udc00\ud800", "x\ud800"]) {
+      expect(codePointCount(text)).toBe(Array.from(text).length);
+    }
   });
 });
 

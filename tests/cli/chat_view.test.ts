@@ -149,7 +149,7 @@ async function until(check: () => boolean): Promise<void> {
 const row = (text: string) => `│ ${text.padEnd(COLUMNS - 4)} │`;
 const TOP = `╭${"─".repeat(COLUMNS - 2)}╮`;
 const BOTTOM = `╰${"─".repeat(COLUMNS - 2)}╯`;
-const HINT = "  /exit to leave · ctrl-c interrupts · esc withdraws";
+const HINT = "  /model /resume /exit · ctrl-c interrupts · esc withdraws";
 
 describe("the banner's pieces", () => {
   test("loginLabel names a subscription and a key that is there", () => {
@@ -332,6 +332,16 @@ describe("the chat's view", () => {
     view.reply("hello ran and returned **Hi Ada**.\n- one");
     view.turn(false);
     expect(rows()).toEqual(["", "⏺ hello ran and returned Hi Ada.", "  • one"]);
+  });
+
+  test("the spinner names the model the view is given", () => {
+    const { view, rows } = viewOn();
+    view.model("openai/gpt-5.5");
+    view.turn(true);
+    expect(rows()).toEqual(["· Thinking… (0s · openai/gpt-5.5 · esc to interrupt)"]);
+    view.model(null);
+    expect(rows()).toEqual(["· Thinking… (0s · esc to interrupt)"]);
+    view.turn(false);
   });
 
   test("a failed attempt's text is replaced by (retrying) once the next starts, in a new block", () => {
@@ -1187,8 +1197,9 @@ describe("the input box while a reply runs", () => {
       await until(() => rows().includes(HINT));
       stdin.write(`tell me a story${ENTER}`);
       await until(() => rows().includes("⏺ Once upon"));
-      // The box is under the spinner, ready for a line.
-      expect(rows().slice(-5)).toEqual(["· Thinking… (0s · esc to interrupt)", TOP, row(">"), BOTTOM, HINT]);
+      // The box is under the spinner, which names the model, ready for a line.
+      const spinner = "· Thinking… (0s · xai/grok-4.3 · esc to interrupt)";
+      expect(rows().slice(-5)).toEqual([spinner, TOP, row(">"), BOTTOM, HINT]);
       stdin.write("make it short");
       await until(() => rows().includes(row("> make it short")));
       stdin.write(ENTER);

@@ -159,7 +159,8 @@ defs:
           const said = [];
           for (const message of inputs.events) {
             const text = message.parts.length === 1 ? message.parts[0].text : undefined;
-            const chosen = /^\/model (\S+) (\S+)$/.exec(message.author === "yian" ? (text ?? "") : "");
+            const yian = message.author === "yian" ? (text ?? "") : "";
+            const chosen = /^\/model (\S+) (\S+)$/.exec(yian);
             if (chosen === null) said.push(message);
             else model = { provider: chosen[1], model: chosen[2] };
           }

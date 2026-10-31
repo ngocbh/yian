@@ -85,11 +85,11 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
     const record = entry.envelope.record;
     if (record instanceof RunStartedRecord) {
       const text = record.flow?.files[record.flow.root]?.text ?? "";
-      if (record.flow?.root !== CHAT_FLOW_FILE || !new RegExp(`^id: ${CHAT_FLOW_ID}$`, "m").test(text)) {
-        return null;
-      }
+      const ours = new RegExp(`^id: ${CHAT_FLOW_ID}$`, "m").test(text);
+      if (record.flow?.root !== CHAT_FLOW_FILE || !ours) return null;
       const effective = record.effectiveLlmByStaticPath;
-      model = MODEL_PATHS.map((path) => recordedModel(effective[path])).find((each) => each !== null) ?? null;
+      const models = MODEL_PATHS.map((path) => recordedModel(effective[path]));
+      model = models.find((each) => each !== null) ?? null;
       continue;
     }
     if (!(record instanceof PoolCommitRecord) || record.nodeId !== "__start__") continue;
@@ -148,7 +148,9 @@ export function chatSessions(runsDir: string, root: string): ChatSession[] {
       return [];
     }
   });
-  return sessions.sort((a, b) => compareCodeUnits(b.startedAt, a.startedAt) || compareCodeUnits(b.runId, a.runId));
+  return sessions.sort(
+    (a, b) => compareCodeUnits(b.startedAt, a.startedAt) || compareCodeUnits(b.runId, a.runId),
+  );
 }
 
 /** What a new chat starts from: an earlier one's transcript and model, and its children left. */
@@ -169,7 +171,11 @@ const TURN_END = /^chat#\d+\/__end__$/;
  *
  * @throws What `foldRunLog` throws for a log it can't replay.
  */
-export async function sessionSeed(session: ChatSession, runsDir: string, env: Env): Promise<SessionSeed> {
+export async function sessionSeed(
+  session: ChatSession,
+  runsDir: string,
+  env: Env,
+): Promise<SessionSeed> {
   const folded = await foldRunLog(session.log, { env });
   let state: { summary: string; history: unknown[][] } = { summary: "", history: [] };
   for (const { entry, value } of folded.records) {
@@ -182,7 +188,9 @@ export async function sessionSeed(session: ChatSession, runsDir: string, env: En
   const waiting = indexRows(runsDir).flatMap((row): WaitingChild[] => {
     if (row.parentRunId !== session.runId) return [];
     const log = join(runsDir, row.runId, "log.jsonl");
-    if (row.status === "stopped" || row.status === "crashed") return [{ run: row.runId, kind: "halted", log }];
+    if (row.status === "stopped" || row.status === "crashed") {
+      return [{ run: row.runId, kind: "halted", log }];
+    }
     if (row.status !== "waiting") return [];
     const tools = row.waits.filter((wait) => !wait.settled).map((wait) => wait.tool);
     const kind = tools.includes("ask") ? "question" : tools.includes("take") ? "inbox" : "timer";

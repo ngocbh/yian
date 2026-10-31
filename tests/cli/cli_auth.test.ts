@@ -2485,8 +2485,8 @@ describe("loginModels", () => {
   test("a login offers its saved model, then its listing; a failed one its own only", async () => {
     const setup = setupAuth();
     await saveEachKind(setup.store);
-    const listed: [string, ListModelsOptions][] = [];
-    const listing = async (provider: string, options: ListModelsOptions) => {
+    const listed: [unknown, ListModelsOptions][] = [];
+    const listing = async (provider: unknown, options: ListModelsOptions = {}) => {
       listed.push([provider, options]);
       if (provider === "ollama") throw new ModelListError("refused", { status: 500 });
       return ["claude-other", "claude-test"];

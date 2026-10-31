@@ -21,7 +21,11 @@ import { canonicalTypeLabel, isInboxType, typeEquals } from "../../src/typesys/v
 import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 /** The skill the reply agent is granted, as a stand-in. */
-const SKILL = new Skill({ name: "composing-agents", description: "Compose flows.", instructions: "Compose." });
+const SKILL = new Skill({
+  name: "composing-agents",
+  description: "Compose flows.",
+  instructions: "Compose.",
+});
 
 const FLOWS = fileURLToPath(new URL("../../src/cli/flows/", import.meta.url));
 
@@ -49,7 +53,7 @@ test("the bundled compaction flow is examples/compact_history.yaml", () => {
   expect(flowText("compact_history.yaml")).toBe(readFileSync(example, "utf8"));
 });
 
-test("the bundled chat loads, with an Inbox(Message), optional flow and focus, model and transcript", async () => {
+test("the bundled chat loads, with an Inbox(Message) and its optional inputs", async () => {
   const flow = await loadChat();
   expect(flow.compiled.flowId).toBe("yian-chat");
   const [inbox, ...rest] = flow.input;
@@ -283,12 +287,14 @@ test(
       expect((await advance({ ...options, log })).status).toBe("waiting");
       // The choice isn't a line to answer: one request, the user's line, on the chosen model.
       expect(model.requests).toHaveLength(1);
-      expect(JSON.stringify(model.requests[0]!.messages.map((m) => m.toJSON()))).not.toContain("/model");
-      expect(access.configs.map((c) => [c["provider"], c["model"]])).toEqual([["openai", "gpt-5.5"]]);
+      const sent = JSON.stringify(model.requests[0]!.messages.map((m) => m.toJSON()));
+      expect(sent).not.toContain("/model");
+      const built = () => access.configs.map((c) => [c["provider"], c["model"]]);
+      expect(built()).toEqual([["openai", "gpt-5.5"]]);
       // Each advance replays the log: the next turn still uses the choice.
       await send(log, "owner_messages", said("again"));
       expect((await advance({ ...options, log })).status).toBe("waiting");
-      expect(access.configs.map((c) => [c["provider"], c["model"]])).toEqual([
+      expect(built()).toEqual([
         ["openai", "gpt-5.5"],
         ["openai", "gpt-5.5"],
       ]);
@@ -315,9 +321,13 @@ test("a transcript and a model given at the start seed the chat's first reply", 
     };
     const transcript = {
       summary: "The user is called Ada.",
-      history: [said("my flow is hello.yaml"), { role: "assistant", parts: [{ type: "text", text: "Noted." }] }],
+      history: [
+        said("my flow is hello.yaml"),
+        { role: "assistant", parts: [{ type: "text", text: "Noted." }] },
+      ],
     };
-    const inputs = { flow: null, focus: null, transcript, model: { provider: "xai", model: "grok-4" } };
+    const model4 = { provider: "xai", model: "grok-4" };
+    const inputs = { flow: null, focus: null, transcript, model: model4 };
     expect((await runFlow(flow, inputs, { ...options, log })).status).toBe("waiting");
     await send(log, "owner_messages", said("what did I say?"));
     await advance({ ...options, log });

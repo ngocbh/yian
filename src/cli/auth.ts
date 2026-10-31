@@ -1056,7 +1056,9 @@ export async function loginModels(
           const variable = provider === "openai" ? "OPENAI_BASE_URL" : BASE_URL_ENV[provider];
           const baseUrl = (variable && io.env(variable)) || null;
           const credentials =
-            selection.method === "api_key" ? await store.credentials(provider, selection.credentialId) : null;
+            selection.method === "api_key"
+              ? await store.credentials(provider, selection.credentialId)
+              : null;
           const key = credentials instanceof ApiKeyCredentials ? credentials : null;
           listed = (await (deps.listModels ?? listModels)(provider, {
             apiKey: key?.apiKey ?? null,
@@ -1069,9 +1071,8 @@ export async function loginModels(
           if (provider === "openai") listed = textModels(listed);
         }
       } catch (error) {
-        if (!(error instanceof AuthError || error instanceof TimeoutError || error instanceof ModelListError)) {
-          throw error;
-        }
+        const listing = error instanceof TimeoutError || error instanceof ModelListError;
+        if (!(listing || error instanceof AuthError)) throw error;
         failed.push(provider);
       }
       const names = [selection.model, ...listed.filter((model) => model !== selection.model)];

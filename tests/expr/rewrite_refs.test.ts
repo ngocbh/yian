@@ -89,6 +89,21 @@ test("template with no span comes back unchanged", () => {
   expect(rewriteTemplateRefs("plain text", bump)).toBe("plain text");
 });
 
+test("template, $$ and a lone $ are kept verbatim around a renamed span", () => {
+  expect(rewriteTemplateRefs("$$${a}$$ cost $5 ${b}$", bump)).toBe("$$${A}$$ cost $5 ${B}$");
+});
+
+test("template, a large literal around a renamed span is rewritten quickly", () => {
+  const big = "lorem ipsum ".repeat(420_000);
+  const source = big + "$$" + big + "${input.a}" + big + "$" + big;
+  source.indexOf("\u0000"); // flatten the concatenation so only the rewrite is timed
+  const start = performance.now();
+  const out = rewriteTemplateRefs(source, bump);
+  const elapsed = performance.now() - start;
+  expect(out).toBe(big + "$$" + big + "${INPUT.a}" + big + "$" + big);
+  expect(elapsed).toBeLessThan(100);
+});
+
 test("a template value that isn't text passes through", () => {
   expect(rewriteTemplateRefs(5, bump)).toBe(5);
 });

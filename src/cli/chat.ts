@@ -95,13 +95,20 @@ export interface ChatDeps {
 }
 
 /**
- * Load the bundled chat flow, its `uses:` resolved to the bundled compaction flow.
+ * Load the bundled chat flow, its `uses:` resolved to the bundled compaction flow, as loaded in
+ * the folder `root`: its run records that folder as its flow's, which is how `/resume` finds the
+ * chats of a folder.
  *
  * @throws {LoadError} Never for the bundle as committed; the bundle test loads it.
  */
-export async function loadChatFlow(env: Env): Promise<ComposedFlow> {
+export async function loadChatFlow(env: Env, root: string): Promise<ComposedFlow> {
   const compaction = await loadFlow(FLOWS["compact_history.yaml"]!, { sourceLabel: "compact_history.yaml", env });
-  return loadFlow(FLOWS[CHAT_LABEL]!, { sourceLabel: CHAT_LABEL, env, childResolver: async () => compaction });
+  return loadFlow(FLOWS[CHAT_LABEL]!, {
+    sourceLabel: CHAT_LABEL,
+    env,
+    baseDir: root,
+    childResolver: async () => compaction,
+  });
 }
 
 /** The message the LLM cascade's `RangeError` has for an agent no layer gives a provider and model. */
@@ -317,7 +324,7 @@ export async function chat(
   validateRunLogOptions({ flow: CHAT_LABEL, inputValues: [], log: options.log });
   const root = deps.root ?? process.cwd();
   const env = io.env;
-  const flow = await loadChatFlow(env);
+  const flow = await loadChatFlow(env, root);
   let skill: Skill;
   try {
     skill = bundledSkill(env);

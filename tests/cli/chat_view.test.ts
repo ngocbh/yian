@@ -1268,10 +1268,9 @@ describe("the first line of a chat", () => {
 });
 
 describe("the command menu", () => {
-  /** The menu's row for `name` and its description, highlighted or not. */
-  const menuRow = (name: string, description: string, highlighted = false) =>
-    `${highlighted ? "»" : " "} ${name.padEnd(11)}${description}`;
-  const MODEL = menuRow("/model", "Choose the model for the next replies", true);
+  /** The menu's row for `name` and its description, without its styles. */
+  const menuRow = (name: string, description: string) => `  ${name.padEnd(11)}${description}`;
+  const MODEL = menuRow("/model", "Choose the model for the next replies");
   const QUIT = menuRow("/quit", "Leave the chat");
 
   test(
@@ -1286,12 +1285,17 @@ describe("the command menu", () => {
       await until(() => rows().includes(HINT));
       stdin.write("/");
       await until(() => rows().includes(QUIT));
-      expect(rows().slice(-5)).toEqual([
+      // Above the box, its hint under it.
+      expect(rows().slice(-9)).toEqual([
         MODEL,
         menuRow("/provider", "Choose a provider and its model, signing in"),
         menuRow("/resume", "Go on from an earlier chat in this folder"),
         menuRow("/exit", "Leave the chat"),
         QUIT,
+        TOP,
+        row("> /"),
+        BOTTOM,
+        HINT,
       ]);
       stdin.write(ENTER);
       await until(() => rows().some((line) => line.includes("Model for the next replies")));
@@ -1329,6 +1333,60 @@ describe("the command menu", () => {
     },
     TIMEOUT,
   );
+});
+
+describe("the command menu over the box", () => {
+  const SPIN = "· Thinking… (0s · esc to interrupt)";
+  const boxed = (text: string) => `│ ${text.padEnd(COLUMNS - 4)} │`;
+  const COMMANDS = [
+    { name: "/model", description: "Choose the model" },
+    { name: "/exit", description: "Leave the chat" },
+  ];
+  const MENU = ["  /model  Choose the model", "  /exit   Leave the chat"];
+
+  test("sits above the box at the prompt and mid-reply, the run list under it", async () => {
+    const { view, output, rows } = viewOn();
+    const input = new FakeInput({ tty: true });
+    stdin = input;
+    const onActive = (active: boolean, printed: boolean) => view.active(active, printed);
+    const terminal = new Terminal({ input, output, onActive });
+    const run = "  r1  color.yaml  ● running · 3s";
+    const list = { rows: () => [{ key: "r1", text: run.trim() }], hint: "↓ runs" };
+    const editor = terminal.lineEditor({ hint: view.hint, list, commands: COMMANDS });
+    view.input(editor);
+    const read = terminal.readLine("You:", { frame: true, escape: true, editor });
+    input.write("/");
+    await tick();
+    expect(rows()).toEqual([...MENU, TOP, boxed("> /"), BOTTOM, HINT, run]);
+    expect(screen(output.text, COLUMNS).cursor).toEqual({ row: 3, col: 5 });
+    // The typed slash is bold in each name.
+    expect(editor.lines()[1]).toContain("\x1b[1m/\x1b[22mexit");
+    input.write(ESCAPE);
+    await pastEscape();
+    input.write("\x15hi\r");
+    expect(await read).toEqual({ value: "hi" });
+    // Mid-reply, as the chat runs a turn: the menu goes between the spinner and the box.
+    const keys = new AbortController();
+    terminal.watchKeys(keys.signal, () => {}, (key) => {
+      editor.key(key);
+      view.refresh();
+      return true;
+    });
+    view.turn(true);
+    input.write("/");
+    await tick();
+    expect(rows()).toEqual(["> hi", SPIN, ...MENU, TOP, boxed("> /"), BOTTOM, HINT, run]);
+    expect(screen(output.text, COLUMNS).cursor).toEqual({ row: 5, col: 5 });
+    // Ctrl-L draws the menu again with the rest, in place.
+    const before = output.text.length;
+    input.write(CTRL_L);
+    await tick();
+    const again = output.text.slice(before).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+    for (const each of MENU) expect(again).toContain(each.trim());
+    expect(rows()).toEqual(["> hi", SPIN, ...MENU, TOP, boxed("> /"), BOTTOM, HINT, run]);
+    keys.abort();
+    view.turn(false);
+  });
 });
 
 describe("the input box after a line is entered while a reply runs", () => {

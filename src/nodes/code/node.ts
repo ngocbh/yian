@@ -26,7 +26,9 @@
  * never keeps the process alive; module state and globals may persist between calls that land on
  * the same thread, but nothing guarantees it. A referenced module is imported once per thread and
  * cached there, so an edited file takes effect in a new process or a new thread. An inline body is
- * stripped of its types and built as a strict async function of `inputs`. Both are called the
+ * stripped of its types on this thread, once per body text (the node keeps the load check's
+ * result, and so do its copies), and the worker builds it as a strict async function of `inputs`.
+ * Both are called the
  * same way: `inputs` is a frozen host copy of the record (ints as `number`s, big ones as
  * `bigint`s, files as `FileRef`s) behind a proxy that throws on an undeclared name; the reference's
  * named export must be a function. What the code throws (a reference's module while it loads
@@ -64,7 +66,7 @@ import { SHARE_ENV, Worker } from "node:worker_threads";
 
 import { current } from "../../defaults.ts";
 import { OriginRef, reprText } from "../../diagnostics.ts";
-import { leavesRoot, TypeStripError } from "../../platform.ts";
+import { leavesRoot, stripTypes } from "../../platform.ts";
 import {
   fromHost,
   isRecord,
@@ -78,10 +80,10 @@ import { HostOutputError, hostOutput, markerMessage, Node, type NodeCaps, NodeKi
 import { mapOrigin, type OriginMapper, validateOptionalOrigin } from "../contracts.ts";
 import {
   AsyncFunction,
+  buildBody,
   type CodeJob,
   type CodeMessage,
   type CodeReply,
-  compileBody,
   packFiles,
   splitReference,
   STRICT_PROLOGUE,
@@ -366,15 +368,12 @@ const ERROR_CLASSES: Readonly<Record<string, ErrorConstructor>> = {
 };
 
 /**
- * Rebuild an error a worker sent: a `TypeStripError` with its line and column, a standard class
- * by name, else an `Error` carrying the name. The worker's stack is kept, so its body frames
- * still map to authored lines.
+ * Rebuild an error a worker sent: a standard class by name, else an `Error` carrying the name.
+ * The worker's stack is kept, so its body frames still map to authored lines.
  */
 function rebuildError(fields: ThrownError): Error {
   let error: Error;
-  if (fields.name === "TypeStripError" && fields.line !== undefined && fields.column !== undefined) {
-    error = new TypeStripError(fields.message, fields.line, fields.column);
-  } else if (Object.hasOwn(ERROR_CLASSES, fields.name)) {
+  if (Object.hasOwn(ERROR_CLASSES, fields.name)) {
     error = new ERROR_CLASSES[fields.name]!(fields.message);
   } else {
     error = new Error(fields.message);
@@ -542,6 +541,11 @@ export class CodeNode extends Node {
   codeLineOrigins: readonly OriginRef[];
   /** The execution mode: `classifyCodeSource`'s for text, `"builtin"` for a built-in form. */
   mode: "reference" | "inline" | "builtin";
+  /**
+   * The inline body text last stripped of its types, and the JavaScript it stripped to; `null`
+   * until then. Derived from `code`, so not fingerprinted. A plain field, so a node copy keeps it.
+   */
+  stripped: Readonly<{ code: string; js: string }> | null = null;
 
   /**
    * Build a CODE node. Nothing is compiled or imported here.
@@ -691,7 +695,7 @@ export class CodeNode extends Node {
       );
     }
     try {
-      await compileBody(this.id, code);
+      buildBody(this.id, await this.strippedBody(code));
     } catch (error) {
       if (!meantAsReference) throw error;
       throw new RangeError(
@@ -738,11 +742,17 @@ export class CodeNode extends Node {
       return new Output(inputs[code.field]);
     }
     caps.signal?.throwIfAborted();
+    let source = code;
+    if (this.mode === "inline") {
+      source = await this.strippedBody(code);
+      // `runInWorker` only hears an abort that comes after it starts listening.
+      caps.signal?.throwIfAborted();
+    }
     const reply = await runInWorker(
       {
         nodeId: this.id,
         mode: this.mode as "reference" | "inline",
-        code,
+        code: source,
         baseDir: this.baseDir,
         inputs: packFiles(toHost(inputs as Value)),
         defaults: current(),
@@ -758,5 +768,16 @@ export class CodeNode extends Node {
       throw error;
     }
     return new Output(hostOutput(unpackFiles(reply.value)));
+  }
+
+  /**
+   * Return the inline body `code` stripped of its types, reusing `stripped` when it holds that
+   * text and keeping the result there otherwise.
+   *
+   * @throws TypeStripError when the body doesn't parse or strip.
+   */
+  private async strippedBody(code: string): Promise<string> {
+    if (this.stripped?.code !== code) this.stripped = Object.freeze({ code, js: await stripTypes(code) });
+    return this.stripped.js;
   }
 }

@@ -5,8 +5,9 @@
  * The main thread (`nodes/code/node.ts`) starts a worker on this module with
  * `workerData.yianCodeWorker` set and posts it jobs (`{id, ...job}`); the module takes jobs only
  * when that key is set, so importing it for its helpers runs nothing. For each job the worker
- * installs the caller's defaults, builds the body or imports the reference (a module is imported
- * once per thread and cached there), calls it with the frozen `inputs` proxy, takes the result in
+ * installs the caller's defaults, builds the body (which the main thread already stripped of its
+ * types, so no worker loads the stripper) or imports the reference (a module is imported once per
+ * thread and cached there), calls it with the frozen `inputs` proxy, takes the result in
  * by host intake, and posts one `CodeReply` carrying the job's id (a result too deep for the copy
  * is refused as an output, by the commit's nesting check). It forwards each
  * `console.log/info/warn/error/debug` call as one formatted text on the same port, so the main
@@ -22,7 +23,7 @@
  * Values cross by structured clone, which drops a `FileRef`'s class, so a `FileRef` crosses as a
  * `Map` of its fields (no yian value holds a `Map`).
  *
- * Knows about:   platform, typesys/values, diagnostics, defaults and `node:*`.
+ * Knows about:   typesys/values, diagnostics, defaults and `node:*`.
  * Never imports: nodes/base, nodes/contracts, nodes/code/node, compile, compose, runtime.
  */
 
@@ -33,7 +34,6 @@ import { parentPort, workerData } from "node:worker_threads";
 
 import { current, type Defaults, install } from "../../defaults.ts";
 import { reprText } from "../../diagnostics.ts";
-import { stripTypes, TypeStripError } from "../../platform.ts";
 import {
   FileRef,
   fromHost,
@@ -57,6 +57,7 @@ export const AsyncFunction = (async () => {}).constructor as new (...args: strin
 export interface CodeJob {
   readonly nodeId: string;
   readonly mode: "reference" | "inline";
+  /** The `./file.ts:fn` reference, or the inline body already stripped of its types. */
   readonly code: string;
   readonly baseDir: string | null;
   /** The bound input record as a host value, through `packFiles`. */
@@ -65,14 +66,12 @@ export interface CodeJob {
   readonly defaults: Defaults;
 }
 
-/** A thrown `Error`'s fields; `line` and `column` only for a `TypeStripError`. */
+/** A thrown `Error`'s fields. */
 export interface ThrownError {
   kind: "error";
   name: string;
   message: string;
   stack?: string;
-  line?: number;
-  column?: number;
 }
 
 /** A thrown value as it crosses: an `Error`'s fields, a yian value (packed), or its text. */
@@ -102,17 +101,16 @@ export type CodeMessage = ({ console: ConsoleMethod; text: string } | (CodeReply
 export const STRICT_PROLOGUE = '"use strict"; ';
 
 /**
- * Strip an inline body's types and build it as a strict async function of `inputs`.
+ * Build an inline body, already stripped of its types (`stripTypes`), as a strict async function
+ * of `inputs`.
  *
  * The `sourceURL` comment names the body's stack frames `yian-code:<nodeId>:<line>:<column>`, and
  * the strict prologue shares the first line, so frame lines stay body lines plus the header (and a
  * first-line column is shifted by the prologue's length).
  *
- * @throws TypeStripError when the body doesn't parse or strip.
  * @throws SyntaxError when the constructor refuses the stripped body.
  */
-export async function compileBody(nodeId: string, body: string): Promise<CodeBody> {
-  const js = await stripTypes(body);
+export function buildBody(nodeId: string, js: string): CodeBody {
   return new AsyncFunction("inputs", STRICT_PROLOGUE + js + "\n//# sourceURL=yian-code:" + nodeId);
 }
 
@@ -222,10 +220,6 @@ function thrownOf(value: unknown): Thrown {
   if (value instanceof Error) {
     const fields: ThrownError = { kind: "error", name: String(value.name), message: String(value.message) };
     if (typeof value.stack === "string") fields.stack = value.stack;
-    if (value instanceof TypeStripError) {
-      fields.line = value.line;
-      fields.column = value.column;
-    }
     return fields;
   }
   try {
@@ -283,8 +277,7 @@ function tooDeepToCopy(value: Value): boolean {
  *   export, or the code returns `undefined`.
  */
 async function runJob(job: CodeJob): Promise<CodeReply> {
-  const body =
-    job.mode === "reference" ? await importReference(job.code, job.baseDir) : await compileBody(job.nodeId, job.code);
+  const body = job.mode === "reference" ? await importReference(job.code, job.baseDir) : buildBody(job.nodeId, job.code);
   if (typeof body !== "function") return body;
   const record = Object.freeze(unpackFiles(job.inputs) as Record<string, unknown>);
   const proxy = inputsProxy(record);

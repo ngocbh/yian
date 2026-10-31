@@ -15,6 +15,7 @@ import {
   modelMessage,
   sessionChoice,
   sessionSeed,
+  spokenCount,
   timeAgo,
 } from "../../src/cli/chat_sessions.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
@@ -160,6 +161,25 @@ test(
     ]);
     const seed = await sessionSeed(sessions[2]!, runsDir, NO_ENV);
     expect(seed.title).toBe("Fixing the parser");
+  },
+  TIMEOUT,
+);
+
+test("a transcript's spoken messages are the user's and assistant's with text", () => {
+  const tool = { role: "assistant", parts: [{ type: "tool_call", name: "read_docs" }] };
+  const result = { role: "tool", parts: [{ type: "tool_result", content: "docs" }] };
+  const reply = { role: "assistant", parts: [{ type: "text", text: "use map" }] };
+  expect(spokenCount([[line("how?"), tool, result, reply], [line("thanks")]])).toBe(3);
+  expect(spokenCount(null)).toBe(0);
+});
+
+test(
+  "a chat going on from another counts the messages it started with",
+  async () => {
+    const reply = { role: "assistant", parts: [{ type: "text", text: "sure" }] };
+    const transcript = { summary: "", history: [[line("earlier"), reply]] };
+    await chatRun("on", root, ["and now"], { inputs: { transcript, title: "Earlier" } });
+    expect(chatSessions(runsDir, root).map((each) => each.messages)).toEqual([4]);
   },
   TIMEOUT,
 );

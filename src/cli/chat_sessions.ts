@@ -80,7 +80,10 @@ export interface ChatSession {
   readonly firstLine: string;
   /** The name the chat gave itself, or kept from the chat it went on from; null until named. */
   readonly title: string | null;
-  /** The lines the user typed in it and the replies to them. */
+  /**
+   * The messages it started with (`spokenCount`), and the lines the user typed in it and the
+   * replies to them.
+   */
   readonly messages: number;
   /** The model it chose, or else the one its last reply used; null when the log doesn't say. */
   readonly model: ModelChoice | null;
@@ -89,6 +92,20 @@ export interface ChatSession {
    * ran on the defaults, which a chat going on from it then uses too.
    */
   readonly chosen: ModelChoice | null;
+}
+
+/**
+ * The messages of `history` (a transcript's turns) the user and the assistant said: those with a
+ * text part, not a tool call's or its result's alone; 0 for anything but a list of turns.
+ */
+export function spokenCount(history: unknown): number {
+  if (!Array.isArray(history)) return 0;
+  const spoken = (message: unknown): boolean => {
+    const { role, parts } = (message ?? {}) as { role?: unknown; parts?: unknown };
+    const said = role === "user" || role === "assistant";
+    return said && Array.isArray(parts) && parts.some((part) => part?.type === "text");
+  };
+  return history.flat().filter(spoken).length;
 }
 
 /** The provider and model a recorded `llm_config` names, or null. */
@@ -146,6 +163,8 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
   let firstLine: string | null = null;
   let title: string | null = null;
   let lines = 0;
+  // The messages it started with, from an earlier chat.
+  let seeded = 0;
   for (const spot of sends) {
     const record = recordAt(log, spot);
     if (!(record instanceof PoolCommitRecord)) continue;
@@ -153,6 +172,8 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
     if (record.key === "__start__") {
       chosen = recordedModel(value?.["model"]) ?? chosen;
       title = typeof value?.["title"] === "string" ? value["title"] : title;
+      const transcript = value?.["transcript"] as { history?: unknown } | null | undefined;
+      seeded = spokenCount(transcript?.history) || seeded;
     } else if (record.key === "__start__.owner_messages") {
       const choice = chosenModel(value);
       if (choice !== null) chosen = choice;
@@ -176,7 +197,7 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
     }
   }
   const { runId, startedAt } = row;
-  const messages = lines + replies;
+  const messages = seeded + lines + replies;
   return { runId, log, startedAt, firstLine, title, messages, model: chosen ?? used, chosen };
 }
 

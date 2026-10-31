@@ -63,6 +63,7 @@ import {
   sessionChoice,
   type SessionSeed,
   sessionSeed,
+  spokenCount,
 } from "./chat_sessions.ts";
 import { type ChatCommandOutcome, inboxChat, type InboxChatHost } from "./inbox_chat.ts";
 import { type Colored, paint, printStyled, type Style } from "./render.ts";
@@ -644,7 +645,7 @@ export async function chat(
       if (seed !== null) {
         const { summary, history } = seed.transcript;
         const summarized = summary === "" ? "" : " and a summary";
-        const count = history.flat().length;
+        const count = spokenCount(history);
         await note(`(going on from an earlier chat: ${count} messages${summarized})\n`);
         if (seed.waiting.length > 0) {
           await note("(its runs left waiting aren't restarted)\n");

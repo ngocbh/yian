@@ -519,11 +519,12 @@ const YIELD_GRACE_MS = 400;
  * the text answered holds the paste. The text and where the keys are last across prompts, so one
  * editor can serve a chat's prompt and the box it keeps up while a reply runs.
  *
- * With `commands`, a `/` typed first in the box opens a menu of them in the list's place, those
- * the text starts with (it closes once none does, the text holds a space or no longer starts with
- * `/`, or on Escape, which then ends nothing): Up and Down move its highlight, Tab completes the
- * highlighted command into the box, and Enter answers it, or the text when that is a command. A
- * paste never opens it.
+ * With `commands`, a `/` typed first in the box opens a menu of them above the box, those the
+ * text starts with, the characters typed bold in each name (it closes once none does, the text
+ * holds a space or no longer starts with `/`, or on Escape, which then ends nothing): Up and Down
+ * move its highlight, Tab completes the highlighted command into the box, and Enter answers it,
+ * or the text when that is a command. A paste never opens it. The box, its hint and the list stay
+ * drawn under the menu, which shows as many rows as the screen leaves them, then `+N more`.
  */
 export class LineEditor {
   readonly #text = textWidget({ label: "", mark: ">", collapse: true });
@@ -643,40 +644,51 @@ export class LineEditor {
   }
 
   /**
-   * The menu's rows, each cut to fit after the pointer: the command's name, then its description,
-   * dim, when the names leave room for it.
+   * The menu's rows, as many as `room` leaves (`+N more` among them), the highlighted one among
+   * them: each the command's name, the characters typed bold, then its description when the
+   * names leave room for it, cut to fit after the indent. The highlighted row is cyan, the
+   * others' descriptions dim.
    */
-  #menuRows(matches: readonly PromptCommand[]): { rows: string[]; focus: number } {
-    const room = Math.max(1, this.#columns() - 2);
-    const width = Math.min(room, Math.max(...matches.map((command) => cells(command.name))) + 2);
-    const rows = matches.map((command) => {
-      const name = fit(command.name, room);
-      if (width >= room) return style("36", name);
-      const pad = " ".repeat(width - cells(name));
-      return `${style("36", name)}${pad}${style("2", fit(command.description, room - width))}`;
+  #menuRows(matches: readonly PromptCommand[], room: number): string[] {
+    const highlight = this.#highlighted(matches);
+    const typed = Array.from(this.#text.text()).length;
+    const columns = Math.max(1, this.#columns() - 2);
+    const width = Math.min(columns, Math.max(...matches.map((command) => cells(command.name))) + 2);
+    const rows = matches.map((command, i) => {
+      const name = fit(command.name, columns);
+      // A name cut to fit ends in `…`, which isn't typed.
+      const chars = Array.from(name);
+      const bold = Math.min(typed, name === command.name ? chars.length : chars.length - 1);
+      const [head, tail] = [chars.slice(0, bold).join(""), chars.slice(bold).join("")];
+      const named = `${ESC}1m${head}${ESC}22m${tail}`;
+      const pad = " ".repeat(Math.max(0, width - cells(name)));
+      const description = width >= columns ? "" : fit(command.description, columns - width);
+      if (i === highlight) return `  ${ESC}36m${named}${pad}${description}${ESC}0m`;
+      return `  ${named}${pad}${description === "" ? "" : style("2", description)}`;
     });
-    return { rows, focus: this.#highlighted(matches) };
+    return cut(rows, highlight, room);
   }
 
   /**
-   * The list's rows as drawn, or the menu's while it is open: at most what fits, the focused one
-   * among them, then `+N more`.
+   * The menu's rows above the box and the list's under the hint, each at most what fits, its
+   * focused row among them, then `+N more`. Both leave `LIST_MARGIN` rows free above them, for
+   * what is drawn above the box; an open menu takes its rows first, leaving the list at least one.
    */
-  #listRows(boxRows: number): string[] {
+  #around(): { menu: string[]; list: string[] } {
+    const { start, end } = this.#window();
+    // The box's text rows, its two edges and the hint.
+    const room = this.#rows() - LIST_MARGIN - (end - start + 3);
+    const list = this.list?.rows() ?? [];
     const matches = this.#matches();
-    const menu = matches.length > 0 ? this.#menuRows(matches) : null;
-    const rows = menu?.rows ?? (this.list?.rows() ?? []).map((row) => row.text);
-    const focus = menu?.focus ?? this.#find(this.list?.rows() ?? []);
-    const room = Math.max(1, this.#rows() - boxRows - 1 - LIST_MARGIN);
+    const free = Math.max(1, room - Math.min(1, list.length));
+    const menu = matches.length === 0 ? [] : this.#menuRows(matches, free);
+    const focus = this.#find(list);
     const pointer = (i: number): string => (i === focus ? `${style("1;36", "»")} ` : "  ");
-    if (rows.length <= room) return rows.map((row, i) => pointer(i) + row);
-    const shown = Math.max(1, room - 1);
-    const start = Math.min(Math.max(0, (focus ?? 0) - shown + 1), rows.length - shown);
-    const drawn = rows.slice(start, start + shown).map((row, i) => pointer(start + i) + row);
-    return [...drawn, `  ${style("2", `+${rows.length - shown} more`)}`];
+    const drawn = list.map((row, i) => pointer(i) + row.text);
+    return { menu, list: cut(drawn, focus, Math.max(1, room - menu.length)) };
   }
 
-  /** The rows, styled: the box, the hint and the list. */
+  /** The rows, styled: the menu, the box, the hint and the list. */
   lines(): string[] {
     const { rows, width } = this.#fold();
     const { start, end } = this.#window();
@@ -687,12 +699,14 @@ export class LineEditor {
       const label = `─ ${arrow} ${count} more `;
       return label + "─".repeat(Math.max(0, width + 4 - cells(label)));
     };
-    const list = this.#listRows(end - start + 2);
-    const extra = list.length > 0 && !this.menuOpen() ? this.list?.hint : undefined;
+    const { menu, list } = this.#around();
+    // Down moves the menu's highlight, not into the list, while the menu is open.
+    const extra = list.length > 0 && menu.length === 0 ? this.list?.hint : undefined;
     const both = extra ? `${this.#hint} · ${extra}` : this.#hint;
     // The list's hint only when it fits on the row: the box's hint matters more.
     const hint = cells(both) + 2 <= this.#columns() ? both : this.#hint;
     return [
+      ...menu,
       border(`╭${edge(start, "↑")}╮`),
       ...rows.slice(start, end).map((each, i) => {
         const body = each.chars.join("");
@@ -710,7 +724,8 @@ export class LineEditor {
     if (this.focus() !== null) return null;
     const { rows, row } = this.#fold();
     const before = rows[row]!.chars.slice(0, this.#text.caret() - rows[row]!.start).join("");
-    return { row: row - this.#window().start + 1, before: `│ ${lead(row)}${before}` };
+    const above = this.#around().menu.length;
+    return { row: above + row - this.#window().start + 1, before: `│ ${lead(row)}${before}` };
   }
 
   /**
@@ -818,6 +833,19 @@ export class LineEditor {
     const row = rows.findLastIndex((each) => each.start <= caret);
     return { rows, row, width };
   }
+}
+
+/**
+ * At most `room` of `rows`, the one at `focus` among them: a run of rows ending with a dim
+ * `+N more` for the others when they don't all fit.
+ */
+function cut(rows: readonly string[], focus: number | null, room: number): string[] {
+  if (rows.length <= room) return [...rows];
+  // No room for `+N more` beside a row: the focused one alone.
+  if (room <= 1) return [rows[focus ?? 0]!];
+  const shown = Math.max(1, room - 1);
+  const start = Math.min(Math.max(0, (focus ?? 0) - shown + 1), rows.length - shown);
+  return [...rows.slice(start, start + shown), `  ${style("2", `+${rows.length - shown} more`)}`];
 }
 
 /** What a framed box's row `row` starts with: the bold `>` on the first. */

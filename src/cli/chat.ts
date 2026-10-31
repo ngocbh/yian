@@ -61,8 +61,11 @@ const VIEW_TICK_MS = 500;
 /** The label the bundled flow's diagnostics and recorded source go by. */
 const CHAT_LABEL = CHAT_FLOW_FILE;
 
-/** The path of the assistant's reply agent in the bundled flow, whose model the banner names. */
-const REPLY_PATH = "chat/answered/reply";
+/**
+ * The path of the bundled flow's summarizer, which sets no model of its own: its model is the one
+ * the run's layers give, which the reply agent uses too while no model is chosen.
+ */
+const DEFAULT_PATH = "chat/compacted/folded/summarize";
 
 /** The options `chat` reads; an absent option is `undefined`, an absent flag `false`. */
 export interface ChatOptions {
@@ -122,7 +125,7 @@ function replyModel(
     const inputs = coerceInputs(flow.input, hostInputs(flow.input, {}));
     snapshot = connectionSnapshot({ env });
     const resolved = runStartLlm(copyGraph(flow.compiled), inputs, { ...layer }, snapshot);
-    config = resolved.effective[REPLY_PATH];
+    config = resolved.effective[DEFAULT_PATH];
   } catch (error) {
     if (error instanceof RangeError && NO_MODEL.test(error.message)) return null;
     throw error;

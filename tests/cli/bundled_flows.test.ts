@@ -4,19 +4,24 @@
  */
 
 import { expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
-import { runFlow, staticNodes } from "../../src/run.ts";
+import { advance, runFlow, send, staticNodes } from "../../src/run.ts";
+import { Skill } from "../../src/skills/catalog.ts";
 import { pending } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { builtinType } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals } from "../../src/typesys/values.ts";
 import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
+
+/** The skill the reply agent is granted, as a stand-in. */
+const SKILL = new Skill({ name: "composing-agents", description: "Compose flows.", instructions: "Compose." });
 
 const FLOWS = fileURLToPath(new URL("../../src/cli/flows/", import.meta.url));
 
@@ -44,7 +49,7 @@ test("the bundled compaction flow is examples/compact_history.yaml", () => {
   expect(flowText("compact_history.yaml")).toBe(readFileSync(example, "utf8"));
 });
 
-test("the bundled chat loads, with an Inbox(Message) and optional flow and focus", async () => {
+test("the bundled chat loads, with an Inbox(Message), optional flow and focus, model and transcript", async () => {
   const flow = await loadChat();
   expect(flow.compiled.flowId).toBe("yian-chat");
   const [inbox, ...rest] = flow.input;
@@ -56,10 +61,12 @@ test("the bundled chat loads, with an Inbox(Message) and optional flow and focus
     canonicalTypeLabel(param.contract!.type),
     param.required,
   ]);
-  expect(inputs).toEqual([
+  expect(inputs.slice(0, 3)).toEqual([
     ["flow", "Optional(str)", false],
     ["focus", "Optional(str)", false],
+    ["model", 'Optional({"model":str,"provider":str})', false],
   ]);
+  expect([inputs[3]![0], inputs[3]![2]]).toEqual(["transcript", false]);
 });
 
 test("the reply agent gets the tools, the skill and steering, with no tool-call cap", async () => {
@@ -230,4 +237,96 @@ test("the report flow's scrub redacts each kind of secret and shows the home as 
     "path src/cli/flows/report_issue_with_a_much_longer_name_v2.yaml",
     "yian check nap.yaml",
   ]);
+});
+
+/** A stand-in for each tool the chat's reply agent is granted; none is called here. */
+function replyToolStubs() {
+  const names = [
+    "list_flows", "read_flow", "check_flow", "write_flow", "read_docs", "start_flow",
+    "flow_status", "wait_flow", "answer_flow", "message_flow", "close_inbox", "stop_flow",
+    "report_issue", "author_flow", "review_flow",
+  ];
+  const parameters = { type: "object", properties: {} };
+  return Object.fromEntries(
+    names.map((name) => [name, tool({ name, description: name, parameters, execute: () => "" })]),
+  );
+}
+
+/** A user message holding `text`; authored `yian` when `yian`. */
+function said(text: string, yian = false) {
+  return { role: "user", ...(yian ? { author: "yian" } : {}), parts: [{ type: "text", text }] };
+}
+
+test(
+  "a /model message chooses the replies' model, is not answered, and a resume replays it",
+  async () => {
+    const dir = mkdtempSync(join(tmpdir(), "yian-chat-model-"));
+    try {
+      const flow = await loadChat();
+      const log = join(dir, "log.jsonl");
+      const model = new ScriptedModel([textReply("one"), textReply("two")], {
+        provider: "xai",
+        model: "grok-4.3",
+      });
+      const access = serving(model);
+      const options = {
+        env: NO_ENV,
+        tools: replyToolStubs(),
+        skills: new Map([[SKILL.name, SKILL]]),
+        llmConfig: { provider: "xai", model: "grok-4.3" },
+        models: access,
+      };
+      const first = await runFlow(flow, { flow: null, focus: null }, { ...options, log });
+      expect(first.status).toBe("waiting");
+      await send(log, "owner_messages", said("/model openai gpt-5.5", true));
+      await send(log, "owner_messages", said("hi"));
+      expect((await advance({ ...options, log })).status).toBe("waiting");
+      // The choice isn't a line to answer: one request, the user's line, on the chosen model.
+      expect(model.requests).toHaveLength(1);
+      expect(JSON.stringify(model.requests[0]!.messages.map((m) => m.toJSON()))).not.toContain("/model");
+      expect(access.configs.map((c) => [c["provider"], c["model"]])).toEqual([["openai", "gpt-5.5"]]);
+      // Each advance replays the log: the next turn still uses the choice.
+      await send(log, "owner_messages", said("again"));
+      expect((await advance({ ...options, log })).status).toBe("waiting");
+      expect(access.configs.map((c) => [c["provider"], c["model"]])).toEqual([
+        ["openai", "gpt-5.5"],
+        ["openai", "gpt-5.5"],
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  },
+  20_000,
+);
+
+test("a transcript and a model given at the start seed the chat's first reply", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "yian-chat-seed-"));
+  try {
+    const flow = await loadChat();
+    const log = join(dir, "log.jsonl");
+    const model = new ScriptedModel([textReply("sure")], { provider: "xai", model: "grok-4.3" });
+    const access = serving(model);
+    const options = {
+      env: NO_ENV,
+      tools: replyToolStubs(),
+      skills: new Map([[SKILL.name, SKILL]]),
+      llmConfig: { provider: "xai", model: "grok-4.3" },
+      models: access,
+    };
+    const transcript = {
+      summary: "The user is called Ada.",
+      history: [said("my flow is hello.yaml"), { role: "assistant", parts: [{ type: "text", text: "Noted." }] }],
+    };
+    const inputs = { flow: null, focus: null, transcript, model: { provider: "xai", model: "grok-4" } };
+    expect((await runFlow(flow, inputs, { ...options, log })).status).toBe("waiting");
+    await send(log, "owner_messages", said("what did I say?"));
+    await advance({ ...options, log });
+    const request = JSON.stringify(model.requests[0]!.messages.map((m) => m.toJSON()));
+    expect(request).toContain("The user is called Ada.");
+    expect(request).toContain("my flow is hello.yaml");
+    expect(request).toContain("Noted.");
+    expect(access.configs.map((c) => [c["provider"], c["model"]])).toEqual([["xai", "grok-4"]]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

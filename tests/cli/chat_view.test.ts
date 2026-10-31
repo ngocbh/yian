@@ -149,7 +149,7 @@ async function until(check: () => boolean): Promise<void> {
 const row = (text: string) => `│ ${text.padEnd(COLUMNS - 4)} │`;
 const TOP = `╭${"─".repeat(COLUMNS - 2)}╮`;
 const BOTTOM = `╰${"─".repeat(COLUMNS - 2)}╯`;
-const HINT = "  /model /resume /exit · ctrl-c interrupts · esc withdraws";
+const HINT = "  /exit to leave · ctrl-c interrupts · esc withdraws";
 
 describe("the banner's pieces", () => {
   test("loginLabel names a subscription and a key that is there", () => {
@@ -1250,6 +1250,69 @@ describe("the first line of a chat", () => {
       // /exit at the prompt takes the box down: what the chat prints after it draws no box.
       expect(output.text.slice(output.text.lastIndexOf("session ended"))).not.toContain("╭");
       expect(rows().at(-1)).toBe("session ended");
+    },
+    TIMEOUT,
+  );
+});
+
+describe("the command menu", () => {
+  /** The menu's row for `name` and its description, highlighted or not. */
+  const menuRow = (name: string, description: string, highlighted = false) =>
+    `${highlighted ? "»" : " "} ${name.padEnd(9)}${description}`;
+  const MODEL = menuRow("/model", "Choose the model for the next replies", true);
+  const QUIT = menuRow("/quit", "Leave the chat");
+
+  test(
+    "/ lists the chat's commands at the prompt, and Enter runs the highlighted one",
+    async () => {
+      const { io, stdin, rows } = terminalIo();
+      const offered = async () => ({ models: [{ provider: "xai", model: "grok-4" }], failed: [] });
+      const chatting = runChat(io, new GatedModel(), undefined, {
+        ticker: manualClock(),
+        modelChoices: offered,
+      });
+      await until(() => rows().includes(HINT));
+      stdin.write("/");
+      await until(() => rows().includes(QUIT));
+      expect(rows().slice(-4)).toEqual([
+        MODEL,
+        menuRow("/resume", "Go on from an earlier chat in this folder"),
+        menuRow("/exit", "Leave the chat"),
+        QUIT,
+      ]);
+      stdin.write(ENTER);
+      await until(() => rows().some((line) => line.includes("Model for the next replies")));
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().includes(HINT));
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "/ opens it while a reply runs: Esc closes it without withdrawing, and /exit typed whole runs",
+    async () => {
+      const { io, stdin, output, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      stdin.write("/");
+      await until(() => rows().includes(QUIT));
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => !rows().includes(QUIT));
+      expect(rows()).toContain(row("> /"));
+      expect(output.text).not.toContain("withdrew");
+      expect(output.text).not.toContain("stopping the reply");
+      // Typed whole, Enter runs /exit as typed; it takes the box down once sent.
+      stdin.write(`exit${ENTER}`);
+      await until(() => rows().includes("> /exit") && !rows().includes(HINT));
+      model.open();
+      expect(await chatting).toBe(0);
     },
     TIMEOUT,
   );

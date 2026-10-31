@@ -244,6 +244,7 @@ with `NO_COLOR`, it prints plain lines.
 | Enter | Sends the line. During a reply, the assistant reads it before its next step |
 | Esc | Takes back the lines the assistant hasn't read yet, and stops the reply |
 | Ctrl-C | Stops the reply. A second Ctrl-C within 2 seconds, or one at the prompt, ends the chat |
+| `/` | Lists the commands
 | `/model` | Picks the model of the next replies, and of the flows the assistant starts after it, from your logins |
 | `/resume` | Ends this chat, as `/exit` does, and goes on from an earlier chat in this folder in a new one; its waiting flows stay as they are |
 | `/exit`, `/quit` or Ctrl-D | Leaves the chat |

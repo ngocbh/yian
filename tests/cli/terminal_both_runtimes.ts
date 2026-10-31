@@ -1333,6 +1333,101 @@ async function downOnAFoldedLineMovesIntoTheListOnlyFromItsLastRow(): Promise<vo
   assert.deepEqual(await line, { open: "r1", draft: "a".repeat(20) });
 }
 
+const MENU_COMMANDS = [
+  { name: "/model", description: "Choose the model" },
+  { name: "/resume", description: "Go on from an earlier chat" },
+  { name: "/exit", description: "Leave the chat" },
+];
+
+/** The menu's row for `name`, highlighted or not, as `MENU_COMMANDS` draws it. */
+function menuRow(name: string, highlighted = false): string {
+  const command = MENU_COMMANDS.find((each) => each.name === name)!;
+  return `${highlighted ? "»" : " "} ${command.name.padEnd(9)}${command.description}`;
+}
+
+async function typingASlashOpensTheCommandMenuInPlaceOfTheList(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const list = { ...rowList(["r1  a.yaml"]), hint: "↓ runs" };
+  const editor = new LineEditor({ columns: () => 60, hint: HINT, list, commands: MENU_COMMANDS });
+  const line = terminal.readLine("You:", { frame: true, escape: true, editor });
+  await tick();
+  assert.deepEqual(view().rows.slice(-1), ["  r1  a.yaml"]);
+  input.write("/");
+  await tick();
+  // The menu takes the list's place.
+  const box = (text: string) => [FRAME_TOP, framed(`> ${text}`), FRAME_BOTTOM, `  ${HINT}`];
+  const all = MENU_COMMANDS.map((each, i) => menuRow(each.name, i === 0));
+  assert.deepEqual(view().rows, [...box("/"), ...all]);
+  assert.equal(editor.menuOpen(), true);
+  // The menu filters by prefix.
+  input.write("re");
+  await tick();
+  assert.deepEqual(view().rows, [...box("/re"), menuRow("/resume", true)]);
+  input.write(BACKSPACE + BACKSPACE);
+  await tick();
+  // Down and Up move the highlight, not into the list; the cursor stays in the box.
+  input.write(DOWN + DOWN);
+  await tick();
+  assert.deepEqual(view().rows.slice(-3), [menuRow("/model"), menuRow("/resume"), menuRow("/exit", true)]);
+  assert.equal(editor.focus(), null);
+  input.write(UP);
+  await tick();
+  assert.deepEqual(view().rows.slice(-3), [menuRow("/model"), menuRow("/resume", true), menuRow("/exit")]);
+  // Tab completes the highlighted command into the box.
+  input.write("\t");
+  await tick();
+  assert.deepEqual(view().rows, [...box("/resume"), menuRow("/resume", true)]);
+  // Escape closes the menu and gives the list back; it doesn't end the prompt.
+  input.write(ESCAPE);
+  await pastEscape();
+  assert.equal(editor.menuOpen(), false);
+  assert.deepEqual(view().rows, [...box("/resume"), "  r1  a.yaml"]);
+  // A space, or a line not starting with a slash, keeps it closed; so does no match.
+  input.write(CTRL_U + "/x");
+  await tick();
+  assert.equal(editor.menuOpen(), false);
+  input.write(CTRL_U + "a/");
+  await tick();
+  assert.equal(editor.menuOpen(), false);
+  input.write(CTRL_U + "/m");
+  await tick();
+  assert.equal(editor.menuOpen(), true);
+  input.write(" ");
+  await tick();
+  assert.equal(editor.menuOpen(), false);
+  input.write(CTRL_U + ENTER);
+  assert.deepEqual(await line, { value: "" });
+}
+
+async function enterInTheCommandMenuRunsTheHighlightedCommand(): Promise<void> {
+  const { input, terminal } = setup({ columns: 60 });
+  const editor = new LineEditor({ columns: () => 60, hint: HINT, commands: MENU_COMMANDS });
+  const first = terminal.readLine("You:", { frame: true, editor });
+  input.write("/" + DOWN + ENTER);
+  assert.deepEqual(await first, { value: "/resume" });
+  assert.deepEqual(editor.entered(), ["/resume"]);
+  // A command typed whole runs as typed, whatever is highlighted.
+  const second = terminal.readLine("You:", { frame: true, editor });
+  input.write("/exit" + ENTER);
+  assert.deepEqual(await second, { value: "/exit" });
+}
+
+async function aPastedSlashOpensNoCommandMenu(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const editor = new LineEditor({ columns: () => 60, hint: HINT, commands: MENU_COMMANDS });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  input.write(PASTE_START + "/mo" + PASTE_END);
+  await tick();
+  assert.equal(editor.menuOpen(), false);
+  assert.deepEqual(view().rows, [FRAME_TOP, framed("> /mo"), FRAME_BOTTOM, `  ${HINT}`]);
+  // Typing on after it keeps the menu closed: only a slash typed first opens it.
+  input.write("d");
+  await tick();
+  assert.equal(editor.menuOpen(), false);
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "/mod" });
+}
+
 async function watchKeysWithAnEditorGivesItTheKeysButCtrlC(): Promise<void> {
   const { input, terminal } = setup();
   const keys: string[] = [];
@@ -3820,6 +3915,10 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a paste keeps its tabs, shown as spaces": aPasteKeepsItsTabsShownAsSpaces,
   "Escape erases a framed readLine": escapeErasesAFramedReadLine,
   "a framed readLine with a list moves into it and opens a row": aFramedReadLineWithAListMovesIntoItAndOpensARow,
+  "typing a slash opens the command menu in place of the list":
+    typingASlashOpensTheCommandMenuInPlaceOfTheList,
+  "Enter in the command menu runs the highlighted command": enterInTheCommandMenuRunsTheHighlightedCommand,
+  "a pasted slash opens no command menu": aPastedSlashOpensNoCommandMenu,
   "a list row that goes gives the keys back, and the list redraws on its own":
     aListRowThatGoesGivesTheKeysBackAndTheListRedrawsOnItsOwn,
   "a long list shows what fits, the focused row among them": aLongListShowsWhatFitsTheFocusedRowAmongThem,

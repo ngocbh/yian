@@ -62,7 +62,7 @@ import { CHAT_FLOW_FILE, removeEmptyDir, validateRunLogOptions } from "./run.ts"
 import { sanitize } from "./sanitize.ts";
 import { RunProgress, runScreen } from "./run_view.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
-import type { Key, Terminal } from "./terminal.ts";
+import type { Key, PromptCommand, Terminal } from "./terminal.ts";
 import { type CliIo, UsageError } from "./utils.ts";
 
 /** How often the run list under the input box is drawn again, for its times. */
@@ -111,7 +111,10 @@ const RESUME_LABEL = "Resume which chat?";
 const MODEL_LABEL = "Model for the next replies";
 
 /** The chat's own commands, beside `/exit`. */
-const COMMANDS: ReadonlySet<string> = new Set(["/model", "/resume"]);
+const COMMANDS: readonly PromptCommand[] = [
+  { name: "/model", description: "Choose the model for the next replies" },
+  { name: "/resume", description: "Go on from an earlier chat in this folder" },
+];
 
 /**
  * Load the bundled chat flow, its `uses:` resolved to the bundled compaction flow, as loaded in
@@ -698,7 +701,7 @@ export async function chat(
             typed = keys;
           },
           commands: {
-            names: COMMANDS,
+            list: COMMANDS,
             run: (name, terminal) =>
               name === "/model" ? chooseModel(terminal) : chooseSession(terminal),
           },

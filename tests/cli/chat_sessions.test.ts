@@ -147,20 +147,24 @@ test(
   "a chat is named once, from its log, and lists its messages; until then its first line stands in",
   async () => {
     await chatRun("named", root, ["fix my parser", "and its tests"], { name: "Fixing the parser" });
-    // A name that's empty once its quotes go leaves the chat unnamed.
-    await chatRun("unnamed", root, ["hello"], { name: '""' });
+    // A name that's empty once its quotes and invisible characters go leaves the chat unnamed,
+    // and named once: the next turn makes no naming call, which the script would run out on.
+    await chatRun("unnamed", root, ["hello", "again"], { name: '"\u200b"' });
     await chatRun("seeded", root, ["go on"], { inputs: { title: "Fixing the parser" } });
     const sessions = chatSessions(runsDir, root);
     const shown = sessions.map((each) => [each.runId, each.title, each.firstLine, each.messages]);
     expect(shown).toEqual([
       // A chat going on from a named one keeps its name, with no call to name it.
       ["seeded", "Fixing the parser", "go on", 2],
-      ["unnamed", null, "hello", 2],
+      ["unnamed", "", "hello", 4],
       // The user's two lines and the two replies.
       ["named", "Fixing the parser", "fix my parser", 4],
     ]);
     const seed = await sessionSeed(sessions[2]!, runsDir, NO_ENV);
     expect(seed.title).toBe("Fixing the parser");
+    expect(seed.messages).toBe(4);
+    // A chat that tried keeps its empty name, so the one going on from it isn't named either.
+    expect((await sessionSeed(sessions[1]!, runsDir, NO_ENV)).title).toBe("");
   },
   TIMEOUT,
 );
@@ -218,6 +222,10 @@ test("a session's picker choice is its name, then when, its messages and model",
   const first = { ...session, title: null, messages: 1, model: null };
   const unnamed = { title: "fix my parser", detail: "2h ago · 1 message" };
   expect(sessionChoice(first, now)).toEqual(unnamed);
+  expect(sessionChoice({ ...first, title: "" }, now)).toEqual(unnamed);
+  // Invisible and control characters show as escapes, never drawn as they are.
+  const hidden = { ...first, firstLine: "fix\u202e me\x07" };
+  expect(sessionChoice(hidden, now).title).toBe("fix\\u{202e} me^G");
 });
 
 test(

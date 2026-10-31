@@ -1036,7 +1036,9 @@ export class Picker {
       return null;
     };
     if (key.paste) {
-      return searched([...this.#query, ...Array.from((key.str ?? "").replace(/\s+/g, " "))]);
+      // One line of text: whitespace folded to spaces, and no control character kept.
+      const text = (key.str ?? "").replace(/\s+/g, " ").replace(/[\x00-\x1f\x7f-\x9f]/g, "");
+      return searched([...this.#query, ...Array.from(text)]);
     }
     if (key.name === "escape") return { cancel: true };
     if (key.name === "return" || key.name === "enter") {

@@ -104,7 +104,8 @@ class AnsweringModel implements ChatModel {
   stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
     if (namingRequest(request)) {
       this.named.push(request);
-      const name = `About ${request.messages.at(-1)!.text().split("\n")[0]}`;
+      // The conversation's first line, after its opening tag.
+      const name = `About ${request.messages.at(-1)!.text().split("\n")[1]}`;
       return new ScriptedModel([textReply(name)], this).stream(request, options);
     }
     this.requests.push(request);

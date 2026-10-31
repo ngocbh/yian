@@ -28,6 +28,7 @@ import { readRunIndex, type RunIndexRow, updateRunIndex } from "../runtime/run_i
 import { toHost } from "../typesys/values.ts";
 import type { WaitingChild } from "./chat_runs.ts";
 import { CHAT_FLOW_FILE, CHAT_FLOW_ID } from "./run.ts";
+import { sanitize } from "./sanitize.ts";
 import type { PickChoice } from "./terminal.ts";
 
 /** How many earlier chats `chatSessions` lists at most, the newest. */
@@ -78,7 +79,10 @@ export interface ChatSession {
   readonly startedAt: string;
   /** The first line the user typed. */
   readonly firstLine: string;
-  /** The name the chat gave itself, or kept from the chat it went on from; null until named. */
+  /**
+   * The name the chat gave itself, or kept from the chat it went on from; empty when naming gave
+   * none, and null until it was tried.
+   */
   readonly title: string | null;
   /**
    * The messages it started with (`spokenCount`), and the lines the user typed in it and the
@@ -139,7 +143,7 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
   let start: Spot | null = null;
   const sends: Spot[] = [];
   const replySteps: Spot[] = [];
-  let titled: Spot | null = null;
+  const titled: Spot[] = [];
   let replies = 0;
   let after: Spot["after"] = null;
   for (const entry of iterRunRecords(log, { payloads: false })) {
@@ -148,7 +152,7 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
     if (entry.kind === "run_started") start = spot;
     else if (commit === "__start__") sends.push(spot);
     else if (commit !== null && ANSWERED.test(commit)) replies++;
-    else if (commit !== null && titled === null && TITLED.test(commit)) titled = spot;
+    else if (commit !== null && TITLED.test(commit)) titled.push(spot);
     else if (entry.kind === "node_step" && entry.nodeId?.endsWith("/answered/reply")) {
       replySteps.push(spot);
     }
@@ -183,9 +187,13 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
       }
     }
   }
-  const named = titled === null ? null : recordAt(log, titled);
-  if (named instanceof PoolCommitRecord && typeof named.value?.value === "string") {
-    title = named.value.value;
+  // The first name given: a chat is named once.
+  for (const spot of titled) {
+    const named = recordAt(log, spot);
+    if (named instanceof PoolCommitRecord && typeof named.value?.value === "string") {
+      title = named.value.value;
+      break;
+    }
   }
   if (firstLine === null || row.startedAt === null) return null;
   // The reply's last model call: its config step is among its last few steps.
@@ -261,8 +269,10 @@ export interface SessionSeed {
   /** Its summary, and its messages as turns. */
   readonly transcript: { summary: string; history: unknown[][] };
   readonly model: ModelChoice | null;
-  /** Its name, which the new chat keeps; null when it had none. */
+  /** Its name, which the new chat keeps (`ChatSession.title`). */
   readonly title: string | null;
+  /** Its message count (`ChatSession.messages`), which `/resume` showed. */
+  readonly messages: number;
   /** The earlier chat's child runs left waiting or stopped; they aren't restarted. */
   readonly waiting: WaitingChild[];
 }
@@ -302,7 +312,8 @@ export async function sessionSeed(
     const kind = tools.includes("ask") ? "question" : tools.includes("take") ? "inbox" : "timer";
     return [{ run: row.runId, kind, log }];
   });
-  return { transcript, model: session.chosen, title: session.title, waiting };
+  const { title, messages } = session;
+  return { transcript, model: session.chosen, title, messages, waiting };
 }
 
 /** Seconds in a minute, an hour and a day, and the days before a time ago is a date. */
@@ -338,10 +349,11 @@ export function timeAgo(startedAt: string, now: number): string {
  * when it started, its message count and its model; a search matches its first line too.
  */
 export function sessionChoice(session: ChatSession, now: number): PickChoice {
-  const firstLine = session.firstLine.replace(/\s+/g, " ").trim();
+  // Text the user typed or a model wrote: its control and invisible characters shown, not drawn.
+  const firstLine = sanitize(session.firstLine.replace(/\s+/g, " ").trim());
   const count = `${session.messages} message${session.messages === 1 ? "" : "s"}`;
   const model = session.model === null ? [] : [`${session.model.provider}/${session.model.model}`];
   const detail = [timeAgo(session.startedAt, now), count, ...model].join(" · ");
-  if (session.title === null) return { title: firstLine, detail };
-  return { title: session.title, detail, also: firstLine };
+  if (session.title === null || session.title === "") return { title: firstLine, detail };
+  return { title: sanitize(session.title), detail, also: firstLine };
 }

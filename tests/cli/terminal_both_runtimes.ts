@@ -2107,6 +2107,12 @@ async function aPickerStartsOnItsInitialChoiceAndScrollsWithinTheScreen(): Promi
   assert.deepEqual(picker.key(key("escape")), { cancel: true });
 }
 
+async function aPasteIntoAPickerDropsControlCharacters(): Promise<void> {
+  const picker = new SearchPicker({ label: "Pick", choices: CHATS, columns: () => 60 });
+  picker.key({ name: undefined, str: "\x1b[31mX\tY\x9b", ctrl: false, meta: false, paste: true });
+  assert.deepEqual(picker.cursor(), { row: 2, before: "│ > [31mX Y" });
+}
+
 async function aPickerAnswersNullOnEscOrCtrlCAndStaysOpen(): Promise<void> {
   const { input, terminal } = setup();
   const escaped = terminal.askPick("Pick", CHATS);
@@ -4284,6 +4290,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
     aPickerBoldsTheMatchedWordsAndMarksItsHighlightedRow,
   "a picker starts on its initial choice and scrolls within the screen":
     aPickerStartsOnItsInitialChoiceAndScrollsWithinTheScreen,
+  "a paste into a picker drops control characters": aPasteIntoAPickerDropsControlCharacters,
   "a picker answers null on Esc or Ctrl-C and stays open":
     aPickerAnswersNullOnEscOrCtrlCAndStaysOpen,
   "a plain terminal's picker is a numberless choice": aPlainTerminalsPickerIsANumberlessChoice,

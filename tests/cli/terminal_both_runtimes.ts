@@ -1487,6 +1487,34 @@ async function aWatchStartedWhileAPromptIsUpLeavesTheWaitingKeysToThePrompt(): P
   watch.abort();
 }
 
+async function aWatchItsEditorEndsWhileTakingTheWaitingKeysEndsThereAndLeavesTheRest(): Promise<void> {
+  const { input, terminal, exitHooks } = setup();
+  const release = terminal.holdRaw();
+  const line = terminal.readLine("You:");
+  input.write("a" + ENTER + "xyz");
+  assert.deepEqual(await line, { value: "a" });
+  const edited: string[] = [];
+  const watch = new AbortController();
+  terminal.watchKeys(
+    watch.signal,
+    () => {},
+    (key) => {
+      edited.push(key.name ?? key.str ?? "?");
+      if (key.name === "x") watch.abort();
+      return true;
+    },
+  );
+  assert.deepEqual(edited, ["x"]);
+  assert.equal(input.isPaused(), true);
+  assert.equal(process.listenerCount("exit"), exitHooks + 1);
+  const next = terminal.readLine("You:");
+  input.write(ENTER);
+  assert.deepEqual(await next, { value: "yz" });
+  assert.deepEqual(edited, ["x"]);
+  release();
+  assert.equal(process.listenerCount("exit"), exitHooks);
+}
+
 async function showScreenDrawsOnTheAlternateScreenAndGivesTheScreenBack(): Promise<void> {
   const { input, output, terminal, view } = setup({ columns: 20 });
   output.rows = 3;
@@ -3761,6 +3789,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
     aWatchWithAnEditorGetsTheKeysTypedBeforeItFirst,
   "a watch started while a prompt is up leaves the waiting keys to the prompt":
     aWatchStartedWhileAPromptIsUpLeavesTheWaitingKeysToThePrompt,
+  "a watch its editor ends while taking the waiting keys ends there and leaves the rest":
+    aWatchItsEditorEndsWhileTakingTheWaitingKeysEndsThereAndLeavesTheRest,
   "showScreen draws on the alternate screen and gives the screen back":
     showScreenDrawsOnTheAlternateScreenAndGivesTheScreenBack,
   "showScreen says when a prompt waits behind it, and closes before that prompt":

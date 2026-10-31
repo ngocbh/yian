@@ -1345,7 +1345,8 @@ test("boundedJsonMaterial cuts the same text as a code-point array would", () =>
   }
 });
 
-test("boundedJsonMaterial keeps no per-code-point copy of long material", () => {
+// Needs Bun.gc to settle the heap before each sample, so it does not run under the Node suite.
+test.skipIf(typeof Bun === "undefined")("boundedJsonMaterial keeps no per-code-point copy of long material", () => {
   // Above Latin-1, so each code point would be its own string rather than a cached one.
   const text = "é😀x".repeat(1_000_000);
   Bun.gc(true);

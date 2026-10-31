@@ -237,8 +237,10 @@ the input's type:
 | `Order` (a union) | `Buy` (a member) | No |
 
 To pass a wider value anyway, tag the binding, which checks it when it runs (`size: !Size
-${input.s}`), or narrow it first. A tagged loop seed works the same way: under `acc: !int 0`, the
-body may return `Optional(int)` (see [Repeat with `loop`](/control-flow/#repeat-with-loop)).
+${input.s}`), or narrow it first. A tagged loop seed relaxes only the `Optional` row: under
+`acc: !int 0`, the body may return `Optional(int)`, and a returned `null` fails the next run of the
+body. Any other row stays a load error for a loop seed, tagged or not (see
+[Repeat with `loop`](/control-flow/#repeat-with-loop)).
 
 ## Narrowing
 

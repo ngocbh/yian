@@ -7,13 +7,14 @@
  */
 
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseDocument } from "yaml";
 
+import { loadConfined } from "../../src/cli/confined_load.ts";
 import { parseKv } from "../../src/cli/run.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadError } from "../../src/compose/helpers/errors.ts";
@@ -170,4 +171,16 @@ test("yian lines are in console blocks", () => {
       .map((line) => `${where(block)}: ${line}`),
   );
   expect(stray).toEqual([]);
+});
+
+// control-flow.md says a `../` ref loads under `yian check --root` when the root holds its file.
+test("control-flow.md's uses: example loads confined to its page folder, but not to app/", async () => {
+  const report = [...PAGE_FILES].find(([block]) => block.file === "control-flow.md" && block.meta["title"] === "app/report.yaml");
+  if (report === undefined) throw new Error("control-flow.md has no app/report.yaml block");
+  const [, path] = report;
+  const page = realpathSync(join(PAGES_DIR, "control-flow.md"));
+  expect((await loadConfined(page, path, new Set(), NO_ENV)).name).toBe("report");
+  const error = await loadConfined(join(page, "app"), path, new Set(), NO_ENV).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(LoadError);
+  expect((error as LoadError).diagnostic.message).toContain("../common/clean.yaml is outside the root");
 });

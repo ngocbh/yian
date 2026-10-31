@@ -158,8 +158,9 @@ typedefs:
 Into a child's input (`call`, `map`, `loop`), `list(int)` fits `list(Optional(int))`, a record
 fits `object`, and `Literal(small)` fits `Literal(small, large)`. `str` doesn't fit a `Literal`,
 `Optional(str)` doesn't fit `str`, and a union doesn't fit one of its members: tag the binding to
-check it at run time, or narrow it first. A tagged loop seed is the same: under `acc: !int 0` the
-body may return `Optional(int)`, and a `null` fails the next run of the body.
+check it at run time, or narrow it first. A tagged loop seed allows only an added `null`: under
+`acc: !int 0` the body may return `Optional(int)`, and a `null` fails the next run of the body.
+Any other wider return (`str` over `!Mode a`) is a load error, tagged or not.
 
 ## Models
 

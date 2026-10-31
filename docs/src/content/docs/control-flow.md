@@ -313,11 +313,13 @@ Shipped.
 - `@<version>` pins the child: its `version:` must be the same text, or the flow doesn't load.
   Quote a number there (`version: "1"`). A ref without `@` takes any version.
 - `yian run` and `yian check` look in the importing file's folder, then in each `system.paths`
-  folder, and the first file found wins. A host's `loadFlow` looks in its `searchPaths` instead
-  (see [Embedding](/embedding/#run-a-flow)).
+  folder, and the first file found wins. A host's `loadFlow` looks in its `searchPaths` instead,
+  then in `system.paths` joined onto the first of them (see [Embedding](/embedding/#run-a-flow)).
 - A child's own refs resolve from its folder and its own `system.paths`, never the importer's.
-- `yian check --root` loads a ref only from the importing file's folder (see
-  [yian check](/cli/#yian-check)), so a `../` ref like the one above fails there.
+- Under `yian check --root` (see [yian check](/cli/#yian-check)), a ref resolves only from the
+  importing file's folder, and a flow that sets `system.paths` is refused. A `../` ref fails only
+  when its file is outside the root: the example above loads with `--root .` but not with
+  `--root app`.
 - Files that import each other in a cycle fail to load, and so does a `hub:` ref.
 
 Pinning a version the child doesn't declare fails at load:
@@ -414,17 +416,18 @@ Exactly one driver decides how often the body runs:
   unless you give `max:`. So is one that reads no carried field and doesn't end the loop at once
   (`until: 1 > 2`).
 - The body returns at least one carried field, and only carried fields. Each must fit the field's
-  carried type, which its seed gives. A tagged seed is checked when the value arrives instead, as
-  in the example below.
+  carried type, which its seed gives. Over a tagged seed, a returned field whose type differs
+  only by allowing `null` still loads, as in the example below. Any other mismatch is a load error,
+  tagged or not.
 - Returning `null` sets the field to `null`; leaving it out keeps its value.
 - `input:` lists each carried field. Each seed is checked against the body's input like a `call`
   argument. An empty list seed needs a tag, as `seen: !list(int) []` shows.
 - `${count.output}` is the final record, and `${count.output.n}` one field of it.
 
-A body may return a wider value than an untagged seed. Here the seed `last: !int 0` is tagged, so
-the body's `Optional(int)` loads, inline or as a `call:` body, as any [tag](/types/#what-a-tag-checks)
-does. A `null` it returns fails the next run of the body with `contract.input`. After the last run
-it stays in the loop's output, whose field reads `Optional(int)`:
+A tagged seed lets the body return its type plus `null`. Here the seed `last: !int 0` is tagged,
+so the body's `Optional(int)` loads, inline or as a `call:` body. A `null` it returns fails the
+next run of the body with `contract.input`. After the last run it stays in the loop's output,
+whose field reads `Optional(int)`:
 
 ```yaml title="poll.yaml" check=runnable
 id: poll
@@ -489,6 +492,36 @@ output: ${poll.output.last}
 
 ```text
 loop node 'poll': the body returns 'last' as Optional(int), but the carried field is typed int from its seed; declare the seed's type: `last: !Optional(int) 0`
+```
+
+A tag allows only that `null`. Any other wider type is a load error, tagged or not: under
+`mode: !Mode a`, a body that returns a `str` doesn't load.
+
+```yaml title="mode.yaml" check=fails
+id: mode
+name: mode
+typedefs:
+  Mode: Literal(a, b)
+nodes:
+  pick:
+    kind: loop
+    input:
+      n: 0
+      mode: !Mode a
+    while: n < 2
+    nodes:
+      read:
+        kind: code
+        output: str
+        code: return "b"
+    output:
+      n: ${input.n + 1}
+      mode: ${read.output}
+output: ${pick.output.mode}
+```
+
+```text
+loop node 'pick': the body returns 'mode' as str, but the carried field is declared Literal(a, b); declare the seed's type: `mode: !str "a"`
 ```
 
 A `while:` null check guards the body. Under `while: cursor != null`, a seed or returned field

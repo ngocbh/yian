@@ -20,8 +20,12 @@ import { foldRunLog } from "../run.ts";
 import { iterRunRecords, PoolCommitRecord, RunStartedRecord } from "../runtime/log.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../runtime/run_index.ts";
 import { toHost } from "../typesys/values.ts";
+import { fit } from "./cells.ts";
 import type { WaitingChild } from "./chat_runs.ts";
 import { CHAT_FLOW_FILE, CHAT_FLOW_ID } from "./run.ts";
+
+/** How many earlier chats `chatSessions` lists at most, the newest. */
+const SESSIONS_LISTED = 20;
 
 /** A provider and model the assistant's replies use. */
 export interface ModelChoice {
@@ -134,7 +138,8 @@ function indexRows(runsDir: string): RunIndexRow[] {
 
 /**
  * The `yian chat` sessions started in the folder `root` whose runs are in `runsDir`, newest first,
- * that the user typed in and that no chat holds now. A log that can't be read is left out.
+ * that the user typed in and that no chat holds now, at most `SESSIONS_LISTED` of them. A log
+ * that can't be read is left out.
  */
 export function chatSessions(runsDir: string, root: string): ChatSession[] {
   const flow = join(real(root), CHAT_FLOW_FILE);
@@ -148,9 +153,10 @@ export function chatSessions(runsDir: string, root: string): ChatSession[] {
       return [];
     }
   });
-  return sessions.sort(
+  sessions.sort(
     (a, b) => compareCodeUnits(b.startedAt, a.startedAt) || compareCodeUnits(b.runId, a.runId),
   );
+  return sessions.slice(0, SESSIONS_LISTED);
 }
 
 /** What a new chat starts from: an earlier one's transcript and model, and its children left. */
@@ -199,9 +205,12 @@ export async function sessionSeed(
   return { transcript, model: session.model, waiting };
 }
 
-/** `session` as a picker row: when it started (UTC), its model and its first line. */
-export function sessionTitle(session: ChatSession): string {
+/**
+ * `session` as a picker row at most `width` cells wide: when it started (UTC), its model and its
+ * first line, cut to fit.
+ */
+export function sessionTitle(session: ChatSession, width: number): string {
   const when = session.startedAt.slice(0, 16).replace("T", " ");
   const model = session.model === null ? "" : ` · ${session.model.provider}/${session.model.model}`;
-  return `${when}${model} · ${session.firstLine.replace(/\s+/g, " ")}`;
+  return fit(`${when}${model} · ${session.firstLine.replace(/\s+/g, " ")}`, width);
 }

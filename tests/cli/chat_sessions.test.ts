@@ -114,7 +114,8 @@ test(
       ["s1", "first chat", { provider: "xai", model: "grok-4" }],
     ]);
     const title = /^\d{4}-\d\d-\d\d \d\d:\d\d · xai\/grok-4 · first chat$/;
-    expect(sessionTitle(sessions[1]!)).toMatch(title);
+    expect(sessionTitle(sessions[1]!, 80)).toMatch(title);
+    expect(sessionTitle(sessions[1]!, 30)).toBe(`${sessionTitle(sessions[1]!, 80).slice(0, 29)}…`);
     expect(chatSessions(runsDir, join(tmp, "nowhere"))).toEqual([]);
   },
   TIMEOUT,

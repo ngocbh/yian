@@ -42,7 +42,7 @@ import {
 } from "./chat_view.ts";
 import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
-import { columnsOf } from "./cells.ts";
+import { cells, columnsOf } from "./cells.ts";
 import { loginModels } from "./auth.ts";
 import {
   type ChatSession,
@@ -110,6 +110,9 @@ export interface ChatDeps {
   modelChoices?: () => Promise<{ models: readonly ModelChoice[]; failed: readonly string[] }>;
 }
 
+/** The label of the picker of earlier chats. */
+const RESUME_LABEL = "Resume which chat?";
+
 /** The chat's own commands, beside `/exit`. */
 const COMMANDS: ReadonlySet<string> = new Set(["/model", "/resume"]);
 
@@ -173,9 +176,10 @@ function loginOf(provider: string, env: Env): string | null {
 }
 
 /**
- * Ask which of `titles` under `label` through `terminal`: a picker, or, when `plain`, the titles
- * numbered (written through `write`) and a line for the number. Returns the index, or null when
- * none was picked (a cancel, the end of input, a blank line or a number out of range).
+ * Ask which of `titles` under `label` through `terminal`: a picker (Esc or Ctrl-C cancels it), or,
+ * when `plain`, the titles numbered (written through `write`) and a line for the number. Returns
+ * the index, or null when none was picked (a cancel, the end of input, a blank line or a number
+ * out of range).
  */
 async function pickOne(
   terminal: Terminal,
@@ -185,7 +189,7 @@ async function pickOne(
   titles: readonly string[],
 ): Promise<number | null> {
   if (!plain) {
-    const picked = await terminal.askChoice(label, titles);
+    const picked = await terminal.askChoice(label, titles, { cancellable: true });
     return picked === null ? null : titles.indexOf(picked);
   }
   const rows = titles.map((title, i) => `  ${i + 1}. ${sanitize(title)}\n`);
@@ -586,6 +590,8 @@ export async function chat(
       );
       return Object.fromEntries(all.map((each) => [each.name, each]));
     };
+    // A session's title fits on one line in the picker and once picked, after its label.
+    const titleCells = () => columnsOf(out.stderrStream) - cells(RESUME_LABEL) - 4;
     const pick = (terminal: Terminal, label: string, titles: readonly string[]) =>
       pickOne(terminal, view === null, note, label, titles);
     /** Go on from `from`: its transcript and model are the run's, its children left are listed. */
@@ -598,7 +604,7 @@ export async function chat(
     const start = async (terminal: Terminal): Promise<number | null> => {
       if (picking) {
         const sessions = chatSessions(runsDir, root);
-        const index = await pick(terminal, "Resume which chat?", sessions.map(sessionTitle));
+        const index = await pick(terminal, RESUME_LABEL, sessions.map((each) => sessionTitle(each, titleCells())));
         if (index === null) {
           await note("chat cancelled\n");
           return 130;
@@ -647,7 +653,7 @@ export async function chat(
         await note("(no earlier yian chat in this folder to resume)\n");
         return null;
       }
-      const index = await pick(terminal, "Resume which chat?", sessions.map(sessionTitle));
+      const index = await pick(terminal, RESUME_LABEL, sessions.map((each) => sessionTitle(each, titleCells())));
       if (index === null) return null;
       next = sessions[index]!;
       return { exit: true };

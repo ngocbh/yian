@@ -1710,6 +1710,23 @@ async function aChoiceMovesWithWraparoundAndReturnsTheTitle(): Promise<void> {
   assertRestored(input, output, exitHooks);
 }
 
+async function aCancellableChoiceAnswersNullOnEscOrCtrlCAndStaysOpen(): Promise<void> {
+  const { input, terminal } = setup();
+  const escaped = terminal.askChoice("Pick", ["a", "b"], { cancellable: true });
+  await tick();
+  input.write(ESCAPE);
+  assert.equal(await escaped, null);
+  const interrupted = terminal.askChoice("Pick", ["a", "b"], { cancellable: true });
+  await tick();
+  input.write(CTRL_C);
+  assert.equal(await interrupted, null);
+  // The terminal is still open: the next choice is asked.
+  const answer = terminal.askChoice("Pick", ["a", "b"]);
+  await tick();
+  input.write(DOWN + ENTER);
+  assert.equal(await answer, "b");
+}
+
 async function aBadChoiceListIsRefusedWithoutDrawing(): Promise<void> {
   const { output, terminal } = setup();
   await assert.rejects(terminal.askChoice("Pick", []), RangeError);
@@ -3838,6 +3855,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "wide characters at a wrap boundary start the next row": wideCharactersAtAWrapBoundaryStartTheNextRow,
   "a long line redraws without stale rows": aLongLineRedrawsWithoutStaleRows,
   "a choice moves with wraparound and returns the title": aChoiceMovesWithWraparoundAndReturnsTheTitle,
+  "a cancellable choice answers null on Esc or Ctrl-C and stays open":
+    aCancellableChoiceAnswersNullOnEscOrCtrlCAndStaysOpen,
   "a bad choice list is refused without drawing": aBadChoiceListIsRefusedWithoutDrawing,
   "equal titles map back by index": equalTitlesMapBackByIndex,
   "a prompt queued while another is raw restores cooked mode": aPromptQueuedWhileAnotherIsRawRestoresCookedMode,

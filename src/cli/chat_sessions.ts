@@ -4,7 +4,8 @@
  *
  * A session is a top-level run of the bundled chat flow whose recorded flow folder is the folder
  * the chat works in (`chat.ts` loads the flow there). The run index finds them; each one's log
- * gives its first user line and model, and its fold the transcript a new chat starts from.
+ * gives its name, first user line, model and message count, and its fold the transcript a new
+ * chat starts from.
  *
  * Knows about: the run index, the run log's records and its fold, the bundled chat flow's names
  * and the waiting children `chat.ts` prints.
@@ -25,9 +26,10 @@ import {
 } from "../runtime/log.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../runtime/run_index.ts";
 import { toHost } from "../typesys/values.ts";
-import { fit } from "./cells.ts";
 import type { WaitingChild } from "./chat_runs.ts";
 import { CHAT_FLOW_FILE, CHAT_FLOW_ID } from "./run.ts";
+import { sanitize } from "./sanitize.ts";
+import type { PickChoice } from "./terminal.ts";
 
 /** How many earlier chats `chatSessions` lists at most, the newest. */
 const SESSIONS_LISTED = 20;
@@ -77,6 +79,16 @@ export interface ChatSession {
   readonly startedAt: string;
   /** The first line the user typed. */
   readonly firstLine: string;
+  /**
+   * The name the chat gave itself, or kept from the chat it went on from; empty when naming gave
+   * none, and null until it was tried.
+   */
+  readonly title: string | null;
+  /**
+   * The messages it started with (`spokenCount`), and the lines the user typed in it and the
+   * replies to them.
+   */
+  readonly messages: number;
   /** The model it chose, or else the one its last reply used; null when the log doesn't say. */
   readonly model: ModelChoice | null;
   /**
@@ -84,6 +96,20 @@ export interface ChatSession {
    * ran on the defaults, which a chat going on from it then uses too.
    */
   readonly chosen: ModelChoice | null;
+}
+
+/**
+ * The messages of `history` (a transcript's turns) the user and the assistant said: those with a
+ * text part, not a tool call's or its result's alone; 0 for anything but a list of turns.
+ */
+export function spokenCount(history: unknown): number {
+  if (!Array.isArray(history)) return 0;
+  const spoken = (message: unknown): boolean => {
+    const { role, parts } = (message ?? {}) as { role?: unknown; parts?: unknown };
+    const said = role === "user" || role === "assistant";
+    return said && Array.isArray(parts) && parts.some((part) => part?.type === "text");
+  };
+  return history.flat().filter(spoken).length;
 }
 
 /** The provider and model a recorded `llm_config` names, or null. */
@@ -104,6 +130,10 @@ function recordAt(log: string, spot: Spot): unknown {
 /** A reply's model call records its model on a step of this kind. */
 const LLM_STEP = "llm_config";
 
+/** A turn's call that answers it, and the node that gives the chat its name, in its log. */
+const ANSWERED = /^chat#\d+\/answered$/;
+const TITLED = /^chat#\d+\/titled\/named$/;
+
 /**
  * Read the session in `log`: its first user line and models; null when it isn't the bundled chat's
  * or the user typed nothing in it. A first pass reads only where the records are; then only the
@@ -113,11 +143,16 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
   let start: Spot | null = null;
   const sends: Spot[] = [];
   const replySteps: Spot[] = [];
+  const titled: Spot[] = [];
+  let replies = 0;
   let after: Spot["after"] = null;
   for (const entry of iterRunRecords(log, { payloads: false })) {
     const spot = { after };
+    const commit = entry.kind === "pool_commit" ? (entry.nodeId ?? "") : null;
     if (entry.kind === "run_started") start = spot;
-    else if (entry.kind === "pool_commit" && entry.nodeId === "__start__") sends.push(spot);
+    else if (commit === "__start__") sends.push(spot);
+    else if (commit !== null && ANSWERED.test(commit)) replies++;
+    else if (commit !== null && TITLED.test(commit)) titled.push(spot);
     else if (entry.kind === "node_step" && entry.nodeId?.endsWith("/answered/reply")) {
       replySteps.push(spot);
     }
@@ -130,16 +165,34 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
   if (started.flow?.root !== CHAT_FLOW_FILE || !ours) return null;
   let chosen: ModelChoice | null = null;
   let firstLine: string | null = null;
+  let title: string | null = null;
+  let lines = 0;
+  // The messages it started with, from an earlier chat.
+  let seeded = 0;
   for (const spot of sends) {
     const record = recordAt(log, spot);
     if (!(record instanceof PoolCommitRecord)) continue;
     const value = record.value?.value as Record<string, unknown> | undefined;
     if (record.key === "__start__") {
       chosen = recordedModel(value?.["model"]) ?? chosen;
+      title = typeof value?.["title"] === "string" ? value["title"] : title;
+      const transcript = value?.["transcript"] as { history?: unknown } | null | undefined;
+      seeded = spokenCount(transcript?.history) || seeded;
     } else if (record.key === "__start__.owner_messages") {
       const choice = chosenModel(value);
       if (choice !== null) chosen = choice;
-      else if (firstLine === null && value?.["author"] == null) firstLine = onlyText(value);
+      else if (value?.["author"] == null) {
+        lines++;
+        firstLine ??= onlyText(value);
+      }
+    }
+  }
+  // The first name given: a chat is named once.
+  for (const spot of titled) {
+    const named = recordAt(log, spot);
+    if (named instanceof PoolCommitRecord && typeof named.value?.value === "string") {
+      title = named.value.value;
+      break;
     }
   }
   if (firstLine === null || row.startedAt === null) return null;
@@ -152,7 +205,8 @@ function readSession(row: RunIndexRow, log: string): ChatSession | null {
     }
   }
   const { runId, startedAt } = row;
-  return { runId, log, startedAt, firstLine, model: chosen ?? used, chosen };
+  const messages = seeded + lines + replies;
+  return { runId, log, startedAt, firstLine, title, messages, model: chosen ?? used, chosen };
 }
 
 /** The real path of `path`, or `path` when it doesn't resolve. */
@@ -215,6 +269,10 @@ export interface SessionSeed {
   /** Its summary, and its messages as turns. */
   readonly transcript: { summary: string; history: unknown[][] };
   readonly model: ModelChoice | null;
+  /** Its name, which the new chat keeps (`ChatSession.title`). */
+  readonly title: string | null;
+  /** Its message count (`ChatSession.messages`), which `/resume` showed. */
+  readonly messages: number;
   /** The earlier chat's child runs left waiting or stopped; they aren't restarted. */
   readonly waiting: WaitingChild[];
 }
@@ -254,15 +312,48 @@ export async function sessionSeed(
     const kind = tools.includes("ask") ? "question" : tools.includes("take") ? "inbox" : "timer";
     return [{ run: row.runId, kind, log }];
   });
-  return { transcript, model: session.chosen, waiting };
+  const { title, messages } = session;
+  return { transcript, model: session.chosen, title, messages, waiting };
+}
+
+/** Seconds in a minute, an hour and a day, and the days before a time ago is a date. */
+const MINUTE_S = 60;
+const HOUR_S = 3600;
+const DAY_S = 86_400;
+const DAYS_AGO = 30;
+
+/** A UTC time as the run index records one, `2026-10-31T12:00:00.000Z`. */
+const UTC_TIME = /^(\d{4})-(\d\d)-(\d\d)T(\d\d):(\d\d):(\d\d)(?:\.(\d{1,3})\d*)?Z$/;
+
+/**
+ * How long before `now` (milliseconds since the epoch) the UTC time `startedAt` was: `<n>s ago`,
+ * `<n>m ago`, `<n>h ago` or `<n>d ago`, and from `DAYS_AGO` days its UTC date. A time after `now`
+ * is `0s ago`, and text that isn't such a time is given back.
+ */
+export function timeAgo(startedAt: string, now: number): string {
+  const parts = UTC_TIME.exec(startedAt);
+  if (parts === null) return startedAt;
+  const [year, month, day, hour, minute, second] = parts.slice(1, 7).map(Number) as number[];
+  const millis = Number((parts[7] ?? "0").padEnd(3, "0"));
+  const at = Date.UTC(year!, month! - 1, day, hour, minute, second, millis);
+  const seconds = Math.max(0, Math.floor((now - at) / 1000));
+  if (seconds < MINUTE_S) return `${seconds}s ago`;
+  if (seconds < HOUR_S) return `${Math.floor(seconds / MINUTE_S)}m ago`;
+  if (seconds < DAY_S) return `${Math.floor(seconds / HOUR_S)}h ago`;
+  const days = Math.floor(seconds / DAY_S);
+  return days < DAYS_AGO ? `${days}d ago` : startedAt.slice(0, 10);
 }
 
 /**
- * `session` as a picker row at most `width` cells wide: when it started (UTC), its model and its
- * first line, cut to fit.
+ * `session` as `/resume`'s picker offers it at `now`: its name (its first line until named), then
+ * when it started, its message count and its model; a search matches its first line too.
  */
-export function sessionTitle(session: ChatSession, width: number): string {
-  const when = session.startedAt.slice(0, 16).replace("T", " ");
-  const model = session.model === null ? "" : ` · ${session.model.provider}/${session.model.model}`;
-  return fit(`${when}${model} · ${session.firstLine.replace(/\s+/g, " ")}`, width);
+export function sessionChoice(session: ChatSession, now: number): PickChoice {
+  // Text the user typed or a model wrote: its control and invisible characters shown, not drawn.
+  const firstLine = sanitize(session.firstLine.replace(/\s+/g, " ").trim());
+  const count = `${session.messages} message${session.messages === 1 ? "" : "s"}`;
+  const model = session.model === null ? [] : [`${session.model.provider}/${session.model.model}`];
+  const detail = [timeAgo(session.startedAt, now), count, ...model].join(" · ");
+  if (session.title === null || session.title === "") return { title: firstLine, detail };
+  return { title: sanitize(session.title), detail, also: firstLine };
 }

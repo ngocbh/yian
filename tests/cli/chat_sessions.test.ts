@@ -13,8 +13,10 @@ import {
   chatSessions,
   chosenModel,
   modelMessage,
+  sessionChoice,
   sessionSeed,
-  sessionTitle,
+  spokenCount,
+  timeAgo,
 } from "../../src/cli/chat_sessions.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { advance, close, runFlow, runLogPath, send } from "../../src/run.ts";
@@ -58,15 +60,31 @@ const line = (text: string) => ({ role: "user", parts: [{ type: "text", text }] 
 
 /**
  * Run a chat `runId` in `folder`: send each of `sent` (a line, or a message) and advance after
- * each, the model replying `re: <n>`; close it when `end`. Returns its log.
+ * each, the model replying `re: <n>` to the n-th, and naming the chat `name` after its first
+ * reply; close it when `end`. `inputs` go to its start. Returns its log.
  */
 async function chatRun(
   runId: string,
   folder: string,
   sent: readonly (string | Record<string, unknown>)[],
-  { end = true, parent = null }: { end?: boolean; parent?: string | null } = {},
+  {
+    end = true,
+    parent = null,
+    name = "A named chat",
+    inputs = {},
+  }: {
+    end?: boolean;
+    parent?: string | null;
+    name?: string;
+    inputs?: Record<string, unknown>;
+  } = {},
 ): Promise<string> {
-  const replies = Array.from({ length: sent.length }, (_, i) => textReply(`re: ${i + 1}`));
+  const replies = sent.flatMap((each, i) => {
+    if (typeof each !== "string" && chosenModel(each) !== null) return [];
+    return [textReply(`re: ${i + 1}`)];
+  });
+  // The first reply has the chat named after it, unless it starts with a name.
+  if (replies.length > 0 && inputs["title"] == null) replies.splice(1, 0, textReply(name));
   const model = new ScriptedModel(replies, { provider: "xai", model: "grok-4.3" });
   const options = {
     env: NO_ENV,
@@ -77,7 +95,7 @@ async function chatRun(
   };
   const log = runLogPath(runsDir, runId);
   const flow = await loadChatFlow(NO_ENV, folder);
-  await runFlow(flow, { flow: null, focus: null }, {
+  await runFlow(flow, { flow: null, focus: null, ...inputs }, {
     ...options,
     log,
     runId,
@@ -120,13 +138,95 @@ test(
       ["s4", "second chat", { provider: "xai", model: "grok-4.3" }, null],
       ["s1", "first chat", grok4, grok4],
     ]);
-    const title = /^\d{4}-\d\d-\d\d \d\d:\d\d · xai\/grok-4 · first chat$/;
-    expect(sessionTitle(sessions[1]!, 80)).toMatch(title);
-    expect(sessionTitle(sessions[1]!, 30)).toBe(`${sessionTitle(sessions[1]!, 80).slice(0, 29)}…`);
     expect(chatSessions(runsDir, join(tmp, "nowhere"))).toEqual([]);
   },
   TIMEOUT,
 );
+
+test(
+  "a chat is named once, from its log, and lists its messages; until then its first line stands in",
+  async () => {
+    await chatRun("named", root, ["fix my parser", "and its tests"], { name: "Fixing the parser" });
+    // A name that's empty once its quotes and invisible characters go leaves the chat unnamed,
+    // and named once: the next turn makes no naming call, which the script would run out on.
+    await chatRun("unnamed", root, ["hello", "again"], { name: '"\u200b"' });
+    await chatRun("seeded", root, ["go on"], { inputs: { title: "Fixing the parser" } });
+    const sessions = chatSessions(runsDir, root);
+    const shown = sessions.map((each) => [each.runId, each.title, each.firstLine, each.messages]);
+    expect(shown).toEqual([
+      // A chat going on from a named one keeps its name, with no call to name it.
+      ["seeded", "Fixing the parser", "go on", 2],
+      ["unnamed", "", "hello", 4],
+      // The user's two lines and the two replies.
+      ["named", "Fixing the parser", "fix my parser", 4],
+    ]);
+    const seed = await sessionSeed(sessions[2]!, runsDir, NO_ENV);
+    expect(seed.title).toBe("Fixing the parser");
+    expect(seed.messages).toBe(4);
+    // A chat that tried keeps its empty name, so the one going on from it isn't named either.
+    expect((await sessionSeed(sessions[1]!, runsDir, NO_ENV)).title).toBe("");
+  },
+  TIMEOUT,
+);
+
+test("a transcript's spoken messages are the user's and assistant's with text", () => {
+  const tool = { role: "assistant", parts: [{ type: "tool_call", name: "read_docs" }] };
+  const result = { role: "tool", parts: [{ type: "tool_result", content: "docs" }] };
+  const reply = { role: "assistant", parts: [{ type: "text", text: "use map" }] };
+  expect(spokenCount([[line("how?"), tool, result, reply], [line("thanks")]])).toBe(3);
+  expect(spokenCount(null)).toBe(0);
+});
+
+test(
+  "a chat going on from another counts the messages it started with",
+  async () => {
+    const reply = { role: "assistant", parts: [{ type: "text", text: "sure" }] };
+    const transcript = { summary: "", history: [[line("earlier"), reply]] };
+    await chatRun("on", root, ["and now"], { inputs: { transcript, title: "Earlier" } });
+    expect(chatSessions(runsDir, root).map((each) => each.messages)).toEqual([4]);
+  },
+  TIMEOUT,
+);
+
+test("a time ago counts seconds, minutes, hours and days, then gives the UTC date", () => {
+  const at = Date.parse("2026-10-31T12:00:00.000Z");
+  const ago = (seconds: number) => timeAgo("2026-10-31T12:00:00.000Z", at + seconds * 1000);
+  expect([ago(0), ago(59), ago(60), ago(3599), ago(3600), ago(86_399), ago(86_400)]).toEqual([
+    "0s ago", "59s ago", "1m ago", "59m ago", "1h ago", "23h ago", "1d ago",
+  ]);
+  expect(ago(29 * 86_400)).toBe("29d ago");
+  expect(ago(30 * 86_400)).toBe("2026-10-31");
+  // A start a skewed clock puts ahead of now is just now.
+  expect(ago(-5)).toBe("0s ago");
+  expect(timeAgo("not a time", at)).toBe("not a time");
+});
+
+test("a session's picker choice is its name, then when, its messages and model", () => {
+  const session = {
+    runId: "r",
+    log: "/runs/r/log.jsonl",
+    startedAt: "2026-10-31T10:00:00.000Z",
+    firstLine: "fix my\nparser",
+    title: "Fixing the parser",
+    messages: 4,
+    model: { provider: "xai", model: "grok-4" },
+    chosen: null,
+  };
+  const now = Date.parse("2026-10-31T12:00:00.000Z");
+  expect(sessionChoice(session, now)).toEqual({
+    title: "Fixing the parser",
+    detail: "2h ago · 4 messages · xai/grok-4",
+    also: "fix my parser",
+  });
+  // Unnamed, its first line stands in; one message, and no model the log names.
+  const first = { ...session, title: null, messages: 1, model: null };
+  const unnamed = { title: "fix my parser", detail: "2h ago · 1 message" };
+  expect(sessionChoice(first, now)).toEqual(unnamed);
+  expect(sessionChoice({ ...first, title: "" }, now)).toEqual(unnamed);
+  // Invisible and control characters show as escapes, never drawn as they are.
+  const hidden = { ...first, firstLine: "fix\u202e me\x07" };
+  expect(sessionChoice(hidden, now).title).toBe("fix\\u{202e} me^G");
+});
 
 test(
   "a seed holds a chat's transcript, from a finished one or one left waiting, and its model",

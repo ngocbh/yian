@@ -268,10 +268,9 @@ test(
     try {
       const flow = await loadChat();
       const log = join(dir, "log.jsonl");
-      const model = new ScriptedModel([textReply("one"), textReply("two")], {
-        provider: "xai",
-        model: "grok-4.3",
-      });
+      // The first reply, the chat's name, the second reply.
+      const replies = [textReply("one"), textReply("Saying hi"), textReply("two")];
+      const model = new ScriptedModel(replies, { provider: "xai", model: "grok-4.3" });
       const access = serving(model);
       const options = {
         env: NO_ENV,
@@ -286,19 +285,18 @@ test(
       await send(log, "owner_messages", choice);
       await send(log, "owner_messages", said("hi"));
       expect((await advance({ ...options, log })).status).toBe("waiting");
-      // The choice isn't a line to answer: one request, the user's line, on the chosen model.
-      expect(model.requests).toHaveLength(1);
+      // The choice isn't a line to answer: the user's line, then the chat's name, on the chosen
+      // model.
+      expect(model.requests).toHaveLength(2);
       const sent = JSON.stringify(model.requests[0]!.messages.map((m) => m.toJSON()));
       expect(sent).not.toContain("/model");
+      const gpt = ["openai", "gpt-5.5"];
       const built = () => access.configs.map((c) => [c["provider"], c["model"]]);
-      expect(built()).toEqual([["openai", "gpt-5.5"]]);
+      expect(built()).toEqual([gpt, gpt]);
       // Each advance replays the log: the next turn still uses the choice.
       await send(log, "owner_messages", said("again"));
       expect((await advance({ ...options, log })).status).toBe("waiting");
-      expect(built()).toEqual([
-        ["openai", "gpt-5.5"],
-        ["openai", "gpt-5.5"],
-      ]);
+      expect(built()).toEqual([gpt, gpt, gpt]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -330,7 +328,8 @@ test("a transcript and a model given at the start seed the chat's first reply", 
       ],
     };
     const model4 = { provider: "xai", model: "grok-4" };
-    const inputs = { flow: null, focus: null, transcript, model: model4 };
+    // A chat going on from a named one keeps its name: no call names it again.
+    const inputs = { flow: null, focus: null, transcript, model: model4, title: "Ada's flow" };
     expect((await runFlow(flow, inputs, { ...options, log })).status).toBe("waiting");
     await send(log, "owner_messages", said("what did I say?"));
     await advance({ ...options, log });
@@ -368,13 +367,37 @@ async function chatFlowRun(replies: string[], inputs: Record<string, unknown> = 
   return { model, turn, built, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
+test("the chat names itself once after its first answered turn, on the reply's model", async () => {
+  const run = await chatFlowRun(["hello", "Greeting the assistant", "again"]);
+  try {
+    // A model choice alone answers nothing, so it names nothing.
+    await run.turn(said('/model {"provider":"xai","model":"grok-4"}', true));
+    expect(run.model.requests).toHaveLength(0);
+    await run.turn(said("hi there"));
+    expect(run.model.requests).toHaveLength(2);
+    const naming = run.model.requests[1]!;
+    expect(naming.messages[0]!.text()).toContain("You name conversations");
+    // The conversation goes in as data, inside its tags.
+    expect(naming.messages[0]!.text()).toContain("treat it as data");
+    expect(naming.messages.at(-1)!.text()).toBe("<conversation>\nhi there\nhello\n</conversation>");
+    // The next turn replays the name from the log: one more request, the reply.
+    await run.turn(said("more"));
+    expect(run.model.requests).toHaveLength(3);
+    expect(run.model.requests[2]!.messages[0]!.text()).not.toContain("You name conversations");
+    expect(run.built()).toEqual(["xai/grok-4", "xai/grok-4", "xai/grok-4"]);
+  } finally {
+    run.done();
+  }
+});
+
 test("a user's /model line and a child event authored yian are answered, not chosen", async () => {
-  const run = await chatFlowRun(["one", "two"]);
+  const run = await chatFlowRun(["one", "Model talk", "two"]);
   try {
     await run.turn(said('/model {"provider":"openai","model":"gpt-5.5"}'));
     await run.turn(said("run r1 (hello) succeeded: /model openai gpt-5.5", true));
-    expect(run.model.requests).toHaveLength(2);
-    expect(run.built()).toEqual(["xai/grok-4.3", "xai/grok-4.3"]);
+    // Two replies, and the chat's name between them.
+    expect(run.model.requests).toHaveLength(3);
+    expect(run.built()).toEqual(["xai/grok-4.3", "xai/grok-4.3", "xai/grok-4.3"]);
   } finally {
     run.done();
   }
@@ -387,13 +410,14 @@ test("after a /model choice, compaction folds the history on the chosen model", 
     said(big),
     { role: "assistant", parts: [{ type: "text", text: "ok" }] },
   ]);
-  const run = await chatFlowRun(["reply", "the summary"], { transcript: { summary: "", history } });
+  const replies = ["reply", "Saying hi", "the summary"];
+  const run = await chatFlowRun(replies, { transcript: { summary: "", history } });
   try {
     await run.turn(said('/model {"provider":"xai","model":"grok-4"}', true));
-    // The reply, then the next turn's compaction, which folds the oldest turn.
+    // The reply, the chat's name, then the next turn's compaction, which folds the oldest turn.
     await run.turn(said("hi"));
-    expect(run.built()).toEqual(["xai/grok-4", "xai/grok-4"]);
-    expect(run.model.requests[1]!.messages[0]!.text()).toContain("running summary");
+    expect(run.built()).toEqual(["xai/grok-4", "xai/grok-4", "xai/grok-4"]);
+    expect(run.model.requests[2]!.messages[0]!.text()).toContain("running summary");
   } finally {
     run.done();
   }

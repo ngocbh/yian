@@ -632,26 +632,38 @@ export function matchTerminal(
     claimed.add(position);
     matches.set(each, output[position]!);
   };
-  const fresh = (item: JsonValue): boolean => !itemIds(item).some((id) => seenIds.has(id));
+  const idsAt = output.map(itemIds);
+  // Whether each item's ids are all ones the stream never gave.
+  const freshAt = idsAt.map((ids) => !ids.some((id) => seenIds.has(id)));
+  // The first position holding each id, so an index finds its item without scanning `output`.
+  const firstAt = new Map<string, number>();
+  for (const [position, ids] of idsAt.entries()) {
+    for (const id of ids) if (!firstAt.has(id)) firstAt.set(id, position);
+  }
   for (const each of streamed) {
     const ids = streamedIds.get(each);
-    if (ids !== undefined && ids.size > 0) {
-      take(each, output.findIndex((item) => itemIds(item).some((id) => ids.has(id))));
+    if (ids === undefined || ids.size === 0) continue;
+    // The first item holding any of the ids.
+    let position = -1;
+    for (const id of ids) {
+      const at = firstAt.get(id);
+      if (at !== undefined && (position < 0 || at < position)) position = at;
     }
+    take(each, position);
   }
   for (const each of streamed) {
-    if (each < output.length && fresh(output[each]!)) take(each, each);
+    if (each < output.length && freshAt[each]) take(each, each);
   }
   // An unfinished index the stream gave no ids takes the first item left whose ids it never
-  // gave, so no item of `output` is shown twice.
+  // gave, so no item of `output` is shown twice. Claims only grow and an item's ids are fixed, so a
+  // position skipped once stays skipped, and the search goes on from where the last one stopped.
+  let next = 0;
   for (const each of unfinished) {
     if (matches.has(each) || (streamedIds.get(each)?.size ?? 0) > 0) continue;
-    take(
-      each,
-      output.findIndex((item, position) => !claimed.has(position) && itemIds(item).length > 0 && fresh(item)),
-    );
+    while (next < output.length && (claimed.has(next) || idsAt[next]!.length === 0 || !freshAt[next])) next += 1;
+    take(each, next < output.length ? next : -1);
   }
-  const rest = output.filter((item, position) => !claimed.has(position) && fresh(item));
+  const rest = output.filter((_, position) => !claimed.has(position) && freshAt[position]);
   return { matches, rest };
 }
 

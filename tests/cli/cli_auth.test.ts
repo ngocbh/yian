@@ -705,7 +705,7 @@ function fakeService() {
  * A store path in `YIAN_AUTH_FILE`, `OPENAI_API_KEY=private-key`, the suite's environment
  * defaults, and a fake service. The store's
  * directory is private (`storeOpen`, the default), or 0755, so any store read fails with
- * "Credential storage must be private to its owner". The browser opener records each URL in
+ * "Credential storage folder <dir> must be private to its owner". The browser opener records each URL in
  * `opened`.
  */
 function setupAuth({ storeOpen = true }: { storeOpen?: boolean } = {}) {
@@ -1039,6 +1039,32 @@ describe("auth list, default and remove", () => {
     const result = await runAuth(setup, provider, { ...options, json: true });
     expect(result).toMatchObject({ code: 2, out: "", err: `Error: ${jsonUsage}\n` });
     expect(readFileSync(setup.path)).toEqual(before);
+    expect(setup.service.calls).toEqual([]);
+  });
+
+  test("a store folder others can read is named, with the chmod that fixes it", async () => {
+    const setup = setupAuth({ storeOpen: false });
+    const directory = join(tmp, "auth");
+    const message = `Credential storage folder ${directory} must be private to its owner; fix it with: chmod 700 ${directory}\n`;
+    for (const [provider, options] of [[undefined, {}], ["anthropic", { remove: true }]] as const) {
+      expect(await runAuth(setup, provider, options)).toMatchObject({ code: 1, out: "", err: message });
+    }
+    chmodSync(directory, 0o700);
+    expect((await runAuth(setup, undefined, {}, noDefaults)).code).toBe(0);
+  });
+
+  test("a damaged store names the file and the command that deletes its logins", async () => {
+    const setup = setupAuth();
+    await saveEachKind(setup.store);
+    writeFileSync(setup.path, '{"version": 1, "provi', { mode: 0o600 });
+    const message =
+      `Credential storage at ${setup.path} is malformed; restore it, or delete every saved login in it and log in ` +
+      `again (yian auth --remove --auth-file ${setup.path})\n`;
+    for (const [provider, options] of [[undefined, {}], ["anthropic", { remove: true }]] as const) {
+      expect(await runAuth(setup, provider, options)).toMatchObject({ code: 1, out: "", err: message });
+    }
+    const removed = await runAuth(setup, undefined, { remove: true, "auth-file": setup.path });
+    expect(removed).toMatchObject({ code: 0, out: `Removed the saved logins in ${setup.path}\n` });
     expect(setup.service.calls).toEqual([]);
   });
 

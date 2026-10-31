@@ -77,7 +77,9 @@ async function breakStore(env: Env, auth: string, flow: ComposedFlow): Promise<v
   writeFileSync(auth, "not json", { mode: 0o600 });
   const models = recording(env, answers("ok"));
   const error = await rejected(runFlow(flow, {}, { models, env }));
-  expect((error as Error).message).toContain("Credential storage is malformed");
+  expect((error as Error).message).toContain(`Credential storage at ${auth} is malformed`);
+  // Logging in again reads the same file and fails the same way, so that isn't the advice.
+  expect((error as Error).message).not.toContain("start a new run");
 }
 
 /** The agent's effective config the log at `path` records at the run's start. */

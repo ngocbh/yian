@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -333,6 +333,50 @@ test("resume relays a reconnected store credential", async () => {
   expect(result.output).toContain("yian auth openai");
   expect(result.output).toContain("start a new run");
   expect(readFileSync(log)).toEqual(before);
+});
+
+test("resume on a damaged store says only restoring the file continues the run", async () => {
+  const flow = flowFile();
+  await new AuthStore(null, { env }).save("openai", new ApiKeyCredentials("saved-key"), "gpt-5.5");
+  const log = await unfinishedLog(flow, { envVar: null });
+  const auth = vars["YIAN_AUTH_FILE"]!;
+  const saved = readFileSync(auth);
+  writeFileSync(auth, '{"version": 1, "provi');
+  const before = readFileSync(log);
+
+  const result = await withFetch(noModel, () => resume(log));
+
+  expect(result.code, result.output).toBe(1);
+  expect(result.output).toContain(`Credential storage at ${auth} is malformed`);
+  // Deleting the logins and logging in again mints a new credential id, which the resume refuses.
+  expect(result.output).toContain(
+    "Only restoring the file lets this run resume; after deleting its logins, log in again and start a new run",
+  );
+  expect(result.output).not.toContain("Resume again");
+  expect(readFileSync(log)).toEqual(before);
+
+  writeFileSync(auth, saved);
+  const restored = await withFetch(fakeModel, () => resume(log));
+  expect(restored.code, restored.output).toBe(0);
+  expect(restored.stdout).toContain("written offline");
+});
+
+test("resume on a store folder others can read says to resume once it is fixed", async () => {
+  const flow = flowFile();
+  await new AuthStore(null, { env }).save("openai", new ApiKeyCredentials("saved-key"), "gpt-5.5");
+  const log = await unfinishedLog(flow, { envVar: null });
+  const folder = join(tmp, "auth");
+  chmodSync(folder, 0o755);
+
+  const result = await withFetch(noModel, () => resume(log));
+
+  expect(result.code, result.output).toBe(1);
+  expect(result.output).toContain(`fix it with: chmod 700 ${folder}. Resume again once it is fixed`);
+  expect(result.output).not.toContain("start a new run");
+
+  chmodSync(folder, 0o700);
+  const fixed = await withFetch(fakeModel, () => resume(log));
+  expect(fixed.code, fixed.output).toBe(0);
 });
 
 test("resume key prompt eof leaves the log unchanged", async () => {

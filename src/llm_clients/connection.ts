@@ -39,7 +39,7 @@ import {
   type ProviderSelection,
 } from "./auth/common.ts";
 import { OpenAIAuth } from "./auth/openai.ts";
-import { AuthStore } from "./auth/store.ts";
+import { AuthStore, StorageError } from "./auth/store.ts";
 import {
   AZURE_NEEDS_BASE_URL,
   azureResourceEndpoint,
@@ -1148,7 +1148,8 @@ export async function connectionCredentials(
             : undefined,
       });
     } catch (error) {
-      if (error instanceof AuthError) {
+      // A storage error names the file and its fix; logging in again would read the same file.
+      if (error instanceof AuthError && !(error instanceof StorageError)) {
         throw new AuthError(`${error.message}. Run 'yian auth ${provider}' and start a new run`, {
           cause: error,
           status: error.status ?? undefined,

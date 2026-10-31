@@ -122,7 +122,7 @@ test("an old api run resumes with the legacy connection", async () => {
   // A store no read survives, which a fresh run reads: the resume fails if it reads a selection.
   writeFileSync(auth, "not json", { mode: 0o600 });
   const reading = await rejected(runFlow(flow, {}, { models, env }));
-  expect((reading as Error).message).toContain("Credential storage is malformed");
+  expect((reading as Error).message).toContain(`Credential storage at ${auth} is malformed`);
   const resumed = await advance({ log: path, models, env });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(model.requests.at(-1)!.messages.map((message) => message.text()).slice(1)).toEqual(["hi"]);

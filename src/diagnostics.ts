@@ -8,7 +8,8 @@
  * frames. `ResolverTable` composes those namespaces through exact immutable routes.
  * `compareCodeUnits` is the one string order for sorting (`compareCodePoints` serves formats fixed
  * to code-point order), `reprText` quotes text the way CPython 3.12's `repr` does, and
- * `getCloseMatches` finds "did you mean" suggestions the way CPython 3.12's `difflib` does.
+ * `getCloseMatches` finds "did you mean" suggestions the way CPython 3.12's `difflib` does, and
+ * `shellQuote` writes a word for a command yian prints for you to paste.
  * `addNote`, `errorTypeName` and `noteCleanup` help report a thrown error.
  */
 
@@ -356,6 +357,17 @@ class SequenceMatcher {
     const lb = this.b.length;
     return calculateRatio(Math.min(la, lb), la + lb);
   }
+}
+
+// Characters a POSIX shell word may hold unquoted.
+const SHELL_SAFE = /^[A-Za-z0-9_@%+=:,./-]+$/;
+
+/**
+ * Return `text` as one POSIX shell word: as is when it holds only safe characters, else in single
+ * quotes, each `'` written `'\''`. Used for the commands yian prints for you to paste.
+ */
+export function shellQuote(text: string): string {
+  return SHELL_SAFE.test(text) ? text : `'${text.replaceAll("'", "'\\''")}'`;
 }
 
 /**

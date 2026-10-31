@@ -1,0 +1,29 @@
+kind: load
+flow: |
+  id: seeded
+  name: seeded
+  nodes:
+    repeat:
+      kind: loop
+      times: 3
+      input:
+        n: "0"
+      nodes:
+        bump:
+          kind: code
+          input:
+            n: ${input.n}
+          output:
+            n: int
+          code: |
+            return {"n": inputs["n"] + 1}
+      output: ${bump.output}
+  output: ${repeat.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'loop node ''repeat'': the body returns ''n'' as int, but the carried field is typed str from its seed; the seed "0" is not of type int: seed one that is, e.g. `n: !int 0`'
+      frames:
+      - label: flow.yaml
+        range: [8, 10, 8, 13]

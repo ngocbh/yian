@@ -243,6 +243,127 @@ test("a literal seed with a str body field is rejected", () => {
   );
 });
 
+/**
+ * A flow whose inline LOOP carries `n` from a literal seed and whose body returns `n` as `bodyType`.
+ *
+ * @param seed The LOOP's `n:` seed binding, e.g. `"0"`.
+ * @param bodyType The body CODE node's declared type for `n`.
+ * @param bodyValue The TS expression the body node returns as `n`.
+ * @param typedefs The flow's `typedefs:` block, if any.
+ */
+function seededLoop(seed: string, bodyType = "int", bodyValue = 'inputs["n"] + 1', typedefs = ""): string {
+  return `${typedefs}
+id: seeded
+name: seeded
+nodes:
+  repeat:
+    kind: loop
+    times: 3
+    input:
+      n: ${seed}
+    nodes:
+      bump:
+        kind: code
+        input:
+          n: \${input.n}
+        output:
+          n: ${bodyType}
+        code: |
+          return {"n": ${bodyValue}}
+    output: \${bump.output}
+output: \${repeat.output}
+`;
+}
+
+/** The seed binding a load error suggests for `field`, from its trailing `` `field: ...` ``. */
+function suggestedSeed(text: string, field: string): string {
+  const match = new RegExp(`\`${field}: ([^\`]+)\`$`).exec(text);
+  if (match === null) throw new Error(`no suggested seed in: ${text}`);
+  return match[1]!;
+}
+
+test("a text seed for an int body field suggests an int seed that loads", async () => {
+  const error = message(seededLoop('"0"'));
+
+  expect(error).toBe(
+    "loop node 'repeat': the body returns 'n' as int, but the carried field is typed str from its seed; " +
+      'the seed "0" is not of type int: seed one that is, e.g. `n: !int 0`',
+  );
+  const result = await run(seededLoop(suggestedSeed(error, "n")));
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toEqual({ n: 3n });
+});
+
+test("a null seed for an int body field suggests an int seed that loads", () => {
+  const error = message(seededLoop("null"));
+
+  expect(error).toBe(
+    "loop node 'repeat': the body returns 'n' as int, but the carried field is typed None from its seed; " +
+      "the seed null is not of type int: seed one that is, e.g. `n: !int 0`",
+  );
+  assembleText(seededLoop(suggestedSeed(error, "n")));
+});
+
+test("a text seed for an optional int body field suggests an optional int seed that loads", () => {
+  const error = message(seededLoop('"p1"', "Optional(int)", "null"));
+
+  expect(error).toBe(
+    "loop node 'repeat': the body returns 'n' as Optional(int), but the carried field is typed str from its " +
+      'seed; the seed "p1" is not of type int: seed one that is, e.g. `n: !Optional(int) 0`',
+  );
+  assembleText(seededLoop(suggestedSeed(error, "n"), "Optional(int)", "null"));
+});
+
+test("a text seed for a str body field suggests empty text", () => {
+  const error = message(seededLoop("1", "str", '"a"'));
+
+  expect(error).toBe(
+    "loop node 'repeat': the body returns 'n' as str, but the carried field is typed int from its seed; " +
+      'the seed 1 is not of type str: seed one that is, e.g. `n: !str ""`',
+  );
+  assembleText(seededLoop(suggestedSeed(error, "n"), "str", '"a"'));
+});
+
+test("a null seed for an Any body field suggests a non-null seed that loads", () => {
+  const error = message(seededLoop("null", "Any", '"a"'));
+
+  expect(error).toBe(
+    "loop node 'repeat': the body returns 'n' as Any, but the carried field is typed None from its seed; " +
+      "the seed null is not of type Any: seed one that is, e.g. `n: !Any 0`",
+  );
+  assembleText(seededLoop(suggestedSeed(error, "n"), "Any", '"a"'));
+});
+
+test.each([
+  { seed: '"$${x}"', shown: "$${x}" },
+  { seed: '"a $${x}"', shown: "a $${x}" },
+  { seed: '"call(x)"', shown: "call(x)" },
+])("an escaped or quoted text seed $seed for an int body field suggests an int seed that loads", ({ seed, shown }) => {
+  const error = message(seededLoop(seed));
+
+  expect(error).toBe(
+    "loop node 'repeat': the body returns 'n' as int, but the carried field is typed str from its seed; " +
+      `the seed ${shown} is not of type int: seed one that is, e.g. \`n: !int 0\``,
+  );
+  assembleText(seededLoop(suggestedSeed(error, "n")));
+});
+
+test("a seed of another kind with no example value names the type", () => {
+  const typedefs = "typedefs:\n  Rec:\n    a: int\n";
+
+  expect(message(seededLoop('"abc"', "Rec", '{"a": 1}', typedefs))).toBe(
+    "loop node 'repeat': the body returns 'n' as {\"a\":int}, but the carried field is typed str from its seed; " +
+      'the seed "abc" is not of type Rec: seed one that is',
+  );
+});
+
+test("a seed for a bounded int body field with no example in bounds names the type", () => {
+  expect(message(seededLoop('"abc"', "int(1..5)", "1"))).toBe(
+    "loop node 'repeat': the body returns 'n' as int(1..5), but the carried field is typed str from its seed; " +
+      'the seed "abc" is not of type int(1..5): seed one that is',
+  );
+});
+
 // ---------- Pinned harvested cases ----------
 
 test.each<CaseRow>([
@@ -251,4 +372,5 @@ test.each<CaseRow>([
     call: assembled,
   },
   { id: "load-loop/compose_inline_loop_carried_types__typed_str_seed_rejects_an_int_body_field", call: assembled },
+  { id: "load-loop/compose_inline_loop_carried_types__text_seed_suggests_an_int_seed_that_loads", call: assembled },
 ])("$id", runCase);

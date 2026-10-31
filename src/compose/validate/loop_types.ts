@@ -25,11 +25,25 @@ import {
 } from "../../nodes/contracts.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { canonicalTypeLabel, isList, isRecord, jsTypeName, type Type, ValueKind } from "../../typesys/values.ts";
+import {
+  buildValueAs,
+  canonicalTypeLabel,
+  isList,
+  isRecord,
+  jsTypeName,
+  type Type,
+  TypeCheckError,
+  ValueKind,
+} from "../../typesys/values.ts";
 import { LoadDiagnostics, shownLiteral } from "../helpers/errors.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
-import { assertExactContracts, resolveOutputBindingContract } from "../../compile/output_contracts.ts";
-import { anySourceHint, suggestTag, tagText } from "../helpers/tags.ts";
+import {
+  assertExactContracts,
+  literalValue,
+  NOT_LITERAL,
+  resolveOutputBindingContract,
+} from "../../compile/output_contracts.ts";
+import { anySourceHint, namedTypeLabel, suggestTag, tagText } from "../helpers/tags.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
 
@@ -198,8 +212,8 @@ function checkReturnedFields(
         `loop node ${reprText(node.id)}: the body returns ${reprText(fieldName)} as ${returnedLabel}, ` +
         "but the carried field is " +
         (typed ? `declared ${parameterLabel}` : `typed ${parameterLabel} from its seed`) +
-        "; declare the seed's type: " +
-        suggestTag(fieldName, bodyField, shownSeed, { registry });
+        "; " +
+        inlineSeedAdvice(fieldName, bodyField, bindingSource(seed), shownSeed, registry);
     } else {
       message =
         `loop node ${reprText(node.id)}: the body ${reprText(node.flowId)} returns ${reprText(fieldName)} ` +
@@ -226,6 +240,67 @@ function checkReturnedFields(
   }
 }
 
+/** Values a seed may be rewritten to, as written and as bound, tried in order. */
+const EXAMPLE_SEEDS: readonly (readonly [string, unknown])[] = [
+  ["0", 0n],
+  ["false", false],
+  ['""', ""],
+  ["[]", []],
+  ["{}", {}],
+];
+
+/**
+ * Advise how to seed an inline loop's carried field so the body's returned type fits it.
+ *
+ * A tag on the seed only helps when load accepts the tagged seed: a template, or a literal the
+ * body's type holds. Any other literal can never hold the body's type, so the advice names the
+ * type instead and shows a seed of it that load accepts, when one is short to write.
+ *
+ * @param fieldName The carried field.
+ * @param bodyField The type the body returns for the field.
+ * @param source The seed's raw binding source.
+ * @param shownSeed The seed as `seedText` renders it.
+ * @param registry The flow's typedefs, to name the type and spell its tag.
+ * @returns The advice clause of the load error.
+ */
+function inlineSeedAdvice(
+  fieldName: string,
+  bodyField: Type,
+  source: unknown,
+  shownSeed: string,
+  registry: TypeRegistry | null,
+): string {
+  const literal = literalValue(source);
+  if (literal === NOT_LITERAL || holds(bodyField, literal)) {
+    return "declare the seed's type: " + suggestTag(fieldName, bodyField, shownSeed, { registry });
+  }
+  const label = namedTypeLabel(bodyField.replace({ nullable: false }), registry ?? new Map());
+  let advice = `the seed ${shownSeed} is not of type ${label}: seed one that is`;
+  // Without a tag spelling, `suggestTag` gives naming advice rather than a seed to show.
+  const example =
+    tagText(bodyField, { registry }) === null
+      ? undefined
+      : EXAMPLE_SEEDS.find(([, value]) => holds(bodyField, value));
+  if (example !== undefined) advice += ", e.g. " + suggestTag(fieldName, bodyField, example[0], { registry });
+  return advice;
+}
+
+/** Whether load accepts `value` written under a tag for `typ`, as it checks a tagged literal. */
+function holds(typ: Type, value: unknown): boolean {
+  try {
+    buildValueAs(typ, value);
+    return true;
+  } catch (error) {
+    if (error instanceof TypeCheckError) return false;
+    throw error;
+  }
+}
+
+/** Whether a seed's binding value is template or directive text rather than a literal. */
+function isTemplateText(value: unknown): value is string {
+  return typeof value === "string" && (value.includes("${") || value.startsWith("call("));
+}
+
 /**
  * Render a seed value as the right side of a typed binding.
  *
@@ -234,7 +309,7 @@ function checkReturnedFields(
  *   (a nested binding shown by its value).
  */
 function seedText(value: unknown): string {
-  if (typeof value === "string" && (value.includes("${") || value.startsWith("call("))) return value;
+  if (isTemplateText(value)) return value;
   // The text form is YAML flow style, and a quoted string stays literal text.
   return shownLiteral(value instanceof ValueTemplate ? untypedTree(value.value) : value);
 }

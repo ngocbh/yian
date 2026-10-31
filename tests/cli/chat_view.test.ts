@@ -6,7 +6,18 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -44,6 +55,7 @@ import { TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { callReply, serving, textReply } from "../helpers/run_state_fixtures.ts";
 import {
+  CTRL_C,
   CTRL_L,
   DOWN,
   ENTER,
@@ -149,7 +161,7 @@ async function until(check: () => boolean): Promise<void> {
 const row = (text: string) => `│ ${text.padEnd(COLUMNS - 4)} │`;
 const TOP = `╭${"─".repeat(COLUMNS - 2)}╮`;
 const BOTTOM = `╰${"─".repeat(COLUMNS - 2)}╯`;
-const HINT = "  /model /resume /exit · ctrl-c interrupts · esc withdraws";
+const HINT = "  /exit to leave · ctrl-c interrupts · esc withdraws";
 
 describe("the banner's pieces", () => {
   test("loginLabel names a subscription and a key that is there", () => {
@@ -1255,6 +1267,70 @@ describe("the first line of a chat", () => {
   );
 });
 
+describe("the command menu", () => {
+  /** The menu's row for `name` and its description, highlighted or not. */
+  const menuRow = (name: string, description: string, highlighted = false) =>
+    `${highlighted ? "»" : " "} ${name.padEnd(11)}${description}`;
+  const MODEL = menuRow("/model", "Choose the model for the next replies", true);
+  const QUIT = menuRow("/quit", "Leave the chat");
+
+  test(
+    "/ lists the chat's commands at the prompt, and Enter runs the highlighted one",
+    async () => {
+      const { io, stdin, rows } = terminalIo();
+      const offered = async () => ({ models: [{ provider: "xai", model: "grok-4" }], failed: [] });
+      const chatting = runChat(io, new GatedModel(), undefined, {
+        ticker: manualClock(),
+        modelChoices: offered,
+      });
+      await until(() => rows().includes(HINT));
+      stdin.write("/");
+      await until(() => rows().includes(QUIT));
+      expect(rows().slice(-5)).toEqual([
+        MODEL,
+        menuRow("/provider", "Choose a provider and its model, signing in"),
+        menuRow("/resume", "Go on from an earlier chat in this folder"),
+        menuRow("/exit", "Leave the chat"),
+        QUIT,
+      ]);
+      stdin.write(ENTER);
+      await until(() => rows().some((line) => line.includes("Model for the next replies")));
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().includes(HINT));
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "/ opens it while a reply runs: Esc closes it without withdrawing, and /exit typed whole runs",
+    async () => {
+      const { io, stdin, output, rows } = terminalIo();
+      const model = new GatedModel();
+      const chatting = runChat(io, model, undefined, { ticker: manualClock() });
+      await until(() => rows().includes(HINT));
+      stdin.write(`tell me a story${ENTER}`);
+      await until(() => rows().includes("⏺ Once upon"));
+      stdin.write("/");
+      await until(() => rows().includes(QUIT));
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => !rows().includes(QUIT));
+      expect(rows()).toContain(row("> /"));
+      expect(output.text).not.toContain("withdrew");
+      expect(output.text).not.toContain("stopping the reply");
+      // Typed whole, Enter runs /exit as typed; it takes the box down once sent.
+      stdin.write(`exit${ENTER}`);
+      await until(() => rows().includes("> /exit") && !rows().includes(HINT));
+      model.open();
+      expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+});
+
 describe("the input box after a line is entered while a reply runs", () => {
   test(
     "/exit there takes the box down, and keys after it go nowhere",
@@ -1670,6 +1746,208 @@ describe("a run's view while the chat goes on", () => {
       expect(rows()).toContain("⏺ r1 succeeded");
       stdin.write(`/exit${ENTER}`);
       expect(await chatting).toBe(0);
+    },
+    TIMEOUT,
+  );
+});
+
+/** Every file under `dir`, read as text. */
+function filesUnder(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"));
+}
+
+/** The models the fake deepseek listing gives. */
+const DEEPSEEK_MODELS = ["deepseek-chat", "deepseek-reasoner"];
+
+describe("/provider", () => {
+  test(
+    "/provider signs in to a provider without a login, its model picked once; a cancel keeps it",
+    async () => {
+      const key = "sk-deepseek-typed-secret";
+      const sentKeys: (string | null)[] = [];
+      const listModels = async (_: unknown, options: { apiKey?: string | null } = {}) => {
+        sentKeys.push(options.apiKey ?? null);
+        return DEEPSEEK_MODELS;
+      };
+      const { io, stdin, output, rows } = terminalIo();
+      const screen = () => output.text;
+      const model = new AnsweringModel(() => textReply("noted"));
+      const access = serving(model, io.env);
+      const log = join(tmp, "chat.jsonl");
+      const chatting = chat(undefined, { engineTrace: false, log }, io, {
+        root,
+        models: access,
+        signals: new EventEmitter(),
+        ticker: manualClock(),
+        auth: { listModels },
+      });
+      const shownSince = (from: number, text: string) => screen().slice(from).includes(text);
+      await until(() => rows().includes(HINT));
+      // openai, xai, deepseek: deepseek has no login yet.
+      let from = screen().length;
+      stdin.write(`/provider${ENTER}`);
+      await until(() => shownSince(from, "Provider for the next replies"));
+      // Each title fits on one line after the label once picked: at 60 columns, 27 cells.
+      expect(screen()).toContain("xai · key from XAI_API_KEY…");
+      expect(screen()).toContain("deepseek · not logged in");
+      stdin.write(DOWN + DOWN + ENTER);
+      await until(() => shownSince(from, "deepseek API key:"));
+      stdin.write(key + ENTER);
+      // The chat's model picker stands for yian auth's "Model:": the login is saved with its pick.
+      await until(() => shownSince(from, "Model for the next replies"));
+      stdin.write(DOWN + ENTER);
+      const chosen = "(model: deepseek/deepseek-reasoner, from the next reply)";
+      await until(() => shownSince(from, chosen));
+      expect(screen()).toContain("Saved deepseek login (api-key) with model deepseek-reasoner");
+      expect(screen()).not.toContain("Model:");
+      // Logged in now: picking it again goes straight to its models.
+      from = screen().length;
+      stdin.write(`/provider${ENTER}`);
+      await until(() => shownSince(from, "Provider for the next replies"));
+      expect(screen().slice(from)).toContain("deepseek · logged in (curr…");
+      stdin.write(DOWN + DOWN + ENTER);
+      await until(() => shownSince(from, "Model for the next replies"));
+      expect(screen().slice(from)).not.toContain("API key:");
+      stdin.write(ESCAPE);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      // A cancel during a sign-in keeps the model.
+      from = screen().length;
+      stdin.write(`/provider${ENTER}`);
+      await until(() => shownSince(from, "Provider for the next replies"));
+      stdin.write(ENTER);
+      await until(() => shownSince(from, "OpenAI authentication method:"));
+      stdin.write(ESCAPE);
+      await until(() => shownSince(from, "the model is unchanged"));
+      stdin.write(`hello${ENTER}`);
+      await until(() => screen().includes("noted"));
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+      const built = access.configs.map((config) => `${config["provider"]}/${config["model"]}`);
+      expect(built).toEqual(["deepseek/deepseek-reasoner"]);
+      expect(sentKeys).toContain(key);
+      // The key went to the saved login, and nowhere the chat writes.
+      const authFile = join(home, ".config", "yian", "auth.json");
+      expect(readFileSync(authFile, "utf8")).toContain(key);
+      const written = [screen(), readFileSync(log, "utf8"), ...filesUnder(join(home, ".yian"))];
+      for (const text of written) expect(text).not.toContain(key);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a browser sign-in waiting in /provider is cancelled by Esc or Ctrl-C, and the model kept",
+    async () => {
+      const opened: string[] = [];
+      // A browser login that never completes: it ends only when its signal aborts.
+      const openAIAuth = ({ signal }: { signal?: AbortSignal }) =>
+        ({
+          browserLogin: async (open: (url: string) => Promise<void> | void) => {
+            await open("https://auth.example/login");
+            return new Promise<never>((_, reject) =>
+              signal!.addEventListener("abort", () => reject(signal!.reason), { once: true }),
+            );
+          },
+        }) as unknown as ReturnType<NonNullable<NonNullable<ChatDeps["auth"]>["openAIAuth"]>>;
+      const { io, stdin, output, rows } = terminalIo();
+      const model = new AnsweringModel(() => textReply("noted"));
+      const access = serving(model, io.env);
+      const chatting = chat(undefined, { engineTrace: false, log: join(tmp, "chat.jsonl") }, io, {
+        root,
+        models: access,
+        signals: new EventEmitter(),
+        ticker: manualClock(),
+        auth: { openAIAuth, openUrl: (url) => void opened.push(url) },
+      });
+      const shownSince = (from: number, text: string) => output.text.slice(from).includes(text);
+      await until(() => rows().includes(HINT));
+      for (const key of [ESCAPE, CTRL_C]) {
+        const from = output.text.length;
+        stdin.write(`/provider${ENTER}`);
+        await until(() => shownSince(from, "Provider for the next replies"));
+        // openai: a subscription, signed in in the browser.
+        stdin.write(ENTER);
+        await until(() => shownSince(from, "OpenAI authentication method:"));
+        stdin.write(ENTER);
+        await until(() => shownSince(from, "Subscription sign-in:"));
+        stdin.write(ENTER);
+        await until(() => shownSince(from, "(Esc or Ctrl-C cancels the sign-in)"));
+        stdin.write(key);
+        await until(() => shownSince(from, "(sign-in cancelled; the model is unchanged)"));
+        await until(() => rows().includes(HINT));
+      }
+      expect(opened).toEqual(["https://auth.example/login", "https://auth.example/login"]);
+      stdin.write(`hello${ENTER}`);
+      await until(() => output.text.includes("noted"));
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+      const built = access.configs.map((config) => `${config["provider"]}/${config["model"]}`);
+      expect(built).toEqual(["xai/grok-4.3"]);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a key from the environment is saved only on Yes; No uses it for the chat, Esc changes nothing",
+    async () => {
+      const key = "sk-deepseek-env-secret";
+      const listModels = async () => DEEPSEEK_MODELS;
+      const { io, stdin, output, rows } = terminalIo({ extra: { DEEPSEEK_API_KEY: key } });
+      const model = new AnsweringModel(() => textReply("noted"));
+      const access = serving(model, io.env);
+      const log = join(tmp, "chat.jsonl");
+      const chatting = chat(undefined, { engineTrace: false, log }, io, {
+        root,
+        models: access,
+        signals: new EventEmitter(),
+        ticker: manualClock(),
+        auth: { listModels },
+      });
+      const authFile = join(home, ".config", "yian", "auth.json");
+      const shownSince = (from: number, text: string) => output.text.slice(from).includes(text);
+      /** Pick deepseek in /provider and wait for the question about its key. */
+      const pickDeepseek = async (): Promise<number> => {
+        const from = output.text.length;
+        stdin.write(`/provider${ENTER}`);
+        await until(() => shownSince(from, "Provider for the next replies"));
+        stdin.write(DOWN + DOWN + ENTER);
+        await until(() => shownSince(from, "Save this key as a yian login?"));
+        return from;
+      };
+      await until(() => rows().includes(HINT));
+      let from = await pickDeepseek();
+      // Cut to fit after the label at 60 columns.
+      expect(output.text.slice(from)).toContain("deepseek · key from DEEPSE…");
+      // Esc changes nothing.
+      stdin.write(ESCAPE);
+      await pastEscape();
+      await until(() => rows().includes(HINT));
+      expect(output.text.slice(from)).not.toContain("Model for the next replies");
+      // No, highlighted first: the key serves the chat, and nothing is saved.
+      from = await pickDeepseek();
+      stdin.write(ENTER);
+      await until(() => shownSince(from, "Model for the next replies"));
+      stdin.write(DOWN + ENTER);
+      const chosen = "(model: deepseek/deepseek-reasoner, from the next reply)";
+      await until(() => shownSince(from, chosen));
+      expect(existsSync(authFile)).toBe(false);
+      stdin.write(`hello${ENTER}`);
+      await until(() => output.text.includes("noted"));
+      // Yes: saved as yian auth saves it, with no key prompt, then the model picked.
+      from = await pickDeepseek();
+      stdin.write(DOWN + ENTER);
+      await until(() => shownSince(from, "Model for the next replies"));
+      expect(output.text.slice(from)).not.toContain("API key:");
+      stdin.write(ENTER);
+      const saved = "Saved deepseek login (api-key) with model deepseek-chat";
+      await until(() => shownSince(from, saved));
+      expect(readFileSync(authFile, "utf8")).toContain(key);
+      stdin.write(`/exit${ENTER}`);
+      expect(await chatting).toBe(0);
+      const built = access.configs.map((config) => `${config["provider"]}/${config["model"]}`);
+      expect(built).toEqual(["deepseek/deepseek-reasoner"]);
+      for (const text of [output.text, readFileSync(log, "utf8")]) expect(text).not.toContain(key);
     },
     TIMEOUT,
   );

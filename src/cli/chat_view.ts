@@ -42,7 +42,7 @@ import { sanitize, sequenceSpans } from "./sanitize.ts";
 import type { CliIo, Writer } from "./utils.ts";
 
 /** The hint under the chat's framed prompt. */
-export const CHAT_HINT = "/model /resume /exit · ctrl-c interrupts · esc withdraws";
+export const CHAT_HINT = "/exit to leave · ctrl-c interrupts · esc withdraws";
 
 /** What the chat's banner shows. */
 export interface BannerInfo {

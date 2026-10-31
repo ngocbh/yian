@@ -58,7 +58,7 @@ const SETTINGS_NEED_API_KEY = "--organization, --project and --header apply to A
 export const EXTRA_FIELD = `llm_config has an extra field; the fields are ${[...LLM_CONFIG_KEYS].sort(compareCodeUnits).join(", ")}`;
 
 /** The prompts `auth` asks on a terminal. */
-type AuthTerminal = Pick<Terminal, "askText" | "askChoice" | "close">;
+export type AuthTerminal = Pick<Terminal, "askText" | "askChoice" | "close">;
 
 /** What the handlers reach the outside through; each defaults to the real one. Tests pass fakes. */
 export interface AuthDeps {
@@ -95,6 +95,12 @@ interface SetupContext {
   terminal: AuthTerminal | null;
   /** The command's stop, which cancels every prompt and request. */
   signal: AbortSignal;
+  /** Picks the login's model among those listed, null for a cancel; "Model:" asks when absent. */
+  pickModel?: ((models: readonly string[]) => Promise<string | null>) | undefined;
+  /** Why a step can't go on without a terminal, instead of naming the option it needs. */
+  noTerminal?: string | undefined;
+  /** Printed once a sign-in waits on the browser or a device code. */
+  waitNote?: string | undefined;
 }
 
 /** A deadline passed before the work it bounds was done. */
@@ -149,7 +155,8 @@ function stdinText(bytes: Buffer): string | null {
  */
 function requireTerminal(option: string, ctx: SetupContext): AuthTerminal {
   if (ctx.terminal === null) {
-    throw new AuthError(`Authentication needs ${option} when no interactive terminal is available`);
+    const message = `Authentication needs ${option} when no interactive terminal is available`;
+    throw new AuthError(ctx.noTerminal ?? message);
   }
   return ctx.terminal;
 }
@@ -165,6 +172,16 @@ async function choose(
   const answer = await terminal.askChoice(message, choices, { initial: options.initial, signal: ctx.signal });
   if (answer === null) throw new AuthError(CANCELLED);
   return answer;
+}
+
+/** The login's model among `models`: `ctx.pickModel`'s choice, or the "Model:" prompt's. */
+async function pickModel(models: readonly string[], ctx: SetupContext): Promise<string> {
+  if (ctx.pickModel === undefined) {
+    return choose("Model:", models, { initial: models[0]!, option: "--model" }, ctx);
+  }
+  const picked = await ctx.pickModel(models);
+  if (picked === null) throw new AuthError(CANCELLED);
+  return picked;
 }
 
 /** Read a typed value on a terminal, or require an explicit command option. */
@@ -197,7 +214,9 @@ async function apiKey(
   }
   if (ctx.terminal === null) {
     if (optional) return null;
-    throw new AuthError(`Set ${variables.join(" or ")} before API-key setup, or run in an interactive terminal`);
+    const names = variables.join(" or ");
+    const message = `Set ${names} before API-key setup, or run in an interactive terminal`;
+    throw new AuthError(ctx.noTerminal ?? message);
   }
   const hint = optional ? " (leave empty for none)" : "";
   const answer = await ctx.terminal.askText(`${provider} API key${hint}:`, { secret: true, signal: ctx.signal });
@@ -478,7 +497,7 @@ async function setupOpenai(
   project: string | undefined,
   sources: ReadonlyMap<string, string | null>,
   ctx: SetupContext,
-): Promise<void> {
+): Promise<string> {
   method ??= await choose(
     "OpenAI authentication method:",
     ["subscription", "api-key"],
@@ -499,12 +518,21 @@ async function setupOpenai(
       { initial: ctx.io.env("SSH_CONNECTION") ? "device" : "browser", option: "--login" },
       ctx,
     );
-    const openUrl = ctx.deps.openUrl ?? ((url: string) => openBrowser(url, ctx.io.stdout));
+    const open = ctx.deps.openUrl ?? ((url: string) => openBrowser(url, ctx.io.stdout));
+    const waiting = async () => {
+      if (ctx.waitNote !== undefined) await ctx.io.stdout.write(ctx.waitNote);
+    };
+    const openUrl = async (url: string) => {
+      await open(url);
+      await waiting();
+    };
     credentials =
       login === "device"
-        ? await service.deviceLogin((url, code) =>
-            ctx.io.stdout.write(forTerminal(`Open ${url} and enter code: ${code}\n`, ctx.io.stdout)),
-          )
+        ? await service.deviceLogin(async (url, code) => {
+            const line = `Open ${url} and enter code: ${code}\n`;
+            await ctx.io.stdout.write(forTerminal(line, ctx.io.stdout));
+            await waiting();
+          })
         : await service.browserLogin(openUrl);
     models = await service.subscriptionModels(credentials);
     choices = models;
@@ -530,11 +558,12 @@ async function setupOpenai(
     if (choices.length === 0) {
       throw new AuthError("No general text models were returned; use --model with an available text model");
     }
-    model = await choose("Model:", choices, { initial: choices[0]!, option: "--model" }, ctx);
+    model = await pickModel(choices, ctx);
   }
   if (!models.includes(model)) throw new AuthError("The selected model is not available for this connection");
   await store.save("openai", credentials, model, { organization, project, makeDefault });
   await ctx.io.stdout.write(`Saved OpenAI ${method} authentication with model ${model}\n`);
+  return model;
 }
 
 /**
@@ -671,7 +700,7 @@ async function setupProvider(
   makeDefault: boolean,
   sources: ReadonlyMap<string, string | null>,
   ctx: SetupContext,
-): Promise<void> {
+): Promise<string> {
   if (provider === "azure" && endpoint === undefined) {
     endpoint = await ask("Azure OpenAI endpoint (https://<resource>.openai.azure.com/):", "--endpoint", ctx);
     checkEndpoint(endpoint);
@@ -688,7 +717,8 @@ async function setupProvider(
   if (provider === "azure") {
     model ||= await ask("Deployment name:", "--model", ctx);
   } else {
-    if (model === undefined) requireTerminal("--model", ctx); // Before the listing request.
+    // Before the listing request.
+    if (model === undefined && ctx.pickModel === undefined) requireTerminal("--model", ctx);
     const elsewhere = (ELSEWHERE_ENV[provider] ?? []).find((name) => ctx.io.env(name));
     const variable = BASE_URL_ENV[provider];
     const baseUrl = (variable && ctx.io.env(variable)) || null;
@@ -714,7 +744,7 @@ async function setupProvider(
         );
         model = await ask("Model:", "--model", ctx);
       } else if (models !== null && models.length > 0) {
-        model = await choose("Model:", models, { initial: models[0]!, option: "--model" }, ctx);
+        model = await pickModel(models, ctx);
       } else {
         await ctx.io.stdout.write(
           `Couldn't list the ${provider} models (${forTerminal(failure || "none were returned", ctx.io.stdout)}); type a model name\n`,
@@ -729,6 +759,125 @@ async function setupProvider(
   }
   await store.save(provider, key ? new ApiKeyCredentials(key, values) : null, model, { endpoint, makeDefault });
   await ctx.io.stdout.write(`Saved ${provider} login (${key ? "api-key" : "none"}) with model ${model}\n`);
+  return model;
+}
+
+/**
+ * Sign in to `name` with `options` (`checkOptions` checked them), save the login in `store`, and
+ * say which provider is the default; returns the login's model.
+ *
+ * @throws {AuthError} As `setupOpenai` and `setupProvider` do.
+ */
+async function saveLogin(
+  store: AuthStore,
+  name: string,
+  options: AuthOptions,
+  sources: ReadonlyMap<string, string | null>,
+  ctx: SetupContext,
+): Promise<string> {
+  // Reading first also diagnoses an unusable store before account sign-in.
+  const current = store.read().defaultProvider;
+  let saved: string;
+  if (name === "openai") {
+    const { method, login, model, apiKeyEnv, organization, project } = options;
+    const keyEnv = apiKeyEnv ?? "OPENAI_API_KEY";
+    const makeDefault = current === null;
+    saved = await setupOpenai(
+      store,
+      method,
+      login,
+      model,
+      keyEnv,
+      makeDefault,
+      organization,
+      project,
+      sources,
+      ctx,
+    );
+  } else {
+    const { model, apiKeyEnv, endpoint } = options;
+    const makeDefault = current === null;
+    saved = await setupProvider(store, name, model, apiKeyEnv, endpoint, makeDefault, sources, ctx);
+  }
+  if (current === null || current === name) {
+    await ctx.io.stdout.write(`Default provider: ${name}\n`);
+  } else {
+    const switching = `switch with 'yian auth ${name} --default'`;
+    await ctx.io.stdout.write(`Default provider: ${current} (${switching})\n`);
+  }
+  return saved;
+}
+
+/** How `signIn` asks: its prompts, its model choice and what it says (`SetupContext`). */
+export interface SignInOptions {
+  /** The terminal its prompts go to; with none, a key must come from its variable. */
+  terminal: AuthTerminal | null;
+  deps: AuthDeps;
+  /** Cancels every prompt and request, the browser or device sign-in's wait too. */
+  signal: AbortSignal;
+  pickModel?: SetupContext["pickModel"];
+  noTerminal?: string;
+  waitNote?: string;
+}
+
+/**
+ * Sign in to `provider` and save the login in `io.env`'s store, as `yian auth PROVIDER` does with
+ * no options, what it prints going to `io.stdout`; returns the login's model. A cancelled or
+ * failed sign-in saves nothing.
+ *
+ * @throws {AuthError} The provider isn't supported, or the sign-in failed or was cancelled.
+ * @throws The signal's reason once it aborts.
+ */
+export async function signIn(provider: string, io: CliIo, options: SignInOptions): Promise<string> {
+  const { signal } = options;
+  const ctx: SetupContext = { io, ...options };
+  const setup: AuthOptions = { header: [], default: false, remove: false };
+  const [name, sources] = checkOptions(provider, setup, ctx);
+  return saveLogin(new AuthStore(null, { env: io.env, signal }), name, setup, sources, ctx);
+}
+
+/** The first of `provider`'s API-key variables set in `io.env`, or null for none. */
+export function keyVariable(provider: string, io: Pick<CliIo, "env">): string | null {
+  return apiKeyEnvNames(provider).find((name) => io.env(name)) ?? null;
+}
+
+/**
+ * The models the key in `variable` is offered for `provider`, as `loginModels` lists a saved key's
+ * (`OPENAI_BASE_URL` and the like followed); null when there is no listing (azure, or a variable
+ * in `ELSEWHERE_ENV` sends runs to another host) or it failed. The listing gets `timeout` seconds.
+ */
+export async function keyModels(
+  provider: string,
+  variable: string,
+  io: Pick<CliIo, "env">,
+  deps: AuthDeps = {},
+  timeout: number = MODEL_LIST_TIMEOUT_SECONDS,
+): Promise<readonly string[] | null> {
+  if (provider === "azure" || (ELSEWHERE_ENV[provider] ?? []).some((name) => io.env(name))) {
+    return null;
+  }
+  const base = provider === "openai" ? "OPENAI_BASE_URL" : BASE_URL_ENV[provider];
+  const baseUrl = (base && io.env(base)) || null;
+  try {
+    const apiKey = io.env(variable) ?? null;
+    const listed = await (deps.listModels ?? listModels)(provider, { apiKey, baseUrl, timeout });
+    if (listed === null) return null;
+    return provider === "openai" ? textModels(listed) : listed;
+  } catch (error) {
+    if (error instanceof ModelListError) return null;
+    throw error;
+  }
+}
+
+/** The providers with a usable login saved in `io.env`'s store; null when it can't be read. */
+export function savedLogins(io: Pick<CliIo, "env">): ReadonlySet<string> | null {
+  try {
+    const { selections } = new AuthStore(null, { env: io.env }).read();
+    return new Set(selections.filter(isUsableLogin).map((selection) => selection.provider));
+  } catch (error) {
+    if (error instanceof AuthError) return null;
+    throw error;
+  }
 }
 
 /**
@@ -850,21 +999,7 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
       await io.stdout.write(`Default provider: ${name}\n`);
       return 0;
     }
-    // Reading first also diagnoses an unusable store before account sign-in.
-    const current = store.read().defaultProvider;
-    if (name === "openai") {
-      const { method, login, model, apiKeyEnv, organization, project } = options;
-      const keyEnv = apiKeyEnv ?? "OPENAI_API_KEY";
-      await setupOpenai(store, method, login, model, keyEnv, current === null, organization, project, sources, ctx);
-    } else {
-      const { model, apiKeyEnv, endpoint } = options;
-      await setupProvider(store, name, model, apiKeyEnv, endpoint, current === null, sources, ctx);
-    }
-    if (current === null || current === name) {
-      await io.stdout.write(`Default provider: ${name}\n`);
-    } else {
-      await io.stdout.write(`Default provider: ${current} (switch with 'yian auth ${name} --default')\n`);
-    }
+    await saveLogin(store, name, options, sources, ctx);
     return 0;
   } catch (error) {
     if (stop.signal.aborted) {

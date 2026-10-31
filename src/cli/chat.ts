@@ -25,6 +25,7 @@ import {
   type ConnectionSnapshot,
   resolveModelConfig,
 } from "../llm_clients/connection.ts";
+import { SUPPORTED_LLM_PROVIDERS } from "../llm_clients/config.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import { homeDir, isSystemError, leavesRoot, realScheduler, type Scheduler } from "../platform.ts";
 import { skillGrants } from "../run.ts";
@@ -45,7 +46,15 @@ import {
 import { ChildRuns, type ChildRunsOptions, type WaitingChild } from "./chat_runs.ts";
 import { type ChatToolHost, chatFileTools, checkFocus, slashed } from "./chat_tools.ts";
 import { cells, columnsOf, fit } from "./cells.ts";
-import { loginModels } from "./auth.ts";
+import {
+  type AuthDeps,
+  type AuthTerminal,
+  keyModels,
+  keyVariable,
+  loginModels,
+  savedLogins,
+  signIn,
+} from "./auth.ts";
 import {
   type ChatSession,
   chatSessions,
@@ -62,7 +71,7 @@ import { CHAT_FLOW_FILE, removeEmptyDir, validateRunLogOptions } from "./run.ts"
 import { sanitize } from "./sanitize.ts";
 import { RunProgress, runScreen } from "./run_view.ts";
 import { cliLayer, defaultRunsDir, freshLog } from "./startup.ts";
-import type { Key, Terminal } from "./terminal.ts";
+import type { Key, PromptCommand, Terminal } from "./terminal.ts";
 import { type CliIo, UsageError } from "./utils.ts";
 
 /** How often the run list under the input box is drawn again, for its times. */
@@ -102,6 +111,8 @@ export interface ChatDeps {
   ticker?: Scheduler;
   /** How `file_issue` runs gh and sends to GitHub, for a test that mustn't file a real issue. */
   filing?: Pick<FileIssueHost, "run" | "send">;
+  /** How `/provider` signs in and lists models (`signIn`, `loginModels`), for a test's fakes. */
+  auth?: AuthDeps;
   /** The models `/model` offers (`loginModels`), for a test that mustn't read logins or list. */
   modelChoices?: () => Promise<{ models: readonly ModelChoice[]; failed: readonly string[] }>;
 }
@@ -109,9 +120,17 @@ export interface ChatDeps {
 /** The labels of the pickers of earlier chats and of models. */
 const RESUME_LABEL = "Resume which chat?";
 const MODEL_LABEL = "Model for the next replies";
+const PROVIDER_LABEL = "Provider for the next replies";
+const SAVE_KEY_LABEL = "Save this key as a yian login?";
+/** The answers to `SAVE_KEY_LABEL`, No first: a key is saved only when asked to. */
+const SAVE_KEY_ANSWERS = ["No, use it for this chat only", "Yes, save it as a yian login"];
 
 /** The chat's own commands, beside `/exit`. */
-const COMMANDS: ReadonlySet<string> = new Set(["/model", "/resume"]);
+const COMMANDS: readonly PromptCommand[] = [
+  { name: "/model", description: "Choose the model for the next replies" },
+  { name: "/provider", description: "Choose a provider and its model, signing in" },
+  { name: "/resume", description: "Go on from an earlier chat in this folder" },
+];
 
 /**
  * Load the bundled chat flow, its `uses:` resolved to the bundled compaction flow, as loaded in
@@ -521,7 +540,7 @@ export async function chat(
     return rootSkills;
   };
   const scheduler = deps.scheduler ?? realScheduler;
-  const choices = deps.modelChoices ?? (() => loginModels(plainIo));
+  const choices = deps.modelChoices ?? (() => loginModels(plainIo, deps.auth));
   // The keys typed ahead that a chat `/resume` ended didn't read, for the chat after it.
   let typed: readonly Key[] = [];
 
@@ -627,22 +646,41 @@ export async function chat(
       }
       return null;
     };
-    const chooseModel = async (terminal: Terminal): Promise<ChatCommandOutcome> => {
+    /**
+     * Pick the model of the next replies among the logins' (`choices`), or only `provider`'s, or
+     * among `given`, the current one first when it is among them; picking it again changes
+     * nothing.
+     */
+    const chooseModel = async (
+      terminal: Terminal,
+      provider: string | null = null,
+      given: readonly ModelChoice[] | null = null,
+    ): Promise<ChatCommandOutcome> => {
       const shown = current ?? defaults;
-      const { models, failed } = await choices();
-      for (const provider of failed) {
-        await note(`(couldn't list the ${provider} models; showing its saved one)\n`);
+      const { models, failed } = given === null ? await choices() : { models: given, failed: [] };
+      for (const each of failed) {
+        if (provider !== null && each !== provider) continue;
+        await note(`(couldn't list the ${each} models; showing its saved one)\n`);
       }
       const same = (a: ModelChoice, b: ModelChoice) =>
         a.provider === b.provider && a.model === b.model;
-      const offered = [shown, ...models.filter((each) => !same(each, shown))];
+      const listed = models.filter((each) => provider === null || each.provider === provider);
+      const keeps = provider === null || shown.provider === provider;
+      const offered = keeps ? [shown, ...listed.filter((each) => !same(each, shown))] : listed;
+      if (offered.length === 0) {
+        await note(`(no ${provider} models to choose from)\n`);
+        return null;
+      }
       const width = titleCells(MODEL_LABEL);
       const titles = offered.map((each, i) =>
-        fit(`${each.provider}/${each.model}${i === 0 ? " (current)" : ""}`, width),
+        fit(`${each.provider}/${each.model}${keeps && i === 0 ? " (current)" : ""}`, width),
       );
       const index = await pick(terminal, MODEL_LABEL, titles);
-      if (index === null || index === 0) return null;
-      const chosen = { provider: offered[index]!.provider, model: offered[index]!.model };
+      if (index === null || (keeps && index === 0)) return null;
+      return choose({ provider: offered[index]!.provider, model: offered[index]!.model });
+    };
+    /** Make `chosen` the model of the next replies once the run has the choice. */
+    const choose = (chosen: ModelChoice): ChatCommandOutcome => {
       // Taken once the run has the choice: a refused send changes nothing.
       const sent = () => {
         current = chosen;
@@ -652,6 +690,105 @@ export async function chat(
         void note(`(model: ${sanitize(name)}, from the next reply)\n`).catch(() => {});
       };
       return { send: modelMessage(chosen), sent };
+    };
+    /**
+     * Pick a provider among those yian supports, then one of its models (`chooseModel`); one with
+     * no saved login is signed in to first, as `yian auth` does, its model picked in the chat's
+     * picker. One whose key variable is set asks first whether to save the key: No, and off a
+     * terminal, leaves the store alone and lists the models that key is offered, for the chat to
+     * use the key as it is. Esc or Ctrl-C at any step, the sign-in's wait included, or `stop`,
+     * keeps the model.
+     */
+    const chooseProvider = async (
+      terminal: Terminal,
+      stop: AbortSignal,
+    ): Promise<ChatCommandOutcome> => {
+      const shown = current ?? defaults;
+      const saved = savedLogins(plainIo);
+      if (saved === null) await note("(couldn't read the saved logins)\n");
+      const width = titleCells(PROVIDER_LABEL);
+      // A key set in the environment, with no saved login, can serve the chat as it is.
+      const keys = new Map(
+        SUPPORTED_LLM_PROVIDERS.map((name) => [name, keyVariable(name, plainIo)]),
+      );
+      const titles = SUPPORTED_LLM_PROVIDERS.map((name) => {
+        const variable = keys.get(name);
+        const login = saved?.has(name)
+          ? "logged in"
+          : variable
+            ? `key from ${variable}`
+            : "not logged in";
+        return fit(`${name} · ${login}${name === shown.provider ? " (current)" : ""}`, width);
+      });
+      const index = await pick(terminal, PROVIDER_LABEL, titles);
+      if (index === null) return null;
+      const provider = SUPPORTED_LLM_PROVIDERS[index]!;
+      if (saved?.has(provider)) return chooseModel(terminal, provider);
+      const variable = keys.get(provider);
+      if (variable) {
+        // Off a terminal nothing is saved: the key serves this chat only.
+        const tty = plainIo.stdin.isTTY === true;
+        const answer = tty ? await pick(terminal, SAVE_KEY_LABEL, SAVE_KEY_ANSWERS) : 0;
+        if (answer === null) return null;
+        if (answer === 0) {
+          const models = await keyModels(provider, variable, plainIo, deps.auth);
+          if (models === null) {
+            await note(`(couldn't list the ${provider} models; the model is unchanged)\n`);
+            return null;
+          }
+          return chooseModel(terminal, provider, models.map((model) => ({ provider, model })));
+        }
+      }
+      const model = await signInTo(provider, terminal, stop);
+      return model === null ? null : choose({ provider, model });
+    };
+    /** Sign in to `provider` (`signIn`), returning the model picked; null once it is cancelled. */
+    const signInTo = async (
+      provider: string,
+      terminal: Terminal,
+      stop: AbortSignal,
+    ): Promise<string | null> => {
+      // Esc and Ctrl-C cancel a step without ending the chat, whose terminal outlives the login.
+      const prompts: AuthTerminal = {
+        askText: (label, ask) => terminal.askText(label, { ...ask, cancellable: true }),
+        askChoice: (label, titles, ask) =>
+          terminal.askChoice(label, titles, { ...ask, cancellable: true }),
+        close: () => {},
+      };
+      const width = titleCells(MODEL_LABEL);
+      const pickModel = async (models: readonly string[]) => {
+        const titles = models.map((model) => fit(`${provider}/${model}`, width));
+        const picked = await pick(terminal, MODEL_LABEL, titles);
+        return picked === null ? null : models[picked]!;
+      };
+      // What `yian auth` prints goes out as the chat's notes; off a terminal no step prompts.
+      const authIo: CliIo = { ...plainIo, stdout: { write: note } };
+      const tty = plainIo.stdin.isTTY === true;
+      // No prompt is up while a browser or device sign-in waits: a watch takes Esc and Ctrl-C.
+      const cancel = new AbortController();
+      const watching = new AbortController();
+      terminal.watchKeys(watching.signal, () => cancel.abort());
+      const signal = AbortSignal.any([cancel.signal, stop]);
+      try {
+        return await signIn(provider, authIo, {
+          terminal: tty ? prompts : null,
+          deps: deps.auth ?? {},
+          signal,
+          pickModel,
+          noTerminal: `signing in to ${provider} needs a terminal; run yian auth ${provider} first`,
+          waitNote: "(Esc or Ctrl-C cancels the sign-in)\n",
+        });
+      } catch (error) {
+        if (signal.aborted) {
+          await note("(sign-in cancelled; the model is unchanged)\n");
+          return null;
+        }
+        if (!(error instanceof AuthError)) throw error;
+        await note(`(${sanitize(error.message)}; the model is unchanged)\n`);
+        return null;
+      } finally {
+        watching.abort();
+      }
     };
     const chooseSession = async (terminal: Terminal): Promise<ChatCommandOutcome> => {
       const sessions = chatSessions(runsDir, root).filter((each) => each.runId !== chatRunId);
@@ -698,9 +835,13 @@ export async function chat(
             typed = keys;
           },
           commands: {
-            names: COMMANDS,
-            run: (name, terminal) =>
-              name === "/model" ? chooseModel(terminal) : chooseSession(terminal),
+            list: COMMANDS,
+            run: (name, terminal, stop) =>
+              name === "/model"
+                ? chooseModel(terminal)
+                : name === "/provider"
+                  ? chooseProvider(terminal, stop)
+                  : chooseSession(terminal),
           },
         },
       );

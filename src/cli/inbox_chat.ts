@@ -79,6 +79,7 @@ import {
   joinDrafts,
   type Key,
   type LineEditor,
+  type PromptCommand,
   type PromptList,
   Terminal,
   TerminalStopped,
@@ -171,10 +172,13 @@ export type ChatCommandOutcome = { send: unknown; sent?: () => void } | { exit: 
  * the input box while a turn runs waits for the turn to end.
  */
 export interface ChatCommands {
-  /** The lines that are commands. */
-  readonly names: ReadonlySet<string>;
-  /** Run the command `name` at the prompt, through the chat's terminal. */
-  run(name: string, terminal: Terminal): Promise<ChatCommandOutcome>;
+  /** The commands, each a whole line and what it does, in the order the menu lists them. */
+  readonly list: readonly PromptCommand[];
+  /**
+   * Run the command `name` at the prompt, through the chat's terminal; `stop` aborts once the
+   * chat stops (a second Ctrl-C, a signal).
+   */
+  run(name: string, terminal: Terminal, stop: AbortSignal): Promise<ChatCommandOutcome>;
 }
 
 /**
@@ -208,7 +212,12 @@ export interface InboxChatView {
 const INTERRUPTING = "(interrupting the reply; Ctrl-C again within 2 s to cancel the run)";
 // A second Ctrl-C this soon after the one that interrupted a turn cancels the run.
 const SECOND_PRESS_MS = 2_000;
-const EXIT_LINES = new Set(["/exit", "/quit"]);
+/** The lines that close the inbox, as the end of input does. */
+const EXIT_COMMANDS: readonly PromptCommand[] = [
+  { name: "/exit", description: "Leave the chat" },
+  { name: "/quit", description: "Leave the chat" },
+];
+const EXIT_LINES: ReadonlySet<string> = new Set(EXIT_COMMANDS.map((command) => command.name));
 
 /** `yian run`'s options, and the inbox a chat it hands over sends lines to. */
 export type RunOrChatOptions = RunOptions & { inbox?: string | undefined };
@@ -646,10 +655,15 @@ export async function inboxChat(
     noColor: Boolean(io.env("NO_COLOR")),
     typed: host.typed,
   });
+  // The host's commands and the chat's own, the menu's rows: a command a host adds is listed.
+  const menu = [...(host.commands?.list ?? []), ...EXIT_COMMANDS];
+  const hostCommands: ReadonlySet<string> = new Set(
+    host.commands?.list.map((command) => command.name),
+  );
   // With the chat's look on a terminal, the prompt's box stays up while a turn runs.
   const editor =
     view !== null && atTerminal(io)
-      ? terminal.lineEditor({ hint: view.hint, list: host.rows?.list })
+      ? terminal.lineEditor({ hint: view.hint, list: host.rows?.list, commands: menu })
       : null;
   // Opens a row of `host.rows` without waiting for the user to leave it: the chat goes on meanwhile
   // (its prompt queues behind the row's screen), and only a failure stops it.
@@ -759,7 +773,7 @@ export async function inboxChat(
       const line = draftText(entered);
       if (line.trim() === "") return;
       view?.echo(draftLabel(entered));
-      if (host.commands?.names.has(line.trim())) {
+      if (hostCommands.has(line.trim())) {
         heldCommand = line.trim();
         void note(`(${heldCommand} once the reply ends)\n`).catch(() => {});
         return;
@@ -966,7 +980,7 @@ export async function inboxChat(
     };
     /** Run the host's command `name`, then do what it says; null when nothing moved. */
     const runCommand = async (name: string): Promise<RunResult | null> => {
-      const outcome = await host.commands!.run(name, terminal);
+      const outcome = await host.commands!.run(name, terminal, stop.signal);
       stop.signal.throwIfAborted();
       if (outcome === null) return null;
       if ("exit" in outcome) return leave();
@@ -1117,7 +1131,7 @@ export async function inboxChat(
         result = await leave();
         continue;
       }
-      if (!host.commands?.names.has(read.value.trim())) {
+      if (!hostCommands.has(read.value.trim())) {
         const event = lineEvent(read.value, inbox.message);
         result = (await sendEvent(event, editor === null ? null : typed)) ?? result;
         continue;

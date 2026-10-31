@@ -300,6 +300,20 @@ async function aSecretIsMaskedAndNeverEchoed(): Promise<void> {
   assertRestored(input, output, exitHooks);
 }
 
+async function aKeyPastedIntoASecretPromptShowsOnlyStars(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 80 });
+  const answer = terminal.askText("Key:", { secret: true });
+  // Long enough that the input box would hold it as a token.
+  const key = "sk-" + "q7".repeat(1_200);
+  input.write(PASTE_START + key + PASTE_END);
+  await tick();
+  assert.ok(view().rows.join("").replace("? Key: ", "").split("").every((char) => char === "*"));
+  assert.ok(!output.text.includes("Pasted text"));
+  input.write(ENTER);
+  assert.equal(await answer, key);
+  assert.ok(!output.text.includes("q7q7"));
+}
+
 async function ctrlCReturnsNullAndCallsOnStopOnce(): Promise<void> {
   const stops: string[] = [];
   const rawWhenStopped: boolean[] = [];
@@ -320,6 +334,22 @@ async function ctrlCReturnsNullAndCallsOnStopOnce(): Promise<void> {
   assert.equal(await terminal.askText("Again:"), null);
   assert.equal(output.text, drawn);
   assert.deepEqual(stops, ["interrupt"]);
+}
+
+async function aCancellableTextPromptEndsOnEscOrCtrlCAndTheTerminalStaysOpen(): Promise<void> {
+  const stops: string[] = [];
+  const { input, terminal } = setup({ onStop: (reason) => stops.push(reason) });
+  const escaped = terminal.askText("Key:", { secret: true, cancellable: true });
+  input.write("abc" + ESCAPE);
+  assert.equal(await escaped, null);
+  const interrupted = terminal.askText("Key:", { secret: true, cancellable: true });
+  input.write("abc" + CTRL_C);
+  assert.equal(await interrupted, null);
+  assert.deepEqual(stops, []);
+  // The terminal is still open: the next prompt reads a line.
+  const next = terminal.askText("Name:");
+  input.write("ok" + ENTER);
+  assert.equal(await next, "ok");
 }
 
 async function ctrlDOnAnEmptyLineIsTheEndOfInput(): Promise<void> {
@@ -1331,6 +1361,122 @@ async function downOnAFoldedLineMovesIntoTheListOnlyFromItsLastRow(): Promise<vo
   assert.equal(editor.focus(), 0);
   input.write(ENTER);
   assert.deepEqual(await line, { open: "r1", draft: "a".repeat(20) });
+}
+
+const MENU_COMMANDS = [
+  { name: "/model", description: "Choose the model" },
+  { name: "/resume", description: "Go on from an earlier chat" },
+  { name: "/exit", description: "Leave the chat" },
+];
+
+/** The menu's row for `name`, highlighted or not, as `MENU_COMMANDS` draws it. */
+function menuRow(name: string, highlighted = false): string {
+  const command = MENU_COMMANDS.find((each) => each.name === name)!;
+  return `${highlighted ? "»" : " "} ${command.name.padEnd(9)}${command.description}`;
+}
+
+async function typingASlashOpensTheCommandMenuInPlaceOfTheList(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const list = { ...rowList(["r1  a.yaml"]), hint: "↓ runs" };
+  const editor = new LineEditor({ columns: () => 60, hint: HINT, list, commands: MENU_COMMANDS });
+  const line = terminal.readLine("You:", { frame: true, escape: true, editor });
+  await tick();
+  assert.deepEqual(view().rows.slice(-1), ["  r1  a.yaml"]);
+  input.write("/");
+  await tick();
+  // The menu takes the list's place.
+  const box = (text: string) => [FRAME_TOP, framed(`> ${text}`), FRAME_BOTTOM, `  ${HINT}`];
+  const all = MENU_COMMANDS.map((each, i) => menuRow(each.name, i === 0));
+  assert.deepEqual(view().rows, [...box("/"), ...all]);
+  assert.equal(editor.menuOpen(), true);
+  // The menu filters by prefix.
+  input.write("re");
+  await tick();
+  assert.deepEqual(view().rows, [...box("/re"), menuRow("/resume", true)]);
+  input.write(BACKSPACE + BACKSPACE);
+  await tick();
+  // Down and Up move the highlight, not into the list; the cursor stays in the box.
+  input.write(DOWN + DOWN);
+  await tick();
+  const three = (highlighted: string) =>
+    ["/model", "/resume", "/exit"].map((name) => menuRow(name, name === highlighted));
+  assert.deepEqual(view().rows.slice(-3), three("/exit"));
+  assert.equal(editor.focus(), null);
+  input.write(UP);
+  await tick();
+  assert.deepEqual(view().rows.slice(-3), three("/resume"));
+  // Tab completes the highlighted command into the box.
+  input.write("\t");
+  await tick();
+  assert.deepEqual(view().rows, [...box("/resume"), menuRow("/resume", true)]);
+  // Escape closes the menu and gives the list back; it doesn't end the prompt.
+  input.write(ESCAPE);
+  await pastEscape();
+  assert.equal(editor.menuOpen(), false);
+  assert.deepEqual(view().rows, [...box("/resume"), "  r1  a.yaml"]);
+  // A space, or a line not starting with a slash, keeps it closed; so does no match.
+  input.write(CTRL_U + "/x");
+  await tick();
+  assert.equal(editor.menuOpen(), false);
+  input.write(CTRL_U + "a/");
+  await tick();
+  assert.equal(editor.menuOpen(), false);
+  input.write(CTRL_U + "/m");
+  await tick();
+  assert.equal(editor.menuOpen(), true);
+  input.write(" ");
+  await tick();
+  assert.equal(editor.menuOpen(), false);
+  input.write(CTRL_U + ENTER);
+  assert.deepEqual(await line, { value: "" });
+}
+
+async function enterInTheCommandMenuRunsTheHighlightedCommand(): Promise<void> {
+  const { input, terminal } = setup({ columns: 60 });
+  const editor = new LineEditor({ columns: () => 60, hint: HINT, commands: MENU_COMMANDS });
+  const first = terminal.readLine("You:", { frame: true, editor });
+  input.write("/" + DOWN + ENTER);
+  assert.deepEqual(await first, { value: "/resume" });
+  assert.deepEqual(editor.entered(), ["/resume"]);
+  // A command typed whole runs as typed, whatever is highlighted.
+  const second = terminal.readLine("You:", { frame: true, editor });
+  input.write("/exit" + ENTER);
+  assert.deepEqual(await second, { value: "/exit" });
+}
+
+async function aCommandMenuRowFitsANarrowScreen(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 20 });
+  const commands = [
+    { name: "/a-very-long-command-name", description: "Does a" },
+    { name: "/b", description: "Does b, said at some length" },
+  ];
+  const editor = new LineEditor({ columns: () => 20, hint: "", commands });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  input.write("/");
+  await tick();
+  assert.deepEqual(view().rows.slice(-2), ["» /a-very-long-comm…", "  /b"]);
+  // With room for a description, it is cut to the row.
+  input.write("b");
+  await tick();
+  assert.deepEqual(view().rows.slice(-1), ["» /b  Does b, said …"]);
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "/b" });
+}
+
+async function aPastedSlashOpensNoCommandMenu(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 60 });
+  const editor = new LineEditor({ columns: () => 60, hint: HINT, commands: MENU_COMMANDS });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  input.write(PASTE_START + "/mo" + PASTE_END);
+  await tick();
+  assert.equal(editor.menuOpen(), false);
+  assert.deepEqual(view().rows, [FRAME_TOP, framed("> /mo"), FRAME_BOTTOM, `  ${HINT}`]);
+  // Typing on after it keeps the menu closed: only a slash typed first opens it.
+  input.write("d");
+  await tick();
+  assert.equal(editor.menuOpen(), false);
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "/mod" });
 }
 
 async function watchKeysWithAnEditorGivesItTheKeysButCtrlC(): Promise<void> {
@@ -3756,7 +3902,10 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an initial value can be edited": anInitialValueCanBeEdited,
   "a blank answer returns an empty string": aBlankAnswerReturnsAnEmptyString,
   "a secret is masked and never echoed": aSecretIsMaskedAndNeverEchoed,
+  "a key pasted into a secret prompt shows only stars": aKeyPastedIntoASecretPromptShowsOnlyStars,
   "Ctrl-C returns null and calls onStop once": ctrlCReturnsNullAndCallsOnStopOnce,
+  "a cancellable text prompt ends on Esc or Ctrl-C and the terminal stays open":
+    aCancellableTextPromptEndsOnEscOrCtrlCAndTheTerminalStaysOpen,
   "Ctrl-D on an empty line is the end of input": ctrlDOnAnEmptyLineIsTheEndOfInput,
   "the end of input returns null": theEndOfInputReturnsNull,
   "Ctrl-D on a non-empty line is ignored": ctrlDOnANonEmptyLineIsIgnored,
@@ -3820,6 +3969,12 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a paste keeps its tabs, shown as spaces": aPasteKeepsItsTabsShownAsSpaces,
   "Escape erases a framed readLine": escapeErasesAFramedReadLine,
   "a framed readLine with a list moves into it and opens a row": aFramedReadLineWithAListMovesIntoItAndOpensARow,
+  "typing a slash opens the command menu in place of the list":
+    typingASlashOpensTheCommandMenuInPlaceOfTheList,
+  "Enter in the command menu runs the highlighted command":
+    enterInTheCommandMenuRunsTheHighlightedCommand,
+  "a pasted slash opens no command menu": aPastedSlashOpensNoCommandMenu,
+  "a command menu row fits a narrow screen": aCommandMenuRowFitsANarrowScreen,
   "a list row that goes gives the keys back, and the list redraws on its own":
     aListRowThatGoesGivesTheKeysBackAndTheListRedrawsOnItsOwn,
   "a long list shows what fits, the focused row among them": aLongListShowsWhatFitsTheFocusedRowAmongThem,

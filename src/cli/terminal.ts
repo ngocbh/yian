@@ -369,9 +369,10 @@ function sameUnits(a: readonly Unit[], b: readonly Unit[]): boolean {
 }
 
 /**
- * A one-line text editor; `mask` draws `*` per character and keeps the answer off the screen. With
- * `collapse`, a long paste (more than `PASTE_LINES` lines or `PASTE_CHARS` characters) goes in as
- * one token, which the caret and the deleting keys treat as one character and the answer expands.
+ * A one-line text editor; `mask` draws `*` per character and keeps the answer off the screen, and
+ * with `escapes` Esc ends it as Ctrl-C does. With `collapse`, a long paste (more than `PASTE_LINES`
+ * lines or `PASTE_CHARS` characters) goes in as one token, which the caret and the deleting keys
+ * treat as one character and the answer expands.
  */
 function textWidget(options: {
   label: string;
@@ -381,6 +382,7 @@ function textWidget(options: {
   instruction?: string;
   validate?: (text: string) => string | undefined;
   collapse?: boolean;
+  escapes?: boolean;
 }): Widget<string> & {
   text(): string;
   caret(): number;
@@ -419,6 +421,7 @@ function textWidget(options: {
       const newline = key.name === "return" || key.name === "enter";
       error = undefined;
       if (key.paste) paste(key.str ?? "");
+      else if (options.escapes && key.name === "escape") return { stop: "interrupt" };
       else if (newline) {
         const answer = text();
         error = options.validate?.(answer);
@@ -476,6 +479,12 @@ export interface PromptList {
   subscribe?(listener: () => void): () => void;
 }
 
+/** A command a `LineEditor`'s menu offers: its whole line, such as `/model`, and what it does. */
+export interface PromptCommand {
+  readonly name: string;
+  readonly description: string;
+}
+
 /**
  * What a key did at a `LineEditor`: Enter in the box answers its text (`value`), Enter on a list
  * row `open`s it, Escape in the box is `escape`, Ctrl-D in an empty box the end of input; `null`
@@ -509,6 +518,12 @@ const YIELD_GRACE_MS = 400;
  * the tokens of the box: the caret steps over it, Backspace, Delete and Ctrl-U take it whole, and
  * the text answered holds the paste. The text and where the keys are last across prompts, so one
  * editor can serve a chat's prompt and the box it keeps up while a reply runs.
+ *
+ * With `commands`, a `/` typed first in the box opens a menu of them in the list's place, those
+ * the text starts with (it closes once none does, the text holds a space or no longer starts with
+ * `/`, or on Escape, which then ends nothing): Up and Down move its highlight, Tab completes the
+ * highlighted command into the box, and Enter answers it, or the text when that is a command. A
+ * paste never opens it.
  */
 export class LineEditor {
   readonly #text = textWidget({ label: "", mark: ">", collapse: true });
@@ -521,6 +536,12 @@ export class LineEditor {
   #focus: { key: string; index: number } | null = null;
   /** The draft last entered at a framed prompt (`enter`). */
   #entered: Draft = [];
+  /** The commands the menu offers. */
+  readonly #commands: readonly PromptCommand[];
+  /** Whether a typed `/` opened the menu and nothing closed it since. */
+  #menu = false;
+  /** The menu's highlighted row, and the text it was for: a new text starts again at the top. */
+  #highlight = { index: 0, text: "" };
 
   /** @param options.rows The screen's height, which the list keeps within; no bound when absent. */
   constructor(options: {
@@ -528,8 +549,10 @@ export class LineEditor {
     rows?: () => number;
     hint: string;
     list?: PromptList | null;
+    commands?: readonly PromptCommand[];
   }) {
     this.#columns = options.columns;
+    this.#commands = options.commands ?? [];
     this.#rows = options.rows ?? (() => Infinity);
     this.#hint = options.hint;
     this.list = options.list ?? null;
@@ -551,9 +574,40 @@ export class LineEditor {
     return draft;
   }
 
-  /** Replace the text (and its tokens, given a draft), the cursor after it. */
+  /**
+   * Replace the text (and its tokens, given a draft), the cursor after it; a new text closes the
+   * menu.
+   */
   set(text: string | Draft): void {
+    if (!sameUnits(unitsOf(text), this.#text.units())) this.#menu = false;
     this.#text.set(text);
+  }
+
+  /** Whether the command menu is open. */
+  menuOpen(): boolean {
+    return this.#matches().length > 0;
+  }
+
+  /**
+   * The commands the menu shows, those the text starts with; none while it is closed. It closes
+   * the menu once none match, so whoever reads it first (drawing or a key) sees the same state.
+   */
+  #matches(): readonly PromptCommand[] {
+    if (!this.#menu) return [];
+    const units = this.#text.units();
+    const typed = units.every((unit) => typeof unit === "string") ? units.join("") : "";
+    const open = typed.startsWith("/") && !/\s/.test(typed);
+    const matches = open ? this.#commands.filter((command) => command.name.startsWith(typed)) : [];
+    // Once it closes, only a `/` typed first opens it again.
+    if (matches.length === 0) this.#menu = false;
+    return matches;
+  }
+
+  /** The menu's highlighted row among `matches`, back at the top once the text changed. */
+  #highlighted(matches: readonly PromptCommand[]): number {
+    const text = this.#text.text();
+    if (this.#highlight.text !== text) this.#highlight = { index: 0, text };
+    return Math.min(this.#highlight.index, matches.length - 1);
   }
 
   /** Take the draft as entered (`entered`), leaving the box empty. */
@@ -588,16 +642,37 @@ export class LineEditor {
     this.#focus = index === null ? null : { key: rows[index]!.key, index };
   }
 
-  /** The list's rows as drawn: at most what fits, the focused one among them, then `+N more`. */
+  /**
+   * The menu's rows, each cut to fit after the pointer: the command's name, then its description,
+   * dim, when the names leave room for it.
+   */
+  #menuRows(matches: readonly PromptCommand[]): { rows: string[]; focus: number } {
+    const room = Math.max(1, this.#columns() - 2);
+    const width = Math.min(room, Math.max(...matches.map((command) => cells(command.name))) + 2);
+    const rows = matches.map((command) => {
+      const name = fit(command.name, room);
+      if (width >= room) return style("36", name);
+      const pad = " ".repeat(width - cells(name));
+      return `${style("36", name)}${pad}${style("2", fit(command.description, room - width))}`;
+    });
+    return { rows, focus: this.#highlighted(matches) };
+  }
+
+  /**
+   * The list's rows as drawn, or the menu's while it is open: at most what fits, the focused one
+   * among them, then `+N more`.
+   */
   #listRows(boxRows: number): string[] {
-    const rows = this.list?.rows() ?? [];
-    const focus = this.#find(rows);
+    const matches = this.#matches();
+    const menu = matches.length > 0 ? this.#menuRows(matches) : null;
+    const rows = menu?.rows ?? (this.list?.rows() ?? []).map((row) => row.text);
+    const focus = menu?.focus ?? this.#find(this.list?.rows() ?? []);
     const room = Math.max(1, this.#rows() - boxRows - 1 - LIST_MARGIN);
     const pointer = (i: number): string => (i === focus ? `${style("1;36", "»")} ` : "  ");
-    if (rows.length <= room) return rows.map((row, i) => pointer(i) + row.text);
+    if (rows.length <= room) return rows.map((row, i) => pointer(i) + row);
     const shown = Math.max(1, room - 1);
     const start = Math.min(Math.max(0, (focus ?? 0) - shown + 1), rows.length - shown);
-    const drawn = rows.slice(start, start + shown).map((row, i) => pointer(start + i) + row.text);
+    const drawn = rows.slice(start, start + shown).map((row, i) => pointer(start + i) + row);
     return [...drawn, `  ${style("2", `+${rows.length - shown} more`)}`];
   }
 
@@ -613,7 +688,7 @@ export class LineEditor {
       return label + "─".repeat(Math.max(0, width + 4 - cells(label)));
     };
     const list = this.#listRows(end - start + 2);
-    const extra = list.length > 0 ? this.list?.hint : undefined;
+    const extra = list.length > 0 && !this.menuOpen() ? this.list?.hint : undefined;
     const both = extra ? `${this.#hint} · ${extra}` : this.#hint;
     // The list's hint only when it fits on the row: the box's hint matters more.
     const hint = cells(both) + 2 <= this.#columns() ? both : this.#hint;
@@ -657,9 +732,12 @@ export class LineEditor {
     // one as a token.
     if (key.paste) {
       this.#focus = null;
+      this.#menu = false;
       this.#text.key(key);
       return null;
     }
+    const matches = this.#matches();
+    if (matches.length > 0) return this.#menuKey(key, matches);
     const list = this.list?.rows() ?? [];
     const focus = this.#find(list);
     const count = list.length;
@@ -672,7 +750,7 @@ export class LineEditor {
       else if (plain && key.name === "down") this.#focusOn(list, Math.min(focus + 1, count - 1));
       else if (printable(key)) {
         this.#focus = null;
-        this.#text.key(key);
+        this.#textKey(key);
       }
       return null;
     }
@@ -682,9 +760,34 @@ export class LineEditor {
       return null;
     }
     if (key.name === "escape") return { escape: true };
+    return this.#textKey(key);
+  }
+
+  /** Apply `key` to the text; a `/` typed into an empty box opens the menu. */
+  #textKey(key: Key): EditorAction {
+    const opens = this.#commands.length > 0 && key.str === "/" && this.#text.units().length === 0;
     const ended = this.#text.key(key);
+    if (opens && printable(key)) this.#menu = true;
     if (ended === undefined) return null;
     return "value" in ended ? ended : ended.stop === "eof" ? { stop: "eof" } : null;
+  }
+
+  /** Apply `key` while the menu shows `matches`. */
+  #menuKey(key: Key, matches: readonly PromptCommand[]): EditorAction {
+    const plain = !key.ctrl && !key.meta;
+    const index = this.#highlighted(matches);
+    const highlighted = matches[index]!.name;
+    if (key.name === "escape") this.#menu = false;
+    else if (plain && (key.name === "up" || key.name === "down")) {
+      this.#highlight.index = moved(key, index, matches.length);
+    } else if (plain && key.name === "tab") this.#text.set(highlighted);
+    else if (key.name === "return" || key.name === "enter") {
+      const typed = this.#text.text();
+      const name = matches.some((command) => command.name === typed) ? typed : highlighted;
+      this.#text.set(name);
+      return { value: name };
+    } else return this.#textKey(key);
+    return null;
   }
 
   /**
@@ -999,22 +1102,36 @@ export class Terminal {
   }
 
   /** A `LineEditor` as wide as this terminal's output. */
-  lineEditor(options: { hint: string; list?: PromptList | null }): LineEditor {
+  lineEditor(options: {
+    hint: string;
+    list?: PromptList | null;
+    commands?: readonly PromptCommand[];
+  }): LineEditor {
     const output = this.#output;
     const size = { columns: () => columnsOf(output), rows: () => rowsOf(output) };
     return new LineEditor({ ...options, ...size });
   }
 
-  /** A free-text or hidden prompt; null when the user cancels or the terminal is closed. */
+  /**
+   * A free-text or hidden prompt; null when the user cancels or the terminal is closed. With
+   * `cancellable`, Esc cancels it too, and neither Esc nor Ctrl-C goes to `onStop`.
+   */
   async askText(
     label: string,
-    options: { initial?: string; secret?: boolean; signal?: AbortSignal } = {},
+    options: {
+      initial?: string;
+      secret?: boolean;
+      signal?: AbortSignal;
+      cancellable?: boolean;
+    } = {},
   ): Promise<string | null> {
+    const escapes = options.cancellable === true;
+    const { initial, secret } = options;
     const ended = await this.#runTurn(
       options.signal,
-      (run) => run(textWidget({ label, initial: options.initial, mask: options.secret })),
+      (run) => run(textWidget({ label, initial, mask: secret, escapes })),
       // A plain terminal leaves the tty cooked, which would echo the secret as it is typed.
-      { raw: options.secret === true },
+      { raw: secret === true, keepOpen: escapes },
     );
     return "value" in ended ? ended.value : null;
   }

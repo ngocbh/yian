@@ -835,6 +835,52 @@ test(
   TIMEOUT,
 );
 
+/**
+ * A chat turn that waits on `hold` after taking the lines, then sleeps 60 s and replies, the turn
+ * ending with the reply.
+ */
+const HOLD_THEN_NAP = turnFlow(NAP_REPLY, {
+  nodes:
+    `      held:
+        kind: tool
+        tool_id: hold
+        input:
+          events: \${heard.output.events}
+        output: str
+` + NAP_NODES.replace("events: ${heard.output.events}", "events: ${heard.output.events}\n          held: ${held.output}"),
+}).replace("said: ${input.said + heard.output.events}", "said: ${input.said + heard.output.events + [reply.output]}");
+
+test(
+  "a chat whose input box takes /exit while its run waits on a deadline waits on a cooked terminal",
+  async () => {
+    const { started, tools } = holdTool();
+    const { io, stdin } = chatIo({ tty: true });
+    const { scheduler } = heldScheduler();
+    const view = new ChatView(io.stderrStream as FakeOutput, io.env, scheduler);
+    const log = join(tmp, "run.jsonl");
+    stdin.write("hi" + ENTER);
+    const chatting = inboxChat(
+      flowFile(HOLD_THEN_NAP),
+      { inputValues: [], engineTrace: false, log },
+      { ...io, stdout: view.writer, stderr: view.writer },
+      { scheduler, signals },
+      { view, tools },
+    );
+    // The turn runs, so the box is up and takes the line.
+    await started;
+    stdin.write("/exit" + ENTER);
+    await until(() => records(log).some((record) => record instanceof InboxClosedRecord));
+    release!();
+    await until(() => records(log).at(-1) instanceof RunWaitingRecord);
+    // Cooked, so Ctrl-C raises SIGINT, which cancels the run during the wait.
+    await until(() => !stdin.isRaw);
+    signals.emit("SIGINT");
+    expect(await chatting).toBe(130);
+    expect(stdin.isRaw).toBe(false);
+  },
+  TIMEOUT,
+);
+
 describe("the chat's inbox and inputs", () => {
   let calls = 0;
 

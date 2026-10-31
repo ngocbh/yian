@@ -500,11 +500,11 @@ export async function inboxChat(
     if (turning && (pressedAt === null || now - pressedAt > SECOND_PRESS_MS)) {
       pressedAt = now;
       void note(`${INTERRUPTING}\n`).catch(() => {});
-      const line = lineSending;
+      const landing = lineSending;
       // The live engine takes it at once. With no reply running it records the Stop for the turn,
       // or nothing when the chat waits at the take.
       const sent = (async () => {
-        if (line !== null) await line;
+        if (landing !== null) await landing;
         await interruptReply(path, inbox.name, { env: env.read });
       })().catch((error: unknown) => {
         if (!(error instanceof DeliveryRefused)) stop.abort(error);
@@ -735,7 +735,10 @@ export async function inboxChat(
       view?.refresh();
       return true;
     };
-    /** Wait until the interrupts and the box lines sent so far have landed, and those made meanwhile. */
+    /**
+     * Wait until the interrupts and the box lines sent so far have landed, and those made
+     * meanwhile, then clear `interrupting`.
+     */
     const land = async (): Promise<void> => {
       for (;;) {
         const landing = [interrupting, liveSends] as const;
@@ -988,7 +991,9 @@ export async function inboxChat(
             // A run that ended under the chat refuses it as `ended`; the move reads how it ended.
             if (error.reason !== "ended") {
               await note(`not sent: ${forTerminal(error.message, io.stderr)}\n`);
-              return null;
+              // A line entered in the box meanwhile was sent; only a move reads it.
+              await land();
+              if (liveSeqs.length === 0) return null;
             }
           } finally {
             lineSending = null;

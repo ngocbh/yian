@@ -1583,6 +1583,79 @@ test(
   TIMEOUT,
 );
 
+/**
+ * Chat ECHO in the framed box with a 16-byte event limit, enter a line the inbox refuses, and a
+ * box line ("hi") typed with it (`oneRead`) or while its send is held. Returns the moves made
+ * before the second prompt, and whether a move read "hi" by then.
+ */
+async function boxLineAfterRefusedLine(oneRead: boolean) {
+  const { io, stdin } = chatIo({ tty: true, env: { YIAN_MAX_EVENT_BYTES: "16" } });
+  const scheduler = virtualScheduler(Date.parse("2026-01-01T00:00:00Z"));
+  let moves = 0;
+  // The moves made each time a prompt takes the terminal.
+  const prompts: number[] = [];
+  class Watched extends ChatView {
+    override active(active: boolean, printed = false): void {
+      if (active) prompts.push(moves);
+      super.active(active, printed);
+    }
+  }
+  const view = new Watched(io.stderrStream as FakeOutput, io.env, scheduler);
+  const big = "x".repeat(40);
+  const held = heldSend((text) => !oneRead && text === big);
+  const step: typeof advance = async (options) => {
+    moves++;
+    return advance(options);
+  };
+  const log = join(tmp, "run.jsonl");
+  const chatting = inboxChat(
+    flowFile(ECHO),
+    { inputValues: [], engineTrace: false, log },
+    { ...io, stdout: view.writer, stderr: view.writer },
+    { scheduler, signals, send: held.send, advance: step },
+    { view },
+  );
+  await until(() => prompts.length >= 1);
+  if (oneRead) {
+    stdin.write(big + ENTER + "hi" + ENTER);
+  } else {
+    stdin.write(big + ENTER);
+    await held.reached;
+    stdin.write("hi" + ENTER);
+    // Long enough for the box line to be sent while the refused one is held.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    release!();
+  }
+  await until(() => prompts.length >= 2);
+  const all = records(log);
+  const hi = all.findIndex(
+    (record) =>
+      record instanceof PoolCommitRecord &&
+      record.key === "__start__.messages" &&
+      (record.value as { value: unknown }).value === "hi",
+  );
+  const lastWaiting = all.findLastIndex((record) => record instanceof RunWaitingRecord);
+  stdin.write(CTRL_U + "/exit" + ENTER);
+  expect(await chatting).toBe(0);
+  return { moves: prompts[1], read: hi > -1 && lastWaiting > hi };
+}
+
+test(
+  "with the framed box, a line typed while a refused line is sent is read before the prompt comes back",
+  async () => {
+    expect(await boxLineAfterRefusedLine(false)).toEqual({ moves: 1, read: true });
+  },
+  TIMEOUT,
+);
+
+test(
+  "with the framed box, a line typed in the same read as a refused line is read before the prompt comes back",
+  async () => {
+    expect(await boxLineAfterRefusedLine(true)).toEqual({ moves: 1, read: true });
+  },
+  TIMEOUT,
+);
+
 test(
   "Ctrl-C while child events queued at the prompt are still being sent stops the reply they start and never cancels",
   async () => {

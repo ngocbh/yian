@@ -848,6 +848,232 @@ function cut(rows: readonly string[], focus: number | null, room: number): strin
   return [...rows.slice(start, start + shown), `  ${style("2", `+${rows.length - shown} more`)}`];
 }
 
+/** A choice a `Picker` offers. */
+export interface PickChoice {
+  /** Its row's text, which a search matches and marks bold. */
+  readonly title: string;
+  /** Dim text after the title, such as when a chat started. */
+  readonly detail?: string;
+  /** Text a search matches beside the title, never shown (a named chat's first line). */
+  readonly also?: string;
+}
+
+/** What a key did at a `Picker`: Enter picked choice `value`, Esc cancelled, or neither. */
+export type PickerAction = { value: number } | { cancel: true } | null;
+
+/** The keys a `Picker` takes, after its label. */
+const PICK_HINT = "(type to search · ↑/↓ · Enter · Esc)";
+
+/** A title narrower than this many cells leaves out its detail instead. */
+const PICK_TITLE_CELLS = 12;
+
+/** `text`'s characters, each lowercased alone, so a match's indices are the text's own. */
+function lowered(text: string): string[] {
+  return Array.from(text, (char) => char.toLowerCase());
+}
+
+/** Where `word` first occurs in `chars`, or -1. */
+function occurs(chars: readonly string[], word: readonly string[]): number {
+  for (let at = 0; at + word.length <= chars.length; at++) {
+    if (word.every((char, i) => chars[at + i] === char)) return at;
+  }
+  return -1;
+}
+
+/**
+ * A searchable picker over `choices`: the label, a search box, then the choices that match what
+ * is typed in it, each its title, the words found bold, and its detail dim. A choice matches when
+ * each word typed occurs, in any case, in its title or its `also`. Up and Down (or Ctrl-P and
+ * Ctrl-N) move the highlight among them, wrapping, Enter picks it and Esc cancels; a new search
+ * starts at the top. On a short screen the list shows as many rows as fit (`rows()` high, leaving
+ * `LIST_MARGIN` rows), the highlighted one among them, then `+N more`.
+ */
+export class Picker {
+  readonly #label: string;
+  readonly #choices: readonly PickChoice[];
+  readonly #columns: () => number;
+  readonly #rows: () => number;
+  /** The search typed, by character. */
+  #query: string[] = [];
+  /** The highlighted choice, by its index among all of them. */
+  #highlight: number;
+
+  /** @param options.initial The choice highlighted first; the first when absent. */
+  constructor(options: {
+    label: string;
+    choices: readonly PickChoice[];
+    initial?: number;
+    columns: () => number;
+    rows?: () => number;
+  }) {
+    this.#label = options.label;
+    this.#choices = options.choices;
+    this.#columns = options.columns;
+    this.#rows = options.rows ?? (() => Infinity);
+    this.#highlight = options.initial ?? 0;
+  }
+
+  /** The search's words, each lowercased. */
+  #words(): string[][] {
+    return this.#query.join("").split(/\s+/).filter((word) => word !== "").map(lowered);
+  }
+
+  /** The indices of the choices the search matches, in order. */
+  #matches(): number[] {
+    const words = this.#words();
+    return this.#choices.flatMap((choice, i) => {
+      const title = lowered(choice.title);
+      const also = lowered(choice.also ?? "");
+      const found = words.every((word) => occurs(title, word) !== -1 || occurs(also, word) !== -1);
+      return found ? [i] : [];
+    });
+  }
+
+  /** `title` with the search's words bold where each first occurs in it. */
+  #marked(title: string): string {
+    const chars = Array.from(title);
+    const bold = chars.map(() => false);
+    const lower = lowered(title);
+    for (const word of this.#words()) {
+      const at = occurs(lower, word);
+      for (let i = 0; at !== -1 && i < word.length; i++) bold[at + i] = true;
+    }
+    return chars
+      .map((char, i) => {
+        const opens = bold[i] && !bold[i - 1] ? `${ESC}1m` : "";
+        const closes = bold[i] && !bold[i + 1] ? `${ESC}22m` : "";
+        return `${opens}${char}${closes}`;
+      })
+      .join("");
+  }
+
+  /** Choice `i`'s row: the pointer when highlighted (cyan), its title marked, its detail dim. */
+  #row(i: number, highlighted: boolean): string {
+    const choice = this.#choices[i]!;
+    const room = Math.max(1, this.#columns() - 3);
+    const detail = choice.detail ?? "";
+    const titleRoom = detail === "" ? room : room - cells(detail) - 2;
+    const keeps = titleRoom >= Math.min(PICK_TITLE_CELLS, cells(choice.title));
+    const title = this.#marked(fit(choice.title, keeps ? titleRoom : room));
+    if (!keeps || detail === "") {
+      return highlighted ? `${style("1;36", "»")} ${style("36", title)}` : `  ${title}`;
+    }
+    if (!highlighted) return `  ${title}  ${style("2", detail)}`;
+    return `${style("1;36", "»")} ${ESC}36m${title}  ${ESC}2m${detail}${ESC}22m${ESC}0m`;
+  }
+
+  /** The highlighted choice's place among `matches`: the first once it no longer matches. */
+  #focus(matches: readonly number[]): number {
+    const at = matches.indexOf(this.#highlight);
+    return at === -1 ? 0 : at;
+  }
+
+  /** The text width of the search box. */
+  #width(): number {
+    return Math.max(1, this.#columns() - 6);
+  }
+
+  /** The search as the box shows it: its tail, when it is wider than the box. */
+  #shown(): string {
+    const width = this.#width() - 1;
+    const kept: string[] = [];
+    let used = 0;
+    for (let i = this.#query.length - 1; i >= 0; i--) {
+      const char = drawn(this.#query[i]!);
+      if (used + cells(char) > width) break;
+      kept.unshift(char);
+      used += cells(char);
+    }
+    return kept.join("");
+  }
+
+  /** The rows, styled: the label, the search box and the choices that match. */
+  lines(): string[] {
+    const width = this.#width();
+    const border = (part: string): string => style("2", part);
+    const shown = this.#shown();
+    const placeholder = fit("Search…", width);
+    const body = shown === "" ? style("2", placeholder) : shown;
+    const pad = " ".repeat(Math.max(0, width - cells(shown === "" ? placeholder : shown)));
+    const matches = this.#matches();
+    const focus = this.#focus(matches);
+    const rows = matches.map((choice, i) => this.#row(choice, i === focus));
+    const room = Math.max(1, this.#rows() - LIST_MARGIN - 4);
+    // The keys' hint only when it fits on the label's row.
+    const hint = cells(`? ${this.#label} ${PICK_HINT}`) < this.#columns() ? PICK_HINT : undefined;
+    return [
+      promptHead("?", this.#label, hint),
+      border(`╭${"─".repeat(width + 4)}╮`),
+      `${border("│")} ${lead(0)}${body}${pad} ${border("│")}`,
+      border(`╰${"─".repeat(width + 4)}╯`),
+      ...(rows.length === 0 ? [`  ${style("2", "No matches")}`] : cut(rows, focus, room)),
+    ];
+  }
+
+  /** The cursor's row among `lines()`, in the search box, and its text before it. */
+  cursor(): { row: number; before: string } {
+    return { row: 2, before: `│ > ${this.#shown()}` };
+  }
+
+  /** The line the picker collapses to once `index` is picked, or with none picked. */
+  done(index: number | null): string {
+    const title = index === null ? "" : this.#choices[index]!.title;
+    const room = Math.max(1, this.#columns() - cells(this.#label) - 4);
+    return collapsed("?", this.#label, fit(title, room));
+  }
+
+  /** Apply one key. */
+  key(key: Key): PickerAction {
+    const matches = this.#matches();
+    const focus = this.#focus(matches);
+    const plain = !key.ctrl && !key.meta;
+    const up = key.ctrl ? key.name === "p" : plain && key.name === "up";
+    const down = key.ctrl ? key.name === "n" : plain && key.name === "down";
+    const searched = (query: string[]): null => {
+      this.#query = query;
+      // A new search starts at the top.
+      this.#highlight = this.#matches()[0] ?? 0;
+      return null;
+    };
+    if (key.paste) {
+      return searched([...this.#query, ...Array.from((key.str ?? "").replace(/\s+/g, " "))]);
+    }
+    if (key.name === "escape") return { cancel: true };
+    if (key.name === "return" || key.name === "enter") {
+      return matches.length === 0 ? null : { value: matches[focus]! };
+    }
+    if ((up || down) && matches.length > 0) {
+      const count = matches.length;
+      this.#highlight = matches[(focus + (up ? count - 1 : 1)) % count]!;
+      return null;
+    }
+    if (key.name === "backspace") return searched(this.#query.slice(0, -1));
+    if (key.ctrl && key.name === "u") return searched([]);
+    if (printable(key)) return searched([...this.#query, ...Array.from(key.str)]);
+    return null;
+  }
+}
+
+/**
+ * `picker` as a prompt answering the index picked; Esc ends it as Ctrl-C does. It collapses to
+ * the label and the title picked.
+ */
+function pickerWidget(picker: Picker): Widget<number> {
+  return {
+    preface: "",
+    lines: () => picker.lines(),
+    cursor: () => picker.cursor(),
+    key(key) {
+      // questionary binds Ctrl-Q like Ctrl-C in its pickers.
+      if (key.ctrl && key.name === "q") return { stop: "interrupt" };
+      const action = picker.key(key);
+      if (action === null) return undefined;
+      return "cancel" in action ? { stop: "interrupt" } : action;
+    },
+    done: (outcome) => picker.done("value" in outcome ? outcome.value : null),
+  };
+}
+
 /** What a framed box's row `row` starts with: the bold `>` on the first. */
 function lead(row: number): string {
   return row === 0 ? `${style("1", ">")} ` : "  ";
@@ -1335,6 +1561,44 @@ export class Terminal {
       { keepOpen: escapes },
     );
     return "value" in ended ? choices[ended.value]! : null;
+  }
+
+  /**
+   * A searchable choice among `choices` (`Picker`): the index picked, or null when Esc or Ctrl-C
+   * cancels it, which leaves the terminal open, or the terminal is closed. Each choice is drawn
+   * through `visible`. On a plain terminal it is a choice among the titles, each with its detail.
+   */
+  async askPick(
+    label: string,
+    choices: readonly PickChoice[],
+    options: { initial?: number; signal?: AbortSignal } = {},
+  ): Promise<number | null> {
+    if (choices.length === 0) throw new RangeError("askPick needs at least one choice");
+    const shown = choices.map((choice) => ({
+      title: visible(choice.title),
+      ...(choice.detail === undefined ? {} : { detail: visible(choice.detail) }),
+      ...(choice.also === undefined ? {} : { also: choice.also }),
+    }));
+    const initial = options.initial ?? 0;
+    const output = this.#output;
+    const widget = this.#plain
+      ? selectWidget({
+          label,
+          titles: shown.map(({ title, detail }) => (detail ? `${title} · ${detail}` : title)),
+          initial,
+          escapes: true,
+        })
+      : pickerWidget(
+          new Picker({
+            label,
+            choices: shown,
+            initial,
+            columns: () => columnsOf(output),
+            rows: () => rowsOf(output),
+          }),
+        );
+    const ended = await this.#runTurn(options.signal, (run) => run(widget), { keepOpen: true });
+    return "value" in ended ? ended.value : null;
   }
 
   /**

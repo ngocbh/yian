@@ -13,7 +13,13 @@ import { PassThrough, Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 
 import { liveRows } from "../../src/cli/live_rows.ts";
-import { LineEditor, Terminal, type TerminalOptions, TerminalStopped } from "../../src/cli/terminal.ts";
+import {
+  LineEditor,
+  Picker as SearchPicker,
+  Terminal,
+  type TerminalOptions,
+  TerminalStopped,
+} from "../../src/cli/terminal.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { parseQuestions } from "../../src/nodes/tool/questions.ts";
 import { ToolContext } from "../../src/tools/context.ts";
@@ -1997,6 +2003,140 @@ async function aBadChoiceListIsRefusedWithoutDrawing(): Promise<void> {
   await assert.rejects(terminal.askChoice("Pick", []), RangeError);
   await assert.rejects(terminal.askChoice("Pick", ["a", "b"], { initial: "c" }), RangeError);
   assert.equal(output.text, "");
+}
+
+/** The choices the picker tests offer: chats, one matched only by its first line. */
+const CHATS = [
+  { title: "Fix the parser", detail: "2h ago · 4 messages" },
+  { title: "Write the docs", detail: "3d ago · 2 messages", also: "the parser's docs" },
+  { title: "Parser bench", detail: "5m ago" },
+];
+
+/** The picker's search box, 60 columns wide, holding `text` (dim `Search…` when empty). */
+const searchBox = (text: string) => [FRAME_TOP, framed(`> ${text || "Search…"}`), FRAME_BOTTOM];
+
+async function aPickerFiltersAsYouTypeAndAnswersTheIndexPicked(): Promise<void> {
+  const { input, output, terminal, view, exitHooks } = setup({ columns: 60 });
+  const answer = terminal.askPick("Resume which chat?", CHATS);
+  await tick();
+  const head = "? Resume which chat? (type to search · ↑/↓ · Enter · Esc)";
+  assert.deepEqual(view().rows, [
+    head,
+    ...searchBox(""),
+    "» Fix the parser  2h ago · 4 messages",
+    "  Write the docs  3d ago · 2 messages",
+    "  Parser bench  5m ago",
+  ]);
+  // The cursor is in the box, after `> `.
+  assert.deepEqual(view().cursor, { row: 2, col: 4 });
+  // Each word must occur, in any case, in the title or the text matched beside it.
+  input.write("PARS");
+  await tick();
+  assert.deepEqual(view().rows.slice(1), [
+    ...searchBox("PARS"),
+    "» Fix the parser  2h ago · 4 messages",
+    "  Write the docs  3d ago · 2 messages",
+    "  Parser bench  5m ago",
+  ]);
+  input.write(" b");
+  await tick();
+  assert.deepEqual(view().rows.slice(4), ["» Parser bench  5m ago"]);
+  // Nothing matches: Enter picks nothing, and Backspace widens the search again.
+  input.write("x");
+  await tick();
+  assert.deepEqual(view().rows.slice(4), ["  No matches"]);
+  input.write(ENTER);
+  await tick();
+  input.write(BACKSPACE + BACKSPACE + BACKSPACE);
+  await tick();
+  // A new search starts at the top; ↓ moves, wrapping.
+  input.write(DOWN + DOWN + DOWN + DOWN);
+  await tick();
+  assert.deepEqual(view().rows.slice(4).map((row) => row.slice(0, 1)), [" ", "»", " "]);
+  input.write(ENTER);
+  assert.equal(await answer, 1);
+  assert.deepEqual(view().rows, ["? Resume which chat? Write the docs"]);
+  assertRestored(input, output, exitHooks);
+}
+
+async function aPickerBoldsTheMatchedWordsAndMarksItsHighlightedRow(): Promise<void> {
+  const picker = new SearchPicker({ label: "Pick", choices: CHATS, columns: () => 60 });
+  const type = (text: string) => {
+    for (const str of text) picker.key({ name: str, str, ctrl: false, meta: false, paste: false });
+  };
+  // Too narrow for the keys' hint after the label: the label alone.
+  const narrow = new SearchPicker({ label: "Pick", choices: CHATS, columns: () => 30 });
+  assert.equal(narrow.lines()[0], "\x1b[1;36m?\x1b[0m \x1b[1mPick\x1b[0m");
+  type("parser fix");
+  const bold = (text: string) => `\x1b[1m${text}\x1b[22m`;
+  assert.deepEqual(picker.lines().slice(4), [
+    `\x1b[1;36m»\x1b[0m \x1b[36m${bold("Fix")} the ${bold("parser")}  \x1b[2m2h ago · 4 messages` +
+      "\x1b[22m\x1b[0m",
+  ]);
+  const backspace = { name: "backspace", str: undefined, ctrl: false, meta: false, paste: false };
+  for (let i = 0; i < 4; i++) picker.key(backspace);
+  // The row matched only by its first line has nothing bold; a dim detail on the others.
+  assert.deepEqual(picker.lines().slice(5), [
+    "  Write the docs  \x1b[2m3d ago · 2 messages\x1b[0m",
+    `  ${bold("Parser")} bench  \x1b[2m5m ago\x1b[0m`,
+  ]);
+}
+
+async function aPickerStartsOnItsInitialChoiceAndScrollsWithinTheScreen(): Promise<void> {
+  const titles = Array.from({ length: 30 }, (_, i) => ({ title: `chat ${i + 1}` }));
+  const picker = new SearchPicker({
+    label: "Pick",
+    choices: titles,
+    initial: 20,
+    columns: () => 60,
+    rows: () => 14,
+  });
+  const plain = () => picker.lines().map((row) => row.replace(/\x1b\[[0-9;]*m/g, ""));
+  // 14 rows leave 6 for the list, beside the head, the box and the margin: 5 and `+25 more`.
+  assert.deepEqual(plain().slice(4), [
+    "  chat 17",
+    "  chat 18",
+    "  chat 19",
+    "  chat 20",
+    "» chat 21",
+    "  +25 more",
+  ]);
+  const key = (name: string) => ({ name, str: undefined, ctrl: false, meta: false, paste: false });
+  assert.equal(picker.key(key("up")), null);
+  assert.deepEqual(picker.key(key("return")), { value: 19 });
+  assert.deepEqual(picker.key(key("escape")), { cancel: true });
+}
+
+async function aPickerAnswersNullOnEscOrCtrlCAndStaysOpen(): Promise<void> {
+  const { input, terminal } = setup();
+  const escaped = terminal.askPick("Pick", CHATS);
+  await tick();
+  input.write("fix" + ESCAPE);
+  assert.equal(await escaped, null);
+  const interrupted = terminal.askPick("Pick", CHATS);
+  await tick();
+  input.write(CTRL_C);
+  assert.equal(await interrupted, null);
+  const answer = terminal.askPick("Pick", CHATS, { initial: 2 });
+  await tick();
+  input.write(ENTER);
+  assert.equal(await answer, 2);
+  await assert.rejects(terminal.askPick("Pick", []), RangeError);
+}
+
+async function aPlainTerminalsPickerIsANumberlessChoice(): Promise<void> {
+  const input = new FakeInput();
+  const output = new FakeOutput();
+  const terminal = new Terminal({ input, output, plain: true });
+  const answer = terminal.askPick("Pick", CHATS.slice(0, 2));
+  input.write(DOWN + ENTER);
+  assert.equal(await answer, 1);
+  // No search box: the titles and their details, as a choice.
+  assert.equal(
+    output.text,
+    "? Pick (Use arrow keys)\n » Fix the parser · 2h ago · 4 messages\n" +
+      "   Write the docs · 3d ago · 2 messages\n",
+  );
 }
 
 async function aPromptQueuedWhileAnotherIsRawRestoresCookedMode(): Promise<void> {
@@ -4138,6 +4278,15 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a cancellable choice answers null on Esc or Ctrl-C and stays open":
     aCancellableChoiceAnswersNullOnEscOrCtrlCAndStaysOpen,
   "a bad choice list is refused without drawing": aBadChoiceListIsRefusedWithoutDrawing,
+  "a picker filters as you type and answers the index picked":
+    aPickerFiltersAsYouTypeAndAnswersTheIndexPicked,
+  "a picker bolds the matched words and marks its highlighted row":
+    aPickerBoldsTheMatchedWordsAndMarksItsHighlightedRow,
+  "a picker starts on its initial choice and scrolls within the screen":
+    aPickerStartsOnItsInitialChoiceAndScrollsWithinTheScreen,
+  "a picker answers null on Esc or Ctrl-C and stays open":
+    aPickerAnswersNullOnEscOrCtrlCAndStaysOpen,
+  "a plain terminal's picker is a numberless choice": aPlainTerminalsPickerIsANumberlessChoice,
   "equal titles map back by index": equalTitlesMapBackByIndex,
   "a prompt queued while another is raw restores cooked mode": aPromptQueuedWhileAnotherIsRawRestoresCookedMode,
   "concurrent prompts draw one after the other": concurrentPromptsDrawOneAfterTheOther,

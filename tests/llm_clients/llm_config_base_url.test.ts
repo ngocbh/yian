@@ -173,6 +173,32 @@ test.each([
   expect(message).not.toContain(SENTINEL);
 });
 
+test.each([
+  "https://res.openai.azure.com/openai/v1/?api-version=1",
+  "https://res.openai.azure.com/openai/v1/#frag",
+  "https://res.openai.azure.com/openai/v1/?",
+  "https://res.openai.azure.com/openai/v1/#",
+  "https://res.openai.azure.com/openai/v1/a?b/c",
+  "https://res.openai.azure.com?api-version=1",
+  "https://res.openai.azure.com#frag",
+  "http://127.0.0.1:1/v1?key=" + SENTINEL,
+  "http://[::1]:8000/v1#f",
+  "http://[::1]?x=1",
+])("a url with a query or fragment %# is rejected as a query or fragment", (url) => {
+  const message = thrown({ provider: "openai", base_url: url, api_key: SENTINEL }).message;
+  expect(message).toContain("without credentials, query, or fragment");
+  expect(message).not.toContain("ASCII URL characters");
+  expect(message).not.toContain(url);
+  expect(message).not.toContain(SENTINEL);
+});
+
+test("a url with whitespace and a query gets the character message", () => {
+  const url = "https://res.openai azure.com/openai/v1/?x=1";
+  const message = thrown({ provider: "openai", base_url: url, api_key: SENTINEL }).message;
+  expect(message).toContain("ASCII URL characters");
+  expect(message).not.toContain(url);
+});
+
 test.each([[{ provider: "openai" }], [{ api_key: SENTINEL }], [{}]])(
   "base_url needs a key and provider in the same config %#",
   (fields) => {

@@ -108,7 +108,7 @@ export interface ChildRunsOptions {
   /** The folder each child's run folder goes in. */
   logDir: string;
   env: Env;
-  /** The `--provider`/`--model` layer, possibly empty. */
+  /** The `--provider`/`--model` layer, possibly empty; `setLlmConfig` replaces it. */
   llmConfig: Readonly<Record<string, string>>;
   /** For tests: the model builder AGENT nodes use. */
   models?: ModelAccess | null;
@@ -242,6 +242,8 @@ function routeConsole(file: string): () => void {
  */
 export class ChildRuns {
   readonly #options: ChildRunsOptions;
+  /** The provider and model layer the children started from now on get. */
+  #llmConfig: Readonly<Record<string, string>>;
   readonly #children = new Map<string, Child>();
   #seq = 0;
   #started = 0;
@@ -256,6 +258,12 @@ export class ChildRuns {
 
   constructor(options: ChildRunsOptions) {
     this.#options = options;
+    this.#llmConfig = options.llmConfig;
+  }
+
+  /** Give the children started from now on the provider and model layer `layer`. */
+  setLlmConfig(layer: Readonly<Record<string, string>>): void {
+    this.#llmConfig = layer;
   }
 
   /**
@@ -309,7 +317,8 @@ export class ChildRuns {
       signal?.throwIfAborted();
     };
     check();
-    const { env, llmConfig, logDir, chatRunId, skillsFor } = this.#options;
+    const { env, logDir, chatRunId, skillsFor } = this.#options;
+    const llmConfig = this.#llmConfig;
     // No terminal: a missing key is reported to the assistant rather than prompted for mid-chat.
     await ensureProviderKeys(flow, llmConfig, inputs, { env: new CommandEnv(env), terminal: null });
     check();
@@ -586,7 +595,8 @@ export class ChildRuns {
     inputs: Readonly<Record<string, unknown>>,
     started: PromiseWithResolvers<void>,
   ): Promise<void> {
-    const { env, llmConfig, models = null, scheduler, chatRunId, advance: move = advance } = this.#options;
+    const { env, models = null, scheduler, chatRunId, advance: move = advance } = this.#options;
+    const llmConfig = this.#llmConfig;
     const onEvent = (event: RunEvent) => {
       if (event instanceof RunStarted) {
         child.started = true;

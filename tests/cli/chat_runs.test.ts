@@ -191,6 +191,25 @@ output: \${write.output}
   TIMEOUT,
 );
 
+test(
+  "a child started after setLlmConfig runs on the layer it set",
+  async () => {
+    const env = (name: string) => (name === "XAI_API_KEY" ? "test-xai-key" : NO_ENV(name));
+    const model = new ScriptedModel([textReply("done")], { provider: "xai", model: "grok-4.3" });
+    const access = serving(model, env);
+    const llmConfig = { provider: "xai", model: "grok-4.3" };
+    const children = childRuns({ env, llmConfig, models: access });
+    children.setLlmConfig({ provider: "xai", model: "grok-4" });
+    const plain = await flow(
+      "id: plain\nname: plain\nnodes:\n  say: {kind: agent, prompt: Say.}\noutput: ${say.output}\n",
+    );
+    const started = await children.start(plain, {});
+    expect((await settled(children, started.id)).output).toBe("done");
+    expect(access.configs.map((config) => config["model"])).toEqual(["grok-4"]);
+  },
+  TIMEOUT,
+);
+
 test("the status of an id that names no child throws", () => {
   expect(() => childRuns().status("r9")).toThrow(new RangeError("no run 'r9' in this chat"));
 });

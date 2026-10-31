@@ -2,9 +2,9 @@
  * Tests for `src/llm/structured.ts`, choosing how a structured call is sent and reading the JSON
  * object from the reply: `structuredTarget`, `planStructured` (one test per row of the selection
  * table, first match wins), `forcesTool` and `sendsJsonSchemaAsTool`; a plan's `apply` to a
- * request, its `instruction` and `correction` texts, and `parse` of tool and text replies; and
- * `StructuredOutputError` and `MissingToolCallError`; and that `typeToSchema` emits the schema
- * copies used here.
+ * request, its `instruction` and `correction` texts, and `parse` of tool and text replies, with
+ * `parseObjectReply`; `StructuredOutputError` and `MissingToolCallError`; and that `typeToSchema`
+ * emits the schema copies used here.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -45,6 +45,7 @@ import {
   FORCED_TOOL_REFUSING_PREFIXES,
   forcesTool,
   MissingToolCallError,
+  parseObjectReply,
   planStructured,
   sendsJsonSchemaAsTool,
   type Strategy,
@@ -863,6 +864,14 @@ describe("StructuredPlan: parse a text reply", () => {
       expect(error.message).toBe(`Invalid json output: ${text.trim()}`);
     });
   }
+
+  test.each(valid)("parseObjectReply reads %s", (_label, text, value) => {
+    expectSame(parseObjectReply(text)!, value);
+  });
+
+  test.each(invalid)("parseObjectReply reads no object from %s", (_label, text) => {
+    expect(parseObjectReply(text)).toBeNull();
+  });
 
   test.each(textPlans)("%s: the error trims only whitespace from the text", (_strategy, plan) => {
     const error = thrown(() => plan.parse(reply([new TextPart("\n  `not json`  \n")])));

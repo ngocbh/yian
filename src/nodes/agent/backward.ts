@@ -7,8 +7,8 @@
  * memory operations.
  *
  * Knows about:   nodes/base, nodes/contracts, events, expr/lineage, llm (events, messages,
- *                executor), llm_clients (connection, factory), typesys, diagnostics, peer AGENT
- *                modules.
+ *                executor, structured), llm_clients (connection, factory), typesys, diagnostics,
+ *                peer AGENT modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -19,8 +19,9 @@ import { legacyConnectionConfig, scrubCallCredentials } from "../../llm_clients/
 import { defaultModelAccess } from "../../llm_clients/factory.ts";
 import type { ChatModel } from "../../llm/events.ts";
 import { callWithRetries, RouteModel } from "../../llm/executor.ts";
-import { Message, Request, TextPart } from "../../llm/messages.ts";
-import { type JsonObject, type JsonValue, parseJson } from "../../typesys/json.ts";
+import { Message, RefusalPart, Request, TextPart } from "../../llm/messages.ts";
+import { parseObjectReply } from "../../llm/structured.ts";
+import type { JsonObject, JsonValue } from "../../typesys/json.ts";
 import { isList, isRecord, rejectDeepNesting, writeAsText } from "../../typesys/values.ts";
 import { BackwardContext, type BackwardOptions, BackwardResult } from "../base.ts";
 import { isExactly } from "../contracts.ts";
@@ -112,22 +113,26 @@ function recordedMaterial(context: BackwardContext): RecordedMaterial {
 }
 
 /**
- * Convert only outer channel arrays; nested lists stay positional feedback.
+ * Convert the channels of the JSON object `reply` holds, bare or in a code fence; only outer
+ * channel arrays are converted, so nested lists stay positional feedback.
  *
- * @throws JSONDecodeError when `text` isn't JSON yian reads (a duplicate key or a lone surrogate
- *   included).
+ * @throws {RangeError} `reply` holds no JSON object yian reads (a duplicate key or a lone
+ *   surrogate included); the message names the model's refusal, if any.
  */
-function parseResult(text: string): BackwardResult {
-  const value = parseJson(text, "plain");
+function parseResult(reply: Message): BackwardResult {
+  const value = parseObjectReply(reply.text());
+  if (value === null) {
+    const refusals = reply.parts.filter((part) => part instanceof RefusalPart);
+    const refused = refusals.length > 0 ? `; the model refused: ${refusals.map((part) => part.text).join("\n")}` : "";
+    throw new RangeError(
+      `AGENT backward reply is not a JSON object with input_feedback, self_feedback and variable_feedback${refused}`,
+    );
+  }
   // A message sits under the response object, its channel object, and its batch array, so those
   // three levels don't count against the message's own nesting.
   rejectDeepNesting(value, "backward response", { enclosingLevels: -3 });
-  // There is no digit limit: `parseJson` reads any int.
-  if (
-    !isRecord(value) ||
-    Object.keys(value).length !== CHANNELS.length ||
-    !CHANNELS.every((name) => Object.hasOwn(value, name))
-  ) {
+  // There is no digit limit: `parseObjectReply` reads any int.
+  if (Object.keys(value).length !== CHANNELS.length || !CHANNELS.every((name) => Object.hasOwn(value, name))) {
     throw new RangeError("backward response must contain exactly the three feedback channels");
   }
   const [inputs, own, variables] = CHANNELS.map((name) => value[name]);
@@ -172,9 +177,9 @@ function modelVisible(inputs: Readonly<JsonObject> | null): Readonly<JsonObject>
  *   common result contract before routing.
  * @throws TypeError when the context, feedback, capture fields, or response channels are
  *   malformed.
- * @throws RangeError when the feedback shape, a required capture, or the response is invalid.
- * @throws JSONDecodeError when the reply isn't JSON yian reads. Model errors propagate with every
- *   credential the call sent scrubbed; there is no correction loop.
+ * @throws RangeError when the feedback shape, a required capture, or the response is invalid,
+ *   including a reply that holds no JSON object, bare or in a code fence. Model errors propagate
+ *   with every credential the call sent scrubbed; there is no correction loop.
  */
 export async function backwardAgent(
   context: BackwardContext,
@@ -262,5 +267,5 @@ export async function backwardAgent(
     // Providers may echo any credential the call sent; the failure record must not carry it.
     throw scrub(error);
   }
-  return parseResult(reply.text());
+  return parseResult(reply);
 }

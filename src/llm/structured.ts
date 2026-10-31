@@ -194,10 +194,8 @@ export class StructuredPlan {
    * Return the JSON object `response` answers with, unvalidated (ints as `bigint`).
    *
    * The tool strategies read the first call of the schema's tool whose arguments parsed, or else
-   * whose raw arguments text is a JSON object. The text strategies read the message's text,
-   * stripped of whitespace and backticks, or else the text inside its first code fence up to the
-   * last one; either must be one JSON object, with no repair. The object may nest past
-   * `YIAN_MAX_VALUE_NESTING`: the caller checks the value it holds.
+   * whose raw arguments text is a JSON object. The text strategies read the message's text with
+   * `parseObjectReply`.
    *
    * @throws {MissingToolCallError} A tool strategy's reply has no valid call of the schema's tool.
    * @throws {StructuredOutputError} A text strategy's reply holds no JSON object; the message
@@ -215,7 +213,7 @@ export class StructuredPlan {
       throw new MissingToolCallError(`the reply did not call the ${this.name} tool; call it with the answer`);
     }
     const text = response.message.text();
-    const value = parseObject(strip(text)) ?? parseObject(fenced(text));
+    const value = parseObjectReply(text);
     if (value !== null) return value;
     const refusals = parts.filter((part) => part instanceof RefusalPart);
     if (refusals.length > 0) {
@@ -250,6 +248,16 @@ function fenced(text: string): string {
   const body = text.slice(start + FENCE.length).replace(/^[A-Za-z0-9_+.-]*/, "");
   const end = body.lastIndexOf(FENCE);
   return strip(end === -1 ? body : body.slice(0, end));
+}
+
+/**
+ * Return the JSON object a model's text reply holds, or `null`: the text stripped of whitespace
+ * and backticks, or else the text inside its first code fence up to the last one, must be one JSON
+ * object, with no repair. Duplicate keys and lone surrogates are refused. The object may nest past
+ * `YIAN_MAX_VALUE_NESTING`: the caller checks the value it holds.
+ */
+export function parseObjectReply(text: string): JsonObject | null {
+  return parseObject(strip(text)) ?? parseObject(fenced(text));
 }
 
 /**

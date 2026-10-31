@@ -1520,6 +1520,99 @@ test(
   TIMEOUT,
 );
 
+test(
+  "with the framed box, a line typed while the move runs, whose send lands after the move ended, is read before the prompt",
+  async () => {
+    const { io, stdin } = chatIo({ tty: true });
+    const scheduler = virtualScheduler(Date.parse("2026-01-01T00:00:00Z"));
+    let moves = 0;
+    let returned = 0;
+    // The moves made each time a prompt takes the terminal.
+    const prompts: number[] = [];
+    class Watched extends ChatView {
+      override active(active: boolean, printed = false): void {
+        if (active) prompts.push(moves);
+        super.active(active, printed);
+      }
+    }
+    const view = new Watched(io.stderrStream as FakeOutput, io.env, scheduler);
+    const held = heldSend((text) => text === "there");
+    const { promise: started, resolve: start } = Promise.withResolvers<void>();
+    const { promise: gate, resolve: open } = Promise.withResolvers<void>();
+    const step: typeof advance = async (options) => {
+      const n = ++moves;
+      if (n === 1) {
+        start();
+        await gate;
+      }
+      const result = await advance(options);
+      returned = n;
+      return result;
+    };
+    const log = join(tmp, "run.jsonl");
+    const chatting = inboxChat(
+      flowFile(ECHO),
+      { inputValues: [], engineTrace: false, log },
+      { ...io, stdout: view.writer, stderr: view.writer },
+      { scheduler, signals, send: held.send, advance: step },
+      { view },
+    );
+    stdin.write("hi" + ENTER);
+    await started;
+    stdin.write("there" + ENTER);
+    await held.reached;
+    open();
+    await until(() => returned === 1);
+    // Past the move, while the chat looks for the lines it sent that the run hasn't read.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release!();
+    await until(() => prompts.some((made) => made > 0));
+    const all = records(log);
+    const there = all.findIndex(
+      (record) =>
+        record instanceof PoolCommitRecord &&
+        record.key === "__start__.messages" &&
+        (record.value as { value: unknown }).value === "there",
+    );
+    const lastWaiting = all.findLastIndex((record) => record instanceof RunWaitingRecord);
+    stdin.write(CTRL_U + "/exit" + ENTER);
+    expect(await chatting).toBe(0);
+    expect(there).toBeGreaterThan(-1);
+    expect({ moves: prompts.find((made) => made > 0), read: lastWaiting > there }).toEqual({ moves: 2, read: true });
+  },
+  TIMEOUT,
+);
+
+test(
+  "Ctrl-C while child events queued at the prompt are still being sent stops the reply they start and never cancels",
+  async () => {
+    const { io, stdin, stderr } = chatIo({ tty: true });
+    const wake = new EventTarget();
+    const events: ChatEvents = { queue: new EventQueue({ wake }), inFlight: new InFlight(wake), wake };
+    const held = heldSend((text) => text === "run r1 was cancelled");
+    const chatting = runChat(flowFile(ECHO), io, {}, { events, send: held.send });
+    await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You:");
+    // Takes the prompt down, for a turn that sends it.
+    events.queue.push({ run: "r1", status: "cancelled", log: "/logs/r1", seq: 5 });
+    await held.reached;
+    stdin.write(CTRL_C);
+    await until(() => stderr().includes(INTERRUPTING) || stderr().includes("chat cancelled"));
+    release!();
+    await until(() => screen((io.stderrStream as FakeOutput).text).rows.at(-1) === "> You:" || stderr().includes("chat cancelled"));
+    stdin.write("/exit" + ENTER);
+    const { code, log } = await chatting;
+    expect([code, stderr()]).toEqual([0, expect.stringContaining("session ended")]);
+    expect(stderr()).not.toContain("chat cancelled");
+    const all = records(log);
+    const event = all.findIndex((record) => record instanceof PoolCommitRecord && record.key === "__start__.messages");
+    const stop = all.findIndex((record) => record instanceof InterruptedRecord);
+    expect(event).toBeGreaterThan(-1);
+    expect(stop).toBeGreaterThan(event);
+    expect(all.some((record) => record instanceof RunCancelledRecord)).toBe(false);
+  },
+  TIMEOUT,
+);
+
 /**
  * A chat turn that takes the lines, sleeps 60 s, then replies with an agent reading the inbox as
  * its steer inbox; the turn ends after the reply.

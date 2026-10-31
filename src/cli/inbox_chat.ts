@@ -735,6 +735,15 @@ export async function inboxChat(
       view?.refresh();
       return true;
     };
+    /** Wait until the interrupts and the box lines sent so far have landed, and those made meanwhile. */
+    const land = async (): Promise<void> => {
+      for (;;) {
+        const landing = [interrupting, liveSends] as const;
+        await Promise.all(landing);
+        if (landing[0] === interrupting && landing[1] === liveSends) break;
+      }
+      interrupting = null;
+    };
     /**
      * Run `body` as a turn: a Ctrl-C meanwhile interrupts the reply instead of cancelling, and on a
      * terminal, Esc withdraws and stops it (`escape`). With the chat's look, the input box stays
@@ -759,12 +768,7 @@ export async function inboxChat(
         view?.turn(false);
         ending = true;
         // Still watched, so a Ctrl-C while they land interrupts rather than cancels.
-        for (;;) {
-          const landing = [interrupting, liveSends] as const;
-          await Promise.all(landing);
-          if (landing[0] === interrupting && landing[1] === liveSends) break;
-        }
-        interrupting = null;
+        await land();
         keys.abort();
         if (live) draft = editor.draft();
         ending = false;
@@ -786,6 +790,10 @@ export async function inboxChat(
       let settled = await moveStep(first);
       for (;;) {
         const seqs = flusher === null ? [] : await flusher.endTurn();
+        // A box line still being sent lands after the move's last `run_waiting`; reading the seqs
+        // before it lands would leave it unread behind the prompt. An interrupt lands before the
+        // next move, as its Stop is for the reply that move would give.
+        await land();
         // The lines sent from the input box during the turn, which may be stranded the same way.
         const lines = liveSeqs.splice(0);
         if (settled.status !== "waiting") break;
@@ -798,6 +806,20 @@ export async function inboxChat(
         settled = await moveStep(() => move({ log: path, checkLlmConfigs, ...shared }));
       }
       return settled;
+    };
+    /**
+     * Make `sending` the send the next turn starts with: a press or Esc meanwhile acts once it has
+     * landed, and the box lines sent meanwhile go after it. Called before the turn starts, as the
+     * keys typed since the prompt ended reach the turn as it starts.
+     */
+    const startsWith = (sending: Promise<unknown>): void => {
+      // Settled however the send ends, for the presses and box lines that wait for it.
+      const landed = sending.then(
+        () => {},
+        () => {},
+      );
+      lineSending = landed;
+      liveSends = liveSends.then(() => landed);
     };
     const advanceRun = () => settle(() => move({ log: path, checkLlmConfigs, ...shared }));
     const moveOn = () => inTurn(advanceRun);
@@ -830,8 +852,16 @@ export async function inboxChat(
       }
       if (flusher?.ready()) {
         // Events queued while the prompt was down, or that took it down: a turn of their own.
+        const sending = flusher.sendQueued();
+        startsWith(sending);
         result = await inTurn(async () => {
-          await flusher.sendQueued();
+          try {
+            await sending;
+          } finally {
+            lineSending = null;
+          }
+          // A press while they were sent goes first: its Stop is for the reply they start.
+          await interrupting;
           return advanceRun();
         });
         continue;
@@ -948,11 +978,7 @@ export async function inboxChat(
           const seq = await deliver(path, inbox.name, lineEvent(entered, inbox.message), { env: env.read });
           if (editor !== null) sent.set(seq, typed);
         })();
-        // Settled however the send ends, for the presses and box lines that wait for it. Set
-        // before the turn starts, as the keys typed with the line reach the turn as it starts.
-        const line = sending.catch(() => {});
-        lineSending = line;
-        liveSends = liveSends.then(() => line);
+        startsWith(sending);
         // The turn starts with the send, so a Ctrl-C from here on interrupts rather than cancels.
         const moved = await inTurn(async () => {
           try {

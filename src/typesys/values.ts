@@ -1733,8 +1733,35 @@ function singleTag(typ: Type): string | null {
   return typ.tags.values().next().value!;
 }
 
+/** A union's tag fields, and per tag field the member index each tag value selects. */
+interface TagInfo {
+  readonly fields: readonly string[];
+  readonly byTag: Map<string, Map<string, number>>;
+}
+
+// A `Type` is not changed once built, so a union's `members` array always gives the same tag
+// fields; caching them keeps checking each value from scanning every member again.
+const TAG_INFO = new WeakMap<readonly Type[], TagInfo>();
+
+/** Return the cached `TagInfo` of `members`, working it out on first use. */
+function tagInfo(members: readonly Type[]): TagInfo {
+  let info = TAG_INFO.get(members);
+  if (info === undefined) {
+    info = { fields: Object.freeze(computeTagFields(members)), byTag: new Map() };
+    TAG_INFO.set(members, info);
+  }
+  return info;
+}
+
 /** Return the tag fields shared by `members`, sorted by name. */
-function membersTagFields(members: readonly Type[]): string[] {
+function membersTagFields(members: readonly Type[]): readonly string[] {
+  // A forged type's `members` may be no array at all; `validateShape` refuses it later.
+  if (typeof members !== "object" || members === null) return computeTagFields(members);
+  return tagInfo(members).fields;
+}
+
+/** Work out the tag fields shared by `members`, sorted by name, without the cache. */
+function computeTagFields(members: readonly Type[]): string[] {
   const first = members[0];
   if (first?.fields === undefined || members.some((member) => member.fields === undefined)) {
     return [];
@@ -1781,7 +1808,8 @@ export function unionTagFields(typ: Type): readonly string[] {
  */
 export function canonicalUnionOrder(members: Iterable<Type>): Type[] {
   const all = [...members];
-  const tagFields = membersTagFields(all);
+  // `all` is a scratch array, so caching its tag fields would only add a throwaway entry.
+  const tagFields = computeTagFields(all);
   if (tagFields.length > 0) {
     // Tag order reads best in labels and manifests, and needs no member labels.
     const field = tagFields[0]!;
@@ -1805,7 +1833,7 @@ function memberTag(member: Type, field: string): string {
  */
 function orderedMemberLabels(members: readonly Type[]): [Type, string, string][] {
   const labelled = members.map((member): [Type, string, string] => [member, ...labels(member)]);
-  const tagFields = membersTagFields(members);
+  const tagFields = computeTagFields(members);
   if (tagFields.length > 0) {
     const field = tagFields[0]!;
     return labelled.sort(([a], [b]) => compareCodeUnits(memberTag(a, field), memberTag(b, field)));
@@ -1851,8 +1879,18 @@ function memberWithTag(members: readonly Type[], field: string, tag: unknown): T
  */
 function tagIndex(members: readonly Type[], field: string, tag: unknown): number | null {
   if (typeof tag !== "string") return null;
-  const index = members.findIndex((member) => member.fields!.get(field)!.tags!.has(tag));
-  return index === -1 ? null : index;
+  const { byTag } = tagInfo(members);
+  let indexes = byTag.get(field);
+  if (indexes === undefined) {
+    indexes = new Map();
+    for (const [index, member] of members.entries()) {
+      const value = singleTag(member.fields!.get(field)!)!;
+      // The first member with a tag wins, as a scan from the front would find it.
+      if (!indexes.has(value)) indexes.set(value, index);
+    }
+    byTag.set(field, indexes);
+  }
+  return indexes.get(tag) ?? null;
 }
 
 /**
@@ -2724,6 +2762,8 @@ export function normalizeTypedFiles(typ: Type | null, typed: TypedValue): TypedV
   return Object.is(value, typed.value) ? typed : new TypedValue(typed.kind, value);
 }
 
+const READS_FILES = new WeakMap<Type, boolean>();
+
 /**
  * Whether `typ` has a `file`, `Inbox(T)` or unrefined `object` position at any depth, so
  * reading a value through it may change how a file or inbox handle is held. Unlike `hasFile`,
@@ -2731,6 +2771,17 @@ export function normalizeTypedFiles(typ: Type | null, typed: TypedValue): TypedV
  * mappings.
  */
 function readsFiles(typ: Type): boolean {
+  // `normalizeFiles` asks this of the same types for every item, so the answer is kept per type.
+  let reads = READS_FILES.get(typ);
+  if (reads === undefined) {
+    reads = computeReadsFiles(typ);
+    READS_FILES.set(typ, reads);
+  }
+  return reads;
+}
+
+/** `readsFiles` without the cache for `typ` itself. */
+function computeReadsFiles(typ: Type): boolean {
   if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
   if (isPlainObject(typ)) return true;
   if (typ.kind === ValueKind.LIST_OBJECT && typ.element === undefined) return true;

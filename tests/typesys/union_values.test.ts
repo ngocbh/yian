@@ -70,6 +70,42 @@ const text = rec({ text: STR });
 const call = rec({ name: STR, input: OBJECT });
 const UNTAGGED = union([call, text]);
 
+/** A `Map` that counts its `get` calls in `counter.gets`. */
+class CountingMap<K, V> extends Map<K, V> {
+  private readonly counter: { gets: number };
+
+  constructor(entries: Iterable<[K, V]>, counter: { gets: number }) {
+    super(entries);
+    this.counter = counter;
+  }
+
+  override get(key: K): V | undefined {
+    this.counter.gets += 1;
+    return super.get(key);
+  }
+}
+
+/**
+ * A tagged union of `size` records `{tag: Literal(t<i>), f<i>: int}` whose field maps count their
+ * `get` calls in `counter.gets`.
+ */
+function countingTaggedUnion(size: number, counter: { gets: number }): Type {
+  const members = Array.from({ length: size }, (_, i) => {
+    return new Type({
+      kind: ValueKind.OBJECT,
+      fields: new CountingMap<string, Type>(
+        [
+          ["tag", lit(`t${i}`)],
+          [`f${i}`, INT],
+        ],
+        counter,
+      ),
+      required: new Set(["tag", `f${i}`]),
+    });
+  });
+  return union(members);
+}
+
 describe("union shape", () => {
   test("is valid", () => {
     U.validateShape();
@@ -354,6 +390,21 @@ describe("buildValueAs", () => {
     expect(error.message).toStartWith("value matches no member of ");
   });
 
+  test("checking many values against a large tagged union reads member fields a bounded number of times per value", () => {
+    // Counting field reads, not time: the tag fields and the tag lookup must not be worked out
+    // again from every member for each value.
+    const counter = { gets: 0 };
+    const size = 50;
+    const values = 1000;
+    const typ = new Type({ kind: ValueKind.LIST_OBJECT, element: countingTaggedUnion(size, counter) });
+    const items = Array.from({ length: values }, (_, i) => {
+      const k = i % size;
+      return { tag: `t${k}`, [`f${k}`]: BigInt(i) };
+    });
+    expect(buildValueAs(typ, items).value).toEqual(items);
+    expect(counter.gets).toBeLessThan(values * 8 + size * size);
+  });
+
   test("a list of a union", () => {
     const typ = new Type({ kind: ValueKind.LIST_OBJECT, element: U });
     const stored = buildValueAs(typ, [
@@ -402,6 +453,19 @@ describe("unionMemberForTag and restrictUnion", () => {
     expect(unionMemberForTag(U, "buy")).toBe(buy);
     expect(unionMemberForTag(U, "sell")).toBe(sell);
     expect(unionMemberForTag(U, "hold")).toBeNull();
+  });
+
+  test("looking up many tags in a large tagged union reads member fields a bounded number of times per lookup", () => {
+    const counter = { gets: 0 };
+    const size = 50;
+    const lookups = 1000;
+    const typ = countingTaggedUnion(size, counter);
+    for (let i = 0; i < lookups; i++) {
+      expect(unionMemberForTag(typ, `t${i % size}`)).toBe(typ.members![i % size]!);
+    }
+    expect(unionMemberForTag(typ, "missing")).toBeNull();
+    expect(unionMemberForTag(typ, 3)).toBeNull();
+    expect(counter.gets).toBeLessThan(lookups * 2 + size * size);
   });
 
   test("unionMemberForTag on another tag field", () => {

@@ -258,6 +258,45 @@ describe("normalizeFiles", () => {
     const typ = t(declared);
     expect(normalizeFiles(typ, value)).toStrictEqual(buildValueAs(typ, value).toObject());
   });
+
+  test("many items of a large union read its members' fields a bounded number of times per item", () => {
+    // Counting field walks, not time: whether the union can hold a file must not be worked out
+    // again from every member for each item. Only the last member holds a file, so that walk
+    // would visit every member.
+    const counter = { walks: 0 };
+    class CountingMap extends Map<string, Type> {
+      override get(key: string): Type | undefined {
+        counter.walks += 1;
+        return super.get(key);
+      }
+
+      override values(): MapIterator<Type> {
+        counter.walks += 1;
+        return super.values();
+      }
+    }
+    const size = 50;
+    const members = Array.from({ length: size }, (_, i) => {
+      const payload = i === size - 1 ? FILE : Type.scalar(ValueKind.INTEGER);
+      return new Type({
+        kind: ValueKind.OBJECT,
+        fields: new CountingMap([
+          ["tag", new Type({ kind: ValueKind.STRING, tags: new Set([`t${i}`]) })],
+          ["x", payload],
+        ]),
+        required: new Set(["tag", "x"]),
+      });
+    });
+    const list = new Type({
+      kind: ValueKind.LIST_OBJECT,
+      element: new Type({ kind: ValueKind.OBJECT, members }),
+    });
+    const items = 1000;
+    const values = Array.from({ length: items }, () => ({ tag: `t${size - 1}`, x: form() }));
+    const normalized = normalizeFiles(list, values) as ValueRecord[];
+    expect(normalized.every((item) => item.x instanceof FileRef)).toBe(true);
+    expect(counter.walks).toBeLessThan(items * 4 + size * size);
+  });
 });
 
 describe("normalizeTypedFiles", () => {

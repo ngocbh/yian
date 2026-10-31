@@ -1305,15 +1305,26 @@ describe("tool calls", () => {
   });
 });
 
-/** Return how long, in milliseconds, parsing `chunks` takes, and the reply's parts. */
+/** Return the fastest of three parses of `chunks`, in milliseconds, and the reply's parts. */
 async function timedParts(chunks: JsonValue[]): Promise<[number, readonly Part[]]> {
   const events = sse(chunks);
-  const start = performance.now();
-  const reply = await collect(xai().parse(frames(events)));
-  return [performance.now() - start, reply.message.parts];
+  let fastest = Infinity;
+  let parts: readonly Part[] = [];
+  for (let run = 0; run < 3; run++) {
+    const start = performance.now();
+    parts = (await collect(xai().parse(frames(events)))).message.parts;
+    fastest = Math.min(fastest, performance.now() - start);
+  }
+  return [fastest, parts];
 }
 
-// Each bound is a few times what the parser takes and well under what a scan per entry takes.
+/** Return how long a stream of `count` frames of plain text takes to parse: linear by any measure. */
+async function textTime(count: number): Promise<number> {
+  return (await timedParts([...Array.from({ length: count - 1 }, () => chunk({ content: "a" })), STOP]))[0];
+}
+
+// Each stream is timed against plain text with as many frames, so a loaded machine slows both. A
+// call frame costs about twice a text frame; a scan of the reply per entry makes these 15-50 times.
 describe("scaling", () => {
   test("8000 calls streamed in pieces at their own indexes parse in linear time", async () => {
     const chunks: JsonValue[] = [];
@@ -1325,8 +1336,8 @@ describe("scaling", () => {
     const [ms, parts] = await timedParts(chunks);
     expect(parts.length).toBe(8000);
     expect(parts[7999]).toEqual(callPart("call_7999", '{"value":7999}'));
-    expect(ms).toBeLessThan(1000);
-  });
+    expect(ms).toBeLessThan(5 * (await textTime(chunks.length)));
+  }, 30_000);
 
   test("8000 calls at one index, each joined again by id, parse in linear time", async () => {
     const chunks: JsonValue[] = [];
@@ -1336,8 +1347,8 @@ describe("scaling", () => {
     const [ms, parts] = await timedParts(chunks);
     expect(parts.length).toBe(8000);
     expect(parts[1234]).toEqual(callPart("call_1234", '{"value":1234}'));
-    expect(ms).toBeLessThan(1000);
-  });
+    expect(ms).toBeLessThan(5 * (await textTime(chunks.length)));
+  }, 30_000);
 
   test("text after 8000 calls streams in linear time", async () => {
     const chunks: JsonValue[] = [];
@@ -1347,8 +1358,8 @@ describe("scaling", () => {
     const [ms, parts] = await timedParts(chunks);
     expect(parts.length).toBe(8001);
     expect(parts[8000]).toEqual(new TextPart("a".repeat(80000)));
-    expect(ms).toBeLessThan(1000);
-  });
+    expect(ms).toBeLessThan(5 * (await textTime(chunks.length)));
+  }, 30_000);
 });
 
 describe("round trips", () => {

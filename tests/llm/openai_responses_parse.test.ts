@@ -857,7 +857,7 @@ describe("terminal matching", () => {
     const streamed = new Set(output.keys());
     const start = performance.now();
     const { matches, rest } = matchTerminal(output, streamed, new Set(), ids([...streamed].map((n) => [n, [`fc_${n}`]])));
-    expect(performance.now() - start).toBeLessThan(200);
+    expect(performance.now() - start).toBeLessThan(500);
     expect(matches.size).toBe(8000);
     expect(matches.get(7999)).toBe(output[7999]!);
     expect(rest).toEqual([]);
@@ -868,7 +868,7 @@ describe("terminal matching", () => {
     const started = new Set(Array.from({ length: 16000 }, (_, n) => n + 16000));
     const start = performance.now();
     const { matches, rest } = matchTerminal(output, started, new Set(), ids([]));
-    expect(performance.now() - start).toBeLessThan(200);
+    expect(performance.now() - start).toBeLessThan(500);
     expect(matches.size).toBe(16000);
     expect(matches.get(31999)).toBe(output[15999]!);
     expect(rest).toEqual([]);

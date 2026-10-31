@@ -356,10 +356,11 @@ export class RunState {
   nodeStarts = new Map<string, number>();
   /**
    * The canonical steps each unsettled node recorded, in record order. They survive a resume and
-   * go when the node's outcome is applied.
+   * go when the node's outcome is applied. The reducer appends to a node's list in place, so a
+   * reader copies it to keep a snapshot.
    */
   nodeSteps = new Map<string, readonly JsonObject[]>();
-  /** The seq of each step in `nodeSteps`, by node, index for index. */
+  /** The seq of each step in `nodeSteps`, by node, index for index; appended in place like it. */
   nodeStepSeqs = new Map<string, readonly number[]>();
   /**
    * The number of accepted starts of each node that a later `RunResumed` retried with no
@@ -1589,9 +1590,8 @@ function callView(state: RunState, call: Call): CallView {
 export function callResultStep(state: RunState, callId: string): Readonly<JsonObject> | null {
   const call = state.waits.calls.get(callId);
   if (call === undefined || call.state !== "answered" || call.resultSeq === null) return null;
-  // The waits fold recorded the answering step's seq; `nodeStepSeqs` is index-aligned with `nodeSteps`.
-  const at = state.nodeStepSeqs.get(call.nodeId)?.indexOf(call.resultSeq);
-  return at === undefined || at < 0 ? null : state.nodeSteps.get(call.nodeId)![at]!;
+  // The waits fold recorded the answering step's seq.
+  return state.nodeSteps.get(call.nodeId)?.[stepIndexAt(state, call.nodeId, call.resultSeq)] ?? null;
 }
 
 /**
@@ -3311,14 +3311,9 @@ function commitFrontier(log: RunLog, state: RunState, prepared: PreparedTransiti
       break;
     case "step":
       state.touched.add(delta.nodeId);
-      state.nodeSteps.set(
-        delta.nodeId,
-        Object.freeze([...(state.nodeSteps.get(delta.nodeId) ?? []), delta.step]),
-      );
-      state.nodeStepSeqs.set(
-        delta.nodeId,
-        Object.freeze([...(state.nodeStepSeqs.get(delta.nodeId) ?? []), prepared.expectedSequence]),
-      );
+      // In place: copying the list per step cost O(steps^2) for a wide reply, live and on fold.
+      appendTo(state.nodeSteps, delta.nodeId, delta.step);
+      appendTo(state.nodeStepSeqs, delta.nodeId, prepared.expectedSequence);
       break;
     case "stopped":
       state.lastStopSequence = prepared.expectedSequence;
@@ -4519,7 +4514,9 @@ function stepInt(value: unknown): number | null {
 
 /** The `n` of `nodeId`'s latest `model_call` step, or `null` before any. */
 function latestReply(state: RunState, nodeId: string): number | null {
-  const at = (state.nodeSteps.get(nodeId) ?? []).findLastIndex((step) => step["kind"] === "model_call");
+  // The waits fold keeps the step's seq; scanning the steps for it cost O(steps) per call result.
+  const seq = state.waits._replies.get(nodeId);
+  const at = seq === undefined ? -1 : stepIndexAt(state, nodeId, seq);
   return at < 0 ? null : at + 1;
 }
 
@@ -4588,8 +4585,27 @@ function resultCall(state: RunState, nodeId: string, key: unknown): Call | undef
 
 /** The `pending` step that registered `call` on its node, or `undefined` (a take or sleep). */
 function pendingStepOf(state: RunState, call: Call): Readonly<JsonObject> | undefined {
-  const steps = state.nodeSteps.get(call.nodeId) ?? [];
-  return steps.find((step) => step["kind"] === "pending" && step["call_id"] === call.callId);
+  if (call.pendingSeq === null) return undefined;
+  return state.nodeSteps.get(call.nodeId)?.[stepIndexAt(state, call.nodeId, call.pendingSeq)];
+}
+
+/**
+ * Return the index in `nodeId`'s `nodeSteps` of the step it recorded at `seq`, or -1 when none of
+ * its steps has that seq.
+ */
+export function stepIndexAt(state: RunState, nodeId: string, seq: number): number {
+  // A node's step seqs only increase, so a binary search finds it.
+  const seqs = state.nodeStepSeqs.get(nodeId) ?? [];
+  let low = 0;
+  let high = seqs.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >>> 1;
+    const at = seqs[mid]!;
+    if (at === seq) return mid;
+    if (at < seq) low = mid + 1;
+    else high = mid - 1;
+  }
+  return -1;
 }
 
 /**
@@ -4617,6 +4633,13 @@ function countUnadmitted(state: RunState, nodeId: string, by: number): void {
   const count = (state.unadmittedCommits.get(nodeId) ?? 0) + by;
   if (count === 0) state.unadmittedCommits.delete(nodeId);
   else state.unadmittedCommits.set(nodeId, count);
+}
+
+/** Append `item` to `key`'s list in `lists`, which only the reducer writes, creating the list on the first. */
+function appendTo<T>(lists: Map<string, readonly T[]>, key: string, item: T): void {
+  const list = lists.get(key) as T[] | undefined;
+  if (list === undefined) lists.set(key, [item]);
+  else list.push(item);
 }
 
 /**

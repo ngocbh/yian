@@ -31,7 +31,7 @@ import {
   RunState,
 } from "../../src/runtime/state.ts";
 import { FileRef, TypeCheckError } from "../../src/typesys/index.ts";
-import { JSONDecodeError, parseJson } from "../../src/typesys/json.ts";
+import { JSONDecodeError, type JsonObject, parseJson } from "../../src/typesys/json.ts";
 import {
   canonicalChild,
   commitStartSuccess,
@@ -215,12 +215,27 @@ test("prepareNodeStep appends in order without observers", () => {
   expect(commitPrepared(log, state, second)).toEqual([]);
 
   expect(state.nodeSteps).toEqual(new Map([["first", [FAILED, started]]]));
-  expect(Object.isFrozen(state.nodeSteps.get("first"))).toBe(true);
   expect(state.nodeStarts.get("first")).toBe(1);
   const kinds = log.records().map((envelope) => envelope.record.constructor);
   expect(kinds.slice(-2)).toEqual([NodeStepRecord, NodeStepRecord]);
   expect(state.nextSequence).toBe(log.nextSequence);
   expect(state.ready).toEqual(["second"]);
+});
+
+test("recording a step appends to the node's step and seq lists in place", () => {
+  const { state, log } = firstInFlight();
+  const steps: JsonObject[] = [FAILED, { kind: "tool_attempt", event: "started", attempt: 2n }, { kind: "tool_attempt", event: "done" }];
+
+  commitPrepared(log, state, prepareNodeStep(state, "first", steps[0]!));
+  const recorded = state.nodeSteps.get("first");
+  const seqs = state.nodeStepSeqs.get("first");
+  for (const step of steps.slice(1)) commitPrepared(log, state, prepareNodeStep(state, "first", step));
+
+  expect(state.nodeSteps.get("first")).toBe(recorded!);
+  expect(state.nodeStepSeqs.get("first")).toBe(seqs!);
+  expect(recorded).toEqual(steps);
+  const stepSeqs = log.records().filter((envelope) => envelope.record instanceof NodeStepRecord).map((envelope) => envelope.seq);
+  expect(seqs).toEqual(stepSeqs);
 });
 
 test("a committed step is detached from the caller and the record", () => {

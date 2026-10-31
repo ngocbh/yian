@@ -33,7 +33,7 @@ import {
   RecallContext,
   sameMemoryMutation,
 } from "./contracts.ts";
-import { boundedJsonMaterial, visibleInteractionJson } from "./reflective.ts";
+import { boundedJsonText, visibleInteractionJson } from "./reflective.ts";
 import { type MarkdownStore, MarkdownVersionMismatch } from "./storage/markdown.ts";
 
 const SNAPSHOT_FORMAT = "yian.profile_memory";
@@ -543,7 +543,7 @@ export class ProfileSession implements MemorySession {
         status: episode.status,
       };
       const whole = writeAsJson(item as Value);
-      const encoded = kept.length === 0 ? boundedJsonMaterial(item, limit) : whole;
+      const encoded = kept.length === 0 ? boundedJsonText(whole, limit) : whole;
       const length = codePointCount(encoded);
       if (kept.length > 0 && used + length > limit) break;
       used += length;

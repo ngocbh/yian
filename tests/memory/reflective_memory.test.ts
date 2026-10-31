@@ -39,6 +39,7 @@ import {
 } from "../../src/memory/contracts.ts";
 import {
   boundedJsonMaterial,
+  boundedJsonText,
   REFLECTION_SCHEMA,
   ReflectiveMemory,
   type ReflectiveSession,
@@ -1327,7 +1328,7 @@ function arrayBoundedMaterial(value: JsonObject | string, limit: number): string
   return encoded;
 }
 
-test("boundedJsonMaterial cuts the same text as a code-point array would", () => {
+test("boundedJsonMaterial and boundedJsonText cut the same text as a code-point array would", () => {
   // Odd-length runs put surrogate pairs on both sides of every cut point across the limits.
   const values: (JsonObject | string)[] = [
     "a😀é".repeat(700),
@@ -1339,6 +1340,7 @@ test("boundedJsonMaterial cuts the same text as a code-point array would", () =>
     for (const limit of [0, 1, 199, 200, 201, 250, 300, 301, 1000, 5000]) {
       const material = boundedJsonMaterial(value, limit);
       expect(material).toBe(arrayBoundedMaterial(value, limit));
+      expect(boundedJsonText(writeAsJson(value as Value), limit)).toBe(material);
       expect(material.isWellFormed()).toBe(true);
       if (limit >= 300) expect(codePoints(material)).toBeLessThanOrEqual(limit);
     }

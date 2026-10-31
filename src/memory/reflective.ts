@@ -495,7 +495,11 @@ function suffixStart(text: string, count: number): number {
  * ends of the text, shrunk until it fits or its ends are empty.
  */
 export function boundedJsonMaterial(value: JsonValue, limit: number): string {
-  const material = writeAsJson(value as Value);
+  return boundedJsonText(writeAsJson(value as Value), limit);
+}
+
+/** @internal `boundedJsonMaterial` for JSON the caller has already written as `material`. */
+export function boundedJsonText(material: string, limit: number): string {
   // UTF-16 length is at least the code-point count, so short material never needs the split below.
   if (material.length <= limit) return material;
   // Code points, so a cut never splits a surrogate pair. The cuts walk the string in place: the

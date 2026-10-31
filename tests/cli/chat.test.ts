@@ -858,10 +858,34 @@ test(
         "  2. xai · not logged in (current)\n  3. deepseek · not logged in\n",
     );
     expect(stderr()).toContain(
-      "(Set DEEPSEEK_API_KEY before API-key setup, or run in an interactive terminal; " +
+      "(signing in to deepseek needs a terminal; run yian auth deepseek first; " +
         "the model is unchanged)\n",
     );
     expect(builtWith(access)).toEqual(["xai/grok-4.3"]);
+  },
+  TIMEOUT,
+);
+
+test(
+  "/provider says when the saved logins can't be read, and lists each provider as not logged in",
+  async () => {
+    const { io, stdin, stderr } = chatIo();
+    const model = new AnsweringModel(() => textReply("noted"));
+    const chatting = chat(undefined, { engineTrace: false }, io, {
+      root,
+      models: serving(model, env),
+      signals: new EventEmitter(),
+    });
+    // The store breaks once the chat has started.
+    await until(() => stderr().includes("Run log:"));
+    mkdirSync(join(home, ".config", "yian"), { recursive: true });
+    writeFileSync(join(home, ".config", "yian", "auth.json"), "not json");
+    stdin.write("/provider\n\n/exit\n");
+    expect(await chatting).toBe(0);
+    expect(stderr()).toContain(
+      "(couldn't read the saved logins)\nProvider for the next replies:\n" +
+        "  1. openai · not logged in\n",
+    );
   },
   TIMEOUT,
 );

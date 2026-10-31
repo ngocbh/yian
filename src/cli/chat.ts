@@ -664,7 +664,10 @@ export async function chat(
       );
       const index = await pick(terminal, MODEL_LABEL, titles);
       if (index === null || (keeps && index === 0)) return null;
-      const chosen = { provider: offered[index]!.provider, model: offered[index]!.model };
+      return choose({ provider: offered[index]!.provider, model: offered[index]!.model });
+    };
+    /** Make `chosen` the model of the next replies once the run has the choice. */
+    const choose = (chosen: ModelChoice): ChatCommandOutcome => {
       // Taken once the run has the choice: a refused send changes nothing.
       const sent = () => {
         current = chosen;
@@ -676,41 +679,76 @@ export async function chat(
       return { send: modelMessage(chosen), sent };
     };
     /**
-     * Pick a provider among those yian supports, signing in to it as `yian auth` does when it has
-     * no saved login, then one of its models (`chooseModel`). A cancel or a failed sign-in at
-     * any step keeps the model.
+     * Pick a provider among those yian supports, then one of its models (`chooseModel`); one with
+     * no saved login is signed in to first, as `yian auth` does, its model picked in the chat's
+     * picker. Esc or Ctrl-C at any step, the sign-in's wait included, or `stop`, keeps the model.
      */
-    const chooseProvider = async (terminal: Terminal): Promise<ChatCommandOutcome> => {
+    const chooseProvider = async (
+      terminal: Terminal,
+      stop: AbortSignal,
+    ): Promise<ChatCommandOutcome> => {
       const shown = current ?? defaults;
       const saved = savedLogins(plainIo);
+      if (saved === null) await note("(couldn't read the saved logins)\n");
+      const width = titleCells(PROVIDER_LABEL);
       const titles = SUPPORTED_LLM_PROVIDERS.map((name) => {
-        const login = saved.has(name) ? "logged in" : "not logged in";
-        return `${name} · ${login}${name === shown.provider ? " (current)" : ""}`;
+        const login = saved?.has(name) ? "logged in" : "not logged in";
+        return fit(`${name} · ${login}${name === shown.provider ? " (current)" : ""}`, width);
       });
       const index = await pick(terminal, PROVIDER_LABEL, titles);
       if (index === null) return null;
       const provider = SUPPORTED_LLM_PROVIDERS[index]!;
-      if (!saved.has(provider)) {
-        // Esc and Ctrl-C cancel a step without ending the chat, whose terminal outlives the login.
-        const prompts: AuthTerminal = {
-          askText: (label, ask) => terminal.askText(label, { ...ask, cancellable: true }),
-          askChoice: (label, titles, ask) =>
-            terminal.askChoice(label, titles, { ...ask, cancellable: true }),
-          close: () => {},
-        };
-        // What `yian auth` prints goes out as the chat's notes; off a terminal no step prompts.
-        const authIo: CliIo = { ...plainIo, stdout: { write: note } };
-        const tty = plainIo.stdin.isTTY === true;
-        try {
-          const signal = new AbortController().signal;
-          await signIn(provider, authIo, tty ? prompts : null, deps.auth ?? {}, signal);
-        } catch (error) {
-          if (!(error instanceof AuthError)) throw error;
-          await note(`(${sanitize(error.message)}; the model is unchanged)\n`);
+      if (saved?.has(provider)) return chooseModel(terminal, provider);
+      const model = await signInTo(provider, terminal, stop);
+      return model === null ? null : choose({ provider, model });
+    };
+    /** Sign in to `provider` (`signIn`), returning the model picked; null once it is cancelled. */
+    const signInTo = async (
+      provider: string,
+      terminal: Terminal,
+      stop: AbortSignal,
+    ): Promise<string | null> => {
+      // Esc and Ctrl-C cancel a step without ending the chat, whose terminal outlives the login.
+      const prompts: AuthTerminal = {
+        askText: (label, ask) => terminal.askText(label, { ...ask, cancellable: true }),
+        askChoice: (label, titles, ask) =>
+          terminal.askChoice(label, titles, { ...ask, cancellable: true }),
+        close: () => {},
+      };
+      const width = titleCells(MODEL_LABEL);
+      const pickModel = async (models: readonly string[]) => {
+        const titles = models.map((model) => fit(`${provider}/${model}`, width));
+        const picked = await pick(terminal, MODEL_LABEL, titles);
+        return picked === null ? null : models[picked]!;
+      };
+      // What `yian auth` prints goes out as the chat's notes; off a terminal no step prompts.
+      const authIo: CliIo = { ...plainIo, stdout: { write: note } };
+      const tty = plainIo.stdin.isTTY === true;
+      // No prompt is up while a browser or device sign-in waits: a watch takes Esc and Ctrl-C.
+      const cancel = new AbortController();
+      const watching = new AbortController();
+      terminal.watchKeys(watching.signal, () => cancel.abort());
+      const signal = AbortSignal.any([cancel.signal, stop]);
+      try {
+        return await signIn(provider, authIo, {
+          terminal: tty ? prompts : null,
+          deps: deps.auth ?? {},
+          signal,
+          pickModel,
+          noTerminal: `signing in to ${provider} needs a terminal; run yian auth ${provider} first`,
+          waitNote: "(Esc or Ctrl-C cancels the sign-in)\n",
+        });
+      } catch (error) {
+        if (signal.aborted) {
+          await note("(sign-in cancelled; the model is unchanged)\n");
           return null;
         }
+        if (!(error instanceof AuthError)) throw error;
+        await note(`(${sanitize(error.message)}; the model is unchanged)\n`);
+        return null;
+      } finally {
+        watching.abort();
       }
-      return chooseModel(terminal, provider);
     };
     const chooseSession = async (terminal: Terminal): Promise<ChatCommandOutcome> => {
       const sessions = chatSessions(runsDir, root).filter((each) => each.runId !== chatRunId);
@@ -758,11 +796,11 @@ export async function chat(
           },
           commands: {
             list: COMMANDS,
-            run: (name, terminal) =>
+            run: (name, terminal, stop) =>
               name === "/model"
                 ? chooseModel(terminal)
                 : name === "/provider"
-                  ? chooseProvider(terminal)
+                  ? chooseProvider(terminal, stop)
                   : chooseSession(terminal),
           },
         },

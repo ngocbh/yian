@@ -370,9 +370,9 @@ function sameUnits(a: readonly Unit[], b: readonly Unit[]): boolean {
 
 /**
  * A one-line text editor; `mask` draws `*` per character and keeps the answer off the screen, and
- * with `escapes` Esc ends it as Ctrl-C does. With
- * `collapse`, a long paste (more than `PASTE_LINES` lines or `PASTE_CHARS` characters) goes in as
- * one token, which the caret and the deleting keys treat as one character and the answer expands.
+ * with `escapes` Esc ends it as Ctrl-C does. With `collapse`, a long paste (more than `PASTE_LINES`
+ * lines or `PASTE_CHARS` characters) goes in as one token, which the caret and the deleting keys
+ * treat as one character and the answer expands.
  */
 function textWidget(options: {
   label: string;
@@ -574,7 +574,10 @@ export class LineEditor {
     return draft;
   }
 
-  /** Replace the text (and its tokens, given a draft), the cursor after it; a new text closes the menu. */
+  /**
+   * Replace the text (and its tokens, given a draft), the cursor after it; a new text closes the
+   * menu.
+   */
   set(text: string | Draft): void {
     if (!sameUnits(unitsOf(text), this.#text.units())) this.#menu = false;
     this.#text.set(text);
@@ -585,7 +588,10 @@ export class LineEditor {
     return this.#matches().length > 0;
   }
 
-  /** The commands the menu shows, those the text starts with; none while it is closed. */
+  /**
+   * The commands the menu shows, those the text starts with; none while it is closed. It closes
+   * the menu once none match, so whoever reads it first (drawing or a key) sees the same state.
+   */
   #matches(): readonly PromptCommand[] {
     if (!this.#menu) return [];
     const units = this.#text.units();
@@ -636,13 +642,18 @@ export class LineEditor {
     this.#focus = index === null ? null : { key: rows[index]!.key, index };
   }
 
-  /** The menu's rows: each command's name, then its description, dim, cut to fit. */
+  /**
+   * The menu's rows, each cut to fit after the pointer: the command's name, then its description,
+   * dim, when the names leave room for it.
+   */
   #menuRows(matches: readonly PromptCommand[]): { rows: string[]; focus: number } {
-    const width = Math.max(...matches.map((command) => cells(command.name))) + 2;
-    const room = Math.max(1, this.#columns() - 2 - width);
+    const room = Math.max(1, this.#columns() - 2);
+    const width = Math.min(room, Math.max(...matches.map((command) => cells(command.name))) + 2);
     const rows = matches.map((command) => {
-      const pad = " ".repeat(width - cells(command.name));
-      return `${style("36", command.name)}${pad}${style("2", fit(command.description, room))}`;
+      const name = fit(command.name, room);
+      if (width >= room) return style("36", name);
+      const pad = " ".repeat(width - cells(name));
+      return `${style("36", name)}${pad}${style("2", fit(command.description, room - width))}`;
     });
     return { rows, focus: this.#highlighted(matches) };
   }

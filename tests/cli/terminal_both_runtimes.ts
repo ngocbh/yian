@@ -300,6 +300,20 @@ async function aSecretIsMaskedAndNeverEchoed(): Promise<void> {
   assertRestored(input, output, exitHooks);
 }
 
+async function aKeyPastedIntoASecretPromptShowsOnlyStars(): Promise<void> {
+  const { input, output, terminal, view } = setup({ columns: 80 });
+  const answer = terminal.askText("Key:", { secret: true });
+  // Long enough that the input box would hold it as a token.
+  const key = "sk-" + "q7".repeat(1_200);
+  input.write(PASTE_START + key + PASTE_END);
+  await tick();
+  assert.ok(view().rows.join("").replace("? Key: ", "").split("").every((char) => char === "*"));
+  assert.ok(!output.text.includes("Pasted text"));
+  input.write(ENTER);
+  assert.equal(await answer, key);
+  assert.ok(!output.text.includes("q7q7"));
+}
+
 async function ctrlCReturnsNullAndCallsOnStopOnce(): Promise<void> {
   const stops: string[] = [];
   const rawWhenStopped: boolean[] = [];
@@ -1384,11 +1398,13 @@ async function typingASlashOpensTheCommandMenuInPlaceOfTheList(): Promise<void> 
   // Down and Up move the highlight, not into the list; the cursor stays in the box.
   input.write(DOWN + DOWN);
   await tick();
-  assert.deepEqual(view().rows.slice(-3), [menuRow("/model"), menuRow("/resume"), menuRow("/exit", true)]);
+  const three = (highlighted: string) =>
+    ["/model", "/resume", "/exit"].map((name) => menuRow(name, name === highlighted));
+  assert.deepEqual(view().rows.slice(-3), three("/exit"));
   assert.equal(editor.focus(), null);
   input.write(UP);
   await tick();
-  assert.deepEqual(view().rows.slice(-3), [menuRow("/model"), menuRow("/resume", true), menuRow("/exit")]);
+  assert.deepEqual(view().rows.slice(-3), three("/resume"));
   // Tab completes the highlighted command into the box.
   input.write("\t");
   await tick();
@@ -1426,6 +1442,25 @@ async function enterInTheCommandMenuRunsTheHighlightedCommand(): Promise<void> {
   const second = terminal.readLine("You:", { frame: true, editor });
   input.write("/exit" + ENTER);
   assert.deepEqual(await second, { value: "/exit" });
+}
+
+async function aCommandMenuRowFitsANarrowScreen(): Promise<void> {
+  const { input, terminal, view } = setup({ columns: 20 });
+  const commands = [
+    { name: "/a-very-long-command-name", description: "Does a" },
+    { name: "/b", description: "Does b, said at some length" },
+  ];
+  const editor = new LineEditor({ columns: () => 20, hint: "", commands });
+  const line = terminal.readLine("You:", { frame: true, editor });
+  input.write("/");
+  await tick();
+  assert.deepEqual(view().rows.slice(-2), ["» /a-very-long-comm…", "  /b"]);
+  // With room for a description, it is cut to the row.
+  input.write("b");
+  await tick();
+  assert.deepEqual(view().rows.slice(-1), ["» /b  Does b, said …"]);
+  input.write(ENTER);
+  assert.deepEqual(await line, { value: "/b" });
 }
 
 async function aPastedSlashOpensNoCommandMenu(): Promise<void> {
@@ -3867,6 +3902,7 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "an initial value can be edited": anInitialValueCanBeEdited,
   "a blank answer returns an empty string": aBlankAnswerReturnsAnEmptyString,
   "a secret is masked and never echoed": aSecretIsMaskedAndNeverEchoed,
+  "a key pasted into a secret prompt shows only stars": aKeyPastedIntoASecretPromptShowsOnlyStars,
   "Ctrl-C returns null and calls onStop once": ctrlCReturnsNullAndCallsOnStopOnce,
   "a cancellable text prompt ends on Esc or Ctrl-C and the terminal stays open":
     aCancellableTextPromptEndsOnEscOrCtrlCAndTheTerminalStaysOpen,
@@ -3935,8 +3971,10 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a framed readLine with a list moves into it and opens a row": aFramedReadLineWithAListMovesIntoItAndOpensARow,
   "typing a slash opens the command menu in place of the list":
     typingASlashOpensTheCommandMenuInPlaceOfTheList,
-  "Enter in the command menu runs the highlighted command": enterInTheCommandMenuRunsTheHighlightedCommand,
+  "Enter in the command menu runs the highlighted command":
+    enterInTheCommandMenuRunsTheHighlightedCommand,
   "a pasted slash opens no command menu": aPastedSlashOpensNoCommandMenu,
+  "a command menu row fits a narrow screen": aCommandMenuRowFitsANarrowScreen,
   "a list row that goes gives the keys back, and the list redraws on its own":
     aListRowThatGoesGivesTheKeysBackAndTheListRedrawsOnItsOwn,
   "a long list shows what fits, the focused row among them": aLongListShowsWhatFitsTheFocusedRowAmongThem,

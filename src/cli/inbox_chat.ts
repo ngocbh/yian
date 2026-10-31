@@ -174,8 +174,11 @@ export type ChatCommandOutcome = { send: unknown; sent?: () => void } | { exit: 
 export interface ChatCommands {
   /** The commands, each a whole line and what it does, in the order the menu lists them. */
   readonly list: readonly PromptCommand[];
-  /** Run the command `name` at the prompt, through the chat's terminal. */
-  run(name: string, terminal: Terminal): Promise<ChatCommandOutcome>;
+  /**
+   * Run the command `name` at the prompt, through the chat's terminal; `stop` aborts once the
+   * chat stops (a second Ctrl-C, a signal).
+   */
+  run(name: string, terminal: Terminal, stop: AbortSignal): Promise<ChatCommandOutcome>;
 }
 
 /**
@@ -654,7 +657,9 @@ export async function inboxChat(
   });
   // The host's commands and the chat's own, the menu's rows: a command a host adds is listed.
   const menu = [...(host.commands?.list ?? []), ...EXIT_COMMANDS];
-  const hostCommands: ReadonlySet<string> = new Set(host.commands?.list.map((command) => command.name));
+  const hostCommands: ReadonlySet<string> = new Set(
+    host.commands?.list.map((command) => command.name),
+  );
   // With the chat's look on a terminal, the prompt's box stays up while a turn runs.
   const editor =
     view !== null && atTerminal(io)
@@ -975,7 +980,7 @@ export async function inboxChat(
     };
     /** Run the host's command `name`, then do what it says; null when nothing moved. */
     const runCommand = async (name: string): Promise<RunResult | null> => {
-      const outcome = await host.commands!.run(name, terminal);
+      const outcome = await host.commands!.run(name, terminal, stop.signal);
       stop.signal.throwIfAborted();
       if (outcome === null) return null;
       if ("exit" in outcome) return leave();

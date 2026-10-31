@@ -56,8 +56,8 @@ A flow file is a mapping of these top-level keys:
 | `asserts` | no | Conditions on inputs and results (see [Asserts](#asserts)) |
 | `typedefs` | no | Named types (see [Types](/types/)) |
 | `defs` | no | Child flows defined in this file (see [Control flow](/control-flow/)) |
-| `uses` | no | Child flows from other files, by alias (see [Control flow](/control-flow/)) |
-| `system` | no | `paths:`, a list of folders, relative to this file, where `uses:` also looks |
+| `uses` | no | Child flows from other files, by alias (see [Import a flow](/control-flow/#import-a-flow-from-another-file-with-uses)) |
+| `system` | no | `paths:`, a list of folders, relative to this file, where `uses:` also looks after this file's folder |
 | `llm_config` | no | Model defaults for every agent (see [Models and providers](/models/)) |
 | `env` | no | Settings for every node in this flow, such as an agent's `max_tool_iterations`; a child flow doesn't inherit them (see [Agents](/agents/)) |
 | `long_term_memory` | no | Long-term memory for the flow's agents (see [Agents](/agents/)) |

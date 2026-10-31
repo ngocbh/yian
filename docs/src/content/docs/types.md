@@ -86,7 +86,9 @@ nodes:
 output: ${input.signal.score}
 ```
 
-- Records are closed: a value with a field the record doesn't declare fails the check.
+- Records are closed: a value with a field the record doesn't declare fails the check. An
+  agent's record reply is the exception: it drops such a field (see
+  [Structured output](/agents/#structured-output)).
 - Every field is required, except an `Optional(...)` field, which may be left out.
 - A tag never fills a field in. A `Buy` with `action: Literal(buy)` must still write
   `action: buy`.
@@ -235,7 +237,10 @@ the input's type:
 | `Order` (a union) | `Buy` (a member) | No |
 
 To pass a wider value anyway, tag the binding, which checks it when it runs (`size: !Size
-${input.s}`), or narrow it first.
+${input.s}`), or narrow it first. A tagged loop seed relaxes only the `Optional` row: under
+`acc: !int 0`, the body may return `Optional(int)`, and a returned `null` fails the next run of the
+body. Any other row stays a load error for a loop seed, tagged or not (see
+[Repeat with `loop`](/control-flow/#repeat-with-loop)).
 
 ## Narrowing
 

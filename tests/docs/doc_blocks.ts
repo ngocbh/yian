@@ -3,8 +3,8 @@
  * command table. `docs/STYLE.md` says how writers mark blocks; `examples.test.ts` runs the checks.
  */
 
-import { readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { COMMANDS, GROUPS } from "../../src/cli/index.ts";
 import { type CommandSpec, type ParsedArgs, parseCommand } from "../../src/cli/utils.ts";
@@ -102,6 +102,30 @@ export function readDocs(root: string): Block[] {
     .filter((path) => /\.mdx?$/.test(path))
     .sort();
   return files.flatMap((path) => readBlocks(readFileSync(join(root, path), "utf8"), relative(root, join(root, path))));
+}
+
+/**
+ * Write each titled YAML block of one page that isn't a fragment under `dir`, at its `title=`
+ * path, so a block's `uses:` refs find the page's other files. Return each written block's path,
+ * in page order. Throw for a title outside `dir`, or one that two blocks share.
+ */
+export function writePageFiles(blocks: readonly Block[], dir: string): Map<Block, string> {
+  const files = new Map<Block, string>();
+  const byPath = new Map<string, Block>();
+  for (const block of blocks) {
+    const title = block.meta["title"];
+    if (block.lang !== "yaml" || title === undefined || checkOf(block) === "fragment") continue;
+    const where = `${block.file}:${block.line}`;
+    const path = resolve(dir, title);
+    if (!path.startsWith(resolve(dir) + sep)) throw new Error(`${where}: title=${title} is outside the page's folder`);
+    const first = byPath.get(path);
+    if (first) throw new Error(`${where}: title=${title} is also the title of ${first.file}:${first.line}`);
+    byPath.set(path, block);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, block.text);
+    files.set(block, path);
+  }
+  return files;
 }
 
 /** Return a YAML block's check; throw for one the style guide doesn't name. */

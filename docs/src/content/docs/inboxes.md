@@ -253,8 +253,9 @@ status: waiting
   it.
 - `--resume` runs the flow the log recorded, not the file on disk, so an edited flow needs a new
   run.
-- `yian status` reads a log without changing it. With `--json` it adds `ready` (a node can wake
-  now) and `wake_at`.
+- `yian status` reads a log without changing it. With `--json` it adds `ready` (every call a
+  waiting node waits on is settled, or an interrupt stops it) and `wake_at` (its earliest
+  deadline). A run is due for `--resume` once `wake_at` has passed, though `ready` stays `false`.
 
 A run whose process dies resumes the same way: nodes that started and didn't finish run again.
 [How yian works](/how-it-works/) explains how the log makes this safe.

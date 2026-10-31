@@ -6,13 +6,15 @@
  * how writers mark blocks.
  */
 
-import { expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { afterAll, expect, test } from "bun:test";
+import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { parseDocument } from "yaml";
 
+import { loadConfined } from "../../src/cli/confined_load.ts";
 import { parseKv } from "../../src/cli/run.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { LoadError } from "../../src/compose/helpers/errors.ts";
@@ -30,6 +32,7 @@ import {
   readCommands,
   readDocs,
   readInvocations,
+  writePageFiles,
 } from "./doc_blocks.ts";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -47,6 +50,16 @@ const SHELLS = new Set(["sh", "bash", "shell", "zsh"]);
 const STRAY = /^\s*(?:\$\s+)?(?:yian\b|(?:npx|bunx)\s+(?:-\S+\s+)*@ngocbh\/yian\b)/;
 // Any provider and model: the scripted model answers whichever the flow asks for.
 const LLM_CONFIG = { provider: "anthropic", model: "claude-test" };
+
+// Each page's titled blocks are files in their own folder, so a `uses:` ref finds another
+// titled block of its page before a flow of examples/.
+const PAGES_DIR = mkdtempSync(join(tmpdir(), "yian-docs-"));
+afterAll(() => rmSync(PAGES_DIR, { recursive: true, force: true }));
+const PAGE_FILES = new Map(
+  [...Map.groupBy(YAML_BLOCKS, (block) => block.file)].flatMap(([file, blocks]) => [
+    ...writePageFiles(blocks, join(PAGES_DIR, file)),
+  ]),
+);
 
 const where = (block: Block) => `${block.file}:${block.line}`;
 
@@ -97,7 +110,9 @@ test.each(YAML_BLOCKS.map((block) => [where(block), block] as const))("%s", asyn
     expect(parseDocument(block.text).errors.map(String)).toEqual([]);
     return;
   }
-  const load = () => loadFlow(block.text, { sourceLabel: label, searchPaths: [EXAMPLES] });
+  const path = PAGE_FILES.get(block);
+  const searchPaths = path === undefined ? [EXAMPLES] : [dirname(path), EXAMPLES];
+  const load = () => loadFlow(block.text, { sourceLabel: label, searchPaths });
   if (check === "fails") {
     await expectShownError(block, load);
     return;
@@ -156,4 +171,16 @@ test("yian lines are in console blocks", () => {
       .map((line) => `${where(block)}: ${line}`),
   );
   expect(stray).toEqual([]);
+});
+
+// control-flow.md says a `../` ref loads under `yian check --root` when the root holds its file.
+test("control-flow.md's uses: example loads confined to its page folder, but not to app/", async () => {
+  const report = [...PAGE_FILES].find(([block]) => block.file === "control-flow.md" && block.meta["title"] === "app/report.yaml");
+  if (report === undefined) throw new Error("control-flow.md has no app/report.yaml block");
+  const [, path] = report;
+  const page = realpathSync(join(PAGES_DIR, "control-flow.md"));
+  expect((await loadConfined(page, path, new Set(), NO_ENV)).name).toBe("report");
+  const error = await loadConfined(join(page, "app"), path, new Set(), NO_ENV).catch((e: unknown) => e);
+  expect(error).toBeInstanceOf(LoadError);
+  expect((error as LoadError).diagnostic.message).toContain("../common/clean.yaml is outside the root");
 });

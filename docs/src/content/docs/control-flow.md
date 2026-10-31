@@ -12,8 +12,8 @@ This page explains how a flow branches, repeats and reuses work. Four node kinds
 | `map` | Runs a child flow once per list item | A list of the child's outputs, in list order |
 | `loop` | Runs a child flow again and again, passing a record from one run to the next | The final record |
 
-A child flow is a `defs:` entry, a flow imported with `uses:`, or a body written inline on the
-node.
+A child flow is a `defs:` entry, a flow imported with [`uses:`](#import-a-flow-from-another-file-with-uses),
+or a body written inline on the node.
 
 ## Branch with `case`
 
@@ -249,7 +249,8 @@ $ yian run greet_team.yaml --input lead=Ada --input team="Bo, Cy"
 {"lead":"Hi, Ada!","team":["Hi, Bo!","Hi, Cy!"]}
 ```
 
-- `call:` names a `defs:` entry first, then a `uses:` alias. Any other name is a load error.
+- `call:` names a `defs:` entry first, then a [`uses:`](#import-a-flow-from-another-file-with-uses)
+  alias. Any other name is a load error.
 - `input:` lists the child's arguments, one per name. A whole `${...}` record there is a load
   error.
 - Each argument must fit the child's input type, checked at load. Nothing is converted: a `str`
@@ -262,6 +263,83 @@ $ yian run greet_team.yaml --input lead=Ada --input team="Bo, Cy"
 
 ```text
 call node 'c': binding 'n' — child expects 'int', source is 'str'
+```
+
+### Import a flow from another file with `uses:`
+
+`uses:` names child flows kept in other files, each under an alias that `call:` takes like a
+`defs:` name. Here `app/report.yaml` imports `common/clean.yaml`:
+
+```yaml title="common/clean.yaml"
+id: clean
+name: clean
+version: "1"
+input:
+  text: !str
+nodes:
+  trimmed:
+    kind: code
+    input:
+      text: ${input.text}
+    output: str
+    code: return inputs.text.trim()
+output: ${trimmed.output}
+```
+
+```yaml title="app/report.yaml" check=runnable
+id: report
+name: report
+input:
+  note: !str
+uses:
+  clean: ../common/clean@1
+nodes:
+  tidy:
+    kind: call
+    call: clean
+    input:
+      text: ${input.note}
+output: ${tidy.output}
+```
+
+```console
+$ yian run app/report.yaml --input note="  Shipped.  "
+Shipped.
+```
+
+- A ref is the child's path without its extension, relative to the importing file's folder:
+  `../common/clean` loads `../common/clean.yaml`. Only `.yaml` files are found, so a ref that
+  ends in `.yaml` and a `.yml` file both fail with `not found`.
+- `@<version>` pins the child: its `version:` must be the same text, or the flow doesn't load.
+  Quote a number there (`version: "1"`). A ref without `@` takes any version.
+- `yian run` and `yian check` look in the importing file's folder, then in each `system.paths`
+  folder, and the first file found wins. A host's `loadFlow` looks in its `searchPaths` instead,
+  then in `system.paths` joined onto the first of them (see [Embedding](/embedding/#run-a-flow)).
+- A child's own refs resolve from its folder and its own `system.paths`, never the importer's.
+- Under `yian check --root` (see [yian check](/cli/#yian-check)), a ref resolves only from the
+  importing file's folder, and a flow that sets `system.paths` is refused. A `../` ref fails only
+  when its file is outside the root: the example above loads with `--root .` but not with
+  `--root app`.
+- Files that import each other in a cycle fail to load, and so does a `hub:` ref.
+
+Pinning a version the child doesn't declare fails at load:
+
+```yaml title="app/pinned.yaml" check=fails
+id: pinned
+name: pinned
+uses:
+  clean: ../common/clean@2
+nodes:
+  tidy:
+    kind: call
+    call: clean
+    input:
+      text: draft
+output: ${tidy.output}
+```
+
+```text
+uses: ref pinned ../common/clean@2 but the resolved file declares version: "1" (file-per-version: name a file that declares "2")
 ```
 
 ### Call a flow inside a binding
@@ -337,12 +415,114 @@ Exactly one driver decides how often the body runs:
 - A condition that reads only fields the body never returns can't change, so it is a load error
   unless you give `max:`. So is one that reads no carried field and doesn't end the loop at once
   (`until: 1 > 2`).
-- The body returns at least one carried field, and only carried fields. A returned field keeps its
-  carried type.
+- The body returns at least one carried field, and only carried fields. Each must fit the field's
+  carried type, which its seed gives. Over a tagged seed, a returned field whose type differs
+  only by allowing `null` still loads, as in the example below. Any other mismatch is a load error,
+  tagged or not.
 - Returning `null` sets the field to `null`; leaving it out keeps its value.
 - `input:` lists each carried field. Each seed is checked against the body's input like a `call`
   argument. An empty list seed needs a tag, as `seen: !list(int) []` shows.
 - `${count.output}` is the final record, and `${count.output.n}` one field of it.
+
+A tagged seed lets the body return its type plus `null`. Here the seed `last: !int 0` is tagged,
+so the body's `Optional(int)` loads, inline or as a `call:` body. A `null` it returns fails the
+next run of the body with `contract.input`. After the last run it stays in the loop's output,
+whose field reads `Optional(int)`:
+
+```yaml title="poll.yaml" check=runnable
+id: poll
+name: poll
+input:
+  tries: !int
+nodes:
+  poll:
+    kind: loop
+    input:
+      n: 0
+      tries: ${input.tries}
+      last: !int 0
+    while: n < tries
+    nodes:
+      read:
+        kind: code
+        input:
+          n: ${input.n}
+        output: Optional(int)
+        code: |
+          return inputs.n < 2 ? inputs.n * 10 : null
+    output:
+      n: ${input.n + 1}
+      last: ${read.output}
+output: ${poll.output.last}
+```
+
+```console
+$ yian run poll.yaml --input tries=3
+null
+```
+
+With an untagged seed, `last: 0`, the same flow doesn't load:
+
+```yaml title="poll_untagged.yaml" check=fails
+id: poll_untagged
+name: poll_untagged
+input:
+  tries: !int
+nodes:
+  poll:
+    kind: loop
+    input:
+      n: 0
+      tries: ${input.tries}
+      last: 0
+    while: n < tries
+    nodes:
+      read:
+        kind: code
+        input:
+          n: ${input.n}
+        output: Optional(int)
+        code: |
+          return inputs.n < 2 ? inputs.n * 10 : null
+    output:
+      n: ${input.n + 1}
+      last: ${read.output}
+output: ${poll.output.last}
+```
+
+```text
+loop node 'poll': the body returns 'last' as Optional(int), but the carried field is typed int from its seed; declare the seed's type: `last: !Optional(int) 0`
+```
+
+A tag allows only that `null`. Any other wider type is a load error, tagged or not: under
+`mode: !Mode a`, a body that returns a `str` doesn't load.
+
+```yaml title="mode.yaml" check=fails
+id: mode
+name: mode
+typedefs:
+  Mode: Literal(a, b)
+nodes:
+  pick:
+    kind: loop
+    input:
+      n: 0
+      mode: !Mode a
+    while: n < 2
+    nodes:
+      read:
+        kind: code
+        output: str
+        code: return "b"
+    output:
+      n: ${input.n + 1}
+      mode: ${read.output}
+output: ${pick.output.mode}
+```
+
+```text
+loop node 'pick': the body returns 'mode' as str, but the carried field is declared Literal(a, b); declare the seed's type: `mode: !str "a"`
+```
 
 A `while:` null check guards the body. Under `while: cursor != null`, a seed or returned field
 typed `Optional(str)` fits a body input typed `str`, since the body never runs with a null

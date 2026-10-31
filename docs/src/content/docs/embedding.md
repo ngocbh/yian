@@ -74,7 +74,9 @@ const result = await runFlow(flow, { qty: 3, price: 2.5 }, { tools: { quote } })
 console.log(result.status, result.output); // succeeded total: 7.5
 ```
 
-`loadFlow` takes `searchPaths` (where `uses:` targets are found; put the flow's own folder first),
+`loadFlow` takes `searchPaths` (where [`uses:`](/control-flow/#import-a-flow-from-another-file-with-uses)
+targets are found, in order, then the flow's `system.paths` joined onto the first entry; put the
+flow's own folder first),
 `sourceLabel` (the name errors show), `baseDir` (where `./file.ts:fn` references resolve),
 `codeRoot` (a folder every CODE file must stay inside) and `env`. A broken flow rejects with
 `LoadError`, whose `diagnostic` points into the source. A CODE reference outside `codeRoot` is
@@ -121,7 +123,7 @@ server that doesn't start, a bad `YIAN_*` value, a callback that throws, a log i
 | `tools` | the registered tools | Tools by id. Passing it replaces the registered set, so list every tool the flow uses |
 | `skills` | none | A `Map` of skills by name, from `loadSkills` |
 | `memory` | none | One backend per declared memory key, usually from `buildMemories` |
-| `llmConfig` | none | The outermost `llm_config` layer (see [Models and providers](/models/)). Its `api_key` is never recorded |
+| `llmConfig` | none | The outermost `llm_config` layer (see [Models and providers](/models/)). Its `api_key` and header values are never recorded; its `base_url`, `organization`, `project` and header names are, on the agents that use the key |
 | `context` | `undefined` | Your app object; tools read it as `ctx.context`. Never recorded |
 | `onEvent`, `onStream` | none | Event callbacks (see [Events](#events)) |
 | `live` | none | A `LiveChannel` a viewer follows |

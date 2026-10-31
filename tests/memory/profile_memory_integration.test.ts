@@ -5,10 +5,11 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
@@ -115,6 +116,9 @@ nodes:
     output: str
 output: \${reply.output}
 `;
+
+/** The package root. */
+const ROOT = resolve(import.meta.dirname, "../..");
 
 // Typed as `runFlow`'s `llmConfig`: a host passes ProfileMemory the same config it passes a run.
 const LEARNER_CONFIG: Readonly<Record<string, unknown>> = {
@@ -351,6 +355,56 @@ test("a run or resume waiting for a held profile lock stops when its signal abor
     lock.release();
   }
 });
+
+test.skipIf(process.platform === "win32")("a profile document that is a FIFO fails the run at once", () => {
+  const file = join(dir, "ada.md");
+  execFileSync("mkfifo", [file]);
+  const vars = {
+    YIAN_AUTH_FILE: join(dir, "auth.json"),
+    YIAN_DEFAULT_PROVIDER: "openai",
+    YIAN_DEFAULT_MODEL: "test-model",
+  };
+  // In a child, because an open that blocks would freeze this test runner too.
+  const script = `import { FileMarkdownStore, loadFlow, ProfileMemory, runFlow } from ${JSON.stringify(join(ROOT, "src/index.ts"))};
+import { ScriptedModel } from ${JSON.stringify(join(ROOT, "src/llm/testing.ts"))};
+const vars = ${JSON.stringify(vars)};
+const env = (name) => vars[name];
+const createModel = () => new ScriptedModel([]);
+const memory = new ProfileMemory(new FileMarkdownStore(${JSON.stringify(file)}), {
+  llmConfig: ${JSON.stringify(LEARNER_CONFIG)},
+  env,
+  createModel,
+});
+const flow = await loadFlow(${JSON.stringify(CHAT)});
+const started = performance.now();
+try {
+  const registry = new Map([["profile", memory]]);
+  await runFlow(flow, { message: "hi" }, { memory: registry, models: { env, createModel }, env });
+  console.log("null");
+} catch (error) {
+  const cause = error.cause;
+  console.log(JSON.stringify({
+    name: error.name,
+    message: error.message,
+    failure: [cause?.name, cause?.stage, cause?.code, cause?.cause?.code],
+    ms: performance.now() - started,
+  }));
+}`;
+  // SIGKILL, since a child blocked in a synchronous open never runs a signal handler.
+  const result = spawnSync(process.execPath, ["-e", script], {
+    encoding: "utf8",
+    timeout: 10_000,
+    killSignal: "SIGKILL",
+  });
+  expect(result.signal).toBeNull();
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
+  const outcome = JSON.parse(result.stdout);
+  expect(outcome.name).toBe("MemorySetupError");
+  expect(outcome.message).toBe("memory 'profile' could not open its run session: profile store could not be read");
+  expect(outcome.failure).toEqual(["MemoryOperationError", "openRun", "profile.store_unavailable", "EINVAL"]);
+  expect(outcome.ms).toBeLessThan(2000);
+}, 15_000);
 
 test("a new attempt after a mismatch learns from the edited document", async () => {
   const memory = await profile();

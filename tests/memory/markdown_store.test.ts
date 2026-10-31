@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -170,7 +170,76 @@ test.each([
 test("a directory path fails on first use", async () => {
   fs.mkdirSync(path.join(dir, "ada.md"));
   const store = new FileMarkdownStore(path.join(dir, "ada.md"));
-  expectSystemError(await failure(() => store.read()));
+  const error = await failure(() => store.read());
+  expectSystemError(error);
+  expect(error.code).toBe("EISDIR");
+});
+
+/** A failed store call as the child in `failuresInChild` reports it. */
+type ChildFailure = { code: unknown; syscall: unknown; ms: number } | null;
+
+/**
+ * Run `operations`, a list of store calls on `store` (a `FileMarkdownStore` of `<dir>/ada.md`), in a
+ * child Bun and return how each failed, or `null` for one that succeeded. A child, because an open
+ * that blocks would freeze this test runner too; it is killed after 10 s.
+ */
+function failuresInChild(operations: string): ChildFailure[] {
+  const script = `import { FileMarkdownStore, markdownVersion } from ${JSON.stringify(path.join(ROOT, "src/memory/storage/markdown.ts"))};
+const store = new FileMarkdownStore(${JSON.stringify(path.join(dir, "ada.md"))});
+const failures = [];
+for (const operation of ${operations}) {
+  const started = performance.now();
+  try {
+    await operation();
+    failures.push(null);
+  } catch (error) {
+    failures.push({ code: error.code, syscall: error.syscall, ms: performance.now() - started });
+  }
+}
+console.log(JSON.stringify(failures));`;
+  // SIGKILL, since a child blocked in a synchronous open never runs a signal handler.
+  const result = spawnSync(process.execPath, ["-e", script], {
+    encoding: "utf8",
+    timeout: 10_000,
+    killSignal: "SIGKILL",
+  });
+  expect(result.signal).toBeNull();
+  expect(result.stderr).toBe("");
+  expect(result.status).toBe(0);
+  return JSON.parse(result.stdout);
+}
+
+describe.skipIf(process.platform === "win32")("a FIFO in the store's files", () => {
+  test("a FIFO document fails a read or write at once with a system error and writes nothing", () => {
+    execFileSync("mkfifo", [path.join(dir, "ada.md")]);
+    const failures = failuresInChild(`[
+  () => store.read(),
+  () => store.write("x", { baseVersion: markdownVersion("") }),
+]`);
+    expect(failures).toHaveLength(2);
+    for (const failure of failures) {
+      expect([failure!.code, failure!.syscall]).toEqual(["EINVAL", "open"]);
+      expect(failure!.ms).toBeLessThan(1000);
+    }
+    expect(fs.readdirSync(dir).sort()).toEqual([".ada.md.lock", "ada.md"]);
+  }, 15_000);
+
+  test("a FIFO write log fails the write at once and writes nothing", () => {
+    execFileSync("mkfifo", [path.join(dir, ".ada.md.writes.jsonl")]);
+    const [failure] = failuresInChild(`[() => store.write("# Ada\\n", { baseVersion: markdownVersion("") })]`);
+    // Refused by the non-blocking open itself, since no process has the FIFO open for reading.
+    expect([failure!.code, failure!.syscall]).toEqual(["ENXIO", "open"]);
+    expect(failure!.ms).toBeLessThan(1000);
+    expect(fs.readdirSync(dir).sort()).toEqual([".ada.md.lock", ".ada.md.writes.jsonl"]);
+  }, 15_000);
+});
+
+test("a version path that isn't a file fails instead of counting as kept", async () => {
+  fs.mkdirSync(keptPath(dir, markdownVersion("")), { recursive: true });
+  const store = new FileMarkdownStore(path.join(dir, "ada.md"));
+  const error = await failure(() => store.read());
+  expectSystemError(error);
+  expect(error.code).toBe("EISDIR");
 });
 
 test("createParent makes the directory on first use", async () => {

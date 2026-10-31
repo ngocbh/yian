@@ -881,6 +881,8 @@ interface Turn {
   ending: Ending | undefined;
   /** Ends the active widget once `ending` is set; a no-op while no widget runs. */
   wake: () => void;
+  /** The raw mode to restore as the turn ends, read as it starts. */
+  wasRaw: boolean;
   /**
    * The rows the turn printed for good (a card, a question set's panel, a label's lines above its
    * last, the lines earlier widgets collapsed to), which Ctrl-L draws again above the widget up.
@@ -940,6 +942,8 @@ export class Terminal {
         wasRaw: boolean;
       }
     | undefined;
+  /** While `holdRaw` holds the terminal: the raw mode to give back, and the exit hook doing so. */
+  #held: { wasRaw: boolean; onExit: () => void } | undefined;
   /** The last key was a `return`, so an `enter` now is the `\n` of the same `\r\n`. */
   #afterReturn = false;
   /** The text of the bracketed paste arriving, or null outside one. */
@@ -1010,7 +1014,8 @@ export class Terminal {
    * the text typed so far (`draft`) when `signal` aborts first, which erases the prompt. With
    * `escape`, Escape ends the prompt as `{escape}` with the draft, erasing it the same way;
    * elsewhere Escape is ignored. Ctrl-C and Escape leave the terminal open, so the next
-   * `readLine` works; keys typed after the prompt ends wait for the next one.
+   * `readLine` works; keys typed after the prompt ends wait for the next one (all of them while
+   * `holdRaw` holds the terminal).
    *
    * With `frame`, on a terminal that isn't plain, the prompt is a box across the terminal holding
    * `> ` and the text, the dim `hint` below it, instead of the label; once entered it collapses
@@ -1322,10 +1327,11 @@ export class Terminal {
 
   /**
    * Close the terminal: the active prompt ends, queued and later prompts are refused, listeners
-   * detach, input pauses.
+   * detach, input pauses, and a `holdRaw` ends.
    */
   close(): void {
     this.#closed = true;
+    this.#release();
     const turn = this.#turn;
     if (turn !== undefined) {
       // The turn's own cleanup detaches and pauses, outside any key dispatch.
@@ -1334,6 +1340,40 @@ export class Terminal {
     } else if (this.#attached) {
       this.#detach();
       quietly(() => this.#input.pause());
+    }
+  }
+
+  /**
+   * Keep the terminal raw between prompts and watches until the returned release is called or the
+   * terminal closes: the keys typed meanwhile wait in the tty, which a cooked tty would drop past
+   * its queue (about 2 KB on macOS). The input still pauses between them. The release, once only,
+   * gives back the mode from before, when the prompt or watch up, if any, ends. Does nothing on a
+   * plain or closed terminal, an input that isn't a TTY, or one already held.
+   */
+  holdRaw(): () => void {
+    const input = this.#input;
+    if (this.#plain || this.#closed || this.#held !== undefined) return () => {};
+    if (input.isTTY !== true || typeof input.setRawMode !== "function") return () => {};
+    // A prompt or watch up has set raw mode itself; the mode to give back is the one before it.
+    const wasRaw = this.#watch?.wasRaw ?? this.#turn?.wasRaw ?? input.isRaw === true;
+    // A `process.exit()` elsewhere skips the release.
+    const held = { wasRaw, onExit: () => quietly(() => input.setRawMode!(false)) };
+    this.#held = held;
+    process.once("exit", held.onExit);
+    quietly(() => input.setRawMode!(true));
+    return () => {
+      if (this.#held === held) this.#release();
+    };
+  }
+
+  /** End the `holdRaw`, if any: its mode goes back now, or as the prompt or watch up ends. */
+  #release(): void {
+    const held = this.#held;
+    if (held === undefined) return;
+    this.#held = undefined;
+    quietly(() => process.removeListener("exit", held.onExit));
+    if (this.#turn === undefined && this.#watch === undefined) {
+      quietly(() => this.#input.setRawMode!(held.wasRaw));
     }
   }
 
@@ -1356,7 +1396,7 @@ export class Terminal {
     if (this.#plain || this.#closed || signal.aborted) return;
     if (input.isTTY !== true || typeof input.setRawMode !== "function") return;
     this.#attach();
-    const watch = { onKey, edit, wasRaw: input.isRaw === true };
+    const watch = { onKey, edit, wasRaw: this.#held?.wasRaw ?? input.isRaw === true };
     this.#watch = watch;
     const output = this.#output;
     // A `process.exit()` elsewhere skips the restore below.
@@ -1373,7 +1413,7 @@ export class Terminal {
       quietly(() => process.removeListener("exit", onExit));
       // A turn holding the terminal restores it when it ends.
       if (this.#turn !== undefined) return;
-      quietly(() => input.setRawMode!(watch.wasRaw));
+      quietly(() => input.setRawMode!(this.#held !== undefined || watch.wasRaw));
       if (edit !== null) quietly(() => output.write(PASTE_OFF));
       quietly(() => input.pause());
     };
@@ -1530,7 +1570,14 @@ export class Terminal {
     const { promise: finished, resolve: release } = Promise.withResolvers<void>();
     // The turn behind this one waits for the one ahead too, even when this one leaves early.
     this.#tail = ahead.then(() => finished);
-    const turn: Turn = { signal, keepOpen, ending: undefined, wake: () => {}, shown: [] };
+    const turn: Turn = {
+      signal,
+      keepOpen,
+      ending: undefined,
+      wake: () => {},
+      wasRaw: false,
+      shown: [],
+    };
     const { promise: queuedAbort, resolve: leaveQueue } = Promise.withResolvers<void>();
     const onAbort = (): void => {
       // A queued turn whose signal aborts after the terminal closed is refused as closed.
@@ -1542,8 +1589,6 @@ export class Terminal {
     const input = this.#input;
     const output = this.#output;
     const setsRaw = (!this.#plain || raw) && input.isTTY === true && typeof input.setRawMode === "function";
-    // Read at turn start: while queued, the turn ahead may still hold the terminal raw.
-    let wasRaw = false;
     // A `process.exit()` elsewhere skips the `finally` below.
     const onExit = (): void => {
       if (setsRaw) quietly(() => input.setRawMode!(false));
@@ -1577,8 +1622,9 @@ export class Terminal {
         this.#printed = false;
         quietly(() => this.#onActive?.(true, false));
         this.#attach();
-        // Under a watch the terminal is raw for it; the mode before the watch is the one to restore.
-        wasRaw = this.#watch?.wasRaw ?? input.isRaw === true;
+        // Read at turn start: while queued, the turn ahead may still hold the terminal raw. Under a
+        // watch or `holdRaw` the terminal is raw for it; the mode before is the one to restore.
+        turn.wasRaw = this.#watch?.wasRaw ?? this.#held?.wasRaw ?? input.isRaw === true;
         // Even without raw mode the widgets hide the cursor and turn bracketed paste on.
         process.once("exit", onExit);
         if (setsRaw) input.setRawMode!(true);
@@ -1595,10 +1641,11 @@ export class Terminal {
         // Pausing here, in a promise continuation rather than inside the key dispatch, keeps a
         // piped stdin from being restarted by its read-ahead.
         // A watch still running keeps the terminal raw and the input flowing, and restores `wasRaw`
-        // itself when it ends.
+        // itself when it ends; `holdRaw` keeps it raw.
         const watch = this.#watch;
-        if (watch !== undefined) watch.wasRaw = wasRaw;
-        if (setsRaw) quietly(() => input.setRawMode!(watch !== undefined || wasRaw));
+        if (watch !== undefined) watch.wasRaw = turn.wasRaw;
+        const keepRaw = watch !== undefined || this.#held !== undefined || turn.wasRaw;
+        if (setsRaw) quietly(() => input.setRawMode!(keepRaw));
         quietly(() => process.removeListener("exit", onExit));
         if (watch === undefined) quietly(() => input.pause());
         if (this.#closed) quietly(() => this.#detach());

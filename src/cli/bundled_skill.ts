@@ -7,7 +7,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -55,15 +55,28 @@ function discard(cache: string, folder: string): void {
   rmSync(aside, { recursive: true, force: true });
 }
 
+/** Whether `file` is a regular file holding exactly `text`; false when it is missing. */
+function holds(file: string, text: string): boolean {
+  const expected = Buffer.from(text);
+  try {
+    // Only a regular file of the right size is read: reading a FIFO or a device could block or never end.
+    const stat = statSync(file);
+    if (!stat.isFile() || stat.size !== expected.length) return false;
+    return readFileSync(file).equals(expected);
+  } catch (error) {
+    if (isSystemError(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) return false;
+    throw error;
+  }
+}
+
 /**
- * The skill in `folder` when it holds every file of the bundled one and loads; `absent` when there
- * is no folder (or it went away meanwhile), `damaged` otherwise.
+ * The skill in `folder` when it holds every file of the bundled one, each with the bundle's
+ * content, and loads; `absent` when there is no folder (or it went away meanwhile), `damaged`
+ * otherwise.
  */
 function loadIntact(folder: string): Skill | "absent" | "damaged" {
   if (!statSync(folder, { throwIfNoEntry: false })?.isDirectory()) return "absent";
-  const whole = Object.keys(SKILL).every((path) =>
-    statSync(join(folder, ...path.split("/")), { throwIfNoEntry: false })?.isFile(),
-  );
+  const whole = Object.entries(SKILL).every(([path, text]) => holds(join(folder, ...path.split("/")), text));
   if (!whole) return "damaged";
   try {
     return loadSkillDir(folder);
@@ -82,8 +95,9 @@ function loadIntact(folder: string): Skill | "absent" | "damaged" {
  * The folder is written whole under a temporary name beside it and renamed into place, so a chat
  * never reads a half-written one. When another chat renamed its own into place first, that one is
  * used and this call's is removed. A folder that exists is never written again, unless it is
- * damaged (a file of the skill missing, or a `SKILL.md` that doesn't load) on two looks in a row,
- * the second for a chat that is replacing it: then it is moved aside, removed and written again.
+ * damaged (a file of the skill missing or different from the bundle's, or a `SKILL.md` that doesn't
+ * load) on two looks in a row, the second for a chat that is replacing it: then it is moved aside,
+ * removed and written again.
  * The folders are the owner's alone, as `~/.yian` is.
  *
  * @param options.beforeRename For tests: runs just before the rename.

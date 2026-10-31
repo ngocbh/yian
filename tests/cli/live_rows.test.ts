@@ -145,32 +145,58 @@ describe("after a resize", () => {
   });
 });
 
-describe("after a clear", () => {
-  test("the next frame erases the screen, not the scrollback, and draws every row", () => {
+describe("after a rerender", () => {
+  test("the next frame goes up to the live rows' top, clears below and draws every row", () => {
     const { output, live, draw, view, writes } = setup();
     output.write("printed for good\r\n");
     draw(["reply", "spin", "box"], { line: 2, before: "b" });
-    live.clear();
+    live.rerender();
     const text = draw(["reply", "spin", "box"], { line: 2, before: "b" });
     expect(writes).toHaveLength(2);
-    expect(text.startsWith(`${SYNC_ON}\x1b[?25l\x1b[2J\x1b[H`)).toBe(true);
+    expect(text.startsWith(`${SYNC_ON}\x1b[?25l\x1b[2A\r\x1b[J`)).toBe(true);
+    expect(text).not.toContain("\x1b[2J");
     expect(text).not.toContain("\x1b[3J");
+    expect(text).not.toContain("printed for good");
     for (const row of ["reply", "spin", "box"]) expect(text.split(row)).toHaveLength(2);
-    expect(view().rows).toEqual(["reply", "spin", "box"]);
-    expect(view().scrollback).toEqual(["printed for good", "reply", "spin", "box"]);
-    expect(view().cursor).toEqual({ row: 2, col: 1 });
+    expect(view().rows).toEqual(["printed for good", "reply", "spin", "box"]);
+    expect(view().scrollback).toEqual([]);
+    expect(view().cursor).toEqual({ row: 3, col: 1 });
   });
 
-  test("a flush with nothing set redraws the rows on screen, then frames go on", () => {
-    const { live, draw, view } = setup();
-    draw(["a", "b"]);
-    live.clear();
-    live.stage(["card"]);
+  test("draws the rows printed last again, and frames go on from there", () => {
+    const { output, live, draw, view } = setup();
+    live.stage(["above"]);
     live.flush();
-    expect(view().rows).toEqual(["card", "a", "b"]);
-    const text = draw(["a", "c"]);
-    expect(text).not.toContain("\x1b[2J");
-    expect(view().rows).toEqual(["card", "a", "c"]);
+    const mark = live.printed;
+    live.stage(["card"]);
+    draw(["one", "two"]);
+    live.rerender(live.printed - mark);
+    const before = output.text.length;
+    live.flush();
+    const text = output.text.slice(before);
+    expect(text).toContain("\x1b[2A\r\x1b[J");
+    expect(text).not.toContain("above");
+    for (const row of ["card", "one", "two"]) expect(text.split(row)).toHaveLength(2);
+    expect(view().rows).toEqual(["above", "card", "one", "two"]);
+    const next = draw(["one", "six"]);
+    expect(next).not.toContain("\x1b[J");
+    expect(view().rows).toEqual(["above", "card", "one", "six"]);
+    // The card was drawn again, not printed anew.
+    expect(live.printed).toBe(mark + 1);
+  });
+
+  test("draws only the rows above that are still on the screen", () => {
+    const { output, live, draw } = setup();
+    output.rows = 3;
+    live.stage(["c1", "c2", "c3"]);
+    draw(["a"]);
+    live.rerender(3);
+    const before = output.text.length;
+    live.flush();
+    const text = output.text.slice(before);
+    expect(text).toContain("\x1b[2A\r\x1b[J");
+    expect(text).not.toContain("c1");
+    for (const row of ["c2", "c3", "a"]) expect(text.split(row)).toHaveLength(2);
   });
 });
 

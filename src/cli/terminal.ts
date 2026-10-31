@@ -884,10 +884,11 @@ interface Turn {
   /** The raw mode to restore as the turn ends, read as it starts. */
   wasRaw: boolean;
   /**
-   * The rows the turn printed for good (a card, a question set's panel, a label's lines above its
-   * last, the lines earlier widgets collapsed to), which Ctrl-L draws again above the widget up.
+   * The live rows' `printed` count as the turn took the terminal: the rows printed for good since
+   * (a card, a question set's panel, a label's lines above its last, the lines earlier widgets
+   * collapsed to, the host's rows printed above a prompt) are what Ctrl-L draws again with it.
    */
-  shown: string[];
+  printed: number;
 }
 
 /** Runs one widget inside a turn: its answer, or a throw when it stops, fails or the turn aborts. */
@@ -1502,7 +1503,7 @@ export class Terminal {
     if (this.#active) this.#active.key(key);
     else if (redraw && this.#turn === undefined) {
       // The live rows are the host's (a watch's box under a reply): drawn again as they are.
-      this.#live.clear();
+      this.#live.rerender();
       this.#live.flush();
     } else if (watch !== undefined && key.ctrl && key.name === "c") watch.onKey("interrupt");
     else if (watch?.edit?.(key) === true) return;
@@ -1510,7 +1511,7 @@ export class Terminal {
     else this.#buffer.push(key);
   }
 
-  /** Whether `key` is Ctrl-L, which clears the screen and redraws: on a TTY, not plain. */
+  /** Whether `key` is Ctrl-L, which draws yian's rows again in place: on a TTY, not plain. */
   #redraws(key: Key): boolean {
     return key.ctrl && !key.meta && key.name === "l" && !this.#plain && this.#input.isTTY === true;
   }
@@ -1576,7 +1577,7 @@ export class Terminal {
       ending: undefined,
       wake: () => {},
       wasRaw: false,
-      shown: [],
+      printed: 0,
     };
     const { promise: queuedAbort, resolve: leaveQueue } = Promise.withResolvers<void>();
     const onAbort = (): void => {
@@ -1609,6 +1610,7 @@ export class Terminal {
       if (turn.ending === undefined) {
         started = true;
         this.#turn = turn;
+        turn.printed = this.#live.printed;
         // A prompt over the live box (a watch's editor) or in a yielded line's place: the user
         // may have been typing in the line, and what they typed for it answers nothing here. A
         // line prompt is the line itself coming back, so it takes its keys.
@@ -1676,10 +1678,7 @@ export class Terminal {
   /** Print `rows` for good above the prompt drawn next: written now on a plain terminal. */
   #print(rows: readonly string[]): void {
     if (this.#plain) this.#output.write(`${rows.join("\r\n")}\r\n`);
-    else {
-      this.#live.stage(rows);
-      this.#turn?.shown.push(...rows);
-    }
+    else this.#live.stage(rows);
   }
 
   /** Change the count of turns that wait for an answer by `by`, and tell the listeners. */
@@ -1716,8 +1715,8 @@ export class Terminal {
     };
     turn.wake = () => finish({ stop: turn.ending! });
     const live = this.#live;
-    // With `clear`, the screen is erased first and the widget drawn at its top (Ctrl-L).
-    const draw = (clear = false): void => {
+    // With `again` (Ctrl-L), every row is drawn again in place, the turn's rows above it too.
+    const draw = (again = false): void => {
       // A plain prompt is written once, as it opens; a refused line adds only its error, since
       // the cooked tty already echoed the line.
       if (this.#plain) {
@@ -1731,13 +1730,10 @@ export class Terminal {
         const columns = columnsOf(output);
         const rows = lines.slice(0, rowsOf(output)).map((line) => clip(line, columns));
         const frame = `${ESC}H${rows.map((row) => `${row}${ESC}K`).join("\r\n")}${ESC}J`;
-        output.write(clear ? `${SYNC_ON}${ESC}2J${frame}${SYNC_OFF}` : frame);
+        output.write(again ? `${SYNC_ON}${frame}${SYNC_OFF}` : frame);
         return;
       }
-      if (clear) {
-        live.clear();
-        live.stage(turn.shown);
-      }
+      if (again) live.rerender(live.printed - turn.printed);
       const cursor = widget.cursor();
       live.draw(lines, cursor === null ? null : { line: cursor.row, before: cursor.before });
     };
@@ -1761,7 +1757,6 @@ export class Terminal {
         else {
           const preface = widget.preface.split("\r\n").slice(0, -1);
           live.stage(preface);
-          turn.shown.push(...preface);
         }
         const screen = widget.screen ? ALT_ON : "";
         this.#onScreen = widget.screen === true;
@@ -1790,10 +1785,7 @@ export class Terminal {
         const line = vanish ? null : widget.done(ended);
         // Drawn with the next frame: the host's live rows as the turn ends, or the next widget's.
         if (!this.#plain) {
-          if (line !== null) {
-            live.stage(line.split("\n"));
-            turn.shown.push(...line.split("\n"));
-          }
+          if (line !== null) live.stage(line.split("\n"));
           live.set(widget.keeps === true ? widget.lines() : [], null);
           this.#printed ||= line !== null;
         }

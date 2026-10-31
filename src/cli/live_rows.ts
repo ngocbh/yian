@@ -6,13 +6,13 @@
  *
  * Each frame is one write wrapped in synchronized output, the cursor hidden while it draws. It
  * writes only the rows that changed, each over the old one, clearing what is left of it, and
- * clears below only when the frame takes fewer rows than the last. After `clear`, a frame erases
- * the screen (not the scrollback) and draws every row from its top.
+ * clears below only when the frame takes fewer rows than the last. After `rerender`, a frame goes
+ * back up to the live rows' top, clears from there down and draws every row again, in place.
  *
  * Knows about: the terminal's cell widths.
  */
 
-import { ANSI, charCells, columnsOf } from "./cells.ts";
+import { ANSI, charCells, columnsOf, rowsOf } from "./cells.ts";
 
 const ESC = "\x1b[";
 /** Starts synchronized output: the terminal shows what follows only once it ends. */
@@ -89,7 +89,11 @@ function wrapClears(line: string, columns: number): string {
 }
 
 /** What a `LiveRows` writes on. */
-export type LiveOutput = { write(text: string): unknown; readonly columns?: number };
+export type LiveOutput = {
+  write(text: string): unknown;
+  readonly columns?: number;
+  readonly rows?: number;
+};
 
 /**
  * The live rows drawn on one output. `stage` queues rows to print for good above them, `set` the
@@ -109,8 +113,15 @@ export class LiveRows {
   #width: number | null = null;
   /** Set once the terminal may have reflowed the lines (a resize): the next frame starts over. */
   #lost = false;
-  /** Set by `clear`: the next frame erases the screen and draws from its top. */
-  #cleared = false;
+  /**
+   * Set by `rerender`: how many of the rows printed for good last the next frame draws again with
+   * the live rows.
+   */
+  #rerender: number | null = null;
+  /** The rows printed for good last, at most a screen's worth, oldest first. */
+  #recent: string[] = [];
+  /** How many rows were staged so far. */
+  #printed = 0;
   /** The rows to print for good above the live rows at the next flush. */
   #staged: string[] = [];
   /** The lines and cursor the next flush draws, or null to keep those on screen. */
@@ -127,6 +138,7 @@ export class LiveRows {
   /** Print `rows` for good above the live rows at the next flush. */
   stage(rows: readonly string[]): void {
     this.#staged.push(...rows);
+    this.#printed += rows.length;
   }
 
   /** Make `lines` the live rows at the next flush, the cursor after `cursor` (null to hide it). */
@@ -145,12 +157,19 @@ export class LiveRows {
     this.#lost = true;
   }
 
+  /** How many rows were printed for good above the live rows so far, those staged counted. */
+  get printed(): number {
+    return this.#printed;
+  }
+
   /**
-   * Forget what is on screen: the next frame erases the visible screen, keeping the scrollback, and
-   * draws every row from the screen's top. A `flush` with nothing set draws the rows on screen.
+   * Forget what is on screen: the next frame goes back up to the live rows' top, and past the
+   * `above` rows printed for good last (as `printed` counts them) as far as the screen still shows
+   * them, clears from there down and draws those rows and every live row again, in place. A
+   * `flush` with nothing set draws the rows on screen.
    */
-  clear(): void {
-    this.#cleared = true;
+  rerender(above = 0): void {
+    this.#rerender = above;
   }
 
   /**
@@ -171,7 +190,7 @@ export class LiveRows {
    * output): the rows that changed, each over the old one; nothing when nothing changed.
    */
   flush(write: (text: string) => void = (text) => void this.#output.write(text)): void {
-    const staged = this.#staged;
+    let staged = this.#staged;
     const want = this.#want ?? { lines: this.#lines, cursor: this.#cursor };
     this.#staged = [];
     this.#want = null;
@@ -185,18 +204,36 @@ export class LiveRows {
       out += target > row ? "\r\n".repeat(target - row) : "\r";
       row = target;
     };
-    const cleared = this.#cleared;
-    this.#cleared = false;
+    const above = this.#rerender;
+    this.#rerender = null;
     const lost = this.#lost || (this.#width !== null && this.#width !== columns);
     this.#lost = false;
-    let prev = cleared ? [] : this.#lines;
+    let prev = above !== null ? [] : this.#lines;
     let heights = prev.map((line) => layout(line, columns, -1).rows);
     // The screen rows from the live rows' top that hold what was drawn before.
     let stale = heights.reduce((sum, rows) => sum + rows, 0);
-    if (cleared) {
-      // Erases the visible screen only: `ESC[3J` would take the scrollback with it.
-      out += `${ESC}2J${ESC}H`;
+    if (above !== null) {
+      // The cursor can't go up into the scrollback, so only the rows above still on the screen
+      // are drawn again: the screen holds at most its height less the live rows over the cursor.
+      const room = rowsOf(this.#output) - 1 - row;
+      let up = 0;
+      let first = this.#recent.length;
+      // The rows staged since are among the `above`, and are printed after these.
+      const oldest = Math.max(0, this.#recent.length - (above - staged.length));
+      while (first > oldest) {
+        const rows = layout(this.#recent[first - 1]!, columns, -1).rows;
+        if (up + rows > room) break;
+        up += rows;
+        first--;
+      }
+      if (row + up > 0) out += `${ESC}${row + up}A`;
+      out += `\r${ESC}J`;
       row = 0;
+      // Drawn again, they go back on the rows printed last with what is staged.
+      staged = [...this.#recent.splice(first), ...staged];
+      prev = [];
+      heights = [];
+      stale = 0;
     } else if (lost) {
       moveTo(0);
       out += `${ESC}J`;
@@ -211,7 +248,7 @@ export class LiveRows {
     const shift = heights.slice(0, kept).reduce((sum, rows) => sum + rows, 0);
     row -= shift;
     // Where the cursor was placed, counted from the live rows' new top.
-    const last = cleared ? null : this.#placed;
+    const last = above !== null ? null : this.#placed;
     let before = last === null ? null : { row: last.row - shift, col: last.col };
     stale -= shift;
     prev = prev.slice(kept);
@@ -235,6 +272,8 @@ export class LiveRows {
       prev = [];
       before = null;
     }
+    this.#recent.push(...staged);
+    this.#recent.splice(0, Math.max(0, this.#recent.length - rowsOf(this.#output)));
     const lines = want.lines;
     const tops: number[] = [];
     let top = 0;

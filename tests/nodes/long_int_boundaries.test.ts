@@ -190,7 +190,7 @@ test("a long int in a partial record output names the limit (mistyped-field)", (
   expect(caught).toBeInstanceOf(NodeDataError);
   const original = (caught as NodeDataError).original as TypeCheckError;
   expect(original).toBeInstanceOf(TypeCheckError);
-  expect(original.message).toBe(`${SHOWN(BIG)} does not match declared type str`);
+  expect(original.message).toBe(`output at label: ${SHOWN(BIG)} does not match declared type str`);
   expect(original.path).toEqual(["label"]);
   assertClean(original.message);
 });

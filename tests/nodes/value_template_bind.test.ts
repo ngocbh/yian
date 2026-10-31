@@ -345,7 +345,7 @@ test("a nested typed binding rejects a missing field at its origin", () => {
   expect(error.message).toContain('["action"]');
   expect(error.failureCode).toBe("binding.type");
   expect(error.origin).toEqual(nestedOrigin);
-  expect(error.message.startsWith("binding 'p.order':")).toBe(true);
+  expect(error.message.startsWith("binding 'p.order' at action:")).toBe(true);
 });
 
 test("a nested typed binding prefers the nearest contract origin", () => {
@@ -359,7 +359,7 @@ test("a nested typed binding prefers the nearest contract origin", () => {
 
   expect(error.failureCode).toBe("binding.type");
   expect(error.origin).toEqual(fieldOrigin);
-  expect(error.message.startsWith("binding 'p.b[0]':")).toBe(true);
+  expect(error.message.startsWith("binding 'p.b[0]' at conviction:")).toBe(true);
 });
 
 test("a nested typed binding over a subtree checks the evaluated record", () => {

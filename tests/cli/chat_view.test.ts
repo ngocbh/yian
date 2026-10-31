@@ -889,7 +889,7 @@ describe("Ctrl-L", () => {
   const SPIN = "· Thinking… (0s · esc to interrupt)";
   const boxed = (text: string) => `│ ${text.padEnd(COLUMNS - 4)} │`;
 
-  test("at the prompt and mid-reply clears the screen, then draws each live row once", async () => {
+  test("at the prompt and mid-reply draws each live row again in place, once", async () => {
     const { view, output, rows } = viewOn();
     const input = new FakeInput({ tty: true });
     stdin = input;
@@ -899,8 +899,14 @@ describe("Ctrl-L", () => {
     const editor = terminal.lineEditor({ hint: view.hint, list });
     view.print("earlier\n");
     view.input(editor);
-    /** Press Ctrl-L, and check it wrote one clearing frame holding each row of `live` once. */
+    /**
+     * Press Ctrl-L, and check it wrote one frame that goes up to the live rows' top, clears below
+     * and holds each row of `live` once, the transcript above it left where it was.
+     */
     const press = async (live: string[]) => {
+      const shown = rows();
+      expect(shown[0]).toBe("earlier");
+      expect(shown.slice(-live.length)).toEqual(live);
       const before = { text: output.text.length, writes: output.writes };
       input.write(CTRL_L);
       await tick();
@@ -908,12 +914,14 @@ describe("Ctrl-L", () => {
       expect(output.writes).toBe(before.writes + 1);
       expect(text.startsWith(SYNC_ON)).toBe(true);
       expect(text.endsWith(SYNC_OFF)).toBe(true);
-      expect(text).toContain("\x1b[2J\x1b[H");
+      expect(text).toMatch(/^\x1b\[\?2026h\x1b\[\?25l\x1b\[\d+A\r\x1b\[J/);
+      expect(text).not.toContain("\x1b[2J");
       expect(text).not.toContain("\x1b[3J");
       const plain = text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, "");
+      expect(plain).not.toContain("earlier");
       for (const row of live) expect(plain.split(row.trim())).toHaveLength(2);
-      expect(rows()).toEqual(live);
-      expect(screen(output.text, COLUMNS).scrollback).toContain("earlier");
+      expect(rows()).toEqual(shown);
+      expect(screen(output.text, COLUMNS).scrollback).toEqual([]);
     };
     const read = terminal.readLine("You:", { frame: true, escape: true, editor });
     input.write("hi");
@@ -934,10 +942,13 @@ describe("Ctrl-L", () => {
     await tick();
     const reply = ["⏺ Once upon", "  a dragon", SPIN];
     await press([...reply, TOP, boxed("> more"), BOTTOM, HINT, "  r1  color.yaml"]);
-    expect(screen(output.text, COLUMNS).cursor).toEqual({ row: 4, col: 8 });
+    // In the box, below the transcript that stayed above the reply.
+    const top = rows().indexOf(reply[0]!);
+    expect(screen(output.text, COLUMNS).cursor).toEqual({ row: top + 4, col: 8 });
     // The next frame goes on from there, rewriting only what changed.
     view.onStream(chunk(1, " slept"));
-    expect(rows().slice(0, 3)).toEqual(["⏺ Once upon", "  a dragon slept", SPIN]);
+    const slept = ["⏺ Once upon", "  a dragon slept", SPIN];
+    expect(rows().slice(0, top + 3)).toEqual(["earlier", "> hi", "", ...slept]);
     keys.abort();
     view.turn(false);
   });

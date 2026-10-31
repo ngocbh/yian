@@ -145,32 +145,116 @@ describe("after a resize", () => {
   });
 });
 
-describe("after a clear", () => {
-  test("the next frame erases the screen, not the scrollback, and draws every row", () => {
+describe("after a rerender", () => {
+  test("the next frame goes up to the live rows' top, clears below and draws every row", () => {
     const { output, live, draw, view, writes } = setup();
     output.write("printed for good\r\n");
     draw(["reply", "spin", "box"], { line: 2, before: "b" });
-    live.clear();
+    live.rerender();
     const text = draw(["reply", "spin", "box"], { line: 2, before: "b" });
     expect(writes).toHaveLength(2);
-    expect(text.startsWith(`${SYNC_ON}\x1b[?25l\x1b[2J\x1b[H`)).toBe(true);
+    expect(text.startsWith(`${SYNC_ON}\x1b[?25l\x1b[2A\r\x1b[J`)).toBe(true);
+    expect(text).not.toContain("\x1b[2J");
     expect(text).not.toContain("\x1b[3J");
+    expect(text).not.toContain("printed for good");
     for (const row of ["reply", "spin", "box"]) expect(text.split(row)).toHaveLength(2);
-    expect(view().rows).toEqual(["reply", "spin", "box"]);
-    expect(view().scrollback).toEqual(["printed for good", "reply", "spin", "box"]);
-    expect(view().cursor).toEqual({ row: 2, col: 1 });
+    expect(view().rows).toEqual(["printed for good", "reply", "spin", "box"]);
+    expect(view().scrollback).toEqual([]);
+    expect(view().cursor).toEqual({ row: 3, col: 1 });
   });
 
-  test("a flush with nothing set redraws the rows on screen, then frames go on", () => {
-    const { live, draw, view } = setup();
-    draw(["a", "b"]);
-    live.clear();
-    live.stage(["card"]);
+  test("draws the rows printed last again, and frames go on from there", () => {
+    const { output, live, draw, view } = setup();
+    live.stage(["above"]);
     live.flush();
-    expect(view().rows).toEqual(["card", "a", "b"]);
-    const text = draw(["a", "c"]);
-    expect(text).not.toContain("\x1b[2J");
-    expect(view().rows).toEqual(["card", "a", "c"]);
+    const mark = live.printed;
+    live.stage(["card"]);
+    draw(["one", "two"]);
+    live.rerender(live.printed - mark);
+    const before = output.text.length;
+    live.flush();
+    const text = output.text.slice(before);
+    expect(text).toContain("\x1b[2A\r\x1b[J");
+    expect(text).not.toContain("above");
+    for (const row of ["card", "one", "two"]) expect(text.split(row)).toHaveLength(2);
+    expect(view().rows).toEqual(["above", "card", "one", "two"]);
+    const next = draw(["one", "six"]);
+    expect(next).not.toContain("\x1b[J");
+    expect(view().rows).toEqual(["above", "card", "one", "six"]);
+    // The card was drawn again, not printed anew.
+    expect(live.printed).toBe(mark + 1);
+  });
+
+  test("draws no more rows than the screen holds, so none goes to the scrollback twice", () => {
+    const { output, live, draw } = setup();
+    output.rows = 10;
+    const card = Array.from({ length: 12 }, (_, i) => `card${i + 1}`);
+    const box = ["top", "> hi", "bottom", "hint"];
+    live.stage(card);
+    draw(box, { line: 1, before: "> hi" });
+    const shown = screen(output.text, COLUMNS, 10);
+    for (let press = 0; press < 3; press++) {
+      live.rerender(card.length);
+      live.flush();
+    }
+    const after = screen(output.text, COLUMNS, 10);
+    expect(after.scrollback).toEqual(shown.scrollback);
+    expect(after.scrollback).toEqual(card.slice(0, 6));
+    expect(after.rows).toEqual(shown.rows);
+    expect(after.cursor).toEqual(shown.cursor);
+  });
+
+  test("after the width changed, draws only the live rows, not those laid out before", () => {
+    const { output, live, draw, view } = setup();
+    live.stage(["card"]);
+    draw(["one", "two"]);
+    output.columns = 30;
+    live.rerender(1);
+    const before = output.text.length;
+    live.flush();
+    const text = output.text.slice(before);
+    expect(text).toContain("\x1b[1A\r\x1b[J");
+    expect(text).not.toContain("card");
+    expect(view().rows).toEqual(["card", "one", "two"]);
+    // A frame at the new width doesn't make them safe to draw again either.
+    live.rerender(1);
+    live.flush();
+    expect(output.text.slice(before)).not.toContain("card");
+    // Rows printed at the new width are.
+    live.stage(["new"]);
+    draw(["one", "two"]);
+    live.rerender(1);
+    const again = output.text.length;
+    live.flush();
+    expect(output.text.slice(again)).toContain("new");
+    expect(view().rows).toEqual(["card", "new", "one", "two"]);
+  });
+
+  test("after a resize, draws only the live rows", () => {
+    const { output, live, draw } = setup();
+    live.stage(["card"]);
+    draw(["one", "two"]);
+    live.lose();
+    live.rerender(1);
+    const before = output.text.length;
+    live.flush();
+    const text = output.text.slice(before);
+    expect(text).toContain("\x1b[1A\r\x1b[J");
+    expect(text).not.toContain("card");
+  });
+
+  test("draws only the rows above that are still on the screen", () => {
+    const { output, live, draw } = setup();
+    output.rows = 3;
+    live.stage(["c1", "c2", "c3"]);
+    draw(["a"]);
+    live.rerender(3);
+    const before = output.text.length;
+    live.flush();
+    const text = output.text.slice(before);
+    expect(text).toContain("\x1b[2A\r\x1b[J");
+    expect(text).not.toContain("c1");
+    for (const row of ["c2", "c3", "a"]) expect(text.split(row)).toHaveLength(2);
   });
 });
 

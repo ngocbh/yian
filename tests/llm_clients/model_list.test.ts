@@ -454,6 +454,20 @@ test("timeout is shared by every page", async () => {
   expect(fake.calls.map((call) => call.timeoutMs)).toEqual([400, 250, 100]);
 });
 
+test("a timeout past the safe milliseconds still lists", async () => {
+  // A clock near the real one: the clamped deadline is then past 2^53, where adding rounds.
+  const scheduler = virtualScheduler(Date.now());
+  const fake = server((call) => {
+    // The real transport's sleep refuses a non-finite timeout the same way.
+    if (!Number.isFinite(call.timeoutMs)) throw new RangeError(`sleep needs a finite number of milliseconds, got ${call.timeoutMs}`);
+    return new HttpResponse(200, { data: [{ id: "m-b" }, { id: "m-a" }] });
+  });
+  const ids = await listModels("openai", { apiKey: KEY, timeout: 1e308, scheduler, request: fake });
+  expect(ids).toEqual(["m-a", "m-b"]);
+  expect(fake.calls[0]!.timeoutMs).toBeGreaterThan(0);
+  expect(Number.isFinite(fake.calls[0]!.timeoutMs)).toBe(true);
+});
+
 describe("a cursor that comes back is invalid", () => {
   const rows: [string, (call: Call) => HttpResponse][] = [
     ["anthropic", () => new HttpResponse(200, { data: [{ id: "m" }], has_more: true, last_id: "m" })],

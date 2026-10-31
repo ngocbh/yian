@@ -32,7 +32,7 @@ import {
 } from "../llm_clients/connection_settings.ts";
 import { callCredentials, ConnectionSnapshot } from "../llm_clients/connection.ts";
 import { chatModelFromConfig, warnOnce } from "../llm_clients/factory.ts";
-import { listModels, MODEL_LIST_TIMEOUT_SECONDS, ModelListError } from "../llm_clients/model_list.ts";
+import { listModels, MODEL_LIST_TIMEOUT_SECONDS, ModelListError, timeoutMilliseconds } from "../llm_clients/model_list.ts";
 import { ValidationError } from "../llm_clients/provider_blocks.ts";
 import { redactKeys } from "../llm_clients/redact.ts";
 import { realScheduler, type Scheduler } from "../platform.ts";
@@ -955,7 +955,7 @@ export async function configCheck(command: ParsedArgs, io: CliIo): Promise<numbe
   } else if (errors.length === 0) {
     await io.stdout.write("ok\n");
   } else {
-    for (const { field, message } of errors) await io.stderr.write(`${field ? `${field}: ${message}` : message}\n`);
+    await io.stderr.write(errors.map(({ field, message }) => `${field ? `${field}: ${message}` : message}\n`).join(""));
   }
   return errors.length === 0 ? 0 : 1;
 }
@@ -1082,8 +1082,7 @@ export async function models(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}
       };
     }
   } else {
-    // Milliseconds past the safe integers (above about 1.8e305 s overflow to Infinity) are clamped.
-    const timeoutMs = Math.min(timeout * 1000, Number.MAX_SAFE_INTEGER);
+    const timeoutMs = timeoutMilliseconds(timeout);
     try {
       listed = await subscriptionModels(authFile!, timeoutMs, io, deps);
     } catch (failure) {
@@ -1112,6 +1111,7 @@ export async function models(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}
   }
   if (json) await printJson({ models: listed === null ? null : [...listed] }, io.stdout);
   else if (listed === null) await io.stderr.write(`${provider} has no model listing\n`);
-  else for (const model of listed) await io.stdout.write(`${forTerminal(model, io.stdout)}\n`);
+  // One write for the whole listing: a write per id costs a round trip each on long lists.
+  else if (listed.length > 0) await io.stdout.write(listed.map((model) => `${forTerminal(model, io.stdout)}\n`).join(""));
   return 0;
 }

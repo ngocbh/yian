@@ -18,6 +18,9 @@ import {
 } from "../../src/llm/executor.ts";
 import { SSEEvent } from "../../src/llm/framing.ts";
 import { Message, Request, Response as ModelResponse, TextPart } from "../../src/llm/messages.ts";
+import { AnthropicMessages } from "../../src/llm/protocols/anthropic_messages.ts";
+import { Gemini } from "../../src/llm/protocols/gemini.ts";
+import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { OpenAIResponses } from "../../src/llm/protocols/openai_responses.ts";
 import { type Cassette, CassetteReplay, ScriptedModel } from "../../src/llm/testing.ts";
 import { Route } from "../../src/llm/route.ts";
@@ -742,6 +745,150 @@ describe("RouteModel reply", () => {
     };
     expect(await rejection(drain(model(send, protocol).stream(REQUEST)))).toBe(defect);
     expect(sent[0]!.signal.aborted).toBe(true);
+  });
+});
+
+describe("RouteModel 2xx reply that is not an event stream", () => {
+  const INVALID_KEY = '{"error":{"message":"Invalid API key provided","type":"invalid_request_error"}}';
+  const COMPLETION = JSON.stringify({
+    id: "x",
+    choices: [{ index: 0, message: { role: "assistant", content: "Hello json" }, finish_reason: "stop" }],
+  });
+  const JSON_TYPE = { "content-type": "application/json" };
+  const SSE_TYPE = { "content-type": "text/event-stream" };
+
+  /** A vllm model over OpenAI Chat Completions, sending with `send`. */
+  const vllm = (send: Send, auth: Auth = new BearerAuth(KEY)): RouteModel =>
+    model(send, new OpenAIChat({ model: "m", provider: "vllm" }), { provider: "vllm", path: "chat/completions", auth });
+
+  /** Return the error one call over `m` ends with. */
+  const failure = async (m: RouteModel): Promise<ProviderError> => {
+    const error = await rejection(drain(m.stream(REQUEST)));
+    expect(error).toBeInstanceOf(ProviderError);
+    return error as ProviderError;
+  };
+
+  /** Check that `error` is the non-retryable error for a 200 reply of `type` showing `detail`. */
+  const expectNotStream = (error: ProviderError, provider: string, type: string, detail: string): void => {
+    expect(error.message).toBe(`${provider} returned a reply that is not an event stream (${type}): ${detail}`);
+    expect(error.kind).toBe("protocol");
+    expect(error.retryable).toBe(false);
+    expect(error.status).toBe(200);
+    expect(error.provider).toBe(provider);
+  };
+
+  /** Check that `error` is the retryable error for a stream cut short. */
+  const expectCutShort = (error: ProviderError, provider = "vllm"): void => {
+    expect(error.message).toBe(`${provider} stream ended before a complete response`);
+    expect(error.kind).toBe("incomplete");
+    expect(error.retryable).toBe(true);
+  };
+
+  test("a JSON error body is sent once and names its content type and message", async () => {
+    const replies = Array.from({ length: 7 }, (): Reply => ({ headers: JSON_TYPE, body: [INVALID_KEY] }));
+    const { send, sent } = fake(...replies);
+    const error = await rejection(callWithRetries(vllm(send), REQUEST, { budget: 6, scheduler: virtualScheduler(0) }));
+    expect(error).toBeInstanceOf(ProviderError);
+    expectNotStream(error as ProviderError, "vllm", "content-type application/json", "Invalid API key provided");
+    expect(sent).toHaveLength(1);
+  });
+
+  test("an HTML body names its media type and shows the page", async () => {
+    const headers = { "content-type": "Text/HTML; charset=utf-8" };
+    const { send } = fake({ headers, body: ["<html>\n", "gateway</html>\n"] });
+    expectNotStream(await failure(vllm(send)), "vllm", "content-type text/html", "<html> gateway</html>");
+  });
+
+  test("a complete non-streamed completion is not read as a stream", async () => {
+    const { send } = fake({ headers: JSON_TYPE, body: [COMPLETION] });
+    expectNotStream(await failure(vllm(send)), "vllm", "content-type application/json", COMPLETION);
+  });
+
+  test("a body with no content-type says so", async () => {
+    const { send } = fake({ body: [INVALID_KEY] });
+    expectNotStream(await failure(vllm(send)), "vllm", "no content-type", "Invalid API key provided");
+  });
+
+  test("a JSON error labelled as an event stream is still not one", async () => {
+    const { send } = fake({ headers: SSE_TYPE, body: [INVALID_KEY] });
+    expectNotStream(await failure(vllm(send)), "vllm", "content-type text/event-stream", "Invalid API key provided");
+  });
+
+  const protocols: [string, () => WireProtocol, string][] = [
+    [
+      "anthropic_messages",
+      () => new AnthropicMessages({ model: "claude-opus-5-5", provider: "anthropic" }),
+      "anthropic",
+    ],
+    ["gemini", () => new Gemini({ model: "gemini-2.5-pro", provider: "google" }), "google"],
+    ["openai_responses", () => new OpenAIResponses({ model: "gpt-5.5", provider: "openai" }), "openai"],
+    [
+      "openai_responses over the subscription",
+      () => new OpenAIResponses({ model: "gpt-5.5", provider: "openai", subscription: true }),
+      "openai",
+    ],
+  ];
+  for (const [name, protocol, provider] of protocols) {
+    test(`a JSON error body over ${name} is sent once`, async () => {
+      const reply: Reply = { headers: JSON_TYPE, body: [INVALID_KEY] };
+      const { send, sent } = fake(reply, { ...reply, body: [INVALID_KEY] });
+      const m = model(send, protocol(), { provider, auth: new BearerAuth(KEY) });
+      const error = await rejection(callWithRetries(m, REQUEST, { budget: 1, scheduler: virtualScheduler(0) }));
+      expect(error).toBeInstanceOf(ProviderError);
+      expectNotStream(error as ProviderError, provider, "content-type application/json", "Invalid API key provided");
+      expect(sent).toHaveLength(1);
+    });
+  }
+
+  test("a body echoing the key holds no part of it", async () => {
+    const { send } = fake({ headers: JSON_TYPE, body: [`{"error":{"message":"bad key ${KEY}"}}`] });
+    const error = await failure(vllm(send));
+    expectScrubbed(error, KEY);
+    expectNotStream(error, "vllm", "content-type application/json", "bad key [REDACTED]");
+  });
+
+  test("a body cut at 64 KiB through the key holds no part of it", async () => {
+    // Collapsed whitespace brings the cut inside the 2,000-code-point cap.
+    const { send } = fake({ headers: { "content-type": "text/plain" }, body: ["gateway" + " ".repeat(65523) + KEY] });
+    const error = await failure(vllm(send));
+    expect(error.message).not.toContain("sk-t");
+    expectNotStream(error, "vllm", "content-type text/plain", "gateway");
+  });
+
+  test("an SSE stream cut after an event is still retryable", async () => {
+    const chunk = { id: "chatcmpl-1", choices: [{ index: 0, delta: { content: "Hi" }, finish_reason: null }] };
+    const { send } = fake({ headers: SSE_TYPE, body: [`data: ${JSON.stringify(chunk)}\n\n`] });
+    expectCutShort(await failure(vllm(send)));
+  });
+
+  test("an SSE stream cut during its first line is still retryable", async () => {
+    const { send } = fake({ headers: SSE_TYPE, body: ['data: {"id":"chatcmpl-1","choices":[{"index":0,'] });
+    expectCutShort(await failure(vllm(send)));
+    const anthropic = new AnthropicMessages({ model: "claude-opus-5-5", provider: "anthropic" });
+    const second = fake({ headers: SSE_TYPE, body: ["event: message_st"] });
+    expectCutShort(await failure(model(second.send, anthropic, { provider: "anthropic" })), "anthropic");
+  });
+
+  test("a stream of only comments is still retryable", async () => {
+    const { send } = fake({ headers: SSE_TYPE, body: [": OPENROUTER PROCESSING\n\n", ": OPENROUTER PROCESSING\n\n"] });
+    expectCutShort(await failure(vllm(send)));
+  });
+
+  test("an empty or blank body is still retryable", async () => {
+    for (const body of [[], ["\n\r\n  \n"]]) {
+      const { send } = fake({ headers: SSE_TYPE, body });
+      expectCutShort(await failure(vllm(send)));
+    }
+  });
+
+  test("a stream with a wrong or no content-type is still read", async () => {
+    const chunk = { id: "chatcmpl-1", choices: [{ index: 0, delta: { content: "Hi" }, finish_reason: "stop" }] };
+    for (const headers of [{ "content-type": "text/plain" }, JSON_TYPE, undefined]) {
+      const { send } = fake({ headers, body: [`data: ${JSON.stringify(chunk)}\n\n`, "data: [DONE]\n\n"] });
+      const events = await drain(vllm(send).stream(REQUEST));
+      expect(events[0]).toEqual(new TextDelta(0, "Hi"));
+      expect(events.at(-1)).toBeInstanceOf(Finish);
+    }
   });
 });
 

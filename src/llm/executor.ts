@@ -15,9 +15,9 @@ import { realScheduler, type Scheduler, type Send } from "../platform.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import { dropCredentialTail, scrub } from "./auth.ts";
 import { encodeBody } from "./body.ts";
-import { capDetail, errorFromResponse, MAX_RETRY_AFTER_SECONDS, ProviderError } from "./errors.ts";
+import { capDetail, errorFromResponse, MAX_RETRY_AFTER_SECONDS, nonStreamError, ProviderError } from "./errors.ts";
 import { type ChatModel, type Event, EventStream, ReplyAssembler } from "./events.ts";
-import { iterNdjson, iterSse, type SSEEvent } from "./framing.ts";
+import { iterNdjson, iterSse, type SSEEvent, type SseStats } from "./framing.ts";
 import type { Message, Request, Response } from "./messages.ts";
 import type { Route } from "./route.ts";
 import { type Exchange, openExchange } from "./transport.ts";
@@ -89,7 +89,9 @@ export class RouteModel implements ChatModel {
    * body with `content-type` and `accept` of `application/json`, overridden by the route's
    * headers, then by the auth headers, case-insensitively. A non-2xx reply throws a
    * `ProviderError` built from at most 64 KiB of its body; a 2xx reply's frames go to the
-   * protocol, and a `ProviderError` from parsing that names no provider gets the route's;
+   * protocol. When an SSE parse ends `incomplete` but the body held text and no SSE line (a JSON
+   * or HTML reply), a non-retryable `protocol` error built from the body's first 64 KiB takes
+   * its place. A `ProviderError` from parsing that names no provider gets the route's;
    * the status error and the parse error are both scrubbed of the route's credentials, and the
    * parse error's message is then capped at 2,000 code points.
    * Closing the stream aborts the request.
@@ -132,15 +134,30 @@ export class RouteModel implements ChatModel {
       });
       throw scrubbed(error, credentials);
     }
+    const stats: SseStats = { sseLines: 0 };
+    const head: Head = { chunks: [], size: 0 };
     try {
-      if (protocol.framing === "sse") yield* protocol.parse(iterSse(exchange.body));
-      else yield* protocol.parse(iterNdjson(exchange.body));
+      if (protocol.framing === "sse") {
+        yield* protocol.parse(iterSse(keepHead(exchange.body, head, stats), undefined, stats));
+      } else {
+        yield* protocol.parse(iterNdjson(exchange.body));
+      }
     } catch (error) {
+      if (!(error instanceof ProviderError)) throw error;
+      const credentials = route.auth.credentials();
+      let failure = error;
+      // A body with no SSE line was never a stream, so sending it again gets the same reply.
+      if (protocol.framing === "sse" && error.kind === "incomplete" && stats.sseLines === 0) {
+        const text = scrub(headText(head.chunks, head.size, credentials), credentials);
+        if (/\S/.test(text)) {
+          failure = nonStreamError(exchange.status, exchange.headers, text, { provider: route.provider, credentials });
+        }
+      }
       // Protocol parsers don't know the route.
-      if (error instanceof ProviderError && error.provider === null) error.provider = route.provider;
+      if (failure.provider === null) failure.provider = route.provider;
       // Provider text, SSE error events included, may echo a credential the protocol never holds.
       // Capped only after the scrub, so a cut can't leave part of a credential unmatched.
-      throw error instanceof ProviderError ? scrubbed(error, route.auth.credentials(), true) : error;
+      throw scrubbed(failure, credentials, true);
     } finally {
       // `body.return()` releases nothing before the body's first read.
       exchange.abort();
@@ -170,6 +187,39 @@ async function readErrorBody(exchange: Exchange, credentials: readonly string[])
     // The status already names the failure.
     if (!(error instanceof ProviderError)) throw error;
   }
+  return headText(chunks, size, credentials);
+}
+
+/** The first bytes of a 2xx body, kept in case it turns out not to be a stream. */
+interface Head {
+  /** Copies of the body's first chunks, at most 64 KiB in all. */
+  chunks: Uint8Array[];
+  /** Their total size in bytes. */
+  size: number;
+}
+
+/**
+ * Yield `chunks` unchanged, copying into `head` what arrives while it holds under 64 KiB and
+ * `stats` has counted no SSE line.
+ */
+async function* keepHead(chunks: AsyncIterable<Uint8Array>, head: Head, stats: SseStats): AsyncGenerator<Uint8Array> {
+  for await (const chunk of chunks) {
+    if (stats.sseLines === 0 && head.size < MAX_ERROR_BODY) {
+      // Copied, since the source may reuse the chunk's buffer once it moves on.
+      const part = chunk.slice(0, MAX_ERROR_BODY - head.size);
+      head.chunks.push(part);
+      head.size += part.byteLength;
+    }
+    yield chunk;
+  }
+}
+
+/**
+ * Return the first 64 KiB of `chunks`, `size` bytes in all, decoded as UTF-8 with replacement.
+ * Text cut at the cap loses what `dropCredentialTail` drops: the cut may split a credential, and
+ * no scrub matches the part before it.
+ */
+function headText(chunks: readonly Uint8Array[], size: number, credentials: readonly string[]): string {
   const bytes = new Uint8Array(Math.min(size, MAX_ERROR_BODY));
   let at = 0;
   for (const chunk of chunks) {

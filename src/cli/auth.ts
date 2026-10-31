@@ -58,7 +58,7 @@ const SETTINGS_NEED_API_KEY = "--organization, --project and --header apply to A
 export const EXTRA_FIELD = `llm_config has an extra field; the fields are ${[...LLM_CONFIG_KEYS].sort(compareCodeUnits).join(", ")}`;
 
 /** The prompts `auth` asks on a terminal. */
-type AuthTerminal = Pick<Terminal, "askText" | "askChoice" | "close">;
+export type AuthTerminal = Pick<Terminal, "askText" | "askChoice" | "close">;
 
 /** What the handlers reach the outside through; each defaults to the real one. Tests pass fakes. */
 export interface AuthDeps {
@@ -732,6 +732,67 @@ async function setupProvider(
 }
 
 /**
+ * Sign in to `name` with `options` (`checkOptions` checked them), save the login in `store`, and
+ * say which provider is the default.
+ *
+ * @throws {AuthError} As `setupOpenai` and `setupProvider` do.
+ */
+async function saveLogin(
+  store: AuthStore,
+  name: string,
+  options: AuthOptions,
+  sources: ReadonlyMap<string, string | null>,
+  ctx: SetupContext,
+): Promise<void> {
+  // Reading first also diagnoses an unusable store before account sign-in.
+  const current = store.read().defaultProvider;
+  if (name === "openai") {
+    const { method, login, model, apiKeyEnv, organization, project } = options;
+    const keyEnv = apiKeyEnv ?? "OPENAI_API_KEY";
+    await setupOpenai(store, method, login, model, keyEnv, current === null, organization, project, sources, ctx);
+  } else {
+    const { model, apiKeyEnv, endpoint } = options;
+    await setupProvider(store, name, model, apiKeyEnv, endpoint, current === null, sources, ctx);
+  }
+  if (current === null || current === name) {
+    await ctx.io.stdout.write(`Default provider: ${name}\n`);
+  } else {
+    await ctx.io.stdout.write(`Default provider: ${current} (switch with 'yian auth ${name} --default')\n`);
+  }
+}
+
+/**
+ * Sign in to `provider` and save the login in `io.env`'s store, as `yian auth PROVIDER` does with
+ * no options: its prompts go to `terminal`, or with none a key must come from its variable, and
+ * what it prints to `io.stdout`. A cancelled or failed sign-in saves nothing.
+ *
+ * @throws {AuthError} The provider isn't supported, or the sign-in failed or was cancelled.
+ */
+export async function signIn(
+  provider: string,
+  io: CliIo,
+  terminal: AuthTerminal | null,
+  deps: AuthDeps,
+  signal: AbortSignal,
+): Promise<void> {
+  const ctx: SetupContext = { io, deps, terminal, signal };
+  const options: AuthOptions = { header: [], default: false, remove: false };
+  const [name, sources] = checkOptions(provider, options, ctx);
+  await saveLogin(new AuthStore(null, { env: io.env, signal }), name, options, sources, ctx);
+}
+
+/** The providers with a usable login saved in `io.env`'s store; none when it can't be read. */
+export function savedLogins(io: Pick<CliIo, "env">): ReadonlySet<string> {
+  try {
+    const { selections } = new AuthStore(null, { env: io.env }).read();
+    return new Set(selections.filter(isUsableLogin).map((selection) => selection.provider));
+  } catch (error) {
+    if (error instanceof AuthError) return new Set();
+    throw error;
+  }
+}
+
+/**
  * List, set up, choose the default among, or remove saved provider logins.
  *
  * `yian auth` lists the saved logins and the default.
@@ -850,21 +911,7 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
       await io.stdout.write(`Default provider: ${name}\n`);
       return 0;
     }
-    // Reading first also diagnoses an unusable store before account sign-in.
-    const current = store.read().defaultProvider;
-    if (name === "openai") {
-      const { method, login, model, apiKeyEnv, organization, project } = options;
-      const keyEnv = apiKeyEnv ?? "OPENAI_API_KEY";
-      await setupOpenai(store, method, login, model, keyEnv, current === null, organization, project, sources, ctx);
-    } else {
-      const { model, apiKeyEnv, endpoint } = options;
-      await setupProvider(store, name, model, apiKeyEnv, endpoint, current === null, sources, ctx);
-    }
-    if (current === null || current === name) {
-      await io.stdout.write(`Default provider: ${name}\n`);
-    } else {
-      await io.stdout.write(`Default provider: ${current} (switch with 'yian auth ${name} --default')\n`);
-    }
+    await saveLogin(store, name, options, sources, ctx);
     return 0;
   } catch (error) {
     if (stop.signal.aborted) {

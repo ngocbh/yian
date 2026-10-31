@@ -246,6 +246,7 @@ with `NO_COLOR`, it prints plain lines.
 | Ctrl-C | Stops the reply. A second Ctrl-C within 2 seconds, or one at the prompt, ends the chat |
 | `/` | Lists the commands
 | `/model` | Picks the model of the next replies, and of the flows the assistant starts after it, from your logins |
+| `/provider` | Picks a provider, signing in to it as `yian auth` does when it has no saved login, then one of its models |
 | `/resume` | Ends this chat, as `/exit` does, and goes on from an earlier chat in this folder in a new one; its waiting flows stay as they are |
 | `/exit`, `/quit` or Ctrl-D | Leaves the chat |
 | Ctrl-L | Rerenders the screen |

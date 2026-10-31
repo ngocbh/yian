@@ -322,6 +322,22 @@ async function ctrlCReturnsNullAndCallsOnStopOnce(): Promise<void> {
   assert.deepEqual(stops, ["interrupt"]);
 }
 
+async function aCancellableTextPromptEndsOnEscOrCtrlCAndTheTerminalStaysOpen(): Promise<void> {
+  const stops: string[] = [];
+  const { input, terminal } = setup({ onStop: (reason) => stops.push(reason) });
+  const escaped = terminal.askText("Key:", { secret: true, cancellable: true });
+  input.write("abc" + ESCAPE);
+  assert.equal(await escaped, null);
+  const interrupted = terminal.askText("Key:", { secret: true, cancellable: true });
+  input.write("abc" + CTRL_C);
+  assert.equal(await interrupted, null);
+  assert.deepEqual(stops, []);
+  // The terminal is still open: the next prompt reads a line.
+  const next = terminal.askText("Name:");
+  input.write("ok" + ENTER);
+  assert.equal(await next, "ok");
+}
+
 async function ctrlDOnAnEmptyLineIsTheEndOfInput(): Promise<void> {
   const stops: string[] = [];
   const { input, output, terminal, exitHooks } = setup({ onStop: (reason) => stops.push(reason) });
@@ -3852,6 +3868,8 @@ export const SCENARIOS: Readonly<Record<string, () => Promise<void>>> = {
   "a blank answer returns an empty string": aBlankAnswerReturnsAnEmptyString,
   "a secret is masked and never echoed": aSecretIsMaskedAndNeverEchoed,
   "Ctrl-C returns null and calls onStop once": ctrlCReturnsNullAndCallsOnStopOnce,
+  "a cancellable text prompt ends on Esc or Ctrl-C and the terminal stays open":
+    aCancellableTextPromptEndsOnEscOrCtrlCAndTheTerminalStaysOpen,
   "Ctrl-D on an empty line is the end of input": ctrlDOnAnEmptyLineIsTheEndOfInput,
   "the end of input returns null": theEndOfInputReturnsNull,
   "Ctrl-D on a non-empty line is ignored": ctrlDOnANonEmptyLineIsIgnored,

@@ -839,3 +839,29 @@ test(
   },
   TIMEOUT,
 );
+
+test(
+  "/provider off a terminal lists the providers by number, and a login it can't prompt for fails",
+  async () => {
+    const { io, stdin, stderr } = chatIo();
+    stdin.write("/provider\n3\nhello\n/exit\n");
+    const model = new AnsweringModel(() => textReply("noted"));
+    const access = serving(model, env);
+    const code = await chat(undefined, { engineTrace: false }, io, {
+      root,
+      models: access,
+      signals: new EventEmitter(),
+    });
+    expect(code).toBe(0);
+    expect(stderr()).toContain(
+      "Provider for the next replies:\n  1. openai · not logged in\n" +
+        "  2. xai · not logged in (current)\n  3. deepseek · not logged in\n",
+    );
+    expect(stderr()).toContain(
+      "(Set DEEPSEEK_API_KEY before API-key setup, or run in an interactive terminal; " +
+        "the model is unchanged)\n",
+    );
+    expect(builtWith(access)).toEqual(["xai/grok-4.3"]);
+  },
+  TIMEOUT,
+);

@@ -369,7 +369,8 @@ function sameUnits(a: readonly Unit[], b: readonly Unit[]): boolean {
 }
 
 /**
- * A one-line text editor; `mask` draws `*` per character and keeps the answer off the screen. With
+ * A one-line text editor; `mask` draws `*` per character and keeps the answer off the screen, and
+ * with `escapes` Esc ends it as Ctrl-C does. With
  * `collapse`, a long paste (more than `PASTE_LINES` lines or `PASTE_CHARS` characters) goes in as
  * one token, which the caret and the deleting keys treat as one character and the answer expands.
  */
@@ -381,6 +382,7 @@ function textWidget(options: {
   instruction?: string;
   validate?: (text: string) => string | undefined;
   collapse?: boolean;
+  escapes?: boolean;
 }): Widget<string> & {
   text(): string;
   caret(): number;
@@ -419,6 +421,7 @@ function textWidget(options: {
       const newline = key.name === "return" || key.name === "enter";
       error = undefined;
       if (key.paste) paste(key.str ?? "");
+      else if (options.escapes && key.name === "escape") return { stop: "interrupt" };
       else if (newline) {
         const answer = text();
         error = options.validate?.(answer);
@@ -1098,16 +1101,26 @@ export class Terminal {
     return new LineEditor({ ...options, ...size });
   }
 
-  /** A free-text or hidden prompt; null when the user cancels or the terminal is closed. */
+  /**
+   * A free-text or hidden prompt; null when the user cancels or the terminal is closed. With
+   * `cancellable`, Esc cancels it too, and neither Esc nor Ctrl-C goes to `onStop`.
+   */
   async askText(
     label: string,
-    options: { initial?: string; secret?: boolean; signal?: AbortSignal } = {},
+    options: {
+      initial?: string;
+      secret?: boolean;
+      signal?: AbortSignal;
+      cancellable?: boolean;
+    } = {},
   ): Promise<string | null> {
+    const escapes = options.cancellable === true;
+    const { initial, secret } = options;
     const ended = await this.#runTurn(
       options.signal,
-      (run) => run(textWidget({ label, initial: options.initial, mask: options.secret })),
+      (run) => run(textWidget({ label, initial, mask: secret, escapes })),
       // A plain terminal leaves the tty cooked, which would echo the secret as it is typed.
-      { raw: options.secret === true },
+      { raw: secret === true, keepOpen: escapes },
     );
     return "value" in ended ? ended.value : null;
   }

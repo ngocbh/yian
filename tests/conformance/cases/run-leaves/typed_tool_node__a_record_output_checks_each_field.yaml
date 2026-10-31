@@ -31,7 +31,7 @@ expect:
     status: failed
     failure:
       code: contract.output
-      message: '"bad" does not match declared type int'
+      message: 'output at qty: "bad" does not match declared type int'
       frames:
       - label: flow.yaml
         range: [9, 19, 9, 22]
@@ -65,7 +65,7 @@ expect:
     - place
     - failure:
         code: contract.output
-        message: '"bad" does not match declared type int'
+        message: 'output at qty: "bad" does not match declared type int'
         frames:
         - label: flow.yaml
           range: [9, 19, 9, 22]
@@ -83,7 +83,7 @@ expect:
   - - NodeFailed
     - failure:
         code: contract.output
-        message: '"bad" does not match declared type int'
+        message: 'output at qty: "bad" does not match declared type int'
         frames:
         - label: flow.yaml
           range: [9, 19, 9, 22]
@@ -91,7 +91,7 @@ expect:
   - - RunFailed
     - failure:
         code: contract.output
-        message: '"bad" does not match declared type int'
+        message: 'output at qty: "bad" does not match declared type int'
         frames:
         - label: flow.yaml
           range: [9, 19, 9, 22]

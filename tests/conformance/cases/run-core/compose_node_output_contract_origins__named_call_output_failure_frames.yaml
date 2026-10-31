@@ -30,7 +30,7 @@ expect:
         range: [15, 3, 15, 9]
       - label: flow.yaml
         range: [12, 18, 12, 21]
-      message: '"bad" does not match declared type int'
+      message: 'output at profile.age: "bad" does not match declared type int'
       node: invoke/emit
   trace:
   - - run_started
@@ -78,7 +78,7 @@ expect:
           range: [15, 3, 15, 9]
         - label: flow.yaml
           range: [12, 18, 12, 21]
-        message: '"bad" does not match declared type int'
+        message: 'output at profile.age: "bad" does not match declared type int'
         node: invoke/emit
   events:
   - [RunStarted]
@@ -111,7 +111,7 @@ expect:
           range: [15, 3, 15, 9]
         - label: flow.yaml
           range: [12, 18, 12, 21]
-        message: '"bad" does not match declared type int'
+        message: 'output at profile.age: "bad" does not match declared type int'
         node: invoke/emit
   - - RunFailed
     - failure:
@@ -121,5 +121,5 @@ expect:
           range: [15, 3, 15, 9]
         - label: flow.yaml
           range: [12, 18, 12, 21]
-        message: '"bad" does not match declared type int'
+        message: 'output at profile.age: "bad" does not match declared type int'
         node: invoke/emit

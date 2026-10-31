@@ -41,7 +41,7 @@ expect:
       frames:
       - label: flow.yaml
         range: [22, 14, 22, 24]
-      message: 'value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
+      message: 'output at notes[1]: value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
       node: d
   trace:
   - - run_started
@@ -87,7 +87,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [22, 14, 22, 24]
-        message: 'value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
+        message: 'output at notes[1]: value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
         node: d
   events:
   - [RunStarted]
@@ -112,7 +112,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [22, 14, 22, 24]
-        message: 'value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
+        message: 'output at notes[1]: value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
         node: d
   - - RunFailed
     - failure:
@@ -120,5 +120,5 @@ expect:
         frames:
         - label: flow.yaml
           range: [22, 14, 22, 24]
-        message: 'value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
+        message: 'output at notes[1]: value matches no member of Union({"num":int},{"text":str}): {"num":int}: record missing required fields: ["num"]; {"text":str}: record missing required fields: ["text"]'
         node: d

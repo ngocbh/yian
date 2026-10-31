@@ -148,9 +148,9 @@ test.each([
 });
 
 test.each([
-  [{ action: "wait" }, '"wait" is not a tag of the union (expected one of ["buy","hold","sell"])'],
-  [{ qty: 2 }, `missing tag field 'action' (expected one of ["buy","hold","sell"])`],
-  [{ action: "sell", qty: 2 }, 'record missing required fields: ["price"]'],
+  [{ action: "wait" }, 'output at action: "wait" is not a tag of the union (expected one of ["buy","hold","sell"])'],
+  [{ qty: 2 }, `output at action: missing tag field 'action' (expected one of ["buy","hold","sell"])`],
+  [{ action: "sell", qty: 2 }, 'output at price: record missing required fields: ["price"]'],
 ] as const)("a code node returning an invalid tagged member fails the node (%o)", async (decision, message) => {
   const result = await run({ decision, note: { num: 1 } });
 
@@ -197,9 +197,13 @@ output: \${d.output}
 `;
 
 test.each([
-  [{ decision: { action: "bid", qty: 1 }, notes: [] }, '"bid" is not a tag of the union (expected one of ["buy","sell"])', "decision"],
-  [{ decision: { action: "sell", qty: "x", price: 1.0 }, notes: [] }, '"x" does not match declared type int', "decision"],
-  [{ decision: BUY, notes: [{ text: "a" }, { zz: 1 }] }, "value matches no member of Union(", "notes"],
+  [
+    { decision: { action: "bid", qty: 1 }, notes: [] },
+    'output at decision.action: "bid" is not a tag of the union (expected one of ["buy","sell"])',
+    "decision",
+  ],
+  [{ decision: { action: "sell", qty: "x", price: 1.0 }, notes: [] }, 'output at decision.qty: "x" does not match declared type int', "decision"],
+  [{ decision: BUY, notes: [{ text: "a" }, { zz: 1 }] }, "output at notes[1]: value matches no member of Union(", "notes"],
 ] as const)("a nested union failure points at the output field (%o)", async (value, message, field) => {
   const loaded = await loadFlow(NESTED_FLOW, { env });
   const result = await runFlow(loaded, { value }, { env });

@@ -79,6 +79,7 @@ import {
   jsTypeName,
   normalizeTypedFiles,
   rejectDeepNesting,
+  renderValuePath,
   type Type,
   TypeCheckError,
   TypedValue,
@@ -1298,7 +1299,8 @@ export function prepareSend(state: RunState, inbox: string, event: unknown): Pre
     [wire] = canonicalTyped(event, element);
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
-    throw new DeliveryRefused("invalid_value", `inbox ${reprText(inbox)} refuses the event: ${error.message}`, {
+    const at = error.path.length > 0 ? ` at ${renderValuePath(error.path)}` : "";
+    throw new DeliveryRefused("invalid_value", `inbox ${reprText(inbox)} refuses the event${at}: ${error.message}`, {
       cause: error,
     });
   }
@@ -1674,7 +1676,16 @@ export function preparePoolCommit(
   let valueWire: TypedWire;
   try {
     rejectDeepNesting(output, "output", { enclosingLevels });
-    [valueWire] = canonicalOutputValue(output, outputContract, declaredType);
+    try {
+      [valueWire] = canonicalOutputValue(output, outputContract, declaredType);
+    } catch (error) {
+      // The check's reason is bare; name where in the output it failed, as the nesting check does.
+      if (!(error instanceof TypeCheckError) || error.path.length === 0) throw error;
+      throw new TypeCheckError(`output at ${renderValuePath(error.path)}: ${error.message}`, {
+        path: error.path,
+        cause: error,
+      });
+    }
   } catch (error) {
     const path = error instanceof TypeCheckError ? error.path : [];
     throw new NodeDataError(error, outputContractOrigin(outputContract, path));

@@ -544,6 +544,7 @@ test("a nested input contract fallback keeps the default's precedence", () => {
   );
   expect(supplied.failureCode).toBe("contract.input");
   expect(supplied.origin).toEqual(parameterOrigin);
+  expect(supplied.message).toBe('input \'value\' at [0].score: "bad" does not match declared type int');
 
   const defaulted = bindingError(() =>
     bindParams(
@@ -562,6 +563,8 @@ test("a nested input contract fallback keeps the default's precedence", () => {
   );
   expect(defaulted.failureCode).toBe("binding.evaluate");
   expect(defaulted.origin).toEqual(defaultOrigin);
+  // A failing default names the place inside it the same way.
+  expect(defaulted.message).toBe('input \'value\' at [0].score: "bad" does not match declared type int');
 });
 
 test("applyDefaults marks an invalid authored default as binding evaluation", () => {

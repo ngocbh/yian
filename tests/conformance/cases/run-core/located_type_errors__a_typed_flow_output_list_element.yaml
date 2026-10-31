@@ -1,0 +1,26 @@
+# A typed flow output's check names the list element and field that failed.
+kind: run
+flow: |
+  id: located-flow-output
+  name: located_flow_output
+  typedefs:
+    Leg:
+      to: str
+      mode: Literal(train, car)
+  nodes:
+    make:
+      kind: code
+      code: |
+        return [{to: "a", mode: "train"}, {to: "b", mode: "boat"}];
+  output: !list(Leg) ${make.output}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      message: 'flow output at [1].mode: "boat" is not one of Literal(car, train)'
+      frames:
+      - label: flow.yaml
+        range: [12, 9, 12, 34]
+      node: __end__

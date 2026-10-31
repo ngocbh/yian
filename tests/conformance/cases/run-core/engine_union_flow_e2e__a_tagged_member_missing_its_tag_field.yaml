@@ -31,7 +31,7 @@ expect:
       frames:
       - label: flow.yaml
         range: [17, 13, 17, 21]
-      message: missing tag field 'action' (expected one of ["buy","hold","sell"])
+      message: 'output at action: missing tag field ''action'' (expected one of ["buy","hold","sell"])'
       node: d
   trace:
   - - run_started
@@ -68,7 +68,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [17, 13, 17, 21]
-        message: missing tag field 'action' (expected one of ["buy","hold","sell"])
+        message: 'output at action: missing tag field ''action'' (expected one of ["buy","hold","sell"])'
         node: d
   events:
   - [RunStarted]
@@ -88,7 +88,7 @@ expect:
         frames:
         - label: flow.yaml
           range: [17, 13, 17, 21]
-        message: missing tag field 'action' (expected one of ["buy","hold","sell"])
+        message: 'output at action: missing tag field ''action'' (expected one of ["buy","hold","sell"])'
         node: d
   - - RunFailed
     - failure:
@@ -96,5 +96,5 @@ expect:
         frames:
         - label: flow.yaml
           range: [17, 13, 17, 21]
-        message: missing tag field 'action' (expected one of ["buy","hold","sell"])
+        message: 'output at action: missing tag field ''action'' (expected one of ["buy","hold","sell"])'
         node: d

@@ -52,7 +52,7 @@ expect:
         range: [24, 3, 24, 9]
       - label: flow.yaml
         range: [22, 13, 22, 34]
-      message: 'flow output: record has unknown fields: ["price"]'
+      message: 'flow output at price: record has unknown fields: ["price"]'
       node: picked/__end__
   trace:
   - - run_started
@@ -115,7 +115,7 @@ expect:
           range: [24, 3, 24, 9]
         - label: flow.yaml
           range: [22, 13, 22, 34]
-        message: 'flow output: record has unknown fields: ["price"]'
+        message: 'flow output at price: record has unknown fields: ["price"]'
         node: picked/__end__
   events:
   - [RunStarted]
@@ -169,7 +169,7 @@ expect:
           range: [24, 3, 24, 9]
         - label: flow.yaml
           range: [22, 13, 22, 34]
-        message: 'flow output: record has unknown fields: ["price"]'
+        message: 'flow output at price: record has unknown fields: ["price"]'
         node: picked/__end__
   - - RunFailed
     - failure:
@@ -179,5 +179,5 @@ expect:
           range: [24, 3, 24, 9]
         - label: flow.yaml
           range: [22, 13, 22, 34]
-        message: 'flow output: record has unknown fields: ["price"]'
+        message: 'flow output at price: record has unknown fields: ["price"]'
         node: picked/__end__

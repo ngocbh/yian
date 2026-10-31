@@ -1,0 +1,29 @@
+# A flow input's check names the list element and field that failed, not only the input.
+kind: run
+flow: |
+  id: located-input
+  name: located_input
+  typedefs:
+    Leg:
+      to: str
+      mode: Literal(train, car)
+  input:
+    legs: !list(Leg)
+  nodes:
+    count: !int ${len(input.legs)}
+  output: ${count.output}
+inputs:
+  legs:
+  - {to: a, mode: train}
+  - {to: b, mode: boat}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      message: 'input ''legs'' at [1].mode: "boat" is not one of Literal(car, train)'
+      frames:
+      - label: flow.yaml
+        range: [8, 9, 8, 19]
+      node: __start__

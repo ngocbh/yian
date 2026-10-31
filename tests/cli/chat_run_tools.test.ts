@@ -98,6 +98,19 @@ nodes:
 output: \${hi.output}
 `;
 
+  const LEGS = `id: legs
+name: legs
+typedefs:
+  Leg:
+    to: str
+    mode: Literal(train, car)
+input:
+  legs: !list(Leg)
+nodes:
+  c: !int \${len(input.legs)}
+output: \${c.output}
+`;
+
   const ASK = `id: ask
 name: ask
 nodes:
@@ -374,6 +387,14 @@ output: done
       const missing = await rejection(Promise.resolve(invoke("start_flow", { path: "greet.yaml", inputs: {} })));
       expect(missing.message).toStartWith("bad inputs: ");
       expect(missing.message).toContain("who");
+      // A failure inside the value names where, as the start's own check does.
+      writeFileSync(join(root, "legs.yaml"), LEGS);
+      const legs = [
+        { to: "a", mode: "train" },
+        { to: "b", mode: "boat" },
+      ];
+      const nested = await rejection(Promise.resolve(invoke("start_flow", { path: "legs.yaml", inputs: { legs } })));
+      expect(nested.message).toBe('bad inputs: input \'legs\' at [1].mode: "boat" is not one of Literal(car, train)');
       expect(requests).toHaveLength(0);
     },
     TIMEOUT,

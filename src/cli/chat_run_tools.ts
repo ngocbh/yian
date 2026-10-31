@@ -24,7 +24,7 @@ import { hostInputs, skillGrants, staticNodes } from "../run.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
-import { buildValueAs, isInboxType } from "../typesys/values.ts";
+import { buildValueAs, isInboxType, renderValuePath, TypeCheckError } from "../typesys/values.ts";
 import { LIST_ITEMS } from "./chat_events.ts";
 import type { ChildRuns, ChildStatus } from "./chat_runs.ts";
 import {
@@ -219,8 +219,10 @@ function checkStartInputs(flow: ComposedFlow, inputs: unknown): void {
       try {
         buildValueAs(param.contract.type, coerced[param.name]);
       } catch (error) {
-        if (error instanceof Error) throw new TypeError(`input ${reprText(param.name)}: ${error.message}`);
-        throw error;
+        if (!(error instanceof Error)) throw error;
+        // Name where in the value it failed, as the start's own check does.
+        const at = error instanceof TypeCheckError && error.path.length > 0 ? ` at ${renderValuePath(error.path)}` : "";
+        throw new TypeError(`input ${reprText(param.name)}${at}: ${error.message}`);
       }
     }
   } catch (error) {

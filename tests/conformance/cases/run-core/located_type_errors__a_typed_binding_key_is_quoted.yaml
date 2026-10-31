@@ -1,0 +1,32 @@
+# A typed binding's check names an unknown key from the data quoted, so a dot in it reads as data.
+kind: run
+flow: |
+  id: located-binding
+  name: located_binding
+  typedefs:
+    Leg:
+      to: str
+      mode: Literal(train, car)
+  nodes:
+    make:
+      kind: code
+      code: |
+        return {to: "a", mode: "car", "a.b": 1};
+    use:
+      kind: code
+      input:
+        leg: !Leg ${make.output}
+      code: |
+        return inputs.leg.to;
+  output: ${use.output}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.type
+      message: 'binding ''leg'' at ["a.b"]: record has unknown fields: ["a.b"]'
+      frames:
+      - label: flow.yaml
+        range: [15, 12, 15, 31]
+      node: use

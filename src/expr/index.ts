@@ -18,8 +18,7 @@
  *   `|` escape around it and whether that escape co-skips as a binding (`conditionReads`,
  *   `ConditionRead`), and renames those references by occurrence (`rewriteConditionReads`).
  * - `lineage`: the routes a traced evaluation records (`evalExpr`, `evalTemplate` and
- *   `evalBinding` with `trace: true`) and the feedback transfer over them; this module re-exports
- *   the feedback value type and its checks (`FeedbackValue`, `hasFeedback`, `validateFeedback`).
+ *   `evalBinding` with `trace: true`); this module re-exports the root read type (`RootRead`).
  *
  * Flow invocation is not a `${...}` construct: it is compose's compile-time whole-value
  * `call(...)` directive, not part of this engine.
@@ -60,8 +59,7 @@ export {
 } from "./expressions.ts";
 export type { DeclaredTypes, RefRename, RefRenamed, RefStep, RootResolver } from "./expressions.ts";
 export { parseExpr } from "./grammar.ts";
-export type { FeedbackValue, RootRead } from "./lineage.ts";
-export { hasFeedback, validateFeedback } from "./lineage.ts";
+export type { RootRead } from "./lineage.ts";
 export type { ConditionRead } from "./template.ts";
 export {
   bindingCoSkips,

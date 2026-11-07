@@ -8,16 +8,7 @@ import { expect, test } from "bun:test";
 
 import { ExpressionError, evalExpr, MISSING_ROOT, ResolveMode, type RootResolver } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr, Token, Tree } from "../../src/expr/grammar.ts";
-import {
-  type FeedbackValue,
-  type RootRead,
-  type RoutedFeedback,
-  routeFeedback,
-  routeValue,
-  SourceRef,
-  type TracedValue,
-  ValueRoute,
-} from "../../src/expr/lineage.ts";
+import { type RootRead, SourceRef, type TracedValue, ValueRoute } from "../../src/expr/lineage.ts";
 import type { Value, ValueRecord } from "../../src/typesys/index.ts";
 import { fieldOf } from "../../src/typesys/values.ts";
 
@@ -395,10 +386,7 @@ test.each([
 // Traced chains against their old binary forms
 // --------------------------------------------------------------------------------------- //
 
-/**
- * A trimmed copy of `expr_lineage.test.ts`'s `Sources` (no `reads`; `lookup` matches on sequence
- * only), kept here because importing a test file would make Bun run its tests again.
- */
+/** Named root values, each read from its own `SourceRef`, that traced expressions read. */
 class Sources {
   readonly values: ValueRecord;
   readonly identities: Record<string, SourceRef>;
@@ -414,31 +402,9 @@ class Sources {
     return { used: 1, present: true, value: this.values[head]!, why: null, source: this.identities[head]! };
   };
 
-  lookup = (source: SourceRef): unknown => {
-    const name = Object.keys(this.identities).find((key) => this.identities[key]!.executionSeq === source.executionSeq);
-    if (name === undefined || source.path.length > 0) throw new Error(`no source ${source.executionSeq}`);
-    return this.values[name];
-  };
-
   evaluate(expression: string): TracedValue {
     return evalExpr(parseExpr(expression), this.resolve, { trace: true });
   }
-
-  feedback(traced: TracedValue, feedback: FeedbackValue): RoutedFeedback {
-    return routeFeedback(traced.route, feedback, this.lookup);
-  }
-}
-
-/** Each contribution as `[source, feedback]`. */
-function messages(routed: RoutedFeedback): [SourceRef, FeedbackValue][] {
-  return routed.contributions.map((c) => [c.source, c.feedback]);
-}
-
-/** The contributions in a canonical order, each as text. */
-function contributions(routed: RoutedFeedback): string[] {
-  return routed.contributions
-    .map((c) => JSON.stringify([c.source.runId, c.source.executionSeq, c.source.path, c.feedback]))
-    .sort();
 }
 
 // The traced pool: list content, scalars and text. Repetition is a type error in TS, so the
@@ -487,16 +453,6 @@ test("traced chains match the old binary steps", () => {
     expect(sameValue(got.value, old.value)).toBe(true);
     if (!jsonLike(got.value)) continue;
     shapes.add(got.route.kind);
-    expect(sameValue(routeValue(got.route, sources.lookup), got.value)).toBe(true);
-    const feedbacks: FeedbackValue[] = ["Whole."];
-    if (Array.isArray(got.value)) feedbacks.push(got.value.map((_, i) => `m${i}`));
-    for (const feedback of feedbacks) {
-      expect(contributions(sources.feedback(got, feedback))).toEqual(contributions(sources.feedback(old, feedback)));
-    }
-    if (Array.isArray(got.value) && got.value.length === 0) {
-      expect(sources.feedback(got, []).contributions).toEqual([]);
-      expect(sources.feedback(old, []).contributions).toEqual([]);
-    }
   }
   expect(shapes.has("concat") && shapes.has("scalar")).toBe(true);
 });
@@ -522,9 +478,6 @@ test("a list chain traces as balanced two-child concats", () => {
     sources.evaluate("right").route,
     sources.evaluate("[]").route,
   ]);
-  const right = sources.identities.right!;
-  expect(messages(sources.feedback(result, [null, "Bad."]))).toEqual([[right, [null, "Bad."]]]);
-  expect(messages(sources.feedback(result, "Too many."))).toEqual([[right, "Too many."]]);
 });
 
 test("a long traced list chain stays shallow", () => {
@@ -533,9 +486,6 @@ test("a long traced list chain stays shallow", () => {
   const route = result.route;
   expect(result.value).toEqual(Array(3000).fill("v"));
   expect(depth(route)).toBeLessThanOrEqual(13);
-  expect(routeValue(route, sources.lookup)).toEqual(result.value);
-  const feedback = Array.from({ length: 3000 }, (_, i) => `m${i}`);
-  expect(messages(sources.feedback(result, feedback))).toEqual(feedback.map((m) => [sources.identities.x!, m]));
 });
 
 test("a scalar chain traces as one scalar", () => {
@@ -547,24 +497,4 @@ test("a scalar chain traces as one scalar", () => {
   expect(route.valueJson).toBe("0");
   sources = new Sources({ left: 3n, right: 4n });
   expect(sources.evaluate("left + right").route.expression).toBe("(left + right)");
-});
-
-test("an old nested concat route still routes feedback", () => {
-  const sources = new Sources({ a: ["a"], b: ["b", "c"], c: ["d"] });
-  const source = (name: string) =>
-    new ValueRoute("source", { source: sources.identities[name]!, expression: name });
-  const inner = new ValueRoute("concat", {
-    children: [source("a"), source("b")],
-    expression: "(a + b)",
-    sizes: [1, 2],
-  });
-  const old = new ValueRoute("concat", { children: [inner, source("c")], expression: "((a + b) + c)", sizes: [3, 1] });
-  expect(routeValue(old, sources.lookup)).toEqual(["a", "b", "c", "d"]);
-  const got = sources.evaluate("a + b + c");
-  expect(got.route).not.toEqual(old);
-  for (const feedback of ["Whole.", ["1", null, "3", "4"]] as FeedbackValue[]) {
-    expect(contributions(routeFeedback(old, feedback, sources.lookup))).toEqual(
-      contributions(sources.feedback(got, feedback)),
-    );
-  }
 });

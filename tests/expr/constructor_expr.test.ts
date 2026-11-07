@@ -20,7 +20,7 @@ import {
   rewriteExprRefs,
 } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
-import { routeFeedback, SourceRef } from "../../src/expr/lineage.ts";
+import { SourceRef } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, evalBinding, flowCallCalleesInSpans, promptRefs } from "../../src/expr/template.ts";
 import { BindingError, bindParams } from "../../src/nodes/binding.ts";
 import { Parameter, ValueTemplate } from "../../src/nodes/contracts.ts";
@@ -444,23 +444,4 @@ test("inference reads optional record fields, file fields and nullable aliases",
 
 test("inference without types leaves a call unknown", () => {
   expect(inferExprType(parseExpr("Buy(d.output)"), noRefs)).toBeNull();
-});
-
-test("feedback on a built field reaches its argument", () => {
-  const sources: Record<number, ValueRecord> = { 1: { output: 0.7 }, 2: { output: A_BUY } };
-  const resolve: RootResolver = (names) => {
-    const seq = names[0] === "s" ? 1 : 2;
-    return { used: 1, present: true, value: sources[seq]!, why: null, source: new SourceRef("run", seq) };
-  };
-  const lookup = (source: SourceRef) => sources[source.executionSeq];
-  const built = evalBinding('${Buy(action="buy", conviction=s.output)}', resolve, { trace: true, types: TYPES });
-  let routed = routeFeedback(built.route, { conviction: "too high" }, lookup);
-  expect(routed.contributions.map((c) => [c.source, c.feedback])).toEqual([
-    [new SourceRef("run", 1), { output: "too high" }],
-  ]);
-  const checked = evalBinding("${Buy(d.output)}", resolve, { trace: true, types: TYPES });
-  routed = routeFeedback(checked.route, { conviction: "too high" }, lookup);
-  expect(routed.contributions.map((c) => [c.source, c.feedback])).toEqual([
-    [new SourceRef("run", 2), { output: { conviction: "too high" } }],
-  ]);
 });

@@ -15,7 +15,7 @@
 import { expect, test } from "bun:test";
 
 import { OriginRef } from "../../src/diagnostics.ts";
-import { type RootRead, routeFeedback, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
+import { type RootRead, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
 import { BindingCollector, BindingError, bindParams } from "../../src/nodes/binding.ts";
 import {
   Binding,
@@ -415,7 +415,7 @@ test("the MAP item scope reaches template strings", () => {
   });
 });
 
-test("template routes record each part and route feedback", () => {
+test("template routes record each part and its source", () => {
   const template = new ValueTemplate({ a: "${n.output}", b: [1n, "${m.output}"], c: "lit" });
   const roots: Record<string, ValueRecord> = { n: { output: 3n }, m: { output: "x" } };
 
@@ -443,14 +443,8 @@ test("template routes record each part and route feedback", () => {
   expect(route.names).toEqual(["a", "b", "c"]);
   expect(route.children[1]!.kind).toBe("list");
   expect(route.children[1]!.children[0]).toEqual(ValueRoute.literal(1n));
-
-  const routed = routeFeedback(captured.route, { p: { a: "Too small.", b: [null, "Wrong."] } }, (source) =>
-    source.executionSeq === 1 ? roots["n"] : roots["m"],
-  );
-  expect(routed.contributions.map((c) => [c.source, c.feedback])).toEqual([
-    [new SourceRef("run", 1), { output: "Too small." }],
-    [new SourceRef("run", 2), { output: "Wrong." }],
-  ]);
+  expect(route.children[0]!.source).toEqual(new SourceRef("run", 1, ["output"]));
+  expect(route.children[1]!.children[1]!.source).toEqual(new SourceRef("run", 2, ["output"]));
 });
 
 // --- TS-only rows --- //

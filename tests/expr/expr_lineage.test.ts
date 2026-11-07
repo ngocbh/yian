@@ -31,7 +31,6 @@ import { evalBinding, evalTemplate, scanTemplate } from "../../src/expr/template
 import { Grow } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
-import { validateRoute } from "../../src/runtime/contracts.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
 import { FileRef, type Value, type ValueRecord, VariablePool } from "../../src/typesys/index.ts";
 import { logJson } from "../../src/typesys/json.ts";
@@ -817,11 +816,6 @@ test("spans count code points", () => {
     [1, 2],
     [3, 4],
   ]);
-  // The result has 4 code points but 5 UTF-16 units, so an end of 5 is past it.
-  validateRoute(rendered.route);
-  expect(() => validateRoute(rendered.route.with({ spans: [[1, 2], [3, 5]] }))).toThrow(
-    new RangeError("interpolation spans must be ordered within the result"),
-  );
 });
 
 test("sourceKey is equal exactly when run id, sequence and path are equal", () => {

@@ -231,7 +231,6 @@ function inventories(state: RunState): (Map<unknown, unknown> | Set<unknown>)[] 
     state.pendingMessages,
     state.crashedAttempts,
     state.waits.waiting,
-    ...(state.trace === null ? [] : [state.trace._parked]),
   ];
 }
 

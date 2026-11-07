@@ -130,13 +130,7 @@ test("clone child rejects a dynamic static memory template atomically", () => {
   expect(flow.nodes.get("head")!.memoryScope!.occurrencePath).toEqual([occurrence]);
 });
 
-test("clone child refuses a template scope that isn't a scope", () => {
-  const flow = single();
-  Object.assign(flow.nodes.get("head")!, { executionScope: {} });
-  expect(() => cloneChild(flow, "call", { topic: "ACME" })).toThrow(
-    new TypeError("child execution scope must be an ExecutionScope"),
-  );
-
+test("clone child refuses a memory scope that isn't a scope", () => {
   const other = single();
   Object.assign(other.nodes.get("head")!, { memoryScope: "notes" });
   expect(() => cloneChild(other, "call", { topic: "ACME" })).toThrow(MemorySetupError);

@@ -508,7 +508,6 @@ test("test_recorded_public_resume_keeps_completed_code_and_wire[6]", async () =>
     expect(replayed.numWorkers).toBe(0);
     expect(start.numWorkers).toBe(0);
     expect(replayed.learnable).toBe(false);
-    expect(replayed.trace).toBeNull();
     const complete = readFileSync(path, "utf8");
     const inspected = await advance({ log: path, env });
     expect(inspected.output).toBe(result.output);

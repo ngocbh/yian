@@ -7,7 +7,6 @@
 import { mkdtempSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { stampExecutionScopes } from "../../src/compile/execution_layout.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, START_ID } from "../../src/compile/model.ts";
 import { ComposedFlow } from "../../src/compose/build/pipeline.ts";
@@ -41,13 +40,12 @@ import {
   prepareWithdraw,
   RunState,
 } from "../../src/runtime/state.ts";
-import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import { toolCallId } from "../../src/tools/context.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { typeFor } from "../../src/typesys/types.ts";
 import { InboxRef, inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
-import { FINGERPRINT, FIXED_CLOCK, forwardCapture, noGrowth, replayTraceSnapshot, RUN_ID } from "./run_state_fixtures.ts";
+import { FINGERPRINT, FIXED_CLOCK, noGrowth, RUN_ID } from "./run_state_fixtures.ts";
 
 /** The START's inbox param `msgs: Inbox(str)`. */
 export const MSGS = new Parameter("msgs", { contract: new ValueContract(inboxType(Type.scalar(ValueKind.STRING))) });
@@ -108,32 +106,23 @@ export function paramFlow(
   );
 }
 
-/**
- * Commit `nodeId`'s output, its messages when it produces them (an AGENT), and its success; a
- * learnable state records a literal capture.
- */
+/** Commit `nodeId`'s output, its messages when it produces them (an AGENT), and its success. */
 export function succeed(log: RunLog, state: RunState, nodeId: string, output: unknown): void {
   const node = state.flow.nodes.get(nodeId)!;
   commitPrepared(log, state, preparePoolCommit(state, nodeId, output));
   if (node.producesMessages) commitPrepared(log, state, prepareMessagesCommit(state, nodeId));
-  commitPrepared(
-    log,
-    state,
-    prepareNodeSucceeded(state, nodeId, { forwardCapture: state.learnable ? forwardCapture(node, {}) : null }),
-  );
+  commitPrepared(log, state, prepareNodeSucceeded(state, nodeId));
 }
 
 /**
  * A JSONL log and state of `flow` after run start and START's success (holding each inbox's
  * handle). `fingerprint` defaults to `flowFingerprint(flow)`; a flow holding a test double passes
- * `FINGERPRINT` and is never replayed through `replayRunLog`. A learnable run gets the execution
- * layout after fingerprinting, as `learnableStarted` does. `numWorkers` defaults to 0; an AGENT's
- * model config comes from `effectiveLlmByStaticPath` (none by default).
+ * `FINGERPRINT` and is never replayed through `replayRunLog`. `numWorkers` defaults to 0; an
+ * AGENT's model config comes from `effectiveLlmByStaticPath` (none by default).
  */
 export function started(
   flow: CompiledFlow,
   options: {
-    learnable?: boolean;
     defaults?: Record<string, bigint>;
     fingerprint?: string;
     numWorkers?: number;
@@ -141,7 +130,6 @@ export function started(
   } = {},
 ) {
   const fingerprint = options.fingerprint ?? flowFingerprint(flow);
-  if (options.learnable) stampExecutionScopes(flow);
   // Beside the test's HOME, in the per-test dir the preload removes once the run ends.
   const path = join(mkdtempSync(join(dirname(process.env.HOME!), "waits-")), "log.jsonl");
   const log = JsonlRunLog.create(path, RUN_ID, { clock: FIXED_CLOCK });
@@ -155,7 +143,7 @@ export function started(
       startWiringOverride: {},
       effectiveLlmByStaticPath: options.effectiveLlmByStaticPath ?? {},
       numWorkers: options.numWorkers ?? 0,
-      learnable: options.learnable ?? false,
+      learnable: false,
       defaults: options.defaults ?? {},
     }),
   );
@@ -173,9 +161,6 @@ export { FINGERPRINT };
 
 /** Reopen a closed scenario log for an offline append, as a host does. */
 export const reopen = (path: string) => JsonlRunLog.resume(path, { clock: FIXED_CLOCK });
-
-/** The trace a learnable replay must reproduce: `replayTraceSnapshot` plus the parked starts. */
-export const traceParts = (trace: RetainedTrace) => ({ ...replayTraceSnapshot(trace), parked: [...trace._parked] });
 
 /** A fresh state of `flow` replayed through the records at `path` (all, or the first `count`). */
 export function replayed(flow: CompiledFlow, path: string, count?: number): RunState {
@@ -196,13 +181,12 @@ export function sleepEntry(node: string): WaitEntry {
   return { callId: call(node), tool: "sleep", inbox: null, mode: null, deadline: DEADLINE };
 }
 
-/** One closed scenario log, its flow and the live state that wrote it; `learnable` logs are compared through `replayRecords` only. */
+/** One closed scenario log, its flow and the live state that wrote it. */
 export interface ScenarioLog {
   readonly name: string;
   readonly path: string;
   readonly flow: CompiledFlow;
   readonly composed: ComposedFlow;
-  readonly learnable: boolean;
   /** The state after the last record, as the writer left it. */
   readonly state: RunState;
   /** The seq of each named record. */
@@ -214,7 +198,6 @@ class Scenario {
   readonly marks: Record<string, number> = {};
   readonly name: string;
   readonly flow: CompiledFlow;
-  readonly learnable: boolean;
   readonly path: string;
   readonly composed: ComposedFlow;
   log: RunLog;
@@ -223,14 +206,12 @@ class Scenario {
   constructor(
     name: string,
     flow: CompiledFlow,
-    learnable: boolean,
     numWorkers = 0,
     effectiveLlmByStaticPath: Record<string, JsonObject> = {},
   ) {
     this.name = name;
     this.flow = flow;
-    this.learnable = learnable;
-    const run = started(flow, { learnable, numWorkers, effectiveLlmByStaticPath });
+    const run = started(flow, { numWorkers, effectiveLlmByStaticPath });
     this.path = run.path;
     this.composed = run.composed;
     this.log = run.log;
@@ -242,11 +223,6 @@ class Scenario {
     commitPrepared(this.log, this.state, prepared);
     if (mark !== undefined) this.marks[mark] = prepared.expectedSequence;
     return this;
-  }
-
-  /** The capture an outcome of `node` carries: a literal one while learning. */
-  capture(node: string) {
-    return this.learnable ? forwardCapture(this.state.flow.nodes.get(node)!, {}) : null;
   }
 
   start(node: string, mark?: string): this {
@@ -280,12 +256,12 @@ class Scenario {
   }
   take(node: string, take: TakeCommit, mark?: string): this {
     this.commit(prepareTakeCommit(this.state, node, take), mark);
-    return this.commit(prepareNodeSucceeded(this.state, node, { forwardCapture: this.capture(node) }));
+    return this.commit(prepareNodeSucceeded(this.state, node));
   }
   succeed(node: string, output: unknown, mark?: string): this {
     this.commit(preparePoolCommit(this.state, node, output), mark);
     if (this.state.flow.nodes.get(node)!.producesMessages) this.commit(prepareMessagesCommit(this.state, node));
-    return this.commit(prepareNodeSucceeded(this.state, node, { forwardCapture: this.capture(node) }));
+    return this.commit(prepareNodeSucceeded(this.state, node));
   }
   resume(mark?: string): this {
     return this.commit(prepareRunResumed(this.state, { numWorkers: this.state.numWorkers }), mark);
@@ -306,8 +282,8 @@ class Scenario {
   /** Close the log and return the scenario. */
   done(): ScenarioLog {
     this.log.close();
-    const { name, path, flow, composed, learnable, state, marks } = this;
-    return { name, path, flow, composed, learnable, state, marks };
+    const { name, path, flow, composed, state, marks } = this;
+    return { name, path, flow, composed, state, marks };
   }
 }
 
@@ -325,7 +301,7 @@ export const askAnswer = (node: string, answer: string) => ({
 });
 
 /**
- * Write every wait scenario log, plain and learnable, and return them:
+ * Write every wait scenario log and return them:
  *
  * - `a`: a take waits, the run waits, a send arrives offline, the take wakes, takes it, and the
  *   run ends; `a-inline`: the send comes first, so the take commits inline.
@@ -344,39 +320,39 @@ export const askAnswer = (node: string, answer: string) => ({
  *   waits ends it, and takes a later send.
  */
 export function scenarioLogs(): ScenarioLog[] {
-  return [false, true].flatMap((learnable) => [
-    scenarioA(learnable),
-    scenarioAInline(learnable),
-    scenarioB(learnable),
-    scenarioBTimeout(learnable),
-    scenarioBSleep(learnable),
-    scenarioC(learnable),
-    scenarioCCrash(learnable),
-    scenarioD(learnable),
-    scenarioE(learnable),
-    scenarioF(learnable),
-    scenarioG(learnable),
-    scenarioH(learnable),
-  ]);
+  return [
+    scenarioA(),
+    scenarioAInline(),
+    scenarioB(),
+    scenarioBTimeout(),
+    scenarioBSleep(),
+    scenarioC(),
+    scenarioCCrash(),
+    scenarioD(),
+    scenarioE(),
+    scenarioF(),
+    scenarioG(),
+    scenarioH(),
+  ];
 }
 
-function scenarioA(learnable: boolean): ScenarioLog {
-  const run = new Scenario("a", waitFlow(tool("heard", "take")), learnable);
+function scenarioA(): ScenarioLog {
+  const run = new Scenario("a", waitFlow(tool("heard", "take")));
   run.start("heard").wait("heard", takeEntry("heard"), "waiting").runWaiting("runWaiting");
   run.reopen().send("hi", "send");
   run.reopen().woken("heard", [], "woken").take("heard", { inbox: "msgs", events: [seqOf(run, "send")], closed: false }, "take");
   return run.end().done();
 }
 
-function scenarioAInline(learnable: boolean): ScenarioLog {
-  const run = new Scenario("a-inline", waitFlow(tool("heard", "take")), learnable);
+function scenarioAInline(): ScenarioLog {
+  const run = new Scenario("a-inline", waitFlow(tool("heard", "take")));
   run.send("hi", "send").start("heard");
   run.take("heard", { inbox: "msgs", events: [seqOf(run, "send")], closed: false }, "take");
   return run.end().done();
 }
 
-function scenarioB(learnable: boolean): ScenarioLog {
-  const run = new Scenario("b", waitFlow(tool("heard", "take")), learnable);
+function scenarioB(): ScenarioLog {
+  const run = new Scenario("b", waitFlow(tool("heard", "take")));
   run.start("heard").wait("heard", takeEntry("heard")).runWaiting();
   run.reopen().send("hi", "send");
   run.reopen().woken("heard", [], "woken");
@@ -386,8 +362,8 @@ function scenarioB(learnable: boolean): ScenarioLog {
   return run.end().done();
 }
 
-function scenarioBTimeout(learnable: boolean): ScenarioLog {
-  const run = new Scenario("b-timeout", waitFlow(tool("heard", "take")), learnable);
+function scenarioBTimeout(): ScenarioLog {
+  const run = new Scenario("b-timeout", waitFlow(tool("heard", "take")));
   run.start("heard").wait("heard", takeEntry("heard", DEADLINE)).runWaiting();
   run.reopen().woken("heard", [call("heard")], "woken");
   run.reopen().send("late", "downtime");
@@ -395,16 +371,16 @@ function scenarioBTimeout(learnable: boolean): ScenarioLog {
   return run.end().done();
 }
 
-function scenarioBSleep(learnable: boolean): ScenarioLog {
-  const run = new Scenario("b-sleep", waitFlow(tool("nap", "sleep")), learnable);
+function scenarioBSleep(): ScenarioLog {
+  const run = new Scenario("b-sleep", waitFlow(tool("nap", "sleep")));
   run.start("nap").wait("nap", sleepEntry("nap")).runWaiting();
   run.reopen().woken("nap", [call("nap")], "woken");
   run.reopen().resume().start("nap", "restarted").succeed("nap", null, "slept");
   return run.end().done();
 }
 
-function scenarioC(learnable: boolean): ScenarioLog {
-  const run = new Scenario("c", waitFlow(tool("a", "ask"), tool("b", "ask")), learnable, 2);
+function scenarioC(): ScenarioLog {
+  const run = new Scenario("c", waitFlow(tool("a", "ask"), tool("b", "ask")), 2);
   run.start("a").start("b").step("a", askPending("a")).step("b", askPending("b"));
   run.wait("a", null).wait("b", null).runWaiting("runWaiting");
   run.reopen().step("b", askAnswer("b", "no")).step("a", askAnswer("a", "yes"), "answered");
@@ -412,31 +388,31 @@ function scenarioC(learnable: boolean): ScenarioLog {
   return run.end().done();
 }
 
-function scenarioCCrash(learnable: boolean): ScenarioLog {
-  const run = new Scenario("c-crash", waitFlow(tool("a", "ask")), learnable);
+function scenarioCCrash(): ScenarioLog {
+  const run = new Scenario("c-crash", waitFlow(tool("a", "ask")));
   run.start("a").step("a", askPending("a"), "pending");
   run.reopen().resume().start("a", "restarted").wait("a", null, "rewaited").runWaiting();
   run.reopen().step("a", askAnswer("a", "yes")).woken("a").succeed("a", "yes");
   return run.end().done();
 }
 
-function scenarioD(learnable: boolean): ScenarioLog {
-  const run = new Scenario("d", waitFlow(tool("nap", "sleep"), work()), learnable);
+function scenarioD(): ScenarioLog {
+  const run = new Scenario("d", waitFlow(tool("nap", "sleep"), work()));
   run.start("nap").start("work").wait("nap", sleepEntry("nap"), "napping").succeed("work", 1n, "worked").runWaiting("runWaiting");
   run.reopen().woken("nap", [call("nap")], "woken").succeed("nap", null);
   return run.end().done();
 }
 
-function scenarioE(learnable: boolean): ScenarioLog {
-  const run = new Scenario("e", waitFlow(tool("heard", "take")), learnable);
+function scenarioE(): ScenarioLog {
+  const run = new Scenario("e", waitFlow(tool("heard", "take")));
   run.start("heard").wait("heard", takeEntry("heard")).runWaiting();
   run.reopen().close("closed");
   run.reopen().woken("heard").take("heard", { inbox: "msgs", events: [], closed: true }, "take");
   return run.end().done();
 }
 
-function scenarioF(learnable: boolean): ScenarioLog {
-  const run = new Scenario("f", steerFlow(), learnable, 0, { chat: { provider: "openai", model: "gpt-5.5" } });
+function scenarioF(): ScenarioLog {
+  const run = new Scenario("f", steerFlow(), 0, { chat: { provider: "openai", model: "gpt-5.5" } });
   run.send("a", "sa").send("b", "sb").start("chat");
   const from = [BigInt(seqOf(run, "sa")), BigInt(seqOf(run, "sb"))];
   run.step("chat", { kind: "steer", inbox: "msgs", from }, "steer").send("c", "sc");
@@ -444,8 +420,8 @@ function scenarioF(learnable: boolean): ScenarioLog {
   return run.end().done();
 }
 
-function scenarioG(learnable: boolean): ScenarioLog {
-  const run = new Scenario("g", waitFlow(tool("heard", "take")), learnable);
+function scenarioG(): ScenarioLog {
+  const run = new Scenario("g", waitFlow(tool("heard", "take")));
   run.start("heard").wait("heard", takeEntry("heard"), "waiting").runWaiting();
   run.reopen().send("x", "sx").withdraw("withdrawn");
   run.reopen().send("y", "sy");
@@ -453,8 +429,8 @@ function scenarioG(learnable: boolean): ScenarioLog {
   return run.end().done();
 }
 
-function scenarioH(learnable: boolean): ScenarioLog {
-  const run = new Scenario("h", waitFlow(work(), tool("heard", "take")), learnable);
+function scenarioH(): ScenarioLog {
+  const run = new Scenario("h", waitFlow(work(), tool("heard", "take")));
   run.start("work").interrupt("stop").succeed("work", 1n).start("heard").wait("heard", takeEntry("heard"), "waiting").runWaiting();
   run.reopen().send("x", "sx");
   run.reopen().woken("heard").take("heard", { inbox: "msgs", events: [seqOf(run, "sx")], closed: false }, "take");

@@ -25,12 +25,8 @@ import {
   asBinding,
   type Binding,
   ChildFlowBoundary,
-  ExecutionScope,
   isExactly,
   Parameter,
-  revalidateScope,
-  sameExecutionPosition,
-  sameItems,
   SeedConnection,
   type ValuePath,
   type ValueTemplate,
@@ -265,35 +261,13 @@ export function validateGrowthMetadata(flow: Flow): void {
   for (const boundary of flow.childBoundaries) {
     // Rebuilding checks a boundary that may have bypassed the constructor.
     new ChildFlowBoundary(boundary.startId, boundary.endId);
-    const scopes: (ExecutionScope | null)[] = [];
-    for (const [nodeId, role] of [
-      [boundary.startId, "start"],
-      [boundary.endId, "end"],
-    ] as const) {
+    for (const nodeId of [boundary.startId, boundary.endId]) {
       if (!flow.nodes.has(nodeId) || endpoints.has(nodeId)) {
         throw new RangeError("child boundaries must name distinct fragment nodes");
       }
       endpoints.add(nodeId);
       const node: unknown = flow.nodes.get(nodeId);
       if (!(node instanceof Node)) throw new TypeError("child boundaries must name Node values");
-      const scope: unknown = node.executionScope;
-      if (scope !== null) {
-        revalidateScope(scope, "child boundary scope");
-        if (scope.boundary !== role) throw new RangeError("child boundary role disagrees with its execution scope");
-        if (scope.staticPath.length === 0 || !sameItems(scope.staticPath.slice(0, -1), scope.flowPath)) {
-          throw new RangeError("child boundary location must belong to its containing flow");
-        }
-      }
-      scopes.push(scope);
-    }
-    const [start, end] = scopes as [ExecutionScope | null, ExecutionScope | null];
-    if (
-      start !== null &&
-      end !== null &&
-      (!sameItems(start.flowPath, end.flowPath) ||
-        !sameItems(start.occurrencePath, end.occurrencePath, sameExecutionPosition))
-    ) {
-      throw new RangeError("child boundaries must belong to the same flow occurrence");
     }
     starts.add(boundary.startId);
   }

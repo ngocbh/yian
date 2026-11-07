@@ -17,7 +17,6 @@ import { CompiledFlow, copyGraph, Edge, END_ID, START_ID } from "../../src/compi
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeStarted, type RunEvent, RunSucceeded } from "../../src/events.ts";
-import { ValueRoute } from "../../src/expr/lineage.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { DeclSite, MemoryScope, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
 import { type Node, NodeKind, Pending } from "../../src/nodes/base.ts";
@@ -26,7 +25,6 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import { replayRunLog } from "../../src/run.ts";
-import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
 import {
@@ -56,7 +54,6 @@ import {
   NO_ENV,
   prepareOutput,
   reducerSnapshot,
-  replayTraceSnapshot,
   snapshot,
   startedRun,
 } from "../helpers/run_state_fixtures.ts";
@@ -723,11 +720,9 @@ function agentFlow(options: { sibling?: boolean } = {}): CompiledFlow {
 
 /**
  * Return a state and log with START succeeded and `agent` in flight. The memory `notes` is
- * recorded unless `enabled` is false; `learnable` and `sibling` shape the run and the flow.
+ * recorded unless `enabled` is false; `sibling` shapes the flow.
  */
-function agentStarted(
-  options: { learnable?: boolean; sibling?: boolean; enabled?: boolean } = {},
-): { state: RunState; log: MemoryRunLog } {
+function agentStarted(options: { sibling?: boolean; enabled?: boolean } = {}): { state: RunState; log: MemoryRunLog } {
   const enabled = options.enabled ?? true;
   const flow = agentFlow(options);
   const state = new RunState(flow);
@@ -744,7 +739,7 @@ function agentStarted(
       startWiringOverride: {},
       effectiveLlmByStaticPath: {},
       numWorkers: 0,
-      learnable: options.learnable ?? false,
+      learnable: false,
       memories: enabled ? [new MemorySpec("notes", "episodic", {}, [new DeclSite([], ["root"], "agent")])] : null,
       memoryStacks: enabled ? [new MemoryStack(["agent"], ["notes"])] : null,
       memorySnapshots: enabled ? [new MemorySnapshotEnvelope("notes", {})] : null,
@@ -752,8 +747,7 @@ function agentStarted(
   );
   commitInitialPool(log, state, pool);
   commitPrepared(log, state, prepareNodeStarted(state, START_ID));
-  const forwardCapture = state.learnable ? new ForwardCapture(ValueRoute.record([])) : null;
-  commitPrepared(log, state, prepareOutput(log, state, START_ID, {}, { forwardCapture }));
+  commitPrepared(log, state, prepareOutput(log, state, START_ID, {}));
   commitPrepared(log, state, prepareNodeStarted(state, "agent"));
   return { state, log };
 }
@@ -784,7 +778,6 @@ function frontierFlowSnapshot(state: RunState): Record<string, unknown> {
       nodeId,
       node.constructor,
       node.memoryScope,
-      node.executionScope,
       node.commitAs,
     ]),
   };
@@ -799,8 +792,6 @@ function expectReplays(state: RunState, log: MemoryRunLog, options: { sibling?: 
   });
   expect(frontierSnapshot(replayed)).toEqual(frontierSnapshot(state));
   expect(frontierFlowSnapshot(replayed)).toEqual(frontierFlowSnapshot(state));
-  const trace = (s: RunState) => (s.trace === null ? null : replayTraceSnapshot(s.trace));
-  expect(trace(replayed)).toEqual(trace(state));
   return replayed;
 }
 
@@ -814,8 +805,8 @@ test("a resume allows memory-free unfinished invocations", () => {
   expectReplays(state, log);
 });
 
-test.each([false, true])("a resume retries every unfinished invocation (learnable: %p)", (learnable) => {
-  const { state, log } = agentStarted({ learnable, sibling: true });
+test("a resume retries every unfinished invocation", () => {
+  const { state, log } = agentStarted({ sibling: true });
   commitPrepared(log, state, prepareNodeStarted(state, "sibling"));
   const before = [...state.inFlight];
   const prepared = prepareRunResumed(state, { numWorkers: 0 });

@@ -44,7 +44,6 @@ import { basename, dirname, join, resolve } from "node:path";
 import { types } from "node:util";
 
 import { localTypes } from "./compile/declared_types.ts";
-import { stampExecutionScopes } from "./compile/execution_layout.ts";
 import { buildGrow } from "./compile/expand.ts";
 import {
   applyEffectiveLlmMap,
@@ -1512,7 +1511,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkRecordedLlmFields(
         recordedLlm,
         staticAgentLabels(flow.compiled),
-        staticPathKeys(state.flow.nodes, Object.keys(inFlight)),
+        staticPathKeys(Object.keys(inFlight)),
       );
       if (options.checkLlmConfigs != null) {
         await options.checkLlmConfigs(legacyConnectionMap(recordedLlm), { callTimeHost: selectionHost(callTime) });
@@ -3171,20 +3170,9 @@ function bindingLabel(typ: Type): string {
   return canonicalTypeLabel(typ);
 }
 
-/**
- * Map each runtime node id to its encoded static path, read from its execution scope.
- *
- * @param nodes The run's live nodes, keyed by node id.
- * @param nodeIds The runtime ids to map.
- * @returns The `/`-joined static path of each id whose node has an execution scope.
- */
-function staticPathKeys(nodes: ReadonlyMap<string, Node>, nodeIds: Iterable<string>): Map<string, string> {
-  const keys = new Map<string, string>();
-  for (const nodeId of nodeIds) {
-    const scope = nodes.get(nodeId)!.executionScope;
-    if (scope !== null) keys.set(nodeId, scope.staticPath.join("/"));
-  }
-  return keys;
+/** Map each runtime node id to its static path (`staticPathOf`). */
+function staticPathKeys(nodeIds: Iterable<string>): Map<string, string> {
+  return new Map([...nodeIds].map((nodeId) => [nodeId, staticPathOf(nodeId)]));
 }
 
 /**
@@ -3422,7 +3410,6 @@ export function replayCompiledRunLog(
     // only when its resolved config is marked.
     bindHostCredentials(privateFlow, apiKey, headers);
   }
-  if (first.learnable) stampExecutionScopes(privateFlow);
   if (first.memories !== null) {
     const replayed = resolveRuntimeMemoryLayout(privateFlow);
     checkRecordedMemoryTable(first.memories, first.memoryStacks, replayed.memories, replayed.stacks, "supplied flow");
@@ -3754,19 +3741,6 @@ function requiredStateRunId(state: RunState): string {
     throw new RangeError("terminal run state has no valid run_id");
   }
   return state.runId;
-}
-
-/**
- * Close one boundary-owned log while preserving an initiating error: with no `primary`, a close
- * error is thrown; with one, it is noted on it.
- */
-function closeOwnedLog(log: RunLog, primary: { error: unknown } | null): void {
-  try {
-    log.close();
-  } catch (cleanupError) {
-    if (primary === null) throw cleanupError;
-    noteCleanup(primary.error, cleanupError, "run-log close also raised");
-  }
 }
 
 /** Return the error for the server under `key`, which another run has open or is opening. */

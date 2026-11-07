@@ -38,15 +38,12 @@ import {
 } from "../../typesys/values.ts";
 import { Grow, isWeakKey, Node, NodeKind, Output, parseNamedCondition } from "../base.ts";
 import {
-  ExecutionPosition,
-  ExecutionScope,
   isExactly,
   iterOriginCarrier,
   type OriginMapper,
   Parameter,
   PartialRecordContract,
   rewriteOriginCarrier,
-  sameExecutionPosition,
   ValueContract,
 } from "../contracts.ts";
 import { mapCallsite, ns } from "../ids.ts";
@@ -286,15 +283,13 @@ export class LoopNode extends Node {
    * `FileRef`; the next driver then binds the merged record. `carried` is the JSON-decoded
    * growth-seed record that seeds the body's START, so live growth and durable replay merge
    * identically. The origin, origin context, memory scope, output contract, asserts and type
-   * table are copied; the execution scope moves to iteration `k`.
+   * table are copied.
    *
    * @param k The clone's iteration index.
    * @param carried The record this iteration's body was seeded with; required when
    *   `returnedFields` is set.
    * @returns The driver for iteration `k`.
-   * @throws RangeError when `returnedFields` is set and `carried` is `null`, or the execution
-   *   scope doesn't end in this driver's position.
-   * @throws TypeError when the execution scope isn't an `ExecutionScope`.
+   * @throws RangeError when `returnedFields` is set and `carried` is `null`.
    */
   respawn(k: number, carried: Readonly<Record<string, Value>> | null = null): LoopNode {
     const originId = this.originId ?? this.id;
@@ -321,21 +316,6 @@ export class LoopNode extends Node {
     // copying that origin into the context would duplicate it on every later iteration.
     clone.originContext = this.originContext;
     clone.memoryScope = this.memoryScope;
-    if (this.executionScope !== null) {
-      const scope: unknown = this.executionScope;
-      if (!isExactly(scope, ExecutionScope)) throw new TypeError("loop execution scope must be an ExecutionScope");
-      const { staticPath, flowPath, occurrencePath, boundary } = scope;
-      const current = new ExecutionPosition("loop_driver", staticPath, this.iteration);
-      const last = occurrencePath.at(-1);
-      if (last === undefined || !sameExecutionPosition(last, current)) {
-        throw new RangeError("loop scope must end in its current driver position");
-      }
-      clone.executionScope = new ExecutionScope(staticPath, {
-        flowPath,
-        occurrencePath: [...occurrencePath.slice(0, -1), new ExecutionPosition("loop_driver", staticPath, k)],
-        boundary,
-      });
-    }
     if (this.returnedFields === null) {
       clone.params = this.params;
     } else {

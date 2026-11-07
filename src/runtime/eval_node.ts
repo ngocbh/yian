@@ -17,7 +17,7 @@
  * Knows about:   compile/model (types), compile/declared_types (the declared types reads go
  *                through), compile/output_contracts (a binding's lone reference, to name an
  *                authored root), diagnostics, expr grammar and lineage, llm_clients (types), memory
- *                contracts, nodes, platform, runtime contracts, log and trace, skills, tools, typesys.
+ *                contracts, nodes, platform, runtime log and sources, skills, tools, typesys.
  * Never imports: runtime state or engine, the run boundary, compose, or the CLI.
  */
 
@@ -26,7 +26,7 @@ import { directReferenceParts, loneSpanTree } from "../compile/output_contracts.
 import { Tree } from "../expr/grammar.ts";
 import type { CompiledFlow, Flow } from "../compile/model.ts";
 import { Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
-import { ResolvedValue, type SourceRef, ValueRoute } from "../expr/lineage.ts";
+import { ResolvedValue, ValueRoute } from "../expr/lineage.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import {
   type JsonObject,
@@ -67,20 +67,16 @@ import { isExactly, NodeSteps } from "../nodes/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
-import type { JsonObject as WireObject, JsonValue } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
 import {
   isRecord,
   jsTypeName,
   setField,
-  type Type,
-  type TypedValue,
   type Value,
   type ValueRecord,
 } from "../typesys/values.ts";
-import { BackwardCapture } from "./contracts.ts";
 import { canonicalSeed } from "./log.ts";
-import { type ReboundSource, resolvePoolPath, SYSTEM_PREFIX } from "./sources.ts";
+import { type ReboundSource, SYSTEM_PREFIX } from "./sources.ts";
 
 /**
  * One raw node-evaluation failure for durable dispatcher preparation. Frozen.
@@ -212,24 +208,17 @@ export type WorkerOutcome = Output | Route | Grow | Pending | EvaluationFailure;
 /**
  * One raw worker outcome with what its evaluation captured. Frozen.
  *
- * `bindings` holds the inputs the node was bound to and the routes evaluated while binding them;
- * `backwardCapture` holds what backward later reads of the invocation (its routes, evaluated keys
- * and scope). Either is `null` when the evaluation captured none. Neither is accepted history
- * until the dispatcher records this outcome.
+ * `bindings` holds the inputs the node was bound to and the routes evaluated while binding them,
+ * or `null` when the evaluation captured none. It isn't accepted history until the dispatcher
+ * records this outcome.
  */
 export class EvaluatedOutcome {
   readonly outcome: WorkerOutcome;
   readonly bindings: BindingCapture | null;
-  readonly backwardCapture: BackwardCapture | null;
 
-  constructor(
-    outcome: WorkerOutcome,
-    bindings: BindingCapture | null = null,
-    backwardCapture: BackwardCapture | null = null,
-  ) {
+  constructor(outcome: WorkerOutcome, bindings: BindingCapture | null = null) {
     this.outcome = outcome;
     this.bindings = bindings;
-    this.backwardCapture = backwardCapture;
     Object.freeze(this);
   }
 }
@@ -372,7 +361,7 @@ export interface EvalNodeOptions {
   emitStream?: NodeCaps["emitStream"] | null;
   /** The transient model and tool call observer sink, received and closed as `emitStream` is. */
   emitEvent?: NodeCaps["emitEvent"] | null;
-  /** Whether to retain the bound input values, their routes and the backward capture. */
+  /** Whether to retain the bound input values and their routes. */
   captureBindings?: boolean;
   /**
    * The memory context source a node declaring `needsMemoryContext` reaches through
@@ -465,7 +454,6 @@ export async function evalNode(
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
   const collector = captureBindings ? new BindingCollector() : null;
-  const backwardCapture = captureBindings ? nodeBackwardCapture(node) : null;
 
   /** Snapshot the completed inputs before the body can change them. */
   const captureInputs = (inputs: Record<string, unknown>): void => {
@@ -492,7 +480,7 @@ export async function evalNode(
     steerInbox,
     onFault,
   });
-  return new EvaluatedOutcome(outcome, collector?.freeze() ?? null, backwardCapture);
+  return new EvaluatedOutcome(outcome, collector?.freeze() ?? null);
 }
 
 /** Bind and run one node, resolving to one normalized result. */
@@ -731,48 +719,27 @@ function stageFailure(node: Node, error: unknown): EvaluationFailure {
   throw error;
 }
 
-/**
- * The capture material `node` gives an evaluation: its data input names, its variable names and
- * its execution scope.
- */
-export function nodeBackwardCapture(node: Node): BackwardCapture {
-  return new BackwardCapture({
-    inputNames: node.dataInputNames(),
-    variableNames: node.declaredVariables().map((parameter) => parameter.name),
-    scope: node.executionScope,
-  });
-}
-
-/** The bound inputs and capabilities `rebind` and `rebuildDerived` share. */
+/** The bound inputs and capabilities a derived node's rebuild runs `forward` with. */
 interface Rebound {
   inputs: Record<string, unknown>;
   caps: NodeCaps;
 }
 
-/**
- * Bind `node` from `sources` as the evaluator does, with defaults filled; with a `collector`,
- * collect the route and bound inputs into it too. `reserved`, when given, are the node's reserved
- * values, used in place of its `bindReserved`.
- */
+/** Bind `node` from `sources` as the evaluator does, with defaults filled. */
 function bindFrom(
   node: Node,
   flow: Flow,
   sources: ReadonlyMap<string, number>,
   resolve: (name: string, seq: number) => ReboundSource,
   wiringOverride: JsonObject | null,
-  collector: BindingCollector | null,
-  reserved: Readonly<Record<string, unknown>> | null = null,
 ): Rebound {
   const pool = new VariablePool(flow.startId);
-  const entries = new Map<string, ReboundSource>();
   for (const [name, seq] of sources) {
-    const entry = resolve(name, seq);
-    entries.set(name, entry);
-    if (name.startsWith(SYSTEM_PREFIX)) pool.system.set(name.slice(SYSTEM_PREFIX.length), entry.value);
-    else pool.store.set(name, entry.value);
+    const { value } = resolve(name, seq);
+    if (name.startsWith(SYSTEM_PREFIX)) pool.system.set(name.slice(SYSTEM_PREFIX.length), value);
+    else pool.store.set(name, value);
   }
-  const sourceResolver: SourceResolver = (names) => resolvePoolPath(names, pool, (name) => entries.get(name)!.source);
-  return bindPool(node, flow, pool, sourceResolver, wiringOverride, collector, reserved);
+  return bindPool(node, flow, pool, wiringOverride);
 }
 
 /**
@@ -790,27 +757,14 @@ export function bindStarted(
   pool: VariablePool,
   wiringOverride: JsonObject | null,
 ): Record<string, unknown> {
-  return bindPool(node, flow, pool, null, wiringOverride, null, null).inputs;
+  return bindPool(node, flow, pool, wiringOverride).inputs;
 }
 
 /** `bindFrom`'s binding over a built `pool`. */
-function bindPool(
-  node: Node,
-  flow: Flow,
-  pool: VariablePool,
-  sourceResolver: SourceResolver | null,
-  wiringOverride: JsonObject | null,
-  collector: BindingCollector | null,
-  reserved: Readonly<Record<string, unknown>> | null,
-): Rebound {
+function bindPool(node: Node, flow: Flow, pool: VariablePool, wiringOverride: JsonObject | null): Rebound {
   const nodeWiring = wiringFor(node, flow, wiringOverride);
-  const { record, bindItem } = bindNode(node, flow, nodeWiring, pool, {
-    collector,
-    sourceResolver,
-    bindReserved: reserved === null ? null : () => reserved,
-  });
+  const { record, bindItem } = bindNode(node, flow, nodeWiring, pool, { collector: null, sourceResolver: null });
   const inputs = applyDefaults(node.params ?? [], record);
-  collector?.finish(inputs as ValueRecord);
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = {
     signal: new AbortController().signal,
     localTypes: localTypes(flow, node),
@@ -834,9 +788,9 @@ interface BoundNode {
 
 /**
  * Bind `node`'s params and reserved values from `pool` through `wiring`: the one binding both the
- * evaluator and the run reducer's rebuild run, so a rebuilt capture is the one the evaluator
- * collected. With a `collector`, each route is collected too; a reserved value its hook made
- * without the binder gets a literal route. Defaults aren't filled and the capture isn't finished.
+ * evaluator and the run reducer's rebuild run, so a rebuilt value is the one the evaluator bound.
+ * With a `collector`, each route is collected too; a reserved value its hook made without the
+ * binder gets a literal route. Defaults aren't filled and the capture isn't finished.
  *
  * @param flow The flow whose declared types the reads go through; `null` declares none.
  * @param options.bindReserved Gives the reserved values from the binder (`null` when not
@@ -892,52 +846,11 @@ function bindNode(
 }
 
 /**
- * Bind a node's params from the values `resolve` gives for its sources, plus its wiring (or
- * `wiringOverride`), collecting the route and bound inputs in the same pass, as the evaluator does.
+ * Rebuild a derived node's outcome: bind it from `from` as the evaluator does, then run its pure,
+ * synchronous `forward`. With `from` empty (a child START over its constant wiring), it binds from
+ * constants only.
  *
- * `resolve(name, seq)` returns the value pool name `name` held when the `pool_commit` at `seq` wrote
- * it, and the producer the route names. Inside the run reducer it reads the run's pool and checks
- * the producer index, which is sound because records apply in log order: the pool when a derived
- * commit is accepted holds exactly what its binding read.
- *
- * `options.reserved` gives the node's reserved values instead of its `bindReserved`: a hook that
- * resolves its value without the binder records it whole, as a literal route, and reads names
- * the route doesn't name.
- *
- * A node that binds per item (MAP) binds its items in its pure `forward`, as the evaluator ran it,
- * so the capture holds them. A binding that doesn't finish, its items' included, gives the
- * `BindingError` as `failure` and, as the evaluator keeps it, the capture of the routes collected
- * before it failed, with no bound inputs.
- *
- * @throws whatever `resolve` or a per-item node's `forward` throws besides a `BindingError`.
- */
-export function rebind(
-  node: Node,
-  flow: Flow,
-  sources: ReadonlyMap<string, number>,
-  resolve: (name: string, seq: number) => ReboundSource,
-  wiringOverride: JsonObject | null,
-  options: { reserved?: Readonly<Record<string, unknown>> | null } = {},
-): { capture: BindingCapture; failure: BindingError | null } {
-  const collector = new BindingCollector();
-  try {
-    const { inputs, caps } = bindFrom(node, flow, sources, resolve, wiringOverride, collector, options.reserved ?? null);
-    if (node.bindsPerItem) node.forward(inputs, caps);
-    return { capture: collector.freeze(), failure: null };
-  } catch (error) {
-    if (!(error instanceof BindingError)) throw error;
-    collector.invalidate();
-    return { capture: collector.freeze(), failure: error };
-  }
-}
-
-/**
- * Rebuild a derived node's outcome: `rebind`, then its pure, synchronous `forward`. With `from`
- * empty (a child START over its constant wiring), it binds from constants only.
- *
- * @param options.capture Whether to collect the route and bound inputs too, with each item a MAP's
- *   `forward` binds; defaults to `false`.
- * @returns The outcome, and the capture (`null` unless `options.capture`).
+ * @returns The outcome.
  * @throws TypeError when `node` isn't derived, or its `forward` returns a promise or a route.
  * @throws BindingError when a source doesn't evaluate, and whatever `resolve` throws.
  */
@@ -947,15 +860,12 @@ export function rebuildDerived(
   from: ReadonlyMap<string, number>,
   resolve: (name: string, seq: number) => ReboundSource,
   wiringOverride: JsonObject | null,
-  options: { capture?: boolean } = {},
-): { outcome: Output | Grow; capture: BindingCapture | null } {
+): Output | Grow {
   if (node.derived !== true) throw new TypeError(`node ${reprText(node.id)} is not derived`);
-  const collector = options.capture === true ? new BindingCollector() : null;
-  const { inputs, caps } = bindFrom(node, flow, from, resolve, wiringOverride, collector);
+  const { inputs, caps } = bindFrom(node, flow, from, resolve, wiringOverride);
   const outcome: unknown = node.forward(inputs, caps);
   if (!(outcome instanceof Output || outcome instanceof Grow)) {
     throw new TypeError(`derived node ${reprText(node.id)} forward returned ${jsTypeName(outcome)}, not an Output or Grow`);
   }
-  // Frozen after `forward`, which binds a MAP's items into the capture.
-  return { outcome, capture: collector === null ? null : collector.freeze() };
+  return outcome;
 }

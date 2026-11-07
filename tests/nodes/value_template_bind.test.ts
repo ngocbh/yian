@@ -31,7 +31,6 @@ import {
   ValueTemplate,
   type ValuePath,
 } from "../../src/nodes/contracts.ts";
-import { validateRoute } from "../../src/runtime/contracts.ts";
 import { Type, typeFor, type ValueRecord, ValueKind, VariablePool } from "../../src/typesys/index.ts";
 import { readTypedefs } from "../../src/typesys/types.ts";
 
@@ -439,7 +438,6 @@ test("template routes record each part and route feedback", () => {
   expect(captured.boundInputs).toEqual(delivered);
   expect(delivered).toEqual({ p: { a: 3n, b: [1n, "x"], c: "lit" } });
   expect(captured.evaluatedKeys).toEqual(new Set(["p"]));
-  validateRoute(captured.route);
   const route = captured.route.children[0]!;
   expect(route.kind).toBe("record");
   expect(route.names).toEqual(["a", "b", "c"]);

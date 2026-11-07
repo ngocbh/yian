@@ -30,8 +30,6 @@ import {
   Binding,
   ChildFlowBoundary,
   ContractOrigins,
-  ExecutionPosition,
-  ExecutionScope,
   isExactly,
   Parameter,
   SeedConnection,
@@ -2318,16 +2316,13 @@ test("expansion digest applies topology-only policy to recursive children", () =
 });
 
 /**
- * `fragment()` grown as a child: `scope` on its entry, and its seed connection (at `seedPath`) and
- * child boundary unless `metadata` is false.
+ * `fragment()` grown as a child: its seed connection (at `seedPath`) and child boundary unless
+ * `metadata` is false.
  */
-function grown(
-  options: { seedPath?: (string | number)[]; scope?: ExecutionScope | null; metadata?: boolean } = {},
-): Flow {
-  const { seedPath = [0, "x"], scope = null, metadata = true } = options;
+function grown(options: { seedPath?: (string | number)[]; metadata?: boolean } = {}): Flow {
+  const { seedPath = [0, "x"], metadata = true } = options;
   const base = fragment();
   const entry = new StartNode("entry", { params: [new Parameter("x", { contract: intContract() })] });
-  entry.executionScope = scope;
   base.nodes.set("entry", entry);
   return new Flow(base.nodes, base.edges, {
     wiring: new Map<string, ReadonlyMap<string, unknown>>([...base.wiring, ["entry", new Map([["x", 1n]])]]),
@@ -2338,48 +2333,12 @@ function grown(
   });
 }
 
-test("growth metadata and execution topology have a separate digest policy", () => {
-  const scope = new ExecutionScope(["call", "entry"], { flowPath: ["call"], boundary: "start" });
-  const steps = [
-    grown(),
-    grown({ seedPath: [3, "x"] }),
-    grown({ seedPath: [3, "x"], scope }),
-    grown({ scope, metadata: false }),
-  ];
+test("growth metadata has a separate digest policy", () => {
+  const steps = [grown(), grown({ seedPath: [3, "x"] }), grown({ metadata: false })];
   const authored = flowFingerprint(grown());
 
   for (const flow of steps) expect(flowFingerprint(flow)).toBe(authored);
   expect(new Set(steps.map(expansionDigest)).size).toBe(steps.length);
-});
-
-test("an execution scope projects its paths, positions and boundary", () => {
-  const flow = fragment();
-  flow.nodes.get("terminal")!.executionScope = new ExecutionScope(["outer", "terminal"], {
-    flowPath: ["outer"],
-    occurrencePath: [new ExecutionPosition("call", ["outer"]), new ExecutionPosition("map_item", ["outer"], 2)],
-    boundary: "end",
-  });
-  // `fragment()` has no growth metadata, so its authored manifest equals its expansion manifest.
-  const expected = flowManifest(fragment());
-  ((expected.nodes as JsonObject).terminal as JsonObject).execution_scope = {
-    boundary: "end",
-    flow_path: ["outer"],
-    occurrence_path: [
-      { index: null, kind: "call", static_path: ["outer"] },
-      { index: 2, kind: "map_item", static_path: ["outer"] },
-    ],
-    static_path: ["outer", "terminal"],
-  };
-
-  expect(expansionDigest(flow)).toBe(sha256(expected));
-  expect(flowFingerprint(flow)).toBe(FRAGMENT_FINGERPRINT);
-});
-
-test("an execution scope that isn't an ExecutionScope is refused", () => {
-  const flow = fragment();
-  Object.assign(code(flow, "body"), { executionScope: { staticPath: ["body"] } });
-
-  expectError(() => expansionDigest(flow), TypeError, "expansion.nodes.body.executionScope must be an ExecutionScope");
 });
 
 // ---- Loaded flows ----------------------------------------------------------------------------

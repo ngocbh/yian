@@ -63,7 +63,6 @@ import { applyDefaults, BindingError, copyValue, type ReservedBinder, validatePa
 import {
   type Assertion,
   type CallView,
-  ExecutionScope,
   type HostToolCall,
   isExactly,
   iterOriginCarrier,
@@ -782,11 +781,6 @@ export abstract class Node {
    * stamps it when memory is on; otherwise `null`.
    */
   memoryScope: MemoryScope | null = null;
-  /**
-   * Compile-derived authored location, independent of memory declarations. Static layout
-   * resolution stamps root-relative paths on private node templates; `null` when built directly.
-   */
-  executionScope: ExecutionScope | null = null;
   /**
    * Author-supplied static per-node config, baked at build time from the flow's `env:` default
    * merged with the node's own `env:` (the node wins). The engine never reads it; only a node's

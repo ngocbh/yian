@@ -427,14 +427,3 @@ test("a waiting take wakes for events a dropped take commit freed", async () => 
   // The retried take finds nothing left and waits.
   expect([...run.state.waits.waiting.keys()]).toEqual(["first"]);
 });
-
-test("learnable: the trace ends at run_failed and leaves the waiting node out of its started set", async () => {
-  const run = inboxEngine(unreachableFlow(new FakeHost("ask")), { learnable: true });
-  await run.run();
-  const trace = run.state.trace!;
-  expect(run.state.result).toBeInstanceOf(RunFailed);
-  expect(trace.started.has("ask")).toBe(false);
-  expect([...trace._parked.keys()]).toEqual(["ask"]);
-  expect(trace.terminal?.succeeded).toBe(false);
-  expect(trace.terminal?.failure).toEqual(run.state.terminalUnreachableFailure!);
-});

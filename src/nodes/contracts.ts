@@ -3,9 +3,8 @@
  *
  * These frozen carriers attach opaque origins to executable meanings without depending on
  * Compose/YAML or runtime state. Compiled wiring, node assertions, node parameters, and node
- * outputs use their canonical carriers. Execution scopes identify authored locations and
- * structured occurrences independently of memory. Seed connections and child boundary pairs
- * describe growth topology without values or runtime producer identities. Compose output
+ * outputs use their canonical carriers. Seed connections and child boundary pairs describe growth
+ * topology without values or runtime producer identities. Compose output
  * derivation preserves those carriers and projects exact field/value types only inside type
  * algorithms.
  */
@@ -92,14 +91,6 @@ export function comparePaths(a: ValuePath, b: ValuePath): number {
   return a.length - b.length;
 }
 
-/** Require authored names while allowing the empty root path. */
-function validateAuthoredPath(path: unknown, name: string): asserts path is readonly string[] {
-  if (!Array.isArray(path)) throw new TypeError(`${name} must be an array`);
-  if ((path as unknown[]).some((part) => typeof part !== "string" || !part)) {
-    throw new RangeError(`${name} components must be non-empty strings`);
-  }
-}
-
 /** Whether `value` is an instance of exactly `cls`, not of a subclass. Used by node kinds. */
 export function isExactly<T>(value: unknown, cls: abstract new (...args: never[]) => T): value is T {
   return typeof value === "object" && value !== null && Object.getPrototypeOf(value) === cls.prototype;
@@ -124,135 +115,6 @@ function freezeEntries(
   entries: readonly (readonly [ValuePath, OriginRef])[],
 ): readonly (readonly [ValuePath, OriginRef])[] {
   return Object.freeze(entries.map(([path, origin]) => Object.freeze([Object.freeze([...path]), origin] as const)));
-}
-
-const POSITION_KINDS = ["call", "map_item", "loop_body", "loop_driver"] as const;
-
-/** The kinds of structured position in an instantiated child computation. */
-export type PositionKind = (typeof POSITION_KINDS)[number];
-
-/** One structured position in an instantiated child computation. Frozen. */
-export class ExecutionPosition {
-  /** The authored composition operation and, for LOOP, its execution role. */
-  readonly kind: PositionKind;
-  /** Root-relative path of the owning spawner. */
-  readonly staticPath: readonly string[];
-  /**
-   * Non-negative item or iteration index. CALL uses `null` because it instantiates exactly one
-   * child per execution.
-   */
-  readonly index: number | null;
-
-  /**
-   * Validate a structured position without interpreting runtime display ids; `staticPath` is
-   * copied.
-   *
-   * @throws RangeError for an unknown kind, an empty path component, an index on a call, or a
-   *   negative index.
-   * @throws TypeError when the path isn't an array, or a non-call index isn't a safe integer.
-   */
-  constructor(kind: PositionKind, staticPath: readonly string[], index: number | null = null) {
-    if (typeof kind !== "string" || !POSITION_KINDS.includes(kind)) {
-      throw new RangeError("unknown execution position kind");
-    }
-    validateAuthoredPath(staticPath, "static_path");
-    if (kind === "call") {
-      if (index !== null) throw new RangeError("a call position cannot have an index");
-    } else if (typeof index !== "number" || !Number.isSafeInteger(index)) {
-      throw new TypeError("execution position index must be an integer");
-    } else if (index < 0) {
-      throw new RangeError("execution position index must be non-negative");
-    }
-    this.kind = kind;
-    this.staticPath = Object.freeze([...staticPath]);
-    this.index = index;
-    Object.freeze(this);
-  }
-}
-
-/** An authored execution location independent of memory declarations. Frozen. */
-export class ExecutionScope {
-  /**
-   * Root-relative authored node or flow path. The empty path identifies the root itself,
-   * including unnamed flows.
-   */
-  readonly staticPath: readonly string[];
-  /** Root-relative path of the containing flow; the empty path denotes the root flow. */
-  readonly flowPath: readonly string[];
-  /**
-   * Outer-to-inner child positions. Exact dynamic identity additionally uses the run id and
-   * accepted node-start sequence, supplied by the runtime.
-   */
-  readonly occurrencePath: readonly ExecutionPosition[];
-  /** This location's role as a flow boundary, when it has one. */
-  readonly boundary: "start" | "end" | null;
-
-  /**
-   * Require explicit source-neutral occurrence data; the paths are copied. `flowPath` and
-   * `occurrencePath` default to empty, `boundary` to `null`.
-   *
-   * @throws TypeError when a path isn't an array or an occurrence isn't an `ExecutionPosition`.
-   * @throws RangeError for an empty path component, an invalid position, or an unknown boundary.
-   */
-  constructor(
-    staticPath: readonly string[],
-    options: {
-      flowPath?: readonly string[];
-      occurrencePath?: readonly ExecutionPosition[];
-      boundary?: "start" | "end" | null;
-    } = {},
-  ) {
-    const { flowPath = [], occurrencePath = [], boundary = null } = options;
-    validateAuthoredPath(staticPath, "static_path");
-    validateAuthoredPath(flowPath, "flow_path");
-    if (!Array.isArray(occurrencePath)) throw new TypeError("occurrence_path must be an array");
-    for (const position of occurrencePath as unknown[]) {
-      if (!isExactly(position, ExecutionPosition)) {
-        throw new TypeError("occurrence_path items must be ExecutionPosition values");
-      }
-      // Rebuilding checks a position that may have bypassed the constructor.
-      new ExecutionPosition(position.kind, position.staticPath, position.index);
-    }
-    if (boundary !== null && boundary !== "start" && boundary !== "end") {
-      throw new RangeError("execution boundary must be 'start', 'end', or null");
-    }
-    this.staticPath = Object.freeze([...staticPath]);
-    this.flowPath = Object.freeze([...flowPath]);
-    this.occurrencePath = Object.freeze([...occurrencePath]);
-    this.boundary = boundary;
-    Object.freeze(this);
-  }
-}
-
-/**
- * Replay an existing scope's exact nested invariants, since a value can bypass the constructor.
- *
- * @param subject Names the value in the error when it isn't an exact `ExecutionScope`.
- * @throws TypeError when `scope` isn't an exact `ExecutionScope`, or as its constructor does.
- * @throws RangeError as its constructor does.
- */
-export function revalidateScope(scope: unknown, subject = "execution scope"): asserts scope is ExecutionScope {
-  if (!isExactly(scope, ExecutionScope)) throw new TypeError(`${subject} must be an ExecutionScope`);
-  new ExecutionScope(scope.staticPath, {
-    flowPath: scope.flowPath,
-    occurrencePath: scope.occurrencePath,
-    boundary: scope.boundary,
-  });
-}
-
-/** Whether two positions have the same kind, index and static path. */
-export function sameExecutionPosition(a: ExecutionPosition, b: ExecutionPosition): boolean {
-  return a.kind === b.kind && a.index === b.index && sameItems(a.staticPath, b.staticPath);
-}
-
-/** Whether two scopes have the same static path, flow path, occurrence positions and boundary. */
-export function sameExecutionScope(a: ExecutionScope, b: ExecutionScope): boolean {
-  return (
-    sameItems(a.staticPath, b.staticPath) &&
-    sameItems(a.flowPath, b.flowPath) &&
-    sameItems(a.occurrencePath, b.occurrencePath, sameExecutionPosition) &&
-    a.boundary === b.boundary
-  );
 }
 
 /**

@@ -12,9 +12,7 @@ import { PassThrough } from "node:stream";
 import { main } from "../../src/cli/index.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { ValueRoute } from "../../src/expr/lineage.ts";
 import { advance, runFlow } from "../../src/run.ts";
-import { validateRoute } from "../../src/runtime/contracts.ts";
 import {
   decodeRecord,
   JsonlRunLog,
@@ -160,8 +158,4 @@ test.each(OLD_LOGS)("cli resume fails clearly (%s)", async (_id, makeLog) => {
   expect(code).toBe(0);
   expect(out.join("")).toBe(`${String(output)}\n`);
   expect(readFileSync(path)).toEqual(before);
-});
-
-test("route value json with a long int is rejected", () => {
-  validateRoute(new ValueRoute("literal", { valueJson: `[1, ${D}]` }));
 });

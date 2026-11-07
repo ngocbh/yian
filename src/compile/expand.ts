@@ -16,8 +16,7 @@
  * the namespaced child START's output object (`${<callsite>/<start>.output.X}`). Transition
  * preparation validates the fragment and records its canonical seed and digest; the reducer then
  * splices it, initializes its dispositions, and queues its START node. Builders preserve
- * seed-route selectors and actual child boundary pairs independently of the materialized values,
- * and instantiate execution scopes from authored locations.
+ * seed-route selectors and actual child boundary pairs independently of the materialized values.
  *
  * Templates are copied with `copyGraph`, which shares arrays, records and carriers with the
  * original, so this module assigns fresh values and never changes a copied node's field in place.
@@ -40,13 +39,9 @@ import {
   Assertion,
   Binding,
   ChildFlowBoundary,
-  ExecutionPosition,
-  ExecutionScope,
   isExactly,
   mapSourceStrings,
   Parameter,
-  sameExecutionPosition,
-  sameItems,
   SeedConnection,
 } from "../nodes/contracts.ts";
 import { EndNode } from "../nodes/end/node.ts";
@@ -183,15 +178,13 @@ function lowerSpawnerPostAsserts(
  *   clone's existing ancestry without deduplication.
  * @param options.occurrencePath The complete dynamic memory occurrence every clone inherits;
  *   static templates must carry an empty one.
- * @param options.executionPath Prefixes each direct template node's initial execution position;
- *   nested child templates keep their static scopes until instantiated.
  * @param options.seedPrefix An optional MAP item index for materialized seed selectors.
  * @param options.postAsserts A CALL spawner's node-level post asserts, lowered onto the cloned END.
  * @param options.inputNames The CALL spawner's declared input names.
  * @returns A `Flow` whose `startId` is the namespaced child START and whose `endId` is the
  *   namespaced child END.
- * @throws TypeError or RangeError for a seed prefix that isn't empty or one item index, a child
- *   execution template with a dynamic occurrence, or an occurrence path a clone's scope refuses.
+ * @throws TypeError or RangeError for a seed prefix that isn't empty or one item index, or an
+ *   occurrence path a clone's scope refuses.
  * @throws MemorySetupError for a dynamic static memory scope on a child node.
  */
 export function cloneChild(
@@ -201,7 +194,6 @@ export function cloneChild(
   options: {
     originContext?: readonly OriginRef[];
     occurrencePath?: readonly MemoryOccurrenceSegment[];
-    executionPath?: readonly ExecutionPosition[];
     seedPrefix?: readonly number[];
     postAsserts?: readonly Assertion[] | null;
     inputNames?: ReadonlySet<string> | null;
@@ -210,7 +202,6 @@ export function cloneChild(
   const {
     originContext = [],
     occurrencePath = [],
-    executionPath = [],
     seedPrefix = [],
     postAsserts = null,
     inputNames = null,
@@ -228,20 +219,6 @@ export function cloneChild(
     const clone = copyGraph(node);
     clone.id = ns(callsite, nid);
     clone.originContext = [...originContext, ...clone.originContext];
-    if (clone.executionScope !== null) {
-      const scope: unknown = clone.executionScope;
-      if (!isExactly(scope, ExecutionScope)) throw new TypeError("child execution scope must be an ExecutionScope");
-      const { staticPath, flowPath, boundary } = scope;
-      const local = clone.isLoop ? [new ExecutionPosition("loop_driver", staticPath, 0)] : [];
-      if (!sameItems(scope.occurrencePath, local, sameExecutionPosition)) {
-        throw new RangeError("child execution template contains a dynamic occurrence");
-      }
-      clone.executionScope = new ExecutionScope(staticPath, {
-        flowPath,
-        occurrencePath: [...executionPath, ...local],
-        boundary,
-      });
-    }
     if (clone.memoryScope !== null) {
       if (!isExactly(clone.memoryScope, MemoryScope)) {
         throw new MemorySetupError(`node ${reprText(nid)} has a noncanonical static memory scope`, {
@@ -344,9 +321,8 @@ export function cloneChild(
  * commits under the spawner id on the ordinary success path. The child's own asserts ride the
  * cloned boundary nodes; the spawner's `postAsserts` (reading `${output}` and the declared
  * `inputNames`) are lowered onto the cloned END. `originContext` is the spawner's failure trace,
- * prefixed to every clone. `memoryScope` gives its occurrence path unchanged to each clone;
- * `executionScope` appends the authored CALL position. The seed recipes select parent seed
- * parameter names directly.
+ * prefixed to every clone. `memoryScope` gives its occurrence path unchanged to each clone. The
+ * seed recipes select parent seed parameter names directly.
  *
  * @throws TypeError or RangeError when `child` has malformed growth metadata, or as `cloneChild`.
  */
@@ -357,21 +333,15 @@ export function callSubgraph(
   options: {
     originContext?: readonly OriginRef[];
     memoryScope?: MemoryScope | null;
-    executionScope?: ExecutionScope | null;
     postAsserts?: readonly Assertion[] | null;
     inputNames?: ReadonlySet<string> | null;
   } = {},
 ): Flow {
-  const { originContext = [], memoryScope = null, executionScope = null, postAsserts = null, inputNames = null } =
-    options;
+  const { originContext = [], memoryScope = null, postAsserts = null, inputNames = null } = options;
   validateGrowthMetadata(child);
   const cloned = cloneChild(child, callsite, record, {
     originContext,
     occurrencePath: memoryScope === null ? [] : memoryScope.occurrencePath,
-    executionPath:
-      executionScope === null
-        ? []
-        : [...executionScope.occurrencePath, new ExecutionPosition("call", executionScope.staticPath)],
     postAsserts,
     inputNames,
   });
@@ -392,8 +362,7 @@ export function callSubgraph(
  *
  * `originContext` is the spawner's failure trace, given to every clone and both generated nodes.
  * With `memoryScope`, element `i` appends a MAP-item occurrence and the generated nodes reuse the
- * spawner's scope. Execution scopes also append the item index; seed recipes select that same
- * index and parameter name. Only actual item START/END pairs become child boundaries.
+ * spawner's scope. Seed recipes select the item index and parameter name. Only actual item START/END pairs become child boundaries.
  *
  * @returns A `Flow` from the synthetic START to the list-END.
  * @throws TypeError or RangeError when `child` has malformed growth metadata, or as `cloneChild`.
@@ -405,10 +374,9 @@ export function mapSubgraph(
   options: {
     originContext?: readonly OriginRef[];
     memoryScope?: MemoryScope | null;
-    executionScope?: ExecutionScope | null;
   } = {},
 ): Flow {
-  const { originContext = [], memoryScope = null, executionScope = null } = options;
+  const { originContext = [], memoryScope = null } = options;
   const mapStartId = ns(spawnerId, START_ID);
   const mapEndId = ns(spawnerId, END_ID);
   const nodes = new Map<string, Node>();
@@ -432,10 +400,6 @@ export function mapSubgraph(
     const cloned = cloneChild(child, mapCallsite(spawnerId, i), record, {
       originContext,
       occurrencePath,
-      executionPath:
-        executionScope === null
-          ? []
-          : [...executionScope.occurrencePath, new ExecutionPosition("map_item", executionScope.staticPath, i)],
       seedPrefix: [i],
     });
     for (const [id, node] of cloned.nodes) nodes.set(id, node);
@@ -448,17 +412,9 @@ export function mapSubgraph(
     endEdges.push(new Edge(`${cloned.endId}->${mapEndId}#${i}`, cloned.endId, mapEndId, { inputGroup: `e${i}` }));
   }
 
-  const unbounded =
-    executionScope === null
-      ? null
-      : new ExecutionScope(executionScope.staticPath, {
-          flowPath: executionScope.flowPath,
-          occurrencePath: executionScope.occurrencePath,
-        });
   const mapStart = new StartNode(mapStartId, { params: [] });
   mapStart.originContext = originContext;
   mapStart.memoryScope = memoryScope;
-  mapStart.executionScope = unbounded;
   nodes.set(mapStartId, mapStart);
   wiring.set(mapStartId, new Map());
 
@@ -466,7 +422,6 @@ export function mapSubgraph(
   mapEnd.commitAs = spawnerId;
   mapEnd.originContext = originContext;
   mapEnd.memoryScope = memoryScope;
-  mapEnd.executionScope = unbounded;
   nodes.set(mapEndId, mapEnd);
   edges.push(...startEdges, ...endEdges);
   wiring.set(mapEndId, endWiring);
@@ -503,7 +458,6 @@ export function mapSubgraph(
  *
  * @returns A `Flow` from body `k`'s START to its END.
  * @throws TypeError or RangeError when `child` has malformed growth metadata, or as `cloneChild`.
- * @throws RangeError when the execution scope doesn't end in driver `k`'s position.
  */
 export function loopContinueSubgraph(
   child: Flow,
@@ -514,23 +468,10 @@ export function loopContinueSubgraph(
   options: {
     originContext?: readonly OriginRef[];
     memoryScope?: MemoryScope | null;
-    executionScope?: ExecutionScope | null;
   } = {},
 ): Flow {
-  const { originContext = [], memoryScope = null, executionScope = null } = options;
+  const { originContext = [], memoryScope = null } = options;
   validateGrowthMetadata(child);
-  let executionPath: ExecutionPosition[] = [];
-  if (executionScope !== null) {
-    const current = new ExecutionPosition("loop_driver", executionScope.staticPath, k);
-    const last = executionScope.occurrencePath.at(-1);
-    if (last === undefined || !sameExecutionPosition(last, current)) {
-      throw new RangeError("loop scope must end in its current driver position");
-    }
-    executionPath = [
-      ...executionScope.occurrencePath.slice(0, -1),
-      new ExecutionPosition("loop_body", executionScope.staticPath, k),
-    ];
-  }
 
   // The carried record may be wider than the body's inputs; only the declared inputs seed its
   // START, while the whole record continues through the next driver.
@@ -543,7 +484,7 @@ export function loopContinueSubgraph(
           ...memoryScope.occurrencePath,
           new MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, memoryScope.staticPath, k),
         ];
-  const cloned = cloneChild(child, mapCallsite(origin, k), bodySeed, { originContext, occurrencePath, executionPath });
+  const cloned = cloneChild(child, mapCallsite(origin, k), bodySeed, { originContext, occurrencePath });
   const bodyEnd = cloned.endId;
   const nodes = new Map(cloned.nodes);
   const edges = [...cloned.edges];
@@ -636,7 +577,6 @@ export function buildGrow(spawner: Node, seed: JsonValue): Flow {
       return callSubgraph(call.child as Flow, call.id, { ...record }, {
         originContext: call.failureTrace(),
         memoryScope: call.memoryScope,
-        executionScope: call.executionScope,
         postAsserts: call.postAsserts,
         inputNames: new Set((call.params ?? []).map((param) => param.name)),
       });
@@ -648,7 +588,7 @@ export function buildGrow(spawner: Node, seed: JsonValue): Flow {
         map.child as Flow,
         map.id,
         records.map((record) => ({ ...record })),
-        { originContext: map.failureTrace(), memoryScope: map.memoryScope, executionScope: map.executionScope },
+        { originContext: map.failureTrace(), memoryScope: map.memoryScope },
       );
     }
     case NodeKind.LOOP: {
@@ -660,7 +600,7 @@ export function buildGrow(spawner: Node, seed: JsonValue): Flow {
         { ...carried },
         iteration,
         loop.respawn(iteration + 1, carried as Readonly<Record<string, Value>>),
-        { originContext: loop.failureTrace(), memoryScope: loop.memoryScope, executionScope: loop.executionScope },
+        { originContext: loop.failureTrace(), memoryScope: loop.memoryScope },
       );
     }
     default:

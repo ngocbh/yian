@@ -21,7 +21,6 @@ import { expect } from "bun:test";
 
 import { main } from "../../src/cli/index.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
-import { stampExecutionScopes } from "../../src/compile/execution_layout.ts";
 import { memoryStacks as layoutStacks, stampMemoryLayout } from "../../src/compile/memory_layout.ts";
 import { buildGrow } from "../../src/compile/expand.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
@@ -64,8 +63,6 @@ import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
-import { ForwardCapture } from "../../src/runtime/contracts.ts";
-import type { Rebinder } from "../../src/runtime/trace.ts";
 import { BindingCapture, BindingError } from "../../src/nodes/binding.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
@@ -87,7 +84,6 @@ import {
   decodeRecord,
   encodeRecord,
   MemoryRunLog,
-  type OutcomeCarriers,
   RecordEnvelope,
   type RunLog,
   type RunRecord,
@@ -116,7 +112,6 @@ import {
   RunState,
 } from "../../src/runtime/state.ts";
 import { decodeTyped } from "../../src/runtime/sources.ts";
-import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";
@@ -819,8 +814,7 @@ export function graph(
  * Return a learnable state of `flow` after its committed RunStarted, and its memory log, for a test
  * that only needs the started state.
  *
- * The flow gets its execution layout; the pool primes START with `inputs`, and START's wiring
- * reads each input as `${input.<name>}`. The run records no agent configuration.
+ * The pool primes START with `inputs`, and START's wiring reads each input as `${input.<name>}`. The run records no agent configuration.
  */
 export function learnableStarted(
   flow: CompiledFlow,
@@ -832,7 +826,6 @@ export function learnableStarted(
   } = {},
 ): { state: RunState; log: MemoryRunLog } {
   const inputs = options.inputs ?? {};
-  stampExecutionScopes(flow);
   const state = new RunState(flow);
   const initialPool = new VariablePool(flow.startId);
   initialPool.set(flow.startId, { ...inputs });
@@ -896,7 +889,6 @@ export function engine(
     defaults = {},
     ...rest
   } = options;
-  if (learnable) stampExecutionScopes(flow);
   const state = new RunState(flow);
   const initialPool = new VariablePool(flow.startId);
   initialPool.set(flow.startId, { ...inputs });
@@ -1145,9 +1137,9 @@ export function prepareOutput(
   state: RunState,
   nodeId: string,
   output: unknown,
-  options: { commitAs?: string | null } & OutcomeCarriers = {},
+  options: { commitAs?: string | null } = {},
 ): PreparedTransition {
-  const { commitAs = null, ...carriers } = options;
+  const { commitAs = null } = options;
   // A child START's expansion committed its value already; its success only names it. A derived
   // node's commit points at every pool name, which holds what its binding reads; its success
   // rebuilds the value from them.
@@ -1159,10 +1151,10 @@ export function prepareOutput(
   const pending = state.pendingCommits.get(nodeId)!;
   if (pending.valueJson === null) {
     // The success checks a derived value against the one evaluated: here, its own rebuild.
-    const rebuilt = decodeTyped(rebuildCommit(state, nodeId, pending.key, pending.from!).valueJson);
-    return prepareNodeSucceeded(state, nodeId, { ...carriers, output: rebuilt });
+    const rebuilt = decodeTyped(rebuildCommit(state, nodeId, pending.key, pending.from!));
+    return prepareNodeSucceeded(state, nodeId, { output: rebuilt });
   }
-  return prepareNodeSucceeded(state, nodeId, carriers);
+  return prepareNodeSucceeded(state, nodeId);
 }
 
 /**
@@ -1182,35 +1174,25 @@ export function commitExpansion(
   return commits.length;
 }
 
-/** `commitExpansion`, then prepare the expansion with the carriers in `options`. */
+/** `commitExpansion` with `options.from`, then prepare the expansion. */
 export function prepareGrowth(
   log: RunLog,
   state: RunState,
   nodeId: string,
   grow: Grow,
   growBuilder: GrowBuilder,
-  options: OutcomeCarriers & { from?: ReadonlyMap<string, number> } = {},
+  options: { from?: ReadonlyMap<string, number> } = {},
 ): PreparedTransition {
-  const { from, ...carriers } = options;
-  commitExpansion(log, state, nodeId, grow, growBuilder, from);
-  return prepareExpanded(state, nodeId, grow, growBuilder, carriers);
+  commitExpansion(log, state, nodeId, grow, growBuilder, options.from);
+  return prepareExpanded(state, nodeId, grow, growBuilder);
 }
 
 /**
  * Commit START's success (`output`, by default `{items: ["canonical"]}`), so its successors enter
- * the ready FIFO. A learnable state records an empty binding capture.
+ * the ready FIFO.
  */
 export function commitStartSuccess(state: RunState, log: MemoryRunLog, output?: unknown): void {
-  const start = state.flow.nodes.get(START_ID)!;
-  commitPrepared(
-    log,
-    state,
-    prepareOutput(log, state, START_ID, output === undefined ? { items: ["canonical"] } : output, {
-      forwardCapture: state.learnable
-        ? new ForwardCapture(ValueRoute.record([]), { scope: start.executionScope })
-        : null,
-    }),
-  );
+  commitPrepared(log, state, prepareOutput(log, state, START_ID, output === undefined ? { items: ["canonical"] } : output));
 }
 
 /** Return one canonical node-execution failure of `nodeId`. */
@@ -1231,38 +1213,6 @@ export function routeInFlight(flow: CompiledFlow = routeFlow()): { state: RunSta
   commitStartSuccess(state, log);
   commitPrepared(log, state, prepareNodeStarted(state, "router"));
   return { state, log };
-}
-
-/**
- * Return a binding capture of `inputs` for `node`: each input a literal route, under the node's
- * execution scope and with its input and variable names.
- */
-export function forwardCapture(node: Node, inputs: Readonly<Record<string, unknown>> | null): ForwardCapture {
-  const route = ValueRoute.record(
-    Object.entries(inputs ?? {}).map(([name, value]) => [name, ValueRoute.literal(value)] as const),
-  );
-  // The node's inventory, as an evaluation captures it.
-  return new ForwardCapture(route, {
-    scope: node.executionScope,
-    inputNames: node.dataInputNames(),
-    variableNames: node.declaredVariables().map((parameter) => parameter.name),
-  });
-}
-
-/**
- * A rebinder for an occurrence of a trace built by hand: it binds `inputs`, or for `null` fails as
- * a binding that didn't finish.
- */
-export function fixedRebinder(inputs: ValueRecord | null): Rebinder {
-  return () => ({
-    capture: new BindingCapture(inputs, ValueRoute.record([]), new Set()),
-    failure: inputs === null ? new BindingError("the binding didn't finish", { failureCode: "binding.evaluate" }) : null,
-  });
-}
-
-/** A node data rebuilder for an occurrence of a trace built by hand: it gives `data`. */
-export function fixedNodeData(data: JsonObject = {}): (inputs: Readonly<Record<string, unknown>> | null) => JsonObject {
-  return () => data;
 }
 
 /** The root flow's declaration site. */
@@ -1342,33 +1292,6 @@ export function startTraceNode(node: Node, options: TraceNodeOptions): { state: 
   commitStartSuccess(state, log, {});
   commitPrepared(log, state, prepareNodeStarted(state, node.id));
   return { state, log };
-}
-
-/**
- * Return every retained-trace field in a form `toEqual` compares: entries, occurrences and
- * boundaries as arrays, and the backward handlers by reference.
- */
-export function traceSnapshot(trace: RetainedTrace): Record<string, unknown> {
-  return {
-    endId: trace.endId,
-    rootInputNames: [...trace.rootInputNames],
-    rootStartSource: trace.rootStartSource,
-    terminal: trace.terminal,
-    rootWriter: trace.rootWriter,
-    causalRouteSource: trace.causalRouteSource,
-    occurrences: [...trace.occurrences],
-    sources: [...trace.sources],
-    currentWriters: [...trace.currentWriters],
-    started: [...trace.started],
-    nextSequence: trace.nextSequence,
-    boundaries: [...trace.boundaries],
-    pendingConnections: [...trace.pendingConnections],
-  };
-}
-
-/** Return `traceSnapshot` for comparing a replay with its live run. */
-export function replayTraceSnapshot(trace: RetainedTrace): Record<string, unknown> {
-  return traceSnapshot(trace);
 }
 
 /**
@@ -1778,8 +1701,7 @@ export async function crashAfter(k: number, fn: () => Promise<unknown>): Promise
  * 2026-08-14T12:00:00Z, and `loaded`'s flow files recorded.
  *
  * @param options.privateFlow The graph to run, a copy of `loaded.compiled` by default.
- * @param options.learnable Whether the run is learnable (`false` by default); a learnable run's
- *   graph gets its execution layout first.
+ * @param options.learnable Whether the run records itself learnable (`false` by default).
  * @returns The state after the record.
  */
 export function startedRun(
@@ -1795,7 +1717,6 @@ export function startedRun(
 ): RunState {
   const { inputs = {}, numWorkers = 0, effective = {}, learnable = false } = options;
   const privateFlow = options.privateFlow ?? copyGraph(loaded.compiled);
-  if (learnable) stampExecutionScopes(privateFlow);
   const pool = new VariablePool(privateFlow.startId);
   pool.set(privateFlow.startId, structuredClone(inputs));
   seedSystemClock(pool, Date.UTC(2026, 7, 14, 12));

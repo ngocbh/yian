@@ -5,8 +5,8 @@
  * wrote it, in every run: run inputs and system values map to their run-start commits, any other
  * name to its node's commit once that node's `node_succeeded` names it. It is pruned with the
  * pool and rebuilt by replay. A derived node (START, END, LOOP, CALL, MAP: its value only reads
- * earlier values through its binding) gets an in-memory input route in a non-learnable run too,
- * whose source leaves name the commits its binding read; nothing more is written to the log.
+ * earlier values through its binding) gets an in-memory input route whose source leaves name the
+ * commits its binding read; nothing more is written to the log.
  */
 
 import { afterAll, expect, spyOn, test } from "bun:test";
@@ -152,7 +152,7 @@ const entries = (state: RunState) => [...state.producers].sort(([a], [b]) => (a 
  */
 async function liveRun<T = unknown>(
   text: string,
-  options: { inputs?: Record<string, unknown>; learnable?: boolean; look?: (state: RunState) => T } = {},
+  options: { inputs?: Record<string, unknown>; look?: (state: RunState) => T } = {},
 ): Promise<{ loaded: ComposedFlow; state: RunState; records: readonly RecordEnvelope[]; live: Map<number, T> }> {
   const { look = entries as (state: RunState) => T, ...start } = options;
   const loaded = await load(text);
@@ -206,7 +206,6 @@ const poolNames = (state: RunState) =>
 
 test("each pool name maps to the seq of the accepted pool_commit that last wrote it", async () => {
   const { state, records } = await liveRun(CALL_IN_LOOP);
-  expect(state.trace).toBeNull();
   const writers = lastWriters(records);
   expect([...state.producers.keys()].sort()).toEqual(poolNames(state));
   for (const [name, seq] of state.producers) {
@@ -249,30 +248,11 @@ test("an orphan commit never enters the index", async () => {
   }
 }, 60_000);
 
-test("in a learnable run, each name's commit is by the node whose start the retained trace names, or its expansion's", async () => {
-  const { state, records } = await liveRun(CALL_IN_LOOP, { learnable: true });
-  const trace = state.trace!;
-  let checked = 0;
-  for (const [name, seq] of state.producers) {
-    if (name.startsWith("system.")) continue;
-    const source = trace.resolve([name, "output"]).source as SourceRef;
-    const started = records[source.executionSeq]!;
-    expect(started.kind).toBe("node_started");
-    // A child START's commit is its expansion's, by the spawner, under the START's key.
-    const commit = records[seq]!.payload;
-    const writer = commit["key"] !== commit["node_id"] && commit["key"] === started.payload["node_id"] ? commit["key"] : commit["node_id"];
-    expect([name, writer]).toEqual([name, started.payload["node_id"]]);
-    checked += 1;
-  }
-  expect(checked).toBeGreaterThan(1);
-});
-
 test.each([
-  ["a CALL in a loop", CALL_IN_LOOP, {}, false],
-  ["a CALL in a loop, learnable", CALL_IN_LOOP, {}, true],
-  ["a MAP", DOUBLES, { xs: [1n, 2n, 3n] }, false],
-] as const)("replaying the log cut at any record restores the live index: %s", async (_label, text, inputs, learnable) => {
-  const { loaded, records, live } = await liveRun(text, { inputs, learnable });
+  ["a CALL in a loop", CALL_IN_LOOP, {}],
+  ["a MAP", DOUBLES, { xs: [1n, 2n, 3n] }],
+] as const)("replaying the log cut at any record restores the live index: %s", async (_label, text, inputs) => {
+  const { loaded, records, live } = await liveRun(text, { inputs });
   expect(records.at(-1)!.kind).toBe("node_succeeded");
   // A cut inside the run start can't be replayed; every later cut can.
   const first = Math.min(...live.keys());
@@ -283,7 +263,7 @@ test.each([
   }
 }, 60_000);
 
-/** A non-learnable loop of `times` iterations whose body bumps a counter. */
+/** A loop of `times` iterations whose body bumps a counter. */
 const counter = (times: number) => `
 id: counter
 name: counter
@@ -298,9 +278,8 @@ nodes:
 output: \${count.output.x}
 `;
 
-test("a 200-iteration non-learnable loop keeps no trace and a bounded index", async () => {
+test("a 200-iteration loop keeps a bounded index", async () => {
   const { state, records, live } = await liveRun(counter(200), { look: (state) => state.producers.size });
-  expect(state.trace).toBeNull();
   expect(state.result).toEqual(new RunSucceeded({ output: 200n }));
   // The index after each body expansion, in iteration order.
   const sizes = records
@@ -379,7 +358,7 @@ interface Captured {
  */
 async function capturedRun(
   text: string,
-  options: { inputs?: Record<string, unknown>; learnable?: boolean } = {},
+  options: { inputs?: Record<string, unknown> } = {},
 ): Promise<{ captured: Captured[]; derivedStarts: string[]; records: readonly RecordEnvelope[]; state: RunState }> {
   const loaded = await load(text);
   const log = new MemoryRunLog("r1");
@@ -420,25 +399,10 @@ async function capturedRun(
   return { captured, derivedStarts, records: log.records(), state };
 }
 
-/** The pool name a non-learnable leaf names: the key of the commit at its seq. */
+/** The pool name a leaf names: the key of the commit at its seq. */
 const commitName = (records: readonly RecordEnvelope[], leaf: SourceRef): string => {
   expect(records[leaf.executionSeq]!.kind).toBe("pool_commit");
   return records[leaf.executionSeq]!.payload["key"] as string;
-};
-
-/**
- * The pool name a learnable leaf names: the key of the commit its node's success accepted after
- * the start at its seq; seq zero is the run's inputs, under the START's id.
- */
-const startName = (records: readonly RecordEnvelope[], leaf: SourceRef): string => {
-  if (leaf.executionSeq === 0) return StartNode.ID;
-  const started = records[leaf.executionSeq]!;
-  expect(started.kind).toBe("node_started");
-  const success = records.find(
-    ({ kind, seq, payload }) =>
-      kind === "node_succeeded" && seq > started.seq && payload["node_id"] === started.payload["node_id"],
-  )!;
-  return records[Number(success.payload["commit"])]!.payload["key"] as string;
 };
 
 /** Each captured node's sorted read names, by node id in evaluation order. */
@@ -452,7 +416,6 @@ test.each([
   ["a chat appending with + and a template", CHAT, {}],
 ] as const)("a derived node's in-memory route names the commits its binding read: %s", async (_label, text, inputs) => {
   const plain = await capturedRun(text, { inputs });
-  expect(plain.state.trace).toBeNull();
   // Only derived nodes capture, each once per start.
   expect(plain.captured.every(({ derived }) => derived)).toBe(true);
   expect(plain.captured.map(({ nodeId }) => nodeId)).toEqual(plain.derivedStarts);
@@ -463,19 +426,6 @@ test.each([
       expect(producers.get(commitName(plain.records, leaf))).toBe(leaf.executionSeq);
     }
   }
-  const learnable = await capturedRun(text, { inputs, learnable: true });
-  const learned = learnable.captured.filter(({ derived }) => derived);
-  // A learnable run also rebuilds a derived record's capture when it accepts it, right after the
-  // evaluation's capture of the same node, and the rebuild reads the same names.
-  const learnedNames = readNames(learned, (leaf) => startName(learnable.records, leaf));
-  const evaluated = learnedNames.filter(([nodeId, names], index) => {
-    const previous = learnedNames[index - 1];
-    if (previous === undefined || previous[0] !== nodeId) return true;
-    expect(names).toEqual(previous[1]);
-    return false;
-  });
-  expect(evaluated.length).toBeLessThan(learnedNames.length);
-  expect(readNames(plain.captured, (leaf) => commitName(plain.records, leaf))).toEqual(evaluated);
 }, 60_000);
 
 test("a derived node's route names exactly the pool names its binding reads", async () => {
@@ -498,17 +448,13 @@ nodes:
 output: {n: "\${c.output}", rid: "\${system.run_id}"}
 `;
 
-test("a derived binding reading a system value: without a trace its leaf names the run-start commit; the trace gives none", async () => {
+test("a derived binding reading a system value: its leaf names the run-start commit", async () => {
   const plain = await capturedRun(READS_SYSTEM);
   const end = plain.captured.find(({ nodeId }) => nodeId === EndNode.ID)!;
   const runIdCommit = runStart(plain.records).get("system.run_id")!;
   const plainLeaves = captureLeaves(end.capture);
   expect(plainLeaves.map((leaf) => leaf.executionSeq)).toContain(runIdCommit);
   expect(readNames([end], (leaf) => commitName(plain.records, leaf))).toEqual([[EndNode.ID, ["c", "system.run_id"]]]);
-  // The retained trace resolves a system value with no source, so the learnable route has no leaf for it.
-  const learnable = await capturedRun(READS_SYSTEM, { learnable: true });
-  const learnedEnd = learnable.captured.find(({ nodeId }) => nodeId === EndNode.ID)!;
-  expect(readNames([learnedEnd], (leaf) => startName(learnable.records, leaf))).toEqual([[EndNode.ID, ["c"]]]);
 });
 
 test("a pool name missing from the producer index is a RangeError", () => {

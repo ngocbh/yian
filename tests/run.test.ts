@@ -79,6 +79,7 @@ import {
   progressOf,
   rejected,
   requiredEndFlow,
+  serving,
   startedRun,
   textReply,
   thrownBy,
@@ -1276,6 +1277,58 @@ test("inspectRun replays with the run's env", async () => {
   expect(thrownBy(() => inspectRun(path, { flow, env: hostEnv(dir) }))).toBeInstanceOf(DefaultsMismatchError);
   // Reading without the flow doesn't check the recorded values.
   expect(inspectRun(path, { env: hostEnv(dir) }).status).toBe("crashed");
+});
+
+// A MAP over a def whose TOOL node asks adaptive questions: the composer agent's model is picked
+// at call time, so each item's agent records its config as a step, under its runtime id.
+const MAPPED_COMPOSER_FLOW = `id: f
+name: f
+defs:
+  item:
+    input: {m: !str }
+    nodes:
+      ask:
+        kind: tool
+        tool_id: ask
+        adaptive_questions:
+          prompt: "Q"
+          llm_config: {provider: openai, model: '\${input.m}'}
+    output: \${ask.output}
+nodes:
+  pick: {kind: code, output: str, code: "return 'gpt-picked'"}
+  each:
+    kind: map
+    call: item
+    over: \${[1]}
+    input: {m: '\${pick.output}'}
+output: \${each.output}
+`;
+
+test("a resume's LLM-field error labels an in-flight mapped agent by its static path", async () => {
+  const env = hostEnv(dir);
+  const flow = await loadFlow(MAPPED_COMPOSER_FLOW, { env });
+  const options = (log: string) => ({
+    log,
+    env,
+    models: serving(new ScriptedModel([textReply("nope")]), env),
+    tools: { ask: () => "a" },
+  });
+  const uncut = join(dir, "uncut.jsonl");
+  await runFlow(flow, {}, options(uncut));
+  const records = readFileSync(uncut, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const at = records.findIndex(({ kind, payload }) => kind === "node_step" && payload.node_id === "each#0/ask__compose");
+  // Cut right after the agent's recorded config, then make that config refuse a field.
+  const log = join(dir, "run.jsonl");
+  await crashAfter(at + 1, () => runFlow(flow, {}, options(log)));
+  const cut = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  expect(cut.at(-1).payload.step.kind).toBe("llm_config");
+  cut.at(-1).payload.step.effective_llm_config.temperature = 0.5;
+  writeFileSync(log, `${cut.map((record) => JSON.stringify(record)).join("\n")}\n`);
+
+  const error = await rejected(advance(options(log)));
+
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toStartWith("node 'ask' adaptive_questions.llm_config in 'each': ");
 });
 
 test("inspectRun reads the run id, schema, fingerprint and last seq, with and without the flow", async () => {

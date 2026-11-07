@@ -30,7 +30,6 @@ import {
   Assertion,
   Binding,
   ContractOrigins,
-  ExecutionScope,
   isExactly,
   Parameter,
   PartialRecordContract,
@@ -80,7 +79,6 @@ const IGNORED_NODE_FIELDS = [
   "origin",
   "originContext",
   "memoryScope",
-  "executionScope",
   "wiringLabels",
   "bindingLabels",
   "isSpawner",
@@ -673,25 +671,6 @@ function memoryScopeTopology(value: unknown, path: string): JsonObject {
 }
 
 /**
- * Project a node's execution location for growth identity.
- *
- * @throws TypeError when `value` isn't exactly an `ExecutionScope`.
- */
-function executionScopeTopology(value: unknown, path: string): JsonObject {
-  if (!isExactly(value, ExecutionScope)) throw new TypeError(`${path} must be an ExecutionScope`);
-  return {
-    static_path: [...value.staticPath],
-    flow_path: [...value.flowPath],
-    occurrence_path: value.occurrencePath.map((position, index) => ({
-      kind: position.kind,
-      static_path: [...position.staticPath],
-      index: count(position.index, `${path}.occurrencePath[${index}].index`, true),
-    })),
-    boundary: value.boundary,
-  };
-}
-
-/**
  * Describe a CODE node's `code`: `{"inline": body}` or `{"ref": "./x.ts:fn"}` for text, or the
  * built-in form `{"builtin": "identity", "field": name}`.
  *
@@ -713,8 +692,8 @@ function codeManifest(code: unknown, path: string): JsonObject {
 /**
  * Canonicalize one concrete node under its exhaustive per-kind field policy.
  *
- * @param topologyOnly Whether this is the expansion topology, which adds the node's memory and
- *   execution scopes and encodes baked child flows in topology mode too.
+ * @param topologyOnly Whether this is the expansion topology, which adds the node's memory scope
+ *   and encodes baked child flows in topology mode too.
  * @throws TypeError or RangeError when a field breaks the policy or holds a value that isn't
  *   manifestable.
  */
@@ -874,14 +853,11 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       throw new RangeError(`${path}: unsupported node kind ${reprText(node.kind)}`);
   }
 
-  // Derived memory and execution state is never authored program identity. A dynamic fragment's
-  // identity includes the scope's root-relative path, key stack and occurrence path, so replay
-  // rejects a structurally different occurrence without persisting configs or source origins.
+  // Derived memory state is never authored program identity. A dynamic fragment's identity
+  // includes the scope's root-relative path, key stack and occurrence path, so replay rejects a
+  // structurally different occurrence without persisting configs or source origins.
   if (topologyOnly && node.memoryScope !== null) {
     manifest.memory_scope = memoryScopeTopology(node.memoryScope, `${path}.memoryScope`);
-  }
-  if (topologyOnly && node.executionScope !== null) {
-    manifest.execution_scope = executionScopeTopology(node.executionScope, `${path}.executionScope`);
   }
   return manifest;
 }

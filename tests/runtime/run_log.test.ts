@@ -1102,7 +1102,7 @@ test("iterRunRecords with maxLineBytes keeps no more than the cap of a long line
   const big = "x".repeat(1_000_000);
   // The failure's node id sorts after its long message; a nested node_id must not be taken for it.
   const failure = `{"code":"tool_error","details":{"node_id":"inner"},"message":"${big}\\"","node_id":"tail\\u00e9"}`;
-  const long = kindLine("node_failed", `{"failure":${failure},"forward_capture":null}`, { seq: 1 });
+  const long = kindLine("node_failed", `{"failure":${failure}}`, { seq: 1 });
   fs.writeFileSync(file, `${wireLine()}\n${long}\n`);
   const sizes: number[] = [];
   const realConcat = Buffer.concat;
@@ -1129,7 +1129,7 @@ test("iterRunRecords with maxLineBytes names a long line's node id as its kind d
   const file = path.join(dir, "run.jsonl");
   const pad = "y".repeat(200);
   const lines = [
-    kindLine("node_expanded", `{"forward_capture":"${pad}","prune_ids":[],"spawner_id":"grow","topology_digest":"${DIGEST}"}`),
+    kindLine("node_expanded", `{"prune_ids":["${pad}"],"spawner_id":"grow","topology_digest":"${DIGEST}"}`),
     kindLine("run_failed", `{"failure":{"message":"${pad}","node_id":"bad"}}`, { seq: 1 }),
     `{"at":"${AT}","kind":"node_started","payload":{"node_id":["${pad}"]},"run_id":"run","schema":${SCHEMA_VERSION},"seq":"2"}`,
   ];

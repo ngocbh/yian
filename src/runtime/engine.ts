@@ -16,8 +16,7 @@
  * cancel lands synchronously between two awaits through `deliver`.
  *
  * Knows about:   compile/model, diagnostics, events, llm_clients (types), nodes, platform (the
- *                scheduler), runtime eval_node, live, log, state, trace and waits, skills, tools,
- *                typesys.
+ *                scheduler), runtime eval_node, live, log, state and waits, skills, tools, typesys.
  * Never imports: the run boundary, compose, or the CLI.
  */
 
@@ -65,7 +64,6 @@ import {
   InterruptedRecord,
   isRunLog,
   type NodeStepRecord,
-  type OutcomeCarriers,
   recordTimeMs,
   type RunLog,
   type RunRecord,
@@ -108,7 +106,6 @@ import {
   resolveFromPool,
   stepsWithSteerValues,
 } from "./state.ts";
-import { captureBindings } from "./trace.ts";
 import { availableUnread, decideWait, dueTimeouts, isWakeable, nodeCalls, wakeAt } from "./waits.ts";
 
 /** The dependencies and host callbacks of one `FlowEngine`. */
@@ -788,17 +785,13 @@ export class FlowEngine {
     this.#steerInboxes.delete(nodeId);
     const reads = this.#reads.get(nodeId) ?? new Map<string, number>();
     this.#reads.delete(nodeId);
-    const carriers: OutcomeCarriers = {
-      // A learnable state evaluated with binding capture on, so both captures are present.
-      forwardCapture: state.learnable ? captureBindings(evaluated.bindings!, evaluated.backwardCapture!) : null,
-    };
     let prepared: PreparedTransition;
     if (outcome instanceof EvaluationFailure) {
-      prepared = this.#prepareFailure(nodeId, outcome.failure, carriers);
+      prepared = this.#prepareFailure(nodeId, outcome.failure);
     } else if (outcome instanceof Output && state.pendingCommits.has(nodeId)) {
       // A child START: its expansion committed its value, which its success names.
       requireExpansionOutput(state, nodeId, outcome.value);
-      prepared = prepareNodeSucceeded(state, nodeId, carriers);
+      prepared = prepareNodeSucceeded(state, nodeId);
     } else if (outcome instanceof Output) {
       let commit: PreparedTransition;
       try {
@@ -806,36 +799,36 @@ export class FlowEngine {
         commit = preparePoolCommit(state, nodeId, outcome.value, { commitAs: outcome.commitAs, from });
       } catch (error) {
         if (!(error instanceof NodeDataError)) throw error;
-        const failure = this.#prepareContractFailure(nodeId, "contract.output", error.original, error.origin, carriers);
+        const failure = this.#prepareContractFailure(nodeId, "contract.output", error.original, error.origin);
         return commitPrepared(this.log, state, failure);
       }
       // The output, then the node's messages, then the success that accepts both, with nothing
       // between: a crash before the success leaves orphan commits, and the node reruns.
       commitPrepared(this.log, state, commit);
       if (state.flow.nodes.get(nodeId)!.producesMessages) commitPrepared(this.log, state, prepareMessagesCommit(state, nodeId));
-      prepared = prepareNodeSucceeded(state, nodeId, { ...carriers, output: outcome.value });
+      prepared = prepareNodeSucceeded(state, nodeId, { output: outcome.value });
     } else if (outcome instanceof Route) {
       try {
-        prepared = prepareNodeRouted(state, nodeId, outcome.handle, carriers);
+        prepared = prepareNodeRouted(state, nodeId, outcome.handle);
       } catch (error) {
         if (!(error instanceof NodeDataError)) throw error;
-        prepared = this.#prepareContractFailure(nodeId, "contract.route", error.original, error.origin, carriers);
+        prepared = this.#prepareContractFailure(nodeId, "contract.route", error.original, error.origin);
       }
     } else if (outcome instanceof Grow) {
       try {
         // The child STARTs' values are written before the expansion that admits them: a crash
         // between them leaves orphan commits, and the spawner reruns.
-        const planned = planExpansion(state, nodeId, outcome, this.growBuilder, carriers);
+        const planned = planExpansion(state, nodeId, outcome, this.growBuilder);
         for (const [key] of planned.commits) {
           commitPrepared(this.log, state, prepareExpansionCommit(state, nodeId, key, reads));
         }
         prepared = prepareExpandedFromPlan(state, planned);
       } catch (error) {
         if (!(error instanceof GrowthRejected)) throw error;
-        prepared = this.#prepareContractFailure(nodeId, "contract.growth", error.original, null, carriers);
+        prepared = this.#prepareContractFailure(nodeId, "contract.growth", error.original, null);
       }
     } else {
-      return this.#commitPending(nodeId, outcome, carriers, steerInbox);
+      return this.#commitPending(nodeId, outcome, steerInbox);
     }
     return commitPrepared(this.log, state, prepared);
   }
@@ -845,7 +838,7 @@ export class FlowEngine {
    * and append the result in this synchronous section, so no delivery lands between the decision
    * and its records. A node that opened a steer inbox waits with it (`steerInbox`).
    */
-  #commitPending(nodeId: string, outcome: Pending, carriers: OutcomeCarriers, steerInbox: string | null): readonly RunEvent[] {
+  #commitPending(nodeId: string, outcome: Pending, steerInbox: string | null): readonly RunEvent[] {
     const { state, log } = this;
     if (outcome.wait === null) {
       return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: outcome.callIds, steerInbox }));
@@ -855,7 +848,7 @@ export class FlowEngine {
     if (decision.kind === "take") {
       // The commit and its success go in together: nothing is appended between them.
       commitPrepared(log, state, prepareTakeCommit(state, nodeId, decision.commit));
-      return commitPrepared(log, state, prepareNodeSucceeded(state, nodeId, carriers));
+      return commitPrepared(log, state, prepareNodeSucceeded(state, nodeId));
     }
     if (decision.kind === "slept") {
       let commit: PreparedTransition;
@@ -863,10 +856,10 @@ export class FlowEngine {
         commit = preparePoolCommit(state, nodeId, null);
       } catch (error) {
         if (!(error instanceof NodeDataError)) throw error;
-        return commitPrepared(log, state, this.#prepareContractFailure(nodeId, "contract.output", error.original, error.origin, carriers));
+        return commitPrepared(log, state, this.#prepareContractFailure(nodeId, "contract.output", error.original, error.origin));
       }
       commitPrepared(log, state, commit);
-      return commitPrepared(log, state, prepareNodeSucceeded(state, nodeId, carriers));
+      return commitPrepared(log, state, prepareNodeSucceeded(state, nodeId));
     }
     // The decision left is to wait.
     return commitPrepared(log, state, prepareNodeWaiting(state, nodeId, { callIds: [callId], waits: [decision.entry], steerInbox }));
@@ -930,12 +923,12 @@ export class FlowEngine {
    *
    * @throws Error when the failure names another node.
    */
-  #prepareFailure(nodeId: string, failure: Failure, carriers: OutcomeCarriers): PreparedTransition {
+  #prepareFailure(nodeId: string, failure: Failure): PreparedTransition {
     if (failure.nodeId !== nodeId) {
       const found = failure.nodeId === null ? "null" : reprText(failure.nodeId);
       throw new Error(`raw evaluation failure node identity mismatch: expected ${reprText(nodeId)}, found ${found}`);
     }
-    return prepareNodeFailed(this.state, failure, carriers);
+    return prepareNodeFailed(this.state, failure);
   }
 
   /** Prepare the failure of one outcome the reducer's contract refused. */
@@ -944,10 +937,9 @@ export class FlowEngine {
     code: FailureCode,
     original: unknown,
     origin: OriginRef | null,
-    carriers: OutcomeCarriers,
   ): PreparedTransition {
     const node = this.state.flow.nodes.get(nodeId)!;
-    return this.#prepareFailure(nodeId, evaluationFailure(node, code, original, origin).failure, carriers);
+    return this.#prepareFailure(nodeId, evaluationFailure(node, code, original, origin).failure);
   }
 
   /**
@@ -965,19 +957,14 @@ export class FlowEngine {
    */
   async #evaluate(nodeId: string): Promise<EvaluatedOutcome> {
     const { state, onEvent, onStream, live } = this;
-    const trace = state.trace;
     const node = state.flow.nodes.get(nodeId)!;
-    // A derived node gets an input route in every run: from the retained trace when there is one,
-    // else from the pool and the producer index (sources are pool_commit seqs), kept in memory with
-    // the outcome and dropped after the commit.
+    // A derived node gets an input route from the pool and the producer index (sources are
+    // pool_commit seqs), kept in memory with the outcome and dropped after the commit.
     const derived = node.derived;
-    const resolver: SourceResolver | null =
-      trace !== null
-        ? (names) => trace.resolve(names)
-        : derived
-          ? (names) => resolveFromPool(names, state.pool, state.producers, state.runId!)
-          : null;
-    // A derived node's commit names each pool name its binding read, in both modes alike.
+    const resolver: SourceResolver | null = derived
+      ? (names) => resolveFromPool(names, state.pool, state.producers, state.runId!)
+      : null;
+    // A derived node's commit names each pool name its binding read.
     let sourceResolver = resolver;
     if (derived) {
       const reads = new Map<string, number>();
@@ -1002,7 +989,7 @@ export class FlowEngine {
         signal: nodeController.signal,
         emitStream: onStream === null && live === null ? null : (chunk) => this.#stream(chunk),
         emitEvent: onEvent === null && live === null ? null : (event) => this.#event(event),
-        captureBindings: state.learnable || derived,
+        captureBindings: derived,
         sourceResolver,
         memoryContextOpener: this.memoryContextOpener,
         tools: this.tools,

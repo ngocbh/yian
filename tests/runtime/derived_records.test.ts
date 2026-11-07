@@ -339,7 +339,7 @@ function rebuildAll(
           expect([record.nodeId, decodeTyped(valueJson).toObject()]).toEqual([record.nodeId, outputs.get(record.nodeId) as never]);
           return;
         }
-        const valueJson = rebuildCommit(state, record.nodeId, commit.key, commit.from).valueJson;
+        const valueJson = rebuildCommit(state, record.nodeId, commit.key, commit.from);
         expect([record.nodeId, decodeTyped(valueJson).toObject()]).toEqual([record.nodeId, outputs.get(record.nodeId) as never]);
         rebuilt += 1;
       } else if (record instanceof NodeExpandedRecord) {
@@ -400,7 +400,7 @@ test("a child START rebuilt over its constant wiring equals the value its expans
   const spawner = flow.compiled.nodes.get("count")!;
   const fragment = buildGrow(spawner, [{ x: 0n }, 0n]);
   const start = fragment.nodes.get("count#0/__start__")!;
-  const { outcome } = rebuildDerived(start, fragment, new Map(), () => {
+  const outcome = rebuildDerived(start, fragment, new Map(), () => {
     throw new Error("a child START reads no source");
   }, null);
   const committed = events.find((event) => event instanceof NodeSucceeded && event.nodeId === "count#0/__start__");
@@ -486,7 +486,7 @@ test("decoding refuses a pool_commit with both forms and a node_expanded with a 
     `"run_id":"r1","schema":${SCHEMA_VERSION},"seq":9}`;
   expect(() => decodeRecord(commit)).toThrow(RangeError);
   const expanded =
-    `{"at":"2026-01-01T00:00:00.000Z","kind":"node_expanded","payload":{"forward_capture":null,"prune_ids":[],` +
+    `{"at":"2026-01-01T00:00:00.000Z","kind":"node_expanded","payload":{"prune_ids":[],` +
     `"seed":{},"spawner_id":"s","topology_digest":"${"a".repeat(64)}"},"run_id":"r1","schema":${SCHEMA_VERSION},"seq":9}`;
   expect(() => decodeRecord(expanded)).toThrow('extra=["seed"]');
 });

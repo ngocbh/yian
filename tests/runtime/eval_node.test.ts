@@ -9,7 +9,6 @@ import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { processEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { RunSucceeded } from "../../src/events.ts";
-import { SourceRef } from "../../src/expr/lineage.ts";
 import { RouteModel } from "../../src/llm/executor.ts";
 import { Message, replayRecord, Request, TextPart } from "../../src/llm/messages.ts";
 import { defaultModelAccess, type ModelAccess } from "../../src/llm_clients/factory.ts";
@@ -40,8 +39,7 @@ import {
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { virtualScheduler } from "../../src/platform.ts";
-import { EvaluationFailure, evalNode, rebind } from "../../src/runtime/eval_node.ts";
-import { resolvePoolPath } from "../../src/runtime/sources.ts";
+import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, type Value, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, FuncNode, graph, NO_ENV, nodeFlow, rejected, thrownBy as thrown } from "../helpers/run_state_fixtures.ts";
@@ -890,56 +888,4 @@ test("per item wrapper default keeps binding stage", async () => {
 
   expect(failure.code).toBe("binding.evaluate");
   expect(failure.trace).toEqual([defaultOrigin]);
-});
-
-describe("rebind collects the capture the evaluator collected", () => {
-  // The run reducer rebuilds a commit's capture through `rebind`, so the two bindings must agree.
-  const pool = new VariablePool();
-  pool.set("up", ["a", "b"]);
-  pool.set("label", "t");
-  const seqs = new Map([
-    ["up", 1],
-    ["label", 2],
-  ]);
-  const sourceResolver = (names: readonly string[]) =>
-    resolvePoolPath(names, pool, (name) => new SourceRef("run", seqs.get(name)!));
-  const resolve = (name: string, seq: number) => ({ value: pool.store.get(name)!, source: new SourceRef("run", seq) });
-
-  test("a MAP's reserved list and its items", async () => {
-    const node = new MapNode("m", { flowId: "child", child: {} });
-    node.params = [new Parameter("x"), new Parameter("tag"), new Parameter("n", { hasDefault: true, default: 3n })];
-    const flow = nodeFlow(node, { over: "${up.output}", x: "${item}", tag: "${label.output}" });
-
-    const evaluated = await evalNode(node, flow, pool, { captureBindings: true, sourceResolver });
-    const { capture, failure } = rebind(node, flow, seqs, resolve, null);
-
-    expect(failure).toBeNull();
-    expect(evaluated.bindings!.items).toHaveLength(2);
-    expect(capture).toEqual(evaluated.bindings!);
-  });
-
-  test("a reserved value a hook made without the binder", async () => {
-    class ReservedNode extends Node {
-      readonly kind = NodeKind.CODE;
-
-      override bindReserved(): Record<string, unknown> {
-        return { made: "here" };
-      }
-
-      override forward(inputs: Record<string, unknown>): NodeResult {
-        return new Output(inputs);
-      }
-    }
-    const node = new ReservedNode("r");
-    node.params = [new Parameter("tag")];
-    const flow = nodeFlow(node, { tag: "${label.output}" });
-
-    const evaluated = await evalNode(node, flow, pool, { captureBindings: true, sourceResolver });
-    const { capture, failure } = rebind(node, flow, new Map([["label", 2]]), resolve, null, {
-      reserved: { made: "here" },
-    });
-
-    expect(failure).toBeNull();
-    expect(capture).toEqual(evaluated.bindings!);
-  });
 });

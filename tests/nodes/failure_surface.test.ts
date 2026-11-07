@@ -23,7 +23,7 @@ test("failure carriers have no parallel location fields", () => {
   expect(Object.keys(new EvaluationFailure(failure))).toEqual(["failure"]);
   expect(Object.keys(new NodeFailed({ failure }))).toEqual(["type", "failure"]);
   expect(Object.keys(new RunFailed({ failure }))).toEqual(["type", "failure"]);
-  expect(Object.keys(new NodeFailedRecord(failure))).toEqual(["failure", "forwardCapture"]);
+  expect(Object.keys(new NodeFailedRecord(failure))).toEqual(["failure"]);
 
   const result = new RunResult({ input: {}, status: "failed", runId: "r", log: null, failure });
   expect(Object.keys(result)).toEqual([

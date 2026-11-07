@@ -8,8 +8,7 @@
  * reducer, so the same validated carriers can back memory and JSONL logs without creating an
  * authority cycle.
  *
- * Knows about:   diagnostics, expr/lineage, memory/contracts, nodes/base, nodes/contracts,
- *                platform, runtime/contracts, typesys.
+ * Knows about:   diagnostics, memory/contracts, nodes/base, nodes/contracts, platform, typesys.
  * Never imports: state, trace, engine, run, compile, compose, or the CLI.
  */
 
@@ -18,12 +17,6 @@ import os from "node:os";
 import { dirname } from "node:path";
 
 import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.ts";
-import {
-  type RouteKind,
-  type RoutePath,
-  SourceRef,
-  ValueRoute,
-} from "../expr/lineage.ts";
 import {
   DeclSite,
   MemoryMutation,
@@ -35,14 +28,7 @@ import {
 } from "../memory/contracts.ts";
 import { retainFailure } from "../nodes/base.ts";
 import { type FileLock, FileLockError, isLocked, lockFile, syncFolder, VERSION } from "../platform.ts";
-import {
-  comparePaths,
-  ExecutionPosition,
-  ExecutionScope,
-  isExactly,
-  type PositionKind,
-  sameItems,
-} from "../nodes/contracts.ts";
+import { comparePaths, isExactly, sameItems } from "../nodes/contracts.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import {
   buildValue,
@@ -53,7 +39,6 @@ import {
 } from "../typesys/index.ts";
 import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temporal.ts";
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
-import { ForwardCapture, validateRoute, validateSource } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
 export const SCHEMA_VERSION = 27;
@@ -136,12 +121,6 @@ export const RUN_STOP_REASONS = Object.freeze(["signal", "callback"] as const);
 
 /** One of `RUN_STOP_REASONS`. */
 export type RunStopReason = (typeof RUN_STOP_REASONS)[number];
-
-/** The optional carrier accepted with a node outcome, frozen and held by reference. */
-export interface OutcomeCarriers {
-  /** The binding capture accepted with the outcome; defaults to `null`. */
-  forwardCapture?: ForwardCapture | null;
-}
 
 /**
  * One flow file a load read: its text, and where each `uses:` ref written in it resolved. A type,
@@ -1008,17 +987,15 @@ export class NodeSucceededRecord {
   readonly commit: number;
   /** The seq of the node's messages commit this success also accepts, or `null`. */
   readonly messages: number | null;
-  /** The binding capture accepted with the outcome, if any. */
-  readonly forwardCapture: ForwardCapture | null;
 
   /**
    * @param options.messages The seq of the node's messages commit; defaults to `null`.
-   * @throws TypeError when the id isn't a string, or the capture is of another class.
+   * @throws TypeError when the id isn't a string.
    * @throws RangeError when the id is empty, or `commit` or `messages` isn't a positive safe
    *   integer.
    */
-  constructor(nodeId: string, commit: number, options: OutcomeCarriers & { messages?: number | null } = {}) {
-    const { forwardCapture = null, messages = null } = options;
+  constructor(nodeId: string, commit: number, options: { messages?: number | null } = {}) {
+    const { messages = null } = options;
     this.nodeId = requireName(nodeId, "node_id");
     if (!Number.isSafeInteger(commit) || commit < 1) throw new RangeError("commit must be a positive integer");
     this.commit = commit;
@@ -1026,7 +1003,6 @@ export class NodeSucceededRecord {
       throw new RangeError("messages must be a positive integer");
     }
     this.messages = messages;
-    this.forwardCapture = validatedCapture(forwardCapture);
     Object.freeze(this);
   }
 }
@@ -1039,25 +1015,18 @@ export class NodeRoutedRecord {
   readonly handle: string;
   /** The terminal-unreachable failure this route first proves, if any. */
   readonly terminalFailure: Failure | null;
-  /** The binding capture accepted with the outcome, if any. */
-  readonly forwardCapture: ForwardCapture | null;
 
   /**
    * A terminal failure is kept through `retainFailure`.
    *
-   * @throws TypeError when an id isn't a string, or a failure or carrier is of another class.
+   * @throws TypeError when an id isn't a string, or the failure is of another class.
    * @throws RangeError when an id is empty, or the failure has no node id.
    */
-  constructor(
-    nodeId: string,
-    handle: string,
-    options: OutcomeCarriers & { terminalFailure?: Failure | null } = {},
-  ) {
-    const { terminalFailure = null, forwardCapture = null } = options;
+  constructor(nodeId: string, handle: string, options: { terminalFailure?: Failure | null } = {}) {
+    const { terminalFailure = null } = options;
     this.nodeId = requireName(nodeId, "node_id");
     this.handle = requireName(handle, "handle");
     this.terminalFailure = terminalFailure === null ? null : retainedFailure(terminalFailure, "NodeRoutedRecord");
-    this.forwardCapture = validatedCapture(forwardCapture);
     Object.freeze(this);
   }
 }
@@ -1074,20 +1043,16 @@ export class NodeExpandedRecord {
   readonly pruneIds: readonly string[];
   /** The expanded topology's SHA-256 digest, 64 lowercase hex digits. */
   readonly topologyDigest: string;
-  /** The binding capture accepted with the outcome, if any. */
-  readonly forwardCapture: ForwardCapture | null;
 
   /**
-   * @throws TypeError when an id or the digest isn't a string, or a carrier is of another class.
+   * @throws TypeError when an id or the digest isn't a string.
    * @throws RangeError when the spawner id is empty, the prune ids aren't a sorted array of
    *   unique non-empty strings, or the digest isn't 64 lowercase hex digits.
    */
-  constructor(spawnerId: string, pruneIds: readonly string[], topologyDigest: string, options: OutcomeCarriers = {}) {
-    const { forwardCapture = null } = options;
+  constructor(spawnerId: string, pruneIds: readonly string[], topologyDigest: string) {
     this.spawnerId = requireName(spawnerId, "spawner_id");
     this.pruneIds = validatedIdArray(pruneIds, "prune_ids", true);
     this.topologyDigest = requireSha256(topologyDigest, "topology_digest");
-    this.forwardCapture = validatedCapture(forwardCapture);
     Object.freeze(this);
   }
 }
@@ -1096,20 +1061,13 @@ export class NodeExpandedRecord {
 export class NodeFailedRecord {
   /** The failure, kept through `retainFailure`; its node id is non-empty. */
   readonly failure: Failure;
-  /** The binding capture accepted with the outcome, if any. */
-  readonly forwardCapture: ForwardCapture | null;
 
   /**
-   * @throws TypeError when the failure or a carrier is of another class.
+   * @throws TypeError when the failure is of another class.
    * @throws RangeError when the failure has no node id.
    */
-  constructor(
-    failure: Failure,
-    options: OutcomeCarriers = {},
-  ) {
-    const { forwardCapture = null } = options;
+  constructor(failure: Failure) {
     this.failure = retainedFailure(failure, "NodeFailedRecord");
-    this.forwardCapture = validatedCapture(forwardCapture);
     Object.freeze(this);
   }
 }
@@ -1251,18 +1209,6 @@ function validatedCount(value: unknown, name: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new TypeError(`${name} must be an integer`);
   if (value < 0) throw new RangeError(`${name} must be non-negative`);
   return value;
-}
-
-/**
- * Return `capture` when it is `null` or exactly a `ForwardCapture`.
- *
- * @throws TypeError otherwise.
- */
-function validatedCapture(capture: unknown): ForwardCapture | null {
-  if (capture !== null && !isExactly(capture, ForwardCapture)) {
-    throw new TypeError("forward_capture must be a ForwardCapture or null");
-  }
-  return capture;
 }
 
 /**
@@ -2827,268 +2773,6 @@ function memoryStackFromPayload(value: unknown, label: string): MemoryStack {
   );
 }
 
-/** Encode a route path: field names, and indexes as int tokens. */
-function routePathPayload(path: RoutePath): JsonValue[] {
-  return path.map((part) => (typeof part === "string" ? part : BigInt(part)));
-}
-
-/**
- * Decode a route or source path; `label` names it in errors. Each index is checked by
- * `validateRoute` or `validateSource`.
- *
- * @throws TypeError when `value` isn't an array.
- * @throws RangeError when a part is neither a string nor an int token.
- */
-function routePathFromPayload(value: unknown, label: string): (string | number)[] {
-  return wireArray(value, label).map((part) => {
-    if (typeof part === "string") return part;
-    if (typeof part === "bigint") return Number(part);
-    throw new RangeError("route path components must be strings or non-negative integers");
-  });
-}
-
-/** Encode a source identity without its produced value. */
-function sourcePayload(source: SourceRef): JsonObject {
-  return { run_id: source.runId, execution_seq: BigInt(source.executionSeq), path: routePathPayload(source.path) };
-}
-
-/**
- * Decode and check one source identity; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields, besides `validateSource`'s errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function sourceFromPayload(value: unknown, label: string): SourceRef {
-  const wire = wireObject(value, label, ["run_id", "execution_seq", "path"]);
-  const source = new SourceRef(
-    requireText(wire["run_id"], `${label} run_id`),
-    wireInt(wire["execution_seq"], `${label} execution_seq`),
-    routePathFromPayload(wire["path"], `${label} path`),
-  );
-  validateSource(source);
-  return source;
-}
-
-/**
- * Encode an authored execution scope independent of memory, or `null` for none.
- *
- * @throws TypeError when `scope` isn't `null` or exactly an `ExecutionScope`.
- */
-export function executionScopePayload(scope: ExecutionScope | null): JsonObject | null {
-  if (scope === null) return null;
-  if (!isExactly(scope, ExecutionScope)) throw new TypeError("scope must be an exact ExecutionScope");
-  return {
-    static_path: [...scope.staticPath],
-    flow_path: [...scope.flowPath],
-    occurrence_path: scope.occurrencePath.map((position) => ({
-      kind: position.kind,
-      static_path: [...position.staticPath],
-      index: position.index === null ? null : BigInt(position.index),
-    })),
-    boundary: scope.boundary,
-  };
-}
-
-/**
- * Decode an execution scope, or `null`; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields or an index beyond ±(2^53 - 1), besides the
- *   positions' and scope's own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function executionScopeFromPayload(value: unknown, label: string): ExecutionScope | null {
-  if (value === null) return null;
-  const wire = wireObject(value, label, ["static_path", "flow_path", "occurrence_path", "boundary"]);
-  const occurrencePath = wireArray(wire["occurrence_path"], `${label} occurrence_path`).map((item) => {
-    const itemLabel = `${label} occurrence_path item`;
-    const position = wireObject(item, itemLabel, ["kind", "static_path", "index"]);
-    const index = position["index"];
-    return new ExecutionPosition(
-      requireText(position["kind"], `${itemLabel} kind`) as PositionKind,
-      wireTextArray(position["static_path"], `${itemLabel} static_path`),
-      index === null ? null : wireInt(index, `${itemLabel} index`),
-    );
-  });
-  return new ExecutionScope(wireTextArray(wire["static_path"], `${label} static_path`), {
-    flowPath: wireTextArray(wire["flow_path"], `${label} flow_path`),
-    occurrencePath,
-    boundary: wireNullableText(wire["boundary"], `${label} boundary`) as ExecutionScope["boundary"],
-  });
-}
-
-/**
- * Encode a route after checking its whole tree once.
- *
- * @throws TypeError when a route field has the wrong type.
- * @throws RangeError when a route field or variant breaks the route contract.
- * @throws JSONDecodeError when a `valueJson` isn't JSON yian reads.
- */
-export function routePayload(route: ValueRoute): JsonObject {
-  validateRoute(route);
-  return encodeRoute(route);
-}
-
-/**
- * Encode a route that `validateRoute` already accepted, without checking it again. An
- * interpolation's text is left out: learning rebuilds it by binding the node again.
- */
-function encodeRoute(route: ValueRoute): JsonObject {
-  return {
-    kind: route.kind,
-    source: route.source === null ? null : sourcePayload(route.source),
-    value_json: route.kind === "interpolation" ? null : route.valueJson,
-    children: route.children.map(encodeRoute),
-    expression: route.expression,
-    names: [...route.names],
-    sizes: route.sizes.map(BigInt),
-    spans: route.spans.map(([start, end]) => [BigInt(start), BigInt(end)]),
-    path: routePathPayload(route.path),
-    result_type: route.resultType,
-    snapshot: route.snapshot === null ? null : encodeRoute(route.snapshot),
-  };
-}
-
-/** The fields of a route payload. */
-const ROUTE_WIRE_FIELDS = [
-  "kind",
-  "source",
-  "value_json",
-  "children",
-  "expression",
-  "names",
-  "sizes",
-  "spans",
-  "path",
-  "result_type",
-  "snapshot",
-];
-
-/**
- * Decode a route payload, then check its variant.
- *
- * Every field's JSON type is checked first: `ValueRoute`'s constructor would reshape a string or
- * a span of another length, and would turn a null `expression` into `""`; checking the scalar
- * fields here also reports a node's own shape errors before its children's. Then each child and
- * the snapshot are decoded and checked by their own call, so the new node is checked without its
- * subtree and each node once.
- *
- * @throws TypeError when a field has the wrong JSON type, or for `validateRoute`'s type errors.
- * @throws RangeError for missing or extra fields, or when a field or variant breaks the route
- *   contract.
- * @throws JSONDecodeError when a `value_json` isn't JSON yian reads.
- */
-export function routeFromPayload(payload: unknown): ValueRoute {
-  const wire = wireObject(payload, "route", ROUTE_WIRE_FIELDS);
-  const { source, children, snapshot } = wire;
-  if (source !== null && !isRecord(source)) throw new TypeError("route source must be an object or null");
-  const valueJson = wire["value_json"];
-  if (valueJson !== null && typeof valueJson !== "string") {
-    throw new TypeError("route value_json must be a string or null");
-  }
-  if (wire["kind"] === "interpolation" && valueJson !== null) {
-    throw new RangeError("an interpolation route records no value_json");
-  }
-  const childWires = wireArray(children, "route children");
-  const expression = wire["expression"];
-  if (typeof expression !== "string") throw new TypeError("route expression must be a string");
-  const names = wireArray(wire["names"], "route names");
-  if (!names.every((name): name is string => typeof name === "string")) {
-    throw new RangeError("route names must be strings");
-  }
-  const sizes = wireArray(wire["sizes"], "route sizes").map((size) => {
-    if (typeof size !== "bigint") throw new RangeError("route sizes must be non-negative integers");
-    return Number(size);
-  });
-  const spans = wireArray(wire["spans"], "route spans").map((span) => {
-    if (!isList(span) || span.length !== 2 || !span.every((bound) => typeof bound === "bigint")) {
-      throw new TypeError("interpolation spans must be integer pairs");
-    }
-    return [Number(span[0]), Number(span[1])] as const;
-  });
-  const path = routePathFromPayload(wire["path"], "route path");
-  const resultType = wire["result_type"];
-  if (resultType !== null && (typeof resultType !== "string" || !resultType)) {
-    throw new RangeError("route result_type must be a non-empty string or null");
-  }
-  if (snapshot !== null && !isRecord(snapshot)) throw new TypeError("route snapshot must be an object or null");
-  const route = new ValueRoute(wire["kind"] as RouteKind, {
-    source: source === null ? null : sourceFromPayload(source, "route source"),
-    valueJson,
-    children: childWires.map(routeFromPayload),
-    expression,
-    names,
-    sizes,
-    spans,
-    path,
-    resultType,
-    snapshot: snapshot === null ? null : routeFromPayload(snapshot),
-  });
-  validateRoute(route, { deep: false });
-  return route;
-}
-
-/**
- * Encode a forward capture's binding data; its route is checked once.
- *
- * @throws RangeError when an evaluated key names no captured route, besides `routePayload`'s
- *   errors.
- */
-function capturePayload(capture: ForwardCapture): JsonObject {
-  const route = routePayload(capture.route);
-  // `evaluatedKeys` is a `Set`, which stays mutable inside a frozen capture, so it is the one
-  // field checked again.
-  const keys = [...capture.evaluatedKeys];
-  if (!keys.every((key) => capture.route.names.includes(key))) {
-    throw new RangeError("evaluated_keys must name captured routes");
-  }
-  return {
-    route,
-    evaluated_keys: keys.sort(compareCodeUnits),
-    items: capture.items.map(([index, item]) => ({ index: BigInt(index), capture: capturePayload(item) })),
-    scope: executionScopePayload(capture.scope),
-    input_names: [...capture.inputNames],
-    variable_names: [...capture.variableNames],
-    bound: capture.bound,
-  };
-}
-
-/**
- * Decode one forward capture; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields, evaluated keys that aren't sorted and unique,
- *   or an index beyond ±(2^53 - 1), besides the route's, scope's and capture's own errors.
- * @throws TypeError when a field has the wrong JSON type.
- * @throws JSONDecodeError when a route's `value_json` isn't JSON yian reads.
- */
-function captureFromPayload(value: unknown, label: string): ForwardCapture {
-  const wire = wireObject(value, label, [
-    "route",
-    "evaluated_keys",
-    "items",
-    "scope",
-    "input_names",
-    "variable_names",
-    "bound",
-  ]);
-  const bound = wire["bound"];
-  if (typeof bound !== "boolean") throw new TypeError(`${label} bound must be a boolean`);
-  const keys = wireTextArray(wire["evaluated_keys"], `${label} evaluated_keys`);
-  if (!strictlyIncreasing(keys, compareCodeUnits)) throw new RangeError("evaluated_keys must be sorted and unique");
-  const items = wireArray(wire["items"], `${label} items`).map((item) => {
-    const pair = wireObject(item, `${label} item`, ["index", "capture"]);
-    const index = wireInt(pair["index"], `${label} item index`);
-    return [index, captureFromPayload(pair["capture"], `${label} item capture`)] as const;
-  });
-  return new ForwardCapture(routeFromPayload(wire["route"]), {
-    evaluatedKeys: new Set(keys),
-    items,
-    scope: executionScopeFromPayload(wire["scope"], `${label} scope`),
-    inputNames: wireTextArray(wire["input_names"], `${label} input_names`),
-    variableNames: wireTextArray(wire["variable_names"], `${label} variable_names`),
-    bound,
-  });
-}
-
 /** Encode one memory mutation. */
 function mutationPayload(mutation: MemoryMutation): JsonObject {
   return { mutation_id: mutation.mutationId, payload: memoryJson(mutation.payload) };
@@ -3125,22 +2809,6 @@ function memoryFailureFromPayload(value: unknown, label: string): MemoryOperatio
     requireName(wire["message"], `${label} message`),
     wireBool(wire["retryable"], `${label} retryable`),
   );
-}
-
-/** Encode an outcome record's optional capture. */
-function outcomePayload(record: OutcomeCarriers): JsonObject {
-  const { forwardCapture = null } = record;
-  return { forward_capture: forwardCapture === null ? null : capturePayload(forwardCapture) };
-}
-
-/**
- * Decode an outcome payload's `forward_capture`; `label` names the payload.
- *
- * @throws RangeError or TypeError as `captureFromPayload`.
- */
-function outcomeFromPayload(payload: JsonObject, label: string): OutcomeCarriers {
-  const capture = payload["forward_capture"];
-  return { forwardCapture: capture === null ? null : captureFromPayload(capture, `${label} forward_capture`) };
 }
 
 /** The fields of a `run_started` payload; every `run_started` payload holds each one. */
@@ -3460,14 +3128,13 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       node_id: record.nodeId,
       commit: BigInt(record.commit),
       messages: record.messages === null ? null : BigInt(record.messages),
-      ...outcomePayload(record),
     }),
     decode: (payload, label) => {
-      requireFields(payload, ["node_id", "commit", "messages", "forward_capture"], label);
+      requireFields(payload, ["node_id", "commit", "messages"], label);
       return new NodeSucceededRecord(
         requireName(payload["node_id"], `${label} node_id`),
         wireInt(payload["commit"], `${label} commit`),
-        { ...outcomeFromPayload(payload, label), messages: wireNullableInt(payload["messages"], `${label} messages`) },
+        { messages: wireNullableInt(payload["messages"], `${label} messages`) },
       );
     },
     nodeId: payloadNodeId,
@@ -3479,18 +3146,14 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       node_id: record.nodeId,
       handle: record.handle,
       terminal_failure: record.terminalFailure === null ? null : failurePayload(record.terminalFailure),
-      ...outcomePayload(record),
     }),
     decode: (payload, label) => {
-      requireFields(payload, ["node_id", "handle", "terminal_failure", "forward_capture"], label);
+      requireFields(payload, ["node_id", "handle", "terminal_failure"], label);
       const failure = payload["terminal_failure"];
       return new NodeRoutedRecord(
         requireName(payload["node_id"], `${label} node_id`),
         requireName(payload["handle"], `${label} handle`),
-        {
-          terminalFailure: failure === null ? null : failureFromPayload(failure, `${label} terminal_failure`),
-          ...outcomeFromPayload(payload, label),
-        },
+        { terminalFailure: failure === null ? null : failureFromPayload(failure, `${label} terminal_failure`) },
       );
     },
     nodeId: payloadNodeId,
@@ -3502,15 +3165,13 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       spawner_id: record.spawnerId,
       prune_ids: [...record.pruneIds],
       topology_digest: record.topologyDigest,
-      ...outcomePayload(record),
     }),
     decode: (payload, label) => {
-      requireFields(payload, ["spawner_id", "prune_ids", "topology_digest", "forward_capture"], label);
+      requireFields(payload, ["spawner_id", "prune_ids", "topology_digest"], label);
       return new NodeExpandedRecord(
         requireName(payload["spawner_id"], `${label} spawner_id`),
         wireTextArray(payload["prune_ids"], `${label} prune_ids`),
         requireText(payload["topology_digest"], `${label} topology_digest`),
-        outcomeFromPayload(payload, label),
       );
     },
     nodeId: (payload, label) => requireName(payload["spawner_id"], `${label} spawner_id`),
@@ -3518,13 +3179,10 @@ const RECORD_CODECS: readonly RecordCodec[] = [
   recordCodec({
     cls: NodeFailedRecord,
     kind: "node_failed",
-    encode: (record) => ({ failure: failurePayload(record.failure), ...outcomePayload(record) }),
+    encode: (record) => ({ failure: failurePayload(record.failure) }),
     decode: (payload, label) => {
-      requireFields(payload, ["failure", "forward_capture"], label);
-      return new NodeFailedRecord(
-        failureFromPayload(payload["failure"], `${label} failure`),
-        outcomeFromPayload(payload, label),
-      );
+      requireFields(payload, ["failure"], label);
+      return new NodeFailedRecord(failureFromPayload(payload["failure"], `${label} failure`));
     },
     nodeId: (payload, label) =>
       requireName(wireObject(payload["failure"], `${label} failure`)["node_id"], `${label} failure node_id`),
@@ -3616,16 +3274,6 @@ function wireObject(value: unknown, label: string, fields?: readonly string[]): 
   if (!isRecord(value)) throw new TypeError(`${label} must be an object`);
   if (fields !== undefined) requireFields(value, fields, label);
   return value as JsonObject;
-}
-
-/**
- * Return `value` when it is a JSON object or `null`.
- *
- * @throws TypeError otherwise.
- */
-function wireNullableObject(value: unknown, label: string): JsonObject | null {
-  if (value !== null && !isRecord(value)) throw new TypeError(`${label} must be an object or null`);
-  return value as JsonObject | null;
 }
 
 /**

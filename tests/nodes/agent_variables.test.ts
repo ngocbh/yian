@@ -139,7 +139,7 @@ test("declared variable inventory preserves canonical declarations", () => {
   expect(new AgentNode("empty").declaredVariables()).toEqual([]);
 });
 
-test("a retained agent keeps early binding unavailable and capture off dormant", async () => {
+test("a capturing evaluation keeps early binding unavailable, and capture off dormant", async () => {
   const node = new AgentNode("writer", { prompt: "${topic}", variables: variables("tone: !str concise\n") });
   node.params = [new Parameter("topic", { required: true })];
   const resolved = spyResolve(node);
@@ -148,7 +148,6 @@ test("a retained agent keeps early binding unavailable and capture off dormant",
   const missing = await evalNode(node, null, new VariablePool(), { captureBindings: true, models });
   expect(missing.outcome).toBeInstanceOf(EvaluationFailure);
   expect(missing.bindings!.boundInputs).toBeNull();
-  expect(missing.backwardCapture!.variableNames).toEqual(["tone"]);
   expect(resolved).toEqual([]);
 
   const ordinary = await evalNode(node, null, new VariablePool(), { wiringOverride: { topic: "reefs" }, models });
@@ -159,7 +158,7 @@ test("a retained agent keeps early binding unavailable and capture off dormant",
   });
   expect(ordinary.outcome).toEqual(new Output("reefs"));
   expect(retained.outcome).toEqual(ordinary.outcome);
-  expect(ordinary.backwardCapture).toBeNull();
+  expect(ordinary.bindings).toBeNull();
   expect(resolved).toHaveLength(2);
 });
 
@@ -173,7 +172,6 @@ test("an agent renders inputs and variable defaults without execution or memory 
   });
   node.params = [new Parameter("topic")];
   const models = echo();
-  expect(node.executionScope).toBeNull();
   expect(node.memoryScope).toBeNull();
 
   const output = await node.forward({ topic: "coral reefs" }, { models });
@@ -303,7 +301,6 @@ output: \${writer.output}
   expect(new Set(built.state.pool.store.keys())).toEqual(new Set([START_ID, "writer", "writer.new_messages", END_ID]));
   expect(built.state.pool.get(START_ID)).toEqual({ topic: "reefs" });
   expect(built.state.pool.get("writer")).toBe(expected);
-  expect(built.state.trace).toBeNull();
 });
 
 test("a temperature variable renders independently of the effective model configuration", async () => {
@@ -328,7 +325,7 @@ output: \${writer.output}
   const target = AgentNode.prototype as unknown as { resolveVariables: (this: AgentNode) => ValueRecord };
   const resolve = target.resolveVariables;
   const spy = spyOn(target, "resolveVariables").mockImplementation(function (this: AgentNode) {
-    scopes.push([this.executionScope, this.memoryScope]);
+    scopes.push([this.memoryScope]);
     return resolve.call(this);
   });
   try {
@@ -348,7 +345,7 @@ output: \${writer.output}
     expect(configurations).toEqual([{ provider: "ollama", model: "test", ollama: { options: { temperature: 0.8 } } }]);
     expect(model.requests.at(-1)!.messages.at(-1)!.text()).toBe("reefs: 0.4");
     expect(model.requests.length).toBe(1);
-    expect(scopes).toEqual([[null, null]]);
+    expect(scopes).toEqual([[null]]);
   } finally {
     spy.mockRestore();
     rmSync(dir, { recursive: true, force: true });

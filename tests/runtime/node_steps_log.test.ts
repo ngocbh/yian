@@ -36,7 +36,6 @@ import {
   canonicalChild,
   commitStartSuccess,
   fanoutFlow,
-  forwardCapture,
   fragmentBuilder,
   fragmentIds,
   initializedAndStarted,
@@ -191,8 +190,8 @@ test("a node step 5000 levels deep is accepted", () => {
 });
 
 /** Return a state and log with START done and node `first` in flight. */
-function firstInFlight(options: { learnable?: boolean } = {}): { state: RunState; log: MemoryRunLog } {
-  const { state, log } = initializedAndStarted(fanoutFlow(), options);
+function firstInFlight(): { state: RunState; log: MemoryRunLog } {
+  const { state, log } = initializedAndStarted(fanoutFlow());
   commitStartSuccess(state, log);
   commitPrepared(log, state, prepareNodeStarted(state, "first"));
   return { state, log };
@@ -445,8 +444,8 @@ test("LOOP body steps go at the outcome and stay gone after the prune", async ()
 });
 
 /** Return `firstInFlight`'s state after a step, a resume, a second start and a second step. */
-function resumedWithSteps(options: { learnable?: boolean } = {}): { state: RunState; log: MemoryRunLog } {
-  const { state, log } = firstInFlight(options);
+function resumedWithSteps(): { state: RunState; log: MemoryRunLog } {
+  const { state, log } = firstInFlight();
   commitPrepared(log, state, prepareNodeStep(state, "first", FAILED));
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
   commitPrepared(log, state, prepareNodeStarted(state, "first"));
@@ -502,19 +501,6 @@ test("a replay reproduces the steps and starts", () => {
   expect(replayed.nextSequence).toBe(state.nextSequence);
 });
 
-test("a learnable replay reproduces the steps, starts and trace", () => {
-  const { state, log } = resumedWithSteps({ learnable: true });
-
-  const replayed = replayRecords(new RunState(fanoutFlow()), log.records(), { growBuilder: fragmentBuilder });
-
-  expect(replayed.nodeSteps).toEqual(state.nodeSteps);
-  expect(replayed.nodeStarts).toEqual(state.nodeStarts);
-  expect(state.nodeStarts).toEqual(new Map([["first", 2]]));
-  expect(replayed.trace).not.toBeNull();
-  expect(replayed.trace!.nextSequence).toBe(state.trace!.nextSequence);
-  expect(state.trace!.nextSequence).toBe(state.nextSequence);
-});
-
 test("a replay without steps has no steps", () => {
   const { log } = firstInFlight();
 
@@ -522,30 +508,6 @@ test("a replay without steps has no steps", () => {
 
   expect(replayed.nodeSteps).toEqual(new Map());
   expect(replayed.nodeStarts).toEqual(new Map([["first", 1]]));
-});
-
-test("a learnable run accepts a step with an empty trace delta", () => {
-  const { state, log } = firstInFlight({ learnable: true });
-  expect(state.trace).not.toBeNull();
-
-  const prepared = prepareNodeStep(state, "first", FAILED);
-  const delta = prepared._plan.traceDelta;
-  expect(delta).not.toBeNull();
-  expect(delta!.started).toBeNull();
-  expect(delta!.resumed).toBe(false);
-  expect(delta!.occurrence).toBeNull();
-  commitPrepared(log, state, prepared);
-  expect(state.nodeSteps).toEqual(new Map([["first", [FAILED]]]));
-  expect(state.trace!.nextSequence).toBe(state.nextSequence);
-
-  commitPrepared(
-    log,
-    state,
-    prepareOutput(log, state, "first", { done: true }, {
-      forwardCapture: forwardCapture(state.flow.nodes.get("first")!, {}),
-    }),
-  );
-  expect(state.nodeSteps).toEqual(new Map());
 });
 
 test("a frontier commit refuses a step record with a start delta", () => {

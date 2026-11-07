@@ -1,4 +1,4 @@
-# A learnable MAP over three items. The golden log pins each item's seed and capture.
+# A MAP over three items. The golden log pins each item's seed.
 kind: run
 flow: |
   id: doubles
@@ -14,6 +14,6 @@ flow: |
     each: {kind: map, over: "${input.xs}", call: double, input: {x: "${item}"}}
   output: ${each.output}
 inputs: {xs: [1, 2, 3]}
-run: {run_id: r1, num_workers: 0, learnable: true}
+run: {run_id: r1, num_workers: 0}
 expect:
   output: {status: succeeded, output: [2, 4, 6]}

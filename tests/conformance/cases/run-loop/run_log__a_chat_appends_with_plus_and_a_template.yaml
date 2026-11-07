@@ -1,7 +1,6 @@
-# A learnable chat loop whose turn output appends to the history with `+` and to the log with a
-# template; each turn takes the message the host sent to the `messages` inbox. The golden log
-# pins the captured transforming bindings: the last turn's END binding holds six messages (four
-# carried in, two appended) and an interpolation route.
+# A chat loop whose turn output appends to the history with `+` and to the log with a template;
+# each turn takes the message the host sent to the `messages` inbox. The golden log pins each
+# turn's records.
 kind: run
 flow: |
   id: chat
@@ -49,7 +48,7 @@ flow: |
         messages: ${input.messages}
       times: 3
   output: ${chat.output.log}
-run: {run_id: r1, num_workers: 0, learnable: true}
+run: {run_id: r1, num_workers: 0}
 host:
   sends:
     - {inbox: messages, event: a}

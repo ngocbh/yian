@@ -26,7 +26,7 @@ expect:
       # The `as_of:` binding's value on line 10.
       frames: [{label: flow.yaml, range: [10, 14, 10, 49]}]
   trace:
-    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [run_started, null, {num_workers: 0}]
     - [pool_commit, __start__, {key: system.now}]
     - [pool_commit, __start__, {key: system.run_id, value: r1}]
     - [pool_commit, __start__, {key: system.today}]

@@ -112,7 +112,7 @@ import {
   type RunLog,
   type RunStartedRecord,
 } from "../../src/runtime/log.ts";
-import { addCrashedAttempts, type RunState } from "../../src/runtime/state.ts";
+import { addCrashedAttempts } from "../../src/runtime/state.ts";
 import { ASK, pending, type ToolContext } from "../../src/tools/context.ts";
 import {
   PermanentToolError,
@@ -143,7 +143,6 @@ export type Kind =
   | "load"
   | "run"
   | "resume"
-  | "backward"
   | "expr"
   | "value"
   | "defaults"
@@ -160,7 +159,6 @@ const KIND_KEYS = {
   load: FLOW,
   run: RUN,
   resume: new Set([...RUN, "resume"]),
-  backward: new Set([...RUN, "backward"]),
   expr: new Set(["expr", "template", "values", "item", "mode", "typedefs", "env"]),
   value: new Set(["type", "typedefs", "value", "env"]),
   defaults: new Set(["env"]),
@@ -169,7 +167,7 @@ const KIND_KEYS = {
   json: new Set(["read", "mode", "write", "form"]),
 } satisfies Record<Kind, ReadonlySet<string>>;
 const REQUIRED: Partial<Record<Kind, readonly string[]>> = {
-  load: ["flow"], run: ["flow"], resume: ["flow"], backward: ["flow", "backward"],
+  load: ["flow"], run: ["flow"], resume: ["flow"],
   value: ["type", "value"], fingerprint: ["flow", "other"],
 };
 // Each kind's `expect` holds exactly one of its result groups, and any of its optional keys.
@@ -177,7 +175,6 @@ const RESULTS = {
   load: [["load"]],
   run: [["raises"], ["output"]],
   resume: [["raises"], ["output"]],
-  backward: [["raises"], ["output"]],
   expr: [["value"], ["raises"]],
   value: [["value", "kind"], ["raises"]],
   defaults: [["defaults"], ["raises"]],
@@ -186,12 +183,11 @@ const RESULTS = {
   json: [["value"], ["text"], ["raises"]],
 } satisfies Record<Kind, readonly (readonly string[])[]>;
 const RUN_OPTIONAL: ReadonlySet<string> = new Set([
-  "trace", "events", "stream", "tool_calls", "memory",
+  "trace", "events", "stream", "tool_calls",
 ]);
 const OPTIONAL: Partial<Record<Kind, ReadonlySet<string>>> = {
   run: RUN_OPTIONAL,
   resume: RUN_OPTIONAL,
-  backward: new Set([...RUN_OPTIONAL, "backward"]),
   cli: new Set(["stdout", "stderr", "json", "json_lines", "exists"]),
 };
 const KIND_NAMES = Object.keys(KIND_KEYS) as Kind[];
@@ -208,23 +204,21 @@ const ALL_EXPECT_KEYS: ReadonlySet<string> = new Set(
   KIND_NAMES.flatMap((kind) => [...expectKeys(kind)]),
 );
 const RUN_KEYS: ReadonlySet<string> = new Set([
-  "run_id", "num_workers", "learnable", "llm_config", "context",
+  "run_id", "num_workers", "llm_config", "context",
 ]);
 const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "headers", "context"]);
 // Host keys the format reserves and this runner doesn't support yet.
 const RESERVED_HOST_KEYS: readonly string[] = ["skills"];
 const HOST_KEYS: ReadonlySet<string> = new Set([
-  "tools", "human", "jitter", "models", "memory", "stop", "sends", ...RESERVED_HOST_KEYS,
+  "tools", "human", "jitter", "models", "stop", "sends", ...RESERVED_HOST_KEYS,
 ]);
 const RESUME_HOST_KEYS: ReadonlySet<string> = new Set([...HOST_KEYS, "crash_after_record"]);
 /** The `[section, key]` pairs a case may not use yet: it fails before it is set up. */
 const RESERVED: readonly (readonly [string, string])[] = RESERVED_HOST_KEYS.map(
   (key) => ["host", key] as const,
 );
-// `host.models` consumers, besides `memory:<key>` under `LEARNER_NODE`.
-const CONSUMERS: readonly string[] = ["agent", "structured_retry", "compose", "backward", "summary"];
-// The node id memory learners' model calls are scripted under.
-const LEARNER_NODE = "__memory__";
+// `host.models` consumers.
+const CONSUMERS: readonly string[] = ["agent", "structured_retry", "compose", "summary"];
 const USAGE_COUNTS: readonly string[] = ["input_tokens", "output_tokens", "total_tokens"];
 const USAGE_DETAILS: readonly string[] = [
   "cache_read_tokens", "cache_creation_tokens", "reasoning_tokens",
@@ -235,7 +229,7 @@ const TEXT_KEYS: ReadonlySet<string> = new Set([
   "flow", "other", "files", "stdin", "read", "http",
 ]);
 const SECRET_KEYS: ReadonlySet<string> = new Set([
-  "run", "resume", "backward", "env", "host", "stdin", "http",
+  "run", "resume", "env", "host", "stdin", "http",
 ]);
 const SECRET = /<key:([0-9]+)>/g;
 const ENV_SUFFIXES: readonly string[] = ["_API_KEY", "_BASE_URL", "_ENDPOINT", "_API_VERSION"];
@@ -505,13 +499,7 @@ function checkModels(models: Value | undefined): void {
   for (const [node, consumers] of Object.entries(mapping("host.models", models))) {
     for (const [consumer, script] of Object.entries(mapping(`host.models.${node}`, consumers))) {
       const label = `host.models.${node}.${consumer}`;
-      if (consumer.startsWith("memory:") !== (node === LEARNER_NODE)) {
-        throw new Error(
-          `\`${label}\`: \`memory:<key>\` consumers go under \`${LEARNER_NODE}\`, and ` +
-            `\`${LEARNER_NODE}\` holds only them`,
-        );
-      }
-      if (node !== LEARNER_NODE && !CONSUMERS.includes(consumer)) {
+      if (!CONSUMERS.includes(consumer)) {
         throw new Error(`\`${label}\`: the consumer must be one of ${CONSUMERS.join(", ")}`);
       }
       if (!Array.isArray(script)) throw new Error(`\`${label}\` must be a list`);
@@ -533,40 +521,6 @@ function checkArguments(
   if (get(args, "context", "present") !== "present") {
     throw new Error(`\`${where}.context\` must be \`present\``);
   }
-}
-
-/** Throw unless `value` is a non-empty list of `{feedback, api_key, headers}`. */
-function checkBackward(where: string, value: Value | undefined): void {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new Error(`\`${where}\` must be a non-empty list`);
-  }
-  value.forEach((entry, index) => {
-    keys(`${where}[${index}]`, entry, new Set(["feedback", "api_key", "headers"]), {
-      required: ["feedback"],
-    });
-  });
-}
-
-/**
- * Throw unless `value` is `host.memory`: `{before: [{inputs, run, backward}, ...]}`. Each earlier
- * run gives `run.run_id`, and one with `backward` is learnable.
- */
-function checkMemory(value: Value | undefined): void {
-  const memory = keys("host.memory", value, new Set(["before"]));
-  const before = get(memory, "before", []);
-  if (!Array.isArray(before)) throw new Error("`host.memory.before` must be a list");
-  before.forEach((item, index) => {
-    const where = `host.memory.before[${index}]`;
-    const entry = keys(where, item, new Set(["inputs", "run", "backward"]), { required: ["run"] });
-    mapping(`${where}.inputs`, get(entry, "inputs", {}));
-    checkArguments(`${where}.run`, entry["run"], RUN_KEYS, ["run_id"]);
-    if (Object.hasOwn(entry, "backward")) {
-      checkBackward(`${where}.backward`, entry["backward"]);
-      if (get(entry["run"] as Case, "learnable") !== true) {
-        throw new Error(`\`${where}.backward\` needs \`${where}.run.learnable: true\``);
-      }
-    }
-  });
 }
 
 /**
@@ -730,7 +684,6 @@ function checkHost(value: Value | undefined, kind: Kind): void {
     }
   }
   checkModels(get(host, "models", {}));
-  if (Object.hasOwn(host, "memory")) checkMemory(host["memory"]);
   checkStop(get(host, "stop", {}));
   checkSends(get(host, "sends", []), kind);
   const human = mapping("host.human", get(host, "human", {}));
@@ -874,17 +827,7 @@ export function checkCase(case_: Case): Case {
       throw new Error(`\`expect.exists\`: \`${path}\` must be a relative path without \`..\``);
     }
   }
-  if (Object.hasOwn(case_, "backward")) checkBackward("backward", case_["backward"]);
   if (Object.hasOwn(case_, "host")) checkHost(case_["host"], kind);
-  if (Object.hasOwn(expect, "memory")) {
-    if (!Object.hasOwn(get(case_, "host", {}) as Case, "memory")) {
-      throw new Error("`expect.memory` needs `host.memory`");
-    }
-    const texts = Object.values(mapping("expect.memory", expect["memory"]));
-    if (texts.some((text) => typeof text !== "string")) {
-      throw new Error("`expect.memory` values must be text");
-    }
-  }
   // Both were checked as mappings above when present.
   const run = get(case_, "run", {}) as Case;
   if (kind === "resume") {
@@ -902,9 +845,6 @@ export function checkCase(case_: Case): Case {
     if (!isZero(get(run, "num_workers"))) {
       throw new Error(`\`host.${stops ? "stop" : "crash_after_record"}\` needs \`run.num_workers: 0\``);
     }
-  }
-  if (kind === "backward" && get(run, "learnable") !== true) {
-    throw new Error("a `backward` case needs `run.learnable: true`");
   }
   if (kind === "expr") {
     if (Object.hasOwn(case_, "expr") === Object.hasOwn(case_, "template")) {
@@ -1138,10 +1078,10 @@ export interface CaseContext {
   crashSweep?: boolean;
   /** The path of the case's golden log, `<group>/<name>.log.jsonl` beside it. */
   golden?: string;
-  /** Whether `--write-logs` asks a `run`, `resume` or `backward` case to write its golden log. */
+  /** Whether `--write-logs` asks a `run` or `resume` case to write its golden log. */
   writeLogs?: boolean;
   /**
-   * With `--write-expect`, where a `run`, `resume` or `backward` case puts each `REWRITTEN` result
+   * With `--write-expect`, where a `run` or `resume` case puts each `REWRITTEN` result
    * that differs from its `expect`, by name, instead of failing on it.
    */
   rewrites?: Map<string, unknown>;
@@ -1161,7 +1101,6 @@ export const KINDS: Record<Kind, KindRunner> = {
   load: runLoad,
   run: runRun,
   resume: runRun,
-  backward: runRun,
   expr: runExpr,
   value: runValue,
   defaults: runDefaults,
@@ -1280,7 +1219,7 @@ export interface MainOptions {
  * summary. Return the exit code: 0 when no case fails, 1 when one does or none matches, 2 on a
  * usage error. Each flag is repeatable; values of one flag are alternatives, flags all apply.
  * `--crash-sweep` also runs each eligible `run` case's crash sweep (`crashSweep`); `--write-logs`,
- * which needs `--case`, writes each selected `run`, `resume` and `backward` case's golden log
+ * which needs `--case`, writes each selected `run` and `resume` case's golden log
  * (`goldenLog`); `--write-expect` writes back each such passing case's `REWRITTEN` results that
  * differ (`rewriteCase`) and reports a `wrote` line for it.
  */
@@ -1752,8 +1691,8 @@ function closedCrashed(request: Value, calls: ReadonlySet<string> | undefined): 
 
 /**
  * Return a builder of chat models that serve each call the next `host.models` entry of its node
- * and consumer, taken through `take` when the call is made: the consumer the model was built for
- * (`backward`, `memory:<key>`), else the call's own (`consumerOf`). A call's request that
+ * and consumer, taken through `take` when the call is made: the call's own consumer
+ * (`consumerOf`). A call's request that
  * differs from its entry's `request` is added to `problems`, naming the entry by its index,
  * `taken` entries of its script before it; for a node with calls in `crashed`, the entry's request
  * reads each such call's result as the `crashed` closer (`closedCrashed`). A call `take` refuses fails at its
@@ -1766,12 +1705,12 @@ function scriptedModels(
   inbox: Inbox,
   taken: (label: string) => number,
   crashed: ReadonlyMap<string, ReadonlySet<string>>,
-): (provider: string, model: string, nodeId: string, builtFor?: string) => ChatModel {
-  return (provider, model, nodeId, builtFor) => ({
+): (provider: string, model: string, nodeId: string) => ChatModel {
+  return (provider, model, nodeId) => ({
     provider,
     model,
     stream: (request, options = {}) => {
-      const consumer = builtFor ?? consumerOf(nodeId, request);
+      const consumer = consumerOf(nodeId, request);
       const label = `host.models.${nodeId}.${consumer}`;
       let entry: Case;
       try {
@@ -2091,7 +2030,7 @@ type TraceRow = readonly [string | null, readonly string[]];
 const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   [
     "run_started",
-    [null, ["learnable", "num_workers", "defaults", "effective_llm_by_static_path", "call_time_llm", "parent"]],
+    [null, ["num_workers", "defaults", "effective_llm_by_static_path", "call_time_llm", "parent"]],
   ],
   ["run_resumed", [null, ["retry_node_ids", "num_workers", "closed_calls"]]],
   ["run_stopped", [null, ["reason", "node_ids"]]],
@@ -2106,19 +2045,10 @@ const TRACE: ReadonlyMap<string, TraceRow> = new Map<string, TraceRow>([
   ["node_started", ["node_id", []]],
   ["node_step", ["node_id", ["n", "step"]]],
   ["pool_commit", ["node_id", ["key", "value", "from", "inbox", "events", "closed", "steps"]]],
-  ["node_succeeded", ["node_id", ["commit", "messages", "forward_capture"]]],
-  ["node_routed", ["node_id", ["handle", "terminal_failure", "forward_capture"]]],
-  ["node_expanded", ["spawner_id", ["prune_ids", "forward_capture"]]],
-  ["node_failed", ["failure", ["failure", "forward_capture"]]],
-  ...["memory_commit_requested", "memory_commit_succeeded", "memory_commit_failed"].map(
-    (kind): [string, TraceRow] => [
-      kind,
-      [null, ["memory", "commit_id", "attempt_id", "mutations", "failure"]],
-    ],
-  ),
-  ["backward_started", [null, ["attempt_id", "feedback"]]],
-  ["backward_ready", [null, ["attempt_id", "root_result", "attributed_results", "proposals"]]],
-  ["backward_finished", [null, ["attempt_id", "outcome", "attributed_results"]]],
+  ["node_succeeded", ["node_id", ["commit", "messages"]]],
+  ["node_routed", ["node_id", ["handle", "terminal_failure"]]],
+  ["node_expanded", ["spawner_id", ["prune_ids"]]],
+  ["node_failed", ["failure", ["failure"]]],
 ]);
 /** The run start's commits whose values are times, which the trace leaves out. */
 const TIMED_KEYS: ReadonlySet<string> = new Set(["system.now", "system.today"]);
@@ -2126,9 +2056,6 @@ const TIMED_KEYS: ReadonlySet<string> = new Set(["system.now", "system.today"]);
 const STEP_TIMES: readonly string[] = ["started_at", "first_token_at"];
 const LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
   "defaults", "effective_llm_by_static_path", "call_time_llm", "parent", "waits", "timed_out", "closed_calls",
-]);
-const CAPTURE_LEFT_OUT_WHEN_EMPTY: ReadonlySet<string> = new Set([
-  "evaluated_keys", "items", "input_names", "variable_names",
 ]);
 const FAILURE_FIELDS: ReadonlyMap<string, string> = new Map([
   ["node_failed", "failure"],
@@ -2166,41 +2093,6 @@ function llm(config: Case): Case {
   const connection = get(config, "_connection") ?? null;
   if (connection !== null) kept["_connection"] = cut(connection as Case);
   return kept;
-}
-
-/** Return whether a route field holds its empty value: null, "", an empty list, or 0, 0.0 or false. */
-function emptyRouteValue(value: Value): boolean {
-  return (
-    value === null || value === "" || value === 0 || value === 0n || value === false ||
-    (Array.isArray(value) && value.length === 0)
-  );
-}
-
-/** Return a `forward_capture` projected to the trace, changing it in place. */
-function capture(captured: Case): Case {
-  const route = (node: Case): Case => {
-    // `expression` and `result_type` are text each implementation spells its own way.
-    const lean: Case = Object.fromEntries(
-      Object.entries(node).filter(
-        ([key, value]) =>
-          key !== "expression" && key !== "result_type" && (key === "kind" || !emptyRouteValue(value)),
-      ),
-    );
-    if (Object.hasOwn(lean, "value_json")) {
-      lean["value_json"] = parseJson(lean["value_json"] as string, "codec") as Value;
-    }
-    if (Object.hasOwn(lean, "children")) lean["children"] = (lean["children"] as Case[]).map(route);
-    if (Object.hasOwn(lean, "snapshot")) lean["snapshot"] = route(lean["snapshot"] as Case);
-    return lean;
-  };
-  captured["route"] = route(captured["route"] as Case);
-  for (const item of captured["items"] as Case[]) item["capture"] = capture(item["capture"] as Case);
-  return Object.fromEntries(
-    Object.entries(captured).filter(
-      // A finished binding, the usual case, leaves out its `bound`.
-      ([key, value]) => (key === "bound" ? value !== true : truthy(value) || !CAPTURE_LEFT_OUT_WHEN_EMPTY.has(key)),
-    ),
-  );
 }
 
 /** Return the run log's `lines` projected to SPEC.md's trace. */
@@ -2257,9 +2149,6 @@ export function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
     if (key !== undefined && (payload[key] ?? null) !== null) {
       payload[key] = failure(payload[key] as Case);
     }
-    if ((get(payload, "forward_capture") ?? null) !== null) {
-      payload["forward_capture"] = capture(payload["forward_capture"] as Case);
-    }
     // Deadlines are times.
     for (const holder of deadlineHolders(kind, payload)) delete holder["deadline"];
     if (kind === "node_step") {
@@ -2269,17 +2158,6 @@ export function trace(lines: readonly string[], flow: ComposedFlow): Value[][] {
       for (const time of STEP_TIMES) delete step[time];
       if ((get(step, "effective_llm_config") ?? null) !== null) {
         step["effective_llm_config"] = llm(step["effective_llm_config"] as Case);
-      }
-    }
-    if (kind === "backward_finished") {
-      const backward = get(payload["outcome"] as Case, "failure") ?? null;
-      if (backward !== null) {
-        const failed = backward as Case;
-        delete failed["cause_type"];
-        delete failed["traceback"];
-        // A backward failure's `cause` is a node failure when it has a `trace`.
-        const cause = failed["cause"];
-        if (isMapping(cause) && Object.hasOwn(cause, "trace")) failed["cause"] = failure(cause);
       }
     }
     const projected = Object.fromEntries(
@@ -2365,41 +2243,14 @@ export function pooled(results: Record<string, unknown>): Record<string, unknown
   };
 }
 
-/** The fields whose text values are ids an implementation makes up. */
-const ID_FIELDS: ReadonlySet<string> = new Set(["commit_id", "mutation_id", "note_id"]);
-
 /**
- * Return `results` with each made-up id in their text replaced by `<id:N>`.
- *
- * The ids are `runId` (unless `null`) and every text value of an `ID_FIELDS` key, numbered in
- * order of first appearance walking `results` in their order (the `before` traces first, `memory`
- * last), with mapping keys in UTF-16 order.
+ * Return `results` with the made-up run id `runId` in their text replaced by `<id:1>`; `null`
+ * replaces nothing. Mapping keys come out in UTF-16 order.
  */
 function placeholders(results: Record<string, unknown>, runId: string | null): Record<string, unknown> {
-  const ids = new Set<string>(runId === null ? [] : [runId]);
-  const collect = (value: unknown): void => {
-    if (Array.isArray(value)) {
-      value.forEach(collect);
-    } else if (isMapping(value)) {
-      for (const [key, item] of Object.entries(value)) {
-        if (ID_FIELDS.has(key) && typeof item === "string" && item !== "") ids.add(item);
-        collect(item);
-      }
-    }
-  };
-  collect(results);
-  if (ids.size === 0) return results;
-  // Longest first, so an id that holds another is replaced whole.
-  const longestFirst = [...ids].sort((a, b) => b.length - a.length);
-  const escaped = longestFirst.map((id) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const pattern = new RegExp(escaped.join("|"), "g");
-  const numbers = new Map<string, number>();
-  const number = (id: string): number => {
-    if (!numbers.has(id)) numbers.set(id, numbers.size + 1);
-    return numbers.get(id)!;
-  };
+  if (runId === null) return results;
   const replace = (value: unknown): unknown => {
-    if (typeof value === "string") return value.replace(pattern, (id) => `<id:${number(id)}>`);
+    if (typeof value === "string") return value.replaceAll(runId, "<id:1>");
     if (Array.isArray(value)) return value.map(replace);
     if (isMapping(value)) {
       const names = Object.keys(value).sort(compareCodeUnits);
@@ -2498,101 +2349,13 @@ function runHooks(
 }
 
 /**
- * Call `result.backward` once per `backward` entry, `{feedback, api_key, headers}`, in order;
- * return each call's outcome, as the `backward_finished` record it appended to `log` projects
- * (`trace`), or `{raises}` when the call raised. Fails the case when a call appends other than one
- * `backward_finished` record.
- */
-async function callBackward(
-  result: RunResult,
-  log: string,
-  entries: readonly Case[],
-  flow: ComposedFlow,
-): Promise<Value[]> {
-  const finished = () => {
-    const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
-    return trace(lines, flow).filter(([kind]) => kind === "backward_finished");
-  };
-  const outcomes: Value[] = [];
-  for (const [index, entry] of entries.entries()) {
-    const before = finished().length;
-    try {
-      // `RunResult.backward` is gone; the `backward` kind leaves the runner with its cases.
-      throw new CaseFailure(`backward call ${index + 1}: RunResult.backward was removed`);
-    } catch (error) {
-      if (error instanceof CaseFailure) throw error;
-      outcomes.push({ raises: raised(error) });
-      continue;
-    }
-    const after = finished();
-    if (after.length !== before + 1) {
-      throw new CaseFailure(
-        `backward call ${index + 1} appended ${after.length - before} \`backward_finished\` records, not one`,
-      );
-    }
-    outcomes.push((after.at(-1)![2] as Case)["outcome"]!);
-  }
-  return outcomes;
-}
-
-/**
- * Run each `host.memory.before` entry in order, logged to `before-<n>.jsonl` in the case
- * directory, with `options` and memories from `memories()`, closed after the run's backward calls
- * (`callBackward`). Return the log texts by where they are reported and each run's trace (grouped
- * when the run is pooled). A raise, the run's or a backward call's, fails the case.
- */
-async function beforeRuns(
-  case_: Case,
-  ctx: CaseContext,
-  flow: ComposedFlow,
-  options: RunFlowOptions,
-): Promise<{ logs: Record<string, string>; traces: Value[][][] }> {
-  const logs: Record<string, string> = {};
-  const traces: Value[][][] = [];
-  const memory = get(get(case_, "host", {}) as Case, "memory", {}) as Case;
-  const before = get(memory, "before", []) as Case[];
-  for (const [index, entry] of before.entries()) {
-    const where = `host.memory.before[${index}]`;
-    const log = join(ctx.dir, `before-${index + 1}.jsonl`);
-    const run = entry["run"] as Case;
-    let outcomes: Value[];
-    try {
-      const inputs = get(entry, "inputs", {}) as Case;
-      const args = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
-      const result = await runFlow(flow, inputs, { ...options, ...args, log });
-      outcomes = await callBackward(result, log, get(entry, "backward", []) as Case[], flow);
-    } catch (error) {
-      if (error instanceof CaseFailure) throw error;
-      throw new CaseFailure(`\`${where}\` raised\n${failureText(error)}`);
-    }
-    const refused = outcomes.find((outcome) => isMapping(outcome) && Object.hasOwn(outcome, "raises"));
-    if (refused !== undefined) {
-      throw new CaseFailure(`\`${where}\` backward raised ${spell((refused as Case)["raises"])}`);
-    }
-    const text = readFileSync(log, "utf8");
-    logs[`the log of \`${where}\``] = text;
-    const lines = trace(text.split("\n").filter((line) => line !== ""), flow);
-    const isPooled = !isZero(get(run, "num_workers", 8n));
-    traces.push(isPooled ? grouped(lines, (record) => record[1] as string | null) : lines);
-  }
-  return { logs, traces };
-}
-
-/**
  * Run the flow with `inputs` and the `run` arguments on the case's host, logged to `run.jsonl` in
  * the case directory, its waits on a virtual clock that starts at the real current time; with
  * `host.stop`, the run is stopped at its point. A `resume` case's first run is cut after record
  * `host.crash_after_record` (or, for `end`, runs to its end; with `host.stop`, is stopped) and
  * resumed with the `resume` arguments. Return the results: `trace`, `events`, `stream` (the
  * resume's), `tool_calls` (every run's), `output` or the host error as `raises` and `error` (never
- * compared), `backward` for a `backward` case (each call's outcome, `callBackward`), `memory` when
- * `expect.memory` lists keys, and `left`, a message per script with entries left.
- *
- * With `host.memory`, the `before` runs go first (`beforeRuns`), and every run (each `before` run,
- * the main run, and for a `resume` case the cut run and the resume) gets the flow's memories built
- * afresh under `<case dir>/memory`, closed after the run's backward calls; a failure building the
- * cut run's is the case's `raises`, and nothing resumes. `expect.memory` is read from memories
- * built after the main run's. Learner events are kept apart, never compared.
+ * compared), and `left`, a message per script with entries left.
  */
 async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, unknown>> {
   const flow = await loadText(case_["flow"] as string, ctx);
@@ -2608,10 +2371,6 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   // One clock for every run of the case. `env` scopes the case's YIAN_* values to each run, so
   // nothing is installed around it.
   const hooks = runHooks(log, env, scripted, Date.now(), events, chunks);
-  // The `before` runs share the clock, but not the log, the run points or the observers.
-  const { random, scheduler } = hooks;
-  const shared: RunFlowOptions = { env, tools, random, models, scheduler };
-  const { logs, traces } = await beforeRuns(case_, ctx, flow, shared);
   const inputs = get(case_, "inputs", {}) as Case;
   let signal: { signal?: AbortSignal } = stop === null ? {} : { signal: stop.signal };
   const runArguments = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
@@ -2625,52 +2384,45 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   let caught: Record<string, unknown> = {};
   inbox.armed = true;
   if (case_["kind"] === "resume") {
-    {
-      await cutFirstRun(spec, () => start(), stop);
-      // The stop ended the first run; aborted for good, it would stop each later advance at once.
-      signal = {};
-      // The sends a host makes while the run is down.
-      for (const item of get(spec, "sends", []) as Case[]) {
-        if (item["down"] === true) await send(log, item["inbox"] as string, item["event"], { env });
-      }
-      events.length = 0;
-      chunks.length = 0;
-      const resumeArguments = runOptions<AdvanceOptions>(resume, RESUME_OPTIONS);
-      advanceArguments = resumeArguments;
-      start = () => advance({ ...resumeArguments, ...hooks });
+    await cutFirstRun(spec, () => start(), stop);
+    // The stop ended the first run; aborted for good, it would stop each later advance at once.
+    signal = {};
+    // The sends a host makes while the run is down.
+    for (const item of get(spec, "sends", []) as Case[]) {
+      if (item["down"] === true) await send(log, item["inbox"] as string, item["event"], { env });
     }
+    events.length = 0;
+    chunks.length = 0;
+    const resumeArguments = runOptions<AdvanceOptions>(resume, RESUME_OPTIONS);
+    advanceArguments = resumeArguments;
+    start = () => advance({ ...resumeArguments, ...hooks });
   }
-  let outcomes: Value[] = [];
-  if (!Object.hasOwn(caught, "raises")) {
-    // The items sent while the run waits; the others are sent at a point, or while it is down.
-    const all = get(spec, "sends", []) as Case[];
-    const sends = all.filter((item) => !Object.hasOwn(item, "after") && !Object.hasOwn(item, "down"));
-    // A run must not end waiting when it was given items to send while it waits, or an empty list.
-    const waitingSends = Object.hasOwn(spec, "sends") && (sends.length > 0 || all.length === 0);
-    try {
-      result = await start();
+  // The items sent while the run waits; the others are sent at a point, or while it is down.
+  const all = get(spec, "sends", []) as Case[];
+  const sends = all.filter((item) => !Object.hasOwn(item, "after") && !Object.hasOwn(item, "down"));
+  // A run must not end waiting when it was given items to send while it waits, or an empty list.
+  const waitingSends = Object.hasOwn(spec, "sends") && (sends.length > 0 || all.length === 0);
+  try {
+    result = await start();
+    await sent();
+    // Each item is delivered while the run waits; the same collectors see every `advance`.
+    while (result.status === "waiting" && sends.length > 0) {
+      const item = sends.shift()!;
+      if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, { env });
+      else if (Object.hasOwn(item, "withdraw")) await withdraw(log, item["withdraw"] as string, { env });
+      else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, { env });
+      else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), { env });
+      else await send(log, item["inbox"] as string, item["event"], { env });
+      // A held item leaves the run waiting, so the next item lands on the same wait.
+      if (item["hold"] === true) continue;
+      result = await advance({ ...advanceArguments, ...hooks, ...signal });
       await sent();
-      // Each item is delivered while the run waits; the same collectors see every `advance`.
-      while (result.status === "waiting" && sends.length > 0) {
-        const item = sends.shift()!;
-        if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, { env });
-        else if (Object.hasOwn(item, "withdraw")) await withdraw(log, item["withdraw"] as string, { env });
-        else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, { env });
-        else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), { env });
-        else await send(log, item["inbox"] as string, item["event"], { env });
-        // A held item leaves the run waiting, so the next item lands on the same wait.
-        if (item["hold"] === true) continue;
-        result = await advance({ ...advanceArguments, ...hooks, ...signal });
-        await sent();
-      }
-    } catch (error) {
-      caught = { raises: raised(error), error };
     }
-    if (waitingSends && result?.status === "waiting") {
-      throw new CaseFailure("the run is still waiting after host.sends ran out");
-    }
-    const entries = get(case_, "backward", []) as Case[];
-    if (result !== undefined) outcomes = await callBackward(result, log, entries, flow);
+  } catch (error) {
+    caught = { raises: raised(error), error };
+  }
+  if (waitingSends && result?.status === "waiting") {
+    throw new CaseFailure("the run is still waiting after host.sends ran out");
   }
   // A call past a script's end is the case's own error, whatever it made differ.
   const left = check();
@@ -2678,21 +2430,16 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   goldenLog(log, ctx);
   const text = existsSync(log) ? readFileSync(log, "utf8") : "";
   const lines = text.split("\n").filter((line) => line !== "");
-  // In placeholder order: ids are numbered walking the results in this order. The `before`
-  // traces come first and are dropped once numbered.
   let actual: Record<string, unknown> = {
-    before: traces,
     trace: trace(lines, flow),
     events: events.map((event) => eventForm(event, flow)),
     stream: chunks.map((chunk) => fields(chunk, flow)),
     tool_calls: Object.fromEntries([...calls].map(([name, list]) => [name, list.map(dataForm)])),
     ...(result !== undefined ? { output: output(result, flow) } : {}),
-    ...(case_["kind"] === "backward" ? { backward: outcomes } : {}),
   };
   checkSecrets(case_, {
     ...Object.fromEntries(Object.entries(actual).map(([name, value]) => [name, spell(value as Value)])),
     "the run log": text,
-    ...logs,
     "the raised error": str((caught["raises"] as Case | undefined)?.["message"] ?? ""),
   });
   // A `resume` case's results are grouped by the resumed run's `num_workers`.
@@ -2703,7 +2450,6 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       : ((parseJson(lines[0]!, "codec") as Case)["run_id"] as string);
   // A raised error is compared as is, without placeholders.
   actual = placeholders(actual, runId);
-  delete actual["before"];
   return { ...actual, ...caught, left };
 }
 
@@ -2734,11 +2480,11 @@ function checkResults(
     const form = actual["output"] as Case;
     compare("output", form, expect["output"], { byValue: form["status"] === "succeeded" });
   }
-  for (const name of [...REWRITTEN, "backward", "memory"]) {
+  for (const name of REWRITTEN) {
     if (!Object.hasOwn(expect, name)) continue;
     // The trace keeps kinds.
     const byValue = BY_VALUE.has(name);
-    if (rewrites !== undefined && REWRITTEN.includes(name)) {
+    if (rewrites !== undefined) {
       if (!same(actual[name], expect[name], { byValue })) rewrites.set(name, actual[name]);
     } else {
       compare(name, actual[name], expect[name], { byValue });
@@ -2824,10 +2570,10 @@ function goldenLog(log: string, ctx: CaseContext): void {
 /**
  * Throw a `CaseFailure` naming the first invariant the run log at `log` breaks (`at` says where in
  * a crash sweep): at every prefix, at most the segment's `num_workers` nodes are in flight (1 when
- * 0; a waiting node isn't, nor a woken TOOL node); after the run's terminal outcome only backward and memory records follow; after a
- * `run_stopped` only node steps until a `run_resumed`; `inspectRun` with the flow reads a replay's
- * status, in-flight nodes, crashed counts and failure, and the log's run id, schema, flow
- * fingerprint, learnable flag and last seq (and no waits), and without it the same except in its one blind
+ * 0; a waiting node isn't, nor a woken TOOL node); no record follows the run's terminal outcome;
+ * after a `run_stopped` only node steps until a `run_resumed`; `inspectRun` with the flow reads a
+ * replay's status, in-flight nodes, crashed counts and failure, and the log's run id, schema, flow
+ * fingerprint and last seq (and no waits), and without it the same except in its one blind
  * corner (nothing in flight, a node still ready, and END succeeded or proved unreachable); a finished
  * run's counts are `result`'s; and a finished log resumed with `options` gives the same status and
  * output and appends nothing.
@@ -2852,7 +2598,6 @@ async function checkInvariants(
   const inFlight = new Set<string>();
   let workers = 1;
   let stopped = false;
-  let lastRun = -1;
   envelopes.forEach(({ kind, payload }, seq) => {
     if (stopped && kind !== "node_step" && kind !== "run_resumed") {
       fail(`record ${seq} (${kind}) follows a run_stopped`);
@@ -2876,14 +2621,14 @@ async function checkInvariants(
     if (inFlight.size > workers) {
       fail(`${inFlight.size} nodes are in flight after record ${seq}, over ${workers}`);
     }
-    if (!kind.startsWith("backward_") && !kind.startsWith("memory_")) lastRun = seq;
   });
-  // A terminal result is never undone, so checking the prefix before the last run record covers
-  // every record after it. A prefix inside the run start (through the START inputs' commit, the
-  // first whose key is its node) can't be replayed, and holds no outcome.
+  // A terminal result is never undone, so checking the prefix before the last record covers every
+  // record after it. A prefix inside the run start (through the START inputs' commit, the first
+  // whose key is its node) can't be replayed, and holds no outcome.
   const inputsCommit = envelopes.findIndex(({ kind, payload }) => kind === "pool_commit" && payload["key"] === payload["node_id"]);
   if (inputsCommit === -1) return;
-  if (lastRun > inputsCommit && replay(lastRun).result !== null) fail(`record ${lastRun} follows the terminal outcome`);
+  const last = envelopes.length - 1;
+  if (last > inputsCommit && replay(last).result !== null) fail(`record ${last} follows the terminal outcome`);
   // Mirrors `inspectRun`'s replay branch on purpose: the check is that it takes that branch and
   // agrees with a replay, not a second statement of its rules.
   const state = replay(envelopes.length);
@@ -2949,33 +2694,15 @@ const OUTCOMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Return the node outcome entries of a run log's trace `entries`, each capture source's
- * `execution_seq` replaced by the kind and node of the record it names, and each success's
- * `commit` by the trace fields of the `pool_commit` it names, whose `from` seqs are replaced the
- * same way, and its `messages` by the messages commit's fields, each of whose `steps` is given as
- * its step's node and kind (a resumed call-time agent records its config again, so step numbers
- * move): captures, successes, `from` and `steps` name records by seq, and a resume adds records,
- * so a crash sweep compares the records instead.
+ * Return the node outcome entries of a run log's trace `entries`, each success's `commit` replaced
+ * by the trace fields of the `pool_commit` it names, whose `from` seqs are given as the kind and
+ * node of the record each names, and its `messages` by the messages commit's fields, each of whose
+ * `steps` is given as its step's node and kind (a resumed call-time agent records its config
+ * again, so step numbers move): successes, `from` and `steps` name records by seq, and a resume
+ * adds records, so a crash sweep compares the records instead.
  */
 export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
-  const rename = (value: unknown): void => {
-    if (Array.isArray(value)) value.forEach(rename);
-    if (!isMapping(value)) return;
-    for (const [key, item] of Object.entries(value)) {
-      if (key === "execution_seq" && typeof item === "bigint") {
-        // The trace has one entry per log line, and a record's seq is its line index.
-        const entry = entries[Number(item)];
-        if (entry === undefined) {
-          throw new CaseFailure(`a capture source names seq ${item}, which the log doesn't hold`);
-        }
-        value[key] = `${String(entry[0])} ${String(entry[1])}`;
-      } else {
-        rename(item);
-      }
-    }
-  };
   const kept = entries.filter(([kind]) => OUTCOMES.has(kind as string));
-  rename(kept);
   for (const [kind, , payload] of kept) {
     if (kind !== "node_succeeded") continue;
     const commit = (payload as Case)["commit"] as bigint;
@@ -3093,7 +2820,7 @@ function stubTools(spec: Case): StubTool[] {
 
 /**
  * Return whether `case_` gets a crash sweep: a serial `run` case expecting `output`, not
- * `pending`, with no `host.memory`, `host.stop` or `host.sends` (an interrupt item among them).
+ * `pending`, with no `host.stop` or `host.sends` (an interrupt item among them).
  */
 export function sweepable(case_: Case): boolean {
   const spec = get(case_, "host", {}) as Case;
@@ -3102,7 +2829,7 @@ export function sweepable(case_: Case): boolean {
     isZero(get(get(case_, "run", {}) as Case, "num_workers", 8n)) &&
     Object.hasOwn(case_["expect"] as Case, "output") &&
     !Object.hasOwn(case_, "pending") &&
-    !["memory", "stop", "sends"].some((key) => Object.hasOwn(spec, key))
+    !["stop", "sends"].some((key) => Object.hasOwn(spec, key))
   );
 }
 
@@ -3119,8 +2846,8 @@ export function sweepable(case_: Case): boolean {
  * the agent's `host.models` script may run out, and the agent's later scripted requests read the
  * call's result as the closer. With no
  * `host.human` or `host.jitter` and only `return` entries in its tool scripts, the strong oracle
- * also holds: the same output, and the same node outcome entries in the trace, in order, with a
- * capture's source named by its record's kind and node rather than its seq.
+ * also holds: the same output, and the same node outcome entries in the trace, in order, with each
+ * record a success names given by its kind and node rather than its seq.
  */
 export async function crashSweep(
   case_: Case,
@@ -3426,10 +3153,6 @@ function rewriteCase(text: string, results: ReadonlyMap<string, unknown>): strin
 // ---- resume ----
 
 // `resume` cases run through `runRun`: `actualRun` cuts or stops their first run and resumes it.
-
-// ---- backward ----
-
-// `backward` cases run through `runRun`: `actualRun` makes their backward calls (`callBackward`).
 
 // ---- expr ----
 

@@ -1,7 +1,7 @@
-# A learnable AGENT run. Reply 1 makes two unsafe calls, which run one at a time; reply 2 mixes
-# two safe calls (`lookup` is marked concurrency_safe) and an unsafe one; reply 3 is the text.
-# The golden log pins the agent's recorded evidence: its interactions in that order and its
-# rendered prompt. Every tool call id is scripted, so the log holds no made-up id.
+# An AGENT run. Reply 1 makes two unsafe calls, which run one at a time; reply 2 mixes two safe
+# calls (`lookup` is marked concurrency_safe) and an unsafe one; reply 3 is the text. The golden
+# log pins the agent's recorded steps in that order. Every tool call id is scripted, so the log
+# holds no made-up id.
 kind: run
 flow: |
   id: groups
@@ -15,7 +15,7 @@ flow: |
       prompt: hi
       output: str
   output: ${writer.output}
-run: {run_id: r1, num_workers: 0, learnable: true}
+run: {run_id: r1, num_workers: 0}
 host:
   tools:
     lookup:

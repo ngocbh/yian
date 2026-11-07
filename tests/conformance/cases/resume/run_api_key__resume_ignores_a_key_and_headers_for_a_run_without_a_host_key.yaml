@@ -50,7 +50,6 @@ expect:
             source: environment
           model: served-model
           provider: vllm
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

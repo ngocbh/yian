@@ -60,7 +60,7 @@ expect:
         - {label: flow.yaml, range: [29, 7, 29, 10]}
         - {label: flow.yaml, range: [20, 15, 20, 46]}
   trace:
-    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [run_started, null, {num_workers: 0}]
     - [pool_commit, __start__, {key: system.now}]
     - [pool_commit, __start__, {key: system.run_id, value: r1}]
     - [pool_commit, __start__, {key: system.today}]

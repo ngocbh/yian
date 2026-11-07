@@ -152,7 +152,6 @@ expect:
             source: environment
           model: claude-sonnet-4-5
           provider: anthropic
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

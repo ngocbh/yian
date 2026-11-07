@@ -68,7 +68,6 @@ expect:
             source: missing
           model: gpt-4o
           provider: openai
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

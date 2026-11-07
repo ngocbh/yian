@@ -169,7 +169,7 @@ function sentResults(model: ScriptedModel, index: number): ToolResultPart[] {
   );
 }
 
-/** The three replies of the learnable AGENT case: two unsafe calls, two safe and an unsafe one, the text. */
+/** The three replies of the grouped AGENT case: two unsafe calls, two safe and an unsafe one, the text. */
 function groupsModel(): ScriptedModel {
   return new ScriptedModel(
     [

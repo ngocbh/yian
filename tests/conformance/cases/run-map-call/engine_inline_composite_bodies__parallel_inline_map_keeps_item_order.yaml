@@ -65,8 +65,7 @@ expect:
   trace:
   - - run_started
     - null
-    - learnable: false
-      num_workers: 4
+    - num_workers: 4
   - [node_started, __end__]
   - - pool_commit
     - __end__

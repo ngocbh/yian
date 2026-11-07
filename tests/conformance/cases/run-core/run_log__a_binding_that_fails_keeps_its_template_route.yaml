@@ -1,0 +1,67 @@
+# Pins: a node whose binding fails after a template with literal text fails at its binding, with
+# no output commit.
+kind: run
+flow: |
+  id: greet
+  name: greet
+  input:
+    name: !str
+    nick: !Optional(str) null
+  nodes:
+    shout:
+      kind: code
+      input:
+        line: 'Hello, ${input.name}!'
+        nick: '${input.nick :? "no nick"}'
+      code: |
+        return inputs["line"]
+      output: str
+  output: ${shout.output}
+inputs:
+  name: Ann
+run:
+  run_id: r1
+  num_workers: 0
+expect:
+  output:
+    status: failed
+    failure:
+      code: binding.evaluate
+      frames:
+      - label: flow.yaml
+        range: [11, 13, 11, 41]
+      message: no nick
+      node: shout
+  trace:
+  - - run_started
+    - null
+    - {num_workers: 0}
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {name: Ann}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {name: Ann, nick: null}
+  - - node_succeeded
+    - __start__
+    - commit: 6
+  - [node_started, shout]
+  - - node_failed
+    - shout
+    - failure:
+        code: binding.evaluate
+        message: no nick
+        frames:
+        - label: flow.yaml
+          range: [11, 13, 11, 41]
+        node: shout

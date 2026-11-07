@@ -29,7 +29,7 @@ expect:
       # The assert `"input.window > 0"` on line 15.
       frames: [{label: flow.yaml, range: [15, 5, 15, 23]}]
   trace:
-    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [run_started, null, {num_workers: 0}]
     - [pool_commit, __start__, {key: system.now}]
     - [pool_commit, __start__, {key: system.run_id, value: r1}]
     - [pool_commit, __start__, {key: system.today}]

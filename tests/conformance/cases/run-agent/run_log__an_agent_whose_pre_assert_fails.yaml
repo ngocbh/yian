@@ -1,6 +1,5 @@
-# Pins: a learnable AGENT whose pre-assert fails never renders, so its node data
-# holds no render and the trace shows none; learning checks the pre-asserts again before it renders
-# the occurrence.
+# Pins: an AGENT whose pre-assert fails never renders or calls a model, so the trace shows no
+# step before its failure.
 kind: run
 flow: |
   id: guarded
@@ -16,7 +15,7 @@ flow: |
       output: str
   output: ${writer.output}
 inputs: {n: -1}
-run: {run_id: r1, num_workers: 0, learnable: true}
+run: {run_id: r1, num_workers: 0}
 expect:
   output:
     status: failed
@@ -35,7 +34,6 @@ expect:
           model: claude-test
           provider: anthropic
           _connection: {method: api_key, source: environment, endpoint: null}
-      learnable: true
       num_workers: 0
   - - pool_commit
     - __start__
@@ -56,23 +54,6 @@ expect:
   - - node_succeeded
     - __start__
     - commit: 6
-      forward_capture:
-        evaluated_keys: [n]
-        input_names: [n]
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 0
-              path: [n]
-              run_id: r1
-          kind: record
-          names: [n]
-        scope:
-          boundary: start
-          flow_path: []
-          occurrence_path: []
-          static_path: [__start__]
   - [node_started, writer]
   - - node_failed
     - writer
@@ -83,20 +64,3 @@ expect:
         - label: flow.yaml
           range: [9, 15, 9, 23]
         node: writer
-      forward_capture:
-        evaluated_keys: [n]
-        input_names: [n]
-        route:
-          children:
-          - kind: source
-            source:
-              execution_seq: 5
-              path: [n]
-              run_id: r1
-          kind: record
-          names: [n]
-        scope:
-          boundary: null
-          flow_path: []
-          occurrence_path: []
-          static_path: [writer]

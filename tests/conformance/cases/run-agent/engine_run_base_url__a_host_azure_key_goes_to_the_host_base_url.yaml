@@ -51,7 +51,6 @@ expect:
           base_url: https://host.openai.azure.com/
           model: deploy-a
           provider: azure
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

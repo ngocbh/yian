@@ -46,7 +46,6 @@ expect:
     - call_time_llm:
         agents:
           a/chat: {}
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

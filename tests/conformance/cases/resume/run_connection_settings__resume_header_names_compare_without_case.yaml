@@ -54,7 +54,6 @@ expect:
           _host_key: true
           model: gpt-5.4
           provider: openai
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

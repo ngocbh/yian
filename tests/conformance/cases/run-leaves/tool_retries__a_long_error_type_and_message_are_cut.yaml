@@ -38,7 +38,6 @@ expect:
     - defaults:
         MAX_SHOWN_VALUE_CHARS: 8
         TOOL_RETRY_DELAY_SECONDS: 0
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

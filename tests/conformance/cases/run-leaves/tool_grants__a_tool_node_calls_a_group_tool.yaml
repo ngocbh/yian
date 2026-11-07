@@ -38,5 +38,5 @@ expect:
   output:
     status: succeeded
     output: retries default to 2
-  trace: [[run_started, null, {learnable: false, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, found], [pool_commit, found, {value: retries default to 2}], [node_succeeded, found, {commit: 9}], [node_started, __end__], [pool_commit, __end__, {value: retries default to 2}], [node_succeeded, __end__, {commit: 12}]]
+  trace: [[run_started, null, {num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, found], [pool_commit, found, {value: retries default to 2}], [node_succeeded, found, {commit: 9}], [node_started, __end__], [pool_commit, __end__, {value: retries default to 2}], [node_succeeded, __end__, {commit: 12}]]
   tool_calls: {docs_search: [{args: {query: retries}, call_id: r1/found, attempt: 1, node: found}]}

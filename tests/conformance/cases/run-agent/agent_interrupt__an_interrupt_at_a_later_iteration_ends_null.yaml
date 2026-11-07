@@ -64,7 +64,6 @@ expect:
             source: missing
           model: gpt-5.5
           provider: openai
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

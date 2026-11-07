@@ -55,7 +55,6 @@ expect:
               method: api_key
               source: environment
               endpoint: https://api.openai.com/v1
-        learnable: false
         num_workers: 0
     - [pool_commit, __start__, {key: system.now}]
     - [pool_commit, __start__, {key: system.run_id, value: r1}]

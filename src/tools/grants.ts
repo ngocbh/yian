@@ -316,7 +316,8 @@ export function groupToolShownAs(
   return null;
 }
 
-// The tool names providers accept: OpenAI's and Anthropic's rule, which the others fit in.
+// The strictest of the providers' tool-name rules, so a flow runs on any of them: OpenAI and
+// Anthropic allow up to 64 of [A-Za-z0-9_-]; Gemini also wants a letter or `_` first.
 const CALLABLE_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 const CALLABLE_RULE =
   "a model's tool names take letters, digits, `_` and `-`, start with a letter or `_`, " +

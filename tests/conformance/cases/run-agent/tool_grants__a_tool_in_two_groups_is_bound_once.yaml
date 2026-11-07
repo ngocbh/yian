@@ -1,0 +1,92 @@
+# One tool sits in two granted groups. The agent is offered it once, under the first grant's
+# name, `toolbox_web`, and run_started records it once, under that record name.
+kind: run
+flow: |
+  id: grants
+  name: grants
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    chat:
+      kind: agent
+      tools: [toolbox, company]
+      system_prompt: Help.
+      prompt: Look up owls.
+      output: str
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    toolbox:
+      group:
+        web:
+          description: Search the web.
+          parameters:
+            type: object
+            properties:
+              query: {type: string}
+            required: [query]
+          results:
+          - return: owls hoot
+        a:
+          description: Tool a.
+          parameters: {type: object}
+          results: []
+    company:
+      group:
+        web: {same_as: toolbox.web}
+        b:
+          description: Tool b.
+          parameters: {type: object}
+          results: []
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-1
+            name: toolbox_web
+            arguments:
+              query: owls
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Look up owls.
+          tools:
+          - name: toolbox_web
+            description: Search the web.
+            parameters:
+              type: object
+              properties:
+                query: {type: string}
+              required: [query]
+          - name: toolbox_a
+            description: Tool a.
+            parameters: {type: object}
+          - name: company_b
+            description: Tool b.
+            parameters: {type: object}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: They hoot.
+expect:
+  output:
+    status: succeeded
+    output: They hoot.
+  trace: [[run_started, null, {effective_llm_by_static_path: {chat: {model: gpt-5.5, provider: openai, _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}}}, learnable: false, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, chat], [node_step, chat, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{arguments: {query: owls}, id: call-1, name: toolbox_web, type: tool_call}], role: assistant}, purpose: chat, request_sha256: b0dd0f2a298482478cc9df379f4c1d0c3ed1052923796ed7d467003432438d29, response_id: null, usage: null}}], [node_step, chat, {n: 2, step: {call_id: call-1, is_error: false, kind: tool_result, output: owls hoot}}], [node_step, chat, {n: 3, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: They hoot., type: text}], role: assistant}, purpose: chat, request_sha256: 263edb22aaa20b63de2b48dff081c6617a164571150bfe9f8f44a750048257a1, response_id: null, usage: null}}], [pool_commit, chat, {value: They hoot.}], [pool_commit, chat, {key: chat.new_messages, steps: [9, 10, 11]}], [node_succeeded, chat, {commit: 12, messages: 13}], [node_started, __end__], [pool_commit, __end__, {value: They hoot.}], [node_succeeded, __end__, {commit: 16}]]
+  tool_calls: {toolbox_web: [{args: {query: owls}, call_id: r1/chat/1/0, attempt: 1, node: chat}]}

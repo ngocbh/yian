@@ -159,6 +159,9 @@ const EXISTS = (path: string) =>
   `\`expect.exists\`: \`${path}\` must be a relative path without \`..\``;
 const TOOL = (results: string) =>
   `${RUN}host: {tools: {t: {parameters: {}, results: ${results}}}}\n`;
+/** A `run` case whose `host.tools` is `tools`. */
+const TOOLS = (tools: string) => `${RUN}host: {tools: ${tools}}\n`;
+const STUB = "{parameters: {}, results: [{return: 1}]}";
 const STRICT = "a strict `template` takes no `item` or `typedefs`";
 const JSON_CASE = "kind: json\nexpect: {value: 1}\n";
 const ONE_OF = "a `json` case takes one of `read` and `write`";
@@ -254,6 +257,17 @@ describe("checkCase", () => {
     ],
     [`${RUN}host: {tools: 1}`, "`host.tools` must be a mapping"],
     [`${RUN}host: {tools: {t: 1}}`, "`host.tools.t` must be a mapping"],
+    [TOOLS("{docs: {group: 1}}"), "`host.tools.docs.group` must be a mapping of stub tools"],
+    [TOOLS(`{docs: {group: {search: ${STUB}}, x: 1}}`), "unknown key `host.tools.docs.x`"],
+    [TOOLS("{docs: {group: {search: {results: []}}}}"), "`host.tools.docs.group.search.parameters` is required"],
+    [
+      TOOLS(`{docs: {group: {search: {same_as: web.search}}}, web: {group: {search: ${STUB}}}}`),
+      "`host.tools.docs.group.search.same_as` must name an earlier group's stub tool as `<group>.<tool>`",
+    ],
+    [
+      TOOLS(`{web: {group: {search: ${STUB}}}, docs: {group: {search: {same_as: web.search, x: 1}}}}`),
+      "unknown key `host.tools.docs.group.search.x`",
+    ],
     [`${RUN}host: {tools: {t: {results: []}}}`, "`host.tools.t.parameters` is required"],
     ...["{parameters: {}}", "{parameters: {}, results: [], pending: true}", "{parameters: {}, pending: false}"].map(
       (stub) => [`${RUN}host: {tools: {t: ${stub}}}`, "`host.tools.t` takes `results` or `pending: true`"],
@@ -583,6 +597,8 @@ describe("checkCase", () => {
     EXPECT("events: [[ModelCallStarted, {node_id: a, n: 1}]], stream: [{node_id: a, n: 1, index: 0}]"),
     TOOL("{n: [{return: 1}, {raise: {class: TransientToolError, message: m, retry_after: 1}}]}"),
     TOOL("[{raise: {class: TransientToolError, message: m, retry_after: 0.5}}]"),
+    TOOLS(`{docs: {group: {search: {parameters: {type: object}, results: [{return: a}]}}}}`),
+    TOOLS(`{web: {group: {search: ${STUB}, a: ${STUB}}}, docs: {group: {search: {same_as: web.search}}}}`),
     RESUME,
     `${BARE_RESUME}run: {num_workers: 0.0}\nhost: {crash_after_record: 1}`,
     `${BARE_RESUME}run: {num_workers: false}\nhost: {crash_after_record: 1}`,

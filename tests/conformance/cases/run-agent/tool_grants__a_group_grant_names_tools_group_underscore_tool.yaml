@@ -1,0 +1,85 @@
+# A group grant offers each of the group's tools as `<group>_<tool>`, and a call by that name
+# reaches the group's tool. Two groups lend a tool named `search`; the agent takes one of them.
+kind: run
+flow: |
+  id: grants
+  name: grants
+  llm_config: {provider: openai, model: gpt-5.5}
+  nodes:
+    chat:
+      kind: agent
+      tools: [{docs: [search]}]
+      system_prompt: Help.
+      prompt: Find retries.
+      output: str
+  output: ${chat.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    docs:
+      group:
+        search:
+          description: Search the docs.
+          parameters:
+            type: object
+            properties:
+              query: {type: string}
+            required: [query]
+          results:
+          - return: retries default to 2
+    web:
+      group:
+        search:
+          description: Search the web.
+          parameters:
+            type: object
+            properties:
+              query: {type: string}
+            required: [query]
+          results: []
+  models:
+    chat:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: tool_call
+            id: call-1
+            name: docs_search
+            arguments:
+              query: retries
+        request:
+          messages:
+          - format: yian.message.v1
+            role: system
+            parts:
+            - type: text
+              text: Help.
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: Find retries.
+          tools:
+          - name: docs_search
+            description: Search the docs.
+            parameters:
+              type: object
+              properties:
+                query: {type: string}
+              required: [query]
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - type: text
+            text: Two.
+expect:
+  output:
+    status: succeeded
+    output: Two.
+  trace: [[run_started, null, {effective_llm_by_static_path: {chat: {model: gpt-5.5, provider: openai, _connection: {method: api_key, source: missing, endpoint: https://api.openai.com/v1}}}, learnable: false, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, chat], [node_step, chat, {n: 1, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{arguments: {query: retries}, id: call-1, name: docs_search, type: tool_call}], role: assistant}, purpose: chat, request_sha256: 21e1881bf9a7abb6f727f20680fee4dedb56d2f084bd7fcf0a4693235dbe0e00, response_id: null, usage: null}}], [node_step, chat, {n: 2, step: {call_id: call-1, is_error: false, kind: tool_result, output: retries default to 2}}], [node_step, chat, {n: 3, step: {finish: null, kind: model_call, model: gpt-5.5, output: {format: yian.message.v1, parts: [{text: Two., type: text}], role: assistant}, purpose: chat, request_sha256: 3fe14056ed3d6dc81cd1bb396523eb4767e45790290f5160b9e68aef0da627ef, response_id: null, usage: null}}], [pool_commit, chat, {value: Two.}], [pool_commit, chat, {key: chat.new_messages, steps: [9, 10, 11]}], [node_succeeded, chat, {commit: 12, messages: 13}], [node_started, __end__], [pool_commit, __end__, {value: Two.}], [node_succeeded, __end__, {commit: 16}]]
+  tool_calls: {docs_search: [{args: {query: retries}, call_id: r1/chat/1/0, attempt: 1, node: chat}]}

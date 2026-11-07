@@ -1,0 +1,42 @@
+# A TOOL node names one tool of a group as `{group: tool}`; two groups lend a tool named
+# `search`, and the node reaches the one it names.
+kind: run
+flow: |
+  id: grants
+  name: grants
+  nodes:
+    found:
+      kind: tool
+      tool_id: {docs: search}
+      input: {query: retries}
+  output: ${found.output}
+run:
+  run_id: r1
+  num_workers: 0
+host:
+  tools:
+    docs:
+      group:
+        search:
+          parameters:
+            type: object
+            properties:
+              query: {type: string}
+            required: [query]
+          results:
+          - return: retries default to 2
+    web:
+      group:
+        search:
+          parameters:
+            type: object
+            properties:
+              query: {type: string}
+            required: [query]
+          results: []
+expect:
+  output:
+    status: succeeded
+    output: retries default to 2
+  trace: [[run_started, null, {learnable: false, num_workers: 0}], [pool_commit, __start__, {key: system.now}], [pool_commit, __start__, {key: system.run_id, value: r1}], [pool_commit, __start__, {key: system.today}], [pool_commit, __start__, {value: {}}], [node_started, __start__], [pool_commit, __start__, {value: {}}], [node_succeeded, __start__, {commit: 6}], [node_started, found], [pool_commit, found, {value: retries default to 2}], [node_succeeded, found, {commit: 9}], [node_started, __end__], [pool_commit, __end__, {value: retries default to 2}], [node_succeeded, __end__, {commit: 12}]]
+  tool_calls: {docs_search: [{args: {query: retries}, call_id: r1/found, attempt: 1, node: found}]}

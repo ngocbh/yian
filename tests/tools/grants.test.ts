@@ -1,10 +1,13 @@
 import { expect, test } from "bun:test";
+import { ToolSpec } from "../../src/llm/messages.ts";
 import {
   expandGrants,
   GrantError,
+  type GrantedTool,
   type GrantScope,
   grantText,
   parseToolGrants,
+  requestToolSpecs,
   type ToolGrant,
   visibleToolName,
 } from "../../src/tools/grants.ts";
@@ -106,4 +109,25 @@ test.each([
   [["web", "company"], ["web", "company_b"]],
 ])("one tool object reached through several grants is bound once, under the first one's name: %j", (raw, visible) => {
   expect(expandGrants(names(raw), [shared]).map((g) => g.visible)).toEqual(visible);
+});
+
+const PARAMS = { type: "object", properties: { q: { type: "string" } } };
+const docsSearch: GrantedTool = { visible: "docs_search", group: "docs", tool: "search", scope: 0, key: "docs_search" };
+const lookup: GrantedTool = { visible: "lookup", group: null, tool: "lookup", scope: 0, key: "lookup" };
+const specOf = (tool: GrantedTool) => new ToolSpec({ name: tool.tool, description: `The ${tool.tool} tool.`, parameters: PARAMS });
+const loadSkill = new ToolSpec({ name: "load_skill", description: "Load a skill.", parameters: PARAMS });
+
+test("a request lists each granted tool under its visible name, in grant order, then load_skill", () => {
+  const specs = requestToolSpecs([docsSearch, lookup], specOf, loadSkill)!;
+  expect(specs.map((spec) => [spec.name, spec.description])).toEqual([
+    ["docs_search", "The search tool."],
+    ["lookup", "The lookup tool."],
+    ["load_skill", "Load a skill."],
+  ]);
+  expect(specs[0]!.parameters).toEqual(PARAMS);
+});
+
+test("a request with nothing granted lists no tools; a tool with no spec gives no list", () => {
+  expect(requestToolSpecs([], specOf, null)).toEqual([]);
+  expect(requestToolSpecs([docsSearch, lookup], (tool) => (tool === lookup ? null : specOf(tool)), loadSkill)).toBeNull();
 });

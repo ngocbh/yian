@@ -5,10 +5,11 @@
  * (`{github: [search, create_issue]}`). A tool reached through a group shows to the model as
  * `<group>_<tool>`; a tool granted by its own name keeps it.
  *
- * Knows about: `diagnostics` and typesys.
+ * Knows about: `diagnostics`, typesys and `llm/messages` (a request's tool specs).
  */
 
 import { reprText } from "../diagnostics.ts";
+import { ToolSpec } from "../llm/messages.ts";
 import { isRecord } from "../typesys/values.ts";
 
 /** One authored grant: a tool or a group by name, or some tools of a group. */
@@ -216,6 +217,29 @@ export function expandGrants(grants: readonly ToolGrant[], scopes: readonly Gran
     add(grant, member(at, group, name, name));
   }
   return granted;
+}
+
+/**
+ * Return a request's tool list: each granted tool's spec under its visible name, in grant order,
+ * then `loadSkill` when given.
+ *
+ * @param specOf The spec of a granted tool as its host describes it, or `null` when it has none.
+ * @returns The specs, empty when nothing is granted; `null` when `specOf` has no spec for a tool.
+ */
+export function requestToolSpecs(
+  granted: readonly GrantedTool[],
+  specOf: (tool: GrantedTool) => ToolSpec | null,
+  loadSkill: ToolSpec | null,
+): ToolSpec[] | null {
+  const specs: ToolSpec[] = [];
+  for (const tool of granted) {
+    const spec = specOf(tool);
+    if (spec === null) return null;
+    const { description, parameters, strict } = spec;
+    specs.push(new ToolSpec({ name: tool.visible, description, parameters, strict }));
+  }
+  if (loadSkill !== null) specs.push(loadSkill);
+  return specs;
 }
 
 /** Return where a granted tool comes from, for a message: `tool x` or `github's search`. */

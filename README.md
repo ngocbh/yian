@@ -10,9 +10,11 @@ fill in values and choose among the tools you grant.
 - **Typed values, checked at load.** A flow whose parts don't fit fails before it calls a model.
 - **An append-only run log.** Each step is logged before it's applied, so a run resumes after a crash.
 
-**Goals:** work that repeats, must be reliable and should improve across runs, such as standard
+## Goals and Non-Goals
+- **Goals:** work that repeats, must be reliable and should improve across runs, such as standard
 operating procedures, routines, reviews, triage and reports. Flows that people and LLMs both write,
-read and fix. **Non-goals:** interactive coding agents, and flexible or one-off work. Use Codex,
+read and fix.
+- **Non-goals:** interactive coding agents, and flexible or one-off work. Use Codex,
 Claude Code or OpenCode for that.
 
 ## Install

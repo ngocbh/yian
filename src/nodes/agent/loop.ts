@@ -652,6 +652,9 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   }
   // The call names the tool as the model saw it; the grant names it in its group.
   const ref = { group: grant.group, name: grant.tool };
+  // A plan that rejects with a reported error carries it too: checking the arguments again on
+  // replay has no side effect and gives the same error.
+  const resumable = turn.resumable.has(call.name);
   // An ask's deadline is fixed before its handler runs, which gets it; the pending step records it.
   let deadline: string | null = null;
   if (call.name === ASK_USER && typeof args["timeout"] === "string") {
@@ -661,7 +664,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
       if (!(error instanceof RangeError || error instanceof TypeError)) throw error;
       const reported = new ReportedToolError(`ask_user timeout: ${error.message}`);
       const invoke = () => Promise.reject(reported);
-      return { planned: { call, index, callId: undefined, deadline: null, resumable: false, invoke }, safe: false };
+      return { planned: { call, index, callId: undefined, deadline: null, resumable, invoke }, safe: false };
     }
   }
   let checked: CheckedCall;
@@ -676,7 +679,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     // The arguments are checked as part of the call, so a reported error is the call's result.
     if (isReportedToolError(error)) {
       const invoke = () => Promise.reject(error);
-      return { planned: { call, index, callId: undefined, deadline: null, resumable: false, invoke }, safe: false };
+      return { planned: { call, index, callId: undefined, deadline: null, resumable, invoke }, safe: false };
     }
     return { error, granted: true };
   }
@@ -688,7 +691,6 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // Above 1 only for a call a crash or a stop cut off after its reply, which a resume sends again.
   const attempt = 1 + (ctx.steps?.resumesSince(turn.n) ?? 0);
   const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, attempt, signal });
-  const resumable = turn.resumable.has(call.name);
   return { planned: { call, index, callId, deadline, resumable, invoke }, safe: toolset.isConcurrencySafe(checked) };
 }
 

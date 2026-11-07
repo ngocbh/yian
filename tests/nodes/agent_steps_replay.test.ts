@@ -44,6 +44,7 @@ import { virtualScheduler } from "../../src/platform.ts";
 import { decodeRecord, InterruptedRecord, NodeStepRecord, PoolCommitRecord, type RecordEnvelope } from "../../src/runtime/log.ts";
 import { advance, foldRunLog, inspectRun, interrupt, runFlow, send } from "../../src/run.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
+import { ReportedToolError } from "../../src/tools/errors.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
@@ -1212,6 +1213,37 @@ test("a pending interrupt is honored after the re-sent call, which still runs", 
   expect(ran).toEqual(["save a", "save a"]);
   expect(steps(log).map((step) => step["kind"])).toEqual(["model_call", "tool_result", "interrupted"]);
   expect(toolResults(log)).toEqual([{ call_id: "c1", output: "save:a", is_error: false }]);
+});
+
+test("a resumable tool's call whose argument check reported an error gets the same error again, not a closer", async () => {
+  let checks = 0;
+  const save = new FunctionTool({
+    name: "save",
+    description: "Tool save.",
+    parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] },
+    parametersValidator: {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: () => {
+          checks += 1;
+          throw new ReportedToolError("no such topic");
+        },
+      },
+    },
+    execute: () => "never",
+    resumable: true,
+  });
+  const uncut = await run(saveModel(), { tools: { save } });
+  expect(uncut.result.status, uncut.result.failure?.message).toBe("succeeded");
+  const log = await cutRun(afterCall(uncut.log), saveModel(), { tools: { save } });
+  checks = 0;
+  const result = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools: { save } });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(checks).toBe(1);
+  expect(toolResults(log)).toEqual(toolResults(uncut.log));
+  expect(toolResults(log)[0]).not.toHaveProperty("closed");
+  expect(comparable(log)).toEqual(comparable(uncut.log));
 });
 
 test("a re-sent call emits ToolCallStarted and ToolCallFinished", async () => {

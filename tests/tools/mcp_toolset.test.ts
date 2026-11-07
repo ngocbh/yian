@@ -104,12 +104,12 @@ describe("an MCP server in a ToolSet", () => {
     );
   });
 
-  test("two servers with one tool name clash", () => {
+  test("two servers with one tool name are each reached through their group", async () => {
     const first = new FakeServer("a", [serverTool("echo")]);
     const second = new FakeServer("b", [serverTool("echo")]);
-    expect(thrown(() => new ToolSet({ a: first, b: second }), RangeError)).toBe(
-      "tool 'echo' is in both groups 'a' and 'b' as different tools",
-    );
+    const tools = new ToolSet({ a: first, b: second });
+    expect(tools.resolve([{ group: "b", name: "echo" }])).toEqual([second.tools[0]!]);
+    expect(await tools.invoke({ group: "a", name: "echo" }, { text: "hi" })).toBe("hi");
   });
 
   test("a server tool named like a top level key clashes", () => {

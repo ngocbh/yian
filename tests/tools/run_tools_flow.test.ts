@@ -348,7 +348,6 @@ for (const [name, tools, message] of [
     { toolbox: [], workspace: [] },
     "AGENT node 'agent' grants unknown tool or group 'company'; tool groups in this run: [\"toolbox\",\"workspace\"]",
   ],
-  ["name clash", groups([textTool("ws")]), "tool 'ws' is in both groups 'toolbox' and 'workspace'"],
   ["group ask_user", groups([textTool("ask_user")]), "group 'toolbox' has a tool named 'ask_user'"],
 ] as const) {
   test(`bad groups fail at run start: ${name}`, async () => {

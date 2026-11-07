@@ -13,8 +13,8 @@
  * serves both the agent's `ask_user` tool and the TOOL built-in `ask`, through
  * `new ToolSet({ ask: handler, ... })`.
  *
- * Knows about: `tools/context`, `tools/errors`, `tools/function_tools`, `tools/mcp`, `tools/types`,
- * `skills/tool` (the reserved `load_skill` name), `defaults`, typesys and diagnostics.
+ * Knows about: `tools/context`, `tools/errors`, `tools/function_tools`, `tools/grants`, `tools/mcp`,
+ * `tools/types`, `skills/tool` (the reserved `load_skill` name), `defaults`, typesys and diagnostics.
  */
 
 import { current } from "../defaults.ts";
@@ -37,6 +37,7 @@ import {
 import { ASK, ASK_USER, isPending, SLEEP, TAKE, ToolContext, toolCallId } from "./context.ts";
 import { isToolCheckError, ToolCheckError, toolErrorKinds } from "./errors.ts";
 import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
+import { GrantError, type GrantScope, visibleToolName } from "./grants.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
 
@@ -122,6 +123,19 @@ export interface InvokeOptions {
   attempt?: number;
   /** The call's abort signal. Absent, the bound run's signal, else a signal that never aborts. */
   signal?: AbortSignal;
+}
+
+/** A tool by name: a top-level tool (`group: null`), or the tool `name` of group `group`. */
+export interface ToolRef {
+  readonly group: string | null;
+  readonly name: string;
+}
+
+/** Whether `value` is a `ToolRef`: a `name` text and a `group` text or `null`. */
+function isToolRef(value: unknown): value is ToolRef {
+  if (typeof value !== "object" || value === null) return false;
+  const { group, name } = value as { group?: unknown; name?: unknown };
+  return typeof name === "string" && (group === null || typeof group === "string");
 }
 
 /** One tool call whose arguments `ToolSet.validate` checked; `invoke` and `isConcurrencySafe` take it. */
@@ -484,11 +498,14 @@ function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
  * empty one, the run sees only that mapping's entries; there is no fallback to the registry. Two
  * runs with different `ToolSet`s never see each other's entries.
  *
- * An entry whose value is an array of `FunctionTool`s, or an open `McpServer`, is a tool group. An
- * AGENT node grants a group by its key, and `expand` replaces that key with the group's tool
- * names. Every tool name in the run names one tool: the same tool object may sit in several
- * groups, but a group tool may not share its name with a different tool or with a top-level key,
- * or take a reserved name (`take`, `sleep`, `ask`, `ask_user`, `load_skill`).
+ * An entry whose value is an array of `FunctionTool`s, or an open `McpServer`, is a tool group.
+ * Groups are namespaced: a group's tool is `{group, name}`, and two groups may hold different
+ * tools of one name. A bare name finds a top-level tool, else the one group tool by that name. The
+ * same tool object may sit in several groups; its record name is `<group>_<tool>` under the first
+ * group that holds it. A tool may show to a model as its top-level name or as `<group>_<tool>`,
+ * and two different tools that could show one name are refused. A group tool may not share its
+ * name with a top-level key or take a reserved name (`take`, `sleep`, `ask`, `ask_user`,
+ * `load_skill`). `scope()` is this set as a `GrantScope`, which `expandGrants` reads.
  *
  * A tool's `execute(args, ctx)` receives a `ToolContext` on each call: the call id, attempt, tool
  * name, run id, calling node, this set's `context` and the call's abort signal.
@@ -515,12 +532,14 @@ function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
  *   neither a function nor an `AskTool`; or both `ask` and `ask_user` are given.
  * @throws {RangeError} A key is `take`, `sleep` or `load_skill`; a `FunctionTool` entry's name
  *   differs from its key; an `McpServer` entry was open but has gone away; an `AskTool` input
- *   shadows yian's ask surface or a required name isn't an input; or a group tool's name is
- *   reserved, is a top-level key, or names a different tool elsewhere in the groups.
+ *   shadows yian's ask surface or a required name isn't an input; a group tool's name is
+ *   reserved or is a top-level key; a group holds two different tools of one name; or two
+ *   different tools could show one name.
  *
  * @example
  * const tools = new ToolSet({ toolbox: [weather, forecast] }); // two FunctionTools
- * tools.expand(["toolbox"]); // ["weather", "forecast"]
+ * tools.scope().group("toolbox"); // ["weather", "forecast"]
+ * tools.resolve([{ group: "toolbox", name: "weather" }]); // [weather]
  * const runTools = new ToolSet({ place }, { context: broker }).forRun("run-1");
  * const call = await runTools.validate("place", { sym: "X" });
  * const parallel = runTools.isConcurrencySafe(call); // true: it may run beside other calls
@@ -529,7 +548,9 @@ function serverTools(key: string, server: McpServer): readonly FunctionTool[] {
 export class ToolSet {
   // Plain private fields, not `#` ones, so `forRun` can copy them into a subclass instance.
   private toolMap: ReadonlyMap<string, FunctionTool> | null;
-  private groupMap: ReadonlyMap<string, readonly string[]>;
+  private groupMap: ReadonlyMap<string, ReadonlyMap<string, FunctionTool>>;
+  // Each group tool's record name: `<group>_<tool>` under the first group holding the object.
+  private recordNames: ReadonlyMap<FunctionTool, string>;
   private boundRunId: string;
   private boundSignal: AbortSignal | undefined;
   private hostContext: unknown;
@@ -539,6 +560,7 @@ export class ToolSet {
   constructor(tools?: Readonly<Record<string, ToolEntry>> | null, options?: { context?: unknown }) {
     this.toolMap = null;
     this.groupMap = new Map();
+    this.recordNames = new Map();
     this.boundRunId = "";
     this.boundSignal = undefined;
     this.hostContext = options?.context;
@@ -585,10 +607,13 @@ export class ToolSet {
       }
     }
     const topLevel = new Set(keys);
-    const groups = new Map<string, readonly string[]>();
-    const owners = new Map<string, { group: string; item: FunctionTool }>();
+    const groups = new Map<string, ReadonlyMap<string, FunctionTool>>();
+    const recordNames = new Map<FunctionTool, string>();
+    // Every name a tool could show, with the tool and how a message names it.
+    const shown = new Map<string, { item: FunctionTool; text: string }>();
+    for (const [name, item] of built) shown.set(name, { item, text: `tool ${reprText(name)}` });
     for (const [group, items] of groupItems) {
-      const names = new Set<string>();
+      const members = new Map<string, FunctionTool>();
       for (const item of items) {
         const name = item.name;
         if (RESERVED_TOOL_NAMES.has(name)) {
@@ -601,37 +626,58 @@ export class ToolSet {
             `tool ${reprText(name)} in group ${reprText(group)} clashes with tools[${JSON.stringify(name)}]`,
           );
         }
-        names.add(name);
-        const owner = owners.get(name);
-        if (owner === undefined) {
-          owners.set(name, { group, item });
-          built.set(name, item);
-          continue;
+        const had = members.get(name);
+        if (had !== undefined && had !== item) {
+          throw new RangeError(`tool ${reprText(name)} appears twice in group ${reprText(group)} as different tools`);
         }
-        // Host permission groups overlap, so one tool may sit in several of them; two different
-        // tools under one name would be ambiguous.
-        if (owner.item !== item) {
-          const where =
-            owner.group === group
-              ? `appears twice in group ${reprText(group)}`
-              : `is in both groups ${reprText(owner.group)} and ${reprText(group)}`;
-          throw new RangeError(`tool ${reprText(name)} ${where} as different tools`);
+        if (had !== undefined) continue;
+        members.set(name, item);
+        // Host permission groups overlap, so one tool may sit in several of them; it keeps the
+        // name of the first.
+        if (!recordNames.has(item)) recordNames.set(item, visibleToolName(group, name));
+        const visible = visibleToolName(group, name);
+        const text = `${group}'s ${reprText(name)}`;
+        if (RESERVED_TOOL_NAMES.has(visible)) {
+          throw new RangeError(`${text} could show as ${reprText(visible)}, a reserved name; rename one`);
         }
+        const other = shown.get(visible);
+        if (other !== undefined && other.item !== item) {
+          throw new RangeError(`${other.text} and ${text} could both show as ${reprText(visible)}; rename one`);
+        }
+        shown.set(visible, { item, text });
       }
-      groups.set(group, Object.freeze([...names]));
+      groups.set(group, members);
     }
     this.toolMap = built;
     this.groupMap = groups;
+    this.recordNames = recordNames;
     this.trustedSchemas = trusted;
   }
 
   /**
    * Return this run's tool, or the registry's when the run has no mapping.
    *
-   * `ask` and `ask_user` never come from the registry: a run without its own handler cannot ask.
-   * `take` and `sleep` are engine built-ins, never tools.
+   * A `ToolRef` with a group names that group's tool. A bare name is a top-level tool, else the one
+   * group tool by that name. `ask` and `ask_user` never come from the registry: a run without its
+   * own handler cannot ask. `take` and `sleep` are engine built-ins, never tools.
+   *
+   * @throws {GrantError} A bare name is a tool of two groups.
+   * @throws {RangeError} No tool answers the ref.
    */
-  private lookup(toolId: string): FunctionTool {
+  private lookup(ref: string | ToolRef): FunctionTool {
+    if (typeof ref !== "string" && ref.group !== null) {
+      const members = this.groupMap.get(ref.group);
+      if (members === undefined) {
+        throw new RangeError(`unknown tool group ${reprText(ref.group)}; tool groups in this run: [${this.groups.join(", ")}]`);
+      }
+      const tool = members.get(ref.name);
+      if (tool === undefined) {
+        const has = members.size === 0 ? "no tools" : [...members.keys()].join(", ");
+        throw new RangeError(`\`${ref.group}\` has no tool \`${ref.name}\`; it has ${has}`);
+      }
+      return tool;
+    }
+    const toolId = typeof ref === "string" ? ref : ref.name;
     if ((toolId === ASK || toolId === ASK_USER) && !this.toolMap?.has(toolId)) {
       throw new RangeError(`no ask handler for this run; ${ASK_HINT}`);
     }
@@ -643,12 +689,67 @@ export class ToolSet {
     if (this.groupMap.has(toolId)) {
       throw new RangeError(`${reprText(toolId)} is a tool group, not a tool; grant it in an AGENT node's tools: list`);
     }
-    const tools = this.toolMap ?? TOOL_REGISTRY;
-    const tool = tools.get(toolId);
-    if (tool === undefined) {
-      throw new RangeError(`unknown tool id ${reprText(toolId)}; known tools: ${writeAsText(sortedIds(tools))}`);
+    const tool = (this.toolMap ?? TOOL_REGISTRY).get(toolId);
+    if (tool !== undefined) return tool;
+    const holders = this.holders(toolId);
+    if (holders.length > 1) {
+      const groups = holders.map(({ group }) => reprText(group));
+      const shown = `${groups.slice(0, -1).join(", ")} and ${groups.at(-1)!}`;
+      throw new GrantError(
+        `${reprText(toolId)} is a tool of groups ${shown}; name one as \`{${holders[0]!.group}: ${toolId}}\``,
+      );
     }
-    return tool;
+    if (holders.length === 1) return holders[0]!.tool;
+    throw new RangeError(`unknown tool id ${reprText(toolId)}; known tools: ${writeAsText([...this.toolIds])}`);
+  }
+
+  /** The group tools named `name`, one per distinct tool, each under the first group holding it. */
+  private holders(name: string): { group: string; tool: FunctionTool }[] {
+    const found: { group: string; tool: FunctionTool }[] = [];
+    for (const [group, members] of this.groupMap) {
+      const tool = members.get(name);
+      if (tool !== undefined && !found.some((each) => each.tool === tool)) found.push({ group, tool });
+    }
+    return found;
+  }
+
+  /**
+   * Return a granted tool's record name: a top-level tool's own name, or `<group>_<tool>` under
+   * the first group holding a group tool.
+   *
+   * @throws {RangeError} No tool answers the ref, as `resolve` throws.
+   */
+  recordName(ref: ToolRef): string {
+    const tool = this.lookup(ref);
+    return this.recordNames.get(tool) ?? ref.name;
+  }
+
+  /**
+   * This set as the run's grant scope: its groups by name, its top-level tools, bare names reaching
+   * group tools, and record names as identities.
+   */
+  scope(): GrantScope {
+    return {
+      label: "this run",
+      bareMembers: true,
+      group: (name) => {
+        const members = this.groupMap.get(name);
+        return members === undefined ? null : [...members.keys()];
+      },
+      hasTool: (name) => {
+        // `ask` and `ask_user` are tools only with the run's own handler.
+        if (name === ASK || name === ASK_USER) return this.toolMap?.has(name) === true;
+        return (this.toolMap ?? TOOL_REGISTRY).has(name);
+      },
+      groupsHolding: (name) => this.holders(name).map(({ group }) => group),
+      groupNames: () => this.groups,
+      identity: (group, tool) => (group === null ? tool : this.recordName({ group, name: tool })),
+    };
+  }
+
+  /** The scopes this set's grants resolve in, in order: only `scope()`. */
+  scopes(): GrantScope[] {
+    return [this.scope()];
   }
 
   /**
@@ -689,11 +790,14 @@ export class ToolSet {
   }
 
   /**
-   * The sorted ids of the tools this run can resolve: with a mapping, the mapping's tools and group
-   * members; with no mapping, the global registry's tools.
+   * The sorted ids of the tools this run can resolve, for messages: with a mapping, the mapping's
+   * top-level tools and `<group>.<tool>` for each group's tools; with no mapping, the global
+   * registry's tools.
    */
   get toolIds(): readonly string[] {
-    return sortedIds(this.toolMap ?? TOOL_REGISTRY);
+    if (this.toolMap === null) return sortedIds(TOOL_REGISTRY);
+    const members = [...this.groupMap].flatMap(([group, tools]) => [...tools.keys()].map((name) => `${group}.${name}`));
+    return [...new Set([...this.toolMap.keys(), ...members])].sort(compareCodeUnits);
   }
 
   /**
@@ -706,18 +810,19 @@ export class ToolSet {
   expand(ids: readonly string[]): string[] {
     // Overlapping or repeated grants bind each tool once.
     const expanded = new Set<string>();
-    for (const id of ids) for (const name of this.groupMap.get(id) ?? [id]) expanded.add(name);
+    for (const id of ids) for (const name of this.groupMap.get(id)?.keys() ?? [id]) expanded.add(name);
     return [...expanded];
   }
 
   /**
-   * Look tools up by id.
+   * Look tools up by id or ref.
    *
-   * @param ids The ids to resolve, in order.
+   * @param ids The bare names or refs to resolve, in order.
    * @returns The matching tools, in the same order as `ids`.
+   * @throws {GrantError} A bare name is a tool of two groups.
    * @throws {RangeError} An id is not visible to this run.
    */
-  resolve(ids: readonly string[]): FunctionTool[] {
+  resolve(ids: readonly (string | ToolRef)[]): FunctionTool[] {
     return ids.map((id) => this.lookup(id));
   }
 
@@ -729,7 +834,7 @@ export class ToolSet {
    * call gives `execute` its output; a caller that retries a call validates it once up front, so a
    * bad argument fails before the first attempt instead of inside the retries.
    *
-   * @param toolId The id of the tool the call is for.
+   * @param toolId The id of the tool the call is for, or a group tool's ref.
    * @param inputs Public arguments keyed by parameter name.
    * @param options `signal` stops the call before and after the validator runs; absent, the
    *   bound run's signal.
@@ -749,7 +854,7 @@ export class ToolSet {
    * await tools.validate("weather", { town: "Paris" }); // rejects with a RangeError
    */
   async validate(
-    toolId: string,
+    toolId: string | ToolRef,
     inputs: Record<string, unknown>,
     options?: { signal?: AbortSignal },
   ): Promise<CheckedCall> {
@@ -765,7 +870,7 @@ export class ToolSet {
    * @throws As `validate` throws, against the full schema.
    */
   async validateTrusted(
-    toolId: string,
+    toolId: string | ToolRef,
     inputs: Record<string, unknown>,
     options?: { signal?: AbortSignal },
   ): Promise<CheckedCall> {
@@ -788,7 +893,7 @@ export class ToolSet {
    * value in host form. A tool without an output returns its result as it is.
    *
    * @param call A call `validate` returned, on this set or any other.
-   * @param toolId The id of the tool to call.
+   * @param toolId The id of the tool to call, or a group tool's ref.
    * @param inputs Public arguments keyed by parameter name.
    * @param options The calling node, call id, attempt and abort signal the tool's context carries.
    * @returns The tool's result, awaited, `undefined` read as `null`; for a tool that declares an
@@ -802,13 +907,13 @@ export class ToolSet {
    *   whose message is its text and whose `cause` is the value.
    */
   invoke(call: CheckedCall, options?: InvokeOptions): Promise<unknown>;
-  invoke(toolId: string, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown>;
+  invoke(toolId: string | ToolRef, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown>;
   async invoke(
-    target: CheckedCall | string,
+    target: CheckedCall | string | ToolRef,
     inputsOrOptions?: Record<string, unknown> | InvokeOptions,
     options?: InvokeOptions,
   ): Promise<unknown> {
-    if (typeof target === "string") {
+    if (typeof target === "string" || (!(target instanceof CheckedCall) && isToolRef(target))) {
       const inputs = inputsOrOptions as Record<string, unknown>;
       return await this.invoke(await this.validate(target, inputs, { signal: options?.signal }), options);
     }
@@ -838,7 +943,7 @@ export class ToolSet {
    *   a throw from the output validator included.
    * @throws Whatever the tool or the validator throws, unchanged.
    */
-  async invokeTrusted(toolId: string, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown> {
+  async invokeTrusted(toolId: string | ToolRef, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown> {
     return await this.invoke(await this.checkedCall(toolId, inputs, true, options?.signal), options);
   }
 
@@ -873,12 +978,14 @@ export class ToolSet {
    * return the call recorded with its tool and argument.
    */
   private async checkedCall(
-    toolId: string,
+    ref: string | ToolRef,
     inputs: Record<string, unknown>,
     trusted: boolean,
     signal: AbortSignal | undefined = this.boundSignal,
   ): Promise<CheckedCall> {
-    const [tool, payload] = this.check(toolId, inputs, trusted);
+    const [tool, payload] = this.check(ref, inputs, trusted);
+    // A tool's context and messages name it by its own name, as it names itself.
+    const toolId = typeof ref === "string" ? ref : ref.name;
     // `??`: a tool built by an older copy of yian has no `parametersValidator` field.
     const validator = tool.parametersValidator ?? null;
     let args: () => Record<string, unknown>;
@@ -908,8 +1015,10 @@ export class ToolSet {
    * Look the tool up and check one call's arguments; return the tool and the checked arguments
    * as a fresh yian record, `ask_user`'s `options` cleaned.
    */
-  private check(toolId: string, inputs: Record<string, unknown>, trusted: boolean): [FunctionTool, ValueRecord] {
-    const tool = this.lookup(toolId);
+  private check(ref: string | ToolRef, inputs: Record<string, unknown>, trusted: boolean): [FunctionTool, ValueRecord] {
+    const tool = this.lookup(ref);
+    // A group tool never takes a reserved name, so `ask` and `ask_user` here are the top-level ones.
+    const toolId = typeof ref === "string" ? ref : ref.name;
     const where = `tool ${reprText(toolId)} arguments`;
     const payload = fromHost(inputs, where);
     if (!isRecord(payload)) throw new TypeError(`${where} must be a record, got ${jsTypeName(inputs)}`);

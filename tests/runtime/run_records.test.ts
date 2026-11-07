@@ -4,14 +4,8 @@
  */
 
 import { expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 
-import { buildGrow } from "../../src/compile/expand.ts";
 import { copyGraph, START_ID } from "../../src/compile/model.ts";
-import { loadFlow } from "../../src/compose/loader.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
 import {
@@ -22,7 +16,6 @@ import {
 } from "../../src/memory/contracts.ts";
 import { BackwardResult } from "../../src/nodes/base.ts";
 import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
-import { replayRunLog, runFlow } from "../../src/run.ts";
 import {
   AttributedBackwardResult,
   BackwardAttribution,
@@ -91,8 +84,6 @@ import {
   ValueKind,
 } from "../../src/typesys/index.ts";
 import { JSONDecodeError, type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
-import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { FakeMemory } from "../helpers/memory_fakes.ts";
 import {
   commitStartSuccess,
   flow,
@@ -2035,116 +2026,4 @@ test("a historical route keeps the schema in its trace line", () => {
   const occurrence = state.trace!.occurrences.at(-1)!;
   expect(occurrence.recordJson).toBe(untimed(last));
   expect(decodeRecord(occurrence.recordJson).schema).toBe(SCHEMA_VERSION);
-});
-
-const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
-
-const HISTORICAL_FLOW = `id: historical-backward
-name: historical_backward
-long_term_memory: test
-nodes:
-  work:
-    kind: code
-    code: return 3
-    output: int
-output: \${work.output}
-`;
-
-const HISTORICAL_GROWTH_FLOW = `
-id: recovery-matrix-growth
-name: recovery_matrix_growth
-long_term_memory: episodic
-defs:
-  echo_one:
-    input:
-      value: !int
-    nodes:
-      echo:
-        kind: code
-        input:
-          x: \${input.value}
-        output: int
-        code: ./compose_codefns.ts:echo_x
-    output: \${echo.output}
-  bump_once:
-    input:
-      n: !int
-      exited: !bool
-    nodes:
-      bump:
-        kind: code
-        input:
-          n: \${input.n}
-          exited: \${input.exited}
-        output:
-          n: int
-          exited: bool
-        code: ./compose_codefns.ts:loop_bump
-    output: \${bump.output}
-  composite:
-    long_term_memory: reflective
-    nodes:
-      mapped:
-        kind: map
-        call: echo_one
-        over: \${[1, 2]}
-        input:
-          value: \${item}
-      repeated:
-        kind: loop
-        call: bump_once
-        input:
-          n: 0
-          exited: false
-        times: 2
-    output:
-      mapped: \${mapped.output}
-      repeated: \${repeated.output}
-nodes:
-  outer:
-    kind: call
-    call: composite
-output: \${outer.output}
-`;
-
-test.each(["success", "failure", "growth"])("historical outcomes keep the schema in their trace lines: %s", async (kind) => {
-  const dir = mkdtempSync(join(tmpdir(), "yian-run-records-"));
-  const env = hostEnv(dir);
-  try {
-    const source =
-      kind === "growth"
-        ? HISTORICAL_GROWTH_FLOW
-        : kind === "failure"
-          ? HISTORICAL_FLOW.replace("return 3", 'return "bad"')
-          : HISTORICAL_FLOW;
-    const keys = kind === "growth" ? ["episodic", "reflective"] : ["test"];
-    const loaded = await loadFlow(source, { sourceLabel: "flow.yaml", baseDir: FIXTURES });
-    const path = join(dir, "run.jsonl");
-    const memory = new Map(keys.map((key) => [key, new FakeMemory()]));
-    const result = await runFlow(loaded, {}, { log: path, learnable: true, numWorkers: 0, memory, env });
-    expect(result.status).toBe(kind === "failure" ? "failed" : "succeeded");
-    const lines = readFileSync(path, "utf8").split("\n").slice(0, -1);
-    // success: through work's NodeSucceeded; growth: through outer's NodeExpanded, after its child
-    // START's expansion commit; failure: the whole log, ending with work's NodeFailed. The run
-    // start is RunStarted and four commits, and START's success its start, commit and success.
-    const wires = kind === "failure" ? lines : lines.slice(0, 11);
-    const last = wires.at(-1)!;
-    expect(decodeRecord(last).kind).toBe({ success: "node_succeeded", failure: "node_failed", growth: "node_expanded" }[kind]);
-
-    const state = replayRunLog(loaded, MemoryRunLog.fromRecords(wires.slice(0, -1).map((wire) => decodeRecord(wire))));
-    const before = [...state.trace!.occurrences];
-    const prepared = prepareRecord(state, decodeRecord(last).record, { growBuilder: buildGrow });
-    expect(prepared._plan.envelopeJson).toBe(untimed(last));
-    expect(state.trace!.occurrences).toEqual(before);
-    const cursor = new HistoricalLogCursor(wires);
-    for (const wire of wires.slice(0, -1)) cursor.append(decodeRecord(wire).record);
-    commitPrepared(cursor, state, prepared);
-
-    expect(state.trace!.occurrences.slice(0, -1)).toEqual(before);
-    const occurrence = state.trace!.occurrences.at(-1)!;
-    expect(occurrence.recordJson).toBe(untimed(last));
-    expect(decodeRecord(occurrence.recordJson).schema).toBe(SCHEMA_VERSION);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
 });

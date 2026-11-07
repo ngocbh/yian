@@ -1463,7 +1463,6 @@ async function runLoad(case_: Case, ctx: CaseContext): Promise<void> {
 const RUN_OPTIONS: Readonly<Record<string, keyof RunFlowOptions>> = {
   run_id: "runId",
   num_workers: "numWorkers",
-  learnable: "learnable",
   llm_config: "llmConfig",
   context: "context",
 };
@@ -2536,10 +2535,8 @@ async function callBackward(
   for (const [index, entry] of entries.entries()) {
     const before = finished().length;
     try {
-      await result.backward(entry["feedback"], {
-        apiKey: (get(entry, "api_key") ?? null) as string | null,
-        headers: (get(entry, "headers") ?? null) as Record<string, string> | null,
-      });
+      // `RunResult.backward` is gone; the `backward` kind leaves the runner with its cases.
+      throw new CaseFailure(`backward call ${index + 1}: RunResult.backward was removed`);
     } catch (error) {
       if (error instanceof CaseFailure) throw error;
       outcomes.push({ raises: raised(error) });

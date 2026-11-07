@@ -111,7 +111,7 @@ test(
 );
 
 test(
-  "a deep record under nested calls runs learnably and resumes",
+  "a deep record under nested calls runs and resumes",
   async () => {
     const text = flow(100, 10);
     const path = join(dir, "deep.jsonl");
@@ -119,7 +119,6 @@ test(
     const first = await runFlow(await loadConformanceFlow(text, { env }), { n: 99n }, {
       env,
       log: path,
-      learnable: true,
       numWorkers: 0,
     });
     expectSucceeded(first, treeValue(100));

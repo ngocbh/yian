@@ -1,4 +1,4 @@
-/** A resumed or delayed run keeps each provider's recorded connection. */
+/** A resumed run keeps each provider's recorded connection. */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,7 +16,6 @@ import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
   anthropicText,
   chatText,
-  NO_FEEDBACK,
   ollamaText,
   type Replier,
   recording,
@@ -151,23 +150,20 @@ test("ollama resume never reads the snapshot", async () => {
   expect(new URL(models.requests[0]!.url).pathname).toBe("/api/chat");
 });
 
-test("host key resume and backward", async () => {
+test("host key resume", async () => {
   const { env, auth, path } = fresh();
   await new AuthStore(null, { env }).save("anthropic", new ApiKeyCredentials("saved-key"), "claude-x");
   const flow = await flowOf(env, "anthropic", "claude-x");
-  await interrupt(flow, path, { llmConfig: { provider: "anthropic", api_key: "host-key" }, learnable: true, env });
+  await interrupt(flow, path, { llmConfig: { provider: "anthropic", api_key: "host-key" }, env });
   expect("_connection" in recorded(path)).toBe(false);
   expect(readFileSync(path, "utf8")).not.toContain("host-key");
 
   await breakStore(env, auth, flow);
-  const models = recording(env, answers("ok", NO_FEEDBACK));
+  const models = recording(env, answers("ok"));
   const result = await advance({ log: path, apiKey: "host-key", models, env });
   expect(result.status, result.failure?.message).toBe("succeeded");
-  const outcome = await result.backward("Be brief.", { apiKey: "host-key" });
-  expect(outcome.status, outcome.failure?.message).toBe("succeeded");
 
   expect(models.requests.map((sent) => [sent.url, keyOf(sent)])).toEqual([
-    ["https://api.anthropic.com/v1/messages", "host-key"],
     ["https://api.anthropic.com/v1/messages", "host-key"],
   ]);
 });

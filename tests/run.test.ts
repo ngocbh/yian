@@ -505,8 +505,6 @@ test("crashedAttempts is an empty map for a fresh run", async () => {
   const result = await run(await load(PLAN_FLOW), { topic: "ACME" });
   expect(result.crashedAttempts).toBeInstanceOf(Map);
   expect(result.crashedAttempts.size).toBe(0);
-  expect(result.learning).toBeNull();
-  expect(result.backwardOutcome).toBeNull();
 });
 
 // ---- host intake of inputs ----
@@ -1280,10 +1278,10 @@ test("inspectRun replays with the run's env", async () => {
   expect(inspectRun(path, { env: hostEnv(dir) }).status).toBe("crashed");
 });
 
-test("inspectRun reads the run id, schema, fingerprint, learnable flag and last seq, with and without the flow", async () => {
-  const path = join(dir, "learnable.jsonl");
+test("inspectRun reads the run id, schema, fingerprint and last seq, with and without the flow", async () => {
+  const path = join(dir, "inspected.jsonl");
   const plan = await load(PLAN_FLOW);
-  const result = await run(plan, { topic: "ACME" }, { log: path, learnable: true });
+  const result = await run(plan, { topic: "ACME" }, { log: path });
   const records = readRunLog(path);
   expect(inspectWithAndWithout(path, plan)).toEqual({
     status: "succeeded",
@@ -1292,7 +1290,6 @@ test("inspectRun reads the run id, schema, fingerprint, learnable flag and last 
     runId: result.runId,
     schema: SCHEMA_VERSION,
     flowFingerprint: flowFingerprint(plan.compiled),
-    learnable: true,
     lastSeq: records.length - 1,
     startedAt: records[0]!.at,
     endedAt: records.at(-1)!.at,
@@ -1305,7 +1302,6 @@ test("inspectRun reads the run id, schema, fingerprint, learnable flag and last 
   const crashed = join(dir, "crash.jsonl");
   const work = await crashedWork(crashed);
   const inspection = inspectWithAndWithout(crashed, work);
-  expect(inspection.learnable).toBe(false);
   expect(inspection.lastSeq).toBe(8);
   expect(inspection.failure).toBeNull();
 });
@@ -1338,7 +1334,6 @@ test("inspectRun reads a running log with no record yet as running with nothing 
       runId: null,
       schema: null,
       flowFingerprint: null,
-      learnable: null,
       lastSeq: null,
       startedAt: null,
       endedAt: null,

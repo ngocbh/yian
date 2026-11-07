@@ -1,7 +1,6 @@
 /**
- * Null field reads agree across the ways a node binds (#1149, "Traced = untraced"): untraced,
- * traced (learnable), as a derived node (a CALL child's END), and on a resume that replays the
- * log.
+ * Null field reads agree across the ways a node binds: as a node, as a derived node (a CALL
+ * child's END), and on a resume that replays the log.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -101,14 +100,11 @@ function expectResult(result: RunResult, c: (typeof CASES)[number]): void {
 }
 
 for (const c of CASES) {
-  test.each([
-    ["untraced", false],
-    ["traced", true],
-  ] as const)(`${c.name}: %s, and its resume`, async (_mode, learnable) => {
+  test(`${c.name}, and its resume`, async () => {
     const log = freshLog();
-    const result = await runFlow(await loadFlow(c.flow), c.inputs ?? {}, { learnable, log });
+    const result = await runFlow(await loadFlow(c.flow), c.inputs ?? {}, { log });
     expectResult(result, c);
-    // Replaying the log rebuilds every derived value and, when learnable, rebinds each capture.
+    // Replaying the log rebuilds every derived value.
     const resumed = await advance({ log });
     expect(resumed.status).toBe(result.status);
     expect(resumed.output).toEqual(result.output);

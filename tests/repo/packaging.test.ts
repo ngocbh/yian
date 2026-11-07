@@ -124,7 +124,6 @@ const NAMES: Record<string, string[]> = {
   ],
   "./run": [
     "RunResult",
-    "BackwardOutcome",
     "inspectRun",
     "agentCalls",
     "agentCall",

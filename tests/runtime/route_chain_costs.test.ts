@@ -1,25 +1,14 @@
 /**
- * Route validation, route payloads and backward context reads: each message `validateRoute` and
- * `validateSource` can reach, round trips through the run-log JSON, unaliased frozen reads, and
- * backward lookups that grow near linearly with the chain.
+ * Route validation and route payloads: each message `validateRoute` and `validateSource` can
+ * reach, and round trips through the run-log JSON.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { expect, test } from "bun:test";
 
-import { afterAll, expect, spyOn, test } from "bun:test";
-
-import { loadFlow } from "../../src/compose/loader.ts";
 import { type RouteKind, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
-import { BackwardContext } from "../../src/nodes/base.ts";
-import { runFlow } from "../../src/run.ts";
 import { validateRoute, validateSource } from "../../src/runtime/contracts.ts";
 import { routeFromPayload, routePayload } from "../../src/runtime/log.ts";
-import { RetainedTrace } from "../../src/runtime/trace.ts";
 import { JSONDecodeError, logJson, parseJson } from "../../src/typesys/json.ts";
-import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { FakeMemory } from "../helpers/memory_fakes.ts";
 
 /** One valid source leaf shared by the route error trees. */
 const SOURCE = new ValueRoute("source", { source: new SourceRef("run", 1) });
@@ -388,110 +377,4 @@ test.each([
   ["a list nested 10,000 levels", "[".repeat(10_000) + "]".repeat(10_000)],
 ])("validateRoute accepts a literal holding %s", (_name, valueJson) => {
   validateRoute(new ValueRoute("literal", { valueJson }));
-});
-
-test("downstream context reads are unaliased", () => {
-  const shared = { note: ["kept"] };
-  const items = [{ first: shared, again: shared }, { second: shared }];
-  const context = new BackwardContext({}, { downstreamContext: items });
-
-  const read = context.downstreamContext;
-  expect<unknown>(read).toEqual(items);
-  expect(read[0]!.first).toBe(read[0]!.again!);
-  expect(read[0]!.first).toBe(read[1]!.second!);
-  expect(read[0]!.first).not.toBe(shared);
-  shared.note.push("changed");
-  expect(read[1]!.second).toEqual({ note: ["kept"] });
-  expect(Object.isFrozen(read)).toBe(true);
-  expect(Object.isFrozen(read[0])).toBe(true);
-  expect(() => {
-    (read[0]!.first as { note: string[] }).note.push("changed");
-  }).toThrow(TypeError);
-  expect(context.downstreamContext).toBe(read);
-});
-
-// ---------- backward over long chains ----------
-
-const dir = mkdtempSync(join(tmpdir(), "yian-route-chain-costs-"));
-afterAll(() => rmSync(dir, { recursive: true, force: true }));
-
-/**
- * Load a flow calling an identity child on an `n`-operand chain, with its inputs:
- * `list` concatenates `input.values` (a balanced `concat` route), `scalar` adds
- * `input.x` (one `scalar` route with `n` operands).
- */
-async function chainFlow(kind: "list" | "scalar", n: number) {
-  if (kind === "list") {
-    const chain = Array(n).fill("input.values").join(" + ");
-    const text =
-      "id: lc\nname: lc\nlong_term_memory: test\ninput:\n  values: !list(str)\n" +
-      "defs:\n  identity:\n    input:\n      values: !list(str)\n    nodes: {}\n" +
-      "    output: ${input.values}\n" +
-      "nodes:\n  outer:\n    kind: call\n    call: identity\n    input:\n" +
-      `      values: \${${chain}}\n` +
-      "output: ${outer.output}\n";
-    return { flow: await loadFlow(text), inputs: { values: ["v"] } };
-  }
-  const chain = Array(n).fill("input.x").join(" + ");
-  const text =
-    "id: bw\nname: bw\nlong_term_memory: test\ninput:\n  x: !int\n" +
-    "defs:\n  identity:\n    input:\n      v: !int\n    nodes: {}\n    output: ${input.v}\n" +
-    "nodes:\n  outer:\n    kind: call\n    call: identity\n    input:\n" +
-    `      v: \${${chain}}\n` +
-    "output: ${outer.output}\n";
-  return { flow: await loadFlow(text), inputs: { x: 1 } };
-}
-
-/** Run a learnable `kind` chain of `n` operands, then return how many source lookups its backward made. */
-async function backwardLookups(kind: "list" | "scalar", n: number): Promise<number> {
-  const { flow, inputs } = await chainFlow(kind, n);
-  const run = await runFlow(flow, inputs, {
-    log: join(dir, `${kind}-${n}.jsonl`),
-    learnable: true,
-    memory: new Map([["test", new FakeMemory()]]),
-    env: hostEnv(dir),
-  });
-  const lookups = spyOn(RetainedTrace.prototype, "lookupSource");
-  try {
-    const outcome = await run.backward("good");
-    expect(outcome.status).toBe("succeeded");
-    return lookups.mock.calls.length;
-  } finally {
-    lookups.mockRestore();
-  }
-}
-
-test.each(["list", "scalar"] as const)("backward lookups grow near linearly: %s", async (kind) => {
-  const small = await backwardLookups(kind, 32);
-  const large = await backwardLookups(kind, 128);
-  expect(small).toBeGreaterThan(0);
-  expect(large / small).toBeLessThanOrEqual(7);
-});
-
-/** Run a learnable scalar chain of `n` operands, then count its backward's lookups of each source and path. */
-async function lookupsPerSource(n: number): Promise<Map<string, number>> {
-  const { flow, inputs } = await chainFlow("scalar", n);
-  const run = await runFlow(flow, inputs, {
-    log: join(dir, `per-source-${n}.jsonl`),
-    learnable: true,
-    memory: new Map([["test", new FakeMemory()]]),
-    env: hostEnv(dir),
-  });
-  const lookups = spyOn(RetainedTrace.prototype, "lookupSource");
-  try {
-    expect((await run.backward("good")).status).toBe("succeeded");
-    const counts = new Map<string, number>();
-    for (const [source] of lookups.mock.calls) {
-      const key = JSON.stringify([source.executionSeq, source.path]);
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    return counts;
-  } finally {
-    lookups.mockRestore();
-  }
-}
-
-test("a backward pass looks each source up as often whatever the chain length", async () => {
-  // Every operand of the chain reads the same source, so a walk without the cache looks it up once per operand.
-  expect(await lookupsPerSource(128)).toEqual(await lookupsPerSource(32));
 });

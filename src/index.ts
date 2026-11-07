@@ -21,9 +21,9 @@
  *   (`memory/storage/markdown`), and `ProfileMemory` (`memory/profile`) for hosts that keep the
  *   profile document in their own `MarkdownStore`.
  *
- * `RunResult` and `BackwardOutcome` are on `yian/run` (`run.ts`). `Message`, `MessagePart`,
- * `checkMessage`, `checkConversation` and `ConversationError` (`nodes/agent/messages`), the
- * built-in message value and the conversation a model route can send, are also on `yian/run`.
+ * `RunResult` is on `yian/run` (`run.ts`). `Message`, `MessagePart`, `checkMessage`,
+ * `checkConversation` and `ConversationError` (`nodes/agent/messages`), the built-in message value
+ * and the conversation a model route can send, are also on `yian/run`.
  * `InboxRef` (`typesys/values`), the handle an `Inbox(T)` input holds, is on both.
  *
  * Knows about: compile, compose, diagnostics, expr, memory storage, `memory/profile`,

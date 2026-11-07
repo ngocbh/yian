@@ -29,7 +29,7 @@ let runs = 0;
 /** Run the flow `text` with `n = 4999`, check its log resumes to the same end, and return the result. */
 async function run(
   text: string,
-  options: { learnable?: boolean; tools?: Record<string, ToolEntry>; models?: ModelAccess } = {},
+  options: { tools?: Record<string, ToolEntry>; models?: ModelAccess } = {},
 ): Promise<RunResult> {
   const flow = await loadFlow(text, { env });
   const log = join(dir, `run-${runs++}.jsonl`);
@@ -145,7 +145,7 @@ test.each([
   assertSucceeds(await run(bindingFlow(binding)), output);
 });
 
-test("a learnable run with a long intermediate succeeds and resumes (default)", async () => {
+test("a run with a long intermediate succeeds and resumes (default)", async () => {
   const result = await run(
     `
 id: long
@@ -161,7 +161,6 @@ nodes:
       return inputs["x"]
 output: \${c.output}
 `,
-    { learnable: true },
   );
 
   assertSucceeds(result, POWER % 7n);

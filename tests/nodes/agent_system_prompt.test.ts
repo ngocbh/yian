@@ -261,33 +261,22 @@ test("resume replays a finished node with its recorded system prompt", async () 
   const path = join(dir, "replays.jsonl");
   const flow = await chatFlow();
   await crashAfter(BEFORE_AFTER_SUCCESS, () =>
-    runFlow(flow, INPUTS, { log: path, learnable: true, ...served(scripted("draft", "lost")) }),
+    runFlow(flow, INPUTS, { log: path, ...served(scripted("draft", "lost")) }),
   );
 
-  // The resumed model also serves the backward calls.
-  const model = scripted(
-    "final",
-    JSON.stringify({ input_feedback: { draft: ["Too stiff."] }, self_feedback: [], variable_feedback: {} }),
-    JSON.stringify({ input_feedback: {}, self_feedback: [], variable_feedback: {} }),
-  );
+  const model = scripted("final");
   const resumed = await advance({ log: path, ...served(model) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("final");
   expect(model.requests.map((request) => request.messages.at(-1)!.text())).toEqual(["polish: draft"]);
-
-  // Backward on the resumed run reads the system prompt recorded before the crash.
-  await resumed.backward("Warmer, please.");
-  const material = JSON.parse(model.requests[2]!.messages[1]!.text());
-  expect(material.forward.node_id).toBe("reply");
-  expect(material.forward.evaluation_evidence.base_system_prompt).toBe(RENDERED);
 });
 
 test("retry after a mid node crash renders the same system prompt", async () => {
   const path = join(dir, "retry.jsonl");
   const flow = await chatFlow();
   const first = scripted("lost");
-  await crashAfter(BEFORE_REPLY_SUCCESS, () => runFlow(flow, INPUTS, { log: path, learnable: true, ...served(first) }));
+  await crashAfter(BEFORE_REPLY_SUCCESS, () => runFlow(flow, INPUTS, { log: path, ...served(first) }));
   expect(systems(first)[0]).toBe(RENDERED);
 
   const retry = scripted("draft", "final");

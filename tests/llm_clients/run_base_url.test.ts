@@ -24,12 +24,8 @@ import type { CallNode } from "../../src/nodes/call/node.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
-  adaStore,
   chatText,
   expectHidden,
-  inOrder,
-  NO_FEEDBACK,
-  profileMemory,
   type Replier,
   recording,
   rejected,
@@ -478,7 +474,7 @@ test("profile memory keeps a keyless azure endpoint beside empty headers", () =>
   expect([profile["host"].apiKey, profile["host"].baseUrl, profile["host"].headers]).toEqual([null, null, null]);
 });
 
-// ---- resume and backward reuse the recorded base_url ----
+// ---- resume reuses the recorded base_url ----
 
 /** Leave at `path` the log of a run of `FLOW` the host stopped before the model call. */
 async function interruptedRun(path: string, llmConfig: Record<string, unknown>): Promise<void> {
@@ -531,56 +527,6 @@ test("openai resume sends the key to the recorded azure url", async () => {
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(models.requests[0]!.url).toBe("https://res.openai.azure.com/openai/v1/responses");
   expect(models.requests[0]!.headers.get("authorization")).toBe(`Bearer ${SENTINEL}`);
-});
-
-test("backward sends the key to the recorded base url", async () => {
-  const events: RunEvent[] = [];
-  const onEvent = (event: RunEvent) => void events.push(event);
-  const path = join(fresh(), "run.jsonl");
-  const models = recording(env, inOrder(chatText("ok"), chatText(NO_FEEDBACK)));
-  const result = await runFlow(await loadFlow(FLOW, { env }), {}, {
-    log: path,
-    onEvent,
-    learnable: true,
-    llmConfig: VLLM,
-    models,
-    env,
-  });
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  expect((await result.backward("Be brief.")).status).toBe("succeeded");
-  const recovered = await advance({ log: path, onEvent, models, env });
-  const outcome = await recovered.backward("Be brief.", { apiKey: SENTINEL });
-  expect(outcome.status, outcome.failure?.message).toBe("succeeded");
-  expect(models.requests).toHaveLength(3);
-  expect(new Set(models.requests.map((request) => request.url))).toEqual(
-    new Set(["https://gateway.example.com/v1/chat/completions"]),
-  );
-  expect(new Set(models.requests.map((request) => request.headers.get("authorization")))).toEqual(
-    new Set([`Bearer ${SENTINEL}`]),
-  );
-  expectHidden(path, [events, result, recovered, outcome], [SENTINEL]);
-});
-
-test("openai backward builds its client with the recorded url and key", async () => {
-  // The path a host on an Azure OpenAI v1 endpoint uses: the recorded config goes through
-  // `legacyConnectionConfig` and the host connection's endpoint.
-  const elsewhere = envWith({ OPENAI_API_KEY: "sk-environment-key", OPENAI_BASE_URL: ELSEWHERE });
-  const models = fakeClients(elsewhere, "ok", NO_FEEDBACK);
-  const path = join(fresh(), "run.jsonl");
-  const result = await runFlow(await loadFlow(FLOW, { env: elsewhere }), {}, {
-    log: path,
-    learnable: true,
-    llmConfig: AZURE,
-    models,
-    env: elsewhere,
-  });
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  expect((await result.backward("Be brief.")).status).toBe("succeeded");
-  const recovered = await advance({ log: path, models, env: elsewhere });
-  const outcome = await recovered.backward("Be brief.", { apiKey: SENTINEL });
-  expect(outcome.status, outcome.failure?.message).toBe("succeeded");
-  expect(built(models)).toEqual(Array.from({ length: 3 }, () => ["openai", "gpt-5.4", AZURE_V1, SENTINEL]));
-  expect(sentTo(models.requests)).toEqual(Array.from({ length: 3 }, () => [`${AZURE_V1}responses`, `Bearer ${SENTINEL}`]));
 });
 
 test("a recorded base url without the marker is refused", async () => {
@@ -649,55 +595,3 @@ test("profile memory needs its key beside its base url", () => {
   expect(error.message).toContain("https");
 });
 
-const PROFILE_REPLY = "<profile>\n# Ada\n- Prefers brief replies.\n</profile>";
-
-test("profile memory learns at its base url", async () => {
-  const root = fresh();
-  const keyed = envWith({ VLLM_API_KEY: "sk-environment-key" });
-  const flow = await loadFlow(FLOW.replace("nodes:", "long_term_memory: profile\nnodes:"), { env: keyed });
-  const models = recording(keyed, inOrder(chatText("ok"), chatText(NO_FEEDBACK), chatText(PROFILE_REPLY)));
-  const memory = profileMemory(
-    await adaStore(root),
-    { provider: "vllm", model: "profiler", base_url: ELSEWHERE, api_key: SENTINEL },
-    models,
-  );
-  const result = await runFlow(flow, {}, {
-    learnable: true,
-    memory: new Map([["profile", memory]]),
-    llmConfig: { provider: "vllm", model: "served-model" },
-    models,
-    env: keyed,
-  });
-  const outcome = await result.backward("Be brief.");
-  expect(outcome.status, outcome.failure?.message).toBe("succeeded");
-  const learner = models.requests.filter((request) => request.body["model"] === "profiler");
-  expect(learner.map((request) => request.url)).toEqual([`${ELSEWHERE}/chat/completions`]);
-  expect(learner.map((request) => request.headers.get("authorization"))).toEqual([`Bearer ${SENTINEL}`]);
-  const others = models.requests.filter((request) => !learner.includes(request));
-  expect(new Set(others.map((request) => request.headers.get("authorization")))).toEqual(
-    new Set(["Bearer sk-environment-key"]),
-  );
-});
-
-test("openai profile memory builds its learner with its url and key", async () => {
-  const root = fresh();
-  const elsewhere = envWith({ OPENAI_API_KEY: "sk-environment-key", OPENAI_BASE_URL: ELSEWHERE });
-  const flow = await loadFlow(FLOW.replace("nodes:", "long_term_memory: profile\nnodes:"), { env: elsewhere });
-  const store = await adaStore(root);
-  const models = fakeClients(elsewhere, "ok", NO_FEEDBACK, PROFILE_REPLY);
-  const memory = profileMemory(store, { ...AZURE, model: "profiler" }, models);
-  const result = await runFlow(flow, {}, {
-    learnable: true,
-    memory: new Map([["profile", memory]]),
-    llmConfig: { provider: "vllm", model: "served-model" },
-    models,
-    env: elsewhere,
-  });
-  const outcome = await result.backward("Be brief.");
-  expect(outcome.status, outcome.failure?.message).toBe("succeeded");
-  expect(built(models)).toContainEqual(["openai", "profiler", AZURE_V1, SENTINEL]);
-  for (const entry of built(models).filter((entry) => entry[1] !== "profiler")) {
-    expect(entry.slice(2)).toEqual([null, null]);
-  }
-  expect((await store.read())[0]).toContain("Prefers brief replies");
-});

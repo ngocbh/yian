@@ -75,12 +75,6 @@ test("runFlow ends waiting: status, waits, no output, the lock released", async 
   expect([result.output, result.unread.size, isRunLogLocked(log)]).toEqual([null, 0, false]);
 });
 
-test("backward needs a run that succeeded or failed", async () => {
-  const result = await runFlow(hostFlow(), {}, { log: freshLog(), env: NO_ENV, tools: { lookup: pendingTool() }, learnable: true });
-  const error = await rejected(result.backward("more"));
-  expect(error).toEqual(new RangeError("backward needs a run that succeeded or failed; this one is waiting"));
-});
-
 const T0 = Date.UTC(2026, 9, 24, 9, 0, 0);
 
 /** The record kinds of the log at `log`, in order. */

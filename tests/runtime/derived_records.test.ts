@@ -88,10 +88,9 @@ beforeAll(async () => {
 });
 
 /**
- * The run options for the chat: scripted answers and replies, non-learnable unless `learnable`,
- * each observer going to `events`.
+ * The run options for the chat: scripted answers and replies, each observer going to `events`.
  */
-function chatOptions(log: string, learnable = false, events: RunEvent[] = []) {
+function chatOptions(log: string, events: RunEvent[] = []) {
   const answers = ["a", "b", "c"];
   return {
     onEvent: (event: RunEvent) => void events.push(event),
@@ -99,7 +98,6 @@ function chatOptions(log: string, learnable = false, events: RunEvent[] = []) {
     log,
     runId: "r1",
     numWorkers: 0,
-    learnable,
     llmConfig: CONFIG,
     models: serving(new ScriptedModel([textReply("A"), textReply("B"), textReply("C")], CONFIG)),
     tools: { ask: () => answers.shift()! },
@@ -107,9 +105,9 @@ function chatOptions(log: string, learnable = false, events: RunEvent[] = []) {
 }
 
 /** Run the chat into a fresh log, its observers going to `events`, and return the log's envelopes. */
-async function chatLog(learnable = false, events: RunEvent[] = []): Promise<readonly RecordEnvelope[]> {
+async function chatLog(events: RunEvent[] = []): Promise<readonly RecordEnvelope[]> {
   const log = freshLog();
-  const result = await runFlow(await load(CHAT), {}, chatOptions(log, learnable, events));
+  const result = await runFlow(await load(CHAT), {}, chatOptions(log, events));
   expect(result.status).toBe("succeeded");
   return readRunLog(log);
 }
@@ -175,8 +173,8 @@ test("a non-top END's commit holds from naming the commits its binding read", as
   expect(fromAt(envelopes, stop)).toEqual({ "chat#2/__end__": commitSeqOf(envelopes, "chat#2/__end__") });
 });
 
-test.each([false, true])("the run start, top-level START and END and other nodes' commits hold no from (learnable %p)", async (learnable) => {
-  const envelopes = await chatLog(learnable);
+test("the run start, top-level START and END and other nodes' commits hold no from", async () => {
+  const envelopes = await chatLog();
   const plain = ["__start__", "__end__", "chat#0/ask", "chat#0/reply"];
   for (const { record } of commits(envelopes)) {
     const commit = record as PoolCommitRecord;
@@ -184,24 +182,11 @@ test.each([false, true])("the run start, top-level START and END and other nodes
   }
 });
 
-test.each([false, true])("every from seq in the log names a pool_commit (learnable %p)", async (learnable) => {
-  const envelopes = await chatLog(learnable);
+test("every from seq in the log names a pool_commit", async () => {
+  const envelopes = await chatLog();
   const seqs = commits(envelopes).flatMap(({ record }) => [...((record as PoolCommitRecord).from ?? new Map()).values()]);
   expect(seqs.length).toBeGreaterThan(0);
   for (const seq of seqs) expect(envelopes[seq]!.record).toBeInstanceOf(PoolCommitRecord);
-});
-
-test("learnable and non-learnable runs write the same from", async () => {
-  const shape = (envelopes: readonly RecordEnvelope[]) =>
-    commits(envelopes).map(({ record }) => {
-      const commit = record as PoolCommitRecord;
-      return [commit.nodeId, commit.key, commit.from === null ? null : Object.fromEntries(commit.from)];
-    });
-  const plain = await chatLog(false);
-  const learned = await chatLog(true);
-  // Learnable runs hold the same records with the same seqs: steps and captures add no lines.
-  expect(learned.length).toBe(plain.length);
-  expect(shape(learned)).toEqual(shape(plain));
 });
 
 /** Run the chat with a crash after the record `cut` picks, then resume it; return both logs' envelopes. */
@@ -314,12 +299,12 @@ output: \${each.output}
 `;
 
 /** Run `text` serially into a fresh log; return the flow, the log's envelopes and the run's observers. */
-async function plainLog(text: string, inputs: Record<string, unknown>, learnable: boolean) {
+async function plainLog(text: string, inputs: Record<string, unknown>) {
   const flow = await load(text);
   const log = freshLog();
   const events: RunEvent[] = [];
   const onEvent = (event: RunEvent) => void events.push(event);
-  const result = await runFlow(flow, inputs, { env: NO_ENV, log, runId: "r1", numWorkers: 0, learnable, onEvent });
+  const result = await runFlow(flow, inputs, { env: NO_ENV, log, runId: "r1", numWorkers: 0, onEvent });
   expect(result.status).toBe("succeeded");
   return { flow, envelopes: readRunLog(log), events };
 }
@@ -333,7 +318,6 @@ async function plainLog(text: string, inputs: Record<string, unknown>, learnable
 function rebuildAll(
   flow: ComposedFlow,
   envelopes: readonly RecordEnvelope[],
-  learnable: boolean,
   events: readonly RunEvent[],
 ): number {
   const outputs = new Map<string, unknown>();
@@ -345,7 +329,6 @@ function rebuildAll(
   let rebuilt = 0;
   replayRunLog(flow, MemoryRunLog.fromRecords(envelopes), {
     onPrepared: (prepared, state) => {
-      expect(state.trace === null).toBe(!learnable);
       const record = prepared.record;
       if (record instanceof NodeSucceededRecord) {
         const commit = envelopes[record.commit]!.record as PoolCommitRecord;
@@ -373,31 +356,27 @@ function rebuildAll(
 test.each([
   ["a CALL in a loop", CALL_IN_LOOP, {}],
   ["a MAP reading a system value", DOUBLES, { xs: [1n, 2n, 3n] }],
-] as const)("replay rebuilds every derived value from its from, learnable or not: %s", async (_label, text, inputs) => {
-  for (const learnable of [false, true]) {
-    const { flow, envelopes, events } = await plainLog(text, inputs, learnable);
-    expect(rebuildAll(flow, envelopes, learnable, events)).toBeGreaterThan(3);
-  }
+] as const)("replay rebuilds every derived value from its from: %s", async (_label, text, inputs) => {
+  const { flow, envelopes, events } = await plainLog(text, inputs);
+  expect(rebuildAll(flow, envelopes, events)).toBeGreaterThan(3);
 });
 
-test("replay rebuilds every derived value of the chat, learnable or not", async () => {
-  for (const learnable of [false, true]) {
-    const events: RunEvent[] = [];
-    const envelopes = await chatLog(learnable, events);
-    // Three expansions, three turn ENDs and the stopping driver.
-    expect(rebuildAll(await load(CHAT), envelopes, learnable, events)).toBe(3 + 3 + 1);
-  }
+test("replay rebuilds every derived value of the chat", async () => {
+  const events: RunEvent[] = [];
+  const envelopes = await chatLog(events);
+  // Three expansions, three turn ENDs and the stopping driver.
+  expect(rebuildAll(await load(CHAT), envelopes, events)).toBe(3 + 3 + 1);
 });
 
 test("a system read points at its run-start commit", async () => {
-  const { envelopes } = await plainLog(DOUBLES, { xs: [1n] }, false);
+  const { envelopes } = await plainLog(DOUBLES, { xs: [1n] });
   const runId = envelopes.find(({ record }) => record instanceof PoolCommitRecord && record.key === "system.run_id")!;
   const end = envelopes[commitSeqOf(envelopes, "each#0/__end__")]!.record as PoolCommitRecord;
   expect(end.from!.get("system.run_id")).toBe(runId.seq);
 });
 
 test("a tampered from seq makes the pool resolver refuse the rebuild", async () => {
-  const { flow, envelopes } = await plainLog(CALL_IN_LOOP, {}, false);
+  const { flow, envelopes } = await plainLog(CALL_IN_LOOP, {});
   let refused: unknown = null;
   replayRunLog(flow, MemoryRunLog.fromRecords(envelopes), {
     onPrepared: (prepared, state) => {
@@ -417,7 +396,7 @@ test("a tampered from seq makes the pool resolver refuse the rebuild", async () 
 });
 
 test("a child START rebuilt over its constant wiring equals the value its expansion committed", async () => {
-  const { flow, events } = await plainLog(CALL_IN_LOOP, {}, false);
+  const { flow, events } = await plainLog(CALL_IN_LOOP, {});
   const spawner = flow.compiled.nodes.get("count")!;
   const fragment = buildGrow(spawner, [{ x: 0n }, 0n]);
   const start = fragment.nodes.get("count#0/__start__")!;
@@ -637,29 +616,7 @@ test("a spawner whose growth doesn't rebuild from its from fails the run at its 
   }
 });
 
-test("a run that doesn't learn rebuilds no child START capture", async () => {
-  /** How often a child START's `forward` runs over the chat, learnable or not. */
-  const childStarts = async (learnable: boolean): Promise<number> => {
-    let calls = 0;
-    const forward = StartNode.prototype.forward;
-    const spy = spyOn(StartNode.prototype, "forward").mockImplementation(function (this: StartNode, ...args) {
-      if (/^chat#\d+\/__start__$/.test(this.id)) calls += 1;
-      return forward.apply(this, args);
-    });
-    try {
-      const result = await runFlow(CHAT_FLOW!, {}, chatOptions(freshLog(), learnable));
-      expect(result.status).toBe("succeeded");
-    } finally {
-      spy.mockRestore();
-    }
-    return calls;
-  };
-  // A learnable run rebuilds each child START's capture when its success is accepted, once per
-  // turn; a run that doesn't learn has no trace to give it to.
-  expect(await childStarts(true)).toBe((await childStarts(false)) + 3);
-});
-
-test("a derived child END reads a declared field that is absent as null, learnable or not", async () => {
+test("a derived child END reads a declared field that is absent as null", async () => {
   const text = `
 id: opt
 name: opt
@@ -678,9 +635,7 @@ nodes:
   c: {kind: call, call: child}
 output: \${c.output}
 `;
-  for (const learnable of [false, true]) {
-    const result = await runFlow(await load(text), {}, { learnable, log: freshLog(), runId: "r1", env: NO_ENV });
-    expect(result.failure?.message).toBeUndefined();
-    expect(result.output).toBe("d");
-  }
+  const result = await runFlow(await load(text), {}, { log: freshLog(), runId: "r1", env: NO_ENV });
+  expect(result.failure?.message).toBeUndefined();
+  expect(result.output).toBe("d");
 });

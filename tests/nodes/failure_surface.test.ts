@@ -38,7 +38,6 @@ test("failure carriers have no parallel location fields", () => {
     "waits",
     "unread",
   ]);
-  expect([result.learning, result.backwardOutcome]).toEqual([null, null]);
 });
 
 test("observers share the same failure authority", () => {

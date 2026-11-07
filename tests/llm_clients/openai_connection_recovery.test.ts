@@ -1,4 +1,4 @@
-/** The recorded OpenAI connection identity governs resume and delayed backward. */
+/** The recorded OpenAI connection identity governs resume. */
 
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -97,18 +97,6 @@ test("old api record resumes via api despite saved subscription", async () => {
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(new URL(models.requests[0]!.url).host).toBe("api.openai.com");
   expect(models.requests[0]!.headers.get("Authorization")).toBe("Bearer old-api-key");
-});
-
-test("backward refuses changed selected connection", async () => {
-  const { env, path } = fresh();
-  await connect(env);
-  const models = recording(env, responsesText("ok"));
-  const result = await runFlow(await loadFlow(FLOW, { env }), {}, { learnable: true, log: path, models, env });
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  await connect(env);
-  const outcome = await result.backward("Review");
-  expect(outcome.status).toBe("failed");
-  expect(models.requests).toHaveLength(1);
 });
 
 test("an old api run resumes with the legacy connection", async () => {

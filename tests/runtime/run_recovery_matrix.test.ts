@@ -7,10 +7,7 @@
  * or wait runs. CODE references resolve from the conformance fixtures.
  */
 
-import { expect, spyOn, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 
 import { buildGrow } from "../../src/compile/expand.ts";
@@ -24,25 +21,21 @@ import { ValueRoute } from "../../src/expr/lineage.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { DeclSite, MemoryScope, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
 import { type Node, NodeKind, Pending } from "../../src/nodes/base.ts";
-import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
-import { replayRunLog, advance, runFlow } from "../../src/run.ts";
+import { replayRunLog } from "../../src/run.ts";
 import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import { evalNode } from "../../src/runtime/eval_node.ts";
 import {
-  decodeRecord,
-  JsonlRunLog,
   MemoryRunLog,
   NodeExpandedRecord,
   NodeStartedRecord,
   type RecordEnvelope,
   type RunRecord,
   RunResumedRecord,
-  type RunStartedRecord,
 } from "../../src/runtime/log.ts";
 import {
   commitInitialPool,
@@ -57,8 +50,6 @@ import {
 import { ToolSet } from "../../src/tools/registry.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 
-import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { FakeMemory } from "../helpers/memory_fakes.ts";
 import {
   expectUnchanged,
   FuncNode,
@@ -68,7 +59,6 @@ import {
   replayTraceSnapshot,
   snapshot,
   startedRun,
-  untimed,
 } from "../helpers/run_state_fixtures.ts";
 
 const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
@@ -667,91 +657,6 @@ test("recovered wait recomputes from the authored absolute deadline", async () =
     expect(outcome).toEqual(
       new Pending([], { wait: { tool: "sleep", until: "2026-08-14T12:00:10.000Z", forSeconds: null } }),
     );
-  }
-});
-
-test("recorded nested growth resumes with exact memory and trace", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "yian-recovery-matrix-"));
-  const env = hostEnv(dir);
-  try {
-    const source = NESTED_GROWTH.replace(
-      "name: recovery_matrix_growth\n",
-      "name: recovery_matrix_growth\nlong_term_memory: episodic\n",
-    ).replace("  composite:\n    nodes:", "  composite:\n    long_term_memory: reflective\n    nodes:");
-    const flow = await load(source);
-    const path = join(dir, "historical-growth.jsonl");
-    const memory = () => new Map([["episodic", new FakeMemory()], ["reflective", new FakeMemory()]]);
-    const fresh = await runFlow(flow, {}, {
-      log: path,
-      runId: "historical-growth",
-      learnable: true,
-      numWorkers: 0,
-      memory: memory(),
-      env,
-    });
-    expect(fresh.status).toBe("succeeded");
-    // Through outer/mapped#1/echo's NodeSucceeded.
-    const all = readFileSync(path, "utf8").split("\n").slice(0, -1);
-    const length =
-      all.findIndex((line) => {
-        const { kind, payload } = decodeRecord(line);
-        return kind === "node_succeeded" && payload["node_id"] === "outer/mapped#1/echo";
-      }) + 1;
-    const lines = all.slice(0, length);
-    expect(decodeRecord(lines.at(-1)!).payload["node_id"]).toBe("outer/mapped#1/echo");
-    const prefix = `${lines.join("\n")}\n`;
-    writeFileSync(path, prefix);
-    const initial = decodeRecord(lines[0]!).record as RunStartedRecord;
-    const snapshots = new Map(initial.memorySnapshots!.map((item) => [item.memory, item.snapshot]));
-    expect([...snapshots.keys()].sort()).toEqual(["episodic", "reflective"]);
-    const backends = memory();
-    const calls: string[] = [];
-    const original = CodeNode.prototype.forward;
-    const forward = spyOn(CodeNode.prototype, "forward").mockImplementation(function (this: CodeNode, inputs) {
-      calls.push(this.id);
-      expect(this.id).toBe("outer/repeated#1/bump");
-      return original.call(this, inputs);
-    });
-    try {
-      const result = await advance({ log: path, memory: backends, env });
-      expect(result.status).toBe("succeeded");
-      expect(result.output).toEqual({ mapped: [1n, 2n], repeated: { n: 2n, exited: false } });
-      expect(calls).toEqual(["outer/repeated#1/bump"]);
-      for (const [key, backend] of backends) expect(backend.openSnapshots).toEqual([snapshots.get(key)!]);
-      expect(readFileSync(path, "utf8").startsWith(prefix)).toBe(true);
-
-      const log = JsonlRunLog.resume(path);
-      let replayed: RunState;
-      try {
-        replayed = replayRunLog(flow, log);
-      } finally {
-        log.close();
-      }
-      expect(replayed.flowFingerprint).toBe(initial.flowFingerprint);
-      expect(initial.flowFingerprint).toBe(flowFingerprint(flow.compiled));
-      expect(replayed.effectiveLlmByStaticPath).toEqual(initial.effectiveLlmByStaticPath as never);
-      expect(replayed.learnable).toBe(true);
-      const historical = replayed.trace!.occurrences.filter((item) => item.outcomeSeq < length);
-      expect(
-        new Set(historical.filter((item) => item.record instanceof NodeExpandedRecord).map((item) => item.nodeId)),
-      ).toEqual(new Set(["outer", "outer/mapped", "outer/repeated"]));
-      for (const occurrence of historical) expect(occurrence.recordJson).toBe(untimed(lines[occurrence.outcomeSeq]!));
-
-      const complete = readFileSync(path, "utf8");
-      const inspected = await advance({
-        log: path,
-        memory: new Map([["episodic", {}], ["reflective", {}]]) as never,
-        env,
-      });
-      expect(inspected.output).toEqual(result.output);
-      expect(inspected.events).toEqual([]);
-      expect(readFileSync(path, "utf8")).toBe(complete);
-      expect(calls).toEqual(["outer/repeated#1/bump"]);
-    } finally {
-      forward.mockRestore();
-    }
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
   }
 });
 

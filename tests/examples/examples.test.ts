@@ -4,8 +4,7 @@
  * the template's flow, and the debate agents are tool-free. Also the
  * shape of `human-approval.yaml`'s `ask` gate, `chat.yaml` on its `Inbox(Message)` input with a
  * steerable `Optional(str)` reply, run end to end on a scripted model, and `compact_history.yaml`
- * alone (pass-through, `keep`, a budget of text parts, a failed summary), and a learnable chat
- * whose reply feedback reaches the summarizer.
+ * alone (pass-through, `keep`, a budget of text parts, a failed summary).
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -23,7 +22,6 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { ValueContract } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { advance, close, runFlow, send, staticNodes } from "../../src/run.ts";
-import { BackwardReadyRecord, JsonlRunLog, NodeStartedRecord } from "../../src/runtime/log.ts";
 import { ASK } from "../../src/tools/context.ts";
 import { builtinType } from "../../src/typesys/types.ts";
 import { isInboxType, typeEquals, ValueKind } from "../../src/typesys/values.ts";
@@ -35,7 +33,6 @@ import {
   SUMMARIZER_FIRST_LINE,
   systemText,
   textReply,
-  writeSmallBudgetChat,
 } from "../helpers/run_state_fixtures.ts";
 
 const EXAMPLES_DIR = fileURLToPath(new URL("../../examples", import.meta.url));
@@ -281,52 +278,4 @@ test("chat folds the older turns into a summary once nine long turns pass the bu
     ["assistant", "r".repeat(2000)],
   ]);
   expect(messages.map((m) => [m.role, m.text()])).toEqual([...kept, ["user", message(10)]]);
-}, 60_000);
-
-test("in a learnable chat, feedback on a reply reaches the summarizer through the summary", async () => {
-  const dir = mkdtempSync(join(tmp, "small-budget-"));
-  const loaded = await loadFlow(readFileSync(writeSmallBudgetChat(dir), "utf8"), { searchPaths: [dir] });
-  // A backward input_feedback value is a list of messages; a bare string fails the attempt.
-  const KEEP_NAME = JSON.stringify({
-    input_feedback: { summary: ["Keep the user's name."] },
-    self_feedback: [],
-    variable_feedback: {},
-  });
-  const model = new PromptModel({ reply: "x".repeat(30), summary: "S", backward: [textReply(KEEP_NAME)] });
-  const log = join(dir, "chat.jsonl");
-  const options = { env: NO_ENV, numWorkers: 0, models: serving(model) };
-  let result = await runFlow(loaded, {}, { ...options, log, learnable: true, llmConfig: config });
-  // Five 60-character turns pass 200, so the sixth turn's `compacted` folds; the closing turn
-  // folds again.
-  for (let n = 1; n <= 6; n++) {
-    expect(result.status).toBe("waiting");
-    await send(log, "owner_messages", user(`${n}:`.padEnd(30, "m")), { env: NO_ENV });
-    result = await advance({ ...options, log });
-  }
-  await close(log, "owner_messages", { env: NO_ENV });
-  result = await advance({ ...options, log });
-  expect(result.status).toBe("succeeded");
-  const history = (result.output as { history: unknown[] }).history;
-  expect(history).toHaveLength(8);
-  const feedback = [...Array<null>(history.length - 1).fill(null), "Mention the user's name."];
-  const outcome = await result.backward({ history: feedback });
-  expect(outcome.status).toBe("succeeded");
-  const reader = JsonlRunLog.resume(log);
-  const records = (() => {
-    try {
-      return reader.records();
-    } finally {
-      reader.close();
-    }
-  })();
-  const starts = new Map(
-    records.flatMap((e) => (e.record instanceof NodeStartedRecord ? [[e.seq, e.record.nodeId] as const] : [])),
-  );
-  const ready = records.map((e) => e.record).filter((r) => r instanceof BackwardReadyRecord);
-  expect(ready).toHaveLength(1);
-  const summarized = ready[0]!.attributedResults.filter((item) =>
-    starts.get(item.source.executionSeq)!.endsWith("/summarize"),
-  );
-  const reached = summarized.filter((item) => item.invoked && item.feedback.length > 0);
-  expect(reached.map((item) => starts.get(item.source.executionSeq))).toEqual(["chat#5/compacted/folded/summarize"]);
 }, 60_000);

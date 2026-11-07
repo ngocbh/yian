@@ -23,7 +23,6 @@ import { SkipModel } from "../../src/compose/validate/skips.ts";
 import { ENTRIES, withEnv } from "../../src/defaults.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { chatModelFromConfig } from "../../src/llm_clients/factory.ts";
-import { buildMemories } from "../../src/memory_host.ts";
 import type { Send } from "../../src/platform.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { TypeCheckError } from "../../src/typesys/index.ts";
@@ -218,36 +217,6 @@ test("skip worlds follow the variable", () => {
 
 // ---- the maxima ----
 
-test("value nesting maximum learns with less stack", async () => {
-  const levels = maximum("MAX_VALUE_NESTING");
-  const env = limitEnv({ MAX_VALUE_NESTING: levels });
-  // A learnable flow whose CODE node returns a list nested `levels` deep.
-  const text = `id: nesting
-name: nesting
-long_term_memory: episodic
-nodes:
-  deep:
-    kind: code
-    code: |
-      let v = "leaf";
-      for (let i = 0; i < ${levels}; i++) v = [v];
-      return v;
-output: \${deep.output}
-`;
-  const flow = await loadFlow(text, { env });
-  const memory = await buildMemories(flow, { env });
-  try {
-    const result = await runFlow(flow, {}, { env, memory, learnable: true });
-    expect(result.status, result.failure?.message).toBe("succeeded");
-    const outcome = await result.backward("good");
-
-    expect(outcome.status).toBe("succeeded");
-    expect(outcome.learning!.status).toBe("succeeded");
-  } finally {
-    await memory[Symbol.asyncDispose]();
-  }
-});
-
 for (const numWorkers of [0, 2]) {
   test(`expression nesting maximum runs with less stack: ${numWorkers}`, async () => {
     const levels = maximum("MAX_VALUE_NESTING");
@@ -294,7 +263,7 @@ test("condition at the expression maximum runs thirty calls deep", async () => {
   expect((await runFlow(flow, { s: "b" }, { env })).output).toBe("no");
 });
 
-test("learnable run at the expression maximum logs and resumes", async () => {
+test("a run at the expression maximum logs and resumes", async () => {
   const levels = maximum("MAX_VALUE_NESTING");
   const env = limitEnv({ MAX_VALUE_NESTING: levels });
   const text =
@@ -309,7 +278,7 @@ test("learnable run at the expression maximum logs and resumes", async () => {
   const backend = new FakeMemory();
   const path = join(dir, "deep.jsonl");
 
-  const result = await runFlow(flow, { s: "a" }, { env, log: path, learnable: true, memory: new Map([["test", backend]]) });
+  const result = await runFlow(flow, { s: "a" }, { env, log: path, memory: new Map([["test", backend]]) });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toBe("A");
   const replayed = await advance({ env, log: path, memory: new Map([["test", backend]]) });

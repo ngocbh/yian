@@ -1,7 +1,6 @@
 /**
- * A run log edited to hold a 5000-digit int, in three places: the START inputs' `pool_commit`, a
- * CODE node's `pool_commit` value, and a route's `value_json` text. Each log is written by a run
- * here and then edited.
+ * A run log edited to hold a 5000-digit int, in two places: the START inputs' `pool_commit` and a
+ * CODE node's `pool_commit` value. Each log is written by a run here and then edited.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -19,7 +18,6 @@ import { validateRoute } from "../../src/runtime/contracts.ts";
 import {
   decodeRecord,
   JsonlRunLog,
-  NodeSucceededRecord,
   PoolCommitRecord,
   type RunRecord,
 } from "../../src/runtime/log.ts";
@@ -64,22 +62,6 @@ nodes:
 output: \${c.output}
 `;
 
-// A learnable run records `input.n + 0` as a scalar route whose result is JSON text.
-const ROUTE_FLOW = `id: old_route
-name: old_route
-input:
-  n: !int
-nodes:
-  c:
-    kind: code
-    input:
-      x: \${(input.n + 0) % 7}
-    output: int
-    code: |
-      return inputs["x"]
-output: \${c.output}
-`;
-
 /** An edited log: its flow, path and recorded output, and a reader of the edited value from its record (else `undefined`). */
 interface OldLog {
   flow: string;
@@ -91,9 +73,9 @@ interface OldLog {
 let logs = 0;
 
 /** Run `flow` with `inputs` into a fresh log and return the log's path and text. */
-async function written(flow: string, inputs: Record<string, unknown>, learnable = false): Promise<[string, string]> {
+async function written(flow: string, inputs: Record<string, unknown>): Promise<[string, string]> {
   const path = join(dir, `run-${logs++}.jsonl`);
-  await runFlow(await loadFlow(flow, { env }), inputs, { env, log: path, learnable });
+  await runFlow(await loadFlow(flow, { env }), inputs, { env, log: path });
   return [path, readFileSync(path, "utf8")];
 }
 
@@ -123,25 +105,9 @@ async function oldCodeLog(): Promise<OldLog> {
   return { flow: CODE_FLOW, path, output: BigInt(SENTINEL), read };
 }
 
-/** Return an edited log whose route value_json string holds the long int. */
-async function oldRouteLog(): Promise<OldLog> {
-  const [path, text] = await written(ROUTE_FLOW, { n: BigInt(SENTINEL) }, true);
-  // The sentinel sits inside a JSON string here, so the outer record parse never sees it.
-  const recorded = `"value_json":"${SENTINEL}"`;
-  expect(text.split(recorded)).toHaveLength(2);
-  writeFileSync(path, text.replace(recorded, recorded.replace(SENTINEL, D)));
-  // The node's route is `{x: (input.n + 0) % 7}`; the edited text is `input.n + 0`'s.
-  const read = (record: RunRecord) =>
-    record instanceof NodeSucceededRecord && record.nodeId === "c"
-      ? record.forwardCapture!.route.children[0]!.children[0]!.valueJson
-      : undefined;
-  return { flow: ROUTE_FLOW, path, output: BigInt(SENTINEL) % 7n, read };
-}
-
 const OLD_LOGS = [
   ["start_inputs_commit", oldStartedLog, BigInt(D)],
   ["code_node_commit", oldCodeLog, BigInt(D)],
-  ["route_value_json", oldRouteLog, D],
 ] as const;
 
 test.each(OLD_LOGS)("resume fails clearly and leaves the log (%s)", async (_id, makeLog) => {

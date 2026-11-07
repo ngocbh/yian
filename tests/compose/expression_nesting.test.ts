@@ -185,7 +185,7 @@ test(
   SLOW,
 );
 
-/** A learnable flow passing a `terms`-term list concatenation through a CALL. */
+/** A flow passing a `terms`-term list concatenation through a CALL. */
 const concatFlow = (terms: number) =>
   loadConformanceFlow(
     "id: long-concat\nname: long_concat\nlong_term_memory: test\ninput:\n  values: !list(str)\n" +
@@ -195,43 +195,28 @@ const concatFlow = (terms: number) =>
       "output: ${outer.output}\n",
   );
 
-// Past the old evaluator's recursion limit (about 250 terms); a longer learnable chain is slow to
-// run and resume (route validation and backward projection grow faster than its length).
-const LEARNABLE_CHAIN = 600;
+// Past the old evaluator's recursion limit (about 250 terms).
+const LONG_CHAIN = 600;
 
 test(
-  "a learnable run of a long list chain logs and resumes",
+  "a run of a long list chain logs and resumes",
   async () => {
-    const flow = await concatFlow(LEARNABLE_CHAIN);
+    const flow = await concatFlow(LONG_CHAIN);
     const backend = new FakeMemory();
     const path = join(dir, "long.jsonl");
     const result = await runFlow(
       flow,
       { values: ["v"] },
-      { env, log: path, learnable: true, memory: new Map([["test", backend]]) },
+      { env, log: path, memory: new Map([["test", backend]]) },
     );
     expect(result.status).toBe("succeeded");
-    expect(result.output).toEqual(Array(LEARNABLE_CHAIN).fill("v"));
+    expect(result.output).toEqual(Array(LONG_CHAIN).fill("v"));
     const replayed = await advance({ env, log: path, memory: new Map([["test", backend]]) });
     expect(replayed.status).toBe("succeeded");
     expect(replayed.output).toEqual(result.output);
   },
   SLOW,
 );
-
-test("feedback on a list chain passes back", async () => {
-  // Backward over a list chain costs about the square of its length, so this chain is short.
-  const flow = await concatFlow(24);
-  const backend = new FakeMemory();
-  const result = await runFlow(
-    flow,
-    { values: ["v"] },
-    { env, log: join(dir, "short.jsonl"), learnable: true, memory: new Map([["test", backend]]) },
-  );
-  expect(result.status).toBe("succeeded");
-  expect(result.output).toEqual(Array(24).fill("v"));
-  expect((await result.backward("good")).status).toBe("succeeded");
-});
 
 const SUM_DEF =
   "defs:\n  add:\n    input:\n      x: !int\n    nodes:\n      use:\n        kind: code\n" +

@@ -606,7 +606,7 @@ describe("FileRef", () => {
 
 // --- committed values and trace reads decode a file through the target's type --- //
 
-test.each([false, true])("a map body reads its file input as a file: learnable %p", async (learnable) => {
+test("a map body reads its file input as a file", async () => {
   const output = await okRun(
     `\
 id: p
@@ -637,13 +637,12 @@ nodes:
       f: \${item}
 output: \${m.output}
 `,
-    { learnable },
   );
 
   expect(output).toEqual(["FileRef", "FileRef"]);
 });
 
-test.each([false, true])("a call body reads its list of files input as files: learnable %p", async (learnable) => {
+test("a call body reads its list of files input as files", async () => {
   const output = await okRun(
     `\
 id: p
@@ -673,13 +672,12 @@ nodes:
       fs: \${a.output}
 output: \${k.output}
 `,
-    { learnable },
   );
 
   expect(output).toEqual(["FileRef"]);
 });
 
-test.each([false, true])("the parent reads a file a call body returns: learnable %p", async (learnable) => {
+test("the parent reads a file a call body returns", async () => {
   const output = await okRun(
     `\
 id: p
@@ -706,15 +704,14 @@ nodes:
       return inputs['x'].constructor.name
 output: \${d.output}
 `,
-    { learnable },
   );
 
   expect(output).toBe("FileRef");
 });
 
-test.each([false, true])(
-  "the parent reads the typed file of a partial record body output: learnable %p",
-  async (learnable) => {
+test(
+  "the parent reads the typed file of a partial record body output",
+  async () => {
     const output = await okRun(
       `\
 id: p
@@ -742,7 +739,6 @@ nodes:
       return [inputs['f'].constructor.name, inputs['g']]
 output: \${d.output}
 `,
-      { learnable },
     );
 
     expect(output).toStrictEqual(["FileRef", form()]);
@@ -792,8 +788,8 @@ nodes:
 output: \${d.output}
 `;
 
-test.each([false, true])("the parent reads a file a loop carries: learnable %p", async (learnable) => {
-  expect(await okRun(LOOP_FLOW, { learnable })).toEqual(["FileRef", 2n]);
+test("the parent reads a file a loop carries", async () => {
+  expect(await okRun(LOOP_FLOW)).toEqual(["FileRef", 2n]);
 });
 
 /** A `times` loop `lp` over typed `f: file` and `n: int` whose body returns only `n`. */
@@ -828,14 +824,12 @@ const BODY_OUTPUTS: Record<string, string> = {
   typed: "\n      g: !file ${c.output.g}\n      n: !int ${c.output.n}",
 };
 
-/** Each `[learnable, body output name]` pair. */
-const LEARNABLE_BY_BODY_OUTPUT = Object.keys(BODY_OUTPUTS)
-  .sort()
-  .flatMap((body) => [false, true].map((learnable) => [learnable, body] as [boolean, string]));
+/** Each body output name. */
+const BODY_OUTPUT_NAMES = Object.keys(BODY_OUTPUTS).sort();
 
-test.each(LEARNABLE_BY_BODY_OUTPUT)(
-  "a partial loop compares an omitted file with a returned one: learnable %p, body output %s",
-  async (learnable, bodyOutput) => {
+test.each(BODY_OUTPUT_NAMES)(
+  "a partial loop compares an omitted file with a returned one: body output %s",
+  async (bodyOutput) => {
     // The body returns `g` and `n` but not `f`, so `f` is carried from the seed.
     const output = await okRun(
       `\
@@ -875,16 +869,15 @@ nodes:
       n: 0
 output: \${l.output.n}
 `,
-      { learnable },
     );
 
     expect(output).toBe(1n);
   },
 );
 
-test.each(LEARNABLE_BY_BODY_OUTPUT)(
-  "a partial loop compares a carried file the body does not take: learnable %p, body output %s",
-  async (learnable, bodyOutput) => {
+test.each(BODY_OUTPUT_NAMES)(
+  "a partial loop compares a carried file the body does not take: body output %s",
+  async (bodyOutput) => {
     // The untyped `h` makes the loop's contract a partial record. The body takes only `n`,
     // so `f` is carried from the seed with no body input to read it through.
     const output = await okRun(
@@ -928,16 +921,15 @@ nodes:
       n: 0
 output: \${l.output.n}
 `,
-      { learnable },
     );
 
     expect(output).toBe(1n);
   },
 );
 
-test.each([false, true])(
-  "a loop reads a file in a carried object as a mapping on every iteration: learnable %p",
-  async (learnable) => {
+test(
+  "a loop reads a file in a carried object as a mapping on every iteration",
+  async () => {
     // The seed binds `f` from `r`'s live output, where `f.x` is a file; from the second
     // iteration `f` comes back through the body's `object` output. Both must read alike.
     const output = await okRun(
@@ -977,7 +969,6 @@ nodes:
       n: 0
 output: \${l.output.n}
 `,
-      { learnable },
     );
 
     expect(output).toBe(2n);
@@ -1230,8 +1221,7 @@ test("render_as_json writes a file as its mapping", async () => {
   expect(output).toBe('{\n  "uri": "f",\n  "mime": null,\n  "name": null\n}');
 });
 
-test.each([false, true])("a run reads the fields of a file through its trace: learnable %p", async (learnable) => {
-  // A learnable run resolves bindings through the run trace, not the pool.
+test("a run reads the fields of a file", async () => {
   const output = await okRun(
     `id: p\nname: p\nnodes:\n${UNTYPED_FILE_PRODUCER}` +
       "  n:\n    kind: code\n    output: file\n" +
@@ -1241,7 +1231,6 @@ test.each([false, true])("a run reads the fields of a file through its trace: le
       "    code: |\n" +
       "      return [inputs['u'], inputs['k'], inputs['m'], inputs['t'].constructor.name]\n" +
       "output: ${b.output}\n",
-    { learnable },
   );
   expect(output).toEqual(["f", "a.txt", null, "FileRef"]);
 });
@@ -1275,13 +1264,13 @@ nodes:
 output: \${b.output}
 `;
 
-test.each([false, true])("a reader sees the files of a typed output: learnable %p", async (learnable) => {
-  expect(await okRun(READER_FLOW, { learnable })).toEqual([["FileRef", "FileRef"], "FileRef", "f"]);
+test("a reader sees the files of a typed output", async () => {
+  expect(await okRun(READER_FLOW)).toEqual([["FileRef", "FileRef"], "FileRef", "f"]);
 });
 
-test.each([false, true])("the success event holds the files of a typed output: learnable %p", async (learnable) => {
+test("the success event holds the files of a typed output", async () => {
   const events: unknown[] = [];
-  await okRun(READER_FLOW, { learnable, onEvent: (event) => void events.push(event) });
+  await okRun(READER_FLOW, { onEvent: (event) => void events.push(event) });
 
   const outputs = events
     .filter((event) => event instanceof NodeSucceeded && event.nodeId === "a")
@@ -1291,7 +1280,7 @@ test.each([false, true])("the success event holds the files of a typed output: l
   expect((outputs[0] as unknown[]).every((item) => item instanceof FileRef)).toBe(true);
 });
 
-test.each([false, true])("an untyped output holding files is read as mappings: learnable %p", async (learnable) => {
+test("an untyped output holding files is read as mappings", async () => {
   const output = await okRun(
     `\
 id: p
@@ -1309,12 +1298,11 @@ nodes:
       return inputs['xs'].map((x) => x.constructor.name)
 output: \${b.output}
 `,
-    { learnable },
   );
   expect(output).toEqual(["Object"]);
 });
 
-test.each([false, true])("a flow input file reaches code as a file: learnable %p", async (learnable) => {
+test("a flow input file reaches code as a file", async () => {
   const output = await okRun(
     `\
 id: p
@@ -1332,23 +1320,10 @@ nodes:
       return [inputs['f'].constructor.name, inputs['fs'].map((x) => x.constructor.name)]
 output: \${c.output}
 `,
-    { learnable },
+    {},
     { f: REF, fs: [REF] },
   );
   expect(output).toEqual(["FileRef", ["FileRef"]]);
-});
-
-test("the backward context holds the files of a typed output as JSON", async () => {
-  // Feedback shapes and source lookups stay on the recorded JSON value.
-  const built = engine((await loadConformanceFlow(READER_FLOW)).compiled, { inputs: {}, learnable: true });
-  await built.run();
-  const trace = built.state.trace!;
-  const [occurrence, ...others] = trace.occurrences.filter((item) => item.nodeId === "a");
-  expect(others).toEqual([]);
-
-  expect(trace.backwardContext(occurrence!.source).output as Value).toEqual([form(), form()]);
-  expect(trace.lookupSource(occurrence!.source) as Value).toEqual([form(), form()]);
-  expect(trace.currentWriters.get("a")!.value).toEqual([REF, REF]);
 });
 
 const TWO_FILES = (output: string) => `\
@@ -1373,11 +1348,7 @@ const RESULT_OUTPUTS: Record<string, readonly [string, (output: unknown) => unkn
   record: ["\n  a: ${a.output}\n  n: ${b.output}", (output) => (output as Record<string, unknown>).a],
 };
 
-const LEARNABLE_BY_SHAPE = [false, true].flatMap((learnable) =>
-  Object.keys(RESULT_OUTPUTS)
-    .sort()
-    .map((shape) => [learnable, shape] as const),
-);
+const SHAPES = Object.keys(RESULT_OUTPUTS).sort();
 
 /** Expect `files` to be the two files `REF`, each a `FileRef`. */
 function expectTwoFiles(files: unknown): void {
@@ -1385,12 +1356,12 @@ function expectTwoFiles(files: unknown): void {
   expect((files as unknown[]).every((item) => item instanceof FileRef)).toBe(true);
 }
 
-test.each(LEARNABLE_BY_SHAPE)(
-  "the run result holds the files of a typed output: learnable %p, %s",
-  async (learnable, shape) => {
+test.each(SHAPES)(
+  "the run result holds the files of a typed output: %s",
+  async (shape) => {
     const [output, filesOf] = RESULT_OUTPUTS[shape]!;
     const events: unknown[] = [];
-    const result = await runText(TWO_FILES(output), {}, { learnable, onEvent: (event) => void events.push(event) });
+    const result = await runText(TWO_FILES(output), {}, { onEvent: (event) => void events.push(event) });
 
     expect(result.failure).toBeNull();
     expectTwoFiles(filesOf(result.output));
@@ -1402,9 +1373,9 @@ test.each(LEARNABLE_BY_SHAPE)(
   },
 );
 
-test.each([false, true])(
-  "the run result holds the files of an untyped output as mappings: learnable %p",
-  async (learnable) => {
+test(
+  "the run result holds the files of an untyped output as mappings",
+  async () => {
     const result = await runText(
       `\
 id: p
@@ -1417,7 +1388,6 @@ nodes:
 output: \${a.output}
 `,
       {},
-      { learnable },
     );
     expect(result.failure).toBeNull();
     expect(result.output).toEqual([form()]);
@@ -1496,7 +1466,7 @@ output: \${b.output}
 `;
 
 /** Run `text` into the new log `name`, stopped by the host before the human answer; return the path. */
-async function interruptedRun(name: string, text: string, learnable: boolean): Promise<string> {
+async function interruptedRun(name: string, text: string): Promise<string> {
   const path = join(dir, `${name}.jsonl`);
   const interruption = new Error("stop before the answer");
   const host = new AbortController();
@@ -1504,26 +1474,26 @@ async function interruptedRun(name: string, text: string, learnable: boolean): P
     host.abort(interruption);
     throw interruption;
   };
-  const caught = await rejected(runText(text, {}, { log: path, learnable, signal: host.signal, tools: { ask: interrupt } }));
+  const caught = await rejected(runText(text, {}, { log: path, signal: host.signal, tools: { ask: interrupt } }));
   expect(caught).toBe(interruption);
   return path;
 }
 
-test.each([false, true])("a reader after resume sees the files of a replayed output: learnable %p", async (learnable) => {
-  const path = await interruptedRun(`gated-${learnable}`, GATED_READER_FLOW, learnable);
+test("a reader after resume sees the files of a replayed output", async () => {
+  const path = await interruptedRun("gated", GATED_READER_FLOW);
   const resumed = await resumeText(GATED_READER_FLOW, path, { tools: { ask: () => "y" } });
 
   expect(resumed.failure).toBeNull();
   expect(resumed.output).toEqual(["FileRef", "FileRef"]);
 });
 
-test.each([false, true])(
-  "resuming an unfinished run returns the files of a typed output: learnable %p",
-  async (learnable) => {
+test(
+  "resuming an unfinished run returns the files of a typed output",
+  async () => {
     // `a` is replayed from the log; the run then finishes live, so the result reads through the
     // contract the replayed state carries.
     const text = GATED_READER_FLOW.replace("output: ${b.output}\n", "output: ${a.output}\n");
-    const path = await interruptedRun(`unfinished-${learnable}`, text, learnable);
+    const path = await interruptedRun("unfinished", text);
     const events: unknown[] = [];
     const resumed = await resumeText(text, path, {
       onEvent: (event) => void events.push(event),
@@ -1539,12 +1509,12 @@ test.each([false, true])(
   },
 );
 
-test.each(LEARNABLE_BY_SHAPE)(
-  "resuming a finished run returns the files of a typed output: learnable %p, %s",
-  async (learnable, shape) => {
+test.each(SHAPES)(
+  "resuming a finished run returns the files of a typed output: %s",
+  async (shape) => {
     const [output, filesOf] = RESULT_OUTPUTS[shape]!;
     const text = TWO_FILES(output);
-    const { path, first } = await runLogged(`result-${learnable}-${shape}`, text, { learnable });
+    const { path, first } = await runLogged(`result-${shape}`, text);
 
     const resumed = await resumeText(text, path);
 

@@ -31,7 +31,6 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import * as base from "../../src/nodes/base.ts";
 import { ToolAttemptsFailed } from "../../src/nodes/tool/node.ts";
 import * as run from "../../src/run.ts";
-import { BackwardOutcome } from "../../src/runtime/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import { pending, ToolContext } from "../../src/tools/context.ts";
 import { PermanentToolError, ReportedToolError, TransientToolError } from "../../src/tools/errors.ts";
@@ -87,7 +86,6 @@ test("only the final log-only runtime and run API remain", () => {
     live: true,
     llmConfig: true,
     memory: true,
-    learnable: true,
     tools: true,
     skills: true,
     context: true,
@@ -98,7 +96,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     parent: true,
   };
-  expect(Object.keys(options)).toHaveLength(18);
+  expect(Object.keys(options)).toHaveLength(17);
   expect(run.runFlow.length).toBe(2);
   const advanceOptions: Record<keyof run.AdvanceOptions, true> = {
     log: true,
@@ -137,10 +135,7 @@ test("only the final log-only runtime and run API remain", () => {
     "waits",
     "unread",
   ]);
-  const getters = Object.entries(Object.getOwnPropertyDescriptors(run.RunResult.prototype))
-    .filter(([, descriptor]) => descriptor.get !== undefined)
-    .map(([name]) => name);
-  expect(getters).toEqual(["learning", "backwardOutcome"]);
+  expect(Object.getOwnPropertyNames(run.RunResult.prototype)).toEqual(["constructor"]);
 });
 
 test("the package root exports exactly its documented root list plus the memory storage names, ProfileMemory, ToolAttemptsFailed, pending, the message names, InboxRef and the host calls", () => {
@@ -199,8 +194,8 @@ test("the package root exports exactly its documented root list plus the memory 
   expect(m.parts).toEqual([]);
 });
 
-test("yian/run re-exports BackwardOutcome; Steering is gone, replaced by interrupt(run, inbox)", () => {
-  expect(run.BackwardOutcome).toBe(BackwardOutcome);
+test("yian/run has no BackwardOutcome; Steering is gone, replaced by interrupt(run, inbox)", () => {
+  expect("BackwardOutcome" in run).toBe(false);
   // `Steering` was a type, so its removal is checked by `tsc`: nothing here may name it.
   expect(typeof run.interrupt).toBe("function");
 });

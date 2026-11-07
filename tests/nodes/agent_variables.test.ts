@@ -21,8 +21,7 @@ import { MemoryContext } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CapabilityFault, type MaterialCaps, Node, NodeKind, Output } from "../../src/nodes/base.ts";
 import { Assertion, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import { recordedGrants, runFlow } from "../../src/run.ts";
-import { driveBackward } from "../../src/runtime/backward.ts";
+import { runFlow } from "../../src/run.ts";
 import { EvaluationFailure, evalNode } from "../../src/runtime/eval_node.ts";
 import {
   decodeRecord,
@@ -263,20 +262,6 @@ test("an agent whose pre-assert failed is not rendered again, so its node data r
 
   expect((record as NodeFailedRecord).failure.code).toBe("assertion.failed");
   expect(occurrence.nodeData).not.toHaveProperty("rendered_prompt");
-});
-
-test("backward over an agent whose node data can't be rebuilt finishes with a failure attributed to it", async () => {
-  const { built, occurrence } = await unresolvable(new TypeError("variable resolution failed"));
-
-  const outcome = await driveBackward(built.state, built.log, "Review.", { grants: recordedGrants(built.state) });
-
-  expect(outcome.status).toBe("failed");
-  expect(outcome.failure!.code).toBe("backward.execute");
-  expect(outcome.failure!.message).toBe("node 'writer': its node data can't be rebuilt: variable resolution failed");
-  expect(outcome.failure!.nodeId).toBe("writer");
-  expect(outcome.failure!.nodeStartedSeq).toBe(occurrence.source.executionSeq);
-  expect(outcome.failure!.runId).toBe(built.state.runId);
-  expect(built.state.backwardState.finished!.outcome).toBe(outcome);
 });
 
 test.each([
@@ -569,7 +554,6 @@ output: \${writer.output}
   });
   try {
     const result = await runFlow(loaded, { topic: "reefs" }, {
-      learnable: false,
       env: hostEnv(dir),
       models: {
         env: hostEnv(dir),
@@ -582,7 +566,6 @@ output: \${writer.output}
 
     expect(result.status, result.failure?.message).toBe("succeeded");
     expect(result.output).toBe("answer");
-    expect(result.learning).toBeNull();
     expect(configurations).toEqual([{ provider: "ollama", model: "test", ollama: { options: { temperature: 0.8 } } }]);
     expect(model.requests.at(-1)!.messages.at(-1)!.text()).toBe("reefs: 0.4");
     expect(model.requests.length).toBe(1);

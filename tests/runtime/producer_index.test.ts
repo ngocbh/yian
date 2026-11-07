@@ -112,9 +112,9 @@ output: \${again.output}
 
 const load = (text: string) => loadFlow(text, { sourceLabel: "flow.yaml" });
 
-/** Run `flow` serially into `log`, learnable or not. */
-const run = (flow: ComposedFlow, log: string, inputs: Record<string, unknown> = {}, learnable = false) =>
-  runFlow(flow, inputs, { env: NO_ENV, log, runId: "r1", numWorkers: 0, learnable });
+/** Run `flow` serially into `log`. */
+const run = (flow: ComposedFlow, log: string, inputs: Record<string, unknown> = {}) =>
+  runFlow(flow, inputs, { env: NO_ENV, log, runId: "r1", numWorkers: 0 });
 
 const DERIVED_KINDS = new Set<string>([NodeKind.START, NodeKind.END, NodeKind.LOOP, NodeKind.CALL, NodeKind.MAP]);
 

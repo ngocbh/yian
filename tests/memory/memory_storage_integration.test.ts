@@ -111,35 +111,3 @@ memory.close();
     });
   });
 }
-
-for (const policy of POLICIES) {
-  test(`explicit learning remains saved after reopen: ${policy}`, async () => {
-    const actions = [{ action: "add", lesson_id: "checked-output", text: "Verify the returned output." }];
-    const reflector = () => new ScriptedModel([reply(JSON.stringify({ actions }))], MODEL_CONFIG);
-    const file = path.join(dir, "memory.sqlite");
-    const log = path.join(dir, "run.jsonl");
-    const flow = await loadFlow(CODE_FLOW.replace("POLICY", policy));
-    const field = policy === "episodic" ? "episodes" : "lessons";
-    const recorded = await withBackend(backend(policy, file, reflector), async (memory) => {
-      const options = { memory: new Map([[policy, memory]]), learnable: true, log, env: NO_ENV };
-      const result = await runFlow(flow, {}, options);
-      expect(result.status).toBe("succeeded");
-      expect(result.output).toBe(7n);
-      expect(memorySnapshot(memory)[field]).toEqual([]);
-      await result.backward();
-      expect(result.learning!.status).toBe("succeeded");
-      const learned = memorySnapshot(memory);
-      expect(learned[field]).not.toHaveLength(0);
-      return learned;
-    });
-    const prefix = fs.readFileSync(log);
-    await withBackend(backend(policy, file, reflector), async (reopened) => {
-      expect(memorySnapshot(reopened)).toEqual(recorded);
-      const inspected = await advance({ log, memory: new Map([[policy, reopened]]), env: NO_ENV });
-      expect(inspected.output).toBe(7n);
-      expect(memorySnapshot(reopened)).toEqual(recorded);
-    });
-    expect(fs.readFileSync(log)).toEqual(prefix);
-    expect(prefix.includes(file)).toBe(false);
-  });
-}

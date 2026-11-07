@@ -18,8 +18,7 @@ import { AuthStore } from "../src/llm_clients/auth/store.ts";
 import type { AgentNode } from "../src/nodes/agent/node.ts";
 import { Parameter } from "../src/nodes/contracts.ts";
 import { VERSION } from "../src/platform.ts";
-import { replayRunLog, runFlow, type RunFlowOptions, runStartInputs } from "../src/run.ts";
-import { JsonlRunLog } from "../src/runtime/log.ts";
+import { runFlow, type RunFlowOptions, runStartInputs } from "../src/run.ts";
 import { hostEnv } from "./helpers/mcp_helpers.ts";
 import { rejected, serving, textReply } from "./helpers/run_state_fixtures.ts";
 
@@ -346,32 +345,6 @@ test("a root flow input value is passed down to child agents", async () => {
     "c/a": ["anthropic", "claude-root"],
     "c/b": ["anthropic", "own-model"],
   });
-});
-
-test("a run start agent binds no reserved llm config input", async () => {
-  const text = values("  m: !str", "{model: '${input.m}'}");
-  const flow = await loadFlow(text, { env });
-  expect(flow.compiled.wiring.get("chat")!.has("__llm_config")).toBe(true);
-  const log = fresh("run.jsonl");
-  const result = await runFlow(flow, { m: "gpt-learn" }, { log, env, models: fakeModel().models, learnable: true });
-  expect(result.status).toBe("succeeded");
-  const succeeded = records(log).filter(
-    (record) => record.kind === "node_succeeded" && record.payload["node_id"] === "chat",
-  );
-  const capture = succeeded[0]!.payload["forward_capture"];
-  expect(capture).not.toBeNull();
-  expect(capture["route"]["names"]).not.toContain("__llm_config");
-  expect(capture["input_names"]).not.toContain("__llm_config");
-  // The record holds no node data; learning rebuilds the agent's config from the run's map.
-  expect(Object.hasOwn(capture, "node_data")).toBe(false);
-  const reopened = JsonlRunLog.resume(log);
-  try {
-    const trace = replayRunLog(flow, reopened).trace!;
-    const chat = trace.occurrences.find((occurrence) => occurrence.nodeId === "chat")!;
-    expect((chat.nodeData["effective_llm_config"] as Record<string, unknown>)["model"]).toBe("gpt-learn");
-  } finally {
-    reopened[Symbol.dispose]();
-  }
 });
 
 const MIXED = `id: f

@@ -419,23 +419,6 @@ test("the view holds the model config without the host's key, headers or connect
   expect(keyed).toEqual(view);
 });
 
-test("a learnable run and one that isn't give the same view", async () => {
-  const views = [];
-  for (const learnable of [false, true]) {
-    const model = new ScriptedModel([callReply(["lookup", { topic: "a" }, "call-a"]), textReply("done")], {
-      provider: "anthropic",
-      model: "claude-test",
-    });
-    const tools = { lookup: topicTool("lookup"), save: topicTool("save") };
-    const { log } = await run(TOOLS, model, { topic: "owls" }, { tools, learnable });
-    const view = await agentCall(log, { nodeId: "writer", n: 3 }, { env: NO_ENV });
-    expect(view.digestMismatch).toBe(false);
-    expect(requestOf(view)).toMatchObject(sentView(model.requests[1]!));
-    views.push({ ...view, attempts: [], toolResults: [] });
-  }
-  expect(views[0]).toEqual(views[1]);
-});
-
 test("a waiting run's call shows a pending tool call without a result, then the host's answer", async () => {
   const model = new ScriptedModel(
     [callReply(["lookup", { topic: "a" }, "call-a"], ["save", { topic: "b" }, "call-b"]), textReply("done")],

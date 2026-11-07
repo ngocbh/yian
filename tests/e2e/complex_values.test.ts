@@ -33,7 +33,7 @@ function expectBindingFails(result: RunResult, nodeId: string, message: string):
   expect(result.failure!.message).toBe(message);
 }
 
-test("a binding that evaluates to no real number fails its node (learnable)", async () => {
+test("a binding that evaluates to no real number fails its node", async () => {
   const result = await run(
     `
 id: complex
@@ -48,7 +48,6 @@ nodes:
 output: \${n.output}
 `,
     {},
-    { learnable: true },
   );
 
   expectBindingFails(result, "n", NO_RESULT);

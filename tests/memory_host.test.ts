@@ -1083,26 +1083,3 @@ test.each(["def", "uses"])("resume accepts one callee called from two nodes: %s"
     await registry[Symbol.asyncDispose]();
   }
 });
-
-test("backward checks registry types too", async () => {
-  const flow = await runnableFlow("{notes: episodic}");
-  const log = path.join(tmp, "run.jsonl");
-  {
-    const registry = await buildMemories(flow);
-    try {
-      expect((await run(flow, registry, { learnable: true, log })).status).toBe("succeeded");
-    } finally {
-      await registry[Symbol.asyncDispose]();
-    }
-  }
-  const before = fs.readFileSync(log);
-  const other = await buildMemories(await runnableFlow("{notes: reflective}"));
-  try {
-    // A finished run opens no memory on resume; backward is where it is used.
-    const resumed = await resume(flow, log, other);
-    await setupError(() => resumed.backward("Review."), /'notes'.*'episodic'.*'reflective'/);
-    expect(fs.readFileSync(log)).toEqual(before);
-  } finally {
-    await other[Symbol.asyncDispose]();
-  }
-});

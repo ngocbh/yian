@@ -210,6 +210,12 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     return new ToolSpec({ name, description, parameters: tool.parametersJsonSchema });
   };
   const bound = requestToolSpecs(granted, specOf, skills.size > 0 ? loadSkillTool() : null)!;
+  // A tool built by an older copy of yian has no `resumable` field, and isn't resumable.
+  const resumable = new Set(
+    granted
+      .filter((each) => toolset.resolve([{ group: each.group, name: each.tool }])[0]!.resumable === true)
+      .map((each) => each.visible),
+  );
   let iterations = 0;
   let reply: Message | null = null;
   const digests = new RequestDigest();
@@ -277,7 +283,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     }
 
     const pended = new Map<number, string>();
-    const turn: ToolTurn = { ctx, toolset, granted, skills, live, n, steps, messages, calls, interrupt, pended };
+    const turn: ToolTurn = { ctx, toolset, granted, resumable, skills, live, n, steps, messages, calls, interrupt, pended };
     const skipped = await (replayed ? replayToolCalls(turn) : runToolCalls(turn));
     // The interrupt closed the reply's pending calls; the agent doesn't wait on them.
     if (skipped || (pended.size > 0 && interruptRequested(interrupt, steps))) {
@@ -452,6 +458,8 @@ interface ToolTurn {
   readonly toolset: ToolSet;
   /** The granted tools, groups expanded, each under the name the model sees. */
   readonly granted: readonly GrantedTool[];
+  /** The names the model sees of the granted tools that are resumable. */
+  readonly resumable: ReadonlySet<string>;
   readonly skills: ReadonlyMap<string, Skill>;
   readonly live: LiveSinks | null;
   /** The `n` of the reply's `model_call` step, which each call's idempotency key and brackets hold. */
@@ -680,8 +688,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // Above 1 only for a call a crash or a stop cut off after its reply, which a resume sends again.
   const attempt = 1 + (ctx.steps?.resumesSince(turn.n) ?? 0);
   const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, attempt, signal });
-  // A tool built by an older copy of yian has no `resumable` field, and isn't resumable.
-  const resumable = toolset.resolve([ref])[0]!.resumable === true;
+  const resumable = turn.resumable.has(call.name);
   return { planned: { call, index, callId, deadline, resumable, invoke }, safe: toolset.isConcurrencySafe(checked) };
 }
 
@@ -726,11 +733,15 @@ async function failCall(
  * Every started call is awaited; then a stop wins, else the first failure is thrown with nothing of
  * the group committed. A stop, then a host
  * interrupt, is checked before the group starts; the interrupt skips from the group's first call,
- * unless `interruptible` is `false`.
+ * unless `options.interruptible` is `false`.
  *
  * @returns Whether a host interrupt skipped the group and every later call.
  */
-async function runGroup(turn: ToolTurn, group: readonly PlannedCall[], interruptible = true): Promise<boolean> {
+async function runGroup(
+  turn: ToolTurn,
+  group: readonly PlannedCall[],
+  { interruptible = true }: { interruptible?: boolean } = {},
+): Promise<boolean> {
   if (group.length === 0) return false;
   const { live } = turn;
   checkNodeStopped(turn);
@@ -837,7 +848,7 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[], interrupt
  * @throws As `runGroup` throws.
  */
 async function resendCall(turn: ToolTurn, planned: PlannedCall): Promise<void> {
-  await runGroup(turn, [planned], false);
+  await runGroup(turn, [planned], { interruptible: false });
 }
 
 /** The yian id of call `index` of the turn's reply, `<run>/<node>/<n>/<index>`; `undefined` outside a run. */

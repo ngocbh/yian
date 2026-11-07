@@ -770,7 +770,7 @@ test("a steer read after the run resumed joins the request after it", async () =
   expect(requestOf(view).messages.at(-1)).toEqual({ role: "user", parts: [{ type: "text", text: "only 2024" }] });
 });
 
-test("agentCall takes no memory option and its view has no memorySections", async () => {
+test("agentCall refuses the memory option and its view has no memorySections", async () => {
   const model = new ScriptedModel([callReply(["lookup", { topic: "a" }, "call-a"]), textReply("done")], {
     provider: "anthropic",
     model: "claude-test",
@@ -779,8 +779,10 @@ test("agentCall takes no memory option and its view has no memorySections", asyn
   const view = await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV });
   expect(view).not.toHaveProperty("memorySections");
   expect(view.digestMismatch).toBe(false);
-  // @ts-expect-error: the option is gone.
-  await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV, memory: new Map() });
+  await expect(
+    // @ts-expect-error: the option is gone.
+    agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV, memory: new Map() }),
+  ).rejects.toThrow("the memory option was removed: pass each memory as a flow input");
 });
 
 test("an agent's rebuildRequests returns each request and whether all digests matched", async () => {

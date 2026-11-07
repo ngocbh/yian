@@ -725,6 +725,21 @@ type DriveOptions = Pick<
 >;
 
 /**
+ * Refuse, by name, an option yian removed: `learnable` (learning) and `memory` (memories are flow
+ * inputs now).
+ *
+ * @throws RangeError when `options` holds either.
+ */
+function refuseRemovedOptions(options: object): void {
+  if (Object.hasOwn(options, "learnable")) {
+    throw new RangeError("learnable was removed: yian no longer learns from runs; drop the option");
+  }
+  if (Object.hasOwn(options, "memory")) {
+    throw new RangeError("the memory option was removed: pass each memory as a flow input");
+  }
+}
+
+/**
  * Check the options `runFlow` and `advance` share before anything is opened or created, and split
  * off the servers the call opens.
  *
@@ -737,12 +752,7 @@ type DriveOptions = Pick<
  * @throws The signal's reason when it has aborted.
  */
 function checkDriveOptions(options: DriveOptions): [string, McpServer][] {
-  if (Object.hasOwn(options, "learnable")) {
-    throw new RangeError("learnable was removed: yian no longer learns from runs; drop the option");
-  }
-  if (Object.hasOwn(options, "memory")) {
-    throw new RangeError("the memory option was removed: pass each memory as a flow input");
-  }
+  refuseRemovedOptions(options);
   const { tools = null, context, signal = null, live = null, onEvent = null, onStream = null } = options;
   const { scheduler = null, random = null, models = null } = options;
   if (signal !== null && !(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal or null");
@@ -1362,7 +1372,8 @@ export interface AdvanceOptions {
  *   (`resume refused: tools.<name> description differs from the recorded one`), a `tools` server
  *   was opened by another run in progress, or a started call-time agent resolves to another config
  *   than the one it recorded (`node '<path>' llm_config: recorded config differs from the
- *   recomputed one; ...`), before its model call.
+ *   recomputed one; ...`), before its model call. Also when `learnable` or `memory`, a removed
+ *   option, is given.
  * @throws AuthError when a call-time agent resolves to the provider of the run's host key and
  *   `apiKey` (or a recorded header) wasn't given, before its model call, or the credential store
  *   can't be read.
@@ -2550,6 +2561,7 @@ export function agentCalls(log: string, options: { maxLineBytes?: number | null 
  *   from the header names a run that uses the host key recorded.
  * @throws AuthError when a call-time agent's run used a host key and `apiKey` isn't given, or
  *   `headers` lack the names it recorded.
+ * @throws RangeError when `learnable` or `memory`, a removed option, is given.
  *
  * @example
  * const [first] = agentCalls(log);
@@ -2569,6 +2581,7 @@ export async function agentCall(
     maxLineBytes?: number | null;
   } = {},
 ): Promise<AgentCallView> {
+  refuseRemovedOptions(options);
   const { nodeId, n } = call;
   const missing = () => new RangeError(`run log ${log} has no model call ${n} of node ${reprText(nodeId)}`);
   const { apiKey, headers } = hostCredentials(options.apiKey, options.headers);

@@ -18,7 +18,7 @@ import { CaseNode } from "../../src/nodes/case/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { runFlow } from "../../src/run.ts";
+import { advance, agentCall, runFlow } from "../../src/run.ts";
 import { decodeRecord } from "../../src/runtime/log.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 
@@ -83,6 +83,13 @@ test("runFlow refuses the removed memory option by name", async () => {
   await expect(runFlow(flow, { topic: "owls" }, { memory: new Map(), env: hostEnv(dir) } as never)).rejects.toThrow(
     "the memory option was removed: pass each memory as a flow input",
   );
+});
+
+test("advance and agentCall refuse the removed memory option by name", async () => {
+  const { log } = await runSimple();
+  const message = "the memory option was removed: pass each memory as a flow input";
+  await expect(advance({ log, memory: new Map(), env: hostEnv(dir) } as never)).rejects.toThrow(message);
+  await expect(agentCall(log, { nodeId: "plan", n: 1 }, { memory: new Map() } as never)).rejects.toThrow(message);
 });
 
 test("run_started records no old memory state and no learnable flag", async () => {

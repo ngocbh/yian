@@ -261,7 +261,8 @@ A case can't hold code, so its host is declared under `host`.
   `isConcurrencySafe` returns true for every call, so an AGENT may run its calls together. With
   `resumable: true`, the tool is resumable, so a resumed AGENT sends a call a crash or a stop cut
   off again; the stub answers a call id it answered before with the same entry and takes none, as
-  an idempotent tool would. A script is a list of entries, taken one per call
+  an idempotent tool would. That memo is keyed by `ctx.callId`, so a TOOL node with `retries:` on a
+  resumable stub gets its first answer again on each retry, a raise included. A script is a list of entries, taken one per call
   in order, or a mapping from node id to such a list, taken by the calling node (for tools that
   several nodes call at once). An entry is `{return: <value>}` or `{raise: {class: <name>,
   message: <text>, retry_after: <seconds>}}` (`retry_after`, a finite non-negative number of

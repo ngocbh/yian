@@ -96,7 +96,7 @@ import {
 } from "./llm_clients/connection.ts";
 import { validateHeaders } from "./llm_clients/connection_settings.ts";
 import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
-import { Message, NamedTool, type Request, ToolCallPart } from "./llm/messages.ts";
+import { Message, NamedTool, type Request, ToolCallPart, ToolSpec } from "./llm/messages.ts";
 import {
   type LearningResult,
   type Memory,
@@ -129,7 +129,7 @@ import {
   sameOptional,
 } from "./nodes/contracts.ts";
 import { FileLockError, isMissingPath, realScheduler, type Scheduler, syncFolder, VERSION, warn } from "./platform.ts";
-import { driveBackward, recordedGrants } from "./runtime/backward.ts";
+import { driveBackward } from "./runtime/backward.ts";
 import type { BackwardOutcome } from "./runtime/contracts.ts";
 import { type DeliveryOp, FlowEngine, prepareDelivery, resumedAttemptEvents } from "./runtime/engine.ts";
 import { LiveChannel } from "./runtime/live.ts";
@@ -196,7 +196,11 @@ import {
   checkVisibleNames,
   expandGrants,
   GrantError,
+  type GrantedTool,
+  type GrantScope,
   reachedGroups,
+  requestToolSpecs,
+  type ToolGrant,
   visibleToolName,
 } from "./tools/grants.ts";
 import { RESERVED_TOOL_NAMES, type ToolEntry, type ToolRef, ToolSet } from "./tools/registry.ts";
@@ -799,6 +803,7 @@ class BackwardHandle {
           });
         };
         return await driveBackward(state, authority, feedback, {
+          grants: recordedGrants(replayed),
           openMemory,
           models: this.models,
           onEvent: options.onEvent ?? undefined,
@@ -3019,6 +3024,72 @@ export async function agentCall(
   } finally {
     await runtime?.close();
   }
+}
+
+/**
+ * Return what the run recorded of its grants, as a `MaterialCaps` reads them: the skills by name,
+ * and a request's tool list for some grants, expanded as the live loop expands them but over the
+ * groups and tools the run recorded (`null` when a grant names no recorded tool).
+ */
+export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "toolSpecs"> {
+  const skills = new Map(
+    Object.entries(state.recordedSkills).map(([name, { description, instructions }]) => [
+      name,
+      new Skill({ name, description, instructions }),
+    ]),
+  );
+  const scope = recordedScope(state);
+  const toolSpecs = (grants: readonly ToolGrant[], loadSkill: ToolSpec | null) => {
+    let granted: GrantedTool[];
+    try {
+      granted = expandGrants(grants, [scope]);
+    } catch (error) {
+      if (error instanceof GrantError) return null;
+      throw error;
+    }
+    const specOf = (tool: GrantedTool) => {
+      if (!Object.hasOwn(state.recordedTools, tool.key)) return null;
+      const { name, description, parameters } = state.recordedTools[tool.key]!;
+      return new ToolSpec({ name, description, parameters });
+    };
+    return requestToolSpecs(granted, specOf, loadSkill);
+  };
+  return { skills, toolSpecs };
+}
+
+/**
+ * Return the run's recorded tools as the grant scope its `ToolSet` was: the recorded groups by
+ * name, each member by its own name; a top-level tool is a recorded tool no group lists; and a
+ * tool's identity is its record name, so grants expand and dedupe as they did live.
+ */
+function recordedScope(state: RunState): GrantScope {
+  const groups = state.recordedToolGroups;
+  const tools = state.recordedTools;
+  const members = (group: string): readonly string[] =>
+    Object.hasOwn(groups, group) ? groups[group]! : [];
+  const nameOf = (key: string) => (Object.hasOwn(tools, key) ? tools[key]!.name : null);
+  const listed = new Set(Object.values(groups).flat());
+  return {
+    label: "this run",
+    bareMembers: true,
+    group: (name) =>
+      Object.hasOwn(groups, name) ? members(name).map((key) => nameOf(key) ?? key) : null,
+    hasTool: (name) => Object.hasOwn(tools, name) && !listed.has(name),
+    groupsHolding: (name) => {
+      const seen = new Set<string>();
+      const holding: string[] = [];
+      for (const group of Object.keys(groups)) {
+        const key = members(group).find((member) => nameOf(member) === name);
+        if (key === undefined || seen.has(key)) continue;
+        seen.add(key);
+        holding.push(group);
+      }
+      return holding;
+    },
+    groupNames: () => Object.keys(groups),
+    identity: (group, tool) =>
+      group === null ? tool : (members(group).find((key) => nameOf(key) === tool) ?? tool),
+  };
 }
 
 /**

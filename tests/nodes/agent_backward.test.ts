@@ -23,6 +23,7 @@ import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { BackwardContext, BackwardResult, CapabilityFault, validateBackwardResult } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
 import { BackwardComputeError, computeBackward, learningMaterials } from "../../src/runtime/backward.ts";
+import { recordedGrants } from "../../src/run.ts";
 import { validateAttributedBackward } from "../../src/runtime/learning.ts";
 import {
   commitPrepared,
@@ -130,7 +131,7 @@ test("the backward context exposes only accepted evidence and replays without ag
   expect(Object.hasOwn(accepted, "_evaluation_evidence")).toBe(false);
   /** The context backward reads for the occurrence, its material rebuilt from `state`'s trace. */
   const contextOf = async (state: RunState) => {
-    const options = { memory: null, models: null, onEvent: null };
+    const options = { grants: recordedGrants(state), memory: null, models: null, onEvent: null };
     const material = (await learningMaterials(state, options)).get(sourceKey(occurrence.source)) ?? null;
     return state.trace!.backwardContext(occurrence.source, { material });
   };

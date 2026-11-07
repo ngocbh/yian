@@ -3,6 +3,7 @@
  * of `memory_fakes.ts`: the proposal phase, policy failures, append faults, retries and cleanup.
  */
 
+import { recordedGrants } from "../../src/run.ts";
 import { expect, spyOn, test } from "bun:test";
 
 import { copyGraph, FlowOutput, START_ID } from "../../src/compile/model.ts";
@@ -191,7 +192,7 @@ function records(built: FlowEngine): RunRecord[] {
 
 /** Drive one attempt with `feedback`, opening `memory` over the recorded table. */
 function drive(built: FlowEngine, memory: ReadonlyMap<string, FakeMemory>, feedback: FeedbackValue = "review") {
-  return driveBackward(built.state, built.log, feedback, {
+  return driveBackward(built.state, built.log, feedback, { grants: recordedGrants(built.state),
     openMemory: () => open(built.state.memories ?? [], memory),
   });
 }
@@ -341,7 +342,7 @@ test("empty feedback still learns empty memories and commits empty batches", asy
 test("a backward without policies still records Ready and Finished without opening resources", async () => {
   const { engine: built, node } = await terminal([]);
   const before = records(built).length;
-  const outcome = await driveBackward(built.state, built.log, "review", {
+  const outcome = await driveBackward(built.state, built.log, "review", { grants: recordedGrants(built.state),
     openMemory: () => {
       throw new Error("no enabled policy");
     },
@@ -355,7 +356,7 @@ test("a backward without policies still records Ready and Finished without openi
     BackwardReadyRecord,
     BackwardFinishedRecord,
   ]);
-  const again = await driveBackward(built.state, built.log, "again");
+  const again = await driveBackward(built.state, built.log, "again", { grants: recordedGrants(built.state) });
   expect(again.status).toBe("succeeded");
   expect(again.feedback!.inputFeedback).toEqual({ topic: ["again"] });
   expect(node.calls).toHaveLength(2);
@@ -386,7 +387,7 @@ test("a drive hands its models and onEvent to the backward hook", async () => {
   };
   const onEvent = () => {};
 
-  const outcome = await driveBackward(built.state, built.log, "review", { models, onEvent });
+  const outcome = await driveBackward(built.state, built.log, "review", { grants: recordedGrants(built.state), models, onEvent });
 
   expect(outcome.status).toBe("succeeded");
   expect(received).toHaveLength(1);
@@ -715,7 +716,7 @@ test("a failed resource setup does not close an unfinished attempt", async () =>
         snapshots: [new MemorySnapshotEnvelope(memories[0]!.key, problem === "snapshots" ? { changed: true } : {})],
       });
     };
-    const error = await rejected(driveBackward(built.state, built.log, "second", { openMemory }));
+    const error = await rejected(driveBackward(built.state, built.log, "second", { grants: recordedGrants(built.state), openMemory }));
     expect((error as Error).constructor).toBe(cls);
     expect((error as Error).message).toBe(message);
     expect(built.state.backwardState).toBe(old);
@@ -971,7 +972,7 @@ test("submission gates reject before opening or appending", async () => {
     const memory = new FakeMemory();
     const before = records(built);
     const error = await rejected(
-      driveBackward(built.state, built.log, problem === "invalid_feedback" ? [] : "review", {
+      driveBackward(built.state, built.log, problem === "invalid_feedback" ? [] : "review", { grants: recordedGrants(built.state),
         openMemory:
           problem === "missing_opener" ? null : () => open(built.state.memories!, new Map([["A", memory]])),
       }),
@@ -990,7 +991,7 @@ test("feedback the state can't prepare is refused before the opener runs", async
   const before = records(built);
   let opened = 0;
   const error = await rejected(
-    driveBackward(built.state, built.log, "\uD800", {
+    driveBackward(built.state, built.log, "\uD800", { grants: recordedGrants(built.state),
       openMemory: () => {
         opened += 1;
         return open(built.state.memories!, new Map([["A", new FakeMemory()]]));
@@ -1153,7 +1154,7 @@ test("driving requires a RunState and a RunLog", async () => {
     [Object.create(built.state), built.log],
     [built.state, {}],
   ]) {
-    const error = await rejected(driveBackward(state as RunState, log as RunLog, "review", { openMemory }));
+    const error = await rejected(driveBackward(state as RunState, log as RunLog, "review", { grants: recordedGrants(state as RunState), openMemory }));
     expect((error as Error).constructor).toBe(TypeError);
     expect((error as Error).message).toBe("backward driving requires a RunState and RunLog");
   }
@@ -1166,7 +1167,7 @@ test("an async opener resolves before the first record is appended", async () =>
   const memory = new FakeMemory();
   const gate = Promise.withResolvers<void>();
   const before = records(built);
-  const pending = driveBackward(built.state, built.log, "review", {
+  const pending = driveBackward(built.state, built.log, "review", { grants: recordedGrants(built.state),
     openMemory: async () => {
       await gate.promise;
       return open(built.state.memories!, new Map([["A", memory]]));
@@ -1192,7 +1193,7 @@ test("a drive overtaken during its opener appends nothing and closes its runtime
     }
     const stale = new FakeMemory();
     const gate = Promise.withResolvers<void>();
-    const pending = driveBackward(built.state, built.log, "stale", {
+    const pending = driveBackward(built.state, built.log, "stale", { grants: recordedGrants(built.state),
       openMemory: async () => {
         await gate.promise;
         return open(built.state.memories!, new Map([["A", stale]]));
@@ -1326,7 +1327,7 @@ test("an opener result that isn't a MemoryRuntime is refused before any record",
   const { engine: built, node } = await terminal();
   const before = records(built);
   const error = await rejected(
-    driveBackward(built.state, built.log, "review", { openMemory: () => ({}) as MemoryRuntime }),
+    driveBackward(built.state, built.log, "review", { grants: recordedGrants(built.state), openMemory: () => ({}) as MemoryRuntime }),
   );
   expect((error as Error).constructor).toBe(TypeError);
   expect((error as Error).message).toBe("backward memory opener must return a MemoryRuntime");
@@ -1348,7 +1349,7 @@ test("an opened runtime whose earlier close failed is refused as a mismatch", as
     close.mockRestore();
   }
   const before = records(built);
-  const error = await rejected(driveBackward(built.state, built.log, "review", { openMemory: () => runtime }));
+  const error = await rejected(driveBackward(built.state, built.log, "review", { grants: recordedGrants(built.state), openMemory: () => runtime }));
   expect((error as Error).constructor).toBe(RangeError);
   expect((error as Error).message).toBe(
     "opened memory runtime does not match the recorded memory table and snapshots",

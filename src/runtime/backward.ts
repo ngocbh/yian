@@ -15,7 +15,6 @@
 import { reprText } from "../diagnostics.ts";
 import { ReplayDegraded } from "../events.ts";
 import { type FeedbackValue, sameSource, sourceKey } from "../expr/lineage.ts";
-import { ToolSpec } from "../llm/messages.ts";
 import {
   LearningFailure,
   MemoryContext,
@@ -35,16 +34,7 @@ import {
   tracebackText,
   validateBackwardResult,
 } from "../nodes/base.ts";
-import { Skill } from "../skills/catalog.ts";
 import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
-import {
-  expandGrants,
-  GrantError,
-  type GrantedTool,
-  type GrantScope,
-  requestToolSpecs,
-  type ToolGrant,
-} from "../tools/grants.ts";
 import { jsTypeName } from "../typesys/values.ts";
 import { AttributedBackwardResult, BackwardFailure, BackwardOutcome, type MemoryProposal } from "./contracts.ts";
 import {
@@ -219,6 +209,9 @@ function finishBackward(
   return state.backwardState.finished!.outcome;
 }
 
+/** What a run recorded of its grants, as a `MaterialCaps` reads them. */
+export type RecordedGrants = Pick<MaterialCaps, "skills" | "toolSpecs">;
+
 /** Each accepted occurrence's learning material by its source's `sourceKey`; one without any is absent. */
 export type LearningMaterials = ReadonlyMap<string, LearningMaterial>;
 
@@ -235,12 +228,14 @@ export type LearningMaterials = ReadonlyMap<string, LearningMaterial>;
  * a tool the recorded specs lack fail the check too. A grant naming a tool group is expanded with
  * the groups the run recorded, so a run reopened without its tools learns the same.
  *
- * @param options `memory` recalls for scoped occurrences (`null` recalls nothing); `models`
- *   builds a structured call's model to read its plan off; `onEvent` receives the reports.
+ * @param options `grants` is what the run recorded of its grants; `memory` recalls for scoped
+ *   occurrences (`null` recalls nothing); `models` builds a structured call's model to read its
+ *   plan off; `onEvent` receives the reports.
  */
 export async function learningMaterials(
   state: RunState,
   options: {
+    grants: RecordedGrants;
     memory: MemoryRuntime | null;
     models: BackwardOptions["models"] | null;
     onEvent: BackwardOptions["onEvent"] | null;
@@ -248,7 +243,7 @@ export async function learningMaterials(
 ): Promise<LearningMaterials> {
   const { memory, models, onEvent } = options;
   const trace = state.trace!;
-  const { skills, toolSpecs } = recordedGrants(state);
+  const { skills, toolSpecs } = options.grants;
   // Recalls for `occurrence` against the recorded snapshots, as its run did.
   const recallFor =
     (occurrence: TraceOccurrence) =>
@@ -276,84 +271,19 @@ export async function learningMaterials(
   return materials;
 }
 
-/**
- * Return what the run recorded of its grants, as a `MaterialCaps` reads them: the skills by name,
- * and a request's tool list for some grants, expanded as the live loop expands them but over the
- * groups and tools the run recorded (`null` when a grant names no recorded tool).
- */
-export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "toolSpecs"> {
-  const skills = new Map(
-    Object.entries(state.recordedSkills).map(([name, { description, instructions }]) => [
-      name,
-      new Skill({ name, description, instructions }),
-    ]),
-  );
-  const scope = recordedScope(state);
-  const toolSpecs = (grants: readonly ToolGrant[], loadSkill: ToolSpec | null) => {
-    let granted: GrantedTool[];
-    try {
-      granted = expandGrants(grants, [scope]);
-    } catch (error) {
-      if (error instanceof GrantError) return null;
-      throw error;
-    }
-    const specOf = (tool: GrantedTool) => {
-      if (!Object.hasOwn(state.recordedTools, tool.key)) return null;
-      const { name, description, parameters } = state.recordedTools[tool.key]!;
-      return new ToolSpec({ name, description, parameters });
-    };
-    return requestToolSpecs(granted, specOf, loadSkill);
-  };
-  return { skills, toolSpecs };
-}
-
-/**
- * Return the run's recorded tools as the grant scope its `ToolSet` was: the recorded groups by
- * name, each member by its own name; a top-level tool is a recorded tool no group lists; and a
- * tool's identity is its record name, so grants expand and dedupe as they did live.
- */
-function recordedScope(state: RunState): GrantScope {
-  const groups = state.recordedToolGroups;
-  const tools = state.recordedTools;
-  const members = (group: string): readonly string[] =>
-    Object.hasOwn(groups, group) ? groups[group]! : [];
-  const nameOf = (key: string) => (Object.hasOwn(tools, key) ? tools[key]!.name : null);
-  const listed = new Set(Object.values(groups).flat());
-  return {
-    label: "this run",
-    bareMembers: true,
-    group: (name) =>
-      Object.hasOwn(groups, name) ? members(name).map((key) => nameOf(key) ?? key) : null,
-    hasTool: (name) => Object.hasOwn(tools, name) && !listed.has(name),
-    groupsHolding: (name) => {
-      const seen = new Set<string>();
-      const holding: string[] = [];
-      for (const group of Object.keys(groups)) {
-        const key = members(group).find((member) => nameOf(member) === name);
-        if (key === undefined || seen.has(key)) continue;
-        seen.add(key);
-        holding.push(group);
-      }
-      return holding;
-    },
-    groupNames: () => Object.keys(groups),
-    identity: (group, tool) =>
-      group === null ? tool : (members(group).find((key) => nameOf(key) === tool) ?? tool),
-  };
-}
-
 /** Compute once, stage every memory, then request and observe each memory key in order. */
 async function driveOpenedBackward(
   state: RunState,
   log: RunLog,
   memory: MemoryRuntime | null,
-  options: BackwardOptions,
+  options: { grants: RecordedGrants } & BackwardOptions,
 ): Promise<BackwardOutcome> {
   const started = state.backwardState.started!;
   const attemptId = started.attemptId;
   const trace = state.trace!;
   const cache = new ContextCache(trace);
   const materials = await learningMaterials(state, {
+    grants: options.grants,
     memory,
     models: options.models ?? null,
     onEvent: options.onEvent ?? null,
@@ -465,6 +395,7 @@ async function driveOpenedBackward(
  * @param state Verified retained forward and backward record authority.
  * @param log The open append authority for that state.
  * @param rootFeedback Ordinary feedback on the recorded terminal.
+ * @param options.grants What the run recorded of its grants, as `learningMaterials` reads them.
  * @param options.openMemory Fresh resource opener using the recorded memory table and snapshots;
  *   required only for enabled memories, and called only then. This driver closes the returned
  *   runtime on every exit.
@@ -488,8 +419,9 @@ export async function driveBackward(
   log: RunLog,
   rootFeedback: FeedbackValue,
   options: {
+    grants: RecordedGrants;
     openMemory?: (() => MemoryRuntime | Promise<MemoryRuntime>) | null;
-  } & BackwardOptions = {},
+  } & BackwardOptions,
 ): Promise<BackwardOutcome> {
   if (!isExactly(state, RunState) || !isRunLog(log)) {
     throw new TypeError("backward driving requires a RunState and RunLog");
@@ -527,6 +459,7 @@ export async function driveBackward(
     acceptBackward(state, log, first);
     if (unfinished) acceptBackward(state, log, started);
     return await driveOpenedBackward(state, log, memory, {
+      grants: options.grants,
       models: options.models,
       onEvent: options.onEvent,
     });

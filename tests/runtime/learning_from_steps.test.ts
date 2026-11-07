@@ -28,7 +28,7 @@ import {
   ToolCallInteraction,
   ToolResultInteraction,
 } from "../../src/memory/contracts.ts";
-import { advance, replayRunLog, runFlow } from "../../src/run.ts";
+import { advance, recordedGrants, replayRunLog, runFlow } from "../../src/run.ts";
 import { learningMaterials } from "../../src/runtime/backward.ts";
 import { JsonlRunLog } from "../../src/runtime/log.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
@@ -123,7 +123,7 @@ async function materialsOf(
         });
   const events: unknown[] = [];
   try {
-    const materials = await learningMaterials(state, {
+    const materials = await learningMaterials(state, { grants: recordedGrants(state),
       memory,
       models: model instanceof ScriptedModel ? serving(model) : model,
       onEvent: (event) => events.push(event),

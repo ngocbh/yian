@@ -3,6 +3,7 @@
  * contexts over engine runs and replays.
  */
 
+import { recordedGrants } from "../../src/run.ts";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
@@ -1003,7 +1004,7 @@ test("a root fallback context failure names no node", async () => {
   });
   let outcome: BackwardOutcome;
   try {
-    outcome = await driveBackward(state, log, "review", {
+    outcome = await driveBackward(state, log, "review", { grants: recordedGrants(state),
       openMemory: () =>
         MemoryRuntime.open({
           memories,

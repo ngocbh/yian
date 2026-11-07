@@ -1,5 +1,5 @@
-# A learnable loop whose body CALLs another def. The golden log pins the captures and seed
-# routes through a LOOP and a CALL.
+# A loop whose body CALLs another def. The golden log pins the seeds and derived commits through
+# a LOOP and a CALL.
 kind: run
 flow: |
   id: count
@@ -18,6 +18,6 @@ flow: |
   nodes:
     count: {kind: loop, call: body, input: {x: 0}, times: 2}
   output: ${count.output.x}
-run: {run_id: r1, num_workers: 0, learnable: true}
+run: {run_id: r1, num_workers: 0}
 expect:
   output: {status: succeeded, output: 2}

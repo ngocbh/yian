@@ -75,20 +75,6 @@ test("a 401 with a saved login records no part of it", async () => {
   await runRejected(env, path);
 });
 
-test("a backward 401 with a saved login records no part of it", async () => {
-  const { env, path } = fresh();
-  await new AuthStore(null, { env }).save("vllm", new ApiKeyCredentials(KEY), "served-model");
-  const models = recording(env, rejecting(1));
-  const result = await runFlow(await flow(env), {}, { log: path, learnable: true, models, env });
-  expect(result.status, result.failure?.message).toBe("succeeded");
-  const outcome = await result.backward("Be brief.");
-  expect(outcome.status).toBe("failed");
-  expect(models.requests).toHaveLength(2);
-  expect(models.requests[1]!.headers.get("authorization")).toBe(`Bearer ${KEY}`);
-  expect(readFileSync(path, "utf8")).toContain("[REDACTED]");
-  expectHidden(path, [result, outcome], FRAGMENTS);
-});
-
 test("a subscription token echoed by the provider is not recorded", async () => {
   const [access, refresh] = ["atok47-echo-7h3k", "rtok91-echo-p9d2"];
   const { env, path } = fresh();

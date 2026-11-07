@@ -172,8 +172,8 @@ export class CaseNode extends Node {
    * @returns Declared names except the generated `__on` and `__rN` controls, preserving directly
    *   declared ordinary inputs in order.
    */
-  override backwardInputNames(): readonly string[] {
-    return super.backwardInputNames().filter((name) => name !== "__on" && !/^__r[0-9]+$/.test(name));
+  override dataInputNames(): readonly string[] {
+    return super.dataInputNames().filter((name) => name !== "__on" && !/^__r[0-9]+$/.test(name));
   }
 
   /**

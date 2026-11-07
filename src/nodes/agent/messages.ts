@@ -8,7 +8,7 @@
  *
  * An AGENT's new messages (`messageSteps`, `rebuildMessages`) are rebuilt from its recorded steps,
  * so the reducer can rebuild them on every append and replay. The steps fold into exchanges by one
- * set of rules (`foldSteps`), which the loop's replay and learning read too.
+ * set of rules (`foldSteps`), which the loop's replay and the request rebuild read too.
  *
  * Knows about: llm (messages), diagnostics, typesys.
  * Never imports: compose, compile, runtime, the run boundary or the CLI.
@@ -366,7 +366,7 @@ export interface FoldedSteps<S = ValueRecord> {
  * and each failed one that wasn't to be retried, ends one logical call, which the failed attempts
  * before it belong to; each `tool_result` is filed under the call before it (one before any call
  * answers nothing), each `steer` under the call after it. Steps of any other kind are skipped. The
- * AGENT loop replays its calls from this fold; learning and the new messages rebuild from it.
+ * AGENT loop replays its calls from this fold; its requests and new messages rebuild from it.
  */
 export function foldSteps<S extends Readonly<Record<string, unknown>>>(steps: readonly S[]): FoldedSteps<S> {
   const exchanges: { steers: NumberedStep<S>[]; attempts: NumberedStep<S>[]; results: Map<string, NumberedStep<S>> }[] = [];

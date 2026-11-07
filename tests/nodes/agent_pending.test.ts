@@ -13,10 +13,9 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunEvent, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
 import { AgentLoopError, type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
-import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
+import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import { advance, cancel, complete, pendingCalls, runFlow, send } from "../../src/run.ts";
 import { decodeRecord, NodeStepRecord, NodeWaitingRecord } from "../../src/runtime/log.ts";
@@ -24,7 +23,6 @@ import { pending } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { type ToolEntry, ToolSet } from "../../src/tools/registry.ts";
 import { gateTool, handClock } from "../helpers/inbox_fixtures.ts";
-import { FakeMemory } from "../helpers/memory_fakes.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { callReply, crashAfter, NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
@@ -231,15 +229,13 @@ test("pending() outside a durable run fails the agent", async () => {
   const ctx: AgentRunContext = {
     nodeId: "n",
     messages: [userMessage("go")],
-    promptText: "go",
     tools: ["lookup"],
     llmConfig: CONFIG,
     outputType: null,
     retries: 0,
     maxToolIterations: -1,
-    memoryContext: new MemoryContext(),
     toolset: new ToolSet({ lookup: lookup(() => pending()) }),
-    baseSystemPrompt: DEFAULT_SYSTEM,
+    systemPrompt: DEFAULT_SYSTEM,
     skills: [],
     models: { env: NO_ENV, createModel: () => model },
     sent: () => [],
@@ -268,73 +264,42 @@ test("a pended call is reported started and never finished", async () => {
   ]);
 });
 
-const MEMORY_FLOW = `
-id: agent_pending_memory
-name: agent_pending_memory
+const ASKING_FLOW = `
+id: agent_pending_ask
+name: agent_pending_ask
 llm_config: {provider: openai, model: test-model}
 nodes:
   agent:
     kind: agent
-    long_term_memory: notes
     prompt: go
     tools: [ask_user]
 output: \${agent.output}
 `;
 
-/** The system message of `model`'s request `index`. */
-const systemText = (model: ScriptedModel, index: number) => model.requests[index]!.messages[0]!.text();
-
-test("memory that learned while the agent waited can't fail its wake; the new call recalls fresh", async () => {
-  const notes = new FakeMemory({ recallText: "Note A." });
-  const model = new ScriptedModel([callReply(["ask_user", { question: "Ship?" }, "c1"]), textReply("done")], CONFIG);
-  const log = freshLog();
-  const options = {
-    env: hostEnv(dir),
-    log,
-    tools: { ask_user: () => pending() },
-    models: serving(model),
-    memory: new Map([["notes", notes]]),
-    runId: "r",
-  };
-  expect((await runFlow(await loadFlow(MEMORY_FLOW), {}, options)).status).toBe("waiting");
-  notes.recallText = "Note B.";
-  await complete(log, "r/agent/1/0", { output: "yes" });
-  const resumed = await advance(options);
-
-  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-  expect(systemText(model, 0)).toContain("Note A.");
-  expect(systemText(model, 1)).toContain("Note B.");
-  expect(systemText(model, 1)).not.toContain("Note A.");
-});
-
 test("a crash between a pending step and node_waiting resumes: the call is closed and the agent goes on", async () => {
-  const notes = new FakeMemory({ recallText: "Note A." });
   const replies = () => [callReply(["ask_user", { question: "Ship?" }, "c1"]), textReply("done")];
   const options = (model: ScriptedModel, log: string) => ({
     env: hostEnv(dir),
     log,
     tools: { ask_user: () => pending() },
     models: serving(model),
-    memory: new Map([["notes", notes]]),
     runId: "r",
   });
   const uncut = freshLog();
-  await runFlow(await loadFlow(MEMORY_FLOW), {}, options(new ScriptedModel(replies(), CONFIG), uncut));
+  await runFlow(await loadFlow(ASKING_FLOW), {}, options(new ScriptedModel(replies(), CONFIG), uncut));
   const log = freshLog();
   // Keep every record up to and including the pending step.
   await crashAfter(kinds(uncut).indexOf("pending") + 1, async () =>
-    runFlow(await loadFlow(MEMORY_FLOW), {}, options(new ScriptedModel(replies(), CONFIG), log)),
+    runFlow(await loadFlow(ASKING_FLOW), {}, options(new ScriptedModel(replies(), CONFIG), log)),
   );
   expect(kinds(log).at(-1)).toBe("pending");
-  notes.recallText = "Note B.";
   const model = new ScriptedModel([textReply("done")], CONFIG);
   const resumed = await advance(options(model, log));
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(kinds(log)).toContain("run_resumed");
-  // The recorded reply replayed; only the live call reached the model, with the fresh recall.
+  // The recorded reply replayed; only the live call reached the model.
   expect(model.requests).toHaveLength(1);
-  expect(systemText(model, 0)).toContain("Note B.");
   expect(sentResults(model, 0)).toEqual([["c1", TOOL_OUTCOME_UNKNOWN, true]]);
 });
 

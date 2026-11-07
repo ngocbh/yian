@@ -33,8 +33,8 @@
  * corrected under `retries:`; once they are spent the node fails with `OutputInvalidError`, whose
  * `path` locates the last error inside the output when it can.
  *
- * Knows about:   defaults, diagnostics, llm, memory contracts, nodes/base (types), nodes/contracts,
- *                typesys, peer AGENT modules.
+ * Knows about:   defaults, diagnostics, llm, nodes/base (types), nodes/contracts, typesys, peer
+ *                AGENT modules.
  * Never imports: compile, compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
@@ -43,11 +43,6 @@ import { compareCodeUnits } from "../../diagnostics.ts";
 import type { ChatModel } from "../../llm/events.ts";
 import { Message, Request, type Response, TextPart } from "../../llm/messages.ts";
 import { planStructured, StructuredOutputError, structuredTarget } from "../../llm/structured.ts";
-import {
-  ModelTextInteraction,
-  ModelValueInteraction,
-  type VisibleInteraction,
-} from "../../memory/contracts.ts";
 import { type JsonObject, type JsonValue, logJson } from "../../typesys/json.ts";
 import {
   type Bounds,
@@ -78,7 +73,6 @@ import {
 } from "./context.ts";
 import { ReplyInterrupted } from "./interrupts.ts";
 import { callModel, type LiveSinks } from "./live.ts";
-import { pushVisible } from "./text.ts";
 
 // ValueKind -> JSON Schema type of a scalar slot. date and datetime persist as ISO strings.
 const SCALAR_TYPES: ReadonlyMap<ValueKind, string> = new Map([
@@ -455,7 +449,7 @@ export function userMessage(text: string): Message {
 
 /**
  * The conversation one structured generation of `typ` sends: `generateStructured` runs it and
- * `structuredMaterial` rebuilds it, so learning's digests match the requests the run sent.
+ * `rebuildStructuredRequests` rebuilds it, so the rebuilt requests' digests match the ones sent.
  */
 interface StructuredConversation {
   /** Whether the schema goes in the prompt (`plan.instruction()` as a user message). */
@@ -515,8 +509,7 @@ function structuredConversation(model: ChatModel, messages: readonly Message[], 
  *   `interrupt` is the host's interrupt signal, which cuts a call as `callModel` does and, once
  *   replay is over, ends the calls before the next one starts, as an honor step an earlier start
  *   recorded in `steps` does; `retry` is each call's retry settings; with `steps`, each call is
- *   written as a `model_call` step (`callModel`), its digest taken with the system message
- *   reduced to `baseSystemPrompt` (`RequestDigest`; absent or `null` hashes the request as it is).
+ *   written as a `model_call` step (`callModel`) with its request's digest (`RequestDigest`).
  * @returns The checked value, unwrapped.
  * @throws OutputInvalidError once `retries + 1` replies were invalid.
  * @throws ReplyInterrupted when a host interrupt cut a call, or was set or recorded honored before
@@ -534,13 +527,12 @@ export async function generateStructured(
     interrupt?: AbortSignal;
     retry?: RetrySettings;
     steps?: AgentSteps;
-    baseSystemPrompt?: string | null;
   } = {},
 ): Promise<Value> {
-  const { live = null, signal, interrupt, retry, steps, baseSystemPrompt = null } = options;
+  const { live = null, signal, interrupt, retry, steps } = options;
   const retries = options.retries ?? current().agentRetries;
   const conversation = structuredConversation(model, messages, typ);
-  const digests = new RequestDigest(baseSystemPrompt);
+  const digests = new RequestDigest();
   for (let call = 0; ; call++) {
     signal?.throwIfAborted();
     // No model call starts after an interrupt, or once replay passed an earlier start's honor; a
@@ -568,41 +560,32 @@ export async function generateStructured(
 }
 
 /**
- * Rebuild what `generateStructured(model, messages, typ)` showed a learner from its recorded
- * `model_call` steps, in order: each prompt-strategy reply's text, or the other strategies'
- * checked value. A failed attempt and a reply a host interrupt cut show nothing; an invalid reply
- * adds the correction the next request carries.
+ * Rebuild each request `generateStructured(model, messages, typ)` sent from its recorded
+ * `model_call` steps, in order: an invalid reply adds the correction the next request carries.
  *
  * @param steps The structured calls' `model_call` steps.
- * @param baseSystemPrompt The system prompt without recalled memory, which each digest reads in
- *   place of the system message (`RequestDigest`); `null` hashes each request as it is.
- * @returns The interactions; each step's rebuilt request and whether the step recorded its
- *   purpose and digest, index for index; and whether every step did.
+ * @returns Each step's rebuilt request and whether the step recorded its purpose and digest, index
+ *   for index; and whether every step did.
  */
-export function structuredMaterial(
+export function rebuildStructuredRequests(
   model: ChatModel,
   messages: readonly Message[],
   typ: Type,
   steps: readonly ValueRecord[],
-  baseSystemPrompt: string | null = null,
-): { interactions: VisibleInteraction[]; requests: RebuiltRequest[]; digestOk: boolean } {
+): { requests: RebuiltRequest[]; digestOk: boolean } {
   const conversation = structuredConversation(model, messages, typ);
-  const { prompted, purpose } = conversation;
-  const interactions: VisibleInteraction[] = [];
+  const { purpose } = conversation;
   const requests: RebuiltRequest[] = [];
-  const digests = new RequestDigest(baseSystemPrompt);
+  const digests = new RequestDigest();
   for (const step of steps) {
     const request = conversation.request();
     const digest = digests.digest(request);
     requests.push({ request, digestOk: step["purpose"] === purpose && step["request_sha256"] === digest });
-    // A cut reply was never output: its text so far shows nothing, as in `stepsMaterial`.
+    // A cut reply was never output, so the next request carries no correction for it.
     if (Object.hasOwn(step, "error") || step["finish"] === "interrupted") continue;
-    const response = recordedResponse(step);
-    if (prompted) pushVisible(interactions, () => new ModelTextInteraction(response.message.text()));
-    const checked = conversation.check(response);
-    if (!prompted && "value" in checked) pushVisible(interactions, () => new ModelValueInteraction(checked.value));
+    conversation.check(recordedResponse(step));
   }
-  return { interactions, requests, digestOk: requests.every((each) => each.digestOk) };
+  return { requests, digestOk: requests.every((each) => each.digestOk) };
 }
 
 /** Whether `typ` is a non-nullable record, whose schema is not wrapped. */

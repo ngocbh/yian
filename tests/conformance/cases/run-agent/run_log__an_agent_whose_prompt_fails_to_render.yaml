@@ -1,0 +1,67 @@
+# Pins: an AGENT whose prompt renders a null fails after resolving its variables, before any model
+# call.
+kind: run
+# A present null is a value, so the strict prompt refuses the null span (#1149).
+flow: |
+  id: noted
+  name: noted
+  llm_config: {provider: anthropic, model: claude-test}
+  input: {note: !Optional(str) null}
+  nodes:
+    writer:
+      kind: agent
+      input: {note: '${input.note}'}
+      variables: {tone: !str plain}
+      prompt: '${tone}: ${note}'
+      output: str
+  output: ${writer.output}
+inputs: {}
+run: {run_id: r1, num_workers: 0}
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 9]
+      message: 'null value in strict template: ${note} is null; give it a default, e.g. ${note :- "none"}'
+      node: writer
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        writer:
+          model: claude-test
+          provider: anthropic
+          _connection: {method: api_key, source: environment, endpoint: null}
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {note: null}
+  - - node_succeeded
+    - __start__
+    - commit: 6
+  - [node_started, writer]
+  - - node_failed
+    - writer
+    - failure:
+        code: node.execute
+        message: 'null value in strict template: ${note} is null; give it a default, e.g. ${note :- "none"}'
+        frames:
+        - label: flow.yaml
+          range: [6, 3, 6, 9]
+        node: writer

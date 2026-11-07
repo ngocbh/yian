@@ -34,7 +34,7 @@ expect:
   trace:
   - - run_started
     - null
-    - {learnable: false, num_workers: 0}
+    - {num_workers: 0}
   - - pool_commit
     - __start__
     - {key: system.now}

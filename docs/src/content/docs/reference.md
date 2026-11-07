@@ -20,7 +20,7 @@ Each entry is in one of three groups:
 | Group | What it bounds |
 |---|---|
 | limit | A safety limit of the language, such as how deep a value may nest, or how much of a value an error message shows |
-| setting | How a node or memory behaves when the flow says nothing. Where a flow can set it (an AGENT's or TOOL's `retries:`, a memory's `config:`), the flow's value wins |
+| setting | How a node behaves when the flow says nothing. Where a flow can set it (an AGENT's or TOOL's `retries:`), the flow's value wins |
 | input cap | The largest input yian reads from a file, a server or the user |
 
 ### Setting a value
@@ -44,7 +44,7 @@ YIAN_MAX_VALUE_NESTING="150" is out of range; use an integer from 1 to 100, or u
 ### Runs keep the values they started with
 
 A run records, in its `run_started` record, the values that differ from the built-in ones.
-Resuming the run, or learning from it, needs the same values. A difference stops the resume with
+Resuming the run needs the same values. A difference stops the resume with
 one line per variable, saying what to set:
 
 ```text
@@ -82,16 +82,6 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MODEL_FIRST_RESPONSE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds from sending a model request to the first bytes of its response |
 | `YIAN_MODEL_IDLE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds between bytes of a streamed model response |
 | `YIAN_REQUEST_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for a short request (model listing, sign-in calls) |
-| `YIAN_EPISODIC_MAX_EPISODES` | setting | 100 | 1 or more | Episodes an episodic memory keeps when it sets no limit |
-| `YIAN_EPISODIC_RECALL_LIMIT` | setting | 10 | 1 or more | Episodes an episodic memory recalls when it sets no limit |
-| `YIAN_REFLECTIVE_MAX_ITEMS` | setting | 100 | 1 or more | Lessons a reflective memory keeps when it sets no limit |
-| `YIAN_REFLECTIVE_RECALL_LIMIT` | setting | 20 | 1 or more | Lessons a reflective memory recalls when it sets no limit |
-| `YIAN_REFLECTIVE_MAX_LESSON_CHARS` | setting | 8,000 | 256 or more | Characters of current lessons shown to the reflection model |
-| `YIAN_REFLECTIVE_MAX_EPISODE_CHARS` | setting | 20,000 | 256 or more | Characters of the episode shown to the reflection model |
-| `YIAN_REFLECTIVE_MAX_LIMIT_CHARS` | setting | 256 | 256 or more | Characters of the memory limits shown to the reflection model |
-| `YIAN_PROFILE_MAX_CHARS` | setting | 32,000 | 1 or more | Characters a profile memory may hold |
-| `YIAN_PROFILE_INPUT_BUDGET_CHARS` | setting | 24,000 | 1 or more | Characters of run material sent to a profile memory's learner |
-| `YIAN_PROFILE_LOCK_TIMEOUT_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds for another writer to release a profile memory's `.lock` file |
 | `YIAN_MAX_AUTH_RESPONSE_BYTES` | input cap | 1,048,576 | 1 or more | Largest response body read from a sign-in server |
 | `YIAN_MAX_AUTH_STORE_BYTES` | input cap | 1,048,576 | 1 or more | Largest auth store file read or written |
 | `YIAN_MAX_OAUTH_CALLBACK_BYTES` | input cap | 16,384 | 1 or more | Largest request header block read from the sign-in callback |
@@ -115,8 +105,6 @@ An entry whose valid values say "can only be lowered" has its default as its max
 - TOOL retries wait `YIAN_TOOL_RETRY_DELAY_SECONDS`, then twice that, and so on, up to
   `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS`. Each wait is picked at random between half and all of its
   step.
-- An episodic or reflective memory records its limits in its store, so its defaults apply only to
-  a store that has none yet.
 
 ## Environment variables
 
@@ -146,12 +134,11 @@ Provider API keys and base URLs, such as `ANTHROPIC_API_KEY`, are listed on
 | `~/.yian/runs/<run_id>/log.jsonl.lock` | The lock the process writing the log holds |
 | `~/.yian/runs/<run_id>/media/` | Media files the run keeps, named by their SHA-256 |
 | `~/.yian/runs/index.sqlite` | The run index `yian status` lists. It is rebuilt from the logs, so you can delete it |
-| `DIR/<flow id>/<key>.sqlite` | A memory kept with `--memory-root DIR`, or at `PATH` with `--memory-storage KEY=PATH`. A profile memory is a `.md` file with hidden `.<file>.lock`, `.versions` and `.writes.jsonl` files beside it. Without either flag, memory stays in RAM for one run |
 | `~/.claude/skills`, `~/.agents/skills` | Your skills, read when an agent grants skills |
 | `.claude/skills`, `.agents/skills` | Project skills, from the current folder up to the git root |
 
-`~/.yian`, `~/.yian/runs` and each run folder have mode `0700`; a log has mode `0600`. Logs and
-memory files are not encrypted and can hold prompts, replies and tool data, so keep them private.
+`~/.yian`, `~/.yian/runs` and each run folder have mode `0700`; a log has mode `0600`. Logs are
+not encrypted and can hold prompts, replies and tool data, so keep them private.
 
 ## Failure codes
 
@@ -197,48 +184,12 @@ A `--json` command that fails without its own result prints an error document wh
 | `expr.nullable_field_read` | The flow doesn't load because it reads a field of a value that may be null. The message names the fix |
 | `compose.outside_root` | `yian check --root`: a flow or a `uses:` import is outside the root |
 | `defaults.invalid` | A `YIAN_*` variable holds a value it doesn't take (any command) |
-| `run.setup` | The run couldn't start or resume: memory, skills or MCP setup, a missing or changed provider key, the run log (missing, damaged, locked), or an input that fails its check. Also a log or index `yian status` can't read |
+| `run.setup` | The run couldn't start or resume: skills or MCP setup, a missing or changed provider key, the run log (missing, damaged, locked), or an input that fails its check. Also a log or index `yian status` can't read |
 | `run.cancelled` | You cancelled the run at a prompt, input ended there, or the host cancelled the run |
 | `auth.failed` | `yian auth` failed: options that don't go together, an unusable file, a login that isn't saved, or a failed sign-in or model check |
 | `models.failed` | `yian models` couldn't list the models. `error.status` is the HTTP status, or `null` |
 | `models.timeout` | The listing took longer than `--timeout`. `error.status` is `null` |
 | `skill.invalid` | `yian skills check`: a directory holds no valid `SKILL.md` |
-
-## Memory and learning codes
-
-A [learning pass](/learning/) that fails, and a `memory_commit_failed` record, carry one of these
-codes. `X` is `episodic` or `reflective`. The failure's `retryable` says whether a retry may help.
-
-| Code | When |
-|---|---|
-| `backward.execute` | The learning pass threw while it computed its result |
-| `backward.result` | The learning pass returned an invalid result |
-| `backward.unfinished` | An earlier attempt stopped before it finished |
-| `memory.invalid_context` | The material a memory learns from couldn't be built for a node |
-| `memory.invalid_result`, `memory.unexpected` | A memory returned a malformed result, or threw an error with no code |
-| `storage.busy` | Another run owns the `.sqlite` file. Retryable |
-| `storage.corrupt`, `storage.io` | The file isn't a valid memory database, or reading or writing it failed |
-| `storage.version`, `storage.kind`, `storage.schema` | The file is from another version or memory type, or has an unsupported format |
-| `storage.path` | The path isn't a local regular file |
-| `storage.closed`, `storage.poisoned`, `storage.backend`, `storage.invalid_state` | The store was used after it closed or failed, or was given a bad value |
-| `X.config_conflict` | The memory's limits differ from the ones its store recorded |
-| `X.stale_generation` | Something was saved to the memory after the run started |
-| `X.invalid_snapshot`, `X.invalid_storage` | The recorded snapshot or the stored state is invalid |
-| `X.invalid_batch`, `X.invalid_commit_id`, `X.commit_collision` | A save's changes or id are invalid, or its id was used for other changes |
-| `X.invalid_context`, `X.closed`, `X.session_closed`, `X.busy` | The memory was called with a bad context, after it closed, or closed while in use |
-| `episodic.invalid_query`, `reflective.query` | Rewriting the recall query failed |
-| `reflective.invalid_mutation` | A lesson change adds a lesson that exists, or changes one that doesn't |
-| `reflective.max_items` | The lessons would exceed the memory's `max_items` |
-| `reflective.config` | The reflection model's configuration is invalid |
-| `reflective.model_construction`, `reflective.provider` | Building or calling the reflection model failed |
-| `reflective.structured_output`, `reflective.contract` | The reflection model can't give structured output, or its reply is invalid |
-| `profile.over_budget` | The learner's document is longer than `YIAN_PROFILE_MAX_CHARS` |
-| `profile.contract` | The learner's reply is empty or not wrapped in the document tags |
-| `profile.version_mismatch` | The document was edited after the learner read it. Retryable |
-| `profile.store_unavailable`, `profile.store_invalid` | The `.md` file couldn't be read or written, or holds an unreadable document |
-| `profile.snapshot_unavailable` | The document version the run recorded can't be restored |
-| `profile.model_construction`, `profile.provider` | Building or calling the learner model failed |
-| `profile.invalid_batch`, `profile.invalid_context`, `profile.closed`, `profile.session_closed`, `profile.reset_unsupported` | The memory was called with a bad save or context, after it closed, or asked to reset |
 
 ## Run log records
 
@@ -246,12 +197,12 @@ A run log is a JSON Lines file: one record per line, appended and never rewritte
 compact JSON with its keys sorted:
 
 ```json
-{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":26,"seq":8}
+{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":27,"seq":8}
 ```
 
 | Key | What it holds |
 |---|---|
-| `schema` | The record format, `26`. yian reads only this one. A log of schema 10 to 25 reads as `run log schema N predates schema 26 and is not supported`, any other as `unsupported run-record schema: N` |
+| `schema` | The record format, `27`. yian reads only this one. A log of schema 10 to 26 reads as `run log schema N predates schema 27 and is not supported`, any other as `unsupported run-record schema: N` |
 | `run_id` | The run's id |
 | `seq` | The record's place in the log, from 0 |
 | `at` | When the record was appended, in UTC with milliseconds. Use `seq`, not `at`, for order |
@@ -278,12 +229,6 @@ compact JSON with its keys sorted:
 | `inbox_closed` | An inbox was closed; it takes no more messages |
 | `inbox_withdrawn` | Messages nobody had read yet were taken back from an inbox |
 | `interrupted` | The agents reading an inbox were interrupted |
-| `memory_commit_requested` | A change to a memory store starts |
-| `memory_commit_succeeded` | The change to a memory store finished |
-| `memory_commit_failed` | The change to a memory store failed |
-| `backward_started` | A learning pass starts, with its feedback |
-| `backward_ready` | A learning pass computed its result and memory proposals |
-| `backward_finished` | A learning pass ended, with its outcome |
 
 `yian status` reads these records to say where a run stands. See [How yian works](/how-it-works/)
 for how yian replays a log to recover a run.

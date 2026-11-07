@@ -43,7 +43,6 @@ import {
   type OriginResolver,
   SourceRange,
 } from "../../src/diagnostics.ts";
-import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { Binding, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
@@ -795,43 +794,6 @@ describe("assemble", () => {
     expect(error).toBeInstanceOf(RangeError);
     expect(error).not.toBeInstanceOf(LoadError);
     expect(error.message).toBe("pre-resolved input parameters cannot carry an inputs cursor");
-  });
-
-  test("memories must be exact MemoryDecl values", () => {
-    class LooseDecl extends MemoryDecl {}
-    const decl = new LooseDecl("notes", "reflective", { max_items: 4n }, new DeclSite([], ["test"]));
-    const error = thrown(() => assemble({ ...bare(), inputParameters: [], memories: [decl] }));
-    expect(error).toBeInstanceOf(TypeError);
-    expect(error.message).toBe("memories must be an array of exact MemoryDecl values");
-  });
-
-  test("memories are restamped with this flow's site and one origin each", () => {
-    const document = parseSourceDocument("memories:\n  notes: reflective\nlog: reflective\n", "flow.yaml");
-    const builder = new SourceCatalogBuilder();
-    const decl = (declName: string) =>
-      new MemoryDecl(declName, "reflective", { max_items: 4n }, new DeclSite(["elsewhere"], ["other"]));
-
-    const flow = assemble({
-      ...bare(),
-      inputParameters: [],
-      scope: fakeScope(builder),
-      memories: [decl("notes"), decl("log")],
-      memoriesCursor: document.root.child("memories"),
-    });
-    const sugar = assemble({
-      ...bare(),
-      inputParameters: [],
-      scope: fakeScope(builder),
-      owner: ["sugar"],
-      memories: [decl("log")],
-      memoriesCursor: document.root.child("log"),
-    });
-
-    const [notes, log] = flow.compiled.memories;
-    expect([notes!.site.scope, notes!.site.owner, notes!.site.node]).toEqual([[], ["test"], null]);
-    expect(resolvedRange(builder, notes!.origin)).toEqual(cursorAt(document, ["memories", "notes"]).keyRange!);
-    expect(resolvedRange(builder, log!.origin)).toEqual(cursorAt(document, ["memories"]).range!);
-    expect(resolvedRange(builder, sugar.compiled.memories[0]!.origin)).toEqual(cursorAt(document, ["log"]).range!);
   });
 
   test("a reserved node id surfaces from parseNodes", () => {

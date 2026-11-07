@@ -22,7 +22,6 @@ import {
   ConnectionSelection,
   connectionSnapshot,
   HOST_KEY_MARKER,
-  legacyConnectionConfig,
 } from "../../src/llm_clients/connection.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { ValidationError } from "../../src/llm_clients/provider_blocks.ts";
@@ -40,21 +39,13 @@ import {
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import {
-  ModelTextInteraction,
-  ModelValueInteraction,
-  ToolCallInteraction,
-  ToolResultInteraction,
-  type VisibleInteraction,
-} from "../../src/memory/contracts.ts";
 import { AgentLoopError, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { SKIPPED_TOOL_ERROR } from "../../src/nodes/agent/live.ts";
 import { CallTimeLLM, contractNullable, LLM_CONFIG_KEY, splitLayers } from "../../src/nodes/agent/llm_values.ts";
-import { reportedText, toolText } from "../../src/nodes/agent/memory.ts";
+import { reportedText, toolText } from "../../src/nodes/agent/results.ts";
 import { AgentNode, isMaxToolIterations } from "../../src/nodes/agent/node.ts";
-import { pushVisible } from "../../src/nodes/agent/text.ts";
-import { BackwardContext, CapabilityFault, Output } from "../../src/nodes/base.ts";
+import { CapabilityFault, Output } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, NodeSteps, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
 import { virtualScheduler } from "../../src/platform.ts";
@@ -87,29 +78,6 @@ test("ReplyInterrupted carries the partial reply and the usage so far", () => {
 test("ReplyInterrupted's usage defaults to null", () => {
   const reply = new Message({ role: "assistant", parts: [] });
   expect(new ReplyInterrupted(reply).usage).toBeNull();
-});
-
-test("pushVisible appends an interaction and ignores a carrier construction error", () => {
-  const interactions: VisibleInteraction[] = [];
-  pushVisible(interactions, () => new ModelTextInteraction("answer"));
-  pushVisible(interactions, () => new ToolCallInteraction("lookup", { q: "x" }));
-  pushVisible(interactions, () => new ToolResultInteraction("lookup", "found"));
-  pushVisible(interactions, () => new ModelValueInteraction({ a: 1n }));
-  pushVisible(interactions, () => new ModelTextInteraction("\ud800"));
-  pushVisible(interactions, () => new ToolCallInteraction("lookup", { q: Number.NaN }));
-  pushVisible(interactions, () => new ToolResultInteraction("", "found"));
-  pushVisible(interactions, () => new ModelValueInteraction(Number.NaN));
-  expect(interactions).toEqual([
-    new ModelTextInteraction("answer"),
-    new ToolCallInteraction("lookup", { q: "x" }),
-    new ToolResultInteraction("lookup", "found"),
-    new ModelValueInteraction({ a: 1n }),
-  ]);
-  expect(() =>
-    pushVisible(interactions, () => {
-      throw new Error("host fault");
-    }),
-  ).toThrow("host fault");
 });
 
 test("toolText writes a tool result in the text form", () => {
@@ -287,44 +255,6 @@ test("an LLMConfig given as llmConfig is refused", () => {
   );
 });
 
-test("backward joins the node's own key and headers, or a marked call-time agent's host key", async () => {
-  const empty = '{"input_feedback":{},"self_feedback":[],"variable_feedback":{}}';
-  /** The config `node`'s backward builds its model from, over an invocation that recorded `recorded`. */
-  async function backwardConfig(node: AgentNode, recorded: Record<string, unknown>) {
-    const configs: Record<string, unknown>[] = [];
-    const models: ModelAccess = {
-      env: NO_ENV,
-      createModel: (config) => {
-        configs.push({ ...config });
-        const message = new Message({ role: "assistant", parts: [new TextPart(empty)] });
-        return new ScriptedModel([new Response({ message, finishReason: "stop" })]);
-      },
-    };
-    const nodeData = {
-      prompt_template: "hi",
-      variables: {},
-      variable_domains: {},
-      rendered_prompt: "hi",
-      effective_llm_config: recorded,
-      _evaluation_evidence: null,
-    };
-    const context = new BackwardContext({}, { output: "answer", nodeId: "chat", nodeData });
-    await node.backward(context, ["Review."], { models });
-    return configs[0];
-  }
-  const plain = { provider: "openai", model: "gpt-5.5" };
-  const marked = { ...plain, [HOST_KEY_MARKER]: true };
-  const headers = { "X-Team": "reefs" };
-  const own = new AgentNode("chat", { prompt: "hi", llmConfig: { ...plain, api_key: "sk-own", headers } });
-  expect(await backwardConfig(own, plain)).toEqual({ ...legacyConnectionConfig(plain), api_key: "sk-own", headers });
-  const callTimeAgent = new AgentNode("chat", { prompt: "hi" });
-  callTimeAgent.callTime = callTime({}, "openai");
-  callTimeAgent.hostCredentials = new HostConnection({ apiKey: "sk-host", headers: { "X-Host": "tide" } });
-  const joined = { ...legacyConnectionConfig(marked), api_key: "sk-host", headers: { "X-Host": "tide" } };
-  expect(await backwardConfig(callTimeAgent, marked)).toEqual(joined);
-  expect(await backwardConfig(callTimeAgent, plain)).toEqual(legacyConnectionConfig(plain));
-});
-
 // ---------- load-time hooks ----------
 
 const HOME = mkdtempSync(join(tmpdir(), "yian-agent-"));
@@ -357,13 +287,11 @@ function llmWiring(nodeLayer: unknown): ReadonlyMap<string, unknown> {
   return new Map([[LLM_CONFIG_KEY, splitLayers(nodeLayer, {}, true, contractNullable)!]]);
 }
 
-test("reservedWiringKeys and modelHiddenInputs hold __llm_config once it is wired", () => {
+test("reservedWiringKeys holds __llm_config once it is wired", () => {
   const node = new AgentNode("chat");
   expect(node.reservedWiringKeys()).toEqual(new Set());
-  expect(node.modelHiddenInputs()).toEqual(new Set());
   node.wiresLlmConfig = true;
   expect(node.reservedWiringKeys()).toEqual(new Set([LLM_CONFIG_KEY]));
-  expect(node.modelHiddenInputs()).toEqual(new Set([LLM_CONFIG_KEY]));
 });
 
 test("reservedKeyLabel names __llm_config as the authored llm_config field", () => {
@@ -416,18 +344,10 @@ test("recordedLlmConfig returns a copy of the last recorded config", () => {
   expect(node.recordedLlmConfig([])).toBeNull();
 });
 
-test("boundLlmConfig returns the bound record config, else null", () => {
-  const node = new AgentNode("chat");
-  const config = { provider: "openai", model: "m" };
-  expect(node.boundLlmConfig({ [LLM_CONFIG_KEY]: config, topic: "t" })).toBe(config);
-  expect(node.boundLlmConfig({ topic: "t" })).toBeNull();
-  expect(node.boundLlmConfig({ [LLM_CONFIG_KEY]: "m" })).toBeNull();
-});
-
-test("backwardInputNames leaves out __llm_config", () => {
+test("dataInputNames leaves out __llm_config", () => {
   const node = new AgentNode("chat");
   node.params = [new Parameter("topic"), new Parameter(LLM_CONFIG_KEY), new Parameter("tone")];
-  expect(node.backwardInputNames()).toEqual(["topic", "tone"]);
+  expect(node.dataInputNames()).toEqual(["topic", "tone"]);
 });
 
 test("bindReserved binds nothing for an agent run start resolved", () => {
@@ -701,7 +621,7 @@ describe("forward", () => {
     const model = new ScriptedModel([refused], { provider: "vllm", model: "m" });
     const llmConfig = { provider: "vllm", model: "m", api_key: key };
     const authEnv: Env = (name) => (name === "YIAN_AUTH_FILE" ? join(HOME, "auth.json") : undefined);
-    const result = await runWith(flow, {}, null, model, { llmConfig, env: authEnv });
+    const result = await runWith(flow, {}, model, { llmConfig, env: authEnv });
     expect(result.status).toBe("failed");
     expect(result.failure?.code).toBe("provider.auth");
     expect(result.failure?.message).toBe("Incorrect API key: [REDACTED]");

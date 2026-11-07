@@ -160,7 +160,7 @@ export const ENTRIES = Object.freeze([
     group: "limit",
     minimum: 1,
   }),
-  // Defaults for node and memory behavior; a flow can override some of them.
+  // Defaults for node behavior; a flow can override some of them.
   entry("AGENT_RETRIES", {
     default: 2,
     description: "Extra attempts an AGENT gets to correct an invalid structured reply when the node sets none",
@@ -235,70 +235,6 @@ export const ENTRIES = Object.freeze([
     description: "Longest wait in seconds for a short request (model listing, sign-in calls)",
     group: "setting",
     minimum: 1,
-  }),
-  entry("EPISODIC_MAX_EPISODES", {
-    default: 100,
-    description: "Episodes an episodic memory keeps when it sets no limit",
-    group: "setting",
-    minimum: 1,
-  }),
-  entry("EPISODIC_RECALL_LIMIT", {
-    default: 10,
-    description: "Episodes an episodic memory recalls when it sets no limit",
-    group: "setting",
-    minimum: 1,
-  }),
-  entry("REFLECTIVE_MAX_ITEMS", {
-    default: 100,
-    description: "Lessons a reflective memory keeps when it sets no limit",
-    group: "setting",
-    minimum: 1,
-  }),
-  entry("REFLECTIVE_RECALL_LIMIT", {
-    default: 20,
-    description: "Lessons a reflective memory recalls when it sets no limit",
-    group: "setting",
-    minimum: 1,
-  }),
-  // The three reflective budgets floor at 256: material over budget is cut to a
-  // summary with a 64-char digest that is about 142 chars whatever the budget.
-  entry("REFLECTIVE_MAX_LESSON_CHARS", {
-    default: 8_000,
-    description: "Characters of current lessons shown to the reflection model",
-    group: "setting",
-    minimum: 256,
-  }),
-  entry("REFLECTIVE_MAX_EPISODE_CHARS", {
-    default: 20_000,
-    description: "Characters of the episode shown to the reflection model",
-    group: "setting",
-    minimum: 256,
-  }),
-  entry("REFLECTIVE_MAX_LIMIT_CHARS", {
-    default: 256,
-    description: "Characters of the memory limits shown to the reflection model",
-    group: "setting",
-    minimum: 256,
-  }),
-  entry("PROFILE_MAX_CHARS", {
-    default: 32_000,
-    description: "Characters a profile memory may hold",
-    group: "setting",
-    minimum: 1,
-  }),
-  entry("PROFILE_INPUT_BUDGET_CHARS", {
-    default: 24_000,
-    description: "Characters of run material sent to a profile memory's learner",
-    group: "setting",
-    minimum: 1,
-  }),
-  // A hung holder of a profile's `.lock` would otherwise stall a run or a backward pass
-  // forever; SQLite memory storage fails at once instead.
-  entry("PROFILE_LOCK_TIMEOUT_SECONDS", {
-    default: 30,
-    description: "Longest wait in seconds for another writer to release a profile memory's `.lock` file",
-    group: "setting",
-    minimum: 0,
   }),
   // Input-size caps.
   entry("MAX_AUTH_RESPONSE_BYTES", {

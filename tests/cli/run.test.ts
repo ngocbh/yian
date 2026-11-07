@@ -584,6 +584,20 @@ describe("main", () => {
     expect(await main(["skills", "check", "--help"], io)).toBe(0);
     expect(stdout()).toStartWith("Usage: yian skills check [OPTIONS] DIRS...\n");
   });
+
+  test("run has no memory flags: --memory-root is an unknown option and the help lists none", async () => {
+    const flow = join(tmp, "flow.yaml");
+    writeFileSync(flow, "id: f\n");
+    for (const flag of ["--memory-root", "--memory-storage"]) {
+      const { io, stdout, stderr } = testIo();
+      expect(await main(["run", flow, flag, tmp], io)).toBe(2);
+      expect(stdout()).toBe("");
+      expect(stderr()).toContain(`No such option: ${flag}`);
+    }
+    const { io, stdout } = testIo();
+    expect(await main(["run", "--help"], io)).toBe(0);
+    expect(stdout()).not.toContain("memory");
+  });
 });
 
 // Bytes that aren't UTF-8: a flow holding them can't be read.

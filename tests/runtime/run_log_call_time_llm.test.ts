@@ -73,16 +73,15 @@ const GOLDEN =
   '{"kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{"agent":' +
   '{"model":"gpt-test","provider":"openai"}},"flow":null,"flow_fingerprint":"' +
   "a".repeat(64) +
-  '","learnable":false,' +
-  '"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":2,"parent":null,"skills":{},' +
+  '","num_workers":2,"parent":null,"skills":{},' +
   '"start_wiring_override":{"name":"${input.name}"},"tool_groups":{},"tools":{},"yian_version":"' +
   VERSION +
   '"},"run_id":"r1",' +
-  '"schema":26,"seq":0}';
+  '"schema":27,"seq":0}';
 
-test("the schema is twenty-six", () => {
-  expect(SCHEMA_VERSION).toBe(26);
-  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(26n);
+test("the schema is twenty-seven", () => {
+  expect(SCHEMA_VERSION).toBe(27);
+  expect((parseJson(encode(record(CALL_TIME)), "codec") as JsonObject)["schema"]).toBe(27n);
 });
 
 test("call_time_llm round trips", () => {

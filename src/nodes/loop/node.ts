@@ -28,37 +28,22 @@
 
 import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
 import { evaluateWhenRecord, localDeclared } from "../../expr/expressions.ts";
-import type { FeedbackValue } from "../../expr/index.ts";
 import {
   isInboxType,
-  isRecord,
   normalizeFiles,
   setField,
   type Type,
   type Value,
   type ValueRecord,
 } from "../../typesys/values.ts";
+import { Grow, isWeakKey, Node, NodeKind, Output, parseNamedCondition } from "../base.ts";
 import {
-  type BackwardContext,
-  BackwardResult,
-  Grow,
-  isWeakKey,
-  Node,
-  NodeKind,
-  Output,
-  parseNamedCondition,
-  projectStructuralFeedback,
-} from "../base.ts";
-import {
-  ExecutionPosition,
-  ExecutionScope,
   isExactly,
   iterOriginCarrier,
   type OriginMapper,
   Parameter,
   PartialRecordContract,
   rewriteOriginCarrier,
-  sameExecutionPosition,
   ValueContract,
 } from "../contracts.ts";
 import { mapCallsite, ns } from "../ids.ts";
@@ -276,36 +261,6 @@ export class LoopNode extends Node {
   }
 
   /**
-   * Capture every carried input, including fields the body doesn't consume, except the inboxes a
-   * stopped driver's output leaves out.
-   *
-   * @returns The `input_output_paths` record from each carried input name to its same-named field
-   *   in a stopped driver's record output.
-   */
-  override captureBackwardContext(): Record<string, unknown> {
-    const inboxes = this.inboxNames();
-    const names = this.backwardInputNames().filter((name) => !inboxes.includes(name));
-    return { input_output_paths: Object.fromEntries(names.map((name) => [name, [name]])) };
-  }
-
-  /**
-   * Project a stopped driver's recorded carried output without testing its predicate.
-   *
-   * @param context Recorded carried inputs, accepted output or failure, the full input inventory
-   *   and the captured named paths.
-   * @param feedback Ordered text or structural selections over the accepted carried record.
-   * @returns Input messages for a successful stopping driver. Failed or continuing drivers stop;
-   *   growth connections handle the separate continuation boundary.
-   * @throws TypeError when a message batch or captured path has an invalid type.
-   * @throws RangeError when feedback or a captured path doesn't match the recorded output, or the
-   *   required structural layout is missing.
-   */
-  override backward(context: BackwardContext, feedback: readonly FeedbackValue[]): BackwardResult {
-    if (context.failure !== null || !isRecord(context.output)) return new BackwardResult();
-    return projectStructuralFeedback(context, feedback);
-  }
-
-  /**
    * The loop's hard iteration budget: `true` once `iteration` has reached `maxIters`.
    *
    * Pure, node-owned budget policy; always `false` when there is no max (`maxIters` is `null`).
@@ -327,16 +282,13 @@ export class LoopNode extends Node {
    * through the body's typed input of that name (`childInputs`) so an omitted file stays a
    * `FileRef`; the next driver then binds the merged record. `carried` is the JSON-decoded
    * growth-seed record that seeds the body's START, so live growth and durable replay merge
-   * identically. The origin, origin context, memory scope, output contract, asserts and type
-   * table are copied; the execution scope moves to iteration `k`.
+   * identically. The origin, origin context, output contract, asserts and type table are copied.
    *
    * @param k The clone's iteration index.
    * @param carried The record this iteration's body was seeded with; required when
    *   `returnedFields` is set.
    * @returns The driver for iteration `k`.
-   * @throws RangeError when `returnedFields` is set and `carried` is `null`, or the execution
-   *   scope doesn't end in this driver's position.
-   * @throws TypeError when the execution scope isn't an `ExecutionScope`.
+   * @throws RangeError when `returnedFields` is set and `carried` is `null`.
    */
   respawn(k: number, carried: Readonly<Record<string, Value>> | null = null): LoopNode {
     const originId = this.originId ?? this.id;
@@ -362,22 +314,6 @@ export class LoopNode extends Node {
     // Keep only the enclosing ancestry: `failureTrace()` appends this driver's authored origin, so
     // copying that origin into the context would duplicate it on every later iteration.
     clone.originContext = this.originContext;
-    clone.memoryScope = this.memoryScope;
-    if (this.executionScope !== null) {
-      const scope: unknown = this.executionScope;
-      if (!isExactly(scope, ExecutionScope)) throw new TypeError("loop execution scope must be an ExecutionScope");
-      const { staticPath, flowPath, occurrencePath, boundary } = scope;
-      const current = new ExecutionPosition("loop_driver", staticPath, this.iteration);
-      const last = occurrencePath.at(-1);
-      if (last === undefined || !sameExecutionPosition(last, current)) {
-        throw new RangeError("loop scope must end in its current driver position");
-      }
-      clone.executionScope = new ExecutionScope(staticPath, {
-        flowPath,
-        occurrencePath: [...occurrencePath.slice(0, -1), new ExecutionPosition("loop_driver", staticPath, k)],
-        boundary,
-      });
-    }
     if (this.returnedFields === null) {
       clone.params = this.params;
     } else {

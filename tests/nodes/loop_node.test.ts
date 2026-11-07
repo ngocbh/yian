@@ -8,13 +8,10 @@ import { type CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts"
 import { OriginRef } from "../../src/diagnostics.ts";
 import { NodeFailed } from "../../src/events.ts";
 import { ExpressionError, evaluateWhenRecord } from "../../src/expr/expressions.ts";
-import { MemoryScope } from "../../src/memory/contracts.ts";
 import { Grow, NodeKind, Output } from "../../src/nodes/base.ts";
 import {
   Assertion,
   ContractOrigins,
-  ExecutionPosition,
-  ExecutionScope,
   Parameter,
   PartialRecordContract,
   ValueContract,
@@ -109,15 +106,6 @@ test("respawn preserves the full output contract carrier", () => {
   expect((clone.outputContract as ValueContract).type).toBe(contract.type);
 });
 
-test("respawn preserves the derived base memory scope", () => {
-  const node = whileLoop();
-  node.memoryScope = new MemoryScope(["loop"], { memories: ["outer"] });
-
-  const clone = node.respawn(1);
-
-  expect(clone.memoryScope).toBe(node.memoryScope);
-});
-
 test("respawn defaults omitted fields from the carried record", () => {
   const node = partialLoop();
   const originParams = node.params;
@@ -168,44 +156,6 @@ test("a respawned driver is named for its origin and targets it", () => {
   expect(clone.iteration).toBe(3);
   expect(clone.originId).toBe("loop");
   expect(clone.skippedOutputTarget()).toBe("loop");
-});
-
-test("respawn moves a scope that ends in the driver's position to index k", () => {
-  const node = whileLoop();
-  const outer = new ExecutionPosition("call", ["c"]);
-  node.executionScope = new ExecutionScope(["c", "loop"], {
-    flowPath: ["c"],
-    occurrencePath: [outer, new ExecutionPosition("loop_driver", ["c", "loop"], 0)],
-  });
-
-  const scope = node.respawn(2).executionScope!;
-
-  expect(scope).toBeInstanceOf(ExecutionScope);
-  expect(scope.staticPath).toEqual(["c", "loop"]);
-  expect(scope.flowPath).toEqual(["c"]);
-  expect(scope.boundary).toBeNull();
-  expect(scope.occurrencePath[0]).toBe(outer);
-  expect(scope.occurrencePath[1]).toEqual(new ExecutionPosition("loop_driver", ["c", "loop"], 2));
-});
-
-test("respawn refuses an execution scope of another class", () => {
-  class Subscope extends ExecutionScope {}
-  const node = whileLoop();
-  node.executionScope = new Subscope(["loop"], { occurrencePath: [new ExecutionPosition("loop_driver", ["loop"], 0)] });
-  expectError(() => node.respawn(1), TypeError, "loop execution scope must be an ExecutionScope");
-});
-
-test("respawn refuses a scope that doesn't end in the driver's position", () => {
-  const node = whileLoop();
-  for (const occurrencePath of [
-    [],
-    [new ExecutionPosition("loop_driver", ["loop"], 1)],
-    [new ExecutionPosition("loop_body", ["loop"], 0)],
-    [new ExecutionPosition("loop_driver", ["other"], 0)],
-  ]) {
-    node.executionScope = new ExecutionScope(["loop"], { occurrencePath });
-    expectError(() => node.respawn(1), RangeError, "loop scope must end in its current driver position");
-  }
 });
 
 /** A `while` driver `lp` over `childFlow()`, its params the child START's. */

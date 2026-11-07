@@ -15,7 +15,6 @@ import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import {
-  BackwardStartedRecord,
   MemoryRunLog,
   NodeExpandedRecord,
   NodeFailedRecord,
@@ -467,16 +466,6 @@ test("prepareRecord refuses a RunStartedRecord", () => {
     () => prepareRecord(state, started),
     TypeError,
     "unsupported run record for state preparation: RunStartedRecord",
-  );
-});
-
-test("prepareRecord hands a backward record to the backward reducer, which requires a terminal", () => {
-  const { state } = initialized();
-
-  expectError(
-    () => prepareRecord(state, new BackwardStartedRecord(1, null)),
-    RangeError,
-    "backward records require an accepted terminal result",
   );
 });
 

@@ -30,8 +30,8 @@
  * answer gets one more model call, within `maxToolIterations`; a structured agent without tools or
  * skills reads its steers once, before its single call.
  *
- * Knows about:   diagnostics, events, llm, llm_clients connection, memory contracts, platform,
- *                nodes/base, skills, tools, typesys, peer AGENT modules.
+ * Knows about:   diagnostics, events, llm, llm_clients connection, platform, nodes/base, skills,
+ *                tools, typesys, peer AGENT modules.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -49,12 +49,6 @@ import {
   ToolResultPart,
   ToolSpec,
 } from "../../llm/messages.ts";
-import {
-  ModelTextInteraction,
-  ToolCallInteraction,
-  ToolResultInteraction,
-  type VisibleInteraction,
-} from "../../memory/contracts.ts";
 import { realScheduler, warn } from "../../platform.ts";
 import { type Skill, SkillError } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
@@ -70,7 +64,7 @@ import {
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
 import { formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
-import { CapabilityFault, Output, Pending, type RebuiltRequest, type SteerInbox } from "../base.ts";
+import { CapabilityFault, Output, Pending, type RebuiltRequest, type RebuiltRequests, type SteerInbox } from "../base.ts";
 import {
   AgentLoopError,
   type AgentRunContext,
@@ -92,10 +86,9 @@ import {
   observeToolCall,
   type ToolCallIdentity,
 } from "./live.ts";
-import { type CloserReason, closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
+import { type CloserReason, closerResult, reportedText, SKIPPED_TOOL_RESULT, toolText } from "./results.ts";
 import { foldSteps, type SteerRender, steerMessages, steerValues } from "./messages.ts";
-import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
-import { pushVisible } from "./text.ts";
+import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./structured.ts";
 
 /**
  * Run one AGENT invocation.
@@ -113,9 +106,8 @@ import { pushVisible } from "./text.ts";
  * after the last recorded call included (a recorded honor step ends the loop there); recorded
  * steers are fed back as replay reaches them.
  *
- * The model reads the system prompt (with the recalled memory sections), the prompt's messages,
- * then each iteration's steers, replies and tool results; a final structured call after tools
- * reads them all.
+ * The model reads the system prompt, the prompt's messages, then each iteration's steers, replies
+ * and tool results; a final structured call after tools reads them all.
  *
  * @returns The checked structured value, or the final reply's visible text; `Interrupted` once it
  *   honored a host interrupt (`honor`); or `Pending` naming the calls of the latest reply whose
@@ -132,8 +124,7 @@ import { pushVisible } from "./text.ts";
  *   pass through.
  */
 export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending | Interrupted> {
-  const systemPrompt = systemPromptWithMemory(ctx.baseSystemPrompt, ctx.memoryContext.sections);
-  const system = new Message({ role: "system", parts: [new TextPart(systemPrompt)] });
+  const system = new Message({ role: "system", parts: [new TextPart(ctx.systemPrompt)] });
   const live = liveSinks(ctx);
   checkStopped(ctx);
   // Each turn's request replays every earlier one, so a reason would otherwise repeat per turn.
@@ -175,7 +166,6 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     interrupt,
     retry,
     steps,
-    baseSystemPrompt: ctx.baseSystemPrompt,
   };
   /** The structured call's checked value, or the honor of an interrupt that cut it. */
   const structured = async (): Promise<Output | Interrupted> => {
@@ -222,7 +212,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
   const bound = requestToolSpecs(granted, specOf, skills.size > 0 ? loadSkillTool() : null)!;
   let iterations = 0;
   let reply: Message | null = null;
-  const digests = new RequestDigest(ctx.baseSystemPrompt);
+  const digests = new RequestDigest();
 
   while (true) {
     checkStopped(ctx);
@@ -362,44 +352,36 @@ function steerReads(steps: AgentSteps, inbox: SteerInbox | undefined): (readonly
 }
 
 /**
- * Rebuild what one AGENT invocation showed a learner from the steps it recorded, and each request
- * it sent, as `runAgent` builds it, checked against the recorded digest.
+ * Rebuild each request one AGENT invocation sent from the steps it recorded, as `runAgent` builds
+ * it, checked against the recorded digest.
  *
- * Interactions follow step order: each chat reply's text when it makes no runnable tool call,
- * else its runnable calls, then the results recorded for them in call order (a `skipped` result
- * is left out); then the structured calls as `structuredMaterial` shows them. A failed attempt,
- * a reply a host interrupt cut, and a reply whose tool call arguments nest too deep (it failed
- * the node) show nothing. Steer steps add their messages where they were read; a steer step
- * without its values fails the check. The steps are grouped as `foldSteps` groups them; steps of
- * another kind are skipped. A request's digest leaves recalled memory out, as the writer does, so
- * it doesn't break the check.
+ * Replies and tool results join the conversation in step order, as the live loop added them; a
+ * `skipped` result is sent too. Steer steps add their messages where they were read; a steer step
+ * without its values fails the check. Structured calls are rebuilt by
+ * `rebuildStructuredRequests`. The steps are grouped as `foldSteps` groups them; steps of another
+ * kind are skipped.
  *
  * @param steps The invocation's steps across its starts.
- * @param options `messages` are the system message (memory sections included) and the prompt's
- *   messages; `tools` the specs every chat request carries, `null` when they can't be rebuilt
- *   (no chat request then matches); `structured` builds the model the structured calls read
- *   their plan off and gives the output type, or `null` when it can't (no structured request
- *   then matches); `baseSystemPrompt` is the system prompt without recalled memory, which each
- *   request's digest reads in place of the system message (`RequestDigest`); `renderSteer` is
- *   the agent's steer render, which steer steps render through as the live loop did.
- * @returns The interactions; each `model_call` step's rebuilt request, by its index in `steps`
- *   (a step after a reply that failed the node, or after a steer step without its values, has
- *   none; with no `tools` or `structured` model, a step's request is `null`); and whether every
- *   recorded request matched.
+ * @param options `messages` are the system message and the prompt's messages; `tools` the specs
+ *   every chat request carries, `null` when they can't be rebuilt (no chat request then matches);
+ *   `structured` builds the model the structured calls read their plan off and gives the output
+ *   type, or `null` when it can't (no structured request then matches); `renderSteer` is the
+ *   agent's steer render, which steer steps render through as the live loop did.
+ * @returns Each `model_call` step's rebuilt request, by its index in `steps` (a step after a reply
+ *   that failed the node, or after a steer step without its values, has none; with no `tools` or
+ *   `structured` model, a step's request is `null`); and whether every recorded request matched.
  */
-export async function stepsMaterial(
+export async function rebuildStepRequests(
   steps: readonly ValueRecord[],
   options: {
     messages: readonly Message[];
     tools: readonly ToolSpec[] | null;
     structured: () => Promise<{ model: ChatModel; typ: Type } | null>;
-    baseSystemPrompt: string | null;
     renderSteer?: SteerRender | null;
   },
-): Promise<{ interactions: VisibleInteraction[]; requests: Map<number, RebuiltRequest>; digestOk: boolean }> {
+): Promise<RebuiltRequests> {
   const messages = [...options.messages];
-  const digests = new RequestDigest(options.baseSystemPrompt);
-  const interactions: VisibleInteraction[] = [];
+  const digests = new RequestDigest();
   const requests = new Map<number, RebuiltRequest>();
   let digestOk = true;
   const { exchanges, open } = foldSteps(steps);
@@ -411,7 +393,7 @@ export async function stepsMaterial(
         values = steerValues(step);
       } catch (error) {
         if (!(error instanceof RangeError)) throw error;
-        return { interactions, requests, digestOk: false };
+        return { requests, digestOk: false };
       }
       messages.push(...steerMessages(values, { render: options.renderSteer ?? null }));
     }
@@ -423,18 +405,16 @@ export async function stepsMaterial(
         const structured = await options.structured();
         if (structured === null) {
           for (const later of rest) requests.set(later.n - 1, { request: null, digestOk: false });
-          return { interactions, requests, digestOk: false };
+          return { requests, digestOk: false };
         }
-        const material = structuredMaterial(
+        const rebuilt = rebuildStructuredRequests(
           structured.model,
           messages,
           structured.typ,
           rest.map((later) => later.step),
-          options.baseSystemPrompt,
         );
-        material.requests.forEach((rebuilt, index) => requests.set(rest[index]!.n - 1, rebuilt));
-        interactions.push(...material.interactions);
-        return { interactions, requests, digestOk: digestOk && material.digestOk };
+        rebuilt.requests.forEach((request, index) => requests.set(rest[index]!.n - 1, request));
+        return { requests, digestOk: digestOk && rebuilt.digestOk };
       }
       const request = options.tools === null ? null : new Request({ messages, tools: options.tools });
       const digest = request === null ? null : digests.digest(request);
@@ -449,26 +429,21 @@ export async function stepsMaterial(
         rejectInvalidReply(reply);
       } catch (error) {
         // The run failed the node at this reply before acting on it.
-        if (error instanceof TypeCheckError) return { interactions, requests, digestOk };
+        if (error instanceof TypeCheckError) return { requests, digestOk };
         throw error;
       }
       calls = reply.parts.filter((part): part is ToolCallPart => part instanceof ToolCallPart && part.arguments !== null);
-      if (calls.length === 0) pushVisible(interactions, () => new ModelTextInteraction(reply.text()));
-      for (const call of calls) pushVisible(interactions, () => new ToolCallInteraction(call.name, call.arguments));
     }
     for (const call of calls) {
       const result = exchange.results.get(call.id)?.step;
       if (result === undefined) continue;
       const content = result["output"] as string;
-      if (result["closed"] !== "skipped") {
-        pushVisible(interactions, () => new ToolResultInteraction(call.name, content));
-      }
       const isError = result["is_error"] === true;
       const part = new ToolResultPart({ callId: call.id, name: call.name, content, isError });
       messages.push(new Message({ role: "tool", parts: [part] }));
     }
   }
-  return { interactions, requests, digestOk };
+  return { requests, digestOk };
 }
 
 /** What running one reply's tool calls reads and appends to. */

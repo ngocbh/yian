@@ -21,8 +21,6 @@ import { ComposedFlow } from "../src/compose/build/pipeline.ts";
 import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { NodeStarted, type RunEvent, RunStarted } from "../src/events.ts";
-import { ScriptedModel } from "../src/llm/testing.ts";
-import { EpisodicMemory } from "../src/memory/episodic.ts";
 import { Parameter } from "../src/nodes/contracts.ts";
 import { ToolNode } from "../src/nodes/tool/node.ts";
 import { lockFile } from "../src/platform.ts";
@@ -35,12 +33,11 @@ import {
   RunResumedRecord,
   RunStoppedRecord,
 } from "../src/runtime/log.ts";
-import { MemoryRuntime } from "../src/runtime/memory_runtime.ts";
 import { commitPrepared, prepareRunCancelled } from "../src/runtime/state.ts";
 import { pending } from "../src/tools/context.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import { completeByHand, gateTool, handClock } from "./helpers/inbox_fixtures.ts";
-import { crashAfter, graph, NO_ENV, rejected, reply, runWith, serving } from "./helpers/run_state_fixtures.ts";
+import { crashAfter, graph, NO_ENV, rejected } from "./helpers/run_state_fixtures.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "advance-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -73,12 +70,6 @@ test("runFlow ends waiting: status, waits, no output, the lock released", async 
   expect(result.status).toBe("waiting");
   expect(result.waits).toEqual([{ node: "ask", callId: `${result.runId}/ask`, tool: "lookup", inbox: null, deadline: null, settled: false }]);
   expect([result.output, result.unread.size, isRunLogLocked(log)]).toEqual([null, 0, false]);
-});
-
-test("backward needs a run that succeeded or failed", async () => {
-  const result = await runFlow(hostFlow(), {}, { log: freshLog(), env: NO_ENV, tools: { lookup: pendingTool() }, learnable: true });
-  const error = await rejected(result.backward("more"));
-  expect(error).toEqual(new RangeError("backward needs a run that succeeded or failed; this one is waiting"));
 });
 
 const T0 = Date.UTC(2026, 9, 24, 9, 0, 0);
@@ -320,48 +311,6 @@ test("a log-close failure releases the hold and the lock", async () => {
   }
   expect(isRunLogLocked(log)).toBe(false);
   expect((await advance({ log, flow, tools, env: NO_ENV })).status).toBe("waiting");
-});
-
-const MEMORY_FLOW = `id: episodic-history
-name: episodic_history
-input:
-  topic: !str
-nodes:
-  answer:
-    kind: agent
-    long_term_memory:
-      episodic:
-        type: episodic
-        config:
-          max_episodes: 4
-          recall_limit: 2
-    input:
-      topic: "\${input.topic}"
-    prompt: Explain \${topic}.
-    output: str
-output: \${answer.output}
-`;
-
-test("a memory-close failure releases the hold and the lock", async () => {
-  const vars = new Map([
-    ["YIAN_DEFAULT_PROVIDER", "openai"],
-    ["YIAN_DEFAULT_MODEL", "test-model"],
-  ]);
-  const env = (name: string) => vars.get(name) ?? NO_ENV(name);
-  const flow = await loadFlow(MEMORY_FLOW);
-  const model = new ScriptedModel([reply("an answer")]);
-  const memory = new Map([["episodic", new EpisodicMemory()]]);
-  const log = freshLog();
-  const failure = new Error("memory close failed");
-  const spy = spyOn(MemoryRuntime.prototype, "close").mockImplementationOnce(() => Promise.reject(failure));
-  try {
-    expect(await rejected(runWith(flow, { topic: "queues" }, memory, model, { log, env }))).toBe(failure);
-  } finally {
-    spy.mockRestore();
-  }
-  expect(isRunLogLocked(log)).toBe(false);
-  const read = await advance({ log, memory, models: serving(model), env });
-  expect(read.status).toBe("succeeded");
 });
 
 /** Write, in a fresh folder, a flow whose CODE node runs `./fn.ts:up`, then a TOOL `ask` calling `lookup`. */

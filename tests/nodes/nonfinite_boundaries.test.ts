@@ -225,11 +225,9 @@ nodes:
 output: \${c.output}
 `;
 
-for (const learnable of [false, true]) {
-  test(`a binding that evaluates to infinity binds it (learnable: ${learnable})`, async () => {
-    expectSucceeds(await run(SCALED_BINDING_FLOW, { x: 1e308 }, { learnable }), Infinity);
-  });
-}
+test("a binding that evaluates to infinity binds it", async () => {
+  expectSucceeds(await run(SCALED_BINDING_FLOW, { x: 1e308 }), Infinity);
+});
 
 /** The `LoadError` loading `source` rejects with. */
 async function loadError(source: string): Promise<LoadError> {
@@ -371,12 +369,11 @@ output: \${c.output}
   expectSucceeds(result, "v=Infinity");
 });
 
-for (const learnable of [false, true]) {
-  test(`an infinite AGENT variable default reaches the prompt (learnable: ${learnable})`, async () => {
-    const model = new ScriptedModel([textReply("x")], { provider: "ollama", model: "test" });
+test("an infinite AGENT variable default reaches the prompt", async () => {
+  const model = new ScriptedModel([textReply("x")], { provider: "ollama", model: "test" });
 
-    const result = await run(
-      `
+  const result = await run(
+    `
 id: nonfinite
 name: nonfinite
 llm_config: {provider: ollama, model: test}
@@ -389,15 +386,14 @@ nodes:
     output: str
 output: \${writer.output}
 `,
-      {},
-      { learnable, models: serving(model) },
-    );
+    {},
+    { models: serving(model) },
+  );
 
-    expectSucceeds(result, "x");
-    expect(model.requests).toHaveLength(1);
-    expect((model.requests[0]!.messages.at(-1)!.parts[0] as TextPart).text).toBe("go Infinity");
-  });
-}
+  expectSucceeds(result, "x");
+  expect(model.requests).toHaveLength(1);
+  expect((model.requests[0]!.messages.at(-1)!.parts[0] as TextPart).text).toBe("go Infinity");
+});
 
 test("a NaN run input is rejected before the run starts", async () => {
   const log = join(dir, "nan.jsonl");

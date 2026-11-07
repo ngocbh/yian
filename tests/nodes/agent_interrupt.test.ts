@@ -45,13 +45,12 @@ import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/cont
 import { Interrupted, ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { callModel, liveSinks } from "../../src/nodes/agent/live.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
-import { TOOL_INTERRUPTED_OUTCOME } from "../../src/nodes/agent/memory.ts";
+import { TOOL_INTERRUPTED_OUTCOME } from "../../src/nodes/agent/results.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import { generateStructured, userMessage } from "../../src/nodes/agent/structured.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { NodeSteps, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
 import type { Scheduler } from "../../src/platform.ts";
 import { advance, interrupt, runFlow, send } from "../../src/run.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
@@ -236,15 +235,13 @@ function agentContext(model: ChatModel, extra: Partial<AgentRunContext>): AgentR
   return {
     nodeId: "chat",
     messages: [userMessage("go")],
-    promptText: "go",
     tools: [],
     llmConfig: CONFIG,
     outputType: null,
     retries: 0,
     maxToolIterations: -1,
-    memoryContext: new MemoryContext(),
     toolset: null,
-    baseSystemPrompt: DEFAULT_SYSTEM,
+    systemPrompt: DEFAULT_SYSTEM,
     skills: [],
     models: serving(model),
     sent: () => [],

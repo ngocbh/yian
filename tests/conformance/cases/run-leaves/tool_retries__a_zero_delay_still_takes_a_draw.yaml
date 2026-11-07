@@ -36,7 +36,6 @@ expect:
     - null
     - defaults:
         TOOL_RETRY_DELAY_SECONDS: 0
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

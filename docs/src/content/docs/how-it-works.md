@@ -163,12 +163,12 @@ The log is append-only:
 Every line has the same envelope. This is the record that stores `greet`'s value:
 
 ```json
-{"at":"2026-10-27T08:43:00.746Z","kind":"pool_commit","payload":{"key":"greet","kind":"str","node_id":"greet","value":"hi Ada"},"run_id":"281f84a4cdb54f26a59aaa23c0f1b593","schema":26,"seq":9}
+{"at":"2026-10-27T08:43:00.746Z","kind":"pool_commit","payload":{"key":"greet","kind":"str","node_id":"greet","value":"hi Ada"},"run_id":"281f84a4cdb54f26a59aaa23c0f1b593","schema":27,"seq":9}
 ```
 
 | Field | Meaning |
 |---|---|
-| `schema` | The log format version. This yian reads and writes only schema 26 |
+| `schema` | The log format version. This yian reads and writes only schema 27 |
 | `run_id` | The run's id; the same on every line |
 | `seq` | The record's place in the log, from 0 with no gaps |
 | `at` | When the record was written (UTC). Use `seq` for order, since clocks can move |
@@ -198,10 +198,10 @@ The `run_started` record holds everything the run needs to be rebuilt later:
 |---|---|
 | The flow's fingerprint, the text of every flow file it loaded, and its code root | API keys and header values |
 | Each agent's resolved model settings | The host's own objects (a tool's `ctx.context`) |
-| The worker count and whether the run is learnable | |
+| The worker count | |
 | The `YIAN_*` settings that differ from the defaults | |
 | The descriptions of the tools and skills agents use | |
-| Memory snapshots, and the yian version | |
+| The yian version | |
 
 Steps inside a node are records too. An agent writes a `node_step` for each model reply and each
 tool result, as it goes. A tool that retries writes one for each failed attempt and one as the next
@@ -289,7 +289,6 @@ You give these again, since the log doesn't hold them:
 |---|---|
 | API keys, in the environment | Keys are never recorded |
 | The same MCP servers and skills | Agents' tools and skills must match the recorded descriptions |
-| The same memory folders (`--memory-root`, `--memory-storage`) | Memory lives outside the log |
 | The same `YIAN_*` settings | A resume refuses settings that differ from the recorded ones |
 
 A resume under another yian version works, with a warning that names both versions.
@@ -309,10 +308,3 @@ was running when the process died runs again, so its effect may happen twice:
 So write tools that change the world to be safe to repeat. Pass `ctx.callId` to the service as an
 idempotency key: it stays the same on every attempt and after a resume. See
 [Code and tools](/code-and-tools/).
-
-## Learning reads the same log
-
-A learnable run keeps what learning needs in the same log. Learning runs only when you ask for it,
-after the run ends, and writes its own records after the run's: `backward_started`,
-`backward_ready`, the memory commit records and `backward_finished`. It never changes the run's
-result. See [Learning](/learning/).

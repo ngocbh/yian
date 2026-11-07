@@ -20,11 +20,10 @@ import {
   ToolCallFinished,
   ToolCallStarted,
 } from "../../src/events.ts";
-import { MemoryRecallError, MemoryScope } from "../../src/memory/contracts.ts";
-import { CapabilityFault, Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
+import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import type { OutputContract } from "../../src/nodes/contracts.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
-import { evalNode, type MemoryContextOpener } from "../../src/runtime/eval_node.ts";
+import { evalNode } from "../../src/runtime/eval_node.ts";
 import {
   JsonlRunLog,
   NodeStartedRecord,
@@ -148,11 +147,6 @@ class ScriptNode extends Node {
   override async forward(_inputs: Record<string, unknown>, caps: NodeCaps): Promise<NodeResult> {
     return new Output(await this.body(caps));
   }
-}
-
-/** A `ScriptNode` that opens memory context. */
-class MemoryScriptNode extends ScriptNode {
-  override readonly needsMemoryContext = true;
 }
 
 /**
@@ -474,62 +468,6 @@ describe.each(MODES)("host faults record no stop (%s)", (_, numWorkers) => {
 
     expect(await rejected(built.run())).toBeInstanceOf(TypeError);
     expect(stops(built)).toEqual([]);
-  });
-
-  test("an opener fault", async () => {
-    const error = new Error("opening failed");
-    const node = new MemoryScriptNode("work", async (caps) => {
-      await caps.openMemoryContext!("system", "prompt");
-      return "done";
-    });
-    node.memoryScope = new MemoryScope(["work"], { memories: ["session"] });
-    const opener: MemoryContextOpener = async () => {
-      throw error;
-    };
-    const built = fanEngine([node], { numWorkers, memoryContextOpener: opener });
-
-    expect(await rejected(built.run())).toBe(error);
-    expect(stops(built)).toEqual([]);
-  });
-
-  test("an opener fault the node catches ends the run at once: a later host abort records nothing", async () => {
-    const host = new AbortController();
-    const error = new Error("opening failed");
-    const node = new MemoryScriptNode("work", async (caps) => {
-      await caps.openMemoryContext!("system", "prompt").catch(() => {});
-      host.abort(new Error("stop now"));
-      return "done";
-    });
-    node.memoryScope = new MemoryScope(["work"], { memories: ["session"] });
-    const opener: MemoryContextOpener = async () => {
-      throw error;
-    };
-    const built = fanEngine([node], { numWorkers, memoryContextOpener: opener, signal: host.signal });
-
-    expect(await rejected(built.run())).toBe(error);
-    expect(stops(built)).toEqual([]);
-    expect(built.signal.reason).toBe(error);
-  });
-
-  test("an opener's MemoryRecallError is the node's failure, not a host fault", async () => {
-    const error = new MemoryRecallError("recall failed");
-    const node = new MemoryScriptNode("work", async (caps) => {
-      await caps.openMemoryContext!("system", "prompt");
-      return "done";
-    });
-    node.memoryScope = new MemoryScope(["work"], { memories: ["session"] });
-    const opener: MemoryContextOpener = async () => {
-      throw error;
-    };
-    const built = fanEngine([node], { numWorkers, memoryContextOpener: opener });
-
-    const terminal = (await built.run()).at(-1);
-    expect(terminal).toBeInstanceOf(RunFailed);
-    expect((terminal as RunFailed).failure.causeType).toBe("MemoryRecallError");
-    expect(stops(built)).toEqual([]);
-    // The run signal aborted with its default reason after the `RunFailed`, not with the error.
-    expect(built.signal.reason).not.toBe(error);
-    expect((built.signal.reason as Error).name).toBe("AbortError");
   });
 });
 

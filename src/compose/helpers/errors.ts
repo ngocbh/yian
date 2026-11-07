@@ -1,7 +1,8 @@
 /**
  * Canonical, source-owned diagnostics for Compose load failures, and the helpers the validate
- * passes share to build them: `locatedError` points an error at a binding's origin, and
- * `shownLiteral` writes a value the way messages show it.
+ * passes share to build them: `locatedError` points an error at a binding's origin,
+ * `rejectRemovedMemoryKey` refuses a removed memory key with its fix, and `shownLiteral` writes a
+ * value the way messages show it.
  */
 
 import { Diagnostic, DiagnosticFrame, type OriginRef, type SourceRange } from "../../diagnostics.ts";
@@ -167,6 +168,31 @@ export class LoadError extends RangeError {
     super(diagnostic.message, cause === undefined ? undefined : { cause });
     this.diagnostic = diagnostic;
     Object.freeze(this);
+  }
+}
+
+/**
+ * Refuse a removed memory key, `long_term_memory:` or its older spelling `memory_policy:`, at the
+ * key, with the fix: memories are flow inputs now.
+ *
+ * @param has Whether the flow, def or node body being read holds a key.
+ * @param cursor The body's authored occurrence, which locates the key; `null` when source-free.
+ * @param prefix Where the body is, as the site's other errors start (`defs entry 'x': `).
+ * @throws LoadError when the body holds either key.
+ */
+export function rejectRemovedMemoryKey(
+  has: (key: string) => boolean,
+  cursor: SourceCursor | null,
+  diagnostics: LoadDiagnostics,
+  prefix = "",
+): void {
+  for (const key of ["long_term_memory", "memory_policy"]) {
+    if (!has(key)) continue;
+    throw diagnostics.error(
+      `${prefix}\`${key}:\` was removed: declare the memory as an input (\`lessons: !FileMemory\`) ` +
+        "and render `${lessons}` in a prompt",
+      { range: cursor?.keyRangeOf(key) ?? null },
+    );
   }
 }
 

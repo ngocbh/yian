@@ -6,8 +6,8 @@
  * are made of (each chat reply that arrived, every tool result, and a structured agent's accepted
  * call). The reducer derives the list itself and refuses any other; it rebuilds the value, a
  * `list(Message)`, when the commit is prepared, puts it in the pool and the producer index on the
- * success (and, in a learnable run, gives the trace a second current writer), and drops it with
- * its agent on a prune. A crash before the success leaves orphans, and the agent reruns.
+ * success, and drops it with its agent on a prune. A crash before the success leaves orphans, and
+ * the agent reruns.
  */
 
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -19,7 +19,6 @@ import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { SourceRef } from "../../src/expr/lineage.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
@@ -37,7 +36,6 @@ import {
 } from "../../src/runtime/log.ts";
 import {
   commitPrepared,
-  poolResolver,
   prepareMessagesCommit,
   prepareNodeSucceeded,
   prepareRecord,
@@ -135,9 +133,9 @@ const TOOLS = { lookup: topicTool("lookup") };
 /** Run `flow` over `model` with a log, a virtual clock at `START` and `modelRetries`. */
 async function run(
   model: ChatModel,
-  options: { log?: string; flow?: string; modelRetries?: number; learnable?: boolean } = {},
+  options: { log?: string; flow?: string; modelRetries?: number } = {},
 ): Promise<{ log: string; flow: ComposedFlow; result: Awaited<ReturnType<typeof runFlow>> }> {
-  const { log = runLog(), flow: text = flowText(), modelRetries = 0, learnable = false } = options;
+  const { log = runLog(), flow: text = flowText(), modelRetries = 0 } = options;
   const flow = await loadFlow(text);
   const result = await runFlow(flow, {}, {
     llmConfig: CONFIG,
@@ -147,7 +145,6 @@ async function run(
     models: serving(model),
     runId: "r",
     tools: TOOLS,
-    learnable,
     log,
   });
   return { log, flow, result };
@@ -414,18 +411,16 @@ test("a resumed agent (crash after a tool result) rebuilds the messages of both 
   checkConversation(value);
 });
 
-test("replay rebuilds the same value, learnable or not", async () => {
-  for (const learnable of [false, true]) {
-    const { log, flow } = await run(toolTurn(), { learnable });
-    const { seq } = messagesCommits(log)[0]!;
-    const state = replayRunLog(flow, MemoryRunLog.fromRecords(readRunLog(log)));
-    // The run ended, so END's success forgot nothing of the pool.
-    const value = state.pool.store.get("writer.new_messages")!;
-    expect(logJson(value.toWire())).toBe(logJson((await foldRunLog(log, { env: retriesEnv(0) })).records[seq]!.value!.toWire()));
-  }
+test("replay rebuilds the same value", async () => {
+  const { log, flow } = await run(toolTurn());
+  const { seq } = messagesCommits(log)[0]!;
+  const state = replayRunLog(flow, MemoryRunLog.fromRecords(readRunLog(log)));
+  // The run ended, so END's success forgot nothing of the pool.
+  const value = state.pool.store.get("writer.new_messages")!;
+  expect(logJson(value.toWire())).toBe(logJson((await foldRunLog(log, { env: retriesEnv(0) })).records[seq]!.value!.toWire()));
 });
 
-// --- growth and the trace --- //
+// --- growth --- //
 
 const CHAT_LOOP = `
 id: talk
@@ -454,38 +449,16 @@ output: \${chat.output.n}
 `;
 
 test("a LOOP of agents keeps a bounded pool and producer index", async () => {
-  for (const learnable of [false, true]) {
-    const model = new ScriptedModel(Array.from({ length: 12 }, (_, index) => textReply(`turn ${index}`)), CONFIG);
-    const { log, flow, result } = await run(model, { flow: CHAT_LOOP, learnable });
-    expect(result.status, result.failure?.message).toBe("succeeded");
-    expect(messagesCommits(log)).toHaveLength(12);
-    const held: number[] = [];
-    const writers: number[] = [];
-    const state = replayRunLog(flow, MemoryRunLog.fromRecords(readRunLog(log)), {
-      onPrepared: (_prepared, at) => {
-        held.push([...at.pool.store.keys()].filter((key) => key.endsWith(".new_messages")).length);
-        if (at.trace !== null) writers.push([...at.trace.currentWriters.keys()].filter((key) => key.endsWith(".new_messages")).length);
-      },
-    });
-    expect(Math.max(...held)).toBeLessThanOrEqual(2);
-    if (learnable) expect(Math.max(...writers)).toBeLessThanOrEqual(2);
-    expect(state.producers.size).toBe(state.pool.store.size + state.pool.system.size);
-  }
-});
-
-test("in a learnable run, the success adds the writer x.new_messages, sourced at the messages commit", async () => {
-  const { log, flow } = await run(toolTurn(), { learnable: true });
-  const { seq } = messagesCommits(log)[0]!;
-  const successSeq = seq + 1;
-  const state = replayRunLog(flow, MemoryRunLog.fromRecords(readRunLog(log)));
-  const trace = state.trace!;
-  const entry = trace.currentWriters.get("writer.new_messages")!;
-  expect(entry.source).toEqual(new SourceRef("r", seq));
-  expect(entry.outcomeSeq).toBe(successSeq);
-  expect(entry.valueJson).toBe(logJson(state.pool.store.get("writer.new_messages")!.toWire()));
-  const occurrence = trace.occurrences.find((each) => each.nodeId === "writer")!;
-  expect(occurrence.messagesSource).toEqual(entry.source);
-  expect(trace.occurrences.find((each) => each.nodeId === "after")!.messagesSource).toBeNull();
-  // A derived binding reading the whole pool resolves the messages through the trace.
-  expect(poolResolver(state)("writer.new_messages", seq).source).toEqual(entry.source);
+  const model = new ScriptedModel(Array.from({ length: 12 }, (_, index) => textReply(`turn ${index}`)), CONFIG);
+  const { log, flow, result } = await run(model, { flow: CHAT_LOOP });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(messagesCommits(log)).toHaveLength(12);
+  const held: number[] = [];
+  const state = replayRunLog(flow, MemoryRunLog.fromRecords(readRunLog(log)), {
+    onPrepared: (_prepared, at) => {
+      held.push([...at.pool.store.keys()].filter((key) => key.endsWith(".new_messages")).length);
+    },
+  });
+  expect(Math.max(...held)).toBeLessThanOrEqual(2);
+  expect(state.producers.size).toBe(state.pool.store.size + state.pool.system.size);
 });

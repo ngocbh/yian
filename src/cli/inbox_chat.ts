@@ -21,7 +21,6 @@
  * command's helpers and the chat's flusher.
  */
 
-import { resolveMemoryLayout } from "../compile/memory_layout.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { Diagnostic, shellQuote } from "../diagnostics.ts";
@@ -232,17 +231,9 @@ interface LineInbox {
   several: boolean;
 }
 
-/**
- * Whether the chat provides all `flow` needs: it declares no memories and needs no MCP tools.
- * Never throws.
- */
+/** Whether the chat provides all `flow` needs: it needs no MCP tools. */
 function chattable(flow: ComposedFlow): boolean {
-  try {
-    return !resolveMemoryLayout(flow.compiled).enabled && !needsMcp(flow);
-  } catch {
-    // A memory layout that doesn't resolve is left to `yian run` to report.
-    return false;
-  }
+  return !needsMcp(flow);
 }
 
 /** Return `flow`'s `Inbox(str)` and `Inbox(Message)` inputs, in declaration order. */
@@ -432,10 +423,9 @@ function inboxClosed(log: string, inbox: string): boolean {
  *
  * The flow loads, inputs, provider keys, log path and run index are handled as `yian run`'s
  * (`--engine-trace` included), except that the inbox input is never asked for or supplied and
- * `host.inputs` are supplied beside the given ones. Skills are `host.skills`, or else read as `yian
- * run` reads them, once per chat, before any input prompt. The chat opens no MCP servers and builds
- * no memories. A host failure prints `chat failed: <message>`, its stack below under
- * `engineTrace`, and exits 1.
+ * `host.inputs` are supplied beside the given ones. Skills are `host.skills`, or else read as
+ * `yian run` reads them, once per chat, before any input prompt. The chat opens no MCP servers. A
+ * host failure prints `chat failed: <message>`, its stack below under `engineTrace`, and exits 1.
  *
  * With `options.resume` there is no `flowPath`: the chat picks up the run recorded in that log,
  * with the flow it recorded (`loadRecordedFlow`), as `yian run --resume` does. Its first move is an
@@ -1186,10 +1176,10 @@ export async function inboxChat(
 
 /**
  * `yian run`: chat with the flow at `flowPath` (`inboxChat`, given `deps`) when stdin and stderr
- * are a TTY, the run is fresh (no `resume`, `json`, `memoryRoot` or `memoryStorage`), and the flow
- * loads, declares no memories, needs no MCP tools, and has an `Inbox(str)` or `Inbox(Message)`
- * input to type into: its only one, or `inbox`. Otherwise hand the command to `run`, which reads
- * the flow again and reports what is wrong with it; checking writes nothing. Returns the exit code.
+ * are a TTY, the run is fresh (no `resume` or `json`), and the flow loads, needs no MCP tools, and
+ * has an `Inbox(str)` or `Inbox(Message)` input to type into: its only one, or `inbox`. Otherwise
+ * hand the command to `run`, which reads the flow again and reports what is wrong with it; checking
+ * writes nothing. Returns the exit code.
  *
  * With `resume`, the chat a stop left in that log goes on (`inboxChat` with `resume`) under the
  * same conditions, judged on the flow the log recorded, and when no fresh-run flag is given;
@@ -1221,14 +1211,13 @@ export async function runOrChat(
 
 /**
  * Whether `runOrChat` goes on with the chat recorded at `options.resume`: on a TTY, not under
- * `json`, with no FLOW, fresh-run or memory flag, for a run that hasn't ended whose recorded flow
+ * `json`, with no FLOW or fresh-run flag, for a run that hasn't ended whose recorded flow
  * the chat could take. Writes nothing.
  */
 async function chatsOnResume(flowPath: string | undefined, options: RunOrChatOptions, io: CliIo): Promise<boolean> {
   if (flowPath !== undefined || options.json || !atTerminal(io)) return false;
-  const fresh = [options.inputs, options.log, options.provider, options.model, options.memoryRoot];
+  const fresh = [options.inputs, options.log, options.provider, options.model];
   if (fresh.some((value) => value !== undefined) || options.inputValues.length > 0) return false;
-  if (options.memoryStorage.length > 0) return false;
   let flow: ComposedFlow | null;
   try {
     const { status } = inspectRun(options.resume!);
@@ -1253,8 +1242,6 @@ async function chatFlow(
   io: CliIo,
 ): Promise<ComposedFlow | null> {
   if (flowPath === undefined || options.resume !== undefined || options.json || !atTerminal(io)) return null;
-  // `run` checks the memory flags against the flow and reports what they can't take.
-  if (options.memoryRoot !== undefined || options.memoryStorage.length > 0) return null;
   const silent: CliIo = { ...io, stderr: { write: async () => {} } };
   let flow: ComposedFlow | Diagnostic;
   try {

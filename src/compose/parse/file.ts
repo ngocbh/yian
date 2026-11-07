@@ -5,8 +5,8 @@
  * throws a located `LoadError` on any violation. Four surface rules shape it:
  *
  * - **Top-level sections only** (`id`/`name`/`description?`/`version?`/`input`/`nodes`/`output`/
- *   `asserts`/`typedefs`/`defs`/`uses`/`system`/`llm_config`/`env`/`long_term_memory`): a typo'd
- *   top-level key (`nodez:`) is loud rather than silently dropped. The schema is checked by hand,
+ *   `asserts`/`typedefs`/`defs`/`uses`/`system`/`llm_config`/`env`): a typo'd top-level key
+ *   (`nodez:`) is loud rather than silently dropped. The schema is checked by hand,
  *   field by field in this order, and the first located failure throws; a missing required key
  *   throws only when no other field fails.
  * - **`x-*` extension keys** at the top level are stripped first: custom metadata and YAML-anchor
@@ -25,7 +25,7 @@
 
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { isList, isRecord, type Value, type ValueRecord } from "../../typesys/values.ts";
-import { LoadDiagnostics } from "../helpers/errors.ts";
+import { LoadDiagnostics, rejectRemovedMemoryKey } from "../helpers/errors.ts";
 import { isExtensionKey } from "../helpers/source.ts";
 import { yamlReadAs } from "../helpers/yaml_words.ts";
 import { notTextError, rejectInfinityName, valueTypeError } from "../nodes/base.ts";
@@ -66,7 +66,6 @@ const TOP_SURFACE_KEYS: readonly string[] = [
   "system",
   "llm_config",
   "env",
-  "long_term_memory",
 ];
 
 /**
@@ -113,7 +112,6 @@ interface ComposeFileFields {
   system?: ValueRecord;
   llmConfig?: Value;
   env?: ValueRecord;
-  longTermMemory?: Value;
 }
 
 /**
@@ -149,8 +147,6 @@ export class ComposeFile {
    * flow; a called child flow doesn't inherit it.
    */
   readonly env: ValueRecord;
-  /** The raw `long_term_memory:` occurrence, for the shared located policy parser. */
-  readonly longTermMemory: Value;
 
   /** Create a flow from `fields`, defaulting the absent optional ones. */
   constructor(fields: ComposeFileFields) {
@@ -169,13 +165,12 @@ export class ComposeFile {
     // An authored `llm_config: null` stays null; only an absent one defaults.
     this.llmConfig = fields.llmConfig === undefined ? {} : fields.llmConfig;
     this.env = fields.env ?? {};
-    this.longTermMemory = fields.longTermMemory ?? null;
   }
 }
 
 /**
- * Reject the retired top-level spellings `inputs:`, `outputs:` and `memory_policy:`, naming the
- * replacement, at the key.
+ * Reject the retired top-level spellings `inputs:` and `outputs:`, naming the replacement, and the
+ * removed memory keys (`rejectRemovedMemoryKey`), at the key.
  *
  * Node and def bodies are checked by `rejectNestedLegacyKeys`.
  */
@@ -193,13 +188,7 @@ function rejectLegacyTopKeys(
       );
     }
   }
-  if (Object.hasOwn(body, "memory_policy")) {
-    throw diagnostics.error(
-      "unknown top-level key 'memory_policy' — `memory_policy:` was renamed to " +
-        "`long_term_memory:`",
-      { range: root.keyRangeOf("memory_policy") },
-    );
-  }
+  rejectRemovedMemoryKey((key) => Object.hasOwn(body, key), root, diagnostics);
 }
 
 /**
@@ -338,8 +327,8 @@ export function signatureNodeBody(
  *   (`p: ${input.p}`).
  * - The flow `output:` is the node's output type, re-exported as the flow output
  *   (`output: ${<id>.output}`).
- * - Everything else (the `kind:` and its logic fields, such as `prompt:`, `asserts:`,
- *   `llm_config:` or `long_term_memory:`) is the node body.
+ * - Everything else (the `kind:` and its logic fields, such as `prompt:`, `asserts:` or
+ *   `llm_config:`) is the node body.
  *
  * @returns The canonical body, with a `nodes:` mapping, for the schema check.
  * @throws LoadError for a `kind:` YAML read as non-text (`null` included), a removed kind, a
@@ -504,7 +493,6 @@ function readComposeFile(
   const system = mapping("system");
   const llmConfig = get("llm_config");
   const env = mapping("env");
-  const longTermMemory = get("long_term_memory");
   if (missing !== null) throw fail(`missing required top-level key ${reprText(missing)}`, []);
 
   return new ComposeFile({
@@ -522,7 +510,6 @@ function readComposeFile(
     system,
     llmConfig,
     env,
-    longTermMemory,
   });
 }
 
@@ -635,10 +622,11 @@ export function flowNodesCursor(document: SourceDocument, nodesSection: ValueRec
 /**
  * Parse a flow into a strict `ComposeFile`; a text is parsed as a document labeled `<flow>`.
  *
- * @throws LoadError for malformed YAML, a non-mapping document, a retired `inputs:`/`outputs:`/
- *   `memory_policy:` key, a bad compact flow, an unknown top-level key (after stripping `x-*`),
- *   or a schema violation. A text field YAML read as non-text (flow `id:`/`name:`/
- *   `description:`/`version:`, a `uses:` ref, a flow `asserts:` item) names the field.
+ * @throws LoadError for malformed YAML, a non-mapping document, a retired `inputs:`/`outputs:`
+ *   key, a removed `long_term_memory:`/`memory_policy:` key, a bad compact flow, an unknown
+ *   top-level key (after stripping `x-*`), or a schema violation. A text field YAML read as
+ *   non-text (flow `id:`/`name:`/`description:`/`version:`, a `uses:` ref, a flow `asserts:` item)
+ *   names the field.
  */
 export function parseFile(source: string | SourceDocument): ComposeFile {
   const document = typeof source === "string" ? parseSourceDocument(source, "<flow>") : source;

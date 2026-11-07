@@ -35,7 +35,7 @@ import {
 } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
-import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
+import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { INTERRUPTED_MARKER } from "../../src/nodes/agent/messages.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
@@ -153,11 +153,10 @@ async function run(
     flow?: string;
     tools?: Tools;
     modelRetries?: number;
-    learnable?: boolean;
     models?: ModelAccess;
   } = {},
 ): Promise<{ log: string; result: Awaited<ReturnType<typeof runFlow>> }> {
-  const { log = runLog(), flow = flowText(), tools = {}, modelRetries = 0, learnable = false, models = serving(model) } = options;
+  const { log = runLog(), flow = flowText(), tools = {}, modelRetries = 0, models = serving(model) } = options;
   const result = await runFlow(await loadFlow(flow), {}, {
     llmConfig: CONFIG,
     env: retriesEnv(modelRetries),
@@ -166,7 +165,6 @@ async function run(
     models,
     runId: RUN_ID,
     tools,
-    learnable,
     log,
   });
   return { log, result };
@@ -176,7 +174,7 @@ async function run(
 async function cutRun(
   k: number,
   model: ChatModel,
-  options: { flow?: string; tools?: Tools; modelRetries?: number; learnable?: boolean; log?: string } = {},
+  options: { flow?: string; tools?: Tools; modelRetries?: number; log?: string } = {},
 ): Promise<string> {
   const log = options.log ?? runLog();
   await crashAfter(k, () => run(model, { ...options, log }));
@@ -897,13 +895,13 @@ test("recorded skipped results replay the host interrupt that skipped them", asy
   expect(ran).toEqual([]);
 });
 
-test("calls a group committed before a host interrupt skipped the rest keep their evidence on replay", async () => {
+test("calls a group committed before a host interrupt skipped the rest replay to the uncut run's success", async () => {
   const flow = flowText(["lookup", "save"], { steerInbox: true, output: "Optional(str)" });
   const replies = () => [calls(["call-x", "lookup", "x"], ["call-y", "lookup", "y"], ["call-z", "save", "z"])];
   const options = (log: string) => {
     // The interrupt lands while the safe group runs, so only `save z` is skipped.
     const lookup = topicTool("lookup", { safe: true, run: (topic) => (interruptAt(log), `lookup:${topic}`) });
-    return { flow, tools: { lookup, save: topicTool("save") }, learnable: true, log };
+    return { flow, tools: { lookup, save: topicTool("save") }, log };
   };
   const uncutLog = runLog();
   const uncut = await run(new ScriptedModel(replies(), CONFIG), options(uncutLog));
@@ -914,7 +912,7 @@ test("calls a group committed before a host interrupt skipped the rest keep thei
   await cutRun(seqOf(uncutLog, "interrupted") + 1, new ScriptedModel(replies(), CONFIG), options(log));
   const resumed = await resume(log, new ScriptedModel([], CONFIG), { tools: options(log).tools });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
-  // The node's success, its evidence included, is the uncut run's.
+  // The node's success is the uncut run's.
   expect(comparable(log)).toEqual(comparable(uncutLog));
 });
 

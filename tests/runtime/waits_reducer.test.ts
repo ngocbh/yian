@@ -64,7 +64,6 @@ import {
   prepareTakeCommit,
   RunState,
 } from "../../src/runtime/state.ts";
-import { TraceDelta } from "../../src/runtime/trace.ts";
 import { availableUnread, wakeableNodes } from "../../src/runtime/waits.ts";
 import { eventBytes, type JsonObject, logJson } from "../../src/typesys/json.ts";
 import { typeFor } from "../../src/typesys/types.ts";
@@ -73,7 +72,6 @@ import {
   expectUnchanged,
   FINGERPRINT,
   FIXED_CLOCK,
-  forwardCapture,
   FuncNode,
   nodeFailure,
   reducerWrite,
@@ -209,15 +207,6 @@ describe("sends", () => {
     );
   });
 
-  test("a learnable run's send changes no trace but its sequence", () => {
-    const run = started(waitFlow(tool("heard", "take")), { learnable: true });
-    const prepared = prepareSend(run.state, "msgs", "hi");
-    const delta = prepared._plan.traceDelta!;
-    expect(delta).toBeInstanceOf(TraceDelta);
-    expect([delta.started, delta.occurrence, delta.writer, delta.systemValue, delta.resumed]).toEqual([null, null, null, null, false]);
-    commitPrepared(run.log, run.state, prepared);
-    expect(run.state.trace!.nextSequence).toBe(run.state.nextSequence);
-  });
 });
 
 const DEADLINE = "2026-10-21T00:00:00.000Z";
@@ -359,21 +348,6 @@ describe("node_waiting, node_woken and run_waiting", () => {
     expect(() => prepareRunWaiting(state)).toThrow(/waiting node must have a start count/);
   });
 
-  test("a learnable run parks a waiting node's start through a resume and brings it back at the wake", () => {
-    const { log, state } = started(waitFlow(tool("heard", "take")), { learnable: true });
-    const startSeq = start(log, state, "heard");
-    wait(log, state, "heard", takeEntry("heard"));
-    expect([...state.trace!.started]).toEqual([]);
-    expect([...state.trace!._parked]).toEqual([["heard", startSeq]]);
-    commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 0 }));
-    expect([...state.trace!._parked]).toEqual([["heard", startSeq]]);
-    send(log, state, "hi");
-    commitPrepared(log, state, prepareNodeWoken(state, "heard"));
-    expect([...state.trace!.started]).toEqual([["heard", startSeq]]);
-    expect(state.trace!._parked.size).toBe(0);
-    state.trace!._parked.set("ghost", 1);
-    expect(() => prepareNodeStep(state, "heard", { kind: "note" })).toThrow(/parks other starts/);
-  });
 });
 
 /** An `ask` node's pending step for its own call. */
@@ -612,7 +586,7 @@ function takeOf(events: readonly number[], closed = false, inbox = "msgs"): Take
 /** Commit `node`'s take commit and its success; return the commit's seq. */
 function takeAndSucceed(log: RunLog, state: RunState, node: string, take: TakeCommit): number {
   const seq = commit(log, state, prepareTakeCommit(state, node, take));
-  commitPrepared(log, state, prepareNodeSucceeded(state, node, { forwardCapture: null }));
+  commitPrepared(log, state, prepareNodeSucceeded(state, node));
   return seq;
 }
 
@@ -669,7 +643,7 @@ describe("the take commit", () => {
     }
     commitPrepared(log, state, prepareTakeCommit(state, "heard", takeOf([seqs[0]!])));
     expect(state.waits.inboxes.get("msgs")!.unread).toEqual(seqs);
-    commitPrepared(log, state, prepareNodeSucceeded(state, "heard", { forwardCapture: null }));
+    commitPrepared(log, state, prepareNodeSucceeded(state, "heard"));
     expect(state.waits.inboxes.get("msgs")!.unread).toEqual(seqs.slice(1));
     expect(state.pool.store.get("heard")!.toObject()).toEqual({ events: ["a"], closed: false });
   });
@@ -718,7 +692,7 @@ describe("the take commit", () => {
     const s = send(log, state, "hi");
     start(log, state, "heard");
     commitPrepared(log, state, prepareTakeCommit(state, "heard", takeOf([s])));
-    expect(() => prepareNodeSucceeded(state, "heard", { forwardCapture: null })).toThrow(/rebuilds to a value its target refuses/);
+    expect(() => prepareNodeSucceeded(state, "heard")).toThrow(/rebuilds to a value its target refuses/);
   });
 });
 
@@ -770,7 +744,7 @@ describe("resumes and the terminal", () => {
     const s = send(log, state, "hi");
     commitPrepared(log, state, prepareNodeWoken(state, "heard"));
     commitPrepared(log, state, prepareTakeCommit(state, "heard", takeOf([s])));
-    const success = prepareNodeSucceeded(state, "heard", { forwardCapture: null });
+    const success = prepareNodeSucceeded(state, "heard");
     expect(success.observers.at(-1)).toBeInstanceOf(RunSucceeded);
     commitPrepared(log, state, success);
     expect(state.result).toBeInstanceOf(RunSucceeded);
@@ -880,15 +854,14 @@ function unreachableFlow(): CompiledFlow {
 }
 
 /** Route `router` to `go` (END unreachable) with `heard` and `ask` waiting; `live` is ready. */
-function unreachableWaiting(options: { learnable?: boolean } = {}) {
-  const run = started(unreachableFlow(), { fingerprint: FINGERPRINT, learnable: options.learnable });
+function unreachableWaiting() {
+  const run = started(unreachableFlow(), { fingerprint: FINGERPRINT });
   const { log, state } = run;
   for (const node of ["router", "heard", "ask"]) start(log, state, node);
   wait(log, state, "heard", takeEntry("heard"));
   step(log, state, "ask", pendingStep("ask"));
   commitPrepared(log, state, prepareNodeWaiting(state, "ask", { callIds: [call("ask")] }));
-  const capture = state.learnable ? forwardCapture(state.flow.nodes.get("router")!, {}) : null;
-  commitPrepared(log, state, prepareNodeRouted(state, "router", "go", { forwardCapture: capture }));
+  commitPrepared(log, state, prepareNodeRouted(state, "router", "go"));
   expect(state.result).toBeNull();
   expect(state.terminalUnreachableFailure).not.toBeNull();
   return run;
@@ -939,19 +912,6 @@ describe("run_cancelled and run_failed", () => {
     start(plain.log, plain.state, "heard");
     wait(plain.log, plain.state, "heard", takeEntry("heard"));
     expect(() => prepareRunFailed(plain.state)).toThrow(/proved END unreachable/);
-  });
-
-  test("a learnable run's failure at quiescence installs the failed terminal from the causal route", () => {
-    const { log, state } = unreachableWaiting({ learnable: true });
-    start(log, state, "live");
-    succeed(log, state, "live", {});
-    commitPrepared(log, state, prepareRunFailed(state));
-    const terminal = state.trace!.terminal!;
-    expect([terminal.succeeded, terminal.source, terminal.failure]).toEqual([
-      false,
-      state.trace!.causalRouteSource,
-      state.terminalUnreachableFailure,
-    ]);
   });
 
   test("a node failure while another node waits on a host call closes the call", () => {

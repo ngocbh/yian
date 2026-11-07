@@ -16,22 +16,11 @@ import * as events from "../../src/events.ts";
 import { registerTemplateFn } from "../../src/expr/builtins.ts";
 import { ExpressionError, evaluateWhen } from "../../src/expr/expressions.ts";
 import * as yian from "../../src/index.ts";
-import { ProfileMemory } from "../../src/memory/profile.ts";
-import {
-  FileMarkdownStore,
-  InMemoryMarkdownStore,
-  type MarkdownStore,
-  MarkdownVersionMismatch,
-  markdownVersion,
-} from "../../src/memory/storage/markdown.ts";
-import { checkStoragePath, SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
-import { buildMemories, MemoryRegistry } from "../../src/memory_host.ts";
 import { checkConversation, checkMessage, ConversationError } from "../../src/nodes/agent/messages.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import * as base from "../../src/nodes/base.ts";
 import { ToolAttemptsFailed } from "../../src/nodes/tool/node.ts";
 import * as run from "../../src/run.ts";
-import { BackwardOutcome } from "../../src/runtime/contracts.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import { pending, ToolContext } from "../../src/tools/context.ts";
 import { PermanentToolError, ReportedToolError, TransientToolError } from "../../src/tools/errors.ts";
@@ -86,8 +75,6 @@ test("only the final log-only runtime and run API remain", () => {
     onStream: true,
     live: true,
     llmConfig: true,
-    memory: true,
-    learnable: true,
     tools: true,
     skills: true,
     context: true,
@@ -98,7 +85,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     parent: true,
   };
-  expect(Object.keys(options)).toHaveLength(18);
+  expect(Object.keys(options)).toHaveLength(16);
   expect(run.runFlow.length).toBe(2);
   const advanceOptions: Record<keyof run.AdvanceOptions, true> = {
     log: true,
@@ -108,7 +95,6 @@ test("only the final log-only runtime and run API remain", () => {
     onEvent: true,
     onStream: true,
     live: true,
-    memory: true,
     tools: true,
     skills: true,
     apiKey: true,
@@ -121,7 +107,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     checkLlmConfigs: true,
   };
-  expect(Object.keys(advanceOptions)).toHaveLength(19);
+  expect(Object.keys(advanceOptions)).toHaveLength(18);
   expect(run.advance.length).toBe(1);
 
   const result = new run.RunResult({ input: {}, status: "succeeded", runId: "r1", log: null });
@@ -137,13 +123,10 @@ test("only the final log-only runtime and run API remain", () => {
     "waits",
     "unread",
   ]);
-  const getters = Object.entries(Object.getOwnPropertyDescriptors(run.RunResult.prototype))
-    .filter(([, descriptor]) => descriptor.get !== undefined)
-    .map(([name]) => name);
-  expect(getters).toEqual(["learning", "backwardOutcome"]);
+  expect(Object.getOwnPropertyNames(run.RunResult.prototype)).toEqual(["constructor"]);
 });
 
-test("the package root exports exactly its documented root list plus the memory storage names, ProfileMemory, ToolAttemptsFailed, pending, the message names, InboxRef and the host calls", () => {
+test("the package root exports exactly its documented root list plus ToolAttemptsFailed, pending, the message names, InboxRef and the host calls", () => {
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,
@@ -157,15 +140,6 @@ test("the package root exports exactly its documented root list plus the memory 
     pendingCalls: run.pendingCalls,
     RunBusyError: run.RunBusyError,
     DeliveryRefused: run.DeliveryRefused,
-    buildMemories,
-    MemoryRegistry,
-    SQLiteStorage,
-    checkStoragePath,
-    FileMarkdownStore,
-    InMemoryMarkdownStore,
-    MarkdownVersionMismatch,
-    markdownVersion,
-    ProfileMemory,
     Failure,
     Diagnostic,
     ComposedFlow,
@@ -193,14 +167,12 @@ test("the package root exports exactly its documented root list plus the memory 
   const exported = yian as Record<string, unknown>;
   expect(Object.keys(expected).filter((name) => exported[name] !== expected[name])).toEqual([]);
   // The type export, checked by `tsc`.
-  const store: yian.MarkdownStore = new InMemoryMarkdownStore() satisfies MarkdownStore;
-  expect(store).toBeInstanceOf(InMemoryMarkdownStore);
   const m: yian.Message = { role: "user", parts: [] };
   expect(m.parts).toEqual([]);
 });
 
-test("yian/run re-exports BackwardOutcome; Steering is gone, replaced by interrupt(run, inbox)", () => {
-  expect(run.BackwardOutcome).toBe(BackwardOutcome);
+test("yian/run has no BackwardOutcome; Steering is gone, replaced by interrupt(run, inbox)", () => {
+  expect("BackwardOutcome" in run).toBe(false);
   // `Steering` was a type, so its removal is checked by `tsc`: nothing here may name it.
   expect(typeof run.interrupt).toBe("function");
 });

@@ -144,8 +144,6 @@ const LOAD = "kind: load\nflow: x\nexpect: {load: ok}\n";
 const RUN = "kind: run\nflow: x\nexpect: {output: 1}\n";
 const BARE_RESUME = "kind: resume\nflow: x\nexpect: {output: 1}\n";
 const RESUME = `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 2}\n`;
-const BARE_BACKWARD = "kind: backward\nflow: x\nexpect: {output: 1}\n";
-const BACKWARD = `${BARE_BACKWARD}run: {learnable: true}\nbackward: [{feedback: f}]\n`;
 const EXPR = "kind: expr\nexpect: {value: 1}\n";
 const CLI = "kind: cli\nexpect: {exit: 0}\n";
 const EXCHANGE = "request: {method: POST, url: u}, response: {status: 200}";
@@ -168,7 +166,7 @@ const JSON_CASE = "kind: json\nexpect: {value: 1}\n";
 const ONE_OF = "a `json` case takes one of `read` and `write`";
 const READ = "`read` takes `mode` (codec or plain), and no `form`";
 const WRITE = "`write` takes `form` (canonical or log), and no `mode`";
-const KINDS = "load, run, resume, backward, expr, value, defaults, fingerprint, cli, json";
+const KINDS = "load, run, resume, expr, value, defaults, fingerprint, cli, json";
 const TEXT_REPLY = "{format: yian.message.v1, role: assistant, parts: [{type: text, text: hi}]}";
 /** A `run` case whose `host.models.n.agent` script is the one `entry`. */
 const MODEL = (entry: string) => `${RUN}host: {models: {n: {agent: [${entry}]}}}\n`;
@@ -179,8 +177,7 @@ const SENDS =
 const COUNTS = "`host.sends[0].after` counts must be ints from 1, `chunk` from 0";
 const STOP_COUNTS = "`host.stop.a.after` counts must be ints from 1, `chunk` from 0";
 const USAGE = "{input_tokens: 1, output_tokens: 2, total_tokens: 3}";
-const CONSUMER_LIST = "agent, structured_retry, compose, backward, summary";
-const MEMORY_CONSUMER = "consumers go under `__memory__`, and `__memory__` holds only them";
+const CONSUMER_LIST = "agent, structured_retry, compose, summary";
 /** A `run` case whose `expect` adds `results`. */
 const EXPECT = (results: string) => `kind: run\nflow: x\nexpect: {output: 1, ${results}}\n`;
 
@@ -243,13 +240,8 @@ describe("checkCase", () => {
     [`${RUN}run: {context: yes}`, "`run.context` must be `present`"],
     [`${RESUME}resume: {run_id: a}`, "unknown key `resume.run_id`"],
     [`${RESUME}resume: {context: 1}`, "`resume.context` must be `present`"],
-    [`${RUN}backward: [{feedback: f}]`, "`backward` is not a key of a `run` case"],
-    [`${BARE_BACKWARD}run: {learnable: true}`, "`backward` is required"],
-    [`${BARE_BACKWARD}backward: []`, "`backward` must be a non-empty list"],
-    [`${BARE_BACKWARD}backward: f`, "`backward` must be a non-empty list"],
-    [`${BARE_BACKWARD}backward: [1]`, "`backward[0]` must be a mapping"],
-    [`${BARE_BACKWARD}backward: [{}]`, "`backward[0].feedback` is required"],
-    [`${BARE_BACKWARD}backward: [{feedback: f, x: 1}]`, "unknown key `backward[0].x`"],
+    ["kind: backward\nflow: x\nexpect: {output: 1}\n", `\`kind\` must be one of ${KINDS}, not "backward"`],
+    [`${RUN}run: {learnable: true}`, "unknown key `run.learnable`"],
     [`${RUN}host: 1`, "`host` must be a mapping"],
     [`${RUN}host: {x: 1}`, "unknown key `host.x`"],
     [
@@ -353,39 +345,11 @@ describe("checkCase", () => {
       `${RUN}host: {models: {n: {x: []}}}`,
       `\`host.models.n.x\`: the consumer must be one of ${CONSUMER_LIST}`,
     ],
-    [`${RUN}host: {models: {n: {"memory:a": []}}}`, MEMORY_CONSUMER],
-    [`${RUN}host: {memory: 1}`, "`host.memory` must be a mapping"],
-    [`${RUN}host: {memory: {after: []}}`, "unknown key `host.memory.after`"],
-    [`${RUN}host: {memory: {before: {}}}`, "`host.memory.before` must be a list"],
-    [`${RUN}host: {memory: {before: [{run: {}}]}}`, "`host.memory.before[0].run.run_id` is required"],
-    [`${RUN}host: {memory: {before: [{}]}}`, "`host.memory.before[0].run` is required"],
     [
-      `${RUN}host: {memory: {before: [{run: {run_id: r}, x: 1}]}}`,
-      "unknown key `host.memory.before[0].x`",
+      `${RUN}host: {models: {n: {"memory:a": []}}}`,
+      `\`host.models.n.memory:a\`: the consumer must be one of ${CONSUMER_LIST}`,
     ],
-    [
-      `${RUN}host: {memory: {before: [{run: {run_id: r}, inputs: 1}]}}`,
-      "`host.memory.before[0].inputs` must be a mapping",
-    ],
-    [
-      `${RUN}host: {memory: {before: [{run: {run_id: r, context: x}}]}}`,
-      "`host.memory.before[0].run.context` must be `present`",
-    ],
-    [
-      `${RUN}host: {memory: {before: [{run: {run_id: r, api_key: k}}]}}`,
-      "unknown key `host.memory.before[0].run.api_key`",
-    ],
-    [
-      `${RUN}host: {memory: {before: [{run: {run_id: r, learnable: true}, backward: []}]}}`,
-      "`host.memory.before[0].backward` must be a non-empty list",
-    ],
-    [
-      `${RUN}host: {memory: {before: [{run: {run_id: r}, backward: [{feedback: f}]}]}}`,
-      "`host.memory.before[0].backward` needs `host.memory.before[0].run.learnable: true`",
-    ],
-    [EXPECT("memory: {a: x}"), "`expect.memory` needs `host.memory`"],
-    [`${EXPECT("memory: {a: 1}")}host: {memory: {}}`, "`expect.memory` values must be text"],
-    [`${RUN}host: {models: {__memory__: {agent: []}}}`, MEMORY_CONSUMER],
+    [`${RUN}host: {memory: {}}`, "unknown key `host.memory`"],
     [`${RUN}host: {models: {n: {agent: {}}}}`, "`host.models.n.agent` must be a list"],
     [MODEL("1"), `\`${AT}\` must be a mapping`],
     [MODEL("{}"), `\`${AT}\` takes \`reply\` or \`chunks\``],
@@ -543,14 +507,6 @@ describe("checkCase", () => {
     ],
     [`${RUN}host: {stop: {a: {after: {model_call: 0}}}}`, STOP_COUNTS],
     [`${RUN}host: {stop: {a: {after: {model_call: 1, chunk: -1}}}}`, STOP_COUNTS],
-    [
-      `${BARE_BACKWARD}backward: [{feedback: f}]`,
-      "a `backward` case needs `run.learnable: true`",
-    ],
-    [
-      `${BARE_BACKWARD}run: {learnable: 1}\nbackward: [{feedback: f}]`,
-      "a `backward` case needs `run.learnable: true`",
-    ],
     [EXPR, "an `expr` case takes one of `expr` and `template`"],
     [`${EXPR}expr: a\ntemplate: b`, "an `expr` case takes one of `expr` and `template`"],
     [`${EXPR}expr: 1`, "`expr` or `template` must be text"],
@@ -586,12 +542,7 @@ describe("checkCase", () => {
       `{usage: ${USAGE}}, {finish: null}]}`),
     MODEL("{chunks: [], raise: {class: ConnectionError, message: m}}"),
     MODEL("{chunks: [{text: a}], raise: {class: X, message: m, status: 503}}"),
-    `${RUN}host: {memory: {}}`,
-    `${EXPECT("memory: {a: x}")}host: {memory: {before: [{inputs: {q: a}, ` +
-      "run: {run_id: r, num_workers: 0, learnable: true, context: present}, " +
-      "backward: [{feedback: f, api_key: k, headers: {}}]}]}}",
-    `${RUN}host: {models: {__memory__: {"memory:a/b": []}, n: {compose: [], ` +
-      "structured_retry: []}}}",
+    `${RUN}host: {models: {n: {compose: [], structured_retry: []}}}`,
     `${RUN}host: {sends: [{interrupt: m, after: {node: chat, model_call: 1, chunk: 2}}, {interrupt: m}]}`,
     `${RUN}host: {sends: [{inbox: m, event: a, after: {node: chat, model_call: 1, chunk: 2}}, {close: m}]}`,
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 1, sends: [{inbox: m, event: a, down: true}]}`,
@@ -606,7 +557,6 @@ describe("checkCase", () => {
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: end}`,
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {stop: {a: {after: {model_call: 1, chunk: 2}}}}`,
     `${RUN}host: {stop: {a: {after: {tool_call: 1}}}}`,
-    BACKWARD,
     `${EXPR}expr: a\nitem: 1`,
     `${EXPR}expr: a\nmode: condition`,
     `${EXPR}expr: a\nitem: 1\ntypedefs: {}\nmode: strict`,
@@ -701,7 +651,6 @@ describe("prepare", () => {
     const prepared = prepare(
       readCase(
         "run: {api_key: <key:3>}\nresume: {headers: {a: x<key:1>y}}\n" +
-          "backward: [{api_key: <key:2>}]\n" +
           "env: {A_API_KEY: <key:3>}\nhost: {human: {n: [<key:4>]}}\nstdin: <key:5>\n" +
           "inputs: {a: <key:3>}\nexpect: {output: <key:3>}",
       ),
@@ -709,7 +658,6 @@ describe("prepare", () => {
     expect(prepared).toEqual({
       run: { api_key: "sk-conformance-3" },
       resume: { headers: { a: "xsk-conformance-1y" } },
-      backward: [{ api_key: "sk-conformance-2" }],
       env: { A_API_KEY: "sk-conformance-3" },
       host: { human: { n: ["sk-conformance-4"] } },
       stdin: "sk-conformance-5",
@@ -1158,36 +1106,6 @@ describe("run", () => {
     expect(sent).toBeGreaterThan(-1);
     expect(kinds.slice(sent + 1, sent + 4)).toEqual(["model_call", "steer", "model_call"]);
   });
-
-  /**
-   * A `run` case whose AGENT `answer` replies `a1` to `q`, declaring `agentMemory` when given, with
-   * `host.memory` set to `memory` and `expect.memory` to `expected`.
-   */
-  const MEMORY_CASE = (agentMemory: string, memory: string, expected: string) =>
-    "kind: run\nflow: |\n  id: tutor\n  name: tutor\n" +
-    "  llm_config: {provider: openai, model: gpt-5.5}\n" +
-    "  input:\n    q: !str\n  nodes:\n    answer:\n      kind: agent\n" +
-    (agentMemory ? `      long_term_memory: ${agentMemory}\n` : "") +
-    '      input: {q: "${input.q}"}\n      system_prompt: Tutor.\n      prompt: "${q}"\n' +
-    "      output: str\n  output: ${answer.output}\n" +
-    "inputs: {q: first}\nrun: {num_workers: 0}\n" +
-    `host:\n  memory: ${memory}\n` +
-    "  models: {answer: {agent: [{reply: {format: yian.message.v1, role: assistant, " +
-    "parts: [{type: text, text: a1}]}}]}}\n" +
-    `expect: {output: {status: succeeded, output: a1}, memory: ${expected}}\n`;
-
-  test("a key the flow doesn't declare in `expect.memory` fails the case", async () => {
-    const read = runCase(MEMORY_CASE("", "{}", "{nope: ''}"));
-    await expect(read).rejects.toBeInstanceOf(CaseFailure);
-    await expect(read).rejects.toThrow("`expect.memory.nope` names no memory the flow declares");
-  });
-
-  test("a `before` entry whose backward call raises fails the case", async () => {
-    const before = "{before: [{run: {run_id: r1, learnable: true}, backward: [{feedback: [1]}]}]}";
-    const failed = runCase(MEMORY_CASE("", before, "{}"));
-    await expect(failed).rejects.toBeInstanceOf(CaseFailure);
-    await expect(failed).rejects.toThrow("`host.memory.before[0]` backward raised {\"class\":");
-  });
 });
 
 describe("main", () => {
@@ -1203,7 +1121,7 @@ describe("main", () => {
     "b/pending_passes.yaml": "kind: expr\nexpr: pass\npending: '#391'\nexpect: {value: 1}\n",
   };
   const BAD =
-    "FAIL b/bad: `kind` must be one of load, run, resume, backward, expr, value, defaults, " +
+    "FAIL b/bad: `kind` must be one of load, run, resume, expr, value, defaults, " +
     'fingerprint, cli, json, not "nope"';
   const X = ["FAIL a/x: x differs", "  --- actual", "  1", "  --- expected", "  2"];
   const PASSES = "FAIL b/pending_passes: passes, but is marked pending (#391); remove the marker";
@@ -1607,15 +1525,6 @@ describe("main", () => {
     expect(cuts.map((names) => names.length)).toEqual([16, 0]);
   }, SWEEP);
 
-  test("sweeps a learnable run case, whose captures name their sources' records by seq", async () => {
-    const learnable = TWO_NODES.replace("num_workers: 0}", "num_workers: 0, learnable: true}");
-    expect(learnable).not.toBe(TWO_NODES);
-    const files = { "a/two.yaml": learnable };
-    const { code, out } = await run(["--crash-sweep"], files, {}, { run: RUNNERS.run! });
-    expect(out).toEqual(["1 case: 1 passed, 0 failed, 0 pending"]);
-    expect(code).toBe(0);
-  }, SWEEP);
-
   test("restores a changed expectation with --write-expect, in the case's own form", async () => {
     const kinds = { run: RUNNERS.run! };
     const edited = FORMS.replace(
@@ -1735,7 +1644,7 @@ expect:
     output: {id: <id:1>, f: 2.0, big: 9007199254740993}
   # Without a run id, the run makes one up.
   trace:
-  - [run_started, null, {learnable: false, num_workers: 0}]
+  - [run_started, null, {num_workers: 0}]
   - [pool_commit, __start__, {key: system.now}]
   - [pool_commit, __start__, {key: system.run_id, value: <id:1>}]
   - [pool_commit, __start__, {key: system.today}]
@@ -1767,33 +1676,21 @@ expect:
 `;
 
 describe("sourcesByRecord", () => {
-  test("names each capture source by its record's kind and node, and each commit by its fields", () => {
-    const source = (seq: bigint) => ({ route: { kind: "source", source: { execution_seq: seq } } });
+  test("names each commit by its fields and each source by its record's kind and node", () => {
     const entries = [
       ["run_started", null],
       ["node_started", "a"],
-      ["pool_commit", "a", { value: 2n }],
-      ["node_succeeded", "a", { commit: 2n, forward_capture: source(1n) }],
+      ["pool_commit", "a", { value: 2n, from: { x: 1n } }],
+      ["node_succeeded", "a", { commit: 2n }],
     ];
     expect(sourcesByRecord(entries)).toEqual([
-      [
-        "node_succeeded",
-        "a",
-        { commit: { value: 2n }, forward_capture: { route: { kind: "source", source: { execution_seq: "node_started a" } } } },
-      ],
+      ["node_succeeded", "a", { commit: { value: 2n, from: { x: "node_started a" } } }],
     ]);
   });
 
   test("fails on a success naming a seq that isn't a pool_commit", () => {
     const entries = [["node_started", "a"], ["node_succeeded", "a", { commit: 0n }]];
     expect(() => sourcesByRecord(entries)).toThrow(new CaseFailure("a success names seq 0, which isn't a pool_commit"));
-  });
-
-  test("fails on a source naming a seq the log doesn't hold", () => {
-    const entries = [["node_succeeded", "a", { route: { source: { execution_seq: 7n } } }]];
-    expect(() => sourcesByRecord(entries)).toThrow(
-      new CaseFailure("a capture source names seq 7, which the log doesn't hold"),
-    );
   });
 });
 

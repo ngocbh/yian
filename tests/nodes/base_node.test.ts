@@ -95,7 +95,6 @@ test("a new node starts with empty fields and every trait off", () => {
   expect([node.id, node.title, node.outputContract, node.params]).toEqual(["n", null, null, null]);
   expect([node.preAsserts, node.postAsserts, node.originContext]).toEqual([[], [], []]);
   expect([node.commitAs, node.originId, node.origin]).toEqual([null, null, null]);
-  expect([node.memoryScope, node.executionScope]).toEqual([null, null]);
   expect(node.env).toEqual({});
   expect([node.types, node.wiringLabels, node.bindingLabels]).toEqual([new Map(), new Map(), new Map()]);
   expect([
@@ -103,7 +102,6 @@ test("a new node starts with empty fields and every trait off", () => {
     node.commitsInputRecord,
     node.bindsPerItem,
     node.isLoop,
-    node.needsMemoryContext,
     node.needsSkills,
     node.needsTools,
     node.needsLiveEvents,
@@ -112,7 +110,7 @@ test("a new node starts with empty fields and every trait off", () => {
     node.needsModels,
     node.derived,
     node.producesMessages,
-  ]).toEqual(Array(13).fill(false));
+  ]).toEqual(Array(12).fill(false));
   expect([node.itemSourceKey, node.growDepthDelta]).toEqual([null, null]);
 });
 

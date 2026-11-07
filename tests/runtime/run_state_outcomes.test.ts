@@ -8,7 +8,6 @@ import { expect, test } from "bun:test";
 
 import { CompiledFlow, Edge, END_ID, Flow, START_ID } from "../../src/compile/model.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
-import { sameSource } from "../../src/expr/lineage.ts";
 import {
   NodeFailed,
   NodeRouted,
@@ -23,7 +22,6 @@ import { type OutputContract, PartialRecordContract, ValueContract } from "../..
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { computeBackward } from "../../src/runtime/backward.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import {
   MemoryRunLog,
@@ -55,7 +53,6 @@ import {
   expectUnchanged,
   FailingLog,
   fanoutFlow,
-  forwardCapture,
   FuncNode,
   initializedAndStarted,
   nodeFailure,
@@ -1749,24 +1746,19 @@ function terminalPrunerFragment(spawnerId: string): Flow {
   return fragmentOf(nodes, [new Edge(`${startId}-end`, startId, endId, { ordering: true })], startId, endId);
 }
 
-test.each([false, true])("the terminal-unreachable latch survives pruning its dynamic cause: learnable %p", async (
-  learnable,
-) => {
-  const { state, log } = initializedAndStarted(terminalPruneParentFlow(), { learnable });
-  const capture = (nodeId: string) => ({
-    forwardCapture: learnable ? forwardCapture(state.flow.nodes.get(nodeId)!, {}) : null,
-  });
+test("the terminal-unreachable latch survives pruning its dynamic cause", () => {
+  const { state, log } = initializedAndStarted(terminalPruneParentFlow());
   commitStartSuccess(state, log);
   commitPrepared(log, state, prepareNodeStarted(state, "creator"));
   commitPrepared(log, state, prepareNodeStarted(state, "pruner"));
   const routerBuilder: GrowBuilder = (spawner) => terminalRouterFragment(spawner.id);
-  commitPrepared(log, state, prepareGrowth(log, state, "creator", new Grow({}), routerBuilder, capture("creator")));
+  commitPrepared(log, state, prepareGrowth(log, state, "creator", new Grow({}), routerBuilder));
   const routerId = "creator/child/router";
   commitPrepared(log, state, prepareNodeStarted(state, "creator/child/start"));
-  commitPrepared(log, state, prepareOutput(log, state, "creator/child/start", {}, capture("creator/child/start")));
+  commitPrepared(log, state, prepareOutput(log, state, "creator/child/start", {}));
   commitPrepared(log, state, prepareNodeStarted(state, routerId));
 
-  const route = prepareNodeRouted(state, routerId, "go", capture(routerId));
+  const route = prepareNodeRouted(state, routerId, "go");
   const failure = routePlan(route).delta.terminalUnreachableFailure!;
   commitPrepared(log, state, route);
 
@@ -1784,11 +1776,7 @@ test.each([false, true])("the terminal-unreachable latch survives pruning its dy
   expect(state.ready).toEqual([]);
 
   const prunerBuilder: GrowBuilder = (spawner) => terminalPrunerFragment(spawner.id);
-  commitPrepared(
-    log,
-    state,
-    prepareGrowth(log, state, "pruner", new Grow({}, [routerId]), prunerBuilder, capture("pruner")),
-  );
+  commitPrepared(log, state, prepareGrowth(log, state, "pruner", new Grow({}, [routerId]), prunerBuilder));
 
   expect(state.flow.nodes.has(routerId)).toBe(false);
   expect(state.terminalUnreachableFailure).toBe(failure);
@@ -1796,26 +1784,15 @@ test.each([false, true])("the terminal-unreachable latch survives pruning its dy
   expect(state.ready).toEqual(["pruner/child/start"]);
 
   commitPrepared(log, state, prepareNodeStarted(state, "pruner/child/start"));
-  commitPrepared(log, state, prepareOutput(log, state, "pruner/child/start", {}, capture("pruner/child/start")));
+  commitPrepared(log, state, prepareOutput(log, state, "pruner/child/start", {}));
   commitPrepared(log, state, prepareNodeStarted(state, "pruner/child/end"));
-  const observers = commitPrepared(
-    log,
-    state,
-    prepareOutput(log, state, "pruner/child/end", {}, capture("pruner/child/end")),
-  );
+  const observers = commitPrepared(log, state, prepareOutput(log, state, "pruner/child/end", {}));
 
   expect(observers.at(-1)).toStrictEqual(new RunFailed({ failure }));
   expect((observers.at(-1) as RunFailed).failure).toBe(failure);
   expect((state.result as RunFailed).failure).toBe(failure);
   expect(state.terminalUnreachableFailure).toBe(failure);
   expect(state.ready).toEqual([]);
-  if (learnable) {
-    const causal = state.trace!.occurrences.find((item) => item.nodeId === routerId)!;
-    expect(state.trace!.terminal!.source).toEqual(causal.source);
-    const [root, results] = await computeBackward(state.trace!, "review pruned failure");
-    expect(root.inputFeedback).toEqual({});
-    expect(results.find((item) => sameSource(item.source, causal.source))!.invoked).toBe(true);
-  }
 });
 
 test("a terminal-skip diagnosis scans only END beyond the touched route joins", () => {

@@ -353,13 +353,10 @@ export class BuildContext {
   readonly variableDeclarationReader: VariableDeclarationReader | null;
   /** Resolves one parent binding's output contract; LOOP reads it to type a carried field its body omits. */
   readonly bindingContractReader: BindingContractReader | null;
-  /** The lexical flow path of the flow being assembled; AGENT stamps it into memory sites. */
-  readonly owner: readonly string[];
 
   /**
    * Create a context. Only `registry` is required; the readers, `resolver` and `baseDir` default
-   * to `null`, `sourceFile` to `"<inline-code>"`, `diagnostics` to an unlocated context and
-   * `owner` to `["root"]`, which is copied.
+   * to `null`, `sourceFile` to `"<inline-code>"` and `diagnostics` to an unlocated context.
    */
   constructor(options: {
     registry: TypeRegistry;
@@ -371,7 +368,6 @@ export class BuildContext {
     outputContractReader?: OutputContractReader | null;
     variableDeclarationReader?: VariableDeclarationReader | null;
     bindingContractReader?: BindingContractReader | null;
-    owner?: readonly string[];
   }) {
     const {
       registry,
@@ -383,7 +379,6 @@ export class BuildContext {
       outputContractReader = null,
       variableDeclarationReader = null,
       bindingContractReader = null,
-      owner = ["root"],
     } = options;
     this.registry = registry;
     this.resolver = resolver;
@@ -394,7 +389,6 @@ export class BuildContext {
     this.outputContractReader = outputContractReader;
     this.variableDeclarationReader = variableDeclarationReader;
     this.bindingContractReader = bindingContractReader;
-    this.owner = Object.freeze([...owner]);
     Object.freeze(this);
   }
 }
@@ -888,7 +882,7 @@ export class NodeDescriptor {
    * Return a copy with `changes` applied, rebuilt through this class's constructor.
    *
    * `changes` is keyed by field name; the base fields are type-checked and a kind's own fields
-   * pass through, so a kind's method can call `this.replace({ memories })`.
+   * pass through, so a kind's method can call `this.replace({ codeOrigin })`.
    */
   replace(changes: Partial<NodeDescriptorFields> & Readonly<Record<string, unknown>>): this {
     const cls = this.constructor as new (fields: NodeDescriptorFields) => this;

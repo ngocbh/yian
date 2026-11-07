@@ -6,7 +6,7 @@
  * Interrupts are in `agent_interrupt.test.ts`.
  */
 
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,8 +25,7 @@ import { userMessage } from "../../src/nodes/agent/structured.ts";
 import { Output, type SteerInbox } from "../../src/nodes/base.ts";
 import { Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
-import { runFlow, send } from "../../src/run.ts";
+import { send } from "../../src/run.ts";
 import type { FlowEngine } from "../../src/runtime/engine.ts";
 import { type LiveFrame, LiveChannel, LiveView } from "../../src/runtime/live.ts";
 import { NodeStepRecord, readRunLog } from "../../src/runtime/log.ts";
@@ -39,7 +38,17 @@ import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { InboxRef, inboxType, Type, ValueKind } from "../../src/typesys/values.ts";
 import { inboxEngine } from "../helpers/inbox_fixtures.ts";
-import { CrashAt, crashes, drive, graph, NO_ENV, noGrowth, rejected, resumeWith, runWith, serving } from "../helpers/run_state_fixtures.ts";
+import {
+  CrashAt,
+  crashes,
+  drive,
+  graph,
+  NO_ENV,
+  noGrowth,
+  resumeWith,
+  runWith,
+  serving,
+} from "../helpers/run_state_fixtures.ts";
 
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
 afterEach(forget);
@@ -174,15 +183,13 @@ function agentContext(model: ChatModel, extra: Partial<AgentRunContext>): AgentR
   return {
     nodeId: "chat",
     messages: [userMessage("go")],
-    promptText: "go",
     tools: [],
     llmConfig: CONFIG,
     outputType: null,
     retries: 0,
     maxToolIterations: -1,
-    memoryContext: new MemoryContext(),
     toolset: null,
-    baseSystemPrompt: DEFAULT_SYSTEM,
+    systemPrompt: DEFAULT_SYSTEM,
     skills: [],
     models: serving(model),
     sent: () => [],
@@ -354,7 +361,7 @@ test("after a steer read, the next call's live frames carry its model_call step'
   const onEvent = (event: unknown) => {
     if (event instanceof RunStarted) void send(log, "notes", "use dataset B");
   };
-  const result = await runWith(flow, {}, null, new ScriptedModel([reply("done")], CONFIG), { log, onEvent, live });
+  const result = await runWith(flow, {}, new ScriptedModel([reply("done")], CONFIG), { log, onEvent, live });
   expect(result.status, result.failure?.message).toBe("succeeded");
   const steps = readRunLog(log).flatMap(({ record }) => (record instanceof NodeStepRecord ? [[record.step["kind"], record.n]] : []));
   expect(steps).toEqual([
@@ -379,12 +386,12 @@ test("resume reuses a finished node with a steer inbox without reading it again"
   const onEvent = (event: unknown) => {
     if (event instanceof RunStarted) void send(log, "notes", "use dataset B");
   };
-  await crashes(first, () => runWith(flow, {}, null, first, { log, onEvent }));
+  await crashes(first, () => runWith(flow, {}, first, { log, onEvent }));
   expect(shown(first.requests[0]!.messages).at(-1)).toEqual(["user", "use dataset B"]);
 
   await send(log, "notes", "new steer", { env: NO_ENV });
   const model = new ScriptedModel([reply("summary")], CONFIG);
-  const resumed = await resumeWith(flow, log, null, model);
+  const resumed = await resumeWith(flow, log, model);
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("summary");
   expect(shown(model.requests[0]!.messages).at(-1)).toEqual(["user", "summarize: chat done"]);

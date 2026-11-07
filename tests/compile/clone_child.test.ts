@@ -12,12 +12,6 @@ import { expect, test } from "bun:test";
 import { cloneChild } from "../../src/compile/expand.ts";
 import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
-import {
-  MemoryOccurrenceKind,
-  MemoryOccurrenceSegment,
-  MemoryScope,
-  MemorySetupError,
-} from "../../src/memory/contracts.ts";
 import { type Node, NodeKind, Output } from "../../src/nodes/base.ts";
 import { Assertion, Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
@@ -118,29 +112,6 @@ test("clone child prefixes existing generated origin context", () => {
 
   expect(cloned.nodes.get("each/head")!.originContext).toEqual([outer, nested]);
   expect(flow.nodes.get("head")!.originContext).toEqual([nested]);
-});
-
-test("clone child rejects a dynamic static memory template atomically", () => {
-  const flow = single();
-  const occurrence = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["call"], 0);
-  flow.nodes.get("head")!.memoryScope = new MemoryScope(["call", "head"], { occurrencePath: [occurrence] });
-
-  expect(() => cloneChild(flow, "call", { topic: "ACME" })).toThrow(MemorySetupError);
-  expect(() => cloneChild(flow, "call", { topic: "ACME" })).toThrow(/static memory template/);
-  expect(flow.nodes.get("head")!.memoryScope!.occurrencePath).toEqual([occurrence]);
-});
-
-test("clone child refuses a template scope that isn't a scope", () => {
-  const flow = single();
-  Object.assign(flow.nodes.get("head")!, { executionScope: {} });
-  expect(() => cloneChild(flow, "call", { topic: "ACME" })).toThrow(
-    new TypeError("child execution scope must be an ExecutionScope"),
-  );
-
-  const other = single();
-  Object.assign(other.nodes.get("head")!, { memoryScope: "notes" });
-  expect(() => cloneChild(other, "call", { topic: "ACME" })).toThrow(MemorySetupError);
-  expect(() => cloneChild(other, "call", { topic: "ACME" })).toThrow(/'head' has a noncanonical static memory scope/);
 });
 
 test("clone child rewrites one binding layer and preserves its origin", () => {

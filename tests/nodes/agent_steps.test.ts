@@ -38,8 +38,8 @@ import {
 } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentSteps, RequestDigest, requestSha256 } from "../../src/nodes/agent/context.ts";
-import { stepsMaterial } from "../../src/nodes/agent/loop.ts";
-import { SKIPPED_TOOL_RESULT } from "../../src/nodes/agent/memory.ts";
+import { rebuildStepRequests } from "../../src/nodes/agent/loop.ts";
+import { SKIPPED_TOOL_RESULT } from "../../src/nodes/agent/results.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { decodeRecord, InterruptedRecord, NodeStepRecord, readRunLog, type RecordEnvelope } from "../../src/runtime/log.ts";
@@ -169,7 +169,7 @@ function sentResults(model: ScriptedModel, index: number): ToolResultPart[] {
   );
 }
 
-/** The three replies of the learnable AGENT case: two unsafe calls, two safe and an unsafe one, the text. */
+/** The three replies of the grouped AGENT case: two unsafe calls, two safe and an unsafe one, the text. */
 function groupsModel(): ScriptedModel {
   return new ScriptedModel(
     [
@@ -540,13 +540,9 @@ test("requestSha256 hashes the request's log JSON, every message", () => {
   expect(requestSha256(long)).toMatch(/^[0-9a-f]{64}$/);
 });
 
-/** The digest a step records for `request`, its system message read as `base`, hashed whole from its log JSON. */
-function fullDigest(request: Request, base: string | null): string {
-  const [first, ...rest] = request.messages;
-  const messages =
-    base !== null && first?.role === "system"
-      ? [new Message({ role: "system", parts: [new TextPart(base)] }), ...rest]
-      : request.messages;
+/** The digest a step records for `request`, hashed whole from its log JSON. */
+function fullDigest(request: Request): string {
+  const { messages } = request;
   const choice = request.toolChoice;
   const format = request.outputFormat;
   const json = {
@@ -576,16 +572,16 @@ test("an incremental request digest matches the full digest on every round of a 
     { messages: [], outputFormat: format },
     { messages: [], tools, toolChoice: "required", parallelToolCalls: false },
   ];
-  // The system message as recalled memory left it, with fields a digest of the base prompt drops.
+  // A system message with an author and a provider payload, which the digest keeps.
   const system = new Message({
     role: "system",
-    parts: [new TextPart("Be brief.\n\nRecalled: the user likes tea.")],
-    author: "memory",
+    parts: [new TextPart("Be brief.")],
+    author: "host",
     providerPayload: { cache: true },
   });
-  for (const base of [null, "Be brief."]) {
-    const digest = new RequestDigest(base);
-    const check = (request: Request) => expect(digest.digest(request)).toBe(fullDigest(request, base));
+  {
+    const digest = new RequestDigest();
+    const check = (request: Request) => expect(digest.digest(request)).toBe(fullDigest(request));
     check(new Request({ messages: [] }));
     const user = new Message({ role: "user", parts: [new TextPart("hi 日本 😀 there")], author: "ann" });
     const messages = [system, user];
@@ -614,7 +610,7 @@ test("an incremental request digest matches the full digest on every round of a 
   }
 });
 
-test("a 200-turn tool loop serializes each message a bounded number of times: live, in its material, on replay", async () => {
+test("a 200-turn tool loop serializes each message a bounded number of times: live, in its request rebuild, on replay", async () => {
   const turns = 200;
   const replies = Array.from({ length: turns }, (_, i) => calls([`c${i}`, "lookup", `t${i}`]));
   replies.push(calls(["h", "hold", "h"]));
@@ -630,13 +626,12 @@ test("a 200-turn tool loop serializes each message a bounded number of times: li
     spy.mockClear();
     const recorded = steps(log);
     const [request] = model.requests;
-    const material = await stepsMaterial(recorded, {
+    const rebuilt = await rebuildStepRequests(recorded, {
       messages: request!.messages,
       tools: request!.tools,
       structured: async () => null,
-      baseSystemPrompt: request!.messages[0]!.text(),
     });
-    expect(material.digestOk).toBe(true);
+    expect(rebuilt.digestOk).toBe(true);
     expect(spy.mock.calls.length).toBeLessThanOrEqual(10 * turns);
 
     const [held] = pendingCalls(log);

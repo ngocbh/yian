@@ -4,8 +4,8 @@
  * The start-up it shares with `yian chat` is in `startup.ts`, and the rendering both use in
  * `render.ts`.
  *
- * - `run` checks the run-log options, loads the flow, builds its memories, reads skills and MCP
- *   servers when it needs them, runs it on a fresh log or recovers the run recorded on a
+ * - `run` checks the run-log options, loads the flow, reads skills and MCP servers when it needs
+ *   them, runs it on a fresh log or recovers the run recorded on a
  *   `--resume` log, checking its recorded keys, and prints its output or its failure; `yian run`
  *   reaches it through `runOrChat` in `inbox_chat.ts`, which hands a terminal chat to `inboxChat`;
  *   `check` loads each flow, or confined to `--root`, and reports each as text or one `--json`
@@ -34,7 +34,7 @@ import { LoadError } from "../compose/helpers/errors.ts";
 import { loadFlow } from "../compose/loader.ts";
 import { defaultSkillRoots, loadSkillDir, loadSkills } from "../compose/skills.ts";
 import { current, type Env } from "../defaults.ts";
-import { compareCodeUnits, Diagnostic, noteCleanup, reprText, shellQuote } from "../diagnostics.ts";
+import { compareCodeUnits, Diagnostic, reprText, shellQuote } from "../diagnostics.ts";
 import type { RunEvent } from "../events.ts";
 import { type Skill, SkillError } from "../skills/catalog.ts";
 import { LOAD_SKILL } from "../skills/tool.ts";
@@ -58,8 +58,6 @@ import {
   HOST_KEY_MARKER,
   keyIdentity,
 } from "../llm_clients/connection.ts";
-import { MemoryOperationError } from "../memory/contracts.ts";
-import type { MemoryRegistry } from "../memory_host.ts";
 import { checkInputNames } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import { FileLockError, isSystemError, sqliteErrorCode, statOrNull, withWarnings } from "../platform.ts";
@@ -83,7 +81,6 @@ import { McpConnectError, McpSdkMissingError, type McpServer } from "../tools/mc
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { loadConfined } from "./confined_load.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
-import { buildCliMemories, MemoryOptionError } from "./memory.ts";
 import {
   box,
   diagnosticJson,
@@ -640,8 +637,6 @@ export interface RunOptions {
   log?: string | undefined;
   resume?: string | undefined;
   quiet: boolean;
-  memoryRoot?: string | undefined;
-  memoryStorage: readonly string[];
   verbose: boolean;
   numWorkers?: number | undefined;
   provider?: string | undefined;
@@ -653,16 +648,15 @@ export interface RunOptions {
 
 /**
  * @internal Whether `error` is a host failure `run` reports as `run failed:` (`resume failed:`) rather than
- * with its stack: a bad value (a damaged or empty log, a defaults mismatch, a memory setup failure
- * included), an unreadable file, a run log another writer holds, a memory failure, an MCP server
- * that didn't start, the missing MCP SDK.
+ * with its stack: a bad value (a damaged or empty log or a defaults mismatch included), an
+ * unreadable file, a run log another writer holds, an MCP server that didn't start, the missing MCP
+ * SDK.
  */
 export function isSetupError(error: unknown): error is Error {
   return (
     error instanceof TypeError ||
     error instanceof RangeError ||
     error instanceof AuthError ||
-    error instanceof MemoryOperationError ||
     error instanceof McpConnectError ||
     // A lock file that is unsafe, not private or changed; a locked log is a plain `Error` over
     // the lock's.
@@ -675,8 +669,8 @@ export function isSetupError(error: unknown): error is Error {
 
 /**
  * The lines `openMcpServers` adds below a server failure it throws: the ids no started server
- * supplies and the other servers that failed. Kept apart from the error's `notes`, which a memory
- * cleanup failure also writes to.
+ * supplies and the other servers that failed. Kept apart from the error's `notes`, which a cleanup
+ * failure also writes to.
  */
 const selectionNotes = new WeakMap<Error, readonly string[]>();
 
@@ -903,16 +897,16 @@ async function resumeEnvKey(
 
 /**
  * Return the error refusing a resume whose `provider` key came from a host's
- * `llm_config.api_key`, pointing to `resume_flow`; `headerNames`
- * are the recorded names of headers sent with the key, if any.
+ * `llm_config.api_key`, pointing to the host's `advance`; `headerNames` are the recorded names of
+ * headers sent with the key, if any.
  */
 function hostKeyRefusal(provider: string, headerNames: unknown): ResumeKeyError {
   // Header values the host sent with its key are not recorded either.
   const withHeaders = Array.isArray(headerNames) && headerNames.length > 0;
-  const given = withHeaders ? "api_key=..., headers=..." : "api_key=...";
+  const given = withHeaders ? "apiKey, headers" : "apiKey";
   return new ResumeKeyError(
     `this run's ${provider} API key came from a host's llm_config.api_key, which the CLI cannot ` +
-      `supply; resume it with resume_flow(${given})`,
+      `supply; resume it from the host with advance({ log, ${given} })`,
   );
 }
 
@@ -995,66 +989,44 @@ export function resumeKeyCheck(context: ResumeKeyContext): LlmConfigsCheck {
 }
 
 /**
- * Return what `body` resolves to once `registry` has closed. When `body` throws, its error is
- * rethrown, with a close failure, and that failure's notes, appended to its `notes`; otherwise a
- * close failure is thrown.
- */
-async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>): Promise<T> {
-  let value: T;
-  try {
-    value = await body();
-  } catch (error) {
-    try {
-      await registry.close();
-    } catch (cleanup) {
-      noteCleanup(error, cleanup, "Memory cleanup failed:");
-    }
-    throw error;
-  }
-  await registry.close();
-  return value;
-}
-
-/**
  * Start a durable run of the flow at `flowPath`, or recover the one recorded at `resume`; returns
  * the exit code.
  *
  * The run-log options are checked before the flow is read. A flow that isn't UTF-8 text or doesn't
  * load is reported on stderr (a load error located, with its stack under `engineTrace`) and exits
- * 1. The flow's memories are built from `memoryRoot` and `memoryStorage`, passed to the run, and
- * closed when the command ends. When an AGENT grants skills, the Claude Code and Codex skill
- * folders are read, each invalid skill a `warning:` line on stderr. When a static TOOL node or
- * AGENT grant names a tool yian lacks, `~/.yian/mcp.json` (when it is a file) and the `mcpConfig`
- * files are read, a bad config printed and exiting 1; just before the run, `openMcpServers` selects
- * the servers the flow needs, each unneeded server that failed to start a `warning:` line on
- * stderr, and closes them all when the run ends. Unless `quiet`, the flow's banner and per-node
- * progress go to stderr; the log path always does. A warning raised during the run prints as a
- * `warning:` line on stderr, above the spinners. On a TTY stdin, each input not supplied is
- * prompted for on stderr, and a cancelled prompt prints `run cancelled` and exits 1. Off a terminal
- * (stdin or stderr isn't a TTY), each prompt, an `ask` node's included, is written once, with no
- * escape codes. `provider` and `model`, those given, are the run's outermost `llmConfig` layer.
- * Before the log exists, every key the agents need is checked (`ensureProviderKeys`), prompted for
- * on a TTY stdin; a missing one is printed and exits 1. The log is `log`, else
- * `~/.yian/runs/<run id>/log.jsonl` in a fresh folder. A succeeded run prints its output on stdout,
- * as text; a failed one prints its diagnostic on stderr and exits 1. A run that ends waiting prints
- * `run waiting: <node> (<tool>), ...` and the `yian run --resume <log>` that continues it on stderr
- * and exits 0; a cancelled one prints `run cancelled` and exits 1 (`run.cancelled`). An inbox input
- * is never asked for or supplied. A host failure (a bad option value, a log that can't be created,
- * an MCP server that doesn't start, the missing MCP SDK) prints `run failed: <message>` on stderr,
- * and when no started server supplies a needed tool the missing ids and the other failed servers on
- * the lines below, and exits 1.
+ * 1. When an AGENT grants skills, the Claude Code and Codex skill folders are read, each invalid
+ * skill a `warning:` line on stderr. When a static TOOL node or AGENT grant names a tool yian
+ * lacks, `~/.yian/mcp.json` (when it is a file) and the `mcpConfig` files are read, a bad config
+ * printed and exiting 1; just before the run, `openMcpServers` selects the servers the flow needs,
+ * each unneeded server that failed to start a `warning:` line on stderr, and closes them all when
+ * the run ends. Unless `quiet`, the flow's banner and per-node progress go to stderr; the log path
+ * always does. A warning raised during the run prints as a `warning:` line on stderr, above the
+ * spinners. On a TTY stdin, each input not supplied is prompted for on stderr, and a cancelled
+ * prompt prints `run cancelled` and exits 1. Off a terminal (stdin or stderr isn't a TTY), each
+ * prompt, an `ask` node's included, is written once, with no escape codes. `provider` and `model`,
+ * those given, are the run's outermost `llmConfig` layer. Before the log exists, every key the
+ * agents need is checked (`ensureProviderKeys`), prompted for on a TTY stdin; a missing one is
+ * printed and exits 1. The log is `log`, else `~/.yian/runs/<run id>/log.jsonl` in a fresh folder.
+ * A succeeded run prints its output on stdout, as text; a failed one prints its diagnostic on
+ * stderr and exits 1. A run that ends waiting prints `run waiting: <node> (<tool>), ...` and the
+ * `yian run --resume <log>` that continues it on stderr and exits 0; a cancelled one prints
+ * `run cancelled` and exits 1 (`run.cancelled`). An inbox input is never asked for or supplied. A
+ * host failure (a bad option value, a log that can't be created, an MCP server that doesn't start,
+ * the missing MCP SDK) prints `run failed: <message>` on stderr, and when no started server
+ * supplies a needed tool the missing ids and the other failed servers on the lines below, and
+ * exits 1.
  *
  * With `resume` there is no `flowPath`: the flow the log recorded is compiled (`loadRecordedFlow`),
- * never a file on disk, and its memories, skills and MCP config are read as for a fresh run; then
- * the log path is printed and `advance` recovers the run, with no input prompts, no
- * `provider`/`model` layer and no key preflight; `numWorkers` absent keeps the recorded count. A
- * log whose flow was built in code, or that `yian chat` wrote (its flow's id `CHAT_FLOW_ID` and
- * its file `CHAT_FLOW_FILE`), can't be resumed here and prints `resume failed: ...`. Before
- * anything is appended, the keys the recorded configs need are checked: a missing one is prompted
- * for on a TTY stdin; a missing, changed or declined key, a run whose key came from a
- * host, or a saved login that no longer resolves prints its message and exits 1 (`run.setup`). A
- * host failure, an empty, damaged or locked log included, prints `resume failed: <message>`. A
- * finished log prints its recorded outcome and appends nothing.
+ * never a file on disk, and its skills and MCP config are read as for a fresh run; then the log
+ * path is printed and `advance` recovers the run, with no input prompts, no `provider`/`model`
+ * layer and no key preflight; `numWorkers` absent keeps the recorded count. A log whose flow was
+ * built in code, or that `yian chat` wrote (its flow's id `CHAT_FLOW_ID` and its file
+ * `CHAT_FLOW_FILE`), can't be resumed here and prints `resume failed: ...`. Before anything is
+ * appended, the keys the recorded configs need are checked: a missing one is prompted for on a TTY
+ * stdin; a missing, changed or declined key, a run whose key came from a host, or a saved login
+ * that no longer resolves prints its message and exits 1 (`run.setup`). A host failure, an empty,
+ * damaged or locked log included, prints `resume failed: <message>`. A finished log prints its
+ * recorded outcome and appends nothing.
  *
  * Under `json`, stdout holds one
  * document: the output (`status: "succeeded"`), the failure (`status: "failed"`), the waits and
@@ -1065,9 +1037,8 @@ async function closingAfter<T>(registry: MemoryRegistry, body: () => Promise<T>)
  * `cancelled by user` on stderr, exit 130, no document. The end of input at a prompt during the
  * run prints `run cancelled` and exits 1 (`run.cancelled`). The first stop wins.
  *
- * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for a memory flag value
- *   the flow can't take; for an input the flow doesn't declare (or an inbox); off a TTY, for
- *   missing required inputs.
+ * @throws {UsageError} As `validateRunLogOptions` and `mergeInputs` do; for an input the flow
+ *   doesn't declare (or an inbox); off a TTY, for missing required inputs.
  */
 export async function run(flowPath: string | undefined, options: RunOptions, io: CliIo): Promise<number> {
   const controller = new AbortController();
@@ -1153,8 +1124,8 @@ async function startRun(
   };
   const writeStack = (error: Error) => writeEngineTrace(error, engineTrace, io);
   const action = options.resume === undefined ? "run" : "resume";
-  // Only the MCP selection's lines follow the message; the error's own notes, such as a memory
-  // cleanup failure, stay out of it.
+  // Only the MCP selection's lines follow the message; the error's own notes, such as a cleanup
+  // failure's, stay out of it.
   const setupFailed = async (error: Error) => {
     const notes = selectionNotes.get(error) ?? [];
     const label = paint(`${action} failed: `, "red bold", io.stderr, io.env);
@@ -1196,18 +1167,6 @@ async function startRun(
   }
 
   const commandEnv = new CommandEnv(io.env);
-  // Building opens nothing: built-in storage opens when the run starts.
-  let registry: MemoryRegistry;
-  try {
-    const { memoryRoot: root, memoryStorage: storageOptions } = options;
-    registry = await buildCliMemories(flow, { root, storageOptions, env: commandEnv.read });
-  } catch (error) {
-    if (error instanceof MemoryOptionError) {
-      throw new UsageError(`Invalid value for ${error.paramHint}: ${error.message}`);
-    }
-    if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-    return setupFailed(error);
-  }
   const warned: string[] = [];
   const warn = (message: string) => void warned.push(message);
   const writeWarnings = async () => {
@@ -1218,7 +1177,7 @@ async function startRun(
 
   let outcome: RunResult | number;
   try {
-    outcome = await closingAfter(registry, async () => {
+    outcome = await (async () => {
       const skills = await readGrantedSkills(flow, commandEnv.read, io);
 
       // MCP configs are read only when the flow needs a tool yian doesn't already have, so a
@@ -1244,7 +1203,6 @@ async function startRun(
         if (banner !== null) await io.stderr.write(banner);
       }
       const onEvent = reporter === null ? null : (event: RunEvent) => reporter.handle(event);
-      const memory = registry.size > 0 ? registry : null;
       const selection = { signal: controller.signal, warn };
       type Start = (tools: Record<string, ToolEntry>) => Promise<RunResult>;
       /**
@@ -1290,7 +1248,6 @@ async function startRun(
             log,
             numWorkers: options.numWorkers ?? null,
             onEvent,
-            memory,
             tools,
             skills,
             env: commandEnv.read,
@@ -1330,7 +1287,6 @@ async function startRun(
             llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
             numWorkers: options.numWorkers,
             onEvent,
-            memory,
             tools,
             skills,
             env: commandEnv.read,
@@ -1338,7 +1294,7 @@ async function startRun(
           }),
         runDir,
       );
-    });
+    })();
   } catch (error) {
     if (error instanceof HostStop) {
       // No document: as Ctrl-C, the stop ends the command with nothing on stdout.

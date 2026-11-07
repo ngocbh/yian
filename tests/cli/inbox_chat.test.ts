@@ -1014,7 +1014,6 @@ describe("runOrChat", () => {
       {
         inputValues: [],
         quiet: true,
-        memoryStorage: [],
         verbose: false,
         engineTrace: false,
         mcpConfig: [],
@@ -1121,22 +1120,6 @@ describe("runOrChat", () => {
       );
       // Off a terminal --inbox has no use, so it is left alone.
       waited(await runOn(flow, { tty: false, inbox: "nope" }));
-    },
-    TIMEOUT,
-  );
-
-  test(
-    "a flow with memory, or a memory flag, runs as before",
-    async () => {
-      const memory = ECHO.replace("name: echo_chat\n", "name: echo_chat\nlong_term_memory: episodic\n");
-      waited(await runOn(flowFile(memory, "memory.yaml"), { typed: BYE }));
-      const echo = flowFile(ECHO);
-      await expect(runOn(echo, { memoryStorage: ["notes=" + join(tmp, "notes")] })).rejects.toThrow(
-        new UsageError(
-          "Invalid value for --memory-storage: key 'notes' is not a memory declared by this flow (declared: none)",
-        ),
-      );
-      waited(await runOn(echo, { memoryRoot: join(tmp, "memory"), typed: BYE }));
     },
     TIMEOUT,
   );

@@ -15,7 +15,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { CallClosed, type RunEvent } from "../../src/events.ts";
 import { type Response, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { ASK_TIMED_OUT_RESULT, closerResult, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
+import { ASK_TIMED_OUT_RESULT, closerResult, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
 import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import { advance, complete, inspectRun, pendingCalls, runFlow } from "../../src/run.ts";
 import { decodeRecord, NodeStepRecord, type RecordEnvelope } from "../../src/runtime/log.ts";

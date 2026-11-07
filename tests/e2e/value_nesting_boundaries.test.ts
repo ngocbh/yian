@@ -1,6 +1,6 @@
 /**
  * Value nesting at the binding boundary, in AGENT structured replies and tool arguments, in runs,
- * loads, replay and backward learning.
+ * loads and replay.
  *
  * Both structured strategies check a reply's nesting before its declared types, and a nesting error
  * has no path into the output, so an exhausted failure keeps the node origin. A growth seed's two
@@ -23,7 +23,6 @@ import { ModelCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { Finish, ToolCallDelta } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { buildMemories } from "../../src/memory_host.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Output } from "../../src/nodes/base.ts";
 import { applyDefaults, BindingError, bindParams } from "../../src/nodes/binding.ts";
@@ -37,7 +36,7 @@ import { Type, TypeCheckError, type Value, ValueKind, VariablePool } from "../..
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { backwardReply, drive, NO_ENV, rejected, reply, serving } from "../helpers/run_state_fixtures.ts";
+import { drive, NO_ENV, rejected, reply, serving } from "../helpers/run_state_fixtures.ts";
 
 // Start each test from the built-in values, whatever `YIAN_*` variables the shell sets.
 beforeEach(() => install({ ...BUILTIN, modelRetries: 0 }));
@@ -78,101 +77,6 @@ test("bindParams rejects a filled default over the limit", () => {
   expect(error.failureCode).toBe("binding.evaluate");
   expect(error.message.startsWith("default for 'p' at a.a")).toBe(true);
   expect(error.message).toContain("deeper than 100 levels");
-});
-
-// ---------- learning from values at the limit ----------
-
-/** A flow whose CODE node `deep` returns `["leaf"]` wrapped in `levels` lists. */
-function listFlow(levels: number): string {
-  return `id: nesting
-name: nesting
-nodes:
-  deep:
-    kind: code
-    code: |
-      let v = "leaf";
-      for (let i = 0; i < ${levels}; i++) v = [v];
-      return v;
-output: \${deep.output}
-`;
-}
-
-/** `text` loaded with episodic long-term memory declared on the flow. */
-function memoryFlow(text: string) {
-  return loadFlow(text.replace("name: nesting\n", "name: nesting\nlong_term_memory: episodic\n"));
-}
-
-/** A memory run of `flow` on `inputs` succeeds and learns from `feedback`. */
-async function expectLearns(
-  flow: Awaited<ReturnType<typeof loadFlow>>,
-  inputs: Record<string, unknown>,
-  feedback: unknown,
-  model: ScriptedModel | null = null,
-): Promise<void> {
-  const memory = await buildMemories(flow);
-  try {
-    const models = model === null ? undefined : serving(model);
-    const result = await runFlow(flow, inputs, { memory, learnable: true, models, env: NO_ENV });
-    expect(result.status).toBe("succeeded");
-
-    const outcome = await result.backward(feedback);
-
-    expect(outcome.status).toBe("succeeded");
-    expect(outcome.learning!.status).toBe("succeeded");
-  } finally {
-    await memory[Symbol.asyncDispose]();
-  }
-}
-
-test("backward rejects feedback over the limit and stays usable", async () => {
-  const result = await runFlow(await loadFlow(listFlow(1)), {}, { learnable: true, env: NO_ENV });
-  expect(result.status).toBe("succeeded");
-  let bad: Value = "bad";
-  for (let i = 0; i < 1500; i++) bad = [bad];
-
-  const error = await rejected(result.backward(bad));
-
-  expect(error).toBeInstanceOf(TypeCheckError);
-  expect((error as Error).message.startsWith("feedback at [0][0]")).toBe(true);
-  expect((error as Error).message).toContain("deeper than 100 levels");
-  expect(result.backwardOutcome).toBeNull();
-  expect((await result.backward("good")).status).toBe("succeeded");
-});
-
-test("a value at the limit learns from an output", async () => {
-  await expectLearns(await memoryFlow(listFlow(100)), {}, "good");
-});
-
-test("a value at the limit learns from an input", async () => {
-  const flow = await memoryFlow(`id: nesting
-name: nesting
-input:
-  x: !object
-nodes:
-  echo:
-    kind: code
-    input:
-      x: \${input.x}
-    code: return inputs["x"]
-output: \${echo.output}
-`);
-  await expectLearns(flow, { x: nestRecord(100) }, "good");
-});
-
-test("a value at the limit learns from a record output", async () => {
-  const flow = await memoryFlow(`id: nesting
-name: nesting
-nodes:
-  deep:
-    kind: code
-    output: {tree: object}
-    code: |
-      let v = "leaf";
-      for (let i = 0; i < 99; i++) v = { a: v };
-      return { tree: v };
-output: \${deep.output.tree}
-`);
-  await expectLearns(flow, {}, { a: "bad" });
 });
 
 // A structured AGENT reply over the limit self-corrects under `retries:`, and fails once they are
@@ -351,45 +255,6 @@ test("tool arguments at the limit run", async () => {
   expect(calls).toEqual([{ q: atLimit }]);
 });
 
-test("tool arguments at the limit are learned from", async () => {
-  const flow = await loadFlow(`id: nesting
-name: nesting
-long_term_memory: episodic
-llm_config: {provider: openai, model: gpt-5.5}
-nodes:
-  w:
-    kind: agent
-    prompt: go
-    tools: [lookup]
-    output: str
-output: \${w.output}
-`);
-  const atLimit = nestRecord(99);
-  const call = new ToolCallPart({ id: "1", name: "lookup", arguments: { q: atLimit } as JsonObject });
-  const model = new ScriptedModel([partsReply(call), partsReply(new TextPart("finished")), backwardReply()], NATIVE);
-  const calls: unknown[] = [];
-  const memory = await buildMemories(flow);
-  try {
-    const result = await runFlow(flow, {}, {
-      memory,
-      learnable: true,
-      tools: { lookup: lookupTool(calls) },
-      models: serving(model),
-      env: NO_ENV,
-    });
-    expect([result.status, result.output]).toEqual(["succeeded", "finished"]);
-    expect(calls).toEqual([{ q: atLimit }]);
-
-    const outcome = await result.backward("good");
-
-    expect(outcome.status).toBe("succeeded");
-    expect(outcome.learning!.status).toBe("succeeded");
-    expect(model.requests).toHaveLength(3);
-  } finally {
-    await memory[Symbol.asyncDispose]();
-  }
-});
-
 const STRUCTURED_FLOW = `id: nesting
 name: nesting
 llm_config: {provider: openai, model: gpt-5.5}
@@ -401,18 +266,10 @@ nodes:
 output: \${w.output}
 `;
 
-/** A native model replying the structured `{t: ...}` texts `values`, then an empty reflection. */
+/** A native model replying the structured `{t: ...}` texts `values`. */
 function structured(...values: string[]): ScriptedModel {
-  return new ScriptedModel([...values.map((value) => reply(`{"t": ${value}}`)), backwardReply()], NATIVE);
+  return new ScriptedModel(values.map((value) => reply(`{"t": ${value}}`)), NATIVE);
 }
-
-test("a model value at the limit is learned from", async () => {
-  await expectLearns(await memoryFlow(STRUCTURED_FLOW), {}, "good", structured(deepText(99)));
-});
-
-test("a model value over the limit self corrects and backward learns", async () => {
-  await expectLearns(await memoryFlow(STRUCTURED_FLOW), {}, "good", structured(deepText(126), '{"k": 1}'));
-});
 
 /** `result` failed node `w` with code `code`, naming `where` and the limit. */
 function expectFailedTooDeep(result: RunResult, code: string, where: string): void {
@@ -422,24 +279,17 @@ function expectFailedTooDeep(result: RunResult, code: string, where: string): vo
   expect(result.failure!.message).toContain("deeper than 100 levels");
 }
 
-test.each([126, 1500])("a model value over the limit fails the agent and backward still learns (%d levels)", async (levels) => {
-  const flow = await memoryFlow(STRUCTURED_FLOW);
+test.each([126, 1500])("a model value over the limit fails the agent (%d levels)", async (levels) => {
+  const flow = await loadFlow(STRUCTURED_FLOW);
   // The first reply and both `retries:` attempts.
   const model = structured(deepText(levels), deepText(levels), deepText(levels));
-  const memory = await buildMemories(flow);
-  try {
-    const result = await runFlow(flow, {}, { memory, learnable: true, models: serving(model), env: NO_ENV });
+  const result = await runFlow(flow, {}, { models: serving(model), env: NO_ENV });
 
-    expectFailedTooDeep(result, "agent.output_invalid", "structured output at t.a");
-
-    expect((await result.backward("good")).status).toBe("succeeded");
-  } finally {
-    await memory[Symbol.asyncDispose]();
-  }
+  expectFailedTooDeep(result, "agent.output_invalid", "structured output at t.a");
 });
 
-test.each([124, 1500])("tool arguments over the limit fail the agent and backward still learns (%d levels)", async (levels) => {
-  const flow = await memoryFlow(`id: nesting
+test.each([124, 1500])("tool arguments over the limit fail the agent (%d levels)", async (levels) => {
+  const flow = await loadFlow(`id: nesting
 name: nesting
 llm_config: {provider: openai, model: gpt-5.5}
 nodes:
@@ -452,25 +302,16 @@ output: \${w.output}
 `);
   const rawArguments = `{"q": ${deepText(levels)}}`;
   const call = new ToolCallPart({ id: "1", name: "lookup", arguments: null, rawArguments });
-  const model = new ScriptedModel([partsReply(call), backwardReply()], NATIVE);
+  const model = new ScriptedModel([partsReply(call)], NATIVE);
   const calls: unknown[] = [];
-  const memory = await buildMemories(flow);
-  try {
-    const result = await runFlow(flow, {}, {
-      memory,
-      learnable: true,
-      tools: { lookup: lookupTool(calls) },
-      models: serving(model),
-      env: NO_ENV,
-    });
+  const result = await runFlow(flow, {}, {
+    tools: { lookup: lookupTool(calls) },
+    models: serving(model),
+    env: NO_ENV,
+  });
 
-    expectFailedTooDeep(result, "node.execute", "tool call 'lookup' arguments at q.a");
-    expect(calls).toEqual([]);
-
-    expect((await result.backward("good")).status).toBe("succeeded");
-  } finally {
-    await memory[Symbol.asyncDispose]();
-  }
+  expectFailedTooDeep(result, "node.execute", "tool call 'lookup' arguments at q.a");
+  expect(calls).toEqual([]);
 });
 
 test("a too-deep later call of a streamed reply stops every call of the reply", async () => {

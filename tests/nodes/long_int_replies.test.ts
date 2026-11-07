@@ -1,6 +1,5 @@
 /**
- * An int over 4300 digits from a model reply, a tool call or result, a backward reply, or backward
- * feedback.
+ * An int over 4300 digits from a model reply, or a tool call or result.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -9,19 +8,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../../src/compose/loader.ts";
-import type { FeedbackValue } from "../../src/expr/lineage.ts";
 import { Finish, ToolCallDelta } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
-import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { generateStructured } from "../../src/nodes/agent/structured.ts";
-import { BackwardContext } from "../../src/nodes/base.ts";
 import { type RunResult, runFlow } from "../../src/run.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
-import { Type, TypeCheckError, ValueKind } from "../../src/typesys/values.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { PLAIN_FLOW, rejected, serving } from "../helpers/run_state_fixtures.ts";
+import { PLAIN_FLOW, serving } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-long-int-replies-"));
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
@@ -204,107 +200,4 @@ test("a tool returning a long int fails naming the tool", async () => {
   assertSucceeds(result, "done");
   expect(calls).toHaveLength(1);
   expect(sentResult(chat)).toBe(String(BIG));
-});
-
-// Backward replies and feedback
-
-/** A recorded AGENT backward context. */
-function context(): BackwardContext {
-  return new BackwardContext(
-    { topic: "reefs", tags: ["a", "b"] },
-    {
-      inputNames: ["topic", "tags"],
-      variableNames: ["tone"],
-      output: { answer: "recorded answer", tags: ["a", "b"] },
-      runId: "recorded-run",
-      nodeId: "recorded-node",
-      nodeStartedSeq: 3,
-      nodeData: {
-        prompt_template: "${topic}: ${tone}",
-        variables: { tone: "concise" },
-        variable_domains: { tone: 'Literal("concise","detailed")' },
-        rendered_prompt: "reefs: concise",
-        effective_llm_config: { provider: "anthropic", model: "recorded", anthropic: { temperature: 0.4 } },
-        _evaluation_evidence: null,
-      },
-      downstreamContext: [{ message_index: 0, contexts: [{ expression: "items[1]" }] }],
-    },
-  );
-}
-
-/** Run the backward of an AGENT `writer` whose model replies `reply`. */
-function backward(reply: string) {
-  const node = new AgentNode("writer", { prompt: "p", llmConfig: { provider: "test", model: "recorded" } });
-  return node.backward(context(), ["Review."], { models: serving(new ScriptedModel([text(reply)]), env) });
-}
-
-test("a long int in a backward reply fails the backward located", async () => {
-  const reply = `{"input_feedback": {}, "self_feedback": ["ok", ${D}], "variable_feedback": {}}`;
-
-  const error = await rejected(backward(reply));
-
-  expect(error).toBeInstanceOf(TypeError);
-  expect((error as TypeError).message).toBe("self_feedback messages must be strings");
-});
-
-/** Return `"x"` wrapped in `levels` one-item lists. */
-function nestedMessage(levels: number): FeedbackValue {
-  let message: FeedbackValue = "x";
-  for (let level = 0; level < levels; level++) message = [message];
-  return message;
-}
-
-/** Run a backward whose reply gives `message` as the only feedback on `topic`. */
-function backwardReply(message: FeedbackValue) {
-  return backward(JSON.stringify({ input_feedback: { topic: [message] }, self_feedback: [], variable_feedback: {} }));
-}
-
-test.each([99, 100])("a backward reply measures nesting from its feedback messages (%p)", async (levels) => {
-  const message = nestedMessage(levels);
-
-  expect((await backwardReply(message)).inputFeedback).toEqual({ topic: [message] });
-});
-
-test("a backward feedback message past the limit still fails", async () => {
-  const error = await rejected(backwardReply(nestedMessage(102)));
-
-  expect(error).toBeInstanceOf(TypeCheckError);
-  expect((error as TypeCheckError).message).toStartWith("backward response at input_feedback.topic[0]");
-  expect((error as TypeCheckError).message).toContain("deeper than 100 levels");
-});
-
-// A flow whose CODE node returns `{"note": "x"}`.
-const CODE_FLOW = `
-id: nesting
-name: nesting
-nodes:
-  deep:
-    kind: code
-    code: |
-      return {"note": "x"}
-output: \${deep.output}
-`;
-
-test.each([
-  ["record", { note: BIG }, 'feedback["note"]'],
-  ["list", [BIG], "feedback[0]"],
-])("long int feedback is rejected located and the result stays usable (%s)", async (_id, feedback, where) => {
-  const result = await runFlow(await loadFlow(CODE_FLOW, { env }), {}, { env, learnable: true });
-  expect(result.status).toBe("succeeded");
-
-  const error = await rejected(result.backward(feedback));
-
-  expect(error).toBeInstanceOf(TypeError);
-  expect((error as TypeError).message).toBe(`${where} must be a string, object, list, or None`);
-  expect(result.backwardOutcome).toBeNull();
-  expect((await result.backward("good")).status).toBe("succeeded");
-});
-
-test("nan feedback still raises a type error", async () => {
-  const result = await runFlow(await loadFlow(CODE_FLOW, { env }), {}, { env, learnable: true });
-
-  const error = await rejected(result.backward({ note: Number.NaN }));
-
-  expect(error).toBeInstanceOf(TypeCheckError);
-  expect((error as TypeCheckError).message).toBe("feedback at note: NaN is not a yian value");
 });

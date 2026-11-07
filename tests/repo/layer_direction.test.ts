@@ -42,8 +42,8 @@ interface ImportTarget {
 
 /**
  * Return each import of `file`. A relative specifier becomes a module id: its path
- * below `src` without `.ts`/`.js`, keeping a trailing `/index` (`memory/index` is the
- * memory package's facade, `index` the package root's). The package's own name,
+ * below `src` without `.ts`/`.js`, keeping a trailing `/index` (`tools/index` is the
+ * tools package's facade, `index` the package root's). The package's own name,
  * `@ngocbh/yian`, is `index` too. Others stay as written.
  */
 function importTargets({ path, text }: Source): ImportTarget[] {
@@ -85,11 +85,11 @@ const only = (file: string) => (path: string) => path === file;
  */
 const LAYERS: readonly (readonly string[])[] = [
   ["diagnostics", "defaults", "typesys", "platform"],
-  ["events", "expr", "llm", "llm_clients", "tools", "skills", "memory"],
+  ["events", "expr", "llm", "llm_clients", "tools", "skills"],
   ["nodes"],
   ["compile"],
   ["compose", "runtime"],
-  ["run", "memory_host"],
+  ["run"],
   ["index", "cli"],
 ];
 
@@ -145,20 +145,6 @@ const RULES: Rule[] = [
       file: "runtime/log.ts",
       bad: ["compile/expand"],
       good: ["compile/graph", "compile/expander", "nodes/contracts"],
-    },
-  },
-  {
-    name: "memory/contracts.ts imports only diagnostics and defaults",
-    files: only("memory/contracts.ts"),
-    allow: ["diagnostics", "defaults"],
-    why: "lower memory imports undeclared dependencies",
-    samples: {
-      file: "memory/contracts.ts",
-      bad: [
-        ...["nodes", "compile", "compose", "runtime", "run", "llm_clients", "index"],
-        ...["memory/episodic", "memory/reflective", "memory/profile", "memory/index"],
-      ],
-      good: ["diagnostics", "defaults"],
     },
   },
   {
@@ -472,8 +458,8 @@ describe("importTargets", () => {
       'import "../../index.ts";',
     ].join("\n");
     expect(targets("nodes/call/node.ts", fromNode)).toEqual(["compile/expand", "compile/expand", "index"]);
-    const fromMemory = 'import "./index.ts";\nimport type { C } from "./contracts.ts";';
-    expect(targets("memory/conversation.ts", fromMemory)).toEqual(["memory/index", "memory/contracts"]);
+    const fromTools = 'import "./index.ts";\nimport type { C } from "./registry.ts";';
+    expect(targets("tools/grants.ts", fromTools)).toEqual(["tools/index", "tools/registry"]);
     expect(targets("defaults.ts", 'import "./typesys/json.ts";')).toEqual(["typesys/json"]);
   });
 
@@ -586,15 +572,15 @@ describe("layer rule snippets", () => {
   });
 
   test("an allowed import never exempts another on the same line", () => {
-    const contracts = RULES.find((r) => r.name === "memory/contracts.ts imports only diagnostics and defaults")!;
+    const contracts = RULES.find((r) => r.name === "nodes/contracts.ts imports only diagnostics and typesys")!;
     const check = (rule: Rule, path: string, text: string) =>
       ruleViolations(rule, [{ path, text }]).map((v) => v.slice(v.lastIndexOf(" -> ") + 4));
-    const shared = 'import { a } from "../diagnostics.ts"; import { b } from "./episodic.ts";';
-    expect(check(contracts, "memory/contracts.ts", shared)).toEqual(["memory/episodic"]);
-    const facade = 'import "./index.ts"; export * from "../defaults.ts";';
-    expect(check(contracts, "memory/contracts.ts", facade)).toEqual(["memory/index"]);
+    const shared = 'import { a } from "../diagnostics.ts"; import { b } from "./binding.ts";';
+    expect(check(contracts, "nodes/contracts.ts", shared)).toEqual(["nodes/binding"]);
+    const facade = 'import "./index.ts"; export * from "../typesys/values.ts";';
+    expect(check(contracts, "nodes/contracts.ts", facade)).toEqual(["nodes/index"]);
     const root = 'import "../index.ts"; import { f } from "../diagnostics.ts";';
-    expect(check(contracts, "memory/contracts.ts", root)).toEqual(["index"]);
+    expect(check(contracts, "nodes/contracts.ts", root)).toEqual(["index"]);
   });
 
   test("nodes/contracts.ts imports no node: builtin", () => {
@@ -606,10 +592,10 @@ describe("layer rule snippets", () => {
   });
 
   test("the package's own name is the root facade", () => {
-    const rule = layerRule("memory");
+    const rule = layerRule("tools");
     const text = 'import { run } from "@ngocbh/yian";';
-    expect(ruleViolations(rule, [{ path: "memory/episodic.ts", text }])).toEqual([
-      'memory/episodic.ts:1: import { run } from "@ngocbh/yian"; -> index',
+    expect(ruleViolations(rule, [{ path: "tools/registry.ts", text }])).toEqual([
+      'tools/registry.ts:1: import { run } from "@ngocbh/yian"; -> index',
     ]);
   });
 

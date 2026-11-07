@@ -26,7 +26,7 @@ expect:
       # The throw is outside the flow, so the frame is the `code:` value on line 12.
       frames: [{label: flow.yaml, range: [12, 11, 12, 42]}]
   trace:
-    - [run_started, null, {learnable: false, num_workers: 0}]
+    - [run_started, null, {num_workers: 0}]
     - [pool_commit, __start__, {key: system.now}]
     - [pool_commit, __start__, {key: system.run_id, value: r1}]
     - [pool_commit, __start__, {key: system.today}]

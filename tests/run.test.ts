@@ -79,6 +79,7 @@ import {
   progressOf,
   rejected,
   requiredEndFlow,
+  serving,
   startedRun,
   textReply,
   thrownBy,
@@ -505,8 +506,6 @@ test("crashedAttempts is an empty map for a fresh run", async () => {
   const result = await run(await load(PLAN_FLOW), { topic: "ACME" });
   expect(result.crashedAttempts).toBeInstanceOf(Map);
   expect(result.crashedAttempts.size).toBe(0);
-  expect(result.learning).toBeNull();
-  expect(result.backwardOutcome).toBeNull();
 });
 
 // ---- host intake of inputs ----
@@ -1280,10 +1279,62 @@ test("inspectRun replays with the run's env", async () => {
   expect(inspectRun(path, { env: hostEnv(dir) }).status).toBe("crashed");
 });
 
-test("inspectRun reads the run id, schema, fingerprint, learnable flag and last seq, with and without the flow", async () => {
-  const path = join(dir, "learnable.jsonl");
+// A MAP over a def whose TOOL node asks adaptive questions: the composer agent's model is picked
+// at call time, so each item's agent records its config as a step, under its runtime id.
+const MAPPED_COMPOSER_FLOW = `id: f
+name: f
+defs:
+  item:
+    input: {m: !str }
+    nodes:
+      ask:
+        kind: tool
+        tool_id: ask
+        adaptive_questions:
+          prompt: "Q"
+          llm_config: {provider: openai, model: '\${input.m}'}
+    output: \${ask.output}
+nodes:
+  pick: {kind: code, output: str, code: "return 'gpt-picked'"}
+  each:
+    kind: map
+    call: item
+    over: \${[1]}
+    input: {m: '\${pick.output}'}
+output: \${each.output}
+`;
+
+test("a resume's LLM-field error labels an in-flight mapped agent by its static path", async () => {
+  const env = hostEnv(dir);
+  const flow = await loadFlow(MAPPED_COMPOSER_FLOW, { env });
+  const options = (log: string) => ({
+    log,
+    env,
+    models: serving(new ScriptedModel([textReply("nope")]), env),
+    tools: { ask: () => "a" },
+  });
+  const uncut = join(dir, "uncut.jsonl");
+  await runFlow(flow, {}, options(uncut));
+  const records = readFileSync(uncut, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const at = records.findIndex(({ kind, payload }) => kind === "node_step" && payload.node_id === "each#0/ask__compose");
+  // Cut right after the agent's recorded config, then make that config refuse a field.
+  const log = join(dir, "run.jsonl");
+  await crashAfter(at + 1, () => runFlow(flow, {}, options(log)));
+  const cut = readFileSync(log, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  expect(cut.at(-1).payload.step.kind).toBe("llm_config");
+  cut.at(-1).payload.step.effective_llm_config.temperature = 0.5;
+  writeFileSync(log, `${cut.map((record) => JSON.stringify(record)).join("\n")}\n`);
+
+  const error = await rejected(advance(options(log)));
+
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toStartWith("node 'ask' adaptive_questions.llm_config in 'each': ");
+});
+
+test("inspectRun reads the run id, schema, fingerprint and last seq, with and without the flow", async () => {
+  const path = join(dir, "inspected.jsonl");
   const plan = await load(PLAN_FLOW);
-  const result = await run(plan, { topic: "ACME" }, { log: path, learnable: true });
+  const result = await run(plan, { topic: "ACME" }, { log: path });
   const records = readRunLog(path);
   expect(inspectWithAndWithout(path, plan)).toEqual({
     status: "succeeded",
@@ -1292,7 +1343,6 @@ test("inspectRun reads the run id, schema, fingerprint, learnable flag and last 
     runId: result.runId,
     schema: SCHEMA_VERSION,
     flowFingerprint: flowFingerprint(plan.compiled),
-    learnable: true,
     lastSeq: records.length - 1,
     startedAt: records[0]!.at,
     endedAt: records.at(-1)!.at,
@@ -1305,7 +1355,6 @@ test("inspectRun reads the run id, schema, fingerprint, learnable flag and last 
   const crashed = join(dir, "crash.jsonl");
   const work = await crashedWork(crashed);
   const inspection = inspectWithAndWithout(crashed, work);
-  expect(inspection.learnable).toBe(false);
   expect(inspection.lastSeq).toBe(8);
   expect(inspection.failure).toBeNull();
 });
@@ -1338,7 +1387,6 @@ test("inspectRun reads a running log with no record yet as running with nothing 
       runId: null,
       schema: null,
       flowFingerprint: null,
-      learnable: null,
       lastSeq: null,
       startedAt: null,
       endedAt: null,

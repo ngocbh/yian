@@ -35,7 +35,7 @@ expect:
     status: succeeded
     output: {a: A, b: B}
   trace:
-    - [run_started, null, {learnable: false, num_workers: 8}]
+    - [run_started, null, {num_workers: 8}]
     - [node_started, __end__]
     - [pool_commit, __end__, {value: {a: A, b: B}}]
     - [node_succeeded, __end__]

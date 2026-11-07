@@ -1,0 +1,27 @@
+# A def's `long_term_memory:` fails at its key with the fix: declare the memory as an input.
+kind: load
+flow: |
+  id: parent
+  name: parent
+  defs:
+    child:
+      long_term_memory: reflective
+      nodes:
+        answer:
+          kind: agent
+          prompt: answer
+          output: str
+      output: ${answer.output}
+  nodes:
+    go:
+      kind: call
+      call: child
+  output: ${go.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'defs entry ''child'': `long_term_memory:` was removed: declare the memory as an input (`lessons: !FileMemory`) and render `${lessons}` in a prompt'
+      frames:
+      - label: flow.yaml
+        range: [5, 5, 5, 21]

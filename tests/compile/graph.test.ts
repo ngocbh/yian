@@ -22,14 +22,11 @@ import {
 import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor } from "../../src/compose/source/index.ts";
-import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import {
   Binding,
   ChildFlowBoundary,
-  ExecutionPosition,
-  ExecutionScope,
   Parameter,
   SeedConnection,
 } from "../../src/nodes/contracts.ts";
@@ -468,31 +465,14 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>
     "flow_id must be an exact string or null",
   ],
   ["an empty flow id", () => new CompiledFlow(new Map(), [], { flowId: "" }), RangeError, "flow_id must be non-empty"],
-  [
-    "memories that aren't MemoryDecls",
-    () => new CompiledFlow(new Map(), [], { memories: [{}] as never }),
-    TypeError,
-    "memories must be an array of exact MemoryDecl values",
-  ],
-  [
-    "a memory declared on a node site",
-    () =>
-      new CompiledFlow(new Map(), [], {
-        memories: [new MemoryDecl("notes", "episodic", {}, new DeclSite([], ["root"], "agent"))],
-      }),
-    RangeError,
-    "flow memories must carry flow DeclSites (node=null)",
-  ],
 ])("compiled flow refuses %s", (_name, factory, cls, message) => {
   expect(factory).toThrow(cls);
   expect(factory).toThrow(message);
 });
 
-test("compiled flow keeps its flow id and flow memories", () => {
-  const decl = new MemoryDecl("notes", "episodic", {}, new DeclSite([], ["root"]));
-  const g = new CompiledFlow(new Map(), [], { flowId: "flow", memories: [decl] });
+test("compiled flow keeps its flow id", () => {
+  const g = new CompiledFlow(new Map(), [], { flowId: "flow" });
   expect(g.flowId).toBe("flow");
-  expect(g.memories).toEqual([decl]);
   expect(g.flowLlmConfig).toEqual({});
   expect(g.flowLlmValueTypes).toEqual([]);
   expect(g.outputs).toEqual([]);
@@ -649,25 +629,13 @@ test("a field reassigned on a node copy leaves the original", () => {
   expect(copy.params).toBe(params);
 
   copy.params = [new Parameter("y")];
-  copy.executionScope = new ExecutionScope(["a"]);
 
   expect(node.params).toBe(params);
-  expect(node.executionScope).toBeNull();
 });
 
-/** Return a boundary scope for node `id` of child flow `call`, at item `index` of a MAP. */
-function boundaryScope(id: string, boundary: "start" | "end", index = 0): ExecutionScope {
-  return new ExecutionScope(["call", id], {
-    flowPath: ["call"],
-    occurrencePath: [new ExecutionPosition("map_item", ["call"], index)],
-    boundary,
-  });
-}
-
 /**
- * Return a valid growth fragment: child START `s` (input `x`, wired) and END `e`, each with its own
- * boundary scope, and node `h` with a defaulted unwired input `p`; both inputs are seeded unless
- * `recipes` replaces the recipes.
+ * Return a valid growth fragment: child START `s` (input `x`, wired) and END `e`, and node `h`
+ * with a defaulted unwired input `p`; both inputs are seeded unless `recipes` replaces the recipes.
  */
 function growthFragment(recipes: { inputConnections?: unknown; childBoundaries?: unknown } = {}): Flow {
   const {
@@ -676,8 +644,6 @@ function growthFragment(recipes: { inputConnections?: unknown; childBoundaries?:
   } = recipes;
   const nodes = nodesOf("s", "e", "h");
   nodes.get("s")!.params = [new Parameter("x")];
-  nodes.get("s")!.executionScope = boundaryScope("s", "start");
-  nodes.get("e")!.executionScope = boundaryScope("e", "end");
   nodes.get("h")!.params = [new Parameter("p", { hasDefault: true, default: 1n })];
   return new Flow(nodes, [], {
     wiring: new Map([["s", new Map([["x", "${input.x}"]])]]),
@@ -692,12 +658,7 @@ function forged<T>(cls: abstract new (...args: never[]) => T, fields: object): T
 }
 
 test("growth metadata accepts a seeded child START and a seeded defaulted unwired input", () => {
-  const flow = growthFragment();
-  expect(flow.nodes.get("s")!.executionScope!.occurrencePath[0]).not.toBe(
-    flow.nodes.get("e")!.executionScope!.occurrencePath[0],
-  );
-
-  expect(() => validateGrowthMetadata(flow)).not.toThrow();
+  expect(() => validateGrowthMetadata(growthFragment())).not.toThrow();
 });
 
 test.each([
@@ -744,71 +705,11 @@ test.each([
     "a boundary endpoint that isn't a Node",
     () => {
       const flow = growthFragment();
-      flow.nodes.set("e", { executionScope: null } as unknown as Node);
+      flow.nodes.set("e", {} as unknown as Node);
       return flow;
     },
     TypeError,
     "child boundaries must name Node values",
-  ],
-  [
-    "a boundary scope of another class",
-    () => {
-      const flow = growthFragment();
-      const node = flow.nodes.get("s")!;
-      node.executionScope = { ...node.executionScope } as ExecutionScope;
-      return flow;
-    },
-    TypeError,
-    "child boundary scope must be an ExecutionScope",
-  ],
-  [
-    "a forged boundary scope with a non-array occurrence path",
-    () => {
-      const flow = growthFragment();
-      flow.nodes.get("s")!.executionScope = forged(ExecutionScope, {
-        staticPath: ["call", "s"],
-        flowPath: ["call"],
-        occurrencePath: "x",
-        boundary: "start",
-      });
-      return flow;
-    },
-    TypeError,
-    "occurrence_path must be an array",
-  ],
-  [
-    "a boundary role that disagrees with its scope",
-    () => {
-      const flow = growthFragment();
-      flow.nodes.get("s")!.executionScope = boundaryScope("s", "end");
-      return flow;
-    },
-    RangeError,
-    "child boundary role disagrees with its execution scope",
-  ],
-  [
-    "a boundary scope whose static path isn't in its flow path",
-    () => {
-      const flow = growthFragment();
-      flow.nodes.get("s")!.executionScope = new ExecutionScope(["other", "s"], {
-        flowPath: ["call"],
-        occurrencePath: [new ExecutionPosition("map_item", ["call"], 0)],
-        boundary: "start",
-      });
-      return flow;
-    },
-    RangeError,
-    "child boundary location must belong to its containing flow",
-  ],
-  [
-    "boundaries whose occurrences differ in one position index",
-    () => {
-      const flow = growthFragment();
-      flow.nodes.get("e")!.executionScope = boundaryScope("e", "end", 1);
-      return flow;
-    },
-    RangeError,
-    "child boundaries must belong to the same flow occurrence",
   ],
   [
     "a seed connection naming a missing node",

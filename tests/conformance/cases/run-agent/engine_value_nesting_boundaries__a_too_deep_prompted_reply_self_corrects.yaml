@@ -52,7 +52,6 @@ expect:
             source: environment
           model: no-structured-sentinel
           provider: vllm
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

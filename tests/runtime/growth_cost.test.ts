@@ -212,10 +212,9 @@ test("a loop iteration costs about the same after a large map", async () => {
 async function runRecords(
   loaded: ComposedFlow,
   values: readonly string[],
-  options: { learnable?: boolean } = {},
 ): Promise<readonly RecordEnvelope[]> {
   const path = join(mkdtempSync(join(dir, "run-")), "log.jsonl");
-  const result = await runFlow(loaded, { values }, { numWorkers: 0, log: path, ...options });
+  const result = await runFlow(loaded, { values }, { numWorkers: 0, log: path });
   expect(result.status).toBe("succeeded");
   return readRunLog(path);
 }
@@ -232,7 +231,6 @@ function inventories(state: RunState): (Map<unknown, unknown> | Set<unknown>)[] 
     state.pendingMessages,
     state.crashedAttempts,
     state.waits.waiting,
-    ...(state.trace === null ? [] : [state.trace._parked]),
   ];
 }
 
@@ -282,13 +280,13 @@ test("a wide map's records don't each read every unsettled node's inventory", as
 
 // Under Bun only: the Node runner can't spy on a module's export.
 test.if(process.versions.bun !== undefined)(
-  "a learnable wide map's replay parses about the same text per item at any width",
+  "a wide map's replay parses about the same text per item at any width",
   async () => {
     const loaded = await loadConformanceFlow(MAP_OF_TEXT);
     const values = (items: number) => Array.from({ length: items }, (_, i) => "x".repeat(200) + i);
-    /** The characters a replay of a learnable run over `items` items parses. */
+    /** The characters a replay of a run over `items` items parses. */
     const parsed = async (items: number): Promise<number> => {
-      const records = await runRecords(loaded, values(items), { learnable: true });
+      const records = await runRecords(loaded, values(items));
       const parse = spyOn(json, "parseJson");
       try {
         replayRunLog(loaded, MemoryRunLog.fromRecords(records));

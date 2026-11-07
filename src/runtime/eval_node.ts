@@ -16,8 +16,8 @@
  *
  * Knows about:   compile/model (types), compile/declared_types (the declared types reads go
  *                through), compile/output_contracts (a binding's lone reference, to name an
- *                authored root), diagnostics, expr grammar and lineage, llm_clients (types), memory
- *                contracts, nodes, platform, runtime contracts, log and trace, skills, tools, typesys.
+ *                authored root), diagnostics, expr grammar and lineage, llm_clients (types), nodes,
+ *                platform, runtime sources, skills, tools, typesys.
  * Never imports: runtime state or engine, the run boundary, compose, or the CLI.
  */
 
@@ -26,16 +26,8 @@ import { directReferenceParts, loneSpanTree } from "../compile/output_contracts.
 import { Tree } from "../expr/grammar.ts";
 import type { CompiledFlow, Flow } from "../compile/model.ts";
 import { Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
-import { ResolvedValue, type SourceRef, ValueRoute } from "../expr/lineage.ts";
+import { ResolvedValue, ValueRoute } from "../expr/lineage.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import {
-  type JsonObject,
-  MemoryContext,
-  MemoryRecallError,
-  MemoryScope,
-  MemorySection,
-  RecallContext,
-} from "../memory/contracts.ts";
 import {
   AssertionStageError,
   BindingStageError,
@@ -63,24 +55,14 @@ import {
   resolveSource,
   type SourceResolver,
 } from "../nodes/binding.ts";
-import { isExactly, NodeSteps } from "../nodes/contracts.ts";
+import { NodeSteps } from "../nodes/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
-import type { JsonObject as WireObject, JsonValue } from "../typesys/json.ts";
+import type { JsonObject } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
-import {
-  isRecord,
-  jsTypeName,
-  setField,
-  type Type,
-  type TypedValue,
-  type Value,
-  type ValueRecord,
-} from "../typesys/values.ts";
-import { BackwardCapture } from "./contracts.ts";
-import { canonicalSeed } from "./log.ts";
-import { type ReboundSource, resolvePoolPath, SYSTEM_PREFIX } from "./trace.ts";
+import { jsTypeName, setField, type TypedValue, type Value, type ValueRecord } from "../typesys/values.ts";
+import { SYSTEM_PREFIX } from "./sources.ts";
 
 /**
  * One raw node-evaluation failure for durable dispatcher preparation. Frozen.
@@ -212,140 +194,19 @@ export type WorkerOutcome = Output | Route | Grow | Pending | EvaluationFailure;
 /**
  * One raw worker outcome with what its evaluation captured. Frozen.
  *
- * `bindings` holds the inputs the node was bound to and the routes evaluated while binding them;
- * `backwardCapture` holds what backward later reads of the invocation (its routes, evaluated keys
- * and scope). Either is `null` when the evaluation captured none. Neither is accepted history
- * until the dispatcher records this outcome.
+ * `bindings` holds the inputs the node was bound to and the routes evaluated while binding them,
+ * or `null` when the evaluation captured none. It isn't accepted history until the dispatcher
+ * records this outcome.
  */
 export class EvaluatedOutcome {
   readonly outcome: WorkerOutcome;
   readonly bindings: BindingCapture | null;
-  readonly backwardCapture: BackwardCapture | null;
 
-  constructor(
-    outcome: WorkerOutcome,
-    bindings: BindingCapture | null = null,
-    backwardCapture: BackwardCapture | null = null,
-  ) {
+  constructor(outcome: WorkerOutcome, bindings: BindingCapture | null = null) {
     this.outcome = outcome;
     this.bindings = bindings;
-    this.backwardCapture = backwardCapture;
     Object.freeze(this);
   }
-}
-
-/**
- * Host-injected admission of recalled notes: selects one memory context for a scoped node's
- * `recall`, under the node's `signal`.
- */
-export type MemoryContextOpener = (
-  scope: MemoryScope,
-  recall: RecallContext,
-  options: { signal: AbortSignal },
-) => Promise<MemoryContext>;
-
-/**
- * Check one opener's sections are an ordered subsequence of the scope's memories, each with text.
- *
- * @throws TypeError when an item isn't exactly a `MemorySection`.
- * @throws RangeError for an empty text, or a section outside the rest of the scope's memories.
- */
-function validateMemorySections(scope: MemoryScope, sections: readonly MemorySection[]): void {
-  let next = 0;
-  for (const section of sections) {
-    if (!isExactly(section, MemorySection)) throw new TypeError("memory recall items must be MemorySection values");
-    if (section.text === "") throw new RangeError("memory recall sections must contain non-empty text");
-    const index = scope.memories.indexOf(section.memory, next);
-    if (index < 0) throw new RangeError("memory recall sections must follow the consumer memory stack");
-    next = index + 1;
-  }
-}
-
-/** A lazy single-use memory context capability bound to one evaluation's lifetime. */
-interface MemoryContextCapability {
-  /** The node's `openMemoryContext`. */
-  readonly open: NonNullable<NodeCaps["openMemoryContext"]>;
-  /** End the lifetime: later opens reject. */
-  close(): void;
-}
-
-/**
- * Bind a memory context capability to one evaluation.
- *
- * @param options.scope The node's memory scope; `null` or no memories opens an empty context.
- * @param options.opener The host's opener, present for a scoped node.
- * @param options.canonicalInputs The visible bound inputs for the recall context; `null` when
- *   canonicalization refused them.
- * @param options.onFault Sees each capability fault before the open rejects with it.
- * @param options.pending Receives the open's promise, for the evaluator to await.
- */
-function memoryContextCapability(options: {
-  scope: MemoryScope | null;
-  opener: MemoryContextOpener | null;
-  signal: AbortSignal;
-  canonicalInputs: JsonObject | null;
-  onFault: (fault: CapabilityFault) => void;
-  pending: Promise<unknown>[];
-}): MemoryContextCapability {
-  const { scope, opener, signal, canonicalInputs, onFault, pending } = options;
-  let closed = false;
-  let used = false;
-
-  /**
-   * Open the context once.
-   *
-   * @throws MemoryRecallError for invalid recall inputs, request or opener result, or as the opener
-   *   throws it.
-   * @throws CapabilityFault carrying a repeated open or any other opener fault.
-   */
-  const enter = async (systemPrompt: string, renderedPrompt: string): Promise<MemoryContext> => {
-    try {
-      if (used) throw new Error("memory context capability was already entered");
-      used = true;
-      if (scope === null || scope.memories.length === 0) return new MemoryContext();
-      if (canonicalInputs === null) throw new MemoryRecallError("memory recall context is invalid");
-      let recall: RecallContext;
-      try {
-        recall = new RecallContext(systemPrompt, renderedPrompt, canonicalInputs, scope.staticPath);
-      } catch (error) {
-        if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-        throw new MemoryRecallError("memory recall context is invalid", { cause: error });
-      }
-      // The evaluator refuses a scoped node without an opener before the node runs.
-      const context: unknown = await opener!(scope, recall, { signal });
-      try {
-        if (!isExactly(context, MemoryContext)) throw new TypeError("memory context must be an exact MemoryContext");
-        validateMemorySections(scope, context.sections);
-      } catch (error) {
-        if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-        throw new MemoryRecallError("memory recall returned invalid context", { cause: error });
-      }
-      return context;
-    } catch (error) {
-      if (error instanceof MemoryRecallError) throw error;
-      const fault = capabilityFault(error);
-      onFault(fault);
-      throw fault;
-    }
-  };
-
-  const open = (systemPrompt: string, renderedPrompt: string) => {
-    const opened: Promise<MemoryContext> = closed
-      ? Promise.reject(new Error("memory context capability is closed"))
-      : enter(systemPrompt, renderedPrompt);
-    // A node may drop the promise: its rejection must not go unhandled, and the evaluator awaits
-    // it, so a fault still reaches `onFault`.
-    opened.catch(() => {});
-    if (!closed) pending.push(opened);
-    return opened;
-  };
-
-  return {
-    open,
-    close: () => {
-      closed = true;
-    },
-  };
 }
 
 /** The optional inputs of one `evalNode` call; each defaults to `null` or `false`. */
@@ -372,13 +233,8 @@ export interface EvalNodeOptions {
   emitStream?: NodeCaps["emitStream"] | null;
   /** The transient model and tool call observer sink, received and closed as `emitStream` is. */
   emitEvent?: NodeCaps["emitEvent"] | null;
-  /** Whether to retain the bound input values, their routes and the backward capture. */
+  /** Whether to retain the bound input values and their routes. */
   captureBindings?: boolean;
-  /**
-   * The memory context source a node declaring `needsMemoryContext` reaches through
-   * `caps.openMemoryContext`; required when the node's scope has memories.
-   */
-  memoryContextOpener?: MemoryContextOpener | null;
   /** The run's host-supplied skills, delivered only to a node declaring `needsSkills`. */
   skills?: ReadonlyMap<string, Skill> | null;
   /** The paired value and source lookup used while capturing bindings. */
@@ -420,11 +276,8 @@ export interface EvalNodeOptions {
  * @param options The capabilities and captures; see `EvalNodeOptions`.
  * @returns The outcome, with captures when asked for.
  * @throws The original error of the first capability fault (a failing stream or event sink, a
- *   repeated memory context open or a failing opener, a `CapabilityFault` from `steps.record` or
- *   the steer inbox), whatever the node then returned or threw.
- * @throws TypeError when a node declaring `needsMemoryContext` has a `memoryScope` that isn't
- *   exactly a `MemoryScope`; Error when a memory context node's scope has memories and no opener
- *   was injected.
+ *   `CapabilityFault` from `steps.record` or the steer inbox), whatever the node then returned or
+ *   threw.
  * @throws TypeError, RangeError or the hook's own error when capturing bindings and the input
  *   inventory fails; the body hasn't run.
  * @throws The signal's reason when the signal is already aborted, before binding, or when the node
@@ -445,7 +298,6 @@ export async function evalNode(
     emitStream = null,
     emitEvent = null,
     captureBindings = false,
-    memoryContextOpener = null,
     skills = null,
     sourceResolver = null,
     tools = null,
@@ -457,15 +309,9 @@ export async function evalNode(
     random = null,
     runDir = null,
   } = options;
-  // Read once, so a node replacing its scope while it runs doesn't change what it recalls.
-  const memoryScope = node.needsMemoryContext === true ? node.memoryScope : null;
-  if (memoryScope !== null && !isExactly(memoryScope, MemoryScope)) {
-    throw new TypeError("node memory_scope must be an exact MemoryScope or null");
-  }
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
   const collector = captureBindings ? new BindingCollector() : null;
-  const backwardCapture = captureBindings ? nodeBackwardCapture(node) : null;
 
   /** Snapshot the completed inputs before the body can change them. */
   const captureInputs = (inputs: Record<string, unknown>): void => {
@@ -480,8 +326,6 @@ export async function evalNode(
     runDir,
     collector,
     captureInputs: captureBindings ? captureInputs : null,
-    memoryScope,
-    memoryContextOpener,
     sourceResolver,
     emitStream,
     emitEvent,
@@ -492,7 +336,7 @@ export async function evalNode(
     steerInbox,
     onFault,
   });
-  return new EvaluatedOutcome(outcome, collector?.freeze() ?? null, backwardCapture);
+  return new EvaluatedOutcome(outcome, collector?.freeze() ?? null);
 }
 
 /** Bind and run one node, resolving to one normalized result. */
@@ -510,9 +354,6 @@ async function evaluateNode(
     collector: BindingCollector | null;
     /** Receives the completed input record before the body runs, when capturing bindings. */
     captureInputs: ((inputs: Record<string, unknown>) => void) | null;
-    /** The memory scope of a node declaring `needsMemoryContext`, else `null`. */
-    memoryScope: MemoryScope | null;
-    memoryContextOpener: MemoryContextOpener | null;
     sourceResolver: SourceResolver | null;
     emitStream: NonNullable<NodeCaps["emitStream"]> | null;
     emitEvent: NonNullable<NodeCaps["emitEvent"]> | null;
@@ -526,7 +367,6 @@ async function evaluateNode(
   },
 ): Promise<WorkerOutcome> {
   const { wiringOverride, signal, collector, captureInputs, sourceResolver } = context;
-  const { memoryScope, memoryContextOpener } = context;
   const { emitStream, emitEvent, skills, tools, models, steps, steerInbox, scheduler, random, runDir } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
@@ -559,25 +399,6 @@ async function evaluateNode(
   }
   const { record } = bound;
 
-  const scoped = memoryScope !== null && memoryScope.memories.length > 0;
-  if (scoped && memoryContextOpener === null) {
-    throw new Error(`scoped node ${reprText(node.id)} requires an injected memory context callback`);
-  }
-  // The visible bound inputs, for the recall context.
-  let canonicalInputs: JsonObject | null = null;
-  if (scoped) {
-    const hidden = node.modelHiddenInputs();
-    const visible = Object.fromEntries(Object.entries(record).filter(([name]) => !hidden.has(name)));
-    try {
-      const value = canonicalSeed(visible)[0];
-      if (!isRecord(value)) throw new TypeError("bound node inputs did not canonicalize to an exact record");
-      canonicalInputs = value as JsonObject;
-    } catch (error) {
-      // The recall capability owns the rejection of its query context.
-      if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-    }
-  }
-
   // The first fault any capability raised. A node can catch the fault it was thrown, so the
   // evaluator keeps it to throw when the node settles.
   const faults: { first: CapabilityFault | null } = { first: null };
@@ -586,17 +407,6 @@ async function evaluateNode(
     faults.first = fault;
     context.onFault?.(fault.original);
   };
-  // The capability promises handed to the node. A node may settle without awaiting one, so the
-  // evaluator awaits their settlement before it settles, and a late fault is still the first.
-  const pending: Promise<unknown>[] = [];
-  const memory = memoryContextCapability({
-    scope: memoryScope,
-    opener: memoryContextOpener,
-    signal,
-    canonicalInputs,
-    onFault,
-    pending,
-  });
 
   // Every node gets its signal and the given scheduler, random draw and run folder; the rest are
   // node-owned and trait-gated. The deferred per-item binder throws the same binder-owned marker
@@ -620,7 +430,6 @@ async function evaluateNode(
       }
     };
   }
-  if (node.needsMemoryContext === true) caps.openMemoryContext = memory.open;
   if (node.needsTools === true) caps.tools = tools ?? new ToolSet();
   // Closed once the node settles, so a step, event or steer read the node's dropped code makes after
   // the outcome is decided is refused or dropped rather than reaching the run with no evaluation
@@ -667,16 +476,7 @@ async function evaluateNode(
   } catch (error) {
     rejection = { error };
   }
-  // The capabilities stay open while the evaluator waits, so a node's dropped code may start another
-  // capability call meanwhile; one wait would miss it, and a late open's fault would never be
-  // checked.
-  for (let settled = 0; settled < pending.length; ) {
-    const batch = pending.slice(settled);
-    settled = pending.length;
-    await Promise.allSettled(batch);
-  }
   closed = true;
-  memory.close();
 
   // A host capability fault, then a stop, is control flow outside the node-result sum, whatever
   // the node returned or rejected with.
@@ -731,110 +531,27 @@ function stageFailure(node: Node, error: unknown): EvaluationFailure {
   throw error;
 }
 
-/**
- * The backward material `node` gives an evaluation: its backward input names, its variable names
- * and its execution scope.
- */
-export function nodeBackwardCapture(node: Node): BackwardCapture {
-  return new BackwardCapture({
-    inputNames: node.backwardInputNames(),
-    variableNames: node.declaredVariables().map((parameter) => parameter.name),
-    scope: node.executionScope,
-  });
-}
-
-/**
- * Rebuild the node data backward reads about one evaluation of `node`, which its record leaves
- * out: none for a binding that didn't finish (`inputs` `null`); else the node's static material
- * (`captureBackwardContext`), and, when its pre-asserts hold for `inputs` (so its `forward` ran)
- * and the node renders (`renderCapture`, called only then), that render with the model config the
- * invocation used as `effective_llm_config`: the config bound with its inputs (`boundLlmConfig`),
- * else the run's entry for its static path.
- *
- * @param inputs The bound inputs, as binding the node again gives them.
- * @param effectiveLlmByStaticPath The run's recorded model config by static path.
- * @param localTypes The node's locals' declared types (`localTypes`); `null` leaves them undeclared.
- * @returns Canonical JSON.
- * @throws TypeError when the static material isn't a record, TypeCheckError when it or the render
- *   isn't JSON, and the hooks' own errors (`preAssertsHold`'s, and `renderCapture`'s faults).
- * @throws RangeError when the node renders and the run's map has no entry for its static path, or
- *   its render holds `effective_llm_config` or a key of its static material.
- */
-export function rebuildNodeData(
-  node: Node,
-  inputs: Readonly<Record<string, unknown>> | null,
-  effectiveLlmByStaticPath: Readonly<Record<string, unknown>>,
-  localTypes: ReadonlyMap<string, Type | null> | null = null,
-): WireObject {
-  if (inputs === null) return {};
-  const captured: unknown = node.captureBackwardContext();
-  if (!isRecord(captured)) throw new TypeError("capture_backward_context must return a record");
-  const data: Record<string, unknown> = { ...captured };
-  // Pre-asserts first: an occurrence whose `forward` never ran is never rendered again.
-  const render = node.preAssertsHold(inputs, localTypes) ? node.renderCapture(inputs, localTypes) : null;
-  if (render !== null) {
-    if (Object.hasOwn(render, "effective_llm_config")) {
-      throw new RangeError("effective_llm_config belongs to the run's model config");
-    }
-    const replaced = Object.keys(render).filter((key) => Object.hasOwn(data, key));
-    if (replaced.length > 0) throw new RangeError(`the render cannot replace static node data: ${replaced.join(", ")}`);
-    Object.assign(data, render, { effective_llm_config: invocationLlmConfig(node, inputs, effectiveLlmByStaticPath) });
-  }
-  return canonicalSeed(data)[1] as WireObject;
-}
-
-/**
- * The model config one invocation of `node` used: the config bound with `inputs`, else the run's
- * entry for the node's static path; `null` for a node with no scope.
- *
- * @throws RangeError when the run's map has no entry for the static path.
- */
-function invocationLlmConfig(
-  node: Node,
-  inputs: Readonly<Record<string, unknown>>,
-  effectiveLlmByStaticPath: Readonly<Record<string, unknown>>,
-): JsonValue | null {
-  const scope = node.executionScope;
-  if (scope === null) return null;
-  const bound = node.boundLlmConfig(inputs);
-  if (bound !== null) return canonicalSeed(bound)[1];
-  const key = scope.staticPath.join("/");
-  if (!Object.hasOwn(effectiveLlmByStaticPath, key)) {
-    throw new RangeError(`recorded effective model configuration is missing static path ${reprText(key)}`);
-  }
-  return canonicalSeed(effectiveLlmByStaticPath[key])[1];
-}
-
-/** The bound inputs and capabilities `rebind` and `rebuildDerived` share. */
+/** The bound inputs and capabilities a derived node's rebuild runs `forward` with. */
 interface Rebound {
   inputs: Record<string, unknown>;
   caps: NodeCaps;
 }
 
-/**
- * Bind `node` from `sources` as the evaluator does, with defaults filled; with a `collector`,
- * collect the route and bound inputs into it too. `reserved`, when given, are the node's reserved
- * values, used in place of its `bindReserved`.
- */
+/** Bind `node` from `sources` as the evaluator does, with defaults filled. */
 function bindFrom(
   node: Node,
   flow: Flow,
   sources: ReadonlyMap<string, number>,
-  resolve: (name: string, seq: number) => ReboundSource,
+  resolve: (name: string, seq: number) => TypedValue,
   wiringOverride: JsonObject | null,
-  collector: BindingCollector | null,
-  reserved: Readonly<Record<string, unknown>> | null = null,
 ): Rebound {
   const pool = new VariablePool(flow.startId);
-  const entries = new Map<string, ReboundSource>();
   for (const [name, seq] of sources) {
-    const entry = resolve(name, seq);
-    entries.set(name, entry);
-    if (name.startsWith(SYSTEM_PREFIX)) pool.system.set(name.slice(SYSTEM_PREFIX.length), entry.value);
-    else pool.store.set(name, entry.value);
+    const value = resolve(name, seq);
+    if (name.startsWith(SYSTEM_PREFIX)) pool.system.set(name.slice(SYSTEM_PREFIX.length), value);
+    else pool.store.set(name, value);
   }
-  const sourceResolver: SourceResolver = (names) => resolvePoolPath(names, pool, (name) => entries.get(name)!.source);
-  return bindPool(node, flow, pool, sourceResolver, wiringOverride, collector, reserved);
+  return bindPool(node, flow, pool, wiringOverride);
 }
 
 /**
@@ -852,27 +569,14 @@ export function bindStarted(
   pool: VariablePool,
   wiringOverride: JsonObject | null,
 ): Record<string, unknown> {
-  return bindPool(node, flow, pool, null, wiringOverride, null, null).inputs;
+  return bindPool(node, flow, pool, wiringOverride).inputs;
 }
 
 /** `bindFrom`'s binding over a built `pool`. */
-function bindPool(
-  node: Node,
-  flow: Flow,
-  pool: VariablePool,
-  sourceResolver: SourceResolver | null,
-  wiringOverride: JsonObject | null,
-  collector: BindingCollector | null,
-  reserved: Readonly<Record<string, unknown>> | null,
-): Rebound {
+function bindPool(node: Node, flow: Flow, pool: VariablePool, wiringOverride: JsonObject | null): Rebound {
   const nodeWiring = wiringFor(node, flow, wiringOverride);
-  const { record, bindItem } = bindNode(node, flow, nodeWiring, pool, {
-    collector,
-    sourceResolver,
-    bindReserved: reserved === null ? null : () => reserved,
-  });
+  const { record, bindItem } = bindNode(node, flow, nodeWiring, pool, { collector: null, sourceResolver: null });
   const inputs = applyDefaults(node.params ?? [], record);
-  collector?.finish(inputs as ValueRecord);
   const caps: { -readonly [K in keyof NodeCaps]: NodeCaps[K] } = {
     signal: new AbortController().signal,
     localTypes: localTypes(flow, node),
@@ -896,9 +600,9 @@ interface BoundNode {
 
 /**
  * Bind `node`'s params and reserved values from `pool` through `wiring`: the one binding both the
- * evaluator and the run reducer's rebuild run, so a rebuilt capture is the one the evaluator
- * collected. With a `collector`, each route is collected too; a reserved value its hook made
- * without the binder gets a literal route. Defaults aren't filled and the capture isn't finished.
+ * evaluator and the run reducer's rebuild run, so a rebuilt value is the one the evaluator bound.
+ * With a `collector`, each route is collected too; a reserved value its hook made without the
+ * binder gets a literal route. Defaults aren't filled and the capture isn't finished.
  *
  * @param flow The flow whose declared types the reads go through; `null` declares none.
  * @param options.bindReserved Gives the reserved values from the binder (`null` when not
@@ -954,52 +658,11 @@ function bindNode(
 }
 
 /**
- * Bind a node's params from the values `resolve` gives for its sources, plus its wiring (or
- * `wiringOverride`), collecting the route and bound inputs in the same pass, as the evaluator does.
+ * Rebuild a derived node's outcome: bind it from `from` as the evaluator does, then run its pure,
+ * synchronous `forward`. With `from` empty (a child START over its constant wiring), it binds from
+ * constants only.
  *
- * `resolve(name, seq)` returns the value pool name `name` held when the `pool_commit` at `seq` wrote
- * it, and the producer the route names. Inside the run reducer it reads the run's pool and checks
- * the producer index, which is sound because records apply in log order: the pool when a derived
- * commit is accepted holds exactly what its binding read.
- *
- * `options.reserved` gives the node's reserved values instead of its `bindReserved`: a hook that
- * resolves its value without the binder records it whole, as a literal route, and reads names
- * the route doesn't name.
- *
- * A node that binds per item (MAP) binds its items in its pure `forward`, as the evaluator ran it,
- * so the capture holds them. A binding that doesn't finish, its items' included, gives the
- * `BindingError` as `failure` and, as the evaluator keeps it, the capture of the routes collected
- * before it failed, with no bound inputs.
- *
- * @throws whatever `resolve` or a per-item node's `forward` throws besides a `BindingError`.
- */
-export function rebind(
-  node: Node,
-  flow: Flow,
-  sources: ReadonlyMap<string, number>,
-  resolve: (name: string, seq: number) => ReboundSource,
-  wiringOverride: JsonObject | null,
-  options: { reserved?: Readonly<Record<string, unknown>> | null } = {},
-): { capture: BindingCapture; failure: BindingError | null } {
-  const collector = new BindingCollector();
-  try {
-    const { inputs, caps } = bindFrom(node, flow, sources, resolve, wiringOverride, collector, options.reserved ?? null);
-    if (node.bindsPerItem) node.forward(inputs, caps);
-    return { capture: collector.freeze(), failure: null };
-  } catch (error) {
-    if (!(error instanceof BindingError)) throw error;
-    collector.invalidate();
-    return { capture: collector.freeze(), failure: error };
-  }
-}
-
-/**
- * Rebuild a derived node's outcome: `rebind`, then its pure, synchronous `forward`. With `from`
- * empty (a child START over its constant wiring), it binds from constants only.
- *
- * @param options.capture Whether to collect the route and bound inputs too, with each item a MAP's
- *   `forward` binds; defaults to `false`.
- * @returns The outcome, and the capture (`null` unless `options.capture`).
+ * @returns The outcome.
  * @throws TypeError when `node` isn't derived, or its `forward` returns a promise or a route.
  * @throws BindingError when a source doesn't evaluate, and whatever `resolve` throws.
  */
@@ -1007,17 +670,14 @@ export function rebuildDerived(
   node: Node,
   flow: Flow,
   from: ReadonlyMap<string, number>,
-  resolve: (name: string, seq: number) => ReboundSource,
+  resolve: (name: string, seq: number) => TypedValue,
   wiringOverride: JsonObject | null,
-  options: { capture?: boolean } = {},
-): { outcome: Output | Grow; capture: BindingCapture | null } {
+): Output | Grow {
   if (node.derived !== true) throw new TypeError(`node ${reprText(node.id)} is not derived`);
-  const collector = options.capture === true ? new BindingCollector() : null;
-  const { inputs, caps } = bindFrom(node, flow, from, resolve, wiringOverride, collector);
+  const { inputs, caps } = bindFrom(node, flow, from, resolve, wiringOverride);
   const outcome: unknown = node.forward(inputs, caps);
   if (!(outcome instanceof Output || outcome instanceof Grow)) {
     throw new TypeError(`derived node ${reprText(node.id)} forward returned ${jsTypeName(outcome)}, not an Output or Grow`);
   }
-  // Frozen after `forward`, which binds a MAP's items into the capture.
-  return { outcome, capture: collector === null ? null : collector.freeze() };
+  return outcome;
 }

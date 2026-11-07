@@ -25,7 +25,7 @@ import {
 import { applyWaitsRecord, awaitsNextMessage, isWakeable, nodeCalls, wakeableNodes, WaitsState } from "../../src/runtime/waits.ts";
 import type { CallClosed } from "../../src/events.ts";
 import { prepareDelivery } from "../../src/runtime/engine.ts";
-import { TOOL_INTERRUPTED_OUTCOME } from "../../src/nodes/agent/memory.ts";
+import { TOOL_INTERRUPTED_OUTCOME } from "../../src/nodes/agent/results.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { MemoryRunLog, type RunLog } from "../../src/runtime/log.ts";

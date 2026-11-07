@@ -14,13 +14,3 @@ test("an inbox engine binds each inbox to its handle and each input to the input
   expect(started.startWiringOverride).toEqual({ topic: "${input.topic}", mail: { inbox: "mail" } });
 });
 
-test("an inbox engine records the memory configuration it is given, and none by default", () => {
-  const configured = inboxEngine(FLOW(), { memories: [], memoryStacks: [], memorySnapshots: [] });
-  expect(configured.state.memories).toEqual([]);
-  expect(configured.state.memoryStacks).toEqual([]);
-  expect(configured.state.memorySnapshots).toEqual([]);
-  const plain = inboxEngine(FLOW());
-  expect(plain.state.memories).toBeNull();
-  expect(plain.state.memoryStacks).toBeNull();
-  expect(plain.state.memorySnapshots).toBeNull();
-});

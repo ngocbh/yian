@@ -1011,16 +1011,6 @@ for (const shape of Object.keys(NESTED_BODIES).sort()) {
   }
 }
 
-for (const shape of Object.keys(NESTED_BODIES).sort()) {
-  test(`loop with nested growth keeps trace indexes bounded: ${shape}`, async () => {
-    // A learnable run's current-name trace indexes shrink with the live graph.
-    const small = (await finishNested(shape, 3, { learnable: true })).state.trace!;
-    const large = (await finishNested(shape, 20, { learnable: true })).state.trace!;
-    expect(large.currentWriters.size).toBe(small.currentWriters.size);
-    expect(large.pendingConnections.size).toBe(small.pendingConnections.size);
-  });
-}
-
 test("loop growth record keeps only the requested prune ids", async () => {
   // The log records the body's direct ids and the driver; nested ids are derived.
   const eng = await finishNested("call", 3);

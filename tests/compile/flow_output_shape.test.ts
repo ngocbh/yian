@@ -10,20 +10,16 @@ import { join } from "node:path";
 
 import { afterAll, expect, test } from "bun:test";
 
-import { END_ID, FlowOutput, START_ID } from "../../src/compile/model.ts";
+import { END_ID } from "../../src/compile/model.ts";
 import { combineOutputContracts } from "../../src/compile/output_contracts.ts";
 import { childSignature } from "../../src/compose/nodes/resolver.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { BackwardResult } from "../../src/nodes/base.ts";
 import { isExactly, sameOutputContract, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { runFlow } from "../../src/run.ts";
-import { computeBackward } from "../../src/runtime/backward.ts";
-import { validateAttributedBackward } from "../../src/runtime/learning.ts";
 import { Type, typeEquals, ValueKind } from "../../src/typesys/values.ts";
 import { assembled, assembleText, type CaseRow, loadError, loadErrorAsync, runCase } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { engine, graph, RecordingBackwardNode } from "../helpers/run_state_fixtures.ts";
 
 const STR = Type.scalar(ValueKind.STRING);
 const INT = Type.scalar(ValueKind.INTEGER);
@@ -257,32 +253,6 @@ test("a loop body with a one-field record output runs", async () => {
 
   expect((flow.compiled.nodes.get("lp")!.outputContract as ValueContract).type).toEqual(record({ count: INT }));
   expect(await run(LOOP_ONE_FIELD)).toEqual({ count: 3n });
-});
-
-// ---------- backward ----------
-
-test("root feedback on a one-field record reaches its producer", async () => {
-  const producer = new RecordingBackwardNode(
-    "producer",
-    (inputs) => inputs.x,
-    (_context, feedback) => new BackwardResult({ inputFeedback: { x: feedback } }),
-    { reads: { x: "${input.topic}" } },
-  );
-  const end = EndNode.record(END_ID, { outputNames: ["order"] });
-  const flow = graph([producer, end], [[START_ID, "producer"]], {
-    outputs: [new FlowOutput("order", "${producer.output}")],
-  });
-  const built = engine(flow, { inputs: { topic: "reefs" }, learnable: true });
-  await built.run();
-  expect(built.state.trace).not.toBeNull();
-
-  const feedback = { order: "Review the order." };
-  const [root, results] = await computeBackward(built.state.trace!, feedback);
-  validateAttributedBackward(built.state.trace!, feedback, root, results);
-
-  expect(producer.calls).toHaveLength(1);
-  expect(producer.calls[0]![1]).toEqual(["Review the order."]);
-  expect(root.inputFeedback).toEqual({ topic: ["Review the order."] });
 });
 
 test.each([

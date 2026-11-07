@@ -11,7 +11,7 @@ import { describe, expect, test } from "bun:test";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { TEMPLATE_FNS, registerTemplateFn } from "../../src/expr/builtins.ts";
 import { RequiredError } from "../../src/expr/index.ts";
-import { type RootRead, routeFeedback, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
+import { type RootRead, SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
 import { Grow, Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import {
   applyDefaults,
@@ -144,10 +144,6 @@ test("binding capture matches the value actually delivered", () => {
     ((delivered["payload"] as ValueRecord)["items"] as Value[]).push("node mutation");
     (original["items"] as Value[]).push("pool mutation");
     expect(captured.boundInputs!["payload"]).toEqual({ items: ["before"] });
-    const routed = routeFeedback(captured.route, { count: "Too large." }, () => ({ count: 12n, payload: original }));
-    expect(routed.contributions.map((c) => [c.source, c.feedback])).toEqual([
-      [new SourceRef("run", 1), { count: "Too large." }],
-    ]);
   } finally {
     if (previous === undefined) TEMPLATE_FNS.delete("observe");
     else TEMPLATE_FNS.set("observe", previous);
@@ -175,10 +171,9 @@ test("an omitted default has no upstream source", () => {
   expect(typeof captured.boundInputs!["defaulted"]).toBe("bigint");
   expect(captured.route.names).toEqual(["defaulted", "null"]);
   expect(captured.evaluatedKeys).toEqual(new Set(["null"]));
-  const routed = routeFeedback(captured.route, { defaulted: "Local.", null: "Supply a value." }, () => null);
-  expect(routed.contributions.map((c) => [c.source, c.feedback])).toEqual([
-    [new SourceRef("run", 3), "Supply a value."],
-  ]);
+  const [defaulted, read] = captured.route.children as [ValueRoute, ValueRoute];
+  expect(defaulted.kind).toBe("literal");
+  expect(read.source).toEqual(new SourceRef("run", 3));
 });
 
 /** A minimal concrete node; it fails before its body in these tests. */

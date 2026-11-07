@@ -12,7 +12,6 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { Message, Response, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
 import { DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { type AgentPrompt, AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node, type NodeCaps, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
@@ -160,17 +159,11 @@ test("no grant or no supply keeps the system prompt byte for byte", async () => 
   expect(model.requests.map((request) => request.messages[0]!.text())).toEqual([DEFAULT_SYSTEM, DEFAULT_SYSTEM]);
 });
 
-test("the memory context gets the system prompt without the listing", async () => {
-  const seen: string[] = [];
-  const openMemoryContext = async (system: string) => {
-    seen.push(system);
-    return new MemoryContext();
-  };
+test("the system message holds the granted skills' listing", async () => {
   const node = new AgentNode("agent", { prompt: "p", llmConfig: CONFIG, skills: ["review"] });
   const model = new ScriptedModel([textReply("ok")], CONFIG);
   const models = serving(model);
-  expect(await node.forward({}, { openMemoryContext, skills: SKILLS, models })).toEqual(new Output("ok"));
-  expect(seen).toEqual([DEFAULT_SYSTEM]);
+  expect(await node.forward({}, { skills: SKILLS, models })).toEqual(new Output("ok"));
   expect(model.requests[0]!.messages[0]!.text()).toBe(systemPromptWithSkills(DEFAULT_SYSTEM, [SKILLS.get("review")!]));
 });
 
@@ -223,8 +216,8 @@ test("granted skills are listed and loaded on demand", async () => {
   expect(model.requests[0]!.tools.map((tool) => tool.name)).toEqual([LOAD_SKILL]);
   expect(lastResult(model.requests[1]!.messages)).toBe("Read references/style.md first.");
   expect(lastResult(model.requests[2]!.messages)).toBe("Prefer small diffs.\n");
-  // Learning renders the same system prompt from the skills the run recorded.
-  expect(renderPrompt(node, {}, SKILLS).baseSystemPrompt).toBe(expectedSystem);
+  // The request rebuild renders the same system prompt from the skills the run recorded.
+  expect(renderPrompt(node, {}, SKILLS).systemPrompt).toBe(expectedSystem);
 });
 
 test("skills with structured output still run the tool loop", async () => {

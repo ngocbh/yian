@@ -11,7 +11,6 @@ import { ModelCallStarted } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
 import { Message, Response, TextPart, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
@@ -43,15 +42,13 @@ async function run(
   const ctx: AgentRunContext = {
     nodeId: "n",
     messages: [userMessage(options.prompt ?? "produce a value")],
-    promptText: options.prompt ?? "produce a value",
     tools: options.tools ?? [],
     llmConfig: null,
     outputType,
     retries: 2,
     maxToolIterations: -1,
-    memoryContext: new MemoryContext(),
     toolset: options.toolset ?? null,
-    baseSystemPrompt: DEFAULT_SYSTEM,
+    systemPrompt: DEFAULT_SYSTEM,
     skills: [],
     emitEvent: (event) => void events.push(event),
     models: { env: NO_ENV, createModel: () => model },

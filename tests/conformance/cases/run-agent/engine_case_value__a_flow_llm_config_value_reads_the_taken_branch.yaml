@@ -48,7 +48,7 @@ expect:
     status: succeeded
     output: ok
   trace:
-  - [run_started, null, {call_time_llm: {agents: {chat: {}}}, learnable: false, num_workers: 0}]
+  - [run_started, null, {call_time_llm: {agents: {chat: {}}}, num_workers: 0}]
   - - pool_commit
     - __start__
     - {key: system.now}

@@ -15,8 +15,8 @@
  * Invariant: a node never writes the pool. It describes its one output value as
  * `new Output(value)`; the engine performs the write under the node's id. This keeps nodes pure.
  *
- * Knows about:   diagnostics, events, expr, llm_clients (types), memory contracts, platform (the
- *                `Scheduler` type), skills, tools, typesys, nodes/binding, nodes/contracts.
+ * Knows about:   diagnostics, events, expr, llm_clients (types), platform (the `Scheduler` type),
+ *                skills, tools, typesys, nodes/binding, nodes/contracts.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -24,41 +24,25 @@ import { current } from "../defaults.ts";
 import { Failure, type FailureCode, OriginRef, reprText } from "../diagnostics.ts";
 import type {
   ModelCallFinished,
-  ModelCallRetried,
   ModelCallStarted,
   ReplayDegraded,
   StreamChunk,
   ToolCallFinished,
   ToolCallStarted,
 } from "../events.ts";
-import {
-  ExpressionError,
-  type FeedbackValue,
-  hasFeedback,
-  parseCondition,
-  promptRefs,
-  validateFeedback,
-} from "../expr/index.ts";
+import { ExpressionError, parseCondition, promptRefs } from "../expr/index.ts";
 import { type DeclaredTypes, evaluateWhenRecord, localDeclared } from "../expr/expressions.ts";
-import { sameFeedback } from "../expr/lineage.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { Request, ToolSpec } from "../llm/messages.ts";
-import type {
-  MemoryContext,
-  MemoryScope,
-  MemorySection,
-  VisibleInteraction,
-} from "../memory/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { ToolGrant } from "../tools/grants.ts";
 import type { ToolSet } from "../tools/registry.ts";
-import type { JsonObject, JsonValue } from "../typesys/json.ts";
+import type { JsonObject } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
 import {
   cutText,
   fromHost,
-  isList,
   isRecord,
   jsTypeName,
   setField,
@@ -67,13 +51,11 @@ import {
   type TypedValue,
   type Value,
   type ValueRecord,
-  writeAsJson,
 } from "../typesys/values.ts";
 import { applyDefaults, BindingError, copyValue, type ReservedBinder, validateParameters } from "./binding.ts";
 import {
   type Assertion,
   type CallView,
-  ExecutionScope,
   type HostToolCall,
   isExactly,
   iterOriginCarrier,
@@ -255,161 +237,6 @@ function isFiniteNumber(value: unknown): boolean {
 /** The closed sum a node's `run` resolves to. */
 export type NodeResult = Output | Route | Grow | Pending;
 
-/** Require one batch of independent textual messages. */
-function validateTextFeedback(messages: unknown, name: string): void {
-  if (!isList(messages)) throw new TypeError(`${name} must be an array`);
-  for (const message of messages) {
-    if (typeof message !== "string") throw new TypeError(`${name} messages must be strings`);
-  }
-}
-
-/**
- * Independent feedback for an owner's inputs, behavior, and local variables. Frozen.
- *
- * Input messages keep ordinary records and positional lists. Every value is a deep-frozen copy
- * made by the constructor, so no caller can change the retained result: copy a value before you
- * modify it.
- */
-export class BackwardResult {
-  /** Authored input names mapped to ordered batches of independent feedback values. */
-  readonly inputFeedback: Readonly<Record<string, readonly FeedbackValue[]>>;
-  /** Observations about this owner's behavior. */
-  readonly selfFeedback: readonly string[];
-  /** Textual messages for declared local variables; these don't update variable values. */
-  readonly variableFeedback: Readonly<Record<string, readonly string[]>>;
-
-  /**
-   * Validate the channels and retain frozen copies of them.
-   *
-   * @param options.inputFeedback Input message batches; `null` or omitted is an empty channel. An
-   *   array inside a batch is one positional message.
-   * @param options.selfFeedback Independent messages about the owner's behavior; defaults to
-   *   empty.
-   * @param options.variableFeedback Local variable message batches; `null` or omitted is an empty
-   *   channel.
-   * @throws TypeError for an invalid channel, batch, or message type.
-   * @throws RangeError for an invalid nested feedback selection.
-   */
-  constructor(
-    options: {
-      inputFeedback?: Readonly<Record<string, readonly FeedbackValue[]>> | null;
-      selfFeedback?: readonly string[];
-      variableFeedback?: Readonly<Record<string, readonly string[]>> | null;
-    } = {},
-  ) {
-    const { selfFeedback = [] } = options;
-    const inputs: unknown = options.inputFeedback ?? {};
-    const variables: unknown = options.variableFeedback ?? {};
-    if (!isRecord(inputs)) throw new TypeError("input_feedback must be a record");
-    for (const name of Object.keys(inputs)) {
-      const messages = inputs[name];
-      if (!isList(messages)) throw new TypeError(`input_feedback[${writeAsJson(name)}] must be an array`);
-      for (const message of messages) validateFeedback(message, message, [name]);
-    }
-    validateTextFeedback(selfFeedback, "self_feedback");
-    if (!isRecord(variables)) throw new TypeError("variable_feedback must be a record");
-    for (const name of Object.keys(variables)) {
-      validateTextFeedback(variables[name], `variable_feedback[${writeAsJson(name)}]`);
-    }
-    // Only this channel copies with a memo, so its shared subtrees stay shared.
-    this.inputFeedback = copyBackwardValue(inputs, "input_feedback", new Map()) as typeof this.inputFeedback;
-    this.selfFeedback = copyBackwardValue(selfFeedback, "self_feedback") as readonly string[];
-    this.variableFeedback = copyBackwardValue(variables, "variable_feedback") as typeof this.variableFeedback;
-    Object.freeze(this);
-  }
-}
-
-/** Whether two results have equal input, self and variable feedback channels. */
-export function sameBackwardResult(a: BackwardResult, b: BackwardResult): boolean {
-  // Each channel is a feedback value; the casts only drop the `readonly` from the channel types.
-  return (
-    sameFeedback(a.inputFeedback as FeedbackValue, b.inputFeedback as FeedbackValue) &&
-    sameFeedback(a.selfFeedback as FeedbackValue, b.selfFeedback as FeedbackValue) &&
-    sameFeedback(a.variableFeedback as FeedbackValue, b.variableFeedback as FeedbackValue)
-  );
-}
-
-/**
- * Check one retained JSON value and return a deep-frozen copy of it. The runtime log, learning,
- * the backward hooks and the runtime contracts use it.
- *
- * JSON here is `null`, strings, booleans, `bigint`s, numbers other than NaN (infinity is a
- * value), plain arrays and plain records. `-0` is copied as `0`, since yian has no negative
- * zero, and a `__proto__` key stays data.
- *
- * @param value The JSON value to check and copy.
- * @param name The value's name in error messages; a nested value is named `name[0]` or
- *   `name["k"]`.
- * @param memo Containers already copied, mapped to their copies. A container met again returns
- *   its earlier copy, so the result shares it. Omitted, every occurrence is copied separately.
- * @returns The copy, with fresh frozen arrays and records.
- * @throws TypeError for a value that isn't JSON (`<name> must contain only JSON values`) or
- *   that contains itself (`<name> must not contain itself`, naming the inner occurrence).
- * @throws RangeError for NaN (`<name> must not contain NaN`).
- */
-export function copyBackwardValue(value: unknown, name: string, memo?: Map<object, unknown>): unknown {
-  return copyBackwardItem(value, name, memo, new Set());
-}
-
-/** Copy one value for `copyBackwardValue`; `active` holds the containers still being copied. */
-function copyBackwardItem(
-  value: unknown,
-  name: string,
-  memo: Map<object, unknown> | undefined,
-  active: Set<object>,
-): unknown {
-  if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "bigint") {
-    return value;
-  }
-  if (typeof value === "number") {
-    if (Number.isNaN(value)) throw new RangeError(`${name} must not contain NaN`);
-    return Object.is(value, -0) ? 0 : value;
-  }
-  const shared = memo?.get(value as object);
-  if (shared !== undefined) return shared;
-  // The memo holds only finished copies, so a container met again while it is still being copied
-  // is a cycle.
-  if (active.has(value as object)) throw new TypeError(`${name} must not contain itself`);
-  let result: unknown[] | ValueRecord;
-  if (isList(value)) {
-    active.add(value);
-    result = [];
-    // An index loop, not `map`: `map` skips the holes of a sparse array, which must fail here.
-    for (let index = 0; index < value.length; index++) {
-      result.push(copyBackwardItem(value[index], `${name}[${index}]`, memo, active));
-    }
-  } else if (isRecord(value)) {
-    active.add(value);
-    result = {};
-    for (const key of Object.keys(value)) {
-      setField(result, key, copyBackwardItem(value[key], `${name}[${writeAsJson(key)}]`, memo, active) as Value);
-    }
-  } else {
-    throw new TypeError(`${name} must contain only JSON values`);
-  }
-  active.delete(value);
-  Object.freeze(result);
-  // Only finished copies are stored, so a failing container fails again, named by its own path,
-  // wherever it reappears.
-  memo?.set(value as object, result);
-  return result;
-}
-
-/**
- * Require one inventory of distinct authored names. `BackwardContext`, the runtime trace and the
- * runtime contracts use it.
- *
- * @throws TypeError when `names` isn't an array of strings.
- * @throws RangeError for a repeated name.
- */
-export function validateDeclaredNames(names: unknown, fieldName: string): void {
-  if (!isList(names)) throw new TypeError(`${fieldName} must be an array`);
-  for (const name of names) {
-    if (typeof name !== "string") throw new TypeError(`${fieldName} must contain only strings`);
-  }
-  if (new Set(names).size !== names.length) throw new RangeError(`${fieldName} must contain unique names`);
-}
-
 /** Return whether `value` can key a `WeakMap` or be held in a `WeakSet`. CASE and LOOP use it. */
 export function isWeakKey(value: unknown): value is object {
   return (typeof value === "object" && value !== null) || typeof value === "function";
@@ -454,36 +281,8 @@ export function checkNamedPrompt(text: string, subject: string): void {
 }
 
 /**
- * Validate the optional source-neutral paths from declared inputs into the output, held in
- * `data.input_output_paths`. `BackwardContext`, the runtime contracts and the structural
- * backward hooks use it.
- *
- * A path part is a string, a non-negative `bigint`, or a non-negative safe-integer `number`.
- *
- * @throws TypeError when the paths aren't a record of arrays.
- * @throws RangeError for an undeclared input or an invalid path part.
- */
-export function validateInputOutputPaths(data: Readonly<Record<string, unknown>>, inputNames: readonly string[]): void {
-  if (!Object.hasOwn(data, "input_output_paths")) return;
-  const paths = data.input_output_paths;
-  if (!isRecord(paths)) throw new TypeError("input_output_paths must be a record");
-  for (const name of Object.keys(paths)) {
-    if (!inputNames.includes(name)) throw new RangeError("input_output_paths must name declared inputs");
-    const path = paths[name];
-    if (!isList(path)) throw new TypeError("input_output_paths values must be arrays");
-    for (const part of path) {
-      const valid =
-        typeof part === "string" ||
-        (typeof part === "bigint" && part >= 0n) ||
-        (typeof part === "number" && Number.isSafeInteger(part) && part >= 0);
-      if (!valid) throw new RangeError("output path components must be strings or non-negative integers");
-    }
-  }
-}
-
-/**
  * Return a frozen copy of `failure`, checked by `Failure`'s constructor, whose trace holds plain
- * `OriginRef`s. `BackwardContext` and the runtime's `BackwardFailure` use it.
+ * `OriginRef`s. The run log and the run state use it.
  *
  * @throws TypeError or RangeError when a field breaks `Failure`'s contract, such as a trace that
  *   isn't an array of `OriginRef`s.
@@ -498,168 +297,30 @@ export function retainFailure(failure: Failure): Failure {
   return Object.freeze(retained);
 }
 
-/**
- * Detached forward material and attribution supplied to one backward hook. Frozen.
- *
- * Input declarations stay separate from recorded values: an early binding failure has
- * `inputs === null` even when the owner declares input names. JSON values are deep-frozen copies
- * made by the constructor; copy one before you modify it. The failure's trace keeps canonical
- * origin keys without subclass state.
- */
-export class BackwardContext {
-  /** The bound JSON input record, or `null` when no usable record was retained. */
-  readonly inputs: Readonly<JsonObject> | null;
-  /** Authored input names this owner may address, including defaults. */
-  readonly inputNames: readonly string[];
-  /** Declared local variables; an empty inventory rejects all targets. */
-  readonly variableNames: readonly string[];
-  /** The recorded JSON output, when the forward invocation produced one. */
-  readonly output: JsonValue;
-  /** The recorded forward failure, independent of backward's outcome. */
-  readonly failure: Failure | null;
-  /** The authored path and structured child position, when available. */
-  readonly scope: ExecutionScope | null;
-  /** The recorded run id. */
-  readonly runId: string | null;
-  /** The display id of the executing node; it is never parsed to infer scope. */
-  readonly nodeId: string | null;
-  /** The positive accepted node-start sequence, paired with the run id. */
-  readonly nodeStartedSeq: number | null;
-  /** Node-owned JSON material retained for backward. */
-  readonly nodeData: Readonly<JsonObject>;
-  /** Ordered JSON attribution accompanying feedback messages. */
-  readonly downstreamContext: readonly Readonly<JsonObject>[];
-
-  /**
-   * Validate the invocation metadata and retain frozen copies of its values.
-   *
-   * @param inputs The canonical bound JSON input record; `null` means no usable input record was
-   *   retained.
-   * @param options.inputNames Authored input names; defaults to empty.
-   * @param options.variableNames Declared local variables; defaults to empty.
-   * @param options.output The recorded JSON output; defaults to `null`.
-   * @param options.failure The recorded forward failure, rebuilt with plain `OriginRef`s; defaults
-   *   to `null`.
-   * @param options.scope The execution scope; defaults to `null`.
-   * @param options.runId The recorded run id; defaults to `null`.
-   * @param options.nodeId The executing node's display id; defaults to `null`.
-   * @param options.nodeStartedSeq The positive node-start sequence; defaults to `null`.
-   * @param options.nodeData Node-owned JSON material; `null` or omitted is `{}`.
-   * @param options.downstreamContext Ordered JSON attribution records; defaults to empty. They
-   *   are copied with one memo, so a subtree they share is copied once and stays shared.
-   * @throws TypeError for malformed metadata or non-JSON values.
-   * @throws RangeError for duplicate declarations, an invalid position or path, or NaN.
-   */
-  constructor(
-    inputs: Readonly<Record<string, unknown>> | null,
-    options: {
-      inputNames?: readonly string[];
-      variableNames?: readonly string[];
-      output?: unknown;
-      failure?: Failure | null;
-      scope?: ExecutionScope | null;
-      runId?: string | null;
-      nodeId?: string | null;
-      nodeStartedSeq?: number | null;
-      nodeData?: Readonly<Record<string, unknown>> | null;
-      downstreamContext?: readonly Readonly<Record<string, unknown>>[];
-    } = {},
-  ) {
-    const {
-      inputNames = [],
-      variableNames = [],
-      output = null,
-      scope = null,
-      runId = null,
-      nodeId = null,
-      nodeStartedSeq = null,
-      downstreamContext = [],
-    } = options;
-    let { failure = null } = options;
-    if (inputs !== null && !isRecord(inputs)) throw new TypeError("inputs must be a record or null");
-    validateDeclaredNames(inputNames, "input_names");
-    validateDeclaredNames(variableNames, "variable_names");
-    if (failure !== null) {
-      if (!isExactly(failure, Failure)) throw new TypeError("failure must be a Failure or null");
-      failure = retainFailure(failure);
-    }
-    if (scope !== null && !isExactly(scope, ExecutionScope)) {
-      throw new TypeError("scope must be an ExecutionScope or null");
-    }
-    if (runId !== null && typeof runId !== "string") throw new TypeError("run_id must be a string or null");
-    if (nodeId !== null && typeof nodeId !== "string") throw new TypeError("node_id must be a string or null");
-    if (nodeStartedSeq !== null) {
-      if (!Number.isSafeInteger(nodeStartedSeq)) throw new TypeError("node_started_seq must be an integer or null");
-      if (nodeStartedSeq <= 0) throw new RangeError("node_started_seq must be positive");
-    }
-    const data: unknown = options.nodeData ?? {};
-    if (!isRecord(data)) throw new TypeError("node_data must be a record");
-    validateInputOutputPaths(data, inputNames);
-    if (!isList(downstreamContext)) throw new TypeError("downstream_context must be an array");
-    for (const item of downstreamContext) {
-      if (!isRecord(item)) throw new TypeError("downstream_context must contain records");
-    }
-
-    this.inputs = copyBackwardValue(inputs, "inputs") as typeof this.inputs;
-    this.inputNames = Object.freeze([...inputNames]);
-    this.variableNames = Object.freeze([...variableNames]);
-    this.output = copyBackwardValue(output, "output") as JsonValue;
-    this.failure = failure;
-    this.scope = scope;
-    this.runId = runId;
-    this.nodeId = nodeId;
-    this.nodeStartedSeq = nodeStartedSeq;
-    this.nodeData = copyBackwardValue(data, "node_data") as typeof this.nodeData;
-    // Messages below one route node share their route contexts, so the items are copied with one
-    // memo: each shared subtree is copied once.
-    const memo = new Map<object, unknown>();
-    this.downstreamContext = Object.freeze(
-      downstreamContext.map((item, index) => copyBackwardValue(item, `downstream_context[${index}]`, memo)),
-    ) as typeof this.downstreamContext;
-    Object.freeze(this);
-  }
-}
-
-/** What the backward driver supplies to a backward hook besides its context and feedback. */
-export interface BackwardOptions {
-  /** Builds the model a hook calls; a hook that calls one defaults to `defaultModelAccess()`. */
-  readonly models?: ModelAccess;
-  /** Receives the transient events a hook publishes; without it nothing is published. */
-  readonly onEvent?: (event: ModelCallRetried | ReplayDegraded) => void;
-}
-
-/** What learning reads about one accepted invocation, rebuilt from its recorded steps. */
-export interface LearningMaterial {
-  /** The model's replies and tool calls, then each reply's tool results in call order. */
-  readonly interactions: readonly VisibleInteraction[];
-  /** The system prompt before memory sections; `null` when the invocation never called its model. */
-  readonly baseSystemPrompt: string | null;
-  /** The prompt's last message's text; `null` exactly when `baseSystemPrompt` is. */
-  readonly prompt: string | null;
-  /** The recalled memory sections the model saw. */
-  readonly memorySections: readonly MemorySection[];
-  /** Whether every recorded model call's `request_sha256` matched its rebuilt request. */
-  readonly digestOk: boolean;
+/** The requests one accepted invocation sent, rebuilt from its recorded steps. */
+export interface RebuiltRequests {
   /**
    * Each `model_call` step's rebuilt request, by the step's index in the steps given; a step the
    * rebuild didn't reach (it stopped at a reply that failed the node, or never started) has none.
    */
   readonly requests: ReadonlyMap<number, RebuiltRequest>;
+  /** Whether every recorded model call's `request_sha256` matched its rebuilt request. */
+  readonly digestOk: boolean;
 }
 
 /** One `model_call` step's request, rebuilt from the invocation's render and the steps before it. */
 export interface RebuiltRequest {
   /**
-   * The request as the call sent it, its system message with the recalled memory sections; `null`
-   * when it can't be rebuilt (a tool the recorded specs lack, a structured model that can't be built).
+   * The request as the call sent it; `null` when it can't be rebuilt (a tool the recorded specs
+   * lack, a structured model that can't be built).
    */
   readonly request: Request | null;
   /** Whether the step recorded the purpose and the `request_sha256` of the rebuilt request. */
   readonly digestOk: boolean;
 }
 
-/** What a node rebuilding its `LearningMaterial` reads beyond its inputs and steps. */
-export interface MaterialCaps {
+/** What a node rebuilding its requests (`rebuildRequests`) reads beyond its inputs and steps. */
+export interface RebuildCaps {
   /** The skills the run recorded, by name. */
   readonly skills: ReadonlyMap<string, Skill>;
   /**
@@ -673,108 +334,8 @@ export interface MaterialCaps {
   ) => readonly ToolSpec[] | null;
   /** Builds the invocation's model to read its request settings off; never called. */
   readonly models: ModelAccess | null;
-  /**
-   * Recalls the memory sections against the run's recorded snapshots, as `NodeCaps` does, from the
-   * rendered system prompt without the skill listing and the rendered prompt.
-   */
-  readonly openMemoryContext: (systemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
   /** The declared type of each of the node's locals, as `NodeCaps.localTypes` gives it. */
   readonly localTypes?: ReadonlyMap<string, Type | null>;
-}
-
-/**
- * Validate every feedback channel before routing any input message.
- *
- * @param result The owner's proposed feedback channels.
- * @param context The recorded bound values and the owner's declared input and local variable
- *   inventories.
- * @throws TypeError for a result or context of another class.
- * @throws RangeError for an undeclared target, an unavailable input value, or a nested feedback
- *   shape mismatch.
- */
-export function validateBackwardResult(result: BackwardResult, context: BackwardContext): void {
-  if (!isExactly(result, BackwardResult)) throw new TypeError("result must be a BackwardResult");
-  if (!isExactly(context, BackwardContext)) throw new TypeError("context must be a BackwardContext");
-  // Not rebuilt: `isExactly` refuses a subclass, and a result built by the
-  // constructor was validated and frozen then; an object forged with `Object.create` isn't
-  // defended against.
-  const inputs = context.inputs;
-  const names = Object.keys(result.inputFeedback);
-  if (names.length > 0 && inputs === null) throw new RangeError("input_feedback requires usable recorded inputs");
-  for (const name of names) {
-    if (!context.inputNames.includes(name)) {
-      throw new RangeError(`input_feedback selects undeclared input ${reprText(name)}`);
-    }
-    if (inputs === null || !Object.hasOwn(inputs, name)) {
-      throw new RangeError(`input_feedback has no recorded input ${reprText(name)}`);
-    }
-    for (const message of result.inputFeedback[name]!) validateFeedback(message, inputs[name], [name]);
-  }
-  for (const name of Object.keys(result.variableFeedback)) {
-    if (!context.variableNames.includes(name)) {
-      throw new RangeError(`variable_feedback selects undeclared variable ${reprText(name)}`);
-    }
-  }
-}
-
-/**
- * Select input messages through the captured output paths without rewriting text. The
- * structural kinds (START, END, LOOP) use it as their backward.
- *
- * @param context The backward context; its `nodeData.input_output_paths` maps declared inputs to
- *   their paths into the output.
- * @param feedback Independent messages addressing the output.
- * @returns Each input's messages selected at its path; an input with no path or no selected text
- *   gets none, and no recorded inputs give an empty result.
- * @throws TypeError when `feedback` isn't an array.
- * @throws RangeError for missing captured paths, a path absent from the accepted output, or
- *   feedback that doesn't fit the output.
- */
-export function projectStructuralFeedback(
-  context: BackwardContext,
-  feedback: readonly FeedbackValue[],
-): BackwardResult {
-  if (!isList(feedback)) throw new TypeError("feedback must be an array of independent messages");
-  const inputs = context.inputs;
-  if (inputs === null) return new BackwardResult();
-  const data = context.nodeData;
-  validateInputOutputPaths(data, context.inputNames);
-  if (!Object.hasOwn(data, "input_output_paths")) {
-    throw new RangeError("structural backward requires captured input_output_paths");
-  }
-  const output = context.failure !== null ? null : context.output;
-  for (const message of feedback) validateFeedback(message, output);
-  const projected: [string, FeedbackValue[]][] = [];
-  const paths = data.input_output_paths as Readonly<Record<string, readonly (string | bigint | number)[]>>;
-  for (const name of context.inputNames) {
-    if (!Object.hasOwn(inputs, name) || !Object.hasOwn(paths, name)) continue;
-    const path = paths[name]!;
-    if (context.failure === null) {
-      let value: unknown = output;
-      for (const part of path) {
-        if (typeof part === "string" && isRecord(value) && Object.hasOwn(value, part)) value = value[part];
-        else if (typeof part !== "string" && isList(value) && Number(part) < value.length) value = value[Number(part)];
-        else throw new RangeError("captured output path does not exist in the accepted output");
-      }
-    }
-    const messages: FeedbackValue[] = [];
-    for (const message of feedback) {
-      let selected = message;
-      for (const part of path) {
-        if (selected === null || typeof selected === "string") break;
-        const key = typeof part === "string" ? part : Number(part);
-        // An own-key read: a partial message that omits the field selects nothing here.
-        if (isRecord(selected)) selected = Object.hasOwn(selected, key) ? selected[key]! : null;
-        else selected = selected[key as number]!;
-      }
-      if (hasFeedback(selected)) messages.push(selected);
-    }
-    if (messages.length > 0) projected.push([name, messages]);
-  }
-  // `fromEntries` defines each key as data, so an input named `__proto__` stays an entry.
-  const result = new BackwardResult({ inputFeedback: Object.fromEntries(projected) });
-  validateBackwardResult(result, context);
-  return result;
 }
 
 /**
@@ -1002,12 +563,6 @@ export interface NodeCaps {
     event: ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished | ReplayDegraded,
   ) => void;
   /**
-   * Opens the invocation's memory context once, from the rendered system prompt (an AGENT's
-   * without its skill listing, so grants never change recall) and the rendered prompt; supplied to
-   * a node that declares `needsMemoryContext`.
-   */
-  readonly openMemoryContext?: (systemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
-  /**
    * Opens the node's steer inbox; supplied to a node declaring `readsSteerInbox` when the engine
    * supplies steps. Opening registers the node as reading `inbox` until its outcome commits.
    */
@@ -1077,11 +632,6 @@ export abstract class Node {
    */
   readonly isLoop: boolean = false;
   /**
-   * Declares access to recalled notes through one lazy memory context capability. AGENT is the
-   * only built-in kind that opts in.
-   */
-  readonly needsMemoryContext: boolean = false;
-  /**
    * Declares "I can use host-supplied skills": the evaluator supplies the run's skills only when
    * the run boundary injected them and this is set. AGENT is the only built-in kind that opts in.
    */
@@ -1127,7 +677,7 @@ export abstract class Node {
   /**
    * Declares "my value only reads earlier pool values through my binding, and my `forward` is
    * pure and synchronous" (START, END, LOOP, CALL, MAP), so it can be rebuilt from the values its
-   * binding read. The engine builds such a node's input route in every run, learnable or not.
+   * binding read. The engine builds such a node's input route in every run.
    */
   readonly derived: boolean = false;
 
@@ -1180,16 +730,6 @@ export abstract class Node {
    * authored origins are rewritten, so it stays outside local origin traversal.
    */
   originContext: readonly OriginRef[] = [];
-  /**
-   * Compile-derived static memory context; authors can't supply it. Memory layout resolution
-   * stamps it when memory is on; otherwise `null`.
-   */
-  memoryScope: MemoryScope | null = null;
-  /**
-   * Compile-derived authored location, independent of memory declarations. Static layout
-   * resolution stamps root-relative paths on private node templates; `null` when built directly.
-   */
-  executionScope: ExecutionScope | null = null;
   /**
    * Author-supplied static per-node config, baked at build time from the flow's `env:` default
    * merged with the node's own `env:` (the node wins). The engine never reads it; only a node's
@@ -1620,120 +1160,30 @@ export abstract class Node {
   }
 
   /**
-   * Return the declared inputs eligible for feedback, in declaration order. Kinds with
+   * Return the node's declared inputs, without reserved wiring, in declaration order. Kinds with
    * control-only params override this.
    *
    * @throws TypeError when `params` isn't an exact array of `Parameter`s.
    */
-  backwardInputNames(): readonly string[] {
+  dataInputNames(): readonly string[] {
     const parameters = this.params ?? [];
     validateParameters(parameters);
     return parameters.map((parameter) => parameter.name);
   }
 
   /**
-   * Return the node's static backward material.
-   *
-   * This pure hook reads authored layout only: it doesn't resolve defaults, render prompts or
-   * run the body. Input and variable names are captured separately. No evaluation calls it:
-   * learning does, when it first reads an occurrence's node data (`rebuildNodeData`), for an
-   * invocation whose binding finished.
-   *
-   * @returns JSON material (infinity is a value; NaN is refused), empty by default. The reserved
-   *   `input_output_paths` record addresses declared inputs by paths of string fields or
-   *   non-negative list indices into the output.
-   */
-  captureBackwardContext(): Record<string, unknown> {
-    return {};
-  }
-
-  /**
-   * Return what an invocation's `forward` renders for bound `inputs`, rendered again: the JSON
-   * material backward reads beside `captureBackwardContext`'s, with the parts established before
-   * a render the run refused the same way. Pure: it renders with the node's authored fields and
-   * calls no model.
-   *
-   * @param localTypes The declared type of each local, as `NodeCaps.localTypes` gives it.
-   * @returns The render material, or `null` (the default) for a kind that renders nothing.
-   * @throws CapabilityFault when building the capture fails; any render error that isn't one of
-   *   the run's refusals (a fault), unchanged. The run failed the node on the same error.
-   */
-  renderCapture(
-    inputs: Readonly<Record<string, unknown>>,
-    localTypes: ReadonlyMap<string, Type | null> | null = null,
-  ): Record<string, unknown> | null {
-    return null;
-  }
-
-  /**
-   * Return whether the `run` template's pre-asserts hold for bound `inputs` (defaults applied), so
-   * the template calls `forward`. The node's setup is validated first, as the template does.
-   *
-   * @param localTypes The declared type of each local, as `NodeCaps.localTypes` gives it.
-   * @throws as `validateExecutionSetup`.
-   */
-  preAssertsHold(
-    inputs: Readonly<Record<string, unknown>>,
-    localTypes: ReadonlyMap<string, Type | null> | null = null,
-  ): boolean {
-    this.validateExecutionSetup();
-    return this.failingAssertion("pre-assert", this.preAsserts, { ...inputs }, localDeclared(localTypes)) === null;
-  }
-
-  /**
-   * Return the bound inputs a model never sees (neither recalled on nor shown to a learner). They
-   * stay in the bound record, so backward and resume read what ran. Empty by default.
-   */
-  modelHiddenInputs(): ReadonlySet<string> {
-    return new Set();
-  }
-
-  /**
-   * Return the model config this invocation bound as an input, if any. Backward then records it
-   * as the invocation's `effective_llm_config` instead of the run's entry for the node's static
-   * path.
-   *
-   * @param inputs The invocation's bound inputs, reserved keys included.
-   * @returns The bound config; `null` by default, which reads the run's recorded map.
-   */
-  boundLlmConfig(inputs: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
-    return null;
-  }
-
-  /**
-   * Stop feedback at the default behavioral boundary with empty channels. The base makes no
-   * model call.
-   *
-   * @param context Detached recorded inputs, the optional accepted output or failure, the
-   *   declared names and node-owned static material for this invocation. Read this snapshot
-   *   rather than live node fields when interpreting feedback.
-   * @param feedback Ordered independent messages: text, a partial record, an exact-length nested
-   *   item list, or `null`; an array is one positional message.
-   * @param options What a hook that calls a model uses: the model access and the observer for the
-   *   transient events it publishes. The base ignores it.
-   * @returns The input, self and variable feedback channels; the base returns all three empty.
-   */
-  backward(
-    context: BackwardContext,
-    feedback: readonly FeedbackValue[],
-    options?: BackwardOptions,
-  ): BackwardResult | Promise<BackwardResult> {
-    return new BackwardResult();
-  }
-
-  /**
-   * Rebuild what learning reads about one accepted invocation of this node.
+   * Rebuild the model requests one accepted invocation of this node sent, from its recorded steps.
    *
    * @param inputs The invocation's bound inputs as recorded, or `null` when none were.
    * @param steps The steps the node recorded across its starts, in order.
-   * @param caps The run's recorded skills and tool specs, model access and recall.
-   * @returns `null` by default: the node shows a learner no prompt or model interactions.
+   * @param caps The run's recorded skills and tool specs, and model access.
+   * @returns `null` by default: the node calls no model.
    */
-  learningMaterial(
+  rebuildRequests(
     inputs: Readonly<Record<string, unknown>> | null,
     steps: readonly ValueRecord[],
-    caps: MaterialCaps,
-  ): Promise<LearningMaterial | null> {
+    caps: RebuildCaps,
+  ): Promise<RebuiltRequests | null> {
     return Promise.resolve(null);
   }
 

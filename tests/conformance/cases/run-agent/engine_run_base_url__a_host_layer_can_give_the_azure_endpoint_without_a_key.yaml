@@ -53,7 +53,6 @@ expect:
           base_url: https://res.openai.azure.com/
           model: d
           provider: azure
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

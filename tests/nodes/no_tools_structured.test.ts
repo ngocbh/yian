@@ -14,7 +14,6 @@ import { Message, type Part, Response, TextPart, ToolCallPart, ToolResultPart } 
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext, MemorySection } from "../../src/memory/contracts.ts";
 import {
   AgentLoopError,
   type AgentRunContext,
@@ -23,7 +22,6 @@ import {
 } from "../../src/nodes/agent/context.ts";
 import { Interrupted } from "../../src/nodes/agent/interrupts.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
-import { systemPromptWithMemory } from "../../src/nodes/agent/memory.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Output, SteerInbox } from "../../src/nodes/base.ts";
 import { Skill } from "../../src/skills/catalog.ts";
@@ -52,15 +50,13 @@ function context(model: ChatModel, overrides: Partial<AgentRunContext> = {}): Ag
     built: 0,
     nodeId: "a",
     messages: [userMessage("x")],
-    promptText: "x",
     tools: [],
     llmConfig: null,
     outputType: null,
     retries: 0,
     maxToolIterations: -1,
-    memoryContext: new MemoryContext(),
     toolset: null,
-    baseSystemPrompt: DEFAULT_SYSTEM,
+    systemPrompt: DEFAULT_SYSTEM,
     skills: [],
     models: {
       env: NO_ENV,
@@ -114,7 +110,6 @@ test("no tools uses ollama structured output for a literal", async () => {
   const events: unknown[] = [];
   const ctx = context(model, {
     messages: [userMessage("classify")],
-    promptText: "classify",
     llmConfig: { provider: "ollama", model: "qwen2.5:72b" },
     outputType: typ,
     emitEvent: (event) => void events.push(event),
@@ -139,24 +134,10 @@ test("no tools bare str text passthrough", async () => {
   ]);
 });
 
-test("systemPromptWithMemory without sections returns the base unchanged", () => {
-  expect(systemPromptWithMemory("base", [])).toBe("base");
-});
-
-test("systemPromptWithMemory appends the memory context heading and canonical JSON", () => {
-  const sections = [new MemorySection("outer", 'notes "é"\n'), new MemorySection("local", "")];
-  expect(systemPromptWithMemory("base", sections)).toBe(
-    "base\n\nMemory context (canonical JSON; sections are ordered from outer workflow to local agent):\n" +
-      '{"order":"outer-to-local","sections":[{"index":1,"memory":"outer","text":"notes \\"é\\"\\n"},' +
-      '{"index":2,"memory":"local","text":""}]}',
-  );
-});
-
-test("the memory sections follow the system prompt in the request", async () => {
+test("the system prompt is the request's first message", async () => {
   const model = new ScriptedModel([textReply("ok")]);
-  const sections = [new MemorySection("m", "remember")];
-  await runAgent(context(model, { baseSystemPrompt: "sys", memoryContext: new MemoryContext({ sections }) }));
-  expect(model.requests[0]!.messages[0]!.text()).toBe(systemPromptWithMemory("sys", sections));
+  await runAgent(context(model, { systemPrompt: "sys" }));
+  expect(model.requests[0]!.messages[0]!.text()).toBe("sys");
 });
 
 test("a steer inbox's queued steers join the loop's request after the prompt", async () => {
@@ -278,13 +259,10 @@ test("ctx.sent() returns the built RouteModel's route credentials", async () => 
   expect(ctx.sent()).toEqual(["sk-test-key-0123456789"]);
 });
 
-test("the memory sections follow the base system prompt", async () => {
+test("the system prompt leads the prompt's messages", async () => {
   const model = new ScriptedModel([textReply("hi")]);
-  const sections = [new MemorySection("m", "remember")];
-  await runAgent(
-    context(model, { baseSystemPrompt: "sys", messages: [userMessage("p")], promptText: "p", memoryContext: new MemoryContext({ sections }) }),
-  );
-  expect(model.requests[0]!.messages[0]!.text()).toBe(systemPromptWithMemory("sys", sections));
+  await runAgent(context(model, { systemPrompt: "sys", messages: [userMessage("p")] }));
+  expect(model.requests[0]!.messages[0]!.text()).toBe("sys");
   expect(model.requests[0]!.messages[1]!.text()).toBe("p");
 });
 

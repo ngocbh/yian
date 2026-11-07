@@ -1,8 +1,8 @@
 /**
- * An 80-turn `examples/chat.yaml` run log grows linearly with the conversation, learnable or not.
+ * An 80-turn `examples/chat.yaml` run log grows linearly with the conversation.
  *
  * Each turn's message is sent to the run's `owner_messages` inbox as a user `Message` and the
- * run advanced; closing the inbox ends it. One 80-turn run per case, its log measured after turns
+ * run advanced; closing the inbox ends it. One 80-turn run, its log measured after turns
  * 10, 20, 40 and 80.
  *
  * Each turn's AGENT records its reply in the messages commit (`reply.new_messages`), and the
@@ -13,8 +13,7 @@
  * turns) never reach compact_history's 32,000-character budget, so nothing folds. The bindings'
  * values (each turn's END, the expansions' child STARTs, the stopping LOOP driver) are derived
  * commits holding `from` pointers, not the history, so a turn adds about the same bytes however
- * long the conversation is. A learnable run's forward captures hold routes, not the bound inputs
- * or the rendered prompt, which learning rebuilds.
+ * long the conversation is.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -42,14 +41,14 @@ const TURNS = [10, 20, 40, 80];
  * Run `examples/chat.yaml` for 80 turns of fixed-size messages and replies, then close its inbox;
  * return the log's size right after each of `TURNS` is advanced.
  */
-async function logBytes(learnable: boolean): Promise<Map<number, number>> {
+async function logBytes(): Promise<Map<number, number>> {
   const flow = await loadFlow(readFileSync(join(EXAMPLES_DIR, "chat.yaml"), "utf8"), { searchPaths: [EXAMPLES_DIR] });
   const turns = TURNS.at(-1)!;
   const replies = Array.from({ length: turns }, (_, k) => textReply(`${k}`.padEnd(REPLY, "r")));
-  const log = join(tmp, `chat-${learnable}.jsonl`);
+  const log = join(tmp, "chat.jsonl");
   const models = serving(new ScriptedModel(replies, CONFIG));
   const sizes = new Map<number, number>();
-  let result = await runFlow(flow, {}, { env: NO_ENV, log, numWorkers: 0, learnable, llmConfig: CONFIG, models });
+  let result = await runFlow(flow, {}, { env: NO_ENV, log, numWorkers: 0, llmConfig: CONFIG, models });
   for (let k = 0; k < turns; k += 1) {
     expect(result.status).toBe("waiting");
     await send(log, "owner_messages", userText(`${k}`.padEnd(MESSAGE, "m")), { env: NO_ENV });
@@ -63,17 +62,15 @@ async function logBytes(learnable: boolean): Promise<Map<number, number>> {
   return sizes;
 }
 
-for (const learnable of [false, true]) {
-  test(`an 80-turn chat log grows linearly${learnable ? " in a learnable run" : ""}`, async () => {
-    const sizes = await logBytes(learnable);
-    const rows = [...sizes].map(([turns, bytes]) => {
-      const transcript = turns * (MESSAGE + REPLY);
-      return `${String(turns).padStart(5)} ${String(transcript).padStart(10)} ${String(bytes).padStart(10)} ${(bytes / transcript).toFixed(2).padStart(6)}`;
-    });
-    console.log([`learnable: ${learnable}`, "turns transcript  log bytes  ratio", ...rows].join("\n"));
-    const inc1 = (sizes.get(40)! - sizes.get(20)!) / 20;
-    const inc2 = (sizes.get(80)! - sizes.get(40)!) / 40;
-    // A log that copies the history every turn grows quadratically, and doubles this increment.
-    expect(inc2).toBeLessThanOrEqual(1.15 * inc1);
-  }, 120_000);
-}
+test("an 80-turn chat log grows linearly", async () => {
+  const sizes = await logBytes();
+  const rows = [...sizes].map(([turns, bytes]) => {
+    const transcript = turns * (MESSAGE + REPLY);
+    return `${String(turns).padStart(5)} ${String(transcript).padStart(10)} ${String(bytes).padStart(10)} ${(bytes / transcript).toFixed(2).padStart(6)}`;
+  });
+  console.log(["turns transcript  log bytes  ratio", ...rows].join("\n"));
+  const inc1 = (sizes.get(40)! - sizes.get(20)!) / 20;
+  const inc2 = (sizes.get(80)! - sizes.get(40)!) / 40;
+  // A log that copies the history every turn grows quadratically, and doubles this increment.
+  expect(inc2).toBeLessThanOrEqual(1.15 * inc1);
+}, 120_000);

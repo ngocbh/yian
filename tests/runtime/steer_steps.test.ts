@@ -192,17 +192,6 @@ test("replay rebuilds the same store and the same step copies", () => {
   ]);
 });
 
-test("a learnable occurrence's steps carry the steer values", () => {
-  const flow = paramFlow([MSGS], new SteerNode("chat", () => "ok"));
-  const { log, state } = started(flow, { learnable: true, fingerprint: FINGERPRINT });
-  commitPrepared(log, state, prepareNodeStarted(state, "chat"));
-  const s1 = commit(log, state, prepareSend(state, "msgs", "a"));
-  commit(log, state, prepareNodeStep(state, "chat", steer([s1])));
-  succeed(log, state, "chat", "ok");
-  const occurrence = state.trace!.occurrences.find((item) => item.nodeId === "chat")!;
-  expect(occurrence.steps).toEqual([{ kind: "steer", inbox: "msgs", from: [BigInt(s1)], values: ["a"] }]);
-});
-
 /** What one `SteerProbe` evaluation saw. */
 interface ProbeSeen {
   queuedBefore: boolean;

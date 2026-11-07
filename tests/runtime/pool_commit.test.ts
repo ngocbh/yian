@@ -464,7 +464,7 @@ test.if(process.versions.bun !== undefined)("on Bun the run entry is the source 
 const WRITTEN_LINE =
   '{"at":"2026-10-23T20:22:41.126Z","kind":"pool_commit","payload":{"key":"make","kind":"object","node_id":"make",' +
   '"value":{"big":1208925819614629174706176,"esc":{"$record":{"$record":{"a":1}}},"inf":{"$float":"inf"},' +
-  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":26,"seq":9}';
+  '"ninf":{"$float":"-inf"},"whole":2.0}},"run_id":"r1","schema":27,"seq":9}';
 
 test("a fixed pool_commit line with a big int, infinities and an escaped record round-trips through the public JSON form", () => {
   expect(roundTrip(WRITTEN_LINE)).toBe(WRITTEN_LINE);
@@ -558,10 +558,10 @@ test("a pool_commit with steps and another form is refused", () => {
 test("node_succeeded names its messages commit, or null", () => {
   const withMessages = new NodeSucceededRecord("reply", 9, { messages: 10 });
   const text = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r1", 11, withMessages, "2026-10-24T00:00:00.000Z"));
-  expect(text).toContain('"payload":{"commit":9,"forward_capture":null,"messages":10,"node_id":"reply"}');
+  expect(text).toContain('"payload":{"commit":9,"messages":10,"node_id":"reply"}');
   expect((decodeRecord(text).record as NodeSucceededRecord).messages).toBe(10);
   const without = encodeRecord(new RecordEnvelope(SCHEMA_VERSION, "r1", 4, new NodeSucceededRecord("x", 3), null));
-  expect(without).toContain('"payload":{"commit":3,"forward_capture":null,"messages":null,"node_id":"x"}');
+  expect(without).toContain('"payload":{"commit":3,"messages":null,"node_id":"x"}');
   expect((decodeRecord(without).record as NodeSucceededRecord).messages).toBeNull();
   expect(() => new NodeSucceededRecord("x", 3, { messages: 0 })).toThrow("messages must be a positive integer");
 });

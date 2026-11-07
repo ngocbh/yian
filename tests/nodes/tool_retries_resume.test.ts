@@ -18,7 +18,6 @@ import { type Scheduler, virtualScheduler } from "../../src/platform.ts";
 import { replayRunLog, advance, runFlow } from "../../src/run.ts";
 import { FlowEngine } from "../../src/runtime/engine.ts";
 import {
-  BackwardFinishedRecord,
   MemoryRunLog,
   NodeStepRecord,
   NodeSucceededRecord,
@@ -344,7 +343,7 @@ test("an unfinished first attempt shows in the final message", async () => {
   expect(waited).toEqual([1000]);
 });
 
-test("a learnable run with a retried tool replays and runs backward", async () => {
+test("a run with a retried tool replays", async () => {
   const path = freshLog();
   const flow = await flowOf(2);
   const script = new Script(new TimeoutError("a"));
@@ -354,7 +353,6 @@ test("a learnable run with a retried tool replays and runs backward", async () =
     log: path,
     runId: "r1",
     tools: script.tools(),
-    learnable: true,
     ...host(scheduler),
   });
 
@@ -366,9 +364,6 @@ test("a learnable run with a retried tool replays and runs backward", async () =
   expect(resumed.status).toBe("succeeded");
   expect(resumed.output).toBe("ok");
   expect(script.seen).toHaveLength(2);
-  const outcome = await resumed.backward("Review.");
-  expect(outcome.status).toBe("succeeded");
-  expect(readRunLog(path).at(-1)!.record).toBeInstanceOf(BackwardFinishedRecord);
 });
 
 const MAP_FLOW = `

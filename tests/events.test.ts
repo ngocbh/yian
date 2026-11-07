@@ -9,7 +9,6 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { FAILURE_CODES, Failure, OriginRef } from "../src/diagnostics.ts";
-import { ERROR_KINDS } from "../src/llm/errors.ts";
 import * as events from "../src/events.ts";
 import {
   CallClosed,
@@ -17,7 +16,6 @@ import {
   IN_LOOP_EVENTS,
   ModelCallFinished,
   type ModelCallPurpose,
-  ModelCallRetried,
   ModelCallStarted,
   NodeAttemptResumed,
   NodeExpanded,
@@ -284,38 +282,6 @@ const SAMPLES: readonly { event: RunEvent; data: Record<string, unknown> }[] = [
     event: new ReplayDegraded({ nodeId: "n", reason: "other_account" }),
     data: { node_id: "n", reason: "other_account" },
   },
-  {
-    event: new ModelCallRetried({
-      nodeId: "agent",
-      consumer: "backward",
-      attempt: 1,
-      error: { kind: "rate_limit", message: "openai returned HTTP 429 (rate_limit): slow down" },
-      retryIn: 0.5,
-    }),
-    data: {
-      node_id: "agent",
-      consumer: "backward",
-      attempt: 1,
-      error: { kind: "rate_limit", message: "openai returned HTTP 429 (rate_limit): slow down" },
-      retry_in: 0.5,
-    },
-  },
-  {
-    event: new ModelCallRetried({
-      nodeId: "__memory__",
-      consumer: "memory:notes",
-      attempt: 2,
-      error: { kind: "server", message: "" },
-      retryIn: 0,
-    }),
-    data: {
-      node_id: "__memory__",
-      consumer: "memory:notes",
-      attempt: 2,
-      error: { kind: "server", message: "" },
-      retry_in: 0,
-    },
-  },
   { event: new NodeWaiting({ nodeId: "heard", callIds: ["r/heard/1", "r/heard/2"] }), data: { node_id: "heard", call_ids: ["r/heard/1", "r/heard/2"] } },
   { event: new NodeWoken({ nodeId: "nap", timedOut: ["r/nap/1"] }), data: { node_id: "nap", timed_out: ["r/nap/1"] } },
   { event: new NodeWoken({ nodeId: "heard", timedOut: [] }), data: { node_id: "heard", timed_out: [] } },
@@ -414,7 +380,7 @@ describe("in-loop observers", () => {
     }
   });
 
-  test("IN_LOOP_EVENTS names exactly the five observers, not ModelCallRetried", () => {
+  test("IN_LOOP_EVENTS names exactly the five observers", () => {
     expect(IN_LOOP_EVENTS).toEqual([
       ModelCallStarted,
       ModelCallFinished,
@@ -474,7 +440,7 @@ describe("type discriminant", () => {
   test("the samples cover every event class", () => {
     const sampled: string[] = [...new Set(SAMPLES.map(({ event }) => event.type))].sort();
     expect(sampled).toEqual(EVENT_CLASS_NAMES);
-    expect(EVENT_CLASS_NAMES).toHaveLength(23);
+    expect(EVENT_CLASS_NAMES).toHaveLength(22);
   });
 
   test("TokenUsage is not an event and has no type", () => {
@@ -599,13 +565,6 @@ describe("events schema", () => {
     error: null,
   };
 
-  const modelCallRetried = {
-    node_id: "agent",
-    consumer: "backward",
-    attempt: 1,
-    error: { kind: "timeout", message: "" },
-    retry_in: 1.5,
-  };
 
   test.each([
     ["a missing required key", "NodeStarted", {}, ["$: missing node_id"]],
@@ -622,30 +581,6 @@ describe("events schema", () => {
       "ModelCallFinished",
       { ...modelCallFinished, n: 0 },
       ["$.n: 0 is below 1"],
-    ],
-    [
-      "a retry's attempt: 0",
-      "ModelCallRetried",
-      { ...modelCallRetried, attempt: 0 },
-      ["$.attempt: 0 is below 1"],
-    ],
-    [
-      "retry_in: -1",
-      "ModelCallRetried",
-      { ...modelCallRetried, retry_in: -1 },
-      ["$.retry_in: -1 is below 0"],
-    ],
-    [
-      "error kind: nope",
-      "ModelCallRetried",
-      { ...modelCallRetried, error: { kind: "nope", message: "" } },
-      ['$.error.kind: "nope" is not one of the enum'],
-    ],
-    [
-      "an error without its message",
-      "ModelCallRetried",
-      { ...modelCallRetried, error: { kind: "timeout" } },
-      ["$.error: missing message"],
     ],
     [
       "failure code: nope",
@@ -700,10 +635,9 @@ describe("events schema", () => {
 
   test("every object form requires each key it lists, but NodeSucceeded's optional interrupted", () => {
     const trace = (def("failure").properties as Record<string, Schema>).trace!;
-    const retryError = (def("ModelCallRetried").properties as Record<string, Schema>).error!;
     const defs = Object.values(SCHEMA.$defs as Record<string, Schema>);
-    const objects = [...defs.filter((schema) => "properties" in schema), trace.items as Schema, retryError];
-    expect(objects).toHaveLength(EVENT_CLASS_NAMES.length + 5);
+    const objects = [...defs.filter((schema) => "properties" in schema), trace.items as Schema];
+    expect(objects).toHaveLength(EVENT_CLASS_NAMES.length + 4);
     const succeeded = def("NodeSucceeded");
     for (const schema of objects) {
       expect(schema.type).toBe("object");
@@ -712,11 +646,9 @@ describe("events schema", () => {
     }
   });
 
-  test("the failure code, purpose and retry error kind enums are their TS vocabularies", () => {
+  test("the failure code, purpose and close reason enums are their TS vocabularies", () => {
     const failure = def("failure").properties as Record<string, Schema>;
     expect(failure.code!.enum).toEqual([...FAILURE_CODES]);
-    const retryError = (def("ModelCallRetried").properties as Record<string, Schema>).error!;
-    expect((retryError.properties as Record<string, Schema>).kind!.enum).toEqual([...ERROR_KINDS]);
     for (const name of ["ModelCallStarted", "ModelCallFinished"]) {
       const properties = def(name).properties as Record<string, Schema>;
       expect(properties.purpose!.enum).toEqual(Object.keys(PURPOSES));

@@ -43,7 +43,6 @@ expect:
     - null
     - defaults:
         MAX_TOTAL_NODES: 5000
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

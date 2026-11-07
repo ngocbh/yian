@@ -36,7 +36,6 @@ import {
   replayRecords,
   RunState,
 } from "../../src/runtime/state.ts";
-import { TraceDelta } from "../../src/runtime/trace.ts";
 import {
   FailingLog,
   FINGERPRINT,
@@ -703,39 +702,18 @@ test("replay checks its arguments' types before the state is pristine", () => {
   );
 });
 
-/** Return a prepared RunStarted whose plan is replaced by `kind`'s, with `traceDelta`. */
-function handBuilt(kind: "backward" | "growth", traceDelta: TraceDelta | null): [RunState, PreparedTransition] {
+/** Return a prepared RunStarted whose plan is replaced by a growth plan. */
+function handBuilt(): [RunState, PreparedTransition] {
   const owned = flow();
   const state = new RunState(owned);
   const prepared = prepareRunStarted(state, startData());
-  const extra =
-    kind === "backward"
-      ? { originatingBackwardState: state.backwardState, nextBackwardState: state.backwardState }
-      : { delta: Object.freeze({}), topology: Object.freeze({}) };
-  const plan = Object.freeze({ ...prepared._plan, kind, traceDelta, ...extra });
+  const extra = { delta: Object.freeze({}), topology: Object.freeze({}) };
+  const plan = Object.freeze({ ...prepared._plan, kind: "growth", ...extra });
   return [state, new PreparedTransition(prepared.record, prepared.expectedRunId, 0, plan as never, [])];
 }
 
-test("a backward plan needs a sequence-only trace change before anything else", () => {
-  const [state, prepared] = handBuilt("backward", null);
-  const log = new MemoryRunLog(RUN_ID);
-  expectError(
-    () => commitPrepared(log, state, prepared),
-    RangeError,
-    /^postterminal trace delta must only advance the accepted sequence$/,
-  );
-  expect(log.nextSequence).toBe(0);
-});
-
-test("a backward plan reaches its commit, which requires an initialized state", () => {
-  const [state, prepared] = handBuilt("backward", new TraceDelta(null, 0));
-  const log = new MemoryRunLog(RUN_ID);
-  expectError(() => commitPrepared(log, state, prepared), RangeError, /^run state is not initialized$/);
-  expect(log.nextSequence).toBe(0);
-});
-
 test("a growth plan requires its NodeExpandedRecord at commit", () => {
-  const [state, prepared] = handBuilt("growth", null);
+  const [state, prepared] = handBuilt();
   const log = new MemoryRunLog(RUN_ID);
   expectError(() => commitPrepared(log, state, prepared), TypeError, /^growth plan requires a NodeExpandedRecord$/);
   expect(log.nextSequence).toBe(0);

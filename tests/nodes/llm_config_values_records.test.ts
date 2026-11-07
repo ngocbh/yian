@@ -11,11 +11,8 @@ import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
-import type { Message } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AuthError } from "../../src/llm_clients/auth/common.ts";
-import { EpisodicMemory } from "../../src/memory/episodic.ts";
-import { ReflectiveMemory } from "../../src/memory/reflective.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
@@ -24,14 +21,11 @@ import {
   checkRecordedLlmFields,
   type AdvanceOptions,
   advance,
-  replayRunLog,
   type RunFlowOptions,
   runFlow,
 } from "../../src/run.ts";
-import { JsonlRunLog } from "../../src/runtime/log.ts";
 import { FakeInput, FakeOutput } from "../cli/terminal_both_runtimes.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { FakeMemory } from "../helpers/memory_fakes.ts";
 import { crashAfter, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-llm-values-records-"));
@@ -100,9 +94,6 @@ function steps(path: string, nodeId = "chat"): Record<string, any>[] {
     .filter((record) => isConfigStep(record) && record.payload["node_id"] === nodeId)
     .map((record) => record.payload["step"]);
 }
-
-/** A message as JSON text, its parts' text included. */
-const textOf = (message: Message) => JSON.stringify(message);
 
 test("each call time start logs its config without secrets", async () => {
   const log = fresh("run.jsonl");
@@ -297,60 +288,9 @@ test("resume passes the host key a call time selection names beside the map", as
   const { code, output } = await cliResume(PICKED, log, env);
   expect(code, output).toBe(1);
   expect(output).toMatch(
-    /this run's openai API key came from a host's llm_config.api_key.*resume_flow\(api_key=\.\.\., headers=\.\.\.\)/,
+    /this run's openai API key came from a host's llm_config.api_key.*advance\(\{ log, apiKey, headers \}\)/,
   );
   expect(readFileSync(log, "utf8")).toBe(before);
-});
-
-const NO_FEEDBACK = JSON.stringify({ input_feedback: {}, self_feedback: ["Be brief."], variable_feedback: {} });
-
-test("backward of a call time agent uses its bound config", async () => {
-  const flow = await loadFlow(PICKED, { env });
-  expect(flow.compiled.nodes.get("chat")!.backwardInputNames()).not.toContain("__llm_config");
-  const { models } = fakeModel(["ok", NO_FEEDBACK]);
-  const result = await runFlow(flow, {}, { env, models, learnable: true, llmConfig: HOST });
-  expect(result.status).toBe("succeeded");
-  const forward = models.configs.length;
-  expect((await result.backward("Shorter.")).status).toBe("succeeded");
-  const backward = models.configs.slice(forward);
-  expect(backward).toHaveLength(1);
-  const config = backward[0]!;
-  expect([config["provider"], config["model"]]).toEqual(["openai", "gpt-picked"]);
-  // Marked for the host key, so backward sends it with its headers.
-  expect(config["api_key"]).toBe("sk-host-secret");
-  expect((config["headers"] as Record<string, string>)["X-Tenant"]).toBe("tenant-secret");
-});
-
-test.each([
-  ["anthropic", "{provider: anthropic}"],
-  ["azure", "{provider: azure, base_url: 'https://res.openai.azure.com/openai/v1'}"],
-])("backward of a call time agent off the host provider gets no host key (%s)", async (_id, flowLlm) => {
-  const runEnv = hostEnv(dir, { ...CONFTEST, AZURE_OPENAI_API_KEY: "azure-env-key" });
-  const text = PICKED.replace("{provider: openai}", flowLlm);
-  const { models } = fakeModel(["ok", NO_FEEDBACK], runEnv);
-  const result = await run(text, { env: runEnv, models, learnable: true, llmConfig: HOST });
-  expect(result.status).toBe("succeeded");
-  const forward = models.configs.length;
-  expect((await result.backward("Shorter.")).status).toBe("succeeded");
-  const backward = models.configs.slice(forward);
-  expect(backward).toHaveLength(1);
-  const config = backward[0]!;
-  expect(config["model"]).toBe("gpt-picked");
-  expect(flowLlm).toContain(config["provider"] as string);
-  expect("api_key" in config).toBe(false);
-  expect("headers" in config).toBe(false);
-});
-
-test("backward of a static agent keeps the recorded map", async () => {
-  const text = PICKED.replace("llm_config: {model: '${pick.output}'}", "llm_config: {model: m1}");
-  const { models } = fakeModel(["ok", NO_FEEDBACK]);
-  const result = await run(text, { models, learnable: true });
-  expect(result.status).toBe("succeeded");
-  const forward = models.configs.length;
-  expect((await result.backward("Shorter.")).status).toBe("succeeded");
-  expect(models.configs.slice(forward).map((config) => [config["provider"], config["model"]])).toEqual([
-    ["openai", "m1"],
-  ]);
 });
 
 /** Run `body` with `AgentNode.prototype.bindReserved` spied on; return each call's result and `body`'s. */
@@ -369,129 +309,26 @@ async function spyingBindReserved<T>(body: () => Promise<T>): Promise<[Record<st
   }
 }
 
-test("a learnable host key call time run records no secret", async () => {
+test("a host key call time run records no secret", async () => {
   const log = fresh("run.jsonl");
-  const [bound, result] = await spyingBindReserved(() => run(PICKED, { log, learnable: true, llmConfig: HOST }));
+  const [bound, result] = await spyingBindReserved(() => run(PICKED, { log, llmConfig: HOST }));
   expect(result.status).toBe("succeeded");
   const nonEmpty = bound.filter((entry) => Object.keys(entry).length > 0);
   expect(nonEmpty).toHaveLength(1);
-  const succeeded = records(log)
-    .filter((entry) => entry.kind === "node_succeeded" && entry.payload["node_id"] === "chat")
-    .map((entry) => entry.payload);
-  expect(succeeded).toHaveLength(1);
-  const capture = JSON.stringify(succeeded[0]!["forward_capture"]);
-  expect(capture).toContain("gpt-picked");
-  for (const text of [JSON.stringify(nonEmpty[0]), capture, readFileSync(log, "utf8")]) {
+  for (const text of [JSON.stringify(nonEmpty[0]), readFileSync(log, "utf8")]) {
     expect(text).not.toContain("sk-host-secret");
     expect(text).not.toContain("tenant-secret");
   }
 });
 
-test("llm config is not model visible", async () => {
-  const text = PICKED.replace("    prompt: Go.\n", "    prompt: Go.\n    long_term_memory: notes\n");
-  const log = fresh("run.jsonl");
-  const notes = new FakeMemory();
-  const { model, models } = fakeModel(["ok", NO_FEEDBACK]);
-  const result = await run(text, { log, models, learnable: true, memory: new Map([["notes", notes]]) });
-  expect(result.status).toBe("succeeded");
-  expect(notes.recallContexts.map((context) => context!.inputs)).toEqual([{}]);
-  const succeeded = records(log)
-    .filter((entry) => entry.kind === "node_succeeded" && entry.payload["node_id"] === "chat")
-    .map((entry) => entry.payload);
-  expect(succeeded).toHaveLength(1);
-  // The route holds the resolved config whole, so the bound record learning rebuilds holds what
-  // ran, though the route names no producer for it.
-  expect(succeeded[0]!["forward_capture"]["route"]["names"]).toContain("__llm_config");
-  const reopened = JsonlRunLog.resume(log);
-  try {
-    const trace = replayRunLog(await loadFlow(text, { env }), reopened).trace!;
-    const chat = trace.occurrences.find((occurrence) => occurrence.nodeId === "chat")!;
-    expect((chat.boundInputs!["__llm_config"] as Record<string, unknown>)["model"]).toBe("gpt-picked");
-  } finally {
-    reopened[Symbol.dispose]();
-  }
-  const forward = model.requests.length;
-  expect((await result.backward("Shorter.")).status).toBe("succeeded");
-  const calls = model.requests.slice(forward);
-  expect(calls).toHaveLength(1);
-  // What the learner reads of the invocation (its evaluation evidence) leaves it out.
-  const last = textOf(calls[0]!.messages.at(-1)!);
-  expect(last).toContain("evaluation_evidence");
-  expect(last).not.toContain("__llm_config");
-  expect(last).not.toContain("gpt-picked");
-});
-
-test("memory episodes leave out the bound llm config", async () => {
-  const reflector = new ScriptedModel([
-    textReply(JSON.stringify({ actions: [{ action: "noop", lesson_id: null, text: null }] })),
-  ]);
-  const text = PICKED.replace(
-    "    prompt: Go.\n",
-    "    prompt: Go.\n    long_term_memory: {notes: episodic, lessons: reflective}\n",
-  );
-  const episodic = new EpisodicMemory();
-  const memory = new Map<string, EpisodicMemory | ReflectiveMemory>([
-    ["notes", episodic],
-    [
-      "lessons",
-      new ReflectiveMemory({ env, llmConfig: { provider: "ollama", model: "reflector" }, createModel: () => reflector }),
-    ],
-  ]);
-  const { models } = fakeModel(["ok", NO_FEEDBACK]);
-  const result = await run(text, { models, learnable: true, memory });
-  expect(result.status).toBe("succeeded");
-  const outcome = await result.backward("Shorter.");
-  expect(outcome.status, outcome.failure?.message).toBe("succeeded");
-  expect(reflector.requests).toHaveLength(1);
-  const prompt = textOf(reflector.requests[0]!.messages.at(-1)!);
-  const session = episodic.openRun();
-  // The snapshot holds its ints as bigints, which JSON.stringify refuses.
-  const stored = JSON.stringify(session.snapshot, (_key, value) => (typeof value === "bigint" ? `${value}` : value));
-  session.close();
-  expect(stored).toContain("ok");
-  for (const each of [prompt, stored]) {
-    expect(each).not.toContain("__llm_config");
-    expect(each).not.toContain("gpt-picked");
-  }
-});
-
-test("backward never routes feedback to the model value producer", async () => {
+test("only an agent with the key reserves it", async () => {
   const flow = await loadFlow(PICKED, { env });
-  const producer = Object.getPrototypeOf(flow.compiled.nodes.get("pick")!) as Node;
-  const reached: string[] = [];
-  const original = producer.backward;
-  const own = Object.hasOwn(producer, "backward");
-  producer.backward = function (this: Node, ...args: Parameters<Node["backward"]>) {
-    reached.push(this.id);
-    return original.apply(this, args);
-  };
-  try {
-    const feedback = JSON.stringify({
-      input_feedback: { __llm_config: ["Use a bigger model."] },
-      self_feedback: [],
-      variable_feedback: {},
-    });
-    const result = await runFlow(flow, {}, { env, models: fakeModel(["ok", feedback]).models, learnable: true });
-    expect(result.status).toBe("succeeded");
-    const outcome = await result.backward("Shorter.");
-    expect(outcome.status).toBe("failed");
-    expect(reached).toEqual([]);
-  } finally {
-    // The producer may inherit `backward`; leave no own copy behind.
-    if (own) producer.backward = original;
-    else delete (producer as Partial<Node>).backward;
-  }
-});
-
-test("only an agent with the key hides it from the model", async () => {
-  const flow = await loadFlow(PICKED, { env });
-  expect(flow.compiled.nodes.get("chat")!.modelHiddenInputs()).toEqual(new Set(["__llm_config"]));
+  expect(flow.compiled.nodes.get("chat")!.reservedWiringKeys()).toEqual(new Set(["__llm_config"]));
   const fixed = await loadFlow(PICKED.replace("{model: '${pick.output}'}", "{model: m1}"), { env });
-  expect(fixed.compiled.nodes.get("chat")!.modelHiddenInputs()).toEqual(new Set());
-  // MAP keeps its reserved input; it shows a learner no prompt.
+  expect(fixed.compiled.nodes.get("chat")!.reservedWiringKeys()).toEqual(new Set());
+  // MAP sends no request to rebuild.
   const map = new MapNode("m", { flowId: "f" });
-  expect(Object.getPrototypeOf(map).modelHiddenInputs).toBe(Node.prototype.modelHiddenInputs);
-  expect(Object.getPrototypeOf(map).learningMaterial).toBe(Node.prototype.learningMaterial);
+  expect(Object.getPrototypeOf(map).rebuildRequests).toBe(Node.prototype.rebuildRequests);
 });
 
 test("resume without the host key raises before a call time agent calls", async () => {

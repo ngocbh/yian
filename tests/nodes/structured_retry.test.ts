@@ -29,12 +29,11 @@ import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { MissingToolCallError, StructuredOutputError } from "../../src/llm/structured.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
-import { ModelTextInteraction, ModelValueInteraction } from "../../src/memory/contracts.ts";
 import {
   generateStructured,
   isContractPath,
   OutputInvalidError,
-  structuredMaterial,
+  rebuildStructuredRequests,
 } from "../../src/nodes/agent/structured.ts";
 import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
 import type { LiveSinks } from "../../src/nodes/agent/live.ts";
@@ -344,36 +343,32 @@ describe("TS-only", () => {
     );
   });
 
-  test("learning shows the native strategy's value, the prompt strategy's every reply's text", async () => {
-    /** Run `generateStructured` on `model`, recording its steps, then rebuild what learning reads of them. */
+  test("the request rebuild gives each structured call the request it sent, for both strategies", async () => {
+    /** Run `generateStructured` on `model`, recording its steps, then rebuild its requests from them. */
     const rebuild = async (model: ScriptedModel, retries: number) => {
       const recorded: ValueRecord[] = [];
       const record = (step: ValueRecord) => recorded.push(step);
       const steps = new AgentSteps(new NodeSteps(1, [], record), () => 0, null, (error) => error, "agent");
       await generateStructured(model, [], INT, { retries, steps });
-      const { requests, ...material } = structuredMaterial(model, [], INT, recorded);
+      const { requests, digestOk } = rebuildStructuredRequests(model, [], INT, recorded);
       // Each step's rebuilt request is the one the model received.
       expect(requests.map(({ request }) => requestSha256(request!))).toEqual(model.requests.map(requestSha256));
-      return material;
+      return digestOk;
     };
-    expect(await rebuild(scripted([text('{"value": 3}')]), 0)).toEqual({
-      interactions: [new ModelValueInteraction(3n)],
-      digestOk: true,
-    });
-    expect(await rebuild(scripted([text("x"), text('{"value": 4}')], PROMPTED), 1)).toEqual({
-      interactions: [new ModelTextInteraction("x"), new ModelTextInteraction('{"value": 4}')],
-      digestOk: true,
-    });
+    expect(await rebuild(scripted([text('{"value": 3}')]), 0)).toBe(true);
+    expect(await rebuild(scripted([text("x"), text('{"value": 4}')], PROMPTED), 1)).toBe(true);
   });
 
-  test("learning shows nothing of a structured reply a host interrupt cut", async () => {
+  test("a structured reply a host interrupt cut still rebuilds its request", async () => {
     for (const model of [scripted([text('{"value": 3}')]), scripted([text('{"value": 3}')], PROMPTED)]) {
       const recorded: ValueRecord[] = [];
       const steps = new AgentSteps(new NodeSteps(1, [], (step) => recorded.push(step)), () => 0, null, (error) => error, "agent");
       await generateStructured(model, [], INT, { retries: 0, steps });
       // The cut keeps the reply received so far, which the node never output.
       const cut = recorded.map((step) => ({ ...step, finish: "interrupted" }));
-      expect(structuredMaterial(model, [], INT, cut)).toMatchObject({ interactions: [], digestOk: true });
+      const rebuilt = rebuildStructuredRequests(model, [], INT, cut);
+      expect(rebuilt.digestOk).toBe(true);
+      expect(rebuilt.requests).toHaveLength(1);
     }
   });
 });
@@ -391,7 +386,7 @@ describe("an agent reply without the schema's tool call", () => {
       "    output: str",
       `    retries: ${retries}\n    output: int`,
     );
-    return runWith(await loadFlow(text), { question: "q" }, null, model, { env: hostEnv(dir) });
+    return runWith(await loadFlow(text), { question: "q" }, model, { env: hostEnv(dir) });
   }
 
   test("an agent retries a reply without the tool call", async () => {

@@ -5,11 +5,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { AgentDescriptor, retriesError } from "../../src/compose/nodes/agent.ts";
 import { BuildContext, siteKey } from "../../src/compose/nodes/base.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
-import { SourceCatalogBuilder } from "../../src/compose/source/catalog.ts";
 import { type SourceCursor, SourceDocument } from "../../src/compose/source/index.ts";
 import { BUILTIN, forget, reload } from "../../src/defaults.ts";
 import { SourceRange } from "../../src/diagnostics.ts";
-import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { assembled, type CaseRow, loadError, parsedNodes, runCase } from "../helpers/declarations.ts";
 
@@ -175,86 +173,12 @@ describe("lone surrogates", () => {
   });
 });
 
-test("the constructor refuses memories that aren't exact MemoryDecl values", () => {
-  class SubDecl extends MemoryDecl {}
-  const site = new DeclSite([], ["root"], "a");
-  const message = "agent descriptor memories must be an array of exact MemoryDecl values";
-
-  expect(
-    () => new AgentDescriptor({ id: "a", memories: [new SubDecl("notes", "episodic", {}, site)] }),
-  ).toThrow(new TypeError(message));
-  expect(
-    () => new AgentDescriptor({ id: "a", memories: "notes" as unknown as readonly MemoryDecl[] }),
-  ).toThrow(new TypeError(message));
-  expect(new AgentDescriptor({ id: "a", memories: [new MemoryDecl("notes", "episodic", {}, site)] }).memories)
-    .toHaveLength(1);
-});
-
-describe("withSourceOrigins", () => {
-  test("one origin per long_term_memory entry, at its key", () => {
-    const text = "nodes:\n  a:\n    kind: agent\n    long_term_memory:\n      notes: episodic\n      lessons: reflective\n";
-    const cursor = readerFor(text, "a");
-    const builder = new SourceCatalogBuilder();
-    const desc = AgentDescriptor.parse("a", cursor);
-    expect(desc.memories.map((decl) => decl.site)).toEqual([
-      new DeclSite([], ["root"], "a"),
-      new DeclSite([], ["root"], "a"),
-    ]);
-
-    const stamped = desc.withSourceOrigins(cursor, { sitePath: ["node", "a"], catalogBuilder: builder });
-
-    expect(stamped).toBeInstanceOf(AgentDescriptor);
-    expect(stamped.memories.map((decl) => decl.name)).toEqual(["notes", "lessons"]);
-    const memories = cursor.child("long_term_memory");
-    for (const decl of stamped.memories) {
-      expect(builder.resolveRegistered(decl.origin!)!.range).toEqual(memories.keyRangeOf(decl.name)!);
-    }
-    expect(desc.memories.every((decl) => decl.origin === null)).toBe(true);
-  });
-
-  test("the sugar form's one origin is the whole value", () => {
-    const text = "nodes:\n  a:\n    kind: agent\n    long_term_memory: episodic\n";
-    const cursor = readerFor(text, "a");
-    const builder = new SourceCatalogBuilder();
-
-    const stamped = AgentDescriptor.parse("a", cursor).withSourceOrigins(cursor, {
-      sitePath: ["node", "a"],
-      catalogBuilder: builder,
-    });
-
-    expect(stamped.memories).toHaveLength(1);
-    expect(builder.resolveRegistered(stamped.memories[0]!.origin!)!.range).toEqual(
-      cursor.rangeOf("long_term_memory")!,
-    );
-  });
-
-  test("no memories: the descriptor itself", () => {
-    const cursor = readerFor("nodes:\n  a:\n    kind: agent\n    long_term_memory: null\n", "a");
-    const desc = AgentDescriptor.parse("a", cursor);
-
-    expect(desc.memories).toEqual([]);
-    expect(desc.withSourceOrigins(cursor, { sitePath: ["node", "a"], catalogBuilder: new SourceCatalogBuilder() }))
-      .toBe(desc);
-  });
-});
-
 describe("build", () => {
-  /** A context over an empty registry, with `owner` as the owner path of the node being built. */
-  const reading = (owner?: readonly string[]) => new BuildContext({ registry: new Map(), owner });
+  /** A context over an empty registry. */
+  const reading = () => new BuildContext({ registry: new Map() });
 
   test("a node with no declarations builds no variables", () => {
     expect((new AgentDescriptor({ id: "a" }).build(reading()).node as AgentNode).variables).toEqual([]);
-  });
-
-  test("memory sites are stamped with the context's owner", () => {
-    const origin = new SourceCatalogBuilder().register(["node", "a"], readerFor("nodes:\n  a: {}\n", "a"));
-    const memories = [new MemoryDecl("notes", "episodic", {}, new DeclSite([], ["root"], "a"), origin)];
-    const node = new AgentDescriptor({ id: "a", memories }).build(reading(["root", "node", "outer"]))
-      .node as AgentNode;
-
-    expect(node.memories).toEqual([
-      new MemoryDecl("notes", "episodic", {}, new DeclSite([], ["root", "node", "outer"], "a"), origin),
-    ]);
   });
 
   test("the llm_config label comes from the field labels", () => {
@@ -311,7 +235,6 @@ describe("literal llm_config fields", () => {
 // ---------- harvested conformance cases ----------
 
 test.each<CaseRow>([
-  { id: "load-agent/cli_memory__storage_key_is_host_owned", call: parsedNodes },
   { id: "load-agent/compose_agent_field_shapes__bool_retries", call: parsedNodes },
   { id: "load-agent/compose_agent_field_shapes__negative_retries", call: parsedNodes },
   { id: "load-agent/compose_agent_field_shapes__tools_as_text", call: parsedNodes },

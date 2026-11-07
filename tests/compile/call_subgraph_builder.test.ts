@@ -10,10 +10,9 @@
 import { expect, test } from "bun:test";
 
 import { callSubgraph, cloneChild, mapSubgraph } from "../../src/compile/expand.ts";
-import { END_ID, Flow, START_ID, validateGrowthMetadata } from "../../src/compile/model.ts";
+import { END_ID, Flow, validateGrowthMetadata } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
-import { MemoryOccurrenceKind, MemoryOccurrenceSegment, MemoryScope } from "../../src/memory/contracts.ts";
-import { Binding, ChildFlowBoundary, ExecutionScope, Parameter, SeedConnection } from "../../src/nodes/contracts.ts";
+import { Binding, ChildFlowBoundary, Parameter, SeedConnection } from "../../src/nodes/contracts.ts";
 import { mapCallsite, ns } from "../../src/nodes/ids.ts";
 import { childFlow } from "../helpers/run_state_fixtures.ts";
 
@@ -56,15 +55,9 @@ test.each([
   ["invalid-parameters", TypeError],
   ["duplicate-boundary", RangeError],
   ["missing-end", RangeError],
-  ["wrong-role", RangeError],
-  ["different-flow", RangeError],
-  ["wrong-owner", RangeError],
 ] as const)("growth metadata revalidates exact targets and nested fields: %s", (malformation, error) => {
   const fragment = callSubgraph(childFlow(), "call", { x: 1n });
   const start = fragment.nodes.get(fragment.startId)!;
-  const end = fragment.nodes.get(fragment.endId)!;
-  start.executionScope = new ExecutionScope(["call", START_ID], { flowPath: ["call"], boundary: "start" });
-  end.executionScope = new ExecutionScope(["call", END_ID], { flowPath: ["call"], boundary: "end" });
   const connection = fragment.inputConnections[0]!;
   switch (malformation) {
     case "boolean-index":
@@ -106,15 +99,6 @@ test.each([
       break;
     case "missing-end":
       setRecipes(fragment, { childBoundaries: [new ChildFlowBoundary(fragment.startId, "absent")] });
-      break;
-    case "wrong-role":
-      start.executionScope = new ExecutionScope(["call", START_ID], { flowPath: ["call"], boundary: "end" });
-      break;
-    case "different-flow":
-      end.executionScope = new ExecutionScope(["call", END_ID], { flowPath: ["other"], boundary: "end" });
-      break;
-    case "wrong-owner":
-      start.executionScope = new ExecutionScope(["other", START_ID], { flowPath: ["call"], boundary: "start" });
       break;
   }
 
@@ -224,26 +208,5 @@ test("call subgraph prefixes every cloned node including boundaries", () => {
   for (const node of sg.nodes.values()) expect(node.originContext).toEqual(context);
   expect(sg.nodes.get(sg.startId)!.originContext).toEqual(context);
   expect(sg.nodes.get(sg.endId)!.originContext).toEqual(context);
-});
-
-test("call subgraph inherits occurrence and keeps child keys", () => {
-  const child = childFlow();
-  for (const [nodeId, node] of child.nodes) {
-    node.memoryScope = new MemoryScope(["outer_map", "call", nodeId], { memories: ["child"] });
-  }
-  const outer = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["outer_map"], 2);
-  const spawnerScope = new MemoryScope(["outer_map", "call"], { occurrencePath: [outer] });
-
-  const fragment = callSubgraph(child, "call", { x: 1n }, { memoryScope: spawnerScope });
-
-  for (const node of fragment.nodes.values()) expect(node.memoryScope!.occurrencePath).toEqual([outer]);
-  for (const [nodeId, fragmentId] of [
-    [START_ID, fragment.startId],
-    [END_ID, fragment.endId],
-  ] as const) {
-    expect(fragment.nodes.get(fragmentId)!.memoryScope).toEqual(
-      new MemoryScope(["outer_map", "call", nodeId], { memories: ["child"], occurrencePath: [outer] }),
-    );
-  }
 });
 

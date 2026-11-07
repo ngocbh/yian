@@ -48,7 +48,7 @@ The runner prints a `FAIL` line for each failing case and exits 1 when any case 
 1. Pick the group whose subject the case covers (SPEC.md's Groups table) and write
    `cases/<group>/<name>.yaml`. Give it `kind`, its input, and the `expect` results you know,
    such as `output` or `raises`.
-2. For a `run`, `resume` or `backward` case, add the projections you want pinned as empty lists
+2. For a `run` or `resume` case, add the projections you want pinned as empty lists
    (`trace: []`, `events: []`), then fill them in from a real run:
    `bun tests/conformance/runner.ts --write-expect --case <group>/<name>`.
 3. Read the written values and check each one is what yian should do, then run the case again.

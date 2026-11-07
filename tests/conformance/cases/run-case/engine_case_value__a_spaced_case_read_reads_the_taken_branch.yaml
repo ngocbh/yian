@@ -24,7 +24,7 @@ expect:
     status: succeeded
     output: {whole: {k: b}, field: b}
   trace:
-  - [run_started, null, {learnable: false, num_workers: 0}]
+  - [run_started, null, {num_workers: 0}]
   - - pool_commit
     - __start__
     - {key: system.now}

@@ -39,7 +39,6 @@ expect:
     - call_time_llm:
         agents:
           ask__compose: {}
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

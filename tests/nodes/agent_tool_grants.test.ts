@@ -8,7 +8,6 @@
 import { expect, test } from "bun:test";
 
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
 import { AgentLoopError, type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
@@ -37,15 +36,13 @@ function context(model: ScriptedModel, tools: AgentRunContext["tools"], toolset:
   return {
     nodeId: "a",
     messages: [userMessage("go")],
-    promptText: "go",
     tools,
     llmConfig: CONFIG,
     outputType: null,
     retries: 0,
     maxToolIterations: -1,
-    memoryContext: new MemoryContext(),
     toolset,
-    baseSystemPrompt: DEFAULT_SYSTEM,
+    systemPrompt: DEFAULT_SYSTEM,
     skills: [],
     models: serving(model),
     sent: () => [],

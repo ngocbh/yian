@@ -17,7 +17,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { type ChatModel, type Event, EventStream } from "../../src/llm/events.ts";
 import { Message, type Request, Response, ToolCallPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
+import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import { advance, pendingCalls, type RunFlowOptions, runFlow } from "../../src/run.ts";
 import { pending } from "../../src/tools/context.ts";

@@ -51,8 +51,7 @@ expect:
   trace:
     - - run_started
       - null
-      - learnable: false
-        num_workers: 0
+      - num_workers: 0
         effective_llm_by_static_path:
           write:
             provider: openai

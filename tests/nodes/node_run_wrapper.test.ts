@@ -9,8 +9,6 @@ import { OriginRef } from "../../src/diagnostics.ts";
 import { ExpressionError } from "../../src/expr/index.ts";
 import {
   AssertionStageError,
-  BackwardContext,
-  BackwardResult,
   BindingStageError,
   CapabilityFault,
   DeferredBindingFault,
@@ -129,12 +127,6 @@ function badDefault(): Parameter {
     default: "30",
   });
 }
-
-test("default backward stops feedback with empty channels", () => {
-  const node = new ImplNode("n", null);
-
-  expect(node.backward(new BackwardContext({}), ["unused"])).toEqual(new BackwardResult());
-});
 
 test("run returns forward output when asserts hold", async () => {
   const node = new ImplNode("n", { output: 42n });
@@ -434,17 +426,6 @@ test("wrapper delegates for grow kind", async () => {
 
   expect(result).toBeInstanceOf(Grow);
   expect((result as Grow).seed).toEqual({ topic: "ACME" });
-});
-
-test("runtime does not drive backward", async () => {
-  // Forward execution remains the runtime's only node-body call.
-  class BackwardTrapNode extends ImplNode {
-    override backward(): BackwardResult {
-      throw new Error("backward must remain dormant");
-    }
-  }
-
-  expect(await drive(new BackwardTrapNode("n", "ok"))).toEqual(new Output("ok"));
 });
 
 test("eval node checks a post-assert through the template", async () => {

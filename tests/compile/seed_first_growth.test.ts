@@ -8,9 +8,8 @@ import { expect, test } from "bun:test";
 
 import { buildGrow, callSubgraph, loopContinueSubgraph, mapSubgraph } from "../../src/compile/expand.ts";
 import { expansionDigest } from "../../src/compile/manifest.ts";
-import { copyGraph, END_ID, Flow, GrowthRejected } from "../../src/compile/model.ts";
+import { END_ID, Flow, GrowthRejected } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
-import { MemoryOccurrenceKind, MemoryOccurrenceSegment, MemoryScope } from "../../src/memory/contracts.ts";
 import { Grow, NodeKind } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { Assertion, Parameter } from "../../src/nodes/contracts.ts";
@@ -62,7 +61,6 @@ function expectSameFragment(actual: Flow, expected: Flow): void {
     expect(left.commitAs).toBe(right.commitAs);
     expect(left.originId).toBe(right.originId);
     expect(left.originContext).toEqual(right.originContext);
-    expect(left.memoryScope).toEqual(right.memoryScope);
     expect(left.postAsserts).toEqual(right.postAsserts);
   }
 }
@@ -124,43 +122,6 @@ test("source free spawners do not invent generated context", async () => {
   for (const [spawner, grow] of await growthProducers()) {
     const fragment = buildGrow(spawner, grow.seed as JsonValue);
     expect([...fragment.nodes.values()].every((node) => node.originContext.length === 0)).toBe(true);
-  }
-});
-
-test("compile builder propagates each spawner memory occurrence", async () => {
-  const [[call, callGrow], [mapNode, mapGrow], [loop, loopGrow]] = await growthProducers();
-  const outer = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["outer"], 3);
-  for (const spawner of [call, mapNode, loop]) {
-    const child = copyGraph(spawner.child as Flow);
-    spawner.child = child;
-    spawner.memoryScope = new MemoryScope(["outer", spawner.id], { occurrencePath: [outer] });
-    for (const [childId, childNode] of child.nodes) {
-      childNode.memoryScope = new MemoryScope(["outer", spawner.id, childId]);
-    }
-  }
-
-  const callFragment = buildGrow(call, callGrow.seed as JsonValue);
-  for (const node of callFragment.nodes.values()) expect(node.memoryScope!.occurrencePath).toEqual([outer]);
-
-  const mapFragment = buildGrow(mapNode, mapGrow.seed as JsonValue);
-  const mapItems = [...mapFragment.nodes]
-    .filter(([nodeId]) => nodeId.includes("#"))
-    .map(([, node]) => node.memoryScope!.occurrencePath.at(-1)!.index);
-  expect(new Set(mapItems)).toEqual(new Set([0, 1]));
-  for (const [nodeId, node] of mapFragment.nodes) {
-    if (!nodeId.includes("#")) continue;
-    const item = node.memoryScope!.occurrencePath.at(-1)!;
-    expect([item.kind, item.staticPath]).toEqual([MemoryOccurrenceKind.MAP_ITEM, ["outer", "map"]]);
-  }
-
-  const loopFragment = buildGrow(loop, loopGrow.seed as JsonValue);
-  const nextDriver = loopFragment.nodes.get("loop~1")!;
-  expect(nextDriver.memoryScope!.occurrencePath).toEqual([outer]);
-  for (const [nodeId, node] of loopFragment.nodes) {
-    if (nodeId === nextDriver.id) continue;
-    expect(node.memoryScope!.occurrencePath.at(-1)).toEqual(
-      new MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ["outer", "loop"], 0),
-    );
   }
 });
 

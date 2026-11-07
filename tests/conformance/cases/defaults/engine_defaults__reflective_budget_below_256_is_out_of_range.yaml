@@ -1,7 +1,0 @@
-kind: defaults
-env:
-  YIAN_REFLECTIVE_MAX_LESSON_CHARS: '255'
-expect:
-  raises:
-    class: DefaultsError
-    message: 'YIAN_REFLECTIVE_MAX_LESSON_CHARS="255" is out of range; use an integer from 256 to 9007199254740991, or unset it'

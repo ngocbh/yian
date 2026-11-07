@@ -11,7 +11,7 @@ runs on disk, move messages and answers into them, and watch what they do. Insta
 
 | Import | What it's for |
 |---|---|
-| `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; host tools (`tool`, `ToolContext`, `pending`, the tool errors); memory (`buildMemories`, `MemoryRegistry`, storage classes); `LoadError`, `Failure`, `Diagnostic` |
+| `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; host tools (`tool`, `ToolContext`, `pending`, the tool errors); `LoadError`, `Failure`, `Diagnostic` |
 | `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `EventHook` and `StreamHook`; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex` |
 | `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, and the ask handler types `AskHandler` and `AskRequest` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
@@ -110,9 +110,6 @@ server that doesn't start, a bad `YIAN_*` value, a callback that throws, a log i
 | `unread` | At the end of a run, the messages no take read, as send seqs by inbox |
 | `crashedAttempts` | Node attempts a resume ran again after a crash, by node id |
 
-`result.backward(feedback)` runs the backward pass on a run started with `learnable: true`; see
-[Learning](/learning/).
-
 ### `runFlow` options
 
 | Option | Default | Meaning |
@@ -122,14 +119,12 @@ server that doesn't start, a bad `YIAN_*` value, a callback that throws, a log i
 | `numWorkers` | `8` | How many nodes run at once; `0` runs them one at a time |
 | `tools` | the registered tools | Tools by id. Passing it replaces the registered set, so list every tool the flow uses |
 | `skills` | none | A `Map` of skills by name, from `loadSkills` |
-| `memory` | none | One backend per declared memory key, usually from `buildMemories` |
 | `llmConfig` | none | The outermost `llm_config` layer (see [Models and providers](/models/)). Its `api_key` and header values are never recorded; its `base_url`, `organization`, `project` and header names are, on the agents that use the key |
 | `context` | `undefined` | Your app object; tools read it as `ctx.context`. Never recorded |
 | `onEvent`, `onStream` | none | Event callbacks (see [Events](#events)) |
 | `live` | none | A `LiveChannel` a viewer follows |
 | `signal` | none | An `AbortSignal` that stops the run |
 | `env` | `process.env` | A function `(name) => string \| undefined` that yian reads instead of `process.env` |
-| `learnable` | `false` | Keep the run for a later `result.backward` |
 | `parent` | none | The run that started this one, recorded in the log |
 
 `scheduler`, `random` and `models` exist for yian's own tests; leave them unset.
@@ -152,8 +147,8 @@ holds media fails if `media` is a symlink, another user's, or writable by others
 | Waiting, with nothing new | Writes nothing and returns `waiting` again |
 
 `advance` runs the flow the log recorded, not the file on disk, with the log's inputs, run id and
-model settings. Pass again what the log doesn't hold: `tools`, `skills`, `memory`, `context`, and
-the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`.
+model settings. Pass again what the log doesn't hold: `tools`, `skills`, `context`, and the API key
+(`apiKey`, `headers`) of a run started with `llmConfig.api_key`.
 
 The log holds the `codeRoot` the flow was loaded under, so `advance` and the host calls below
 confine the recorded flow's CODE files to it without being told. Passing `codeRoot` is optional; one
@@ -338,12 +333,12 @@ soon after is stopped too, before its first model call. `interrupt` appends noth
 (`seq: null`) when the run is waiting for the next message on the inbox, or is already stopping.
 Queued steers stay; `withdraw` takes them back.
 
-`cancel` ends the run with no output and no learning, and closes its open calls. If your process
+`cancel` ends the run with no output, and closes its open calls. If your process
 is running the run, its running nodes are stopped at once. To stop a run you may want to resume,
 abort its `signal` instead: the run records a stop, rejects with the signal's reason, and
 `advance` runs the stopped nodes again.
 
-## Tools, skills and memory
+## Tools and skills
 
 - **Tools.** `tool()` builds a tool from a JSON Schema or a Standard Schema validator (zod,
   valibot, ArkType); see [Agents](/agents/#host-tools). A handler gets `(args, ctx)`. `ctx` holds
@@ -357,10 +352,6 @@ abort its `signal` instead: the run records a stop, rejects with the signal's re
   optional peer package `@modelcontextprotocol/client`.
 - **Skills.** `loadSkills(defaultSkillRoots())` reads the Claude Code and Codex skill folders
   into the `Map` that `skills` takes.
-- **Memory.** `buildMemories(flow, { root, storage })` builds a backend for each memory the flow
-  declares, as `yian run`'s memory flags do ([Learning](/learning/#storage)). Pass the registry as
-  `memory`, and `close()` it when you are done. `supplied` passes ready backends by key, and
-  `factories` builds custom memory types by type name.
 
 ## Inspect runs
 
@@ -406,7 +397,7 @@ for (let done = false; !done; ) {
 ## Environment and stopping
 
 - `env` is a function `(name) => string | undefined`. `loadFlow`, `runFlow`, `advance`,
-  `inspectRun`, `buildMemories` and the host calls read through it instead of `process.env`:
+  `inspectRun` and the host calls read through it instead of `process.env`:
   provider keys, `HOME`, and every `YIAN_*` setting. Runs with different `env`s don't share
   settings. A resume refuses `YIAN_*` values that differ from the recorded ones.
 - `signal` stops `runFlow` or `advance`. An already-aborted signal rejects before anything is

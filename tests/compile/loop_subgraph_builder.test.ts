@@ -12,7 +12,6 @@ import { expect, test } from "bun:test";
 import { loopContinueSubgraph } from "../../src/compile/expand.ts";
 import { CompiledFlow, Edge, END_ID, Flow, START_ID, validateGrowthMetadata } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
-import { MemoryOccurrenceKind, MemoryOccurrenceSegment, MemoryScope } from "../../src/memory/contracts.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import { Binding, ChildFlowBoundary, Parameter, SeedConnection } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
@@ -207,27 +206,5 @@ test("continue keys body on origin when driver id differs", () => {
   expect(sg.nodes.has(ns(mapCallsite("lp", 2), child.startId))).toBe(true);
   expect([...sg.nodes.keys()].some((nid) => nid.startsWith("lp~2#"))).toBe(false);
   expect(sg.nodes.has("lp~3")).toBe(true);
-});
-
-test("continue appends body iteration but driver keeps outer occurrence", () => {
-  const child = childFlow();
-  for (const [nodeId, node] of child.nodes) {
-    node.memoryScope = new MemoryScope(["outer_map", "lp", nodeId], { memories: ["outer"] });
-  }
-  const outer = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["outer_map"], 1);
-  const loopScope = new MemoryScope(["outer_map", "lp"], { memories: ["outer"], occurrencePath: [outer] });
-  const d = driver("lp", 3, child);
-  d.memoryScope = loopScope;
-
-  const fragment = loopContinueSubgraph(child, "lp", { x: 1n }, 2, d, { memoryScope: loopScope });
-
-  const expectedBody = [
-    outer,
-    new MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ["outer_map", "lp"], 2),
-  ];
-  const body = [...fragment.nodes].filter(([nodeId]) => nodeId !== d.id);
-  expect(body.length).toBeGreaterThan(0);
-  for (const [, node] of body) expect(node.memoryScope!.occurrencePath).toEqual(expectedBody);
-  expect(fragment.nodes.get(d.id)!.memoryScope!.occurrencePath).toEqual([outer]);
 });
 

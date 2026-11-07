@@ -13,14 +13,13 @@
  * (`{"type": "int", "value": "1"}`, a float as its IEEE-754 big-endian hex), and only counts are
  * raw JSON ints. The fingerprint is SHA-256 over that text.
  *
- * Knows about:   diagnostics, nodes, memory contracts, typesys and compile/model.
+ * Knows about:   diagnostics, nodes, typesys and compile/model.
  * Never imports: compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
 import { createHash } from "node:crypto";
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
-import { DeclSite, MemoryDecl, MemoryOccurrenceSegment, MemoryScope } from "../memory/contracts.ts";
 import { AgentNode, authoredPrompt } from "../nodes/agent/node.ts";
 import { Node, NodeKind } from "../nodes/base.ts";
 import { CallNode } from "../nodes/call/node.ts";
@@ -30,7 +29,6 @@ import {
   Assertion,
   Binding,
   ContractOrigins,
-  ExecutionScope,
   isExactly,
   Parameter,
   PartialRecordContract,
@@ -79,8 +77,6 @@ const COMMON_NODE_FIELDS = [
 const IGNORED_NODE_FIELDS = [
   "origin",
   "originContext",
-  "memoryScope",
-  "executionScope",
   "wiringLabels",
   "bindingLabels",
   "isSpawner",
@@ -89,7 +85,6 @@ const IGNORED_NODE_FIELDS = [
   "itemSourceKey",
   "growDepthDelta",
   "isLoop",
-  "needsMemoryContext",
   "needsSkills",
   "needsTools",
   "needsLiveEvents",
@@ -113,7 +108,6 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "ownLlmConfig",
     "llmInherit",
     "retries",
-    "memories",
     "variables",
     "skills",
     "steerRender",
@@ -208,7 +202,6 @@ const VALUE_CONTRACT_FIELDS = new Set(["type", "origins"]);
 const PARTIAL_RECORD_CONTRACT_FIELDS = new Set(["fields"]);
 const CONTRACT_ORIGINS_IGNORED_FIELDS = new Set(["default", "entries"]);
 const TYPE_FIELDS = new Set(["kind", "fields", "required", "tags", "element", "nullable", "bounds", "members"]);
-const MEMORY_DECL_FIELDS = new Set(["name", "type", "config", "site", "origin"]);
 const CASE_FIELDS = new Set(["handle", "when", "origin"]);
 const FLOW_FIELDS = ["nodes", "edges", "wiring", "startId", "endId", "inputConnections", "childBoundaries"];
 const FLOW_FIELD_SET = new Set(FLOW_FIELDS);
@@ -219,7 +212,6 @@ const COMPILED_FLOW_FIELD_SET = new Set([
   // Derived from the layer and the flow's contracts; not identity.
   "flowLlmValueTypes",
   "flowId",
-  "memories",
   "incomingEdges",
   "outgoingEdges",
 ]);
@@ -340,7 +332,7 @@ function checkNodeFields(node: Node, path: string): void {
 /**
  * Canonicalize a record as sorted typed key/value entries.
  *
- * @param value The authored record, such as `env:` or memory config.
+ * @param value The authored record, such as `env:`.
  * @param ctx Recursion stacks for cycle detection.
  * @param path Location used in error messages.
  * @returns The `{"entries": [...], "type": "mapping"}` record.
@@ -598,34 +590,6 @@ function parameterManifest(value: unknown, ctx: ManifestContext, path: string): 
 }
 
 /**
- * Project one authored memory declaration while excluding its origin.
- *
- * @throws TypeError when `value` isn't exactly a `MemoryDecl` or its site exactly a `DeclSite`.
- */
-function memoryDeclManifest(value: unknown, ctx: ManifestContext, path: string): JsonObject {
-  if (!isExactly(value, MemoryDecl)) throw new TypeError(`${path}: expected exact MemoryDecl, got ${typeName(value)}`);
-  checkFields(value, MEMORY_DECL_FIELDS, path);
-  const site: unknown = value.site;
-  if (!isExactly(site, DeclSite)) throw new TypeError(`${path}.site: expected exact DeclSite`);
-  return {
-    config: sortedMapping(value.config, ctx, `${path}.config`),
-    name: value.name,
-    site: { node: site.node, owner: [...site.owner], scope: [...site.scope] },
-    type: value.type,
-  };
-}
-
-/**
- * Project authored declarations in authored order.
- *
- * @throws TypeError when `values` isn't an array.
- */
-function memoriesManifest(values: unknown, ctx: ManifestContext, path: string): JsonObject[] {
-  if (!isList(values)) throw new TypeError(`${path}: expected an array of MemoryDecl values`);
-  return values.map((value, index) => memoryDeclManifest(value, ctx, `${path}[${index}]`));
-}
-
-/**
  * Canonicalize one ordered CASE arm; its origin is diagnostic-only.
  *
  * @throws TypeError when `value` isn't exactly a `Case`.
@@ -635,60 +599,6 @@ function caseManifest(value: unknown, ctx: ManifestContext, path: string): JsonO
   if (!isExactly(value, Case)) throw new TypeError(`${path}: expected Case, got ${typeName(value)}`);
   checkFields(value, CASE_FIELDS, path);
   return { handle: value.handle, when: canonicalValue(value.when, ctx, `${path}.when`) };
-}
-
-/**
- * Project one dynamic memory occurrence segment.
- *
- * @throws TypeError when `segment` isn't exactly a `MemoryOccurrenceSegment`.
- */
-function memoryOccurrenceTopology(segment: unknown, path: string): JsonObject {
-  if (!isExactly(segment, MemoryOccurrenceSegment)) {
-    throw new TypeError(`${path}: expected exact MemoryOccurrenceSegment, got ${typeName(segment)}`);
-  }
-  return {
-    index: count(segment.index, `${path}.index`, false),
-    kind: segment.kind,
-    static_path: [...segment.staticPath],
-  };
-}
-
-/**
- * Project the memory topology needed for deterministic growth identity: the node's path, its
- * memory keys and its occurrence path, without configs or origins.
- *
- * @throws TypeError when `value` isn't exactly a `MemoryScope`.
- */
-function memoryScopeTopology(value: unknown, path: string): JsonObject {
-  if (!isExactly(value, MemoryScope)) {
-    throw new TypeError(`${path}: expected exact MemoryScope, got ${typeName(value)}`);
-  }
-  return {
-    memories: [...value.memories],
-    occurrence_path: value.occurrencePath.map((segment, index) =>
-      memoryOccurrenceTopology(segment, `${path}.occurrencePath[${index}]`),
-    ),
-    static_path: [...value.staticPath],
-  };
-}
-
-/**
- * Project a node's execution location for growth identity.
- *
- * @throws TypeError when `value` isn't exactly an `ExecutionScope`.
- */
-function executionScopeTopology(value: unknown, path: string): JsonObject {
-  if (!isExactly(value, ExecutionScope)) throw new TypeError(`${path} must be an ExecutionScope`);
-  return {
-    static_path: [...value.staticPath],
-    flow_path: [...value.flowPath],
-    occurrence_path: value.occurrencePath.map((position, index) => ({
-      kind: position.kind,
-      static_path: [...position.staticPath],
-      index: count(position.index, `${path}.occurrencePath[${index}].index`, true),
-    })),
-    boundary: value.boundary,
-  };
 }
 
 /**
@@ -713,8 +623,8 @@ function codeManifest(code: unknown, path: string): JsonObject {
 /**
  * Canonicalize one concrete node under its exhaustive per-kind field policy.
  *
- * @param topologyOnly Whether this is the expansion topology, which adds the node's memory and
- *   execution scopes and encodes baked child flows in topology mode too.
+ * @param topologyOnly Whether this is the expansion topology, which encodes baked child flows in
+ *   topology mode too.
  * @throws TypeError or RangeError when a field breaks the policy or holds a value that isn't
  *   manifestable.
  */
@@ -807,7 +717,6 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       if (agent.steerRender !== null) manifest.steer_render = agent.steerRender;
       const tools: unknown = agent.tools;
       if (!isList(tools)) throw new TypeError(`${path}.tools: expected array, got ${typeName(tools)}`);
-      const memories = memoriesManifest(agent.memories, ctx, `${path}.memories`);
       manifest.llm_inherit = agent.llmInherit;
       // A list prompt as authored; a text prompt stays text, so text-prompt flows keep their identity.
       manifest.prompt = typeof agent.prompt === "string" ? agent.prompt : authoredPrompt(agent.prompt);
@@ -816,8 +725,6 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       const grants = (tools as readonly ToolGrant[]).map(authoredGrant);
       manifest.tools = canonicalSequence(grants, ctx, `${path}.tools`);
       manifest.own_llm_config = llmLayerManifest(agent.ownLlmConfig, ctx, `${path}.ownLlmConfig`);
-      // Left out when empty so memory-free flows keep their identity.
-      if (!topologyOnly && memories.length > 0) manifest.memories = memories;
       break;
     }
     case NodeKind.CODE:
@@ -872,16 +779,6 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
     }
     default:
       throw new RangeError(`${path}: unsupported node kind ${reprText(node.kind)}`);
-  }
-
-  // Derived memory and execution state is never authored program identity. A dynamic fragment's
-  // identity includes the scope's root-relative path, key stack and occurrence path, so replay
-  // rejects a structurally different occurrence without persisting configs or source origins.
-  if (topologyOnly && node.memoryScope !== null) {
-    manifest.memory_scope = memoryScopeTopology(node.memoryScope, `${path}.memoryScope`);
-  }
-  if (topologyOnly && node.executionScope !== null) {
-    manifest.execution_scope = executionScopeTopology(node.executionScope, `${path}.executionScope`);
   }
   return manifest;
 }
@@ -1012,11 +909,8 @@ function flowManifestOf(flow: unknown, ctx: ManifestContext, path: string, topol
       if (flowId !== null && (typeof flowId !== "string" || !flowId)) {
         throw new RangeError(`${path}.flowId: expected a non-empty exact string or null`);
       }
-      const memories = memoriesManifest(flow.memories, ctx, `${path}.memories`);
       if (!topologyOnly) {
         if (flowId !== null) manifest.flow_id = flowId;
-        // Omitted when empty, so memories don't change the identity of memory-free flows.
-        if (memories.length > 0) manifest.memories = memories;
         manifest.flow_llm_config = llmLayerManifest(flow.flowLlmConfig, ctx, `${path}.flowLlmConfig`);
         const outputs: unknown = flow.outputs;
         if (!isList(outputs)) throw new TypeError(`${path}.outputs: expected array, got ${typeName(outputs)}`);
@@ -1058,7 +952,7 @@ export function flowFingerprint(flow: Flow): string {
  * The topology identity holds the entry and terminal ids, sorted node and wiring maps, every
  * build-relevant node field (including recursive baked children), edges in their semantic order,
  * and the fragment's seed connections and child boundaries. CompiledFlow-only root outputs, LLM
- * layers, flow id and memories are intentionally not part of a dynamic fragment digest.
+ * layers and flow id are intentionally not part of a dynamic fragment digest.
  *
  * @param fragment The self-contained Flow a deterministic growth builder returned.
  * @returns A lowercase 64-character SHA-256 hexadecimal digest.

@@ -48,7 +48,7 @@ ${body}output: \${chat.output}
 
 /** Load `chatFlow(...lines)` and run it with `model`; return the run's output once it succeeds. */
 async function run(lines: string[], model: ScriptedModel, options: RunFlowOptions = {}): Promise<unknown> {
-  const result = await runWith(await loadFlow(chatFlow(...lines)), {}, null, model, options);
+  const result = await runWith(await loadFlow(chatFlow(...lines)), {}, model, options);
   expect(result.status).toBe("succeeded");
   return result.output;
 }

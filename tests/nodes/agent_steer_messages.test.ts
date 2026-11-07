@@ -14,9 +14,8 @@ import { type RunEvent, RunStarted } from "../../src/events.ts";
 import type { ChatModel } from "../../src/llm/events.ts";
 import { Message as ModelMessage, Request, type Response, TextPart, ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256 } from "../../src/nodes/agent/context.ts";
-import { runAgent, stepsMaterial } from "../../src/nodes/agent/loop.ts";
+import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
 import { fromModelMessage, rebuildMessages, steerMessages } from "../../src/nodes/agent/messages.ts";
 import { renderTemplateRecord } from "../../src/expr/template.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
@@ -41,13 +40,12 @@ function poolWithInbox(name: string): VariablePool {
   return pool;
 }
 
-test("an agent with a steer inbox reserves its key, hides it from the model and reads its inbox", () => {
+test("an agent with a steer inbox reserves its key and reads its inbox", () => {
   const node = new AgentNode("chat", { prompt: "hi", steerInbox: true });
   expect(node.readsSteerInbox).toBe(true);
   expect([...node.reservedWiringKeys()]).toEqual([STEER_INBOX_KEY]);
   expect(node.reservedKeyLabel(STEER_INBOX_KEY)).toBe("steer_inbox");
-  expect(node.modelHiddenInputs().has(STEER_INBOX_KEY)).toBe(true);
-  expect(node.backwardInputNames()).not.toContain(STEER_INBOX_KEY);
+  expect(node.dataInputNames()).not.toContain(STEER_INBOX_KEY);
   expect(new AgentNode("plain", { prompt: "hi" }).readsSteerInbox).toBe(false);
 });
 
@@ -207,15 +205,13 @@ function loopContext(model: ChatModel, extra: Partial<AgentRunContext> & { tool?
   return {
     nodeId: "chat",
     messages: [userMessage("go")],
-    promptText: "go",
     tools: tool === undefined ? [] : ["lookup"],
     llmConfig: CONFIG,
     outputType: null,
     retries: 0,
     maxToolIterations: -1,
-    memoryContext: new MemoryContext(),
     toolset: tool === undefined ? null : new ToolSet({ lookup: tool }),
-    baseSystemPrompt: DEFAULT_SYSTEM,
+    systemPrompt: DEFAULT_SYSTEM,
     skills: [],
     models: serving(model),
     sent: () => [],
@@ -400,9 +396,9 @@ test("the rebuild and learning render steers as the live loop did, fallback incl
   const live = model.requests[0]!.messages.at(-1)!;
   const { result, warned } = await warnings(async () => {
     const rebuilt = rebuildMessages(steps as JsonObject[], null, renderSteer).toObject() as unknown[];
-    const options = { messages: [SYSTEM, userMessage("go")], tools: [], structured: async () => null, baseSystemPrompt: DEFAULT_SYSTEM };
-    const rendered = await stepsMaterial(steps, { ...options, renderSteer });
-    const unrendered = await stepsMaterial(steps, options);
+    const options = { messages: [SYSTEM, userMessage("go")], tools: [], structured: async () => null };
+    const rendered = await rebuildStepRequests(steps, { ...options, renderSteer });
+    const unrendered = await rebuildStepRequests(steps, options);
     return { rebuilt, rendered, unrendered };
   });
   expect(result.rebuilt[0]).toEqual(fromModelMessage(live));
@@ -462,7 +458,7 @@ async function replayed(log: string): Promise<RunState> {
 
 /** Run `flow` at `log` with `model`, the tool `lookup` and `options`. */
 async function runSteer(flow: string, log: string, model: ChatModel, tool: FunctionTool, options: RunFlowOptions = {}) {
-  return await runWith(await loadFlow(flow), {}, null, model, { log, tools: { lookup: tool }, ...options });
+  return await runWith(await loadFlow(flow), {}, model, { log, tools: { lookup: tool }, ...options });
 }
 
 test("a send while the agent runs joins the next request and writes steer {inbox, from}", async () => {
@@ -567,7 +563,7 @@ test("crash after a steer step: advance replays the steer, the digest matches, n
   await crashAfter(steerSeq + 1, () => runSteer(steerFlow(), log, new ScriptedModel(replies(), CONFIG), sending(log)));
   await send(log, "notes", "b", { env: NO_ENV });
   const model = new ScriptedModel([textReply("done")], CONFIG);
-  const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, model, { tools: { lookup: lookup() } });
+  const resumed = await resumeWith(await loadFlow(steerFlow()), log, model, { tools: { lookup: lookup() } });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(model.requests).toHaveLength(1);
   expect(sent(model.requests[0]!).slice(-2)).toEqual([
@@ -596,7 +592,7 @@ test("crash after the model_call that read the steer: replay takes the recorded 
   await crashAfter(call.seq + 1, () => runSteer(steerFlow(), log, new ScriptedModel(replies(), CONFIG), sending(log)));
   // The reply that read the steer is replayed; only the last call is made.
   const model = new ScriptedModel([textReply("done")], CONFIG);
-  const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, model, { tools: { lookup: lookup() } });
+  const resumed = await resumeWith(await loadFlow(steerFlow()), log, model, { tools: { lookup: lookup() } });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(model.requests).toHaveLength(1);
   expect(stepsOf(log).filter(({ kind }) => kind === "steer")).toHaveLength(1);
@@ -616,7 +612,7 @@ test("a steer read, more sends, then a crash and advance: the read values surviv
   const [sa] = sendSeqs(log);
   expect(state.inboxEvents.get(sa!)!.toObject()).toBe("a");
   const model = new ScriptedModel([textReply("done")], CONFIG);
-  const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, model, { tools: { lookup: lookup() } });
+  const resumed = await resumeWith(await loadFlow(steerFlow()), log, model, { tools: { lookup: lookup() } });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(sent(model.requests[0]!).slice(-2)).toEqual([
     ["user", ["a"]],
@@ -663,7 +659,7 @@ async function crashEverywhere(replies: Response[], sends: readonly string[]): P
     for (const event of lost) await send(log, "notes", event, { env: NO_ENV });
     const made = stepsOf(log).filter(({ kind, step }) => kind === "model_call" && !Object.hasOwn(step, "error")).length;
     const model = new ScriptedModel(replies.slice(made), CONFIG);
-    const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, model, { tools: { lookup: lookup() } });
+    const resumed = await resumeWith(await loadFlow(steerFlow()), log, model, { tools: { lookup: lookup() } });
     expect([k, resumed.status, resumed.output]).toEqual([k, "succeeded", "done"]);
     const read = stepsOf(log).flatMap(({ kind, step }) => (kind === "steer" ? (step["from"] as bigint[]).map(Number) : []));
     expect([k, read]).toEqual([k, sendSeqs(log)]);
@@ -707,7 +703,7 @@ async function steeredThenDown(): Promise<string> {
 /** The seqs of the second steer step and the model call after it, as an uncut advance of `steeredThenDown` writes them. */
 async function secondSteerSeqs(): Promise<{ steer: number; call: number }> {
   const log = await steeredThenDown();
-  const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, new ScriptedModel([textReply("done")], CONFIG), {
+  const resumed = await resumeWith(await loadFlow(steerFlow()), log, new ScriptedModel([textReply("done")], CONFIG), {
     tools: { lookup: lookup() },
   });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
@@ -728,11 +724,11 @@ test("crash after the second steer of one call, then advance: both join the call
   const log = await steeredThenDown();
   const flow = await loadFlow(steerFlow());
   await crashAfter(steer + 1, () =>
-    resumeWith(flow, log, null, new ScriptedModel([textReply("done")], CONFIG), { tools: { lookup: lookup() } }),
+    resumeWith(flow, log, new ScriptedModel([textReply("done")], CONFIG), { tools: { lookup: lookup() } }),
   );
   expect(stepsOf(log).filter(({ kind }) => kind === "steer")).toHaveLength(2);
   const model = new ScriptedModel([textReply("done")], CONFIG);
-  const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, model, { tools: { lookup: lookup() } });
+  const resumed = await resumeWith(await loadFlow(steerFlow()), log, model, { tools: { lookup: lookup() } });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(model.requests).toHaveLength(1);
   expect(sent(model.requests[0]!).slice(-2)).toEqual([
@@ -749,11 +745,11 @@ test("crash after the call that sent two steers, then advance: the recorded repl
   const log = await steeredThenDown();
   const flow = await loadFlow(steerFlow());
   await crashAfter(call + 1, () =>
-    resumeWith(flow, log, null, new ScriptedModel([textReply("done")], CONFIG), { tools: { lookup: lookup() } }),
+    resumeWith(flow, log, new ScriptedModel([textReply("done")], CONFIG), { tools: { lookup: lookup() } }),
   );
   expect(stepsOf(log).at(-1)!.kind).toBe("model_call");
   const model = new ScriptedModel([], CONFIG);
-  const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, model, { tools: { lookup: lookup() } });
+  const resumed = await resumeWith(await loadFlow(steerFlow()), log, model, { tools: { lookup: lookup() } });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("done");
   expect(model.requests).toHaveLength(0);
@@ -762,7 +758,7 @@ test("crash after the call that sent two steers, then advance: the recorded repl
 
 test("two steers before one call: new_messages holds both in order, live and rebuilt from the log", async () => {
   const log = await steeredThenDown();
-  const resumed = await resumeWith(await loadFlow(steerFlow()), log, null, new ScriptedModel([textReply("done")], CONFIG), {
+  const resumed = await resumeWith(await loadFlow(steerFlow()), log, new ScriptedModel([textReply("done")], CONFIG), {
     tools: { lookup: lookup() },
   });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");

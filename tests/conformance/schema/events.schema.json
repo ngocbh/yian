@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "yian.events.v1",
-  "description": "One yian observer event as {name, data}: name is the event's class name and data its JSON form. Keys are snake_case. Every key a data form lists is always present (null where it allows null). This schema describes this version exactly; later versions only add event names, keys and enum values, which a consumer ignores when it doesn't know them: a consumer checking against an older copy skips an event whose name it doesn't know, and treats an unknown key or enum value as unknown, not invalid; an unknown failure code is still a failure. Values the flow produced appear in yian's JSON codec form (see $defs/value). In-loop events (ModelCallStarted, ModelCallFinished, ToolCallStarted, ToolCallFinished, ReplayDegraded), ModelCallRetried and stream chunks are transient: they are never recorded or replayed. In-loop events arrive while a node runs; ModelCallRetried, and a ReplayDegraded published during AGENT backward or with node_id __memory__, come from outside a forward node. $defs/StreamChunk is also the data of a stream chunk forwarded on its own.",
+  "description": "One yian observer event as {name, data}: name is the event's class name and data its JSON form. Keys are snake_case. Every key a data form lists is always present (null where it allows null). This schema describes this version exactly; later versions only add event names, keys and enum values, which a consumer ignores when it doesn't know them: a consumer checking against an older copy skips an event whose name it doesn't know, and treats an unknown key or enum value as unknown, not invalid; an unknown failure code is still a failure. Values the flow produced appear in yian's JSON codec form (see $defs/value). In-loop events (ModelCallStarted, ModelCallFinished, ToolCallStarted, ToolCallFinished, ReplayDegraded) and stream chunks are transient: they are never recorded or replayed. In-loop events arrive while a node runs. $defs/StreamChunk is also the data of a stream chunk forwarded on its own.",
   "type": "object",
   "required": ["name", "data"],
   "properties": {
@@ -25,7 +25,6 @@
     {"properties": {"name": {"const": "ToolCallStarted"}, "data": {"$ref": "#/$defs/ToolCallStarted"}}},
     {"properties": {"name": {"const": "ToolCallFinished"}, "data": {"$ref": "#/$defs/ToolCallFinished"}}},
     {"properties": {"name": {"const": "ReplayDegraded"}, "data": {"$ref": "#/$defs/ReplayDegraded"}}},
-    {"properties": {"name": {"const": "ModelCallRetried"}, "data": {"$ref": "#/$defs/ModelCallRetried"}}},
     {"properties": {"name": {"const": "RunStarted"}, "data": {"$ref": "#/$defs/RunStarted"}}},
     {"properties": {"name": {"const": "RunResumed"}, "data": {"$ref": "#/$defs/RunResumed"}}},
     {"properties": {"name": {"const": "RunSucceeded"}, "data": {"$ref": "#/$defs/RunSucceeded"}}},
@@ -281,40 +280,16 @@
       }
     },
     "ReplayDegraded": {
-      "description": "An AGENT's model left out replay state it couldn't send back, once per reason per invocation; the replayed turns' text and tool calls were still sent (in-loop, transient). One published during AGENT backward (under the AGENT's node_id) or with node_id __memory__ (a memory's learner) comes from outside a forward node; in practice it can't fire there, since those requests replay no assistant message. A backward pass also publishes one with reason rebuilt_request_differs, under an AGENT's node_id, when a request rebuilt from that occurrence's recorded steps doesn't match the digest its step recorded (or its render, recall, structured model or tool groups can't be rebuilt); learning then reads no prompt, memory sections or interactions of that occurrence, while its backward call and memory episodes still run with its inputs, output and feedback.",
+      "description": "An AGENT's model left out replay state it couldn't send back, once per reason per invocation; the replayed turns' text and tool calls were still sent (in-loop, transient).",
       "type": "object",
       "required": ["node_id", "reason"],
       "properties": {
         "node_id": {"type": "string"},
         "reason": {
-          "description": "Why the replay state was left out; rebuilt_request_differs: why learning read no prompt, memory sections or interactions of an occurrence.",
+          "description": "Why the replay state was left out.",
           "type": "string",
-          "enum": ["missing", "malformed", "unknown_version", "other_protocol", "other_provider", "other_model", "other_account", "unknown_field", "rebuilt_request_differs"]
+          "enum": ["missing", "malformed", "unknown_version", "other_protocol", "other_provider", "other_model", "other_account", "unknown_field"]
         }
-      }
-    },
-    "ModelCallRetried": {
-      "description": "A model call outside a forward node (AGENT backward, a memory's learner) failed with a retryable error and is sent again after retry_in seconds; published before the wait (transient).",
-      "type": "object",
-      "required": ["node_id", "consumer", "attempt", "error", "retry_in"],
-      "properties": {
-        "node_id": {"type": "string", "description": "The AGENT's id during backward, or \"__memory__\" for a memory's learner."},
-        "consumer": {"type": "string", "description": "Who made the call: \"backward\" for AGENT backward, or \"memory:<key>\" for the learner of the memory under <key>."},
-        "attempt": {"type": "integer", "minimum": 1, "description": "The failed attempt, from 1."},
-        "error": {
-          "description": "The provider error, scrubbed of credentials.",
-          "type": "object",
-          "required": ["kind", "message"],
-          "properties": {
-            "kind": {
-              "description": "What went wrong, independent of the provider.",
-              "type": "string",
-              "enum": ["auth", "permission", "not_found", "rate_limit", "quota", "overloaded", "bad_request", "context_length", "refused", "server", "timeout", "connection", "redirect", "incomplete", "protocol"]
-            },
-            "message": {"type": "string"}
-          }
-        },
-        "retry_in": {"type": "number", "minimum": 0, "description": "Seconds until the next attempt."}
       }
     },
     "RunStarted": {

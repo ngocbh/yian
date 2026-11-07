@@ -56,8 +56,6 @@ $ yian run --resume ~/.yian/runs/4f1c/log.jsonl
 | `-w`, `--num-workers` | int | How many nodes may run at once. Default 8 for a fresh run; `0` runs nodes one at a time |
 | `--provider` | name | Provider for agents that set none |
 | `--model` | name | Model for agents that set none |
-| `--memory-root` | dir | Keep every built-in memory under `DIR/<flow id>/` |
-| `--memory-storage` | `KEY=PATH` | Keep one memory at `PATH`. Repeat it for more |
 | `--mcp-config` | file | Read MCP servers from this file too. Repeat it for more |
 | `--engine-trace` | | On a failure, also print the engine's stack trace |
 | `--json` | | Print one JSON document on stdout (see [Machine-readable output](#machine-readable-output)) |
@@ -111,8 +109,8 @@ yian creates `~/.yian` and the run folders with mode `0700` and the log with mod
 
 `--resume PATH` continues the run recorded in that log. It runs the flow files the run started
 with, not the files on disk now, so an edited flow needs a new run. It takes no `FLOW`, `--input`,
-`--inputs`, `--provider`, `--model` or `--log`: the log holds all of those. It does take `-w`,
-`--memory-root`, `--memory-storage` and `--mcp-config`; give the memory flags the run used.
+`--inputs`, `--provider`, `--model` or `--log`: the log holds all of those. It does take `-w` and
+`--mcp-config`.
 
 - A finished run prints its recorded result again and runs nothing.
 - An unfinished run retries the nodes that started but never finished. A model call or tool call
@@ -144,8 +142,8 @@ itself. An `ask` never waits in `yian run`: it prompts at the terminal. See
 On a terminal, `yian run FLOW` chats with a flow that has an `Inbox(str)` or `Inbox(Message)`
 input: each line you type goes to the inbox, and each node named `reply` prints its output. It
 chats when stdin and stderr are a terminal, the flow has one such input (or `--inbox NAME` picks
-one), it uses no memory or MCP tool, and there is no `--json` or memory flag. Otherwise a `take`
-on the inbox leaves the run waiting; from a script, use [`send` and `advance`](/embedding/#inbox-calls).
+one), it uses no MCP tool, and there is no `--json`. Otherwise a `take` on the inbox leaves the run
+waiting; from a script, use [`send` and `advance`](/embedding/#inbox-calls).
 
 ```console
 $ yian run chat.yaml
@@ -161,19 +159,6 @@ $ yian run chat.yaml
 Lines you type or paste while the flow replies wait, in order, for the next prompt.
 
 A chat that stops prints `continue with: yian run --resume LOG`; run it on a terminal to go on.
-
-### Memory
-
-Without flags, each built-in memory a flow declares lives in RAM for one run.
-
-- `--memory-root DIR` keeps memory `notes` at `DIR/<flow id>/notes.sqlite`, and `lib.notes`, from a
-  `uses:` import, at `DIR/<flow id>/lib/notes.sqlite`. A profile memory uses `.md`. Folders are
-  created on first use. The flow needs an `id:`.
-- `--memory-storage KEY=PATH` puts one memory at `PATH` and wins over `--memory-root` for that key.
-  The folder must exist.
-- A key the flow doesn't declare, a repeated key, or a custom memory type's key is a usage error. A
-  flow that declares a custom memory type can't run from the CLI; run it from your own program
-  (see [Embedding yian](/embedding/)). `yian run` never runs the [backward pass](/learning/).
 
 ### Skills and MCP servers
 

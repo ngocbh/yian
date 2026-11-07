@@ -44,7 +44,6 @@ expect:
             method: api_key
             source: host
             endpoint: https://api.openai.com/v1
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__

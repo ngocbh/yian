@@ -34,14 +34,13 @@ import {
   scenarioLogs,
   sleepEntry,
   takeEntry,
-  traceParts,
 } from "../helpers/waits_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-wait-scenarios-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 const SCENARIOS = scenarioLogs();
-const plain = (name: string) => SCENARIOS.find((scenario) => scenario.name === name && !scenario.learnable)!;
+const plain = (name: string) => SCENARIOS.find((scenario) => scenario.name === name)!;
 
 /** The state replayed through `scenario`'s records up to and including the one marked `mark`. */
 const stateAt = (scenario: ScenarioLog, mark: string): RunState => replayed(scenario.flow, scenario.path, scenario.marks[mark]! + 1);
@@ -64,7 +63,7 @@ function progress(inspection: RunInspection) {
 /** The records-only inspection of `scenario`'s first `count` records. */
 const inspectCut = (scenario: ScenarioLog, count: number) => inspectRun(cut(scenario, count));
 
-describe.each(SCENARIOS.map((scenario) => [`${scenario.name}${scenario.learnable ? " (learnable)" : ""}`, scenario] as const))(
+describe.each(SCENARIOS.map((scenario) => [scenario.name, scenario] as const))(
   "scenario %s",
   (_name, scenario) => {
     test("every prefix replays, and the whole log replays to the live state", () => {
@@ -72,7 +71,6 @@ describe.each(SCENARIOS.map((scenario) => [`${scenario.name}${scenario.learnable
       for (let k = 1; k < count; k++) replayed(scenario.flow, scenario.path, k);
       const state = replayed(scenario.flow, scenario.path);
       expect(reducerSnapshot(state)).toEqual(reducerSnapshot(scenario.state));
-      if (scenario.learnable) expect(traceParts(state.trace!)).toEqual(traceParts(scenario.state.trace!));
     });
 
     test("the records-only fold is the reducer's", () => {
@@ -81,7 +79,7 @@ describe.each(SCENARIOS.map((scenario) => [`${scenario.name}${scenario.learnable
       expect(w.toJSON()).toEqual(scenario.state.waits.toJSON());
     });
 
-    test.skipIf(scenario.learnable)("inspectRun reads every cut past the run start from the records as a replay does", () => {
+    test("inspectRun reads every cut past the run start from the records as a replay does", () => {
       const envelopes = readRunLog(scenario.path);
       // A replay refuses a log that ends inside its run start; its last record is the START inputs' commit.
       const started = envelopes.findIndex(({ record }) => record instanceof PoolCommitRecord && record.key === START_ID) + 1;

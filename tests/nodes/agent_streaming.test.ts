@@ -294,7 +294,6 @@ test.each([
   const result = await runWith(
     await loadFlow(PLAIN_FLOW),
     { question: "q1" },
-    null,
     new ScriptedModel([script()], PLAIN_CONFIG),
     { onStream: (item) => void chunks.push(item), onEvent: (event) => void events.push(event) },
   );

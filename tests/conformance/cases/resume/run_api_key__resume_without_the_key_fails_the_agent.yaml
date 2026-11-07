@@ -36,7 +36,7 @@ expect:
     status: failed
     failure:
       code: provider.auth
-      message: This run's vllm API key came from the host's llm_config.api_key and is not recorded; pass api_key to resume_flow or RunResult.backward
+      message: This run's vllm API key came from the host's llm_config.api_key and is not recorded; pass apiKey to advance
       frames:
       - label: flow.yaml
         range: [4, 3, 4, 8]
@@ -49,7 +49,6 @@ expect:
           _host_key: true
           model: served-model
           provider: vllm
-      learnable: false
       num_workers: 0
   - - pool_commit
     - __start__
@@ -80,7 +79,7 @@ expect:
     - agent
     - failure:
         code: provider.auth
-        message: This run's vllm API key came from the host's llm_config.api_key and is not recorded; pass api_key to resume_flow or RunResult.backward
+        message: This run's vllm API key came from the host's llm_config.api_key and is not recorded; pass apiKey to advance
         frames:
         - label: flow.yaml
           range: [4, 3, 4, 8]

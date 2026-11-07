@@ -995,8 +995,8 @@ describe("waiting runs in the index", () => {
       const rows = byId(readRunIndex(runs));
       expect(rows["run-w"]).toMatchObject({ status: "running", ready: false, wakeAt: null, waits: [] });
       expect(rows["run-x"]!.status).toBe("cancelled");
-      // The intended difference: inspectRun reads any locked log as running, since a terminal run
-      // may still append backward records; the index overlays only runs that haven't ended.
+      // The intended difference: inspectRun reads any locked log as running, since its writer may
+      // still be appending; the index overlays only runs that haven't ended.
       expect(inspectRun(join(runs, "run-x", "log.jsonl")).status).toBe("running");
     } finally {
       waiting.close();

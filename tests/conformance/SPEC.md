@@ -38,7 +38,7 @@ additions to this file.
 ## The case file
 
 ```yaml
-kind: run                  # load | run | resume | backward | expr | value | defaults | fingerprint | cli | json
+kind: run                  # load | run | resume | expr | value | defaults | fingerprint | cli | json
 pending: "<reason>"        # the runner expects this case to fail until the reason is fixed
 flow: |                    # the flow
   id: greet
@@ -81,8 +81,8 @@ Every case runs in a new temporary directory, the *case directory*:
   `value`, `values` and `item`. yian takes `inputs`, a tool result and an answer through host
   intake, as it takes any host's, so a whole float reaches it as an int: `2.0` is the int `2`
   (`2.5` stays a float).
-- **Secrets** are written as `<key:N>` (N a number) in `run`, `resume`, `backward`, `env`, `host`,
-  `stdin` and `http`. The runner replaces each with the text `sk-conformance-N` and fails the case
+- **Secrets** are written as `<key:N>` (N a number) in `run`, `resume`, `env`, `host`, `stdin` and
+  `http`. The runner replaces each with the text `sk-conformance-N` and fails the case
   if one appears in the trace, events, stream, tool calls, output, the raised error's message,
   stdout, stderr or a run log file.
 - **Time.** The runner's runs use a virtual clock that starts at the real current time and
@@ -92,15 +92,13 @@ Every case runs in a new temporary directory, the *case directory*:
 
 Keys marked required must be present. In a `load`, `expr`, `value`, `defaults`, `fingerprint` or
 `json` case, `expect` holds the results under Checks: exactly one group where
-it says "or". A `run`, `resume` or `backward` case's `expect` has exactly one of `raises` and
-`output`.
+it says "or". A `run` or `resume` case's `expect` has exactly one of `raises` and `output`.
 
 | Kind | Keys | Checks |
 |---|---|---|
 | `load` | `flow` (required), `files`, `env` | `expect.load` |
-| `run` | `flow` (required), `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls`, `memory` when present |
+| `run` | `flow` (required), `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls` when present |
 | `resume` | as `run`, plus `host.crash_after_record` or `host.stop`, and `resume` | as `run`, for the resumed run |
-| `backward` | as `run`, plus `backward` | as `run`, plus `expect.backward` |
 | `expr` | exactly one of `expr` and `template` (required), `values`, `item`, `mode`, `typedefs`, `env` | `expect.value` or `expect.raises` |
 | `value` | `type` and `value` (required), `typedefs`, `env` | `expect.value` and `expect.kind`, or `expect.raises` |
 | `defaults` | `env` | `expect.defaults` or `expect.raises` |
@@ -121,7 +119,6 @@ runner always gives the run a log file in the case directory, and projects it to
 |---|---|---|
 | `run_id` | the run id | yian makes one (a placeholder in expectations) |
 | `num_workers` | the worker bound; `0` is serial | yian's default, 8 |
-| `learnable` | keep learning evidence | `false` |
 | `llm_config` | the run's `llm_config` layer (its `headers` included) | none |
 | `context` | `present`: tools get a host context object | none |
 
@@ -130,34 +127,19 @@ runner always gives the run a log file in the case directory, and projects it to
 error the run raised instead (the log may not exist). When the run raised before creating its
 log, its trace is `[]`.
 
-With `host.memory` (below), its `before` runs go first; `tool_calls` lists their calls too, and
-every other result is the main run's.
-
 ### `resume`
 
 For serial runs (`num_workers: 0`). A `resume` case gives one of `host.crash_after_record`, a
 record number or `end`, and `host.stop` (below). A number `k` cuts the first run after record `k`
 (0-based, so records `0`..`k` are kept): every later append is refused without writing, the run is
 abandoned, and the runner checks that the cut happened. The cut still runs the run's own cleanup
-(closing the log, and memory and MCP close calls), which a real crash would not. `end` lets the
+(closing the log, and MCP close calls), which a real crash would not. `end` lets the
 first run run to its end (a first run that raises fails the case), so the resume is a finished
 run's, read-only. With `host.stop`, the first run must reject with the stop, and the resume
 continues the stopped run. Then the flow is resumed from the log with the `resume` arguments
 `num_workers` (absent: the recorded value), `api_key`, `headers` and `context` (`context` as in
 `run`). The expectations are for the resumed run: its output, the trace of the whole log, the
-events and stream of the resume call, and `tool_calls` over both runs. With `host.memory`, the
-`before` runs come first (their calls are in `tool_calls` too), and the cut run and the resume each
-get the memories built afresh, so the resume sees what the cut run saved before the cut.
-
-### `backward`
-
-Runs the flow (`run.learnable: true`), then calls backward once per entry of `backward`
-(required), a non-empty list of `{feedback, api_key, headers}` (only `feedback` required).
-`expect.backward` has one entry per call: the `outcome` of the `backward_finished` record the
-call appended, projected like the trace (nested nulls kept, so `failure: null` stays), or
-`{raises: <raises>}` when the call raised. The trace includes the backward records. With
-`host.memory`, a `before` run's backward calls aren't in `expect.backward`; the main run's
-memories are closed after its last backward call, and `expect.memory` is read after that.
+events and stream of the resume call, and `tool_calls` over both runs.
 
 ### `expr`
 
@@ -330,9 +312,7 @@ A case can't hold code, so its host is declared under `host`.
   the next entry of its node and consumer. The consumers are `agent` (an AGENT's calls),
   `structured_retry` (a structured call's attempts after its first, which keeps the outer
   consumer), `compose` (the calls of the synthetic composer AGENT `<gate>__compose`, under that
-  node id), `backward`, `summary` (the AGENT's history summaries, under the AGENT's node id) and
-  `memory:<key>` (a reflective or profile memory's learner, under the node id `__memory__`; `<key>`
-  is the memory key and may hold `/`). An entry is `{reply: <message>}`, a yian.message.v1
+  node id) and `summary` (the AGENT's history summaries, under the AGENT's node id). An entry is `{reply: <message>}`, a yian.message.v1
   assistant message, with an optional `usage`; or `{chunks: [<chunk>, ...]}` whose last chunk is
   `{finish: <reason or null>}`; or `{chunks: [...], raise: {class, message, status}}` for a failure
   after the chunks (`chunks: []`: before any output; `status` optional, the provider's HTTP
@@ -343,10 +323,8 @@ A case can't hold code, so its host is declared under `host`.
   its class name is yian's own, so a case with such a raise doesn't pin `ModelCallFinished.error`.
   Without `status`, it is a plain error named `class`, never retried. The runner seats a call from
   the call itself, since its model is built per node: the node id is the one the model was built
-  for, and the consumer is the one it was built for when it has one (`ModelAccess.createModel`'s
-  `consumer`: `backward`, or `memory:<key>` under `__memory__`), else `summary` when the request's
-  first message is a system message starting `Summarize the historical conversation` (the AGENT's
-  summary prompt), else `structured_retry` when the request's last message is a user message
+  for, and the consumer is `summary` when the request's first message is a system message
+  starting `Summarize the historical conversation` (the AGENT's summary prompt), else `structured_retry` when the request's last message is a user message
   starting `Your previous output was invalid:` (the correction a structured call adds after an
   invalid reply), else `compose` for a node id ending in `__compose` and `agent` for any other.
   Every model call streams, so no `chunks` entry is summed; the text chunks of an entry build one
@@ -364,25 +342,9 @@ A case can't hold code, so its host is declared under `host`.
   `cache_creation_tokens` and `reasoning_tokens`. A `reply` served to a streamed call streams as
   one chunk; a `chunks` entry served to an unstreamed call is summed. The script replaces the
   provider below config resolution: the runner still resolves and checks each call's config, so a
-  `models` case needs no provider key unless it tests credentials. In `run`, `resume` and
-  `backward` cases every model call is scripted, so a call with no script fails the case at once
-  instead of reaching a provider; calls that run out and leftovers fail as above.
-- **`memory`**: `{before: [<run>, ...]}` turns memory on (`{}` with no earlier runs). For each
-  run (each `before` run, the main run, and for a `resume` case the cut run and the resume) the
-  runner builds the flow's memories from their declarations, fresh per run, rooted at
-  `<case dir>/memory`, passes them to the run, and
-  closes them after that run's backward calls. An error building them is the case's `raises`
-  (e.g. `MemorySetupError`), except in a `before` run (below); in a `resume` case, the cut run's
-  error skips the resume. A `before` entry is `{inputs, run, backward}`, the case's own shapes
-  (`run.run_id` required; `backward` needs `run.learnable: true`); the `before` runs go in
-  order, before the main run, over the same memory root. Their outcomes aren't compared, but a
-  raise (a run's, a backward call's, or building their memories) fails the case. Scripts are
-  shared by all runs in order; `tool_calls` lists every run's calls; `trace`, `events`,
-  `stream`, `output` and `backward` are the main run's. A profile is seeded by a `files` entry
-  at its storage path, `memory/<flow id>/<scope...>/<name>.md`.
-  The memories are `buildMemories(flow, {root, models, onEvent})` with the runner's
-  scripted model access; the events `onEvent` gets (the learners' `ModelCallRetried` and
-  `ReplayDegraded`) are kept apart and never compared with `expect.events`.
+  `models` case needs no provider key unless it tests credentials. In `run` and `resume` cases
+  every model call is scripted, so a call with no script fails the case at once instead of
+  reaching a provider; calls that run out and leftovers fail as above.
 - **`stop`**: `{<node id>: {after: <point>}}`, a stop of the run. The [points](#points) and their
   counting are a `sends` item's, and `after` is required. When the run reaches the point, the
   runner aborts the run's `signal` with a `ConformanceStop` error, so the run rejects with it: a
@@ -398,12 +360,6 @@ TOOL `ask`, `ask_user` for an agent's call); their `args` are the request in
 data form (`question`, `questions`, `answer_schema`, `title`, `node_id`, `options`, `deadline`
 and the host's extras; nulls left out).
 A TOOL `ask` never sends `options`; a model's `ask_user` call can.
-
-`expect.memory` (it needs `host.memory`) is `{<key>: <text>}`: after the main run and its
-backward calls, the runner builds the memories afresh and reads each listed key's whole recall
-text. Its keys, like `<key>` in
-`memory:<key>`, are memory keys as the `memory_commit_*` records name them. A key the flow
-doesn't declare fails the case.
 
 The format reserves the host key `skills` (skill directories, given as `files`); a case that
 uses it fails.
@@ -424,8 +380,7 @@ A `sends` item's `after: {node: <node id>, <point>}`, and a `stop`'s `{<node id>
   finish in call order.
 
 Counts start at 1. In a `resume` case they run across the cut run and the resume, as the
-scripts do. Points count in the main run (and its resume), never in a `host.memory` `before`
-run, whose calls aren't counted. A resumed AGENT replays its recorded calls, steers and
+scripts do. A resumed AGENT replays its recorded calls, steers and
 `interrupted` step (`resume/run_log__*`); an interrupt recorded before the cut and not yet
 honored is honored on the resume.
 
@@ -509,7 +464,7 @@ they are, except as the rules below say), and an empty payload is left out.
 
 | Record | Node | Payload fields |
 |---|---|---|
-| `run_started` | null | `learnable`, `num_workers`, `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent` |
+| `run_started` | null | `num_workers`, `defaults`, `effective_llm_by_static_path`, `call_time_llm`, `parent` |
 | `run_resumed` | null | `retry_node_ids`, `num_workers`, `closed_calls` |
 | `run_stopped` | null | `reason` (the reason's kind), `node_ids` |
 | `node_waiting` | `node_id` | `call_ids`, `waits`, `steer_inbox` |
@@ -523,19 +478,15 @@ they are, except as the rules below say), and an empty payload is left out.
 | `node_started` | `node_id` | none |
 | `node_step` | `node_id` | `n` (the step's number within the node), `step` |
 | `pool_commit` | `node_id` | `key` (only when it differs from the node), `value` (left out for `system.now` and `system.today`), `from` (a derived commit's sources), `inbox`, `events`, `closed` (a take commit's), `steps` (a messages commit's) |
-| `node_succeeded` | `node_id` | `commit` (the seq of the `pool_commit` it accepts), `messages` (the seq of its messages commit), `forward_capture` |
-| `node_routed` | `node_id` | `handle`, `terminal_failure`, `forward_capture` |
-| `node_expanded` | `spawner_id` | `prune_ids`, `forward_capture` |
-| `node_failed` | the failure's node | `failure`, `forward_capture` |
-| `memory_commit_requested`, `_succeeded`, `_failed` | null | `memory`, `commit_id`, `attempt_id`, `mutations`, `failure` |
-| `backward_started` | null | `attempt_id`, `feedback` |
-| `backward_ready` | null | `attempt_id`, `root_result`, `attributed_results`, `proposals` |
-| `backward_finished` | null | `attempt_id`, `outcome`, `attributed_results` |
+| `node_succeeded` | `node_id` | `commit` (the seq of the `pool_commit` it accepts), `messages` (the seq of its messages commit) |
+| `node_routed` | `node_id` | `handle`, `terminal_failure` |
+| `node_expanded` | `spawner_id` | `prune_ids` |
+| `node_failed` | the failure's node | `failure` |
 
 For example:
 
 ```yaml
-- [run_started, null, {learnable: false, num_workers: 0, defaults: {MAX_TOTAL_NODES: 20000}}]
+- [run_started, null, {num_workers: 0, defaults: {MAX_TOTAL_NODES: 20000}}]
 - [pool_commit, __start__, {key: system.now}]
 - [pool_commit, __start__, {key: system.run_id, value: r1}]
 - [pool_commit, __start__, {key: system.today}]
@@ -560,8 +511,8 @@ For example:
   with the spawner's `from`. A child START's `node_succeeded` names its expansion commit; it writes
   none of its own.
 - Values are plain values: a `pool_commit`'s `value` is recorded typed (`kind` and `value`), and
-  is written without the kind tag (a file as `{uri, mime, name}`); every other value
-  (captures, feedback) is recorded plain already.
+  is written without the kind tag (a file as `{uri, mime, name}`); every other value is recorded
+  plain already.
 - A messages commit holds no `value` but `steps`: the seqs of the AGENT's steps
   its success rebuilds `<node>.new_messages` from (each chat reply that arrived, every tool
   result, and a structured agent's accepted call). An AGENT writes it right after its output
@@ -574,31 +525,11 @@ For example:
 - Deadlines are times: a `node_waiting` wait entry's `deadline` and a `pending` step's
   `deadline` are left out.
 - Dropped: the envelope (`schema`, `run_id`, `seq`); a `pool_commit`'s `kind`; from
-  `run_started`, `flow_fingerprint`, `start_wiring_override`, `memory_snapshots`, `memories`,
-  `memory_stacks`, and the bulky `flow` (the flow files), `skills`, `tools` and `yian_version`;
-  and `node_expanded`'s `topology_digest`.
-- Failures: `node_failed.failure`, `node_routed.terminal_failure`, `run_failed.failure` and a
-  backward failure's `cause` (when it is a node failure, with `trace`) are in failure form. A
-  backward failure (`backward_finished.outcome.failure`) leaves out `cause_type` and `traceback`.
-  Nothing else is removed, and values the flow produced or received are never rewritten, except by
-  placeholders. A memory record's `failure` is a memory operation failure, `{stage, code, message,
-  retryable}`, kept as recorded.
-- In `forward_capture`, a route (and each route nested in its `children` and `snapshot`) leaves out
-  `expression` and `result_type`, because their spelling isn't part of the contract (a literal's
-  JSON text, markers for values JSON can't hold); its structure stays. It also leaves out every
-  other field equal to its empty value (null, `[]`, `0`, `""`), except `kind`, which always stays,
-  and its `value_json` text is read as JSON (codec form). The capture leaves out `evaluated_keys`,
-  `items`, `input_names` and `variable_names` when they are `[]`, and `bound` when it is `true`.
-  `bound` says whether the bound inputs are usable: `false` when this binding, or any of a MAP's
-  item bindings, failed; an item's flag follows its MAP's. A capture records no
-  `bound_inputs` (learning rebuilds them by binding the node again from what its route read) and no
-  `node_data` (learning rebuilds it from the node: its static material, and an AGENT's render and
-  model config), and a derived record (a success naming a derived or expansion commit, and
-  `node_expanded`) holds no `forward_capture`: it is rebuilt from the record's sources. An
-  `interpolation` route (a template with literal text) records no `value_json` either: learning
-  rebuilds its text the same way. Each `items` entry is `{index, capture}`, and its `capture` is
-  projected by these same rules. Everything else is kept as recorded (sources, spans). An
-  interpolation route's `spans` are offsets in code points into its rendered text.
+  `run_started`, `flow_fingerprint`, `start_wiring_override`, and the bulky `flow` (the flow
+  files), `skills`, `tools` and `yian_version`; and `node_expanded`'s `topology_digest`.
+- Failures: `node_failed.failure`, `node_routed.terminal_failure` and `run_failed.failure` are in
+  failure form. Nothing else is removed, and values the flow produced or received are never
+  rewritten, except by placeholders.
 - An agent's LLM config (each value of `run_started.effective_llm_by_static_path` and of
   `run_started.call_time_llm.agents`, and the config of an `effective_llm_config` step) keeps its
   `llm_config` fields (keys not starting with `_`), `_header_names`, `_host_key`, and `_connection`
@@ -606,8 +537,6 @@ For example:
   key is dropped.
 - `call_time_llm` keeps only `agents`: its `selection` is dropped, because its fields are
   internal and its effect is recorded in each call-time agent's `effective_llm_config` step.
-- The backward records' nested structures are kept as recorded, except the backward failure
-  above.
 - A step shows its `n` and every field as written, its `kind` included: a TOOL's
   `tool_attempt`, a call-time agent's `llm_config`, an AGENT's `model_call` and `tool_result`
   (`closed: skipped` for a call a host interrupt skipped, `closed: crashed` for one a resume
@@ -617,18 +546,11 @@ For example:
   error `kind` stay as recorded: a class name (as under Error classes), or a provider error's
   kind such as `rate_limit`.
 
-**Placeholders.** Ids yian makes up are replaced by `<id:1>`, `<id:2>`, ...: a run id the case
-didn't give, and the values of `commit_id`, `mutation_id` and `note_id` fields. The generated run
-id is the run's own id. Every occurrence inside a text value is replaced, so a call id `<run
-id>/fetch` becomes `<id:1>/fetch`; mapping keys are left alone. The ids are collected from every
-projection, expected or not, and numbered in order of first appearance (by position, within one
-text), walking the `before` runs' traces first, run by run in order (their ids are numbered, but
-their entries are never compared), then the trace, events, stream, tool calls (tools in sorted
-order), output, backward outcomes and `expect.memory` texts, with lists in order and mapping keys
-in sorted order; projections added later are walked after `expect.memory`. An episode's `entry_id`
-equals a `mutation_id`, so recall text gets the same placeholder. Since replacement is textual, the
-runner's id source makes ids that can't occur in other text (UUIDs, for example). A `raises`
-expectation is compared as is; a case whose error names the run id gives `run_id`.
+**Placeholders.** A run id the case didn't give is made up, and replaced by `<id:1>` in every
+projection. Every occurrence inside a text value is replaced, so a call id `<run id>/fetch`
+becomes `<id:1>/fetch`; mapping keys are left alone. Since replacement is textual, the run id is
+one that can't occur in other text (a UUID, for example). A `raises` expectation is compared as
+is; a case whose error names the run id gives `run_id`.
 
 **Pooled runs.** When the run's `num_workers` isn't 0, the trace, events, stream and each tool's
 calls are first grouped: run-level entries first, then each node's entries, nodes in sorted
@@ -640,8 +562,7 @@ must be the `pool_commit` of its name (its `key`, else its node). A seq the log 
 fails the case.
 Placeholders are numbered and lists compared after that.
 Expectations are written grouped. A `resume` case's results are grouped by the resumed run's
-`num_workers` (`resume.num_workers`, else the recorded one). A `before` run's trace is grouped
-when its own `num_workers` isn't 0.
+`num_workers` (`resume.num_workers`, else the recorded one).
 An entry's node is its trace `node`; an event's `node_id` (a `NodeFailed`'s failure node; run
 events are run-level); a chunk's `node_id`; a tool call's `node`.
 
@@ -663,16 +584,14 @@ A case's group is its directory under `cases/`.
 | `load-case` | load | CASE branches, exhaustiveness, value entries, skips |
 | `load-loop` | load | LOOP seeds, predicates, partial updates |
 | `load-map-call` | load | CALL, MAP, inline bodies, inline `call(...)`, call nesting |
-| `load-agent` | load | AGENT fields, the `llm_config` cascade, provider blocks, skills, memory declarations |
+| `load-agent` | load | AGENT fields, the `llm_config` cascade, provider blocks, skills |
 | `load-leaves` | load | TOOL (`ask`, `sleep`), CODE, asserts |
 | `fingerprint` | fingerprint | same and different pairs, determinism |
 | `run-core` | run | START and END, bindings, outputs, failures, events, stops |
 | `run-case`, `run-loop`, `run-map-call` | run | control flow and growth |
 | `run-leaves` | run | TOOL (retries, call ids, `ask`, `sleep`), CODE |
 | `run-agent` | run | AGENT with scripted models: plain, structured, tool loop, steers, interrupts, retries |
-| `run-memory` | run | episodic, reflective and profile memories |
 | `resume` | resume | recovery, TOOL attempts across a resume, crashed-attempt counts, re-supplied keys |
-| `backward` | backward | explicit backward feedback and learning |
 | `cli` | cli | non-interactive `yian run`, the `--json` commands, `yian status --json` |
 
 ## Running the suite
@@ -681,18 +600,18 @@ The runner's selection flags, each repeatable, are `--group`, `--kind`, `--case 
 `--diagnostic-code`; `bun run build && node dist/tests/conformance.js` runs it on Node. It prints
 one `FAIL` line per failing case and a summary, counts a failing `pending` case as expected, and
 exits 1 when any case fails. On every `run` and `resume` case with a log it also checks the log's
-invariants (in-flight nodes within `num_workers`, nothing but backward and memory records after the
-terminal outcome, `inspectRun` agreeing with a replay, a finished log resumed read-only).
+invariants (in-flight nodes within `num_workers`, no record after the terminal outcome,
+`inspectRun` agreeing with a replay, a finished log resumed read-only).
 `--crash-sweep` also cuts each serial `run` case that expects `output`, isn't `pending`, and has no
-`host.sends`, `host.memory` or `host.stop` after every record but the last, resumes it (passing the
+`host.sends` or `host.stop` after every record but the last, resumes it (passing the
 run's `context`, `llm_config.api_key` and `llm_config.headers` again), and checks the invariants,
 plus the output and node outcomes when the case has no `host.human` or `host.jitter` and its tool
 scripts only return. What a run took from the host scripts after the cut (tool results, model
 replies, backoff draws) goes back; what it took before stays taken, since the resume replays the
 steps that hold it (an AGENT replays its recorded model calls and tool results rather than making
-them again). A resume adds records, so in those outcomes a capture source's `execution_seq` is
-compared by the kind and node of the record it names, and a success's `commit` by the trace fields
-of the `pool_commit` it names (a `from` seq by the kind and node of the record it names). A node
+them again). A resume adds records, so in those outcomes a success's `commit` is compared by the
+trace fields of the `pool_commit` it names (a `from` seq by the kind and node of the record it
+names). A node
 cut right after its `pool_commit` runs again, so what it took from the host scripts goes back from
 its last record before the commit (its steps replay). A cut inside the run start (before the START
 inputs' commit) can't be resumed: the sweep expects the resume to refuse it (`run log <path> ends
@@ -708,9 +627,8 @@ may make a model call more; and the agent's later scripted requests are compared
 result read as the closer (`content` the closer text, `is_error: true`). A filled secret in the
 uncut run's log or in a resumed log fails the sweep too.
 
-A `run`, `resume` or `backward` case may have a **golden log**, `<name>.log.jsonl` beside it: the
-run log the case writes (for a `resume` case, the whole log after the resume; for a `backward`
-case, with its backward records), pinned byte for byte. Before
+A `run` or `resume` case may have a **golden log**, `<name>.log.jsonl` beside it: the run log the
+case writes (for a `resume` case, the whole log after the resume), pinned byte for byte. Before
 the comparison, every `traceback` value, each record's time (`at`), the seeded clock values
 (the `value` of the `system.now` and `system.today` commits), a step's times (`started_at` and
 `first_token_at`, when set), a set `deadline` of a `node_waiting` wait entry or a `pending` step,
@@ -721,13 +639,13 @@ and the version changes with each release; each line is then written again with 
 encoder, which gives back the line as written. When the log format changes, regenerate the
 golden logs with `--write-logs`, naming each case that has one, and check the diff holds only the
 change. Bun and Node write the same bytes. A golden log goes
-with a serial case that sets `run.run_id`, makes no random ids (no memory; an AGENT case only when
-its scripted replies give every tool call id), and holds no file paths; the error texts in it are
+with a serial case that sets `run.run_id`, makes no random ids (an AGENT case only when its
+scripted replies give every tool call id), and holds no file paths; the error texts in it are
 a stub's or the runner's own (the stop's `conformance stop`).
-`--write-logs` (for development; it needs `--case`) writes the golden log of each selected `run`,
-`resume` and `backward` case instead of comparing it.
+`--write-logs` (for development; it needs `--case`) writes the golden log of each selected `run`
+and `resume` case instead of comparing it.
 
-`--write-expect` reruns each selected `run`, `resume` and `backward` case and, for each of `trace`,
+`--write-expect` reruns each selected `run` and `resume` case and, for each of `trace`,
 `events`, `stream` and `tool_calls` that the case already has and whose computed value differs,
 writes the computed value back into `expect`. It prints a `wrote <id>: <keys>` line for each case
 it changes. Values are written in the codec form above, after placeholders, so a float keeps its

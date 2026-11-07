@@ -290,7 +290,7 @@ function resolveFrom(scope: CallableScope, children: ChildFlows = {}): AssemblyS
  * (`rootAssembleOptions`) and `llm_config:` reader, through the loader's `CallableScope` over the
  * file's `defs:` (no `uses:`), whose catalog is `builder`, with the hand-built `children` (default
  * none) looked up in front of it. Defs resolve lazily, as calls reach them. The loader's `uses:`
- * aliases, root memories and CODE checks are left out.
+ * aliases and CODE checks are left out.
  *
  * @param diagnostics The case's factory for located load errors.
  * @param inputParameters The flow's inputs as an earlier pass resolved them, read in place of its

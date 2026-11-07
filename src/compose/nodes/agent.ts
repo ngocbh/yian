@@ -11,8 +11,8 @@
  * values.
  *
  * Knows about: diagnostics, compose source and helpers, expr (span reading and the binder),
- *              llm_clients (config and provider blocks), memory contracts, nodes (agent and
- *              contracts), skills, typesys and defaults.
+ *              llm_clients (config and provider blocks), nodes (agent and contracts), skills,
+ *              typesys and defaults.
  * Never imports: compose/parse, the runtime or the CLI.
  */
 
@@ -23,7 +23,6 @@ import { wholeSpanInterior } from "../../expr/grammar.ts";
 import { evalBinding } from "../../expr/template.ts";
 import { hostOnlyFieldError, LLMConfig, responsesBlockError } from "../../llm_clients/config.ts";
 import { locatedBlockProblems, PROVIDER_BLOCKS, ValidationError } from "../../llm_clients/provider_blocks.ts";
-import { DeclSite, MemoryDecl } from "../../memory/contracts.ts";
 import {
   BASE_URL_FROM_VALUE,
   declaredHostOnlyError,
@@ -44,9 +43,8 @@ import {
 import { SkillError } from "../../skills/index.ts";
 import { GrantError, parseToolGrants, type ToolGrant } from "../../tools/grants.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isList, isRecord, type Type, typeLevels, type Value, valueRepr } from "../../typesys/values.ts";
-import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
-import { parseMemoryDeclarations } from "../helpers/memory.ts";
+import { isList, isRecord, type Type, typeLevels, valueRepr } from "../../typesys/values.ts";
+import { LoadDiagnostics, LoadError, rejectRemovedMemoryKey } from "../helpers/errors.ts";
 import { readTaggedValue } from "../helpers/tags.ts";
 import { readVariables } from "../helpers/types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
@@ -549,7 +547,6 @@ export interface AgentDescriptorFields extends NodeDescriptorFields {
   asserts?: readonly string[] | null;
   steerInbox?: string | null;
   steerRender?: string | null;
-  memories?: readonly MemoryDecl[];
   outputContractOverride?: ValueContract | null;
 }
 
@@ -559,8 +556,7 @@ export interface AgentDescriptorFields extends NodeDescriptorFields {
  *
  * `allowed` adds `inputs`/`outputs` and the AGENT's own keys to the commons; nothing is required.
  * Only `inputs` is a binding field: the `${...}` references of `prompt:` and `system_prompt:` are
- * read by template scanning, not the inline-call desugar. The authored `long_term_memory:` is read
- * into `memories`.
+ * read by template scanning, not the inline-call desugar.
  */
 export class AgentDescriptor extends NodeDescriptor {
   static override readonly kind = "agent";
@@ -573,14 +569,12 @@ export class AgentDescriptor extends NodeDescriptor {
     "tools",
     "skills",
     "llm_config",
-    "long_term_memory",
     "retries",
     "asserts",
     "steer_inbox",
   );
   static override readonly required = this.require();
   static override readonly bindingFields: readonly string[] = ["inputs"];
-  static override readonly keywordRemap: ReadonlyMap<string, string> = new Map([["long_term_memory", "memories"]]);
 
   /** The prompt template or list prompt; `null` when absent. */
   readonly prompt: string | readonly PromptItem[] | null;
@@ -602,8 +596,6 @@ export class AgentDescriptor extends NodeDescriptor {
   readonly steerInbox: string | null;
   /** The `steer_inbox:` mapping's `render:` template over `${event}`; `null` when absent. */
   readonly steerRender: string | null;
-  /** The authored `long_term_memory:` declarations. */
-  readonly memories: readonly MemoryDecl[];
   /**
    * Never parsed from YAML: set only by the `adaptive_questions` desugar, for a synthesized AGENT
    * whose output type is built in code and has no type text; it overrides the declared `output:`.
@@ -616,15 +608,10 @@ export class AgentDescriptor extends NodeDescriptor {
    * null `variables:` and reads a null `llm_config:` as the defaults); `skills` and `asserts` read
    * `null` as empty.
    *
-   * @throws TypeError when `memories` isn't an array of exact `MemoryDecl` values, or `origin`
-   *   isn't an `OriginRef` or `null`.
+   * @throws TypeError when `origin` isn't an `OriginRef` or `null`.
    */
   constructor(fields: AgentDescriptorFields) {
     super(fields);
-    const memories = fields.memories ?? [];
-    if (!isList(memories) || memories.some((decl) => !isExactly(decl, MemoryDecl))) {
-      throw new TypeError("agent descriptor memories must be an array of exact MemoryDecl values");
-    }
     this.prompt = fields.prompt ?? null;
     this.systemPrompt = fields.systemPrompt ?? null;
     this.variables = fields.variables === undefined ? {} : fields.variables;
@@ -635,16 +622,17 @@ export class AgentDescriptor extends NodeDescriptor {
     this.asserts = fields.asserts ?? [];
     this.steerInbox = fields.steerInbox ?? null;
     this.steerRender = fields.steerRender ?? null;
-    this.memories = memories;
     this.outputContractOverride = fields.outputContractOverride ?? null;
   }
 
   /**
-   * Reject the removed `mode:` key, parse as usual, then reject a variable named `inf`, since
-   * `${inf}` reads infinity, and read a list `prompt:` into its items (`readPromptList`).
+   * Reject the removed `mode:` and memory keys (`rejectRemovedMemoryKey`), parse as usual, then
+   * reject a variable named `inf`, since `${inf}` reads infinity, and read a list `prompt:` into
+   * its items (`readPromptList`).
    *
-   * @throws LoadError when the node authors `mode:` (at its key) or a variable named `inf` (at
-   *   its key), a list `prompt:` is malformed, or the template `parse` rejects it.
+   * @throws LoadError when the node authors `mode:`, `long_term_memory:` or `memory_policy:` (at
+   *   its key) or a variable named `inf` (at its key), a list `prompt:` is malformed, or the
+   *   template `parse` rejects it.
    */
   static override parse<T extends typeof NodeDescriptor>(
     this: T,
@@ -660,6 +648,7 @@ export class AgentDescriptor extends NodeDescriptor {
       }
       throw diagnostics.error(message, { range: cursor.keyRangeOf("mode") });
     }
+    rejectRemovedMemoryKey((key) => cursor.has(key), cursor, diagnostics, `node ${reprText(nodeId)}: `);
     const desc = super.parse(nodeId, cursor) as AgentDescriptor;
     // A `steer_inbox:` mapping's errors and reads point at its `from:` and `render:` values.
     if (isRecord(cursor.get("steer_inbox"))) {
@@ -686,17 +675,11 @@ export class AgentDescriptor extends NodeDescriptor {
   }
 
   /**
-   * Reject the retired `memory_policy:` and `steerable:` keys, at their key, and a `steer_inbox:`
-   * mapping with a key other than `from:` and `render:`, no `from:`, or a `render:` that isn't
-   * non-empty text, before the generic key check.
+   * Reject the retired `steerable:` key, at its key, and a `steer_inbox:` mapping with a key other
+   * than `from:` and `render:`, no `from:`, or a `render:` that isn't non-empty text, before the
+   * generic key check.
    */
   static override _normalizeCursor(cursor: SourceCursor): SourceCursor {
-    if (cursor.has("memory_policy")) {
-      throw LoadDiagnostics.fromCursor(cursor).error(
-        "node field `memory_policy:` was renamed to `long_term_memory:`",
-        { range: cursor.keyRangeOf("memory_policy") },
-      );
-    }
     const steerInbox = cursor.has("steer_inbox") ? cursor.get("steer_inbox") : null;
     if (isRecord(steerInbox)) {
       const diagnostics = LoadDiagnostics.fromCursor(cursor);
@@ -731,10 +714,9 @@ export class AgentDescriptor extends NodeDescriptor {
   /**
    * Check the `prompt:`, `system_prompt:`, `tools:`, `retries:`, `skills:` and `steer_inbox:`
    * shapes, store `retries` as a `number`, split a `steer_inbox:` mapping into its source and
-   * `steerRender`, and parse a present `long_term_memory:` into `memories` (`null` is none).
+   * `steerRender`.
    *
-   * @throws LoadError at the field for a bad shape, a lone surrogate in a prompt, or a bad
-   *   memory declaration.
+   * @throws LoadError at the field for a bad shape or a lone surrogate in a prompt.
    */
   static override _validateFields(
     nodeId: string,
@@ -813,27 +795,16 @@ export class AgentDescriptor extends NodeDescriptor {
         });
       }
     }
-    if (Object.hasOwn(fields, "memories")) {
-      const value = fields["memories"] as Value;
-      fields["memories"] =
-        value === null
-          ? []
-          : parseMemoryDeclarations(value, {
-              diagnostics,
-              cursor: cursor.child("long_term_memory"),
-              site: new DeclSite([], ["root"], nodeId),
-            });
-    }
     super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
   }
 
   /**
    * Build the runtime `AgentNode` and its flow-owned wiring.
    *
-   * Reads the `llm_config:` layer and the local variables, stamps each memory's site with
-   * `ctx.owner`, sets the node's `params` from the authored `input:` and its output contract from
-   * the override or the authored `output:`. `_finish` stamps the descriptor origin; the result
-   * also ranges `__llm_config` at the authored `llm_config:`, where errors about its values point.
+   * Reads the `llm_config:` layer and the local variables, and sets the node's `params` from the
+   * authored `input:` and its output contract from the override or the authored `output:`.
+   * `_finish` stamps the descriptor origin; the result also ranges `__llm_config` at the authored
+   * `llm_config:`, where errors about its values point.
    *
    * @throws LoadError for a bad `env.max_tool_iterations`, a bad variable declaration, a tool or
    *   skill grant the node refuses, an `output:` nesting deeper than
@@ -865,9 +836,6 @@ export class AgentDescriptor extends NodeDescriptor {
       });
     }
     const variables = this.readVariables(ctx);
-    const memories = this.memories.map(
-      (decl) => new MemoryDecl(decl.name, decl.type, decl.config, new DeclSite([], ctx.owner, this.id), decl.origin),
-    );
     let node: AgentNode;
     try {
       node = new AgentNode(this.id, {
@@ -878,7 +846,6 @@ export class AgentDescriptor extends NodeDescriptor {
         llmInherit: inherit,
         retries: this.retries,
         title: this.nodeName,
-        memories,
         variables,
         skills: this.skills,
         steerInbox: this.steerInbox !== null,
@@ -1005,24 +972,5 @@ export class AgentDescriptor extends NodeDescriptor {
         cause: error,
       });
     }
-  }
-
-  /** Attach one origin per authored `long_term_memory:` entry: its key, or the whole sugar scalar. */
-  override withSourceOrigins(
-    cursor: SourceCursor,
-    options: { sitePath: readonly (string | number)[]; catalogBuilder: SourceCatalogBuilder },
-  ): this {
-    if (this.memories.length === 0 || !cursor.has("long_term_memory")) return this;
-    const { sitePath, catalogBuilder } = options;
-    const valueCursor = cursor.child("long_term_memory");
-    const memories = this.memories.map((decl) => {
-      const path = [...sitePath, "field", "memories", decl.name];
-      const origin = valueCursor.has(decl.name)
-        ? catalogBuilder.register(path, valueCursor.child(decl.name), "key")
-        : // The sugar form: the whole scalar value is the one entry.
-          catalogBuilder.register(path, valueCursor);
-      return new MemoryDecl(decl.name, decl.type, decl.config, decl.site, origin);
-    });
-    return this.replace({ memories });
   }
 }

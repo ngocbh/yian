@@ -1,0 +1,77 @@
+# A chat loop whose turn output appends to the history with `+` and to the log with a template;
+# each turn takes the message the host sent to the `messages` inbox. The golden log pins each
+# turn's records.
+kind: run
+flow: |
+  id: chat
+  name: chat
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    messages: !Inbox(str)
+  typedefs:
+    Msg: {role: str, text: str}
+  defs:
+    turn:
+      input:
+        history: !list(Msg)
+        log: !str
+        messages: !Inbox(str)
+      nodes:
+        heard:
+          kind: tool
+          tool_id: take
+          input:
+            from: ${input.messages}
+            take: all
+        reply:
+          kind: agent
+          input:
+            history: ${input.history}
+            message: ${join(heard.output.events)}
+          output: str
+          prompt: |-
+            Conversation so far: ${history}
+            User: ${message}
+      output:
+        history: ${input.history + [Msg(role="user", text=join(heard.output.events)), Msg(role="assistant", text=reply.output)]}
+        log: |-
+          ${input.log}
+          User: ${join(heard.output.events)}
+          Assistant: ${reply.output}
+  nodes:
+    chat:
+      kind: loop
+      call: turn
+      input:
+        history: []
+        log: ""
+        messages: ${input.messages}
+      times: 3
+  output: ${chat.output.log}
+run: {run_id: r1, num_workers: 0}
+host:
+  sends:
+    - {inbox: messages, event: a}
+    - {inbox: messages, event: b}
+    - {inbox: messages, event: c}
+  models:
+    "chat#0/reply":
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: text, text: A}]
+    "chat#1/reply":
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: text, text: B}]
+    "chat#2/reply":
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts: [{type: text, text: C}]
+expect:
+  output: {status: succeeded, output: "\nUser: a\nAssistant: A\nUser: b\nAssistant: B\nUser: c\nAssistant: C"}

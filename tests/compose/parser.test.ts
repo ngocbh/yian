@@ -219,5 +219,4 @@ test.each<Omit<TextCaseRow, "call">>([
 test.each([
   "load-core/engine_surface_vocab_golden__legacy_inputs_section",
   "load-core/seed_e09_unknown_top_level_key",
-  "load-agent/engine_memory_authoring__retired_memory_policy_at_the_root",
 ])("parseFile: %s", (id) => runTextCase({ id, call: fileOf }));

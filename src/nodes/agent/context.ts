@@ -53,7 +53,7 @@ export interface AgentRunContext {
   readonly messages: readonly Message[];
   /** The last message's text, which recall reads as the prompt. */
   readonly promptText: string;
-  /** The tool grants; a text is a name grant. */
+  /** The tool grants, a text read as a name grant; the model sees a group's tools as `<group>_<tool>`. */
   readonly tools: readonly (string | ToolGrant)[];
   /** The effective model config, or `null`. */
   readonly llmConfig: Readonly<Record<string, unknown>> | null;

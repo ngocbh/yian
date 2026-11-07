@@ -321,7 +321,7 @@ test("agent sees the union of three host-filled groups", async () => {
   const result = await run(GROUPS_FLOW, {}, { tools: groups([textTool("box")]), models: chats });
 
   expect(result.status, result.failure?.message).toBe("succeeded");
-  expect(result.output).toBe('box:x via ["box","ws","co"]');
+  expect(result.output).toBe('box:x via ["toolbox_box","workspace_ws","company_co"]');
 });
 
 test("concurrent runs with different toolboxes never cross", async () => {
@@ -339,8 +339,8 @@ test("concurrent runs with different toolboxes never cross", async () => {
 
   const [ann, bob] = await Promise.all([runAs("ann"), runAs("bob")]);
 
-  expect(ann.output).toBe('ann looked up x via ["lookup","ws","co"]');
-  expect(bob.output).toBe('bob looked up x via ["lookup","ws","co"]');
+  expect(ann.output).toBe('ann looked up x via ["toolbox_lookup","workspace_ws","company_co"]');
+  expect(bob.output).toBe('bob looked up x via ["toolbox_lookup","workspace_ws","company_co"]');
 });
 
 for (const [name, tools, message] of [
@@ -497,7 +497,7 @@ test("resume uses the group contents passed to resume", async () => {
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   // The stop cut the call off before its result, so the resume closes it, outcome unknown, rather
   // than running it again.
-  expect(resumed.output).toBe(`${TOOL_OUTCOME_UNKNOWN} via ["old","ws","co"]`);
+  expect(resumed.output).toBe(`${TOOL_OUTCOME_UNKNOWN} via ["toolbox_old","workspace_ws","company_co"]`);
 });
 
 const NESTED_GROUPS_FLOW = `

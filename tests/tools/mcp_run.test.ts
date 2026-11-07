@@ -138,14 +138,14 @@ test(
 test(
   "an agent gets the server tools and calls one",
   async () => {
-    const model = callThenAnswer("add", { a: 2, b: 3 });
+    const model = callThenAnswer("fake_add", { a: 2, b: 3 });
     const server = fake();
     const result = await run(await agentFlow("fake"), { fake: server }, { models: serving(model) });
     expect(result.failure).toBeNull();
     expect(result.status).toBe("succeeded");
     const bound = new Map(model.requests[0]!.tools.map((spec) => [spec.name, spec]));
-    for (const name of ["echo", "add", "fail"]) expect(bound.has(name)).toBe(true);
-    expect(Object.keys(bound.get("add")!.parameters["properties"] as JsonObject).sort()).toEqual(["a", "b"]);
+    for (const name of ["fake_echo", "fake_add", "fake_fail"]) expect(bound.has(name)).toBe(true);
+    expect(Object.keys(bound.get("fake_add")!.parameters["properties"] as JsonObject).sort()).toEqual(["a", "b"]);
     // `add` returns structured content, which the call's result is.
     expect(toolResults(model, 1).map((part) => part.content)).toEqual(['{"result":5}']);
     await expectClosed(server);
@@ -156,7 +156,7 @@ test(
 test(
   "an agent calls an unopened http server",
   async () => {
-    const model = callThenAnswer("echo", { text: "over http" });
+    const model = callThenAnswer("web_echo", { text: "over http" });
     const http = await startHttpServer();
     let server: McpServer;
     try {
@@ -176,7 +176,7 @@ test(
 test(
   "an agent reads a tool error and carries on",
   async () => {
-    const model = callThenAnswer("fail", { message: "boom" });
+    const model = callThenAnswer("fake_fail", { message: "boom" });
     const server = fake();
     const result = await run(await agentFlow("fake"), { fake: server }, { models: serving(model) });
     expect(result.failure).toBeNull();

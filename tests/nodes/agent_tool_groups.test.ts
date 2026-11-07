@@ -49,6 +49,7 @@ import { LOAD_SKILL, loadSkillTool } from "../../src/skills/tool.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { ReportedToolError, ToolCheckError } from "../../src/tools/errors.ts";
 import { FunctionTool, type StandardSchemaV1 } from "../../src/tools/function_tools.ts";
+import { asToolGrant, expandGrants, type GrantedTool, requestToolSpecs } from "../../src/tools/grants.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import type { ValueRecord } from "../../src/typesys/values.ts";
@@ -208,10 +209,12 @@ function agent(
   );
   const material = () => {
     const system = new Message({ role: "system", parts: [new TextPart(systemPromptWithMemory(DEFAULT_SYSTEM, []))] });
-    const specs = toolset
-      .resolve(toolset.expand(tools))
-      .map((tool) => new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema }));
-    if (ctx.skills.length > 0) specs.push(loadSkillTool());
+    const specOf = (granted: GrantedTool) => {
+      const tool = toolset.resolve([{ group: granted.group, name: granted.tool }])[0]!;
+      return new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema });
+    };
+    const granted = expandGrants(tools.map(asToolGrant), toolset.scopes());
+    const specs = requestToolSpecs(granted, specOf, ctx.skills.length > 0 ? loadSkillTool() : null)!;
     return stepsMaterial(steps, {
       messages: [system, ...ctx.messages],
       tools: specs,

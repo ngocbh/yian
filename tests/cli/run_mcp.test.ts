@@ -356,7 +356,7 @@ test.each(["fake", "{fake: [echo]}"])(
     }
 
     expect(result.code, result.output).toBe(0);
-    expect(bound[0]).toContain("echo");
+    expect(bound[0]).toContain("fake_echo");
     expect(pids(fakePid)).toHaveLength(1);
     expect(existsSync(otherPid)).toBe(false);
     await expectNoChildren(fakePid);

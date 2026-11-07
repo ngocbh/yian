@@ -245,7 +245,8 @@ test("agent tool from a group sees the context", async () => {
     tools: { toolbox: [probe(seen)] },
     context: db,
     runId: "run-7f3a",
-    ...agentHost(twoCallsThenAnswer("probe")),
+    // The model sees the group's tool as `<group>_<tool>`.
+    ...agentHost(twoCallsThenAnswer("toolbox_probe")),
   });
 
   expect(result.status, result.failure?.message).toBe("succeeded");

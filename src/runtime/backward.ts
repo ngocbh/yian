@@ -36,7 +36,7 @@ import {
   validateBackwardResult,
 } from "../nodes/base.ts";
 import { Skill } from "../skills/catalog.ts";
-import type { ToolGrant } from "../tools/grants.ts";
+import { expandGrants, GrantError, type GrantedTool, type GrantScope, requestToolSpecs, type ToolGrant } from "../tools/grants.ts";
 import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { jsTypeName } from "../typesys/values.ts";
 import { AttributedBackwardResult, BackwardFailure, BackwardOutcome, type MemoryProposal } from "./contracts.ts";
@@ -271,9 +271,8 @@ export async function learningMaterials(
 
 /**
  * Return what the run recorded of its grants, as a `MaterialCaps` reads them: the skills by name,
- * and the specs of the tools some grants name, found by record name: a group expanded with the
- * membership the run recorded, a group grant's tools and a bare name's tool found in it (`null`
- * when one names no recorded tool).
+ * and a request's tool list for some grants, expanded as the live loop expands them but over the
+ * groups and tools the run recorded (`null` when a grant names no recorded tool).
  */
 export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "toolSpecs"> {
   const skills = new Map(
@@ -282,31 +281,55 @@ export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "
       new Skill({ name, description, instructions }),
     ]),
   );
-  const toolSpecs = (grants: readonly ToolGrant[]): ToolSpec[] | null => {
-    const groups = state.recordedToolGroups;
-    const tools = state.recordedTools;
-    const listed = Object.values(groups).flat();
-    const named = (name: string) => (key: string) => Object.hasOwn(tools, key) && tools[key]!.name === name;
-    // Each grant's tools by record name: a group's, a group grant's listed ones, a top-level
-    // tool's, or a bare name's tool in a recorded group.
-    const keys = grants.flatMap((grant): (string | undefined)[] => {
-      if (grant.kind === "group") {
-        return grant.tools.map((name) => (Object.hasOwn(groups, grant.group) ? groups[grant.group]!.find(named(name)) : undefined));
-      }
-      if (Object.hasOwn(groups, grant.name)) return [...groups[grant.name]!];
-      if (Object.hasOwn(tools, grant.name) && !listed.includes(grant.name)) return [grant.name];
-      return [listed.find(named(grant.name))];
-    });
-    // As `ToolSet.expand`: each tool under its own name, a name granted twice bound once.
-    const specs = new Map<string, ToolSpec>();
-    for (const key of keys) {
-      if (key === undefined || !Object.hasOwn(tools, key)) return null;
-      const { name, description, parameters } = tools[key]!;
-      if (!specs.has(name)) specs.set(name, new ToolSpec({ name, description, parameters }));
+  const scope = recordedScope(state);
+  const toolSpecs = (grants: readonly ToolGrant[], loadSkill: ToolSpec | null): ToolSpec[] | null => {
+    let granted: GrantedTool[];
+    try {
+      granted = expandGrants(grants, [scope]);
+    } catch (error) {
+      if (error instanceof GrantError) return null;
+      throw error;
     }
-    return [...specs.values()];
+    const specOf = (tool: GrantedTool) => {
+      if (!Object.hasOwn(state.recordedTools, tool.key)) return null;
+      const { name, description, parameters } = state.recordedTools[tool.key]!;
+      return new ToolSpec({ name, description, parameters });
+    };
+    return requestToolSpecs(granted, specOf, loadSkill);
   };
   return { skills, toolSpecs };
+}
+
+/**
+ * Return the run's recorded tools as the grant scope its `ToolSet` was: the recorded groups by
+ * name, each member by its own name; a top-level tool is a recorded tool no group lists; and a
+ * tool's identity is its record name, so grants expand and dedupe as they did live.
+ */
+function recordedScope(state: RunState): GrantScope {
+  const groups = state.recordedToolGroups;
+  const tools = state.recordedTools;
+  const members = (group: string): readonly string[] => (Object.hasOwn(groups, group) ? groups[group]! : []);
+  const nameOf = (key: string) => (Object.hasOwn(tools, key) ? tools[key]!.name : null);
+  const listed = new Set(Object.values(groups).flat());
+  return {
+    label: "this run",
+    bareMembers: true,
+    group: (name) => (Object.hasOwn(groups, name) ? members(name).map((key) => nameOf(key) ?? key) : null),
+    hasTool: (name) => Object.hasOwn(tools, name) && !listed.has(name),
+    groupsHolding: (name) => {
+      const seen = new Set<string>();
+      const holding: string[] = [];
+      for (const group of Object.keys(groups)) {
+        const key = members(group).find((member) => nameOf(member) === name);
+        if (key === undefined || seen.has(key)) continue;
+        seen.add(key);
+        holding.push(group);
+      }
+      return holding;
+    },
+    groupNames: () => Object.keys(groups),
+    identity: (group, tool) => (group === null ? tool : (members(group).find((key) => nameOf(key) === tool) ?? tool)),
+  };
 }
 
 /** Compute once, stage every memory, then request and observe each memory key in order. */

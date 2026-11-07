@@ -37,7 +37,7 @@ import {
 import { ASK, ASK_USER, isPending, SLEEP, TAKE, ToolContext, toolCallId } from "./context.ts";
 import { isToolCheckError, ToolCheckError, toolErrorKinds } from "./errors.ts";
 import { FunctionTool, isFunctionTool, type StandardIssue, type StandardResult } from "./function_tools.ts";
-import { asToolGrant, GrantError, type GrantScope, type ToolGrant, visibleToolName } from "./grants.ts";
+import { GrantError, type GrantScope, visibleToolName } from "./grants.ts";
 import { isMcpServer, type McpServer } from "./mcp.ts";
 import { inputTypeFromJsonSchema } from "./types.ts";
 
@@ -798,24 +798,6 @@ export class ToolSet {
     if (this.toolMap === null) return sortedIds(TOOL_REGISTRY);
     const members = [...this.groupMap].flatMap(([group, tools]) => [...tools.keys()].map((name) => `${group}.${name}`));
     return [...new Set([...this.toolMap.keys(), ...members])].sort(compareCodeUnits);
-  }
-
-  /**
-   * Replace each group grant with the names of the tools it grants.
-   *
-   * @param grants Grants, in order: a text is a name grant. A name that is not a group is kept as
-   *   is; a group grant gives the tools it lists.
-   * @returns The names with every group replaced by its tool names, in group order. A name that
-   *   repeats, from overlapping groups or a repeated grant, is kept only where it first appears.
-   */
-  expand(grants: readonly (string | ToolGrant)[]): string[] {
-    // Overlapping or repeated grants bind each tool once.
-    const expanded = new Set<string>();
-    for (const grant of grants.map(asToolGrant)) {
-      const names = grant.kind === "group" ? grant.tools : (this.groupMap.get(grant.name)?.keys() ?? [grant.name]);
-      for (const name of names) expanded.add(name);
-    }
-    return [...expanded];
   }
 
   /**

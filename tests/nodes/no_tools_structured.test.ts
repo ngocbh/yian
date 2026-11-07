@@ -202,7 +202,7 @@ test("a granted tool without a tool set fails as unknown to the registry before 
   const model = new ScriptedModel([textReply("unused")]);
   const error = await rejection(runAgent(context(model, { tools: ["no_such_registered_tool"] })));
   expect(error).toBeInstanceOf(RangeError);
-  expect((error as Error).message).toStartWith("unknown tool id 'no_such_registered_tool'; known tools: ");
+  expect((error as Error).message).toContain("grants unknown tool or group 'no_such_registered_tool'; tool groups in this run: []");
   expect(model.requests).toEqual([]);
 });
 

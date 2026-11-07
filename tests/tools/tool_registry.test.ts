@@ -1,6 +1,6 @@
 /**
  * The tool registry and `ToolSet`: each construction and group error, namespaced groups and their
- * scope, `expand`, `forRun`, `toolIds`, `groups`, `validate` and the `CheckedCall` it returns, `invoke` of a call (a thrown non-`Error` is
+ * scope, `forRun`, `toolIds`, `groups`, `validate` and the `CheckedCall` it returns, `invoke` of a call (a thrown non-`Error` is
  * wrapped), `isConcurrencySafe` and the `ask_user` options cleaning.
  */
 
@@ -22,6 +22,7 @@ import {
   ToolSet,
   type ToolEntry,
 } from "../../src/tools/registry.ts";
+import { asToolGrant, expandGrants } from "../../src/tools/grants.ts";
 import { toolTypes } from "../../src/tools/types.ts";
 import { canonicalTypeLabel, TypeCheckError } from "../../src/typesys/values.ts";
 
@@ -281,15 +282,15 @@ describe("ToolSet construction", () => {
     const shared = tool("shared");
     const tools = new ToolSet({ a: [shared, shared, tool("x")], b: [shared] });
     expect(tools.groups).toEqual(["a", "b"]);
-    expect(tools.expand(["a"])).toEqual(["shared", "x"]);
-    expect(tools.expand(["b"])).toEqual(["shared"]);
+    expect(tools.scope().group("a")).toEqual(["shared", "x"]);
+    expect(tools.scope().group("b")).toEqual(["shared"]);
     expect(tools.resolve(["shared"])).toEqual([shared]);
   });
 
   test("an empty group grants nothing", () => {
     const tools = new ToolSet({ company: [] });
     expect(tools.groups).toEqual(["company"]);
-    expect(tools.expand(["company"])).toEqual([]);
+    expect(tools.scope().group("company")).toEqual([]);
   });
 
   test("the ask_user handler becomes the fixed ask_user tool", async () => {
@@ -436,15 +437,15 @@ describe("ToolSet lookup", () => {
     expect(new ToolSet({ a, g: [b] }).resolve(["b", "a"])).toEqual([b, a]);
   });
 
-  test("expand deduplicates overlapping and repeated grants", () => {
+  test("overlapping and repeated grants bind each tool once, under its first grant's name", () => {
     const shared = tool("shared");
     const tools = new ToolSet({ a: [tool("x"), shared], b: [shared, tool("y")], solo: tool("solo") });
-    expect(tools.expand(["a", "b", "a", "solo", "solo", "unknown"])).toEqual([
-      "x",
-      "shared",
-      "y",
+    const grants = ["a", "b", "a", "solo", "solo"].map(asToolGrant);
+    expect(expandGrants(grants, tools.scopes()).map((granted) => granted.visible)).toEqual([
+      "a_x",
+      "a_shared",
+      "b_y",
       "solo",
-      "unknown",
     ]);
   });
 

@@ -1262,8 +1262,8 @@ export class AgentNode extends Node {
       role: "system",
       parts: [new TextPart(systemPromptWithMemory(rendered.baseSystemPrompt, sections))],
     });
-    const specs = caps.toolSpecs(this.tools);
-    const tools = specs === null ? null : [...specs, ...(rendered.skills.length > 0 ? [loadSkillTool()] : [])];
+    const specs = caps.toolSpecs(this.tools, rendered.skills.length > 0 ? loadSkillTool() : null);
+    const tools = specs === null ? null : [...specs];
     const contract = this.outputContract;
     const structured = async () => {
       if (!isExactly(contract, ValueContract) || caps.models === null) return null;

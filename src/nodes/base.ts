@@ -663,10 +663,11 @@ export interface MaterialCaps {
   /** The skills the run recorded, by name. */
   readonly skills: ReadonlyMap<string, Skill>;
   /**
-   * The specs of the tools `grants` grant, groups expanded, in the order the run bound them, as
-   * the run recorded them; `null` when a grant can't be resolved.
+   * The request's tool list as the run bound it: the specs of the tools `grants` grant, as the run
+   * recorded them, each under the name the model saw, then `loadSkill` when given; `null` when a
+   * grant can't be resolved.
    */
-  readonly toolSpecs: (grants: readonly ToolGrant[]) => readonly ToolSpec[] | null;
+  readonly toolSpecs: (grants: readonly ToolGrant[], loadSkill: ToolSpec | null) => readonly ToolSpec[] | null;
   /** Builds the invocation's model to read its request settings off; never called. */
   readonly models: ModelAccess | null;
   /**

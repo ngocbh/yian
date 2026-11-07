@@ -210,7 +210,7 @@ for (const numWorkers of [0, 8]) {
   test(
     `a stop ends an agent tool call (${numWorkers} workers)`,
     async () => {
-      const call = new ToolCallPart({ id: "c0", name: "slow", arguments: { seconds: 30 } });
+      const call = new ToolCallPart({ id: "c0", name: "fake_slow", arguments: { seconds: 30 } });
       const model = new ScriptedModel([
         new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" }),
         new Response({

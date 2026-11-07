@@ -44,7 +44,7 @@ again until it gives a final answer.
 | `output` | The reply's type (default `str`) |
 | `retries` | Extra attempts to correct a reply that doesn't fit `output:` (default 2) |
 | `asserts` | Checks on the result (see [Expressions](/expressions/)) |
-| `tools` | Tool and tool group names the model may call |
+| `tools` | The tools the model may call: tools and tool groups by name, or `{group: [tool, ...]}` |
 | `skills` | Skill names, or `all` |
 | `steer_inbox` | An `Inbox` input whose messages steer the agent while it runs |
 | `long_term_memory` | Memories the agent recalls and learns into |
@@ -164,13 +164,26 @@ researcher:
   output: str
 ```
 
-`tools:` is always a list. A name is a single tool or a **tool group**, such as all the tools of
-one MCP server. The run fails before it starts when a granted name is missing.
+`tools:` is always a list. A **tool group** holds several tools, such as all the tools of one MCP
+server. Each entry grants one of these:
+
+| Entry | Grants | The model sees |
+|---|---|---|
+| `ask_user` | One tool | `ask_user` |
+| `github` | A whole group | `github_search`, `github_create_issue`, ... |
+| `{github: [search]}` | Some tools of a group | `github_search` |
+
+- A group's tools show as `<group>_<tool>`, so two groups may each have a `search`.
+- A bare tool name, such as `search`, finds a group's tool when only one group has it, and keeps
+  its own name. When two groups have one, grant it as `{github: [search]}`.
+- A tool in two granted groups is offered once, under the first grant's name.
+- The run fails before it starts when a granted name is missing or held by two groups, a group
+  lacks a listed tool, or two granted tools would show one name.
 
 | Where tools come from | How |
 |---|---|
 | `ask_user` | Built in. The model asks the person running the flow a question, with optional answer choices. `yian run` asks in the terminal; a host must pass an `ask` handler in its tools |
-| MCP servers | `yian run` reads them from config files (below). A server's name grants all its tools; a tool's own name grants just that tool |
+| MCP servers | `yian run` reads them from config files (below). Each server is a tool group named after it |
 | Host tools | A program passes them to the run (below) |
 
 - Consecutive calls in one reply run together when their tools say that is safe. Results reach
@@ -244,8 +257,10 @@ const search = tool({
 const result = await runFlow(flow, { question }, { tools: { search, toolbox: [a, b] } });
 ```
 
-A key holding one tool must match its name; a key holding a list is a tool group. The
-`tools` option replaces the run's tools, so pass everything the flow names. See
+A key holding one tool must match its name; a key holding a list is a tool group. Two groups may
+hold tools of one name, but two tools that could show one name, such as a tool `github_search` and
+group `github`'s `search`, are refused. The `tools` option replaces the run's tools, so pass
+everything the flow names. See
 [Embedding yian](/embedding/) for tool context, pending calls and MCP from a program.
 
 ## Skills

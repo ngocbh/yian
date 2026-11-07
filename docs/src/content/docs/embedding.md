@@ -349,6 +349,8 @@ abort its `signal` instead: the run records a stop, rejects with the signal's re
   valibot, ArkType); see [Agents](/agents/#host-tools). A handler gets `(args, ctx)`. `ctx` holds
   `callId` (the same on every retry and resume, so use it as an idempotency key), `attempt`,
   `runId`, `node`, `context` (your app object) and `signal` (aborted when the call must end).
+  Tool groups may hold same-named tools, which a model sees as `<group>_<tool>`; two tools that
+  could show one name are refused.
 - **MCP servers.** `mcpServer({ command, args })` or `mcpServer({ url, headers })` describes a
   server; pass it as a `tools` entry and its tools become one group. yian opens it for the run
   and closes it after, unless you opened it yourself with `await server.open()`. It needs the

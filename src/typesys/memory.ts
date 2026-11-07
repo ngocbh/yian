@@ -14,5 +14,11 @@ import type { JsonObject } from "./json.ts";
  */
 export type Recall = { text: string; cut: string | null; hint: { tool: string; text: string } | null };
 
-/** One tool of a memory as its value records it: a write tool's call goes through `apply`. */
-export type RecordedMemoryTool = { write: boolean; description: string; parameters: JsonObject };
+/**
+ * One tool of a memory as its value records it: a write tool's call goes through `apply`.
+ *
+ * A memory value records its `tools` as a list of these in the type's spec order, not as a map
+ * keyed by name: the run log writes an object's keys sorted, and a whole grant shows the tools in
+ * spec order, both live and when a request is rebuilt from the log.
+ */
+export type RecordedMemoryTool = { name: string; write: boolean; description: string; parameters: JsonObject };

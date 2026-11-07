@@ -13,6 +13,7 @@ import {
   memoryErrorKind,
   type MemorySession,
   type MemoryToolSpec,
+  type RecordedMemoryTool,
 } from "../../src/memory/base.ts";
 
 /** Return a read tool's spec named `name`. */
@@ -176,4 +177,9 @@ test("anything else is not a memory, and the check never throws", () => {
   ]) {
     expect(isMemory(value)).toBe(false);
   }
+});
+
+test("a memory value's tools are a list of specs, each with its name, in spec order", () => {
+  const tools: RecordedMemoryTool[] = BUILTIN_MEMORY_TOOLS.FileMemory.map(spec);
+  expect(tools.map((tool) => tool.name)).toEqual([...BUILTIN_MEMORY_TOOLS.FileMemory]);
 });

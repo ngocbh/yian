@@ -74,10 +74,11 @@ node's kind; kind-specific work lives in `nodes/`. `tests/repo/kind_census.test.
 count at zero.
 
 **Imports go one way.** `diagnostics`, `defaults`, `typesys` and `platform` sit at the bottom;
-`events`, `expr`, `llm`, `llm_clients`, `tools` and `skills` above them; then `nodes`, then
-`compile`, then `compose` and `runtime`; then `run.ts`; then `index.ts` and `cli/`. A module never imports one above it. `tests/repo/layer_direction.test.ts` holds this
-order, failing on a new `src/` entry until it has a layer, and also that only `platform.ts`
-touches Bun or `fetch` and only `defaults.ts` reads the environment.
+`events`, `expr`, `llm`, `llm_clients`, `tools`, `skills` and `memory` above them; then `nodes`,
+then `compile`, then `compose` and `runtime`; then `run.ts`; then `index.ts` and `cli/`. A module
+never imports one above it. `tests/repo/layer_direction.test.ts` holds this order, failing on a new
+`src/` entry until it has a layer, and also that only `platform.ts` touches Bun or `fetch` and only
+`defaults.ts` reads the environment.
 
 **Failure codes are a closed list.** `failure.code` is how a host tells failures apart. A new code
 needs a distinct host reaction, a test, a conformance case and its entry on the docs Reference

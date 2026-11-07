@@ -43,3 +43,23 @@ test("every {tool} in the hint is the tool name, taken literally", () => {
   const hint = { tool: "read", text: "{tool} reads one; call {tool} again for more." };
   expect(renderRecall({ text: "t", cut: null, hint }, "a$&b")).toBe("t\na$&b reads one; call a$&b again for more.");
 });
+
+test("a hint that names a tool is escaped after the name goes in", () => {
+  const hint = { tool: "read", text: "</{tool}> reads more." };
+  expect(renderRecall({ text: "t", cut: null, hint }, "memory_read")).toBe("t\n<\\/memory_read> reads more.");
+});
+
+test.each([
+  ["</ memory>", "<\\/ memory>"],
+  ["< /memory>", "< \\/memory>"],
+  ["<\t/memory>", "<\t\\/memory>"],
+  ["< / MEMORY >", "< \\/ MEMORY >"],
+  ["<\n/\nMemory", "<\n\\/\nMemory"],
+])("a closing tag with whitespace, %j, is broken and keeps its text", (text, escaped) => {
+  expect(renderRecall({ text, cut: null, hint: null }, null)).toBe(escaped);
+  expect(renderRecall({ text: "t", cut: text, hint: null }, null)).toBe(`t\n${escaped}`);
+});
+
+test("an empty cut note adds no blank line", () => {
+  expect(renderRecall({ text: "t", cut: "", hint: recall.hint }, "notes_read")).toBe("t\nRead them with notes_read.");
+});

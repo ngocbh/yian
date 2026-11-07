@@ -154,6 +154,57 @@ test(
 );
 
 test(
+  "an agent granted some tools of a server sees only those, under the server's name",
+  async () => {
+    const model = callThenAnswer("fake_echo", { text: "hi" });
+    const server = fake();
+    const result = await run(await agentFlow("{fake: [echo]}"), { fake: server }, { models: serving(model) });
+    expect(result.failure).toBeNull();
+    expect(model.requests[0]!.tools.map((spec) => spec.name)).toEqual(["fake_echo"]);
+    expect(toolResults(model, 1).map((part) => part.content)).toEqual(["hi"]);
+    await expectClosed(server);
+  },
+  SLOW,
+);
+
+test.each(["{fake: echo}", "echo"])(
+  "a tool node calls a server tool as tool_id: %s",
+  async (toolId) => {
+    const server = fake();
+    const result = await run(await toolFlow(toolId, '{text: "hi"}'), { fake: server });
+    expect(result.failure).toBeNull();
+    expect(result.output).toBe("hi");
+    await expectClosed(server);
+  },
+  SLOW,
+);
+
+test(
+  "two servers listing one tool: a bare grant fails at run start, the group form works",
+  async () => {
+    const first = fake("--only", "echo");
+    const second = fake("--only", "echo");
+    const error = await rejection(run(await agentFlow("echo"), { fake: first, other: second }));
+    expect(error).toBeInstanceOf(RangeError);
+    expect(error.message).toBe(
+      "AGENT node 'worker' grants 'echo': 'echo' is a tool of groups 'fake' and 'other'; grant one as `{fake: [echo]}`",
+    );
+    await expectClosed(first);
+    await expectClosed(second);
+
+    const model = callThenAnswer("other_echo", { text: "hi" });
+    const [a, b] = [fake("--only", "echo"), fake("--only", "echo")];
+    const result = await run(await agentFlow("{other: [echo]}"), { fake: a, other: b }, { models: serving(model) });
+    expect(result.failure).toBeNull();
+    expect(model.requests[0]!.tools.map((spec) => spec.name)).toEqual(["other_echo"]);
+    expect(toolResults(model, 1).map((part) => part.content)).toEqual(["hi"]);
+    await expectClosed(a);
+    await expectClosed(b);
+  },
+  SLOW,
+);
+
+test(
   "an agent calls an unopened http server",
   async () => {
     const model = callThenAnswer("web_echo", { text: "over http" });

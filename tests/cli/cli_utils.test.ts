@@ -278,7 +278,7 @@ const RUN: CommandSpec = {
       help: "Recover the run recorded at PATH.",
     },
     { name: "log", type: "string", path: { dir: false }, help: "Create a fresh durable run log at PATH." },
-    { name: "memory-root", type: "string", path: { dir: true }, metavar: "DIR", help: "Keep memory under DIR." },
+    { name: "work-dir", type: "string", path: { dir: true }, metavar: "DIR", help: "Keep scratch files under DIR." },
     { name: "quiet", short: "q", type: "boolean", help: "Suppress per-node progress." },
     { name: "num-workers", short: "w", type: "int", min: 0, help: "Worker pool size." },
     { name: "json", type: "boolean", help: "Print one yian.cli.v1 JSON document on stdout." },
@@ -465,10 +465,10 @@ describe("parseCommand", () => {
     const missing = join(home, "nodir");
     expect(usage(CHECK, ["--root", missing, "x.yaml"])).toBe(`Invalid value for '--root': Directory '${missing}' does not exist.`);
     expect(usage(CHECK, ["--root", flow, "x.yaml"])).toBe(`Invalid value for '--root': Directory '${flow}' is a file.`);
-    expect(usage(RUN, [flow, "--memory-root", flow])).toBe(`Invalid value for '--memory-root': Directory '${flow}' is a file.`);
-    const memory = join(home, "memory");
-    mkdirSync(memory);
-    expect(parseCommand(CHECK, ["--root", memory, "x.yaml"])).toMatchObject({ options: { root: memory } });
+    expect(usage(RUN, [flow, "--work-dir", flow])).toBe(`Invalid value for '--work-dir': Directory '${flow}' is a file.`);
+    const work = join(home, "work");
+    mkdirSync(work);
+    expect(parseCommand(CHECK, ["--root", work, "x.yaml"])).toMatchObject({ options: { root: work } });
   });
 });
 
@@ -479,7 +479,7 @@ describe("helpText and usageError", () => {
     expect(text).toContain(RUN.summary);
     expect(text).toContain("Path to a flow .yaml");
     expect(text).toContain("-w, --num-workers INTEGER");
-    expect(text).toContain("--memory-root DIR");
+    expect(text).toContain("--work-dir DIR");
     expect(text).toContain("--help");
     expect(helpText(CHECK).startsWith("Usage: yian check [OPTIONS] FLOWS...\n")).toBe(true);
   });

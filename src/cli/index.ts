@@ -96,24 +96,6 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
             "provider/model, and log flags are forbidden.",
         },
         { name: "quiet", short: "q", type: "boolean", help: "Suppress per-node progress." },
-        {
-          name: "memory-root",
-          type: "string",
-          path: { dir: true },
-          metavar: "DIR",
-          help:
-            "Keep every declared built-in memory under DIR/<flow id>/ (created on first use). Also " +
-            "accepted with --resume. Without either flag, memory lives in process RAM.",
-        },
-        {
-          name: "memory-storage",
-          type: "string",
-          multiple: true,
-          metavar: "KEY=PATH",
-          help:
-            "Store the built-in memory KEY (for example notes or lib.notes) at PATH, whose directory " +
-            "must exist (repeatable; overrides --memory-root for KEY). Also accepted with --resume.",
-        },
         { name: "verbose", short: "v", type: "boolean", help: "Also print each node's output as it finishes." },
         {
           name: "num-workers",
@@ -166,8 +148,6 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
             log: o["log"] as string | undefined,
             resume: o["resume"] as string | undefined,
             quiet: o["quiet"] === true,
-            memoryRoot: o["memory-root"] as string | undefined,
-            memoryStorage: o["memory-storage"] as string[],
             verbose: o["verbose"] === true,
             numWorkers: o["num-workers"] as number | undefined,
             provider: o["provider"] as string | undefined,

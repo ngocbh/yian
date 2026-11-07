@@ -1014,7 +1014,6 @@ describe("runOrChat", () => {
       {
         inputValues: [],
         quiet: true,
-        memoryStorage: [],
         verbose: false,
         engineTrace: false,
         mcpConfig: [],

@@ -92,6 +92,8 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MODEL_FIRST_RESPONSE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds from sending a model request to the first bytes of its response |
 | `YIAN_MODEL_IDLE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds between bytes of a streamed model response |
 | `YIAN_REQUEST_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for a short request (model listing, sign-in calls) |
+| `YIAN_EMBEDDING_TIMEOUT_SECONDS` | setting | 60 | 1 or more | Longest wait in seconds for one embeddings request |
+| `YIAN_EMBEDDING_BATCH_ITEMS` | setting | 64 | 1 or more | Most texts sent in one embeddings request; more go in several requests |
 | `YIAN_MAX_AUTH_RESPONSE_BYTES` | input cap | 1,048,576 | 1 or more | Largest response body read from a sign-in server |
 | `YIAN_MAX_AUTH_STORE_BYTES` | input cap | 1,048,576 | 1 or more | Largest auth store file read or written |
 | `YIAN_MAX_OAUTH_CALLBACK_BYTES` | input cap | 16,384 | 1 or more | Largest request header block read from the sign-in callback |

@@ -298,6 +298,18 @@ export const ENTRIES = Object.freeze([
     group: "setting",
     minimum: 1,
   }),
+  entry("EMBEDDING_TIMEOUT_SECONDS", {
+    default: 60,
+    description: "Longest wait in seconds for one embeddings request",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("EMBEDDING_BATCH_ITEMS", {
+    default: 64,
+    description: "Most texts sent in one embeddings request; more go in several requests",
+    group: "setting",
+    minimum: 1,
+  }),
   // Input-size caps.
   entry("MAX_AUTH_RESPONSE_BYTES", {
     default: 1024 * 1024,

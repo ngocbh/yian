@@ -184,9 +184,8 @@ export function expandGrants(grants: readonly ToolGrant[], scopes: readonly Gran
       const members = scopes[at]!.group(grant.group)!;
       const missing = grant.tools.find((tool) => !members.includes(tool));
       if (missing !== undefined) {
-        throw new GrantError(
-          `grants ${grantText(grant)}: \`${grant.group}\` has no tool \`${missing}\`; it has ${members.join(", ")}`,
-        );
+        const has = members.length === 0 ? "no tools" : members.join(", ");
+        throw new GrantError(`grants ${grantText(grant)}: \`${grant.group}\` has no tool \`${missing}\`; it has ${has}`);
       }
       for (const tool of grant.tools) add(grant, member(at, grant.group, tool, visibleToolName(grant.group, tool)));
       continue;
@@ -205,7 +204,11 @@ export function expandGrants(grants: readonly ToolGrant[], scopes: readonly Gran
     const holders = scopes.flatMap((scope, at) =>
       scope.bareMembers ? scope.groupsHolding(name).map((group) => [at, group] as const) : [],
     );
-    if (holders.length === 0) throw new GrantError(`grants unknown tool or group ${reprText(name)}; ${groupsText(scopes)}`);
+    if (holders.length === 0) {
+      const shown = groupToolShownAs(name, scopes);
+      const hint = shown === null ? "" : `; did you mean \`{${shown.group}: [${shown.tool}]}\`?`;
+      throw new GrantError(`grants unknown tool or group ${reprText(name)}; ${groupsText(scopes)}${hint}`);
+    }
     if (holders.length > 1) {
       const groups = holders.map(([, group]) => reprText(group));
       throw new GrantError(
@@ -240,6 +243,23 @@ export function requestToolSpecs(
   }
   if (loadSkill !== null) specs.push(loadSkill);
   return specs;
+}
+
+/**
+ * Return the group tool whose visible name is `name` (`github_search` is `github`'s `search`), or
+ * `null` when no group of `scopes` shows a tool under it.
+ */
+export function groupToolShownAs(
+  name: string,
+  scopes: readonly GrantScope[],
+): { readonly group: string; readonly tool: string } | null {
+  for (const scope of scopes) {
+    for (const group of scope.groupNames()) {
+      const tool = name.slice(group.length + 1);
+      if (name.startsWith(`${group}_`) && scope.group(group)!.includes(tool)) return { group, tool };
+    }
+  }
+  return null;
 }
 
 // The tool names providers accept: OpenAI's and Anthropic's rule, which the others fit in.

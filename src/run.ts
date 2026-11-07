@@ -3175,8 +3175,15 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
         reason =
           `tool ${reprText(call.toolId)}, which isn't in this run's tools; ` +
           `known tools: ${writeAsText([...known])}`;
-        const [close] = getCloseMatches(call.toolId, known, 1, CLOSE_MATCH_CUTOFF);
-        if (close !== undefined) reason += `; did you mean ${reprText(close)}?`;
+        // A group's tool is matched by the name a model sees it under and offered as `{group: tool}`.
+        const scope = tools.scope();
+        const written = new Map<string, string>();
+        for (const group of scope.groupNames()) {
+          for (const name of scope.group(group)!) written.set(`{${group}: ${name}}`, visibleToolName(group, name));
+        }
+        const candidates = new Map(known.map((id) => [written.get(id) ?? id, written.has(id) ? `\`${id}\`` : reprText(id)]));
+        const [close] = getCloseMatches(call.toolId, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);
+        if (close !== undefined) reason += `; did you mean ${candidates.get(close)!}?`;
       }
       throw new RangeError(`TOOL node ${reprText(nodeId)} names ${reason}`);
     }

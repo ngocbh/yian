@@ -21,7 +21,7 @@ import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
 import { visibleToolName } from "../../tools/grants.ts";
-import type { ToolRef } from "../../tools/registry.ts";
+import { RESERVED_TOOL_NAMES, type ToolRef } from "../../tools/registry.ts";
 import { parseDateOrDatetime, parseDuration } from "../../typesys/temporal.ts";
 import {
   canonicalTypeLabel,
@@ -172,6 +172,13 @@ export class ToolDescriptor extends NodeDescriptor {
     fields["toolRef"] = ref;
     // A group's tool shows as `<group>_<tool>`, which is never a built-in's name.
     const toolId = visibleToolName(ref.group, ref.name);
+    if (ref.group !== null && RESERVED_TOOL_NAMES.has(toolId)) {
+      throw diagnostics.error(
+        `node ${reprText(nodeId)} (kind=${this.kind}): \`tool_id: {${ref.group}: ${ref.name}}\` would show as ` +
+          `\`${toolId}\`, a name yian reserves; rename the group or the tool`,
+        { range: rangeOf("tool_id") },
+      );
+    }
     if (toolId === LOAD_SKILL) {
       throw diagnostics.error(`node ${reprText(nodeId)} (kind=${this.kind}): tool id \`${LOAD_SKILL}\` is reserved by yian`, {
         range: rangeOf("tool_id"),

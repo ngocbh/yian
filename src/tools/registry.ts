@@ -686,8 +686,11 @@ export class ToolSet {
         `${reprText(toolId)} is an engine built-in, not a tool; reach it with a TOOL node's tool_id: ${toolId}`,
       );
     }
-    if (this.groupMap.has(toolId)) {
-      throw new RangeError(`${reprText(toolId)} is a tool group, not a tool; grant it in an AGENT node's tools: list`);
+    const group = this.groupMap.get(toolId);
+    if (group !== undefined) {
+      const [first] = group.keys();
+      const what = first === undefined ? ", and it has no tools" : `; name one of its tools, as \`{${toolId}: ${first}}\``;
+      throw new RangeError(`${reprText(toolId)} is a tool group, not a tool${what}`);
     }
     const tool = (this.toolMap ?? TOOL_REGISTRY).get(toolId);
     if (tool !== undefined) return tool;
@@ -791,12 +794,12 @@ export class ToolSet {
 
   /**
    * The sorted ids of the tools this run can resolve, for messages: with a mapping, the mapping's
-   * top-level tools and `<group>.<tool>` for each group's tools; with no mapping, the global
-   * registry's tools.
+   * top-level tools and `{<group>: <tool>}` for each group's tools, as a TOOL node names one; with
+   * no mapping, the global registry's tools.
    */
   get toolIds(): readonly string[] {
     if (this.toolMap === null) return sortedIds(TOOL_REGISTRY);
-    const members = [...this.groupMap].flatMap(([group, tools]) => [...tools.keys()].map((name) => `${group}.${name}`));
+    const members = [...this.groupMap].flatMap(([group, tools]) => [...tools.keys()].map((name) => `{${group}: ${name}}`));
     return [...new Set([...this.toolMap.keys(), ...members])].sort(compareCodeUnits);
   }
 

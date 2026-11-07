@@ -155,3 +155,15 @@ test.each<[GrantedTool, string]>([
 test("names a model can call pass", () => {
   expect(() => checkVisibleNames([shownAs("my-server", "get-file"), shownAs(null, "_x"), shownAs("a".repeat(32), "b".repeat(31))])).not.toThrow();
 });
+
+test("a group grant on an empty group says it has no tools", () => {
+  const empty: GrantScope = { ...run, group: (name) => (name === "g" ? [] : null), groupNames: () => ["g"] };
+  expect(() => expandGrants(parseToolGrants([{ g: ["x"] }], "n"), [empty])).toThrow("`g` has no tool `x`; it has no tools");
+});
+
+test("a grant written as a group tool's visible name suggests the group form", () => {
+  expect(() => expandGrants(parseToolGrants(["github_create_issue"], "n"), [run])).toThrow(
+    "grants unknown tool or group 'github_create_issue'; tool groups in this run: [github, docs]; " +
+      "did you mean `{github: [create_issue]}`?",
+  );
+});

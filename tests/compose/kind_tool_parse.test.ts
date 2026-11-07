@@ -101,6 +101,17 @@ test("tool build sets a record output contract", () => {
   expect(fields.get("qty")).toEqual(Type.scalar(ValueKind.INTEGER));
 });
 
+test("a tool_id group tool that would show under a reserved name is refused in the form written", () => {
+  const error = loadError(() =>
+    ToolDescriptor.parse("a", readerFor("nodes:\n  a:\n    kind: tool\n    tool_id: {load: skill}\n", "a")),
+  );
+
+  expect(error.message).toBe(
+    "node 'a' (kind=tool): `tool_id: {load: skill}` would show as `load_skill`, a name yian reserves; " +
+      "rename the group or the tool",
+  );
+});
+
 describe("retries", () => {
   /** Parse node `a` of a TOOL flow with `line` added. */
   const parseA = (line: string) =>

@@ -429,6 +429,43 @@ output: \${found.output}
   expect(pendingCalls(log).map(({ node, tool: name }) => [node, name])).toEqual([["found", "github_search"]]);
 });
 
+test.each([
+  ["github_search", "`{github: search}`"],
+  ["github_serch", "`{github: search}`"],
+  ["lookp", "'lookup'"],
+])("a TOOL node's unknown tool_id %s suggests the form to write: %s", async (toolId, suggestion) => {
+  const flow = `id: t\nname: t\nnodes:\n  found:\n    kind: tool\n    tool_id: ${toolId}\n    input: {text: owls}\noutput: \${found.output}\n`;
+  const tools = { lookup: textTool("lookup"), github: [textTool("search")] };
+
+  const error = await rejected(run(flow, {}, { log: freshLog(), tools }));
+
+  expect((error as Error).message).toBe(
+    `TOOL node 'found' names tool '${toolId}', which isn't in this run's tools; ` +
+      `known tools: ["lookup","{github: search}"]; did you mean ${suggestion}?`,
+  );
+});
+
+test("a TOOL node naming a group offers one of its tools as {group: tool}", async () => {
+  const flow = `id: t\nname: t\nnodes:\n  found:\n    kind: tool\n    tool_id: github\n    input: {text: owls}\noutput: \${found.output}\n`;
+
+  const error = await rejected(run(flow, {}, { log: freshLog(), tools: { github: [textTool("search")] } }));
+
+  expect((error as Error).message).toBe(
+    "TOOL node 'found' names 'github': 'github' is a tool group, not a tool; name one of its tools, as `{github: search}`",
+  );
+});
+
+test("an AGENT granting a group tool's visible name is offered the group form", async () => {
+  const flow = GROUPS_FLOW.replace("tools: [toolbox, workspace, company]", "tools: [github_search]");
+
+  const error = await rejected(run(flow, {}, { log: freshLog(), tools: { github: [textTool("search")] }, models: chats }));
+
+  expect((error as Error).message).toBe(
+    "AGENT node 'agent' grants unknown tool or group 'github_search'; tool groups in this run: [github]; " +
+      "did you mean `{github: [search]}`?",
+  );
+});
+
 test("a TOOL node naming a group the run lacks fails at run start", async () => {
   const flow = `
 id: group_tool

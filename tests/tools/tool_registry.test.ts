@@ -394,16 +394,19 @@ describe("ToolSet lookup", () => {
     expect((error as Error).message).toContain("unsupported argument");
   });
 
-  test("a group id is not a tool", () => {
+  test("a group id is not a tool, and the error names one of its tools as {group: tool}", () => {
     expect(thrown(() => new ToolSet({ toolbox: [tool("a")] }).resolve(["toolbox"]), RangeError)).toBe(
-      "'toolbox' is a tool group, not a tool; grant it in an AGENT node's tools: list",
+      "'toolbox' is a tool group, not a tool; name one of its tools, as `{toolbox: a}`",
+    );
+    expect(thrown(() => new ToolSet({ toolbox: [] }).resolve(["toolbox"]), RangeError)).toBe(
+      "'toolbox' is a tool group, not a tool, and it has no tools",
     );
   });
 
-  test("an unknown id lists the mapping's tools, a group's as group.tool", () => {
+  test("an unknown id lists the mapping's tools, a group's as {group: tool}", () => {
     const tools = new ToolSet({ b: tool("b"), g: [tool("a")] });
     expect(thrown(() => tools.resolve(["zzz"]), RangeError)).toBe(
-      'unknown tool id \'zzz\'; known tools: ["b","g.a"]',
+      'unknown tool id \'zzz\'; known tools: ["b","{g: a}"]',
     );
   });
 
@@ -451,7 +454,7 @@ describe("ToolSet lookup", () => {
 
   test("toolIds is sorted, from the mapping and its groups", () => {
     const tools = new ToolSet({ b: tool("b"), g: [tool("a"), tool("C")], ask_user: () => null });
-    expect(tools.toolIds).toEqual(["ask", "ask_user", "b", "g.C", "g.a"]);
+    expect(tools.toolIds).toEqual(["ask", "ask_user", "b", "{g: C}", "{g: a}"]);
     expect(tools.groups).toEqual(["g"]);
   });
 

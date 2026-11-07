@@ -36,7 +36,6 @@ import type {
   PolicyCommitStatus,
   VisibleInteraction,
 } from "../../src/memory/index.ts";
-import { BackwardFailure } from "../../src/runtime/contracts.ts";
 import {
   decodeRecord,
   encodeRecord,
@@ -317,8 +316,7 @@ test("learning carriers name their memory key", () => {
   );
 });
 
-test("a backward failure and the commit records name their memory key", () => {
-  expect(new BackwardFailure("commit", "declined", "", { memory: "notes" }).memory).toBe("notes");
+test("the commit records name their memory key", () => {
   const cause = new MemoryOperationFailure("commit", "declined", "Declined.", true);
   for (const record of [
     new MemoryCommitRequestedRecord("notes", "c1", [], 1),

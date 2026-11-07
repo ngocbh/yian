@@ -703,36 +703,15 @@ test("replay checks its arguments' types before the state is pristine", () => {
   );
 });
 
-/** Return a prepared RunStarted whose plan is replaced by `kind`'s, with `traceDelta`. */
-function handBuilt(kind: "backward" | "growth", traceDelta: TraceDelta | null): [RunState, PreparedTransition] {
+/** Return a prepared RunStarted whose plan is replaced by a growth plan, with `traceDelta`. */
+function handBuilt(kind: "growth", traceDelta: TraceDelta | null): [RunState, PreparedTransition] {
   const owned = flow();
   const state = new RunState(owned);
   const prepared = prepareRunStarted(state, startData());
-  const extra =
-    kind === "backward"
-      ? { originatingBackwardState: state.backwardState, nextBackwardState: state.backwardState }
-      : { delta: Object.freeze({}), topology: Object.freeze({}) };
+  const extra = { delta: Object.freeze({}), topology: Object.freeze({}) };
   const plan = Object.freeze({ ...prepared._plan, kind, traceDelta, ...extra });
   return [state, new PreparedTransition(prepared.record, prepared.expectedRunId, 0, plan as never, [])];
 }
-
-test("a backward plan needs a sequence-only trace change before anything else", () => {
-  const [state, prepared] = handBuilt("backward", null);
-  const log = new MemoryRunLog(RUN_ID);
-  expectError(
-    () => commitPrepared(log, state, prepared),
-    RangeError,
-    /^postterminal trace delta must only advance the accepted sequence$/,
-  );
-  expect(log.nextSequence).toBe(0);
-});
-
-test("a backward plan reaches its commit, which requires an initialized state", () => {
-  const [state, prepared] = handBuilt("backward", new TraceDelta(null, 0));
-  const log = new MemoryRunLog(RUN_ID);
-  expectError(() => commitPrepared(log, state, prepared), RangeError, /^run state is not initialized$/);
-  expect(log.nextSequence).toBe(0);
-});
 
 test("a growth plan requires its NodeExpandedRecord at commit", () => {
   const [state, prepared] = handBuilt("growth", null);

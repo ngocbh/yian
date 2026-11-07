@@ -1,7 +1,7 @@
 /**
  * Closed run-record vocabulary and canonical JSON codecs.
  *
- * The engine, the host deliveries and the backward driver build these durable records, and each
+ * The engine and the host deliveries build these durable records, and each
  * one reaches a log through `RunLog.append`. Records contain only transition data; their enclosing
  * `RecordEnvelope` owns run identity, schema version, sequence and the time the log appended the
  * record. This module deliberately knows nothing about the scheduler or
@@ -19,29 +19,21 @@ import { dirname } from "node:path";
 
 import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.ts";
 import {
-  type FeedbackValue,
   type RouteKind,
   type RoutePath,
   SourceRef,
   ValueRoute,
-  validateFeedback,
 } from "../expr/lineage.ts";
 import {
   DeclSite,
-  LearningFailure,
-  type LearningOperation,
-  LearningResult,
-  type LearningStatus,
   MemoryMutation,
   MemoryOperationFailure,
   MemorySnapshotEnvelope,
   MemorySpec,
   MemoryStack,
-  PolicyCommitOutcome,
-  type PolicyCommitStatus,
   validateMutations,
 } from "../memory/contracts.ts";
-import { BackwardResult, copyBackwardValue, retainFailure } from "../nodes/base.ts";
+import { retainFailure } from "../nodes/base.ts";
 import { type FileLock, FileLockError, isLocked, lockFile, syncFolder, VERSION } from "../platform.ts";
 import {
   comparePaths,
@@ -61,24 +53,14 @@ import {
 } from "../typesys/index.ts";
 import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temporal.ts";
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
-import {
-  AttributedBackwardResult,
-  BackwardAttribution,
-  BackwardFailure,
-  BackwardOutcome,
-  type BackwardStatus,
-  ForwardCapture,
-  MemoryProposal,
-  validateRoute,
-  validateSource,
-} from "./contracts.ts";
+import { ForwardCapture, validateRoute, validateSource } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 26;
+export const SCHEMA_VERSION = 27;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
 const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
-  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
 ]);
 
 /** A typed value's wire object `{kind, value}`. */
@@ -1146,107 +1128,6 @@ function validatedAttemptId(attemptId: unknown): number {
   return attemptId;
 }
 
-/**
- * Return a frozen copy of an array of exact `AttributedBackwardResult`s, kept by reference.
- *
- * @throws TypeError when `results` isn't an array or an item is of another class.
- */
-function validatedAttributedResults(results: unknown): readonly AttributedBackwardResult[] {
-  if (!isList(results)) throw new TypeError("attributed_results must be an array");
-  return exactItems(results, AttributedBackwardResult, "attributed_results require exact AttributedBackwardResult values");
-}
-
-/** Start one backward attempt with detached ordinary root feedback. Frozen. */
-export class BackwardStartedRecord {
-  /** The attempt's positive identity within the run. */
-  readonly attemptId: number;
-  /** A deep-frozen copy of the attempt's root message. */
-  readonly feedback: FeedbackValue;
-
-  /**
-   * @param feedback One ordinary root message; agreement with the output's shape is checked by
-   *   the reducer.
-   * @throws TypeError when `attemptId` isn't a safe integer or `feedback` isn't ordinary
-   *   feedback.
-   * @throws RangeError when `attemptId` isn't positive.
-   */
-  constructor(attemptId: number, feedback: FeedbackValue) {
-    this.attemptId = validatedAttemptId(attemptId);
-    validateFeedback(feedback, feedback);
-    this.feedback = copyBackwardValue(feedback, "feedback") as FeedbackValue;
-    Object.freeze(this);
-  }
-}
-
-/** Retain a computed root result, occurrence inventory and memory proposals. Frozen. */
-export class BackwardReadyRecord {
-  /** The attempt's positive identity within the run. */
-  readonly attemptId: number;
-  /** The completed three-channel root feedback. */
-  readonly rootResult: BackwardResult;
-  /** The ordered accepted occurrence results, unreached occurrences included. */
-  readonly attributedResults: readonly AttributedBackwardResult[];
-  /**
-   * The ordered proposals, one per recorded memory key. Table membership and attempt agreement
-   * belong to reduction.
-   */
-  readonly proposals: readonly MemoryProposal[];
-
-  /**
-   * The carriers are held by reference; the arrays are copied and frozen.
-   *
-   * @throws TypeError when `attemptId` isn't a safe integer, a carrier isn't exactly its class,
-   *   or an array argument isn't an array.
-   * @throws RangeError when `attemptId` isn't positive.
-   */
-  constructor(
-    attemptId: number,
-    rootResult: BackwardResult,
-    attributedResults: readonly AttributedBackwardResult[],
-    proposals: readonly MemoryProposal[],
-  ) {
-    this.attemptId = validatedAttemptId(attemptId);
-    if (!isExactly(rootResult, BackwardResult)) throw new TypeError("result must be an exact BackwardResult");
-    this.rootResult = rootResult;
-    this.attributedResults = validatedAttributedResults(attributedResults);
-    if (!isList(proposals)) throw new TypeError("proposals must be an array");
-    this.proposals = exactItems(proposals, MemoryProposal, "proposals require exact MemoryProposal values");
-    Object.freeze(this);
-  }
-}
-
-/** Settle one backward attempt with its outcome and completed inventory. Frozen. */
-export class BackwardFinishedRecord {
-  /** The attempt's positive identity within the run. */
-  readonly attemptId: number;
-  /** The backward and learning dispositions, keeping completed root feedback when a later operation fails. */
-  readonly outcome: BackwardOutcome;
-  /**
-   * The completed occurrence inventory, possibly empty; its agreement with the attempt's accepted
-   * computation is checked by the reducer.
-   */
-  readonly attributedResults: readonly AttributedBackwardResult[];
-
-  /**
-   * The carriers are held by reference; the array is copied and frozen.
-   *
-   * @throws TypeError when `attemptId` isn't a safe integer, a carrier isn't exactly its class,
-   *   or `attributedResults` isn't an array.
-   * @throws RangeError when `attemptId` isn't positive.
-   */
-  constructor(
-    attemptId: number,
-    outcome: BackwardOutcome,
-    attributedResults: readonly AttributedBackwardResult[] = [],
-  ) {
-    this.attemptId = validatedAttemptId(attemptId);
-    if (!isExactly(outcome, BackwardOutcome)) throw new TypeError("outcome must be an exact BackwardOutcome");
-    this.outcome = outcome;
-    this.attributedResults = validatedAttributedResults(attributedResults);
-    Object.freeze(this);
-  }
-}
-
 /** Request one memory's atomic idempotent mutation commit. Frozen. */
 export class MemoryCommitRequestedRecord {
   /** The non-empty memory key. */
@@ -1343,10 +1224,7 @@ export type RunRecord =
   | NodeFailedRecord
   | MemoryCommitRequestedRecord
   | MemoryCommitSucceededRecord
-  | MemoryCommitFailedRecord
-  | BackwardStartedRecord
-  | BackwardReadyRecord
-  | BackwardFinishedRecord;
+  | MemoryCommitFailedRecord;
 
 /** A run-record class. */
 type RunRecordClass = new (...args: never[]) => RunRecord;
@@ -1901,7 +1779,7 @@ export interface RunLog {
   [Symbol.dispose](): void;
 }
 
-/** Whether `log` has the `RunLog` members the engine and the backward driver read. */
+/** Whether `log` has the `RunLog` members the engine reads. */
 export function isRunLog(log: unknown): log is RunLog {
   const candidate = log as Partial<RunLog> | null;
   return (
@@ -3249,261 +3127,6 @@ function memoryFailureFromPayload(value: unknown, label: string): MemoryOperatio
   );
 }
 
-/** Encode the three channels of a backward result, each batch in its order. */
-function backwardResultPayload(result: BackwardResult): JsonObject {
-  return {
-    input_feedback: result.inputFeedback as JsonObject,
-    self_feedback: [...result.selfFeedback],
-    variable_feedback: result.variableFeedback as JsonObject,
-  };
-}
-
-/**
- * Decode a backward result through its constructor; `label` names it in errors. Messages are
- * ordinary feedback, not memory JSON.
- *
- * @throws RangeError for missing or extra fields, besides the result's own errors.
- * @throws TypeError when a channel has the wrong JSON type, besides the result's own errors.
- */
-function backwardResultFromPayload(value: unknown, label: string): BackwardResult {
-  const wire = wireObject(value, label, ["input_feedback", "self_feedback", "variable_feedback"]);
-  return new BackwardResult({
-    inputFeedback: wireObject(wire["input_feedback"], `${label} input_feedback`) as Record<string, FeedbackValue[]>,
-    selfFeedback: wireArray(wire["self_feedback"], `${label} self_feedback`) as string[],
-    variableFeedback: wireObject(wire["variable_feedback"], `${label} variable_feedback`) as Record<string, string[]>,
-  });
-}
-
-/** Encode one message's transfer coordinates, without the downstream context they point at. */
-function attributionPayload(item: BackwardAttribution): JsonObject {
-  return {
-    sender: item.sender === null ? null : sourcePayload(item.sender),
-    input_name: item.inputName,
-    message_index: BigInt(item.messageIndex),
-    contribution_index: item.contributionIndex === null ? null : BigInt(item.contributionIndex),
-    parents: item.parents.map((parent) => BigInt(parent)),
-  };
-}
-
-/**
- * Decode one message's coordinates through `BackwardAttribution`; `label` names it in errors.
- * Agreement with the trace belongs to the reducer.
- *
- * @throws RangeError for missing or extra fields or a counter beyond ±(2^53 - 1), besides the
- *   source's and the attribution's own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function attributionFromPayload(value: unknown, label: string): BackwardAttribution {
-  const wire = wireObject(value, label, ["sender", "input_name", "message_index", "contribution_index", "parents"]);
-  const sender = wire["sender"];
-  const contribution = wire["contribution_index"];
-  return new BackwardAttribution(
-    sender === null ? null : sourceFromPayload(sender, `${label} sender`),
-    wireNullableText(wire["input_name"], `${label} input_name`),
-    wireInt(wire["message_index"], `${label} message_index`),
-    contribution === null ? null : wireInt(contribution, `${label} contribution_index`),
-    wireArray(wire["parents"], `${label} parents`).map((parent) => wireInt(parent, `${label} parents item`)),
-  );
-}
-
-/** Encode one occurrence's received feedback, its attribution and its callback result. */
-function attributedResultPayload(item: AttributedBackwardResult): JsonObject {
-  return {
-    source: sourcePayload(item.source),
-    feedback: [...item.feedback] as JsonValue[],
-    attribution: item.attribution.map(attributionPayload),
-    result: backwardResultPayload(item.result),
-    invoked: item.invoked,
-  };
-}
-
-/**
- * Decode one occurrence's result through `AttributedBackwardResult`, without rebuilding an
- * invocation or a route; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields, besides the nested carriers' own errors.
- * @throws TypeError when a field has the wrong JSON type, besides the nested carriers' own errors.
- */
-function attributedResultFromPayload(value: unknown, label: string): AttributedBackwardResult {
-  const wire = wireObject(value, label, ["source", "feedback", "attribution", "result", "invoked"]);
-  return new AttributedBackwardResult(
-    sourceFromPayload(wire["source"], `${label} source`),
-    wireArray(wire["feedback"], `${label} feedback`) as FeedbackValue[],
-    wireItems(wire["attribution"], `${label} attribution`, attributionFromPayload),
-    backwardResultFromPayload(wire["result"], `${label} result`),
-    wireBool(wire["invoked"], `${label} invoked`),
-  );
-}
-
-/** Encode one memory's proposed mutation batch, in order. */
-function memoryProposalPayload(proposal: MemoryProposal): JsonObject {
-  return { memory: proposal.memory, mutations: proposal.mutations.map(mutationPayload) };
-}
-
-/**
- * Decode one memory's proposal through `MemoryProposal`; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields, an empty memory key or two mutations with one id.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function memoryProposalFromPayload(value: unknown, label: string): MemoryProposal {
-  const wire = wireObject(value, label, ["memory", "mutations"]);
-  return new MemoryProposal(
-    requireName(wire["memory"], `${label} memory`),
-    wireItems(wire["mutations"], `${label} mutations`, mutationFromPayload),
-  );
-}
-
-/** Encode a learning result's failures and per-memory commit dispositions, in order. */
-function learningResultPayload(result: LearningResult): JsonObject {
-  return {
-    status: result.status,
-    failures: result.failures.map((item) => ({
-      memory: item.memory,
-      operation: item.operation,
-      failure: memoryFailurePayload(item.failure),
-    })),
-    policies: result.policies.map((item) => ({
-      memory: item.memory,
-      status: item.status,
-      commit_id: item.commitId,
-      failure: item.failure === null ? null : memoryFailurePayload(item.failure),
-    })),
-  };
-}
-
-/**
- * Decode a learning result through its carriers, without inferring the attempt's completion;
- * `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields or an empty memory key, besides the carriers'
- *   own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function learningResultFromPayload(value: unknown, label: string): LearningResult {
-  const wire = wireObject(value, label, ["status", "failures", "policies"]);
-  const failures = wireArray(wire["failures"], `${label} failures`).map((item) => {
-    const itemLabel = `${label} failures item`;
-    const failure = wireObject(item, itemLabel, ["memory", "operation", "failure"]);
-    return new LearningFailure(
-      requireName(failure["memory"], `${itemLabel} memory`),
-      requireText(failure["operation"], `${itemLabel} operation`) as LearningOperation,
-      memoryFailureFromPayload(failure["failure"], `${itemLabel} failure`),
-    );
-  });
-  const policies = wireArray(wire["policies"], `${label} policies`).map((item) => {
-    const itemLabel = `${label} policies item`;
-    const policy = wireObject(item, itemLabel, ["memory", "status", "commit_id", "failure"]);
-    const failure = policy["failure"];
-    return new PolicyCommitOutcome(
-      requireName(policy["memory"], `${itemLabel} memory`),
-      requireText(policy["status"], `${itemLabel} status`) as PolicyCommitStatus,
-      {
-        commitId: wireNullableText(policy["commit_id"], `${itemLabel} commit_id`),
-        failure: failure === null ? null : memoryFailureFromPayload(failure, `${itemLabel} failure`),
-      },
-    );
-  });
-  return new LearningResult(requireText(wire["status"], `${label} status`) as LearningStatus, { failures, policies });
-}
-
-/** Encode one attributed backward diagnostic and its `Failure` or memory-operation cause. */
-function backwardFailurePayload(failure: BackwardFailure): JsonObject {
-  const { cause } = failure;
-  return {
-    stage: failure.stage,
-    code: failure.code,
-    message: failure.message,
-    scope: executionScopePayload(failure.scope),
-    run_id: failure.runId,
-    node_id: failure.nodeId,
-    node_started_seq: failure.nodeStartedSeq === null ? null : BigInt(failure.nodeStartedSeq),
-    memory: failure.memory,
-    cause: cause === null ? null : cause instanceof Failure ? failurePayload(cause) : memoryFailurePayload(cause),
-    cause_type: failure.causeType,
-    traceback: failure.traceback,
-  };
-}
-
-/** The fields of a backward failure's wire object. */
-const BACKWARD_FAILURE_FIELDS = [
-  "stage",
-  "code",
-  "message",
-  "scope",
-  "run_id",
-  "node_id",
-  "node_started_seq",
-  "memory",
-  "cause",
-  "cause_type",
-  "traceback",
-];
-
-/**
- * Decode one backward diagnostic through `BackwardFailure`; `label` names it in errors. A cause
- * with a `stage` field is a memory-operation failure, any other a `Failure` (the two shapes are
- * disjoint, so nothing is inferred).
- *
- * @throws RangeError for missing or extra fields or a counter beyond ±(2^53 - 1), besides the
- *   nested carriers' own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function backwardFailureFromPayload(value: unknown, label: string): BackwardFailure {
-  const wire = wireObject(value, label, BACKWARD_FAILURE_FIELDS);
-  const causeLabel = `${label} cause`;
-  const cause = wireNullableObject(wire["cause"], causeLabel);
-  let decodedCause: Failure | MemoryOperationFailure | null = null;
-  if (cause !== null) {
-    decodedCause = Object.hasOwn(cause, "stage")
-      ? memoryFailureFromPayload(cause, causeLabel)
-      : failureFromPayload(cause, causeLabel, true);
-  }
-  const seq = wire["node_started_seq"];
-  return new BackwardFailure(
-    requireText(wire["stage"], `${label} stage`),
-    requireText(wire["code"], `${label} code`),
-    requireText(wire["message"], `${label} message`),
-    {
-      scope: executionScopeFromPayload(wire["scope"], `${label} scope`),
-      runId: wireNullableText(wire["run_id"], `${label} run_id`),
-      nodeId: wireNullableText(wire["node_id"], `${label} node_id`),
-      nodeStartedSeq: seq === null ? null : wireInt(seq, `${label} node_started_seq`),
-      memory: wireNullableText(wire["memory"], `${label} memory`),
-      cause: decodedCause,
-      causeType: wireNullableText(wire["cause_type"], `${label} cause_type`),
-      traceback: wireNullableText(wire["traceback"], `${label} traceback`),
-    },
-  );
-}
-
-/** Encode a backward outcome with its optional feedback, failure and learning result. */
-function backwardOutcomePayload(outcome: BackwardOutcome): JsonObject {
-  return {
-    status: outcome.status,
-    feedback: outcome.feedback === null ? null : backwardResultPayload(outcome.feedback),
-    failure: outcome.failure === null ? null : backwardFailurePayload(outcome.failure),
-    learning: outcome.learning === null ? null : learningResultPayload(outcome.learning),
-  };
-}
-
-/**
- * Decode a backward outcome through `BackwardOutcome`, without fabricating missing computation;
- * `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields, besides the nested carriers' own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function backwardOutcomeFromPayload(value: unknown, label: string): BackwardOutcome {
-  const wire = wireObject(value, label, ["status", "feedback", "failure", "learning"]);
-  const { feedback, failure, learning } = wire;
-  return new BackwardOutcome(requireText(wire["status"], `${label} status`) as BackwardStatus, {
-    feedback: feedback === null ? null : backwardResultFromPayload(feedback, `${label} feedback`),
-    failure: failure === null ? null : backwardFailureFromPayload(failure, `${label} failure`),
-    learning: learning === null ? null : learningResultFromPayload(learning, `${label} learning`),
-  });
-}
-
 /** Encode an outcome record's optional capture. */
 function outcomePayload(record: OutcomeCarriers): JsonObject {
   const { forwardCapture = null } = record;
@@ -3954,54 +3577,6 @@ const RECORD_CODECS: readonly RecordCodec[] = [
         requireName(payload["commit_id"], `${label} commit_id`),
         memoryFailureFromPayload(payload["failure"], `${label} failure`),
         wireInt(payload["attempt_id"], `${label} attempt_id`),
-      );
-    },
-  }),
-  recordCodec({
-    cls: BackwardStartedRecord,
-    kind: "backward_started",
-    encode: (record) => ({ attempt_id: BigInt(record.attemptId), feedback: record.feedback as JsonValue }),
-    decode: (payload, label) => {
-      requireFields(payload, ["attempt_id", "feedback"], label);
-      return new BackwardStartedRecord(
-        wireInt(payload["attempt_id"], `${label} attempt_id`),
-        payload["feedback"] as FeedbackValue,
-      );
-    },
-  }),
-  recordCodec({
-    cls: BackwardReadyRecord,
-    kind: "backward_ready",
-    encode: (record) => ({
-      attempt_id: BigInt(record.attemptId),
-      root_result: backwardResultPayload(record.rootResult),
-      attributed_results: record.attributedResults.map(attributedResultPayload),
-      proposals: record.proposals.map(memoryProposalPayload),
-    }),
-    decode: (payload, label) => {
-      requireFields(payload, ["attempt_id", "root_result", "attributed_results", "proposals"], label);
-      return new BackwardReadyRecord(
-        wireInt(payload["attempt_id"], `${label} attempt_id`),
-        backwardResultFromPayload(payload["root_result"], `${label} root_result`),
-        wireItems(payload["attributed_results"], `${label} attributed_results`, attributedResultFromPayload),
-        wireItems(payload["proposals"], `${label} proposals`, memoryProposalFromPayload),
-      );
-    },
-  }),
-  recordCodec({
-    cls: BackwardFinishedRecord,
-    kind: "backward_finished",
-    encode: (record) => ({
-      attempt_id: BigInt(record.attemptId),
-      outcome: backwardOutcomePayload(record.outcome),
-      attributed_results: record.attributedResults.map(attributedResultPayload),
-    }),
-    decode: (payload, label) => {
-      requireFields(payload, ["attempt_id", "outcome", "attributed_results"], label);
-      return new BackwardFinishedRecord(
-        wireInt(payload["attempt_id"], `${label} attempt_id`),
-        backwardOutcomeFromPayload(payload["outcome"], `${label} outcome`),
-        wireItems(payload["attributed_results"], `${label} attributed_results`, attributedResultFromPayload),
       );
     },
   }),

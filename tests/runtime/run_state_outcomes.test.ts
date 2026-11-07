@@ -8,7 +8,6 @@ import { expect, test } from "bun:test";
 
 import { CompiledFlow, Edge, END_ID, Flow, START_ID } from "../../src/compile/model.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
-import { sameSource } from "../../src/expr/lineage.ts";
 import {
   NodeFailed,
   NodeRouted,
@@ -23,7 +22,6 @@ import { type OutputContract, PartialRecordContract, ValueContract } from "../..
 import { CodeNode } from "../../src/nodes/code/node.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
-import { computeBackward } from "../../src/runtime/backward.ts";
 import { NodeState } from "../../src/runtime/common.ts";
 import {
   MemoryRunLog,
@@ -1812,9 +1810,6 @@ test.each([false, true])("the terminal-unreachable latch survives pruning its dy
   if (learnable) {
     const causal = state.trace!.occurrences.find((item) => item.nodeId === routerId)!;
     expect(state.trace!.terminal!.source).toEqual(causal.source);
-    const [root, results] = await computeBackward(state.trace!, "review pruned failure");
-    expect(root.inputFeedback).toEqual({});
-    expect(results.find((item) => sameSource(item.source, causal.source))!.invoked).toBe(true);
   }
 });
 

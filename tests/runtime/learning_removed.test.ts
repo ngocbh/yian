@@ -1,5 +1,6 @@
 /**
- * Learning is gone: a run result has no backward pass, and the removed options are refused by name.
+ * Learning is gone: a run result has no backward pass, the removed options are refused by name, and
+ * the backward records are unknown kinds.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -11,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { runFlow } from "../../src/run.ts";
+import { decodeRecord } from "../../src/runtime/log.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 
 const FIXTURES = fileURLToPath(new URL("../conformance/fixtures", import.meta.url));
@@ -67,4 +69,14 @@ test("runFlow refuses the removed learnable option by name", async () => {
   await expect(runFlow(flow, { topic: "owls" }, { learnable: true, env: hostEnv(dir) } as never)).rejects.toThrow(
     "learnable was removed: yian no longer learns from runs; drop the option",
   );
+});
+
+test.each(["backward_started", "backward_ready", "backward_finished"])("a %s record is an unknown kind", (kind) => {
+  const line = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind, payload: {}, run_id: "r", schema: 27, seq: 1 });
+  expect(() => decodeRecord(line)).toThrow(`run-record kind '${kind}' is unsupported in schema 27`);
+});
+
+test("a schema-26 log is refused by name", () => {
+  const line26 = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind: "node_started", payload: {}, run_id: "r", schema: 26, seq: 1 });
+  expect(() => decodeRecord(line26)).toThrow("run log schema 26 predates schema 27 and is not supported");
 });

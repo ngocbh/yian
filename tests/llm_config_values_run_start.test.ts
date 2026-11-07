@@ -154,7 +154,7 @@ const GOLDEN_RUN_STARTED = {
     yian_version: VERSION,
   },
   run_id: "golden",
-  schema: 26,
+  schema: 27,
   seq: 0,
   at: "<at>",
 };

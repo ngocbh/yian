@@ -758,7 +758,7 @@ function agentStarted(
   return { state, log };
 }
 
-/** Return `reducerSnapshot(state)` with the memory, learning and backward state. */
+/** Return `reducerSnapshot(state)` with the memory and learning state. */
 function frontierSnapshot(state: RunState): Record<string, unknown> {
   return {
     ...reducerSnapshot(state),
@@ -766,7 +766,6 @@ function frontierSnapshot(state: RunState): Record<string, unknown> {
     memoryStacks: state.memoryStacks,
     memorySnapshots: state.memorySnapshots,
     learnable: state.learnable,
-    backwardState: state.backwardState,
   };
 }
 

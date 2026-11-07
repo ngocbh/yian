@@ -8,25 +8,10 @@ import { expect, test } from "bun:test";
 import { copyGraph, START_ID } from "../../src/compile/model.ts";
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
 import { SourceRef, ValueRoute } from "../../src/expr/lineage.ts";
-import {
-  LearningResult,
-  MemoryMutation,
-  MemoryOperationFailure,
-  PolicyCommitOutcome,
-} from "../../src/memory/contracts.ts";
-import { BackwardResult } from "../../src/nodes/base.ts";
+import { MemoryMutation, MemoryOperationFailure } from "../../src/memory/contracts.ts";
 import { ExecutionPosition, ExecutionScope } from "../../src/nodes/contracts.ts";
+import { ForwardCapture } from "../../src/runtime/contracts.ts";
 import {
-  AttributedBackwardResult,
-  BackwardAttribution,
-  BackwardOutcome,
-  ForwardCapture,
-  MemoryProposal,
-} from "../../src/runtime/contracts.ts";
-import {
-  BackwardFinishedRecord,
-  BackwardReadyRecord,
-  BackwardStartedRecord,
   canonicalSeed,
   canonicalTyped,
   decodeRecord,
@@ -273,7 +258,6 @@ test("the run log protocol pins iteration, append, close and context management"
 
 const FAILURE = new Failure({ code: "node.execute", message: "boom", nodeId: "work" });
 const OPERATION_FAILURE = new MemoryOperationFailure("backend", "failed", "Failed.", true);
-const SUCCEEDED = new BackwardOutcome("succeeded");
 
 /** Return a run-start record with one agent's LLM config and `fields` over it. */
 function runStarted(fields: Partial<RunStartedFields> = {}): RunStartedRecord {
@@ -360,31 +344,6 @@ test.each<[string, () => unknown]>([
     "memory commit failed",
     () => ((new MemoryCommitFailedRecord("notes", "c", OPERATION_FAILURE, 1) as { failure: unknown }).failure = null),
   ],
-  ["backward started", () => ((new BackwardStartedRecord(1, null) as { attemptId: number }).attemptId = 2)],
-  [
-    "a nested backward feedback",
-    () => ((new BackwardStartedRecord(1, { parts: ["a"] }).feedback as { parts: unknown[] }).parts.push("b")),
-  ],
-  [
-    "backward ready",
-    () => ((new BackwardReadyRecord(1, new BackwardResult(), [], []) as { attemptId: number }).attemptId = 2),
-  ],
-  [
-    "ready attributed results",
-    () => (new BackwardReadyRecord(1, new BackwardResult(), [], []).attributedResults as unknown[]).push(null),
-  ],
-  [
-    "ready proposals",
-    () => (new BackwardReadyRecord(1, new BackwardResult(), [], []).proposals as unknown[]).push(null),
-  ],
-  [
-    "backward finished",
-    () => ((new BackwardFinishedRecord(1, SUCCEEDED) as { outcome: unknown }).outcome = null),
-  ],
-  [
-    "finished attributed results",
-    () => (new BackwardFinishedRecord(1, SUCCEEDED).attributedResults as unknown[]).push(null),
-  ],
 ])("records and envelopes are frozen: %s", (_name, assign) => {
   expect(assign).toThrow(TypeError);
 });
@@ -416,9 +375,6 @@ test("RUN_RECORD_TYPES holds every record class", () => {
     MemoryCommitRequestedRecord,
     MemoryCommitSucceededRecord,
     MemoryCommitFailedRecord,
-    BackwardStartedRecord,
-    BackwardReadyRecord,
-    BackwardFinishedRecord,
   ]);
   expect(Object.isFrozen(RUN_RECORD_TYPES)).toBe(true);
 });
@@ -663,30 +619,6 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
     TypeError,
     "failure must be a MemoryOperationFailure",
   ],
-  [
-    "a ready root result of another class",
-    () => new BackwardReadyRecord(1, {} as never, [], []),
-    TypeError,
-    "result must be an exact BackwardResult",
-  ],
-  [
-    "ready attributed results that aren't an array",
-    () => new BackwardReadyRecord(1, new BackwardResult(), new Set() as never, []),
-    TypeError,
-    "attributed_results must be an array",
-  ],
-  [
-    "ready proposals that aren't an array",
-    () => new BackwardReadyRecord(1, new BackwardResult(), [], new Set() as never),
-    TypeError,
-    "proposals must be an array",
-  ],
-  [
-    "a finished outcome of another class",
-    () => new BackwardFinishedRecord(1, {} as never),
-    TypeError,
-    "outcome must be an exact BackwardOutcome",
-  ],
 ])("record constructors refuse %s", (_name, fn, cls, message) => {
   expectError(fn, cls, message);
 });
@@ -735,25 +667,26 @@ test.each<[string, unknown, string]>([
   ["7", 7, "unsupported run-record schema: 7"],
   ["8", 8, "unsupported run-record schema: 8"],
   ["9", 9, "unsupported run-record schema: 9"],
-  ["10", 10, "run log schema 10 predates schema 26 and is not supported"],
-  ["11", 11, "run log schema 11 predates schema 26 and is not supported"],
-  ["12", 12, "run log schema 12 predates schema 26 and is not supported"],
-  ["13", 13, "run log schema 13 predates schema 26 and is not supported"],
-  ["14", 14, "run log schema 14 predates schema 26 and is not supported"],
-  ["15", 15, "run log schema 15 predates schema 26 and is not supported"],
-  ["16", 16, "run log schema 16 predates schema 26 and is not supported"],
-  ["17", 17, "run log schema 17 predates schema 26 and is not supported"],
-  ["18", 18, "run log schema 18 predates schema 26 and is not supported"],
-  ["19", 19, "run log schema 19 predates schema 26 and is not supported"],
-  ["20", 20, "run log schema 20 predates schema 26 and is not supported"],
-  ["21", 21, "run log schema 21 predates schema 26 and is not supported"],
-  ["22", 22, "run log schema 22 predates schema 26 and is not supported"],
-  ["23", 23, "run log schema 23 predates schema 26 and is not supported"],
-  ["24", 24, "run log schema 24 predates schema 26 and is not supported"],
-  ["25", 25, "run log schema 25 predates schema 26 and is not supported"],
-  ["27", 27, "unsupported run-record schema: 27"],
+  ["10", 10, "run log schema 10 predates schema 27 and is not supported"],
+  ["11", 11, "run log schema 11 predates schema 27 and is not supported"],
+  ["12", 12, "run log schema 12 predates schema 27 and is not supported"],
+  ["13", 13, "run log schema 13 predates schema 27 and is not supported"],
+  ["14", 14, "run log schema 14 predates schema 27 and is not supported"],
+  ["15", 15, "run log schema 15 predates schema 27 and is not supported"],
+  ["16", 16, "run log schema 16 predates schema 27 and is not supported"],
+  ["17", 17, "run log schema 17 predates schema 27 and is not supported"],
+  ["18", 18, "run log schema 18 predates schema 27 and is not supported"],
+  ["19", 19, "run log schema 19 predates schema 27 and is not supported"],
+  ["20", 20, "run log schema 20 predates schema 27 and is not supported"],
+  ["21", 21, "run log schema 21 predates schema 27 and is not supported"],
+  ["22", 22, "run log schema 22 predates schema 27 and is not supported"],
+  ["23", 23, "run log schema 23 predates schema 27 and is not supported"],
+  ["24", 24, "run log schema 24 predates schema 27 and is not supported"],
+  ["25", 25, "run log schema 25 predates schema 27 and is not supported"],
+  ["26", 26, "run log schema 26 predates schema 27 and is not supported"],
+  ["28", 28, "unsupported run-record schema: 28"],
   ["true", true, "unsupported run-record schema: true"],
-  ["26n", 26n, "unsupported run-record schema: 26n"],
+  ["27n", 27n, "unsupported run-record schema: 27n"],
 ])("the envelope refuses schema %s", (_name, schema, message) => {
   expectError(() => new RecordEnvelope(schema as never, "run", 0, new NodeStartedRecord("work")), RunLogSchemaError, message);
 });
@@ -854,21 +787,6 @@ function sourcedRunStarted(): RunStartedRecord {
   });
 }
 
-/** The three-channel result of the backward round trips. */
-function backwardResult(): BackwardResult {
-  return new BackwardResult({
-    inputFeedback: { topic: [[null, { uri: "Review." }]] },
-    selfFeedback: ["Behavior."],
-    variableFeedback: { tone: ["Concise."] },
-  });
-}
-
-/** The invoked occurrence of the backward round trips, with a root attribution. */
-function backwardOccurrences(): AttributedBackwardResult[] {
-  const root = new BackwardAttribution(null, null, 0, null, []);
-  return [new AttributedBackwardResult(new SourceRef("run", 1), ["Review."], [root], backwardResult(), true)];
-}
-
 const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
   ["RunStartedRecord", roundTripRunStarted()],
   ["RunStartedRecord with its sources", sourcedRunStarted()],
@@ -930,26 +848,6 @@ const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
       1,
     ),
   ],
-  ["BackwardStartedRecord", new BackwardStartedRecord(1, [null, { uri: "Review." }])],
-  [
-    "BackwardReadyRecord",
-    new BackwardReadyRecord(1, backwardResult(), backwardOccurrences(), [
-      new MemoryProposal("agent", [new MemoryMutation("m1", { notes: ["one"] })]),
-    ]),
-  ],
-  [
-    "BackwardFinishedRecord",
-    new BackwardFinishedRecord(
-      1,
-      new BackwardOutcome("succeeded", {
-        feedback: backwardResult(),
-        learning: new LearningResult("succeeded", {
-          policies: [new PolicyCommitOutcome("history", "succeeded", { commitId: "commit-1" })],
-        }),
-      }),
-      backwardOccurrences(),
-    ),
-  ],
 ];
 
 test.each<[string, Record<string, unknown>]>([
@@ -958,7 +856,7 @@ test.each<[string, Record<string, unknown>]>([
   ["memory_commit_failed", { failure: { stage: "commit", code: "declined", message: "Declined.", retryable: true } }],
 ])("the memory commit wire requires a positive attempt: %s", (kind, extra) => {
   const wire = {
-    schema: 26,
+    schema: 27,
     run_id: "run",
     seq: 0,
     kind,
@@ -1168,7 +1066,7 @@ test.each([
       ...extra,
     },
   };
-  const message = `run-record kind '${kind}' is unsupported in schema 26`;
+  const message = `run-record kind '${kind}' is unsupported in schema 27`;
   expectError(() => decodeRecord(JSON.stringify(wire)), RangeError, message);
 });
 
@@ -1179,7 +1077,7 @@ test.each([
   ["conversation_closed", "ConversationClosedRecord"],
 ])("removed conversation wire kinds are rejected: %s", (kind, recordName) => {
   const wire = { schema: SCHEMA_VERSION, run_id: "run", seq: 0, kind, payload: { checkpoint: {} } };
-  const message = `run-record kind '${kind}' is unsupported in schema 26`;
+  const message = `run-record kind '${kind}' is unsupported in schema 27`;
   expectError(() => decodeRecord(JSON.stringify(wire)), RangeError, message);
   expect(Object.hasOwn(runLog, recordName)).toBe(false);
 });
@@ -1190,7 +1088,7 @@ test("record encoding is canonical, newline-free and byte-stable", () => {
   const encoded = encodeRecord(envelope);
 
   expect(encoded).toBe(
-    '{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run-canonical","schema":26,"seq":0}',
+    '{"kind":"node_started","payload":{"node_id":"work"},"run_id":"run-canonical","schema":27,"seq":0}',
   );
   expect(encoded.endsWith("\n")).toBe(false);
   expect(encodeRecord(decodeRecord(encoded))).toBe(encoded);
@@ -1216,7 +1114,7 @@ test("a node failure encoding nests one canonical failure", () => {
   const encoded = encodeRecord(envelope);
 
   expect(JSON.parse(encoded)).toEqual({
-    schema: 26,
+    schema: 27,
     run_id: "run-failure",
     seq: 7,
     kind: "node_failed",
@@ -1344,7 +1242,7 @@ test("a node success with a capture encodes its counters as ints", () => {
       '"kind":"record","names":["joined","text","picked"],"path":[],"result_type":null,"sizes":[],"snapshot":null,' +
       '"source":null,"spans":[],"value_json":null},"scope":{"boundary":null,"flow_path":["each"],' +
       '"occurrence_path":[{"index":3,"kind":"map_item","static_path":["each"]}],"static_path":["each","work"]},' +
-      '"variable_names":[]},"messages":null,"node_id":"work"},"run_id":"run","schema":26,"seq":5}',
+      '"variable_names":[]},"messages":null,"node_id":"work"},"run_id":"run","schema":27,"seq":5}',
   );
   // The interpolation's text isn't recorded; learning rebuilds it.
   const recorded = ValueRoute.record([
@@ -1383,7 +1281,7 @@ test("a forward capture records whether its bound inputs are usable, and decode 
 
 test("decode requires an explicit route terminal failure field", () => {
   const wire = {
-    schema: 26,
+    schema: 27,
     run_id: "run",
     seq: 0,
     kind: "node_routed",
@@ -1398,7 +1296,7 @@ test("decode requires an explicit route terminal failure field", () => {
 
 test("decode rejects an extra nested route terminal failure field", () => {
   const wire = {
-    schema: 26,
+    schema: 27,
     run_id: "run",
     seq: 0,
     kind: "node_routed",
@@ -1436,74 +1334,74 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
   ],
   // A float token reads as a number, never as a schema; it is shown as the log writes floats.
   [
-    "schema 26.0",
-    `{"schema":26.0,"run_id":"run","seq":0,${NODE_STARTED}}`,
+    "schema 27.0",
+    `{"schema":27.0,"run_id":"run","seq":0,${NODE_STARTED}}`,
     RunLogSchemaError,
-    "unsupported run-record schema: 26.0",
+    "unsupported run-record schema: 27.0",
   ],
   [
     "an empty run id",
-    `{"schema":26,"run_id":"","seq":0,${NODE_STARTED}}`,
+    `{"schema":27,"run_id":"","seq":0,${NODE_STARTED}}`,
     RangeError,
     "run-record envelope run_id must be a non-empty string",
   ],
   [
     "seq -1",
-    `{"schema":26,"run_id":"run","seq":-1,${NODE_STARTED}}`,
+    `{"schema":27,"run_id":"run","seq":-1,${NODE_STARTED}}`,
     RangeError,
     "run-record envelope seq must be a non-negative integer",
   ],
   [
     "seq true",
-    `{"schema":26,"run_id":"run","seq":true,${NODE_STARTED}}`,
+    `{"schema":27,"run_id":"run","seq":true,${NODE_STARTED}}`,
     TypeError,
     "run-record envelope seq must be an integer",
   ],
   [
     "an unknown kind",
-    '{"schema":26,"run_id":"run","seq":0,"kind":"not_a_record","payload":{}}',
+    '{"schema":27,"run_id":"run","seq":0,"kind":"not_a_record","payload":{}}',
     RangeError,
-    "run-record kind 'not_a_record' is unsupported in schema 26",
+    "run-record kind 'not_a_record' is unsupported in schema 27",
   ],
   [
     "an extra key",
-    `{"schema":26,"run_id":"run","seq":0,${NODE_STARTED},"unexpected":true}`,
+    `{"schema":27,"run_id":"run","seq":0,${NODE_STARTED},"unexpected":true}`,
     RangeError,
     'invalid run-record envelope fields; missing=[], extra=["unexpected"]',
   ],
   [
     "a missing payload",
-    '{"schema":26,"run_id":"run","seq":0,"kind":"node_started"}',
+    '{"schema":27,"run_id":"run","seq":0,"kind":"node_started"}',
     RangeError,
     'invalid run-record envelope fields; missing=["payload"], extra=[]',
   ],
   [
     "seq 0.0",
-    `{"schema":26,"run_id":"run","seq":0.0,${NODE_STARTED}}`,
+    `{"schema":27,"run_id":"run","seq":0.0,${NODE_STARTED}}`,
     TypeError,
     "run-record envelope seq must be an integer",
   ],
   [
     "seq past 2^53 - 1",
-    `{"schema":26,"run_id":"run","seq":9007199254740992,${NODE_STARTED}}`,
+    `{"schema":27,"run_id":"run","seq":9007199254740992,${NODE_STARTED}}`,
     RangeError,
     "run-record envelope seq must be a safe integer",
   ],
   [
     "a non-text run id",
-    `{"schema":26,"run_id":7,"seq":0,${NODE_STARTED}}`,
+    `{"schema":27,"run_id":7,"seq":0,${NODE_STARTED}}`,
     TypeError,
     "run-record envelope run_id must be a non-empty string",
   ],
   [
     "a non-text kind",
-    '{"schema":26,"run_id":"run","seq":0,"kind":7,"payload":{}}',
+    '{"schema":27,"run_id":"run","seq":0,"kind":7,"payload":{}}',
     TypeError,
     "run-record envelope kind must be a string",
   ],
   [
     "a payload that isn't an object",
-    '{"schema":26,"run_id":"run","seq":0,"kind":"node_started","payload":[]}',
+    '{"schema":27,"run_id":"run","seq":0,"kind":"node_started","payload":[]}',
     TypeError,
     "run-record envelope payload must be an object",
   ],
@@ -1578,7 +1476,7 @@ test.each<[string, string, unknown, new (...args: never[]) => Error, string]>([
     "node_started payload node_id must be a non-empty string",
   ],
 ])("decode rejects unknown, missing and wrong payload fields: %s", (_name, kind, payload, cls, message) => {
-  const wire = { schema: 26, run_id: "run", seq: 0, kind, payload };
+  const wire = { schema: 27, run_id: "run", seq: 0, kind, payload };
   expectError(() => decodeRecord(JSON.stringify(wire)), cls, message);
 });
 
@@ -1593,7 +1491,7 @@ type FailureWire = {
 /** Return one independently mutable valid node-failure wire object. */
 function nodeFailureWire(): FailureWire {
   return {
-    schema: 26,
+    schema: 27,
     run_id: "run",
     seq: 0,
     kind: "node_failed",
@@ -1785,13 +1683,13 @@ function invalidJsonCause(data: string | Uint8Array): Error {
 
 test("decode rejects duplicate keys at any object depth", () => {
   const payloadKey = invalidJsonCause(
-    '{"schema":26,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"first","node_id":"second"}}',
+    '{"schema":27,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"first","node_id":"second"}}',
   );
   expect(payloadKey).toBeInstanceOf(JSONDecodeError);
   expect(payloadKey.message).toStartWith('duplicate JSON object key: "node_id"');
 
   const originKey = invalidJsonCause(
-    '{"schema":26,"run_id":"run","seq":0,"kind":"node_failed",' +
+    '{"schema":27,"run_id":"run","seq":0,"kind":"node_failed",' +
       '"payload":{"failure":{"code":"node.execute","message":"boom",' +
       '"node_id":"work","trace":[{"key":"one","key":"two"}],' +
       '"cause_type":null,"traceback":null}}}',
@@ -1823,7 +1721,7 @@ test("canonical JSON rejects lone Unicode surrogates", () => {
     "Unicode surrogate is not valid canonical JSON",
   );
   const cause = invalidJsonCause(
-    '{"schema":26,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"\\ud800"}}',
+    '{"schema":27,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"\\ud800"}}',
   );
   expect(cause).toBeInstanceOf(JSONDecodeError);
   expect(cause.message).toStartWith("string has an unpaired surrogate");
@@ -1847,7 +1745,7 @@ test("a line with a UTF-8 BOM is invalid record JSON", () => {
 
 test("a line that isn't UTF-8 is invalid record JSON", () => {
   const bytes = new TextEncoder().encode(
-    '{"schema":26,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"x"}}',
+    '{"schema":27,"run_id":"run","seq":0,"kind":"node_started","payload":{"node_id":"x"}}',
   );
   bytes[bytes.indexOf(0x78)] = 0xff;
   // Only the class is checked: the decoder's message differs between Bun and Node.
@@ -1890,7 +1788,7 @@ test.each<[string, unknown, new (...args: never[]) => Error, string]>([
     "node_ids must contain unique IDs",
   ],
 ])("decode rejects a run_stopped payload with %s", (_name, payload, cls, message) => {
-  const wire = { schema: 26, run_id: "run", seq: 0, kind: "run_stopped", payload };
+  const wire = { schema: 27, run_id: "run", seq: 0, kind: "run_stopped", payload };
   expectError(() => decodeRecord(JSON.stringify(wire)), cls, message);
 });
 
@@ -1921,7 +1819,7 @@ test.each<[string, string, new (...args: never[]) => Error, string]>([
     "run_resumed payload closed_calls must be an array of strings",
   ],
 ])("decode rejects a run_resumed payload with %s", (_name, payload, cls, message) => {
-  const text = `{"schema":26,"run_id":"run","seq":0,"kind":"run_resumed","payload":${payload}}`;
+  const text = `{"schema":27,"run_id":"run","seq":0,"kind":"run_resumed","payload":${payload}}`;
   expectError(() => decodeRecord(text), cls, message);
 });
 

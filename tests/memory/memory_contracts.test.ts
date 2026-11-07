@@ -51,7 +51,7 @@ import {
 } from "../../src/memory/contracts.ts";
 import * as memoryPackage from "../../src/memory/index.ts";
 import * as runtimeContracts from "../../src/runtime/contracts.ts";
-import { BackwardFailure, MemoryProposal } from "../../src/runtime/contracts.ts";
+import { MemoryProposal } from "../../src/runtime/contracts.ts";
 import { MemoryRuntime } from "../../src/runtime/memory_runtime.ts";
 import { logJson } from "../../src/typesys/json.ts";
 import { FakeMemory } from "../helpers/memory_fakes.ts";
@@ -701,7 +701,6 @@ test("mutations, proposals and failures name the memory key", () => {
   const cause = new MemoryOperationFailure("learn", "notes.failed", "boom", false);
   expect(new LearningFailure("notes", "learn", cause).memory).toBe("notes");
   expect("frameRef" in new LearningFailure("notes", "commit", cause)).toBe(false);
-  expect("frameRef" in new BackwardFailure("learn", "x", "y", { memory: "notes" })).toBe(false);
 });
 
 test("a learning failure checks its attribution and failure", () => {

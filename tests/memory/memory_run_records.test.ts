@@ -18,10 +18,8 @@ import {
   ToolCallInteraction,
   ToolResultInteraction,
 } from "../../src/memory/contracts.ts";
-import { BackwardResult } from "../../src/nodes/base.ts";
 import { MemoryProposal } from "../../src/runtime/contracts.ts";
 import {
-  BackwardReadyRecord,
   decodeRecord,
   encodeRecord,
   MemoryCommitFailedRecord,
@@ -553,24 +551,6 @@ test("a decoded commit's mutation payloads are frozen", () => {
 test("a commit request names its mutations on the wire", () => {
   const commit = new MemoryCommitRequestedRecord("reflective", "c1", [new MemoryMutation("m1", { add: 1n })], 1);
   expect(wireOf(commit).payload.mutations).toEqual([{ mutation_id: "m1", payload: { add: 1n } }]);
-});
-
-test("a backward-ready record names its proposals' memory keys on the wire", () => {
-  const proposal = new MemoryProposal("reflective", [new MemoryMutation("m1", { add: 1n })]);
-  const ready = new BackwardReadyRecord(1, new BackwardResult(), [], [proposal]);
-  const wire = wireOf(ready);
-  expect(wire.payload.proposals).toEqual([
-    { memory: "reflective", mutations: [{ mutation_id: "m1", payload: { add: 1n } }] },
-  ]);
-  expect(Object.hasOwn(wire.payload, "frame_proposals")).toBe(false);
-  expect((roundTrip(ready) as BackwardReadyRecord).proposals).toEqual([proposal]);
-
-  wire.payload.proposals[0].frame_ref = null;
-  expectError(
-    () => decodeRecord(logJson(wire)),
-    RangeError,
-    'invalid backward_ready payload proposals item fields; missing=[], extra=["frame_ref"]',
-  );
 });
 
 const MEMORY_LABEL = "run_started payload memories item";

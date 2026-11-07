@@ -10,9 +10,9 @@
  *
  * Knows about:   compile/declared_types, compile/manifest, compile/model, compile/validation,
  *                defaults, diagnostics, events, expr, memory, nodes, runtime/common,
- *                runtime/contracts, runtime/eval_node, runtime/learning, runtime/log, runtime/trace,
- *                runtime/waits, tools/context, typesys.
- * Never imports: engine, run, backward, compose, or the CLI.
+ *                runtime/contracts, runtime/eval_node, runtime/log, runtime/trace, runtime/waits,
+ *                tools/context, typesys.
+ * Never imports: engine, run, compose, or the CLI.
  */
 
 import { localTypes } from "../compile/declared_types.ts";
@@ -89,11 +89,7 @@ import {
 import { NodeState } from "./common.ts";
 import { ForwardCapture, validateSource } from "./contracts.ts";
 import { nodeBackwardCapture, rebind, rebuildDerived, rebuildNodeData } from "./eval_node.ts";
-import { reduceBackwardRecord, RuntimeBackwardState } from "./learning.ts";
 import {
-  BackwardFinishedRecord,
-  BackwardReadyRecord,
-  BackwardStartedRecord,
   canonicalSeed,
   canonicalTyped,
   decodeRecord,
@@ -101,9 +97,6 @@ import {
   InboxClosedRecord,
   InboxWithdrawnRecord,
   InterruptedRecord,
-  MemoryCommitFailedRecord,
-  MemoryCommitRequestedRecord,
-  MemoryCommitSucceededRecord,
   NodeExpandedRecord,
   NodeFailedRecord,
   NodeRoutedRecord,
@@ -468,8 +461,6 @@ export class RunState {
    * recorded learning independently of memory scopes.
    */
   trace: RetainedTrace | null = null;
-  /** Immutable accepted backward attempts and irreversible commit facts. */
-  backwardState = new RuntimeBackwardState();
   /**
    * The node ids adopted before any runtime expansion. Safe pruning may retire only later
    * dynamic-overlay nodes.
@@ -1051,13 +1042,6 @@ interface GrowthPlan extends PlanAnchors {
   readonly topology: GrowthTopology;
 }
 
-/** One post-terminal backward or memory-commit record and the backward state it leads to. */
-interface BackwardPlan extends PlanAnchors {
-  readonly kind: "backward";
-  readonly originatingBackwardState: RuntimeBackwardState;
-  readonly nextBackwardState: RuntimeBackwardState;
-}
-
 /** Every plan kind a `PreparedTransition` carries. */
 type PreparedPlan =
   | RunStartedPlan
@@ -1067,8 +1051,7 @@ type PreparedPlan =
   | RoutePlan
   | FailurePlan
   | EndingPlan
-  | GrowthPlan
-  | BackwardPlan;
+  | GrowthPlan;
 
 /**
  * One canonical record plus its already validated total state-change plan. Frozen.
@@ -1951,16 +1934,6 @@ export function prepareRunWaiting(state: RunState): PreparedTransition {
   return prepareRecord(state, new RunWaitingRecord([...state.waits.waiting.keys()]));
 }
 
-/** The post-terminal records `prepareRecord` hands to the backward reducer. */
-const BACKWARD_RECORDS = [
-  BackwardStartedRecord,
-  BackwardReadyRecord,
-  BackwardFinishedRecord,
-  MemoryCommitRequestedRecord,
-  MemoryCommitSucceededRecord,
-  MemoryCommitFailedRecord,
-] as const;
-
 /** The frontier records `prepareRecord` validates and plans itself. */
 const FRONTIER_RECORDS = [
   NodeStartedRecord,
@@ -1978,12 +1951,11 @@ const FRONTIER_RECORDS = [
 /**
  * Validate one supported authoritative record against the current frontier.
  *
- * This is the shared reducer seam for live dispatch and historical replay. Graph records require
- * an initialized nonterminal state; backward and memory-commit records require an initialized
- * primary terminal with learning enabled.
+ * This is the shared reducer seam for live dispatch and historical replay. Every record requires an
+ * initialized nonterminal state.
  *
  * @param state The initialized reducer state immediately before `record`.
- * @param record One supported graph, frontier or backward-attempt record.
+ * @param record One supported graph or frontier record.
  * @param options.growBuilder Required only for `NodeExpandedRecord` replay; rebuilds and verifies
  *   the recorded fragment through the same injected path used live.
  * @returns The canonically copied record, its frozen plan and its observers.
@@ -1996,10 +1968,6 @@ export function prepareRecord(
   options: { growBuilder?: GrowBuilder | null } = {},
 ): PreparedTransition {
   if (!isExactly(state, RunState)) throw new TypeError("prepareRecord expects a RunState");
-  if (BACKWARD_RECORDS.some((cls) => isExactly<RunRecord>(record, cls))) {
-    return prepareBackwardTransition(state, record);
-  }
-
   requireInitializedNonterminal(state);
 
   if (isExactly(record, PoolCommitRecord)) {
@@ -2747,20 +2715,6 @@ function prepareGrowthTransition(
   return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, [growthObserver(canonical, seed)]);
 }
 
-/** Validate all backward data and prepare its detached state before append. */
-function prepareBackwardTransition(state: RunState, record: RunRecord): PreparedTransition {
-  requireInitializedTerminalBackward(state);
-  const { envelopeJson, envelope, canonical } = canonicalEnvelope(state, record, BACKWARD_RECORDS, "backward");
-  const nextBackwardState = reduceBackwardRecord(state.trace!, state.backwardState, canonical);
-  const plan: BackwardPlan = Object.freeze({
-    kind: "backward",
-    ...planAnchors(state, envelopeJson, envelope),
-    originatingBackwardState: state.backwardState,
-    nextBackwardState,
-  });
-  return new PreparedTransition(canonical, envelope.runId, envelope.seq, plan, []);
-}
-
 /** Every plan kind `commitPrepared` dispatches. */
 const PLAN_KINDS: ReadonlySet<string> = new Set([
   "runStarted",
@@ -2771,7 +2725,6 @@ const PLAN_KINDS: ReadonlySet<string> = new Set([
   "failure",
   "ending",
   "growth",
-  "backward",
 ]);
 
 /**
@@ -2796,8 +2749,7 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
   const kind = (prepared._plan as { kind?: unknown } | null)?.kind;
   if (typeof kind !== "string" || !PLAN_KINDS.has(kind)) throw new TypeError("unsupported prepared transition plan");
   const traceDelta = prepared._plan.traceDelta;
-  if (kind === "backward") requirePostterminalTraceDelta(state, traceDelta);
-  else if (kind === "frontier") requireFrontierTraceDelta(state, prepared);
+  if (kind === "frontier") requireFrontierTraceDelta(state, prepared);
   else if (kind === "ending") requireEndingTraceDelta(state, prepared);
   if (traceDelta !== null) traceDelta.validateOrigin(state.trace);
   let observers: readonly RunEvent[];
@@ -2826,15 +2778,11 @@ export function commitPrepared(log: RunLog, state: RunState, prepared: PreparedT
     case "growth":
       observers = commitGrowth(log, state, prepared);
       break;
-    case "backward":
-      observers = commitBackward(log, state, prepared);
-      break;
     default:
       throw new TypeError("unsupported prepared transition plan");
   }
   if (traceDelta !== null) state.trace = traceDelta.apply();
-  // Backward records come after the terminal result and change no wait.
-  if (kind !== "backward") applyWaitsRecord(state.waits, { seq: prepared.expectedSequence, record: prepared.record });
+  applyWaitsRecord(state.waits, { seq: prepared.expectedSequence, record: prepared.record });
   return observers;
 }
 
@@ -3577,19 +3525,6 @@ function changesOnly(delta: TraceDelta, allowed: readonly TraceChange[] = []): b
   });
 }
 
-/** Require the exact sequence-only trace change before accepting a post-terminal record. */
-function requirePostterminalTraceDelta(state: RunState, delta: TraceDelta | null): void {
-  if (
-    !isExactly(delta, TraceDelta) ||
-    delta.originatingTrace !== state.trace ||
-    !Number.isSafeInteger(delta.sequence) ||
-    delta.sequence !== state.nextSequence ||
-    !changesOnly(delta)
-  ) {
-    throw new RangeError("postterminal trace delta must only advance the accepted sequence");
-  }
-}
-
 /** Permit only the canonical dispatch, resume, step, stop, wait, wake, run-wait or close trace change before append. */
 function requireFrontierTraceDelta(state: RunState, prepared: PreparedTransition): void {
   const delta = prepared._plan.traceDelta;
@@ -3687,27 +3622,6 @@ function requireEndingTraceDelta(state: RunState, prepared: PreparedTransition):
   ) {
     throw new RangeError("a run failure's terminal trace disagrees with its causal route occurrence");
   }
-}
-
-/** Verify the complete prepared authority, append, then replace the attempt state. */
-function commitBackward(log: RunLog, state: RunState, prepared: PreparedTransition): readonly RunEvent[] {
-  const plan = prepared._plan;
-  if (plan.kind !== "backward") throw new TypeError("backward commit requires its exact plan");
-  requirePreparedOrigin(state, plan);
-  if (state.backwardState !== plan.originatingBackwardState) {
-    throw new RangeError("prepared backward transition has stale attempt authority");
-  }
-  requireInitializedTerminalBackward(state);
-  requireAuthorityCoordinates(log, state, prepared, true);
-  requireUnchangedRecord(prepared, plan.envelopeJson);
-  // The plan reduced this record from this very backward state, as the identity check above shows.
-  if (!isExactly(plan.nextBackwardState, RuntimeBackwardState)) {
-    throw new TypeError("backward plan requires an exact next state");
-  }
-  appendAndVerify(log, prepared);
-  state.backwardState = plan.nextBackwardState;
-  state.nextSequence = prepared.expectedSequence + 1;
-  return [];
 }
 
 /** Require the exact state, adopted flow and boundary nodes of the preparation. */
@@ -3833,7 +3747,6 @@ function hasReducerContainers(state: RunState): boolean {
     isExactly(state.inboxEvents, Map) &&
     isRecord(state.input) &&
     isRecord(state.effectiveLlmByStaticPath) &&
-    isExactly(state.backwardState, RuntimeBackwardState) &&
     isExactly(state.initialStaticIds, Set)
   );
 }
@@ -4001,17 +3914,6 @@ function requireInventories(state: RunState): void {
 function requireInitializedNonterminal(state: RunState): void {
   requireInitialized(state);
   if (state.result !== null) throw new RangeError("terminal run state cannot prepare another graph transition");
-}
-
-/** Require the accepted retained terminal, independently from memory declarations. */
-function requireInitializedTerminalBackward(state: RunState): void {
-  requireInitialized(state);
-  if (!(state.result instanceof RunSucceeded || state.result instanceof RunFailed)) {
-    throw new RangeError("backward records require an accepted terminal result");
-  }
-  if (state.learnable !== true || state.trace === null || state.trace.terminal === null) {
-    throw new RangeError("backward records require recorded learning and terminal trace authority");
-  }
 }
 
 /** Require `record` to dispatch exactly one eligible ready-head node. */
@@ -6584,9 +6486,6 @@ function requirePristine(state: RunState): void {
     state.memoryStacks === null &&
     state.learnable === false &&
     state.trace === null &&
-    // An empty backward state: no attempt and no memory order.
-    state.backwardState.attempts.length === 0 &&
-    state.backwardState.memoryOrder.length === 0 &&
     sameIds(state.initialStaticIds, flow.nodes.keys());
   if (!pristine) throw new RangeError("RunStarted requires a pristine RunState at sequence 0");
 }
@@ -6636,7 +6535,6 @@ interface RunStartedApply {
   recordedTools: Readonly<Record<string, RecordedTool>>;
   recordedToolGroups: Readonly<Record<string, readonly string[]>>;
   runDefaults: Defaults;
-  backwardState: RuntimeBackwardState;
   observers: readonly RunEvent[];
 }
 
@@ -6660,9 +6558,6 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
   if (!isRecord(wiring)) throw new TypeError("canonical START wiring is not a dict");
   if (!isRecord(effective)) throw new TypeError("canonical effective LLM map is not a dict");
 
-  const backwardState = new RuntimeBackwardState(
-    record.memories === null ? [] : record.memories.map((spec) => spec.key),
-  );
   return {
     nodeState: new Map(state.nodeState),
     edgeState: new Map(state.edgeState),
@@ -6690,7 +6585,6 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
     recordedTools: record.tools,
     recordedToolGroups: record.toolGroups,
     runDefaults: fromRecorded(record.defaults),
-    backwardState,
     observers: [new RunStarted()],
   };
 }
@@ -6719,7 +6613,6 @@ function applyRunStarted(state: RunState, apply: RunStartedApply): void {
   state.recordedTools = apply.recordedTools;
   state.recordedToolGroups = apply.recordedToolGroups;
   state.runDefaults = apply.runDefaults;
-  state.backwardState = apply.backwardState;
   state.nextSequence = apply.nextSequence;
 }
 

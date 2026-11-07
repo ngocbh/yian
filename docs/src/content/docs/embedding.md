@@ -343,10 +343,9 @@ abort its `signal` instead: the run records a stop, rejects with the signal's re
 - **Tools.** `tool()` builds a tool from a JSON Schema or a Standard Schema validator (zod,
   valibot, ArkType); see [Agents](/agents/#host-tools). With `resumable: true`, a resumed agent
   sends a call to it that a crash or a stop cut off again. A handler gets `(args, ctx)`. `ctx` holds
-  `callId` (the same on every retry and resume, so use it as an idempotency key), `attempt` (1;
-  a TOOL node's retry or resumed attempt counts on, and an agent's call is above 1 only when a
-  resume sends a resumable tool's call again), `runId`, `node`, `context` (your app object) and
-  `signal` (aborted when the call must end).
+  `callId` (the same on every retry and resume, so use it as an idempotency key), `attempt` (1
+  on the first try, higher on a TOOL node's retry or when a resume makes the call again), `runId`,
+  `node`, `context` (your app object) and `signal` (aborted when the call must end).
   Tool groups may hold same-named tools, which a model sees as `<group>_<tool>`; two tools that
   could show one name are refused.
 - **MCP servers.** `mcpServer({ command, args })` or `mcpServer({ url, headers })` describes a

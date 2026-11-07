@@ -227,10 +227,8 @@ export function checkContract(instance: MemoryBase): void {
   const names = contract.tools.map((tool) => tool.name);
   const twice = names.find((name, i) => names.indexOf(name) !== i);
   if (twice !== undefined) throw new TypeError(`${cls.name}'s contract lists the tool ${twice} twice`);
-  const expected = Object.hasOwn(BUILTIN_MEMORY_TOOLS, contract.type)
-    ? BUILTIN_MEMORY_TOOLS[contract.type as keyof typeof BUILTIN_MEMORY_TOOLS]
-    : null;
-  if (expected === null) return;
+  if (!Object.hasOwn(BUILTIN_MEMORY_TOOLS, contract.type)) return;
+  const expected = BUILTIN_MEMORY_TOOLS[contract.type as keyof typeof BUILTIN_MEMORY_TOOLS];
   const declares = `${cls.name} declares ${contract.type}`;
   const missing = expected.filter((name) => !names.includes(name));
   if (missing.length > 0) throw new TypeError(`${declares} but lacks its tools: ${missing.join(", ")}`);

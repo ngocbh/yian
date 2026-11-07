@@ -134,6 +134,16 @@ export type ChangeEntry = {
   at: string;
 };
 
+/**
+ * The brand a session's errors carry: their kind. yian reads it rather than `instanceof`, since a
+ * host memory type may load another copy of yian, and a busy memory from that copy must still
+ * reach the model as busy.
+ */
+const MEMORY_ERROR = Symbol.for("yian.memory_error");
+
+/** The kind of a session's error: its lock wait timed out, or a change id was reused. */
+export type MemoryErrorKind = "busy" | "change_id_reused";
+
 /** A session's wait for its memory's lock timed out; nothing was written. */
 export class MemoryBusyError extends Error {
   override name = "MemoryBusyError";
@@ -148,6 +158,23 @@ export class ChangeIdReusedError extends Error {
   constructor(id: string, options?: ErrorOptions) {
     super(`change id \`${id}\` was used for another change`, options);
     this.id = id;
+  }
+}
+
+Object.defineProperty(MemoryBusyError.prototype, MEMORY_ERROR, { value: "busy" });
+Object.defineProperty(ChangeIdReusedError.prototype, MEMORY_ERROR, { value: "change_id_reused" });
+
+/**
+ * Return the kind `error` is branded with by any copy of yian, or `null` when it has none. Never
+ * throws, so a hostile object (a throwing getter or proxy trap) has no kind.
+ */
+export function memoryErrorKind(error: unknown): MemoryErrorKind | null {
+  if (error === null || (typeof error !== "object" && typeof error !== "function")) return null;
+  try {
+    const kind: unknown = (error as { [MEMORY_ERROR]?: unknown })[MEMORY_ERROR];
+    return kind === "busy" || kind === "change_id_reused" ? kind : null;
+  } catch {
+    return null;
   }
 }
 

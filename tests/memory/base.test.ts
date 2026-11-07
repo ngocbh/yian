@@ -9,6 +9,7 @@ import {
   MemoryBase,
   MemoryBusyError,
   type MemoryContract,
+  memoryErrorKind,
   type MemorySession,
   type MemoryToolSpec,
 } from "../../src/memory/base.ts";
@@ -104,4 +105,31 @@ test("the errors a session throws", () => {
   expect(busy).toBeInstanceOf(Error);
   expect(busy.name).toBe("MemoryBusyError");
   expect(busy.message).toBe("lock wait timed out");
+});
+
+test("each session error carries its kind", () => {
+  expect(memoryErrorKind(new MemoryBusyError("lock wait timed out"))).toBe("busy");
+  expect(memoryErrorKind(new ChangeIdReusedError("x"))).toBe("change_id_reused");
+});
+
+test("an error from another copy of yian is read by its brand", () => {
+  const brand = Symbol.for("yian.memory_error");
+  const busy = Object.assign(new Error("busy elsewhere"), { [brand]: "busy" });
+  expect(memoryErrorKind(busy)).toBe("busy");
+  expect(memoryErrorKind({ [brand]: "change_id_reused" })).toBe("change_id_reused");
+});
+
+test("anything else has no memory error kind, and the reader never throws", () => {
+  const brand = Symbol.for("yian.memory_error");
+  const hostile = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("trap");
+      },
+    },
+  );
+  for (const value of [new Error("plain"), { [brand]: "other" }, { [brand]: ["busy"] }, null, "busy", 1, hostile]) {
+    expect(memoryErrorKind(value)).toBeNull();
+  }
 });

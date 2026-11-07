@@ -50,14 +50,11 @@ export interface EmbeddingsOptions {
   scheduler?: Scheduler;
 }
 
-// What the openai SDK sends on every request.
-const DEFAULT_HEADERS = { "content-type": "application/json", accept: "application/json" };
-
 /**
  * Return an `Embedder` that POSTs `{model, input}` to `<baseUrl>/embeddings`.
  *
- * Each request sends `content-type` and `accept` of `application/json`, overridden by `headers`,
- * then by the auth headers, case-insensitively. A non-2xx reply throws `errorFromResponse`'s
+ * Each request sends the route's `requestHeaders`: JSON defaults, then `headers`, then the auth
+ * headers. A non-2xx reply throws `errorFromResponse`'s
  * `ProviderError`, scrubbed of the auth's credentials; a reply that isn't one vector of finite
  * numbers per text, all of one non-zero length across every batch, throws a `protocol` one.
  * Transport failures and a stop reject as `shortRequest` does. No texts send no request.
@@ -79,12 +76,10 @@ export function openaiEmbeddings(options: EmbeddingsOptions): Embedder {
     const vectors: Float32Array[] = [];
     for (let start = 0; start < texts.length; start += embeddingBatchItems) {
       const batch = texts.slice(start, start + embeddingBatchItems);
-      const headers = new Headers(DEFAULT_HEADERS);
-      for (const [name, value] of Object.entries(route.headers)) headers.set(name, value);
-      for (const [name, value] of Object.entries(await route.auth.headers())) headers.set(name, value);
+      const body = encodeBody({ model, input: batch });
       const reply = await shortRequest(
         route.url(),
-        { method: "POST", headers, body: encodeBody({ model, input: batch }) },
+        { method: "POST", headers: await route.requestHeaders(), body },
         {
           name: route.provider,
           credentials: () => route.auth.credentials(),

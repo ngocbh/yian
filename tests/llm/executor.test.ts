@@ -91,6 +91,23 @@ describe("Route", () => {
     expect(r.headers).toEqual({});
   });
 
+  test("requestHeaders: JSON defaults, then route headers, then auth headers, case-insensitively", async () => {
+    const plain = Object.fromEntries(await route().requestHeaders());
+    expect(plain).toEqual({
+      "content-type": "application/json",
+      accept: "application/json",
+      authorization: "Bearer sk-test-key-0123456789",
+    });
+    const headers = { ACCEPT: "text/event-stream", Authorization: "x", "x-extra": "a" };
+    const overridden = Object.fromEntries(await route({ headers }).requestHeaders());
+    expect(overridden).toEqual({
+      "content-type": "application/json",
+      accept: "text/event-stream",
+      authorization: "Bearer sk-test-key-0123456789",
+      "x-extra": "a",
+    });
+  });
+
   for (const name of ["x extra", "x:extra"]) {
     test(`header name ${JSON.stringify(name)} throws`, () => {
       const error = thrown(() => route({ headers: { [name]: "v" } }));

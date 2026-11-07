@@ -22,8 +22,6 @@ import type { Message, Request, Response } from "./messages.ts";
 import type { Route } from "./route.ts";
 import { type Exchange, openExchange } from "./transport.ts";
 
-// The openai and anthropic SDKs send this Accept on every request, streamed ones too.
-const DEFAULT_HEADERS = { "content-type": "application/json", accept: "application/json" };
 const MAX_ERROR_BODY = 64 * 1024;
 // Fixed, not a setting: YIAN_MODEL_RETRIES bounds how long retrying takes.
 /** openai's MAX_RETRY_DELAY: the longest backoff between model retries, in seconds. */
@@ -111,9 +109,7 @@ export class RouteModel implements ChatModel {
     const { route, protocol } = this;
     signal.throwIfAborted();
     const body = encodeBody(protocol.buildBody(request));
-    const headers = new Headers(DEFAULT_HEADERS);
-    for (const [name, value] of Object.entries(route.headers)) headers.set(name, value);
-    for (const [name, value] of Object.entries(await route.auth.headers())) headers.set(name, value);
+    const headers = await route.requestHeaders();
     const exchange = await openExchange(
       route.url(),
       { method: "POST", headers, body },

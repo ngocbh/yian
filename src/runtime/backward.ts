@@ -271,8 +271,9 @@ export async function learningMaterials(
 
 /**
  * Return what the run recorded of its grants, as a `MaterialCaps` reads them: the skills by name,
- * and the specs of the tools some grant ids name, a group expanded with the membership the run
- * recorded (`null` when one names no recorded tool).
+ * and the specs of the tools some grants name, found by record name: a group expanded with the
+ * membership the run recorded, a group grant's tools and a bare name's tool found in it (`null`
+ * when one names no recorded tool).
  */
 export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "toolSpecs"> {
   const skills = new Map(
@@ -282,21 +283,28 @@ export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "
     ]),
   );
   const toolSpecs = (grants: readonly ToolGrant[]): ToolSpec[] | null => {
-    const specs: ToolSpec[] = [];
-    // As `ToolSet.expand`: a group becomes its tools, a group grant the tools it lists, and a tool
-    // granted twice is bound once.
     const groups = state.recordedToolGroups;
-    const names = new Set(
-      grants.flatMap((grant) =>
-        grant.kind === "group" ? grant.tools : Object.hasOwn(groups, grant.name) ? groups[grant.name]! : [grant.name],
-      ),
-    );
-    for (const name of names) {
-      if (!Object.hasOwn(state.recordedTools, name)) return null;
-      const { description, parameters } = state.recordedTools[name]!;
-      specs.push(new ToolSpec({ name, description, parameters }));
+    const tools = state.recordedTools;
+    const listed = Object.values(groups).flat();
+    const named = (name: string) => (key: string) => Object.hasOwn(tools, key) && tools[key]!.name === name;
+    // Each grant's tools by record name: a group's, a group grant's listed ones, a top-level
+    // tool's, or a bare name's tool in a recorded group.
+    const keys = grants.flatMap((grant): (string | undefined)[] => {
+      if (grant.kind === "group") {
+        return grant.tools.map((name) => (Object.hasOwn(groups, grant.group) ? groups[grant.group]!.find(named(name)) : undefined));
+      }
+      if (Object.hasOwn(groups, grant.name)) return [...groups[grant.name]!];
+      if (Object.hasOwn(tools, grant.name) && !listed.includes(grant.name)) return [grant.name];
+      return [listed.find(named(grant.name))];
+    });
+    // As `ToolSet.expand`: each tool under its own name, a name granted twice bound once.
+    const specs = new Map<string, ToolSpec>();
+    for (const key of keys) {
+      if (key === undefined || !Object.hasOwn(tools, key)) return null;
+      const { name, description, parameters } = tools[key]!;
+      if (!specs.has(name)) specs.set(name, new ToolSpec({ name, description, parameters }));
     }
-    return specs;
+    return [...specs.values()];
   };
   return { skills, toolSpecs };
 }

@@ -19,7 +19,8 @@ import { Message, type Request, Response, ToolCallPart, ToolResultPart } from ".
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
-import { advance, type RunFlowOptions, runFlow } from "../../src/run.ts";
+import { advance, pendingCalls, type RunFlowOptions, runFlow } from "../../src/run.ts";
+import { pending } from "../../src/tools/context.ts";
 import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { type AskRequest, registerTool, TOOL_REGISTRY, type ToolEntry } from "../../src/tools/registry.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
@@ -346,7 +347,7 @@ for (const [name, tools, message] of [
   [
     "missing group",
     { toolbox: [], workspace: [] },
-    "AGENT node 'agent' grants unknown tool or group 'company'; tool groups in this run: [\"toolbox\",\"workspace\"]",
+    "AGENT node 'agent' grants unknown tool or group 'company'; tool groups in this run: [toolbox, workspace]",
   ],
   ["group ask_user", groups([textTool("ask_user")]), "group 'toolbox' has a tool named 'ask_user'"],
 ] as const) {
@@ -360,6 +361,99 @@ for (const [name, tools, message] of [
     expect(existsSync(path)).toBe(false);
   });
 }
+
+test("an ambiguous bare grant fails at run start with the group form as its fix", async () => {
+  const path = freshLog();
+  const flow = GROUPS_FLOW.replace("tools: [toolbox, workspace, company]", "tools: [search]");
+  const tools = { github: [textTool("search")], docs: [textTool("search")] };
+
+  const error = await rejected(run(flow, {}, { log: path, tools, models: chats }));
+
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toBe(
+    "AGENT node 'agent' grants 'search': 'search' is a tool of groups 'github' and 'docs'; grant one as `{github: [search]}`",
+  );
+  expect(existsSync(path)).toBe(false);
+});
+
+test("a group grant naming a tool the group lacks fails at run start", async () => {
+  const path = freshLog();
+  const flow = GROUPS_FLOW.replace("tools: [toolbox, workspace, company]", "tools: [{github: [upsert]}]");
+
+  const error = await rejected(run(flow, {}, { log: path, tools: { github: [textTool("search")] }, models: chats }));
+
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toBe(
+    "AGENT node 'agent' grants {github: [upsert]}: `github` has no tool `upsert`; it has search",
+  );
+  expect(existsSync(path)).toBe(false);
+});
+
+test("a TOOL node's {group: tool} reaches the group's tool, and its pending step names github_search", async () => {
+  const log = freshLog();
+  const flow = `
+id: group_tool
+name: group_tool
+nodes:
+  found:
+    kind: tool
+    tool_id: {github: search}
+    input: {text: owls}
+output: \${found.output}
+`;
+  const held = tool({
+    name: "search",
+    description: "search",
+    parameters: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+    execute: () => pending(),
+  });
+  const tools = { github: [held], docs: [textTool("search")] };
+
+  const result = await run(flow, {}, { log, tools });
+
+  expect(result.status, result.failure?.message).toBe("waiting");
+  expect(pendingCalls(log).map(({ node, tool: name }) => [node, name])).toEqual([["found", "github_search"]]);
+});
+
+test("a TOOL node naming a group the run lacks fails at run start", async () => {
+  const flow = `
+id: group_tool
+name: group_tool
+nodes:
+  found:
+    kind: tool
+    tool_id: {github: search}
+    input: {text: owls}
+output: \${found.output}
+`;
+
+  const error = await rejected(run(flow, {}, { log: freshLog(), tools: { docs: [textTool("search")] } }));
+
+  expect((error as Error).message).toBe(
+    "TOOL node 'found' names {github: search}: unknown tool group 'github'; tool groups in this run: [docs]",
+  );
+});
+
+test("a resume whose group holds its tools in another order is refused", async () => {
+  const path = freshLog();
+  const flow = GROUPS_FLOW.replace("tools: [toolbox, workspace, company]", "tools: [toolbox]");
+  const host = new AbortController();
+  const stop = new Error("host stop");
+  const interrupt = () => {
+    host.abort(stop);
+    throw stop;
+  };
+  const first = textTool("first", interrupt);
+  const second = textTool("second");
+  const started = run(flow, {}, { log: path, signal: host.signal, models: chats, tools: { toolbox: [first, second] } });
+  expect(await rejected(started)).toBe(stop);
+
+  const refused = await rejected(
+    advance({ log: path, env: hostEnv(dir), models: chats, tools: { toolbox: [second, first] } }),
+  );
+
+  expect((refused as Error).message).toBe("resume refused: tool_groups.toolbox differs from the recorded one");
+});
 
 test("resume uses the group contents passed to resume", async () => {
   const path = freshLog();
@@ -386,8 +480,8 @@ test("resume uses the group contents passed to resume", async () => {
     advance({ log: path, env: hostEnv(dir), models: chats, tools: groups([textTool("new")]) }),
   );
   expect(other).toBeInstanceOf(RangeError);
-  expect((other as Error).message).toBe("resume refused: tools.new isn't recorded; the run started without it");
-  // The same tools in other groups are refused: the recorded membership is what learning expands.
+  expect((other as Error).message).toBe("resume refused: tools.toolbox_new isn't recorded; the run started without it");
+  // The same tools in other groups are refused: a tool's record name names its group.
   const moved = await rejected(
     advance({
       log: path,
@@ -397,7 +491,7 @@ test("resume uses the group contents passed to resume", async () => {
     }),
   );
   expect(moved).toBeInstanceOf(RangeError);
-  expect((moved as Error).message).toBe("resume refused: tool_groups.toolbox differs from the recorded one");
+  expect((moved as Error).message).toBe("resume refused: tools.toolbox_ws isn't recorded; the run started without it");
   const resumed = await advance({ log: path, env: hostEnv(dir), models: chats, tools: groups([textTool("old")]) });
 
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");

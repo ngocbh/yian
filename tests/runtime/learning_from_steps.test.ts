@@ -421,8 +421,8 @@ test("a grant naming a tool group is expanded with the run's tools when the same
 test("run_started records each granted tool group's members", async () => {
   const { path } = await groupedRun(new FakeMemory());
   const start = JSON.parse(readFileSync(path, "utf8").split("\n")[0]!);
-  expect(start.payload.tool_groups).toEqual({ toolbox: ["lookup", "save"] });
-  expect(Object.keys(start.payload.tools).sort()).toEqual(["lookup", "save"]);
+  expect(start.payload.tool_groups).toEqual({ toolbox: ["toolbox_lookup", "toolbox_save"] });
+  expect(Object.keys(start.payload.tools).sort()).toEqual(["toolbox_lookup", "toolbox_save"]);
 });
 
 test("a finished run reopened with no tools expands its grant from the recorded tool groups", async () => {

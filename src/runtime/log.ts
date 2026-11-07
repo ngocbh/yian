@@ -74,10 +74,10 @@ import {
 } from "./contracts.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 25;
+export const SCHEMA_VERSION = 26;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -195,10 +195,13 @@ export interface FlowSource {
 }
 
 /**
- * A tool an AGENT of the run grants, as the model is told about it. A type, not an interface, so
- * it is a `JsonObject` as recorded.
+ * A tool an AGENT of the run grants, or a tool of a group one grants, as the model is told about
+ * it. The run keys it by its record name: a top-level tool's name, or `<group>_<tool>` under the
+ * first group holding it. A type, not an interface, so it is a `JsonObject` as recorded.
  */
 export type RecordedTool = {
+  /** The tool's own name. */
+  readonly name: string;
   /** The tool's description. */
   readonly description: string;
   /** The tool's parameters, a JSON Schema object. */
@@ -251,9 +254,15 @@ export interface RunStartedFields {
   flow?: FlowSource | null;
   /** Each skill an AGENT grants, by name; defaults to `{}`. */
   skills?: Readonly<Record<string, RecordedSkill>>;
-  /** Each tool an AGENT grants, groups expanded, by name; defaults to `{}`. */
+  /**
+   * Each tool an AGENT grants and each tool of a group one reaches, by record name; defaults to
+   * `{}`.
+   */
   tools?: Readonly<Record<string, RecordedTool>>;
-  /** Each tool group an AGENT grants, by name: its tools' names in group order; defaults to `{}`. */
+  /**
+   * Each tool group an AGENT reaches, by name: its tools' record names in group order; defaults
+   * to `{}`.
+   */
   toolGroups?: Readonly<Record<string, readonly string[]>>;
   /** The yian version that started the run; defaults to this one's `VERSION`. */
   yianVersion?: string;
@@ -290,9 +299,9 @@ export class RunStartedRecord {
   readonly flow: FlowSource | null;
   /** The deep-frozen skills the AGENTs grant, by name. */
   readonly skills: Readonly<Record<string, RecordedSkill>>;
-  /** The deep-frozen tools the AGENTs grant, by name. */
+  /** The deep-frozen tools the AGENTs grant or reach through a group, by record name. */
   readonly tools: Readonly<Record<string, RecordedTool>>;
-  /** The frozen tool groups the AGENTs grant, by name: each group's tool names, in group order. */
+  /** The frozen tool groups the AGENTs reach, by name: each group's tools' record names, in group order. */
   readonly toolGroups: Readonly<Record<string, readonly string[]>>;
   /** The yian version that started the run. */
   readonly yianVersion: string;
@@ -364,6 +373,7 @@ export class RunStartedRecord {
     this.tools = validatedEntries(tools, "tools", (tool, label) => {
       if (!isRecord(tool["parameters"])) throw new TypeError(`${label} parameters must be an object`);
       return {
+        name: requireName(tool["name"], `${label} name`),
         description: requireText(tool["description"], `${label} description`),
         parameters: freezeParsed(canonicalCopy(jsonPart(tool["parameters"], [], "refuse")) as JsonObject),
       };
@@ -398,7 +408,7 @@ function requireName(value: unknown, label: string): string {
 }
 
 /**
- * Return a frozen copy of `RunStarted.tool_groups`: each group's tool names as a frozen array.
+ * Return a frozen copy of `RunStarted.tool_groups`: each group's tools' record names as a frozen array.
  *
  * @throws TypeError when `groups` isn't a plain object or a group isn't an array of strings.
  * @throws RangeError when a group or tool name is empty, or a group names a tool `tools` lacks.
@@ -3613,7 +3623,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
         callTimeLlm: payload["call_time_llm"] as JsonObject | null,
         flow: payload["flow"] === null ? null : flowFromPayload(payload["flow"], `${label} flow`),
         skills: wireEntries<RecordedSkill>(payload["skills"], `${label} skills`, ["description", "instructions"]),
-        tools: wireEntries<RecordedTool>(payload["tools"], `${label} tools`, ["description", "parameters"]),
+        tools: wireEntries<RecordedTool>(payload["tools"], `${label} tools`, ["name", "description", "parameters"]),
         toolGroups: wireObject(payload["tool_groups"], `${label} tool_groups`) as Record<string, string[]>,
         yianVersion: requireText(payload["yian_version"], `${label} yian_version`),
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),

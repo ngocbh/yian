@@ -639,7 +639,7 @@ output: \${agent.output}
   const error = await runStartError(flow, { tools: { toolbox: [], workspace: [] } });
   expect(error).toBeInstanceOf(RangeError);
   expect(error.message).toBe(
-    `AGENT node 'agent' grants unknown tool or group 'company'; tool groups in this run: ["toolbox","workspace"]`,
+    `AGENT node 'agent' grants unknown tool or group 'company'; tool groups in this run: [toolbox, workspace]`,
   );
 });
 

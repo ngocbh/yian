@@ -192,7 +192,8 @@ import {
 import { Skill } from "./skills/catalog.ts";
 import { isAlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
-import { RESERVED_TOOL_NAMES, type ToolEntry, ToolSet } from "./tools/registry.ts";
+import { expandGrants, GrantError, type ToolGrant, visibleToolName } from "./tools/grants.ts";
+import { RESERVED_TOOL_NAMES, type ToolEntry, type ToolRef, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { type JsonObject, logJson } from "./typesys/json.ts";
 import { VariablePool } from "./typesys/pool.ts";
@@ -1465,15 +1466,25 @@ async function startRun(
 }
 
 /**
- * Return each tool an AGENT of `flow` grants, groups expanded, as the model is told about it.
+ * Return, by record name, each tool an AGENT of `flow` grants and each tool of a group one reaches,
+ * as the model is told about it, with its own name. A tool reached twice is recorded once.
  *
- * @throws RangeError when a grant names a tool `tools` lacks (`checkToolGrants` reports it first).
+ * @throws RangeError when a grant can't be resolved (`checkToolGrants` reports it first).
  */
 function recordedTools(flow: CompiledFlow, tools: ToolSet): Record<string, RecordedTool> {
   const recorded = new Map<string, RecordedTool>();
+  const record = (ref: ToolRef) => {
+    const key = tools.recordName(ref);
+    if (recorded.has(key)) return;
+    const tool = tools.resolve([ref])[0]!;
+    recorded.set(key, { name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema });
+  };
   for (const [, node] of staticNodes(flow)) {
-    for (const tool of tools.resolve(tools.expand(node.grantedTools()))) {
-      recorded.set(tool.name, { description: tool.description, parameters: tool.parametersJsonSchema });
+    const grants = node.grantedTools();
+    for (const granted of expandGrants(grants, tools.scopes())) record({ group: granted.group, name: granted.tool });
+    // `tool_groups` lists every tool of a group, so each one is recorded too.
+    for (const group of reachedGroups(grants, tools)) {
+      for (const name of tools.scope().group(group)!) record({ group, name });
     }
   }
   // `Object.fromEntries` defines own data properties, so a `__proto__` name stays a key.
@@ -1481,18 +1492,32 @@ function recordedTools(flow: CompiledFlow, tools: ToolSet): Record<string, Recor
 }
 
 /**
- * Return each tool group an AGENT of `flow` grants, by name: its tools' names in group order. A
- * reopened run expands its grants with these, since it has no `ToolSet` of its own.
+ * Return each tool group an AGENT of `flow` reaches, by name: its tools' record names in group
+ * order. A reopened run expands its grants with these, since it has no `ToolSet` of its own.
  */
 function recordedToolGroups(flow: CompiledFlow, tools: ToolSet): Record<string, readonly string[]> {
-  const groups = new Set(tools.groups);
   const recorded = new Map<string, readonly string[]>();
   for (const [, node] of staticNodes(flow)) {
-    for (const grant of node.grantedTools()) {
-      if (grant.kind === "name" && groups.has(grant.name)) recorded.set(grant.name, tools.expand([grant]));
+    for (const group of reachedGroups(node.grantedTools(), tools)) {
+      recorded.set(group, tools.scope().group(group)!.map((name) => tools.recordName({ group, name })));
     }
   }
   return Object.fromEntries(recorded);
+}
+
+/**
+ * Return the run's tool groups `grants` reach, in grant order: a group granted whole or in group
+ * form, and the group holding a tool granted by its bare name.
+ */
+function reachedGroups(grants: readonly ToolGrant[], tools: ToolSet): string[] {
+  const scope = tools.scope();
+  const groups = grants.flatMap((grant) => {
+    if (grant.kind === "group") return [grant.group];
+    if (scope.group(grant.name) !== null) return [grant.name];
+    if (scope.hasTool(grant.name)) return [];
+    return [...scope.groupsHolding(grant.name)];
+  });
+  return [...new Set(groups)];
 }
 
 /** Return each skill an AGENT of `flow` grants from `skills`, by name. */
@@ -3088,18 +3113,25 @@ function* streamedEnvelopes(log: string, maxLineBytes: number | null): Generator
 /**
  * Prove every static AGENT grant and TOOL `tool_id` names a tool this run supplies.
  *
- * An AGENT grant may name a tool group; a TOOL node must name one tool. `take` and `sleep` TOOL
- * nodes need no tool: the engine runs them. Every static node is checked, including nodes that
- * may never run, so an unresolvable id rejects the run before any record is written instead of
- * failing its node when the node starts.
+ * An AGENT's grants expand as its request will: a group gives its tools, a group grant the tools it
+ * lists, and a bare name a top-level tool or the one group tool by that name. A TOOL node names
+ * one tool, bare or as `{group: tool}`. `take` and `sleep` TOOL nodes need no tool: the engine
+ * runs them. Every static node is checked, including nodes that may never run, so an unresolvable
+ * id rejects the run before any record is written instead of failing its node when the node
+ * starts.
  *
  * @throws RangeError when an AGENT grants a built-in (`take`, `sleep`, `ask`), a tool or group
- *   this run lacks, or `ask_user` with no handler; or a TOOL node names a tool this run lacks, a
- *   tool group, or `ask` or `ask_user` with no handler.
+ *   this run lacks, a tool of two groups by its bare name, a tool its group lacks, two tools that
+ *   would show one name, or `ask_user` with no handler; or a TOOL node names a tool or group this
+ *   run lacks, a tool of two groups by its bare name, a tool group, or `ask` or `ask_user` with no
+ *   handler.
  */
 function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
   for (const [nodeId, node] of staticNodes(flow)) {
-    for (const toolId of tools.expand(node.grantedTools())) {
+    const grants = node.grantedTools();
+    for (const grant of grants) {
+      if (grant.kind !== "name") continue;
+      const toolId = grant.name;
       if (BUILTIN_TOOL_IDS.has(toolId as BuiltinToolId)) {
         const reason =
           toolId === ASK
@@ -3107,25 +3139,35 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
             : `an engine built-in a TOOL node reaches with tool_id: ${toolId}`;
         throw new RangeError(`AGENT node ${reprText(nodeId)} grants ${reprText(toolId)}: ${reason}`);
       }
+      if (toolId !== ASK_USER) continue;
       try {
-        tools.resolve([toolId]);
+        tools.resolve([ASK_USER]);
       } catch (error) {
         if (!(error instanceof RangeError)) throw error;
-        const reason =
-          toolId === ASK_USER
-            ? `'ask_user': ${error.message}`
-            : `unknown tool or group ${reprText(toolId)}; tool groups in this run: ${writeAsText([...tools.groups])}`;
-        throw new RangeError(`AGENT node ${reprText(nodeId)} grants ${reason}`);
+        throw new RangeError(`AGENT node ${reprText(nodeId)} grants 'ask_user': ${error.message}`);
       }
     }
-    const call = node.hostToolCall();
-    if (call === null || isEngineBuiltin(call.toolId)) continue;
     try {
-      tools.resolve([call.toolId]);
+      expandGrants(grants, tools.scopes());
+    } catch (error) {
+      if (!(error instanceof GrantError)) throw error;
+      throw new RangeError(`AGENT node ${reprText(nodeId)} ${error.message}`);
+    }
+    const call = node.hostToolCall();
+    if (call === null || (call.group === null && isEngineBuiltin(call.toolId))) continue;
+    try {
+      tools.resolve([callRef(call)]);
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
       let reason: string;
-      if (call.toolId === ASK || call.toolId === ASK_USER || tools.groups.includes(call.toolId)) {
+      if (call.group !== null) {
+        reason = `{${call.group}: ${call.toolId}}: ${error.message}`;
+      } else if (
+        error instanceof GrantError ||
+        call.toolId === ASK ||
+        call.toolId === ASK_USER ||
+        tools.groups.includes(call.toolId)
+      ) {
         reason = `${reprText(call.toolId)}: ${error.message}`;
       } else {
         const known = tools.toolIds;
@@ -3143,6 +3185,11 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
 /** Whether a TOOL node's `toolId` is `take` or `sleep`, which the engine runs, not a tool. */
 function isEngineBuiltin(toolId: string): boolean {
   return toolId === TAKE || toolId === SLEEP;
+}
+
+/** Return the tool a TOOL node's call names: its bare id, or its group's tool. */
+function callRef(call: HostToolCall): string | ToolRef {
+  return call.group === null ? call.toolId : { group: call.group, name: call.toolId };
 }
 
 /**
@@ -3228,8 +3275,8 @@ function checkTemplateSource(binding: unknown, subject: string, types: ReadonlyM
 function checkToolTypes(flow: CompiledFlow, tools: ToolSet): void {
   for (const [nodeId, node] of staticNodes(flow)) {
     const call = node.hostToolCall();
-    if (call === null || isEngineBuiltin(call.toolId)) continue;
-    const declared = toolTypes(tools.resolve([call.toolId])[0]!);
+    if (call === null || (call.group === null && isEngineBuiltin(call.toolId))) continue;
+    const declared = toolTypes(tools.resolve([callRef(call)])[0]!);
     if (declared.inputs !== null) checkToolInputs(nodeId, call, declared.inputs, declared.required, declared.extra);
     if (declared.output !== null) checkToolOutput(nodeId, call, declared.output);
   }
@@ -3258,7 +3305,7 @@ function checkToolInputs(
     if (!inputs.has(name) && extra === undefined) {
       const taken = [...inputs.keys()].sort(compareCodeUnits);
       throw new RangeError(
-        `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${reprText(call.toolId)} takes no such input; ` +
+        `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${reprText(visibleToolName(call.group, call.toolId))} takes no such input; ` +
           `it takes ${writeAsText(taken)}`,
       );
     }
@@ -3267,7 +3314,7 @@ function checkToolInputs(
   if (missing.length > 0) {
     const named = missing.length === 1 ? `input ${reprText(missing[0]!)}` : `inputs ${writeAsText(missing)}`;
     throw new RangeError(
-      `TOOL node ${reprText(nodeId)} is missing ${named} that tool ${reprText(call.toolId)} requires`,
+      `TOOL node ${reprText(nodeId)} is missing ${named} that tool ${reprText(visibleToolName(call.group, call.toolId))} requires`,
     );
   }
   for (const [name, inferred] of call.inputTypes) {
@@ -3276,7 +3323,7 @@ function checkToolInputs(
     // string of digits into an int) is rejected too.
     if (expected !== null && typeRelation(inferred, expected) === "disjoint") {
       throw new RangeError(
-        `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${reprText(call.toolId)} takes ` +
+        `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${reprText(visibleToolName(call.group, call.toolId))} takes ` +
           `${canonicalTypeLabel(expected)}, but the binding is ${bindingLabel(inferred)}`,
       );
     }
@@ -3294,7 +3341,7 @@ function checkToolOutput(nodeId: string, call: HostToolCall, declaredOutput: Typ
   if (typeRelation(declaredOutput, call.outputType) === "disjoint") {
     throw new RangeError(
       `TOOL node ${reprText(nodeId)} output: declared ${canonicalTypeLabel(call.outputType)}, ` +
-        `but tool ${reprText(call.toolId)} returns ${canonicalTypeLabel(declaredOutput)}`,
+        `but tool ${reprText(visibleToolName(call.group, call.toolId))} returns ${canonicalTypeLabel(declaredOutput)}`,
     );
   }
 }

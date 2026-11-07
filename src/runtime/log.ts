@@ -32,11 +32,11 @@ import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temp
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 27;
+export const SCHEMA_VERSION = 28;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
 const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
-  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
 ]);
 
 /** A typed value's wire object `{kind, value}`. */
@@ -160,6 +160,8 @@ export type RecordedTool = {
   readonly description: string;
   /** The tool's parameters, a JSON Schema object. */
   readonly parameters: Readonly<JsonObject>;
+  /** Whether a resume sends a call to the tool that a crash or a stop cut off again. */
+  readonly resumable: boolean;
 };
 
 /** A skill an AGENT of the run grants. A type, not an interface, so it is a `JsonObject` as recorded. */
@@ -302,6 +304,7 @@ export class RunStartedRecord {
         name: requireName(tool["name"], `${label} name`),
         description: requireText(tool["description"], `${label} description`),
         parameters: freezeParsed(canonicalCopy(jsonPart(tool["parameters"], [], "refuse")) as JsonObject),
+        resumable: wireBool(tool["resumable"], `${label} resumable`),
       };
     });
     this.toolGroups = validatedToolGroups(toolGroups, this.tools);
@@ -2582,6 +2585,7 @@ const RECORD_CODECS: readonly RecordCodec[] = [
           "name",
           "description",
           "parameters",
+          "resumable",
         ]),
         toolGroups: wireObject(payload["tool_groups"], `${label} tool_groups`) as Record<string, string[]>,
         yianVersion: requireText(payload["yian_version"], `${label} yian_version`),

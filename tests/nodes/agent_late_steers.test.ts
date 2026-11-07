@@ -16,9 +16,9 @@ import { ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import { Message, type Request, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext, type ModelTextInteraction } from "../../src/memory/contracts.ts";
+import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
-import { runAgent, stepsMaterial } from "../../src/nodes/agent/loop.ts";
+import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
 import type { Output, SteerInbox } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
@@ -229,7 +229,7 @@ test("an interrupt that lands during the final reply beats a queued steer: the a
   expect(recorded.map((step) => step["kind"])).toEqual(["model_call"]);
 });
 
-test("stepsMaterial rebuilds a late-steered occurrence with a matching digest", async () => {
+test("rebuildStepRequests rebuilds a late-steered occurrence with a matching digest", async () => {
   const { inbox, queue, reads } = inboxDouble();
   const model = hooked(new ScriptedModel([textReply("draft"), textReply("final")], CONFIG), (i) => {
     if (i === 1) queue.push("use 2024");
@@ -239,11 +239,11 @@ test("stepsMaterial rebuilds a late-steered occurrence with a matching digest", 
   expect(await output(loopContext(model, { steerInbox: inbox, steps }))).toBe("final");
   // The engine writes the steer step a read makes; here it goes between the two calls by hand.
   const occurrence = [recorded[0]!, { kind: "steer", inbox: "notes", from: [100n], values: reads[1]! } as unknown as ValueRecord, recorded[1]!];
-  const options = { messages: [SYSTEM, userMessage("go")], tools: [], structured: async () => null, baseSystemPrompt: DEFAULT_SYSTEM };
-  const { interactions, digestOk } = await stepsMaterial(occurrence, options);
+  const options = { messages: [SYSTEM, userMessage("go")], tools: [], structured: async () => null };
+  const { requests, digestOk } = await rebuildStepRequests(occurrence, options);
   expect(digestOk).toBe(true);
-  expect(interactions.map((each) => (each as ModelTextInteraction).text)).toEqual(["draft", "final"]);
-  expect((await stepsMaterial([recorded[0]!, recorded[1]!], options)).digestOk).toBe(false);
+  expect([...requests.keys()]).toEqual([0, 2]);
+  expect((await rebuildStepRequests([recorded[0]!, recorded[1]!], options)).digestOk).toBe(false);
 });
 
 // --- through the engine, and across a crash --- //

@@ -337,10 +337,10 @@ test("only an agent with the key hides it from the model", async () => {
   expect(flow.compiled.nodes.get("chat")!.modelHiddenInputs()).toEqual(new Set(["__llm_config"]));
   const fixed = await loadFlow(PICKED.replace("{model: '${pick.output}'}", "{model: m1}"), { env });
   expect(fixed.compiled.nodes.get("chat")!.modelHiddenInputs()).toEqual(new Set());
-  // MAP keeps its reserved input; it shows a learner no prompt.
+  // MAP keeps its reserved input; it sends no request to rebuild.
   const map = new MapNode("m", { flowId: "f" });
   expect(Object.getPrototypeOf(map).modelHiddenInputs).toBe(Node.prototype.modelHiddenInputs);
-  expect(Object.getPrototypeOf(map).learningMaterial).toBe(Node.prototype.learningMaterial);
+  expect(Object.getPrototypeOf(map).rebuildRequests).toBe(Node.prototype.rebuildRequests);
 });
 
 test("resume without the host key raises before a call time agent calls", async () => {

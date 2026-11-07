@@ -56,8 +56,8 @@ import {
   CapabilityFault,
   checkNamedPrompt,
   type CompleteResult,
-  type LearningMaterial,
-  type MaterialCaps,
+  type RebuildCaps,
+  type RebuiltRequests,
   Node,
   type NodeCaps,
   NodeKind,
@@ -92,8 +92,7 @@ import {
   type Nullable,
   typesNullable,
 } from "./llm_values.ts";
-import { runAgent, stepsMaterial } from "./loop.ts";
-import { systemPromptWithMemory } from "./memory.ts";
+import { rebuildStepRequests, runAgent } from "./loop.ts";
 import { reportedText, toolText } from "./results.ts";
 import {
   checkMessage,
@@ -179,7 +178,7 @@ function checkPromptItems(nodeId: string, items: readonly unknown[]): void {
  */
 interface PromptMessage {
   readonly role: "user" | "assistant" | "tool";
-  /** The text recall and learning read: a text message's text, or the model message's text parts. */
+  /** The text recall reads: a text message's text, or the model message's text parts. */
   readonly text: string;
   /** A spliced `Message`'s model message; `null` for a text message, built when the prompt's messages are read. */
   readonly model: ModelMessage | null;
@@ -294,7 +293,7 @@ function renderPromptList(
 export interface AgentPrompt {
   /** Build the prompt's model messages, after the system message; the last is the user's. */
   modelMessages(): readonly ModelMessage[];
-  /** The last message's text, which recall and learning read as the prompt. */
+  /** The last message's text, which recall reads as the prompt. */
   readonly promptText: string;
   /** The authored system prompt rendered, or `DEFAULT_SYSTEM`; recall reads it. */
   readonly systemPrompt: string;
@@ -311,11 +310,11 @@ function collidingVariable(node: AgentNode, inputs: Readonly<Record<string, unkn
 }
 
 /**
- * Whether `error` is a render's or recall's refusal (a template error, a missing skill, a refused
- * recall), which leaves an invocation's prompt unrebuilt; any other error is a fault and escapes.
+ * Whether `error` is a render's refusal (a template error, a missing skill), which leaves an
+ * invocation's prompt unrebuilt; any other error is a fault and escapes.
  */
 function isRebuildRefusal(error: unknown): boolean {
-  return error instanceof ExpressionError || error instanceof SkillError || error instanceof MemoryRecallError;
+  return error instanceof ExpressionError || error instanceof SkillError;
 }
 
 /** An AGENT a host interrupted whose declared output doesn't allow null; its failure is `agent.interrupted`. */
@@ -524,8 +523,8 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Hide `__llm_config` and `__steer_inbox` from recall and learning, when this agent has them:
-   * they configure the call.
+   * Hide `__llm_config` and `__steer_inbox` from recall, when this agent has them: they configure
+   * the call.
    */
   override modelHiddenInputs(): ReadonlySet<string> {
     return new Set(this.reservedKeys());
@@ -891,8 +890,8 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Render the prompt once (`renderPrompt`), recall with it, and run the loop. Recall and learning
-   * read the last message's text. No invocation state is stored on the node.
+   * Render the prompt once (`renderPrompt`), recall with it, and run the loop. Recall reads the
+   * last message's text. No invocation state is stored on the node.
    *
    * A call-time agent's model config is its bound `__llm_config` with the run's host key and
    * header values joined when it is marked for the host key; any other agent uses its run's
@@ -1004,7 +1003,7 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Render what one invocation sends: the pure half of `forward`, which `learningMaterial` also
+   * Render what one invocation sends: the pure half of `forward`, which `rebuildRequests` also
    * calls with the recorded skills.
    *
    * The authored `systemPrompt` renders against the same inputs and variables as `prompt`; without
@@ -1062,46 +1061,30 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Rebuild what learning reads about one accepted invocation: its prompt rendered with the
-   * recorded skills (`renderPrompt`), its memory sections recalled against the recorded
-   * snapshots, and its interactions and each request it sent, read from its steps
-   * (`stepsMaterial`), each recorded request checked against the one rebuilt from them.
+   * Rebuild each request one accepted invocation sent: its prompt rendered with the recorded
+   * skills (`renderPrompt`), then the requests read from its steps (`rebuildStepRequests`), each
+   * checked against the recorded digest.
    *
-   * An invocation with no `model_call` step showed no model anything, so it has no prompt, no
-   * sections, no interactions and no requests. One whose render or recall now fails (the run
-   * rendered and recalled it before its first model call) has no prompt or requests either, and
-   * fails the digest check.
+   * An invocation with no `model_call` step sent no request. One whose render now fails (the run
+   * rendered it before its first model call) has no requests either, and fails the digest check.
    */
-  override async learningMaterial(
+  override async rebuildRequests(
     inputs: Readonly<Record<string, unknown>> | null,
     steps: readonly ValueRecord[],
-    caps: MaterialCaps,
-  ): Promise<LearningMaterial> {
-    const none = {
-      interactions: [],
-      baseSystemPrompt: null,
-      prompt: null,
-      memorySections: [],
-      digestOk: true,
-      requests: new Map(),
-    };
+    caps: RebuildCaps,
+  ): Promise<RebuiltRequests> {
+    const none = { requests: new Map(), digestOk: true };
     if (inputs === null || !steps.some((step) => step["kind"] === "model_call")) return none;
     // The run refused this render; any other RangeError while rebuilding is a fault.
     if (collidingVariable(this, inputs) !== null) return { ...none, digestOk: false };
     let rendered: AgentPrompt;
-    let memoryContext: MemoryContext;
     try {
       rendered = this.renderPrompt(inputs, caps.skills, { localTypes: caps.localTypes });
-      memoryContext = await caps.openMemoryContext(rendered.systemPrompt, rendered.promptText);
     } catch (error) {
       if (!isRebuildRefusal(error)) throw error;
       return { ...none, digestOk: false };
     }
-    const sections = memoryContext.sections;
-    const system = new ModelMessage({
-      role: "system",
-      parts: [new TextPart(systemPromptWithMemory(rendered.baseSystemPrompt, sections))],
-    });
+    const system = new ModelMessage({ role: "system", parts: [new TextPart(rendered.baseSystemPrompt)] });
     const tools = caps.toolSpecs(this.tools, rendered.skills.length > 0 ? loadSkillTool() : null);
     const contract = this.outputContract;
     const structured = async () => {
@@ -1114,25 +1097,16 @@ export class AgentNode extends Node {
         // A TypeError is a fault in the builder, not a refused build.
         if (!(error instanceof Error) || error instanceof TypeError) throw error;
         // A model that can't be built now can't give the plan, so its structured requests can't
-        // be checked: `null` fails the digest, and the occurrence's material is left out and reported.
+        // be checked: `null` fails the digest.
         return null;
       }
     };
-    const { interactions, requests, digestOk } = await stepsMaterial(steps, {
+    return await rebuildStepRequests(steps, {
       messages: [system, ...rendered.modelMessages()],
       tools,
       structured,
-      baseSystemPrompt: rendered.baseSystemPrompt,
       renderSteer: this.steerRenderer(caps.localTypes ?? null),
     });
-    return {
-      interactions,
-      baseSystemPrompt: rendered.baseSystemPrompt,
-      prompt: rendered.promptText,
-      memorySections: sections,
-      digestOk,
-      requests,
-    };
   }
 
   /** Return the canonical local declarations in their authored order. */

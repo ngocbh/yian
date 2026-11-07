@@ -22,6 +22,7 @@ import { ScriptedModel } from "../src/llm/testing.ts";
 import { AuthError } from "../src/llm_clients/auth/index.ts";
 import type { ModelAccess } from "../src/llm_clients/factory.ts";
 import { fromModelMessage } from "../src/nodes/agent/messages.ts";
+import { AgentNode } from "../src/nodes/agent/node.ts";
 import { virtualScheduler } from "../src/platform.ts";
 import {
   advance,
@@ -41,7 +42,6 @@ import { Skill } from "../src/skills/catalog.ts";
 import { LOAD_SKILL } from "../src/skills/tool.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import { logJson } from "../src/typesys/json.ts";
-import { FakeMemory } from "./helpers/memory_fakes.ts";
 import { callReply, crashAfter, NO_ENV, serving, textReply } from "./helpers/run_state_fixtures.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-calls-"));
@@ -164,7 +164,6 @@ test("a tool loop: each call's request is the one sent, its reply and its two re
     purpose: "chat",
     finish: "tool_calls",
     interrupted: false,
-    memorySections: [],
   });
   const time = expect.any(String);
   expect(first.attempts).toEqual([
@@ -663,37 +662,6 @@ test("a run cut off mid-agent, then resumed: each start's calls are read", async
   expect(await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV })).toEqual(cut);
 });
 
-const RECALLED = `
-id: recalled
-name: recalled
-llm_config: {provider: anthropic, model: claude-test}
-nodes:
-  work:
-    kind: agent
-    long_term_memory: test
-    prompt: hi
-    output: str
-output: \${work.output}
-`;
-
-test("memory sections are recalled against the recorded snapshot only when memory is given", async () => {
-  const memory = new FakeMemory({ recallText: "notes" });
-  const registry = new Map([["test", memory]]);
-  const model = new ScriptedModel([textReply("done")], { provider: "anthropic", model: "claude-test" });
-  const { log, result } = await run(RECALLED, model, {}, { memory: registry });
-  expect(result.status, result.failure?.message).toBe("succeeded");
-
-  const recalled = await agentCall(log, { nodeId: "work", n: 1 }, { env: NO_ENV, memory: registry });
-  expect(recalled.memorySections).toEqual([{ memory: "test", text: "notes" }]);
-  expect(requestOf(recalled)).toMatchObject(sentView(model.requests[0]!));
-  expect(recalled.digestMismatch).toBe(false);
-
-  const plain = await agentCall(log, { nodeId: "work", n: 1 }, { env: NO_ENV });
-  expect(plain.memorySections).toBeNull();
-  expect(requestOf(plain).system).not.toContain("notes");
-  expect(plain.digestMismatch).toBe(false);
-});
-
 test("agentCall refuses a step that is no model call", async () => {
   const model = new ScriptedModel([callReply(["lookup", { topic: "a" }, "call-a"]), textReply("done")], {
     provider: "anthropic",
@@ -800,4 +768,24 @@ test("a steer read after the run resumed joins the request after it", async () =
   expect(view.digestMismatch).toBe(false);
   expect(requestOf(view)).toMatchObject(sentView(second.requests[0]!));
   expect(requestOf(view).messages.at(-1)).toEqual({ role: "user", parts: [{ type: "text", text: "only 2024" }] });
+});
+
+test("agentCall takes no memory option and its view has no memorySections", async () => {
+  const model = new ScriptedModel([callReply(["lookup", { topic: "a" }, "call-a"]), textReply("done")], {
+    provider: "anthropic",
+    model: "claude-test",
+  });
+  const { log } = await run(TOOLS, model, { topic: "owls" }, { tools: toolsOf() });
+  const view = await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV });
+  expect(view).not.toHaveProperty("memorySections");
+  expect(view.digestMismatch).toBe(false);
+  // @ts-expect-error: the option is gone.
+  await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV, memory: new Map() });
+});
+
+test("an agent's rebuildRequests returns each request and whether all digests matched", async () => {
+  const node = new AgentNode("writer", { prompt: "hi" });
+  const caps = { skills: new Map(), toolSpecs: () => [], models: null };
+  const material = await node.rebuildRequests({}, [], caps);
+  expect(Object.keys(material!).sort()).toEqual(["digestOk", "requests"]);
 });

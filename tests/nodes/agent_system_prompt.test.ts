@@ -30,7 +30,7 @@ import { parametersFromYaml } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import { crashAfter, editRecordedFlow, nodeFlow, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
-/** The node's private render, which `forward` and `learningMaterial` share. */
+/** The node's private render, which `forward` and `rebuildRequests` share. */
 function renderPrompt(
   node: AgentNode,
   inputs: Readonly<Record<string, unknown>>,

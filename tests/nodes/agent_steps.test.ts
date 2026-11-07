@@ -38,7 +38,7 @@ import {
 } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentSteps, RequestDigest, requestSha256 } from "../../src/nodes/agent/context.ts";
-import { stepsMaterial } from "../../src/nodes/agent/loop.ts";
+import { rebuildStepRequests } from "../../src/nodes/agent/loop.ts";
 import { SKIPPED_TOOL_RESULT } from "../../src/nodes/agent/results.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
@@ -614,7 +614,7 @@ test("an incremental request digest matches the full digest on every round of a 
   }
 });
 
-test("a 200-turn tool loop serializes each message a bounded number of times: live, in its material, on replay", async () => {
+test("a 200-turn tool loop serializes each message a bounded number of times: live, in its request rebuild, on replay", async () => {
   const turns = 200;
   const replies = Array.from({ length: turns }, (_, i) => calls([`c${i}`, "lookup", `t${i}`]));
   replies.push(calls(["h", "hold", "h"]));
@@ -630,13 +630,12 @@ test("a 200-turn tool loop serializes each message a bounded number of times: li
     spy.mockClear();
     const recorded = steps(log);
     const [request] = model.requests;
-    const material = await stepsMaterial(recorded, {
+    const rebuilt = await rebuildStepRequests(recorded, {
       messages: request!.messages,
       tools: request!.tools,
       structured: async () => null,
-      baseSystemPrompt: request!.messages[0]!.text(),
     });
-    expect(material.digestOk).toBe(true);
+    expect(rebuilt.digestOk).toBe(true);
     expect(spy.mock.calls.length).toBeLessThanOrEqual(10 * turns);
 
     const [held] = pendingCalls(log);

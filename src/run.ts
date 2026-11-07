@@ -96,11 +96,9 @@ import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
 import { Message, NamedTool, type Request, ToolCallPart, ToolSpec } from "./llm/messages.ts";
 import {
   type Memory,
-  MemoryContext,
   MemorySetupError,
   type MemorySpec,
   type MemoryStack,
-  RecallContext,
   sameMemorySpec,
 } from "./memory/contracts.ts";
 import { MemoryRegistry } from "./memory_host.ts";
@@ -113,7 +111,7 @@ import {
   type StepExchange,
 } from "./nodes/agent/messages.ts";
 import { staticPathOf } from "./nodes/ids.ts";
-import type { CompleteResult, MaterialCaps, Node } from "./nodes/base.ts";
+import type { CompleteResult, Node, RebuildCaps } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
 import {
   type HostToolCall,
@@ -129,7 +127,6 @@ import { type DeliveryOp, FlowEngine, prepareDelivery, resumedAttemptEvents } fr
 import { LiveChannel } from "./runtime/live.ts";
 import { bindStarted } from "./runtime/eval_node.ts";
 import {
-  canonicalSeed,
   decodeRecord,
   encodeRecord,
   isRunLogLocked,
@@ -1700,7 +1697,7 @@ function checkRecordedSpecs(
 
 /**
  * Refuse a resume whose granted tool groups hold other tools, or other tools in another order,
- * than the run recorded: learning expands the run's grants with the recorded membership.
+ * than the run recorded: the request rebuild expands the run's grants with the recorded membership.
  *
  * @throws RangeError naming the first group, by name, that differs.
  */
@@ -1948,9 +1945,9 @@ export async function withdraw(log: string, inbox: string, options: DeliveryOpti
 }
 
 /**
- * Cancel the run at `log`: `run_cancelled` ends it, closing its open calls, with no output and no
- * learning. A live engine aborts its running nodes and publishes `CallClosed {reason:
- * "cancelled"}` for each open host call. Delivered as `send` is.
+ * Cancel the run at `log`: `run_cancelled` ends it, closing its open calls, with no output. A live
+ * engine aborts its running nodes and publishes `CallClosed {reason: "cancelled"}` for each open
+ * host call. Delivered as `send` is.
  *
  * @param log The run's JSONL log.
  * @param options See `DeliveryOptions`.
@@ -2514,11 +2511,6 @@ export interface AgentCallView {
    * from it; `false` when `request` is `null`.
    */
   readonly digestMismatch: boolean;
-  /**
-   * The memory sections recalled into the system message: `null` when the node recalls memory
-   * and no `memory` was given, so they weren't rebuilt.
-   */
-  readonly memorySections: readonly { readonly memory: string; readonly text: string }[] | null;
   /** Every attempt, oldest first. */
   readonly attempts: readonly AgentCallAttempt[];
   /** The last attempt's reply as recorded (what arrived before a failure), or `null` when nothing did. */
@@ -2602,10 +2594,6 @@ export function agentCalls(log: string, options: { maxLineBytes?: number | null 
  * structured call whose model can't be built, a granted tool the recorded specs lack) is `null`,
  * with `digestMismatch: false`.
  *
- * A request's digest leaves recalled memory out. With `memory`, the system message gets the
- * sections recalled against the snapshots the run recorded, as learning does; without it, a node
- * that recalls memory gets its system prompt without them and `memorySections: null`.
- *
  * @param log The JSONL run log.
  * @param call `nodeId` and the `n` of any attempt of the call, such as an `agentCalls` entry.
  * @param options.env The environment the load reads `YIAN_*` values from (default `processEnv`);
@@ -2618,7 +2606,6 @@ export function agentCalls(log: string, options: { maxLineBytes?: number | null 
  * @param options.headers As `advance`'s: the header values sent with `apiKey`.
  * @param options.models Builds a structured call's model to read its plan off; never called
  *   (default `defaultModelAccess(env)`).
- * @param options.memory The run's memory mapping, as `advance` takes it, to recall sections.
  * @param options.maxLineBytes The most bytes a line may hold, as `iterRunRecords` takes it; a longer
  *   line throws `RunLogLineTooLongError`.
  * @returns The call's view.
@@ -2628,7 +2615,6 @@ export function agentCalls(log: string, options: { maxLineBytes?: number | null 
  *   from the header names a run that uses the host key recorded.
  * @throws AuthError when a call-time agent's run used a host key and `apiKey` isn't given, or
  *   `headers` lack the names it recorded.
- * @throws MemorySetupError, RangeError when `memory` doesn't match the run's memory table.
  *
  * @example
  * const [first] = agentCalls(log);
@@ -2645,7 +2631,6 @@ export async function agentCall(
     apiKey?: string | null;
     headers?: Readonly<Record<string, string>> | null;
     models?: ModelAccess | null;
-    memory?: ReadonlyMap<string, Memory> | null;
     maxLineBytes?: number | null;
   } = {},
 ): Promise<AgentCallView> {
@@ -2704,61 +2689,41 @@ export async function agentCall(
     entries.flatMap(({ envelope, at }) => (isStep(envelope.record) ? [[envelope.record.n, at]] : [])),
   );
 
-  // Recall needs the node's scope, and the visible inputs as the evaluator canonicalized them.
-  const scope = agent.needsMemoryContext === true ? agent.memoryScope : null;
-  const recalls = scope !== null && scope.memories.length > 0;
-  const memory = options.memory ?? null;
-  let runtime: MemoryRuntime | null = null;
-  try {
-    if (recalls && memory !== null && state.memories !== null) runtime = await openRecordedMemory(flow, state, memory);
-    const opened = runtime;
-    const caps: MaterialCaps = {
-      ...recordedGrants(state),
-      models: options.models ?? defaultModelAccess(env),
-      localTypes: localTypes(state.flow, agent),
-      openMemoryContext: async (systemPrompt, prompt) => {
-        if (opened === null || !recalls) return new MemoryContext();
-        const hidden = agent.modelHiddenInputs();
-        const visible = Object.fromEntries(Object.entries(inputs!).filter(([name]) => !hidden.has(name)));
-        const recall = new RecallContext(systemPrompt, prompt, canonicalSeed(visible)[0], scope!.staticPath);
-        return await opened.openContext(scope!, recall, { signal: new AbortController().signal });
-      },
-    };
-    const material = await withEnv(env, () => agent.learningMaterial(inputs, steps, caps));
-    const rebuilt = (attempt: NumberedStep) => material?.requests.get(attempt.n - 1) ?? null;
-    const last = attempts.at(-1)!;
-    const request = rebuilt(last)?.request ?? null;
-    // A call-time agent's config is its latest `llm_config` step before the call.
-    const recorded = inFlightLlmConfigs(state.flow.nodes, new Map([[nodeId, steps.slice(0, attempts[0]!.n - 1)]]));
-    const config = recorded[nodeId] ?? state.effectiveLlmByStaticPath[staticPathOf(nodeId)] ?? {};
-    const sections = recalls && runtime === null ? null : (material?.memorySections ?? []);
-    const output = last.step["output"];
-    return {
-      nodeId,
-      n: last.n,
-      purpose: last.step["purpose"] as string,
-      request: request === null ? null : requestView(request, last.step["model"] as string, withoutCredentials(config)),
-      digestMismatch: request !== null && attempts.some((attempt) => rebuilt(attempt)?.digestOk !== true),
-      memorySections: sections?.map(({ memory, text }) => ({ memory, text })) ?? null,
-      attempts: attempts.map((attempt) => attemptView(attempt, appended.get(attempt.n)!)),
-      reply: output == null ? null : fromModelMessage(Message.fromJSON(output)),
-      toolResults: output == null ? [] : toolResults(Message.fromJSON(output), exchange.results),
-      usage: usageView(last.step["usage"]),
-      finish: (last.step["finish"] as string | undefined) ?? null,
-      // The honor is the node's last step, so it follows its last call.
-      interrupted: last.step["finish"] === "interrupted" || (folded.honored !== null && exchange === calls.at(-1)),
-    };
-  } finally {
-    await runtime?.close();
-  }
+  const caps: RebuildCaps = {
+    ...recordedGrants(state),
+    models: options.models ?? defaultModelAccess(env),
+    localTypes: localTypes(state.flow, agent),
+  };
+  const rebuiltRequests = await withEnv(env, () => agent.rebuildRequests(inputs, steps, caps));
+  const rebuilt = (attempt: NumberedStep) => rebuiltRequests?.requests.get(attempt.n - 1) ?? null;
+  const last = attempts.at(-1)!;
+  const request = rebuilt(last)?.request ?? null;
+  // A call-time agent's config is its latest `llm_config` step before the call.
+  const recorded = inFlightLlmConfigs(state.flow.nodes, new Map([[nodeId, steps.slice(0, attempts[0]!.n - 1)]]));
+  const config = recorded[nodeId] ?? state.effectiveLlmByStaticPath[staticPathOf(nodeId)] ?? {};
+  const output = last.step["output"];
+  return {
+    nodeId,
+    n: last.n,
+    purpose: last.step["purpose"] as string,
+    request: request === null ? null : requestView(request, last.step["model"] as string, withoutCredentials(config)),
+    digestMismatch: request !== null && attempts.some((attempt) => rebuilt(attempt)?.digestOk !== true),
+    attempts: attempts.map((attempt) => attemptView(attempt, appended.get(attempt.n)!)),
+    reply: output == null ? null : fromModelMessage(Message.fromJSON(output)),
+    toolResults: output == null ? [] : toolResults(Message.fromJSON(output), exchange.results),
+    usage: usageView(last.step["usage"]),
+    finish: (last.step["finish"] as string | undefined) ?? null,
+    // The honor is the node's last step, so it follows its last call.
+    interrupted: last.step["finish"] === "interrupted" || (folded.honored !== null && exchange === calls.at(-1)),
+  };
 }
 
 /**
- * Return what the run recorded of its grants, as a `MaterialCaps` reads them: the skills by name,
+ * Return what the run recorded of its grants, as a `RebuildCaps` reads them: the skills by name,
  * and a request's tool list for some grants, expanded as the live loop expands them but over the
  * groups and tools the run recorded (`null` when a grant names no recorded tool).
  */
-export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "toolSpecs"> {
+export function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpecs"> {
   const skills = new Map(
     Object.entries(state.recordedSkills).map(([name, { description, instructions }]) => [
       name,

@@ -428,11 +428,11 @@ export class RunState {
   // The memory roots, in one frozen object `RunStarted` installs once (`installMemory`) and the
   // getters read, so no root can be reassigned apart from the others.
   #memory: RunMemory = NO_MEMORY;
-  /** The skills `RunStarted` recorded, by name, which learning renders prompts with. */
+  /** The skills `RunStarted` recorded, by name, which the request rebuild renders prompts with. */
   recordedSkills: Readonly<Record<string, RecordedSkill>> = {};
-  /** The tool specs `RunStarted` recorded, by name, which learning rebuilds requests with. */
+  /** The tool specs `RunStarted` recorded, by name, which the request rebuild sends. */
   recordedTools: Readonly<Record<string, RecordedTool>> = {};
-  /** The tool groups `RunStarted` recorded, by name, which learning expands grants with. */
+  /** The tool groups `RunStarted` recorded, by name, which the request rebuild expands grants with. */
   recordedToolGroups: Readonly<Record<string, readonly string[]>> = {};
   /**
    * The `yian.defaults` values `RunStarted` recorded, the built-in values overlaid with the

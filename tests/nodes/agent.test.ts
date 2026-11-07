@@ -39,20 +39,12 @@ import {
 import { OpenAIChat } from "../../src/llm/protocols/openai_chat.ts";
 import { Route } from "../../src/llm/route.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import {
-  ModelTextInteraction,
-  ModelValueInteraction,
-  ToolCallInteraction,
-  ToolResultInteraction,
-  type VisibleInteraction,
-} from "../../src/memory/contracts.ts";
 import { AgentLoopError, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { SKIPPED_TOOL_ERROR } from "../../src/nodes/agent/live.ts";
 import { CallTimeLLM, contractNullable, LLM_CONFIG_KEY, splitLayers } from "../../src/nodes/agent/llm_values.ts";
 import { reportedText, toolText } from "../../src/nodes/agent/results.ts";
 import { AgentNode, isMaxToolIterations } from "../../src/nodes/agent/node.ts";
-import { pushVisible } from "../../src/nodes/agent/text.ts";
 import { CapabilityFault, Output } from "../../src/nodes/base.ts";
 import { BindingError } from "../../src/nodes/binding.ts";
 import { Binding, ContractOrigins, NodeSteps, Parameter, ValueContract, ValueTemplate } from "../../src/nodes/contracts.ts";
@@ -86,29 +78,6 @@ test("ReplyInterrupted carries the partial reply and the usage so far", () => {
 test("ReplyInterrupted's usage defaults to null", () => {
   const reply = new Message({ role: "assistant", parts: [] });
   expect(new ReplyInterrupted(reply).usage).toBeNull();
-});
-
-test("pushVisible appends an interaction and ignores a carrier construction error", () => {
-  const interactions: VisibleInteraction[] = [];
-  pushVisible(interactions, () => new ModelTextInteraction("answer"));
-  pushVisible(interactions, () => new ToolCallInteraction("lookup", { q: "x" }));
-  pushVisible(interactions, () => new ToolResultInteraction("lookup", "found"));
-  pushVisible(interactions, () => new ModelValueInteraction({ a: 1n }));
-  pushVisible(interactions, () => new ModelTextInteraction("\ud800"));
-  pushVisible(interactions, () => new ToolCallInteraction("lookup", { q: Number.NaN }));
-  pushVisible(interactions, () => new ToolResultInteraction("", "found"));
-  pushVisible(interactions, () => new ModelValueInteraction(Number.NaN));
-  expect(interactions).toEqual([
-    new ModelTextInteraction("answer"),
-    new ToolCallInteraction("lookup", { q: "x" }),
-    new ToolResultInteraction("lookup", "found"),
-    new ModelValueInteraction({ a: 1n }),
-  ]);
-  expect(() =>
-    pushVisible(interactions, () => {
-      throw new Error("host fault");
-    }),
-  ).toThrow("host fault");
 });
 
 test("toolText writes a tool result in the text form", () => {

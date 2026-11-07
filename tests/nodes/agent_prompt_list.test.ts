@@ -18,7 +18,7 @@ import { ToolSet } from "../../src/tools/registry.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { callReply, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
-/** The node's private render, which `forward` and `learningMaterial` share. */
+/** The node's private render, which `forward` and `rebuildRequests` share. */
 function renderPrompt(
   node: AgentNode,
   inputs: Readonly<Record<string, unknown>>,

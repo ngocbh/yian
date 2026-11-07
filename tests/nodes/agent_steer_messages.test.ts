@@ -16,7 +16,7 @@ import { Message as ModelMessage, Request, type Response, TextPart, ToolResultPa
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256 } from "../../src/nodes/agent/context.ts";
-import { runAgent, stepsMaterial } from "../../src/nodes/agent/loop.ts";
+import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
 import { fromModelMessage, rebuildMessages, steerMessages } from "../../src/nodes/agent/messages.ts";
 import { renderTemplateRecord } from "../../src/expr/template.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
@@ -400,9 +400,9 @@ test("the rebuild and learning render steers as the live loop did, fallback incl
   const live = model.requests[0]!.messages.at(-1)!;
   const { result, warned } = await warnings(async () => {
     const rebuilt = rebuildMessages(steps as JsonObject[], null, renderSteer).toObject() as unknown[];
-    const options = { messages: [SYSTEM, userMessage("go")], tools: [], structured: async () => null, baseSystemPrompt: DEFAULT_SYSTEM };
-    const rendered = await stepsMaterial(steps, { ...options, renderSteer });
-    const unrendered = await stepsMaterial(steps, options);
+    const options = { messages: [SYSTEM, userMessage("go")], tools: [], structured: async () => null };
+    const rendered = await rebuildStepRequests(steps, { ...options, renderSteer });
+    const unrendered = await rebuildStepRequests(steps, options);
     return { rebuilt, rendered, unrendered };
   });
   expect(result.rebuilt[0]).toEqual(fromModelMessage(live));

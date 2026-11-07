@@ -34,12 +34,7 @@ import { ExpressionError, parseCondition, promptRefs } from "../expr/index.ts";
 import { type DeclaredTypes, evaluateWhenRecord, localDeclared } from "../expr/expressions.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { Request, ToolSpec } from "../llm/messages.ts";
-import type {
-  MemoryContext,
-  MemoryScope,
-  MemorySection,
-  VisibleInteraction,
-} from "../memory/contracts.ts";
+import type { MemoryContext, MemoryScope } from "../memory/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { ToolGrant } from "../tools/grants.ts";
@@ -319,38 +314,30 @@ export function retainFailure(failure: Failure): Failure {
   return Object.freeze(retained);
 }
 
-/** What learning reads about one accepted invocation, rebuilt from its recorded steps. */
-export interface LearningMaterial {
-  /** The model's replies and tool calls, then each reply's tool results in call order. */
-  readonly interactions: readonly VisibleInteraction[];
-  /** The system prompt before memory sections; `null` when the invocation never called its model. */
-  readonly baseSystemPrompt: string | null;
-  /** The prompt's last message's text; `null` exactly when `baseSystemPrompt` is. */
-  readonly prompt: string | null;
-  /** The recalled memory sections the model saw. */
-  readonly memorySections: readonly MemorySection[];
-  /** Whether every recorded model call's `request_sha256` matched its rebuilt request. */
-  readonly digestOk: boolean;
+/** The requests one accepted invocation sent, rebuilt from its recorded steps. */
+export interface RebuiltRequests {
   /**
    * Each `model_call` step's rebuilt request, by the step's index in the steps given; a step the
    * rebuild didn't reach (it stopped at a reply that failed the node, or never started) has none.
    */
   readonly requests: ReadonlyMap<number, RebuiltRequest>;
+  /** Whether every recorded model call's `request_sha256` matched its rebuilt request. */
+  readonly digestOk: boolean;
 }
 
 /** One `model_call` step's request, rebuilt from the invocation's render and the steps before it. */
 export interface RebuiltRequest {
   /**
-   * The request as the call sent it, its system message with the recalled memory sections; `null`
-   * when it can't be rebuilt (a tool the recorded specs lack, a structured model that can't be built).
+   * The request as the call sent it; `null` when it can't be rebuilt (a tool the recorded specs
+   * lack, a structured model that can't be built).
    */
   readonly request: Request | null;
   /** Whether the step recorded the purpose and the `request_sha256` of the rebuilt request. */
   readonly digestOk: boolean;
 }
 
-/** What a node rebuilding its `LearningMaterial` reads beyond its inputs and steps. */
-export interface MaterialCaps {
+/** What a node rebuilding its requests (`rebuildRequests`) reads beyond its inputs and steps. */
+export interface RebuildCaps {
   /** The skills the run recorded, by name. */
   readonly skills: ReadonlyMap<string, Skill>;
   /**
@@ -364,11 +351,6 @@ export interface MaterialCaps {
   ) => readonly ToolSpec[] | null;
   /** Builds the invocation's model to read its request settings off; never called. */
   readonly models: ModelAccess | null;
-  /**
-   * Recalls the memory sections against the run's recorded snapshots, as `NodeCaps` does, from the
-   * rendered system prompt without the skill listing and the rendered prompt.
-   */
-  readonly openMemoryContext: (systemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
   /** The declared type of each of the node's locals, as `NodeCaps.localTypes` gives it. */
   readonly localTypes?: ReadonlyMap<string, Type | null>;
 }
@@ -1231,18 +1213,18 @@ export abstract class Node {
   }
 
   /**
-   * Rebuild what learning reads about one accepted invocation of this node.
+   * Rebuild the model requests one accepted invocation of this node sent, from its recorded steps.
    *
    * @param inputs The invocation's bound inputs as recorded, or `null` when none were.
    * @param steps The steps the node recorded across its starts, in order.
-   * @param caps The run's recorded skills and tool specs, model access and recall.
-   * @returns `null` by default: the node shows a learner no prompt or model interactions.
+   * @param caps The run's recorded skills and tool specs, and model access.
+   * @returns `null` by default: the node calls no model.
    */
-  learningMaterial(
+  rebuildRequests(
     inputs: Readonly<Record<string, unknown>> | null,
     steps: readonly ValueRecord[],
-    caps: MaterialCaps,
-  ): Promise<LearningMaterial | null> {
+    caps: RebuildCaps,
+  ): Promise<RebuiltRequests | null> {
     return Promise.resolve(null);
   }
 

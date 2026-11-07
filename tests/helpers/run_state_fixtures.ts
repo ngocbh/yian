@@ -32,11 +32,9 @@ import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import type { ChildResolver } from "../../src/compose/loader.ts";
 import { Failure, type OriginRef } from "../../src/diagnostics.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
-import { type FeedbackValue, ValueRoute } from "../../src/expr/lineage.ts";
+import { ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
 import {
-  type BackwardContext,
-  type BackwardResult,
   Grow,
   Node,
   type NodeCaps,
@@ -164,44 +162,6 @@ export class FuncNode extends Node {
 
   override forward(inputs: Record<string, unknown>): NodeResult {
     return new Output(this.fn(inputs));
-  }
-}
-
-/** A node's backward callback: its context and feedback copies to its result. */
-export type BackwardCallback = (
-  context: BackwardContext,
-  feedback: readonly FeedbackValue[],
-) => BackwardResult | Promise<BackwardResult>;
-
-/**
- * A `FuncNode` whose backward records each invocation's `[context, feedback]` in `calls`, then
- * returns what `callback` returns. `callback` is read at call time, so a test can replace it on
- * the instance after the forward run.
- */
-export class RecordingBackwardNode extends FuncNode {
-  /** The backward callback. */
-  callback: BackwardCallback;
-  /** Every backward invocation's context and feedback, in call order. */
-  readonly calls: [BackwardContext, readonly FeedbackValue[]][];
-
-  constructor(
-    nodeId: string,
-    fn: (inputs: Record<string, unknown>) => unknown,
-    backward: BackwardCallback,
-    options: { calls?: [BackwardContext, readonly FeedbackValue[]][] } & ConstructorParameters<typeof FuncNode>[2] = {},
-  ) {
-    const { calls = [], ...rest } = options;
-    super(nodeId, fn, rest);
-    this.callback = backward;
-    this.calls = calls;
-  }
-
-  override backward(
-    context: BackwardContext,
-    feedback: readonly FeedbackValue[],
-  ): BackwardResult | Promise<BackwardResult> {
-    this.calls.push([context, feedback]);
-    return this.callback(context, feedback);
   }
 }
 
@@ -1280,10 +1240,10 @@ export function forwardCapture(node: Node, inputs: Readonly<Record<string, unkno
   const route = ValueRoute.record(
     Object.entries(inputs ?? {}).map(([name, value]) => [name, ValueRoute.literal(value)] as const),
   );
-  // The node's inventory, as an evaluation captures it, so the node data learning rebuilds fits it.
+  // The node's inventory, as an evaluation captures it.
   return new ForwardCapture(route, {
     scope: node.executionScope,
-    inputNames: node.backwardInputNames(),
+    inputNames: node.dataInputNames(),
     variableNames: node.declaredVariables().map((parameter) => parameter.name),
   });
 }
@@ -1402,16 +1362,12 @@ export function traceSnapshot(trace: RetainedTrace): Record<string, unknown> {
     nextSequence: trace.nextSequence,
     boundaries: [...trace.boundaries],
     pendingConnections: [...trace.pendingConnections],
-    backwardHandlers: [...trace.backwardHandlers],
   };
 }
 
-/**
- * Return `traceSnapshot` for comparing a replay with its live run: the backward handlers by key,
- * since each run binds its own nodes' handlers and a bound function can't name its node.
- */
+/** Return `traceSnapshot` for comparing a replay with its live run. */
 export function replayTraceSnapshot(trace: RetainedTrace): Record<string, unknown> {
-  return { ...traceSnapshot(trace), backwardHandlers: [...trace.backwardHandlers.keys()] };
+  return traceSnapshot(trace);
 }
 
 /**

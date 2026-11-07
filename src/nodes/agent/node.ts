@@ -7,8 +7,6 @@
  * ordinary explicitly authored tool grants. A crash or host interruption unwinds the node; no
  * conversation or continuation state is stored in the graph or variable pool.
  *
- * Backward makes one tool-free model call over the recorded invocation (`backward.ts`).
- *
  * Knows about:   nodes/base, nodes/binding, nodes/contracts, peer AGENT modules, memory contracts,
  *                llm (messages), llm_clients (config, connection, factory), expr (expressions,
  *                templates, lineage), skills,
@@ -18,7 +16,6 @@
 
 import { current } from "../../defaults.ts";
 import { compareCodeUnits, type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
-import type { FeedbackValue } from "../../expr/lineage.ts";
 import {
   type DeclaredTypes,
   ExpressionError,
@@ -45,23 +42,17 @@ import { type JsonObject, logJson } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import {
   buildValueAs,
-  canonicalTypeLabel,
   isList,
   inboxName,
   isRecord,
   type Type,
   TypeCheckError,
   TypedValue,
-  type Value,
-  ValueKind,
   type ValueRecord,
   valueRepr,
   writeAsText,
 } from "../../typesys/values.ts";
 import {
-  type BackwardContext,
-  type BackwardOptions,
-  type BackwardResult,
   CapabilityFault,
   checkNamedPrompt,
   type CompleteResult,
@@ -90,7 +81,6 @@ import {
   type ValuePath,
   ValueTemplate,
 } from "../contracts.ts";
-import { backwardAgent } from "./backward.ts";
 import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, sentCredentials, ToolIterationLimitError } from "./context.ts";
 import { Interrupted } from "./interrupts.ts";
 import { modelFailureCode } from "./live.ts";
@@ -110,7 +100,6 @@ import {
   checkModelConversation,
   ConversationError,
   type ConversationMessage,
-  type Message,
   messageSteps,
   rebuildMessages,
   type SteerRender,
@@ -151,7 +140,7 @@ export type PromptItem =
 
 /**
  * Return a list prompt as authored: a splice as `${name}`, a message as `{<role>: <text>}`. The
- * manifest and the render material (`renderCapture`) hold this form.
+ * manifest holds this form.
  */
 export function authoredPrompt(items: readonly PromptItem[]): (string | Record<string, string>)[] {
   return items.map((item) => ("splice" in item ? `\${${item.splice}}` : { [item.role]: item.text }));
@@ -186,7 +175,7 @@ function checkPromptItems(nodeId: string, items: readonly unknown[]): void {
 
 /**
  * One rendered prompt message: a text message's role and text, or a spliced `Message`'s model
- * message; its render-capture form; and the prompt item it came from.
+ * message; and the prompt item it came from.
  */
 interface PromptMessage {
   readonly role: "user" | "assistant" | "tool";
@@ -194,15 +183,13 @@ interface PromptMessage {
   readonly text: string;
   /** A spliced `Message`'s model message; `null` for a text message, built when the prompt's messages are read. */
   readonly model: ModelMessage | null;
-  /** `{role, text}` for a text message; a spliced `Message` value's wire JSON without its opaque fields. */
-  readonly captured: Value;
   /** The index of the prompt item it came from. */
   readonly item: number;
 }
 
 /** Return a text message of `role` from prompt item `item`. */
 function textMessage(role: "user" | "assistant", text: string, item: number): PromptMessage {
-  return { role, text, model: null, captured: { role, text }, item };
+  return { role, text, model: null, item };
 }
 
 /** Return what `checkModelConversation` reads of a rendered message; a text message is one text part. */
@@ -220,13 +207,6 @@ function isTextMessage(value: unknown): value is { role: "user" | "assistant"; t
   return isRecord(value) && (value.role === "user" || value.role === "assistant") && typeof value.text === "string";
 }
 
-/** Return a `Message`'s capture form: its wire JSON without `protocol` or any `provider_payload`, which hold opaque provider data. */
-function captureForm(message: Message): Value {
-  const { protocol: _protocol, provider_payload: _payload, parts, ...rest } = message;
-  const bare = parts.map(({ provider_payload: _partPayload, ...part }) => part);
-  return new TypedValue(ValueKind.OBJECT, { ...rest, parts: bare } as ValueRecord).toWire().value as Value;
-}
-
 /**
  * Return a spliced value's message: a record with a `text` field is a `{role, text}` message
  * (other fields ignored); anything else must be a built-in `Message`, sent with all its parts.
@@ -238,11 +218,9 @@ function splicedMessage(nodeId: string, index: number, ref: string, value: unkno
     if (isTextMessage(value)) return textMessage(value.role, value.text, index);
     throw notAMessage(nodeId, index, ref, null);
   }
-  let message: Message;
   let model: ModelMessage;
   try {
-    message = checkMessage(value);
-    model = toModelMessage(message);
+    model = toModelMessage(checkMessage(value));
   } catch (error) {
     if (error instanceof TypeCheckError || error instanceof MessageFormatError) throw notAMessage(nodeId, index, ref, error.message);
     throw error;
@@ -250,7 +228,7 @@ function splicedMessage(nodeId: string, index: number, ref: string, value: unkno
   if (model.parts.some((part) => part instanceof MediaPart)) {
     throw new ExpressionError(`node ${reprText(nodeId)} prompt[${index}]: ${ref} holds a media part; no model route sends media yet`);
   }
-  return { role: model.role as "user" | "assistant" | "tool", text: model.text(), model, captured: captureForm(message), item: index };
+  return { role: model.role as "user" | "assistant" | "tool", text: model.text(), model, item: index };
 }
 
 /** The error for a spliced value that isn't a message, with why a `Message` didn't fit, if one was read. */
@@ -338,18 +316,6 @@ function collidingVariable(node: AgentNode, inputs: Readonly<Record<string, unkn
  */
 function isRebuildRefusal(error: unknown): boolean {
   return error instanceof ExpressionError || error instanceof SkillError || error instanceof MemoryRecallError;
-}
-
-/**
- * Return `make()`; its error is a capability fault: building the render capture failed, which is
- * not a refusal of the render.
- */
-function captureValue<T>(make: () => T): T {
-  try {
-    return make();
-  } catch (error) {
-    throw error instanceof CapabilityFault ? error : new CapabilityFault(error);
-  }
 }
 
 /** An AGENT a host interrupted whose declared output doesn't allow null; its failure is `agent.interrupted`. */
@@ -660,25 +626,9 @@ export class AgentNode extends Node {
     return null;
   }
 
-  /**
-   * Return the declared inputs eligible for feedback, never `__llm_config` or `__steer_inbox`.
-   * Neither is material the model reasons about, so the node that produced a value in one never
-   * receives this agent's input feedback.
-   */
-  override backwardInputNames(): readonly string[] {
-    return super.backwardInputNames().filter((name) => name !== LLM_CONFIG_KEY && name !== STEER_INBOX_KEY);
-  }
-
-  /**
-   * Return the config a call-time agent bound as `__llm_config`, if any.
-   *
-   * @param inputs The invocation's bound inputs.
-   * @returns The resolved config, with no key or header value; `null` for an agent run start
-   *   resolved, which binds none.
-   */
-  override boundLlmConfig(inputs: Readonly<Record<string, unknown>>): Record<string, unknown> | null {
-    const config = Object.hasOwn(inputs, LLM_CONFIG_KEY) ? inputs[LLM_CONFIG_KEY] : null;
-    return isRecord(config) ? config : null;
+  /** Return the declared inputs, never the reserved `__llm_config` or `__steer_inbox`. */
+  override dataInputNames(): readonly string[] {
+    return super.dataInputNames().filter((name) => name !== LLM_CONFIG_KEY && name !== STEER_INBOX_KEY);
   }
 
   /**
@@ -1055,77 +1005,43 @@ export class AgentNode extends Node {
 
   /**
    * Render what one invocation sends: the pure half of `forward`, which `learningMaterial` also
-   * calls with the recorded skills, and `renderCapture` with a capture.
+   * calls with the recorded skills.
    *
    * The authored `systemPrompt` renders against the same inputs and variables as `prompt`; without
    * one it is `DEFAULT_SYSTEM`. A text prompt renders into one user message, a list prompt into its
-   * messages (`renderPromptList`). `options.capture` receives the actual template, the resolved
-   * variable values and domains, and the rendered prompt once, with the parts established so far
-   * when rendering fails; unknown variables or an unfinished prompt stay `null`, and capture faults
-   * propagate. A list prompt's template and rendered prompt are `logJson` text: the authored items,
-   * and the `{role, text}` messages and each spliced `Message` as its JSON without `protocol` or
-   * `provider_payload`.
+   * messages (`renderPromptList`).
    *
    * @param inputs Delivered inputs, kept separate from local variables.
    * @param skills The run's skills by name, or `null` when the host supplied none.
-   * @param options `capture` receives the render capture; `signal` is checked after rendering,
-   *   before the skill grants are read.
+   * @param options `signal` is checked after rendering, before the skill grants are read.
    * @throws RangeError when a variable collides with a declared or delivered input.
    * @throws ExpressionError as `forward` documents for a prompt that can't render.
    * @throws SkillError when the node grants skills `skills` doesn't hold.
-   * @throws CapabilityFault when the capture fails; the signal's reason once it aborted.
+   * @throws The signal's reason once it aborted.
    */
   private renderPrompt(
     inputs: Readonly<Record<string, unknown>>,
     skills: ReadonlyMap<string, Skill> | null,
     options: {
-      capture?: (captured: Readonly<Record<string, unknown>>) => void;
       signal?: AbortSignal;
       localTypes?: ReadonlyMap<string, Type | null> | null;
     } = {},
   ): AgentPrompt {
-    const { capture, signal, localTypes = null } = options;
-    const template = typeof this.prompt === "string" ? this.prompt : logJson(authoredPrompt(this.prompt));
-    const captured: Record<string, unknown> | null =
-      capture === undefined
-        ? null
-        : { prompt_template: template, variables: null, variable_domains: null, rendered_prompt: null };
-    let messages: PromptMessage[];
-    let systemPrompt: string;
-    try {
-      const colliding = collidingVariable(this, inputs);
-      if (colliding !== null) throw new RangeError(`variable ${reprText(colliding)} collides with an input name`);
-      if (captured !== null) {
-        captured["variable_domains"] = captureValue(() =>
-          Object.fromEntries(
-            this.variables.map((variable) => {
-              const contract = variable.contract as ValueContract;
-              return [variable.name, canonicalTypeLabel(contract.type)];
-            }),
-          ),
-        );
-      }
-      const variables = this.resolveVariables();
-      if (captured !== null) captured["variables"] = captureValue(() => copyValue(variables));
-      const record = { ...inputs, ...variables } as ValueRecord;
-      // The inputs' declared types, and each variable's contract.
-      const types = new Map(localTypes ?? []);
-      for (const variable of this.variables) types.set(variable.name, (variable.contract as ValueContract).type);
-      const declared = localDeclared(types);
-      if (typeof this.prompt === "string") {
-        messages = [textMessage("user", renderTemplateRecord(this.prompt, record, declared), 0)];
-        if (captured !== null) captured["rendered_prompt"] = messages[0]!.text;
-      } else {
-        messages = renderPromptList(this.id, this.prompt, record, declared);
-        if (captured !== null) {
-          captured["rendered_prompt"] = captureValue(() => logJson(messages.map((message) => message.captured)));
-        }
-      }
-      systemPrompt =
-        this.systemPrompt === null ? DEFAULT_SYSTEM : renderTemplateRecord(this.systemPrompt, record, declared);
-    } finally {
-      if (captured !== null) capture?.(captured);
-    }
+    const { signal, localTypes = null } = options;
+    const colliding = collidingVariable(this, inputs);
+    if (colliding !== null) throw new RangeError(`variable ${reprText(colliding)} collides with an input name`);
+    const variables = this.resolveVariables();
+    const record = { ...inputs, ...variables } as ValueRecord;
+    // The inputs' declared types, and each variable's contract.
+    const types = new Map(localTypes ?? []);
+    for (const variable of this.variables) types.set(variable.name, (variable.contract as ValueContract).type);
+    const declared = localDeclared(types);
+    const messages =
+      typeof this.prompt === "string"
+        ? [textMessage("user", renderTemplateRecord(this.prompt, record, declared), 0)]
+        : renderPromptList(this.id, this.prompt, record, declared);
+    const systemPrompt =
+      this.systemPrompt === null ? DEFAULT_SYSTEM : renderTemplateRecord(this.systemPrompt, record, declared);
     signal?.throwIfAborted();
     const granted = this.grantedSkills(skills);
     return {
@@ -1140,86 +1056,9 @@ export class AgentNode extends Node {
     };
   }
 
-  /**
-   * Render `inputs` again as `forward` renders them (`renderPrompt`) and return its capture: the
-   * actual template, the resolved variable values and domains, and the rendered prompt, with the
-   * parts established before a render the run refused the same way (a variable colliding with an
-   * input, or a rebuild refusal, `isRebuildRefusal`).
-   *
-   * @throws CapabilityFault when the capture fails; any other error the render throws, unchanged.
-   */
-  override renderCapture(
-    inputs: Readonly<Record<string, unknown>>,
-    localTypes: ReadonlyMap<string, Type | null> | null = null,
-  ): Record<string, unknown> {
-    let captured: Record<string, unknown> = {};
-    try {
-      // No skills: the grants are read after the capture, which is all this needs, so a node that
-      // grants skills ends in a `SkillError`.
-      this.renderPrompt(inputs, null, { capture: (data) => void (captured = { ...data }), localTypes });
-    } catch (error) {
-      // The render refuses a colliding variable first, so a RangeError then is that refusal.
-      if (!isRebuildRefusal(error) && !(error instanceof RangeError && collidingVariable(this, inputs) !== null)) {
-        throw error;
-      }
-    }
-    return captured;
-  }
-
   /** Resolve the validated literal defaults into one detached invocation record. */
   private resolveVariables(): ValueRecord {
     return copyValue(applyDefaults(this.variables, {}) as ValueRecord) as ValueRecord;
-  }
-
-  /**
-   * Return the host key and header values bound to this node for the run, if any.
-   *
-   * @param recorded The recorded config of the invocation backward revisits. A call-time agent
-   *   gets the host's secrets only when it is marked (`invocationConfig`); any other agent, its
-   *   own `llmConfig`'s `api_key` and `headers`.
-   * @returns The key and the header values, each `null` when unbound.
-   */
-  private hostSecrets(recorded: unknown): { apiKey: string | null; headers: Readonly<Record<string, string>> | null } {
-    let config: Readonly<Record<string, unknown>> | null = this.llmConfig;
-    // Through `invocationConfig`, so the host-key marker rule lives in one place.
-    if (this.callTime !== null) config = isRecord(recorded) ? invocationConfig(recorded, this.hostCredentials) : null;
-    if (config === null) return { apiKey: null, headers: null };
-    return {
-      apiKey: (config["api_key"] as string | undefined) ?? null,
-      headers: (config["headers"] as Record<string, string> | undefined) ?? null,
-    };
-  }
-
-  /**
-   * Use only the invocation material learning rebuilt for one tool-free backward call
-   * (`backwardAgent`).
-   *
-   * This call reads no live node field, except a host `api_key` and `headers` bound for the run;
-   * the node data it reads was rendered from this node when learning first read it
-   * (`TraceOccurrence.nodeData`), so a node changed before then changes it.
-   *
-   * @param context Accepted context, including the model configuration and the render
-   *   components learning rebuilt (`TraceOccurrence.nodeData`); `_evaluation_evidence` is what
-   *   learning rebuilt of the invocation's steps.
-   * @param feedback Ordered ordinary output messages. Empty effective feedback skips model
-   *   construction.
-   * @param options The model access (default `defaultModelAccess()`) and the observer for the
-   *   call's retry and replay events.
-   * @returns Independent input, self, and variable channels for common result validation by the
-   *   caller before upstream routing.
-   * @throws TypeError when the context, feedback, captured fields, or response channels are
-   *   malformed.
-   * @throws RangeError when the feedback shape, a required capture, or the response is invalid.
-   *   Model and host errors propagate, model errors with every credential the call sent scrubbed.
-   */
-  override async backward(
-    context: BackwardContext,
-    feedback: readonly FeedbackValue[],
-    options: BackwardOptions = {},
-  ): Promise<BackwardResult> {
-    // The only live fields: a host key and its header values, which are never recorded.
-    const { apiKey, headers } = this.hostSecrets(context.nodeData["effective_llm_config"]);
-    return backwardAgent(context, feedback, { ...options, apiKey, headers });
   }
 
   /**

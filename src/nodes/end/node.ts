@@ -19,20 +19,12 @@
  * loaded flow never co-skips END through an output. Hidden from authors: a reserved
  * `__`-prefixed id, never parseable.
  *
- * Knows about:   nodes/base, nodes/contracts, diagnostics and expr (types).
+ * Knows about:   nodes/base, nodes/contracts and diagnostics.
  * Never imports: anything above nodes; the loader synthesizes it and the engine reads it as the
  *   terminal.
  */
 
-import type { FeedbackValue } from "../../expr/index.ts";
-import {
-  type BackwardContext,
-  type BackwardResult,
-  Node,
-  NodeKind,
-  Output,
-  projectStructuralFeedback,
-} from "../base.ts";
+import { Node, NodeKind, Output } from "../base.ts";
 import { reprText } from "../../diagnostics.ts";
 import { Parameter } from "../contracts.ts";
 
@@ -151,46 +143,15 @@ export class EndNode extends Node {
       return new Output(Object.fromEntries(this.names.map((name) => [name, inputOf(inputs, name)])));
     }
     // List mode (the MAP fan-in): join in over order (index); n = 0 gives [].
-    return new Output(this.backwardInputNames().map((name) => inputOf(inputs, name)));
+    return new Output(this.dataInputNames().map((name) => inputOf(inputs, name)));
   }
 
   /**
    * Return the actual output contributors, excluding augmented assertion params: the value or
    * record output names, or the ordered `e0`..`eN` list slots. Empty layouts have none.
    */
-  override backwardInputNames(): readonly string[] {
+  override dataInputNames(): readonly string[] {
     if (this.mode !== "list") return [...this.names];
     return Array.from({ length: this.n! }, (_, index) => `e${index}`);
-  }
-
-  /**
-   * Capture the output layout before the body runs, as `input_output_paths`: no paths for zero
-   * outputs, `[]` for a value terminal's one input, a named path for each record field, or an
-   * index path for each list position. Assertion inputs are excluded.
-   */
-  override captureBackwardContext(): Record<string, unknown> {
-    const names = this.backwardInputNames();
-    let paths: Record<string, unknown[]>;
-    if (this.mode === "list") paths = Object.fromEntries(names.map((name, index) => [name, [BigInt(index)]]));
-    else if (this.mode === "record") paths = Object.fromEntries(names.map((name) => [name, [name]]));
-    else paths = Object.fromEntries(names.map((name) => [name, []]));
-    return { input_output_paths: paths };
-  }
-
-  /**
-   * Project feedback through the recorded layout without reading the live node fields.
-   *
-   * @param context Recorded inputs, output or failure, the output-name inventory and the captured
-   *   output paths.
-   * @param feedback Ordered text or structural selections over the accepted output. Text is sent
-   *   unchanged to every contributor; a failed END accepts text or `null`.
-   * @returns Independent input message batches. Zero-output and empty-list layouts have no
-   *   contributors; missing bindings stop.
-   * @throws TypeError when a message batch or captured path has an invalid type.
-   * @throws RangeError when feedback or a captured path doesn't match the recorded output, or the
-   *   structural layout is missing.
-   */
-  override backward(context: BackwardContext, feedback: readonly FeedbackValue[]): BackwardResult {
-    return projectStructuralFeedback(context, feedback);
   }
 }

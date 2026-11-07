@@ -1,6 +1,6 @@
 /**
- * Learning is gone: a run result has no backward pass, the removed options are refused by name, and
- * the backward records are unknown kinds.
+ * Learning is gone: a run result has no backward pass, the removed options are refused by name, the
+ * backward records are unknown kinds, and no node has a backward hook.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -11,6 +11,12 @@ import { fileURLToPath } from "node:url";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
+import { AgentNode } from "../../src/nodes/agent/node.ts";
+import { Node } from "../../src/nodes/base.ts";
+import { CaseNode } from "../../src/nodes/case/node.ts";
+import { EndNode } from "../../src/nodes/end/node.ts";
+import { LoopNode } from "../../src/nodes/loop/node.ts";
+import { StartNode } from "../../src/nodes/start/node.ts";
 import { runFlow } from "../../src/run.ts";
 import { decodeRecord } from "../../src/runtime/log.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
@@ -79,4 +85,18 @@ test.each(["backward_started", "backward_ready", "backward_finished"])("a %s rec
 test("a schema-26 log is refused by name", () => {
   const line26 = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind: "node_started", payload: {}, run_id: "r", schema: 26, seq: 1 });
   expect(() => decodeRecord(line26)).toThrow("run log schema 26 predates schema 27 and is not supported");
+});
+
+test.each([Node, AgentNode, EndNode, StartNode, LoopNode, CaseNode].map((cls) => [cls.name, cls] as const))(
+  "%s has no backward hook",
+  (_name, cls) => {
+    for (const hook of ["backward", "backwardInputNames", "captureBackwardContext", "renderCapture", "boundLlmConfig"]) {
+      expect(hook in cls.prototype).toBe(false);
+    }
+  },
+);
+
+test("a node's declared inputs, without reserved wiring, are its dataInputNames", () => {
+  expect(typeof Node.prototype.dataInputNames).toBe("function");
+  expect(EndNode.record("__end__", { outputNames: ["a", "b"] }).dataInputNames()).toEqual(["a", "b"]);
 });

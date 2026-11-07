@@ -732,77 +732,15 @@ function stageFailure(node: Node, error: unknown): EvaluationFailure {
 }
 
 /**
- * The backward material `node` gives an evaluation: its backward input names, its variable names
- * and its execution scope.
+ * The capture material `node` gives an evaluation: its data input names, its variable names and
+ * its execution scope.
  */
 export function nodeBackwardCapture(node: Node): BackwardCapture {
   return new BackwardCapture({
-    inputNames: node.backwardInputNames(),
+    inputNames: node.dataInputNames(),
     variableNames: node.declaredVariables().map((parameter) => parameter.name),
     scope: node.executionScope,
   });
-}
-
-/**
- * Rebuild the node data backward reads about one evaluation of `node`, which its record leaves
- * out: none for a binding that didn't finish (`inputs` `null`); else the node's static material
- * (`captureBackwardContext`), and, when its pre-asserts hold for `inputs` (so its `forward` ran)
- * and the node renders (`renderCapture`, called only then), that render with the model config the
- * invocation used as `effective_llm_config`: the config bound with its inputs (`boundLlmConfig`),
- * else the run's entry for its static path.
- *
- * @param inputs The bound inputs, as binding the node again gives them.
- * @param effectiveLlmByStaticPath The run's recorded model config by static path.
- * @param localTypes The node's locals' declared types (`localTypes`); `null` leaves them undeclared.
- * @returns Canonical JSON.
- * @throws TypeError when the static material isn't a record, TypeCheckError when it or the render
- *   isn't JSON, and the hooks' own errors (`preAssertsHold`'s, and `renderCapture`'s faults).
- * @throws RangeError when the node renders and the run's map has no entry for its static path, or
- *   its render holds `effective_llm_config` or a key of its static material.
- */
-export function rebuildNodeData(
-  node: Node,
-  inputs: Readonly<Record<string, unknown>> | null,
-  effectiveLlmByStaticPath: Readonly<Record<string, unknown>>,
-  localTypes: ReadonlyMap<string, Type | null> | null = null,
-): WireObject {
-  if (inputs === null) return {};
-  const captured: unknown = node.captureBackwardContext();
-  if (!isRecord(captured)) throw new TypeError("capture_backward_context must return a record");
-  const data: Record<string, unknown> = { ...captured };
-  // Pre-asserts first: an occurrence whose `forward` never ran is never rendered again.
-  const render = node.preAssertsHold(inputs, localTypes) ? node.renderCapture(inputs, localTypes) : null;
-  if (render !== null) {
-    if (Object.hasOwn(render, "effective_llm_config")) {
-      throw new RangeError("effective_llm_config belongs to the run's model config");
-    }
-    const replaced = Object.keys(render).filter((key) => Object.hasOwn(data, key));
-    if (replaced.length > 0) throw new RangeError(`the render cannot replace static node data: ${replaced.join(", ")}`);
-    Object.assign(data, render, { effective_llm_config: invocationLlmConfig(node, inputs, effectiveLlmByStaticPath) });
-  }
-  return canonicalSeed(data)[1] as WireObject;
-}
-
-/**
- * The model config one invocation of `node` used: the config bound with `inputs`, else the run's
- * entry for the node's static path; `null` for a node with no scope.
- *
- * @throws RangeError when the run's map has no entry for the static path.
- */
-function invocationLlmConfig(
-  node: Node,
-  inputs: Readonly<Record<string, unknown>>,
-  effectiveLlmByStaticPath: Readonly<Record<string, unknown>>,
-): JsonValue | null {
-  const scope = node.executionScope;
-  if (scope === null) return null;
-  const bound = node.boundLlmConfig(inputs);
-  if (bound !== null) return canonicalSeed(bound)[1];
-  const key = scope.staticPath.join("/");
-  if (!Object.hasOwn(effectiveLlmByStaticPath, key)) {
-    throw new RangeError(`recorded effective model configuration is missing static path ${reprText(key)}`);
-  }
-  return canonicalSeed(effectiveLlmByStaticPath[key])[1];
 }
 
 /** The bound inputs and capabilities `rebind` and `rebuildDerived` share. */

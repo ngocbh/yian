@@ -36,11 +36,6 @@ test("end record one output returns record", async () => {
   expect((out as Output).value).toEqual({ only: 42n });
 });
 
-test("end record one output captures a keyed path", () => {
-  const node = EndNode.record("__end__", { outputNames: ["only"] });
-  expect(node.captureBackwardContext()).toEqual({ input_output_paths: { only: ["only"] } });
-});
-
 test("end record two outputs returns keyed object", async () => {
   const node = EndNode.record("__end__", { outputNames: ["report", "n"] });
   const out = await node.run({ report: "r", n: 4n });
@@ -66,10 +61,9 @@ test("end value without a name has no params and returns none", async () => {
   expect(((await node.run({})) as Output).value).toBeNull();
 });
 
-test("end value captures the whole output path", () => {
+test("end value's data input is its one output", () => {
   const node = EndNode.value("__end__", { outputName: "only" });
-  expect(node.backwardInputNames()).toEqual(["only"]);
-  expect(node.captureBackwardContext()).toEqual({ input_output_paths: { only: [] } });
+  expect(node.dataInputNames()).toEqual(["only"]);
 });
 
 test("end record returns record", () => {

@@ -47,7 +47,7 @@ test("an agent with a steer inbox reserves its key, hides it from the model and 
   expect([...node.reservedWiringKeys()]).toEqual([STEER_INBOX_KEY]);
   expect(node.reservedKeyLabel(STEER_INBOX_KEY)).toBe("steer_inbox");
   expect(node.modelHiddenInputs().has(STEER_INBOX_KEY)).toBe(true);
-  expect(node.backwardInputNames()).not.toContain(STEER_INBOX_KEY);
+  expect(node.dataInputNames()).not.toContain(STEER_INBOX_KEY);
   expect(new AgentNode("plain", { prompt: "hi" }).readsSteerInbox).toBe(false);
 });
 

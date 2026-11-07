@@ -88,7 +88,7 @@ import {
 } from "../typesys/values.ts";
 import { NodeState } from "./common.ts";
 import { ForwardCapture, validateSource } from "./contracts.ts";
-import { nodeBackwardCapture, rebind, rebuildDerived, rebuildNodeData } from "./eval_node.ts";
+import { nodeBackwardCapture, rebind, rebuildDerived } from "./eval_node.ts";
 import {
   canonicalSeed,
   canonicalTyped,
@@ -2804,12 +2804,11 @@ function prepareRecordTrace(
   return prepareTrace(state.trace, envelope, node, {
     ...options,
     rebinder: state.trace === null || node === null ? null : nodeRebinder(state, node),
-    nodeDataRebuilder: state.trace === null || node === null ? null : nodeDataRebuilder(state, node),
     // Only learning reads the steps, so a run that doesn't learn doesn't copy them.
     steps: state.trace === null || nodeId === null ? [] : stepsWithSteerValues(state, nodeId),
     rootStartId: started ? state.flow.startId : null,
     rootEndId: started ? state.flow.endId : null,
-    rootInputNames: started && record.learnable ? state.flow.nodes.get(state.flow.startId)!.backwardInputNames() : null,
+    rootInputNames: started && record.learnable ? state.flow.nodes.get(state.flow.startId)!.dataInputNames() : null,
   });
 }
 
@@ -2823,23 +2822,6 @@ function nodeRebinder(state: RunState, node: Node): Rebinder {
   const wiring = (state.wiringOverrides.get(node.id) ??
     Object.fromEntries(flow.wiring.get(node.id) ?? new Map())) as JsonObject;
   return (sources, resolve, route) => rebind(node, flow, sources, resolve, wiring, { reserved: recordedReserved(node, route) });
-}
-
-/**
- * Return what rebuilds `node`'s node data from its bound inputs (`rebuildNodeData`), with the
- * model configs the run recorded.
- *
- * It holds the node itself, since learning runs after an expansion may have pruned the node from
- * the flow.
- */
-function nodeDataRebuilder(
-  state: RunState,
-  node: Node,
-): (inputs: Readonly<Record<string, unknown>> | null) => JsonObject {
-  const llm = state.effectiveLlmByStaticPath;
-  // Typed now, while the node is in the flow; learning may prune it later.
-  const types = localTypes(state.flow, node);
-  return (inputs) => rebuildNodeData(node, inputs, llm, types);
 }
 
 /**
@@ -3486,8 +3468,6 @@ const TRACE_CHANGES = [
   "parked",
   "unparked",
   "occurrence",
-  "handler",
-  "material",
   "writer",
   "messagesWriter",
   "systemValue",

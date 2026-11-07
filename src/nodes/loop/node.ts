@@ -28,27 +28,15 @@
 
 import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts";
 import { evaluateWhenRecord, localDeclared } from "../../expr/expressions.ts";
-import type { FeedbackValue } from "../../expr/index.ts";
 import {
   isInboxType,
-  isRecord,
   normalizeFiles,
   setField,
   type Type,
   type Value,
   type ValueRecord,
 } from "../../typesys/values.ts";
-import {
-  type BackwardContext,
-  BackwardResult,
-  Grow,
-  isWeakKey,
-  Node,
-  NodeKind,
-  Output,
-  parseNamedCondition,
-  projectStructuralFeedback,
-} from "../base.ts";
+import { Grow, isWeakKey, Node, NodeKind, Output, parseNamedCondition } from "../base.ts";
 import {
   ExecutionPosition,
   ExecutionScope,
@@ -273,36 +261,6 @@ export class LoopNode extends Node {
         this.types,
       );
     }
-  }
-
-  /**
-   * Capture every carried input, including fields the body doesn't consume, except the inboxes a
-   * stopped driver's output leaves out.
-   *
-   * @returns The `input_output_paths` record from each carried input name to its same-named field
-   *   in a stopped driver's record output.
-   */
-  override captureBackwardContext(): Record<string, unknown> {
-    const inboxes = this.inboxNames();
-    const names = this.backwardInputNames().filter((name) => !inboxes.includes(name));
-    return { input_output_paths: Object.fromEntries(names.map((name) => [name, [name]])) };
-  }
-
-  /**
-   * Project a stopped driver's recorded carried output without testing its predicate.
-   *
-   * @param context Recorded carried inputs, accepted output or failure, the full input inventory
-   *   and the captured named paths.
-   * @param feedback Ordered text or structural selections over the accepted carried record.
-   * @returns Input messages for a successful stopping driver. Failed or continuing drivers stop;
-   *   growth connections handle the separate continuation boundary.
-   * @throws TypeError when a message batch or captured path has an invalid type.
-   * @throws RangeError when feedback or a captured path doesn't match the recorded output, or the
-   *   required structural layout is missing.
-   */
-  override backward(context: BackwardContext, feedback: readonly FeedbackValue[]): BackwardResult {
-    if (context.failure !== null || !isRecord(context.output)) return new BackwardResult();
-    return projectStructuralFeedback(context, feedback);
   }
 
   /**

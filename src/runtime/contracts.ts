@@ -196,8 +196,7 @@ export function validateRoute(route: unknown, options: { deep?: boolean } = {}):
  * Transient detached inventories and scope from one invocation. Frozen.
  *
  * This worker-owned snapshot becomes durable only through an accepted `ForwardCapture`. It
- * contains neither bound values, outcomes nor node material: learning rebuilds the node data
- * backward reads from the node (`TraceOccurrence.nodeData`).
+ * contains neither bound values nor outcomes.
  */
 export class BackwardCapture {
   /** Distinct eligible input names, snapshotted before binding can fail. */
@@ -242,10 +241,9 @@ export class BackwardCapture {
  *
  * The bound inputs aren't kept: learning rebuilds them by binding the node again from the values
  * its route read (`TraceOccurrence.boundInputs`). Its record holds no interpolation route's text
- * either; the same binding rebuilds it (`TraceOccurrence.capture`). Nor node data: learning
- * rebuilds it from the node (`TraceOccurrence.nodeData`). An unfinished binding keeps its safe
- * partial routes and says so (`bound`), since a failure's code doesn't tell whether its bound
- * inputs are usable. Item captures retain explicit indices and actual second-template evaluation
+ * either; the same binding rebuilds it (`TraceOccurrence.capture`). An unfinished binding keeps
+ * its safe partial routes and says so (`bound`), since a failure's code doesn't tell whether its
+ * bound inputs are usable. Item captures retain explicit indices and actual second-template evaluation
  * flags. Outcomes and visible interactions stay on their accepted record. Scope may be absent for
  * synthetic nodes awaiting instantiation.
  */

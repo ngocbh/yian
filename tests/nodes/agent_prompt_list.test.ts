@@ -10,12 +10,11 @@ import { ExpressionError } from "../../src/expr/expressions.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentPrompt, AgentNode, type PromptItem } from "../../src/nodes/agent/node.ts";
-import { CapabilityFault, type NodeCaps, Output } from "../../src/nodes/base.ts";
+import { type NodeCaps, Output } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
 import type { Skill } from "../../src/skills/catalog.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
-import { logJson } from "../../src/typesys/json.ts";
 import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { callReply, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
@@ -196,7 +195,7 @@ test("a rendered list with no message fails the node", async () => {
   expect(error).toEqual(new ExpressionError("node 'reply' prompt: the rendered list holds no message"));
 });
 
-test("recall, learning and the render capture read the list's text forms", async () => {
+test("recall and the rendered prompt read the list's text forms", async () => {
   const recalled: string[] = [];
   await run(agent(CHAT), HISTORY, {
     openMemoryContext: async (_system, prompt) => {
@@ -207,28 +206,6 @@ test("recall, learning and the render capture read the list's text forms", async
 
   expect(recalled).toEqual(["Now: again"]);
   expect(renderPrompt(agent(CHAT), { history: HISTORY, message: "again" }, null).promptText).toBe("Now: again");
-  const capture = agent(CHAT).renderCapture({ history: HISTORY, message: "again" });
-  expect(capture["prompt_template"]).toBe(logJson(["${history}", { user: "Now: ${message}" }]));
-  expect(capture["rendered_prompt"]).toBe(
-    logJson([
-      { role: "user", text: "Hi" },
-      { role: "assistant", text: "Hello! How can I help?" },
-      { role: "user", text: "Now: again" },
-    ]),
-  );
-});
-
-test("a rendered prompt the capture can't write is a capability fault carrying the original", () => {
-  // A lone surrogate renders, but isn't run-log JSON.
-  let error: unknown = null;
-  try {
-    agent(CHAT).renderCapture({ history: [{ role: "user", text: "\ud800" }], message: "again" });
-  } catch (caught) {
-    error = caught;
-  }
-
-  expect(error).toBeInstanceOf(CapabilityFault);
-  expect((error as CapabilityFault).original).toEqual(new TypeError("Unicode surrogate is not valid canonical JSON"));
 });
 
 test("the node refuses a malformed list prompt", () => {
@@ -271,7 +248,7 @@ test("a spliced Message ending the list must be the user's", async () => {
   expect(models.built).toBe(0);
 });
 
-test("recall reads the last Message's text; the capture holds a spliced Message without its opaque fields", async () => {
+test("recall reads the last Message's text", async () => {
   const recalled: string[] = [];
   const reply = {
     role: "assistant",
@@ -283,10 +260,6 @@ test("recall reads the last Message's text; the capture holds a spliced Message 
     openMemoryContext: async (_system, prompt) => (recalled.push(prompt), new MemoryContext()),
   });
   expect(recalled).toEqual(["Go"]);
-  const capture = agent([{ splice: "history" }]).renderCapture({ history: [TOOL_HISTORY[0], reply, last] });
-  expect(capture["rendered_prompt"]).toBe(
-    logJson([TOOL_HISTORY[0], { role: "assistant", parts: [{ type: "reasoning", text: "r" }, { type: "text", text: "It says hi." }] }, last]),
-  );
 });
 
 test("a spliced media part fails the node before any model call", async () => {

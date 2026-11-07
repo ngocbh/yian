@@ -105,7 +105,7 @@ function endType(flow: Flow, end: EndNode): Type | null {
     if (param?.contract != null) return param.contract.type;
     return wiring.has(name) ? bindingType(end, wiring.get(name), contracts) : null;
   };
-  const names = end.backwardInputNames();
+  const names = end.dataInputNames();
   if (end.mode === "value") return names.length === 1 ? typeOf(names[0]!) : null;
   const fields = new Map(names.map((name): [string, Type] => [name, typeOf(name) ?? Type.scalar(ValueKind.ANY)]));
   return new Type({ kind: ValueKind.OBJECT, fields, required: new Set(names) });

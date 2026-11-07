@@ -9,7 +9,6 @@ import { describe, expect, test } from "bun:test";
 import { withEnv } from "../../src/defaults.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
 import { StreamChunk } from "../../src/events.ts";
-import { AgentNode } from "../../src/nodes/agent/node.ts";
 import {
   CapabilityFault,
   Grow,
@@ -21,12 +20,11 @@ import {
   Route,
   type SteerInbox,
 } from "../../src/nodes/base.ts";
-import { ExecutionScope, Parameter } from "../../src/nodes/contracts.ts";
+import { Parameter } from "../../src/nodes/contracts.ts";
 import {
   EvaluatedOutcome,
   EvaluationFailure,
   evalNode,
-  rebuildNodeData,
 } from "../../src/runtime/eval_node.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { drive, FailNode, FuncNode, nodeFlow, rejected, StreamNode } from "../helpers/run_state_fixtures.ts";
@@ -68,20 +66,6 @@ test("raw evaluation returns closed success route and grow values", async () => 
   expect(await drive(new FuncNode("work", () => "done"))).toEqual(new Output("done"));
   expect(await drive(new ResultNode("branch", new Route("chosen")))).toEqual(new Route("chosen"));
   expect(await drive(new Spawner("spawn", new Grow({ value: 1n })))).toEqual(new Grow({ value: 1n }));
-});
-
-test("the rebuilt node data of a scoped agent requires the recorded model map entry", () => {
-  const config = { provider: "openai", model: "ambient" };
-  const node = new AgentNode("a/runtime/id", { prompt: "hello", llmConfig: config });
-  node.executionScope = new ExecutionScope(["authored", "agent"]);
-  expect(() => rebuildNodeData(node, {}, {})).toThrow(
-    new RangeError("recorded effective model configuration is missing static path 'authored/agent'"),
-  );
-  const recorded = { provider: "openai", model: "recorded", openai: { temperature: 0.5 } };
-  const data = rebuildNodeData(node, {}, { "authored/agent": recorded });
-  recorded.model = "later mutation";
-  expect(data["effective_llm_config"]).toEqual({ provider: "openai", model: "recorded", openai: { temperature: 0.5 } });
-  expect(data["rendered_prompt"]).toBe("hello");
 });
 
 test("raw failure is frozen slotted and preserves diagnostics", async () => {

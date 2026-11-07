@@ -22,7 +22,6 @@
 
 import { compareCodeUnits, Failure, reprText } from "../diagnostics.ts";
 import {
-  type FeedbackValue,
   type RootRead,
   type RoutePath,
   SourceRef,
@@ -30,30 +29,11 @@ import {
   sourceKey,
   ValueRoute,
 } from "../expr/lineage.ts";
-import {
-  type MemoryOccurrenceSegment,
-  MemoryScope,
-  type MemorySection,
-  ModelTextInteraction,
-  ModelValueInteraction,
-  ToolCallInteraction,
-  type VisibleInteraction,
-} from "../memory/index.ts";
-import {
-  BackwardContext,
-  type BackwardOptions,
-  type BackwardResult,
-  type LearningMaterial,
-  type MaterialCaps,
-  markerMessage,
-  type Node,
-  retainFailure,
-  validateDeclaredNames,
-} from "../nodes/base.ts";
+import { MemoryScope } from "../memory/index.ts";
+import { type Node, retainFailure, validateDeclaredNames } from "../nodes/base.ts";
 import { BindingCapture, BindingError } from "../nodes/binding.ts";
 import {
   type ChildFlowBoundary,
-  type ExecutionScope,
   isExactly,
   type SeedConnection,
   sameExecutionScope,
@@ -95,20 +75,6 @@ import {
 
 /** An accepted outcome record, the record a trace occurrence holds. */
 export type OutcomeRecord = NodeSucceededRecord | NodeRoutedRecord | NodeExpandedRecord | NodeFailedRecord;
-
-/** A node's bound backward handler, kept in the trace's private index. */
-type BackwardHandler = (
-  context: BackwardContext,
-  feedback: readonly FeedbackValue[],
-  options?: BackwardOptions,
-) => BackwardResult | Promise<BackwardResult>;
-
-/** A node's bound `learningMaterial`, kept in the trace's private index. */
-type MaterialHandler = (
-  inputs: Readonly<Record<string, unknown>> | null,
-  steps: readonly ValueRecord[],
-  caps: MaterialCaps,
-) => Promise<LearningMaterial | null>;
 
 /** One value `rebind` reads for a source: the typed value a pool name held, and the producer it names. */
 export interface ReboundSource {
@@ -313,40 +279,15 @@ export function checkMemoryScope(scope: MemoryScope | null): MemoryScope | null 
 }
 
 /**
- * An occurrence's node data (`TraceOccurrence.nodeData`) couldn't be rebuilt; the error the
- * rebuild threw is the `cause`. It names the occurrence as its backward context would.
- */
-export class NodeDataError extends Error {
-  override name = "NodeDataError";
-  /** The occurrence's execution scope. */
-  readonly scope: ExecutionScope | null;
-  /** The occurrence's run. */
-  readonly runId: string;
-  /** The occurrence's node. */
-  readonly nodeId: string;
-  /** The occurrence's accepted start sequence. */
-  readonly nodeStartedSeq: number;
-
-  constructor(occurrence: TraceOccurrence, cause: unknown) {
-    const { nodeId, source } = occurrence;
-    super(`node ${reprText(nodeId)}: its node data can't be rebuilt: ${markerMessage(cause)}`, { cause });
-    this.scope = occurrence.capture.scope;
-    this.runId = source.runId;
-    this.nodeId = nodeId;
-    this.nodeStartedSeq = source.executionSeq;
-  }
-}
-
-/**
  * One accepted outcome and its derived route, identified by its accepted start. Frozen.
  *
  * Private memory ownership is detached from the physical node before pruning. Replay reconstructs
  * it from that node; it never replaces execution scope or adds memory ownership to the accepted
  * outcome payload. `hiddenInputs` names the bound inputs that node keeps from models, so memory
- * episodes leave them out. `steps` are the steps the node recorded across its starts, which
- * learning reads (`occurrenceMaterial`). `capture` is the record's forward capture, or the one
- * rebuilt for a derived record. `boundInputs`, and the interpolation routes' text in `capture`
- * and `inputRoute`, are rebuilt by binding the node again on the first read.
+ * episodes leave them out. `steps` are the steps the node recorded across its starts. `capture` is
+ * the record's forward capture, or the one rebuilt for a derived record. `boundInputs`, and the
+ * interpolation routes' text in `capture` and `inputRoute`, are rebuilt by binding the node again
+ * on the first read.
  */
 export class TraceOccurrence {
   /** The occurrence's accepted start. */
@@ -379,10 +320,6 @@ export class TraceOccurrence {
   readonly #fillsText: boolean;
   /** What binding the node again gave, once read. */
   #rebound: ReboundOccurrence | null = null;
-  /** Rebuilds the node data, or `null` when none was given. */
-  readonly #rebuildNodeData: (() => JsonObject) | null;
-  /** The rebuilt node data, once read. */
-  #nodeData: JsonObject | null = null;
 
   /**
    * Keep the outcome's log line; its envelope is decoded on the first read.
@@ -400,8 +337,6 @@ export class TraceOccurrence {
    *   default) leaves `boundInputs` unreadable.
    * @param options.fillsText Whether `rebind` also rebuilds the capture's interpolation text,
    *   which `capture` and `inputRoute` then read; defaults to `false` (they give it as held).
-   * @param options.nodeDataRebuilder Rebuilds the node data from the node and its bound inputs;
-   *   `null` (the default) leaves `nodeData` unreadable.
    * @throws TypeError when `memoryScope` isn't `null` or exactly a `MemoryScope`, or there is no
    *   capture.
    * @throws RangeError when `fillsText` is given without `rebind`.
@@ -421,7 +356,6 @@ export class TraceOccurrence {
       capture?: ForwardCapture | null;
       rebind?: (() => ReboundOccurrence) | null;
       fillsText?: boolean;
-      nodeDataRebuilder?: (() => JsonObject) | null;
     } = {},
   ) {
     const {
@@ -433,7 +367,6 @@ export class TraceOccurrence {
       capture = null,
       rebind = null,
       fillsText = false,
-      nodeDataRebuilder = null,
     } = options;
     if (fillsText && rebind === null) throw new RangeError("rebuilding interpolation text requires a rebinder");
     this.source = source;
@@ -445,7 +378,6 @@ export class TraceOccurrence {
     this.#capture = held;
     this.#rebind = rebind;
     this.#fillsText = fillsText;
-    this.#rebuildNodeData = nodeDataRebuilder;
     this.#inputRoute = inputRoute;
     this.memoryScope = checkMemoryScope(memoryScope);
     this.hiddenInputs = new Set(hiddenInputs);
@@ -500,29 +432,6 @@ export class TraceOccurrence {
   get boundInputs(): JsonObject | null {
     if (this.#rebind === null) throw new RangeError(`occurrence of ${reprText(this.nodeId)} can't rebuild its bound inputs`);
     return this.#reboundOccurrence().inputs;
-  }
-
-  /**
-   * The node data backward reads (`BackwardContext.nodeData`), canonical JSON rebuilt from the
-   * node and its bound inputs (`rebuildNodeData`): its static material and, for a node whose
-   * `forward` rendered, the render and the model config it used. Built on the first read.
-   *
-   * @throws RangeError when the occurrence was made without a rebuilder.
-   * @throws NodeDataError carrying what the rebuild threw: an error rebinding the inputs (as
-   *   `boundInputs`, a finished binding whose bound inputs don't rebuild included), a run that
-   *   recorded no model config for the node, or a render error that isn't one of the run's refusals
-   *   (`Node.renderCapture`), such as a capture fault.
-   */
-  get nodeData(): JsonObject {
-    if (this.#rebuildNodeData === null) {
-      throw new RangeError(`occurrence of ${reprText(this.nodeId)} can't rebuild its node data`);
-    }
-    try {
-      this.#nodeData ??= this.#rebuildNodeData();
-    } catch (error) {
-      throw new NodeDataError(this, error);
-    }
-    return this.#nodeData;
   }
 
   /** What binding the node again gives, bound on the first read. */
@@ -809,10 +718,6 @@ export class RetainedTrace {
    * doesn't retry them) and back when they wake: node id to start sequence.
    */
   _parked = new Map<string, number>();
-  /** @internal Bound backward handlers by occurrence `sourceKey`. */
-  _backwardHandlers = new Map<string, BackwardHandler>();
-  /** @internal Bound learning material builders by occurrence `sourceKey`. */
-  _materialHandlers = new Map<string, MaterialHandler>();
   /** @internal System values as canonical typed log text, by key. */
   system = new Map<string, string>();
   /** @internal Unconsumed child seed routes by target node id. */
@@ -865,11 +770,6 @@ export class RetainedTrace {
     return this._started;
   }
 
-  /** Reconstructed node handlers by occurrence `sourceKey`, kept apart from records; live and read-only. */
-  get backwardHandlers(): ReadonlyMap<string, BackwardHandler> {
-    return this._backwardHandlers;
-  }
-
   /**
    * Return fresh canonical JSON for an accepted producer's value, or a path inside it.
    *
@@ -892,55 +792,6 @@ export class RetainedTrace {
     const occurrence = this.occurrenceBySource.get(key);
     if (occurrence === undefined) throw new RangeError(`no accepted occurrence for ${key}`);
     return occurrence;
-  }
-
-  /**
-   * Build detached context from accepted invocation facts; the bound inputs and node data are
-   * rebuilt from the node (`TraceOccurrence`), and no other hook is called.
-   *
-   * The node data gains the reserved `_evaluation_evidence` entry: what the occurrence showed its
-   * model, built from `options.material` (`evaluationEvidence`), or `null` without one.
-   *
-   * @param source The accepted start of an executed occurrence.
-   * @param options.downstreamContext Transient attribution materialized by a caller, copied with
-   *   the other context values; defaults to empty.
-   * @param options.material The occurrence's learning material (`occurrenceMaterial`), if any.
-   * @throws RangeError when the occurrence or its accepted output source is absent, the rebuilt
-   *   node data already holds `_evaluation_evidence`, or a value breaks the context contract.
-   * @throws TypeError when supplied context material breaks the context contract.
-   */
-  backwardContext(
-    source: SourceRef,
-    options: {
-      downstreamContext?: readonly Readonly<Record<string, unknown>>[];
-      material?: LearningMaterial | null;
-    } = {},
-  ): BackwardContext {
-    const { downstreamContext = [], material = null } = options;
-    const occurrence = this.occurrence(source);
-    const record = occurrence.record;
-    const capture = occurrence.capture;
-    const data = occurrence.nodeData;
-    if (Object.hasOwn(data, "_evaluation_evidence")) {
-      throw new RangeError("node data uses reserved _evaluation_evidence");
-    }
-    const failure = isExactly(record, NodeFailedRecord)
-      ? record.failure
-      : isExactly(record, NodeRoutedRecord)
-        ? record.terminalFailure
-        : null;
-    return new BackwardContext(occurrence.boundInputs, {
-      inputNames: capture.inputNames,
-      variableNames: capture.variableNames,
-      output: isExactly(record, NodeSucceededRecord) ? this.lookupSource(source) : null,
-      failure,
-      scope: capture.scope,
-      runId: source.runId,
-      nodeId: occurrence.nodeId,
-      nodeStartedSeq: source.executionSeq,
-      nodeData: { ...data, _evaluation_evidence: evaluationEvidence(occurrence, material) },
-      downstreamContext,
-    });
   }
 
   /**
@@ -972,85 +823,6 @@ export class RetainedTrace {
   }
 }
 
-/**
- * Return the bound inputs `occurrence` showed models: its bound inputs without the ones its node
- * keeps from models, or `null` when its binding didn't finish.
- */
-export function visibleInputs(occurrence: TraceOccurrence): JsonObject | null {
-  const inputs = occurrence.boundInputs;
-  if (inputs === null || occurrence.hiddenInputs.size === 0) return inputs;
-  return Object.fromEntries(Object.entries(inputs).filter(([name]) => !occurrence.hiddenInputs.has(name)));
-}
-
-/**
- * Return what AGENT backward reads as `_evaluation_evidence`: the occurrence's memory scope and
- * visible bound inputs, and `material`'s prompts, memory sections and interactions; `null` without
- * material.
- */
-export function evaluationEvidence(occurrence: TraceOccurrence, material: LearningMaterial | null): JsonObject | null {
-  if (material === null) return null;
-  const scope = occurrence.memoryScope;
-  return {
-    scope: scope === null ? null : scopePayload(scope),
-    bound_inputs: visibleInputs(occurrence),
-    base_system_prompt: material.baseSystemPrompt,
-    prompt: material.prompt,
-    memory_sections: material.memorySections.map(memorySectionPayload),
-    interactions: material.interactions.map(interactionPayload),
-  };
-}
-
-/** Encode one memory scope as `_evaluation_evidence` holds it. */
-function scopePayload(scope: MemoryScope): JsonObject {
-  const segment = (item: MemoryOccurrenceSegment): JsonObject => ({
-    kind: item.kind,
-    static_path: [...item.staticPath],
-    index: BigInt(item.index),
-  });
-  return {
-    static_path: [...scope.staticPath],
-    memories: [...scope.memories],
-    occurrence_path: scope.occurrencePath.map(segment),
-  };
-}
-
-/** Encode one recalled memory section as `_evaluation_evidence` holds it. */
-function memorySectionPayload(section: MemorySection): JsonObject {
-  return { memory: section.memory, text: section.text };
-}
-
-/** Encode one visible interaction as `_evaluation_evidence` holds it. */
-function interactionPayload(interaction: VisibleInteraction): JsonObject {
-  // Memory's JSON types are the read-only form of the same frozen values.
-  if (interaction instanceof ModelTextInteraction) return { kind: "model_text", text: interaction.text };
-  if (interaction instanceof ModelValueInteraction) {
-    return { kind: "model_value", value: interaction.value as JsonValue };
-  }
-  if (interaction instanceof ToolCallInteraction) {
-    return { kind: "tool_call", name: interaction.name, arguments: interaction.arguments as JsonObject };
-  }
-  return { kind: "tool_result", name: interaction.name, text: interaction.text };
-}
-
-/**
- * Rebuild what learning reads about one accepted occurrence: its node's `learningMaterial` over
- * its bound inputs and recorded steps.
- *
- * @param source The accepted start of an executed occurrence.
- * @param caps The run's recorded skills and tool specs, model access and recall.
- * @returns The material, or `null` for a node that shows a learner none.
- * @throws RangeError when no accepted occurrence has this identity; what the node's hook throws.
- */
-export async function occurrenceMaterial(
-  trace: RetainedTrace,
-  source: SourceRef,
-  caps: MaterialCaps,
-): Promise<LearningMaterial | null> {
-  const occurrence = trace.occurrence(source);
-  const build = trace._materialHandlers.get(sourceKey(source))!;
-  return await build(occurrence.boundInputs, occurrence.steps, caps);
-}
-
 /** The optional parts of a `TraceDelta`; each defaults to `null`, `false` or an empty array. */
 export interface TraceDeltaFields {
   /** The trace a learnable RunStarted creates. */
@@ -1065,10 +837,6 @@ export interface TraceDeltaFields {
   unparked?: string | null;
   /** The accepted outcome's occurrence. */
   occurrence?: TraceOccurrence | null;
-  /** The occurrence node's bound backward handler. */
-  handler?: BackwardHandler | null;
-  /** The occurrence node's bound learning material builder. */
-  material?: MaterialHandler | null;
   /** The accepted output's commit target and its source entry. */
   writer?: readonly [string, SourceEntry] | null;
   /** An AGENT's new messages: their pool name and source entry. */
@@ -1113,10 +881,6 @@ export class TraceDelta {
   readonly unparked: string | null;
   /** The accepted outcome's occurrence, or `null`. */
   readonly occurrence: TraceOccurrence | null;
-  /** The occurrence node's bound backward handler, or `null`. */
-  readonly handler: BackwardHandler | null;
-  /** The occurrence node's bound learning material builder, or `null`. */
-  readonly material: MaterialHandler | null;
   /** The accepted output's commit target and its source entry, or `null`. */
   readonly writer: readonly [string, SourceEntry] | null;
   /** An AGENT's new messages: their pool name and source entry, or `null`. */
@@ -1152,8 +916,6 @@ export class TraceDelta {
     this.parked = fields.parked ?? null;
     this.unparked = fields.unparked ?? null;
     this.occurrence = fields.occurrence ?? null;
-    this.handler = fields.handler ?? null;
-    this.material = fields.material ?? null;
     this.writer = frozenPair(fields.writer ?? null);
     this.messagesWriter = frozenPair(fields.messagesWriter ?? null);
     this.systemValue = frozenPair(fields.systemValue ?? null);
@@ -1217,8 +979,6 @@ export class TraceDelta {
       const key = sourceKey(this.occurrence.source);
       trace._occurrences.push(this.occurrence);
       trace.occurrenceBySource.set(key, this.occurrence);
-      trace._backwardHandlers.set(key, this.handler!);
-      trace._materialHandlers.set(key, this.material!);
       trace._started.delete(this.occurrence.nodeId);
       trace.currentBoundaries.delete(this.occurrence.nodeId);
     }
@@ -1328,11 +1088,6 @@ export interface PrepareTraceOptions {
   capture?: ForwardCapture | null;
   /** Binds the executing node again, which rebuilds the occurrence's bound inputs. */
   rebinder?: Rebinder | null;
-  /**
-   * Rebuilds the executing node's node data from its bound inputs (`null` for none); a finished
-   * binding needs `rebinder` too.
-   */
-  nodeDataRebuilder?: ((inputs: Readonly<Record<string, unknown>> | null) => JsonObject) | null;
 }
 
 /**
@@ -1354,8 +1109,7 @@ export interface PrepareTraceOptions {
  *   differs from the node's, a route source isn't an earlier accepted producer or lacks its path,
  *   a seed connection isn't captured or its target or a boundary endpoint already has an owner,
  *   or a terminal disagrees with the root writer or has no causal occurrence.
- * @throws TypeError when the node's backward isn't a function or its memory scope isn't `null` or
- *   exactly a `MemoryScope`.
+ * @throws TypeError when the node's memory scope isn't `null` or exactly a `MemoryScope`.
  */
 export function prepareTrace(
   trace: RetainedTrace | null,
@@ -1382,7 +1136,6 @@ export function prepareTrace(
     envelopeJson = null,
     capture: rebuilt = null,
     rebinder = null,
-    nodeDataRebuilder: rebuildNodeData = null,
   } = options;
   const record = envelope.record;
   if (isExactly(record, RunStartedRecord)) {
@@ -1473,9 +1226,6 @@ export function prepareTrace(
   if (!bound && !isExactly(record, NodeFailedRecord)) {
     throw new RangeError("only a failure's capture may hold a binding that didn't finish");
   }
-  if (bound && rebuildNodeData !== null && rebinder === null) {
-    throw new RangeError("rebuilding the node data of a finished binding requires a rebinder");
-  }
   let again: { capture: BindingCapture; failure: BindingError | null } | null = null;
   const bindAgain = () => (again ??= reboundCapture(trace, capture, rebinder!));
   const rebind = (): ReboundOccurrence => {
@@ -1496,16 +1246,6 @@ export function prepareTrace(
     capture,
     rebind: rebinder !== null ? rebind : bound ? null : () => ({ inputs: null, capture, inputRoute }),
     fillsText: fillsText && rebinder !== null,
-    nodeDataRebuilder:
-      rebuildNodeData === null
-        ? null
-        : () => {
-            if (!bound) return rebuildNodeData(null);
-            const rebound = bindAgain();
-            finishedInputs(node.id, rebound);
-            // The typed values, not `finishedInputs`' canonical JSON: the render needs them as bound.
-            return rebuildNodeData(rebound.capture.boundInputs);
-          },
   });
   let boundaryUpdate: readonly [number, TraceBoundary] | null = null;
   const boundaryTarget = trace.currentBoundaries.get(node.id);
@@ -1544,10 +1284,6 @@ export function prepareTrace(
   if (boundaries.some((boundary) => [boundary.startId, boundary.endId].some((id) => trace.currentBoundaries.has(id)))) {
     throw new RangeError("child boundary target already has an accepted owner");
   }
-  if (typeof node.backward !== "function") throw new TypeError("node backward handler must be callable");
-  const handler: BackwardHandler = node.backward.bind(node);
-  if (typeof node.learningMaterial !== "function") throw new TypeError("node learningMaterial must be callable");
-  const material: MaterialHandler = node.learningMaterial.bind(node);
   if (isExactly(record, NodeSucceededRecord) && committed === null) {
     throw new RangeError("an accepted success requires its commit");
   }
@@ -1589,8 +1325,6 @@ export function prepareTrace(
   }
   return new TraceDelta(trace, envelope.seq, {
     occurrence,
-    handler,
-    material,
     writer,
     messagesWriter,
     pruneIds: isExactly(record, NodeExpandedRecord) ? retiredIds : [],

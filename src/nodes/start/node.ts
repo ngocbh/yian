@@ -12,13 +12,11 @@
  * boundary asserts share one seam. Not START's job: system, clock or run id. Hidden from authors:
  * a reserved `__`-prefixed id, never parseable.
  *
- * Knows about:   nodes/base, nodes/contracts, expr (types) and typesys.
+ * Knows about:   nodes/base and nodes/contracts.
  * Never imports: anything above nodes; the loader synthesizes and seeds it.
  */
 
-import type { FeedbackValue } from "../../expr/index.ts";
-import { isRecord } from "../../typesys/values.ts";
-import { type BackwardContext, BackwardResult, Node, NodeKind, Output, projectStructuralFeedback } from "../base.ts";
+import { Node, NodeKind, Output } from "../base.ts";
 import { validateParameters } from "../binding.ts";
 import type { Parameter } from "../contracts.ts";
 
@@ -65,32 +63,5 @@ export class StartNode extends Node {
   /** Return the record already bound by the generic node input seam. */
   override forward(inputs: Record<string, unknown>): Output {
     return new Output(inputs);
-  }
-
-  /**
-   * Capture the named record projection independently of delivered presence: each declared input
-   * maps to its same-named output field in `input_output_paths`, so an omitted optional input
-   * keeps its path.
-   */
-  override captureBackwardContext(): Record<string, unknown> {
-    return { input_output_paths: Object.fromEntries(this.backwardInputNames().map((name) => [name, [name]])) };
-  }
-
-  /**
-   * Project feedback to the declared inputs present in the captured START record.
-   *
-   * @param context Recorded bound inputs, output or failure, the declared inventory and the
-   *   captured named output paths.
-   * @param feedback Independent whole-record text or structured selections; a failed START
-   *   accepts text or `null`.
-   * @returns Messages for delivered inputs, defaults included; omitted inputs and unavailable
-   *   bindings get none, and a successful output that isn't a record gives an empty result.
-   * @throws TypeError when a message batch or captured path has an invalid type.
-   * @throws RangeError when feedback or a captured path doesn't match the recorded output, or the
-   *   structural layout is missing.
-   */
-  override backward(context: BackwardContext, feedback: readonly FeedbackValue[]): BackwardResult {
-    if (context.failure === null && !isRecord(context.output)) return new BackwardResult();
-    return projectStructuralFeedback(context, feedback);
   }
 }

@@ -681,15 +681,18 @@ export function isSetupError(error: unknown): error is Error {
 const selectionNotes = new WeakMap<Error, readonly string[]>();
 
 /**
- * Return the tool ids `flow`'s static TOOL nodes call, which name single tools, and the names its
- * static AGENT nodes grant, which name tools or tool groups (a group grant's group).
+ * Return the bare tool ids `flow`'s static TOOL nodes call, which name single tools, and the names
+ * its static nodes grant, which name tools or tool groups: an AGENT's grants (a group grant's
+ * group) and the group of a TOOL node's `{group: tool}`.
  */
 function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
   const toolIds = new Set<string>();
   const grants = new Set<string>();
   for (const [, node] of staticNodes(flow.compiled)) {
     const call = node.hostToolCall();
-    if (call !== null) toolIds.add(call.toolId);
+    // A group names its server, as an AGENT's group grant does.
+    if (call?.group != null) grants.add(call.group);
+    else if (call !== null) toolIds.add(call.toolId);
     for (const grant of node.grantedTools()) grants.add(grant.kind === "group" ? grant.group : grant.name);
   }
   return [toolIds, grants];
@@ -718,10 +721,10 @@ export function needsMcp(flow: ComposedFlow): boolean {
  * @internal Run `body` with the configured MCP servers `flow` needs, and close every server in
  * `servers` when it settles.
  *
- * A server an AGENT grants by name (its tool group) is selected unopened, so the run starts it
- * after its own checks and closes it. A TOOL node's id names one tool, never a group, so it counts
- * as unresolved unless it is in `known`; so does a grant that is neither in `known` nor a server
- * name. When some id is unresolved, the granted servers open here instead, and if their tools don't
+ * A server a flow grants by name (an AGENT's tool group, or the group of a TOOL node's
+ * `{group: tool}`) is selected unopened, so the run starts it after its own checks and closes it.
+ * A TOOL node's bare id names one tool, never a group, so it counts as unresolved unless it is in
+ * `known`; so does a grant that is neither in `known` nor a server name. When some id is unresolved, the granted servers open here instead, and if their tools don't
  * supply every unresolved id, the other servers open in turn to show their tools until every id is
  * supplied; those that list a still-unresolved id stay open and the rest close before the run, so
  * an unused server's tool names can't collide with another's. A server opened only to show its
@@ -730,8 +733,8 @@ export function needsMcp(flow: ComposedFlow): boolean {
  * selected. Nothing is selected when the flow needs no tools.
  *
  * @param servers The configured servers by name, none of them open.
- * @param toolIds The tool ids the flow's static TOOL nodes call.
- * @param grants The tool and tool-group ids the flow's static AGENT nodes grant.
+ * @param toolIds The bare tool ids the flow's static TOOL nodes call.
+ * @param grants The tool and tool-group names the flow's static nodes grant.
  * @param known The tool ids the run supplies without MCP.
  * @param options.signal The run's stop.
  * @param options.warn Called with `<error>; skipped, the flow doesn't need it` for each unneeded

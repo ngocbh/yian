@@ -287,6 +287,27 @@ test(
 );
 
 test(
+  "a tool node naming a server's tool as {server: tool} starts that server and no other",
+  async () => {
+    const files = { other: marker("other.pid"), fake: marker("fake.pid") };
+    // Listed first and supplying `echo` too, so probing for a bare `echo` would pick it.
+    const cfg = config(join(tmp, "cfg.json"), {
+      other: stdio("--only", "echo", "--marker", files.other),
+      fake: stdio("--marker", files.fake),
+    });
+
+    const result = await run([toolFlow("{fake: echo}"), "--mcp-config", cfg]);
+
+    expect(result.code, result.output).toBe(0);
+    expect(lastLine(result.stdout)).toBe("hi");
+    expect(pids(files.fake)).toHaveLength(1);
+    expect(existsSync(files.other)).toBe(false);
+    await expectNoChildren(files.fake);
+  },
+  SLOW,
+);
+
+test(
   "a granted server that supplies the missing tool skips probing",
   async () => {
     const fakePid = marker("fake.pid");

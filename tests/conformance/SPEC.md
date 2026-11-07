@@ -256,9 +256,12 @@ instead. In `codec` mode a bare `{"$record": X}` whose `X` isn't an object (e.g.
 A case can't hold code, so its host is declared under `host`.
 
 - **`tools`**: stub tools by name, each `{parameters: <JSON Schema>, description: <text>,
-  concurrency_safe: <bool>, results: <script>}` (`description` and `concurrency_safe`
-  optional). With `concurrency_safe: true`, the tool's `isConcurrencySafe` returns true for every
-  call, so an AGENT may run its calls together. A script is a list of entries, taken one per call
+  concurrency_safe: <bool>, resumable: <bool>, results: <script>}` (`description`,
+  `concurrency_safe` and `resumable` optional). With `concurrency_safe: true`, the tool's
+  `isConcurrencySafe` returns true for every call, so an AGENT may run its calls together. With
+  `resumable: true`, the tool is resumable, so a resumed AGENT sends a call a crash or a stop cut
+  off again; the stub answers a call id it answered before with the same entry and takes none, as
+  an idempotent tool would. A script is a list of entries, taken one per call
   in order, or a mapping from node id to such a list, taken by the calling node (for tools that
   several nodes call at once). An entry is `{return: <value>}` or `{raise: {class: <name>,
   message: <text>, retry_after: <seconds>}}` (`retry_after`, a finite non-negative number of
@@ -620,7 +623,9 @@ the host scripts as the uncut run is: a model request that differs from its entr
 call past a script's end, or an entry left unused fails the sweep. An AGENT tool call whose reply
 is in the cut log, but not its result, and that the uncut run made is closed `crashed`, not made
 again (`closed: crashed` above): the resume must close exactly those calls, by node and call id (a
-call the agent never makes, such as an ungranted tool's, has nothing to cut off). For each such call, the
+call the agent never makes, such as an ungranted tool's, has nothing to cut off). A resumable stub's
+cut call is sent again instead, so it is never closed and gets none of the allowances below; an
+answer the stub gave after the cut goes back with its entry. For each closed call, the
 script it took from (`host.tools` or `host.human`) may keep one entry, since what the call took
 stays taken; its agent's `host.models` script may run out, since the agent reads the closer and
 may make a model call more; and the agent's later scripted requests are compared with that call's

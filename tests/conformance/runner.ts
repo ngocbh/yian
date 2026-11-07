@@ -605,10 +605,12 @@ function completion(item: Case): CompleteResult {
 
 /** Throw unless `entry`, the stub tool at `where`, uses only the format's keys and scripts. */
 function checkStub(where: string, entry: Value | undefined): void {
-  const toolKeys = new Set(["parameters", "description", "concurrency_safe", "results", "pending"]);
+  const toolKeys = new Set(["parameters", "description", "concurrency_safe", "resumable", "results", "pending"]);
   const tool = keys(where, entry, toolKeys, { required: ["parameters"] });
-  if (Object.hasOwn(tool, "concurrency_safe") && typeof tool["concurrency_safe"] !== "boolean") {
-    throw new Error(`\`${where}.concurrency_safe\` must be a boolean`);
+  for (const flag of ["concurrency_safe", "resumable"]) {
+    if (Object.hasOwn(tool, flag) && typeof tool[flag] !== "boolean") {
+      throw new Error(`\`${where}.${flag}\` must be a boolean`);
+    }
   }
   const waits = Object.hasOwn(tool, "pending");
   if (Object.hasOwn(tool, "results") === waits || (waits && tool["pending"] !== true)) {
@@ -1797,7 +1799,10 @@ interface Host {
   calls: Map<string, Case[]>;
   /** Each script entry taken, in order, with the log's `nextSequence` when it was taken. */
   taken: { label: string; entry: Value; sequence: number }[];
-  /** Put each entry taken while the log's `nextSequence` was above `last` back at its script's front. */
+  /**
+   * Put each entry taken while the log's `nextSequence` was above `last` back at its script's
+   * front, and forget the answers resumable stubs gave then.
+   */
   putBack: (last: number) => void;
   /** By node, the AGENT calls a resume closes `crashed`, whose results its model requests read as the closer. */
   crashed: Map<string, ReadonlySet<string>>;
@@ -1825,6 +1830,8 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
   const calls = new Map<string, Case[]>();
   const problems: Problem[] = [];
   const taken: Host["taken"] = [];
+  // What each resumable stub answered, by `<where> <call id>`, with the log's `nextSequence` then.
+  const answered = new Map<string, { entry: Value; sequence: number }>();
   const crashed: Host["crashed"] = new Map();
   const stopper = new AbortController();
   const stopError = new ConformanceStop();
@@ -1888,10 +1895,12 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
 
   /**
    * Build the stub tool `name` declared at `where`: its calls are recorded under `shown` and take
-   * from its `where.results` scripts.
+   * from its `where.results` scripts. A resumable stub answers a call id it answered before with
+   * the same entry and takes none, as an idempotent tool would.
    */
   const stubTool = (where: string, name: string, shown: string, stub: Case): FunctionTool => {
     const waits = stub["pending"] === true;
+    const resumable = stub["resumable"] === true;
     const results = stub["results"];
     const byNode = isMapping(results);
     if (waits) {
@@ -1909,14 +1918,24 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
         return pending();
       }
       const label = `${where}.results${byNode ? `.${ctx.node}` : ""}`;
-      const step = call(shown, label, ctx, args as Case) as Case;
+      const key = `${where} ${ctx.callId}`;
+      const known = resumable ? answered.get(key) : undefined;
+      let step: Case;
+      if (known === undefined) {
+        step = call(shown, label, ctx, args as Case) as Case;
+        // The entry `call` just took, with the sequence it was taken at.
+        if (resumable) answered.set(key, { entry: step, sequence: taken.at(-1)!.sequence });
+      } else {
+        call(shown, null, ctx, args as Case);
+        step = known.entry as Case;
+      }
       if (Object.hasOwn(step, "return")) return step["return"];
       throw scriptedError(step["raise"] as Case, TOOL_ERRORS);
     };
     const description = get(stub, "description", "") as string;
     const isConcurrencySafe = stub["concurrency_safe"] === true ? () => true : null;
     const parameters = stub["parameters"] as JsonObject;
-    return tool({ name, description, parameters, execute, isConcurrencySafe });
+    return tool({ name, description, parameters, execute, isConcurrencySafe, resumable });
   };
   const tools: [string, ToolEntry][] = [];
   // Each group's stub tools by `<group>.<tool>`, which a later `same_as` reuses.
@@ -1989,6 +2008,8 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
       .concat(inbox.left());
   };
   const putBack = (last: number): void => {
+    // An answer given after the cut goes with its entry, so a call sent again takes it again.
+    for (const [key, { sequence }] of answered) if (sequence > last) answered.delete(key);
     // Taken in `nextSequence` order, so the entries to put back are a tail.
     const first = taken.findIndex(({ sequence }) => sequence > last);
     if (first === -1) return;
@@ -2779,10 +2800,18 @@ function callNames(calls: readonly (readonly [string, string])[]): string {
  * its own name when an agent granted it by its bare name; a `same_as` reads as the tool it names.
  */
 export function scriptLabel(spec: Case, node: string, name: string): string {
-  const stubs = stubTools(spec);
-  const found = stubs.find((each) => each.shown === name) ?? stubs.find((each) => each.own === name);
+  const found = stubCalled(spec, name);
   if (found === undefined) return `host.human.${node}`;
   return `${found.where}.results${isMapping(found.stub["results"]) ? `.${node}` : ""}`;
+}
+
+/**
+ * Return the stub tool an AGENT's call to tool `name` reaches: a group's tool by `<group>_<tool>`,
+ * or by its own name when an agent granted it by its bare name; `undefined` for an ask.
+ */
+function stubCalled(spec: Case, name: string): StubTool | undefined {
+  const stubs = stubTools(spec);
+  return stubs.find((each) => each.shown === name) ?? stubs.find((each) => each.own === name);
 }
 
 /** One stub tool `host.tools` declares: where, its stub, its visible name and its own name. */
@@ -2840,7 +2869,8 @@ export function sweepable(case_: Case): boolean {
  * runs again), the invariants are checked at the cut, `beforeResume` (for a test, to damage the log) runs, and
  * the run is resumed. A cut inside the run start (before the START inputs' commit) must instead be
  * refused by the resume, leaving the log as it is. The resume must end with a result whose invariants hold,
- * close `crashed` exactly the AGENT tool calls the cut cut off before their result (`cutCalls`), pass its
+ * close `crashed` exactly the AGENT tool calls the cut cut off before their result (`cutCalls`) but
+ * those to resumable stubs, which it sends again, pass its
  * host's `check()` with no entry left, and leave no filled secret in its log, as the uncut run's
  * log must not. For each call closed `crashed`, the script its call took from may keep one entry,
  * the agent's `host.models` script may run out, and the agent's later scripted requests read the
@@ -2916,6 +2946,12 @@ export async function crashSweep(
     await checkInvariants(flow, log, reopen, null, at);
     beforeResume(log);
     const open = cutCalls(uncutRecords, k, uncut.runId, made);
+    // The resume sends a resumable stub's cut calls again and reads their answers, so it closes
+    // only the others, and only theirs get a script allowance and a model overrun.
+    for (const [node, calls] of open) {
+      for (const [id, name] of calls) if (stubCalled(spec, name)?.stub["resumable"] === true) calls.delete(id);
+      if (calls.size === 0) open.delete(node);
+    }
     for (const [node, calls] of open) scripted.crashed.set(node, new Set(calls.keys()));
     let resumed: RunResult;
     try {

@@ -1,0 +1,147 @@
+# `save` is resumable. The crash cuts the agent after its reply's model_call (record 9), once
+# `save` ran but before its tool_result was written. The resumed agent sends the call again under
+# the same call id (r1/writer/1/0), attempt 2, instead of closing it `crashed`; the stub answers
+# the call id it already answered with the same entry, as an idempotent tool would.
+kind: resume
+flow: |
+  id: resumable
+  name: resumable
+  llm_config: {provider: anthropic, model: claude-test}
+  nodes:
+    writer:
+      kind: agent
+      tools: [save]
+      system_prompt: Help.
+      prompt: hi
+      output: str
+  output: ${writer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    save:
+      description: Save a topic.
+      resumable: true
+      parameters:
+        type: object
+        properties:
+          topic:
+            type: string
+        required: [topic]
+      results:
+      - return: saved:a
+  models:
+    writer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: save, arguments: {topic: a}}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: text, text: done}
+  crash_after_record: 9
+expect:
+  output: {status: succeeded, output: done}
+  tool_calls:
+    save:
+    - args: {topic: a}
+      call_id: r1/writer/1/0
+      attempt: 1
+      node: writer
+    - args: {topic: a}
+      call_id: r1/writer/1/0
+      attempt: 2
+      node: writer
+  trace:
+  - - run_started
+    - null
+    - effective_llm_by_static_path:
+        writer:
+          model: claude-test
+          provider: anthropic
+          _connection: {method: api_key, source: environment, endpoint: null}
+      num_workers: 0
+  - - pool_commit
+    - __start__
+    - {key: system.now}
+  - - pool_commit
+    - __start__
+    - {key: system.run_id, value: r1}
+  - - pool_commit
+    - __start__
+    - {key: system.today}
+  - - pool_commit
+    - __start__
+    - value: {}
+  - [node_started, __start__]
+  - - pool_commit
+    - __start__
+    - value: {}
+  - - node_succeeded
+    - __start__
+    - {commit: 6}
+  - [node_started, writer]
+  - - node_step
+    - writer
+    - n: 1
+      step:
+        finish: null
+        kind: model_call
+        model: claude-test
+        output:
+          format: yian.message.v1
+          parts:
+          - arguments: {topic: a}
+            id: c1
+            name: save
+            type: tool_call
+          role: assistant
+        purpose: chat
+        request_sha256: bf0473b589bfcd5e9978f2abf632a0d658ba810e929b6b93bb30e2cb4e3f1a9f
+        response_id: null
+        usage: null
+  - - run_resumed
+    - null
+    - num_workers: 0
+      retry_node_ids: [writer]
+  - [node_started, writer]
+  - - node_step
+    - writer
+    - n: 2
+      step: {call_id: c1, is_error: false, kind: tool_result, output: saved:a}
+  - - node_step
+    - writer
+    - n: 3
+      step:
+        finish: null
+        kind: model_call
+        model: claude-test
+        output:
+          format: yian.message.v1
+          parts:
+          - {text: done, type: text}
+          role: assistant
+        purpose: chat
+        request_sha256: b0d7e115f7611e626f80100ac6b750553ba8cd22a6f63257cb962532a077c8c4
+        response_id: null
+        usage: null
+  - - pool_commit
+    - writer
+    - {value: done}
+  - - pool_commit
+    - writer
+    - key: writer.new_messages
+      steps: [9, 12, 13]
+  - - node_succeeded
+    - writer
+    - {commit: 14, messages: 15}
+  - [node_started, __end__]
+  - - pool_commit
+    - __end__
+    - {value: done}
+  - - node_succeeded
+    - __end__
+    - {commit: 18}

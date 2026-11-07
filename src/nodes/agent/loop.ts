@@ -60,7 +60,13 @@ import { type Skill, SkillError } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
 import { ASK_USER, isPending } from "../../tools/context.ts";
 import { isReportedToolError, ReportedToolError } from "../../tools/errors.ts";
-import { asToolGrant, expandGrants, GrantError, type GrantedTool, requestToolSpecs } from "../../tools/grants.ts";
+import {
+  asToolGrant,
+  expandGrants,
+  GrantError,
+  type GrantedTool,
+  requestToolSpecs,
+} from "../../tools/grants.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
 import { formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
@@ -210,7 +216,8 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
   // The schema goes out as the host gave it; each protocol adapter lowers it for its provider.
   const specOf = (each: GrantedTool) => {
     const tool = toolset.resolve([{ group: each.group, name: each.tool }])[0]!;
-    return new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema });
+    const { name, description } = tool;
+    return new ToolSpec({ name, description, parameters: tool.parametersJsonSchema });
   };
   const bound = requestToolSpecs(granted, specOf, skills.size > 0 ? loadSkillTool() : null)!;
   let iterations = 0;

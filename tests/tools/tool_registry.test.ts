@@ -1,7 +1,7 @@
 /**
  * The tool registry and `ToolSet`: each construction and group error, namespaced groups and their
- * scope, `forRun`, `toolIds`, `groups`, `validate` and the `CheckedCall` it returns, `invoke` of a call (a thrown non-`Error` is
- * wrapped), `isConcurrencySafe` and the `ask_user` options cleaning.
+ * scope, `forRun`, `toolIds`, `groups`, `validate` and the `CheckedCall` it returns, `invoke` of a
+ * call (a thrown non-`Error` is wrapped), `isConcurrencySafe` and the `ask_user` options cleaning.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -47,12 +47,16 @@ function tool(name: string, result: unknown = "done"): FunctionTool {
   });
 }
 
-/** Build a `FunctionTool` named `name` that takes one string `topic` and returns `<name>:<topic>`. */
+/** Build a `FunctionTool` named `name` taking one string `topic`; it returns `<name>:<topic>`. */
 function topic(name: string): FunctionTool {
   return new FunctionTool({
     name,
     description: `The ${name} tool.`,
-    parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] },
+    parametersJsonSchema: {
+      type: "object",
+      properties: { topic: { type: "string" } },
+      required: ["topic"],
+    },
     execute: (args) => `${name}:${String(args.topic)}`,
   });
 }
@@ -269,7 +273,11 @@ describe("ToolSet construction", () => {
     const a = tool("echo");
     const b = tool("echo");
     const tools = new ToolSet({ a: [a], b: [b] });
-    expect(tools.resolve([{ group: "a", name: "echo" }, { group: "b", name: "echo" }])).toEqual([a, b]);
+    const refs = [
+      { group: "a", name: "echo" },
+      { group: "b", name: "echo" },
+    ];
+    expect(tools.resolve(refs)).toEqual([a, b]);
   });
 
   test("null and undefined mean the registry", () => {
@@ -330,14 +338,15 @@ describe("ToolSet construction", () => {
 });
 
 describe("namespaced tool groups", () => {
-  test("two groups may hold different tools with one name, each reached through its group", async () => {
+  test("two groups may hold different tools of one name, each reached by its group", async () => {
     const a = topic("search"),
       b = topic("search");
     const set = new ToolSet({ github: [a], docs: [b] });
     expect(set.scope().groupsHolding("search")).toEqual(["github", "docs"]);
     expect(set.scope().group("docs")).toEqual(["search"]);
     expect(set.scope().identity("docs", "search")).toBe("docs_search");
-    expect(await set.invoke(await set.validate({ group: "docs", name: "search" }, { topic: "x" }))).toBe("search:x");
+    const call = await set.validate({ group: "docs", name: "search" }, { topic: "x" });
+    expect(await set.invoke(call)).toBe("search:x");
   });
 
   test("a bare name finds its one group's tool", async () => {
@@ -357,7 +366,10 @@ describe("namespaced tool groups", () => {
       { github_search: topic("github_search"), github: [topic("search")] },
       "tool 'github_search' and github's 'search' could both show as 'github_search'; rename one",
     ],
-    [{ a: [topic("b_c")], a_b: [topic("c")] }, "a's 'b_c' and a_b's 'c' could both show as 'a_b_c'; rename one"],
+    [
+      { a: [topic("b_c")], a_b: [topic("c")] },
+      "a's 'b_c' and a_b's 'c' could both show as 'a_b_c'; rename one",
+    ],
   ])("a tool set in which two tools could show one name is refused (%#)", (spec, message) => {
     expect(() => new ToolSet(spec as never)).toThrow(message);
   });

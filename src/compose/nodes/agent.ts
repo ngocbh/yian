@@ -766,7 +766,8 @@ export class AgentDescriptor extends NodeDescriptor {
       if (!isList(tools)) {
         const example = typeof tools === "string" && tools ? tools : "search";
         throw diagnostics.error(
-          `node ${id} (kind=${this.kind}): \`tools:\` must be a list of tool or group grants; write \`tools: [${example}]\``,
+          `node ${id} (kind=${this.kind}): \`tools:\` must be a list of tool or group grants; ` +
+            `write \`tools: [${example}]\``,
           { range: rangeOf("tools") },
         );
       }

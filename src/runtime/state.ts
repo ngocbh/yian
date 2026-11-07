@@ -4741,7 +4741,9 @@ function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
   const take = record.take!;
   requireCommittingNode(state, nodeId);
   const node = state.flow.nodes.get(nodeId)!;
-  if (hostToolName(node) !== TAKE) throw new RangeError(`a take commit by node ${reprText(nodeId)}, which is no take`);
+  if (hostToolName(node) !== TAKE) {
+    throw new RangeError(`a take commit by node ${reprText(nodeId)}, which is no take`);
+  }
   const target = node.commitAs ?? nodeId;
   if (record.key !== target) {
     throw new RangeError(`the take commit of ${reprText(nodeId)} is under ${reprText(record.key)}, not ${reprText(target)}`);

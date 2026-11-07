@@ -280,7 +280,8 @@ export class ToolNode extends Node {
       if (!Number.isSafeInteger(retries)) throw new TypeError(message);
       if (retries < 0) throw new RangeError(message);
     }
-    this.toolRef = Object.freeze(typeof toolId === "string" ? { group: null, name: toolId } : { ...toolId });
+    const ref = typeof toolId === "string" ? { group: null, name: toolId } : { ...toolId };
+    this.toolRef = Object.freeze(ref);
     this.toolId = visibleToolName(this.toolRef.group, this.toolRef.name);
     this.retries = retries ?? current().toolRetries;
     this.inputTypes = new Map();

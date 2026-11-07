@@ -667,7 +667,10 @@ export interface MaterialCaps {
    * recorded them, each under the name the model saw, then `loadSkill` when given; `null` when a
    * grant can't be resolved.
    */
-  readonly toolSpecs: (grants: readonly ToolGrant[], loadSkill: ToolSpec | null) => readonly ToolSpec[] | null;
+  readonly toolSpecs: (
+    grants: readonly ToolGrant[],
+    loadSkill: ToolSpec | null,
+  ) => readonly ToolSpec[] | null;
   /** Builds the invocation's model to read its request settings off; never called. */
   readonly models: ModelAccess | null;
   /**

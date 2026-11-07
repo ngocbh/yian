@@ -192,7 +192,13 @@ import {
 import { Skill } from "./skills/catalog.ts";
 import { isAlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
-import { checkVisibleNames, expandGrants, GrantError, reachedGroups, visibleToolName } from "./tools/grants.ts";
+import {
+  checkVisibleNames,
+  expandGrants,
+  GrantError,
+  reachedGroups,
+  visibleToolName,
+} from "./tools/grants.ts";
 import { RESERVED_TOOL_NAMES, type ToolEntry, type ToolRef, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { type JsonObject, logJson } from "./typesys/json.ts";
@@ -1477,11 +1483,14 @@ function recordedTools(flow: CompiledFlow, tools: ToolSet): Record<string, Recor
     const key = tools.recordName(ref);
     if (recorded.has(key)) return;
     const tool = tools.resolve([ref])[0]!;
-    recorded.set(key, { name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema });
+    const { name, description } = tool;
+    recorded.set(key, { name, description, parameters: tool.parametersJsonSchema });
   };
   for (const [, node] of staticNodes(flow)) {
     const grants = node.grantedTools();
-    for (const granted of expandGrants(grants, tools.scopes())) record({ group: granted.group, name: granted.tool });
+    for (const granted of expandGrants(grants, tools.scopes())) {
+      record({ group: granted.group, name: granted.tool });
+    }
     // `tool_groups` lists every tool of a group, so each one is recorded too.
     for (const { group } of reachedGroups(grants, tools.scopes())) {
       for (const name of tools.scope().group(group)!) record({ group, name });
@@ -1499,7 +1508,8 @@ function recordedToolGroups(flow: CompiledFlow, tools: ToolSet): Record<string, 
   const recorded = new Map<string, readonly string[]>();
   for (const [, node] of staticNodes(flow)) {
     for (const { group } of reachedGroups(node.grantedTools(), tools.scopes())) {
-      recorded.set(group, tools.scope().group(group)!.map((name) => tools.recordName({ group, name })));
+      const members = tools.scope().group(group)!;
+      recorded.set(group, members.map((name) => tools.recordName({ group, name })));
     }
   }
   return Object.fromEntries(recorded);
@@ -3160,13 +3170,18 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
         reason =
           `tool ${reprText(call.toolId)}, which isn't in this run's tools; ` +
           `known tools: ${writeAsText([...known])}`;
-        // A group's tool is matched by the name a model sees it under and offered as `{group: tool}`.
+        // A group's tool is matched by the name a model sees it under, and offered as written:
+        // `{group: tool}`.
         const scope = tools.scope();
-        const written = new Map<string, string>();
+        const shown = new Map<string, string>();
         for (const group of scope.groupNames()) {
-          for (const name of scope.group(group)!) written.set(`{${group}: ${name}}`, visibleToolName(group, name));
+          for (const name of scope.group(group)!) {
+            shown.set(`{${group}: ${name}}`, visibleToolName(group, name));
+          }
         }
-        const candidates = new Map(known.map((id) => [written.get(id) ?? id, written.has(id) ? `\`${id}\`` : reprText(id)]));
+        const candidates = new Map(
+          known.map((id) => [shown.get(id) ?? id, shown.has(id) ? `\`${id}\`` : reprText(id)]),
+        );
         const [close] = getCloseMatches(call.toolId, [...candidates.keys()], 1, CLOSE_MATCH_CUTOFF);
         if (close !== undefined) reason += `; did you mean ${candidates.get(close)!}?`;
       }
@@ -3294,12 +3309,13 @@ function checkToolInputs(
   required: ReadonlySet<string>,
   extra: Type | null | undefined,
 ): void {
+  const tool = reprText(visibleToolName(call.group, call.toolId));
   for (const name of call.inputs) {
     if (!inputs.has(name) && extra === undefined) {
       const taken = [...inputs.keys()].sort(compareCodeUnits);
       throw new RangeError(
-        `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${reprText(visibleToolName(call.group, call.toolId))} takes no such input; ` +
-          `it takes ${writeAsText(taken)}`,
+        `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${tool} takes no such ` +
+          `input; it takes ${writeAsText(taken)}`,
       );
     }
   }
@@ -3307,7 +3323,7 @@ function checkToolInputs(
   if (missing.length > 0) {
     const named = missing.length === 1 ? `input ${reprText(missing[0]!)}` : `inputs ${writeAsText(missing)}`;
     throw new RangeError(
-      `TOOL node ${reprText(nodeId)} is missing ${named} that tool ${reprText(visibleToolName(call.group, call.toolId))} requires`,
+      `TOOL node ${reprText(nodeId)} is missing ${named} that tool ${tool} requires`,
     );
   }
   for (const [name, inferred] of call.inputTypes) {
@@ -3316,7 +3332,7 @@ function checkToolInputs(
     // string of digits into an int) is rejected too.
     if (expected !== null && typeRelation(inferred, expected) === "disjoint") {
       throw new RangeError(
-        `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${reprText(visibleToolName(call.group, call.toolId))} takes ` +
+        `TOOL node ${reprText(nodeId)} input ${reprText(name)}: tool ${tool} takes ` +
           `${canonicalTypeLabel(expected)}, but the binding is ${bindingLabel(inferred)}`,
       );
     }
@@ -3334,7 +3350,8 @@ function checkToolOutput(nodeId: string, call: HostToolCall, declaredOutput: Typ
   if (typeRelation(declaredOutput, call.outputType) === "disjoint") {
     throw new RangeError(
       `TOOL node ${reprText(nodeId)} output: declared ${canonicalTypeLabel(call.outputType)}, ` +
-        `but tool ${reprText(visibleToolName(call.group, call.toolId))} returns ${canonicalTypeLabel(declaredOutput)}`,
+        `but tool ${reprText(visibleToolName(call.group, call.toolId))} returns ` +
+        canonicalTypeLabel(declaredOutput),
     );
   }
 }

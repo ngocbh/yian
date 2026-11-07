@@ -77,7 +77,9 @@ import {
 export const SCHEMA_VERSION = 26;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
-const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]);
+const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+]);
 
 /** A typed value's wire object `{kind, value}`. */
 type TypedWire = ReturnType<TypedValue["toWire"]>;
@@ -301,7 +303,10 @@ export class RunStartedRecord {
   readonly skills: Readonly<Record<string, RecordedSkill>>;
   /** The deep-frozen tools the AGENTs grant or reach through a group, by record name. */
   readonly tools: Readonly<Record<string, RecordedTool>>;
-  /** The frozen tool groups the AGENTs reach, by name: each group's tools' record names, in group order. */
+  /**
+   * The frozen tool groups the AGENTs reach, by name: each group's tools' record names, in group
+   * order.
+   */
   readonly toolGroups: Readonly<Record<string, readonly string[]>>;
   /** The yian version that started the run. */
   readonly yianVersion: string;
@@ -408,7 +413,8 @@ function requireName(value: unknown, label: string): string {
 }
 
 /**
- * Return a frozen copy of `RunStarted.tool_groups`: each group's tools' record names as a frozen array.
+ * Return a frozen copy of `RunStarted.tool_groups`: each group's tools' record names as a frozen
+ * array.
  *
  * @throws TypeError when `groups` isn't a plain object or a group isn't an array of strings.
  * @throws RangeError when a group or tool name is empty, or a group names a tool `tools` lacks.
@@ -3623,7 +3629,11 @@ const RECORD_CODECS: readonly RecordCodec[] = [
         callTimeLlm: payload["call_time_llm"] as JsonObject | null,
         flow: payload["flow"] === null ? null : flowFromPayload(payload["flow"], `${label} flow`),
         skills: wireEntries<RecordedSkill>(payload["skills"], `${label} skills`, ["description", "instructions"]),
-        tools: wireEntries<RecordedTool>(payload["tools"], `${label} tools`, ["name", "description", "parameters"]),
+        tools: wireEntries<RecordedTool>(payload["tools"], `${label} tools`, [
+          "name",
+          "description",
+          "parameters",
+        ]),
         toolGroups: wireObject(payload["tool_groups"], `${label} tool_groups`) as Record<string, string[]>,
         yianVersion: requireText(payload["yian_version"], `${label} yian_version`),
         parent: payload["parent"] === null ? null : parentFromPayload(payload["parent"], `${label} parent`),

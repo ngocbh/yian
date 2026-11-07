@@ -36,8 +36,15 @@ import {
   validateBackwardResult,
 } from "../nodes/base.ts";
 import { Skill } from "../skills/catalog.ts";
-import { expandGrants, GrantError, type GrantedTool, type GrantScope, requestToolSpecs, type ToolGrant } from "../tools/grants.ts";
 import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
+import {
+  expandGrants,
+  GrantError,
+  type GrantedTool,
+  type GrantScope,
+  requestToolSpecs,
+  type ToolGrant,
+} from "../tools/grants.ts";
 import { jsTypeName } from "../typesys/values.ts";
 import { AttributedBackwardResult, BackwardFailure, BackwardOutcome, type MemoryProposal } from "./contracts.ts";
 import {
@@ -282,7 +289,7 @@ export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "
     ]),
   );
   const scope = recordedScope(state);
-  const toolSpecs = (grants: readonly ToolGrant[], loadSkill: ToolSpec | null): ToolSpec[] | null => {
+  const toolSpecs = (grants: readonly ToolGrant[], loadSkill: ToolSpec | null) => {
     let granted: GrantedTool[];
     try {
       granted = expandGrants(grants, [scope]);
@@ -308,13 +315,15 @@ export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "
 function recordedScope(state: RunState): GrantScope {
   const groups = state.recordedToolGroups;
   const tools = state.recordedTools;
-  const members = (group: string): readonly string[] => (Object.hasOwn(groups, group) ? groups[group]! : []);
+  const members = (group: string): readonly string[] =>
+    Object.hasOwn(groups, group) ? groups[group]! : [];
   const nameOf = (key: string) => (Object.hasOwn(tools, key) ? tools[key]!.name : null);
   const listed = new Set(Object.values(groups).flat());
   return {
     label: "this run",
     bareMembers: true,
-    group: (name) => (Object.hasOwn(groups, name) ? members(name).map((key) => nameOf(key) ?? key) : null),
+    group: (name) =>
+      Object.hasOwn(groups, name) ? members(name).map((key) => nameOf(key) ?? key) : null,
     hasTool: (name) => Object.hasOwn(tools, name) && !listed.has(name),
     groupsHolding: (name) => {
       const seen = new Set<string>();
@@ -328,7 +337,8 @@ function recordedScope(state: RunState): GrantScope {
       return holding;
     },
     groupNames: () => Object.keys(groups),
-    identity: (group, tool) => (group === null ? tool : (members(group).find((key) => nameOf(key) === tool) ?? tool)),
+    identity: (group, tool) =>
+      group === null ? tool : (members(group).find((key) => nameOf(key) === tool) ?? tool),
   };
 }
 

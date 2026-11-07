@@ -813,7 +813,8 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       manifest.prompt = typeof agent.prompt === "string" ? agent.prompt : authoredPrompt(agent.prompt);
       manifest.retries = count(agent.retries, `${path}.retries`, false);
       // Grants as authored, so a flow granting only names keeps its identity.
-      manifest.tools = canonicalSequence((tools as readonly ToolGrant[]).map(authoredGrant), ctx, `${path}.tools`);
+      const grants = (tools as readonly ToolGrant[]).map(authoredGrant);
+      manifest.tools = canonicalSequence(grants, ctx, `${path}.tools`);
       manifest.own_llm_config = llmLayerManifest(agent.ownLlmConfig, ctx, `${path}.ownLlmConfig`);
       // Left out when empty so memory-free flows keep their identity.
       if (!topologyOnly && memories.length > 0) manifest.memories = memories;

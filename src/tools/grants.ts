@@ -59,7 +59,8 @@ export function parseToolGrants(raw: readonly unknown[], where: string): ToolGra
       return;
     }
     if (!isRecord(entry)) {
-      fail(`entry ${flowText(entry)} must be a tool name or a group grant; write \`search\` or \`{github: [search]}\``, index);
+      const fix = "write `search` or `{github: [search]}`";
+      fail(`entry ${flowText(entry)} must be a tool name or a group grant; ${fix}`, index);
     }
     const keys = Object.keys(entry as Record<string, unknown>);
     if (keys.length === 0) fail("entry {} names no group; write `{github: [search]}`", index);
@@ -77,7 +78,9 @@ export function parseToolGrants(raw: readonly unknown[], where: string): ToolGra
       fail(`entry ${shown} must list tools; write \`{${group}: [${example}]}\``, index);
     }
     const tools = value as unknown[];
-    if (tools.length === 0) fail(`entry ${shown} lists no tools; write \`{${group}: [read]}\` or \`${group}\``, index);
+    if (tools.length === 0) {
+      fail(`entry ${shown} lists no tools; write \`{${group}: [read]}\` or \`${group}\``, index);
+    }
     if (!tools.every((tool) => typeof tool === "string" && tool !== "")) {
       fail(`entry ${shown} must list tool names; write \`{${group}: [read]}\``, index);
     }
@@ -86,7 +89,8 @@ export function parseToolGrants(raw: readonly unknown[], where: string): ToolGra
       if (seen.has(key)) fail(`grants ${group}.${tool} twice`, index);
       seen.add(key);
     }
-    grants.push(Object.freeze({ kind: "group", group, tools: Object.freeze([...(tools as string[])]) }));
+    const names = Object.freeze([...(tools as string[])]);
+    grants.push(Object.freeze({ kind: "group", group, tools: names }));
   });
   return grants;
 }
@@ -101,8 +105,13 @@ export function grantText(grant: ToolGrant): string {
   return grant.kind === "name" ? grant.name : `{${grant.group}: [${grant.tools.join(", ")}]}`;
 }
 
-/** The grant as the manifest encodes it: a name grant is its text, a group grant `{group: [tools]}`. */
-export function authoredGrant(grant: ToolGrant): string | Readonly<Record<string, readonly string[]>> {
+/**
+ * The grant as the manifest encodes it: a name grant is its text, a group grant
+ * `{group: [tools]}`.
+ */
+export function authoredGrant(
+  grant: ToolGrant,
+): string | Readonly<Record<string, readonly string[]>> {
   // `fromEntries` defines an own data property, so a `__proto__` group stays a key.
   return grant.kind === "name" ? grant.name : Object.fromEntries([[grant.group, [...grant.tools]]]);
 }
@@ -152,7 +161,10 @@ export interface GrantedTool {
  *   scope has, or a tool its group lacks; or two different tools would show one name. The message
  *   starts with `grants`, so a caller prefixes the node (`AGENT node 'a' grants ...`).
  */
-export function expandGrants(grants: readonly ToolGrant[], scopes: readonly GrantScope[]): GrantedTool[] {
+export function expandGrants(
+  grants: readonly ToolGrant[],
+  scopes: readonly GrantScope[],
+): GrantedTool[] {
   const granted: GrantedTool[] = [];
   const bound = new Set<string>();
   const byVisible = new Map<string, GrantedTool>();
@@ -160,14 +172,16 @@ export function expandGrants(grants: readonly ToolGrant[], scopes: readonly Gran
     const { scope, group, tools, grouped } = resolveGrant(grant, scopes);
     for (const name of tools) {
       const visible = grouped ? visibleToolName(group, name) : name;
-      const tool: GrantedTool = { visible, group, tool: name, scope, key: scopes[scope]!.identity(group, name) };
+      const key = scopes[scope]!.identity(group, name);
+      const tool: GrantedTool = { visible, group, tool: name, scope, key };
       const id = JSON.stringify([tool.scope, tool.key]);
       if (bound.has(id)) continue;
       const other = byVisible.get(tool.visible);
       if (other !== undefined) {
+        const first = `${reprText(other.visible)} (${placeText(other)})`;
+        const second = `${reprText(tool.visible)} (${placeText(tool)})`;
         throw new GrantError(
-          `grants ${grantText(grant)}: tools ${reprText(other.visible)} (${placeText(other)}) and ` +
-            `${reprText(tool.visible)} (${placeText(tool)}) have one name; grant one`,
+          `grants ${grantText(grant)}: tools ${first} and ${second} have one name; grant one`,
         );
       }
       bound.add(id);
@@ -192,12 +206,16 @@ export function reachedGroups(
   const reached = new Map<string, { readonly scope: number; readonly group: string }>();
   for (const grant of grants) {
     const { scope, group } = resolveGrant(grant, scopes);
-    if (group !== null) reached.set(JSON.stringify([scope, group]), Object.freeze({ scope, group }));
+    if (group === null) continue;
+    reached.set(JSON.stringify([scope, group]), Object.freeze({ scope, group }));
   }
   return [...reached.values()];
 }
 
-/** Where one grant resolves: a scope, the group its tools are in (`null` for a top-level tool), and those tools. */
+/**
+ * Where one grant resolves: a scope, the group its tools are in (`null` for a top-level tool), and
+ * those tools.
+ */
 interface ResolvedGrant {
   readonly scope: number;
   readonly group: string | null;
@@ -215,18 +233,25 @@ interface ResolvedGrant {
 function resolveGrant(grant: ToolGrant, scopes: readonly GrantScope[]): ResolvedGrant {
   if (grant.kind === "group") {
     const scope = scopes.findIndex((each) => each.group(grant.group) !== null);
-    if (scope < 0) throw new GrantError(`grants unknown tool group ${reprText(grant.group)}; ${groupsText(scopes)}`);
+    if (scope < 0) {
+      const known = groupsText(scopes);
+      throw new GrantError(`grants unknown tool group ${reprText(grant.group)}; ${known}`);
+    }
     const members = scopes[scope]!.group(grant.group)!;
     const missing = grant.tools.find((tool) => !members.includes(tool));
     if (missing !== undefined) {
       const has = members.length === 0 ? "no tools" : members.join(", ");
-      throw new GrantError(`grants ${grantText(grant)}: \`${grant.group}\` has no tool \`${missing}\`; it has ${has}`);
+      throw new GrantError(
+        `grants ${grantText(grant)}: \`${grant.group}\` has no tool \`${missing}\`; it has ${has}`,
+      );
     }
     return { scope, group: grant.group, tools: grant.tools, grouped: true };
   }
   const name = grant.name;
   const groupAt = scopes.findIndex((each) => each.group(name) !== null);
-  if (groupAt >= 0) return { scope: groupAt, group: name, tools: scopes[groupAt]!.group(name)!, grouped: true };
+  if (groupAt >= 0) {
+    return { scope: groupAt, group: name, tools: scopes[groupAt]!.group(name)!, grouped: true };
+  }
   const toolAt = scopes.findIndex((each) => each.hasTool(name));
   if (toolAt >= 0) return { scope: toolAt, group: null, tools: [name], grouped: false };
   const holders = scopes.flatMap((each, at) =>
@@ -235,7 +260,9 @@ function resolveGrant(grant: ToolGrant, scopes: readonly GrantScope[]): Resolved
   if (holders.length === 0) {
     const shown = groupToolShownAs(name, scopes);
     const hint = shown === null ? "" : `; did you mean \`{${shown.group}: [${shown.tool}]}\`?`;
-    throw new GrantError(`grants unknown tool or group ${reprText(name)}; ${groupsText(scopes)}${hint}`);
+    throw new GrantError(
+      `grants unknown tool or group ${reprText(name)}; ${groupsText(scopes)}${hint}`,
+    );
   }
   if (holders.length > 1) {
     const groups = holders.map(([, group]) => reprText(group));
@@ -282,7 +309,8 @@ export function groupToolShownAs(
   for (const scope of scopes) {
     for (const group of scope.groupNames()) {
       const tool = name.slice(group.length + 1);
-      if (name.startsWith(`${group}_`) && scope.group(group)!.includes(tool)) return { group, tool };
+      if (!name.startsWith(`${group}_`)) continue;
+      if (scope.group(group)!.includes(tool)) return { group, tool };
     }
   }
   return null;
@@ -291,7 +319,8 @@ export function groupToolShownAs(
 // The tool names providers accept: OpenAI's and Anthropic's rule, which the others fit in.
 const CALLABLE_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
 const CALLABLE_RULE =
-  "a model's tool names take letters, digits, `_` and `-`, start with a letter or `_`, and are at most 64 characters";
+  "a model's tool names take letters, digits, `_` and `-`, start with a letter or `_`, " +
+  "and are at most 64 characters";
 
 /**
  * Refuse a granted tool whose visible name a model can't call: a group or tool name with other
@@ -303,13 +332,16 @@ const CALLABLE_RULE =
 export function checkVisibleNames(granted: readonly GrantedTool[]): void {
   for (const tool of granted) {
     if (CALLABLE_NAME.test(tool.visible)) continue;
-    const place = tool.group === null ? `tool \`${tool.tool}\`` : `group \`${tool.group}\`'s \`${tool.tool}\``;
+    const place =
+      tool.group === null ? `tool \`${tool.tool}\`` : `group \`${tool.group}\`'s \`${tool.tool}\``;
     let fix: string;
     if (tool.group === null || tool.visible === tool.tool) fix = "rename the tool";
     else if (!CALLABLE_NAME.test(tool.group)) fix = "rename the group";
     else if (!/^[A-Za-z0-9_-]+$/.test(tool.tool)) fix = "rename the tool";
     else fix = "shorten the group or the tool";
-    throw new GrantError(`grants ${place}, which would show as \`${tool.visible}\`; ${CALLABLE_RULE}; ${fix}`);
+    throw new GrantError(
+      `grants ${place}, which would show as \`${tool.visible}\`; ${CALLABLE_RULE}; ${fix}`,
+    );
   }
 }
 
@@ -326,7 +358,8 @@ function groupsText(scopes: readonly GrantScope[]): string {
 
 /** Join items as `a`, `a and b`, or `a, b and c`. */
 function andText(items: readonly string[]): string {
-  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)!}`;
+  if (items.length < 2) return items.join("");
+  return `${items.slice(0, -1).join(", ")} and ${items.at(-1)!}`;
 }
 
 /** Return a YAML value in flow style, for a message: `x`, `[x, y]`, `{a: [x]}`. */

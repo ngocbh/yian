@@ -13,8 +13,9 @@
  * serves both the agent's `ask_user` tool and the TOOL built-in `ask`, through
  * `new ToolSet({ ask: handler, ... })`.
  *
- * Knows about: `tools/context`, `tools/errors`, `tools/function_tools`, `tools/grants`, `tools/mcp`,
- * `tools/types`, `skills/tool` (the reserved `load_skill` name), `defaults`, typesys and diagnostics.
+ * Knows about: `tools/context`, `tools/errors`, `tools/function_tools`, `tools/grants`,
+ * `tools/mcp`, `tools/types`, `skills/tool` (the reserved `load_skill` name), `defaults`, typesys
+ * and diagnostics.
  */
 
 import { current } from "../defaults.ts";
@@ -140,7 +141,7 @@ function isToolRef(value: unknown): value is ToolRef {
 
 /** One tool call whose arguments `ToolSet.validate` checked; `invoke` and `isConcurrencySafe` take it. */
 class CheckedCall {
-  /** The id of the tool the call is for. */
+  /** The tool's own name: its id, or a group's tool's name without its group. */
   readonly toolId: string;
 
   /** Build a frozen call; only `checkedCall` builds one, and records it in `CALLS`. */
@@ -628,7 +629,8 @@ export class ToolSet {
         }
         const had = members.get(name);
         if (had !== undefined && had !== item) {
-          throw new RangeError(`tool ${reprText(name)} appears twice in group ${reprText(group)} as different tools`);
+          const where = `appears twice in group ${reprText(group)}`;
+          throw new RangeError(`tool ${reprText(name)} ${where} as different tools`);
         }
         if (had !== undefined) continue;
         members.set(name, item);
@@ -638,11 +640,15 @@ export class ToolSet {
         const visible = visibleToolName(group, name);
         const text = `${group}'s ${reprText(name)}`;
         if (RESERVED_TOOL_NAMES.has(visible)) {
-          throw new RangeError(`${text} could show as ${reprText(visible)}, a reserved name; rename one`);
+          throw new RangeError(
+            `${text} could show as ${reprText(visible)}, a reserved name; rename one`,
+          );
         }
         const other = shown.get(visible);
         if (other !== undefined && other.item !== item) {
-          throw new RangeError(`${other.text} and ${text} could both show as ${reprText(visible)}; rename one`);
+          throw new RangeError(
+            `${other.text} and ${text} could both show as ${reprText(visible)}; rename one`,
+          );
         }
         shown.set(visible, { item, text });
       }
@@ -668,7 +674,8 @@ export class ToolSet {
     if (typeof ref !== "string" && ref.group !== null) {
       const members = this.groupMap.get(ref.group);
       if (members === undefined) {
-        throw new RangeError(`unknown tool group ${reprText(ref.group)}; tool groups in this run: [${this.groups.join(", ")}]`);
+        const known = `tool groups in this run: [${this.groups.join(", ")}]`;
+        throw new RangeError(`unknown tool group ${reprText(ref.group)}; ${known}`);
       }
       const tool = members.get(ref.name);
       if (tool === undefined) {
@@ -689,7 +696,8 @@ export class ToolSet {
     const group = this.groupMap.get(toolId);
     if (group !== undefined) {
       const [first] = group.keys();
-      const what = first === undefined ? ", and it has no tools" : `; name one of its tools, as \`{${toolId}: ${first}}\``;
+      const one = `; name one of its tools, as \`{${toolId}: ${first}}\``;
+      const what = first === undefined ? ", and it has no tools" : one;
       throw new RangeError(`${reprText(toolId)} is a tool group, not a tool${what}`);
     }
     const tool = (this.toolMap ?? TOOL_REGISTRY).get(toolId);
@@ -698,12 +706,12 @@ export class ToolSet {
     if (holders.length > 1) {
       const groups = holders.map(({ group }) => reprText(group));
       const shown = `${groups.slice(0, -1).join(", ")} and ${groups.at(-1)!}`;
-      throw new GrantError(
-        `${reprText(toolId)} is a tool of groups ${shown}; name one as \`{${holders[0]!.group}: ${toolId}}\``,
-      );
+      const fix = `name one as \`{${holders[0]!.group}: ${toolId}}\``;
+      throw new GrantError(`${reprText(toolId)} is a tool of groups ${shown}; ${fix}`);
     }
     if (holders.length === 1) return holders[0]!.tool;
-    throw new RangeError(`unknown tool id ${reprText(toolId)}; known tools: ${writeAsText([...this.toolIds])}`);
+    const known = writeAsText([...this.toolIds]);
+    throw new RangeError(`unknown tool id ${reprText(toolId)}; known tools: ${known}`);
   }
 
   /** The group tools named `name`, one per distinct tool, each under the first group holding it. */
@@ -711,7 +719,8 @@ export class ToolSet {
     const found: { group: string; tool: FunctionTool }[] = [];
     for (const [group, members] of this.groupMap) {
       const tool = members.get(name);
-      if (tool !== undefined && !found.some((each) => each.tool === tool)) found.push({ group, tool });
+      if (tool === undefined || found.some((each) => each.tool === tool)) continue;
+      found.push({ group, tool });
     }
     return found;
   }
@@ -799,7 +808,9 @@ export class ToolSet {
    */
   get toolIds(): readonly string[] {
     if (this.toolMap === null) return sortedIds(TOOL_REGISTRY);
-    const members = [...this.groupMap].flatMap(([group, tools]) => [...tools.keys()].map((name) => `{${group}: ${name}}`));
+    const members = [...this.groupMap].flatMap(([group, tools]) =>
+      [...tools.keys()].map((name) => `{${group}: ${name}}`),
+    );
     return [...new Set([...this.toolMap.keys(), ...members])].sort(compareCodeUnits);
   }
 
@@ -896,7 +907,11 @@ export class ToolSet {
    *   whose message is its text and whose `cause` is the value.
    */
   invoke(call: CheckedCall, options?: InvokeOptions): Promise<unknown>;
-  invoke(toolId: string | ToolRef, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown>;
+  invoke(
+    toolId: string | ToolRef,
+    inputs: Record<string, unknown>,
+    options?: InvokeOptions,
+  ): Promise<unknown>;
   async invoke(
     target: CheckedCall | string | ToolRef,
     inputsOrOptions?: Record<string, unknown> | InvokeOptions,
@@ -932,7 +947,11 @@ export class ToolSet {
    *   a throw from the output validator included.
    * @throws Whatever the tool or the validator throws, unchanged.
    */
-  async invokeTrusted(toolId: string | ToolRef, inputs: Record<string, unknown>, options?: InvokeOptions): Promise<unknown> {
+  async invokeTrusted(
+    toolId: string | ToolRef,
+    inputs: Record<string, unknown>,
+    options?: InvokeOptions,
+  ): Promise<unknown> {
     return await this.invoke(await this.checkedCall(toolId, inputs, true, options?.signal), options);
   }
 
@@ -1004,9 +1023,14 @@ export class ToolSet {
    * Look the tool up and check one call's arguments; return the tool and the checked arguments
    * as a fresh yian record, `ask_user`'s `options` cleaned.
    */
-  private check(ref: string | ToolRef, inputs: Record<string, unknown>, trusted: boolean): [FunctionTool, ValueRecord] {
+  private check(
+    ref: string | ToolRef,
+    inputs: Record<string, unknown>,
+    trusted: boolean,
+  ): [FunctionTool, ValueRecord] {
     const tool = this.lookup(ref);
-    // A group tool never takes a reserved name, so `ask` and `ask_user` here are the top-level ones.
+    // A group tool never takes a reserved name, so `ask` and `ask_user` here are the top-level
+    // ones.
     const toolId = typeof ref === "string" ? ref : ref.name;
     const where = `tool ${reprText(toolId)} arguments`;
     const payload = fromHost(inputs, where);

@@ -693,7 +693,9 @@ function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
     // A group names its server, as an AGENT's group grant does.
     if (call?.group != null) grants.add(call.group);
     else if (call !== null) toolIds.add(call.toolId);
-    for (const grant of node.grantedTools()) grants.add(grant.kind === "group" ? grant.group : grant.name);
+    for (const grant of node.grantedTools()) {
+      grants.add(grant.kind === "group" ? grant.group : grant.name);
+    }
   }
   return [toolIds, grants];
 }
@@ -724,11 +726,12 @@ export function needsMcp(flow: ComposedFlow): boolean {
  * A server a flow grants by name (an AGENT's tool group, or the group of a TOOL node's
  * `{group: tool}`) is selected unopened, so the run starts it after its own checks and closes it.
  * A TOOL node's bare id names one tool, never a group, so it counts as unresolved unless it is in
- * `known`; so does a grant that is neither in `known` nor a server name. When some id is unresolved, the granted servers open here instead, and if their tools don't
- * supply every unresolved id, the other servers open in turn to show their tools until every id is
- * supplied; those that list a still-unresolved id stay open and the rest close before the run, so
- * an unused server's tool names can't collide with another's. A server opened only to show its
- * tools that fails to start is skipped with a `warn` call, unless the flow still lacks a needed id
+ * `known`; so does a grant that is neither in `known` nor a server name. When some id is
+ * unresolved, the granted servers open here instead, and if their tools don't supply every
+ * unresolved id, the other servers open in turn to show their tools until every id is supplied;
+ * those that list a still-unresolved id stay open and the rest close before the run, so an unused
+ * server's tool names can't collide with another's. A server opened only to show its tools that
+ * fails to start is skipped with a `warn` call, unless the flow still lacks a needed id
  * afterwards. Once `signal` aborts, no further server opens, and only the servers already open are
  * selected. Nothing is selected when the flow needs no tools.
  *

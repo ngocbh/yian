@@ -167,15 +167,16 @@ export class ToolDescriptor extends NodeDescriptor {
     cursor: SourceCursor,
   ): void {
     const rangeOf = (key: string) => ranges.get(siteKey("field", key)) ?? ownRange;
-    const ref = ToolDescriptor.readToolRef(nodeId, fields["toolId"] ?? null, rangeOf("tool_id"), diagnostics);
+    const raw = fields["toolId"] ?? null;
+    const ref = ToolDescriptor.readToolRef(nodeId, raw, rangeOf("tool_id"), diagnostics);
     delete fields["toolId"];
     fields["toolRef"] = ref;
     // A group's tool shows as `<group>_<tool>`, which is never a built-in's name.
     const toolId = visibleToolName(ref.group, ref.name);
     if (ref.group !== null && RESERVED_TOOL_NAMES.has(toolId)) {
       throw diagnostics.error(
-        `node ${reprText(nodeId)} (kind=${this.kind}): \`tool_id: {${ref.group}: ${ref.name}}\` would show as ` +
-          `\`${toolId}\`, a name yian reserves; rename the group or the tool`,
+        `node ${reprText(nodeId)} (kind=${this.kind}): \`tool_id: {${ref.group}: ${ref.name}}\` ` +
+          `would show as \`${toolId}\`, a name yian reserves; rename the group or the tool`,
         { range: rangeOf("tool_id") },
       );
     }
@@ -225,15 +226,20 @@ export class ToolDescriptor extends NodeDescriptor {
     diagnostics: LoadDiagnostics,
   ): ToolRef {
     const fail = (problem: string): never => {
-      throw diagnostics.error(`node ${reprText(nodeId)} (kind=${this.kind}): ${problem}`, { range });
+      const where = `node ${reprText(nodeId)} (kind=${this.kind})`;
+      throw diagnostics.error(`${where}: ${problem}`, { range });
     };
-    if (typeof raw === "string") return Object.freeze({ group: null, name: raw === ASK_USER ? ASK : raw });
+    if (typeof raw === "string") {
+      return Object.freeze({ group: null, name: raw === ASK_USER ? ASK : raw });
+    }
     if (!isRecord(raw)) {
       const fix = raw === null ? "write a tool name" : "put it in quotes";
       return fail(valueTypeError("tool_id", "a tool name or `{group: tool}`", raw, fix));
     }
     const keys = Object.keys(raw);
-    if (keys.length !== 1 || keys[0] === "") return fail("`tool_id:` names one tool: `{cases: search}` or `search`");
+    if (keys.length !== 1 || keys[0] === "") {
+      return fail("`tool_id:` names one tool: `{cases: search}` or `search`");
+    }
     const group = keys[0]!;
     const name = raw[group];
     if (typeof name !== "string" || name === "") {
@@ -243,8 +249,11 @@ export class ToolDescriptor extends NodeDescriptor {
     }
     if (BUILTIN_TOOL_IDS.has(name as BuiltinToolId) || name === ASK_USER || name === LOAD_SKILL) {
       const bare = name === ASK_USER ? ASK : name;
-      const fix = name === LOAD_SKILL ? `\`${LOAD_SKILL}\` is reserved by yian` : `write \`tool_id: ${bare}\``;
-      return fail(`\`tool_id: {${group}: ${name}}\`: ${name} is a built-in, not a group's tool; ${fix}`);
+      const reserved = `\`${name}\` is reserved by yian`;
+      const fix = name === LOAD_SKILL ? reserved : `write \`tool_id: ${bare}\``;
+      return fail(
+        `\`tool_id: {${group}: ${name}}\`: ${name} is a built-in, not a group's tool; ${fix}`,
+      );
     }
     return Object.freeze({ group, name });
   }

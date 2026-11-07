@@ -67,7 +67,7 @@ export class ToolContext<T = unknown> {
    * Every other call, including one from an AGENT's tool loop, sees 1.
    */
   readonly attempt: number;
-  /** The id the tool is registered under. */
+  /** The tool's own name: its id, or a group's tool's name without its group. */
   readonly toolName: string;
   /** The run's id, or `""` outside a run. */
   readonly runId: string;

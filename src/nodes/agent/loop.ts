@@ -667,7 +667,9 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // calls that ran: a reply a crash cut before its `model_call` was written ran no tool. Outside a
   // run (no run id) the tool set gives each call a fresh id.
   const callId = agentCallId(turn, index);
-  const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, signal });
+  // Above 1 only for a call a crash or a stop cut off after its reply, which a resume sends again.
+  const attempt = 1 + (ctx.steps?.resumesSince(turn.n) ?? 0);
+  const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, attempt, signal });
   return { planned: { call, index, callId, deadline, invoke }, safe: toolset.isConcurrencySafe(checked) };
 }
 

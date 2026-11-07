@@ -463,6 +463,7 @@ async function evaluateNode(
       steps.durable,
       () => steps.currentCalls(),
       () => steps.next,
+      steps.resumesSince,
     );
   }
   if (steerInbox !== null && node.readsSteerInbox === true) {

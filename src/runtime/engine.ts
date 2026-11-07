@@ -700,6 +700,13 @@ export class FlowEngine {
       () => callViews(state, nodeId),
       // A steer read and a host's answer append the node's steps without `record`.
       () => (state.nodeSteps.get(nodeId)?.length ?? 0) + 1,
+      // Only a resume that found the node cut off (by a crash or a stop) starts it again; a wake
+      // records no start.
+      (n) => {
+        const seq = state.nodeStepSeqs.get(nodeId)?.[n - 1];
+        if (seq === undefined) throw new RangeError(`node ${reprText(nodeId)} has no step ${String(n)}`);
+        return (state.nodeStartSeqs.get(nodeId) ?? []).filter((start) => start > seq).length;
+      },
     );
   }
 

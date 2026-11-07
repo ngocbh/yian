@@ -492,6 +492,29 @@ test("a crash mid-call makes the call again under the same n", async () => {
   expect(comparable(log)).toEqual(comparable(uncut.log));
 });
 
+test("an agent's tool call sees attempt 1 live", async () => {
+  const seen: number[] = [];
+  const save = topicTool("save", { run: (_t, ctx) => (seen.push(ctx.attempt), "ok") });
+  await run(new ScriptedModel([calls(["c1", "save", "a"]), textReply("done")], CONFIG), { tools: { save } });
+  expect(seen).toEqual([1]);
+});
+
+test("a call of a reply made after a resume sees attempt 1", async () => {
+  const seen: [string, number][] = [];
+  const save = topicTool("save", { run: (_t, ctx) => (seen.push([ctx.callId, ctx.attempt]), "ok") });
+  const replies = () => [calls(["c1", "save", "a"]), calls(["c2", "save", "b"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { tools: { save } });
+  seen.length = 0;
+  // Cut before the second model_call record: the resumed start makes the second reply live.
+  const log = await cutRun(seqOf(uncut.log, "model_call", 1), new ScriptedModel(replies(), CONFIG), { tools: { save } });
+  const resumed = await resume(log, new ScriptedModel(replies().slice(1), CONFIG), { tools: { save } });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(seen).toEqual([
+    ["r/writer/1/0", 1],
+    ["r/writer/3/0", 1],
+  ]);
+});
+
 test("a crash while tools run closes each call with no result lazily, without running it", async () => {
   const replies = () => [calls(["call-a", "save", "a"], ["call-b", "save", "b"]), textReply("done")];
   const uncut = await run(new ScriptedModel(replies(), CONFIG), { tools: { save: topicTool("save") } });

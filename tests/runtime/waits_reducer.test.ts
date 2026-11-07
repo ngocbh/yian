@@ -344,6 +344,7 @@ describe("node_waiting, node_woken and run_waiting", () => {
       state.inFlight.delete("heard");
       state.acceptedStarts.delete("heard");
       state.nodeStarts.delete("heard");
+      state.nodeStartSeqs.delete("heard");
     });
     expect(() => prepareRunWaiting(state)).toThrow(/waiting node must have a start count/);
   });

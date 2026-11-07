@@ -8,6 +8,7 @@ import {
   type GrantScope,
   grantText,
   parseToolGrants,
+  reachedGroups,
   requestToolSpecs,
   type ToolGrant,
   visibleToolName,
@@ -166,4 +167,18 @@ test("a grant written as a group tool's visible name suggests the group form", (
     "grants unknown tool or group 'github_create_issue'; tool groups in this run: [github, docs]; " +
       "did you mean `{github: [create_issue]}`?",
   );
+});
+
+test("a group grant expands its tools in the order the author lists them", () => {
+  const granted = expandGrants(parseToolGrants([{ github: ["create_issue", "search"] }], "n"), [run]);
+  expect(granted.map((each) => each.visible)).toEqual(["github_create_issue", "github_search"]);
+});
+
+test("the groups grants reach: whole, in group form, or through a bare name, once each, in grant order", () => {
+  const grants = parseToolGrants(["lookup", { github: ["search"] }, "lessons", "create_issue", "docs"], "n");
+  expect(reachedGroups(grants, [local, run])).toEqual([
+    { scope: 1, group: "github" },
+    { scope: 0, group: "lessons" },
+    { scope: 1, group: "docs" },
+  ]);
 });

@@ -156,70 +156,96 @@ export function expandGrants(grants: readonly ToolGrant[], scopes: readonly Gran
   const granted: GrantedTool[] = [];
   const bound = new Set<string>();
   const byVisible = new Map<string, GrantedTool>();
-  const add = (grant: ToolGrant, tool: GrantedTool): void => {
-    const id = JSON.stringify([tool.scope, tool.key]);
-    if (bound.has(id)) return;
-    const other = byVisible.get(tool.visible);
-    if (other !== undefined) {
-      throw new GrantError(
-        `grants ${grantText(grant)}: tools ${reprText(other.visible)} (${placeText(other)}) and ` +
-          `${reprText(tool.visible)} (${placeText(tool)}) have one name; grant one`,
-      );
-    }
-    bound.add(id);
-    byVisible.set(tool.visible, tool);
-    granted.push(Object.freeze(tool));
-  };
-  const member = (scope: number, group: string, tool: string, visible: string): GrantedTool => ({
-    visible,
-    group,
-    tool,
-    scope,
-    key: scopes[scope]!.identity(group, tool),
-  });
   for (const grant of grants) {
-    if (grant.kind === "group") {
-      const at = scopes.findIndex((scope) => scope.group(grant.group) !== null);
-      if (at < 0) throw new GrantError(`grants unknown tool group ${reprText(grant.group)}; ${groupsText(scopes)}`);
-      const members = scopes[at]!.group(grant.group)!;
-      const missing = grant.tools.find((tool) => !members.includes(tool));
-      if (missing !== undefined) {
-        const has = members.length === 0 ? "no tools" : members.join(", ");
-        throw new GrantError(`grants ${grantText(grant)}: \`${grant.group}\` has no tool \`${missing}\`; it has ${has}`);
+    const { scope, group, tools, grouped } = resolveGrant(grant, scopes);
+    for (const name of tools) {
+      const visible = grouped ? visibleToolName(group, name) : name;
+      const tool: GrantedTool = { visible, group, tool: name, scope, key: scopes[scope]!.identity(group, name) };
+      const id = JSON.stringify([tool.scope, tool.key]);
+      if (bound.has(id)) continue;
+      const other = byVisible.get(tool.visible);
+      if (other !== undefined) {
+        throw new GrantError(
+          `grants ${grantText(grant)}: tools ${reprText(other.visible)} (${placeText(other)}) and ` +
+            `${reprText(tool.visible)} (${placeText(tool)}) have one name; grant one`,
+        );
       }
-      for (const tool of grant.tools) add(grant, member(at, grant.group, tool, visibleToolName(grant.group, tool)));
-      continue;
+      bound.add(id);
+      byVisible.set(tool.visible, tool);
+      granted.push(Object.freeze(tool));
     }
-    const name = grant.name;
-    const groupAt = scopes.findIndex((scope) => scope.group(name) !== null);
-    if (groupAt >= 0) {
-      for (const tool of scopes[groupAt]!.group(name)!) add(grant, member(groupAt, name, tool, visibleToolName(name, tool)));
-      continue;
-    }
-    const toolAt = scopes.findIndex((scope) => scope.hasTool(name));
-    if (toolAt >= 0) {
-      add(grant, { visible: name, group: null, tool: name, scope: toolAt, key: scopes[toolAt]!.identity(null, name) });
-      continue;
-    }
-    const holders = scopes.flatMap((scope, at) =>
-      scope.bareMembers ? scope.groupsHolding(name).map((group) => [at, group] as const) : [],
-    );
-    if (holders.length === 0) {
-      const shown = groupToolShownAs(name, scopes);
-      const hint = shown === null ? "" : `; did you mean \`{${shown.group}: [${shown.tool}]}\`?`;
-      throw new GrantError(`grants unknown tool or group ${reprText(name)}; ${groupsText(scopes)}${hint}`);
-    }
-    if (holders.length > 1) {
-      const groups = holders.map(([, group]) => reprText(group));
-      throw new GrantError(
-        `grants ${reprText(name)}: ${reprText(name)} is a tool of groups ${andText(groups)}; ` +
-          `grant one as \`{${holders[0]![1]}: [${name}]}\``,
-      );
-    }
-    const [at, group] = holders[0]!;
-    add(grant, member(at, group, name, name));
   }
   return granted;
+}
+
+/**
+ * Return the groups `grants` reach, once each, in grant order: a group granted whole or in group
+ * form, and the group holding a tool granted by its bare name. Grants resolve as `expandGrants`
+ * resolves them.
+ *
+ * @throws {GrantError} As `expandGrants` throws, but for names that clash.
+ */
+export function reachedGroups(
+  grants: readonly ToolGrant[],
+  scopes: readonly GrantScope[],
+): { readonly scope: number; readonly group: string }[] {
+  const reached = new Map<string, { readonly scope: number; readonly group: string }>();
+  for (const grant of grants) {
+    const { scope, group } = resolveGrant(grant, scopes);
+    if (group !== null) reached.set(JSON.stringify([scope, group]), Object.freeze({ scope, group }));
+  }
+  return [...reached.values()];
+}
+
+/** Where one grant resolves: a scope, the group its tools are in (`null` for a top-level tool), and those tools. */
+interface ResolvedGrant {
+  readonly scope: number;
+  readonly group: string | null;
+  readonly tools: readonly string[];
+  /** Whether the tools show as `<group>_<tool>`: a group granted whole or in group form. */
+  readonly grouped: boolean;
+}
+
+/**
+ * Resolve one grant over `scopes`, as `expandGrants` describes.
+ *
+ * @throws {GrantError} The grant names an unknown tool or group, a tool of two groups by its bare
+ *   name, or a tool its group lacks.
+ */
+function resolveGrant(grant: ToolGrant, scopes: readonly GrantScope[]): ResolvedGrant {
+  if (grant.kind === "group") {
+    const scope = scopes.findIndex((each) => each.group(grant.group) !== null);
+    if (scope < 0) throw new GrantError(`grants unknown tool group ${reprText(grant.group)}; ${groupsText(scopes)}`);
+    const members = scopes[scope]!.group(grant.group)!;
+    const missing = grant.tools.find((tool) => !members.includes(tool));
+    if (missing !== undefined) {
+      const has = members.length === 0 ? "no tools" : members.join(", ");
+      throw new GrantError(`grants ${grantText(grant)}: \`${grant.group}\` has no tool \`${missing}\`; it has ${has}`);
+    }
+    return { scope, group: grant.group, tools: grant.tools, grouped: true };
+  }
+  const name = grant.name;
+  const groupAt = scopes.findIndex((each) => each.group(name) !== null);
+  if (groupAt >= 0) return { scope: groupAt, group: name, tools: scopes[groupAt]!.group(name)!, grouped: true };
+  const toolAt = scopes.findIndex((each) => each.hasTool(name));
+  if (toolAt >= 0) return { scope: toolAt, group: null, tools: [name], grouped: false };
+  const holders = scopes.flatMap((each, at) =>
+    each.bareMembers ? each.groupsHolding(name).map((group) => [at, group] as const) : [],
+  );
+  if (holders.length === 0) {
+    const shown = groupToolShownAs(name, scopes);
+    const hint = shown === null ? "" : `; did you mean \`{${shown.group}: [${shown.tool}]}\`?`;
+    throw new GrantError(`grants unknown tool or group ${reprText(name)}; ${groupsText(scopes)}${hint}`);
+  }
+  if (holders.length > 1) {
+    const groups = holders.map(([, group]) => reprText(group));
+    throw new GrantError(
+      `grants ${reprText(name)}: ${reprText(name)} is a tool of groups ${andText(groups)}; ` +
+        `grant one as \`{${holders[0]![1]}: [${name}]}\``,
+    );
+  }
+  const [scope, group] = holders[0]!;
+  return { scope, group, tools: [name], grouped: false };
 }
 
 /**

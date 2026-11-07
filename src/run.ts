@@ -192,7 +192,7 @@ import {
 import { Skill } from "./skills/catalog.ts";
 import { isAlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
-import { checkVisibleNames, expandGrants, GrantError, type ToolGrant, visibleToolName } from "./tools/grants.ts";
+import { checkVisibleNames, expandGrants, GrantError, reachedGroups, visibleToolName } from "./tools/grants.ts";
 import { RESERVED_TOOL_NAMES, type ToolEntry, type ToolRef, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { type JsonObject, logJson } from "./typesys/json.ts";
@@ -1483,7 +1483,7 @@ function recordedTools(flow: CompiledFlow, tools: ToolSet): Record<string, Recor
     const grants = node.grantedTools();
     for (const granted of expandGrants(grants, tools.scopes())) record({ group: granted.group, name: granted.tool });
     // `tool_groups` lists every tool of a group, so each one is recorded too.
-    for (const group of reachedGroups(grants, tools)) {
+    for (const { group } of reachedGroups(grants, tools.scopes())) {
       for (const name of tools.scope().group(group)!) record({ group, name });
     }
   }
@@ -1498,26 +1498,11 @@ function recordedTools(flow: CompiledFlow, tools: ToolSet): Record<string, Recor
 function recordedToolGroups(flow: CompiledFlow, tools: ToolSet): Record<string, readonly string[]> {
   const recorded = new Map<string, readonly string[]>();
   for (const [, node] of staticNodes(flow)) {
-    for (const group of reachedGroups(node.grantedTools(), tools)) {
+    for (const { group } of reachedGroups(node.grantedTools(), tools.scopes())) {
       recorded.set(group, tools.scope().group(group)!.map((name) => tools.recordName({ group, name })));
     }
   }
   return Object.fromEntries(recorded);
-}
-
-/**
- * Return the run's tool groups `grants` reach, in grant order: a group granted whole or in group
- * form, and the group holding a tool granted by its bare name.
- */
-function reachedGroups(grants: readonly ToolGrant[], tools: ToolSet): string[] {
-  const scope = tools.scope();
-  const groups = grants.flatMap((grant) => {
-    if (grant.kind === "group") return [grant.group];
-    if (scope.group(grant.name) !== null) return [grant.name];
-    if (scope.hasTool(grant.name)) return [];
-    return [...scope.groupsHolding(grant.name)];
-  });
-  return [...new Set(groups)];
 }
 
 /** Return each skill an AGENT of `flow` grants from `skills`, by name. */

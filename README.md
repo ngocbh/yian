@@ -65,6 +65,8 @@ Hello, Ada!
 
 ## Chat with Yian
 
+Yian Chat is the first application built on Yian, serving as a way to dogfood the framework through real-world use. See [CLI](https://github.com/ngocbh/yian/tree/main/src/cli) and [CLI Flows](https://github.com/ngocbh/yian/tree/main/src/cli/flows) for example.
+
 ```console
 $ yian chat
 $ yian chat hello.yaml

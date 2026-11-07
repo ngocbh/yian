@@ -101,6 +101,134 @@ export function authoredGrant(grant: ToolGrant): string | Readonly<Record<string
   return grant.kind === "name" ? grant.name : Object.fromEntries([[grant.group, [...grant.tools]]]);
 }
 
+/** Where grants resolve; `expandGrants` tries scopes in order. */
+export interface GrantScope {
+  /** What the scope is, for messages: `this run`. */
+  readonly label: string;
+  /** Group `name`'s tool names in spec order, or `null` when this scope has no such group. */
+  group(name: string): readonly string[] | null;
+  /** Whether this scope has a top-level tool `name`. */
+  hasTool(name: string): boolean;
+  /** The groups of this scope that hold a tool named `name`, one per distinct tool. */
+  groupsHolding(name: string): readonly string[];
+  /** This scope's group names, in order, for messages. */
+  groupNames(): readonly string[];
+  /** A key equal for two names of one tool: `group` is `null` for a top-level tool. */
+  identity(group: string | null, tool: string): string;
+  /** Whether a bare name may reach a group's tool here (never for memory scopes). */
+  readonly bareMembers: boolean;
+}
+
+/** One granted tool: the name the model sees, the tool it names, and that tool's identity. */
+export interface GrantedTool {
+  /** The name the model sees: `<group>_<tool>` through a group grant, else the tool's own name. */
+  readonly visible: string;
+  /** The group the tool was reached through, or `null` for a top-level tool. */
+  readonly group: string | null;
+  /** The tool's own name in its group, or its top-level name. */
+  readonly tool: string;
+  /** The index of the scope it resolved in. */
+  readonly scope: number;
+  /** The tool's identity in that scope (`GrantScope.identity`). */
+  readonly key: string;
+}
+
+/**
+ * Expand grants over ordered scopes into the tools a model is given, in grant order.
+ *
+ * A bare name is a whole group when a scope has that group (each tool shown as `<group>_<tool>`),
+ * else a scope's top-level tool, else, where the scope allows bare members, the one group tool by
+ * that name, shown under its own name. A group grant takes the tools it lists, in its order, from
+ * the first scope with that group. A tool reached twice is bound once, at its first place and
+ * under that place's name.
+ *
+ * @throws {GrantError} A name is unknown, or a tool of two groups; a group grant names a group no
+ *   scope has, or a tool its group lacks; or two different tools would show one name. The message
+ *   starts with `grants`, so a caller prefixes the node (`AGENT node 'a' grants ...`).
+ */
+export function expandGrants(grants: readonly ToolGrant[], scopes: readonly GrantScope[]): GrantedTool[] {
+  const granted: GrantedTool[] = [];
+  const bound = new Set<string>();
+  const byVisible = new Map<string, GrantedTool>();
+  const add = (grant: ToolGrant, tool: GrantedTool): void => {
+    const id = JSON.stringify([tool.scope, tool.key]);
+    if (bound.has(id)) return;
+    const other = byVisible.get(tool.visible);
+    if (other !== undefined) {
+      throw new GrantError(
+        `grants ${grantText(grant)}: tools ${reprText(other.visible)} (${placeText(other)}) and ` +
+          `${reprText(tool.visible)} (${placeText(tool)}) have one name; grant one`,
+      );
+    }
+    bound.add(id);
+    byVisible.set(tool.visible, tool);
+    granted.push(Object.freeze(tool));
+  };
+  const member = (scope: number, group: string, tool: string, visible: string): GrantedTool => ({
+    visible,
+    group,
+    tool,
+    scope,
+    key: scopes[scope]!.identity(group, tool),
+  });
+  for (const grant of grants) {
+    if (grant.kind === "group") {
+      const at = scopes.findIndex((scope) => scope.group(grant.group) !== null);
+      if (at < 0) throw new GrantError(`grants unknown tool group ${reprText(grant.group)}; ${groupsText(scopes)}`);
+      const members = scopes[at]!.group(grant.group)!;
+      const missing = grant.tools.find((tool) => !members.includes(tool));
+      if (missing !== undefined) {
+        throw new GrantError(
+          `grants ${grantText(grant)}: \`${grant.group}\` has no tool \`${missing}\`; it has ${members.join(", ")}`,
+        );
+      }
+      for (const tool of grant.tools) add(grant, member(at, grant.group, tool, visibleToolName(grant.group, tool)));
+      continue;
+    }
+    const name = grant.name;
+    const groupAt = scopes.findIndex((scope) => scope.group(name) !== null);
+    if (groupAt >= 0) {
+      for (const tool of scopes[groupAt]!.group(name)!) add(grant, member(groupAt, name, tool, visibleToolName(name, tool)));
+      continue;
+    }
+    const toolAt = scopes.findIndex((scope) => scope.hasTool(name));
+    if (toolAt >= 0) {
+      add(grant, { visible: name, group: null, tool: name, scope: toolAt, key: scopes[toolAt]!.identity(null, name) });
+      continue;
+    }
+    const holders = scopes.flatMap((scope, at) =>
+      scope.bareMembers ? scope.groupsHolding(name).map((group) => [at, group] as const) : [],
+    );
+    if (holders.length === 0) throw new GrantError(`grants unknown tool or group ${reprText(name)}; ${groupsText(scopes)}`);
+    if (holders.length > 1) {
+      const groups = holders.map(([, group]) => reprText(group));
+      throw new GrantError(
+        `grants ${reprText(name)}: ${reprText(name)} is a tool of groups ${andText(groups)}; ` +
+          `grant one as \`{${holders[0]![1]}: [${name}]}\``,
+      );
+    }
+    const [at, group] = holders[0]!;
+    add(grant, member(at, group, name, name));
+  }
+  return granted;
+}
+
+/** Return where a granted tool comes from, for a message: `tool x` or `github's search`. */
+function placeText(tool: GrantedTool): string {
+  return tool.group === null ? `tool ${tool.tool}` : `${tool.group}'s ${tool.tool}`;
+}
+
+/** Return the scopes' group names for a message: `tool groups in this run: [a, b]`. */
+function groupsText(scopes: readonly GrantScope[]): string {
+  const where = scopes.length === 1 ? `in ${scopes[0]!.label}` : "here";
+  return `tool groups ${where}: [${scopes.flatMap((scope) => scope.groupNames()).join(", ")}]`;
+}
+
+/** Join items as `a`, `a and b`, or `a, b and c`. */
+function andText(items: readonly string[]): string {
+  return items.length < 2 ? items.join("") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)!}`;
+}
+
 /** Return a YAML value in flow style, for a message: `x`, `[x, y]`, `{a: [x]}`. */
 function flowText(value: unknown): string {
   if (typeof value === "string") return value === "" ? "''" : value;

@@ -60,7 +60,6 @@ A flow file is a mapping of these top-level keys:
 | `system` | no | `paths:`, a list of folders, relative to this file, where `uses:` also looks after this file's folder |
 | `llm_config` | no | Model defaults for every agent (see [Models and providers](/models/)) |
 | `env` | no | Settings for every node in this flow, such as an agent's `max_tool_iterations`; a child flow doesn't inherit them (see [Agents](/agents/)) |
-| `long_term_memory` | no | Long-term memory for the flow's agents (see [Agents](/agents/)) |
 
 Any other key is a load error, so a typo such as `nodez:` fails loudly. Keys that start with
 `x-` are the exception: yian ignores them, so use them for notes or to hold YAML anchors.

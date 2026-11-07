@@ -561,8 +561,8 @@ loud:
   `input:`. `${system.today}`, `${system.now}` and `${system.run_id}` work everywhere.
 - Each input's type is inferred from its binding. When it can't be proven, such as for an empty
   list, the load fails; add a tag (`seen: !list(int) []`) or use a `defs:` entry.
-- `env:` and the loop driver stay on the outer node. An inline body has no `long_term_memory:`,
-  `llm_config:` or flow `asserts:`; use a `defs:` entry when it needs them.
+- `env:` and the loop driver stay on the outer node. An inline body has no `llm_config:` or flow
+  `asserts:`; use a `defs:` entry when it needs them.
 
 ## Nesting limit
 

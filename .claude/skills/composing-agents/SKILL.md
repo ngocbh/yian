@@ -83,7 +83,7 @@ output:
 
 | Kind | Use it for | Page |
 |---|---|---|
-| `agent` | A model call, with optional tools, skills, steering and memory | [Agents](https://yian.readthedocs.io/agents/) |
+| `agent` | A model call, with optional tools, skills and steering | [Agents](https://yian.readthedocs.io/agents/) |
 | `code` | A TypeScript or JavaScript body, or a `./file.ts:fn` export | [Code and tools](https://yian.readthedocs.io/code-and-tools/) |
 | `tool` | A host tool, or the built-ins `ask`, `take` and `sleep` | [Code and tools](https://yian.readthedocs.io/code-and-tools/), [Inboxes and waiting](https://yian.readthedocs.io/inboxes/) |
 | `case` | Take one branch, skip the others | [Control flow](https://yian.readthedocs.io/control-flow/) |
@@ -218,8 +218,7 @@ output:
   request body: `anthropic: {max_tokens: 8000}`, `openai: {reasoning: {effort: high}}`. See [Models
   and providers](https://yian.readthedocs.io/models/).
 - **No `session` memory.** Carry a conversation as a `loop` field and compact it with a `call`;
-  see `templates/chat.yaml`. Long-term memory types are `episodic`, `reflective` and `profile`
-  ([Learning](https://yian.readthedocs.io/learning/)).
+  see `templates/chat.yaml`. `long_term_memory:` was removed: it is a load error.
 
 ### Waiting: `ask`, `take`, `sleep`
 

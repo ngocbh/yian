@@ -36,8 +36,8 @@ folder, so copy those too.
 
 Top-level keys ([Flows and nodes](https://yian.readthedocs.io/flows/#the-file-shape)): `id` and
 `name` (required), `description`, `version`, `typedefs`, `input`, `nodes` (required), `output`,
-`asserts`, `defs`, `uses`, `system` (`paths:` for `uses:`), `llm_config`, `env`,
-`long_term_memory`. Any other key is a load error, except `x-` keys, which yian ignores.
+`asserts`, `defs`, `uses`, `system` (`paths:` for `uses:`), `llm_config`, `env`. Any other key is
+a load error, except `x-` keys, which yian ignores.
 
 | Flow `output:` | Returns |
 |---|---|
@@ -55,8 +55,7 @@ Fields every node takes: `kind`, `input` (not on `case`), `asserts` (not on `cas
 list of messages), `system_prompt` (replaces the default instruction), `variables` (tagged
 values the prompts read, such as `tone: !str plain`), `output`, `retries`, `tools` (tool and
 group names, or `{group: [tool, ...]}`; a group's tools show as `<group>_<tool>`), `skills`
-(names or `all`), `steer_inbox`, `long_term_memory`, `llm_config`, `env`
-(`max_tool_iterations`).
+(names or `all`), `steer_inbox`, `llm_config`, `env` (`max_tool_iterations`).
 
 **code** ([Code and tools](https://yian.readthedocs.io/code-and-tools/)): `code` (an inline body
 or `./file.ts:fn`), `input`, `output`. The body reads `inputs.<name>` and returns a value.

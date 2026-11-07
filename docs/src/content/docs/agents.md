@@ -1,6 +1,6 @@
 ---
 title: "Agents"
-description: "Agent nodes: prompts, models, tools, structured output, steering and memory."
+description: "Agent nodes: prompts, models, tools, structured output and steering."
 ---
 
 This page explains `agent` nodes, the steps that call a model. You write the prompt and the
@@ -47,7 +47,6 @@ again until it gives a final answer.
 | `tools` | The tools the model may call: tools and tool groups by name, or `{group: [tool, ...]}` |
 | `skills` | Skill names, or `all` |
 | `steer_inbox` | An `Inbox` input whose messages steer the agent while it runs |
-| `long_term_memory` | Memories the agent recalls and learns into |
 | `llm_config` | Provider, model and request settings (see [Models and providers](/models/)) |
 | `env` | `max_tool_iterations`, the tool loop's turn cap |
 
@@ -348,28 +347,5 @@ and [Embedding yian](/embedding/).
 
 ## Memory
 
-`long_term_memory:` gives an agent, or a whole flow, memories that last across runs. Each entry
-names a memory and its type: `episodic`, `reflective` or `profile`.
-
-```yaml
-id: support
-name: support
-long_term_memory:
-  notes: episodic
-input:
-  ticket: !str
-nodes:
-  answer:
-    kind: agent
-    input:
-      ticket: ${input.ticket}
-    long_term_memory:
-      lessons: reflective
-    prompt: Answer this support ticket. ${ticket}
-    output: str
-output: ${answer.output}
-```
-
-Before its first model call, the agent recalls its memories, the flow's first, then its own,
-into its system message. Memories learn only when the host runs the backward pass after the
-run. See [Learning](/learning/) for the memory types, feedback and storage.
+`long_term_memory:` was removed and is now a load error. Declare a memory as a flow input
+(`lessons: !FileMemory`) and render it in a prompt (`${lessons}`).

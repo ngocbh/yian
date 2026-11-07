@@ -21,8 +21,6 @@ adds a step.
   fit fails before it calls a model.
 - **An append-only run log.** Each step is logged before it's applied, so a run resumes after a
   crash or a wait, and you can read what happened afterwards.
-- **Learning across runs.** Feedback on a run becomes lessons in the flow's memory, which agents
-  recall into their prompts on later runs.
 
 ## Goals and non-goals
 
@@ -85,12 +83,11 @@ flowchart LR
 | Learn the shape of a flow file | [Flows and nodes](/flows/) |
 | Write `${...}` values | [Expressions](/expressions/) |
 | Declare input and output types | [Types](/types/) |
-| Give an agent tools, skills and memory | [Agents](/agents/) |
+| Give an agent tools and skills | [Agents](/agents/) |
 | Run your own code in a step | [Code and tools](/code-and-tools/) |
 | Choose and log in to a model provider | [Models and providers](/models/) |
 | Branch, loop and call other flows | [Control flow](/control-flow/) |
 | Wait for messages, answers and time | [Inboxes and waiting](/inboxes/) |
-| Improve a flow from feedback | [Learning](/learning/) |
 | Look up a `yian` command | [CLI](/cli/) |
 | Run flows from your own TypeScript program | [Embedding yian](/embedding/) |
 | See how runs are logged and resumed | [How yian works](/how-it-works/) |

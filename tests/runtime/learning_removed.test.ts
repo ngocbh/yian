@@ -1,7 +1,7 @@
 /**
  * Learning and the old memories are gone: a run result has no backward pass, the removed options are
  * refused by name, the backward and memory commit records are unknown kinds, `run_started` holds no
- * memory state, and no node has a backward hook.
+ * memory state, the package root exports no old memory name, and no node has a backward hook.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -119,6 +119,20 @@ test.each([Node, AgentNode, EndNode, StartNode, LoopNode, CaseNode].map((cls) =>
     }
   },
 );
+
+test("the package root has none of the old memory names", async () => {
+  const root = await import("../../src/index.ts");
+  for (const name of [
+    "buildMemories",
+    "ProfileMemory",
+    "SQLiteStorage",
+    "MarkdownStore",
+    "FileMarkdownStore",
+    "MarkdownVersionMismatch",
+  ]) {
+    expect(name in root).toBe(false);
+  }
+});
 
 test("a node's declared inputs, without reserved wiring, are its dataInputNames", () => {
   expect(typeof Node.prototype.dataInputNames).toBe("function");

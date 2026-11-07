@@ -16,9 +16,6 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { ProfileMemory } from "../../src/memory/profile.ts";
-import { ReflectiveMemory } from "../../src/memory/reflective.ts";
-import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import type { CallNode } from "../../src/nodes/call/node.ts";
 import { advance, runFlow } from "../../src/run.ts";
@@ -72,16 +69,6 @@ const env = envWith();
 /** The effective LLM configs the log at `path` records at the run's start. */
 function effective(path: string): Record<string, any> {
   return JSON.parse(readFileSync(path, "utf8").split("\n")[0]!).payload["effective_llm_by_static_path"];
-}
-
-/** Return the error `fn` throws; fails the test when it returns. */
-function thrown(fn: () => unknown): Error {
-  try {
-    fn();
-  } catch (error) {
-    return error as Error;
-  }
-  throw new Error("expected a throw");
 }
 
 /** A model access whose builds answer `ok` and record their configs. */
@@ -458,22 +445,6 @@ test("a def level azure endpoint reaches its body", async () => {
   expect(effective(path)["child/nested"]["base_url"]).toBe(AZURE_RESOURCE);
 });
 
-test("memories take a keyless azure endpoint", () => {
-  const config = { provider: "azure", model: "d", base_url: AZURE_RESOURCE };
-  expect(new ReflectiveMemory({ llmConfig: { ...config }, env })["llmConfig"]).toEqual(config);
-  const profile = new ProfileMemory(new FileMarkdownStore(join(fresh(), "ada.md")), { llmConfig: { ...config }, env });
-  expect(profile["llmConfig"]).toEqual(config);
-  expect([profile["host"].apiKey, profile["host"].baseUrl]).toEqual([null, null]);
-});
-
-test("profile memory keeps a keyless azure endpoint beside empty headers", () => {
-  const config = { provider: "azure", model: "d", base_url: AZURE_RESOURCE };
-  const llmConfig = { ...config, headers: {} };
-  const profile = new ProfileMemory(new FileMarkdownStore(join(fresh(), "ada.md")), { llmConfig, env });
-  expect(profile["llmConfig"]).toEqual(config);
-  expect([profile["host"].apiKey, profile["host"].baseUrl, profile["host"].headers]).toEqual([null, null, null]);
-});
-
 // ---- resume reuses the recorded base_url ----
 
 /** Leave at `path` the log of a run of `FLOW` the host stopped before the model call. */
@@ -569,29 +540,3 @@ test("a recorded base url must match the host connection", async () => {
   expect(result.failure!.message).toContain("host connection endpoint");
   expect(models.requests).toEqual([]);
 });
-
-// ---- memory learners ----
-
-test("reflective memory refuses a base url without its key", () => {
-  // Reflective memory refuses api_key, so it can never send one to a base_url.
-  const error = thrown(() => new ReflectiveMemory({ llmConfig: { provider: "vllm", model: "m", base_url: ELSEWHERE }, env }));
-  expect(error).toBeInstanceOf(RangeError);
-  expect(error.message).toContain("base_url");
-});
-
-test("profile memory needs its key beside its base url", () => {
-  const store = new FileMarkdownStore(join(fresh(), "ada.md"));
-  let error = thrown(() => new ProfileMemory(store, { llmConfig: { provider: "vllm", base_url: ELSEWHERE }, env }));
-  expect(error).toBeInstanceOf(RangeError);
-  expect(error.message).toContain("api_key");
-  error = thrown(
-    () =>
-      new ProfileMemory(store, {
-        llmConfig: { provider: "vllm", base_url: "http://collector.example.com", api_key: SENTINEL },
-        env,
-      }),
-  );
-  expect(error).toBeInstanceOf(RangeError);
-  expect(error.message).toContain("https");
-});
-

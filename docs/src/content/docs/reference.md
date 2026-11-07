@@ -82,16 +82,6 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MODEL_FIRST_RESPONSE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds from sending a model request to the first bytes of its response |
 | `YIAN_MODEL_IDLE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds between bytes of a streamed model response |
 | `YIAN_REQUEST_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for a short request (model listing, sign-in calls) |
-| `YIAN_EPISODIC_MAX_EPISODES` | setting | 100 | 1 or more | Episodes an episodic memory keeps when it sets no limit |
-| `YIAN_EPISODIC_RECALL_LIMIT` | setting | 10 | 1 or more | Episodes an episodic memory recalls when it sets no limit |
-| `YIAN_REFLECTIVE_MAX_ITEMS` | setting | 100 | 1 or more | Lessons a reflective memory keeps when it sets no limit |
-| `YIAN_REFLECTIVE_RECALL_LIMIT` | setting | 20 | 1 or more | Lessons a reflective memory recalls when it sets no limit |
-| `YIAN_REFLECTIVE_MAX_LESSON_CHARS` | setting | 8,000 | 256 or more | Characters of current lessons shown to the reflection model |
-| `YIAN_REFLECTIVE_MAX_EPISODE_CHARS` | setting | 20,000 | 256 or more | Characters of the episode shown to the reflection model |
-| `YIAN_REFLECTIVE_MAX_LIMIT_CHARS` | setting | 256 | 256 or more | Characters of the memory limits shown to the reflection model |
-| `YIAN_PROFILE_MAX_CHARS` | setting | 32,000 | 1 or more | Characters a profile memory may hold |
-| `YIAN_PROFILE_INPUT_BUDGET_CHARS` | setting | 24,000 | 1 or more | Characters of run material sent to a profile memory's learner |
-| `YIAN_PROFILE_LOCK_TIMEOUT_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds for another writer to release a profile memory's `.lock` file |
 | `YIAN_MAX_AUTH_RESPONSE_BYTES` | input cap | 1,048,576 | 1 or more | Largest response body read from a sign-in server |
 | `YIAN_MAX_AUTH_STORE_BYTES` | input cap | 1,048,576 | 1 or more | Largest auth store file read or written |
 | `YIAN_MAX_OAUTH_CALLBACK_BYTES` | input cap | 16,384 | 1 or more | Largest request header block read from the sign-in callback |
@@ -115,8 +105,6 @@ An entry whose valid values say "can only be lowered" has its default as its max
 - TOOL retries wait `YIAN_TOOL_RETRY_DELAY_SECONDS`, then twice that, and so on, up to
   `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS`. Each wait is picked at random between half and all of its
   step.
-- An episodic or reflective memory records its limits in its store, so its defaults apply only to
-  a store that has none yet.
 
 ## Environment variables
 

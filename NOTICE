@@ -46,12 +46,8 @@ generated from CPython 3.12.14's str.isprintable) and ports
 difflib.get_close_matches and the parts of difflib.SequenceMatcher it uses, from
 CPython 3.12 (https://github.com/python/cpython), changed as follows: written in
 TypeScript; strings handled as arrays of code points; ties between equal scores
-broken by UTF-16 code units; no junk function. src/memory/storage/sqlite.ts
-ports posixpath's join, split, normpath, _joinrealpath and realpath (as
-realStoragePath) from CPython 3.12's Lib/posixpath.py, changed as follows:
-written in TypeScript; str paths only; realpath with strict=False only. CPython
-carries the following copyright notice and is distributed under the following
-license:
+broken by UTF-16 code units; no junk function. CPython carries the following
+copyright notice and is distributed under the following license:
 
 Copyright (c) 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010,
 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023 Python Software Foundation;

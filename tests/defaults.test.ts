@@ -107,19 +107,13 @@ describe("the table", () => {
 
   test("variable names are prefixed and do not collide", () => {
     const taken = ["YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL", "YIAN_AUTH_FILE"];
-    const owners = ["MAX", "AGENT", "TOOL", "MCP", "MODEL", "REQUEST", "EPISODIC", "REFLECTIVE", "SESSION", "PROFILE"];
+    const owners = ["MAX", "AGENT", "TOOL", "MCP", "MODEL", "REQUEST", "SESSION"];
     for (const entry of ENTRIES) {
       expect(entry.name).toMatch(/^[A-Z]+(?:_[A-Z]+)+$/);
       expect(owners).toContain(entry.name.split("_")[0]!);
       expect(entry.variable).toBe("YIAN_" + entry.name);
       expect(taken).not.toContain(entry.variable);
       expect(entry.name.startsWith("DEFAULT_")).toBe(false);
-    }
-  });
-
-  test("reflective budgets have a floor of 256", () => {
-    for (const name of ["REFLECTIVE_MAX_LESSON_CHARS", "REFLECTIVE_MAX_EPISODE_CHARS", "REFLECTIVE_MAX_LIMIT_CHARS"]) {
-      expect(entryNamed(name).minimum).toBe(256);
     }
   });
 });

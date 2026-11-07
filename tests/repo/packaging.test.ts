@@ -24,7 +24,6 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { LICENSES } from "../../src/cli/licenses.ts";
-import type { MarkdownStore } from "../../src/index.ts";
 import { AuthStore } from "../../src/llm_clients/auth/index.ts";
 import type {
   AuthRequest,
@@ -108,13 +107,6 @@ const NAMES: Record<string, string[]> = {
     "ReportedToolError",
     "ToolAttemptsFailed",
     "registerTemplateFn",
-    "SQLiteStorage",
-    "checkStoragePath",
-    "FileMarkdownStore",
-    "InMemoryMarkdownStore",
-    "MarkdownVersionMismatch",
-    "markdownVersion",
-    "ProfileMemory",
     "checkMessage",
     "checkConversation",
     "ConversationError",
@@ -354,7 +346,6 @@ describe("entry points", () => {
       JsonValue?,
       JsonObject?,
       JsonMode?,
-      MarkdownStore?,
       FileLock?,
       FileLockReason?,
       Sqlite?,

@@ -16,15 +16,6 @@ import * as events from "../../src/events.ts";
 import { registerTemplateFn } from "../../src/expr/builtins.ts";
 import { ExpressionError, evaluateWhen } from "../../src/expr/expressions.ts";
 import * as yian from "../../src/index.ts";
-import { ProfileMemory } from "../../src/memory/profile.ts";
-import {
-  FileMarkdownStore,
-  InMemoryMarkdownStore,
-  type MarkdownStore,
-  MarkdownVersionMismatch,
-  markdownVersion,
-} from "../../src/memory/storage/markdown.ts";
-import { checkStoragePath, SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
 import { checkConversation, checkMessage, ConversationError } from "../../src/nodes/agent/messages.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import * as base from "../../src/nodes/base.ts";
@@ -135,7 +126,7 @@ test("only the final log-only runtime and run API remain", () => {
   expect(Object.getOwnPropertyNames(run.RunResult.prototype)).toEqual(["constructor"]);
 });
 
-test("the package root exports exactly its documented root list plus the memory storage names, ProfileMemory, ToolAttemptsFailed, pending, the message names, InboxRef and the host calls", () => {
+test("the package root exports exactly its documented root list plus ToolAttemptsFailed, pending, the message names, InboxRef and the host calls", () => {
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,
@@ -149,13 +140,6 @@ test("the package root exports exactly its documented root list plus the memory 
     pendingCalls: run.pendingCalls,
     RunBusyError: run.RunBusyError,
     DeliveryRefused: run.DeliveryRefused,
-    SQLiteStorage,
-    checkStoragePath,
-    FileMarkdownStore,
-    InMemoryMarkdownStore,
-    MarkdownVersionMismatch,
-    markdownVersion,
-    ProfileMemory,
     Failure,
     Diagnostic,
     ComposedFlow,
@@ -183,8 +167,6 @@ test("the package root exports exactly its documented root list plus the memory 
   const exported = yian as Record<string, unknown>;
   expect(Object.keys(expected).filter((name) => exported[name] !== expected[name])).toEqual([]);
   // The type export, checked by `tsc`.
-  const store: yian.MarkdownStore = new InMemoryMarkdownStore() satisfies MarkdownStore;
-  expect(store).toBeInstanceOf(InMemoryMarkdownStore);
   const m: yian.Message = { role: "user", parts: [] };
   expect(m.parts).toEqual([]);
 });

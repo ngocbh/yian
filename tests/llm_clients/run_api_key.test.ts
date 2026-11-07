@@ -4,7 +4,7 @@
  * each value as `inspect` shows it and as `plain`'s JSON.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { inspect } from "node:util";
@@ -16,9 +16,6 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import type { Env } from "../../src/defaults.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { ProfileMemory } from "../../src/memory/profile.ts";
-import { ReflectiveMemory } from "../../src/memory/reflective.ts";
-import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 import { advance, runFlow } from "../../src/run.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
 import {
@@ -360,38 +357,6 @@ test("host key marker is not an authored option", async () => {
   expect(error).toBeInstanceOf(LoadError);
   expect(error.message).toContain("_host_key");
 });
-
-test("reflective memory refuses a key it would record", () => {
-  const error = thrown(() => new ReflectiveMemory({ llmConfig: { provider: "vllm", model: "m", api_key: SENTINEL }, env }));
-  expect(error).toBeInstanceOf(RangeError);
-  expect(error.message).toContain("api_key");
-  expect(error.message).not.toContain(SENTINEL);
-});
-
-test("profile memory needs a provider with its key", () => {
-  const store = new FileMarkdownStore(join(fresh(), "ada.md"));
-  for (const llmConfig of [{ api_key: SENTINEL }, { model: "profiler", api_key: SENTINEL }] as Record<string, string>[]) {
-    const error = thrown(() => new ProfileMemory(store, { llmConfig, env }));
-    expect(error).toBeInstanceOf(RangeError);
-    expect(error.message).toContain("provider");
-    expect(error.message).not.toContain(SENTINEL);
-  }
-  const error = thrown(() => new ProfileMemory(store, { llmConfig: { provider: "vllm", api_key: "" }, env }));
-  expect(error).toBeInstanceOf(RangeError);
-  expect(error.message).toContain("api_key");
-  const memory = new ProfileMemory(store, { llmConfig: { provider: "vllm", api_key: SENTINEL }, env });
-  expect(inspect(memory, { depth: null })).not.toContain(SENTINEL);
-});
-
-/** Return the error `fn` throws; fails the test when it returns. */
-function thrown(fn: () => unknown): Error {
-  try {
-    fn();
-  } catch (error) {
-    return error as Error;
-  }
-  throw new Error("expected a throw");
-}
 
 const REJECTED_KEY = "sk-sentinel-401-zqxw";
 const REJECTED_FRAGMENTS = [REJECTED_KEY, REJECTED_KEY.slice(0, 8), `*${REJECTED_KEY.slice(-4)}`];

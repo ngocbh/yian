@@ -17,8 +17,6 @@ import type { Env } from "../../src/defaults.ts";
 import { NodeStarted, type RunEvent } from "../../src/events.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { type HostConnection, popHostCredentials } from "../../src/llm_clients/config.ts";
-import { ProfileMemory } from "../../src/memory/profile.ts";
-import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
 import type { AgentNode } from "../../src/nodes/agent/node.ts";
 import { checkRecordedLlmFields, advance, runFlow } from "../../src/run.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
@@ -245,26 +243,6 @@ test("a run with settings beside its key records no header value", async () => {
   expect(models.configs.map((config) => config["model"])).toEqual(["gpt-5.4"]);
   expect(readFileSync(path, "utf8")).not.toContain(HEADER_VALUE);
   expect(readFileSync(path, "utf8")).not.toContain(SENTINEL);
-});
-
-test("profile memory keeps the settings beside its key", () => {
-  const store = new FileMarkdownStore(join(fresh(), "ada.md"));
-  const memory = new ProfileMemory(store, {
-    llmConfig: { ...KEYED, organization: "org-abc", project: "proj-abc", headers: { "X-Gateway": HEADER_VALUE } },
-    env,
-  });
-  expect(memory["llmConfig"]).toEqual({ provider: "openai", model: "gpt-5.4" });
-  const host = memory["host"];
-  expect([host.organization, host.project]).toEqual(["org-abc", "proj-abc"]);
-  expect(host.headers!["X-Gateway"]).toBe(HEADER_VALUE);
-  expect(host.apiKey).toBe(SENTINEL);
-});
-
-test("profile memory needs its key beside the settings", () => {
-  const store = new FileMarkdownStore(join(fresh(), "ada.md"));
-  const error = thrown(() => new ProfileMemory(store, { llmConfig: { provider: "openai", organization: "org-abc" }, env }));
-  expect(error).toBeInstanceOf(RangeError);
-  expect(error.message).toContain("api_key");
 });
 
 // ---- the run records the settings without secrets and binds the values ----

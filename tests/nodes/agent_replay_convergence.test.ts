@@ -274,10 +274,11 @@ function cutPoints(records: readonly RecordEnvelope[], from: number): number[] {
 /** Check a finished scenario's invariants; `label` names it in failures. */
 function checkEnd(label: string, kinds: readonly Kind[], end: World, result: RunResult): void {
   expect(result.status, `${label}: ${result.failure?.message}`).toBe("succeeded");
-  const steps = decoded(end.log!).flatMap((envelope) => {
+  const writer = decoded(end.log!).flatMap((envelope) => {
     const step = writerStep(envelope);
-    return step !== null && step["kind"] === "tool_result" ? [step] : [];
+    return step === null ? [] : [step];
   });
+  const steps = writer.filter((step) => step["kind"] === "tool_result");
   const interrupted = end.interruptAt !== null;
   expect(result.output, label).toBe(interrupted ? null : "done");
   for (const [index, kind] of kinds.entries()) {
@@ -289,9 +290,15 @@ function checkEnd(label: string, kinds: readonly Kind[], end: World, result: Run
     if (end.invoked.some((each) => each.index === index)) expect(closed, `${label}: c${index} ran`).not.toBe("skipped");
     if (!interrupted) {
       expect(closed, `${label}: c${index} without an interrupt`).not.toBe("skipped");
-      // A pended call a resume closes ends `crashed`.
       if (KINDS[kind].resumable && !KINDS[kind].pends) expect(closed, `${label}: c${index} is resumable`).toBeUndefined();
       else if (!KINDS[kind].resumable) expect(end.invoked.filter((each) => each.index === index).length, `${label}: c${index} runs once`).toBeLessThanOrEqual(1);
+      else if (closed !== undefined) {
+        // A resumable call that pends is closed only once it pended and a resume closed its call:
+        // one cut before its pending step is sent again.
+        expect(closed, `${label}: c${index} waits, closed`).toBe("crashed");
+        const pended = writer.filter((step) => step["kind"] === "pending" && String(step["call_id"]).endsWith(`/${index}`));
+        expect(pended.length, `${label}: c${index} crashed with no pending step`).toBe(1);
+      }
     }
   }
   // Once the interrupt is pending, only calls that had run before it run.

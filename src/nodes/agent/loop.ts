@@ -563,6 +563,14 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
  * before its result), the closer written as its `tool_result` step, and never runs. Unparsed calls
  * are not in `turn.calls`, so they get nothing, as live.
  *
+ * With a host interrupt pending, only the calls that may have started are sent again or closed:
+ * those of the group that was running at the cut, the first group holding a call with neither a
+ * result nor a pending step. Live, a later group starts only once that one settles, so its calls
+ * never started, and they are skipped from the first one on (`skipFrom`), as live skips them. The
+ * groups are formed as live forms them: a call that ran with a recorded result belongs to the
+ * running group, and an unrecorded call joins it only when it and the group's first unrecorded
+ * call are both safe to run together.
+ *
  * @returns Whether a host interrupt skipped calls of this reply when it was live (a recorded
  *   `skipped` result): the loop ends as it did then.
  * @throws A stop's reason, a failed check's error (`failCall`), or what a call sent again throws
@@ -570,6 +578,8 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
  */
 async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
   const { steps } = turn;
+  // The group running at the cut: not reached yet, still taking safe calls, or ended.
+  let running: "ahead" | "open" | "ended" = "ahead";
   for (const [index, call] of turn.calls.entries()) {
     checkNodeStopped(turn);
     let result = steps.recordedResult(turn.n, call.id);
@@ -583,6 +593,12 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       if (callId !== undefined && view?.state === "open") {
         turn.pended.set(index, callId);
         continue;
+      }
+      if (view === undefined) {
+        // Neither a result nor a pending step: the call was cut off, or its group never started.
+        const joins: boolean = running === "ahead" || (running === "open" && check.safe);
+        if (!joins && turn.interrupt?.aborted) return skipFrom(turn, index);
+        running = joins && check.safe ? "open" : "ended";
       }
       if (view === undefined && check.planned.resumable) {
         await resendCall(turn, check.planned);
@@ -844,8 +860,8 @@ async function runGroup(
 /**
  * Send again one call a crash or a stop cut off, as a group of its own: its started and finished
  * events, its `tool_result` step (or its `pending` step) and its tool message, a reported error as
- * the call's result, as live. A pending host interrupt doesn't skip it, since the call may have
- * started before the cut; the loop honors the interrupt afterwards.
+ * the call's result, as live. The replay sends again only a call that may have started before the
+ * cut, so a pending host interrupt doesn't skip it; the loop honors the interrupt afterwards.
  *
  * @throws As `runGroup` throws.
  */

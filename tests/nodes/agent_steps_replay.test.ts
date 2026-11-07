@@ -1246,6 +1246,77 @@ test("a resumable tool's call whose argument check reported an error gets the sa
   expect(comparable(log)).toEqual(comparable(uncut.log));
 });
 
+/** A model whose agent's interrupt on `notes` lands at the resume, before the replay. */
+function interruptedAtResume(log: string, model: ScriptedModel): ModelAccess {
+  const base = serving(model);
+  // The agent opens its steer inbox, then builds its model: the interrupt lands before the replay.
+  return { ...base, createModel: (config: Readonly<Record<string, unknown>>, opts: never) => (interruptAt(log), base.createModel(config, opts)) };
+}
+
+test("with an interrupt pending, a resume sends again only the cut-off group, and skips the later calls", async () => {
+  const flow = flowText(["save"], { steerInbox: true, output: "Optional(str)" });
+  const ran: string[] = [];
+  const tools = { save: topicTool("save", { resumable: true, log: ran }) };
+  const replies = () => [calls(["c1", "save", "a"], ["c2", "save", "b"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools });
+  ran.length = 0;
+  // `save a` ran; the crash cut its result, and `save b`, a later group, never started.
+  const log = await cutRun(afterCall(uncut.log), new ScriptedModel(replies(), CONFIG), { flow, tools });
+  expect(ran).toEqual(["save a"]);
+  const model = new ScriptedModel([], CONFIG);
+  const resumed = await resume(log, model, { tools, models: interruptedAtResume(log, model) });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBeNull();
+  expect(model.requests.length).toBe(0);
+  expect(ran).toEqual(["save a", "save a"]);
+  expect(toolResults(log)).toEqual([
+    { call_id: "c1", output: "save:a", is_error: false },
+    { call_id: "c2", output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" },
+  ]);
+  expect(steps(log).map((step) => step["kind"])).toEqual(["model_call", "tool_result", "tool_result", "interrupted"]);
+});
+
+test("with an interrupt pending, the cut-off group's safe calls are all sent again before the skip", async () => {
+  const flow = flowText(["look", "save"], { steerInbox: true, output: "Optional(str)" });
+  const ran: string[] = [];
+  const tools = {
+    look: topicTool("look", { safe: true, resumable: true, log: ran }),
+    save: topicTool("save", { resumable: true, log: ran }),
+  };
+  const replies = () => [calls(["c1", "look", "a"], ["c2", "look", "b"], ["c3", "save", "c"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools });
+  ran.length = 0;
+  // Both `look` calls ran together; the crash cut their results, and `save c` never started.
+  const log = await cutRun(afterCall(uncut.log), new ScriptedModel(replies(), CONFIG), { flow, tools });
+  expect(ran).toEqual(["look a", "look b"]);
+  const model = new ScriptedModel([], CONFIG);
+  const resumed = await resume(log, model, { tools, models: interruptedAtResume(log, model) });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBeNull();
+  expect(ran).toEqual(["look a", "look b", "look a", "look b"]);
+  expect(toolResults(log)).toEqual([
+    { call_id: "c1", output: "look:a", is_error: false },
+    { call_id: "c2", output: "look:b", is_error: false },
+    { call_id: "c3", output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" },
+  ]);
+});
+
+test("without an interrupt, a resume sends the cut-off call again and then the later group's, in order", async () => {
+  const ran: string[] = [];
+  const tools = { save: topicTool("save", { resumable: true, log: ran }) };
+  const replies = () => [calls(["c1", "save", "a"], ["c2", "save", "b"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { tools });
+  ran.length = 0;
+  const log = await cutRun(afterCall(uncut.log), new ScriptedModel(replies(), CONFIG), { tools });
+  const resumed = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(ran).toEqual(["save a", "save a", "save b"]);
+  expect(toolResults(log)).toEqual([
+    { call_id: "c1", output: "save:a", is_error: false },
+    { call_id: "c2", output: "save:b", is_error: false },
+  ]);
+});
+
 test("a re-sent call emits ToolCallStarted and ToolCallFinished", async () => {
   const tools = { save: topicTool("save", { resumable: true }) };
   const uncut = await run(saveModel(), { tools });

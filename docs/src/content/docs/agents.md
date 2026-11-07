@@ -231,6 +231,8 @@ The file uses the `mcpServers` format other MCP clients use:
 - A key set to `null` counts as absent.
 - A server can't share a name with a registered tool or a built-in: `take`, `sleep`, `ask`,
   `ask_user`, `load_skill`.
+- A model sees a server's tools as `<server>_<tool>`, so name servers with letters, digits, `_`
+  and `-`. The run fails before it starts on a name a model can't call, or one past 64 characters.
 - In `command`, `args`, `cwd`, `url` and the values of `env` and `headers`, `${VAR}` reads an
   environment variable, `${VAR:-default}` gives a fallback, and `$$` is a literal `$`. An unset
   variable with no fallback is an error, so keep tokens in the environment, not the file.

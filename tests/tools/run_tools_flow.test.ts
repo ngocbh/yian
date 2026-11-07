@@ -376,6 +376,20 @@ test("an ambiguous bare grant fails at run start with the group form as its fix"
   expect(existsSync(path)).toBe(false);
 });
 
+test("a group whose tools would show under a name a model can't call fails at run start", async () => {
+  const path = freshLog();
+  const flow = GROUPS_FLOW.replace("tools: [toolbox, workspace, company]", "tools: [files.v2]");
+
+  const error = await rejected(run(flow, {}, { log: path, tools: { "files.v2": [textTool("read")] }, models: chats }));
+
+  expect(error).toBeInstanceOf(RangeError);
+  expect((error as Error).message).toStartWith(
+    "AGENT node 'agent' grants group `files.v2`'s `read`, which would show as `files.v2_read`; ",
+  );
+  expect((error as Error).message).toEndWith("; rename the group");
+  expect(existsSync(path)).toBe(false);
+});
+
 test("a group grant naming a tool the group lacks fails at run start", async () => {
   const path = freshLog();
   const flow = GROUPS_FLOW.replace("tools: [toolbox, workspace, company]", "tools: [{github: [upsert]}]");

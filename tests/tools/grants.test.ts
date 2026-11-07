@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { ToolSpec } from "../../src/llm/messages.ts";
 import {
+  checkVisibleNames,
   expandGrants,
   GrantError,
   type GrantedTool,
@@ -130,4 +131,27 @@ test("a request lists each granted tool under its visible name, in grant order, 
 test("a request with nothing granted lists no tools; a tool with no spec gives no list", () => {
   expect(requestToolSpecs([], specOf, null)).toEqual([]);
   expect(requestToolSpecs([docsSearch, lookup], (tool) => (tool === lookup ? null : specOf(tool)), loadSkill)).toBeNull();
+});
+
+const shownAs = (group: string | null, tool: string): GrantedTool => ({
+  visible: group === null ? tool : `${group}_${tool}`,
+  group,
+  tool,
+  scope: 0,
+  key: tool,
+});
+const RULE = "a model's tool names take letters, digits, `_` and `-`, start with a letter or `_`, and are at most 64 characters";
+
+test.each<[GrantedTool, string]>([
+  [shownAs("files.v2", "read"), `grants group \`files.v2\`'s \`read\`, which would show as \`files.v2_read\`; ${RULE}; rename the group`],
+  [shownAs("2files", "read"), `grants group \`2files\`'s \`read\`, which would show as \`2files_read\`; ${RULE}; rename the group`],
+  [shownAs("files", "read.all"), `grants group \`files\`'s \`read.all\`, which would show as \`files_read.all\`; ${RULE}; rename the tool`],
+  [shownAs("a".repeat(40), "b".repeat(30)), `which would show as \`${"a".repeat(40)}_${"b".repeat(30)}\`; ${RULE}; shorten the group or the tool`],
+  [shownAs(null, "x.y"), `grants tool \`x.y\`, which would show as \`x.y\`; ${RULE}; rename the tool`],
+])("a name a model can't call is refused: %#", (granted, message) => {
+  expect(() => checkVisibleNames([shownAs("ok", "fine"), granted])).toThrow(message);
+});
+
+test("names a model can call pass", () => {
+  expect(() => checkVisibleNames([shownAs("my-server", "get-file"), shownAs(null, "_x"), shownAs("a".repeat(32), "b".repeat(31))])).not.toThrow();
 });

@@ -192,7 +192,7 @@ import {
 import { Skill } from "./skills/catalog.ts";
 import { isAlreadyOpenError, isMcpServer, type McpServer } from "./tools/mcp.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "./tools/context.ts";
-import { expandGrants, GrantError, type ToolGrant, visibleToolName } from "./tools/grants.ts";
+import { checkVisibleNames, expandGrants, GrantError, type ToolGrant, visibleToolName } from "./tools/grants.ts";
 import { RESERVED_TOOL_NAMES, type ToolEntry, type ToolRef, ToolSet } from "./tools/registry.ts";
 import { toolTypes } from "./tools/types.ts";
 import { type JsonObject, logJson } from "./typesys/json.ts";
@@ -3148,7 +3148,8 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       }
     }
     try {
-      expandGrants(grants, tools.scopes());
+      // A provider refuses a name it can't call only at the first request; refuse it here.
+      checkVisibleNames(expandGrants(grants, tools.scopes()));
     } catch (error) {
       if (!(error instanceof GrantError)) throw error;
       throw new RangeError(`AGENT node ${reprText(nodeId)} ${error.message}`);

@@ -242,6 +242,31 @@ export function requestToolSpecs(
   return specs;
 }
 
+// The tool names providers accept: OpenAI's and Anthropic's rule, which the others fit in.
+const CALLABLE_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
+const CALLABLE_RULE =
+  "a model's tool names take letters, digits, `_` and `-`, start with a letter or `_`, and are at most 64 characters";
+
+/**
+ * Refuse a granted tool whose visible name a model can't call: a group or tool name with other
+ * characters, or a `<group>_<tool>` past 64 characters.
+ *
+ * @throws {GrantError} Naming the first such tool and what to rename; the message starts with
+ *   `grants`, as `expandGrants`' do.
+ */
+export function checkVisibleNames(granted: readonly GrantedTool[]): void {
+  for (const tool of granted) {
+    if (CALLABLE_NAME.test(tool.visible)) continue;
+    const place = tool.group === null ? `tool \`${tool.tool}\`` : `group \`${tool.group}\`'s \`${tool.tool}\``;
+    let fix: string;
+    if (tool.group === null || tool.visible === tool.tool) fix = "rename the tool";
+    else if (!CALLABLE_NAME.test(tool.group)) fix = "rename the group";
+    else if (!/^[A-Za-z0-9_-]+$/.test(tool.tool)) fix = "rename the tool";
+    else fix = "shorten the group or the tool";
+    throw new GrantError(`grants ${place}, which would show as \`${tool.visible}\`; ${CALLABLE_RULE}; ${fix}`);
+  }
+}
+
 /** Return where a granted tool comes from, for a message: `tool x` or `github's search`. */
 function placeText(tool: GrantedTool): string {
   return tool.group === null ? `tool ${tool.tool}` : `${tool.group}'s ${tool.tool}`;

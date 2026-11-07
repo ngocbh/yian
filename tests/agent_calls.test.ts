@@ -615,7 +615,7 @@ output: \${review.output}
 
 test("a grant naming a tool group carries the group's recorded tools", async () => {
   const text = TOOLS.replace("tools: [lookup, save]", "tools: [toolbox]");
-  const model = new ScriptedModel([callReply(["save", { topic: "b" }, "call-b"]), textReply("done")], {
+  const model = new ScriptedModel([callReply(["toolbox_save", { topic: "b" }, "call-b"]), textReply("done")], {
     provider: "anthropic",
     model: "claude-test",
   });
@@ -624,8 +624,36 @@ test("a grant naming a tool group carries the group's recorded tools", async () 
   expect(result.status, result.failure?.message).toBe("succeeded");
   const view = await agentCall(log, { nodeId: "writer", n: 3 }, { env: NO_ENV });
   expect(view.digestMismatch).toBe(false);
-  expect(requestOf(view).tools.map((tool) => tool.name)).toEqual(["lookup", "save"]);
+  expect(requestOf(view).tools.map((tool) => tool.name)).toEqual(["toolbox_lookup", "toolbox_save"]);
   expect(requestOf(view)).toMatchObject(sentView(model.requests[1]!));
+});
+
+test.each<[string, string, Record<string, FunctionTool[]>, string, string[]]>([
+  ["some tools of a group", "tools: [{toolbox: [save]}]", { toolbox: [topicTool("lookup"), topicTool("save")] }, "toolbox_save", ["toolbox_save"]],
+  [
+    "a tool shared by two granted groups",
+    "tools: [company, toolbox]",
+    (() => {
+      const save = topicTool("save");
+      return { toolbox: [topicTool("lookup"), save], company: [save, topicTool("file")] };
+    })(),
+    "company_save",
+    ["company_save", "company_file", "toolbox_lookup"],
+  ],
+])("a grant of %s rebuilds exactly the sent request", async (_name, line, tools, call, names) => {
+  const text = TOOLS.replace("tools: [lookup, save]", line);
+  const model = new ScriptedModel([callReply([call, { topic: "b" }, "call-b"]), textReply("done")], {
+    provider: "anthropic",
+    model: "claude-test",
+  });
+  const { log, result } = await run(text, model, { topic: "owls" }, { tools });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(model.requests[0]!.tools.map((tool) => tool.name)).toEqual(names);
+  for (const n of [1, 3]) {
+    const view = await agentCall(log, { nodeId: "writer", n }, { env: NO_ENV });
+    expect(view.digestMismatch).toBe(false);
+    expect(requestOf(view)).toMatchObject(sentView(model.requests[(n - 1) / 2]!));
+  }
 });
 
 test("a run cut off mid-agent, then resumed: each start's calls are read", async () => {

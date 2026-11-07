@@ -198,7 +198,7 @@ test("agent cannot call a per-run tool the flow did not grant", async () => {
 });
 
 test("agent granted three groups sees the union of their tools", async () => {
-  const model = new ScriptedModel(replies(["a", { text: "1" }], ["c", { text: "3" }]), CONFIG);
+  const model = new ScriptedModel(replies(["toolbox_a", { text: "1" }], ["workspace_c", { text: "3" }]), CONFIG);
   const tools = new ToolSet({
     toolbox: [named("a")],
     workspace: [named("b"), named("c")],
@@ -209,11 +209,11 @@ test("agent granted three groups sees the union of their tools", async () => {
   const outcome = await runAgentNode(model, ["toolbox", "workspace", "company"], tools);
 
   expect(outcome).toEqual(new Output("done"));
-  expect(boundNames(model)).toEqual(["a", "b", "c", "d"]);
+  expect(boundNames(model)).toEqual(["toolbox_a", "workspace_b", "workspace_c", "company_d"]);
   expect(resultContents(model)).toEqual(["a:1", "c:3"]);
 });
 
-test.each(["e", "toolbox"])("agent grant check sees expanded group names (%s)", async (name) => {
+test.each(["e", "toolbox", "a"])("agent grant check sees expanded group names (%s)", async (name) => {
   const model = new ScriptedModel([toolCallReply(name, { text: "x" })], CONFIG);
   const tools = new ToolSet({ toolbox: [named("a")], hidden: [named("e")] });
 
@@ -221,23 +221,23 @@ test.each(["e", "toolbox"])("agent grant check sees expanded group names (%s)", 
 
   expect(outcome).toBeInstanceOf(EvaluationFailure);
   expect((outcome as EvaluationFailure).failure.message).toContain(
-    `requested tool '${name}', but it is not granted; granted tools: ["a"]`,
+    `requested tool '${name}', but it is not granted; granted tools: ["toolbox_a"]`,
   );
 });
 
 test("agent binds a tool shared by overlapping groups once", async () => {
-  const model = new ScriptedModel(replies(["web", { text: "q" }]), CONFIG);
+  const model = new ScriptedModel(replies(["toolbox_web", { text: "q" }]), CONFIG);
   const web = named("web");
   const tools = new ToolSet({ toolbox: [web, named("a")], company: [web, named("b")] });
 
   const outcome = await runAgentNode(model, ["toolbox", "company", "toolbox"], tools);
 
   expect(outcome).toEqual(new Output("done"));
-  expect(boundNames(model)).toEqual(["web", "a", "b"]);
+  expect(boundNames(model)).toEqual(["toolbox_web", "toolbox_a", "company_b"]);
 });
 
 test("agent with groups and ask_user asks the top-level handler", async () => {
-  const model = new ScriptedModel(replies(["ask_user", { question: "Which?" }], ["a", { text: "go" }]), CONFIG);
+  const model = new ScriptedModel(replies(["ask_user", { question: "Which?" }], ["toolbox_a", { text: "go" }]), CONFIG);
   const seen: AskRequest[] = [];
   const tools = new ToolSet({ toolbox: [named("a")], ask_user: recordingHandler(seen, "B") });
   const node = new AgentNode("agent", { prompt: "go", llmConfig: CONFIG, tools: ["toolbox", "ask_user"] });
@@ -250,7 +250,7 @@ test("agent with groups and ask_user asks the top-level handler", async () => {
   await built.run();
 
   expect(built.state.pool.get("agent")).toBe("done");
-  expect(boundNames(model)).toEqual(["a", "ask_user"]);
+  expect(boundNames(model)).toEqual(["toolbox_a", "ask_user"]);
   expect(seen.map((request) => request.question)).toEqual(["Which?"]);
   expect(resultContents(model)).toEqual(["B", "a:go"]);
 });

@@ -1,0 +1,13 @@
+# A TOOL node names one tool of a group as `{group: tool}`; host groups aren't checked at load.
+kind: load
+flow: |
+  id: grants
+  name: grants
+  nodes:
+    found:
+      kind: tool
+      tool_id: {cases: search}
+      input: {query: owls}
+  output: ${found.output}
+expect:
+  load: ok

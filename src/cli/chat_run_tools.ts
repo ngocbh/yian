@@ -24,6 +24,7 @@ import { hostInputs, skillGrants, staticNodes } from "../run.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
+import { grantText, visibleToolName } from "../tools/grants.ts";
 import { buildValueAs, isInboxType, renderValuePath, TypeCheckError } from "../typesys/values.ts";
 import { LIST_ITEMS } from "./chat_events.ts";
 import type { ChildRuns, ChildStatus } from "./chat_runs.ts";
@@ -245,8 +246,8 @@ function capabilities(flow: ComposedFlow, files: readonly string[]): string[] {
     // Every flow has its start and end; they do nothing to approve.
     if (node.kind !== "start" && node.kind !== "end") kinds.add(node.kind);
     const call = node.hostToolCall();
-    if (call !== null) called.add(call.toolId);
-    for (const grant of node.grantedTools()) granted.add(grant);
+    if (call !== null) called.add(visibleToolName(call.group, call.toolId));
+    for (const grant of node.grantedTools()) granted.add(grantText(grant));
   }
   const skills = new Set<string>();
   for (const [, grant] of skillGrants(flow.compiled)) {

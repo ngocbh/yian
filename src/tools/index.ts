@@ -17,7 +17,9 @@
  * TOOL node's retries, and `ToolCheckError`, thrown when a check yian runs on a call fails; yian
  * classifies them by brand, with `toolErrorKinds` and the guards. `tools/mcp` holds `mcpServer`,
  * which describes a Model Context Protocol server, the `McpServer` it returns, whose opened tools
- * a `ToolSet` takes as one group, and the `McpError` classes its calls throw.
+ * a `ToolSet` takes as one group, and the `McpError` classes its calls throw. `tools/grants`
+ * parses an AGENT's `tools:` grants, names a group's tools `<group>_<tool>` for a model, and
+ * expands grants over `GrantScope`s, a `ToolSet`'s `scope()` among them.
  *
  * Knows about: `defaults`, `diagnostics`, `platform`, typesys, `llm/messages` (the JSON check),
  * `llm/auth`, `llm/body` and `llm/errors` (for MCP servers) and the skills leaf (`skills/tool`).
@@ -45,6 +47,7 @@ export {
   type StandardSchemaV1,
   tool,
 } from "./function_tools.ts";
+export { type GrantScope } from "./grants.ts";
 export {
   isMcpError,
   McpCallCancelled,
@@ -77,5 +80,6 @@ export {
   resolveTools,
   TOOL_REGISTRY,
   type ToolEntry,
+  type ToolRef,
   ToolSet,
 } from "./registry.ts";

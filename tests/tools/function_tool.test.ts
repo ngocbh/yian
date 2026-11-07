@@ -415,7 +415,7 @@ describe("FunctionTool in a ToolSet and the registry", () => {
   test("a group item is named by its name", () => {
     const tool = build({});
     const tools = new ToolSet({ box: [tool] });
-    expect(tools.expand(["box"])).toEqual(["echo"]);
+    expect(tools.scope().group("box")).toEqual(["echo"]);
     expect(tools.resolve(["echo"])).toEqual([tool]);
   });
 

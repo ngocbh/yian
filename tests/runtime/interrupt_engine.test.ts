@@ -240,7 +240,7 @@ class CallReader extends Node {
   }
 
   override hostToolCall(): HostToolCall {
-    return new HostToolCall(this.tool, [], new Map(), null);
+    return new HostToolCall(this.tool, null, [], new Map(), null);
   }
 
   override waitResultStep(call: CallView, result: CompleteResult): JsonObject {

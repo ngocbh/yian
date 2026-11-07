@@ -1,0 +1,19 @@
+# A group grant that lists no tools is refused at its entry, with both fixes.
+kind: load
+flow: |
+  id: grants
+  name: grants
+  nodes:
+    a:
+      kind: agent
+      prompt: Help the user.
+      tools: [search, {lessons: []}]
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'' (kind=agent): `tools:` entry {lessons: []} lists no tools; write `{lessons: [read]}` or `lessons`'
+      frames:
+      - label: flow.yaml
+        range: [7, 21, 7, 34]

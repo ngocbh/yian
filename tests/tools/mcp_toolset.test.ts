@@ -11,6 +11,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { McpServer, McpServerClosed, type McpServerSpec, mcpServer } from "../../src/tools/mcp.ts";
+import { asToolGrant, expandGrants } from "../../src/tools/grants.ts";
 import { ToolSet } from "../../src/tools/registry.ts";
 import { killMarkers, stdioOptions, strayProcesses } from "../helpers/mcp_helpers.ts";
 
@@ -86,7 +87,7 @@ describe("an MCP server in a ToolSet", () => {
   test("an open server is a group of its tools", async () => {
     const tools = new ToolSet({ fake: server });
     expect(tools.groups).toEqual(["fake"]);
-    expect(tools.expand(["fake"])).toEqual(server.tools.map((tool) => tool.name));
+    expect(tools.scope().group("fake")).toEqual(server.tools.map((tool) => tool.name));
     expect(tools.resolve(["echo"])).toEqual([server.tools[0]!]);
     expect(await tools.invoke("echo", { text: "hi" })).toBe("hi");
   });
@@ -104,12 +105,12 @@ describe("an MCP server in a ToolSet", () => {
     );
   });
 
-  test("two servers with one tool name clash", () => {
+  test("two servers with one tool name are each reached through their group", async () => {
     const first = new FakeServer("a", [serverTool("echo")]);
     const second = new FakeServer("b", [serverTool("echo")]);
-    expect(thrown(() => new ToolSet({ a: first, b: second }), RangeError)).toBe(
-      "tool 'echo' is in both groups 'a' and 'b' as different tools",
-    );
+    const tools = new ToolSet({ a: first, b: second });
+    expect(tools.resolve([{ group: "b", name: "echo" }])).toEqual([second.tools[0]!]);
+    expect(await tools.invoke({ group: "a", name: "echo" }, { text: "hi" })).toBe("hi");
   });
 
   test("a server tool named like a top level key clashes", () => {
@@ -118,10 +119,11 @@ describe("an MCP server in a ToolSet", () => {
     );
   });
 
-  test("one server under two keys lists each tool once", () => {
+  test("one server under two keys binds each tool once, under the first key", () => {
     const tools = new ToolSet({ a: server, b: server });
     expect(tools.groups).toEqual(["a", "b"]);
-    expect(tools.expand(["a", "b"])).toEqual(server.tools.map((tool) => tool.name));
+    const granted = expandGrants(["a", "b"].map(asToolGrant), tools.scopes());
+    expect(granted.map((each) => each.visible)).toEqual(server.tools.map((tool) => `a_${tool.name}`));
   });
 
   test("a renamed tool in a list group calls the servers tool", async () => {
@@ -133,7 +135,7 @@ describe("an MCP server in a ToolSet", () => {
       execute: echo.execute,
     });
     const tools = new ToolSet({ renamed: [renamed] });
-    expect(tools.expand(["renamed"])).toEqual(["other"]);
+    expect(tools.scope().group("renamed")).toEqual(["other"]);
     expect(tools.resolve(["other"])[0]!.execute).toBe(echo.execute);
     expect(await tools.invoke("other", { text: "hi" })).toBe("hi");
   });

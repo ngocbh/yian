@@ -287,6 +287,27 @@ test(
 );
 
 test(
+  "a tool node naming a server's tool as {server: tool} starts that server and no other",
+  async () => {
+    const files = { other: marker("other.pid"), fake: marker("fake.pid") };
+    // Listed first and supplying `echo` too, so probing for a bare `echo` would pick it.
+    const cfg = config(join(tmp, "cfg.json"), {
+      other: stdio("--only", "echo", "--marker", files.other),
+      fake: stdio("--marker", files.fake),
+    });
+
+    const result = await run([toolFlow("{fake: echo}"), "--mcp-config", cfg]);
+
+    expect(result.code, result.output).toBe(0);
+    expect(lastLine(result.stdout)).toBe("hi");
+    expect(pids(files.fake)).toHaveLength(1);
+    expect(existsSync(files.other)).toBe(false);
+    await expectNoChildren(files.fake);
+  },
+  SLOW,
+);
+
+test(
   "a granted server that supplies the missing tool skips probing",
   async () => {
     const fakePid = marker("fake.pid");
@@ -329,9 +350,9 @@ const DONE =
     .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
     .join("") + "data: [DONE]\n\n";
 
-test(
-  "an agent grant starts only the granted server",
-  async () => {
+test.each(["fake", "{fake: [echo]}"])(
+  "an agent grant starts only the granted server: tools: [%s]",
+  async (grant) => {
     const bound: string[][] = [];
     const fakeFetch = async (input: string | URL | Request, init?: RequestInit) => {
       type Body = { tools?: { function: { name: string } }[] };
@@ -350,13 +371,13 @@ test(
     globalThis.fetch = fakeFetch as typeof fetch;
     let result;
     try {
-      result = await run([flowFile(AGENT_FLOW), "--mcp-config", cfg], vars);
+      result = await run([flowFile(AGENT_FLOW.replace("tools: [fake]", `tools: [${grant}]`)), "--mcp-config", cfg], vars);
     } finally {
       globalThis.fetch = send;
     }
 
     expect(result.code, result.output).toBe(0);
-    expect(bound[0]).toContain("echo");
+    expect(bound[0]).toContain("fake_echo");
     expect(pids(fakePid)).toHaveLength(1);
     expect(existsSync(otherPid)).toBe(false);
     await expectNoChildren(fakePid);

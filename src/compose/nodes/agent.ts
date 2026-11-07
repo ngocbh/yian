@@ -42,6 +42,7 @@ import {
   ValueTemplate,
 } from "../../nodes/contracts.ts";
 import { SkillError } from "../../skills/index.ts";
+import { GrantError, parseToolGrants, type ToolGrant } from "../../tools/grants.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isList, isRecord, type Type, typeLevels, type Value, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
@@ -541,7 +542,7 @@ export interface AgentDescriptorFields extends NodeDescriptorFields {
   prompt?: string | readonly PromptItem[] | null;
   systemPrompt?: string | null;
   variables?: unknown;
-  tools?: readonly string[];
+  tools?: readonly ToolGrant[];
   skills?: readonly string[] | "all" | null;
   llmConfig?: unknown;
   retries?: number;
@@ -587,8 +588,8 @@ export class AgentDescriptor extends NodeDescriptor {
   readonly systemPrompt: string | null;
   /** The authored `variables:` as YAML read it; `build` reads the declarations. */
   readonly variables: unknown;
-  /** The granted tool names. */
-  readonly tools: readonly string[];
+  /** The authored tool grants. */
+  readonly tools: readonly ToolGrant[];
   /** The granted skill names, or `"all"`. */
   readonly skills: readonly string[] | "all";
   /** The authored `llm_config:` as YAML read it; `build` reads the values in it. */
@@ -762,12 +763,20 @@ export class AgentDescriptor extends NodeDescriptor {
     }
     if (Object.hasOwn(fields, "tools")) {
       const tools = fields["tools"];
-      if (!isList(tools) || !tools.every((name) => typeof name === "string" && name)) {
+      if (!isList(tools)) {
         const example = typeof tools === "string" && tools ? tools : "search";
         throw diagnostics.error(
-          `node ${id} (kind=${this.kind}): \`tools:\` must be a list of tool names; write \`tools: [${example}]\``,
+          `node ${id} (kind=${this.kind}): \`tools:\` must be a list of tool or group grants; ` +
+            `write \`tools: [${example}]\``,
           { range: rangeOf("tools") },
         );
+      }
+      try {
+        fields["tools"] = parseToolGrants(tools, `node ${id} (kind=${this.kind})`);
+      } catch (error) {
+        if (!(error instanceof GrantError)) throw error;
+        const at = error.index === null ? null : rangeAt(cursor, ["tools", error.index]);
+        throw diagnostics.error(error.message, { range: at ?? rangeOf("tools") });
       }
     }
     if (Object.hasOwn(fields, "retries")) {

@@ -19,6 +19,7 @@ import { tool } from "../../src/tools/function_tools.ts";
 import { builtinType } from "../../src/typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals } from "../../src/typesys/values.ts";
 import { NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
+import { grantText } from "../../src/tools/grants.ts";
 
 /** The skill the reply agent is granted, as a stand-in. */
 const SKILL = new Skill({
@@ -79,7 +80,7 @@ test("the reply agent gets the tools, the skill and steering, with no tool-call 
   expect(replies).toHaveLength(1);
   const reply = replies[0]![1] as AgentNode;
   expect(reply.kind).toBe("agent");
-  expect(reply.tools).toEqual([
+  expect(reply.tools.map(grantText)).toEqual([
     "list_flows",
     "read_flow",
     "check_flow",

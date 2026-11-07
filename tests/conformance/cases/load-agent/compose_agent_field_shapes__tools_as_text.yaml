@@ -12,7 +12,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''a'' (kind=agent): `tools:` must be a list of tool names; write `tools: [search]`'
+      message: 'node ''a'' (kind=agent): `tools:` must be a list of tool or group grants; write `tools: [search]`'
       frames:
       - label: flow.yaml
         range: [7, 12, 7, 18]

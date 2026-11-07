@@ -1,0 +1,21 @@
+# A built-in is never a group's tool: `{x: take}` is refused with the bare form.
+kind: load
+flow: |
+  id: grants
+  name: grants
+  input:
+    inbox: !Inbox(str)
+  nodes:
+    found:
+      kind: tool
+      tool_id: {x: take}
+      input: {from: '${input.inbox}'}
+  output: ${found.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''found'' (kind=tool): `tool_id: {x: take}`: take is a built-in, not a group''s tool; write `tool_id: take`'
+      frames:
+      - label: flow.yaml
+        range: [8, 14, 8, 23]

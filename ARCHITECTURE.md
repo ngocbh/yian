@@ -44,7 +44,7 @@ flowchart LR
 | `defaults.ts` | Every default and limit, each overridable by a `YIAN_*` variable |
 | `llm/` | Provider-neutral messages, wire protocols, the HTTP transport and structured output |
 | `llm_clients/` | `LLMConfig`, provider blocks, connections and saved logins, the model catalog |
-| `tools/` | The tool registry, the context a tool gets, MCP tools, and the `pending` marker |
+| `tools/` | The tool registry, the context a tool gets, MCP tools, the `pending` marker, and tool grants (`grants.ts`): parsing `tools:`, the `<group>_<tool>` names a model sees, and their expansion |
 | `skills/` | Host-supplied skills and the AGENT's built-in skill tool |
 | `memory/` | Memory contracts and the episodic, reflective and profile memories, with their storage |
 | `memory_host.ts` | Builds the memories a flow declares and owns their lifetime |

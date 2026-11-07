@@ -38,7 +38,7 @@ test("tool parse matches descriptor and records ranges", () => {
 
   expect(desc).toBeInstanceOf(ToolDescriptor);
   expect(fieldsOf(desc)).toEqual(
-    fieldsOf(new ToolDescriptor({ id: "fetch", toolId: "http_get", inputs: { url: "${input.url}" } })),
+    fieldsOf(new ToolDescriptor({ id: "fetch", toolRef: { group: null, name: "http_get" }, inputs: { url: "${input.url}" } })),
   );
   expect(desc.range).toBeInstanceOf(SourceRange);
   expect(desc.fieldRanges.get(siteKey("field", "tool_id"))).toBeInstanceOf(SourceRange);
@@ -101,6 +101,17 @@ test("tool build sets a record output contract", () => {
   expect(fields.get("qty")).toEqual(Type.scalar(ValueKind.INTEGER));
 });
 
+test("a tool_id group tool that would show under a reserved name is refused in the form written", () => {
+  const error = loadError(() =>
+    ToolDescriptor.parse("a", readerFor("nodes:\n  a:\n    kind: tool\n    tool_id: {load: skill}\n", "a")),
+  );
+
+  expect(error.message).toBe(
+    "node 'a' (kind=tool): `tool_id: {load: skill}` would show as `load_skill`, a name yian reserves; " +
+      "rename the group or the tool",
+  );
+});
+
 describe("retries", () => {
   /** Parse node `a` of a TOOL flow with `line` added. */
   const parseA = (line: string) =>
@@ -117,7 +128,7 @@ describe("retries", () => {
 });
 
 test("build passes the title and the retries to the node", () => {
-  const node = new ToolDescriptor({ id: "a", toolId: "t", nodeName: "Fetch", retries: 2 }).build(reading())
+  const node = new ToolDescriptor({ id: "a", toolRef: { group: null, name: "t" }, nodeName: "Fetch", retries: 2 }).build(reading())
     .node as ToolNode;
 
   expect(node.title).toBe("Fetch");
@@ -129,4 +140,8 @@ test("build passes the title and the retries to the node", () => {
 
 test.each<CaseRow>([
   { id: "load-leaves/seed_08_tool_news", call: assembled },
+  { id: "load-leaves/tool_grants__a_tool_node_names_a_group_tool", call: assembled },
+  { id: "load-leaves/tool_grants__a_tool_id_mapping_with_two_keys_is_refused", call: assembled },
+  { id: "load-leaves/tool_grants__a_tool_id_group_with_a_list_is_refused", call: assembled },
+  { id: "load-leaves/tool_grants__a_built_in_in_a_group_is_refused", call: assembled },
 ])("assembles: $id", runCase);

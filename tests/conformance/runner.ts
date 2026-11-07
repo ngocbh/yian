@@ -121,7 +121,8 @@ import {
   ToolCheckError,
   TransientToolError,
 } from "../../src/tools/errors.ts";
-import { tool } from "../../src/tools/function_tools.ts";
+import { type FunctionTool, tool } from "../../src/tools/function_tools.ts";
+import { visibleToolName } from "../../src/tools/grants.ts";
 import type { AskRequest, AskTool, ToolEntry } from "../../src/tools/registry.ts";
 import { canonicalJson, logJson, parseJson } from "../../src/typesys/json.ts";
 import type { JsonMode, JsonObject } from "../../src/typesys/json.ts";
@@ -649,6 +650,54 @@ function completion(item: Case): CompleteResult {
   return Object.hasOwn(item, "output") ? { output: item["output"] } : { error: item["error"] as string };
 }
 
+/** Throw unless `entry`, the stub tool at `where`, uses only the format's keys and scripts. */
+function checkStub(where: string, entry: Value | undefined): void {
+  const toolKeys = new Set(["parameters", "description", "concurrency_safe", "results", "pending"]);
+  const tool = keys(where, entry, toolKeys, { required: ["parameters"] });
+  if (Object.hasOwn(tool, "concurrency_safe") && typeof tool["concurrency_safe"] !== "boolean") {
+    throw new Error(`\`${where}.concurrency_safe\` must be a boolean`);
+  }
+  const waits = Object.hasOwn(tool, "pending");
+  if (Object.hasOwn(tool, "results") === waits || (waits && tool["pending"] !== true)) {
+    throw new Error(`\`${where}\` takes \`results\` or \`pending: true\``);
+  }
+  if (waits) return;
+  const results = tool["results"];
+  const scripts: [string | null, Value | undefined][] = isMapping(results)
+    ? Object.entries(results)
+    : [[null, results]];
+  for (const [node, script] of scripts) {
+    if (!Array.isArray(script)) {
+      throw new Error(`\`${where}.results\` must be a list or a mapping of lists`);
+    }
+    const label = node === null ? `${where}.results` : `${where}.results.${node}`;
+    script.forEach((item, index) => {
+      const at = `${label}[${index}]`;
+      const step = keys(at, item, new Set(["return", "raise"]));
+      if (Object.keys(step).length !== 1) {
+        throw new Error(`\`${at}\` takes \`return\` or \`raise\``);
+      }
+      if (Object.hasOwn(step, "raise")) {
+        const raiseKeys = new Set(["class", "message", "retry_after"]);
+        const error = keys(`${at}.raise`, step["raise"], raiseKeys, {
+          required: ["class", "message"],
+        });
+        if (Object.hasOwn(error, "retry_after")) {
+          if (error["class"] !== "TransientToolError") {
+            throw new Error(`\`${at}.raise.retry_after\` is for TransientToolError`);
+          }
+          const seconds = error["retry_after"];
+          const number = typeof seconds === "bigint" || typeof seconds === "number";
+          // Finite, as `TransientToolError` requires.
+          if (!number || !(seconds >= 0 && seconds < Infinity)) {
+            throw new Error(`\`${at}.raise.retry_after\` must be a finite non-negative number`);
+          }
+        }
+      }
+    });
+  }
+}
+
 /**
  * Throw unless `value`, the host, its tools, models and their scripts use only the format's keys.
  */
@@ -656,51 +705,29 @@ function checkHost(value: Value | undefined, kind: Kind): void {
   const allowed = kind === "resume" ? RESUME_HOST_KEYS : HOST_KEYS;
   const host = keys("host", value, allowed, { known: RESUME_HOST_KEYS, kind });
   const tools = mapping("host.tools", get(host, "tools", {}));
+  // Each earlier group's stub tools, which a later group's `same_as` may name.
+  const stubs = new Set<string>();
   for (const [name, entry] of Object.entries(tools)) {
     const where = `host.tools.${name}`;
-    const toolKeys = new Set(["parameters", "description", "concurrency_safe", "results", "pending"]);
-    const tool = keys(where, entry, toolKeys, { required: ["parameters"] });
-    if (Object.hasOwn(tool, "concurrency_safe") && typeof tool["concurrency_safe"] !== "boolean") {
-      throw new Error(`\`${where}.concurrency_safe\` must be a boolean`);
+    if (!isMapping(entry) || !Object.hasOwn(entry, "group")) {
+      checkStub(where, entry);
+      continue;
     }
-    const waits = Object.hasOwn(tool, "pending");
-    if (Object.hasOwn(tool, "results") === waits || (waits && tool["pending"] !== true)) {
-      throw new Error(`\`${where}\` takes \`results\` or \`pending: true\``);
-    }
-    if (waits) continue;
-    const results = tool["results"];
-    const scripts: [string | null, Value | undefined][] = isMapping(results)
-      ? Object.entries(results)
-      : [[null, results]];
-    for (const [node, script] of scripts) {
-      if (!Array.isArray(script)) {
-        throw new Error(`\`${where}.results\` must be a list or a mapping of lists`);
+    const group = keys(where, entry, new Set(["group"]))["group"];
+    if (!isMapping(group)) throw new Error(`\`${where}.group\` must be a mapping of stub tools`);
+    for (const [tool, member] of Object.entries(group)) {
+      const at = `${where}.group.${tool}`;
+      if (!isMapping(member) || !Object.hasOwn(member, "same_as")) {
+        checkStub(at, member);
+        continue;
       }
-      const label = node === null ? `${where}.results` : `${where}.results.${node}`;
-      script.forEach((item, index) => {
-        const at = `${label}[${index}]`;
-        const step = keys(at, item, new Set(["return", "raise"]));
-        if (Object.keys(step).length !== 1) {
-          throw new Error(`\`${at}\` takes \`return\` or \`raise\``);
-        }
-        if (Object.hasOwn(step, "raise")) {
-          const raiseKeys = new Set(["class", "message", "retry_after"]);
-          const error = keys(`${at}.raise`, step["raise"], raiseKeys, {
-            required: ["class", "message"],
-          });
-          if (Object.hasOwn(error, "retry_after")) {
-            if (error["class"] !== "TransientToolError") {
-              throw new Error(`\`${at}.raise.retry_after\` is for TransientToolError`);
-            }
-            const seconds = error["retry_after"];
-            const number = typeof seconds === "bigint" || typeof seconds === "number";
-            // Finite, as `TransientToolError` requires.
-            if (!number || !(seconds >= 0 && seconds < Infinity)) {
-              throw new Error(`\`${at}.raise.retry_after\` must be a finite non-negative number`);
-            }
-          }
-        }
-      });
+      const same = keys(at, member, new Set(["same_as"]))["same_as"];
+      if (typeof same !== "string" || !stubs.has(same)) {
+        throw new Error(`\`${at}.same_as\` must name an earlier group's stub tool as \`<group>.<tool>\``);
+      }
+    }
+    for (const [tool, member] of Object.entries(group)) {
+      if (!Object.hasOwn(member as Case, "same_as")) stubs.add(`${name}.${tool}`);
     }
   }
   checkModels(get(host, "models", {}));
@@ -1922,9 +1949,11 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
     return entry;
   };
 
-  const tools: [string, ToolEntry][] = [];
-  for (const [name, entry] of Object.entries(get(spec, "tools", {}) as Case)) {
-    const stub = entry as Case;
+  /**
+   * Build the stub tool `name` declared at `where`: its calls are recorded under `shown` and take
+   * from its `where.results` scripts.
+   */
+  const stubTool = (where: string, name: string, shown: string, stub: Case): FunctionTool => {
     const waits = stub["pending"] === true;
     const results = stub["results"];
     const byNode = isMapping(results);
@@ -1932,25 +1961,47 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
       // A pending tool's calls wait; `host.sends` answers them.
     } else if (byNode) {
       for (const [node, script] of Object.entries(results)) {
-        scripts.set(`host.tools.${name}.results.${node}`, [...(script as Value[])]);
+        scripts.set(`${where}.results.${node}`, [...(script as Value[])]);
       }
     } else {
-      scripts.set(`host.tools.${name}.results`, [...(results as Value[])]);
+      scripts.set(`${where}.results`, [...(results as Value[])]);
     }
     const execute = (args: Record<string, unknown>, ctx: ToolContext): unknown => {
       if (waits) {
-        call(name, null, ctx, args as Case);
+        call(shown, null, ctx, args as Case);
         return pending();
       }
-      const label = `host.tools.${name}.results${byNode ? `.${ctx.node}` : ""}`;
-      const step = call(name, label, ctx, args as Case) as Case;
+      const label = `${where}.results${byNode ? `.${ctx.node}` : ""}`;
+      const step = call(shown, label, ctx, args as Case) as Case;
       if (Object.hasOwn(step, "return")) return step["return"];
       throw scriptedError(step["raise"] as Case, TOOL_ERRORS);
     };
     const description = get(stub, "description", "") as string;
     const isConcurrencySafe = stub["concurrency_safe"] === true ? () => true : null;
     const parameters = stub["parameters"] as JsonObject;
-    tools.push([name, tool({ name, description, parameters, execute, isConcurrencySafe })]);
+    return tool({ name, description, parameters, execute, isConcurrencySafe });
+  };
+  const tools: [string, ToolEntry][] = [];
+  // Each group's stub tools by `<group>.<tool>`, which a later `same_as` reuses.
+  const groupStubs = new Map<string, FunctionTool>();
+  for (const [name, entry] of Object.entries(get(spec, "tools", {}) as Case)) {
+    if (!Object.hasOwn(entry as Case, "group")) {
+      tools.push([name, stubTool(`host.tools.${name}`, name, name, entry as Case)]);
+      continue;
+    }
+    const members: FunctionTool[] = [];
+    for (const [member, stub] of Object.entries((entry as Case)["group"] as Case)) {
+      const same = (stub as Case)["same_as"];
+      if (typeof same === "string") {
+        members.push(groupStubs.get(same)!);
+        continue;
+      }
+      // A group's tool is called by its record name, `<group>_<tool>`.
+      const built = stubTool(`host.tools.${name}.group.${member}`, member, visibleToolName(name, member), stub as Case);
+      groupStubs.set(`${name}.${member}`, built);
+      members.push(built);
+    }
+    tools.push([name, members]);
   }
   if (Object.hasOwn(spec, "human")) {
     const inputs: JsonObject = {};
@@ -3069,11 +3120,49 @@ function callNames(calls: readonly (readonly [string, string])[]): string {
     .join(", ");
 }
 
-/** Return the label of the script a call to tool `name` from AGENT `node` takes from: its `host.tools` results, else `host.human`. */
-function scriptLabel(spec: Case, node: string, name: string): string {
-  const stub = (get(spec, "tools", {}) as Case)[name] as Case | undefined;
-  if (stub === undefined) return `host.human.${node}`;
-  return `host.tools.${name}.results${isMapping(stub["results"]) ? `.${node}` : ""}`;
+/**
+ * @internal Return the label of the script a call to tool `name` from AGENT `node` takes from:
+ * its `host.tools` results, else `host.human`. A group's tool is called `<group>_<tool>`, or by
+ * its own name when an agent granted it by its bare name; a `same_as` reads as the tool it names.
+ */
+export function scriptLabel(spec: Case, node: string, name: string): string {
+  const stubs = stubTools(spec);
+  const found = stubs.find((each) => each.shown === name) ?? stubs.find((each) => each.own === name);
+  if (found === undefined) return `host.human.${node}`;
+  return `${found.where}.results${isMapping(found.stub["results"]) ? `.${node}` : ""}`;
+}
+
+/** One stub tool `host.tools` declares: where, its stub, its visible name and its own name. */
+interface StubTool {
+  readonly where: string;
+  readonly stub: Case;
+  /** A top-level stub's name, or a group's tool's `<group>_<tool>`. */
+  readonly shown: string;
+  /** The tool's own name, which a bare grant of a group's tool shows. */
+  readonly own: string;
+}
+
+/**
+ * Return each stub tool `host.tools` declares. A `same_as` member gives the stub it names, under
+ * the member's own `<group>_<tool>`.
+ */
+function stubTools(spec: Case): StubTool[] {
+  const found: StubTool[] = [];
+  const named = new Map<string, [string, Case]>();
+  for (const [name, entry] of Object.entries(get(spec, "tools", {}) as Case)) {
+    if (!Object.hasOwn(entry as Case, "group")) {
+      found.push({ where: `host.tools.${name}`, stub: entry as Case, shown: name, own: name });
+      continue;
+    }
+    for (const [member, stub] of Object.entries((entry as Case)["group"] as Case)) {
+      const same = (stub as Case)["same_as"];
+      const [where, declared]: [string, Case] =
+        typeof same === "string" ? named.get(same)! : [`host.tools.${name}.group.${member}`, stub as Case];
+      if (typeof same !== "string") named.set(`${name}.${member}`, [where, declared]);
+      found.push({ where, stub: declared, shown: visibleToolName(name, member), own: member });
+    }
+  }
+  return found;
 }
 
 /**
@@ -3115,7 +3204,8 @@ export async function crashSweep(
   const flow = await loadText(case_["flow"] as string, ctx);
   const env = caseEnv(ctx);
   const spec = get(case_, "host", {}) as Case;
-  const tools = Object.values(get(spec, "tools", {}) as Case) as Case[];
+  // A `same_as` member shares its stub's scripts, so each stub counts once.
+  const tools = [...new Map(stubTools(spec).map(({ where, stub }) => [where, stub])).values()];
   const entries = tools.flatMap(({ results }) =>
     (isMapping(results) ? Object.values(results) : [results]).flat(),
   );

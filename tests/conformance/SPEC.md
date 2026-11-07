@@ -288,6 +288,11 @@ A case can't hold code, so its host is declared under `host`.
   tool may have `pending: true`: each call's handler
   returns `pending()`, so the call waits until a `host.sends` `{complete}` item answers it. A tool
   takes `results` or `pending: true`, not both.
+  An entry `{group: {<tool>: <stub>, ...}}` is a tool group instead: each member is a stub tool
+  as above, its scripts at `host.tools.<group>.group.<tool>.results`, or `{same_as:
+  <group>.<tool>}`, which puts an earlier group's stub tool, the same object, in this group too.
+  `tool_calls` lists a group tool's calls under its record name `<group>_<tool>`, a `same_as`
+  member's under the tool it names.
 - **`human`**: `{<node id>: [<answer>, ...]}`, the answers the run's ask handler gives to the
   calling node, in order; the same rules when they run out or are left over. The one handler
   answers a TOOL `ask` and an agent's `ask_user` tool. It declares, as extra inputs,

@@ -607,7 +607,7 @@ output: call(enrich, 30)
 test("inline call in tool inputs desugars", () => {
   // The TOOL descriptor's `inputs` binding field desugars too.
   const descriptors = new Map([
-    ["t", new ToolDescriptor({ id: "t", toolId: "some_tool", inputs: { q: "call(enrich, x=${input.k})" } })],
+    ["t", new ToolDescriptor({ id: "t", toolRef: { group: null, name: "some_tool" }, inputs: { q: "call(enrich, x=${input.k})" } })],
   ]);
   const [newDescriptors] = desugarInlineCalls(descriptors, "${t.output}");
   expect(newDescriptors.get("t")!.inputs["q"]).toBe("${__call_0.output}");

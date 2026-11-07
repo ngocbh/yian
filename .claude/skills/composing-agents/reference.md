@@ -53,16 +53,18 @@ Fields every node takes: `kind`, `input` (not on `case`), `asserts` (not on `cas
 
 **agent** ([Agents](https://yian.readthedocs.io/agents/)): `input`, `prompt` (a template, or a
 list of messages), `system_prompt` (replaces the default instruction), `variables` (tagged
-values the prompts read, such as `tone: !str plain`), `output`, `retries`, `tools`, `skills`
+values the prompts read, such as `tone: !str plain`), `output`, `retries`, `tools` (tool and
+group names, or `{group: [tool, ...]}`; a group's tools show as `<group>_<tool>`), `skills`
 (names or `all`), `steer_inbox`, `long_term_memory`, `llm_config`, `env`
 (`max_tool_iterations`).
 
 **code** ([Code and tools](https://yian.readthedocs.io/code-and-tools/)): `code` (an inline body
 or `./file.ts:fn`), `input`, `output`. The body reads `inputs.<name>` and returns a value.
 
-**tool** ([Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes)): `tool_id`,
-`input` (the tool's own argument names), `output`, `retries` (default 0). The run fails before it
-starts when the tool is missing or an argument can never fit.
+**tool** ([Code and tools](https://yian.readthedocs.io/code-and-tools/#tool-nodes)): `tool_id`
+(a tool name or `{group: tool}`), `input` (the tool's own argument names), `output`, `retries`
+(default 0). The run fails before it starts when the tool is missing or an argument can never
+fit.
 
 **case** ([Control flow](https://yian.readthedocs.io/control-flow/#branch-with-case)): `on`
 (optional), `cases` (a list of `{when, then}`), `else`. A `when:` or `on:` may read an agent's

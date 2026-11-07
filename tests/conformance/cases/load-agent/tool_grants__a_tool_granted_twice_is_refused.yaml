@@ -1,0 +1,19 @@
+# A tool granted twice is refused at its second entry.
+kind: load
+flow: |
+  id: grants
+  name: grants
+  nodes:
+    a:
+      kind: agent
+      prompt: Help the user.
+      tools: [search, lookup, search]
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''a'' (kind=agent): `tools:` grants ''search'' twice'
+      frames:
+      - label: flow.yaml
+        range: [7, 29, 7, 35]

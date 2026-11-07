@@ -323,6 +323,9 @@ test.each<CaseRow>([
   { id: "load-core/compose_non_text_prompt__non_text_agent_prompt", call: parsedNodes },
   // The AGENT half of the `inf` name rule
   { id: "load-agent/compose_infinity_names__an_agent_variable_named_inf", call: parsedNodes },
+  { id: "load-agent/tool_grants__group_forms_load", call: parsedNodes },
+  { id: "load-agent/tool_grants__a_group_grant_with_no_tools_is_refused", call: parsedNodes },
+  { id: "load-agent/tool_grants__a_tool_granted_twice_is_refused", call: parsedNodes },
 ])("parseNodes: $id", runCase);
 
 test.each<CaseRow>([

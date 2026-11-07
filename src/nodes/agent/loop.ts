@@ -60,6 +60,13 @@ import { type Skill, SkillError } from "../../skills/catalog.ts";
 import { invokeLoadSkill, LOAD_SKILL, loadSkillTool } from "../../skills/tool.ts";
 import { ASK_USER, isPending } from "../../tools/context.ts";
 import { isReportedToolError, ReportedToolError } from "../../tools/errors.ts";
+import {
+  asToolGrant,
+  expandGrants,
+  GrantError,
+  type GrantedTool,
+  requestToolSpecs,
+} from "../../tools/grants.ts";
 import { type CheckedCall, ToolSet } from "../../tools/registry.ts";
 import { formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import { rejectDeepNesting, type Type, TypeCheckError, type ValueRecord, writeAsText } from "../../typesys/values.ts";
@@ -189,8 +196,14 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     );
   const steerOptions = { render: ctx.renderSteer ?? null, onDrop, onFallback };
   const toolset = ctx.toolset ?? new ToolSet();
-  // A granted id may name a host-filled group; grants are checked by tool name.
-  const granted = toolset.expand(ctx.tools);
+  // A grant may name a host-filled group, whose tools the model sees as `<group>_<tool>`.
+  let granted: GrantedTool[];
+  try {
+    granted = expandGrants(ctx.tools.map(asToolGrant), toolset.scopes());
+  } catch (error) {
+    if (!(error instanceof GrantError)) throw error;
+    throw new RangeError(`agent node ${reprText(ctx.nodeId)} ${error.message}`, { cause: error });
+  }
   if (granted.length === 0 && ctx.skills.length === 0 && schema !== null) {
     // One structured request: steers join it as they would a loop's first call, and an interrupt
     // before it is honored, leaving the steers queued.
@@ -199,12 +212,14 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     return await structured();
   }
 
-  // The schema goes out as the host gave it; each protocol adapter lowers it for its provider.
-  const bound = toolset
-    .resolve(granted)
-    .map((tool) => new ToolSpec({ name: tool.name, description: tool.description, parameters: tool.parametersJsonSchema }));
   const skills = new Map(ctx.skills.map((skill) => [skill.name, skill]));
-  if (skills.size > 0) bound.push(loadSkillTool());
+  // The schema goes out as the host gave it; each protocol adapter lowers it for its provider.
+  const specOf = (each: GrantedTool) => {
+    const tool = toolset.resolve([{ group: each.group, name: each.tool }])[0]!;
+    const { name, description } = tool;
+    return new ToolSpec({ name, description, parameters: tool.parametersJsonSchema });
+  };
+  const bound = requestToolSpecs(granted, specOf, skills.size > 0 ? loadSkillTool() : null)!;
   let iterations = 0;
   let reply: Message | null = null;
   const digests = new RequestDigest(ctx.baseSystemPrompt);
@@ -460,8 +475,8 @@ export async function stepsMaterial(
 interface ToolTurn {
   readonly ctx: AgentRunContext;
   readonly toolset: ToolSet;
-  /** The granted tool names, groups expanded. */
-  readonly granted: string[];
+  /** The granted tools, groups expanded, each under the name the model sees. */
+  readonly granted: readonly GrantedTool[];
   readonly skills: ReadonlyMap<string, Skill>;
   readonly live: LiveSinks | null;
   /** The `n` of the reply's `model_call` step, which each call's idempotency key and brackets hold. */
@@ -636,13 +651,16 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     };
     return { planned: { call, index, callId: undefined, deadline: null, invoke }, safe: true };
   }
-  if (!turn.granted.includes(call.name)) {
+  const grant = turn.granted.find((each) => each.visible === call.name);
+  if (grant === undefined) {
     const error = new AgentLoopError(
       `agent node ${reprText(ctx.nodeId)} requested tool ${reprText(call.name)}, but it is not granted; ` +
-        `granted tools: ${writeAsText(turn.granted)}`,
+        `granted tools: ${writeAsText(turn.granted.map((each) => each.visible))}`,
     );
     return { error, granted: false };
   }
+  // The call names the tool as the model saw it; the grant names it in its group.
+  const ref = { group: grant.group, name: grant.tool };
   // An ask's deadline is fixed before its handler runs, which gets it; the pending step records it.
   let deadline: string | null = null;
   if (call.name === ASK_USER && typeof args["timeout"] === "string") {
@@ -658,8 +676,8 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   try {
     checked =
       deadline === null
-        ? await toolset.validate(call.name, args, { signal: ctx.signal })
-        : await toolset.validateTrusted(call.name, { ...args, deadline }, { signal: ctx.signal });
+        ? await toolset.validate(ref, args, { signal: ctx.signal })
+        : await toolset.validateTrusted(ref, { ...args, deadline }, { signal: ctx.signal });
   } catch (error) {
     // A check the stop cut short is the stop, not a failed check.
     checkNodeStopped(turn);

@@ -1,0 +1,13 @@
+# `tools:` takes a tool or group name, or some tools of a group; host groups aren't checked at load.
+kind: load
+flow: |
+  id: grants
+  name: grants
+  nodes:
+    a:
+      kind: agent
+      prompt: Help the user.
+      tools: [ask_user, github, {lessons: [read]}]
+  output: ${a.output}
+expect:
+  load: ok

@@ -189,7 +189,7 @@ test("desugar adaptive questions preserves ranges", () => {
 test("desugar adaptive questions without source", () => {
   const gate = new ToolDescriptor({
     id: "ask",
-    toolId: "ask",
+    toolRef: { group: null, name: "ask" },
     inputs: { topic: "${input.topic}" },
     adaptiveQuestions: { prompt: "Q", llm_config: { model: "m" } },
   });

@@ -560,7 +560,7 @@ output: \${call.output}
   test(
     "an agent model reads an mcp error result and the node succeeds",
     async () => {
-      const call = new ToolCallPart({ id: "c0", name: "fail", arguments: { message: "no luck" } });
+      const call = new ToolCallPart({ id: "c0", name: "fake_fail", arguments: { message: "no luck" } });
       const model = new ScriptedModel([
         new Response({ message: new Message({ role: "assistant", parts: [call] }), finishReason: "tool_calls" }),
         new Response({

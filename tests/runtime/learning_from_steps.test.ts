@@ -388,7 +388,7 @@ const backwardReply = () => textReply(JSON.stringify({ input_feedback: {}, self_
 async function groupedRun(backend: FakeMemory) {
   const path = join(dir, `grouped-${++count}.jsonl`);
   const flow = await loadFlow(GROUPED);
-  const replies = [callReply(["lookup", { topic: "x" }, "call-x"]), textReply("done"), backwardReply()];
+  const replies = [callReply(["toolbox_lookup", { topic: "x" }, "call-x"]), textReply("done"), backwardReply()];
   const model = new ScriptedModel(replies, { provider: "anthropic", model: "claude-test" });
   const result = await runFlow(flow, {}, {
     log: path,
@@ -411,8 +411,8 @@ test("a grant naming a tool group is expanded with the run's tools when the same
   const [episode] = backend.learnContexts[0]!.episodes;
   expect(episode!.prompt).toBe("hi");
   expect(episode!.interactions).toEqual([
-    new ToolCallInteraction("lookup", { topic: "x" }),
-    new ToolResultInteraction("lookup", "found:x"),
+    new ToolCallInteraction("toolbox_lookup", { topic: "x" }),
+    new ToolResultInteraction("toolbox_lookup", "found:x"),
     new ModelTextInteraction("done"),
   ]);
   expect(events).toEqual([]);
@@ -421,8 +421,8 @@ test("a grant naming a tool group is expanded with the run's tools when the same
 test("run_started records each granted tool group's members", async () => {
   const { path } = await groupedRun(new FakeMemory());
   const start = JSON.parse(readFileSync(path, "utf8").split("\n")[0]!);
-  expect(start.payload.tool_groups).toEqual({ toolbox: ["lookup", "save"] });
-  expect(Object.keys(start.payload.tools).sort()).toEqual(["lookup", "save"]);
+  expect(start.payload.tool_groups).toEqual({ toolbox: ["toolbox_lookup", "toolbox_save"] });
+  expect(Object.keys(start.payload.tools).sort()).toEqual(["toolbox_lookup", "toolbox_save"]);
 });
 
 test("a finished run reopened with no tools expands its grant from the recorded tool groups", async () => {
@@ -443,8 +443,8 @@ test("a finished run reopened with no tools expands its grant from the recorded 
   const [episode] = context.episodes;
   expect(episode!.prompt).toBe("hi");
   expect(episode!.interactions).toEqual([
-    new ToolCallInteraction("lookup", { topic: "x" }),
-    new ToolResultInteraction("lookup", "found:x"),
+    new ToolCallInteraction("toolbox_lookup", { topic: "x" }),
+    new ToolResultInteraction("toolbox_lookup", "found:x"),
     new ModelTextInteraction("done"),
   ]);
   expect(logJson(context.feedback)).toContain("Shorter.");

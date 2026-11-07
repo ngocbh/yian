@@ -203,9 +203,12 @@ output:
 - **`output:` defaults to `str`.** Any other type (a record, `Literal`, list, number) asks the
   model for that type and checks the reply, retrying up to `retries:` (default 2). It can't
   hold `file` or `None`.
-- **`tools:` is always a list** of tool or group names, such as an MCP server's name. `ask_user`
-  lets the model ask a person when it chooses; for a question that must be asked, use an `ask`
-  node.
+- **`tools:` is always a list** of tool or group names, such as an MCP server's name, or
+  `{group: [tool, ...]}` for some tools of a group. `ask_user` lets the model ask a person when
+  it chooses; for a question that must be asked, use an `ask` node.
+- **A group's tools show to the model as `<group>_<tool>`.** A bare tool name finds a group's tool
+  only when one group has it; when two do, grant `{github: [search]}`. A tool in two granted
+  groups is offered once, under the first grant's name.
 - **An agent a host may interrupt needs an `Optional(...)` output.** An interrupted agent's
   output is null; with `str` or any other type it fails with `agent.interrupted`. This applies
   to every agent with `steer_inbox:`.

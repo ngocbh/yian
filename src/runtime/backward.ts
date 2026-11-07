@@ -37,6 +37,14 @@ import {
 } from "../nodes/base.ts";
 import { Skill } from "../skills/catalog.ts";
 import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
+import {
+  expandGrants,
+  GrantError,
+  type GrantedTool,
+  type GrantScope,
+  requestToolSpecs,
+  type ToolGrant,
+} from "../tools/grants.ts";
 import { jsTypeName } from "../typesys/values.ts";
 import { AttributedBackwardResult, BackwardFailure, BackwardOutcome, type MemoryProposal } from "./contracts.ts";
 import {
@@ -270,8 +278,8 @@ export async function learningMaterials(
 
 /**
  * Return what the run recorded of its grants, as a `MaterialCaps` reads them: the skills by name,
- * and the specs of the tools some grant ids name, a group expanded with the membership the run
- * recorded (`null` when one names no recorded tool).
+ * and a request's tool list for some grants, expanded as the live loop expands them but over the
+ * groups and tools the run recorded (`null` when a grant names no recorded tool).
  */
 export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "toolSpecs"> {
   const skills = new Map(
@@ -280,19 +288,58 @@ export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "
       new Skill({ name, description, instructions }),
     ]),
   );
-  const toolSpecs = (ids: readonly string[]): ToolSpec[] | null => {
-    const specs: ToolSpec[] = [];
-    // As `ToolSet.expand`: a group becomes its tools, and a tool granted twice is bound once.
-    const groups = state.recordedToolGroups;
-    const names = new Set(ids.flatMap((id) => (Object.hasOwn(groups, id) ? groups[id]! : [id])));
-    for (const name of names) {
-      if (!Object.hasOwn(state.recordedTools, name)) return null;
-      const { description, parameters } = state.recordedTools[name]!;
-      specs.push(new ToolSpec({ name, description, parameters }));
+  const scope = recordedScope(state);
+  const toolSpecs = (grants: readonly ToolGrant[], loadSkill: ToolSpec | null) => {
+    let granted: GrantedTool[];
+    try {
+      granted = expandGrants(grants, [scope]);
+    } catch (error) {
+      if (error instanceof GrantError) return null;
+      throw error;
     }
-    return specs;
+    const specOf = (tool: GrantedTool) => {
+      if (!Object.hasOwn(state.recordedTools, tool.key)) return null;
+      const { name, description, parameters } = state.recordedTools[tool.key]!;
+      return new ToolSpec({ name, description, parameters });
+    };
+    return requestToolSpecs(granted, specOf, loadSkill);
   };
   return { skills, toolSpecs };
+}
+
+/**
+ * Return the run's recorded tools as the grant scope its `ToolSet` was: the recorded groups by
+ * name, each member by its own name; a top-level tool is a recorded tool no group lists; and a
+ * tool's identity is its record name, so grants expand and dedupe as they did live.
+ */
+function recordedScope(state: RunState): GrantScope {
+  const groups = state.recordedToolGroups;
+  const tools = state.recordedTools;
+  const members = (group: string): readonly string[] =>
+    Object.hasOwn(groups, group) ? groups[group]! : [];
+  const nameOf = (key: string) => (Object.hasOwn(tools, key) ? tools[key]!.name : null);
+  const listed = new Set(Object.values(groups).flat());
+  return {
+    label: "this run",
+    bareMembers: true,
+    group: (name) =>
+      Object.hasOwn(groups, name) ? members(name).map((key) => nameOf(key) ?? key) : null,
+    hasTool: (name) => Object.hasOwn(tools, name) && !listed.has(name),
+    groupsHolding: (name) => {
+      const seen = new Set<string>();
+      const holding: string[] = [];
+      for (const group of Object.keys(groups)) {
+        const key = members(group).find((member) => nameOf(member) === name);
+        if (key === undefined || seen.has(key)) continue;
+        seen.add(key);
+        holding.push(group);
+      }
+      return holding;
+    },
+    groupNames: () => Object.keys(groups),
+    identity: (group, tool) =>
+      group === null ? tool : (members(group).find((key) => nameOf(key) === tool) ?? tool),
+  };
 }
 
 /** Compute once, stage every memory, then request and observe each memory key in order. */

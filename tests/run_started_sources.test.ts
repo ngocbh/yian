@@ -534,8 +534,35 @@ test("run_started records the tools and skills the AGENTs grant", async () => {
 
   const record = started(await runInto(flow, { tools: { t }, skills: skill(), models }, {}));
 
-  expect(record.tools).toEqual({ t: { description: "Look it up.", parameters: t.parametersJsonSchema } });
+  expect(record.tools).toEqual({ t: { name: "t", description: "Look it up.", parameters: t.parametersJsonSchema } });
   expect(record.skills).toEqual({ s: { description: "Answer briefly.", instructions: "Be brief." } });
+});
+
+/** Run AGENT_FLOW with the agent's `tools:` line `line`, no skills, and the host tools `tools`; return its log. */
+async function runWith(line: string, tools: RunFlowOptions["tools"]): Promise<{ log: string }> {
+  const flow = await loadFlow(AGENT_FLOW.replace("    tools: [t]\n    skills: [s]\n", `    ${line}\n`));
+  return { log: await runInto(flow, { tools, models }, {}) };
+}
+
+test("run_started records each granted tool once, under its record name", async () => {
+  const web = lookup("web");
+  const { log } = await runWith(`tools: [company]`, { toolbox: [web, lookup("a")], company: [web, lookup("b")] });
+  // The log writes keys in sorted order.
+  expect(Object.keys(started(log).tools)).toEqual(["company_b", "toolbox_web"]);
+  expect(started(log).tools["toolbox_web"]).toMatchObject({ name: "web" });
+  expect(started(log).toolGroups).toEqual({ company: ["toolbox_web", "company_b"] });
+});
+
+test("a bare grant of a group's tool records its group", async () => {
+  const { log } = await runWith(`tools: [create_issue]`, { github: [lookup("search"), lookup("create_issue")] });
+  expect(started(log).toolGroups).toEqual({ github: ["github_search", "github_create_issue"] });
+  expect(Object.keys(started(log).tools)).toEqual(["github_create_issue", "github_search"]);
+});
+
+test("a group grant records the whole group, each tool under its record name", async () => {
+  const { log } = await runWith(`tools: [{github: [search]}]`, { github: [lookup("search"), lookup("create_issue")] });
+  expect(started(log).toolGroups).toEqual({ github: ["github_search", "github_create_issue"] });
+  expect(started(log).tools["github_search"]).toMatchObject({ name: "search", description: "Look a word up." });
 });
 
 test("run_started records no flow for a flow built in code", async () => {
@@ -844,16 +871,17 @@ test(
       execute: (args) => String(args.text),
     });
     const flow = await loadFlow(AGENT_FLOW.replace("tools: [t]", "tools: [echo]").replace("    skills: [s]\n", ""));
-    const log = await cutRun(flow, 9, { tools: { echo }, models }, {});
+    // In a group named like the server, so the resume's server tool has the same record name.
+    const log = await cutRun(flow, 9, { tools: { fake: [echo] }, models }, {});
     const before = readFileSync(log);
     const marker = join(logs, `marker-${markers.length + 1}`);
     markers.push(marker);
-    const server = mcpServer(stdioOptions("--marker", marker));
+    const server = mcpServer(stdioOptions("--only", "echo", "--marker", marker));
 
     const error = await rejected(advance({ log, env: hostEnv(logs), tools: { fake: server }, models }));
 
     expect(error).toBeInstanceOf(RangeError);
-    expect((error as Error).message).toStartWith("resume refused: tools.echo description");
+    expect((error as Error).message).toStartWith("resume refused: tools.fake_echo description");
     // The server listed its tools before the check, and the resume closed it.
     expect(readFileSync(marker, "utf8")).not.toBe("");
     await expectClosed(server, marker);

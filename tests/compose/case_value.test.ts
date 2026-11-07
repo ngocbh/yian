@@ -193,14 +193,14 @@ test("multiple case values in one binding both expand", () => {
 });
 
 test("case value in tool inputs expands", () => {
-  const tool = new ToolDescriptor({ id: "t", toolId: "x", inputs: { q: "${gate.output}" } });
+  const tool = new ToolDescriptor({ id: "t", toolRef: { group: null, name: "x" }, inputs: { q: "${gate.output}" } });
   const out = expanded({ gate: gate(), t: tool });
   expect(inputOf(out, "t", "q")).toBe("${pro.output | caut.output}");
 });
 
 test("case value in ask and loop inputs expands", () => {
   const hosts = [
-    new ToolDescriptor({ id: "ask", toolId: "ask", inputs: { prompt: "Continue?", q: "${gate.output}" } }),
+    new ToolDescriptor({ id: "ask", toolRef: { group: null, name: "ask" }, inputs: { prompt: "Continue?", q: "${gate.output}" } }),
     new LoopDescriptor({ id: "loop", call: "body", inputs: { q: "${gate.output}" } }),
   ];
   for (const host of hosts) {

@@ -1053,8 +1053,10 @@ export function validateOutputContract(contract: OutputContract | null, value: u
 
 /** One direct tool call a node makes, as the run boundary checks it. Frozen. */
 export class HostToolCall {
-  /** The id of the tool the node invokes. */
+  /** The id of the tool the node invokes: its own name, in its group when `group` is set. */
   readonly toolId: string;
+  /** The tool group the tool is named in, or `null` for a bare tool id. */
+  readonly group: string | null;
   /** The names of the inputs the node passes, in declaration order. */
   readonly inputs: readonly string[];
   /** The proven type of each input's binding; an input whose type is not proven is absent. */
@@ -1065,11 +1067,13 @@ export class HostToolCall {
   /** Describe one tool call; `inputs` is copied and `inputTypes` retained. */
   constructor(
     toolId: string,
+    group: string | null,
     inputs: readonly string[],
     inputTypes: ReadonlyMap<string, Type>,
     outputType: Type | null,
   ) {
     this.toolId = toolId;
+    this.group = group;
     this.inputs = Object.freeze([...inputs]);
     this.inputTypes = inputTypes;
     this.outputType = outputType;

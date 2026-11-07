@@ -1,7 +1,7 @@
 /**
- * The tool registry and `ToolSet`: each construction and group error, `expand`, `forRun`, `toolIds`,
- * `groups`, `validate` and the `CheckedCall` it returns, `invoke` of a call (a thrown non-`Error` is
- * wrapped), `isConcurrencySafe` and the `ask_user` options cleaning.
+ * The tool registry and `ToolSet`: each construction and group error, namespaced groups and their
+ * scope, `forRun`, `toolIds`, `groups`, `validate` and the `CheckedCall` it returns, `invoke` of a
+ * call (a thrown non-`Error` is wrapped), `isConcurrencySafe` and the `ask_user` options cleaning.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -22,6 +22,7 @@ import {
   ToolSet,
   type ToolEntry,
 } from "../../src/tools/registry.ts";
+import { asToolGrant, expandGrants } from "../../src/tools/grants.ts";
 import { toolTypes } from "../../src/tools/types.ts";
 import { canonicalTypeLabel, TypeCheckError } from "../../src/typesys/values.ts";
 
@@ -43,6 +44,20 @@ function tool(name: string, result: unknown = "done"): FunctionTool {
     description: "Echo.",
     parametersJsonSchema: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
     execute: () => result,
+  });
+}
+
+/** Build a `FunctionTool` named `name` taking one string `topic`; it returns `<name>:<topic>`. */
+function topic(name: string): FunctionTool {
+  return new FunctionTool({
+    name,
+    description: `The ${name} tool.`,
+    parametersJsonSchema: {
+      type: "object",
+      properties: { topic: { type: "string" } },
+      required: ["topic"],
+    },
+    execute: (args) => `${name}:${String(args.topic)}`,
   });
 }
 
@@ -246,12 +261,6 @@ describe("ToolSet construction", () => {
       RangeError,
       "tool 'echo' appears twice in group 'g' as different tools",
     ],
-    [
-      "two tools under one name in two groups",
-      { a: [tool("echo")], b: [tool("echo")] },
-      RangeError,
-      "tool 'echo' is in both groups 'a' and 'b' as different tools",
-    ],
   ];
 
   for (const [label, tools, kind, message] of SERVERLESS_ROWS) {
@@ -259,6 +268,17 @@ describe("ToolSet construction", () => {
       expect(thrown(() => loose(tools), kind)).toBe(message);
     });
   }
+
+  test("two tools under one name in two groups are both kept", () => {
+    const a = tool("echo");
+    const b = tool("echo");
+    const tools = new ToolSet({ a: [a], b: [b] });
+    const refs = [
+      { group: "a", name: "echo" },
+      { group: "b", name: "echo" },
+    ];
+    expect(tools.resolve(refs)).toEqual([a, b]);
+  });
 
   test("null and undefined mean the registry", () => {
     registerTool("echo", tool("echo"));
@@ -270,15 +290,15 @@ describe("ToolSet construction", () => {
     const shared = tool("shared");
     const tools = new ToolSet({ a: [shared, shared, tool("x")], b: [shared] });
     expect(tools.groups).toEqual(["a", "b"]);
-    expect(tools.expand(["a"])).toEqual(["shared", "x"]);
-    expect(tools.expand(["b"])).toEqual(["shared"]);
+    expect(tools.scope().group("a")).toEqual(["shared", "x"]);
+    expect(tools.scope().group("b")).toEqual(["shared"]);
     expect(tools.resolve(["shared"])).toEqual([shared]);
   });
 
   test("an empty group grants nothing", () => {
     const tools = new ToolSet({ company: [] });
     expect(tools.groups).toEqual(["company"]);
-    expect(tools.expand(["company"])).toEqual([]);
+    expect(tools.scope().group("company")).toEqual([]);
   });
 
   test("the ask_user handler becomes the fixed ask_user tool", async () => {
@@ -317,6 +337,44 @@ describe("ToolSet construction", () => {
   });
 });
 
+describe("namespaced tool groups", () => {
+  test("two groups may hold different tools of one name, each reached by its group", async () => {
+    const a = topic("search"),
+      b = topic("search");
+    const set = new ToolSet({ github: [a], docs: [b] });
+    expect(set.scope().groupsHolding("search")).toEqual(["github", "docs"]);
+    expect(set.scope().group("docs")).toEqual(["search"]);
+    expect(set.scope().identity("docs", "search")).toBe("docs_search");
+    const call = await set.validate({ group: "docs", name: "search" }, { topic: "x" });
+    expect(await set.invoke(call)).toBe("search:x");
+  });
+
+  test("a bare name finds its one group's tool", async () => {
+    const set = new ToolSet({ box: [topic("place_order")] });
+    await expect(set.validate("place_order", { topic: "x" })).resolves.toBeDefined();
+  });
+
+  test("one tool object in two groups has one record name, its first group's", () => {
+    const web = topic("web");
+    const set = new ToolSet({ toolbox: [web, topic("a")], company: [web, topic("b")] });
+    expect(set.scope().identity("company", "web")).toBe("toolbox_web");
+    expect(set.scope().groupsHolding("web")).toEqual(["toolbox"]);
+  });
+
+  test.each([
+    [
+      { github_search: topic("github_search"), github: [topic("search")] },
+      "tool 'github_search' and github's 'search' could both show as 'github_search'; rename one",
+    ],
+    [
+      { a: [topic("b_c")], a_b: [topic("c")] },
+      "a's 'b_c' and a_b's 'c' could both show as 'a_b_c'; rename one",
+    ],
+  ])("a tool set in which two tools could show one name is refused (%#)", (spec, message) => {
+    expect(() => new ToolSet(spec as never)).toThrow(message);
+  });
+});
+
 describe("ToolSet lookup", () => {
   test("ask user never falls back to the global registry", () => {
     TOOL_REGISTRY.set("ask_user", tool("ask_user", "global answer"));
@@ -348,16 +406,19 @@ describe("ToolSet lookup", () => {
     expect((error as Error).message).toContain("unsupported argument");
   });
 
-  test("a group id is not a tool", () => {
+  test("a group id is not a tool, and the error names one of its tools as {group: tool}", () => {
     expect(thrown(() => new ToolSet({ toolbox: [tool("a")] }).resolve(["toolbox"]), RangeError)).toBe(
-      "'toolbox' is a tool group, not a tool; grant it in an AGENT node's tools: list",
+      "'toolbox' is a tool group, not a tool; name one of its tools, as `{toolbox: a}`",
+    );
+    expect(thrown(() => new ToolSet({ toolbox: [] }).resolve(["toolbox"]), RangeError)).toBe(
+      "'toolbox' is a tool group, not a tool, and it has no tools",
     );
   });
 
-  test("an unknown id lists the mapping's tools", () => {
+  test("an unknown id lists the mapping's tools, a group's as {group: tool}", () => {
     const tools = new ToolSet({ b: tool("b"), g: [tool("a")] });
     expect(thrown(() => tools.resolve(["zzz"]), RangeError)).toBe(
-      'unknown tool id \'zzz\'; known tools: ["a","b"]',
+      'unknown tool id \'zzz\'; known tools: ["b","{g: a}"]',
     );
   });
 
@@ -391,21 +452,21 @@ describe("ToolSet lookup", () => {
     expect(new ToolSet({ a, g: [b] }).resolve(["b", "a"])).toEqual([b, a]);
   });
 
-  test("expand deduplicates overlapping and repeated grants", () => {
+  test("overlapping and repeated grants bind each tool once, under its first grant's name", () => {
     const shared = tool("shared");
     const tools = new ToolSet({ a: [tool("x"), shared], b: [shared, tool("y")], solo: tool("solo") });
-    expect(tools.expand(["a", "b", "a", "solo", "solo", "unknown"])).toEqual([
-      "x",
-      "shared",
-      "y",
+    const grants = ["a", "b", "a", "solo", "solo"].map(asToolGrant);
+    expect(expandGrants(grants, tools.scopes()).map((granted) => granted.visible)).toEqual([
+      "a_x",
+      "a_shared",
+      "b_y",
       "solo",
-      "unknown",
     ]);
   });
 
   test("toolIds is sorted, from the mapping and its groups", () => {
     const tools = new ToolSet({ b: tool("b"), g: [tool("a"), tool("C")], ask_user: () => null });
-    expect(tools.toolIds).toEqual(["C", "a", "ask", "ask_user", "b"]);
+    expect(tools.toolIds).toEqual(["ask", "ask_user", "b", "{g: C}", "{g: a}"]);
     expect(tools.groups).toEqual(["g"]);
   });
 

@@ -12,7 +12,7 @@ expect:
   load:
     diagnostics:
     - code: compose.load
-      message: 'node ''a'' (kind=tool): `tool_id:` must be text, but it is empty; write the text'
+      message: 'node ''a'' (kind=tool): `tool_id:` must be a tool name or `{group: tool}`, but it is empty; write a tool name'
       frames:
       - label: flow.yaml
         range: [6, 14, 6, 18]

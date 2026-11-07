@@ -42,6 +42,7 @@ import { LoopNode } from "../nodes/loop/node.ts";
 import { MapNode } from "../nodes/map/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import { ToolNode } from "../nodes/tool/node.ts";
+import { authoredGrant, type ToolGrant } from "../tools/grants.ts";
 import { canonicalJson, type JsonObject, type JsonValue } from "../typesys/json.ts";
 import {
   canonicalUnionOrder,
@@ -118,7 +119,7 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "steerRender",
   ],
   [NodeKind.CODE]: ["code"],
-  [NodeKind.TOOL]: ["toolId", "retries", "answerSchema"],
+  [NodeKind.TOOL]: ["toolRef", "retries", "answerSchema"],
   [NodeKind.CASE]: ["cases"],
   [NodeKind.CALL]: ["flowId", "flowVersion", "child"],
   [NodeKind.MAP]: ["flowId", "flowVersion", "child"],
@@ -156,7 +157,8 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   // body's JavaScript, derived from `code`.
   [NodeKind.CODE]: ["mode", "baseDir", "sourceFile", "codeLineStarts", "codeOrigin", "codeLineOrigins", "stripped"],
   // `inputTypes` is derived from wiring and producer contracts; the run-start tool check reads it.
-  [NodeKind.TOOL]: ["inputTypes"],
+  // `toolId` is the name messages show, derived from `toolRef`.
+  [NodeKind.TOOL]: ["inputTypes", "toolId"],
   [NodeKind.CASE]: [],
   // `childInputs` duplicates the recursive child's START signature.
   [NodeKind.CALL]: ["childInputs"],
@@ -810,7 +812,9 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       // A list prompt as authored; a text prompt stays text, so text-prompt flows keep their identity.
       manifest.prompt = typeof agent.prompt === "string" ? agent.prompt : authoredPrompt(agent.prompt);
       manifest.retries = count(agent.retries, `${path}.retries`, false);
-      manifest.tools = canonicalSequence(tools, ctx, `${path}.tools`);
+      // Grants as authored, so a flow granting only names keeps its identity.
+      const grants = (tools as readonly ToolGrant[]).map(authoredGrant);
+      manifest.tools = canonicalSequence(grants, ctx, `${path}.tools`);
       manifest.own_llm_config = llmLayerManifest(agent.ownLlmConfig, ctx, `${path}.ownLlmConfig`);
       // Left out when empty so memory-free flows keep their identity.
       if (!topologyOnly && memories.length > 0) manifest.memories = memories;
@@ -821,7 +825,9 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       break;
     case NodeKind.TOOL: {
       const tool = node as ToolNode;
-      manifest.tool_id = tool.toolId;
+      // As authored: a bare id stays text, so flows naming bare tools keep their identity.
+      const { group, name } = tool.toolRef;
+      manifest.tool_id = group === null ? name : Object.fromEntries([[group, name]]);
       const retries = count(tool.retries, `${path}.retries`, false);
       // Left out at zero, so retries don't change the identity of flows that don't set
       // them.

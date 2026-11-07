@@ -153,6 +153,7 @@ import {
   TraceTerminal,
 } from "./trace.ts";
 import { ASK, ASK_USER, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
+import { visibleToolName } from "../tools/grants.ts";
 import {
   applyWaitsRecord,
   availableUnread,
@@ -4135,7 +4136,7 @@ function validateNodeWaiting(state: RunState, record: NodeWaitingRecord): void {
     }
   }
   const w = state.waits;
-  const toolId = node.hostToolCall()?.toolId ?? null;
+  const toolId = hostToolName(node);
   for (const entry of record.waits) {
     if (toolId !== TAKE && toolId !== SLEEP) {
       throw new RangeError(`NodeWaiting node ${reprText(nodeId)} registers a wait but is neither a take nor a sleep`);
@@ -4428,6 +4429,15 @@ function validateSteerStep(state: RunState, nodeId: string, step: Readonly<JsonO
 const AGENT_PENDING_FIELDS = ["tool_call_id", "reply", "index"] as const;
 
 /**
+ * Return the name a node's host tool call shows in its steps and waits: the tool id, or
+ * `<group>_<tool>` for a group's tool; `null` for a node that calls no host tool.
+ */
+function hostToolName(node: Node): string | null {
+  const call = node.hostToolCall();
+  return call === null ? null : visibleToolName(call.group, call.toolId);
+}
+
+/**
  * Require a running node's `pending` step to register its own host call. An AGENT's is checked by
  * `validateAgentPendingStep`. Otherwise the node makes a host tool call that isn't a take or
  * sleep, `tool` is its tool, `call_id` its TOOL call id, not yet registered; no agent fields; a
@@ -4440,7 +4450,7 @@ function validatePendingStep(state: RunState, nodeId: string, step: Readonly<Jso
     validateAgentPendingStep(state, nodeId, step);
     return;
   }
-  const toolId = node.hostToolCall()?.toolId ?? null;
+  const toolId = hostToolName(node);
   if (toolId === null) throw new RangeError(`a pending step on node ${reprText(nodeId)}, which calls no host tool`);
   if (toolId === TAKE || toolId === SLEEP) {
     throw new RangeError(`a pending step on node ${reprText(nodeId)}, whose ${toolId} the engine decides`);
@@ -4710,7 +4720,7 @@ function requireCommittingNode(state: RunState, nodeId: string): void {
 
 /** Refuse a value commit by a take node, which commits the events it took (a take commit). */
 function requireValueCommitNode(state: RunState, nodeId: string): void {
-  if (state.flow.nodes.get(nodeId)!.hostToolCall()?.toolId === TAKE) {
+  if (hostToolName(state.flow.nodes.get(nodeId)!) === TAKE) {
     throw new RangeError(`take node ${reprText(nodeId)} commits the events it took, not a value`);
   }
 }
@@ -4731,7 +4741,9 @@ function validateTakeCommit(state: RunState, record: PoolCommitRecord): void {
   const take = record.take!;
   requireCommittingNode(state, nodeId);
   const node = state.flow.nodes.get(nodeId)!;
-  if (node.hostToolCall()?.toolId !== TAKE) throw new RangeError(`a take commit by node ${reprText(nodeId)}, which is no take`);
+  if (hostToolName(node) !== TAKE) {
+    throw new RangeError(`a take commit by node ${reprText(nodeId)}, which is no take`);
+  }
   const target = node.commitAs ?? nodeId;
   if (record.key !== target) {
     throw new RangeError(`the take commit of ${reprText(nodeId)} is under ${reprText(record.key)}, not ${reprText(target)}`);

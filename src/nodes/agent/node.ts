@@ -103,7 +103,8 @@ import {
   typesNullable,
 } from "./llm_values.ts";
 import { runAgent, stepsMaterial } from "./loop.ts";
-import { reportedText, systemPromptWithMemory, toolText } from "./memory.ts";
+import { systemPromptWithMemory } from "./memory.ts";
+import { reportedText, toolText } from "./results.ts";
 import {
   checkMessage,
   checkModelConversation,

@@ -27,7 +27,7 @@ import { type JsonObject, logJson } from "../../typesys/json.ts";
 import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesys/values.ts";
 import { CapabilityFault, type NodeCaps, type SteerInbox } from "../base.ts";
 import type { NodeSteps } from "../contracts.ts";
-import type { CloserReason } from "./memory.ts";
+import type { CloserReason } from "./results.ts";
 import { foldSteps, type NumberedStep, type SteerRender, type StepExchange, steerValues } from "./messages.ts";
 
 /** The system prompt of an AGENT that authors none. */

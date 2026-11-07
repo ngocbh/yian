@@ -52,7 +52,7 @@ import {
   reprText,
 } from "../../src/diagnostics.ts";
 import { type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "../../src/events.ts";
-import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
+import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
 import type { CompleteResult } from "../../src/nodes/base.ts";
 import { ProviderError, kindForStatus } from "../../src/llm/errors.ts";
 import {

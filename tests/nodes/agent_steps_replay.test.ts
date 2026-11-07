@@ -35,7 +35,7 @@ import {
 } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentSteps, requestSha256 } from "../../src/nodes/agent/context.ts";
-import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
+import { SKIPPED_TOOL_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { INTERRUPTED_MARKER } from "../../src/nodes/agent/messages.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";

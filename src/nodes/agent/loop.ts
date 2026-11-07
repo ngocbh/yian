@@ -92,7 +92,8 @@ import {
   observeToolCall,
   type ToolCallIdentity,
 } from "./live.ts";
-import { type CloserReason, closerResult, reportedText, SKIPPED_TOOL_RESULT, systemPromptWithMemory, toolText } from "./memory.ts";
+import { systemPromptWithMemory } from "./memory.ts";
+import { type CloserReason, closerResult, reportedText, SKIPPED_TOOL_RESULT, toolText } from "./results.ts";
 import { foldSteps, type SteerRender, steerMessages, steerValues } from "./messages.ts";
 import { generateStructured, structuredMaterial, typeToSchema } from "./structured.ts";
 import { pushVisible } from "./text.ts";

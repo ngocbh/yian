@@ -51,7 +51,7 @@ import { AgentLoopError, DEFAULT_SYSTEM, ToolIterationLimitError } from "../../s
 import { ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { SKIPPED_TOOL_ERROR } from "../../src/nodes/agent/live.ts";
 import { CallTimeLLM, contractNullable, LLM_CONFIG_KEY, splitLayers } from "../../src/nodes/agent/llm_values.ts";
-import { reportedText, toolText } from "../../src/nodes/agent/memory.ts";
+import { reportedText, toolText } from "../../src/nodes/agent/results.ts";
 import { AgentNode, isMaxToolIterations } from "../../src/nodes/agent/node.ts";
 import { pushVisible } from "../../src/nodes/agent/text.ts";
 import { BackwardContext, CapabilityFault, Output } from "../../src/nodes/base.ts";

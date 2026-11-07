@@ -39,7 +39,7 @@ import {
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { AgentSteps, RequestDigest, requestSha256 } from "../../src/nodes/agent/context.ts";
 import { stepsMaterial } from "../../src/nodes/agent/loop.ts";
-import { SKIPPED_TOOL_RESULT } from "../../src/nodes/agent/memory.ts";
+import { SKIPPED_TOOL_RESULT } from "../../src/nodes/agent/results.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";
 import { NodeSteps } from "../../src/nodes/contracts.ts";
 import { decodeRecord, InterruptedRecord, NodeStepRecord, readRunLog, type RecordEnvelope } from "../../src/runtime/log.ts";

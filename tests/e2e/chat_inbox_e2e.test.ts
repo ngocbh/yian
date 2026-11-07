@@ -15,7 +15,7 @@ import { NodeSucceeded, type RunEvent } from "../../src/events.ts";
 import { type ChatModel, EventStream, Finish, TextDelta } from "../../src/llm/events.ts";
 import type { Request } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
+import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
 import { INTERRUPTED_MARKER } from "../../src/nodes/agent/messages.ts";
 import { advance, close, complete, foldRunLog, interrupt, pendingCalls, runFlow, send, withdraw } from "../../src/run.ts";
 import {

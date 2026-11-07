@@ -45,7 +45,7 @@ import { type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/cont
 import { Interrupted, ReplyInterrupted } from "../../src/nodes/agent/interrupts.ts";
 import { callModel, liveSinks } from "../../src/nodes/agent/live.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
-import { TOOL_INTERRUPTED_OUTCOME } from "../../src/nodes/agent/memory.ts";
+import { TOOL_INTERRUPTED_OUTCOME } from "../../src/nodes/agent/results.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import { generateStructured, userMessage } from "../../src/nodes/agent/structured.ts";
 import { CapabilityFault } from "../../src/nodes/base.ts";

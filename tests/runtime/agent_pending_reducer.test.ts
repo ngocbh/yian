@@ -7,7 +7,7 @@ import { describe, expect, test } from "bun:test";
 
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { pendingCalls } from "../../src/run.ts";
-import { ASK_TIMED_OUT_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/memory.ts";
+import { ASK_TIMED_OUT_RESULT, TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
 import { NodeStepRecord, RunResumedRecord, type RunLog } from "../../src/runtime/log.ts";
 import {
   callResultStep,

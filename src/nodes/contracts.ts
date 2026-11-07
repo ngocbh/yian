@@ -1022,6 +1022,13 @@ export class NodeSteps {
    * @throws RangeError in a run, when `n` isn't one of the node's recorded steps.
    */
   readonly resumesSince: (n: number) => number;
+  /**
+   * The seq of step `n`'s record in the run log, to order it against another record, such as the
+   * `interrupted` record of the interrupt the node holds.
+   *
+   * @throws RangeError when `n` isn't one of the node's recorded steps, or outside a run.
+   */
+  readonly seqOf: (n: number) => number;
   /** The `n` after the last step recorded through this object, or after `prior` before any. */
   #next: number;
   /** Reads the node's calls as the run state holds them now; `null` outside a run. */
@@ -1041,9 +1048,11 @@ export class NodeSteps {
    *   engine passes it, and `next` counts only `record`'s steps without it.
    * @param resumesSince Counts the resumes that cut the node off since a step, from the run
    *   state; the engine passes it, and `resumesSince` is 0 without it.
+   * @param seqOf Gives a step's seq, from the run state; the engine passes it, and `seqOf` throws
+   *   without it.
    * @throws TypeError when `starts` isn't a safe integer, `prior` isn't an array of plain
-   *   records, `record` isn't a function, `calls` isn't an array, or `currentCalls`, `nextStep` or
-   *   `resumesSince` isn't a function or `null`.
+   *   records, `record` isn't a function, `calls` isn't an array, or `currentCalls`, `nextStep`,
+   *   `resumesSince` or `seqOf` isn't a function or `null`.
    * @throws RangeError when `starts` is less than 1 or `maxEventBytes` isn't a positive safe
    *   integer.
    */
@@ -1057,6 +1066,7 @@ export class NodeSteps {
     currentCalls: (() => readonly CallView[]) | null = null,
     nextStep: (() => number) | null = null,
     resumesSince: ((n: number) => number) | null = null,
+    seqOf: ((n: number) => number) | null = null,
   ) {
     if (typeof starts !== "number" || !Number.isSafeInteger(starts)) throw new TypeError("starts must be an int");
     if (starts < 1) throw new RangeError("starts must be at least 1");
@@ -1070,6 +1080,7 @@ export class NodeSteps {
     if (resumesSince !== null && typeof resumesSince !== "function") {
       throw new TypeError("resumesSince must be callable or null");
     }
+    if (seqOf !== null && typeof seqOf !== "function") throw new TypeError("seqOf must be callable or null");
     if (typeof maxEventBytes !== "number" || !Number.isSafeInteger(maxEventBytes) || maxEventBytes < 1) {
       throw new RangeError("maxEventBytes must be a positive int");
     }
@@ -1079,6 +1090,11 @@ export class NodeSteps {
     this.maxEventBytes = maxEventBytes;
     this.durable = durable === true;
     this.resumesSince = resumesSince ?? (() => 0);
+    this.seqOf =
+      seqOf ??
+      ((n) => {
+        throw new RangeError(`step ${String(n)} has no seq outside a run`);
+      });
     this.#next = prior.length + 1;
     this.#current = currentCalls;
     this.#nextStep = nextStep;

@@ -661,3 +661,24 @@ describe("NodeSteps.resumesSince counts the resumes that cut the node off since 
     expect(new NodeSteps(2, [{ kind: "test" }], () => 2).resumesSince(1)).toBe(0);
   });
 });
+
+test("NodeSteps.seqOf gives a step's seq in the log, and refuses a step it doesn't hold", async () => {
+  const seen: unknown[] = [];
+  const built = single(
+    new StepNode("work", (caps) => {
+      const steps = caps.steps!;
+      const n = steps.record({ kind: "test" });
+      seen.push(steps.seqOf(n));
+      try {
+        steps.seqOf(n + 1);
+      } catch (error) {
+        seen.push((error as Error).message);
+      }
+      return new Output("done");
+    }),
+  );
+  await built.run();
+  const step = built.log.records().find((envelope) => envelope.record instanceof NodeStepRecord)!;
+  expect(seen).toEqual([step.seq, "node 'work' has no step 2"]);
+  expect(() => new NodeSteps(1, [], () => 1).seqOf(1)).toThrow("step 1 has no seq outside a run");
+});

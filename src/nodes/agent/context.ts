@@ -217,6 +217,8 @@ export class AgentSteps {
   readonly #scrub: (error: unknown) => unknown;
   readonly #nodeId: string;
   #count = 0;
+  /** The `n` of the last step this start wrote, or `null`. */
+  #lastWritten: number | null = null;
   /** The recorded logical calls, each its failed attempts then its reply or its last failure. */
   readonly #calls: readonly (readonly NumberedStep[])[];
   /** How many of `#calls` were taken. */
@@ -539,8 +541,13 @@ export class AgentSteps {
   }
 
   #record(step: ValueRecord, options?: { settled?: boolean }): number {
-    if (this.#steps === undefined) return ++this.#count;
-    return this.#steps.record(step, options);
+    this.#lastWritten = this.#steps === undefined ? ++this.#count : this.#steps.record(step, options);
+    return this.#lastWritten;
+  }
+
+  /** The `n` of the last step this start wrote, or `null` before any. */
+  lastWritten(): number | null {
+    return this.#lastWritten;
   }
 }
 

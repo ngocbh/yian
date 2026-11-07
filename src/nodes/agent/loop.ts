@@ -563,15 +563,18 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
  * before its result), the closer written as its `tool_result` step, and never runs. Unparsed calls
  * are not in `turn.calls`, so they get nothing, as live.
  *
- * With a host interrupt pending, only the calls that may have started are sent again or closed,
- * and the rest are skipped from the first one on (`skipFrom`), as live skips the calls it hasn't
- * started. A call may have started when it belongs to the group the reply's own start was running
- * at its cut, or when it is the first call with neither a result nor a pending step, which a later
- * start, sending calls one at a time, may have been sending. That group is formed as live formed
- * it, from what the reply's own start recorded (`NodeSteps.resumesSince`; a call's pending step
- * marks the start that ran it, even when a later one closed it): its first call is the first one
- * that start didn't finish, and a later call joins it while both are safe to run together. A call
- * with no result is skipped before its check once the group has ended.
+ * With a host interrupt pending, only the calls that may have run are sent again or closed, and
+ * the rest are skipped from the first one on (`skipFrom`), as live skips the calls it hasn't
+ * started. A call may have run when it belongs to the group the reply's own start was running at
+ * its cut, which ran all its calls together. That group is formed as live formed it, from what the
+ * reply's own start recorded (`NodeSteps.resumesSince`; a call's pending step marks the start that
+ * ran it, even when a later one closed it): its first call is the first one that start didn't
+ * finish, and a later call joins it while both are safe to run together. Any other call was sent,
+ * if ever, by a later start, one call at a time: a resumable one may have run when the first start
+ * to reach it did so before the interrupt, and one that isn't resumable never ran. A start reaches
+ * a call when it writes the result of a call before it; the interrupt's place is its record's
+ * (`NodeSteps.seqOf`), so a replay decides as an earlier one did. A call outside the group is
+ * skipped before its check.
  *
  * @returns Whether a host interrupt skipped calls of this reply, when it was live (a recorded
  *   `skipped` result) or now.
@@ -602,30 +605,36 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
   };
   // Only a call with neither can be skipped, so with none the groups needn't be formed.
   const unfinished = turn.calls.some((call, index) => ranAt(call, index) === null);
-  // Whether a call with neither a result nor a pending step has been seen.
-  let missed = false;
+  // The step at which a start after the reply's own last reached the next call: the last result a
+  // start wrote for a call so far, but a host's answer to a pended call. `null` before any.
+  let reached: number | null = null;
+  /**
+   * Whether a resumable call outside the reply's own start's running group may have run: the
+   * first start to reach it did so before the interrupt recorded at `by`.
+   */
+  const mayHaveRun = (call: ToolCallPart, by: number): boolean =>
+    turn.resumable.has(call.name) && (reached === null || turn.ctx.steps!.seqOf(reached) < by);
   for (const [index, call] of turn.calls.entries()) {
     checkNodeStopped(turn);
     const result = steps.recordedResult(turn.n, call.id);
-    // Live, the interrupt skipped from this call's group on; the groups before it committed.
-    if (result?.closed === "skipped") return true;
+    // An interrupt skipped from this call's group on; the groups before it committed. A cut can
+    // land among the skips, so the later calls without one are skipped now.
+    if (result?.closed === "skipped") return skipFrom(turn, index + 1);
     const callId = agentCallId(turn, index);
     // Read at each call: an interrupt can arrive while a call is sent again.
-    const interrupted = turn.interrupt?.aborted === true;
+    const by = turn.ctx.steerInbox?.interruptedBy() ?? null;
     const ran = ranAt(call, index);
-    // Whether the call is the first with neither a result nor a pending step.
-    let sending = false;
     if (ran === null) {
-      sending = !missed;
-      missed = true;
-      if (interrupted && running === "ended" && !sending) return skipFrom(turn, index);
+      if (by !== null && running === "ended" && !mayHaveRun(call, by)) return skipFrom(turn, index);
     } else if (unfinished && running !== "ended" && !own(ran)) {
       // A later start finished it, so the reply's own start was still running it at its cut, or
-      // never started it; its place in the groups bounds what may have started after it. Placed
+      // never started it; its place in the groups bounds what may have run after it. Placed
       // whether or not an interrupt is pending yet, since one can arrive later in the replay.
       joins(await concurrencySafe(turn, call, index));
     }
     if (result !== null) {
+      const pended = callId !== undefined && steps.recordedPending(callId) !== null;
+      if (!own(result.n) && (!pended || result.closed !== null)) reached = Math.max(reached ?? 0, result.n);
       pushToolMessage(turn, call, result.output, result.isError);
       continue;
     }
@@ -636,13 +645,14 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       turn.pended.set(index, callId);
       continue;
     }
-    if (ran === null && !joins(check.safe) && !sending && interrupted) return skipFrom(turn, index);
+    if (ran === null && !joins(check.safe) && by !== null && !mayHaveRun(call, by)) return skipFrom(turn, index);
     if (view === undefined && check.planned.resumable) {
       await resendCall(turn, check.planned);
+      reached = steps.lastWritten() ?? reached;
       continue;
     }
     const { output, closed } = closerResult(closerReason(view?.closedReason ?? null));
-    steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
+    reached = steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
     pushToolMessage(turn, call, output, true);
   }
   return false;

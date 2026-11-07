@@ -1345,13 +1345,14 @@ test.each([true, false])(
     expect(resumed.status, resumed.failure?.message).toBe("succeeded");
     expect(resumed.output).toBeNull();
     expect(model.requests.length).toBe(0);
-    // `look c` never started: no start sent it, so the interrupt skips it.
+    // `look c` never started: no start sent it, so the interrupt skips it. A `look b` that isn't
+    // resumable never ran either, since a resume only closes such a call.
     expect(ran).toEqual(lookResumable ? ["look b"] : []);
     expect(toolResults(log)).toEqual([
       { call_id: "c1", output: "save:a", is_error: false },
       lookResumable
         ? { call_id: "c2", output: "look:b", is_error: false }
-        : { call_id: "c2", output: TOOL_OUTCOME_UNKNOWN, is_error: true, closed: "crashed" },
+        : { call_id: "c2", output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" },
       { call_id: "c3", output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" },
     ]);
   },
@@ -1425,6 +1426,50 @@ test("a call that pended in the reply's own start and was closed by a later one 
     { call_id: "c1", output: TOOL_OUTCOME_UNKNOWN, is_error: true, closed: "crashed" },
     { call_id: "c2", output: "look:b", is_error: false },
     { call_id: "c3", output: "look:c", is_error: false },
+  ]);
+});
+
+test("a call a start skipped for a pending interrupt, cut before the skip was written, is skipped again, not sent", async () => {
+  const flow = flowText(["save"], { steerInbox: true, output: "Optional(str)" });
+  const ran: string[] = [];
+  const tools = { save: topicTool("save", { resumable: true, log: ran }) };
+  const replies = () => [calls(["c1", "save", "a"], ["c2", "save", "b"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools });
+  const log = await cutRun(afterCall(uncut.log), new ScriptedModel(replies(), CONFIG), { flow, tools });
+  // The resume takes the interrupt, sends `save a` again and is cut writing c2's skip.
+  const before = records(log).length;
+  const first = new ScriptedModel([], CONFIG);
+  await crashAfter(before + 4, () => resume(log, first, { tools, models: interruptedAtResume(log, first) }));
+  expect(kinds(log, before)).toEqual(["run_resumed", "node_started", "interrupted", "tool_result 2"]);
+  ran.length = 0;
+  const resumed = await resume(log, new ScriptedModel([], CONFIG), { tools });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBeNull();
+  expect(ran).toEqual([]);
+  expect(toolResults(log)).toEqual([
+    { call_id: "c1", output: "save:a", is_error: false },
+    { call_id: "c2", output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" },
+  ]);
+});
+
+test("skips a cut left half written are finished by the next start", async () => {
+  const flow = flowText(["save"], { steerInbox: true, output: "Optional(str)" });
+  const tools = { save: topicTool("save", { resumable: true }) };
+  const replies = () => [calls(["c1", "save", "a"], ["c2", "save", "b"], ["c3", "save", "c"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools });
+  const log = await cutRun(afterCall(uncut.log), new ScriptedModel(replies(), CONFIG), { flow, tools });
+  // The resume takes the interrupt, sends `save a` again, skips c2 and is cut skipping c3.
+  const before = records(log).length;
+  const first = new ScriptedModel([], CONFIG);
+  await crashAfter(before + 5, () => resume(log, first, { tools, models: interruptedAtResume(log, first) }));
+  expect(kinds(log, before)).toEqual(["run_resumed", "node_started", "interrupted", "tool_result 2", "tool_result 3"]);
+  const resumed = await resume(log, new ScriptedModel([], CONFIG), { tools });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBeNull();
+  expect(toolResults(log)).toEqual([
+    { call_id: "c1", output: "save:a", is_error: false },
+    { call_id: "c2", output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" },
+    { call_id: "c3", output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" },
   ]);
 });
 

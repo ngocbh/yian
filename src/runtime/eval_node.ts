@@ -80,7 +80,7 @@ import {
 } from "../typesys/values.ts";
 import { BackwardCapture } from "./contracts.ts";
 import { canonicalSeed } from "./log.ts";
-import { type ReboundSource, resolvePoolPath, SYSTEM_PREFIX } from "./trace.ts";
+import { type ReboundSource, resolvePoolPath, SYSTEM_PREFIX } from "./sources.ts";
 
 /**
  * One raw node-evaluation failure for durable dispatcher preparation. Frozen.

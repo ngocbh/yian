@@ -19,7 +19,7 @@ import { bindParams } from "../../src/nodes/binding.ts";
 import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { advance, type RunFlowOptions, runFlow } from "../../src/run.ts";
-import { SourceEntry, sameSourceEntry } from "../../src/runtime/trace.ts";
+import { SourceEntry, sameSourceEntry } from "../../src/runtime/sources.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {

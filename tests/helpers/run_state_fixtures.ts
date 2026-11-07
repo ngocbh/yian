@@ -115,7 +115,8 @@ import {
   type RunStartData,
   RunState,
 } from "../../src/runtime/state.ts";
-import { decodeTyped, type RetainedTrace } from "../../src/runtime/trace.ts";
+import { decodeTyped } from "../../src/runtime/sources.ts";
+import type { RetainedTrace } from "../../src/runtime/trace.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";

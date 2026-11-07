@@ -127,19 +127,21 @@ import {
   type WaitEntry,
 } from "./log.ts";
 import {
+  decodeTyped,
+  type ReboundSource,
+  resolvePoolPath,
+  SourceEntry,
+  sameSourceEntry,
+  SYSTEM_PREFIX,
+} from "./sources.ts";
+import {
   checkMemoryScope,
   captureBindings,
-  decodeTyped,
   type PrepareTraceOptions,
-  type ReboundSource,
   type Rebinder,
   prepareTrace,
   RetainedTrace,
   selectSeedRoute,
-  SourceEntry,
-  sameSourceEntry,
-  SYSTEM_PREFIX,
-  resolvePoolPath,
   TraceDelta,
   type TraceDeltaFields,
   TraceOccurrence,

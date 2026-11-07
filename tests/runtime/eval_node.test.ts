@@ -41,7 +41,7 @@ import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { MapNode } from "../../src/nodes/map/node.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import { EvaluationFailure, evalNode, rebind } from "../../src/runtime/eval_node.ts";
-import { resolvePoolPath } from "../../src/runtime/trace.ts";
+import { resolvePoolPath } from "../../src/runtime/sources.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { Type, type Value, ValueKind } from "../../src/typesys/values.ts";
 import { drive, engine, FuncNode, graph, NO_ENV, nodeFlow, rejected, thrownBy as thrown } from "../helpers/run_state_fixtures.ts";

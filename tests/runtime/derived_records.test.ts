@@ -40,7 +40,7 @@ import {
   SCHEMA_VERSION,
 } from "../../src/runtime/log.ts";
 import { rebuildCommit, rebuildGrowth } from "../../src/runtime/state.ts";
-import { decodeTyped } from "../../src/runtime/trace.ts";
+import { decodeTyped } from "../../src/runtime/sources.ts";
 import { logJson, parseJson } from "../../src/typesys/json.ts";
 import { crashAfter, NO_ENV, serving, textReply } from "../helpers/run_state_fixtures.ts";
 

@@ -51,6 +51,7 @@ import type {
 } from "../memory/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
+import type { ToolGrant } from "../tools/grants.ts";
 import type { ToolSet } from "../tools/registry.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
@@ -662,10 +663,10 @@ export interface MaterialCaps {
   /** The skills the run recorded, by name. */
   readonly skills: ReadonlyMap<string, Skill>;
   /**
-   * The specs of the tools `ids` grant, groups expanded, in the order the run bound them, as the
-   * run recorded them; `null` when a grant can't be resolved.
+   * The specs of the tools `grants` grant, groups expanded, in the order the run bound them, as
+   * the run recorded them; `null` when a grant can't be resolved.
    */
-  readonly toolSpecs: (ids: readonly string[]) => readonly ToolSpec[] | null;
+  readonly toolSpecs: (grants: readonly ToolGrant[]) => readonly ToolSpec[] | null;
   /** Builds the invocation's model to read its request settings off; never called. */
   readonly models: ModelAccess | null;
   /**
@@ -1587,10 +1588,11 @@ export abstract class Node {
   }
 
   /**
-   * Return the tool and tool-group ids a model inside this node may call. The run boundary
-   * checks them against the run's tools before any record is written. The base grants none.
+   * Return the tool grants a model inside this node may call: tools and tool groups by name, and
+   * some tools of a group. The run boundary checks them against the run's tools before any record
+   * is written. The base grants none.
    */
-  grantedTools(): readonly string[] {
+  grantedTools(): readonly ToolGrant[] {
     return [];
   }
 

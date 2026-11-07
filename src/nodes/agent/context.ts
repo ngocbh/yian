@@ -21,6 +21,7 @@ import type { ModelAccess } from "../../llm_clients/factory.ts";
 import type { MemoryContext } from "../../memory/contracts.ts";
 import { type Scheduler, syncFolder, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
+import type { ToolGrant } from "../../tools/grants.ts";
 import type { ToolSet } from "../../tools/registry.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
 import { FileRef, jsonSafeText, type Type, type ValueRecord } from "../../typesys/values.ts";
@@ -52,8 +53,8 @@ export interface AgentRunContext {
   readonly messages: readonly Message[];
   /** The last message's text, which recall reads as the prompt. */
   readonly promptText: string;
-  /** The granted tool and group ids. */
-  readonly tools: readonly string[];
+  /** The tool grants; a text is a name grant. */
+  readonly tools: readonly (string | ToolGrant)[];
   /** The effective model config, or `null`. */
   readonly llmConfig: Readonly<Record<string, unknown>> | null;
   /** The node's declared output type; `null` passes the reply's text through. */

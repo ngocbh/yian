@@ -223,7 +223,7 @@ describe("agent", () => {
     const node = nodesOf(text, [], label).get("reviewer") as AgentDescriptor;
 
     expect(node).toBeInstanceOf(AgentDescriptor);
-    expect(node.tools).toEqual(["get_web_data", "web_search", "ask_user"]);
+    expect(node.tools).toEqual(["get_web_data", "web_search", "ask_user"].map((name) => ({ kind: "name", name })));
     expect(node.llmConfig).toEqual({
       provider: "anthropic",
       model: "claude-opus-4-8",

@@ -22,6 +22,7 @@ import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { readTypedefs, type TypeRegistry } from "../../src/typesys/types.ts";
 import { ValueKind } from "../../src/typesys/values.ts";
 import { caseDocument, loadError } from "../helpers/declarations.ts";
+import { grantText } from "../../src/tools/grants.ts";
 
 afterEach(() => forget());
 
@@ -116,7 +117,7 @@ test("an AGENT node's knobs", () => {
 
   expect(node).toBeInstanceOf(AgentNode);
   const agent = node as AgentNode;
-  expect(agent.tools).toEqual(["get_web_data", "web_search", "ask_user"]);
+  expect(agent.tools.map(grantText)).toEqual(["get_web_data", "web_search", "ask_user"]);
   // llm_config is a plain record end to end.
   expect(agent.llmConfig).toEqual({ provider: "anthropic", model: "claude-opus-4-8", anthropic: { temperature: 0.3 } });
   expect(agent.prompt).toStartWith("Research ${topic}");

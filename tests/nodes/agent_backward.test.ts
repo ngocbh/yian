@@ -279,7 +279,7 @@ test("AGENT backward uses the recorded model and no tools", async () => {
   );
   expect((recorded.nodeData["effective_llm_config"] as Record<string, unknown>)["model"]).toBe("recorded");
   expect(node.prompt).toBe("mutable prompt");
-  expect(node.tools).toEqual(["never-granted"]);
+  expect(node.tools).toEqual([{ kind: "name", name: "never-granted" }]);
 });
 
 test("AGENT backward keeps visible tool evidence inert and separate", async () => {

@@ -681,8 +681,8 @@ export function isSetupError(error: unknown): error is Error {
 const selectionNotes = new WeakMap<Error, readonly string[]>();
 
 /**
- * Return the tool ids `flow`'s static TOOL nodes call, which name single tools, and the ids its
- * static AGENT nodes grant, which name tools or tool groups.
+ * Return the tool ids `flow`'s static TOOL nodes call, which name single tools, and the names its
+ * static AGENT nodes grant, which name tools or tool groups (a group grant's group).
  */
 function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
   const toolIds = new Set<string>();
@@ -690,7 +690,7 @@ function mcpNeededNames(flow: ComposedFlow): [Set<string>, Set<string>] {
   for (const [, node] of staticNodes(flow.compiled)) {
     const call = node.hostToolCall();
     if (call !== null) toolIds.add(call.toolId);
-    for (const grant of node.grantedTools()) grants.add(grant);
+    for (const grant of node.grantedTools()) grants.add(grant.kind === "group" ? grant.group : grant.name);
   }
   return [toolIds, grants];
 }

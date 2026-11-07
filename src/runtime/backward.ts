@@ -36,6 +36,7 @@ import {
   validateBackwardResult,
 } from "../nodes/base.ts";
 import { Skill } from "../skills/catalog.ts";
+import type { ToolGrant } from "../tools/grants.ts";
 import { isExactly, sameItems, sameOptional } from "../nodes/contracts.ts";
 import { jsTypeName } from "../typesys/values.ts";
 import { AttributedBackwardResult, BackwardFailure, BackwardOutcome, type MemoryProposal } from "./contracts.ts";
@@ -280,11 +281,16 @@ export function recordedGrants(state: RunState): Pick<MaterialCaps, "skills" | "
       new Skill({ name, description, instructions }),
     ]),
   );
-  const toolSpecs = (ids: readonly string[]): ToolSpec[] | null => {
+  const toolSpecs = (grants: readonly ToolGrant[]): ToolSpec[] | null => {
     const specs: ToolSpec[] = [];
-    // As `ToolSet.expand`: a group becomes its tools, and a tool granted twice is bound once.
+    // As `ToolSet.expand`: a group becomes its tools, a group grant the tools it lists, and a tool
+    // granted twice is bound once.
     const groups = state.recordedToolGroups;
-    const names = new Set(ids.flatMap((id) => (Object.hasOwn(groups, id) ? groups[id]! : [id])));
+    const names = new Set(
+      grants.flatMap((grant) =>
+        grant.kind === "group" ? grant.tools : Object.hasOwn(groups, grant.name) ? groups[grant.name]! : [grant.name],
+      ),
+    );
     for (const name of names) {
       if (!Object.hasOwn(state.recordedTools, name)) return null;
       const { description, parameters } = state.recordedTools[name]!;

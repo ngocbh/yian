@@ -272,7 +272,10 @@ test("grantedTools returns a copy of the authored grants", () => {
   const tools = ["search", "fetch"];
   const node = new AgentNode("n", { tools });
   const granted = node.grantedTools();
-  expect(granted).toEqual(["search", "fetch"]);
+  expect(granted).toEqual([
+    { kind: "name", name: "search" },
+    { kind: "name", name: "fetch" },
+  ]);
   expect(granted).not.toBe(node.tools);
   expect(new AgentNode("n").grantedTools()).toEqual([]);
 });

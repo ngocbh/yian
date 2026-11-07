@@ -40,6 +40,7 @@ import {
 } from "../../memory/contracts.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL, loadSkillTool, systemPromptWithSkills } from "../../skills/tool.ts";
+import { asToolGrant, type ToolGrant } from "../../tools/grants.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import {
@@ -382,7 +383,7 @@ export class AgentNode extends Node {
   /** The system prompt template replacing the default one; `null` keeps the default. */
   systemPrompt: string | null;
   /** The authored tool grants, which may name host-filled groups. */
-  tools: readonly string[];
+  tools: readonly ToolGrant[];
   /**
    * The authored source each cascade pass re-resolves: a record, or a template or binding for a
    * layer holding values.
@@ -436,7 +437,7 @@ export class AgentNode extends Node {
    * @param nodeId The node's unique id.
    * @param options.prompt The prompt template or a list prompt; `null` or omitted means `""`.
    * @param options.systemPrompt A non-empty system prompt template, or `null` (the default).
-   * @param options.tools The tool grants; defaults to `[]`.
+   * @param options.tools The tool grants, a text read as a name grant; defaults to `[]`.
    * @param options.llmConfig A config record, a `ValueTemplate` or `Binding` for a layer
    *   holding values, or `null` (the default).
    * @param options.llmInherit Whether the config merges over the enclosing layers; defaults to
@@ -462,7 +463,7 @@ export class AgentNode extends Node {
     options: {
       prompt?: string | readonly PromptItem[] | null;
       systemPrompt?: string | null;
-      tools?: readonly string[] | null;
+      tools?: readonly (string | ToolGrant)[] | null;
       llmConfig?: Readonly<Record<string, unknown>> | ValueTemplate | Binding | null;
       llmInherit?: boolean;
       retries?: number | null;
@@ -495,8 +496,8 @@ export class AgentNode extends Node {
       throw new TypeError(`AGENT node ${reprText(nodeId)}: system_prompt must be a non-empty string or null`);
     }
     this.systemPrompt = systemPrompt;
-    this.tools = tools ?? [];
-    if (this.tools.includes("builtin_tools")) {
+    this.tools = (tools ?? []).map(asToolGrant);
+    if (this.tools.some((grant) => grant.kind === "name" && grant.name === "builtin_tools")) {
       throw new RangeError(
         "builtin_tools belonged to the removed native Codex integration. " +
           "Remove it and grant registered Yian tools explicitly.",
@@ -731,7 +732,7 @@ export class AgentNode extends Node {
   /** Require `"all"` or unique valid names, and no `load_skill` tool grant. */
   private validateSkills(): void {
     const where = `AGENT node ${reprText(this.id)}`;
-    if (this.tools.includes(LOAD_SKILL)) {
+    if (this.tools.some((grant) => grant.kind === "name" && grant.name === LOAD_SKILL)) {
       throw new SkillError(`${where}: ${reprText(LOAD_SKILL)} is a reserved tool name; remove it from tools`);
     }
     if (this.skills === "all") return;
@@ -743,7 +744,7 @@ export class AgentNode extends Node {
   }
 
   /** Return the authored `tools:` grants, which may name host-filled groups. */
-  override grantedTools(): readonly string[] {
+  override grantedTools(): readonly ToolGrant[] {
     return [...this.tools];
   }
 

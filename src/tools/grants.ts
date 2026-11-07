@@ -90,6 +90,11 @@ export function parseToolGrants(raw: readonly unknown[], where: string): ToolGra
   return grants;
 }
 
+/** Return `item` as a grant: a text is a name grant, as a node built in code may pass. */
+export function asToolGrant(item: string | ToolGrant): ToolGrant {
+  return typeof item === "string" ? Object.freeze({ kind: "name", name: item }) : item;
+}
+
 /** The grant as an author writes it: `lessons` or `{lessons: [read, search]}`. */
 export function grantText(grant: ToolGrant): string {
   return grant.kind === "name" ? grant.name : `{${grant.group}: [${grant.tools.join(", ")}]}`;

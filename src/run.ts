@@ -1488,7 +1488,9 @@ function recordedToolGroups(flow: CompiledFlow, tools: ToolSet): Record<string, 
   const groups = new Set(tools.groups);
   const recorded = new Map<string, readonly string[]>();
   for (const [, node] of staticNodes(flow)) {
-    for (const id of node.grantedTools()) if (groups.has(id)) recorded.set(id, tools.expand([id]));
+    for (const grant of node.grantedTools()) {
+      if (grant.kind === "name" && groups.has(grant.name)) recorded.set(grant.name, tools.expand([grant]));
+    }
   }
   return Object.fromEntries(recorded);
 }

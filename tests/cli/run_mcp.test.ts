@@ -329,9 +329,9 @@ const DONE =
     .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
     .join("") + "data: [DONE]\n\n";
 
-test(
-  "an agent grant starts only the granted server",
-  async () => {
+test.each(["fake", "{fake: [echo]}"])(
+  "an agent grant starts only the granted server: tools: [%s]",
+  async (grant) => {
     const bound: string[][] = [];
     const fakeFetch = async (input: string | URL | Request, init?: RequestInit) => {
       type Body = { tools?: { function: { name: string } }[] };
@@ -350,7 +350,7 @@ test(
     globalThis.fetch = fakeFetch as typeof fetch;
     let result;
     try {
-      result = await run([flowFile(AGENT_FLOW), "--mcp-config", cfg], vars);
+      result = await run([flowFile(AGENT_FLOW.replace("tools: [fake]", `tools: [${grant}]`)), "--mcp-config", cfg], vars);
     } finally {
       globalThis.fetch = send;
     }

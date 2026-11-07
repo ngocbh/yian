@@ -1,0 +1,24 @@
+# Granting some tools of a group is a different flow from granting the whole group.
+kind: fingerprint
+flow: |
+  id: grants
+  name: grants
+  nodes:
+    a:
+      kind: agent
+      prompt: Help the user.
+      tools: [{github: [search]}]
+      output: str
+  output: ${a.output}
+other: |
+  id: grants
+  name: grants
+  nodes:
+    a:
+      kind: agent
+      prompt: Help the user.
+      tools: [github]
+      output: str
+  output: ${a.output}
+expect:
+  fingerprint: different

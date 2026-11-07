@@ -20,7 +20,7 @@ import { afterAll, afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 
 import { loadFlow } from "../../src/compose/loader.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
-import { ModelCallStarted, type RunEvent } from "../../src/events.ts";
+import { ModelCallStarted, type RunEvent, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, EventStream, Finish, TextDelta } from "../../src/llm/events.ts";
 import {
@@ -76,17 +76,21 @@ output: \${writer.output}
 `;
 }
 
-/** A tool `name` that returns `<name>:<topic>`; `safe` marks it concurrency safe; `log` sees each call. */
+/**
+ * A tool `name` that returns `<name>:<topic>`; `safe` marks it concurrency safe, `resumable`
+ * resumable; `log` sees each call.
+ */
 function topicTool(
   name: string,
-  options: { safe?: boolean; log?: string[]; run?: (topic: string, ctx: ToolContext) => unknown } = {},
+  options: { safe?: boolean; resumable?: boolean; log?: string[]; run?: (topic: string, ctx: ToolContext) => unknown } = {},
 ): FunctionTool {
-  const { safe = false, log = [], run = (topic: string) => `${name}:${topic}` } = options;
+  const { safe = false, resumable = false, log = [], run = (topic: string) => `${name}:${topic}` } = options;
   return new FunctionTool({
     name,
     description: `Tool ${name}.`,
     parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] },
     isConcurrencySafe: safe ? () => true : null,
+    resumable,
     execute: (args, ctx) => {
       log.push(`${name} ${String(args["topic"])}`);
       return run(String(args["topic"]), ctx);
@@ -125,6 +129,13 @@ function steps(path: string): ValueRecord[] {
   );
 }
 
+/** The log's `tool_result` steps for `writer`: call id, output, whether an error, and the closer word if any. */
+function toolResults(path: string): Record<string, unknown>[] {
+  return steps(path)
+    .filter((step) => step["kind"] === "tool_result")
+    .map(({ call_id, output, is_error, closed }) => ({ call_id, output, is_error, ...(closed === undefined ? {} : { closed }) }));
+}
+
 /** The kinds of the log's records from seq `from` on, a step as `<kind> <n>`. */
 function kinds(path: string, from = 0): string[] {
   return records(path)
@@ -154,10 +165,12 @@ async function run(
     tools?: Tools;
     modelRetries?: number;
     models?: ModelAccess;
+    signal?: AbortSignal;
   } = {},
 ): Promise<{ log: string; result: Awaited<ReturnType<typeof runFlow>> }> {
-  const { log = runLog(), flow = flowText(), tools = {}, modelRetries = 0, models = serving(model) } = options;
+  const { log = runLog(), flow = flowText(), tools = {}, modelRetries = 0, models = serving(model), signal } = options;
   const result = await runFlow(await loadFlow(flow), {}, {
+    signal,
     llmConfig: CONFIG,
     env: retriesEnv(modelRetries),
     scheduler: virtualScheduler(START),
@@ -1029,4 +1042,189 @@ test("an AGENT run resumed at every cut point ends as the uncut run, running no 
     expect(resumed.output).toBe("all done");
     expect(new Set(ran).size, `cut at ${k}: ${ran.join(", ")}`).toBe(ran.length);
   }
+});
+
+test("with save resumable, a run resumed at every cut point ends as the uncut run, save running at most twice", async () => {
+  const replies = () => [
+    calls(["call-a", "save", "a"], ["call-b", "save", "b"]),
+    calls(["call-x", "lookup", "x"], ["call-y", "lookup", "y"], ["call-z", "save", "z"]),
+    textReply("all done"),
+  ];
+  const flow = flowText(["lookup", "save"]);
+  const toolsFor = (ran: string[]) => ({
+    lookup: topicTool("lookup", { safe: true, log: ran }),
+    save: topicTool("save", { resumable: true, log: ran }),
+  });
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools: toolsFor([]) });
+  const count = records(uncut.log).length;
+  const first = records(uncut.log).findIndex(({ kind }) => kind === "node_started");
+  for (let k = first; k < count - 1; k += 1) {
+    const ran: string[] = [];
+    const log = await cutRun(k, new ScriptedModel(replies(), CONFIG), { flow, tools: toolsFor(ran) });
+    const kept = steps(log).filter((step) => step["kind"] === "model_call").length;
+    const resumed = await resume(log, new ScriptedModel(replies().slice(kept), CONFIG), { tools: toolsFor(ran) });
+    expect(resumed.status, `cut at ${k}: ${resumed.failure?.message}`).toBe("succeeded");
+    expect(resumed.output).toBe("all done");
+    for (const topic of ["a", "b", "z"]) {
+      expect(ran.filter((each) => each === `save ${topic}`).length, `cut at ${k}: ${ran.join(", ")}`).toBeLessThanOrEqual(2);
+    }
+    expect(ran.filter((each) => each.startsWith("lookup")).length, `cut at ${k}`).toBe(new Set(ran.filter((each) => each.startsWith("lookup"))).size);
+    // Every save call ends with the result it gave; none is closed.
+    const saves = toolResults(log).filter(({ call_id }) => ["call-a", "call-b", "call-z"].includes(call_id as string));
+    expect(saves, `cut at ${k}`).toEqual([
+      { call_id: "call-a", output: "save:a", is_error: false },
+      { call_id: "call-b", output: "save:b", is_error: false },
+      { call_id: "call-z", output: "save:z", is_error: false },
+    ]);
+  }
+});
+
+// ---------- resumable calls sent again ----------
+
+/** The record count that cuts after the reply's `model_call` step and before its first `tool_result`. */
+function afterCall(uncut: string): number {
+  return seqOf(uncut, "model_call") + 1;
+}
+
+test("a crash mid-call sends a resumable call again with the same call id, once, attempt 2", async () => {
+  const seen: [string, number][] = [];
+  const save = topicTool("save", { resumable: true, run: (t, ctx) => (seen.push([ctx.callId, ctx.attempt]), `saved ${t}`) });
+  const model = () => new ScriptedModel([calls(["c1", "save", "a"]), textReply("done")], CONFIG);
+  const uncut = await run(model(), { tools: { save } });
+  seen.length = 0;
+  const log = await cutRun(afterCall(uncut.log), model(), { tools: { save } });
+  const result = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools: { save } });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(result.output).toBe("done");
+  expect(seen).toEqual([
+    ["r/writer/1/0", 1],
+    ["r/writer/1/0", 2],
+  ]);
+  expect(toolResults(log)).toEqual([{ call_id: "c1", output: "saved a", is_error: false }]);
+  expect(comparable(log)).toEqual(comparable(uncut.log));
+});
+
+test("a stop mid-call sends a resumable call again on the next advance, attempt 2", async () => {
+  const seen: [string, number][] = [];
+  const entered = Promise.withResolvers<void>();
+  const save = topicTool("save", {
+    resumable: true,
+    run: async (t, ctx) => {
+      seen.push([ctx.callId, ctx.attempt]);
+      if (ctx.attempt === 1) {
+        entered.resolve();
+        await new Promise((_resolve, reject) => ctx.signal.addEventListener("abort", () => reject(ctx.signal.reason)));
+      }
+      return `saved ${t}`;
+    },
+  });
+  const controller = new AbortController();
+  const log = runLog();
+  const running = run(new ScriptedModel([calls(["c1", "save", "a"]), textReply("done")], CONFIG), {
+    tools: { save },
+    log,
+    signal: controller.signal,
+  });
+  await entered.promise;
+  controller.abort(new Error("host stop"));
+  await running.catch(() => undefined);
+  expect(kinds(log)).toContain("run_stopped");
+  expect(toolResults(log)).toEqual([]);
+
+  const result = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools: { save } });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(seen).toEqual([
+    ["r/writer/1/0", 1],
+    ["r/writer/1/0", 2],
+  ]);
+  expect(toolResults(log)).toEqual([{ call_id: "c1", output: "saved a", is_error: false }]);
+});
+
+test("a mixed reply re-sends its resumable call and closes the other crashed, in call order", async () => {
+  const ran: string[] = [];
+  const tools = { note: topicTool("note", { log: ran }), save: topicTool("save", { resumable: true, log: ran }) };
+  const flow = flowText(["note", "save"]);
+  const replies = () => [calls(["c1", "note", "a"], ["c2", "save", "b"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools });
+  ran.length = 0;
+  // `note a` ran; the crash cut its result, and `save b` never started.
+  const log = await cutRun(afterCall(uncut.log), new ScriptedModel(replies(), CONFIG), { flow, tools });
+  expect(ran).toEqual(["note a"]);
+  const model = new ScriptedModel([textReply("done")], CONFIG);
+  const result = await resume(log, model, { tools });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(ran).toEqual(["note a", "save b"]);
+  expect(toolResults(log)).toEqual([
+    { call_id: "c1", output: TOOL_OUTCOME_UNKNOWN, is_error: true, closed: "crashed" },
+    { call_id: "c2", output: "save:b", is_error: false },
+  ]);
+  expect(sentResults(model, 0).map((part) => [part.callId, part.content])).toEqual([
+    ["c1", TOOL_OUTCOME_UNKNOWN],
+    ["c2", "save:b"],
+  ]);
+});
+
+test("re-sent calls run one at a time even when their tool is concurrency-safe", async () => {
+  let active = 0;
+  let most = 0;
+  const save = topicTool("save", {
+    safe: true,
+    resumable: true,
+    run: async (t) => {
+      active += 1;
+      most = Math.max(most, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return `saved ${t}`;
+    },
+  });
+  const replies = () => [calls(["c1", "save", "a"], ["c2", "save", "b"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { tools: { save } });
+  // Live, the two calls run together.
+  expect(most).toBe(2);
+  const log = await cutRun(afterCall(uncut.log), new ScriptedModel(replies(), CONFIG), { tools: { save } });
+  most = 0;
+  const result = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools: { save } });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  expect(most).toBe(1);
+  expect(toolResults(log)).toEqual([
+    { call_id: "c1", output: "saved a", is_error: false },
+    { call_id: "c2", output: "saved b", is_error: false },
+  ]);
+});
+
+test("a pending interrupt is honored after the re-sent call, which still runs", async () => {
+  const flow = flowText(["save"], { steerInbox: true, output: "Optional(str)" });
+  const ran: string[] = [];
+  const tools = { save: topicTool("save", { resumable: true, log: ran }) };
+  const replies = () => [calls(["c1", "save", "a"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools });
+  ran.length = 0;
+  const log = await cutRun(afterCall(uncut.log), new ScriptedModel(replies(), CONFIG), { flow, tools });
+  const model = new ScriptedModel([], CONFIG);
+  const base = serving(model);
+  // The agent opens its steer inbox, then builds its model: the interrupt lands before the replay.
+  const models = { ...base, createModel: (config: Readonly<Record<string, unknown>>, opts: never) => (interruptAt(log), base.createModel(config, opts)) };
+  const resumed = await resume(log, model, { tools, models });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBeNull();
+  expect(model.requests.length).toBe(0);
+  expect(ran).toEqual(["save a", "save a"]);
+  expect(steps(log).map((step) => step["kind"])).toEqual(["model_call", "tool_result", "interrupted"]);
+  expect(toolResults(log)).toEqual([{ call_id: "c1", output: "save:a", is_error: false }]);
+});
+
+test("a re-sent call emits ToolCallStarted and ToolCallFinished", async () => {
+  const tools = { save: topicTool("save", { resumable: true }) };
+  const uncut = await run(saveModel(), { tools });
+  const log = await cutRun(afterCall(uncut.log), saveModel(), { tools });
+  const events: RunEvent[] = [];
+  const result = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools, events });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const brackets = events.filter((event) => event instanceof ToolCallStarted || event instanceof ToolCallFinished);
+  expect(brackets.map((event) => [event.constructor.name, (event as ToolCallStarted).toolCallId])).toEqual([
+    ["ToolCallStarted", "call-a"],
+    ["ToolCallFinished", "call-a"],
+  ]);
+  expect((brackets[1] as ToolCallFinished).result).toBe("save:a");
 });

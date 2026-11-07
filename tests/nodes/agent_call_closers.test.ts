@@ -260,6 +260,31 @@ test("two pended calls and a crash before node_waiting: both close, in call orde
   ]);
 });
 
+test("a resumable call that pended and was closed by the resume stays closed crashed", async () => {
+  let calls = 0;
+  const hold = {
+    hold: tool({
+      name: "hold",
+      description: "hold.",
+      parameters: { type: "object", properties: {} },
+      execute: () => (calls++, pending()),
+      resumable: true,
+    }),
+  };
+  const replies = () => scripted(callReply(["hold", {}, "c1"]), textReply("checked"));
+  const log = await crashedAtPending(replies, hold);
+  calls = 0;
+  const m = scripted(textReply("checked"));
+  const result = await advance(resumeOf(log, m, () => pending(), START, undefined, hold));
+
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const resumed = records(log).find(({ kind }) => kind === "run_resumed")!;
+  expect((resumed.record as { closedCalls: string[] }).closedCalls).toEqual([CALL]);
+  expect(calls).toBe(0);
+  expect(closers(log)).toEqual(["crashed"]);
+  expect(sentResults(m, 0)).toEqual([["c1", TOOL_OUTCOME_UNKNOWN, true]]);
+});
+
 test("an ask_user timeout stamps the deadline on the request and the pending step", async () => {
   let deadline = null as string | null;
   const m = scripted(callReply(["ask_user", { question: "Ship?", timeout: "30m" }, "c1"]));

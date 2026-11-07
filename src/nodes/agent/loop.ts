@@ -492,6 +492,8 @@ interface PlannedCall {
   readonly callId: string | undefined;
   /** When an `ask_user` call times out (a record time), from the model's `timeout`; else `null`. */
   readonly deadline: string | null;
+  /** Whether its tool is resumable, so a resume sends it again when a crash or a stop cut it off. */
+  readonly resumable: boolean;
   /** Run the call under its group's signal. */
   readonly invoke: (signal: AbortSignal) => Promise<unknown>;
 }
@@ -541,20 +543,22 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
 }
 
 /**
- * Give a replayed reply's tool calls their results without running any, appending a tool message
- * per call in call order, as live commits them. A call keeps the result an earlier start recorded,
- * unchecked. A call with none is checked as live: a failed check fails the node as live. Otherwise
- * a call the run still holds open (it pended and waits on, beside a sibling a deadline closed) is
- * pended again, with no closer and no handler call, and gets no tool message: the loop then
- * returns `Pending`. Any other call is closed with the word of the record that closed it
- * (`closerResult`: `timed_out` for an ask whose deadline passed, `interrupted` for a call a host
- * interrupt closed), `crashed` when none did (its run was cut off before its result), the closer
- * written as its `tool_result` step. Unparsed calls are not in `turn.calls`, so they get nothing,
- * as live.
+ * Give a replayed reply's tool calls their results, appending a tool message per call in call
+ * order, as live commits them. A call keeps the result an earlier start recorded, unchecked. A
+ * call with none is checked as live: a failed check fails the node as live. Otherwise a call the
+ * run still holds open (it pended and waits on, beside a sibling a deadline closed) is pended
+ * again, with no closer and no handler call, and gets no tool message: the loop then returns
+ * `Pending`. A call to a resumable tool that no record closed was cut off by a crash or a stop,
+ * so it is sent again (`resendCall`), with the same call id. Any other call is closed with the word
+ * of the record that closed it (`closerResult`: `timed_out` for an ask whose deadline passed,
+ * `interrupted` for a call a host interrupt closed), `crashed` when none did (its run was cut off
+ * before its result), the closer written as its `tool_result` step, and never runs. Unparsed calls
+ * are not in `turn.calls`, so they get nothing, as live.
  *
  * @returns Whether a host interrupt skipped calls of this reply when it was live (a recorded
  *   `skipped` result): the loop ends as it did then.
- * @throws A stop's reason, or a failed check's error (`failCall`).
+ * @throws A stop's reason, a failed check's error (`failCall`), or what a call sent again throws
+ *   (`resendCall`).
  */
 async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
   const { steps } = turn;
@@ -570,6 +574,10 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       const view = turn.ctx.steps?.calls.find((each) => each.callId === callId);
       if (callId !== undefined && view?.state === "open") {
         turn.pended.set(index, callId);
+        continue;
+      }
+      if (view === undefined && check.planned.resumable) {
+        await resendCall(turn, check.planned);
         continue;
       }
       const { output, closed } = closerResult(closerReason(view?.closedReason ?? null));
@@ -624,7 +632,7 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
         throw error;
       }
     };
-    return { planned: { call, index, callId: undefined, deadline: null, invoke }, safe: true };
+    return { planned: { call, index, callId: undefined, deadline: null, resumable: false, invoke }, safe: true };
   }
   const grant = turn.granted.find((each) => each.visible === call.name);
   if (grant === undefined) {
@@ -644,7 +652,8 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     } catch (error) {
       if (!(error instanceof RangeError || error instanceof TypeError)) throw error;
       const reported = new ReportedToolError(`ask_user timeout: ${error.message}`);
-      return { planned: { call, index, callId: undefined, deadline: null, invoke: () => Promise.reject(reported) }, safe: false };
+      const invoke = () => Promise.reject(reported);
+      return { planned: { call, index, callId: undefined, deadline: null, resumable: false, invoke }, safe: false };
     }
   }
   let checked: CheckedCall;
@@ -658,7 +667,8 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
     checkNodeStopped(turn);
     // The arguments are checked as part of the call, so a reported error is the call's result.
     if (isReportedToolError(error)) {
-      return { planned: { call, index, callId: undefined, deadline: null, invoke: () => Promise.reject(error) }, safe: false };
+      const invoke = () => Promise.reject(error);
+      return { planned: { call, index, callId: undefined, deadline: null, resumable: false, invoke }, safe: false };
     }
     return { error, granted: true };
   }
@@ -670,7 +680,9 @@ async function checkCall(turn: ToolTurn, call: ToolCallPart, index: number): Pro
   // Above 1 only for a call a crash or a stop cut off after its reply, which a resume sends again.
   const attempt = 1 + (ctx.steps?.resumesSince(turn.n) ?? 0);
   const invoke = (signal: AbortSignal) => toolset.invoke(checked, { node: ctx.nodeId, callId, attempt, signal });
-  return { planned: { call, index, callId, deadline, invoke }, safe: toolset.isConcurrencySafe(checked) };
+  // A tool built by an older copy of yian has no `resumable` field, and isn't resumable.
+  const resumable = toolset.resolve([ref])[0]!.resumable === true;
+  return { planned: { call, index, callId, deadline, resumable, invoke }, safe: toolset.isConcurrencySafe(checked) };
 }
 
 /**
@@ -713,15 +725,16 @@ async function failCall(
  * agent outside a durable run can't pend: that fails the group.
  * Every started call is awaited; then a stop wins, else the first failure is thrown with nothing of
  * the group committed. A stop, then a host
- * interrupt, is checked before the group starts; the interrupt skips from the group's first call.
+ * interrupt, is checked before the group starts; the interrupt skips from the group's first call,
+ * unless `interruptible` is `false`.
  *
  * @returns Whether a host interrupt skipped the group and every later call.
  */
-async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<boolean> {
+async function runGroup(turn: ToolTurn, group: readonly PlannedCall[], interruptible = true): Promise<boolean> {
   if (group.length === 0) return false;
   const { live } = turn;
   checkNodeStopped(turn);
-  if (turn.interrupt?.aborted) return skipFrom(turn, group[0]!.index);
+  if (interruptible && turn.interrupt?.aborted) return skipFrom(turn, group[0]!.index);
   const signal = nodeSignal(turn);
   const controller = new AbortController();
   const relay = () => controller.abort(signal!.reason);
@@ -813,6 +826,18 @@ async function runGroup(turn: ToolTurn, group: readonly PlannedCall[]): Promise<
     signal?.removeEventListener("abort", relay);
   }
   return false;
+}
+
+/**
+ * Send again one call a crash or a stop cut off, as a group of its own: its started and finished
+ * events, its `tool_result` step (or its `pending` step) and its tool message, a reported error as
+ * the call's result, as live. A pending host interrupt doesn't skip it, since the call may have
+ * started before the cut; the loop honors the interrupt afterwards.
+ *
+ * @throws As `runGroup` throws.
+ */
+async function resendCall(turn: ToolTurn, planned: PlannedCall): Promise<void> {
+  await runGroup(turn, [planned], false);
 }
 
 /** The yian id of call `index` of the turn's reply, `<run>/<node>/<n>/<index>`; `undefined` outside a run. */

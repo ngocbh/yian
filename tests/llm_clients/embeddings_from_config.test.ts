@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import type { Env } from "../../src/defaults.ts";
+import { ProviderError } from "../../src/llm/errors.ts";
 import { ApiKeyCredentials, AuthError, OAuthCredentials } from "../../src/llm_clients/auth/common.ts";
 import { AuthStore } from "../../src/llm_clients/auth/store.ts";
 import { defaultEmbed, embedderFromConfig } from "../../src/llm_clients/factory.ts";
@@ -111,6 +112,37 @@ test("a vendor's saved login wins over its environment key", async () => {
   const { requests, send } = recorder();
   await (await embedderFromConfig({ provider: "openrouter", model: "e" }, { env, send }))(["a"], { signal });
   expect(routes(requests)).toEqual([["https://openrouter.ai/api/v1/embeddings", "Bearer or-saved-key"]]);
+});
+
+test("an error reply echoing a saved login's secret header value comes back scrubbed", async () => {
+  const value = "gw-secret-5e1d90";
+  await authStore().save("openrouter", new ApiKeyCredentials("or-saved-key", { "X-Gateway": value }), "m", {
+    makeDefault: false,
+  });
+  const sent: Headers[] = [];
+  const send: Send = async (_url, init) => {
+    sent.push(new Headers(init.headers));
+    return Response.json({ error: { message: `bad gateway token ${value}` } }, { status: 400 });
+  };
+  const embed = await embedderFromConfig({ provider: "openrouter", model: "e" }, { env, send });
+  const error = (await rejected(embed(["a"], { signal }))) as ProviderError;
+  expect(sent.map((headers) => headers.get("x-gateway"))).toEqual([value]);
+  expect(error).toBeInstanceOf(ProviderError);
+  expect(error.message).toBe("openrouter returned HTTP 400 (bad_request): bad gateway token [REDACTED]");
+  expect(error.stack).not.toContain(value);
+});
+
+test("an OpenAI key changed after the build fails the next request with AuthError, sending nothing", async () => {
+  await authStore().save("openai", new ApiKeyCredentials("sk-first-0a1b"), "gpt-x");
+  const { requests, send } = recorder();
+  const embed = await embedderFromConfig({ provider: "openai", model: "text-embedding-3-small" }, { env, send });
+  await embed(["a"], { signal });
+  await authStore().save("openai", new ApiKeyCredentials("sk-second-2c3d"), "gpt-x");
+  const error = await rejected(embed(["b"], { signal }));
+  expect(error).toBeInstanceOf(AuthError);
+  expect(error.message).toContain("yian auth openai");
+  expect(error.message).not.toContain("sk-second-2c3d");
+  expect(routes(requests)).toEqual([["https://api.openai.com/v1/embeddings", "Bearer sk-first-0a1b"]]);
 });
 
 test("a vendor with no key is refused, naming its key variable", async () => {

@@ -1,0 +1,19 @@
+# A `tool_id:` group names one tool, not a list of them.
+kind: load
+flow: |
+  id: grants
+  name: grants
+  nodes:
+    found:
+      kind: tool
+      tool_id: {cases: [search]}
+      input: {query: owls}
+  output: ${found.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''found'' (kind=tool): `tool_id: {cases: ...}` names one tool; write `{cases: search}`'
+      frames:
+      - label: flow.yaml
+        range: [6, 14, 6, 31]

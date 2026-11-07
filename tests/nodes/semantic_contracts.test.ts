@@ -438,9 +438,9 @@ test("a child flow boundary needs two distinct non-empty ids", () => {
 
 test("a host tool call is frozen", () => {
   const integer = Type.scalar(ValueKind.INTEGER);
-  const call = new HostToolCall("search", ["q"], new Map([["q", integer]]), null);
+  const call = new HostToolCall("search", null, ["q"], new Map([["q", integer]]), null);
 
-  expect(Object.keys(call)).toEqual(["toolId", "inputs", "inputTypes", "outputType"]);
+  expect(Object.keys(call)).toEqual(["toolId", "group", "inputs", "inputTypes", "outputType"]);
   expect(call.inputs).toEqual(["q"]);
   expect(call.inputTypes.get("q")).toBe(integer);
   expect(Object.isFrozen(call)).toBe(true);

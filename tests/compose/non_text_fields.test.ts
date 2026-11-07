@@ -484,26 +484,25 @@ describe("parseNodes", () => {
     expect(startLine(error)).toBe(lineOf(text, "code: "));
   });
 
-  test.each(NON_TEXT)("non-text tool id is a load error: %s", (value, phrase) => {
+  // A mapping is the `{group: tool}` form, whose own errors the conformance cases pin.
+  test.each(NON_TEXT.filter(([, phrase]) => phrase !== "a mapping"))("non-text tool id is a load error: %s", (value, phrase) => {
     const text = toolFlow(value);
 
     const error = loadError(() => nodesOf(text));
 
     expect(error.message).toContain(
-      `node 'a' (kind=tool): \`tool_id:\` must be text, but YAML read it as ${phrase}; put it in quotes`,
+      `node 'a' (kind=tool): \`tool_id:\` must be a tool name or \`{group: tool}\`, but YAML read it as ${phrase}; put it in quotes`,
     );
     expect(startLine(error)).toBe(lineOf(text, "tool_id: "));
   });
 
   test.each([
-    [codeFlow("null"), "code", "code"],
-    [toolFlow("null"), "tool", "tool_id"],
-  ])("null code and tool id are empty: %#", (text, kind, key) => {
+    [codeFlow("null"), "code", "code", "`code:` must be text, but it is empty; write the text"],
+    [toolFlow("null"), "tool", "tool_id", "`tool_id:` must be a tool name or `{group: tool}`, but it is empty; write a tool name"],
+  ])("null code and tool id are empty: %#", (text, kind, key, message) => {
     const error = loadError(() => nodesOf(text));
 
-    expect(error.message).toContain(
-      `node 'a' (kind=${kind}): \`${key}:\` must be text, but it is empty; write the text`,
-    );
+    expect(error.message).toContain(`node 'a' (kind=${kind}): ${message}`);
     expect(startLine(error)).toBe(lineOf(text, `${key}: `));
   });
 
@@ -514,7 +513,7 @@ describe("parseNodes", () => {
   test("tagged non-text tool id", () => {
     // `!str 5` still reads as an integer here; the tag's own error comes once it is quoted.
     expect(loadError(() => nodesOf(toolFlow("!str 5"))).message).toContain(
-      "`tool_id:` must be text, but YAML read it as an integer; put it in quotes",
+      "`tool_id:` must be a tool name or `{group: tool}`, but YAML read it as an integer; put it in quotes",
     );
   });
 

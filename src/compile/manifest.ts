@@ -119,7 +119,7 @@ const KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "steerRender",
   ],
   [NodeKind.CODE]: ["code"],
-  [NodeKind.TOOL]: ["toolId", "retries", "answerSchema"],
+  [NodeKind.TOOL]: ["toolRef", "retries", "answerSchema"],
   [NodeKind.CASE]: ["cases"],
   [NodeKind.CALL]: ["flowId", "flowVersion", "child"],
   [NodeKind.MAP]: ["flowId", "flowVersion", "child"],
@@ -157,7 +157,8 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   // body's JavaScript, derived from `code`.
   [NodeKind.CODE]: ["mode", "baseDir", "sourceFile", "codeLineStarts", "codeOrigin", "codeLineOrigins", "stripped"],
   // `inputTypes` is derived from wiring and producer contracts; the run-start tool check reads it.
-  [NodeKind.TOOL]: ["inputTypes"],
+  // `toolId` is the name messages show, derived from `toolRef`.
+  [NodeKind.TOOL]: ["inputTypes", "toolId"],
   [NodeKind.CASE]: [],
   // `childInputs` duplicates the recursive child's START signature.
   [NodeKind.CALL]: ["childInputs"],
@@ -823,7 +824,9 @@ function nodeManifest(node: Node, ctx: ManifestContext, path: string, topologyOn
       break;
     case NodeKind.TOOL: {
       const tool = node as ToolNode;
-      manifest.tool_id = tool.toolId;
+      // As authored: a bare id stays text, so flows naming bare tools keep their identity.
+      const { group, name } = tool.toolRef;
+      manifest.tool_id = group === null ? name : Object.fromEntries([[group, name]]);
       const retries = count(tool.retries, `${path}.retries`, false);
       // Left out at zero, so retries don't change the identity of flows that don't set
       // them.

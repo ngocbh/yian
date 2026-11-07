@@ -1,0 +1,19 @@
+# A `tool_id:` mapping names one tool, so a second key is refused.
+kind: load
+flow: |
+  id: grants
+  name: grants
+  nodes:
+    found:
+      kind: tool
+      tool_id: {cases: search, docs: search}
+      input: {query: owls}
+  output: ${found.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'node ''found'' (kind=tool): `tool_id:` names one tool: `{cases: search}` or `search`'
+      frames:
+      - label: flow.yaml
+        range: [6, 14, 6, 43]

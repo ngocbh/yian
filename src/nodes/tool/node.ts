@@ -22,7 +22,8 @@ import { type FailureCode, reprText } from "../../diagnostics.ts";
 import { realScheduler } from "../../platform.ts";
 import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, isPending, SLEEP, TAKE, toolCallId } from "../../tools/context.ts";
 import { isPermanentToolError, isToolCheckError, isTransientToolError, ToolCheckError } from "../../tools/errors.ts";
-import { ToolSet } from "../../tools/registry.ts";
+import { visibleToolName } from "../../tools/grants.ts";
+import { type ToolRef, ToolSet } from "../../tools/registry.ts";
 import { eventBytes, type JsonObject } from "../../typesys/json.ts";
 import { deadlineUtc, formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import {
@@ -236,8 +237,13 @@ export class ToolNode extends Node {
    * calling its tool, so it takes no worker slot.
    */
   override readonly wakesWithoutWorker: boolean = true;
-  /** The tool id, looked up in the run's `ToolSet`; an unknown id rejects at run time. */
+  /**
+   * The tool's name as messages and the pending step show it: its id, or `<group>_<tool>` for a
+   * group's tool.
+   */
   toolId: string;
+  /** The tool, looked up in the run's `ToolSet`: a bare id, or a group's tool. */
+  toolRef: ToolRef;
   /** How many times a failed tool call may be retried, at least 0. */
   retries: number;
   /** The proven type of each input's binding; an input whose type is not proven is absent. */
@@ -249,7 +255,8 @@ export class ToolNode extends Node {
    * Build a TOOL node.
    *
    * @param nodeId The node's unique id.
-   * @param options.toolId The tool id, looked up in the run's `ToolSet`.
+   * @param options.toolId The tool id, or a group's tool as a `ToolRef`, looked up in the run's
+   *   `ToolSet`.
    * @param options.title A display title.
    * @param options.retries How many times a failed call may be retried, at least 0; `null` or
    *   omitted means `current().toolRetries`.
@@ -260,7 +267,7 @@ export class ToolNode extends Node {
   constructor(
     nodeId: string,
     options: {
-      toolId: string;
+      toolId: string | ToolRef;
       title?: string | null;
       retries?: number | null;
       answerSchema?: readonly Readonly<Record<string, unknown>>[] | null;
@@ -273,7 +280,8 @@ export class ToolNode extends Node {
       if (!Number.isSafeInteger(retries)) throw new TypeError(message);
       if (retries < 0) throw new RangeError(message);
     }
-    this.toolId = toolId;
+    this.toolRef = Object.freeze(typeof toolId === "string" ? { group: null, name: toolId } : { ...toolId });
+    this.toolId = visibleToolName(this.toolRef.group, this.toolRef.name);
     this.retries = retries ?? current().toolRetries;
     this.inputTypes = new Map();
     this.answerSchema = answerSchema ?? [];
@@ -287,10 +295,11 @@ export class ToolNode extends Node {
     return BUILTIN_TOOL_IDS.has(this.toolId as BuiltinToolId) ? (this.toolId as BuiltinToolId) : null;
   }
 
-  /** Return this node's tool id, input names, proven input types, and output type. */
+  /** Return this node's tool id and group, input names, proven input types, and output type. */
   override hostToolCall(): HostToolCall {
     return new HostToolCall(
-      this.toolId,
+      this.toolRef.name,
+      this.toolRef.group,
       (this.params ?? []).map((parameter) => parameter.name),
       this.inputTypes,
       outputContractType(this.outputContract),
@@ -561,7 +570,7 @@ export class ToolNode extends Node {
       steps?.record(step);
     };
 
-    const call = await tools.validate(this.toolId, inputs, { signal });
+    const call = await tools.validate(this.toolRef, inputs, { signal });
     const last = history.at(-1);
     // The previous start recorded a failure and stopped before the retry finished: wait again.
     if (last?.event === "failed") await scheduler.sleep(Number(last.retry_in) * 1000, signal);

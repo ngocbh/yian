@@ -20,6 +20,8 @@ import { parseQuestions, QuestionSpecError } from "../../nodes/tool/questions.ts
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
+import { visibleToolName } from "../../tools/grants.ts";
+import type { ToolRef } from "../../tools/registry.ts";
 import { parseDateOrDatetime, parseDuration } from "../../typesys/temporal.ts";
 import {
   canonicalTypeLabel,
@@ -43,14 +45,14 @@ import {
   type NodeDescriptorFields,
   notTextError,
   rangeAt,
-  rejectNonText,
   siteKey,
   siteLabel,
+  valueTypeError,
 } from "./base.ts";
 
 /** The fields `ToolDescriptor`'s constructor takes: the common ones and the TOOL's own. */
 export interface ToolDescriptorFields extends NodeDescriptorFields {
-  toolId: string;
+  toolRef: ToolRef;
   retries?: number;
   asserts?: readonly string[] | null;
   adaptiveQuestions?: unknown;
@@ -64,9 +66,9 @@ export interface ToolDescriptorFields extends NodeDescriptorFields {
  * `inputs` is its one binding field. `output:` is optional; when present it is the node's output
  * contract, which the engine checks the tool's return value against on every call.
  *
- * `tool_id: take | sleep | ask` names a yian built-in, whose inputs are checked at load and whose
- * output is inferred (`take`, `sleep`) or is the answer type (`ask`, which alone takes
- * `adaptive_questions:`).
+ * `tool_id:` is a tool's id or a group's tool, `{group: tool}`. `tool_id: take | sleep | ask` names
+ * a yian built-in, whose inputs are checked at load and whose output is inferred (`take`, `sleep`)
+ * or is the answer type (`ask`, which alone takes `adaptive_questions:`).
  */
 export class ToolDescriptor extends NodeDescriptor {
   static override readonly kind = "tool";
@@ -81,8 +83,8 @@ export class ToolDescriptor extends NodeDescriptor {
   static override readonly required = this.require("tool_id");
   static override readonly bindingFields: readonly string[] = ["inputs"];
 
-  /** The tool id, looked up in the run's `ToolSet`. */
-  readonly toolId: string;
+  /** The tool, looked up in the run's `ToolSet`: a bare id, or a group's tool. */
+  readonly toolRef: ToolRef;
   /** The effective retry count, so the manifest holds it; zero is left out of the manifest. */
   readonly retries: number;
   /** The node asserts. */
@@ -98,10 +100,15 @@ export class ToolDescriptor extends NodeDescriptor {
    */
   constructor(fields: ToolDescriptorFields) {
     super(fields);
-    this.toolId = fields.toolId;
+    this.toolRef = fields.toolRef;
     this.retries = fields.retries ?? current().toolRetries;
     this.asserts = fields.asserts ?? [];
     this.adaptiveQuestions = fields.adaptiveQuestions ?? null;
+  }
+
+  /** The tool's name as messages show it: its id, or `<group>_<tool>` for a group's tool. */
+  get toolId(): string {
+    return visibleToolName(this.toolRef.group, this.toolRef.name);
   }
 
   /**
@@ -140,8 +147,10 @@ export class ToolDescriptor extends NodeDescriptor {
   }
 
   /**
-   * Reject a non-text `tool_id:` (`null` included), the reserved `load_skill`, the fields a
-   * built-in refuses, and a bad `retries:`; store `retries` as a `number`, then run the base checks.
+   * Read `tool_id:` into `toolRef`, rejecting anything but a tool id or a one-key `{group: tool}`
+   * (`null` included), a built-in or `load_skill` named in a group, the reserved `load_skill`, the
+   * fields a built-in refuses, and a bad `retries:`; store `retries` as a `number`, then run the
+   * base checks.
    *
    * `take` and `sleep` refuse `retries:`, `asserts:` and `output:` (they make no tool call, and
    * their output is fixed); `ask` refuses `retries:`. `tool_id: ask_user`, `ask`'s old name, is
@@ -158,11 +167,11 @@ export class ToolDescriptor extends NodeDescriptor {
     cursor: SourceCursor,
   ): void {
     const rangeOf = (key: string) => ranges.get(siteKey("field", key)) ?? ownRange;
-    rejectNonText(this.kind, nodeId, "tool_id", fields["toolId"] ?? null, rangeOf("tool_id"), diagnostics, {
-      required: true,
-    });
-    if (fields["toolId"] === ASK_USER) fields["toolId"] = ASK;
-    const toolId = fields["toolId"] as string;
+    const ref = ToolDescriptor.readToolRef(nodeId, fields["toolId"] ?? null, rangeOf("tool_id"), diagnostics);
+    delete fields["toolId"];
+    fields["toolRef"] = ref;
+    // A group's tool shows as `<group>_<tool>`, which is never a built-in's name.
+    const toolId = visibleToolName(ref.group, ref.name);
     if (toolId === LOAD_SKILL) {
       throw diagnostics.error(`node ${reprText(nodeId)} (kind=${this.kind}): tool id \`${LOAD_SKILL}\` is reserved by yian`, {
         range: rangeOf("tool_id"),
@@ -193,6 +202,44 @@ export class ToolDescriptor extends NodeDescriptor {
       fields["retries"] = Number(fields["retries"]);
     }
     super._validateFields(nodeId, fields, ranges, ownRange, diagnostics, cursor);
+  }
+
+  /**
+   * Read an authored `tool_id:`: a tool id (`ask_user` read as `ask`), or a one-key mapping
+   * `{group: tool}` naming one tool of a group.
+   *
+   * @throws LoadError at `tool_id:` for any other value, `null` included, or a built-in or
+   *   `load_skill` named in a group.
+   */
+  private static readToolRef(
+    nodeId: string,
+    raw: unknown,
+    range: SourceRange | null,
+    diagnostics: LoadDiagnostics,
+  ): ToolRef {
+    const fail = (problem: string): never => {
+      throw diagnostics.error(`node ${reprText(nodeId)} (kind=${this.kind}): ${problem}`, { range });
+    };
+    if (typeof raw === "string") return Object.freeze({ group: null, name: raw === ASK_USER ? ASK : raw });
+    if (!isRecord(raw)) {
+      const fix = raw === null ? "write a tool name" : "put it in quotes";
+      return fail(valueTypeError("tool_id", "a tool name or `{group: tool}`", raw, fix));
+    }
+    const keys = Object.keys(raw);
+    if (keys.length !== 1 || keys[0] === "") return fail("`tool_id:` names one tool: `{cases: search}` or `search`");
+    const group = keys[0]!;
+    const name = raw[group];
+    if (typeof name !== "string" || name === "") {
+      const first = Array.isArray(name) ? name[0] : undefined;
+      const example = typeof first === "string" && first !== "" ? first : "search";
+      return fail(`\`tool_id: {${group}: ...}\` names one tool; write \`{${group}: ${example}}\``);
+    }
+    if (BUILTIN_TOOL_IDS.has(name as BuiltinToolId) || name === ASK_USER || name === LOAD_SKILL) {
+      const bare = name === ASK_USER ? ASK : name;
+      const fix = name === LOAD_SKILL ? `\`${LOAD_SKILL}\` is reserved by yian` : `write \`tool_id: ${bare}\``;
+      return fail(`\`tool_id: {${group}: ${name}}\`: ${name} is a built-in, not a group's tool; ${fix}`);
+    }
+    return Object.freeze({ group, name });
   }
 
   /**
@@ -250,7 +297,7 @@ export class ToolDescriptor extends NodeDescriptor {
     const builtin = BUILTIN_TOOL_IDS.has(this.toolId as BuiltinToolId);
     // A built-in is never retried by the node: take and sleep make no call, and the host owns an ask.
     const retries = builtin ? 0 : this.retries;
-    const node = new ToolNode(this.id, { toolId: this.toolId, title: this.nodeName, retries });
+    const node = new ToolNode(this.id, { toolId: this.toolRef, title: this.nodeName, retries });
     const wiring = this.sinkWiring();
     if (this.toolId === TAKE) {
       node.outputContract = this.buildTake(ctx);

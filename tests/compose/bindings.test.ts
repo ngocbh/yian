@@ -26,7 +26,7 @@ describe("mapBindingStrings", () => {
   });
 
   test("tool inputs rewritten", () => {
-    const desc = new ToolDescriptor({ id: "t", toolId: "fetch", inputs: { url: "${u}", n: 3 } });
+    const desc = new ToolDescriptor({ id: "t", toolRef: { group: null, name: "fetch" }, inputs: { url: "${u}", n: 3 } });
     const out = mapBindingStrings(desc, up);
     expect(out.inputs).toEqual({ url: "${U}", n: 3 });
   });
@@ -78,8 +78,8 @@ describe("mapBindingStrings", () => {
 
   test("ask, sleep and loop inputs rewritten", () => {
     for (const [desc, inputs] of [
-      [new ToolDescriptor({ id: "h", toolId: "ask", inputs: { questions: "${qs}" } }), { questions: "${QS}" }],
-      [new ToolDescriptor({ id: "w", toolId: "sleep", inputs: { until: "${t}" } }), { until: "${T}" }],
+      [new ToolDescriptor({ id: "h", toolRef: { group: null, name: "ask" }, inputs: { questions: "${qs}" } }), { questions: "${QS}" }],
+      [new ToolDescriptor({ id: "w", toolRef: { group: null, name: "sleep" }, inputs: { until: "${t}" } }), { until: "${T}" }],
       [new LoopDescriptor({ id: "l", call: "body", inputs: { q: "${qs}" } }), { q: "${QS}" }],
     ] as const) {
       const out = mapBindingStrings(desc, up);

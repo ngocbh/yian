@@ -38,7 +38,7 @@ export class FakeTake extends Node {
   }
 
   override hostToolCall(): HostToolCall {
-    return new HostToolCall("take", [], new Map(), null);
+    return new HostToolCall("take", null, [], new Map(), null);
   }
 
   override forward(): NodeResult {
@@ -59,7 +59,7 @@ export class FakeSleep extends Node {
   }
 
   override hostToolCall(): HostToolCall {
-    return new HostToolCall("sleep", [], new Map(), null);
+    return new HostToolCall("sleep", null, [], new Map(), null);
   }
 
   override forward(): NodeResult {
@@ -97,7 +97,7 @@ export class FakeHost extends Node {
   }
 
   override hostToolCall(): HostToolCall {
-    return new HostToolCall(this.tool, [], new Map(), null);
+    return new HostToolCall(this.tool, null, [], new Map(), null);
   }
 
   override forward(_inputs: Record<string, unknown>, caps: NodeCaps): NodeResult {

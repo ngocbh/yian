@@ -3,10 +3,10 @@
  *
  * Each entry has one built-in value and one environment variable, `YIAN_` plus the
  * entry name: `YIAN_MAX_VALUE_NESTING` overrides `MAX_VALUE_NESTING`. Limits and input
- * caps start with `MAX_`; defaults for settings a flow author can set are named
- * `<OWNER>_<SETTING>` after the authored setting (`AGENT_RETRIES`). Units are suffixes
- * (`_BYTES`, `_CHARS`); counts have none. Code reads a value as the camelCase property
- * of `current()`, for example `current().maxValueNesting`.
+ * caps start with `MAX_`; defaults for settings a flow author or a host can set are named
+ * `<OWNER>_<SETTING>` after the setting (`AGENT_RETRIES`, `FILE_MEMORY_MAX_FILES`). Units
+ * are suffixes (`_BYTES`, `_CHARS`); counts have none. Code reads a value as the camelCase
+ * property of `current()`, for example `current().maxValueNesting`.
  *
  * Values are read once per process, unless a call's `env` scopes them: the first
  * `current()` call reads and checks every variable, and later changes to the environment
@@ -197,6 +197,68 @@ export const ENTRIES = Object.freeze([
     description: "Longest wait in seconds before a TOOL node retries a failed tool call",
     group: "setting",
     minimum: 0,
+  }),
+  // Defaults for the settings a host passes to a memory it binds. A lock timeout of 0 makes a
+  // busy memory fail at once instead of waiting.
+  entry("MEMORY_LOCK_TIMEOUT_SECONDS", {
+    default: 30,
+    description: "Longest wait in seconds for a memory's lock",
+    group: "setting",
+    minimum: 0,
+  }),
+  entry("MEMORY_MAX_CHANGE_IDS", {
+    default: 10_000,
+    description: "Most change ids a memory keeps to answer a repeated change",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("MEMORY_MAX_UNDO", {
+    default: 100,
+    description: "Most changes a memory can undo",
+    group: "setting",
+    minimum: 0,
+  }),
+  entry("FILE_MEMORY_MAX_FILE_CHARS", {
+    default: 100_000,
+    description: "Most characters one file of a FileMemory may hold",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("FILE_MEMORY_MAX_TOTAL_CHARS", {
+    default: 1_000_000,
+    description: "Most characters all files of a FileMemory may hold",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("FILE_MEMORY_MAX_FILES", {
+    default: 1_000,
+    description: "Most files a FileMemory may hold",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("FILE_MEMORY_MAX_DEPTH", {
+    default: 4,
+    description: "Deepest folder depth of a FileMemory's files",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("FILE_MEMORY_MAX_RECALL_CHARS", {
+    default: 8_000,
+    description: "Most characters of a FileMemory's recall",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("FILE_MEMORY_MAX_READ_CHARS", {
+    default: 20_000,
+    description: "Most characters one FileMemory read tool result shows",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("FILE_MEMORY_MAX_RESULTS", {
+    default: 100,
+    description: "Most entries a FileMemory's `list` shows, and lines its `search` shows",
+    group: "setting",
+    minimum: 1,
   }),
   // A hung MCP server would otherwise stall the run forever; a run reads these when it
   // talks to a server, so they don't change the loaded flow.

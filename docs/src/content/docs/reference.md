@@ -76,6 +76,16 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_TOOL_RETRIES` | setting | 0 | 0 or more | Extra attempts a TOOL node gets after a failed tool call when the node sets none |
 | `YIAN_TOOL_RETRY_DELAY_SECONDS` | setting | 1 | 0 or more | Base wait in seconds before a TOOL node's first retry; each later wait doubles, up to the cap |
 | `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds before a TOOL node retries a failed tool call |
+| `YIAN_MEMORY_LOCK_TIMEOUT_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds for a memory's lock |
+| `YIAN_MEMORY_MAX_CHANGE_IDS` | setting | 10,000 | 1 or more | Most change ids a memory keeps to answer a repeated change |
+| `YIAN_MEMORY_MAX_UNDO` | setting | 100 | 0 or more | Most changes a memory can undo |
+| `YIAN_FILE_MEMORY_MAX_FILE_CHARS` | setting | 100,000 | 1 or more | Most characters one file of a FileMemory may hold |
+| `YIAN_FILE_MEMORY_MAX_TOTAL_CHARS` | setting | 1,000,000 | 1 or more | Most characters all files of a FileMemory may hold |
+| `YIAN_FILE_MEMORY_MAX_FILES` | setting | 1,000 | 1 or more | Most files a FileMemory may hold |
+| `YIAN_FILE_MEMORY_MAX_DEPTH` | setting | 4 | 1 or more | Deepest folder depth of a FileMemory's files |
+| `YIAN_FILE_MEMORY_MAX_RECALL_CHARS` | setting | 8,000 | 1 or more | Most characters of a FileMemory's recall |
+| `YIAN_FILE_MEMORY_MAX_READ_CHARS` | setting | 20,000 | 1 or more | Most characters one FileMemory read tool result shows |
+| `YIAN_FILE_MEMORY_MAX_RESULTS` | setting | 100 | 1 or more | Most entries a FileMemory's `list` shows, and lines its `search` shows |
 | `YIAN_MCP_CONNECT_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for an MCP server to start and list its tools |
 | `YIAN_MCP_CALL_TIMEOUT_SECONDS` | setting | 300 | 1 or more | Longest wait in seconds for one MCP tool call |
 | `YIAN_MODEL_RETRIES` | setting | 6 | 0 or more | Extra attempts a model call gets after a transport failure (a network error, 5xx, 429 or timeout) |

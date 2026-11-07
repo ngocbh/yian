@@ -10,6 +10,7 @@ import { ProviderError } from "../../src/llm/errors.ts";
 import {
   type Exchange,
   type ExchangeOptions,
+  MAX_ERROR_BODY_BYTES,
   openExchange,
   shortRequest,
   type ShortRequestOptions,
@@ -761,6 +762,26 @@ describe("shortRequest", () => {
     expect(reply.status).toBe(404);
     expect(reply.headers.get("x-a")).toBe("1");
     expect(reply.text).toBe("not here");
+  });
+
+  test("cutErrorBody reads a non-2xx body only to MAX_ERROR_BODY_BYTES, past maxBytes, without a cut credential", async () => {
+    expect(MAX_ERROR_BODY_BYTES).toBe(64 * 1024);
+    const key = "sk-cut-secret-77";
+    // The cap falls inside the key, whose first four characters end the second chunk.
+    const first = "a".repeat(32 * 1024);
+    const second = " ".repeat(32 * 1024 - 4) + key.slice(0, 4);
+    const steps = [{ at: 0, chunk: first }, { at: S, chunk: second }, { at: 2 * S, chunk: key.slice(4) + "c" }];
+    const h = harness({ status: 500, steps });
+    const reply = await h.short({ cutErrorBody: true, maxBytes: 10, credentials: () => [key] });
+    expect(reply.status).toBe(500);
+    expect(reply.text).toBe(first);
+    expect(h.clock.now()).toBe(S);
+    expect(h.cancels.count).toBe(1);
+
+    const whole = harness({ status: 500, steps: [{ at: 0, chunk: "not here" }] });
+    expect((await whole.short({ cutErrorBody: true, maxBytes: 3 })).text).toBe("not here");
+    const ok = harness({ steps: [{ at: 0, chunk: "abcdef" }] });
+    expect(((await failure(ok.short({ cutErrorBody: true, maxBytes: 5 }))) as ProviderError).kind).toBe("protocol");
   });
 
   test("a transport failure maps as for a model call, credentials scrubbed", async () => {

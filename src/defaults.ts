@@ -357,6 +357,14 @@ export const ENTRIES = Object.freeze([
     group: "input cap",
     minimum: 1,
   }),
+  // 64 texts at 3,072 dimensions take about 4 MiB as JSON numbers; this leaves room for larger
+  // batches and models.
+  entry("MAX_EMBEDDING_REPLY_BYTES", {
+    default: 32 * 1024 * 1024,
+    description: "Largest reply read from an embeddings request",
+    group: "input cap",
+    minimum: 1,
+  }),
   // Media travel as run-folder file refs, so the cap is on text and structure.
   entry("MAX_EVENT_BYTES", {
     default: MAX_EVENT_BYTES,

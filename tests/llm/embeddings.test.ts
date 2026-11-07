@@ -160,6 +160,35 @@ test("batches whose vectors differ in length are a protocol error", async () => 
   expect([error.kind, error.provider]).toEqual(["protocol", "openai"]);
 });
 
+test("a reply over MAX_EMBEDDING_REPLY_BYTES is a protocol error", async () => {
+  expect(BUILTIN.maxEmbeddingReplyBytes).toBe(32 * 1024 * 1024);
+  const env = (name: string) => (name === "YIAN_MAX_EMBEDDING_REPLY_BYTES" ? "64" : undefined);
+  const { send } = fake(() => Response.json({ data: [{ index: 0, embedding: Array(40).fill(0.5) }] }));
+  const error = (await rejected(withEnv(env, () => embedder(send)(["a"], { signal })))) as ProviderError;
+  expect([error instanceof ProviderError, error.kind, error.message]).toEqual([
+    true,
+    "protocol",
+    "openai response is larger than 64 bytes",
+  ]);
+});
+
+test("an error reply is read only to its first 64 KiB, past the reply cap, and keeps its status", async () => {
+  const env = (name: string) => (name === "YIAN_MAX_EMBEDDING_REPLY_BYTES" ? "1024" : undefined);
+  const chunk = new TextEncoder().encode("x".repeat(16 * 1024));
+  let pulled = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      pulled += 1;
+      if (pulled > 1000) controller.close();
+      else controller.enqueue(chunk);
+    },
+  });
+  const send: Send = async () => new Response(body, { status: 500 });
+  const error = (await rejected(withEnv(env, () => embedder(send)(["a"], { signal })))) as ProviderError;
+  expect([error instanceof ProviderError, error.kind, error.status]).toEqual([true, "server", 500]);
+  expect(pulled).toBeLessThan(8);
+});
+
 test("a request gets EMBEDDING_TIMEOUT_SECONDS to answer", async () => {
   expect(BUILTIN.embeddingTimeoutSeconds).toBe(60);
   const clock = virtualScheduler();

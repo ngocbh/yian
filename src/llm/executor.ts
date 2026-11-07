@@ -13,16 +13,15 @@
 import { current } from "../defaults.ts";
 import { realScheduler, type Scheduler, type Send } from "../platform.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
-import { dropCredentialTail, scrub } from "./auth.ts";
+import { scrub } from "./auth.ts";
 import { encodeBody } from "./body.ts";
 import { capDetail, errorFromResponse, MAX_RETRY_AFTER_SECONDS, nonStreamError, ProviderError } from "./errors.ts";
 import { type ChatModel, type Event, EventStream, ReplyAssembler } from "./events.ts";
 import { iterNdjson, iterSse, type SSEEvent, type SseStats } from "./framing.ts";
 import type { Message, Request, Response } from "./messages.ts";
 import type { Route } from "./route.ts";
-import { type Exchange, openExchange } from "./transport.ts";
+import { errorBodyText, type Exchange, MAX_ERROR_BODY_BYTES, openExchange } from "./transport.ts";
 
-const MAX_ERROR_BODY = 64 * 1024;
 // Fixed, not a setting: YIAN_MODEL_RETRIES bounds how long retrying takes.
 /** openai's MAX_RETRY_DELAY: the longest backoff between model retries, in seconds. */
 const MAX_RETRY_DELAY_SECONDS = 8;
@@ -123,12 +122,8 @@ export class RouteModel implements ChatModel {
     );
     if (exchange.status < 200 || exchange.status >= 300) {
       const credentials = route.auth.credentials();
-      const text = scrub(await readErrorBody(exchange, credentials), credentials);
-      const error = errorFromResponse(exchange.status, exchange.headers, text, {
-        provider: route.provider,
-        credentials,
-      });
-      throw scrubbed(error, credentials);
+      const text = await readErrorBody(exchange, credentials);
+      throw statusError(exchange.status, exchange.headers, text, route.provider, credentials);
     }
     const stats: SseStats = { sseLines: 0 };
     const head: Head = { chunks: [], size: 0 };
@@ -144,7 +139,7 @@ export class RouteModel implements ChatModel {
       let failure = error;
       // A body with no SSE line was never a stream, so sending it again gets the same reply.
       if (protocol.framing === "sse" && error.kind === "incomplete" && stats.sseLines === 0) {
-        const text = scrub(headText(head.chunks, head.size, credentials), credentials);
+        const text = scrub(errorBodyText(head.chunks, head.size, credentials), credentials);
         if (/\S/.test(text)) {
           failure = nonStreamError(exchange.status, exchange.headers, text, { provider: route.provider, credentials });
         }
@@ -177,13 +172,13 @@ async function readErrorBody(exchange: Exchange, credentials: readonly string[])
     for await (const chunk of exchange.body) {
       chunks.push(chunk);
       size += chunk.byteLength;
-      if (size >= MAX_ERROR_BODY) break;
+      if (size >= MAX_ERROR_BODY_BYTES) break;
     }
   } catch (error) {
     // The status already names the failure.
     if (!(error instanceof ProviderError)) throw error;
   }
-  return headText(chunks, size, credentials);
+  return errorBodyText(chunks, size, credentials);
 }
 
 /** The first bytes of a 2xx body, kept in case it turns out not to be a stream. */
@@ -200,9 +195,9 @@ interface Head {
  */
 async function* keepHead(chunks: AsyncIterable<Uint8Array>, head: Head, stats: SseStats): AsyncGenerator<Uint8Array> {
   for await (const chunk of chunks) {
-    if (stats.sseLines === 0 && head.size < MAX_ERROR_BODY) {
+    if (stats.sseLines === 0 && head.size < MAX_ERROR_BODY_BYTES) {
       // Copied, since the source may reuse the chunk's buffer once it moves on.
-      const part = chunk.slice(0, MAX_ERROR_BODY - head.size);
+      const part = chunk.slice(0, MAX_ERROR_BODY_BYTES - head.size);
       head.chunks.push(part);
       head.size += part.byteLength;
     }
@@ -211,20 +206,19 @@ async function* keepHead(chunks: AsyncIterable<Uint8Array>, head: Head, stats: S
 }
 
 /**
- * Return the first 64 KiB of `chunks`, `size` bytes in all, decoded as UTF-8 with replacement.
- * Text cut at the cap loses what `dropCredentialTail` drops: the cut may split a credential, and
- * no scrub matches the part before it.
+ * Return the error for a non-2xx reply whose body text, cut as `errorBodyText` cuts it, is
+ * `body`: `errorFromResponse`'s for the body scrubbed of `credentials`, with its message scrubbed
+ * again.
  */
-function headText(chunks: readonly Uint8Array[], size: number, credentials: readonly string[]): string {
-  const bytes = new Uint8Array(Math.min(size, MAX_ERROR_BODY));
-  let at = 0;
-  for (const chunk of chunks) {
-    const part = chunk.subarray(0, bytes.length - at);
-    bytes.set(part, at);
-    at += part.length;
-  }
-  const text = new TextDecoder().decode(bytes);
-  return size < MAX_ERROR_BODY ? text : dropCredentialTail(text, credentials);
+export function statusError(
+  status: number,
+  headers: Headers,
+  body: string,
+  provider: string,
+  credentials: readonly string[],
+): ProviderError {
+  const error = errorFromResponse(status, headers, scrub(body, credentials), { provider, credentials });
+  return scrubbed(error, credentials);
 }
 
 /**

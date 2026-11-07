@@ -3,16 +3,18 @@
  *
  * `openaiEmbeddings` returns an `Embedder` bound to one endpoint, auth and model. A call posts the
  * texts in batches of at most `current().embeddingBatchItems`, each a short request under
- * `current().embeddingTimeoutSeconds`, and checks that every reply holds one vector per text, all
- * of one length. Nothing is retried: the caller decides what a failed call means.
+ * `current().embeddingTimeoutSeconds` whose reply may hold `current().maxEmbeddingReplyBytes`, and
+ * checks that every reply holds one vector per text, all of one length. Nothing is retried: the
+ * caller decides what a failed call means.
  */
 
 import { current } from "../defaults.ts";
 import type { Scheduler, Send } from "../platform.ts";
 import type { JsonValue } from "../typesys/json.ts";
-import { type Auth, scrub } from "./auth.ts";
+import type { Auth } from "./auth.ts";
 import { encodeBody } from "./body.ts";
-import { errorFromResponse, ProviderError } from "./errors.ts";
+import { ProviderError } from "./errors.ts";
+import { statusError } from "./executor.ts";
 import { isPlainObject } from "./messages.ts";
 import { Route } from "./route.ts";
 import { shortRequest } from "./transport.ts";
@@ -54,10 +56,11 @@ export interface EmbeddingsOptions {
  * Return an `Embedder` that POSTs `{model, input}` to `<baseUrl>/embeddings`.
  *
  * Each request sends the route's `requestHeaders`: JSON defaults, then `headers`, then the auth
- * headers. A non-2xx reply throws `errorFromResponse`'s
- * `ProviderError`, scrubbed of the auth's credentials; a reply that isn't one vector of finite
- * numbers per text, all of one non-zero length across every batch, throws a `protocol` one.
- * Transport failures and a stop reject as `shortRequest` does. No texts send no request.
+ * headers. A non-2xx reply throws `statusError`'s `ProviderError`, built from the body's first
+ * 64 KiB as a model call's is and scrubbed of the auth's credentials. A 2xx reply larger than
+ * `current().maxEmbeddingReplyBytes`, or one that isn't one vector of finite numbers per text, all
+ * of one non-zero length across every batch, throws a `protocol` one. Transport failures and a
+ * stop reject as `shortRequest` does. No texts send no request.
  *
  * @throws TypeError At construction, if a header name or value may not be sent.
  */
@@ -72,7 +75,7 @@ export function openaiEmbeddings(options: EmbeddingsOptions): Embedder {
   });
   return async (texts, { signal }) => {
     // Read per call, so a run's scoped defaults apply to the calls it makes.
-    const { embeddingBatchItems, embeddingTimeoutSeconds } = current();
+    const { embeddingBatchItems, embeddingTimeoutSeconds, maxEmbeddingReplyBytes } = current();
     const vectors: Float32Array[] = [];
     for (let start = 0; start < texts.length; start += embeddingBatchItems) {
       const batch = texts.slice(start, start + embeddingBatchItems);
@@ -84,17 +87,15 @@ export function openaiEmbeddings(options: EmbeddingsOptions): Embedder {
           name: route.provider,
           credentials: () => route.auth.credentials(),
           timeoutMs: embeddingTimeoutSeconds * 1000,
+          maxBytes: maxEmbeddingReplyBytes,
+          cutErrorBody: true,
           signal,
           scheduler,
           send,
         },
       );
       if (reply.status < 200 || reply.status >= 300) {
-        const credentials = route.auth.credentials();
-        throw errorFromResponse(reply.status, reply.headers, scrub(reply.text, credentials), {
-          provider: route.provider,
-          credentials,
-        });
+        throw statusError(reply.status, reply.headers, reply.text, route.provider, route.auth.credentials());
       }
       for (const vector of vectorsOf(reply.json(), batch.length, route.provider, vectors[0]?.length ?? null)) {
         vectors.push(vector);

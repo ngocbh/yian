@@ -342,11 +342,20 @@ test("the replay cursor takes the recorded replies in order and finds each resul
   expect(steps.replaying()).toBe(false);
   expect(steps.takeRecorded("chat", D1)).toBeNull();
   expect(steps.priorAttempts("chat", D1)).toBeNull();
-  expect(steps.recordedResult(2, "c1")).toEqual({ output: "one", isError: false, closed: null });
-  expect(steps.recordedResult(6, "c2")).toEqual({ output: "two", isError: false, closed: null });
+  expect(steps.recordedResult(2, "c1")).toEqual({ output: "one", isError: false, closed: null, n: 3 });
+  expect(steps.recordedResult(6, "c2")).toEqual({ output: "two", isError: false, closed: null, n: 7 });
   // A result belongs to the reply before it.
   expect(steps.recordedResult(6, "c1")).toBeNull();
   expect(steps.recordedResult(2, "c3")).toBeNull();
+});
+
+test("the replay cursor finds the step an earlier start pended a call in", () => {
+  const steps = replaying([
+    callStep(D1, "first"),
+    { kind: "pending", call_id: "r/writer/1/0", tool: "hold", tool_call_id: "c1", reply: 1n, index: 0n },
+  ]);
+  expect(steps.recordedPending("r/writer/1/0")).toBe(2);
+  expect(steps.recordedPending("r/writer/1/1")).toBeNull();
 });
 
 test("a recorded reply's usage reads back its cache writes; a step written without them reads null", () => {
@@ -1298,6 +1307,129 @@ test("with an interrupt pending, the cut-off group's safe calls are all sent aga
     { call_id: "c1", output: "look:a", is_error: false },
     { call_id: "c2", output: "look:b", is_error: false },
     { call_id: "c3", output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" },
+  ]);
+});
+
+/**
+ * A run of the reply [c1 save (unsafe), c2 look (safe), c3 look (safe)], whose groups are [c1] and
+ * [c2, c3], cut twice: the first start during c1, then a resume, which sends c1 again and records
+ * it, during c2. `look` is resumable when `lookResumable`. Returns the log and what each start ran.
+ */
+async function cutTwice(lookResumable: boolean, ran: string[]) {
+  const flow = flowText(["save", "look"], { steerInbox: true, output: "Optional(str)" });
+  const tools = {
+    save: topicTool("save", { resumable: true, log: ran }),
+    look: topicTool("look", { safe: true, resumable: lookResumable, log: ran }),
+  };
+  const replies = () => [calls(["c1", "save", "a"], ["c2", "look", "b"], ["c3", "look", "c"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools });
+  ran.length = 0;
+  const log = await cutRun(afterCall(uncut.log), new ScriptedModel(replies(), CONFIG), { flow, tools });
+  // The resume writes run_resumed, node_started and c1's result, then is cut on c2's record.
+  const before = records(log).length;
+  await crashAfter(before + 3, () => resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools }));
+  expect(kinds(log, before)).toEqual(["run_resumed", "node_started", "tool_result 2"]);
+  return { log, tools };
+}
+
+test.each([true, false])(
+  "with an interrupt pending after two cuts, only the call the last start was sending may have started (look resumable %p)",
+  async (lookResumable) => {
+    const ran: string[] = [];
+    const { log, tools } = await cutTwice(lookResumable, ran);
+    // The first start ran `save a`; the resume sent it again, then started `look b` alone.
+    expect(ran).toEqual(lookResumable ? ["save a", "save a", "look b"] : ["save a", "save a"]);
+    ran.length = 0;
+    const model = new ScriptedModel([], CONFIG);
+    const resumed = await resume(log, model, { tools, models: interruptedAtResume(log, model) });
+    expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+    expect(resumed.output).toBeNull();
+    expect(model.requests.length).toBe(0);
+    // `look c` never started: no start sent it, so the interrupt skips it.
+    expect(ran).toEqual(lookResumable ? ["look b"] : []);
+    expect(toolResults(log)).toEqual([
+      { call_id: "c1", output: "save:a", is_error: false },
+      lookResumable
+        ? { call_id: "c2", output: "look:b", is_error: false }
+        : { call_id: "c2", output: TOOL_OUTCOME_UNKNOWN, is_error: true, closed: "crashed" },
+      { call_id: "c3", output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" },
+    ]);
+  },
+);
+
+test("without an interrupt after two cuts, the resume sends the rest in order", async () => {
+  const ran: string[] = [];
+  const { log, tools } = await cutTwice(true, ran);
+  ran.length = 0;
+  const resumed = await resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBe("done");
+  expect(ran).toEqual(["look b", "look c"]);
+  expect(toolResults(log)).toEqual([
+    { call_id: "c1", output: "save:a", is_error: false },
+    { call_id: "c2", output: "look:b", is_error: false },
+    { call_id: "c3", output: "look:c", is_error: false },
+  ]);
+});
+
+test("with an interrupt pending, a call past the cut-off group is skipped before its arguments are checked", async () => {
+  const flow = flowText(["save"], { steerInbox: true, output: "Optional(str)" });
+  const checked: string[] = [];
+  const ran: string[] = [];
+  const save = new FunctionTool({
+    name: "save",
+    description: "Tool save.",
+    parametersJsonSchema: { type: "object", properties: { topic: { type: "string" } }, required: ["topic"] },
+    parametersValidator: {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: (value) => (checked.push(String((value as { topic: unknown }).topic)), { value }),
+      },
+    },
+    execute: (args) => (ran.push(String(args["topic"])), `save:${String(args["topic"])}`),
+    resumable: true,
+  });
+  const replies = () => [calls(["c1", "save", "a"], ["c2", "save", "b"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools: { save } });
+  const log = await cutRun(afterCall(uncut.log), new ScriptedModel(replies(), CONFIG), { flow, tools: { save } });
+  checked.length = 0;
+  ran.length = 0;
+  const model = new ScriptedModel([], CONFIG);
+  const resumed = await resume(log, model, { tools: { save }, models: interruptedAtResume(log, model) });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(checked).toEqual(["a"]);
+  expect(ran).toEqual(["a"]);
+});
+
+test("a skip passes over a call that has a recorded result, even when the call's group changed on resume", async () => {
+  const flow = flowText(["look"], { steerInbox: true, output: "Optional(str)" });
+  const ran: string[] = [];
+  // c3 finishes first, so its result is written while c1 and c2 still run.
+  const look = (safe: boolean) =>
+    topicTool("look", {
+      safe,
+      resumable: true,
+      log: ran,
+      run: async (topic) => {
+        if (topic !== "c") await new Promise((resolve) => setTimeout(resolve, 5));
+        return `look:${topic}`;
+      },
+    });
+  const replies = () => [calls(["c1", "look", "a"], ["c2", "look", "b"], ["c3", "look", "c"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools: { look: look(true) } });
+  expect(toolResults(uncut.log).map(({ call_id }) => call_id)).toEqual(["c3", "c1", "c2"]);
+  const log = await cutRun(seqOf(uncut.log, "tool_result") + 1, new ScriptedModel(replies(), CONFIG), { flow, tools: { look: look(true) } });
+  ran.length = 0;
+  const model = new ScriptedModel([], CONFIG);
+  // On resume `look` no longer runs beside others, so c1 is a group of its own and c2 is skipped.
+  const resumed = await resume(log, model, { tools: { look: look(false) }, models: interruptedAtResume(log, model) });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(ran).toEqual(["look a"]);
+  expect(toolResults(log)).toEqual([
+    { call_id: "c3", output: "look:c", is_error: false },
+    { call_id: "c1", output: "look:a", is_error: false },
+    { call_id: "c2", output: SKIPPED_TOOL_RESULT, is_error: true, closed: "skipped" },
   ]);
 });
 

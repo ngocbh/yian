@@ -563,67 +563,100 @@ async function runToolCalls(turn: ToolTurn): Promise<boolean> {
  * before its result), the closer written as its `tool_result` step, and never runs. Unparsed calls
  * are not in `turn.calls`, so they get nothing, as live.
  *
- * With a host interrupt pending, only the calls that may have started are sent again or closed:
- * those of the group that was running at the cut, the first group holding a call with neither a
- * result nor a pending step. Live, a later group starts only once that one settles, so its calls
- * never started, and they are skipped from the first one on (`skipFrom`), as live skips them. The
- * groups are formed as live forms them: a call that ran with a recorded result belongs to the
- * running group, and an unrecorded call joins it only when it and the group's first unrecorded
- * call are both safe to run together.
+ * With a host interrupt pending, only the calls that may have started are sent again or closed,
+ * and the rest are skipped from the first one on (`skipFrom`), as live skips the calls it hasn't
+ * started. A call may have started when it belongs to the group the reply's own start was running
+ * at its cut, or when it is the first call with neither a result nor a pending step, which a later
+ * start, sending calls one at a time, may have been sending. That group is formed as live formed
+ * it, from what the reply's own start recorded (`NodeSteps.resumesSince`): its first call is the
+ * first one that start didn't finish, and a later call joins it while both are safe to run
+ * together. A call with no result is skipped before its check once the group has ended.
  *
- * @returns Whether a host interrupt skipped calls of this reply when it was live (a recorded
- *   `skipped` result): the loop ends as it did then.
+ * @returns Whether a host interrupt skipped calls of this reply, when it was live (a recorded
+ *   `skipped` result) or now.
  * @throws A stop's reason, a failed check's error (`failCall`), or what a call sent again throws
  *   (`resendCall`).
  */
 async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
   const { steps } = turn;
-  // The group running at the cut: not reached yet, still taking safe calls, or ended.
-  let running: "ahead" | "open" | "ended" = "ahead";
+  const resumesSince = turn.ctx.steps?.resumesSince ?? (() => 0);
+  /** Whether step `m` was recorded by the start that recorded the reply. */
+  const own = (m: number) => resumesSince(m) === resumesSince(turn.n);
+  // The group the reply's own start was running at its cut: not reached yet, still taking safe
+  // calls, or ended. Set in `joins`, so declared wide: an initializer alone would narrow it.
+  let running = "ahead" as "ahead" | "open" | "ended";
+  /** Place a call the reply's own start didn't finish: whether it is in that start's running group. */
+  const joins = (safe: boolean): boolean => {
+    const joined = running === "ahead" || (running === "open" && safe);
+    running = joined && safe ? "open" : "ended";
+    return joined;
+  };
+  // Whether a call with neither a result nor a pending step has been seen.
+  let missed = false;
   for (const [index, call] of turn.calls.entries()) {
     checkNodeStopped(turn);
-    let result = steps.recordedResult(turn.n, call.id);
+    const result = steps.recordedResult(turn.n, call.id);
     // Live, the interrupt skipped from this call's group on; the groups before it committed.
     if (result?.closed === "skipped") return true;
-    if (result === null) {
-      const check = await checkCall(turn, call, index);
-      if ("error" in check) return await failCall(turn, call, index, check);
-      const callId = agentCallId(turn, index);
-      const view = turn.ctx.steps?.calls.find((each) => each.callId === callId);
-      if (callId !== undefined && view?.state === "open") {
-        turn.pended.set(index, callId);
-        continue;
-      }
-      if (view === undefined) {
-        // Neither a result nor a pending step: the call was cut off, or its group never started.
-        const joins: boolean = running === "ahead" || (running === "open" && check.safe);
-        if (!joins && turn.interrupt?.aborted) return skipFrom(turn, index);
-        running = joins && check.safe ? "open" : "ended";
-      }
-      if (view === undefined && check.planned.resumable) {
-        await resendCall(turn, check.planned);
-        continue;
-      }
-      const { output, closed } = closerResult(closerReason(view?.closedReason ?? null));
-      result = { output, isError: true, closed };
-      steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
+    const callId = agentCallId(turn, index);
+    const interrupted = turn.interrupt?.aborted === true;
+    const ran = result?.n ?? (callId === undefined ? null : steps.recordedPending(callId));
+    // Whether the call is the first with neither a result nor a pending step.
+    let sending = false;
+    if (ran === null) {
+      sending = !missed;
+      missed = true;
+      if (interrupted && running === "ended" && !sending) return skipFrom(turn, index);
+    } else if (interrupted && running !== "ended" && !own(ran)) {
+      // A later start finished it, so the reply's own start was still running it at its cut, or
+      // never started it; its place in the groups bounds what may have started after it.
+      joins(await concurrencySafe(turn, call, index));
     }
-    const part = new ToolResultPart({ callId: call.id, name: call.name, content: result.output, isError: result.isError });
-    turn.messages.push(new Message({ role: "tool", parts: [part] }));
+    if (result !== null) {
+      pushToolMessage(turn, call, result.output, result.isError);
+      continue;
+    }
+    const check = await checkCall(turn, call, index);
+    if ("error" in check) return await failCall(turn, call, index, check);
+    const view = turn.ctx.steps?.calls.find((each) => each.callId === callId);
+    if (callId !== undefined && view?.state === "open") {
+      turn.pended.set(index, callId);
+      continue;
+    }
+    if (ran === null && !joins(check.safe) && !sending && interrupted) return skipFrom(turn, index);
+    if (view === undefined && check.planned.resumable) {
+      await resendCall(turn, check.planned);
+      continue;
+    }
+    const { output, closed } = closerResult(closerReason(view?.closedReason ?? null));
+    steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
+    pushToolMessage(turn, call, output, true);
   }
   return false;
+}
+
+/** Append the tool message the model reads for `call`'s result. */
+function pushToolMessage(turn: ToolTurn, call: ToolCallPart, content: string, isError: boolean): void {
+  const part = new ToolResultPart({ callId: call.id, name: call.name, content, isError });
+  turn.messages.push(new Message({ role: "tool", parts: [part] }));
+}
+
+/** Whether `call` may run beside other calls; a call whose check fails runs alone. */
+async function concurrencySafe(turn: ToolTurn, call: ToolCallPart, index: number): Promise<boolean> {
+  const check = await checkCall(turn, call, index);
+  return !("error" in check) && check.safe;
 }
 
 /**
  * Report the calls from call `start` on as skipped by a host interrupt, in call order: each gets a
  * `skipped` `tool_result` step (`SKIPPED_TOOL_RESULT`, an error) and its skipped events. None of
- * them runs.
+ * them runs. A call an earlier start recorded a result for keeps it.
  *
  * @returns `true`, for the caller to return.
  */
 function skipFrom(turn: ToolTurn, start: number): true {
   for (const [index, call] of turn.calls.entries()) {
-    if (index < start) continue;
+    if (index < start || turn.steps.recordedResult(turn.n, call.id) !== null) continue;
     turn.steps.toolResult({
       callId: call.id,
       startedAt: null,

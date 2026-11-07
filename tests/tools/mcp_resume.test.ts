@@ -11,15 +11,12 @@ import { join } from "node:path";
 
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { RunStarted } from "../../src/events.ts";
-import { MemorySetupError } from "../../src/memory/contracts.ts";
 import { type AdvanceOptions, type RunFlowOptions, advance, runFlow } from "../../src/run.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
 import { tool } from "../../src/tools/function_tools.ts";
 import { McpConnectError, type McpServer, mcpServer } from "../../src/tools/mcp.ts";
 import { withAppendHook } from "../helpers/append_hook.ts";
 import { expectClosed, hostEnv, killMarkers, stdioOptions, strayProcesses } from "../helpers/mcp_helpers.ts";
-import { FakeMemory } from "../helpers/memory_fakes.ts";
 import { Crash, rejected } from "../helpers/run_state_fixtures.ts";
 
 const SLOW = 30_000;
@@ -47,18 +44,6 @@ nodes:
     kind: tool
     tool_id: whoami
 output: \${call.output}
-`;
-
-const MEMORY_FLOW = `
-id: mcp_memory
-name: mcp_memory
-long_term_memory: test
-nodes:
-  work:
-    kind: code
-    code: return 7
-    output: int
-output: \${work.output}
 `;
 
 /** `runFlow` in `hostEnv(dir)`. */
@@ -205,30 +190,6 @@ test(
     await expectClosed(server);
     const resumed = await resume(flow, { log, tools: { fake: server } });
     expect(resumed.status).toBe("succeeded");
-  },
-  SLOW,
-);
-
-test(
-  "resuming without the runs memory fails before any server starts",
-  async () => {
-    const log = join(dir, "run.jsonl");
-    const flow = await loadFlow(MEMORY_FLOW);
-    const stop = new Error("host stop");
-    const stopAfterStart = (event: unknown) => {
-      if (event instanceof RunStarted) throw stop;
-    };
-    expect(
-      await rejected(run(flow, {}, { log, memory: new Map([["test", new FakeMemory()]]), onEvent: stopAfterStart })),
-    ).toBe(stop);
-    const [server, marker] = fake();
-
-    const error = await rejected(resume(flow, { log, tools: { fake: server } }));
-
-    expect(error).toBeInstanceOf(MemorySetupError);
-    expect((error as Error).message).toBe("resuming this run requires its enabled memory mapping");
-    expect(existsSync(marker)).toBe(false);
-    await expectClosed(server);
   },
   SLOW,
 );

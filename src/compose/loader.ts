@@ -26,14 +26,14 @@
  *
  * After a file assembles, its CODE nodes are checked (each def's in written order, then the
  * root's) against the file's base directory, and inside the load's `codeRoot` when it has one.
- * Only the root load sees the fully assembled graph, so `loadFlow` then resolves its memory layout
- * and refuses an `llm_config` value a child flow's agent would inherit before it is known.
+ * Only the root load sees the fully assembled graph, so `loadFlow` then refuses an `llm_config`
+ * value a child flow's agent would inherit before it is known.
  *
  * A flow's chain of `uses:` imports is at most `current().maxCallNesting` files deep, the call
  * nesting limit, counted apart from call depth; each loaded flow records its own `importDepth`.
  *
  * Imports flow down only: this module composes the compose package's own components plus
- * `compile`, `defaults`, `diagnostics`, `llm_clients`, `memory`, `nodes` and `typesys`, and the
+ * `compile`, `defaults`, `diagnostics`, `llm_clients`, `nodes` and `typesys`, and the
  * `FlowSource` type of `runtime/log`; nothing in the engine imports it back.
  */
 
@@ -42,7 +42,6 @@ import fsp from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 
 import { fieldLabel, findInheritedLlmValue, inheritedValueFix } from "../compile/llm_cascade.ts";
-import { resolveMemoryLayout, scopeMemoryDeclarations } from "../compile/memory_layout.ts";
 import type { CompiledFlow } from "../compile/model.ts";
 import { iterFlowOrigins, rebaseFlowOrigins } from "../compile/origins.ts";
 import { current, type Env, processEnv, withEnv } from "../defaults.ts";
@@ -55,7 +54,6 @@ import {
   reprText,
   type SourceRange,
 } from "../diagnostics.ts";
-import { DeclSite, MemorySetupError } from "../memory/contracts.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
 import { typeName, readTypedefs, type TypeRegistry } from "../typesys/types.ts";
 import {
@@ -71,8 +69,7 @@ import {
 import type { FlowSource } from "../runtime/log.ts";
 import { assemble, type AssembleOptions, type CallableScope as AssemblyScope, ComposedFlow } from "./build/pipeline.ts";
 import { INLINE_FLOW_PREFIX } from "./desugar/inline_bodies.ts";
-import { LoadDiagnostics, LoadError } from "./helpers/errors.ts";
-import { parseMemoryDeclarations } from "./helpers/memory.ts";
+import { LoadDiagnostics, LoadError, rejectRemovedMemoryKey } from "./helpers/errors.ts";
 import { boundaryFieldRanges, pathText } from "./helpers/source.ts";
 import { rejectUnreadTags } from "./helpers/tags.ts";
 import { parseUsesRef } from "./helpers/uses.ts";
@@ -245,7 +242,6 @@ const DEF_ALLOWED: ReadonlySet<string> = new Set([
   "asserts",
   "llm_config",
   "env",
-  "long_term_memory",
 ]);
 // The kinds a single-node def may use, sorted: a case routes to other nodes, which a one-node
 // def has none of.
@@ -489,8 +485,7 @@ function checkFrame(resolve: () => unknown, subject: string, target: string, dia
 }
 
 /**
- * Return one validated child copy scoped under its lexical alias. Every reachable memory
- * declaration in the copy gains `alias` as its outermost scope segment.
+ * Return one validated child copy scoped under its lexical alias.
  *
  * @param alias The authored `uses:` alias owning the returned view.
  * @param child The canonical `ComposedFlow` the host resolver returned.
@@ -507,9 +502,6 @@ function rebaseExternalChild(alias: string, child: unknown): ComposedFlow {
     [compiled, table] = rebaseFlowOrigins(flow.compiled, (origin) => scopeOrigin(alias, origin), {
       resolver: flow.originResolver,
     });
-    // The rebase returned an independent copy, so the scope rewrite can't reach the cached
-    // canonical child.
-    scopeMemoryDeclarations(compiled, alias);
   } catch (error) {
     throw UNLOCATED_DIAGNOSTICS.error(`uses: alias ${reprText(alias)} could not rebase child: ${errorText(error)}`, {
       cause: error,
@@ -656,8 +648,8 @@ interface LoadOptions {
  *   file the load read, with where each `uses:` path resolved (see `FlowSource`); it is `null`
  *   when a `childResolver` returned a flow without a source (one built in code).
  * @throws LoadError (as a rejection) for any malformed or inconsistent flow, located at the
- *   offending line when source provenance is available: among them a memory layout that breaks a
- *   rule, and an `llm_config` value a child flow's agent would inherit before it is known.
+ *   offending line when source provenance is available: among them an `llm_config` value a child
+ *   flow's agent would inherit before it is known.
  * @throws DefaultsError when a `YIAN_<NAME>` value in `env` isn't accepted.
  * @throws TypeError when `sourceLabel` isn't text.
  */
@@ -762,12 +754,6 @@ function sourceResolver(source: FlowSource, from: string, ctx: LoadCtx): ChildRe
 function checkRoot(flow: ComposedFlow): ComposedFlow {
   // Only the root load sees the fully assembled graph, imports included; children loaded for
   // uses: are checked as part of their importer.
-  try {
-    resolveMemoryLayout(flow.compiled);
-  } catch (error) {
-    if (!(error instanceof MemorySetupError)) throw error;
-    throw memorySetupLoadError(flow, error);
-  }
   // Which flow is the run's root, and so which inputs are known at run start, is decided only
   // here.
   refuseInheritedLlmValues(flow);
@@ -904,38 +890,6 @@ function sameLocation(a: DiagnosticFrame, b: DiagnosticFrame): boolean {
 /** Return `origin`'s frame through `resolver`, or `null` when either is missing. */
 function frameOf(resolver: OriginResolver | null, origin: OriginRef | null): DiagnosticFrame | null {
   return origin === null || resolver === null ? null : resolver.resolve(origin);
-}
-
-/**
- * Locate one memory layout failure at its first declaration site.
- *
- * @param flow The loaded root, whose resolver maps origins to source.
- * @param error The layout failure with its origins and notes.
- * @returns A `LoadError` framed at `error.origin`. Its notes are the failure's own notes, then
- *   one located note per related origin whose location differs from the primary frame and from
- *   every earlier note.
- */
-export function memorySetupLoadError(
-  flow: { readonly originResolver: OriginResolver | null },
-  error: MemorySetupError,
-): LoadError {
-  const frame = (origin: OriginRef | null) => frameOf(flow.originResolver, origin);
-  const primary = frame(error.origin);
-  const notes = [...(error.notes ?? [])];
-  // Aliases of one file map distinct origins to one source location; two files may share a label,
-  // so a location is one file's only when the texts match too.
-  const seen: DiagnosticFrame[] = primary === null ? [] : [primary];
-  for (const origin of error.related) {
-    const other = frame(origin);
-    if (other === null || seen.some((known) => sameLocation(known, other))) continue;
-    seen.push(other);
-    notes.push(`related declaration at ${other.label}:${other.range.startLine}:${other.range.startCol}`);
-  }
-  return UNLOCATED_DIAGNOSTICS.error(error.message, {
-    frames: primary === null ? [] : [primary],
-    notes,
-    cause: error,
-  });
 }
 
 /**
@@ -1155,14 +1109,6 @@ export async function loadFlowFile(
     diagnostics,
     cursor: root,
   });
-  const rootMemories =
-    root.has("nodes") && f.longTermMemory !== null
-      ? parseMemoryDeclarations(f.longTermMemory, {
-          diagnostics,
-          cursor: root.child("long_term_memory"),
-          site: new DeclSite([], ["root"], null),
-        })
-      : [];
   // A collision is reported before a colliding alias's broken target.
   const collide = Object.keys(f.uses)
     .filter((alias) => Object.hasOwn(f.nodes, alias))
@@ -1179,7 +1125,6 @@ export async function loadFlowFile(
         scope,
         usesAliases: Object.keys(f.uses),
         flowLlmConfig,
-        memories: rootMemories,
         baseDir,
       }),
     );
@@ -1203,13 +1148,13 @@ export async function loadFlowFile(
 /**
  * @internal Return the `assemble` options for `document`'s root flow: the sections of `f`, its
  * parsed file, their cursors and the flow's metadata, plus `rest`. Only a full flow (one with
- * `nodes:`) locates its `asserts:`, `output:` and `long_term_memory:`: a compact flow lends its
+ * `nodes:`) locates its `asserts:` and `output:`: a compact flow lends its
  * top-level `output:` to its one synthesized node.
  */
 export function rootAssembleOptions(
   document: SourceDocument,
   f: ReturnType<typeof parseFile>,
-  rest: Pick<AssembleOptions, "registry" | "scope" | "usesAliases" | "flowLlmConfig" | "memories" | "baseDir">,
+  rest: Pick<AssembleOptions, "registry" | "scope" | "usesAliases" | "flowLlmConfig" | "baseDir">,
 ): AssembleOptions {
   const root = document.root;
   const fullFlowChild = (key: string) => (root.has("nodes") && root.has(key) ? root.child(key) : null);
@@ -1229,7 +1174,6 @@ export function rootAssembleOptions(
     assertsCursor: fullFlowChild("asserts"),
     outputsCursor: fullFlowChild("output"),
     flowId: f.id,
-    memoriesCursor: fullFlowChild("long_term_memory"),
   };
 }
 
@@ -1717,11 +1661,7 @@ function loadDef(
       { range: defCursor?.range ?? null },
     );
   }
-  if (Object.hasOwn(body, "memory_policy")) {
-    throw diagnostics.error(`${where}: field \`memory_policy:\` was renamed to \`long_term_memory:\``, {
-      range: defCursor?.keyRangeOf("memory_policy") ?? null,
-    });
-  }
+  rejectRemovedMemoryKey((key) => Object.hasOwn(body, key), defCursor, diagnostics, `${where}: `);
   const extra = Object.keys(body)
     .filter((key) => !DEF_ALLOWED.has(key))
     .sort(compareCodeUnits);
@@ -1756,14 +1696,6 @@ function loadDef(
   }
   const nodesCursor = defAssemblyCursor(defCursor, body["nodes"]!);
   try {
-    const memories =
-      field("long_term_memory") !== null
-        ? parseMemoryDeclarations(body["long_term_memory"]!, {
-            diagnostics,
-            cursor: defCursor?.has("long_term_memory") ? defCursor.child("long_term_memory") : null,
-            site: new DeclSite([], ["def", name], null),
-          })
-        : [];
     const asserts = field("asserts");
     return assemble({
       inputsSection: inputs,
@@ -1781,8 +1713,6 @@ function loadDef(
       assertsCursor: sourceChild(defCursor, "asserts"),
       outputsCursor: sourceChild(defCursor, "output"),
       flowId: name,
-      memories,
-      memoriesCursor: sourceChild(defCursor, "long_term_memory"),
       baseDir: scope.baseDir,
     });
   } catch (error) {

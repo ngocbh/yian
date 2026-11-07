@@ -2629,11 +2629,6 @@ llm_config:
   model: gpt-4o
 env:
   max_tool_iterations: 40
-long_term_memory:
-  notes:
-    type: episodic
-    config:
-      max_episodes: 5
 nodes:
   fetch:
     kind: code
@@ -2661,7 +2656,7 @@ output:
 
 test("flow without formerly redacted values keeps its fingerprint", async () => {
   expect(flowFingerprint(await loaded(GOLDEN_FLOW))).toBe(
-    "786dc8194fcfbd44f554e4151e29991b1faf373d4f6445bb5a387196a2a28314",
+    "f9dc0cf3d2b00caa52a3313091f931a76116bb95fb0da931f3d4a66536cfbd08",
   );
 });
 

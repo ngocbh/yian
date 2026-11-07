@@ -29,7 +29,6 @@ import { TypeCheckError } from "../../src/typesys/index.ts";
 import { parseType } from "../../src/typesys/types.ts";
 import { linkConformanceFixtures, loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { FakeMemory } from "../helpers/memory_fakes.ts";
 import { serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-limit-overrides-"));
@@ -267,7 +266,7 @@ test("a run at the expression maximum logs and resumes", async () => {
   const levels = maximum("MAX_VALUE_NESTING");
   const env = limitEnv({ MAX_VALUE_NESTING: levels });
   const text =
-    "id: deep-call\nname: deep_call\nlong_term_memory: test\ninput:\n  s: !str\n" +
+    "id: deep-call\nname: deep_call\ninput:\n  s: !str\n" +
     "defs:\n  echo:\n    input:\n      s: !str\n    nodes: {}\n    output: ${input.s}\n" +
     "nodes:\n  outer:\n    kind: call\n    call: echo\n    input:\n" +
     "      s: ${" +
@@ -275,13 +274,12 @@ test("a run at the expression maximum logs and resumes", async () => {
     "}\n" +
     "output: ${outer.output}\n";
   const flow = await loadFlow(text, { env });
-  const backend = new FakeMemory();
   const path = join(dir, "deep.jsonl");
 
-  const result = await runFlow(flow, { s: "a" }, { env, log: path, memory: new Map([["test", backend]]) });
+  const result = await runFlow(flow, { s: "a" }, { env, log: path });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toBe("A");
-  const replayed = await advance({ env, log: path, memory: new Map([["test", backend]]) });
+  const replayed = await advance({ env, log: path });
 
   expect(replayed.status, replayed.failure?.message).toBe("succeeded");
   expect(replayed.output).toBe("A");

@@ -1,0 +1,20 @@
+# A flow-level `long_term_memory:` fails at its key with the fix: declare the memory as an input.
+kind: load
+flow: |
+  id: notes
+  name: notes
+  long_term_memory: reflective
+  nodes:
+    answer:
+      kind: agent
+      prompt: answer
+      output: str
+  output: ${answer.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '`long_term_memory:` was removed: declare the memory as an input (`lessons: !FileMemory`) and render `${lessons}` in a prompt'
+      frames:
+      - label: flow.yaml
+        range: [3, 1, 3, 17]

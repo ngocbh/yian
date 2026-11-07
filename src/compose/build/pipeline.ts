@@ -5,11 +5,11 @@
  * runs one phase function after another; each takes the `AssembleContext` and the records the
  * earlier phases returned, and returns its own:
  *
- *   1. `readSections`: extract inline bodies; stamp memory and flow-assert origins; read the flow
- *      parameters; parse nodes (a tagged `nodes:` entry lowers to a CODE node returning its
- *      value) and stamp their origins; refuse a `uses:` alias that collides with a node id;
- *      bound written-value nesting; refuse a tagged node `output:`; split tagged inputs,
- *      `llm_config` and flow outputs into value + declared contract; check case branches.
+ *   1. `readSections`: extract inline bodies; stamp flow-assert origins; read the flow parameters;
+ *      parse nodes (a tagged `nodes:` entry lowers to a CODE node returning its value) and stamp
+ *      their origins; refuse a `uses:` alias that collides with a node id; bound written-value
+ *      nesting; refuse a tagged node `output:`; split tagged inputs, `llm_config` and flow outputs
+ *      into value + declared contract; check case branches.
  *   2. `desugarSections`: inline calls, adaptive questions, case call targets, then
  *      `${case.output}` to a coalesce over the case's branch targets.
  *   3. `buildNodes`: register inline bodies as private callables; build every node kind-blind
@@ -53,7 +53,6 @@ import {
   reprText,
   SourceRange,
 } from "../../diagnostics.ts";
-import { DeclSite, MemoryDecl } from "../../memory/contracts.ts";
 import type { Node } from "../../nodes/base.ts";
 import {
   asBinding,
@@ -1582,10 +1581,6 @@ export interface AssembleOptions {
   outputsCursor?: SourceCursor | null;
   /** The authored or generated semantic identity. */
   flowId?: string | null;
-  /** The flow-owned memory declarations. */
-  memories?: readonly MemoryDecl[];
-  /** Retained occurrence of the `memories:` declarations, or `null`. */
-  memoriesCursor?: SourceCursor | null;
   /**
    * The directory the flow's CODE references resolve against, its inline bodies' too; `null` is
    * the current directory.
@@ -1647,8 +1642,6 @@ interface ReadSections {
   readonly authoredNodesCursor: SourceCursor;
   /** The retained inline bodies by node id. */
   readonly inlineBodies: ReadonlyMap<string, InlineBody>;
-  /** The flow's memory declarations, restamped with this flow's site and origins. */
-  readonly memories: readonly MemoryDecl[];
   /** Each authored flow assertion's range, `null` when source-free. */
   readonly flowAssertionRanges: readonly (SourceRange | null)[];
   /** Return the registered origin for one authored flow assertion. */
@@ -1735,38 +1728,6 @@ interface ClosedFlow {
   readonly wiring: Map<string, Map<string, unknown>>;
 }
 
-/**
- * Restamp each memory declaration with this flow's `DeclSite` and one origin per entry.
- *
- * @throws TypeError when `memories` isn't an array of exact `MemoryDecl` values.
- */
-function stampMemories(
-  memories: readonly MemoryDecl[],
-  memoriesCursor: SourceCursor | null,
-  ctx: AssembleContext,
-): readonly MemoryDecl[] {
-  const { owner, catalogBuilder } = ctx;
-  if (!Array.isArray(memories) || memories.some((decl) => !isExactly(decl, MemoryDecl))) {
-    throw new TypeError("memories must be an array of exact MemoryDecl values");
-  }
-  if (memories.length === 0) return memories;
-  const stamped: MemoryDecl[] = [];
-  for (const decl of memories) {
-    let origin = decl.origin;
-    if (memoriesCursor !== null) {
-      const path = [...owner, "memories", decl.name];
-      if (memoriesCursor.has(decl.name)) {
-        origin = catalogBuilder.register(path, memoriesCursor.child(decl.name), "key");
-      } else {
-        // sugar: the whole scalar value is the one entry
-        origin = catalogBuilder.register(path, memoriesCursor);
-      }
-    }
-    stamped.push(new MemoryDecl(decl.name, decl.type, decl.config, new DeclSite([], owner, null), origin));
-  }
-  return stamped;
-}
-
 /** Read the flow's parameters from the authored `input:` mapping or the resolved parameters. */
 function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): FlowParameters {
   const { inputsSection = null, inputParameters = null, inputsCursor = null, boundaryFieldRanges = null } = options;
@@ -1797,13 +1758,13 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
 }
 
 /**
- * Read the authored sections: extract inline bodies, stamp memory and flow-assert origins, read
- * the parameters, parse and locate the nodes, refuse a colliding `uses:` alias, bound written-value
+ * Read the authored sections: extract inline bodies, stamp flow-assert origins, read the
+ * parameters, parse and locate the nodes, refuse a colliding `uses:` alias, bound written-value
  * nesting, refuse a tagged node `output:`, split tagged values from their contracts, and check case
  * branches.
  */
 function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSections {
-  const { usesAliases = [], assertsCursor = null, outputsCursor = null, memoriesCursor = null } = options;
+  const { usesAliases = [], assertsCursor = null, outputsCursor = null } = options;
   const { registry, scope, owner, catalogBuilder, diagnostics } = ctx;
   const authoredNodesCursor = options.nodesCursor;
   const outputsRange = options.outputsRange ?? outputsCursor?.range ?? null;
@@ -1814,7 +1775,6 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
     extractInlineBodies(authoredNodesCursor, { owner }),
   );
 
-  const memories = stampMemories(options.memories === undefined ? [] : options.memories, memoriesCursor, ctx);
   const flowAssertionCursors = assertionCursors(options.assertsSection, assertsCursor, diagnostics);
   const flowAssertionRanges = flowAssertionCursors.map((cursor) => (cursor !== null ? cursor.range : null));
   const flowAssertionOriginAt = (index: number): OriginRef | null =>
@@ -1919,7 +1879,6 @@ function readSections(options: AssembleOptions, ctx: AssembleContext): ReadSecti
     nodesCursor,
     authoredNodesCursor,
     inlineBodies,
-    memories,
     flowAssertionRanges,
     flowAssertionOriginAt,
     params,
@@ -2206,7 +2165,6 @@ function buildNodes(
     outputContractReader: readAuthoredNodeOutput,
     variableDeclarationReader: readAuthoredNodeVariables,
     bindingContractReader: readBindingContract,
-    owner,
     baseDir,
   });
   descriptorCache = new DescriptorBuildCache(descriptors, ctxBase);
@@ -2655,19 +2613,16 @@ function checkGraph(
  * canonical contract only when the leaf reaches its established output-contract step;
  * source-free builds use the descriptor's ordinary type reader. Retained ranges and
  * `nodesCursor` own diagnostic locations; after the common header stamp each descriptor may
- * immutably attach kind-owned opaque origins. `memories` and its optional cursor carry the
- * flow-owned declarations; each is restamped with this flow's `DeclSite` and gets one origin per
- * entry. `scope.catalogBuilder` is the one registry shared by every assembly originating from
- * this physical document, so root, definitions, and inline bodies mint collision-free local
- * origins under `owner`. After kind-owned attachment, CODE may present a syntax failure through
- * the builder's registered-site lookup without freezing the catalog. `assemble` performs one
- * construction attempt; retriable callable attempts run through the scope's `resolve`, while a
- * failed top-level load discards its scope.
+ * immutably attach kind-owned opaque origins. `scope.catalogBuilder` is the one registry shared
+ * by every assembly originating from this physical document, so root, definitions, and inline
+ * bodies mint collision-free local origins under `owner`. After kind-owned attachment, CODE may
+ * present a syntax failure through the builder's registered-site lookup without freezing the
+ * catalog. `assemble` performs one construction attempt; retriable callable attempts run through
+ * the scope's `resolve`, while a failed top-level load discards its scope.
  *
  * @throws RangeError when not exactly one input representation is given, or resolved parameters
  *   come with an inputs cursor.
- * @throws TypeError when `memories` isn't an array of exact `MemoryDecl` values, or a flow input
- *   or producer contract has the wrong class.
+ * @throws TypeError when a flow input or producer contract has the wrong class.
  * @throws LoadError for an authored mistake any pass finds.
  */
 export function assemble(options: AssembleOptions): ComposedFlow {
@@ -2707,7 +2662,6 @@ export function assemble(options: AssembleOptions): ComposedFlow {
     wiring: closed.wiring,
     flowLlmConfig: desugared.flowLlmConfig ?? {},
     flowId: options.flowId ?? null,
-    memories: read.memories,
   });
   compiled.flowLlmValueTypes = built.flowLlmValueTypes;
   return new ComposedFlow(compiled, {

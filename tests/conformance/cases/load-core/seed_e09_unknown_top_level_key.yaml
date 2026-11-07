@@ -20,5 +20,5 @@ expect:
   load:
     diagnostics:
       - code: compose.load
-        message: "unknown top-level key 'bogus' (allowed: asserts, defs, description, env, id, input, llm_config, long_term_memory, name, nodes, output, system, typedefs, uses, version)"
+        message: "unknown top-level key 'bogus' (allowed: asserts, defs, description, env, id, input, llm_config, name, nodes, output, system, typedefs, uses, version)"
         frames: [{label: flow.yaml, range: [14, 1, 14, 6]}]

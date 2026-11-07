@@ -26,7 +26,6 @@ import {
 } from "../../src/run.ts";
 import { FakeInput, FakeOutput } from "../cli/terminal_both_runtimes.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { FakeMemory } from "../helpers/memory_fakes.ts";
 import { crashAfter, rejected, serving, textReply } from "../helpers/run_state_fixtures.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-llm-values-records-"));
@@ -320,16 +319,6 @@ test("a host key call time run records no secret", async () => {
     expect(text).not.toContain("sk-host-secret");
     expect(text).not.toContain("tenant-secret");
   }
-});
-
-test("llm config is not model visible", async () => {
-  const text = PICKED.replace("    prompt: Go.\n", "    prompt: Go.\n    long_term_memory: notes\n");
-  const log = fresh("run.jsonl");
-  const notes = new FakeMemory();
-  const { models } = fakeModel(["ok"]);
-  const result = await run(text, { log, models, memory: new Map([["notes", notes]]) });
-  expect(result.status).toBe("succeeded");
-  expect(notes.recallContexts.map((context) => context!.inputs)).toEqual([{}]);
 });
 
 test("only an agent with the key hides it from the model", async () => {

@@ -24,5 +24,5 @@ expect:
   load:
     diagnostics:
       - code: compose.load
-        message: "node 'note' (kind=agent): field 'controls' is not allowed (allowed: asserts, depends_on, env, input, kind, llm_config, long_term_memory, node_name, output, prompt, retries, runs_after, skills, steer_inbox, system_prompt, tools, variables)"
+        message: "node 'note' (kind=agent): field 'controls' is not allowed (allowed: asserts, depends_on, env, input, kind, llm_config, node_name, output, prompt, retries, runs_after, skills, steer_inbox, system_prompt, tools, variables)"
         frames: [{label: flow.yaml, range: [13, 15, 13, 39]}]

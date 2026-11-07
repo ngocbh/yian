@@ -1126,22 +1126,6 @@ describe("runOrChat", () => {
   );
 
   test(
-    "a flow with memory, or a memory flag, runs as before",
-    async () => {
-      const memory = ECHO.replace("name: echo_chat\n", "name: echo_chat\nlong_term_memory: episodic\n");
-      waited(await runOn(flowFile(memory, "memory.yaml"), { typed: BYE }));
-      const echo = flowFile(ECHO);
-      await expect(runOn(echo, { memoryStorage: ["notes=" + join(tmp, "notes")] })).rejects.toThrow(
-        new UsageError(
-          "Invalid value for --memory-storage: key 'notes' is not a memory declared by this flow (declared: none)",
-        ),
-      );
-      waited(await runOn(echo, { memoryRoot: join(tmp, "memory"), typed: BYE }));
-    },
-    TIMEOUT,
-  );
-
-  test(
     "a flow with no Inbox(str) or Inbox(Message) input goes to run",
     async () => {
       const ints = ECHO.replaceAll("!Inbox(str)", "!Inbox(int)").replace("said: !list(str)", "said: !list(int)");

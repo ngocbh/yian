@@ -15,7 +15,6 @@ import { join } from "node:path";
 
 import { advance, runFlow } from "../../src/run.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { FakeMemory } from "../helpers/memory_fakes.ts";
 import { caseText, loadConformanceFlow, loadErrorAsync } from "../helpers/declarations.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "yian-expression-nesting-"));
@@ -188,7 +187,7 @@ test(
 /** A flow passing a `terms`-term list concatenation through a CALL. */
 const concatFlow = (terms: number) =>
   loadConformanceFlow(
-    "id: long-concat\nname: long_concat\nlong_term_memory: test\ninput:\n  values: !list(str)\n" +
+    "id: long-concat\nname: long_concat\ninput:\n  values: !list(str)\n" +
       "defs:\n  identity:\n    input:\n      values: !list(str)\n    nodes: {}\n    output: ${input.values}\n" +
       "nodes:\n  outer:\n    kind: call\n    call: identity\n    input:\n" +
       "      values: ${" + sum(terms, "input.values") + "}\n" +
@@ -202,16 +201,11 @@ test(
   "a run of a long list chain logs and resumes",
   async () => {
     const flow = await concatFlow(LONG_CHAIN);
-    const backend = new FakeMemory();
     const path = join(dir, "long.jsonl");
-    const result = await runFlow(
-      flow,
-      { values: ["v"] },
-      { env, log: path, memory: new Map([["test", backend]]) },
-    );
+    const result = await runFlow(flow, { values: ["v"] }, { env, log: path });
     expect(result.status).toBe("succeeded");
     expect(result.output).toEqual(Array(LONG_CHAIN).fill("v"));
-    const replayed = await advance({ env, log: path, memory: new Map([["test", backend]]) });
+    const replayed = await advance({ env, log: path });
     expect(replayed.status).toBe("succeeded");
     expect(replayed.output).toEqual(result.output);
   },

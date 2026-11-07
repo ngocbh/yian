@@ -238,7 +238,7 @@ export const ENTRIES = Object.freeze([
   }),
   entry("FILE_MEMORY_MAX_DEPTH", {
     default: 4,
-    description: "Deepest folder depth of a FileMemory's files",
+    description: "Most folders deep a FileMemory file may sit",
     group: "setting",
     minimum: 1,
   }),
@@ -250,7 +250,7 @@ export const ENTRIES = Object.freeze([
   }),
   entry("FILE_MEMORY_MAX_READ_CHARS", {
     default: 20_000,
-    description: "Most characters one FileMemory read tool result shows",
+    description: "Most characters one FileMemory list, read or search result shows",
     group: "setting",
     minimum: 1,
   }),

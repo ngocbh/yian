@@ -1473,6 +1473,36 @@ test("skips a cut left half written are finished by the next start", async () =>
   ]);
 });
 
+test("a call a later start pended places the next call where it pended, not where it was closed", async () => {
+  const flow = flowText(["save", "hold"], { steerInbox: true, output: "Optional(str)" });
+  const ran: string[] = [];
+  const tools = {
+    save: topicTool("save", { resumable: true, log: ran }),
+    hold: topicTool("hold", { resumable: true, log: ran, run: () => pending() }),
+  };
+  const replies = () => [calls(["c0", "save", "a"], ["c1", "hold", "b"], ["c2", "save", "c"]), textReply("done")];
+  const uncut = await run(new ScriptedModel(replies(), CONFIG), { flow, tools });
+  const log = await cutRun(afterCall(uncut.log), new ScriptedModel(replies(), CONFIG), { flow, tools });
+  // The resume writes c0's result and c1's pending step, runs `save c`, and is cut on its result.
+  const before = records(log).length;
+  ran.length = 0;
+  await crashAfter(before + 4, () => resume(log, new ScriptedModel([textReply("done")], CONFIG), { tools }));
+  expect(kinds(log, before)).toEqual(["run_resumed", "node_started", "tool_result 2", "pending 3"]);
+  expect(ran).toEqual(["save a", "hold b", "save c"]);
+  ran.length = 0;
+  // The next resume closes c1, after the interrupt; `save c` ran before it, so it is sent again.
+  const model = new ScriptedModel([], CONFIG);
+  const resumed = await resume(log, model, { tools, models: interruptedAtResume(log, model) });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  expect(resumed.output).toBeNull();
+  expect(ran).toEqual(["save c"]);
+  expect(toolResults(log)).toEqual([
+    { call_id: "c0", output: "save:a", is_error: false },
+    { call_id: "c1", output: TOOL_OUTCOME_UNKNOWN, is_error: true, closed: "crashed" },
+    { call_id: "c2", output: "save:c", is_error: false },
+  ]);
+});
+
 test("without an interrupt after two cuts, the resume sends the rest in order", async () => {
   const ran: string[] = [];
   const { log, tools } = await cutTwice(true, ran);

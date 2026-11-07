@@ -605,8 +605,9 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
   };
   // Only a call with neither can be skipped, so with none the groups needn't be formed.
   const unfinished = turn.calls.some((call, index) => ranAt(call, index) === null);
-  // The step at which a start after the reply's own last reached the next call: the last result a
-  // start wrote for a call so far, but a host's answer to a pended call. `null` before any.
+  // The step at which a start after the reply's own last reached the next call: where it finished
+  // the call before, with its result or, for a call it pended, its pending step (the answer or the
+  // closer comes after, and a host writes the answer). `null` before any.
   let reached: number | null = null;
   /**
    * Whether a resumable call outside the reply's own start's running group may have run: the
@@ -624,6 +625,10 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
     // Read at each call: an interrupt can arrive while a call is sent again.
     const by = turn.ctx.steerInbox?.interruptedBy() ?? null;
     const ran = ranAt(call, index);
+    const pendedAt = callId === undefined ? null : steps.recordedPending(callId);
+    // A later start that pended the call reached the next one there.
+    const laterPending = pendedAt !== null && !own(pendedAt) ? pendedAt : null;
+    if (laterPending !== null) reached = Math.max(reached ?? 0, laterPending);
     if (ran === null) {
       if (by !== null && running === "ended" && !mayHaveRun(call, by)) return skipFrom(turn, index);
     } else if (unfinished && running !== "ended" && !own(ran)) {
@@ -633,8 +638,10 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       joins(await concurrencySafe(turn, call, index));
     }
     if (result !== null) {
-      const pended = callId !== undefined && steps.recordedPending(callId) !== null;
-      if (!own(result.n) && (!pended || result.closed !== null)) reached = Math.max(reached ?? 0, result.n);
+      // A call the reply's own start pended was finished by the later start that closed it.
+      if (!own(result.n) && (pendedAt === null || (laterPending === null && result.closed !== null))) {
+        reached = Math.max(reached ?? 0, result.n);
+      }
       pushToolMessage(turn, call, result.output, result.isError);
       continue;
     }
@@ -652,7 +659,9 @@ async function replayToolCalls(turn: ToolTurn): Promise<boolean> {
       continue;
     }
     const { output, closed } = closerResult(closerReason(view?.closedReason ?? null));
-    reached = steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
+    const closer = steps.toolResult({ callId: call.id, startedAt: null, output, isError: true, closed });
+    // A later start that pended the call reached the next one already.
+    if (laterPending === null) reached = closer;
     pushToolMessage(turn, call, output, true);
   }
   return false;

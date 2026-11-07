@@ -1,16 +1,16 @@
 /**
  * An AGENT's tool calls replayed across cuts, exhaustively over small replies. Each reply makes two
  * or three calls, each to a tool that is unsafe and resumable, safe and resumable, safe and not
- * resumable, or that pends. Its run is cut at every point of the reply's tool phase and resumed,
- * across up to three starts. Each later start runs with no interrupt, or with one delivered as it
- * begins or while it sends its first or second call again. A run that waits on a pended call gets
- * its answer and goes on. Every finished run must hold:
+ * resumable, or that pends, resumable or not. Its run is cut at every point of the reply's tool
+ * phase and resumed, across up to three starts. Each later start runs with no interrupt, or with
+ * one delivered as it begins or while it sends its first or second call again. A run that waits on
+ * a pended call gets its answer and goes on. Every finished run must hold:
  * - a call that ran in any start is never recorded `skipped`;
  * - once the interrupt is pending, no call that hadn't run before it runs;
  * - each call ends with exactly one `tool_result` step;
  * - each start runs calls in call order, each at most once;
- * - with no interrupt, nothing is skipped, each resumable call ends with the result it gave, a call
- *   that isn't resumable runs at most once, and the agent answers.
+ * - with no interrupt, nothing is skipped, each resumable call that doesn't pend ends with the
+ *   result it gave, a call that isn't resumable runs at most once, and the agent answers.
  */
 
 import { afterAll, expect, test } from "bun:test";
@@ -39,13 +39,15 @@ const START = Date.UTC(2026, 10, 7, 10, 0, 0, 0);
 const STARTS = 3;
 
 /** The kinds of tool a call can go to. */
-type Kind = "unsafe" | "safe" | "plain" | "pends";
+type Kind = "unsafe" | "safe" | "plain" | "pends" | "waits";
 
-const KINDS: Record<Kind, { name: string; safe: boolean; resumable: boolean }> = {
-  unsafe: { name: "save", safe: false, resumable: true },
-  safe: { name: "look", safe: true, resumable: true },
-  plain: { name: "note", safe: true, resumable: false },
-  pends: { name: "hold", safe: false, resumable: false },
+const KINDS: Record<Kind, { name: string; safe: boolean; resumable: boolean; pends: boolean }> = {
+  unsafe: { name: "save", safe: false, resumable: true, pends: false },
+  safe: { name: "look", safe: true, resumable: true, pends: false },
+  plain: { name: "note", safe: true, resumable: false, pends: false },
+  pends: { name: "hold", safe: false, resumable: false, pends: true },
+  // A later start sends it again when it was cut before its pending step, and writes that step.
+  waits: { name: "wait", safe: false, resumable: true, pends: true },
 };
 
 /** When a start delivers the interrupt: not at all, as it begins, or while it sends its `n`-th call again. */
@@ -94,7 +96,7 @@ function deliver(state: Live): void {
 
 /** The tool for `kind`: it records each call, and pends or answers `<name>:<index>`. */
 function kindTool(kind: Kind): FunctionTool {
-  const { name, safe, resumable } = KINDS[kind];
+  const { name, safe, resumable, pends } = KINDS[kind];
   return new FunctionTool({
     name,
     description: `Tool ${name}.`,
@@ -109,7 +111,7 @@ function kindTool(kind: Kind): FunctionTool {
         state.resends += 1;
         if (state.mode.when === "resend" && state.mode.n === state.resends) deliver(state);
       }
-      return kind === "pends" ? pending() : `${name}:${index}`;
+      return pends ? pending() : `${name}:${index}`;
     },
   });
 }
@@ -125,7 +127,7 @@ input:
 nodes:
   writer:
     kind: agent
-    tools: [save, look, note, hold]
+    tools: [save, look, note, hold, wait]
     steer_inbox: \${input.notes}
     prompt: hi
     output: Optional(str)
@@ -287,8 +289,9 @@ function checkEnd(label: string, kinds: readonly Kind[], end: World, result: Run
     if (end.invoked.some((each) => each.index === index)) expect(closed, `${label}: c${index} ran`).not.toBe("skipped");
     if (!interrupted) {
       expect(closed, `${label}: c${index} without an interrupt`).not.toBe("skipped");
-      if (KINDS[kind].resumable) expect(closed, `${label}: c${index} is resumable`).toBeUndefined();
-      else expect(end.invoked.filter((each) => each.index === index).length, `${label}: c${index} runs once`).toBeLessThanOrEqual(1);
+      // A pended call a resume closes ends `crashed`.
+      if (KINDS[kind].resumable && !KINDS[kind].pends) expect(closed, `${label}: c${index} is resumable`).toBeUndefined();
+      else if (!KINDS[kind].resumable) expect(end.invoked.filter((each) => each.index === index).length, `${label}: c${index} runs once`).toBeLessThanOrEqual(1);
     }
   }
   // Once the interrupt is pending, only calls that had run before it run.
@@ -307,15 +310,15 @@ function checkEnd(label: string, kinds: readonly Kind[], end: World, result: Run
 
 /**
  * Every reply of two calls over the kinds, and of three over the resumable kinds and the pending
- * one, with at most one pending call. A third call adds a group before or after a pair, which a
+ * ones, with at most one call that pends. A third call adds a group before or after a pair, which a
  * second call that is never sent again (the non-resumable safe kind, or another pending one) only
  * closes, as the one already there does.
  */
 function replies(): Kind[][] {
   const pairs = (kinds: readonly Kind[]) => kinds.flatMap((a) => kinds.map((b) => [a, b]));
-  const three: Kind[] = ["unsafe", "safe", "pends"];
+  const three: Kind[] = ["unsafe", "safe", "pends", "waits"];
   const triples = pairs(three).flatMap((pair) => three.map((c) => [...pair, c]));
-  return [...pairs(Object.keys(KINDS) as Kind[]), ...triples.filter((kinds) => kinds.filter((kind) => kind === "pends").length <= 1)];
+  return [...pairs(Object.keys(KINDS) as Kind[]), ...triples.filter((kinds) => kinds.filter((kind) => KINDS[kind].pends).length <= 1)];
 }
 
 test("an agent's tool calls replayed across up to three starts, cut anywhere in the tool phase, converge", async () => {

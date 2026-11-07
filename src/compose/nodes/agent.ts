@@ -43,7 +43,7 @@ import {
 import { SkillError } from "../../skills/index.ts";
 import { GrantError, parseToolGrants, type ToolGrant } from "../../tools/grants.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isList, isRecord, type Type, typeLevels, type Value, valueRepr } from "../../typesys/values.ts";
+import { isList, isRecord, type Type, typeLevels, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError, rejectRemovedMemoryKey } from "../helpers/errors.ts";
 import { readTaggedValue } from "../helpers/tags.ts";
 import { readVariables } from "../helpers/types.ts";

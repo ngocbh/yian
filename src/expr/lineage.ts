@@ -24,7 +24,7 @@ export type RoutePath = readonly (string | number)[];
  *
  * `executionSeq` is the seq of the producing `pool_commit` (the START inputs get their run-start
  * commit's seq). Values themselves remain in the caller's source store. A `SourceRef` is frozen
- * and compares by identity; match one by its `runId`, `executionSeq` and `path` (`sameSource`).
+ * and compares by identity; match one by its `runId`, `executionSeq` and `path`.
  */
 export class SourceRef {
   readonly runId: string;
@@ -38,16 +38,6 @@ export class SourceRef {
     this.path = Object.freeze([...path]);
     Object.freeze(this);
   }
-}
-
-/** Whether two sources have the same run id, sequence and path. */
-export function sameSource(a: SourceRef, b: SourceRef): boolean {
-  return (
-    a.runId === b.runId &&
-    a.executionSeq === b.executionSeq &&
-    a.path.length === b.path.length &&
-    a.path.every((step, index) => step === b.path[index])
-  );
 }
 
 /** The kinds of recorded composition a `ValueRoute` holds. */

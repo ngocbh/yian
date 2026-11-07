@@ -2658,7 +2658,7 @@ export async function agentCall(
  * and a request's tool list for some grants, expanded as the live loop expands them but over the
  * groups and tools the run recorded (`null` when a grant names no recorded tool).
  */
-export function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpecs"> {
+function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpecs"> {
   const skills = new Map(
     Object.entries(state.recordedSkills).map(([name, { description, instructions }]) => [
       name,

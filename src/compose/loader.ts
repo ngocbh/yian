@@ -882,11 +882,6 @@ function sameFile(a: DiagnosticFrame, b: DiagnosticFrame): boolean {
   return a.label === b.label && a.text === b.text;
 }
 
-/** Say whether two frames start at one place in one file. */
-function sameLocation(a: DiagnosticFrame, b: DiagnosticFrame): boolean {
-  return sameFile(a, b) && a.range.startLine === b.range.startLine && a.range.startCol === b.range.startCol;
-}
-
 /** Return `origin`'s frame through `resolver`, or `null` when either is missing. */
 function frameOf(resolver: OriginResolver | null, origin: OriginRef | null): DiagnosticFrame | null {
   return origin === null || resolver === null ? null : resolver.resolve(origin);

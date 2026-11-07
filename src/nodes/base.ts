@@ -43,7 +43,6 @@ import type { VariablePool } from "../typesys/pool.ts";
 import {
   cutText,
   fromHost,
-  isList,
   isRecord,
   jsTypeName,
   setField,
@@ -237,21 +236,6 @@ function isFiniteNumber(value: unknown): boolean {
 
 /** The closed sum a node's `run` resolves to. */
 export type NodeResult = Output | Route | Grow | Pending;
-
-/**
- * Require one inventory of distinct authored names. The runtime trace and the runtime contracts
- * use it.
- *
- * @throws TypeError when `names` isn't an array of strings.
- * @throws RangeError for a repeated name.
- */
-export function validateDeclaredNames(names: unknown, fieldName: string): void {
-  if (!isList(names)) throw new TypeError(`${fieldName} must be an array`);
-  for (const name of names) {
-    if (typeof name !== "string") throw new TypeError(`${fieldName} must contain only strings`);
-  }
-  if (new Set(names).size !== names.length) throw new RangeError(`${fieldName} must contain unique names`);
-}
 
 /** Return whether `value` can key a `WeakMap` or be held in a `WeakSet`. CASE and LOOP use it. */
 export function isWeakKey(value: unknown): value is object {

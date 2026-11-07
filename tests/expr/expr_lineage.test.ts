@@ -9,7 +9,7 @@ import { afterEach, expect, test } from "bun:test";
 import { registerTemplateFn, TEMPLATE_FNS, type TemplateFn, type TemplateParam } from "../../src/expr/builtins.ts";
 import { evalExpr, ExpressionError, MISSING_ROOT, ResolveMode, type RootResolver } from "../../src/expr/expressions.ts";
 import { parseExpr } from "../../src/expr/grammar.ts";
-import { ResolvedValue, type RootRead, SourceRef, sameSource, type TracedValue, ValueRoute } from "../../src/expr/lineage.ts";
+import { ResolvedValue, type RootRead, SourceRef, type TracedValue, ValueRoute } from "../../src/expr/lineage.ts";
 import { evalBinding, evalTemplate, scanTemplate } from "../../src/expr/template.ts";
 import { Grow } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
@@ -404,15 +404,6 @@ test("spans count code points", () => {
     [1, 2],
     [3, 4],
   ]);
-});
-
-test("sameSource is true exactly when run id, sequence and path are equal", () => {
-  const source = new SourceRef("run", 1, ["a", 0]);
-  expect(sameSource(source, new SourceRef("run", 1, ["a", 0]))).toBe(true);
-  expect(sameSource(source, new SourceRef("run", 1, ["a", "0"]))).toBe(false);
-  expect(sameSource(source, new SourceRef("other", 1, ["a", 0]))).toBe(false);
-  expect(sameSource(source, new SourceRef("run", 2, ["a", 0]))).toBe(false);
-  expect(sameSource(source, new SourceRef("run", 1, ["a"]))).toBe(false);
 });
 
 test.each([

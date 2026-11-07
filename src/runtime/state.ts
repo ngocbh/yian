@@ -115,12 +115,7 @@ import {
   type TakeCommit,
   type WaitEntry,
 } from "./log.ts";
-import {
-  decodeTyped,
-  type ReboundSource,
-  resolvePoolPath,
-  SYSTEM_PREFIX,
-} from "./sources.ts";
+import { decodeTyped, resolvePoolPath, SYSTEM_PREFIX } from "./sources.ts";
 import { ASK, ASK_USER, SLEEP, TAKE, toolCallId } from "../tools/context.ts";
 import { visibleToolName } from "../tools/grants.ts";
 import {
@@ -504,8 +499,8 @@ export function resolveFromPool(
 }
 
 /**
- * Return the resolver the reducer rebuilds derived values with: the value pool name `name` holds
- * now, named by its producer index seq, with the commit at `seq` as its source.
+ * Return the resolver the reducer rebuilds derived values with: the typed value pool name `name`
+ * holds now, which the commit at `seq` wrote.
  *
  * Sound because records apply in log order: when a derived commit is accepted, the pool holds
  * exactly what its binding read.
@@ -513,7 +508,7 @@ export function resolveFromPool(
  * @throws RangeError (from the resolver) when `seq` isn't the seq of the `pool_commit` that last
  *   wrote `name`: the log and the flow disagree.
  */
-export function poolResolver(state: RunState): (name: string, seq: number) => ReboundSource {
+export function poolResolver(state: RunState): (name: string, seq: number) => TypedValue {
   return (name, seq) => {
     const producer = state.producers.get(name);
     if (producer !== seq) {
@@ -524,7 +519,7 @@ export function poolResolver(state: RunState): (name: string, seq: number) => Re
     const value = name.startsWith(SYSTEM_PREFIX) ? state.pool.system.get(name.slice(SYSTEM_PREFIX.length)) : state.pool.store.get(name);
     // The producer index names exactly the pool's names.
     if (value === undefined) throw new RangeError(`pool name ${reprText(name)} has no value`);
-    return { value, source: new SourceRef(state.runId!, seq) };
+    return value;
   };
 }
 
@@ -2352,7 +2347,7 @@ function liveGrowth(
 }
 
 /** Refuse a lookup: a child START binds only its constant wiring. */
-function noSources(name: string): ReboundSource {
+function noSources(name: string): TypedValue {
   throw new RangeError(`a child START binds only its constant wiring, not ${reprText(name)}`);
 }
 

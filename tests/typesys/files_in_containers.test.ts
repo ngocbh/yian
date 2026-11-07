@@ -19,7 +19,6 @@ import { bindParams } from "../../src/nodes/binding.ts";
 import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { LoopNode } from "../../src/nodes/loop/node.ts";
 import { advance, type RunFlowOptions, runFlow } from "../../src/run.ts";
-import { SourceEntry, sameSourceEntry } from "../../src/runtime/sources.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
 import {
@@ -37,7 +36,7 @@ import {
 } from "../../src/typesys/values.ts";
 import { loadConformanceFlow } from "../helpers/declarations.ts";
 import { hostEnv } from "../helpers/mcp_helpers.ts";
-import { engine, rejected } from "../helpers/run_state_fixtures.ts";
+import { rejected } from "../helpers/run_state_fixtures.ts";
 import { typeCheckError } from "../helpers/type_errors.ts";
 
 const REGISTRY = readTypedefs({
@@ -974,14 +973,6 @@ output: \${l.output.n}
     expect(output).toBe(2n);
   },
 );
-
-test("a source entry with a record reading type differs from one without it", () => {
-  const files = new Type({ kind: ValueKind.OBJECT, fields: new Map([["f", FILE]]), required: new Set() });
-  const entry = new SourceEntry(null, 0, "null", files);
-
-  expect(sameSourceEntry(entry, new SourceEntry(null, 0, "null", files))).toBe(true);
-  expect(sameSourceEntry(entry, new SourceEntry(null, 0, "null"))).toBe(false);
-});
 
 // --- typed bindings and constructors deliver the slot's file representation --- //
 

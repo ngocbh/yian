@@ -61,8 +61,8 @@ import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
-import { jsTypeName, setField, type Value, type ValueRecord } from "../typesys/values.ts";
-import { type ReboundSource, SYSTEM_PREFIX } from "./sources.ts";
+import { jsTypeName, setField, type TypedValue, type Value, type ValueRecord } from "../typesys/values.ts";
+import { SYSTEM_PREFIX } from "./sources.ts";
 
 /**
  * One raw node-evaluation failure for durable dispatcher preparation. Frozen.
@@ -542,12 +542,12 @@ function bindFrom(
   node: Node,
   flow: Flow,
   sources: ReadonlyMap<string, number>,
-  resolve: (name: string, seq: number) => ReboundSource,
+  resolve: (name: string, seq: number) => TypedValue,
   wiringOverride: JsonObject | null,
 ): Rebound {
   const pool = new VariablePool(flow.startId);
   for (const [name, seq] of sources) {
-    const { value } = resolve(name, seq);
+    const value = resolve(name, seq);
     if (name.startsWith(SYSTEM_PREFIX)) pool.system.set(name.slice(SYSTEM_PREFIX.length), value);
     else pool.store.set(name, value);
   }
@@ -670,7 +670,7 @@ export function rebuildDerived(
   node: Node,
   flow: Flow,
   from: ReadonlyMap<string, number>,
-  resolve: (name: string, seq: number) => ReboundSource,
+  resolve: (name: string, seq: number) => TypedValue,
   wiringOverride: JsonObject | null,
 ): Output | Grow {
   if (node.derived !== true) throw new TypeError(`node ${reprText(node.id)} is not derived`);

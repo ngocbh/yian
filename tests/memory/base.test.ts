@@ -6,6 +6,7 @@ import {
   BUILTIN_MEMORY_TOOLS,
   ChangeIdReusedError,
   checkContract,
+  isMemory,
   MemoryBase,
   MemoryBusyError,
   type MemoryContract,
@@ -131,5 +132,48 @@ test("anything else has no memory error kind, and the reader never throws", () =
   );
   for (const value of [new Error("plain"), { [brand]: "other" }, { [brand]: ["busy"] }, null, "busy", 1, hostile]) {
     expect(memoryErrorKind(value)).toBeNull();
+  }
+});
+
+test("a MemoryBase instance is a memory", () => {
+  expect(isMemory(memoryWith("Folder", { type: "FileMemory", tools: [] }))).toBe(true);
+});
+
+test("a memory from another copy of yian is read by its brand", () => {
+  class Foreign {
+    static readonly contract = { type: "FileMemory", tools: [] };
+    open(): Promise<MemorySession> {
+      throw new Error("not opened in these tests");
+    }
+    reset(): Promise<void> {
+      throw new Error("not reset in these tests");
+    }
+  }
+  Object.defineProperty(Foreign.prototype, Symbol.for("yian.memory"), { value: true });
+  expect(isMemory(new Foreign())).toBe(true);
+});
+
+test("anything else is not a memory, and the check never throws", () => {
+  const brand = Symbol.for("yian.memory");
+  const hostile = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("trap");
+      },
+    },
+  );
+  const open = async () => {
+    throw new Error("unused");
+  };
+  for (const value of [
+    { open, reset: open },
+    { [brand]: true, open },
+    { [brand]: "yes", open, reset: open },
+    null,
+    "memory",
+    hostile,
+  ]) {
+    expect(isMemory(value)).toBe(false);
   }
 });

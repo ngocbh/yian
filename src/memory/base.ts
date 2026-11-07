@@ -62,6 +62,32 @@ export abstract class MemoryBase {
 }
 
 /**
+ * The brand every `MemoryBase` instance carries. yian checks it rather than `instanceof`, so a
+ * memory built against another copy of yian (a host package's own) binds.
+ */
+const MEMORY = Symbol.for("yian.memory");
+
+Object.defineProperty(MemoryBase.prototype, MEMORY, { value: true });
+
+/**
+ * Return whether `value` is a memory from any copy of yian: it carries the brand and has `open`
+ * and `reset`. Never throws, so a hostile object is not a memory.
+ */
+export function isMemory(value: unknown): value is MemoryBase {
+  if (typeof value !== "object" || value === null) return false;
+  try {
+    const memory = value as Partial<Record<keyof MemoryBase, unknown>>;
+    return (
+      (value as { [MEMORY]?: unknown })[MEMORY] === true &&
+      typeof memory.open === "function" &&
+      typeof memory.reset === "function"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * One open memory. All nodes of a run bound to one identity share one session, so it accepts
  * concurrent calls; the type serializes writes.
  *

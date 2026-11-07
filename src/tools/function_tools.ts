@@ -58,8 +58,8 @@ type ResultOf<O> = O extends StandardSchemaV1<infer I, any> ? I : unknown;
  *
  * @throws {TypeError} `name` or `description` is not a string, `parametersJsonSchema` or
  *   `outputJsonSchema` is not a plain object or not JSON, `parametersValidator` or
- *   `outputValidator` is not a Standard Schema v1 validator, `execute` is not a function, or
- *   `isConcurrencySafe` is neither a function nor `null`.
+ *   `outputValidator` is not a Standard Schema v1 validator, `execute` is not a function,
+ *   `isConcurrencySafe` is neither a function nor `null`, or `resumable` is not a boolean.
  * @throws {RangeError} `name` is empty, or `parametersJsonSchema`'s `type` is not `"object"`.
  *
  * @example
@@ -101,6 +101,11 @@ export class FunctionTool {
   readonly outputJsonSchema: JsonObject | null;
   /** The Standard Schema v1 validator of the result, or `null` when none was given. */
   readonly outputValidator: StandardSchemaV1 | null;
+  /**
+   * Whether a resumed AGENT may send a call that a crash or a stop cut off again, with the same
+   * `ctx.callId`. Set it only for a tool that treats `callId` as an idempotency key.
+   */
+  readonly resumable: boolean;
 
   /** Check the fields and build a frozen tool. */
   constructor(options: {
@@ -112,9 +117,10 @@ export class FunctionTool {
     parametersValidator?: StandardSchemaV1 | null;
     outputJsonSchema?: JsonObject | null;
     outputValidator?: StandardSchemaV1 | null;
+    resumable?: boolean;
   }) {
     const { name, description, parametersJsonSchema, execute, isConcurrencySafe } = options;
-    const { parametersValidator, outputJsonSchema, outputValidator } = options;
+    const { parametersValidator, outputJsonSchema, outputValidator, resumable } = options;
     if (typeof name !== "string") {
       throw new TypeError(`FunctionTool name must be a string, got ${jsTypeName(name)}`);
     }
@@ -156,6 +162,9 @@ export class FunctionTool {
     ) {
       throw new TypeError(`${prefix} isConcurrencySafe must be a function`);
     }
+    if (resumable !== undefined && typeof resumable !== "boolean") {
+      throw new TypeError(`${prefix} resumable must be a boolean, got ${jsTypeName(resumable)}`);
+    }
     this.name = name;
     this.description = description;
     this.parametersJsonSchema = schema;
@@ -164,6 +173,7 @@ export class FunctionTool {
     this.parametersValidator = parametersValidator ?? null;
     this.outputJsonSchema = output;
     this.outputValidator = outputValidator ?? null;
+    this.resumable = resumable ?? false;
     Object.freeze(this);
   }
 }
@@ -183,6 +193,7 @@ export function withExecute(original: FunctionTool, execute: FunctionTool["execu
     parametersValidator: original.parametersValidator,
     outputJsonSchema: original.outputJsonSchema,
     outputValidator: original.outputValidator,
+    resumable: original.resumable,
     execute,
   });
 }
@@ -242,8 +253,9 @@ export function tool<
   outputJsonSchema?: JsonObject;
   execute: (args: ArgsOf<P>, ctx: ToolContext<any>) => ResultOf<O> | Promise<ResultOf<O>>;
   isConcurrencySafe?: ((args: ArgsOf<P>) => boolean) | null;
+  resumable?: boolean;
 }): FunctionTool {
-  const { name, description, execute, isConcurrencySafe } = options;
+  const { name, description, execute, isConcurrencySafe, resumable } = options;
   // `String`: the prefix must not throw on a non-string name; `FunctionTool` reports a bad name
   // when nothing fails first.
   const prefix = `tool ${reprText(String(name))}`;
@@ -265,6 +277,7 @@ export function tool<
     // `undefined` when no output was given, which `FunctionTool` stores as `null`.
     outputJsonSchema: outputJsonSchema as JsonObject | undefined,
     outputValidator,
+    resumable,
   });
 }
 

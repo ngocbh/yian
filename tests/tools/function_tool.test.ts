@@ -169,6 +169,12 @@ describe("FunctionTool construction", () => {
       "FunctionTool 'echo' isConcurrencySafe must be a function",
     ],
     [
+      "a non-boolean resumable",
+      { resumable: "yes" },
+      TypeError,
+      "FunctionTool 'echo' resumable must be a boolean, got string",
+    ],
+    [
       "a non-object output schema",
       { outputJsonSchema: [1] },
       TypeError,
@@ -342,6 +348,15 @@ describe("withExecute", () => {
     }
     expect(copy.execute({}, undefined as never)).toBe("new");
   });
+
+  test("a tool is resumable only when it says so, and keeps the flag through withExecute", () => {
+    const base = { name: "t", description: "d", parameters: { type: "object", properties: {} }, execute: () => "x" };
+    expect(tool(base).resumable).toBe(false);
+    const kept = tool({ ...base, resumable: true });
+    expect(kept.resumable).toBe(true);
+    expect(withExecute(kept, () => "y").resumable).toBe(true);
+    expect(() => tool({ ...base, resumable: "yes" as never })).toThrow("FunctionTool 't' resumable must be a boolean");
+  });
 });
 
 describe("toolTypes", () => {
@@ -486,6 +501,11 @@ describe("FunctionTool in a ToolSet and the registry", () => {
     expect(stored.execute).toBe(tool.execute);
     expect(stored.parametersJsonSchema).toEqual(tool.parametersJsonSchema);
     expect(tool.description).toBe("Echo.");
+  });
+
+  test("registerTool's description override keeps the resumable flag", () => {
+    registerTool("echo", build({ resumable: true }), { descriptionOverride: "New." });
+    expect(TOOL_REGISTRY.get("echo")!.resumable).toBe(true);
   });
 });
 

@@ -415,7 +415,7 @@ test("resume of a host key run says the host must resume it", async () => {
   const result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(1);
-  expect(result.output).toContain("resume_flow(api_key=...)");
+  expect(result.output).toContain("advance({ log, apiKey })");
   expect(result.output).toContain("cannot supply");
   expect(readFileSync(log)).toEqual(before);
 });
@@ -429,7 +429,7 @@ test("resume of a host key run with headers names both", async () => {
   const result = await withFetch(noModel, () => resume(log));
 
   expect(result.code, result.output).toBe(1);
-  expect(result.output).toContain("resume_flow(api_key=..., headers=...)");
+  expect(result.output).toContain("advance({ log, apiKey, headers })");
   expect(result.output).not.toContain("gw-6a1f");
   expect(readFileSync(log)).toEqual(before);
 });
@@ -537,7 +537,7 @@ test("resume of a call time host key selection says the host must resume it", as
 
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain("this run's openai API key came from a host's llm_config.api_key");
-  expect(result.output).toContain("resume_flow(api_key=..., headers=...)");
+  expect(result.output).toContain("advance({ log, apiKey, headers })");
   expect(result.output).not.toContain("gw-6a1f");
   expect(result.output).not.toContain("sk-h");
   expect(readFileSync(log)).toEqual(before);

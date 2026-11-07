@@ -288,7 +288,7 @@ test("resume passes the host key a call time selection names beside the map", as
   const { code, output } = await cliResume(PICKED, log, env);
   expect(code, output).toBe(1);
   expect(output).toMatch(
-    /this run's openai API key came from a host's llm_config.api_key.*resume_flow\(api_key=\.\.\., headers=\.\.\.\)/,
+    /this run's openai API key came from a host's llm_config.api_key.*advance\(\{ log, apiKey, headers \}\)/,
   );
   expect(readFileSync(log, "utf8")).toBe(before);
 });

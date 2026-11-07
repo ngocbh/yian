@@ -812,7 +812,7 @@ function checkHostHeaders(raw: Readonly<AgentConfig>, names: readonly string[]):
     const listed = [...expected.keys()].sort(compareCodeUnits).map((name) => expected.get(name)!);
     throw new AuthError(
       `This run's ${messageText(raw["provider"])} connection headers ${listed.join(", ")} came from the host's ` +
-        "llm_config.headers and are not recorded; pass headers to resume_flow",
+        "llm_config.headers and are not recorded; pass headers to advance",
     );
   }
   throw new AuthError(`llm_config.headers must have the header names this run recorded for the host key: ${diff}`);
@@ -827,7 +827,7 @@ function messageText(value: unknown): string {
 function hostKeyMissing(provider: unknown): string {
   return (
     `This run's ${messageText(provider)} API key came from the host's llm_config.api_key and is not ` +
-    "recorded; pass api_key to resume_flow"
+    "recorded; pass apiKey to advance"
   );
 }
 

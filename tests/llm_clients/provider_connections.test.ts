@@ -369,7 +369,7 @@ test("split model config needs the recorded headers", () => {
   expect(error).toBeInstanceOf(AuthError);
   expect(error.message).toContain("X-Gateway");
   expect(error.message).toContain("X-Trace");
-  expect(error.message).toContain("resume_flow");
+  expect(error.message).toContain("pass headers to advance");
   error = thrown(() =>
     splitModelConfig({
       ...MARKED,

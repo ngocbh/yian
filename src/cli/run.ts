@@ -897,16 +897,16 @@ async function resumeEnvKey(
 
 /**
  * Return the error refusing a resume whose `provider` key came from a host's
- * `llm_config.api_key`, pointing to `resume_flow`; `headerNames`
- * are the recorded names of headers sent with the key, if any.
+ * `llm_config.api_key`, pointing to the host's `advance`; `headerNames` are the recorded names of
+ * headers sent with the key, if any.
  */
 function hostKeyRefusal(provider: string, headerNames: unknown): ResumeKeyError {
   // Header values the host sent with its key are not recorded either.
   const withHeaders = Array.isArray(headerNames) && headerNames.length > 0;
-  const given = withHeaders ? "api_key=..., headers=..." : "api_key=...";
+  const given = withHeaders ? "apiKey, headers" : "apiKey";
   return new ResumeKeyError(
     `this run's ${provider} API key came from a host's llm_config.api_key, which the CLI cannot ` +
-      `supply; resume it with resume_flow(${given})`,
+      `supply; resume it from the host with advance({ log, ${given} })`,
   );
 }
 

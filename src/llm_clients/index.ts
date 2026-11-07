@@ -5,7 +5,8 @@
  * lists its supported names, and its other exports are internal.
  *
  * The model-access leaf: `LLMConfig` (the selection carrier) and `chatModelFromConfig` (resolve it
- * to a ready `RouteModel` on its provider's route). `provider_blocks.ts` holds the schema of each
+ * to a ready `RouteModel` on its provider's route), and `embedderFromConfig` (an embedding model's
+ * `/embeddings` client, with the same credentials). `provider_blocks.ts` holds the schema of each
  * provider block, the request body of the API that provider's calls reach, checked at load and
  * again when a model is built, then sent as written by the wire protocols in `llm/protocols/`.
  * `auth/` owns staged login, private storage of one saved login per provider, and refresh.
@@ -41,6 +42,7 @@ export {
   SUPPORTED_LLM_PROVIDERS,
 } from "./config.ts";
 export { callCredentials, scrubCallCredentials } from "./connection.ts";
-export { chatModelFromConfig, defaultModelAccess, type ModelAccess } from "./factory.ts";
+export type { Embed, Embedder, EmbeddingModel } from "../llm/embeddings.ts";
+export { chatModelFromConfig, defaultEmbed, defaultModelAccess, embedderFromConfig, type ModelAccess } from "./factory.ts";
 export { type ListModelsOptions, listModels, ModelListError } from "./model_list.ts";
 export { type Issue, ValidationError } from "./provider_blocks.ts";

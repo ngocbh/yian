@@ -20,6 +20,18 @@ import { shortRequest } from "./transport.ts";
 /** Return one vector per text, in the texts' order, all of one length; `signal` stops the call. */
 export type Embedder = (texts: readonly string[], o: { signal: AbortSignal }) => Promise<Float32Array[]>;
 
+/** An embedding model: the provider whose `/embeddings` endpoint serves it, and its name there. */
+export interface EmbeddingModel {
+  readonly provider: string;
+  readonly model: string;
+}
+
+/** Embed `texts` with the embedding model `o.provider`/`o.model`, as an `Embedder` does. */
+export type Embed = (
+  texts: readonly string[],
+  o: EmbeddingModel & { signal: AbortSignal },
+) => Promise<Float32Array[]>;
+
 /** Options for `openaiEmbeddings`. */
 export interface EmbeddingsOptions {
   /** The provider name, for error messages. */

@@ -9,7 +9,6 @@ import { expansionDigest, flowFingerprint, flowManifest } from "../../src/compil
 import { CompiledFlow, END_ID, Edge, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
 import { iterFlowOrigins, rebaseFlowOrigins, rewriteFlowOrigins } from "../../src/compile/origins.ts";
 import { DiagnosticFrame, OriginRef, ResolverTable, SourceRange } from "../../src/diagnostics.ts";
-import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
@@ -253,11 +252,9 @@ test("case predicate origins traverse and rewrite by arm identity (local half)",
   expect(node.cases[2]).toBe(second);
 });
 
-/** Return an AGENT with a variable and a memory declaration, configured by `llmConfig`. */
+/** Return an AGENT with a variable, configured by `llmConfig`. */
 function richAgent(llmConfig: ValueTemplate | Binding | Record<string, unknown>): AgentNode {
-  const site = new DeclSite([], ["root"], "chat");
-  const memory = new MemoryDecl("notes", "reflective", { max_items: 4n }, site, origin("memory"));
-  const node = new AgentNode("chat", { llmConfig, variables: [parameterOf("tone", "variable")], memories: [memory] });
+  const node = new AgentNode("chat", { llmConfig, variables: [parameterOf("tone", "variable")] });
   node.origin = origin("node");
   return node;
 }
@@ -268,7 +265,6 @@ const AGENT_LOCAL_KEYS = [
   "variable/contract/leaf",
   "variable",
   "variable/default",
-  "memory",
 ];
 
 test("an AGENT's local origins end with a template llm config's", () => {
@@ -296,7 +292,7 @@ test("an AGENT's local origins end with a template llm config's", () => {
 test("an AGENT's local origins end with a binding llm config's", () => {
   const binding = new Binding("${input.cfg}", { origin: origin("llm") });
   const node = richAgent(binding);
-  const { variables, memories } = node;
+  const { variables } = node;
 
   expect(keys(node.iterLocalOrigins())).toEqual([...AGENT_LOCAL_KEYS, "llm"]);
 
@@ -308,12 +304,9 @@ test("an AGENT's local origins end with a binding llm config's", () => {
   expect(copy.ownLlmConfig).not.toBe(binding);
   expect((copy.ownLlmConfig as Binding).source).toBe(binding.source);
   expect(copy.variables).not.toBe(variables);
-  expect(copy.memories).not.toBe(memories);
   expect(node.ownLlmConfig).toBe(binding);
   expect(node.variables).toBe(variables);
-  expect(node.memories).toBe(memories);
   expect(binding.origin).toEqual(origin("llm"));
-  expect(memories[0]!.origin).toEqual(origin("memory"));
 });
 
 test("a plain-record AGENT llm config adds no origin", () => {
@@ -550,18 +543,15 @@ test("iter flow origins reaches every slot once and is repeatable", () => {
   ]);
 });
 
-test("a compiled flow yields memories, llm config, wiring, outputs, then nodes", () => {
+test("a compiled flow yields llm config, wiring, outputs, then nodes", () => {
   const node = new BareNode("only", { origin: origin("node") });
   const flow = new CompiledFlow(new Map([["only", node]]), [], {
-    memories: [
-      new MemoryDecl("reflective", "reflective", { max_items: 4n }, new DeclSite([], ["root"]), origin("memory")),
-    ],
     flowLlmConfig: new Binding("${__start__.output.llm}", { origin: origin("llm") }),
     wiring: new Map([["only", new Map([["value", new Binding(1n, { origin: origin("wiring") })]])]]),
     outputs: [new FlowOutput("result", new Binding("${only.output}", { origin: origin("output") }))],
   });
 
-  expect(keys(iterFlowOrigins(flow))).toEqual(["memory", "llm", "wiring", "output", "node"]);
+  expect(keys(iterFlowOrigins(flow))).toEqual(["llm", "wiring", "output", "node"]);
 });
 
 test("parameter origins follow the carrier's canonical order", () => {
@@ -638,52 +628,6 @@ test("case predicate origins traverse and rewrite by arm identity (flow half)", 
   expect(shared.origin).toEqual(origin("case/shared"));
 });
 
-/** Return an AGENT-site reflective declaration with `origin`. */
-function sharedDecl(declOrigin: OriginRef | null): MemoryDecl {
-  return new MemoryDecl("reflective", "reflective", { max_items: 4n }, new DeclSite([], ["root"], "agent"), declOrigin);
-}
-
-/** Return a compiled flow of two AGENTs, `left` and `right`, that both declare `shared`. */
-function aliasedFlow(shared: MemoryDecl): CompiledFlow {
-  return new CompiledFlow(
-    new Map([
-      ["left", new AgentNode("left", { memories: [shared] })],
-      ["right", new AgentNode("right", { memories: [shared] })],
-    ]),
-    [],
-    { wiring: new Map([["left", new Map()], ["right", new Map()]]) },
-  );
-}
-
-/** Return the first memory of `left` and of `right` in `flow`. */
-function aliasedMemories(flow: CompiledFlow): [MemoryDecl, MemoryDecl] {
-  return [(flow.nodes.get("left") as AgentNode).memories[0]!, (flow.nodes.get("right") as AgentNode).memories[0]!];
-}
-
-test("shared memory decl origin traverses and rewrites once", () => {
-  // Two AGENTs may deliberately alias one immutable declaration carrier.
-  const shared = sharedDecl(origin("policy/shared"));
-  const flow = aliasedFlow(shared);
-
-  expect([...iterFlowOrigins(flow)]).toEqual([origin("policy/shared")]);
-  const calls: OriginRef[] = [];
-
-  class DerivedOrigin extends OriginRef {}
-
-  const rewritten = rewriteFlowOrigins(flow, (o) => {
-    calls.push(o);
-    return new DerivedOrigin(`mapped/${o.key}`);
-  });
-
-  expect(calls).toEqual([origin("policy/shared")]);
-  const [left, right] = aliasedMemories(rewritten);
-  expect(left).toBe(right);
-  expect(left).not.toBe(shared);
-  expect(left.origin!.key).toBe("mapped/policy/shared");
-  expect(aliasedMemories(flow)[0]).toBe(shared);
-  expect(shared.origin).toEqual(origin("policy/shared"));
-});
-
 test("a FlowOutput shared by two flows is rewritten once and stays shared", () => {
   const shared = new FlowOutput("result", new Binding("${x.output}", { origin: origin("output") }));
   const child = new CompiledFlow(new Map(), [], { outputs: [shared] });
@@ -734,36 +678,6 @@ test("a node shared by two flows is rewritten once", () => {
   expect(rewrittenChild.nodes.get("shared")).toBe(rewritten.nodes.get("shared")!);
   expect(rewritten.nodes.get("shared")!.origin).toEqual(origin("mapped/shared/node"));
   expect(node.origin).toEqual(origin("shared/node"));
-});
-
-test("source-free memory decl adds no origin", () => {
-  expect([...iterFlowOrigins(aliasedFlow(sharedDecl(null)))]).toEqual([]);
-});
-
-test("memory decl origin rebase routes the single shared site", () => {
-  const shared = sharedDecl(origin("policy/shared"));
-  const flow = aliasedFlow(shared);
-  const frame = new DiagnosticFrame({
-    label: "memory.yaml",
-    text: "long_term_memory: reflective\n",
-    range: new SourceRange(1, 19, 1, 29),
-  });
-  const resolver = { resolve: (o: OriginRef) => (o.key === shared.origin!.key ? frame : null) };
-
-  const mapped: OriginRef[] = [];
-  const [rebased, table] = rebaseFlowOrigins(
-    flow,
-    (o) => {
-      mapped.push(o);
-      return origin(`alias/${o.key}`);
-    },
-    { resolver },
-  );
-
-  expect(mapped).toEqual([origin("policy/shared")]);
-  const [left, right] = aliasedMemories(rebased);
-  expect(left).toBe(right);
-  expect(table.resolve(origin("alias/policy/shared"))).toBe(frame);
 });
 
 for (const [label, make] of COMPOSITES) {

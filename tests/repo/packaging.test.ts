@@ -90,8 +90,6 @@ const NAMES: Record<string, string[]> = {
     "pendingCalls",
     "RunBusyError",
     "DeliveryRefused",
-    "buildMemories",
-    "MemoryRegistry",
     "Failure",
     "Diagnostic",
     "ComposedFlow",

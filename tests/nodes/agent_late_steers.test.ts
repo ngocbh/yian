@@ -16,7 +16,6 @@ import { ProviderError } from "../../src/llm/errors.ts";
 import { type ChatModel, EventStream } from "../../src/llm/events.ts";
 import { Message, type Request, TextPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentRunContext, DEFAULT_SYSTEM, requestSha256, ToolIterationLimitError } from "../../src/nodes/agent/context.ts";
 import { rebuildStepRequests, runAgent } from "../../src/nodes/agent/loop.ts";
 import { userMessage } from "../../src/nodes/agent/structured.ts";
@@ -119,15 +118,13 @@ function loopContext(model: ChatModel, extra: Partial<AgentRunContext> & { withL
   return {
     nodeId: "chat",
     messages: [userMessage("go")],
-    promptText: "go",
     tools: withLookup ? ["lookup"] : [],
     llmConfig: CONFIG,
     outputType: null,
     retries: 0,
     maxToolIterations: -1,
-    memoryContext: new MemoryContext(),
     toolset: withLookup ? new ToolSet({ lookup: lookup() }) : null,
-    baseSystemPrompt: DEFAULT_SYSTEM,
+    systemPrompt: DEFAULT_SYSTEM,
     skills: [],
     models: serving(model),
     sent: () => [],
@@ -293,7 +290,7 @@ const sendingModel = (log: string) =>
 test("through the engine: a send during the final reply writes a steer step and a second model_call", async () => {
   const log = freshLog();
   const model = sendingModel(log);
-  const result = await runWith(await loadFlow(FLOW), {}, null, model, { log });
+  const result = await runWith(await loadFlow(FLOW), {}, model, { log });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toBe("final");
   const [seq] = sendSeqs(log);
@@ -307,7 +304,7 @@ test("through the engine: a send during the final reply writes a steer step and 
 
 test("at the cap through the engine the event stays unread and no steer step is written", async () => {
   const log = freshLog();
-  const result = await runWith(await loadFlow(FLOW), {}, null, sendingModel(log), { log, env: capped(1) });
+  const result = await runWith(await loadFlow(FLOW), {}, sendingModel(log), { log, env: capped(1) });
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(result.output).toBe("draft");
   expect(steps(log)).toEqual(["model_call"]);
@@ -321,12 +318,12 @@ const stepSeq = (log: string, kind: string, i = 0) =>
 test("a crash between the late steer and its model call replays to the same point", async () => {
   const uncut = freshLog();
   const uncutModel = sendingModel(uncut);
-  await runWith(await loadFlow(FLOW), {}, null, uncutModel, { log: uncut });
+  await runWith(await loadFlow(FLOW), {}, uncutModel, { log: uncut });
   const log = freshLog();
-  await crashAfter(stepSeq(uncut, "steer") + 1, async () => runWith(await loadFlow(FLOW), {}, null, sendingModel(log), { log }));
+  await crashAfter(stepSeq(uncut, "steer") + 1, async () => runWith(await loadFlow(FLOW), {}, sendingModel(log), { log }));
   expect(steps(log).at(-1)).toMatchObject({ kind: "steer" });
   const model = new ScriptedModel([textReply("final")], CONFIG);
-  const resumed = await resumeWith(await loadFlow(FLOW), log, null, model);
+  const resumed = await resumeWith(await loadFlow(FLOW), log, model);
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("final");
   expect(steps(log).filter((step) => typeof step !== "string")).toHaveLength(1);
@@ -339,14 +336,14 @@ test("a crash between the late steer and its model call replays to the same poin
 
 test("a crash after the final reply, before any steer: a send while down yields a late steer on resume", async () => {
   const uncut = freshLog();
-  await runWith(await loadFlow(FLOW), {}, null, new ScriptedModel([textReply("draft")], CONFIG), { log: uncut });
+  await runWith(await loadFlow(FLOW), {}, new ScriptedModel([textReply("draft")], CONFIG), { log: uncut });
   const log = freshLog();
   await crashAfter(stepSeq(uncut, "model_call") + 1, async () =>
-    runWith(await loadFlow(FLOW), {}, null, new ScriptedModel([textReply("draft")], CONFIG), { log }),
+    runWith(await loadFlow(FLOW), {}, new ScriptedModel([textReply("draft")], CONFIG), { log }),
   );
   const seq = await send(log, "notes", "one more thing", { env: NO_ENV });
   const model = new ScriptedModel([textReply("final")], CONFIG);
-  const resumed = await resumeWith(await loadFlow(FLOW), log, null, model);
+  const resumed = await resumeWith(await loadFlow(FLOW), log, model);
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("final");
   expect(steps(log)).toEqual(["model_call", { kind: "steer", inbox: "notes", from: [BigInt(seq)] }, "model_call"]);
@@ -358,11 +355,11 @@ test("a crash after the final reply, before any steer: a send while down yields 
 
 test("a crash after the late model_call: replay takes it with a matching digest", async () => {
   const uncut = freshLog();
-  await runWith(await loadFlow(FLOW), {}, null, sendingModel(uncut), { log: uncut });
+  await runWith(await loadFlow(FLOW), {}, sendingModel(uncut), { log: uncut });
   const log = freshLog();
-  await crashAfter(stepSeq(uncut, "model_call", 1) + 1, async () => runWith(await loadFlow(FLOW), {}, null, sendingModel(log), { log }));
+  await crashAfter(stepSeq(uncut, "model_call", 1) + 1, async () => runWith(await loadFlow(FLOW), {}, sendingModel(log), { log }));
   const model = new ScriptedModel([], CONFIG);
-  const resumed = await resumeWith(await loadFlow(FLOW), log, null, model);
+  const resumed = await resumeWith(await loadFlow(FLOW), log, model);
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("final");
   expect(model.requests).toEqual([]);
@@ -414,15 +411,15 @@ const honors = (log: string) =>
 
 test("a crash after an interrupt cut the late-steered call: the resume honors it, with no model call", async () => {
   const uncut = freshLog();
-  const done = await runWith(await loadFlow(STOPPABLE), {}, null, steeringThen(uncut, interruptAndHold(uncut)), { log: uncut });
+  const done = await runWith(await loadFlow(STOPPABLE), {}, steeringThen(uncut, interruptAndHold(uncut)), { log: uncut });
   expect(done.output).toBe("(stopped)");
   const log = freshLog();
   await crashAfter(interruptedSeq(uncut) + 1, async () =>
-    runWith(await loadFlow(STOPPABLE), {}, null, steeringThen(log, interruptAndHold(log)), { log }),
+    runWith(await loadFlow(STOPPABLE), {}, steeringThen(log, interruptAndHold(log)), { log }),
   );
   expect(steps(log).at(-1)).toMatchObject({ kind: "steer" });
   const model = new ScriptedModel([], CONFIG);
-  const resumed = await resumeWith(await loadFlow(STOPPABLE), log, null, model);
+  const resumed = await resumeWith(await loadFlow(STOPPABLE), log, model);
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("(stopped)");
   expect(model.requests).toEqual([]);
@@ -444,7 +441,7 @@ test("a crash after an interrupt honored in the late-steered call's retry wait: 
   };
   const uncut = freshLog();
   const first = interrupting(uncut);
-  const done = await runWith(await loadFlow(STOPPABLE), {}, null, steeringThen(uncut, failing), { log: uncut, onEvent: first.onEvent });
+  const done = await runWith(await loadFlow(STOPPABLE), {}, steeringThen(uncut, failing), { log: uncut, onEvent: first.onEvent });
   await Promise.all(first.landed);
   expect(done.output).toBe("(stopped)");
   expect(steps(uncut).map((step) => (typeof step === "string" ? step : step["kind"]))).toEqual([
@@ -456,11 +453,11 @@ test("a crash after an interrupt honored in the late-steered call's retry wait: 
   const log = freshLog();
   const second = interrupting(log);
   await crashAfter(stepSeq(uncut, "interrupted") + 1, async () =>
-    runWith(await loadFlow(STOPPABLE), {}, null, steeringThen(log, failing), { log, onEvent: second.onEvent }),
+    runWith(await loadFlow(STOPPABLE), {}, steeringThen(log, failing), { log, onEvent: second.onEvent }),
   );
   await Promise.all(second.landed);
   const model = new ScriptedModel([], CONFIG);
-  const resumed = await resumeWith(await loadFlow(STOPPABLE), log, null, model);
+  const resumed = await resumeWith(await loadFlow(STOPPABLE), log, model);
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
   expect(resumed.output).toBe("(stopped)");
   expect(model.requests).toEqual([]);
@@ -498,7 +495,7 @@ output: \${chat.output}
   const warned: string[] = [];
   const result = await withWarnings(
     (message) => warned.push(message),
-    async () => runWith(await loadFlow(flow), {}, null, model, { log }),
+    async () => runWith(await loadFlow(flow), {}, model, { log }),
   );
   expect(result.status, result.failure?.message).toBe("succeeded");
   expect(model.requests[1]!.messages.at(-1)!.parts.map((part) => (part as TextPart).text)).toEqual([

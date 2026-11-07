@@ -73,8 +73,7 @@ const GOLDEN =
   '{"kind":"run_started","payload":{"call_time_llm":null,"defaults":{},"effective_llm_by_static_path":{"agent":' +
   '{"model":"gpt-test","provider":"openai"}},"flow":null,"flow_fingerprint":"' +
   "a".repeat(64) +
-  '","learnable":false,' +
-  '"memories":null,"memory_snapshots":null,"memory_stacks":null,"num_workers":2,"parent":null,"skills":{},' +
+  '","num_workers":2,"parent":null,"skills":{},' +
   '"start_wiring_override":{"name":"${input.name}"},"tool_groups":{},"tools":{},"yian_version":"' +
   VERSION +
   '"},"run_id":"r1",' +

@@ -282,8 +282,7 @@ export class LoopNode extends Node {
    * through the body's typed input of that name (`childInputs`) so an omitted file stays a
    * `FileRef`; the next driver then binds the merged record. `carried` is the JSON-decoded
    * growth-seed record that seeds the body's START, so live growth and durable replay merge
-   * identically. The origin, origin context, memory scope, output contract, asserts and type
-   * table are copied.
+   * identically. The origin, origin context, output contract, asserts and type table are copied.
    *
    * @param k The clone's iteration index.
    * @param carried The record this iteration's body was seeded with; required when
@@ -315,7 +314,6 @@ export class LoopNode extends Node {
     // Keep only the enclosing ancestry: `failureTrace()` appends this driver's authored origin, so
     // copying that origin into the context would duplicate it on every later iteration.
     clone.originContext = this.originContext;
-    clone.memoryScope = this.memoryScope;
     if (this.returnedFields === null) {
       clone.params = this.params;
     } else {

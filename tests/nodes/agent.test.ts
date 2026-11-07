@@ -287,13 +287,11 @@ function llmWiring(nodeLayer: unknown): ReadonlyMap<string, unknown> {
   return new Map([[LLM_CONFIG_KEY, splitLayers(nodeLayer, {}, true, contractNullable)!]]);
 }
 
-test("reservedWiringKeys and modelHiddenInputs hold __llm_config once it is wired", () => {
+test("reservedWiringKeys holds __llm_config once it is wired", () => {
   const node = new AgentNode("chat");
   expect(node.reservedWiringKeys()).toEqual(new Set());
-  expect(node.modelHiddenInputs()).toEqual(new Set());
   node.wiresLlmConfig = true;
   expect(node.reservedWiringKeys()).toEqual(new Set([LLM_CONFIG_KEY]));
-  expect(node.modelHiddenInputs()).toEqual(new Set([LLM_CONFIG_KEY]));
 });
 
 test("reservedKeyLabel names __llm_config as the authored llm_config field", () => {
@@ -623,7 +621,7 @@ describe("forward", () => {
     const model = new ScriptedModel([refused], { provider: "vllm", model: "m" });
     const llmConfig = { provider: "vllm", model: "m", api_key: key };
     const authEnv: Env = (name) => (name === "YIAN_AUTH_FILE" ? join(HOME, "auth.json") : undefined);
-    const result = await runWith(flow, {}, null, model, { llmConfig, env: authEnv });
+    const result = await runWith(flow, {}, model, { llmConfig, env: authEnv });
     expect(result.status).toBe("failed");
     expect(result.failure?.code).toBe("provider.auth");
     expect(result.failure?.message).toBe("Incorrect API key: [REDACTED]");

@@ -9,7 +9,7 @@
  * the only topology writers. Everything here is synchronous.
  *
  * Knows about:   compile/declared_types, compile/manifest, compile/model, compile/validation,
- *                defaults, diagnostics, events, expr, memory, nodes, runtime/common,
+ *                defaults, diagnostics, events, expr, nodes, runtime/common,
  *                runtime/eval_node, runtime/log, runtime/sources, runtime/waits, tools/context,
  *                typesys.
  * Never imports: engine, run, compose, or the CLI.
@@ -43,18 +43,11 @@ import {
 import { ExpressionError } from "../expr/expressions.ts";
 import { type RootRead, SourceRef } from "../expr/lineage.ts";
 import { exprRefsOf } from "../expr/template.ts";
-import {
-  MemoryScope,
-  type MemorySnapshotEnvelope,
-  type MemorySpec,
-  type MemoryStack,
-} from "../memory/index.ts";
 import { type CompleteResult, ELSE_HANDLE, Grow, Node, Output } from "../nodes/base.ts";
 import { BindingError, copyValue } from "../nodes/binding.ts";
 import {
   type Binding,
   type CallView,
-  comparePaths,
   fileFieldsType,
   isExactly,
   iterSourceStrings,
@@ -189,21 +182,6 @@ function fileReadingType(node: Node): Type | null {
   }
   return outputContractFileType(node.outputContract);
 }
-
-/** The memory configuration `RunStarted` recorded. */
-interface RunMemory {
-  /** The recorded snapshots, or `null` when memory is disabled. */
-  readonly snapshots: readonly MemorySnapshotEnvelope[] | null;
-  /** The recorded memory key table, or `null` when memory is disabled. */
-  readonly memories: readonly MemorySpec[] | null;
-  /** The recorded key stacks, or `null` when memory is disabled. */
-  readonly memoryStacks: readonly MemoryStack[] | null;
-  /** Whether the run retains what learning reads (forward capture and steps). */
-  readonly learnable: boolean;
-}
-
-/** A pristine state's memory configuration: memory and learning off. */
-const NO_MEMORY: RunMemory = Object.freeze({ snapshots: null, memories: null, memoryStacks: null, learnable: false });
 
 /**
  * @internal An outcome-owned value rejected before durability: it fails the node, not the run.
@@ -425,9 +403,6 @@ export class RunState {
    * bind from (`RunStartedRecord.callTimeLlm`); `null` when there are none.
    */
   callTimeLlm: JsonObject | null = null;
-  // The memory roots, in one frozen object `RunStarted` installs once (`installMemory`) and the
-  // getters read, so no root can be reassigned apart from the others.
-  #memory: RunMemory = NO_MEMORY;
   /** The skills `RunStarted` recorded, by name, which the request rebuild renders prompts with. */
   recordedSkills: Readonly<Record<string, RecordedSkill>> = {};
   /** The tool specs `RunStarted` recorded, by name, which the request rebuild sends. */
@@ -467,36 +442,6 @@ export class RunState {
     this.edgeState = new Map(flow.edges.map((edge) => [edge.id, NodeState.UNKNOWN]));
     for (const edge of flow.edges) addUnknownIncoming(this, edge.to);
     this.initialStaticIds = new Set(flow.nodes.keys());
-  }
-
-  /** The canonical recorded snapshots, one per memory key. */
-  get memorySnapshots(): readonly MemorySnapshotEnvelope[] | null {
-    return this.#memory.snapshots;
-  }
-
-  /** The recorded memory key table. */
-  get memories(): readonly MemorySpec[] | null {
-    return this.#memory.memories;
-  }
-
-  /** The recorded key stacks. */
-  get memoryStacks(): readonly MemoryStack[] | null {
-    return this.#memory.memoryStacks;
-  }
-
-  /** Whether accepted outcomes carry forward capture and keep their steps for learning. */
-  get learnable(): boolean {
-    return this.#memory.learnable;
-  }
-
-  /**
-   * @internal Install the memory configuration `RunStarted` recorded, frozen.
-   *
-   * @throws RangeError when one is already installed.
-   */
-  installMemory(memory: RunMemory): void {
-    if (this.#memory !== NO_MEMORY) throw new RangeError("the run's memory configuration is already installed");
-    this.#memory = Object.freeze({ ...memory });
   }
 }
 
@@ -724,14 +669,6 @@ export interface RunStartData {
   effectiveLlmByStaticPath: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   /** The exact non-negative dispatcher worker count. */
   numWorkers: number;
-  /** Canonical snapshots, one per memory key; `null` (the default) disables memory. */
-  memorySnapshots?: readonly MemorySnapshotEnvelope[] | null;
-  /** Whether accepted outcomes must carry forward capture for learning; defaults to `false`. */
-  learnable?: boolean;
-  /** The sorted memory key table paired with `memorySnapshots`; defaults to `null`. */
-  memories?: readonly MemorySpec[] | null;
-  /** Each scoped target's key stack, sorted by locator; defaults to `null`. */
-  memoryStacks?: readonly MemoryStack[] | null;
   /**
    * The `yian.defaults` values that differ from the built-in ones, by entry name; empty (the
    * default) means the run uses the built-in values.
@@ -1129,10 +1066,6 @@ export function prepareRunStarted(state: RunState, data: RunStartData): Prepared
     startWiringOverride: data.startWiringOverride,
     effectiveLlmByStaticPath: data.effectiveLlmByStaticPath,
     numWorkers: data.numWorkers,
-    memorySnapshots: data.memorySnapshots ?? null,
-    learnable: data.learnable ?? false,
-    memories: data.memories ?? null,
-    memoryStacks: data.memoryStacks ?? null,
     defaults: data.defaults ?? {},
     callTimeLlm: data.callTimeLlm ?? null,
     flow: data.flow ?? null,
@@ -2109,7 +2042,7 @@ function prepareSuccessTransition(
   record: NodeSucceededRecord,
   live: { readonly output: unknown } | null = null,
 ): PreparedTransition {
-  validateLearnedScope(state, record.nodeId);
+  requireFlowNode(state, record.nodeId);
   if (state.flow.nodes.get(record.nodeId)!.producesMessages && !state.pendingMessages.has(record.nodeId)) {
     throw new RangeError(`node_succeeded of ${reprText(record.nodeId)} has no messages commit to accept`);
   }
@@ -2157,7 +2090,7 @@ function prepareRouteTransition(
   deriveTerminalFailure: boolean,
 ): PreparedTransition {
   validateRouteRecord(state, record);
-  validateLearnedScope(state, record.nodeId);
+  requireFlowNode(state, record.nodeId);
   const route = prepareRouteDelta(state, record, deriveTerminalFailure);
   const causalFailure = route.causalFailure;
   let delta = route.delta;
@@ -2249,7 +2182,7 @@ function openHostCalls(state: RunState): string[] {
 export function prepareExpanded(state: RunState, nodeId: string, grow: Grow, growBuilder: GrowBuilder): PreparedTransition {
   const { seedWire, fragment, validatedFragment } = liveGrowth(state, nodeId, grow, growBuilder);
   // `liveGrowth` checked the spawner, and the record's constructor its carriers.
-  validateLearnedScope(state, nodeId);
+  requireFlowNode(state, nodeId);
   const pruneIds = [...grow.prune].sort(compareCodeUnits);
   const digest = expansionDigest(fragment);
   return prepareGrowthTransition(state, new NodeExpandedRecord(nodeId, pruneIds, digest), fragment, {
@@ -2280,7 +2213,7 @@ export function prepareExpandedFromPlan(state: RunState, planned: PlannedExpansi
   if (state.nextSequence !== planned.sequence + planned.commits.length) {
     throw new RangeError(`the planned expansion of ${reprText(planned.spawnerId)} is stale`);
   }
-  validateLearnedScope(state, planned.spawnerId);
+  requireFlowNode(state, planned.spawnerId);
   requireRebuiltGrowth(state, planned);
   const { spawnerId, seed, pruneIds, fragment, validatedFragment, grown, digest, commits } = planned;
   return prepareGrowthTransition(state, new NodeExpandedRecord(spawnerId, pruneIds, digest), fragment, {
@@ -2693,10 +2626,6 @@ export function replayRecords(
     startWiringOverride: start.startWiringOverride,
     effectiveLlmByStaticPath: start.effectiveLlmByStaticPath,
     numWorkers: start.numWorkers,
-    memorySnapshots: start.memorySnapshots,
-    learnable: start.learnable,
-    memories: start.memories,
-    memoryStacks: start.memoryStacks,
     defaults: start.defaults,
     callTimeLlm: start.callTimeLlm,
     flow: start.flow,
@@ -4207,7 +4136,7 @@ function validateGrowthRecord(state: RunState, record: NodeExpandedRecord): void
     throw new RangeError("NodeExpandedRecord topology_digest must be lowercase SHA-256");
   }
   requireExpandingNode(state, spawnerId);
-  validateLearnedScope(state, spawnerId);
+  requireFlowNode(state, spawnerId);
 }
 
 /** Call the injected builder with a copy of the spawner and return a copy of its fragment. */
@@ -4955,44 +4884,9 @@ function sameIds(a: { readonly size: number; has(id: string): boolean }, b: Iter
   return a.size === other.size && [...other].every((id) => a.has(id));
 }
 
-/** Return the recorded stack at `locator` by binary search over the sorted stacks, or `null`. */
-function recordedStack(stacks: readonly MemoryStack[], locator: readonly string[]): MemoryStack | null {
-  let low = 0;
-  let high = stacks.length;
-  while (low < high) {
-    const middle = (low + high) >>> 1;
-    if (comparePaths(stacks[middle]!.locator, locator) < 0) low = middle + 1;
-    else high = middle;
-  }
-  return low < stacks.length && sameItems(stacks[low]!.locator, locator) ? stacks[low]! : null;
-}
-
-/**
- * Require a learnable run's node that recalls memory to carry its exact recorded memory stack, so
- * learning recalls and attributes against the stack the run recorded.
- */
-function validateLearnedScope(state: RunState, nodeId: string): void {
-  const node = state.flow.nodes.get(nodeId);
-  if (node === undefined) throw new RangeError(`node ${reprText(nodeId)} does not exist in the flow`);
-  if (state.learnable !== true || node.needsMemoryContext !== true) return;
-  const scope = node.memoryScope;
-  if (scope !== null) {
-    // A `MemoryScope` validated itself when built.
-    if (!isExactly(scope, MemoryScope)) {
-      throw new RangeError(`node ${reprText(nodeId)} has no exact compiled memory scope`);
-    }
-    let expected: readonly string[] = [];
-    if (state.memoryStacks !== null) {
-      const recorded = recordedStack(state.memoryStacks, scope.staticPath);
-      if (recorded === null) throw new RangeError(`node ${reprText(nodeId)} has no recorded memory stack`);
-      expected = recorded.memories;
-    }
-    if (!sameItems(scope.memories, expected)) {
-      throw new RangeError(`node ${reprText(nodeId)} memory scope must carry its exact recorded memory stack`);
-    }
-  } else if (state.memories !== null && state.memories.length > 0) {
-    throw new RangeError(`node ${reprText(nodeId)} has no exact compiled memory scope`);
-  }
+/** Require `nodeId` to name a node of the flow. */
+function requireFlowNode(state: RunState, nodeId: string): void {
+  if (!state.flow.nodes.has(nodeId)) throw new RangeError(`node ${reprText(nodeId)} does not exist in the flow`);
 }
 
 /** Validate a failure's exact diagnostic carriers and its executing node. */
@@ -5006,7 +4900,7 @@ function validateFailureRecord(state: RunState, record: NodeFailedRecord): void 
   if (!nodeId) throw new RangeError("NodeFailedRecord failure node_id must be non-empty");
   requireOutcomeNode(state, nodeId, "NodeFailed");
   requireNoPendingCommit(state, nodeId, "NodeFailed");
-  validateLearnedScope(state, nodeId);
+  requireFlowNode(state, nodeId);
 }
 
 /**
@@ -5917,10 +5811,6 @@ function requirePristine(state: RunState): void {
     Object.keys(state.input).length === 0 &&
     Object.keys(state.effectiveLlmByStaticPath).length === 0 &&
     state.callTimeLlm === null &&
-    state.memorySnapshots === null &&
-    state.memories === null &&
-    state.memoryStacks === null &&
-    state.learnable === false &&
     sameIds(state.initialStaticIds, flow.nodes.keys());
   if (!pristine) throw new RangeError("RunStarted requires a pristine RunState at sequence 0");
 }
@@ -5965,7 +5855,6 @@ interface RunStartedApply {
   numWorkers: number;
   effectiveLlmByStaticPath: Record<string, JsonObject>;
   callTimeLlm: JsonObject | null;
-  memory: RunMemory;
   recordedSkills: Readonly<Record<string, RecordedSkill>>;
   recordedTools: Readonly<Record<string, RecordedTool>>;
   recordedToolGroups: Readonly<Record<string, readonly string[]>>;
@@ -6010,12 +5899,6 @@ function materializeRunStarted(state: RunState, prepared: PreparedTransition, pl
     numWorkers: record.numWorkers,
     effectiveLlmByStaticPath: effective as Record<string, JsonObject>,
     callTimeLlm: record.callTimeLlm === null ? null : (canonicalSeed(record.callTimeLlm)[1] as JsonObject),
-    memory: {
-      snapshots: record.memorySnapshots,
-      memories: record.memories,
-      memoryStacks: record.memoryStacks,
-      learnable: record.learnable,
-    },
     recordedSkills: record.skills,
     recordedTools: record.tools,
     recordedToolGroups: record.toolGroups,
@@ -6043,7 +5926,6 @@ function applyRunStarted(state: RunState, apply: RunStartedApply): void {
   state.numWorkers = apply.numWorkers;
   state.effectiveLlmByStaticPath = apply.effectiveLlmByStaticPath;
   state.callTimeLlm = apply.callTimeLlm;
-  state.installMemory(apply.memory);
   state.recordedSkills = apply.recordedSkills;
   state.recordedTools = apply.recordedTools;
   state.recordedToolGroups = apply.recordedToolGroups;

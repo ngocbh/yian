@@ -22,7 +22,6 @@ import {
 import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { parseNodes } from "../../src/compose/parse/nodes.ts";
 import { SourceCursor } from "../../src/compose/source/index.ts";
-import { DeclSite, MemoryDecl } from "../../src/memory/contracts.ts";
 import { Node, NodeKind, type NodeResult, Output } from "../../src/nodes/base.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import {
@@ -466,31 +465,14 @@ test.each<[string, () => unknown, typeof TypeError | typeof RangeError, string]>
     "flow_id must be an exact string or null",
   ],
   ["an empty flow id", () => new CompiledFlow(new Map(), [], { flowId: "" }), RangeError, "flow_id must be non-empty"],
-  [
-    "memories that aren't MemoryDecls",
-    () => new CompiledFlow(new Map(), [], { memories: [{}] as never }),
-    TypeError,
-    "memories must be an array of exact MemoryDecl values",
-  ],
-  [
-    "a memory declared on a node site",
-    () =>
-      new CompiledFlow(new Map(), [], {
-        memories: [new MemoryDecl("notes", "episodic", {}, new DeclSite([], ["root"], "agent"))],
-      }),
-    RangeError,
-    "flow memories must carry flow DeclSites (node=null)",
-  ],
 ])("compiled flow refuses %s", (_name, factory, cls, message) => {
   expect(factory).toThrow(cls);
   expect(factory).toThrow(message);
 });
 
-test("compiled flow keeps its flow id and flow memories", () => {
-  const decl = new MemoryDecl("notes", "episodic", {}, new DeclSite([], ["root"]));
-  const g = new CompiledFlow(new Map(), [], { flowId: "flow", memories: [decl] });
+test("compiled flow keeps its flow id", () => {
+  const g = new CompiledFlow(new Map(), [], { flowId: "flow" });
   expect(g.flowId).toBe("flow");
-  expect(g.memories).toEqual([decl]);
   expect(g.flowLlmConfig).toEqual({});
   expect(g.flowLlmValueTypes).toEqual([]);
   expect(g.outputs).toEqual([]);

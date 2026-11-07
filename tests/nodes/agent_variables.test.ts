@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -171,7 +171,6 @@ test("an agent renders inputs and variable defaults without execution or memory 
   });
   node.params = [new Parameter("topic")];
   const models = echo();
-  expect(node.memoryScope).toBeNull();
 
   const output = await node.forward({ topic: "coral reefs" }, { models });
 
@@ -284,7 +283,7 @@ output: \${writer.output}
   expect([...flow.wiring.get("writer")!.keys()]).toEqual(["topic"]);
   expect(flow.nodes.get("writer")!.params!.map((parameter) => parameter.name)).toEqual(["topic"]);
   expect(flow.edges.every((edge) => edge.from !== "absent")).toBe(true);
-  const built = engine(flow, { inputs: { topic: "reefs" }, learnable: false, models: echo() });
+  const built = engine(flow, { inputs: { topic: "reefs" }, models: echo() });
   await built.run();
 
   const expected = "reefs: concise, ${absent.output}";
@@ -312,13 +311,6 @@ output: \${writer.output}
   const dir = mkdtempSync(join(tmpdir(), "yian-agent-variables-"));
   const model = new ScriptedModel([textReply("answer")]);
   const configurations: Readonly<Record<string, unknown>>[] = [];
-  const scopes: unknown[][] = [];
-  const target = AgentNode.prototype as unknown as { resolveVariables: (this: AgentNode) => ValueRecord };
-  const resolve = target.resolveVariables;
-  const spy = spyOn(target, "resolveVariables").mockImplementation(function (this: AgentNode) {
-    scopes.push([this.memoryScope]);
-    return resolve.call(this);
-  });
   try {
     const result = await runFlow(loaded, { topic: "reefs" }, {
       env: hostEnv(dir),
@@ -336,9 +328,7 @@ output: \${writer.output}
     expect(configurations).toEqual([{ provider: "ollama", model: "test", ollama: { options: { temperature: 0.8 } } }]);
     expect(model.requests.at(-1)!.messages.at(-1)!.text()).toBe("reefs: 0.4");
     expect(model.requests.length).toBe(1);
-    expect(scopes).toEqual([[null]]);
   } finally {
-    spy.mockRestore();
     rmSync(dir, { recursive: true, force: true });
   }
 });

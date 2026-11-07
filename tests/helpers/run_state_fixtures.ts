@@ -3,15 +3,14 @@
  *
  * A `*.test.ts` imported by another test file registers its tests twice, so a helper that two or
  * more run-state test files use lives here: also the recording `send`, reply streams and secret
- * scan the provider and host-credential tests share, and the `runFlow` and `advance`
- * helpers of the run-level AGENT and memory tests (`PLAIN_FLOW`, `runWith`, `resumeWith`,
- * `CrashAt`, `crashes`, `sentTexts`, `reply`, `backwardReply`,
- * `memorySections`, `memorySnapshot`) and the in-process `yian run` over a fake chat endpoint
- * (`runCli`, `ChatText`), and the chat examples' model that answers by system prompt
+ * scan the provider and host-credential tests share, and the `runFlow` and `advance` helpers of
+ * the run-level AGENT tests (`PLAIN_FLOW`, `runWith`, `resumeWith`, `CrashAt`, `crashes`,
+ * `sentTexts`, `reply`) and the in-process `yian run` over a fake chat endpoint (`runCli`,
+ * `ChatText`), and the chat examples' model that answers by system prompt
  * (`PromptModel`) and small-budget copy (`writeSmallBudgetChat`).
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -21,7 +20,6 @@ import { expect } from "bun:test";
 
 import { main } from "../../src/cli/index.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
-import { memoryStacks as layoutStacks, stampMemoryLayout } from "../../src/compile/memory_layout.ts";
 import { buildGrow } from "../../src/compile/expand.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { CompiledFlow, copyGraph, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../src/compile/model.ts";
@@ -31,7 +29,6 @@ import { LoadDiagnostics } from "../../src/compose/helpers/errors.ts";
 import type { ChildResolver } from "../../src/compose/loader.ts";
 import { Failure, type OriginRef } from "../../src/diagnostics.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
-import { ValueRoute } from "../../src/expr/lineage.ts";
 import { bindingCoSkips, exprRefsOf } from "../../src/expr/template.ts";
 import {
   Grow,
@@ -46,24 +43,10 @@ import {
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { CallNode } from "../../src/nodes/call/node.ts";
 import { CodeNode } from "../../src/nodes/code/node.ts";
-import { Binding, comparePaths, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
-import {
-  DeclSite,
-  type JsonObject as MemoryJson,
-  type LearnContext,
-  type Memory,
-  MemoryDecl,
-  MemoryScope,
-  MemorySnapshotEnvelope,
-  MemorySpec,
-  MemoryStack,
-} from "../../src/memory/index.ts";
-import { ProfileMemory } from "../../src/memory/profile.ts";
-import { FileMarkdownStore } from "../../src/memory/storage/markdown.ts";
+import { Binding, Parameter, ValueContract } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
 import { StartNode } from "../../src/nodes/start/node.ts";
 import { NodeState } from "../../src/runtime/common.ts";
-import { BindingCapture, BindingError } from "../../src/nodes/binding.ts";
 import { FlowEngine, type FlowEngineOptions } from "../../src/runtime/engine.ts";
 import { type EvalNodeOptions, evalNode, type WorkerOutcome } from "../../src/runtime/eval_node.ts";
 import { NodeStarted, type RunEvent, type RunFailed, type RunSucceeded, StreamChunk } from "../../src/events.ts";
@@ -115,7 +98,7 @@ import { decodeTyped } from "../../src/runtime/sources.ts";
 import { type JsonObject, logJson, parseJson } from "../../src/typesys/json.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { seedSystemClock } from "../../src/typesys/seeding.ts";
-import { Type, type ValueRecord, ValueKind } from "../../src/typesys/values.ts";
+import { Type, ValueKind } from "../../src/typesys/values.ts";
 import { withAppendHook } from "./append_hook.ts";
 import { loadConformanceFlow } from "./declarations.ts";
 
@@ -454,26 +437,24 @@ export const systemText = (request: Request): string =>
 
 /**
  * A `ChatModel` that answers by system prompt: the summarizer gets `summary`, a reply request
- * `reply`, and any other request (a backward request) the next of `backward`, then empty
- * feedback. Every request is kept in `requests`.
+ * `reply`; any other request throws. Every request is kept in `requests`.
  */
 export class PromptModel implements ChatModel {
   readonly provider = "anthropic";
   readonly model = "claude-test";
   readonly requests: Request[] = [];
-  readonly answers: { reply: string; summary: string; backward?: Response[] };
-  constructor(answers: { reply: string; summary: string; backward?: Response[] }) {
+  readonly answers: { reply: string; summary: string };
+  constructor(answers: { reply: string; summary: string }) {
     this.answers = answers;
   }
   stream(request: Request, options: { signal?: AbortSignal } = {}): EventStream {
     this.requests.push(request);
     const system = systemText(request);
-    const answer = system.startsWith(SUMMARIZER_FIRST_LINE)
-      ? textReply(this.answers.summary)
-      : system.startsWith(REPLY_FIRST_LINE)
-        ? textReply(this.answers.reply)
-        : (this.answers.backward?.shift() ?? textReply(NO_FEEDBACK));
-    return new ScriptedModel([answer], this).stream(request, options);
+    let answer: string;
+    if (system.startsWith(SUMMARIZER_FIRST_LINE)) answer = this.answers.summary;
+    else if (system.startsWith(REPLY_FIRST_LINE)) answer = this.answers.reply;
+    else throw new Error(`PromptModel has no answer for the system prompt ${JSON.stringify(system)}`);
+    return new ScriptedModel([textReply(answer)], this).stream(request, options);
   }
 }
 
@@ -665,30 +646,6 @@ export function keyEcho401(key: string): globalThis.Response {
   );
 }
 
-/** A profile store under `<root>/profile` holding `# Ada`. */
-export async function adaStore(root: string): Promise<FileMarkdownStore> {
-  mkdirSync(join(root, "profile"));
-  const store = new FileMarkdownStore(join(root, "profile", "ada.md"));
-  await store.write("# Ada\n", { baseVersion: (await store.read())[1] });
-  return store;
-}
-
-/** A profile memory over `store` with `llmConfig`, whose learner builds through `models`. */
-export function profileMemory(
-  store: FileMarkdownStore,
-  llmConfig: Record<string, string>,
-  models: ReturnType<typeof recording>,
-): ProfileMemory {
-  return new ProfileMemory(store, {
-    llmConfig,
-    env: models.env,
-    createModel: (config) => models.createModel(config, { nodeId: "__memory__", signal: new AbortController().signal }),
-  });
-}
-
-/** An AGENT backward reply with no feedback. */
-export const NO_FEEDBACK = JSON.stringify({ input_feedback: {}, self_feedback: [], variable_feedback: {} });
-
 /**
  * `value` field by field, so a JSON scan sees every value: an object's own enumerable entries (an
  * error's message and cause too), maps and sets as entry lists, bigints as text, a value already
@@ -810,43 +767,6 @@ export function graph(
   return new CompiledFlow(nodeMap, edges, { outputs, wiring });
 }
 
-/**
- * Return a learnable state of `flow` after its committed RunStarted, and its memory log, for a test
- * that only needs the started state.
- *
- * The pool primes START with `inputs`, and START's wiring reads each input as `${input.<name>}`. The run records no agent configuration.
- */
-export function learnableStarted(
-  flow: CompiledFlow,
-  options: {
-    inputs?: Readonly<Record<string, unknown>>;
-    memories?: readonly MemorySpec[] | null;
-    memoryStacks?: readonly MemoryStack[] | null;
-    memorySnapshots?: readonly MemorySnapshotEnvelope[] | null;
-  } = {},
-): { state: RunState; log: MemoryRunLog } {
-  const inputs = options.inputs ?? {};
-  const state = new RunState(flow);
-  const initialPool = new VariablePool(flow.startId);
-  initialPool.set(flow.startId, { ...inputs });
-  initialPool.addSystem("run_id", RUN_ID);
-  const log = new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK });
-  const prepared = prepareRunStarted(state, {
-    runId: RUN_ID,
-    flowFingerprint: FINGERPRINT,
-    startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
-    effectiveLlmByStaticPath: {},
-    numWorkers: 0,
-    learnable: true,
-    memories: options.memories ?? null,
-    memoryStacks: options.memoryStacks ?? null,
-    memorySnapshots: options.memorySnapshots ?? null,
-  });
-  commitPrepared(log, state, prepared);
-  commitInitialPool(log, state, initialPool);
-  return { state, log };
-}
-
 /** A growth builder for flows that never grow; a call fails the test. */
 export const noGrowth: GrowBuilder = () => {
   throw new Error("this flow does not grow");
@@ -856,36 +776,26 @@ export const noGrowth: GrowBuilder = () => {
  * Return a direct engine over a fresh in-memory authority for `flow`: `RunStarted` is prepared and committed on a `MemoryRunLog`, so START
  * is ready. The run's id is `runId` (`RUN_ID` by default). The pool primes START with `inputs`,
  * START's wiring is `startWiringOverride`, by default reading each input as `${input.<name>}`, and
- * the run records `effectiveLlmByStaticPath`
- * (none by default), the memory configuration given and the `yian.defaults` values in `defaults`
- * (none by default). A learnable flow gets its execution layout first. The other options go to
- * `FlowEngine`.
+ * the run records `effectiveLlmByStaticPath` (none by default) and the `yian.defaults` values in
+ * `defaults` (none by default). The other options go to `FlowEngine`.
  */
 export function engine(
   flow: CompiledFlow,
   options: {
     inputs?: Readonly<Record<string, unknown>>;
     runId?: string;
-    learnable?: boolean;
     startWiringOverride?: RunStartData["startWiringOverride"];
     effectiveLlmByStaticPath?: RunStartData["effectiveLlmByStaticPath"];
-    memories?: readonly MemorySpec[] | null;
-    memoryStacks?: readonly MemoryStack[] | null;
-    memorySnapshots?: readonly MemorySnapshotEnvelope[] | null;
     defaults?: Readonly<Record<string, bigint>>;
   } & Partial<FlowEngineOptions> = {},
 ): FlowEngine {
   const {
     inputs = {},
     runId = RUN_ID,
-    learnable = false,
     numWorkers = 0,
     growBuilder = noGrowth,
     startWiringOverride = Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
     effectiveLlmByStaticPath = {},
-    memories = null,
-    memoryStacks = null,
-    memorySnapshots = null,
     defaults = {},
     ...rest
   } = options;
@@ -900,10 +810,6 @@ export function engine(
     startWiringOverride,
     effectiveLlmByStaticPath,
     numWorkers,
-    learnable,
-    memories,
-    memoryStacks,
-    memorySnapshots,
     defaults,
   });
   commitPrepared(log, state, prepared);
@@ -977,33 +883,6 @@ export function expectUnknownIncomingMatchesRecount(state: RunState): void {
     if (state.edgeState.get(edge.id) === NodeState.UNKNOWN) recount.set(edge.to, (recount.get(edge.to) ?? 0) + 1);
   }
   expect(Object.fromEntries(state.unknownIncoming)).toEqual(Object.fromEntries(recount));
-}
-
-/** The memory key and policy type `ownerEngine` records. */
-export const POLICY = "reflective";
-
-/**
- * Return a learnable engine over `flow` whose root flow owns one memory, `POLICY`, with the recorded table and stacks: the flow's
- * `memories` become one root-owned `POLICY` declaration, `stampMemoryLayout` scopes every node, the table and stacks are the layout's, and each snapshot
- * is `{}`. It leaves `flow.flowId` at its default (`null`), which the runtime
- * never reads, and applies no effective LLM map.
- */
-export function ownerEngine(
-  flow: CompiledFlow,
-  options: { inputs?: Readonly<Record<string, unknown>> } & Partial<FlowEngineOptions> = {},
-): { engine: FlowEngine; memories: MemorySpec[]; stacks: MemoryStack[] } {
-  flow.memories = [new MemoryDecl(POLICY, POLICY, {}, new DeclSite([], ["root"]))];
-  const layout = stampMemoryLayout(flow);
-  const memories = layout.memories.map((memory) => memory.spec);
-  const memoryStacks = [...layoutStacks(layout)];
-  const memorySnapshots = memories.map((spec) => new MemorySnapshotEnvelope(spec.key, {}));
-  const built = engine(flow, { ...options, learnable: true, memories, memoryStacks, memorySnapshots });
-  return { engine: built, memories, stacks: memoryStacks };
-}
-
-/** Return `context`'s feedback entries as records. */
-export function feedbackEntries(context: LearnContext): readonly Readonly<Record<string, unknown>>[] {
-  return context.feedback as readonly Readonly<Record<string, unknown>>[];
 }
 
 /**
@@ -1100,10 +979,7 @@ export function reducerSnapshot(state: RunState): Record<string, unknown> {
  * Return a state and log of `flow` after a replay-valid RunStarted (START primed with
  * `{items: ["seed"]}`, two workers) and START's dispatch.
  */
-export function initializedAndStarted(
-  flow: CompiledFlow,
-  options: { learnable?: boolean } = {},
-): { state: RunState; log: MemoryRunLog } {
+export function initializedAndStarted(flow: CompiledFlow): { state: RunState; log: MemoryRunLog } {
   const initialPool = new VariablePool(flow.startId);
   initialPool.set(flow.startId, { items: ["seed"] });
   initialPool.addSystem("run_id", RUN_ID);
@@ -1118,7 +994,6 @@ export function initializedAndStarted(
       startWiringOverride: {},
       effectiveLlmByStaticPath: {},
       numWorkers: 2,
-      learnable: options.learnable ?? false,
     }),
   );
   commitInitialPool(log, state, initialPool);
@@ -1212,85 +1087,6 @@ export function routeInFlight(flow: CompiledFlow = routeFlow()): { state: RunSta
   const { state, log } = initializedAndStarted(flow);
   commitStartSuccess(state, log);
   commitPrepared(log, state, prepareNodeStarted(state, "router"));
-  return { state, log };
-}
-
-/** The root flow's declaration site. */
-const ROOT_SITE = new DeclSite([], ["root"]);
-
-/** Return the sorted key table for `keys`, all owned by the root flow. */
-function table(keys: readonly string[]): MemorySpec[] {
-  return [...keys].sort().map((key) => new MemorySpec(key, key, { limit: 3n }, [ROOT_SITE]));
-}
-
-/** Return the recorded stacks of `scopes`, one per static path, sorted by locator. */
-export function stacks(...scopes: readonly MemoryScope[]): MemoryStack[] {
-  const byLocator = new Map(scopes.map((scope) => [JSON.stringify(scope.staticPath), scope] as const));
-  return [...byLocator.values()]
-    .sort((a, b) => comparePaths(a.staticPath, b.staticPath))
-    .map((scope) => new MemoryStack(scope.staticPath, scope.memories));
-}
-
-/** The options of `newState` and `startTraceNode`. */
-interface TraceNodeOptions {
-  keys: readonly string[] | null;
-  learnable: boolean;
-  routeHandle?: string;
-  stacks?: readonly MemoryStack[];
-}
-
-/**
- * Return a state of `START -> node -> END` after its committed RunStarted, with START ready, and
- * its log. `keys: null` disables memory; otherwise the table holds `keys`, each snapshot is
- * `{epoch: 4}`, and the stacks default to the node's own scope (none without one). `routeHandle`
- * is the handle of the edge into END.
- */
-function newState(node: Node, options: TraceNodeOptions): { state: RunState; log: MemoryRunLog } {
-  const built = graph([node], [
-    [START_ID, node.id],
-    [node.id, END_ID, options.routeHandle],
-  ]);
-  const state = new RunState(built);
-  const initialPool = new VariablePool(built.startId);
-  initialPool.set(built.startId, {});
-  initialPool.addSystem("run_id", RUN_ID);
-  let memories: MemorySpec[] | null = null;
-  let snapshots: MemorySnapshotEnvelope[] | null = null;
-  let recordedStacks: readonly MemoryStack[] | null = null;
-  if (options.keys !== null) {
-    memories = table(options.keys);
-    snapshots = memories.map((spec) => new MemorySnapshotEnvelope(spec.key, { epoch: 4n }));
-    recordedStacks = options.stacks ?? (node.memoryScope === null ? [] : stacks(node.memoryScope));
-  }
-  const log = new MemoryRunLog(RUN_ID, { clock: FIXED_CLOCK });
-  commitPrepared(
-    log,
-    state,
-    prepareRunStarted(state, {
-      runId: RUN_ID,
-      flowFingerprint: FINGERPRINT,
-      startWiringOverride: {},
-      effectiveLlmByStaticPath: {},
-      numWorkers: 0,
-      memorySnapshots: snapshots,
-      learnable: options.learnable,
-      memories,
-      memoryStacks: recordedStacks,
-    }),
-  );
-  commitInitialPool(log, state, initialPool);
-  return { state, log };
-}
-
-/**
- * Return a state of `START -> node -> END` (as `newState` builds it) with START succeeded and
- * `node` the sole in-flight node, and its log.
- */
-export function startTraceNode(node: Node, options: TraceNodeOptions): { state: RunState; log: MemoryRunLog } {
-  const { state, log } = newState(node, options);
-  commitPrepared(log, state, prepareNodeStarted(state, START_ID));
-  commitStartSuccess(state, log, {});
-  commitPrepared(log, state, prepareNodeStarted(state, node.id));
   return { state, log };
 }
 
@@ -1701,7 +1497,6 @@ export async function crashAfter(k: number, fn: () => Promise<unknown>): Promise
  * 2026-08-14T12:00:00Z, and `loaded`'s flow files recorded.
  *
  * @param options.privateFlow The graph to run, a copy of `loaded.compiled` by default.
- * @param options.learnable Whether the run records itself learnable (`false` by default).
  * @returns The state after the record.
  */
 export function startedRun(
@@ -1712,10 +1507,9 @@ export function startedRun(
     numWorkers?: number;
     effective?: Record<string, Record<string, unknown>>;
     privateFlow?: CompiledFlow;
-    learnable?: boolean;
   } = {},
 ): RunState {
-  const { inputs = {}, numWorkers = 0, effective = {}, learnable = false } = options;
+  const { inputs = {}, numWorkers = 0, effective = {} } = options;
   const privateFlow = options.privateFlow ?? copyGraph(loaded.compiled);
   const pool = new VariablePool(privateFlow.startId);
   pool.set(privateFlow.startId, structuredClone(inputs));
@@ -1731,7 +1525,6 @@ export function startedRun(
       startWiringOverride: Object.fromEntries(Object.keys(inputs).map((name) => [name, `\${input.${name}}`])),
       effectiveLlmByStaticPath: effective,
       numWorkers,
-      learnable,
       // As a real run of `loaded` records it, so resume compiles it.
       flow: loaded.source,
     }),
@@ -1831,42 +1624,30 @@ export async function runAgentFlow(
   return built.state.result as RunSucceeded | RunFailed;
 }
 
-/** The current snapshot of `memory`, read through a fresh run. */
-export function memorySnapshot(memory: { openRun(): { readonly snapshot: MemoryJson; close(): void } }): MemoryJson {
-  const opened = memory.openRun();
-  try {
-    return opened.snapshot;
-  } finally {
-    opened.close();
-  }
-}
-
 /**
- * `runFlow` of `flow` with `inputs`, `memory` backing each memory key, `model` serving every AGENT,
- * in `NO_ENV`; the other options go to `runFlow`.
+ * `runFlow` of `flow` with `inputs`, `model` serving every AGENT, in `NO_ENV`; the other options go
+ * to `runFlow`.
  */
 export function runWith(
   flow: ComposedFlow,
   inputs: Readonly<Record<string, unknown>>,
-  memory: ReadonlyMap<string, Memory> | null,
   model: ChatModel,
   options: RunFlowOptions = {},
 ): Promise<RunResult> {
-  return runFlow(flow, inputs, { memory, models: serving(model), env: NO_ENV, ...options });
+  return runFlow(flow, inputs, { models: serving(model), env: NO_ENV, ...options });
 }
 
 /**
- * `advance` of `flow` from `log`, with `runWith`'s `memory`, `model` and `NO_ENV`; the other
- * options go to `advance`.
+ * `advance` of `flow` from `log`, with `runWith`'s `model` and `NO_ENV`; the other options go to
+ * `advance`.
  */
 export function resumeWith(
   flow: ComposedFlow,
   log: string,
-  memory: ReadonlyMap<string, Memory> | null,
   model: ChatModel,
   options: Omit<AdvanceOptions, "log"> = {},
 ): Promise<RunResult> {
-  return advance({ log, memory, models: serving(model), env: NO_ENV, ...options });
+  return advance({ log, models: serving(model), env: NO_ENV, ...options });
 }
 
 /**
@@ -1909,19 +1690,6 @@ export function sentTexts(model: { requests: readonly { messages: readonly Messa
 /** A text-only assistant reply. */
 export function reply(text: string): Response {
   return new Response({ message: new Message({ role: "assistant", parts: [new TextPart(text)] }) });
-}
-
-/** An AGENT backward reply whose only feedback is the self-feedback `notes`. */
-export function backwardReply(...notes: string[]): Response {
-  return reply(JSON.stringify({ input_feedback: {}, self_feedback: notes, variable_feedback: {} }));
-}
-
-/** The memory sections the system prompt among `messages` shows; none without a memory context. */
-export function memorySections(messages: readonly Message[]): { memory: string; text: string }[] {
-  const system = messages.find((message) => message.role === "system")?.text() ?? "";
-  if (!system.includes("Memory context (canonical JSON")) return [];
-  return (JSON.parse(system.slice(system.lastIndexOf("\n") + 1)) as { sections: { memory: string; text: string }[] })
-    .sections;
 }
 
 /** The text of a chat message's `content`, a string or a list of text parts. */

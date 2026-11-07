@@ -540,13 +540,9 @@ test("requestSha256 hashes the request's log JSON, every message", () => {
   expect(requestSha256(long)).toMatch(/^[0-9a-f]{64}$/);
 });
 
-/** The digest a step records for `request`, its system message read as `base`, hashed whole from its log JSON. */
-function fullDigest(request: Request, base: string | null): string {
-  const [first, ...rest] = request.messages;
-  const messages =
-    base !== null && first?.role === "system"
-      ? [new Message({ role: "system", parts: [new TextPart(base)] }), ...rest]
-      : request.messages;
+/** The digest a step records for `request`, hashed whole from its log JSON. */
+function fullDigest(request: Request): string {
+  const { messages } = request;
   const choice = request.toolChoice;
   const format = request.outputFormat;
   const json = {
@@ -576,16 +572,16 @@ test("an incremental request digest matches the full digest on every round of a 
     { messages: [], outputFormat: format },
     { messages: [], tools, toolChoice: "required", parallelToolCalls: false },
   ];
-  // The system message as recalled memory left it, with fields a digest of the base prompt drops.
+  // A system message with an author and a provider payload, which the digest keeps.
   const system = new Message({
     role: "system",
-    parts: [new TextPart("Be brief.\n\nRecalled: the user likes tea.")],
-    author: "memory",
+    parts: [new TextPart("Be brief.")],
+    author: "host",
     providerPayload: { cache: true },
   });
-  for (const base of [null, "Be brief."]) {
-    const digest = new RequestDigest(base);
-    const check = (request: Request) => expect(digest.digest(request)).toBe(fullDigest(request, base));
+  {
+    const digest = new RequestDigest();
+    const check = (request: Request) => expect(digest.digest(request)).toBe(fullDigest(request));
     check(new Request({ messages: [] }));
     const user = new Message({ role: "user", parts: [new TextPart("hi 日本 😀 there")], author: "ann" });
     const messages = [system, user];

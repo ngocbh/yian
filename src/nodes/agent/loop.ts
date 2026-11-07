@@ -86,7 +86,6 @@ import {
   observeToolCall,
   type ToolCallIdentity,
 } from "./live.ts";
-import { systemPromptWithMemory } from "./memory.ts";
 import { type CloserReason, closerResult, reportedText, SKIPPED_TOOL_RESULT, toolText } from "./results.ts";
 import { foldSteps, type SteerRender, steerMessages, steerValues } from "./messages.ts";
 import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./structured.ts";
@@ -107,9 +106,8 @@ import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./s
  * after the last recorded call included (a recorded honor step ends the loop there); recorded
  * steers are fed back as replay reaches them.
  *
- * The model reads the system prompt (with the recalled memory sections), the prompt's messages,
- * then each iteration's steers, replies and tool results; a final structured call after tools
- * reads them all.
+ * The model reads the system prompt, the prompt's messages, then each iteration's steers, replies
+ * and tool results; a final structured call after tools reads them all.
  *
  * @returns The checked structured value, or the final reply's visible text; `Interrupted` once it
  *   honored a host interrupt (`honor`); or `Pending` naming the calls of the latest reply whose
@@ -126,8 +124,7 @@ import { generateStructured, rebuildStructuredRequests, typeToSchema } from "./s
  *   pass through.
  */
 export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending | Interrupted> {
-  const systemPrompt = systemPromptWithMemory(ctx.baseSystemPrompt, ctx.memoryContext.sections);
-  const system = new Message({ role: "system", parts: [new TextPart(systemPrompt)] });
+  const system = new Message({ role: "system", parts: [new TextPart(ctx.systemPrompt)] });
   const live = liveSinks(ctx);
   checkStopped(ctx);
   // Each turn's request replays every earlier one, so a reason would otherwise repeat per turn.
@@ -169,7 +166,6 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
     interrupt,
     retry,
     steps,
-    baseSystemPrompt: ctx.baseSystemPrompt,
   };
   /** The structured call's checked value, or the honor of an interrupt that cut it. */
   const structured = async (): Promise<Output | Interrupted> => {
@@ -216,7 +212,7 @@ export async function runAgent(ctx: AgentRunContext): Promise<Output | Pending |
   const bound = requestToolSpecs(granted, specOf, skills.size > 0 ? loadSkillTool() : null)!;
   let iterations = 0;
   let reply: Message | null = null;
-  const digests = new RequestDigest(ctx.baseSystemPrompt);
+  const digests = new RequestDigest();
 
   while (true) {
     checkStopped(ctx);
@@ -385,7 +381,7 @@ export async function rebuildStepRequests(
   },
 ): Promise<RebuiltRequests> {
   const messages = [...options.messages];
-  const digests = new RequestDigest(null);
+  const digests = new RequestDigest();
   const requests = new Map<number, RebuiltRequest>();
   let digestOk = true;
   const { exchanges, open } = foldSteps(steps);

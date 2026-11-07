@@ -14,12 +14,11 @@
  * flow's result). They are owned canonically by the node classes (`StartNode.ID` / `EndNode.ID`)
  * and re-exported here so runtime consumers can import them alongside the graph types.
  *
- * Knows about:   nodes, memory contracts, diagnostics and typesys.
+ * Knows about:   nodes, diagnostics and typesys.
  * Never imports: compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
-import { compareCodeUnits, type OriginRef, reprText } from "../diagnostics.ts";
-import { MemoryDecl } from "../memory/contracts.ts";
+import { type OriginRef, reprText } from "../diagnostics.ts";
 import { Node } from "../nodes/base.ts";
 import {
   asBinding,
@@ -34,7 +33,7 @@ import {
 import { EndNode } from "../nodes/end/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import type { Type } from "../typesys/index.ts";
-import { isList, jsTypeName, writeAsText } from "../typesys/values.ts";
+import { isList, jsTypeName } from "../typesys/values.ts";
 
 /** The synthesized START node id. Canonical source is the node class; re-exported here. */
 export const START_ID = StartNode.ID;
@@ -305,7 +304,6 @@ type CompiledFlowOptions = {
   wiring?: WiringInput;
   flowLlmConfig?: Readonly<Record<string, unknown>> | ValueTemplate | Binding | null;
   flowId?: string | null;
-  memories?: readonly MemoryDecl[];
 };
 
 /** Append each of `edges` to its consumer's `incoming` list and its producer's `outgoing` list. */
@@ -346,10 +344,8 @@ export class CompiledFlow extends Flow {
    * whose values answer from their tags.
    */
   flowLlmValueTypes: readonly (readonly [ValuePath, Type | null])[];
-  /** Stable authored semantic identity; direct memoryless graphs may omit it. */
+  /** Stable authored semantic identity; a graph built directly may omit it. */
   readonly flowId: string | null;
-  /** Flow-owned memory declarations in authored order. Runtime layout is derived later. */
-  memories: readonly MemoryDecl[];
   /** Node id to the edges ending at it, in edge order. The runtime's reducer updates it. */
   incomingEdges: Map<string, Edge[]>;
   /** Node id to the edges leaving it, in edge order. The runtime's reducer updates it. */
@@ -358,12 +354,12 @@ export class CompiledFlow extends Flow {
   /**
    * Build a compiled flow rooted at `START_ID` and returning `END_ID`, and index its edges.
    *
-   * @throws TypeError for a non-string wiring key, a `flowId` that isn't an exact string or
-   *   `null`, or `memories` that isn't an array of exact `MemoryDecl` values.
-   * @throws RangeError for an empty `flowId`, or a memory declared on a node site.
+   * @throws TypeError for a non-string wiring key, or a `flowId` that isn't an exact string or
+   *   `null`.
+   * @throws RangeError for an empty `flowId`.
    */
   constructor(nodes: Map<string, Node>, edges: Edge[], options: CompiledFlowOptions = {}) {
-    const { outputs = null, wiring = null, flowLlmConfig = null, flowId = null, memories = [] } = options;
+    const { outputs = null, wiring = null, flowLlmConfig = null, flowId = null } = options;
     super(nodes, edges, { wiring, startId: START_ID, endId: END_ID });
     this.outputs = outputs ?? [];
     this.flowLlmConfig = flowLlmConfig ?? {};
@@ -372,14 +368,7 @@ export class CompiledFlow extends Flow {
       if (typeof flowId !== "string") throw new TypeError("flow_id must be an exact string or null");
       if (!flowId) throw new RangeError("flow_id must be non-empty");
     }
-    if (!Array.isArray(memories) || memories.some((decl) => !isExactly(decl, MemoryDecl))) {
-      throw new TypeError("memories must be an array of exact MemoryDecl values");
-    }
-    if (memories.some((decl) => decl.site.node !== null)) {
-      throw new RangeError("flow memories must carry flow DeclSites (node=null)");
-    }
     this.flowId = flowId;
-    this.memories = memories;
     this.incomingEdges = new Map();
     this.outgoingEdges = new Map();
     indexEdges(edges, this.incomingEdges, this.outgoingEdges);
@@ -506,45 +495,6 @@ export type GraphWalkError = (
 const plainWalkError: GraphWalkError = (kind, message) => new kind(message);
 
 /**
- * Return one flow's direct nodes, sorted by id, after checking the graph carriers.
- *
- * @param flow The exact `Flow` or `CompiledFlow` to read.
- * @param fail Builds each error; a plain `TypeError` or `RangeError` by default.
- * @param origin The site a flow-level error names; a node-level error names the node's origin.
- * @throws What `fail` builds: for a flow, nodes map or node that isn't exact (TypeError), or a
- *   node id that is empty or differs from its key (RangeError).
- */
-export function flowNodes(
-  flow: Flow,
-  fail: GraphWalkError = plainWalkError,
-  origin: OriginRef | null = null,
-): [string, Node][] {
-  if (!isExactly(flow, Flow) && !isExactly(flow, CompiledFlow)) {
-    throw fail(TypeError, `expected an exact Flow or CompiledFlow, got ${jsTypeName(flow)}`, origin);
-  }
-  if (!isExactly(flow.nodes, Map)) throw fail(TypeError, "flow nodes must be an exact Map", origin);
-  const ids: unknown[] = [...flow.nodes.keys()];
-  if (ids.some((nodeId) => typeof nodeId !== "string" || !nodeId)) {
-    throw fail(RangeError, "flow node ids must be non-empty exact strings", origin);
-  }
-  return (ids as string[]).sort(compareCodeUnits).map((nodeId) => {
-    const node: unknown = flow.nodes.get(nodeId);
-    if (!(node instanceof Node)) throw fail(TypeError, `flow node ${reprText(nodeId)} must be a Node`, origin);
-    if (typeof node.id !== "string" || !node.id) {
-      throw fail(RangeError, `flow node ${reprText(nodeId)} has an invalid node id`, node.origin);
-    }
-    if (node.id !== nodeId) {
-      throw fail(
-        RangeError,
-        `flow node key ${reprText(nodeId)} does not match node id ${reprText(node.id)}`,
-        node.origin,
-      );
-    }
-    return [nodeId, node];
-  });
-}
-
-/**
  * Return the node's single exact static child, if present, from its `originChildren` hook.
  *
  * @param fail Builds each error, naming the node's origin; plain errors by default.
@@ -576,38 +526,4 @@ export function setNodeChild(node: Node, child: Flow): void {
   if (nodeChild(node) === null) throw new RangeError(`node ${reprText(node.id)} has no static child to replace`);
   // Every kind with a static child keeps it in its `child` field, which `originChildren` returns.
   (node as Node & { child: Flow }).child = child;
-}
-
-/**
- * Reject a layout's duplicate target paths, or one node object reached through several paths.
- *
- * @param targets The layout's targets, each a root-relative locator and the node there.
- * @param layout Names the layout in errors, such as `"memory layout"`.
- * @param fail Builds each error, naming the target node's origin; plain errors by default.
- * @throws What `fail` builds, as a RangeError.
- */
-export function validateUniqueTargets(
-  targets: readonly { readonly locator: readonly string[]; readonly node: Node }[],
-  layout: string,
-  fail: GraphWalkError = plainWalkError,
-): void {
-  // Keyed by the JSON of the locator, which no two distinct string paths share; never shown.
-  const locators = new Set<string>();
-  const nodes = new Set<Node>();
-  for (const target of targets) {
-    const key = JSON.stringify(target.locator);
-    if (locators.has(key)) {
-      throw fail(RangeError, `${layout} has duplicate target path ${writeAsText([...target.locator])}`, target.node.origin);
-    }
-    locators.add(key);
-    if (nodes.has(target.node)) {
-      throw fail(
-        RangeError,
-        `${layout} reaches one node object through multiple static paths; ` +
-          "de-alias child flows before applying it",
-        target.node.origin,
-      );
-    }
-    nodes.add(target.node);
-  }
 }

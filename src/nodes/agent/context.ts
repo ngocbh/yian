@@ -2,9 +2,9 @@
  * Process-local context for one AGENT invocation, the steps it records, and the run files its
  * replies' media go to.
  *
- * Knows about:   diagnostics, events, llm errors, llm messages, llm_clients factory, memory
- *                contracts, nodes/base, nodes/contracts, platform, skills, tools, typesys, peer
- *                AGENT modules, node's crypto and node's fs.
+ * Knows about:   diagnostics, events, llm errors, llm messages, llm_clients factory, nodes/base,
+ *                nodes/contracts, platform, skills, tools, typesys, peer AGENT modules, node's
+ *                crypto and node's fs.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -16,9 +16,8 @@ import { join, resolve, sep } from "node:path";
 import { reprText } from "../../diagnostics.ts";
 import type { ModelCallPurpose } from "../../events.ts";
 import { ProviderError } from "../../llm/errors.ts";
-import { MediaPart, Message, NamedTool, type Part, Request, Response, TextPart, Usage } from "../../llm/messages.ts";
+import { MediaPart, Message, NamedTool, type Part, Request, Response, Usage } from "../../llm/messages.ts";
 import type { ModelAccess } from "../../llm_clients/factory.ts";
-import type { MemoryContext } from "../../memory/contracts.ts";
 import { type Scheduler, syncFolder, warn } from "../../platform.ts";
 import type { Skill } from "../../skills/catalog.ts";
 import type { ToolGrant } from "../../tools/grants.ts";
@@ -51,8 +50,6 @@ export interface AgentRunContext {
   readonly nodeId: string;
   /** The rendered prompt's messages, after the system message; the last is the user's. */
   readonly messages: readonly Message[];
-  /** The last message's text, which recall reads as the prompt. */
-  readonly promptText: string;
   /**
    * The tool grants, a text read as a name grant; the model sees a group's tools as
    * `<group>_<tool>`.
@@ -68,15 +65,14 @@ export interface AgentRunContext {
   readonly maxToolIterations: number;
   /** The host's stop; absent for direct loop tests. */
   readonly signal?: AbortSignal;
-  readonly memoryContext: MemoryContext;
   /** The run's tools and groups, which `tools` grants from. */
   readonly toolset: ToolSet | null;
   /** The transient text sink; absent means no streaming. */
   readonly emitStream?: NodeCaps["emitStream"];
   /** The transient model and tool call observer sink. */
   readonly emitEvent?: NodeCaps["emitEvent"];
-  /** The authored or default system text plus the skill listing; memory follows it. */
-  readonly baseSystemPrompt: string;
+  /** The authored or default system text plus the skill listing. */
+  readonly systemPrompt: string;
   /** The granted skills served by `load_skill`, sorted by name. */
   readonly skills: readonly Skill[];
   /** The steer inbox this invocation reads, and its interrupt signal; absent without `steer_inbox`. */
@@ -607,7 +603,7 @@ export function interruptRequested(interrupt: AbortSignal | undefined, steps: Ag
  * holds it, the file form for a reply.
  */
 export function requestSha256(request: Request): string {
-  return new RequestDigest(null).digest(request);
+  return new RequestDigest().digest(request);
 }
 
 // The log JSON of a request opens with its messages: `logJson` sorts keys, and the other keys sort
@@ -615,31 +611,17 @@ export function requestSha256(request: Request): string {
 const MESSAGES_OPEN = '{"messages":[';
 
 /**
- * Takes the digests of a series of requests, each the one `requestSha256` gives for the request
- * with its leading system message reduced to `baseSystemPrompt`, the system prompt without
- * recalled memory: a request's digest covers what the flow and the conversation decide, not what
- * memory recalled, so recorded calls replay whatever a later recall returns. A `null`
- * `baseSystemPrompt`, or a request that doesn't start with a system message, hashes the request as
- * it is.
+ * Takes the digests of a series of requests, each the one `requestSha256` gives.
  *
  * A request whose messages start with the last request's messages, the same objects, hashes only
  * the messages it adds, so a growing tool loop serializes each message once; any other request
  * hashes all of its messages.
  */
 export class RequestDigest {
-  /** The log JSON of the system message a digest reads in place of the request's, or `null`. */
-  readonly #system: string | null;
   /** The messages hashed so far, the last request's. */
   #messages: readonly Message[] = [];
   /** The hash of `MESSAGES_OPEN` and the log JSON of `#messages`, comma separated. */
   #hash = createHash("sha256").update(MESSAGES_OPEN, "utf8");
-
-  constructor(baseSystemPrompt: string | null) {
-    this.#system =
-      baseSystemPrompt === null
-        ? null
-        : logJson(new Message({ role: "system", parts: [new TextPart(baseSystemPrompt)] }).toJSON());
-  }
 
   /** Return the digest a `model_call` step records for `request`. */
   digest(request: Request): string {
@@ -649,10 +631,8 @@ export class RequestDigest {
     const from = extending ? this.#messages.length : 0;
     // All new messages are serialized before any is hashed, so one that can't be leaves the state as it was.
     const texts = messages.slice(from).map((message, i) => {
-      const at = from + i;
-      const system = at === 0 && this.#system !== null && message.role === "system";
-      const text = system ? this.#system! : logJson(message.toJSON());
-      return at === 0 ? text : `,${text}`;
+      const text = logJson(message.toJSON());
+      return from + i === 0 ? text : `,${text}`;
     });
     if (!extending) this.#hash = createHash("sha256").update(MESSAGES_OPEN, "utf8");
     for (const text of texts) this.#hash.update(text, "utf8");

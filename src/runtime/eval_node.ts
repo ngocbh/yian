@@ -16,8 +16,8 @@
  *
  * Knows about:   compile/model (types), compile/declared_types (the declared types reads go
  *                through), compile/output_contracts (a binding's lone reference, to name an
- *                authored root), diagnostics, expr grammar and lineage, llm_clients (types), memory
- *                contracts, nodes, platform, runtime log and sources, skills, tools, typesys.
+ *                authored root), diagnostics, expr grammar and lineage, llm_clients (types), nodes,
+ *                platform, runtime sources, skills, tools, typesys.
  * Never imports: runtime state or engine, the run boundary, compose, or the CLI.
  */
 
@@ -28,14 +28,6 @@ import type { CompiledFlow, Flow } from "../compile/model.ts";
 import { Failure, type FailureCode, type OriginRef, reprText } from "../diagnostics.ts";
 import { ResolvedValue, ValueRoute } from "../expr/lineage.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import {
-  type JsonObject,
-  MemoryContext,
-  MemoryRecallError,
-  MemoryScope,
-  MemorySection,
-  RecallContext,
-} from "../memory/contracts.ts";
 import {
   AssertionStageError,
   BindingStageError,
@@ -63,19 +55,13 @@ import {
   resolveSource,
   type SourceResolver,
 } from "../nodes/binding.ts";
-import { isExactly, NodeSteps } from "../nodes/contracts.ts";
+import { NodeSteps } from "../nodes/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import { ToolSet } from "../tools/registry.ts";
+import type { JsonObject } from "../typesys/json.ts";
 import { VariablePool } from "../typesys/pool.ts";
-import {
-  isRecord,
-  jsTypeName,
-  setField,
-  type Value,
-  type ValueRecord,
-} from "../typesys/values.ts";
-import { canonicalSeed } from "./log.ts";
+import { jsTypeName, setField, type Value, type ValueRecord } from "../typesys/values.ts";
 import { type ReboundSource, SYSTEM_PREFIX } from "./sources.ts";
 
 /**
@@ -223,120 +209,6 @@ export class EvaluatedOutcome {
   }
 }
 
-/**
- * Host-injected admission of recalled notes: selects one memory context for a scoped node's
- * `recall`, under the node's `signal`.
- */
-export type MemoryContextOpener = (
-  scope: MemoryScope,
-  recall: RecallContext,
-  options: { signal: AbortSignal },
-) => Promise<MemoryContext>;
-
-/**
- * Check one opener's sections are an ordered subsequence of the scope's memories, each with text.
- *
- * @throws TypeError when an item isn't exactly a `MemorySection`.
- * @throws RangeError for an empty text, or a section outside the rest of the scope's memories.
- */
-function validateMemorySections(scope: MemoryScope, sections: readonly MemorySection[]): void {
-  let next = 0;
-  for (const section of sections) {
-    if (!isExactly(section, MemorySection)) throw new TypeError("memory recall items must be MemorySection values");
-    if (section.text === "") throw new RangeError("memory recall sections must contain non-empty text");
-    const index = scope.memories.indexOf(section.memory, next);
-    if (index < 0) throw new RangeError("memory recall sections must follow the consumer memory stack");
-    next = index + 1;
-  }
-}
-
-/** A lazy single-use memory context capability bound to one evaluation's lifetime. */
-interface MemoryContextCapability {
-  /** The node's `openMemoryContext`. */
-  readonly open: NonNullable<NodeCaps["openMemoryContext"]>;
-  /** End the lifetime: later opens reject. */
-  close(): void;
-}
-
-/**
- * Bind a memory context capability to one evaluation.
- *
- * @param options.scope The node's memory scope; `null` or no memories opens an empty context.
- * @param options.opener The host's opener, present for a scoped node.
- * @param options.canonicalInputs The visible bound inputs for the recall context; `null` when
- *   canonicalization refused them.
- * @param options.onFault Sees each capability fault before the open rejects with it.
- * @param options.pending Receives the open's promise, for the evaluator to await.
- */
-function memoryContextCapability(options: {
-  scope: MemoryScope | null;
-  opener: MemoryContextOpener | null;
-  signal: AbortSignal;
-  canonicalInputs: JsonObject | null;
-  onFault: (fault: CapabilityFault) => void;
-  pending: Promise<unknown>[];
-}): MemoryContextCapability {
-  const { scope, opener, signal, canonicalInputs, onFault, pending } = options;
-  let closed = false;
-  let used = false;
-
-  /**
-   * Open the context once.
-   *
-   * @throws MemoryRecallError for invalid recall inputs, request or opener result, or as the opener
-   *   throws it.
-   * @throws CapabilityFault carrying a repeated open or any other opener fault.
-   */
-  const enter = async (systemPrompt: string, renderedPrompt: string): Promise<MemoryContext> => {
-    try {
-      if (used) throw new Error("memory context capability was already entered");
-      used = true;
-      if (scope === null || scope.memories.length === 0) return new MemoryContext();
-      if (canonicalInputs === null) throw new MemoryRecallError("memory recall context is invalid");
-      let recall: RecallContext;
-      try {
-        recall = new RecallContext(systemPrompt, renderedPrompt, canonicalInputs, scope.staticPath);
-      } catch (error) {
-        if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-        throw new MemoryRecallError("memory recall context is invalid", { cause: error });
-      }
-      // The evaluator refuses a scoped node without an opener before the node runs.
-      const context: unknown = await opener!(scope, recall, { signal });
-      try {
-        if (!isExactly(context, MemoryContext)) throw new TypeError("memory context must be an exact MemoryContext");
-        validateMemorySections(scope, context.sections);
-      } catch (error) {
-        if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-        throw new MemoryRecallError("memory recall returned invalid context", { cause: error });
-      }
-      return context;
-    } catch (error) {
-      if (error instanceof MemoryRecallError) throw error;
-      const fault = capabilityFault(error);
-      onFault(fault);
-      throw fault;
-    }
-  };
-
-  const open = (systemPrompt: string, renderedPrompt: string) => {
-    const opened: Promise<MemoryContext> = closed
-      ? Promise.reject(new Error("memory context capability is closed"))
-      : enter(systemPrompt, renderedPrompt);
-    // A node may drop the promise: its rejection must not go unhandled, and the evaluator awaits
-    // it, so a fault still reaches `onFault`.
-    opened.catch(() => {});
-    if (!closed) pending.push(opened);
-    return opened;
-  };
-
-  return {
-    open,
-    close: () => {
-      closed = true;
-    },
-  };
-}
-
 /** The optional inputs of one `evalNode` call; each defaults to `null` or `false`. */
 export interface EvalNodeOptions {
   /**
@@ -363,11 +235,6 @@ export interface EvalNodeOptions {
   emitEvent?: NodeCaps["emitEvent"] | null;
   /** Whether to retain the bound input values and their routes. */
   captureBindings?: boolean;
-  /**
-   * The memory context source a node declaring `needsMemoryContext` reaches through
-   * `caps.openMemoryContext`; required when the node's scope has memories.
-   */
-  memoryContextOpener?: MemoryContextOpener | null;
   /** The run's host-supplied skills, delivered only to a node declaring `needsSkills`. */
   skills?: ReadonlyMap<string, Skill> | null;
   /** The paired value and source lookup used while capturing bindings. */
@@ -409,11 +276,8 @@ export interface EvalNodeOptions {
  * @param options The capabilities and captures; see `EvalNodeOptions`.
  * @returns The outcome, with captures when asked for.
  * @throws The original error of the first capability fault (a failing stream or event sink, a
- *   repeated memory context open or a failing opener, a `CapabilityFault` from `steps.record` or
- *   the steer inbox), whatever the node then returned or threw.
- * @throws TypeError when a node declaring `needsMemoryContext` has a `memoryScope` that isn't
- *   exactly a `MemoryScope`; Error when a memory context node's scope has memories and no opener
- *   was injected.
+ *   `CapabilityFault` from `steps.record` or the steer inbox), whatever the node then returned or
+ *   threw.
  * @throws TypeError, RangeError or the hook's own error when capturing bindings and the input
  *   inventory fails; the body hasn't run.
  * @throws The signal's reason when the signal is already aborted, before binding, or when the node
@@ -434,7 +298,6 @@ export async function evalNode(
     emitStream = null,
     emitEvent = null,
     captureBindings = false,
-    memoryContextOpener = null,
     skills = null,
     sourceResolver = null,
     tools = null,
@@ -446,11 +309,6 @@ export async function evalNode(
     random = null,
     runDir = null,
   } = options;
-  // Read once, so a node replacing its scope while it runs doesn't change what it recalls.
-  const memoryScope = node.needsMemoryContext === true ? node.memoryScope : null;
-  if (memoryScope !== null && !isExactly(memoryScope, MemoryScope)) {
-    throw new TypeError("node memory_scope must be an exact MemoryScope or null");
-  }
   const signal = options.signal ?? new AbortController().signal;
   signal.throwIfAborted();
   const collector = captureBindings ? new BindingCollector() : null;
@@ -468,8 +326,6 @@ export async function evalNode(
     runDir,
     collector,
     captureInputs: captureBindings ? captureInputs : null,
-    memoryScope,
-    memoryContextOpener,
     sourceResolver,
     emitStream,
     emitEvent,
@@ -498,9 +354,6 @@ async function evaluateNode(
     collector: BindingCollector | null;
     /** Receives the completed input record before the body runs, when capturing bindings. */
     captureInputs: ((inputs: Record<string, unknown>) => void) | null;
-    /** The memory scope of a node declaring `needsMemoryContext`, else `null`. */
-    memoryScope: MemoryScope | null;
-    memoryContextOpener: MemoryContextOpener | null;
     sourceResolver: SourceResolver | null;
     emitStream: NonNullable<NodeCaps["emitStream"]> | null;
     emitEvent: NonNullable<NodeCaps["emitEvent"]> | null;
@@ -514,7 +367,6 @@ async function evaluateNode(
   },
 ): Promise<WorkerOutcome> {
   const { wiringOverride, signal, collector, captureInputs, sourceResolver } = context;
-  const { memoryScope, memoryContextOpener } = context;
   const { emitStream, emitEvent, skills, tools, models, steps, steerInbox, scheduler, random, runDir } = context;
   // The flow owns every source. A missing trait-declared reserved key is a malformed compiled
   // graph and deliberately escapes the expected binder catch.
@@ -547,25 +399,6 @@ async function evaluateNode(
   }
   const { record } = bound;
 
-  const scoped = memoryScope !== null && memoryScope.memories.length > 0;
-  if (scoped && memoryContextOpener === null) {
-    throw new Error(`scoped node ${reprText(node.id)} requires an injected memory context callback`);
-  }
-  // The visible bound inputs, for the recall context.
-  let canonicalInputs: JsonObject | null = null;
-  if (scoped) {
-    const hidden = node.modelHiddenInputs();
-    const visible = Object.fromEntries(Object.entries(record).filter(([name]) => !hidden.has(name)));
-    try {
-      const value = canonicalSeed(visible)[0];
-      if (!isRecord(value)) throw new TypeError("bound node inputs did not canonicalize to an exact record");
-      canonicalInputs = value as JsonObject;
-    } catch (error) {
-      // The recall capability owns the rejection of its query context.
-      if (!(error instanceof TypeError || error instanceof RangeError)) throw error;
-    }
-  }
-
   // The first fault any capability raised. A node can catch the fault it was thrown, so the
   // evaluator keeps it to throw when the node settles.
   const faults: { first: CapabilityFault | null } = { first: null };
@@ -574,17 +407,6 @@ async function evaluateNode(
     faults.first = fault;
     context.onFault?.(fault.original);
   };
-  // The capability promises handed to the node. A node may settle without awaiting one, so the
-  // evaluator awaits their settlement before it settles, and a late fault is still the first.
-  const pending: Promise<unknown>[] = [];
-  const memory = memoryContextCapability({
-    scope: memoryScope,
-    opener: memoryContextOpener,
-    signal,
-    canonicalInputs,
-    onFault,
-    pending,
-  });
 
   // Every node gets its signal and the given scheduler, random draw and run folder; the rest are
   // node-owned and trait-gated. The deferred per-item binder throws the same binder-owned marker
@@ -608,7 +430,6 @@ async function evaluateNode(
       }
     };
   }
-  if (node.needsMemoryContext === true) caps.openMemoryContext = memory.open;
   if (node.needsTools === true) caps.tools = tools ?? new ToolSet();
   // Closed once the node settles, so a step, event or steer read the node's dropped code makes after
   // the outcome is decided is refused or dropped rather than reaching the run with no evaluation
@@ -655,16 +476,7 @@ async function evaluateNode(
   } catch (error) {
     rejection = { error };
   }
-  // The capabilities stay open while the evaluator waits, so a node's dropped code may start another
-  // capability call meanwhile; one wait would miss it, and a late open's fault would never be
-  // checked.
-  for (let settled = 0; settled < pending.length; ) {
-    const batch = pending.slice(settled);
-    settled = pending.length;
-    await Promise.allSettled(batch);
-  }
   closed = true;
-  memory.close();
 
   // A host capability fault, then a stop, is control flow outside the node-result sum, whatever
   // the node returned or rejected with.

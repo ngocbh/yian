@@ -8,7 +8,7 @@
  * reducer, so the same validated carriers can back memory and JSONL logs without creating an
  * authority cycle.
  *
- * Knows about:   diagnostics, memory/contracts, nodes/base, nodes/contracts, platform, typesys.
+ * Knows about:   diagnostics, nodes/base, nodes/contracts, platform, typesys.
  * Never imports: state, trace, engine, run, compile, compose, or the CLI.
  */
 
@@ -17,18 +17,9 @@ import os from "node:os";
 import { dirname } from "node:path";
 
 import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.ts";
-import {
-  DeclSite,
-  MemoryMutation,
-  MemoryOperationFailure,
-  MemorySnapshotEnvelope,
-  MemorySpec,
-  MemoryStack,
-  validateMutations,
-} from "../memory/contracts.ts";
 import { retainFailure } from "../nodes/base.ts";
 import { type FileLock, FileLockError, isLocked, lockFile, syncFolder, VERSION } from "../platform.ts";
-import { comparePaths, isExactly, sameItems } from "../nodes/contracts.ts";
+import { isExactly } from "../nodes/contracts.ts";
 import { JSONDecodeError, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import {
   buildValue,
@@ -179,7 +170,7 @@ export type RecordedSkill = {
   readonly instructions: string;
 };
 
-/** The run that started this one: a host-started child run or a learning pass. */
+/** The run that started this one, a host-started child run. */
 export interface RunParent {
   /** The parent run's id. */
   readonly runId: string;
@@ -197,14 +188,6 @@ export interface RunStartedFields {
   effectiveLlmByStaticPath: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   /** The initial dispatcher worker count; zero selects serial execution. */
   numWorkers: number;
-  /** Recorded snapshots, one per memory key in key order; `null` (the default) when memory is disabled. */
-  memorySnapshots?: readonly MemorySnapshotEnvelope[] | null;
-  /** Whether the run retains what learning reads; defaults to `false`. */
-  learnable?: boolean;
-  /** The memory key table, sorted by key; `null` (the default) when memory is disabled. */
-  memories?: readonly MemorySpec[] | null;
-  /** Each target's ordered key stack, sorted by locator; `null` (the default) when memory is disabled. */
-  memoryStacks?: readonly MemoryStack[] | null;
   /** The `yian.defaults` values that differ from the built-in ones, by entry name; defaults to `{}`. */
   defaults?: Readonly<Record<string, bigint>>;
   /**
@@ -246,14 +229,6 @@ export class RunStartedRecord {
   readonly effectiveLlmByStaticPath: Readonly<Record<string, Readonly<JsonObject>>>;
   /** The initial dispatcher worker count; zero selects serial execution. */
   readonly numWorkers: number;
-  /** Recorded snapshots, one per memory key in key order, or `null` when memory is disabled. */
-  readonly memorySnapshots: readonly MemorySnapshotEnvelope[] | null;
-  /** Whether the run retains what learning reads. */
-  readonly learnable: boolean;
-  /** The memory key table, sorted by key, or `null` when memory is disabled. */
-  readonly memories: readonly MemorySpec[] | null;
-  /** Each scoped target's ordered key stack, sorted by locator, or `null` when memory is disabled. */
-  readonly memoryStacks: readonly MemoryStack[] | null;
   /** The non-built-in `yian.defaults` values by entry name; empty means all built-in values. */
   readonly defaults: Readonly<Record<string, bigint>>;
   /** The deep-frozen canonical call-time agents `{selection, agents}`, or `null` when there are none. */
@@ -275,19 +250,15 @@ export class RunStartedRecord {
   readonly parent: RunParent | null;
 
   /**
-   * The memory table, stacks and snapshots are all recorded or all `null`; recorded, they are
-   * copied into frozen arrays that hold the given carriers. JSON fields keep `±Infinity` and read
-   * `-0` back as `0`.
+   * JSON fields keep `±Infinity` and read `-0` back as `0`.
    *
    * @throws TypeError when the fingerprint isn't a string, the wiring override, the agent
    *   configuration or one agent's configuration isn't a JSON object, `numWorkers` isn't a safe
-   *   integer, `learnable` isn't a boolean, the memory fields aren't arrays of exactly their carrier
-   *   class, `defaults` isn't a plain object of `bigint`s, `callTimeLlm` or one of its parts
+   *   integer, `defaults` isn't a plain object of `bigint`s, `callTimeLlm` or one of its parts
    *   isn't a plain object, or a part of `flow`, `skills`, `tools`, `yianVersion` or `parent` has
    *   the wrong type.
    * @throws RangeError when the fingerprint isn't 64 lowercase hex digits, `numWorkers` is
-   *   negative, the memory fields are only partly recorded, aren't sorted and unique, disagree on
-   *   their keys or a stack names an unknown key, a defaults name is empty, `callTimeLlm` has
+   *   negative, a defaults name is empty, `callTimeLlm` has
    *   missing or extra fields, no agent, an empty agent path or a non-JSON value, `flow.files`
    *   lacks `flow.root` or a file its refs name, a name, the flow's root or folder or the version
    *   is empty, a tool's parameters aren't JSON, or a tool group names a tool `tools` lacks.
@@ -296,10 +267,6 @@ export class RunStartedRecord {
    */
   constructor(fields: RunStartedFields) {
     const {
-      memorySnapshots = null,
-      learnable = false,
-      memories = null,
-      memoryStacks = null,
       defaults = {},
       callTimeLlm = null,
       flow = null,
@@ -322,13 +289,6 @@ export class RunStartedRecord {
     }
     this.effectiveLlmByStaticPath = freezeParsed(llm) as Readonly<Record<string, Readonly<JsonObject>>>;
     this.numWorkers = validatedCount(fields.numWorkers, "num_workers");
-    [this.memories, this.memoryStacks, this.memorySnapshots] = validatedRunMemoryConfiguration(
-      memories,
-      memoryStacks,
-      memorySnapshots,
-      learnable,
-    );
-    this.learnable = learnable;
     this.defaults = validatedDefaults(defaults);
     this.callTimeLlm = callTimeLlm === null ? null : validatedCallTimeLlm(callTimeLlm);
     this.flow = flow === null ? null : validatedFlowSource(flow);
@@ -1072,94 +1032,6 @@ export class NodeFailedRecord {
   }
 }
 
-/**
- * Return `attemptId` when it is a positive safe integer, an accepted backward attempt's identity.
- *
- * @throws TypeError when it isn't a safe integer `number`.
- * @throws RangeError when it isn't positive.
- */
-function validatedAttemptId(attemptId: unknown): number {
-  if (typeof attemptId !== "number" || !Number.isSafeInteger(attemptId)) {
-    throw new TypeError("attempt_id must be an integer");
-  }
-  if (attemptId <= 0) throw new RangeError("attempt_id must be positive");
-  return attemptId;
-}
-
-/** Request one memory's atomic idempotent mutation commit. Frozen. */
-export class MemoryCommitRequestedRecord {
-  /** The non-empty memory key. */
-  readonly memory: string;
-  /** The non-empty commit id. */
-  readonly commitId: string;
-  /** The mutations with unique ids, in order, kept by reference. */
-  readonly mutations: readonly MemoryMutation[];
-  /** The positive identity of the accepted backward attempt. */
-  readonly attemptId: number;
-
-  /**
-   * @throws TypeError when `attemptId` is missing or isn't a safe integer, an identity isn't a
-   *   string, `mutations` isn't an array or an item isn't exactly a `MemoryMutation`.
-   * @throws RangeError when `attemptId` isn't positive, an identity is empty or two mutations
-   *   share an id.
-   */
-  constructor(memory: string, commitId: string, mutations: readonly MemoryMutation[], attemptId: number) {
-    this.attemptId = validatedAttemptId(attemptId);
-    this.memory = requireName(memory, "memory");
-    this.commitId = requireName(commitId, "commit_id");
-    this.mutations = validateMutations(mutations);
-    Object.freeze(this);
-  }
-}
-
-/** Confirm that one memory commit completed. Frozen. */
-export class MemoryCommitSucceededRecord {
-  /** The non-empty memory key. */
-  readonly memory: string;
-  /** The non-empty commit id. */
-  readonly commitId: string;
-  /** The positive identity of the accepted backward attempt whose request this settles. */
-  readonly attemptId: number;
-
-  /**
-   * @throws TypeError when `attemptId` is missing or isn't a safe integer, or an identity isn't
-   *   a string.
-   * @throws RangeError when `attemptId` isn't positive or an identity is empty.
-   */
-  constructor(memory: string, commitId: string, attemptId: number) {
-    this.attemptId = validatedAttemptId(attemptId);
-    this.memory = requireName(memory, "memory");
-    this.commitId = requireName(commitId, "commit_id");
-    Object.freeze(this);
-  }
-}
-
-/** Retain one observed memory commit failure. Frozen. */
-export class MemoryCommitFailedRecord {
-  /** The non-empty memory key. */
-  readonly memory: string;
-  /** The non-empty commit id. */
-  readonly commitId: string;
-  /** The failure, held by reference. */
-  readonly failure: MemoryOperationFailure;
-  /** The positive identity of the accepted backward attempt whose request this settles. */
-  readonly attemptId: number;
-
-  /**
-   * @throws TypeError when `attemptId` is missing or isn't a safe integer, an identity isn't a
-   *   string, or `failure` isn't exactly a `MemoryOperationFailure`.
-   * @throws RangeError when `attemptId` isn't positive or an identity is empty.
-   */
-  constructor(memory: string, commitId: string, failure: MemoryOperationFailure, attemptId: number) {
-    this.attemptId = validatedAttemptId(attemptId);
-    this.memory = requireName(memory, "memory");
-    this.commitId = requireName(commitId, "commit_id");
-    if (!isExactly(failure, MemoryOperationFailure)) throw new TypeError("failure must be a MemoryOperationFailure");
-    this.failure = failure;
-    Object.freeze(this);
-  }
-}
-
 /** One durable run transition. */
 export type RunRecord =
   | RunStartedRecord
@@ -1179,10 +1051,7 @@ export type RunRecord =
   | NodeSucceededRecord
   | NodeRoutedRecord
   | NodeExpandedRecord
-  | NodeFailedRecord
-  | MemoryCommitRequestedRecord
-  | MemoryCommitSucceededRecord
-  | MemoryCommitFailedRecord;
+  | NodeFailedRecord;
 
 /** A run-record class. */
 type RunRecordClass = new (...args: never[]) => RunRecord;
@@ -1209,78 +1078,6 @@ function validatedCount(value: unknown, name: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new TypeError(`${name} must be an integer`);
   if (value < 0) throw new RangeError(`${name} must be non-negative`);
   return value;
-}
-
-/**
- * Return a frozen copy of `items` when each is exactly a `cls` instance, kept by reference.
- *
- * @throws TypeError with `message` otherwise.
- */
-function exactItems<T>(
-  items: readonly unknown[],
-  cls: abstract new (...args: never[]) => T,
-  message: string,
-): readonly T[] {
-  // Spread, so a hole of a sparse array reads as `undefined` and is refused.
-  const copy = [...items];
-  if (!copy.every((item) => isExactly(item, cls))) throw new TypeError(message);
-  return Object.freeze(copy as T[]);
-}
-
-/** Whether `items` are in strictly increasing order by `compare`: sorted and unique. */
-function strictlyIncreasing<T>(items: readonly T[], compare: (a: T, b: T) => number): boolean {
-  return items.every((item, index) => index === 0 || compare(items[index - 1]!, item) < 0);
-}
-
-/**
- * Validate one `RunStarted` memory table, its stacks and its snapshots, and return frozen copies
- * of the three arrays (each `null` when memory is disabled), holding the given carriers.
- *
- * @throws TypeError when `learnable` isn't a boolean, a recorded field isn't an array, or an item
- *   isn't exactly its carrier class.
- * @throws RangeError when the fields are only partly recorded, keys or locators aren't sorted and
- *   unique in code-unit order, the snapshot keys differ from the table's, or a stack names an
- *   unknown key.
- */
-function validatedRunMemoryConfiguration(
-  memories: unknown,
-  stacks: unknown,
-  snapshots: unknown,
-  learnable: unknown,
-): [readonly MemorySpec[] | null, readonly MemoryStack[] | null, readonly MemorySnapshotEnvelope[] | null] {
-  if (typeof learnable !== "boolean") throw new TypeError("learnable must be a boolean");
-  if (new Set([memories === null, stacks === null, snapshots === null]).size !== 1) {
-    throw new RangeError("memories, memory_stacks and memory_snapshots must all be recorded or all be absent");
-  }
-  if (memories === null) return [null, null, null];
-  if (!isList(memories) || !isList(stacks) || !isList(snapshots)) {
-    throw new TypeError("memories, memory_stacks and memory_snapshots must be arrays when recorded");
-  }
-  const specs = exactItems(memories, MemorySpec, "memories items must be MemorySpec values");
-  const keys = specs.map((spec) => spec.key);
-  if (!strictlyIncreasing(keys, compareCodeUnits)) throw new RangeError("memories keys must be sorted and unique");
-  const envelopes = exactItems(
-    snapshots,
-    MemorySnapshotEnvelope,
-    "memory_snapshots items must be MemorySnapshotEnvelope values",
-  );
-  const snapshotKeys = envelopes.map((snapshot) => snapshot.memory);
-  if (!strictlyIncreasing(snapshotKeys, compareCodeUnits)) {
-    throw new RangeError("memory_snapshots memory keys must be sorted and unique");
-  }
-  if (!sameItems(snapshotKeys, keys)) {
-    throw new RangeError("memory_snapshots memory keys must equal memories keys");
-  }
-  const keyStacks = exactItems(stacks, MemoryStack, "memory_stacks items must be MemoryStack values");
-  if (!strictlyIncreasing(keyStacks.map((stack) => stack.locator), comparePaths)) {
-    throw new RangeError("memory_stacks locators must be sorted and unique");
-  }
-  const known = new Set(keys);
-  const unknownKeys = [...new Set(keyStacks.flatMap((stack) => stack.memories))].filter((key) => !known.has(key));
-  if (unknownKeys.length > 0) {
-    throw new RangeError(`memory_stacks name unknown memory keys: ${writeAsText(unknownKeys.sort(compareCodeUnits))}`);
-  }
-  return [specs, keyStacks, envelopes];
 }
 
 /**
@@ -2083,8 +1880,8 @@ export interface RunLogEntry<E extends RecordEnvelope | null = RecordEnvelope> {
   readonly kind: string;
   /**
    * The node the record is about: the `node_id` of a node's start, step, pool commit, success,
-   * route, wait or wake, the spawner of a growth, the node of a failure; `null` for a run, stop,
-   * memory or backward record, and for a `run_failed` even though its failure names a node.
+   * route, wait or wake, the spawner of a growth, the node of a failure; `null` for a run or stop
+   * record, and for a `run_failed` even though its failure names a node.
    */
   readonly nodeId: string | null;
   /** The validated envelope; `null` when read with `payloads: false`. */
@@ -2617,19 +2414,17 @@ function failurePayload(failure: Failure): JsonObject {
 
 /**
  * Rebuild a `Failure` from its wire object; `label` names it in errors. Its node id must be a
- * non-empty string, or any string or `null` when `optionalNodeId` is set (a backward failure's
- * cause).
+ * non-empty string.
  *
- * @throws RangeError for missing or extra fields, an empty required node id or origin key, or an
- *   unknown code.
+ * @throws RangeError for missing or extra fields, an empty node id or origin key, or an unknown
+ *   code.
  * @throws TypeError when a field has the wrong JSON type.
  */
-function failureFromPayload(value: unknown, label: string, optionalNodeId = false): Failure {
+function failureFromPayload(value: unknown, label: string): Failure {
   const wire = wireObject(value, label, ["code", "message", "node_id", "trace", "cause_type", "traceback"]);
   const code = requireText(wire["code"], `${label} code`);
   const message = requireText(wire["message"], `${label} message`);
-  const nodeLabel = `${label} node_id`;
-  const nodeId = optionalNodeId ? wireNullableText(wire["node_id"], nodeLabel) : requireName(wire["node_id"], nodeLabel);
+  const nodeId = requireName(wire["node_id"], `${label} node_id`);
   const trace = wireArray(wire["trace"], `${label} trace`).map((item) => {
     const origin = wireObject(item, `${label} trace item`, ["key"]);
     return new OriginRef(requireName(origin["key"], `${label} trace item key`));
@@ -2642,70 +2437,6 @@ function failureFromPayload(value: unknown, label: string, optionalNodeId = fals
     causeType: wireNullableText(wire["cause_type"], `${label} cause_type`),
     traceback: wireNullableText(wire["traceback"], `${label} traceback`),
   });
-}
-
-/**
- * Return memory JSON as the log writes it. Memory's carriers keep `-0`, which canonical JSON
- * refuses, so it is written as `0`.
- */
-function memoryJson(value: unknown): JsonValue {
-  return jsonPart(value, [], "refuse") as JsonValue;
-}
-
-/** Encode one named memory snapshot. */
-function snapshotPayload(snapshot: MemorySnapshotEnvelope): JsonObject {
-  return { memory: snapshot.memory, snapshot: memoryJson(snapshot.snapshot) };
-}
-
-/**
- * Decode one named memory snapshot; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields or an empty memory key, besides the envelope's
- *   own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function snapshotFromPayload(value: unknown, label: string): MemorySnapshotEnvelope {
-  const wire = wireObject(value, label, ["memory", "snapshot"]);
-  return new MemorySnapshotEnvelope(
-    requireName(wire["memory"], `${label} memory`),
-    wireObject(wire["snapshot"], `${label} snapshot`),
-  );
-}
-
-/** Encode one memory key-table entry. */
-function memorySpecPayload(spec: MemorySpec): JsonObject {
-  return {
-    key: spec.key,
-    type: spec.type,
-    config: memoryJson(spec.config),
-    owners: spec.owners.map((site) => ({ scope: [...site.scope], owner: [...site.owner], node: site.node })),
-  };
-}
-
-/**
- * Decode one memory key-table entry; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields or an empty key or type, besides the sites' and
- *   spec's own errors (a private config key among them).
- * @throws TypeError when a field has the wrong JSON type.
- */
-function memorySpecFromPayload(value: unknown, label: string): MemorySpec {
-  const wire = wireObject(value, label, ["key", "type", "config", "owners"]);
-  const owners = wireArray(wire["owners"], `${label} owners`).map((item) => {
-    const siteLabel = `${label} owners item`;
-    const site = wireObject(item, siteLabel, ["scope", "owner", "node"]);
-    return new DeclSite(
-      wireTextArray(site["scope"], `${siteLabel} scope`),
-      wireTextArray(site["owner"], `${siteLabel} owner`),
-      wireNullableText(site["node"], `${siteLabel} node`),
-    );
-  });
-  return new MemorySpec(
-    requireName(wire["key"], `${label} key`),
-    requireName(wire["type"], `${label} type`),
-    wireObject(wire["config"], `${label} config`),
-    owners,
-  );
 }
 
 /** Encode a `run_started` flow. */
@@ -2754,73 +2485,12 @@ function parentFromPayload(value: unknown, label: string): RunParent {
   return { runId: requireText(wire["run_id"], `${label} run_id`), node: wireNullableText(wire["node"], `${label} node`) };
 }
 
-/** Encode one target's memory key stack. */
-function memoryStackPayload(stack: MemoryStack): JsonObject {
-  return { locator: [...stack.locator], memories: [...stack.memories] };
-}
-
-/**
- * Decode one target's memory key stack; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields, besides the stack's own errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function memoryStackFromPayload(value: unknown, label: string): MemoryStack {
-  const wire = wireObject(value, label, ["locator", "memories"]);
-  return new MemoryStack(
-    wireTextArray(wire["locator"], `${label} locator`),
-    wireTextArray(wire["memories"], `${label} memories`),
-  );
-}
-
-/** Encode one memory mutation. */
-function mutationPayload(mutation: MemoryMutation): JsonObject {
-  return { mutation_id: mutation.mutationId, payload: memoryJson(mutation.payload) };
-}
-
-/**
- * Decode one memory mutation; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields or an empty id, besides the mutation's own
- *   errors.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function mutationFromPayload(value: unknown, label: string): MemoryMutation {
-  const wire = wireObject(value, label, ["mutation_id", "payload"]);
-  return new MemoryMutation(requireName(wire["mutation_id"], `${label} mutation_id`), wire["payload"]);
-}
-
-/** Encode one sanitized memory-operation failure. */
-function memoryFailurePayload(failure: MemoryOperationFailure): JsonObject {
-  return { stage: failure.stage, code: failure.code, message: failure.message, retryable: failure.retryable };
-}
-
-/**
- * Decode one sanitized memory-operation failure; `label` names it in errors.
- *
- * @throws RangeError for missing or extra fields or an empty string field.
- * @throws TypeError when a field has the wrong JSON type.
- */
-function memoryFailureFromPayload(value: unknown, label: string): MemoryOperationFailure {
-  const wire = wireObject(value, label, ["stage", "code", "message", "retryable"]);
-  return new MemoryOperationFailure(
-    requireName(wire["stage"], `${label} stage`),
-    requireName(wire["code"], `${label} code`),
-    requireName(wire["message"], `${label} message`),
-    wireBool(wire["retryable"], `${label} retryable`),
-  );
-}
-
 /** The fields of a `run_started` payload; every `run_started` payload holds each one. */
 const RUN_STARTED_FIELDS = [
   "flow_fingerprint",
   "start_wiring_override",
   "effective_llm_by_static_path",
   "num_workers",
-  "memory_snapshots",
-  "learnable",
-  "memories",
-  "memory_stacks",
   "defaults",
   "call_time_llm",
   "flow",
@@ -2882,10 +2552,6 @@ const RECORD_CODECS: readonly RecordCodec[] = [
       start_wiring_override: record.startWiringOverride as JsonObject,
       effective_llm_by_static_path: record.effectiveLlmByStaticPath as JsonObject,
       num_workers: BigInt(record.numWorkers),
-      memory_snapshots: record.memorySnapshots === null ? null : record.memorySnapshots.map(snapshotPayload),
-      learnable: record.learnable,
-      memories: record.memories === null ? null : record.memories.map(memorySpecPayload),
-      memory_stacks: record.memoryStacks === null ? null : record.memoryStacks.map(memoryStackPayload),
       // The writer sorts every object's keys, so the defaults come out sorted by name.
       defaults: record.defaults as JsonObject,
       call_time_llm: record.callTimeLlm as JsonObject | null,
@@ -2908,14 +2574,6 @@ const RECORD_CODECS: readonly RecordCodec[] = [
           `${label} effective_llm_by_static_path`,
         ) as Record<string, JsonObject>,
         numWorkers: wireInt(payload["num_workers"], `${label} num_workers`),
-        memorySnapshots: wireNullableItems(
-          payload["memory_snapshots"],
-          `${label} memory_snapshots`,
-          snapshotFromPayload,
-        ),
-        learnable: wireBool(payload["learnable"], `${label} learnable`),
-        memories: wireNullableItems(payload["memories"], `${label} memories`, memorySpecFromPayload),
-        memoryStacks: wireNullableItems(payload["memory_stacks"], `${label} memory_stacks`, memoryStackFromPayload),
         defaults: wireObject(payload["defaults"], `${label} defaults`) as Record<string, bigint>,
         callTimeLlm: payload["call_time_llm"] as JsonObject | null,
         flow: payload["flow"] === null ? null : flowFromPayload(payload["flow"], `${label} flow`),
@@ -3187,57 +2845,6 @@ const RECORD_CODECS: readonly RecordCodec[] = [
     nodeId: (payload, label) =>
       requireName(wireObject(payload["failure"], `${label} failure`)["node_id"], `${label} failure node_id`),
   }),
-  recordCodec({
-    cls: MemoryCommitRequestedRecord,
-    kind: "memory_commit_requested",
-    encode: (record) => ({
-      memory: record.memory,
-      commit_id: record.commitId,
-      attempt_id: BigInt(record.attemptId),
-      mutations: record.mutations.map(mutationPayload),
-    }),
-    decode: (payload, label) => {
-      requireFields(payload, ["memory", "commit_id", "attempt_id", "mutations"], label);
-      return new MemoryCommitRequestedRecord(
-        requireName(payload["memory"], `${label} memory`),
-        requireName(payload["commit_id"], `${label} commit_id`),
-        wireItems(payload["mutations"], `${label} mutations`, mutationFromPayload),
-        wireInt(payload["attempt_id"], `${label} attempt_id`),
-      );
-    },
-  }),
-  recordCodec({
-    cls: MemoryCommitSucceededRecord,
-    kind: "memory_commit_succeeded",
-    encode: (record) => ({ memory: record.memory, commit_id: record.commitId, attempt_id: BigInt(record.attemptId) }),
-    decode: (payload, label) => {
-      requireFields(payload, ["memory", "commit_id", "attempt_id"], label);
-      return new MemoryCommitSucceededRecord(
-        requireName(payload["memory"], `${label} memory`),
-        requireName(payload["commit_id"], `${label} commit_id`),
-        wireInt(payload["attempt_id"], `${label} attempt_id`),
-      );
-    },
-  }),
-  recordCodec({
-    cls: MemoryCommitFailedRecord,
-    kind: "memory_commit_failed",
-    encode: (record) => ({
-      memory: record.memory,
-      commit_id: record.commitId,
-      attempt_id: BigInt(record.attemptId),
-      failure: memoryFailurePayload(record.failure),
-    }),
-    decode: (payload, label) => {
-      requireFields(payload, ["memory", "commit_id", "attempt_id", "failure"], label);
-      return new MemoryCommitFailedRecord(
-        requireName(payload["memory"], `${label} memory`),
-        requireName(payload["commit_id"], `${label} commit_id`),
-        memoryFailureFromPayload(payload["failure"], `${label} failure`),
-        wireInt(payload["attempt_id"], `${label} attempt_id`),
-      );
-    },
-  }),
 ];
 
 /** Each record kind's codec by wire kind: the closed set of kinds this schema reads. */
@@ -3305,18 +2912,6 @@ function wireTextArray(value: unknown, label: string): string[] {
  */
 function wireItems<T>(value: unknown, label: string, decode: (item: unknown, label: string) => T): T[] {
   return wireArray(value, label).map((item) => decode(item, `${label} item`));
-}
-
-/**
- * Return `null` for `null`, else each item of the JSON array `value` decoded by `decode` with the
- * label `<label> item`.
- *
- * @throws TypeError when `value` is neither an array nor `null`, besides `decode`'s errors.
- */
-function wireNullableItems<T>(value: unknown, label: string, decode: (item: unknown, label: string) => T): T[] | null {
-  if (value === null) return null;
-  if (!isList(value)) throw new TypeError(`${label} must be an array or null`);
-  return value.map((item) => decode(item, `${label} item`));
 }
 
 /**

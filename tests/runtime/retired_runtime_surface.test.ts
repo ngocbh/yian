@@ -25,7 +25,6 @@ import {
   markdownVersion,
 } from "../../src/memory/storage/markdown.ts";
 import { checkStoragePath, SQLiteStorage } from "../../src/memory/storage/sqlite.ts";
-import { buildMemories, MemoryRegistry } from "../../src/memory_host.ts";
 import { checkConversation, checkMessage, ConversationError } from "../../src/nodes/agent/messages.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import * as base from "../../src/nodes/base.ts";
@@ -85,7 +84,6 @@ test("only the final log-only runtime and run API remain", () => {
     onStream: true,
     live: true,
     llmConfig: true,
-    memory: true,
     tools: true,
     skills: true,
     context: true,
@@ -96,7 +94,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     parent: true,
   };
-  expect(Object.keys(options)).toHaveLength(17);
+  expect(Object.keys(options)).toHaveLength(16);
   expect(run.runFlow.length).toBe(2);
   const advanceOptions: Record<keyof run.AdvanceOptions, true> = {
     log: true,
@@ -106,7 +104,6 @@ test("only the final log-only runtime and run API remain", () => {
     onEvent: true,
     onStream: true,
     live: true,
-    memory: true,
     tools: true,
     skills: true,
     apiKey: true,
@@ -119,7 +116,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     checkLlmConfigs: true,
   };
-  expect(Object.keys(advanceOptions)).toHaveLength(19);
+  expect(Object.keys(advanceOptions)).toHaveLength(18);
   expect(run.advance.length).toBe(1);
 
   const result = new run.RunResult({ input: {}, status: "succeeded", runId: "r1", log: null });
@@ -152,8 +149,6 @@ test("the package root exports exactly its documented root list plus the memory 
     pendingCalls: run.pendingCalls,
     RunBusyError: run.RunBusyError,
     DeliveryRefused: run.DeliveryRefused,
-    buildMemories,
-    MemoryRegistry,
     SQLiteStorage,
     checkStoragePath,
     FileMarkdownStore,

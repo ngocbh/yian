@@ -18,7 +18,6 @@ import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { NodeStarted, type RunEvent, RunSucceeded } from "../../src/events.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
-import { DeclSite, MemoryScope, MemorySnapshotEnvelope, MemorySpec, MemoryStack } from "../../src/memory/index.ts";
 import { type Node, NodeKind, Pending } from "../../src/nodes/base.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { EndNode } from "../../src/nodes/end/node.ts";
@@ -690,15 +689,11 @@ test("resume prepends ordered effect retries before existing ready work", async 
 
 // ---- The retry frontier of unfinished invocations ----
 
-/**
- * Return `START -> agent -> END` where `agent` has the memory scope `notes`; with `sibling`, also
- * `START -> sibling`.
- */
+/** Return `START -> agent -> END`; with `sibling`, also `START -> sibling`. */
 function agentFlow(options: { sibling?: boolean } = {}): CompiledFlow {
   const agent = new FuncNode("agent", () => {
     throw new Error("replay invoked a node");
   });
-  agent.memoryScope = new MemoryScope(["agent"], { memories: ["notes"] });
   const built = new CompiledFlow(
     new Map<string, Node>([
       [START_ID, new StartNode(START_ID)],
@@ -718,12 +713,8 @@ function agentFlow(options: { sibling?: boolean } = {}): CompiledFlow {
   return built;
 }
 
-/**
- * Return a state and log with START succeeded and `agent` in flight. The memory `notes` is
- * recorded unless `enabled` is false; `sibling` shapes the flow.
- */
-function agentStarted(options: { sibling?: boolean; enabled?: boolean } = {}): { state: RunState; log: MemoryRunLog } {
-  const enabled = options.enabled ?? true;
+/** Return a state and log with START succeeded and `agent` in flight; `sibling` shapes the flow. */
+function agentStarted(options: { sibling?: boolean } = {}): { state: RunState; log: MemoryRunLog } {
   const flow = agentFlow(options);
   const state = new RunState(flow);
   const pool = new VariablePool(flow.startId);
@@ -739,10 +730,6 @@ function agentStarted(options: { sibling?: boolean; enabled?: boolean } = {}): {
       startWiringOverride: {},
       effectiveLlmByStaticPath: {},
       numWorkers: 0,
-      learnable: false,
-      memories: enabled ? [new MemorySpec("notes", "episodic", {}, [new DeclSite([], ["root"], "agent")])] : null,
-      memoryStacks: enabled ? [new MemoryStack(["agent"], ["notes"])] : null,
-      memorySnapshots: enabled ? [new MemorySnapshotEnvelope("notes", {})] : null,
     }),
   );
   commitInitialPool(log, state, pool);
@@ -752,18 +739,7 @@ function agentStarted(options: { sibling?: boolean; enabled?: boolean } = {}): {
   return { state, log };
 }
 
-/** Return `reducerSnapshot(state)` with the memory and learning state. */
-function frontierSnapshot(state: RunState): Record<string, unknown> {
-  return {
-    ...reducerSnapshot(state),
-    memories: state.memories,
-    memoryStacks: state.memoryStacks,
-    memorySnapshots: state.memorySnapshots,
-    learnable: state.learnable,
-  };
-}
-
-/** Return `state`'s topology and each node's class, scopes and `commitAs`. */
+/** Return `state`'s topology and each node's class and `commitAs`. */
 function frontierFlowSnapshot(state: RunState): Record<string, unknown> {
   const flow = state.flow;
   return {
@@ -777,7 +753,6 @@ function frontierFlowSnapshot(state: RunState): Record<string, unknown> {
     nodes: [...flow.nodes].map(([nodeId, node]) => [
       nodeId,
       node.constructor,
-      node.memoryScope,
       node.commitAs,
     ]),
   };
@@ -790,13 +765,13 @@ function expectReplays(state: RunState, log: MemoryRunLog, options: { sibling?: 
       throw new Error("builder called");
     },
   });
-  expect(frontierSnapshot(replayed)).toEqual(frontierSnapshot(state));
+  expect(reducerSnapshot(replayed)).toEqual(reducerSnapshot(state));
   expect(frontierFlowSnapshot(replayed)).toEqual(frontierFlowSnapshot(state));
   return replayed;
 }
 
-test("a resume allows memory-free unfinished invocations", () => {
-  const { state, log } = agentStarted({ enabled: false });
+test("a resume starts an unfinished invocation again", () => {
+  const { state, log } = agentStarted();
   const firstSequence = state.acceptedStarts.get("agent")!;
   commitPrepared(log, state, prepareRunResumed(state, { numWorkers: 2 }));
   expect(state.acceptedStarts).toEqual(new Map());

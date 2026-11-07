@@ -6,12 +6,11 @@
  * children through source-neutral hooks. This module joins those responsibilities without
  * importing Compose, resolving a source, or inspecting arbitrary semantic payloads.
  *
- * Knows about:   compile/model, nodes, memory contracts, typesys and diagnostics.
+ * Knows about:   compile/model, nodes, typesys and diagnostics.
  * Never imports: compose, runtime, the run boundary, the CLI, or provider SDKs.
  */
 
 import { OriginRef, type OriginResolver, ResolverTable, reprText } from "../diagnostics.ts";
-import { iterMemoryDeclOrigins, rewriteMemoryDeclOrigins } from "../memory/contracts.ts";
 import { Node } from "../nodes/base.ts";
 import {
   Binding,
@@ -27,11 +26,10 @@ import { CompiledFlow, copyGraph, Flow, FlowOutput } from "./model.ts";
  * Iterate declared provenance slots in one static flow graph.
  *
  * Traversal follows wiring and outputs, then nodes and their baked children in deterministic
- * structural order; a compiled flow's memory declarations and its `flowLlmConfig` layer holding
- * values come first. Flow, node, and frozen-carrier identities are visited once, so shared
- * children and deliberate object cycles terminate. Equal origins in distinct carriers remain
- * distinct occurrences. Binding sources other than value templates, parameter defaults, node
- * environments, and render metadata stay opaque.
+ * structural order; a compiled flow's `flowLlmConfig` layer holding values comes first. Flow, node,
+ * and frozen-carrier identities are visited once, so shared children and deliberate object cycles
+ * terminate. Equal origins in distinct carriers remain distinct occurrences. Binding sources other
+ * than value templates, parameter defaults, node environments, and render metadata stay opaque.
  *
  * @param flow Compiled topology or compile-owned fragment to traverse.
  * @returns The present semantic origins; a source-free graph yields none.
@@ -54,7 +52,6 @@ function* walkFlowOrigins(
   seenFlows.add(flow);
 
   if (flow instanceof CompiledFlow) {
-    yield* iterMemoryDeclOrigins(flow.memories, seenCarriers);
     if (flow.flowLlmConfig instanceof Binding || flow.flowLlmConfig instanceof ValueTemplate) {
       yield* iterOriginCarrier(flow.flowLlmConfig, seenCarriers);
     }
@@ -210,7 +207,6 @@ function rewriteFlowOriginGraph(
   seenFlows.add(flow);
 
   if (flow instanceof CompiledFlow) {
-    flow.memories = rewriteMemoryDeclOrigins(flow.memories, mapper, seen);
     if (flow.flowLlmConfig instanceof Binding || flow.flowLlmConfig instanceof ValueTemplate) {
       flow.flowLlmConfig = rewriteOriginCarrier(flow.flowLlmConfig, mapper, seen);
     }

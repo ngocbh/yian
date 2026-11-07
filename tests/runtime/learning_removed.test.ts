@@ -1,10 +1,11 @@
 /**
- * Learning is gone: a run result has no backward pass, the removed options are refused by name, the
- * backward records are unknown kinds, and no node has a backward hook.
+ * Learning and the old memories are gone: a run result has no backward pass, the removed options are
+ * refused by name, the backward and memory commit records are unknown kinds, `run_started` holds no
+ * memory state, and no node has a backward hook.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,7 +78,30 @@ test("runFlow refuses the removed learnable option by name", async () => {
   );
 });
 
-test.each(["backward_started", "backward_ready", "backward_finished"])("a %s record is an unknown kind", (kind) => {
+test("runFlow refuses the removed memory option by name", async () => {
+  const flow = await load();
+  await expect(runFlow(flow, { topic: "owls" }, { memory: new Map(), env: hostEnv(dir) } as never)).rejects.toThrow(
+    "the memory option was removed: pass each memory as a flow input",
+  );
+});
+
+test("run_started records no old memory state and no learnable flag", async () => {
+  const { log } = await runSimple();
+  const start = JSON.parse(readFileSync(log, "utf8").split("\n")[0]!);
+  expect(start.kind).toBe("run_started");
+  for (const field of ["memory_snapshots", "memories", "memory_stacks", "learnable"]) {
+    expect(Object.keys(start.payload)).not.toContain(field);
+  }
+});
+
+test.each([
+  "backward_started",
+  "backward_ready",
+  "backward_finished",
+  "memory_commit_requested",
+  "memory_commit_succeeded",
+  "memory_commit_failed",
+])("a %s record is an unknown kind", (kind) => {
   const line = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind, payload: {}, run_id: "r", schema: 27, seq: 1 });
   expect(() => decodeRecord(line)).toThrow(`run-record kind '${kind}' is unsupported in schema 27`);
 });

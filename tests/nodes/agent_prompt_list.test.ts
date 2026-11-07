@@ -8,7 +8,6 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ExpressionError } from "../../src/expr/expressions.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
 import { type AgentPrompt, AgentNode, type PromptItem } from "../../src/nodes/agent/node.ts";
 import { type NodeCaps, Output } from "../../src/nodes/base.ts";
 import { Parameter } from "../../src/nodes/contracts.ts";
@@ -195,19 +194,6 @@ test("a rendered list with no message fails the node", async () => {
   expect(error).toEqual(new ExpressionError("node 'reply' prompt: the rendered list holds no message"));
 });
 
-test("recall and the rendered prompt read the list's text forms", async () => {
-  const recalled: string[] = [];
-  await run(agent(CHAT), HISTORY, {
-    openMemoryContext: async (_system, prompt) => {
-      recalled.push(prompt);
-      return new MemoryContext();
-    },
-  });
-
-  expect(recalled).toEqual(["Now: again"]);
-  expect(renderPrompt(agent(CHAT), { history: HISTORY, message: "again" }, null).promptText).toBe("Now: again");
-});
-
 test("the node refuses a malformed list prompt", () => {
   expect(() => agent([])).toThrow(new RangeError("AGENT node 'reply': a list prompt must hold at least one item"));
   expect(() => agent([{ role: "system", text: "x" } as unknown as PromptItem])).toThrow(
@@ -246,20 +232,6 @@ test("a spliced Message ending the list must be the user's", async () => {
   const error = await rejected(node.forward({ history: TOOL_HISTORY, message: "x" }, { models }));
   expect(error).toEqual(new ExpressionError("node 'reply' prompt: the last message must be from the user, got assistant"));
   expect(models.built).toBe(0);
-});
-
-test("recall reads the last Message's text", async () => {
-  const recalled: string[] = [];
-  const reply = {
-    role: "assistant",
-    protocol: "anthropic_messages",
-    parts: [{ type: "reasoning", text: "r", provider_payload: { sig: "s" } }, { type: "text", text: "It says hi." }],
-  };
-  const last = { role: "user", author: null, parts: [{ type: "text", text: "Go" }] };
-  await run(agent([{ splice: "history" }]), [TOOL_HISTORY[0], reply, last], {
-    openMemoryContext: async (_system, prompt) => (recalled.push(prompt), new MemoryContext()),
-  });
-  expect(recalled).toEqual(["Go"]);
 });
 
 test("a spliced media part fails the node before any model call", async () => {

@@ -62,7 +62,7 @@ function setting(name: string, value: string): Env {
 
 /** Load `text` and run it on `{question: "q"}` with `model`, in `env`; the other options go to `runFlow`. */
 async function run(text: string, model: ScriptedModel, env: Env, options: RunFlowOptions = {}): Promise<RunResult> {
-  return runWith(await loadFlow(text, { env }), { question: "q" }, null, model, { env, ...options });
+  return runWith(await loadFlow(text, { env }), { question: "q" }, model, { env, ...options });
 }
 
 /** A model replying a bad score, then a good one. */

@@ -32,9 +32,8 @@
  * which lists a log's calls from its steps, and `agentCall`, which rebuilds one call's request and
  * reads its attempts, reply and tool results.
  *
- * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory contracts,
- *                memory_host (the registry type check and the cleanup note), nodes, platform, runtime,
- *                skills, tools, typesys.
+ * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, nodes,
+ *                platform, runtime, skills, tools, typesys.
  * Never imports: the CLI.
  */
 
@@ -58,12 +57,6 @@ import {
   valueConfigSubjects,
 } from "./compile/llm_cascade.ts";
 import { flowFingerprint } from "./compile/manifest.ts";
-import {
-  memoryStacks,
-  type ResolvedMemoryLayout,
-  resolveMemoryLayout,
-  stampMemoryLayout,
-} from "./compile/memory_layout.ts";
 import { type CompiledFlow, copyGraph, type Flow } from "./compile/model.ts";
 import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
@@ -71,7 +64,7 @@ import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
 import { loadFlowSource } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
-import { compareCodeUnits, type Failure, getCloseMatches, noteCleanup, type OriginRef, reprText } from "./diagnostics.ts";
+import { compareCodeUnits, type Failure, getCloseMatches, noteCleanup, reprText } from "./diagnostics.ts";
 import { CallClosed, RunCancelled, type RunEvent, RunFailed, RunSucceeded, type StreamChunk } from "./events.ts";
 import { ExpressionError } from "./expr/expressions.ts";
 import { checkTemplateCalls } from "./expr/template.ts";
@@ -95,14 +88,6 @@ import { validateHeaders } from "./llm_clients/connection_settings.ts";
 import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
 import { Message, NamedTool, type Request, ToolCallPart, ToolSpec } from "./llm/messages.ts";
 import {
-  type Memory,
-  MemorySetupError,
-  type MemorySpec,
-  type MemoryStack,
-  sameMemorySpec,
-} from "./memory/contracts.ts";
-import { MemoryRegistry } from "./memory_host.ts";
-import {
   type FoldedSteps,
   foldSteps,
   fromModelMessage,
@@ -119,8 +104,6 @@ import {
   iterSourceStrings,
   type OutputContract,
   type Parameter,
-  sameItems,
-  sameOptional,
 } from "./nodes/contracts.ts";
 import { FileLockError, isMissingPath, realScheduler, type Scheduler, syncFolder, VERSION, warn } from "./platform.ts";
 import { type DeliveryOp, FlowEngine, prepareDelivery, resumedAttemptEvents } from "./runtime/engine.ts";
@@ -152,7 +135,6 @@ import {
   RunResumedRecord,
   RunStartedRecord,
 } from "./runtime/log.ts";
-import { MemoryRuntime } from "./runtime/memory_runtime.ts";
 import { emptyRunScan, foldRunScan, scanStatus, unfinishedStatus } from "./runtime/run_index.ts";
 import {
   applyWaitsRecord,
@@ -564,8 +546,8 @@ function idleRun(
 /**
  * Close what a run call opened and hand the run on, whatever fails.
  *
- * 1. Servers close, then memory. Server close never rejects (`closeRunServers`), so only memory and
- *    log close errors are noted.
+ * 1. Servers close. Server close never rejects (`closeRunServers`), so only log close errors are
+ *    noted.
  * 2. Then, in one synchronous step: the next idle entry is built (after every await, so it holds
  *    every record appended under this hold), the log closes, and the hold is released.
  *
@@ -575,7 +557,6 @@ function idleRun(
  */
 async function closeAndRelease(parts: {
   servers: readonly McpServer[];
-  memoryRuntime: MemoryRuntime | null;
   authority: RunLog | null;
   primary: { error: unknown } | null;
   hold: RunHold | null;
@@ -589,11 +570,6 @@ async function closeAndRelease(parts: {
     else noteCleanup(pending.error, error, `${operation} also raised`);
   };
   await closeRunServers(parts.servers);
-  try {
-    await parts.memoryRuntime?.close();
-  } catch (error) {
-    note("memory-session close", error);
-  }
   let next: IdleRun | null = null;
   try {
     // Cleanup errors after a refusal are only noted on it, so the entry is still kept; only a
@@ -654,11 +630,6 @@ export interface RunFlowOptions {
    */
   llmConfig?: Readonly<Record<string, unknown>> | null;
   /**
-   * The backend of each declared memory key, a `Map`, typically a `MemoryRegistry`. Each key's
-   * session opens before the log and closes when the run ends.
-   */
-  memory?: ReadonlyMap<string, Memory> | null;
-  /**
    * The tools this run sees, keyed by tool id; `null` (the default) uses the registered tools.
    * A record, even an empty one, is the whole set. An `McpServer` that isn't open is opened for
    * this run and closed when it ends; one the host opened stays open.
@@ -710,8 +681,8 @@ export interface RunFlowOptions {
  *   isn't a `LiveChannel`, `onEvent` or `onStream` isn't a function, `inputs` isn't a record (a
  *   Proxy included), `llmConfig` is a primitive or an array, a `tools` entry is malformed, `skills`
  *   isn't a `Map` of `Skill`s each keyed by its name, `scheduler` lacks `now` or `sleep`, `random`
- *   isn't a function, `models` lacks `env` or `createModel`, or `memory` isn't a `Map` of memories.
- * @throws RangeError when `learnable`, a removed option, is given.
+ *   isn't a function, or `models` lacks `env` or `createModel`.
+ * @throws RangeError when `learnable` or `memory`, a removed option, is given.
  * @throws ExpressionError when a condition, binding or prompt set in code can't run.
  * @throws TypeCheckError when an input holds an accessor, NaN, a lone surrogate, a cycle or
  *   another non-yian value, nests deeper than `YIAN_MAX_VALUE_NESTING` levels, or has text that
@@ -723,8 +694,6 @@ export interface RunFlowOptions {
  *   has no provider or model, or `llmConfig.api_key` has no `provider`; or the identity, worker
  *   count or prepared start state breaks its contract; or a `tools` server was opened by
  *   another run in progress. A message never echoes the key.
- * @throws MemorySetupError when the flow's memory layout breaks a rule, `memory` lacks a declared
- *   key or is a `MemoryRegistry` built for another flow, or a memory fails to open its session.
  * @throws McpConnectError when a `tools` server doesn't start or doesn't list its tools.
  * @throws AuthError when the credential store can't be read.
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
@@ -770,6 +739,9 @@ type DriveOptions = Pick<
 function checkDriveOptions(options: DriveOptions): [string, McpServer][] {
   if (Object.hasOwn(options, "learnable")) {
     throw new RangeError("learnable was removed: yian no longer learns from runs; drop the option");
+  }
+  if (Object.hasOwn(options, "memory")) {
+    throw new RangeError("the memory option was removed: pass each memory as a flow input");
   }
   const { tools = null, context, signal = null, live = null, onEvent = null, onStream = null } = options;
   const { scheduler = null, random = null, models = null } = options;
@@ -1058,13 +1030,12 @@ async function startRun(
   runDefaults: Defaults,
   env: Env,
 ): Promise<RunResult> {
-  const { log = null, runId = null, numWorkers = 8, memory = null } = options;
+  const { log = null, runId = null, numWorkers = 8 } = options;
   const live = options.live ?? null;
   const { tools = null, skills = null, context, signal = null } = options;
   const scheduler = options.scheduler ?? realScheduler;
   const models = options.models ?? defaultModelAccess(env);
   let runServers: McpServer[] = [];
-  let memoryRuntime: MemoryRuntime | null = null;
   let authority: RunLog | null = null;
   let primary: { error: unknown } | null = null;
   let runHold: RunHold | null = null;
@@ -1135,19 +1106,6 @@ async function startRun(
     pool.addSystem("run_id", canonicalRunId);
     const startWiringOverride = startWiring(flow.input, coerced);
 
-    let layout: MemoryLayoutParts | null = null;
-    if (memory !== null) {
-      layout = resolveRuntimeMemoryLayout(privateFlow);
-      checkRegistryTypes(memory, layout.memories);
-      memoryRuntime = await MemoryRuntime.open({
-        memories: layout.memories,
-        origins: layout.origins,
-        memory,
-        snapshots: null,
-        signal,
-      });
-    }
-
     // The result reads its files through the contract a CALL of this flow gets.
     const state = new RunState(privateFlow, { resultContract: childSignature(flow).output });
     const preparedStart = prepareRunStarted(state, {
@@ -1157,10 +1115,6 @@ async function startRun(
       effectiveLlmByStaticPath: effectiveLlm,
       callTimeLlm,
       numWorkers,
-      memorySnapshots: memoryRuntime?.snapshots ?? null,
-      learnable: false,
-      memories: layout?.memories ?? null,
-      memoryStacks: layout?.stacks ?? null,
       defaults: nonDefaults(runDefaults),
       flow: flow.source,
       skills: recordedSkills(flow.compiled, skills),
@@ -1204,7 +1158,6 @@ async function startRun(
       skills,
       models,
       scheduler,
-      memoryRuntime,
       runDir: locator === null ? null : dirname(locator),
       hold: runHold,
     });
@@ -1213,7 +1166,7 @@ async function startRun(
     primary = { error };
     throw error;
   } finally {
-    await closeAndRelease({ servers: runServers, memoryRuntime, authority, primary, hold: runHold, keep });
+    await closeAndRelease({ servers: runServers, authority, primary, hold: runHold, keep });
   }
 }
 
@@ -1321,11 +1274,6 @@ export interface AdvanceOptions {
    */
   live?: LiveChannel | null;
   /**
-   * The backend of each declared memory key, a `Map`, typically a `MemoryRegistry`. Required when
-   * the run recorded memory and has unfinished work; a finished log opens no memory.
-   */
-  memory?: ReadonlyMap<string, Memory> | null;
-  /**
    * The tools the resumed segment sees, with `runFlow`'s rules. Only the specs of the tools AGENTs
    * grant are recorded, so pass the tools the run used (`ask_user` included); for an unfinished
    * run, each granted tool's description and parameters must be the recorded ones. An unopened
@@ -1377,10 +1325,10 @@ export interface AdvanceOptions {
  * from disk (`loadRecordedFlow`), and a flow built in code is the `flow` option. Its fingerprint
  * must match the recorded one. The recorded history is replayed silently on a private copy of the
  * flow; recovery never reads the ambient model defaults, mints a new identity or takes new inputs
- * or configuration. A finished log returns its result with no events, opening no server and no
- * memory. Otherwise a log another yian version started is resumed with a warning naming both
- * versions, and the host's specs of the tools and skills the AGENTs grant must be the recorded ones
- * (the skills checked before any server starts, the tools once the servers are open).
+ * or configuration. A finished log returns its result with no events, opening no server. Otherwise
+ * a log another yian version started is resumed with a warning naming both versions, and the host's
+ * specs of the tools and skills the AGENTs grant must be the recorded ones (the skills checked
+ * before any server starts, the tools once the servers are open).
  *
  * `RunResumed` is written only when the last segment crashed or stopped (work in flight, a
  * recorded stop, or no `run_waiting` as its last frontier record) or `numWorkers` changes; then the
@@ -1407,21 +1355,17 @@ export interface AdvanceOptions {
  * @throws ExpressionError as `runFlow`, for an unfinished run.
  * @throws RangeError when the log's prefix is invalid, the run's flow was built in code and no
  *   `flow` was passed, or its flow files were recorded and one was, `codeRoot` isn't the recorded
- *   code root, the flow fingerprint differs,
- *   the worker count is negative, `apiKey` or `headers` is refused or their header names aren't the recorded
- *   ones (the message never echoes a value), a recorded agent config has an invalid field, the
- *   recorded memory table doesn't match the flow, or, for an unfinished run, a tool or skill
+ *   code root, the flow fingerprint differs, the worker count is negative, `apiKey` or `headers`
+ *   is refused or their header names aren't the recorded ones (the message never echoes a value),
+ *   a recorded agent config has an invalid field, or, for an unfinished run, a tool or skill
  *   check of `runFlow` fails, a granted tool's spec or skill's text differs from the recorded one
  *   (`resume refused: tools.<name> description differs from the recorded one`), a `tools` server
- *   was opened by another run in progress, or a started
- *   call-time agent resolves to another config than the one it recorded (`node '<path>'
- *   llm_config: recorded config differs from the recomputed one; ...`), before its model call.
+ *   was opened by another run in progress, or a started call-time agent resolves to another config
+ *   than the one it recorded (`node '<path>' llm_config: recorded config differs from the
+ *   recomputed one; ...`), before its model call.
  * @throws AuthError when a call-time agent resolves to the provider of the run's host key and
  *   `apiKey` (or a recorded header) wasn't given, before its model call, or the credential store
  *   can't be read.
- * @throws MemorySetupError when the run recorded memory and has unfinished work, and `memory` is
- *   missing, lacks a key, is a `MemoryRegistry` built for another flow, or can't reproduce the
- *   recorded snapshots.
  * @throws McpConnectError when a `tools` server doesn't start or doesn't list its tools.
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from `env`'s.
@@ -1455,7 +1399,6 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     const root = resolvedRoot(options.codeRoot);
     const runHold = await holdForAdvance(key, locator);
     let authority: JsonlRunLog | null = null;
-    let memoryRuntime: MemoryRuntime | null = null;
     let runServers: McpServer[] = [];
     let primary: { error: unknown } | null = null;
     let keep: () => IdleRun | null = () => null;
@@ -1513,10 +1456,6 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       if (options.checkLlmConfigs != null) {
         await options.checkLlmConfigs(legacyConnectionMap(recordedLlm), { callTimeHost: selectionHost(callTime) });
       }
-      const memory = options.memory ?? null;
-      if (state.memories !== null && memory === null) {
-        throw new MemorySetupError("resuming this run requires its enabled memory mapping");
-      }
       // Skills need no server, so a changed one is refused before any server starts.
       checkRecordedSpecs("skills", start.skills, recordedSkills(flow.compiled, skills));
       runServers = await openRunServers(unopened, signal);
@@ -1525,8 +1464,6 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkToolTypes(flow.compiled, runTools);
       checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
       checkRecordedToolGroups(start.toolGroups, recordedToolGroups(flow.compiled, runTools));
-
-      if (state.memories !== null) memoryRuntime = await openRecordedMemory(flow, state, memory!, signal);
 
       const prepared = resume ? prepareRunResumed(state, { numWorkers }) : null;
       // This segment's appends go through the live channel's wrapper.
@@ -1542,7 +1479,6 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
         skills,
         models,
         scheduler,
-        memoryRuntime,
         runDir: dirname(locator),
         hold: runHold,
       });
@@ -1551,7 +1487,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       primary = { error };
       throw error;
     } finally {
-      await closeAndRelease({ servers: runServers, memoryRuntime, authority, primary, hold: runHold, keep });
+      await closeAndRelease({ servers: runServers, authority, primary, hold: runHold, keep });
     }
   });
 }
@@ -1807,7 +1743,6 @@ async function deliverTo(
     } finally {
       await closeAndRelease({
         servers: [],
-        memoryRuntime: null,
         authority,
         primary,
         hold: runHold,
@@ -2457,7 +2392,7 @@ export interface AgentCallRequest {
   readonly model: string;
   /** The model config the call used, without the host's key, headers or connection. */
   readonly params: JsonObject;
-  /** The system message's text (recalled memory included when rebuilt); `null` without one. */
+  /** The system message's text; `null` without one. */
   readonly system: string | null;
   /** The other messages, in order, as `Message` values. */
   readonly messages: readonly MessageValue[];
@@ -3299,9 +3234,8 @@ export function replayRunLog(
  *
  * @throws RangeError when the log's run id or sequence is malformed or changes while it is read,
  *   the prefix is empty, an envelope isn't in canonical form or breaks the run id or the sequence,
- *   the first record isn't `RunStarted`, the flow fingerprint differs, the recorded memory table
- *   doesn't match the flow, a record isn't the exact next transition, or the log ends inside its
- *   run start (before the START inputs' commit).
+ *   the first record isn't `RunStarted`, the flow fingerprint differs, a record isn't the exact
+ *   next transition, or the log ends inside its run start (before the START inputs' commit).
  * @throws DefaultsMismatchError when the run recorded `YIAN_*` values that differ from the ones in
  *   effect.
  */
@@ -3374,10 +3308,6 @@ export function replayCompiledRunLog(
     // call-time agent gets them only when its selection names the key's provider, and uses them
     // only when its resolved config is marked.
     bindHostCredentials(privateFlow, apiKey, headers);
-  }
-  if (first.memories !== null) {
-    const replayed = resolveRuntimeMemoryLayout(privateFlow);
-    checkRecordedMemoryTable(first.memories, first.memoryStacks, replayed.memories, replayed.stacks, "supplied flow");
   }
   const state = replayRecords(new RunState(privateFlow, { resultContract }), canonical, {
     growBuilder: buildGrow,
@@ -3482,114 +3412,6 @@ function replayedScan(flow: ComposedFlow, envelopes: readonly RecordEnvelope[]):
   };
 }
 
-/** A layout's record-facing key table, per-key origins and stacks. */
-type MemoryLayoutParts = {
-  memories: readonly MemorySpec[];
-  origins: Map<string, OriginRef | null>;
-  stacks: readonly MemoryStack[];
-};
-
-/**
- * Derive the key table, origins and stacks, and stamp one private graph.
- *
- * @param flow The run's private flow copy; its nodes get their memory scopes.
- * @throws MemorySetupError when the layout breaks a rule.
- */
-function resolveRuntimeMemoryLayout(flow: CompiledFlow): MemoryLayoutParts {
-  return memoryLayoutParts(stampMemoryLayout(flow));
-}
-
-/** Return one layout's record-facing key table, per-key origins and stacks. */
-function memoryLayoutParts(resolved: ResolvedMemoryLayout): MemoryLayoutParts {
-  return {
-    memories: resolved.memories.map((memory) => memory.spec),
-    origins: new Map(resolved.memories.map((memory) => [memory.key, memory.origin])),
-    stacks: memoryStacks(resolved),
-  };
-}
-
-/**
- * Reject a `MemoryRegistry` whose declared types differ from this flow's table; any other `Map` is
- * not checked.
- *
- * @throws MemorySetupError when a key's registry type differs from its declared type.
- */
-function checkRegistryTypes(memory: ReadonlyMap<string, Memory>, specs: readonly MemorySpec[]): void {
-  if (!(memory instanceof MemoryRegistry)) return;
-  for (const spec of specs) {
-    const built = memory.types.get(spec.key);
-    if (built !== undefined && built !== spec.type) {
-      throw new MemorySetupError(
-        `memory ${reprText(spec.key)} is declared as ${reprText(spec.type)} but the registry ` +
-          `built it as ${reprText(built)}; build the registry from the flow you run`,
-      );
-    }
-  }
-}
-
-/**
- * Resolve memory on the authored static program, never on replayed growth.
- *
- * Nothing is stamped, so a def called from several nodes needs no de-aliasing; the table, origins
- * and stacks equal those a fresh run records.
- *
- * @throws MemorySetupError when the layout breaks a rule.
- */
-function resolveAuthoredMemoryLayout(flow: ComposedFlow): MemoryLayoutParts {
-  return memoryLayoutParts(resolveMemoryLayout(flow.compiled));
-}
-
-/**
- * Open `memory` on the memory table and snapshots the replayed run in `state` recorded, once the
- * registry's types and `flow`'s authored layout match the table, as a resume opens it. `signal`,
- * the run's stop, reaches each backend's `openRun`.
- *
- * @throws MemorySetupError when a registry type differs (`checkRegistryTypes`), or the layout
- *   breaks a rule.
- * @throws RangeError when the recorded table or stacks don't match `flow`'s.
- */
-async function openRecordedMemory(
-  flow: ComposedFlow,
-  state: RunState,
-  memory: ReadonlyMap<string, Memory>,
-  signal: AbortSignal | null = null,
-): Promise<MemoryRuntime> {
-  const memories = state.memories!;
-  checkRegistryTypes(memory, memories);
-  const authored = resolveAuthoredMemoryLayout(flow);
-  checkRecordedMemoryTable(memories, state.memoryStacks, authored.memories, authored.stacks, "supplied flow");
-  return await MemoryRuntime.open({
-    memories,
-    origins: authored.origins,
-    memory,
-    snapshots: state.memorySnapshots,
-    signal,
-  });
-}
-
-/**
- * Reject a recorded key table or stack set that the flow doesn't resolve.
- *
- * @param subject What resolved `memories` and `stacks`, for the message.
- * @throws RangeError when the table or the stacks differ.
- */
-function checkRecordedMemoryTable(
-  recordedMemories: readonly MemorySpec[] | null,
-  recordedStacks: readonly MemoryStack[] | null,
-  memories: readonly MemorySpec[],
-  stacks: readonly MemoryStack[],
-  subject: string,
-): void {
-  const sameStack = (a: MemoryStack, b: MemoryStack): boolean =>
-    sameItems(a.locator, b.locator) && sameItems(a.memories, b.memories);
-  if (
-    !sameOptional(recordedMemories, memories, (a, b) => sameItems(a, b, sameMemorySpec)) ||
-    !sameOptional(recordedStacks, stacks, (a, b) => sameItems(a, b, sameStack))
-  ) {
-    throw new RangeError(`recorded memory table or stacks do not match the ${subject}`);
-  }
-}
-
 /**
  * Drive one segment of a run whose log is open and whose lead is committed: build the engine,
  * publish the lead, and run it. Calls waiting on `hold` reach the engine once it runs.
@@ -3610,13 +3432,12 @@ async function driveSegment(
     skills: ReadonlyMap<string, Skill> | null;
     models: ModelAccess;
     scheduler: Scheduler;
-    memoryRuntime: MemoryRuntime | null;
     /** The log's folder, or `null` for a process-local log. */
     runDir: string | null;
     hold: RunHold | null;
   },
 ): Promise<RunEvent[]> {
-  const { options, memoryRuntime: runtime } = parts;
+  const { options } = parts;
   const onEvent = options.onEvent ?? null;
   // Built before publishing so a callback's rejected promise can stop it.
   const engine = new FlowEngine(state, appender, {
@@ -3625,8 +3446,6 @@ async function driveSegment(
     onEvent,
     onStream: options.onStream ?? null,
     live: options.live ?? null,
-    // A bare `runtime.openContext` would lose its `this`.
-    memoryContextOpener: runtime === null ? null : (scope, recall, opts) => runtime.openContext(scope, recall, opts),
     tools: parts.tools,
     skills: parts.skills,
     models: parts.models,

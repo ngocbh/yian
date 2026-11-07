@@ -15,7 +15,6 @@ import { expect, test } from "bun:test";
 import { mapSubgraph } from "../../src/compile/expand.ts";
 import { END_ID, Flow, START_ID } from "../../src/compile/model.ts";
 import { OriginRef } from "../../src/diagnostics.ts";
-import { MemoryOccurrenceKind, MemoryOccurrenceSegment, MemoryScope } from "../../src/memory/contracts.ts";
 import { Binding, ChildFlowBoundary, SeedConnection } from "../../src/nodes/contracts.ts";
 import { mapCallsite, ns } from "../../src/nodes/ids.ts";
 import { childFlow } from "../helpers/run_state_fixtures.ts";
@@ -127,28 +126,5 @@ test("map subgraph n0 wires start to collector", () => {
   expect(sg.nodes.get(mapEndId)!.originContext).toEqual(context);
   expect(sg.inputConnections).toEqual([]);
   expect(sg.childBoundaries).toEqual([]);
-});
-
-test("map subgraph appends item occurrence and scopes generated fan nodes", () => {
-  const child = childFlow();
-  for (const [nodeId, node] of child.nodes) {
-    node.memoryScope = new MemoryScope(["outer_loop", "map", nodeId], { memories: ["outer"] });
-  }
-  const outer = new MemoryOccurrenceSegment(MemoryOccurrenceKind.LOOP_ITERATION, ["outer_loop"], 4);
-  const spawnerScope = new MemoryScope(["outer_loop", "map"], { memories: ["outer"], occurrencePath: [outer] });
-
-  const fragment = mapSubgraph(child, "map", [{ x: 1n }, { x: 2n }], { memoryScope: spawnerScope });
-
-  for (const index of [0, 1]) {
-    const expected = [outer, new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["outer_loop", "map"], index)];
-    const clonePrefix = mapCallsite("map", index);
-    const clones = [...fragment.nodes].filter(([nodeId]) => nodeId.startsWith(`${clonePrefix}/`));
-    expect(clones.length).toBeGreaterThan(0);
-    for (const [, node] of clones) expect(node.memoryScope!.occurrencePath).toEqual(expected);
-  }
-
-  const generatedScope = new MemoryScope(["outer_loop", "map"], { memories: ["outer"], occurrencePath: [outer] });
-  expect(fragment.nodes.get(ns("map", START_ID))!.memoryScope).toEqual(generatedScope);
-  expect(fragment.nodes.get(ns("map", END_ID))!.memoryScope).toEqual(generatedScope);
 });
 

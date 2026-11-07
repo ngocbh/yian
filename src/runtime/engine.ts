@@ -57,7 +57,6 @@ import {
   EvaluationFailure,
   evalNode,
   evaluationFailure,
-  type MemoryContextOpener,
 } from "./eval_node.ts";
 import type { LiveChannel } from "./live.ts";
 import {
@@ -123,8 +122,6 @@ export interface FlowEngineOptions {
   onEvent?: ((event: RunEvent) => unknown) | null;
   /** Sees each transient stream chunk; called as `onEvent` is. */
   onStream?: ((chunk: StreamChunk) => unknown) | null;
-  /** Admits memory context for a node declaring `needsMemoryContext`. */
-  memoryContextOpener?: MemoryContextOpener | null;
   /** The run's tool set, bound to the run id and signal; the global registry when omitted. */
   tools?: ToolSet | null;
   /** The run's host-supplied skills, passed to nodes declaring `needsSkills`. */
@@ -301,22 +298,23 @@ function callViews(state: RunState, nodeId: string): CallView[] {
  * applied; `onEvent` sees each first. Stream chunks reach only `onStream`. A `live` channel gets
  * each AGENT model call's start (from `ModelCallStarted`), text chunks and end (from
  * `ModelCallFinished`), none once the run stops, and a node's calls are dropped from it when the
- * node settles; the appended records reach it through the log the run boundary wraps. Evidence and
- * binding capture follow the recorded `RunState.learnable`. A node declaring `needsSteps` gets a
- * `NodeSteps` snapshot taken right after its start; each step it records is appended and applied
- * before `record` returns, with no observer but the `CallClosed` of a call a `pending` step registers
- * already closed (its node holds an interrupt), and the capability closes once the evaluation's
- * outcome is decided, as do the node's event sinks. Once the run stops, `record` throws the node
- * signal's reason and appends nothing, and the sinks drop what they get, except a settled step
- * (`{ settled: true }`) and a `ToolCallFinished` while the run has no terminal result: the node
- * vouches that the call settled while its signal was live (see `NodeSteps.record`).
+ * node settles; the appended records reach it through the log the run boundary wraps. A derived
+ * node's bindings are captured, for the sources its outcome points at. A node declaring
+ * `needsSteps` gets a `NodeSteps` snapshot taken right after its start; each step it records is
+ * appended and applied before `record` returns, with no observer but the `CallClosed` of a call a
+ * `pending` step registers already closed (its node holds an interrupt), and the capability closes
+ * once the evaluation's outcome is decided, as do the node's event sinks. Once the run stops,
+ * `record` throws the node signal's reason and appends nothing, and the sinks drop what they get,
+ * except a settled step (`{ settled: true }`) and a `ToolCallFinished` while the run has no
+ * terminal result: the node vouches that the call settled while its signal was live (see
+ * `NodeSteps.record`).
  *
- * Each node runs under its own signal (its `caps.signal`, also the memory opener's), aborted with
- * the run signal's reason and unlinked from it when the node settles. A host stop (the `signal`
- * option aborting) or a failing host callback is recorded as one `RunStopped` naming the
- * in-flight nodes, appended when the stop is requested and before the drain; any other host
- * fault, and a `RunFailed`, ends the run with no such record. A capability fault (a refused step,
- * an opener fault) ends it at once, even when the node catches it.
+ * Each node runs under its own signal (its `caps.signal`), aborted with the run signal's reason and
+ * unlinked from it when the node settles. A host stop (the `signal` option aborting) or a failing
+ * host callback is recorded as one `RunStopped` naming the in-flight nodes, appended when the stop
+ * is requested and before the drain; any other host fault, and a `RunFailed`, ends the run with no
+ * such record. A capability fault (a refused step, an opener fault) ends it at once, even when the
+ * node catches it.
  *
  * Each evaluation runs in its own async resource, started in the `run()` caller's async context: an
  * `AsyncLocalStorage` store a node sets stays with that node. Host callbacks the dispatcher calls
@@ -335,7 +333,6 @@ export class FlowEngine {
   readonly numWorkers: number;
   readonly onEvent: ((event: RunEvent) => unknown) | null;
   readonly onStream: ((chunk: StreamChunk) => unknown) | null;
-  readonly memoryContextOpener: MemoryContextOpener | null;
   /** The run's tool set bound to the state's run id and the run signal. */
   readonly tools: ToolSet;
   readonly skills: ReadonlyMap<string, Skill> | null;
@@ -378,7 +375,7 @@ export class FlowEngine {
    *   `nextSequence`.
    */
   constructor(state: RunState, log: RunLog, options: FlowEngineOptions) {
-    const { growBuilder, numWorkers, onEvent = null, onStream = null, memoryContextOpener = null } = options;
+    const { growBuilder, numWorkers, onEvent = null, onStream = null } = options;
     const { tools = null, skills = null, models = null, signal = null, scheduler = null, random = null } =
       options;
     const { runDir = null, live = null } = options;
@@ -390,7 +387,6 @@ export class FlowEngine {
     this.numWorkers = numWorkers;
     this.onEvent = onEvent;
     this.onStream = onStream;
-    this.memoryContextOpener = memoryContextOpener;
     this.tools = (tools ?? new ToolSet()).forRun(state.runId ?? "", { signal: this.#controller.signal });
     this.skills = skills;
     this.scheduler = scheduler;
@@ -991,7 +987,6 @@ export class FlowEngine {
         emitEvent: onEvent === null && live === null ? null : (event) => this.#event(event),
         captureBindings: derived,
         sourceResolver,
-        memoryContextOpener: this.memoryContextOpener,
         tools: this.tools,
         skills: this.skills,
         scheduler: this.scheduler,

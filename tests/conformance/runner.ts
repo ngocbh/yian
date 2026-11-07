@@ -86,7 +86,6 @@ import {
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr } from "../../src/expr/grammar.ts";
 import { evalBinding, renderTemplateRecord } from "../../src/expr/template.ts";
-import { buildMemories, type MemoryRegistry } from "../../src/memory_host.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
 import { virtualScheduler } from "../../src/platform.ts";
 import {
@@ -2030,12 +2029,12 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
   // Installed even without `host.models`, so an unscripted model call never reaches a provider.
   const models: ModelAccess = {
     env,
-    createModel: (config, { nodeId, consumer }) => {
+    createModel: (config, { nodeId }) => {
       // The script replaces only the provider: the config is resolved and checked as yian's own
       // factory does, so its errors stay yian's. No credential is read.
       const values = fromHost(config, "llm_config") as Record<string, unknown>;
       const [validated] = checkModelConfig(resolveModelConfig(values, { env }));
-      return scripted(validated.provider!, validated.model!, nodeId, consumer);
+      return scripted(validated.provider!, validated.model!, nodeId);
     },
   };
 
@@ -2499,23 +2498,6 @@ function runHooks(
 }
 
 /**
- * Return the whole recall text of memory `key` in `memory`, after the main run. Fails the case for
- * a key the flow doesn't declare.
- */
-async function recall(memory: MemoryRegistry, key: string): Promise<string> {
-  if (!memory.types.has(key)) {
-    throw new CaseFailure(`\`expect.memory.${key}\` names no memory the flow declares`);
-  }
-  const session = await memory.get(key)!.openRun();
-  try {
-    const content = await session.recall(null);
-    return typeof content === "string" ? content : content.text;
-  } finally {
-    await session.close();
-  }
-}
-
-/**
  * Call `result.backward` once per `backward` entry, `{feedback, api_key, headers}`, in order;
  * return each call's outcome, as the `backward_finished` record it appended to `log` projects
  * (`trace`), or `{raises}` when the call raised. Fails the case when a call appends other than one
@@ -2564,7 +2546,6 @@ async function beforeRuns(
   ctx: CaseContext,
   flow: ComposedFlow,
   options: RunFlowOptions,
-  memories: () => Promise<MemoryRegistry | null>,
 ): Promise<{ logs: Record<string, string>; traces: Value[][][] }> {
   const logs: Record<string, string> = {};
   const traces: Value[][][] = [];
@@ -2576,15 +2557,10 @@ async function beforeRuns(
     const run = entry["run"] as Case;
     let outcomes: Value[];
     try {
-      const registry = await memories();
-      try {
-        const inputs = get(entry, "inputs", {}) as Case;
-        const args = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
-        const result = await runFlow(flow, inputs, { ...options, ...args, log, memory: registry });
-        outcomes = await callBackward(result, log, get(entry, "backward", []) as Case[], flow);
-      } finally {
-        await registry?.close();
-      }
+      const inputs = get(entry, "inputs", {}) as Case;
+      const args = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
+      const result = await runFlow(flow, inputs, { ...options, ...args, log });
+      outcomes = await callBackward(result, log, get(entry, "backward", []) as Case[], flow);
     } catch (error) {
       if (error instanceof CaseFailure) throw error;
       throw new CaseFailure(`\`${where}\` raised\n${failureText(error)}`);
@@ -2629,30 +2605,17 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const resume = get(case_, "resume", {}) as Case;
   const events: RunEvent[] = [];
   const chunks: StreamChunk[] = [];
-  // The learners' events (from `buildMemories`' `onEvent`) are never read: collected here
-  // so they stay out of the run's `events`, which `expect.events` compares.
-  const apart: unknown[] = [];
-  // A run without `host.memory` gets none, leaving the flow's declarations dormant.
-  const memories = async (): Promise<MemoryRegistry | null> =>
-    Object.hasOwn(spec, "memory")
-      ? buildMemories(flow, {
-          root: join(ctx.dir, "memory"),
-          models,
-          onEvent: (event) => apart.push(event),
-        })
-      : null;
   // One clock for every run of the case. `env` scopes the case's YIAN_* values to each run, so
   // nothing is installed around it.
   const hooks = runHooks(log, env, scripted, Date.now(), events, chunks);
   // The `before` runs share the clock, but not the log, the run points or the observers.
   const { random, scheduler } = hooks;
   const shared: RunFlowOptions = { env, tools, random, models, scheduler };
-  const { logs, traces } = await beforeRuns(case_, ctx, flow, shared, memories);
+  const { logs, traces } = await beforeRuns(case_, ctx, flow, shared);
   const inputs = get(case_, "inputs", {}) as Case;
   let signal: { signal?: AbortSignal } = stop === null ? {} : { signal: stop.signal };
   const runArguments = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
-  let start = (memory: MemoryRegistry | null) =>
-    runFlow(flow, inputs, { ...runArguments, ...hooks, ...signal, memory });
+  let start = () => runFlow(flow, inputs, { ...runArguments, ...hooks, ...signal });
   // After each `host.sends` item, the run moves on with the arguments `advance` shares with `run`.
   const sharedArgs = Object.fromEntries(
     Object.entries(run).filter(([key]) => Object.hasOwn(RESUME_OPTIONS, key)),
@@ -2662,20 +2625,8 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   let caught: Record<string, unknown> = {};
   inbox.armed = true;
   if (case_["kind"] === "resume") {
-    let cutMemory: MemoryRegistry | null = null;
-    try {
-      cutMemory = await memories();
-    } catch (error) {
-      // The cut run's memories failing to build is the case's `raises`; nothing resumes.
-      caught = { raises: raised(error), error };
-    }
-    if (!Object.hasOwn(caught, "raises")) {
-      // A close error escapes as the case's own error.
-      try {
-        await cutFirstRun(spec, () => start(cutMemory), stop);
-      } finally {
-        await cutMemory?.close();
-      }
+    {
+      await cutFirstRun(spec, () => start(), stop);
       // The stop ended the first run; aborted for good, it would stop each later advance at once.
       signal = {};
       // The sends a host makes while the run is down.
@@ -2686,20 +2637,18 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       chunks.length = 0;
       const resumeArguments = runOptions<AdvanceOptions>(resume, RESUME_OPTIONS);
       advanceArguments = resumeArguments;
-      start = (memory) => advance({ ...resumeArguments, ...hooks, memory });
+      start = () => advance({ ...resumeArguments, ...hooks });
     }
   }
   let outcomes: Value[] = [];
   if (!Object.hasOwn(caught, "raises")) {
-    let memory: MemoryRegistry | null = null;
     // The items sent while the run waits; the others are sent at a point, or while it is down.
     const all = get(spec, "sends", []) as Case[];
     const sends = all.filter((item) => !Object.hasOwn(item, "after") && !Object.hasOwn(item, "down"));
     // A run must not end waiting when it was given items to send while it waits, or an empty list.
     const waitingSends = Object.hasOwn(spec, "sends") && (sends.length > 0 || all.length === 0);
     try {
-      memory = await memories();
-      result = await start(memory);
+      result = await start();
       await sent();
       // Each item is delivered while the run waits; the same collectors see every `advance`.
       while (result.status === "waiting" && sends.length > 0) {
@@ -2711,35 +2660,17 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
         else await send(log, item["inbox"] as string, item["event"], { env });
         // A held item leaves the run waiting, so the next item lands on the same wait.
         if (item["hold"] === true) continue;
-        result = await advance({ ...advanceArguments, ...hooks, ...signal, memory });
+        result = await advance({ ...advanceArguments, ...hooks, ...signal });
         await sent();
       }
     } catch (error) {
       caught = { raises: raised(error), error };
     }
     if (waitingSends && result?.status === "waiting") {
-      await memory?.close();
       throw new CaseFailure("the run is still waiting after host.sends ran out");
     }
-    // The memories stay open for the backward calls, and close even when one fails the case; the
-    // close is outside the run's `try`, so a close error never replaces its `raises`.
-    try {
-      const entries = get(case_, "backward", []) as Case[];
-      if (result !== undefined) outcomes = await callBackward(result, log, entries, flow);
-    } finally {
-      await memory?.close();
-    }
-  }
-  const listed = get(get(case_, "expect", {}) as Case, "memory") as Case | undefined;
-  let recalled: Record<string, string> | undefined;
-  if (listed !== undefined) {
-    const fresh = (await memories())!;
-    try {
-      recalled = {};
-      for (const key of Object.keys(listed)) recalled[key] = await recall(fresh, key);
-    } finally {
-      await fresh.close();
-    }
+    const entries = get(case_, "backward", []) as Case[];
+    if (result !== undefined) outcomes = await callBackward(result, log, entries, flow);
   }
   // A call past a script's end is the case's own error, whatever it made differ.
   const left = check();
@@ -2757,7 +2688,6 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     tool_calls: Object.fromEntries([...calls].map(([name, list]) => [name, list.map(dataForm)])),
     ...(result !== undefined ? { output: output(result, flow) } : {}),
     ...(case_["kind"] === "backward" ? { backward: outcomes } : {}),
-    ...(recalled !== undefined ? { memory: recalled } : {}),
   };
   checkSecrets(case_, {
     ...Object.fromEntries(Object.entries(actual).map(([name, value]) => [name, spell(value as Value)])),
@@ -2970,7 +2900,6 @@ async function checkInvariants(
     runId: first.runId,
     schema: first.schema,
     flowFingerprint: started.flowFingerprint,
-    learnable: started.learnable,
     lastSeq: envelopes.length - 1,
     startedAt: first.at,
     endedAt: finished === null ? null : envelopes.at(-1)!.at,

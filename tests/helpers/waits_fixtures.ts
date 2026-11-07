@@ -143,7 +143,6 @@ export function started(
       startWiringOverride: {},
       effectiveLlmByStaticPath: options.effectiveLlmByStaticPath ?? {},
       numWorkers: options.numWorkers ?? 0,
-      learnable: false,
       defaults: options.defaults ?? {},
     }),
   );

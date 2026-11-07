@@ -15,8 +15,8 @@
  * Invariant: a node never writes the pool. It describes its one output value as
  * `new Output(value)`; the engine performs the write under the node's id. This keeps nodes pure.
  *
- * Knows about:   diagnostics, events, expr, llm_clients (types), memory contracts, platform (the
- *                `Scheduler` type), skills, tools, typesys, nodes/binding, nodes/contracts.
+ * Knows about:   diagnostics, events, expr, llm_clients (types), platform (the `Scheduler` type),
+ *                skills, tools, typesys, nodes/binding, nodes/contracts.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -34,7 +34,6 @@ import { ExpressionError, parseCondition, promptRefs } from "../expr/index.ts";
 import { type DeclaredTypes, evaluateWhenRecord, localDeclared } from "../expr/expressions.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { Request, ToolSpec } from "../llm/messages.ts";
-import type { MemoryContext, MemoryScope } from "../memory/contracts.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { ToolGrant } from "../tools/grants.ts";
@@ -580,12 +579,6 @@ export interface NodeCaps {
     event: ModelCallStarted | ModelCallFinished | ToolCallStarted | ToolCallFinished | ReplayDegraded,
   ) => void;
   /**
-   * Opens the invocation's memory context once, from the rendered system prompt (an AGENT's
-   * without its skill listing, so grants never change recall) and the rendered prompt; supplied to
-   * a node that declares `needsMemoryContext`.
-   */
-  readonly openMemoryContext?: (systemPrompt: string, renderedPrompt: string) => Promise<MemoryContext>;
-  /**
    * Opens the node's steer inbox; supplied to a node declaring `readsSteerInbox` when the engine
    * supplies steps. Opening registers the node as reading `inbox` until its outcome commits.
    */
@@ -655,11 +648,6 @@ export abstract class Node {
    */
   readonly isLoop: boolean = false;
   /**
-   * Declares access to recalled notes through one lazy memory context capability. AGENT is the
-   * only built-in kind that opts in.
-   */
-  readonly needsMemoryContext: boolean = false;
-  /**
    * Declares "I can use host-supplied skills": the evaluator supplies the run's skills only when
    * the run boundary injected them and this is set. AGENT is the only built-in kind that opts in.
    */
@@ -705,7 +693,7 @@ export abstract class Node {
   /**
    * Declares "my value only reads earlier pool values through my binding, and my `forward` is
    * pure and synchronous" (START, END, LOOP, CALL, MAP), so it can be rebuilt from the values its
-   * binding read. The engine builds such a node's input route in every run, learnable or not.
+   * binding read. The engine builds such a node's input route in every run.
    */
   readonly derived: boolean = false;
 
@@ -758,11 +746,6 @@ export abstract class Node {
    * authored origins are rewritten, so it stays outside local origin traversal.
    */
   originContext: readonly OriginRef[] = [];
-  /**
-   * Compile-derived static memory context; authors can't supply it. Memory layout resolution
-   * stamps it when memory is on; otherwise `null`.
-   */
-  memoryScope: MemoryScope | null = null;
   /**
    * Author-supplied static per-node config, baked at build time from the flow's `env:` default
    * merged with the node's own `env:` (the node wins). The engine never reads it; only a node's
@@ -1202,14 +1185,6 @@ export abstract class Node {
     const parameters = this.params ?? [];
     validateParameters(parameters);
     return parameters.map((parameter) => parameter.name);
-  }
-
-  /**
-   * Return the bound inputs a model never sees (memory doesn't recall on them). They stay in the
-   * bound record, so resume reads what ran. Empty by default.
-   */
-  modelHiddenInputs(): ReadonlySet<string> {
-    return new Set();
   }
 
   /**

@@ -13,7 +13,6 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import { type RunEvent, ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { ToolResultPart } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
 import { AgentLoopError, type AgentRunContext, DEFAULT_SYSTEM } from "../../src/nodes/agent/context.ts";
 import { runAgent } from "../../src/nodes/agent/loop.ts";
 import { TOOL_OUTCOME_UNKNOWN } from "../../src/nodes/agent/results.ts";
@@ -230,15 +229,13 @@ test("pending() outside a durable run fails the agent", async () => {
   const ctx: AgentRunContext = {
     nodeId: "n",
     messages: [userMessage("go")],
-    promptText: "go",
     tools: ["lookup"],
     llmConfig: CONFIG,
     outputType: null,
     retries: 0,
     maxToolIterations: -1,
-    memoryContext: new MemoryContext(),
     toolset: new ToolSet({ lookup: lookup(() => pending()) }),
-    baseSystemPrompt: DEFAULT_SYSTEM,
+    systemPrompt: DEFAULT_SYSTEM,
     skills: [],
     models: { env: NO_ENV, createModel: () => model },
     sent: () => [],

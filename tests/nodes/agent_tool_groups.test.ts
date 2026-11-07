@@ -23,7 +23,6 @@ import { BUILTIN, forget, install } from "../../src/defaults.ts";
 import { ToolCallFinished, ToolCallStarted } from "../../src/events.ts";
 import { Message, Response, TextPart, ToolCallPart, ToolResultPart, ToolSpec } from "../../src/llm/messages.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
-import { MemoryContext } from "../../src/memory/contracts.ts";
 import {
   AgentLoopError,
   type AgentRunContext,
@@ -173,7 +172,6 @@ function agent(
   const ctx: AgentRunContext = {
     nodeId: options.nodeId ?? "n",
     messages: [userMessage("go")],
-    promptText: "go",
     tools,
     llmConfig: CONFIG,
     outputType: null,
@@ -181,13 +179,12 @@ function agent(
     maxToolIterations: options.maxToolIterations ?? -1,
     signal: options.signal,
     steps: new NodeSteps(1, [], (step) => steps.push(step)),
-    memoryContext: new MemoryContext(),
     toolset,
     emitEvent: (event) => {
       events.push(event);
       options.onEvent?.(event);
     },
-    baseSystemPrompt: DEFAULT_SYSTEM,
+    systemPrompt: DEFAULT_SYSTEM,
     skills: options.skills ?? [],
     steerInbox: options.steerInbox,
     models: serving(model),

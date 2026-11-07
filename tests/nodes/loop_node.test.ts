@@ -8,7 +8,6 @@ import { type CompiledFlow, END_ID, START_ID } from "../../src/compile/model.ts"
 import { OriginRef } from "../../src/diagnostics.ts";
 import { NodeFailed } from "../../src/events.ts";
 import { ExpressionError, evaluateWhenRecord } from "../../src/expr/expressions.ts";
-import { MemoryScope } from "../../src/memory/contracts.ts";
 import { Grow, NodeKind, Output } from "../../src/nodes/base.ts";
 import {
   Assertion,
@@ -105,15 +104,6 @@ test("respawn preserves the full output contract carrier", () => {
   expect(clone.outputContract).toBe(contract);
   expect((clone.outputContract as ValueContract).origins).toBe(origins);
   expect((clone.outputContract as ValueContract).type).toBe(contract.type);
-});
-
-test("respawn preserves the derived base memory scope", () => {
-  const node = whileLoop();
-  node.memoryScope = new MemoryScope(["loop"], { memories: ["outer"] });
-
-  const clone = node.respawn(1);
-
-  expect(clone.memoryScope).toBe(node.memoryScope);
 });
 
 test("respawn defaults omitted fields from the carried record", () => {

@@ -4,8 +4,7 @@
  *
  * - loading: `loadFlow` (`compose/loader`), `LoadError` (`compose/helpers/errors`) and
  *   `ComposedFlow` (`compose/build/pipeline`);
- * - running: `runFlow` and `advance` (`run`), and `buildMemories` and `MemoryRegistry`
- *   (`memory_host`);
+ * - running: `runFlow` and `advance` (`run`);
  * - `Failure` and `Diagnostic` (`diagnostics`), `CompiledFlow` (`compile/model`),
  *   `FlowValidationError` (`compile/validation`) and `VariablePool` (`typesys/pool`);
  * - `evaluateWhen` and `ExpressionError` (`expr/expressions`), and `registerTemplateFn`
@@ -26,8 +25,8 @@
  * and the conversation a model route can send, are also on `yian/run`.
  * `InboxRef` (`typesys/values`), the handle an `Inbox(T)` input holds, is on both.
  *
- * Knows about: compile, compose, diagnostics, expr, memory storage, `memory/profile`,
- * `memory_host`, nodes, `run`, tools and typesys.
+ * Knows about: compile, compose, diagnostics, expr, memory storage, `memory/profile`, nodes,
+ * `run`, tools and typesys.
  * Never imports: the CLI; nothing in the package imports this module.
  */
 
@@ -48,7 +47,6 @@ export {
   markdownVersion,
 } from "./memory/storage/markdown.ts";
 export { checkStoragePath, SQLiteStorage } from "./memory/storage/sqlite.ts";
-export { buildMemories, MemoryRegistry } from "./memory_host.ts";
 export {
   checkConversation,
   checkMessage,

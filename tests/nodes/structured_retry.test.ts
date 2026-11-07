@@ -386,7 +386,7 @@ describe("an agent reply without the schema's tool call", () => {
       "    output: str",
       `    retries: ${retries}\n    output: int`,
     );
-    return runWith(await loadFlow(text), { question: "q" }, null, model, { env: hostEnv(dir) });
+    return runWith(await loadFlow(text), { question: "q" }, model, { env: hostEnv(dir) });
   }
 
   test("an agent retries a reply without the tool call", async () => {

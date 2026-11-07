@@ -6,7 +6,6 @@
  */
 
 import { expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,13 +15,6 @@ import { CompiledFlow, Edge, END_ID, Flow, FlowOutput, START_ID } from "../../sr
 import { LoadError } from "../../src/compose/helpers/errors.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import { compareCodeUnits, OriginRef } from "../../src/diagnostics.ts";
-import {
-  DeclSite,
-  MemoryDecl,
-  MemoryOccurrenceKind,
-  MemoryOccurrenceSegment,
-  MemoryScope,
-} from "../../src/memory/contracts.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../src/nodes/agent/node.ts";
 import type { Node } from "../../src/nodes/base.ts";
 import {
@@ -729,10 +721,10 @@ test("expansion digest excludes effective but includes authored llm config", () 
   expect(expansionDigest(singleNodeFlow(first))).not.toBe(expansionDigest(singleNodeFlow(changedAuthored)));
 });
 
-test("an AGENT leaves out unset variables, skills, steer inbox, system prompt, memories and mode", () => {
+test("an AGENT leaves out unset variables, skills, steer inbox, system prompt and mode", () => {
   const manifest = nodeManifest(singleNodeFlow(new AgentNode("node", { prompt: "p" })), "node");
 
-  for (const key of ["variables", "skills", "steer_inbox", "steer_render", "system_prompt", "memories", "mode"]) {
+  for (const key of ["variables", "skills", "steer_inbox", "steer_render", "system_prompt", "mode"]) {
     expect(key in manifest).toBe(false);
   }
   expect(manifest.retries).toBe(2);
@@ -1640,7 +1632,7 @@ test("a typed flow output adds its type", () => {
   ]);
 });
 
-test("a plain Flow has no outputs, flow id, memories or LLM layer", () => {
+test("a plain Flow has no outputs, flow id or LLM layer", () => {
   expect(Object.keys(flowManifest(fragment())).sort()).toEqual(["edges", "end_id", "nodes", "start_id", "wiring"]);
 });
 
@@ -1735,35 +1727,6 @@ test.each([
   );
 });
 
-test("flow memories are identity only when present and never expansion topology", () => {
-  const plain = compiled();
-  const withMemory = compiled();
-  withMemory.memories = [new MemoryDecl("reflective", "reflective", { max_items: 4n }, new DeclSite([], ["root"]))];
-
-  expect("memories" in flowManifest(plain)).toBe(false);
-  expect(flowManifest(withMemory).memories).toEqual([
-    {
-      config: {
-        entries: [{ key: { type: "str", value: "max_items" }, value: { type: "int", value: "4" } }],
-        type: "mapping",
-      },
-      name: "reflective",
-      site: { node: null, owner: ["root"], scope: [] },
-      type: "reflective",
-    },
-  ]);
-  expect(flowFingerprint(withMemory)).not.toBe(flowFingerprint(plain));
-  expect(expansionDigest(withMemory)).toBe(expansionDigest(plain));
-});
-
-test("forged flow memories are refused in both modes", () => {
-  const flow = compiled();
-  Object.assign(flow, { memories: ["notes"] });
-
-  expectError(() => flowManifest(flow), TypeError, "flow.memories[0]: expected exact MemoryDecl, got string");
-  expectError(() => expansionDigest(flow), TypeError, "expansion.memories[0]: expected exact MemoryDecl, got string");
-});
-
 // ---- Flow field policy -----------------------------------------------------------------------
 
 class FlowSubclass extends Flow {}
@@ -1856,12 +1819,6 @@ test.each([
     (flow: CompiledFlow) => Object.assign(flow, { flowLlmConfig: 5 }),
     TypeError,
     "flow.flowLlmConfig: expected a record, got number",
-  ],
-  [
-    "memories that aren't an array",
-    (flow: CompiledFlow) => Object.assign(flow, { memories: "x" }),
-    TypeError,
-    "flow.memories: expected an array of MemoryDecl values",
   ],
   [
     "an output that isn't a FlowOutput",
@@ -2216,93 +2173,6 @@ test("expansion digest is stable across canonical mapping order", () => {
 });
 
 // ---- Expansion topology ----------------------------------------------------------------------
-
-/** Return the lowercase SHA-256 the manifest module takes over `manifest`'s RFC 8785 text. */
-function sha256(manifest: JsonValue): string {
-  return createHash("sha256").update(canonicalJson(manifest), "utf8").digest("hex");
-}
-
-test("memory scope is not authored identity but is expansion topology", () => {
-  const plain = fragment();
-  const stamped = fragment();
-  code(stamped, "body").memoryScope = new MemoryScope(["body"]);
-
-  expect(flowManifest(stamped)).toEqual(flowManifest(plain));
-  expect(flowFingerprint(stamped)).toBe(flowFingerprint(plain));
-  expect(expansionDigest(stamped)).not.toBe(expansionDigest(plain));
-});
-
-test("memory expansion projection covers keys and occurrence topology", () => {
-  const scopePath = ["nested", "body"];
-  const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["nested"], 0);
-  const baseline = fragment();
-  code(baseline, "body").memoryScope = new MemoryScope(scopePath);
-  const variants = [baseline];
-  for (const [memories, occurrencePath] of [
-    [["notes"], []],
-    [["chat"], []],
-    [["notes", "chat"], []],
-    [["chat", "notes"], []],
-    [["notes"], [segment]],
-  ] as const) {
-    const flow = fragment();
-    code(flow, "body").memoryScope = new MemoryScope(scopePath, { memories, occurrencePath });
-    variants.push(flow);
-  }
-
-  expect(new Set(variants.map(expansionDigest)).size).toBe(6);
-});
-
-test("memory expansion projection fields", () => {
-  const segment = new MemoryOccurrenceSegment(MemoryOccurrenceKind.MAP_ITEM, ["nested"], 1);
-  const flow = fragment();
-  code(flow, "body").memoryScope = new MemoryScope(["nested", "body"], {
-    memories: ["notes"],
-    occurrencePath: [segment],
-  });
-  // `fragment()` has no growth metadata, so its authored manifest equals its expansion manifest.
-  const expected = flowManifest(fragment());
-  ((expected.nodes as JsonObject).body as JsonObject).memory_scope = {
-    memories: ["notes"],
-    occurrence_path: [{ index: 1, kind: "map_item", static_path: ["nested"] }],
-    static_path: ["nested", "body"],
-  };
-
-  expect(expansionDigest(flow)).toBe(sha256(expected));
-});
-
-test("a memory scope that isn't a MemoryScope is refused", () => {
-  const flow = fragment();
-  Object.assign(code(flow, "body"), { memoryScope: { staticPath: ["body"] } });
-
-  expectError(
-    () => expansionDigest(flow),
-    TypeError,
-    "expansion.nodes.body.memoryScope: expected exact MemoryScope, got Object",
-  );
-  // The authored manifest never reads the scope.
-  expect(flowFingerprint(flow)).toBe(FRAGMENT_FINGERPRINT);
-});
-
-test("memory expansion projection omits root id and config but hashes keys", () => {
-  /** `compiled()` with flow id `rootId`, one `policy` memory of config `{limit}`, scoped on its step. */
-  const withMemory = (rootId: string, policy: string, limit: bigint): CompiledFlow => {
-    const flow = compiled();
-    Object.assign(flow, {
-      flowId: rootId,
-      memories: [new MemoryDecl(policy, policy, { limit }, new DeclSite([], [rootId]))],
-    });
-    code(flow, "step").memoryScope = new MemoryScope(["step"], { memories: [policy] });
-    return flow;
-  };
-  const first = withMemory("first", "outer", 3n);
-  const second = withMemory("second", "outer", 99n);
-  const otherKey = withMemory("first", "inner", 3n);
-
-  expect(flowFingerprint(first)).not.toBe(flowFingerprint(second));
-  expect(expansionDigest(first)).toBe(expansionDigest(second));
-  expect(expansionDigest(first)).not.toBe(expansionDigest(otherKey));
-});
 
 test("expansion digest applies topology-only policy to recursive children", () => {
   const parent = (child: CompiledFlow) => singleNodeFlow(new CallNode("invoke", { flowId: "child", child }));

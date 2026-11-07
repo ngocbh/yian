@@ -321,14 +321,13 @@ test("a host key call time run records no secret", async () => {
   }
 });
 
-test("only an agent with the key hides it from the model", async () => {
+test("only an agent with the key reserves it", async () => {
   const flow = await loadFlow(PICKED, { env });
-  expect(flow.compiled.nodes.get("chat")!.modelHiddenInputs()).toEqual(new Set(["__llm_config"]));
+  expect(flow.compiled.nodes.get("chat")!.reservedWiringKeys()).toEqual(new Set(["__llm_config"]));
   const fixed = await loadFlow(PICKED.replace("{model: '${pick.output}'}", "{model: m1}"), { env });
-  expect(fixed.compiled.nodes.get("chat")!.modelHiddenInputs()).toEqual(new Set());
-  // MAP keeps its reserved input; it sends no request to rebuild.
+  expect(fixed.compiled.nodes.get("chat")!.reservedWiringKeys()).toEqual(new Set());
+  // MAP sends no request to rebuild.
   const map = new MapNode("m", { flowId: "f" });
-  expect(Object.getPrototypeOf(map).modelHiddenInputs).toBe(Node.prototype.modelHiddenInputs);
   expect(Object.getPrototypeOf(map).rebuildRequests).toBe(Node.prototype.rebuildRequests);
 });
 

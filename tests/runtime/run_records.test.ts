@@ -6,7 +6,6 @@
 import { expect, test } from "bun:test";
 
 import { Failure, OriginRef } from "../../src/diagnostics.ts";
-import { MemoryMutation, MemoryOperationFailure } from "../../src/memory/contracts.ts";
 import {
   canonicalSeed,
   canonicalTyped,
@@ -15,9 +14,6 @@ import {
   InboxClosedRecord,
   InboxWithdrawnRecord,
   InterruptedRecord,
-  MemoryCommitFailedRecord,
-  MemoryCommitRequestedRecord,
-  MemoryCommitSucceededRecord,
   MemoryRunLog,
   NodeExpandedRecord,
   NodeFailedRecord,
@@ -239,7 +235,6 @@ test("the run log protocol pins iteration, append, close and context management"
 });
 
 const FAILURE = new Failure({ code: "node.execute", message: "boom", nodeId: "work" });
-const OPERATION_FAILURE = new MemoryOperationFailure("backend", "failed", "Failed.", true);
 
 /** Return a run-start record with one agent's LLM config and `fields` over it. */
 function runStarted(fields: Partial<RunStartedFields> = {}): RunStartedRecord {
@@ -297,35 +292,6 @@ test.each<[string, () => unknown]>([
         chat: unknown;
       }).chat = null),
   ],
-  [
-    "run-started memories",
-    () => (runStarted({ memories: [], memoryStacks: [], memorySnapshots: [] }).memories as unknown[]).push(null),
-  ],
-  [
-    "run-started memory stacks",
-    () => (runStarted({ memories: [], memoryStacks: [], memorySnapshots: [] }).memoryStacks as unknown[]).push(null),
-  ],
-  [
-    "run-started memory snapshots",
-    () =>
-      (runStarted({ memories: [], memoryStacks: [], memorySnapshots: [] }).memorySnapshots as unknown[]).push(null),
-  ],
-  [
-    "memory commit requested",
-    () => ((new MemoryCommitRequestedRecord("notes", "c", [], 1) as { attemptId: number }).attemptId = 2),
-  ],
-  [
-    "commit mutations",
-    () => (new MemoryCommitRequestedRecord("notes", "c", [], 1).mutations as unknown[]).push(null),
-  ],
-  [
-    "memory commit succeeded",
-    () => ((new MemoryCommitSucceededRecord("notes", "c", 1) as { commitId: string }).commitId = "d"),
-  ],
-  [
-    "memory commit failed",
-    () => ((new MemoryCommitFailedRecord("notes", "c", OPERATION_FAILURE, 1) as { failure: unknown }).failure = null),
-  ],
 ])("records and envelopes are frozen: %s", (_name, assign) => {
   expect(assign).toThrow(TypeError);
 });
@@ -354,9 +320,6 @@ test("RUN_RECORD_TYPES holds every record class", () => {
     NodeRoutedRecord,
     NodeExpandedRecord,
     NodeFailedRecord,
-    MemoryCommitRequestedRecord,
-    MemoryCommitSucceededRecord,
-    MemoryCommitFailedRecord,
   ]);
   expect(Object.isFrozen(RUN_RECORD_TYPES)).toBe(true);
 });
@@ -567,30 +530,6 @@ test.each<[string, () => unknown, new (...args: never[]) => Error, string]>([
     () => runStarted({ effectiveLlmByStaticPath: { agent: ["openai"] as never } }),
     TypeError,
     "effective_llm_by_static_path value for 'agent' must be a mapping",
-  ],
-  [
-    "an empty commit memory",
-    () => new MemoryCommitSucceededRecord("", "commit", 1),
-    RangeError,
-    "memory must be a non-empty string",
-  ],
-  [
-    "a non-text commit id",
-    () => new MemoryCommitRequestedRecord("notes", 3 as never, [], 1),
-    TypeError,
-    "commit_id must be a non-empty string",
-  ],
-  [
-    "commit mutations that aren't an array",
-    () => new MemoryCommitRequestedRecord("notes", "commit", new Set() as never, 1),
-    TypeError,
-    "mutations must be an array",
-  ],
-  [
-    "a commit failure of another class",
-    () => new MemoryCommitFailedRecord("notes", "commit", {} as never, 1),
-    TypeError,
-    "failure must be a MemoryOperationFailure",
   ],
 ])("record constructors refuse %s", (_name, fn, cls, message) => {
   expectError(fn, cls, message);
@@ -807,40 +746,7 @@ const ROUND_TRIP_RECORDS: [string, RunRecord][] = [
       }),
     ),
   ],
-  [
-    "MemoryCommitRequestedRecord",
-    new MemoryCommitRequestedRecord("history", "commit-1", [new MemoryMutation("m1", { text: "Remember." })], 1),
-  ],
-  ["MemoryCommitSucceededRecord", new MemoryCommitSucceededRecord("history", "commit-1", 1)],
-  [
-    "MemoryCommitFailedRecord",
-    new MemoryCommitFailedRecord(
-      "history",
-      "commit-1",
-      new MemoryOperationFailure("backend", "backend.failed", "Failed.", true),
-      1,
-    ),
-  ],
 ];
-
-test.each<[string, Record<string, unknown>]>([
-  ["memory_commit_requested", { mutations: [] }],
-  ["memory_commit_succeeded", {}],
-  ["memory_commit_failed", { failure: { stage: "commit", code: "declined", message: "Declined.", retryable: true } }],
-])("the memory commit wire requires a positive attempt: %s", (kind, extra) => {
-  const wire = {
-    schema: 27,
-    run_id: "run",
-    seq: 0,
-    kind,
-    payload: { memory: "history", commit_id: "commit-1", attempt_id: null as number | null, ...extra },
-  };
-  expectError(() => decodeRecord(JSON.stringify(wire)), TypeError, `${kind} payload attempt_id must be an integer`);
-  for (const attemptId of [0, -1]) {
-    wire.payload.attempt_id = attemptId;
-    expectError(() => decodeRecord(JSON.stringify(wire)), RangeError, "attempt_id must be positive");
-  }
-});
 
 // A TS record refuses NaN when it is built, so no log ever sees it.
 test.each<[string, () => unknown, (string | number)[]]>([
@@ -887,16 +793,16 @@ test.each<[string, (payload: Record<string, unknown>) => void, new (...args: nev
     "num_workers must be non-negative",
   ],
   [
-    "a non-boolean learnable",
-    (payload) => (payload["learnable"] = 1n),
-    TypeError,
-    "run_started payload learnable must be a boolean",
+    "the removed learnable field",
+    (payload) => (payload["learnable"] = false),
+    RangeError,
+    'invalid run_started payload fields; missing=[], extra=["learnable"]',
   ],
   [
-    "memories that aren't an array",
-    (payload) => (payload["memories"] = {}),
-    TypeError,
-    "run_started payload memories must be an array or null",
+    "the removed memories field",
+    (payload) => (payload["memories"] = null),
+    RangeError,
+    'invalid run_started payload fields; missing=[], extra=["memories"]',
   ],
   [
     "defaults that aren't an object",
@@ -1723,7 +1629,7 @@ test("an append result of the wrong schema is a protocol fault", () => {
   }
 
   const state = new RunState(flow());
-  const prepared = prepareRunStarted(state, { ...startData(), learnable: true });
+  const prepared = prepareRunStarted(state, startData());
   const before = stateSnapshot(state);
   const log = new WrongSchemaLog(prepared.expectedRunId);
   expectError(

@@ -624,8 +624,9 @@ export function flowNodesCursor(document: SourceDocument, nodesSection: ValueRec
  *
  * @throws LoadError for malformed YAML, a non-mapping document, a retired `inputs:`/`outputs:`
  *   key, a removed `long_term_memory:`/`memory_policy:` key, a bad compact flow, an unknown
- *   top-level key (after stripping `x-*`), or a schema violation. A text field YAML read as non-text (flow `id:`/`name:`/
- *   `description:`/`version:`, a `uses:` ref, a flow `asserts:` item) names the field.
+ *   top-level key (after stripping `x-*`), or a schema violation. A text field YAML read as
+ *   non-text (flow `id:`/`name:`/`description:`/`version:`, a `uses:` ref, a flow `asserts:` item)
+ *   names the field.
  */
 export function parseFile(source: string | SourceDocument): ComposeFile {
   const document = typeof source === "string" ? parseSourceDocument(source, "<flow>") : source;

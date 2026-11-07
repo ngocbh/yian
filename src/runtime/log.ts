@@ -9,7 +9,7 @@
  * authority cycle.
  *
  * Knows about:   diagnostics, nodes/base, nodes/contracts, platform, typesys.
- * Never imports: state, trace, engine, run, compile, compose, or the CLI.
+ * Never imports: state, engine, run, compile, compose, or the CLI.
  */
 
 import fs from "node:fs";

@@ -280,7 +280,7 @@
       }
     },
     "ReplayDegraded": {
-      "description": "An AGENT's model left out replay state it couldn't send back, once per reason per invocation; the replayed turns' text and tool calls were still sent (in-loop, transient). One published during AGENT backward (under the AGENT's node_id) or with node_id __memory__ (a memory's learner) comes from outside a forward node; in practice it can't fire there, since those requests replay no assistant message.",
+      "description": "An AGENT's model left out replay state it couldn't send back, once per reason per invocation; the replayed turns' text and tool calls were still sent (in-loop, transient).",
       "type": "object",
       "required": ["node_id", "reason"],
       "properties": {

@@ -282,7 +282,7 @@ export function checkNamedPrompt(text: string, subject: string): void {
 
 /**
  * Return a frozen copy of `failure`, checked by `Failure`'s constructor, whose trace holds plain
- * `OriginRef`s. The run log, the run state and the runtime trace use it.
+ * `OriginRef`s. The run log and the run state use it.
  *
  * @throws TypeError or RangeError when a field breaks `Failure`'s contract, such as a trace that
  *   isn't an array of `OriginRef`s.

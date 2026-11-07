@@ -3,8 +3,8 @@
  *
  * It makes one call without tools or skills, and runs the tool loop with them. The loop drives
  * local model and tool calls through the shared provider interface. Tools, including the run's
- * `ask_user`, are ordinary explicitly authored tool grants. A crash or host interruption unwinds the node; no
- * conversation or continuation state is stored in the graph or variable pool.
+ * `ask_user`, are ordinary explicitly authored tool grants. A crash or host interruption unwinds
+ * the node; no conversation or continuation state is stored in the graph or variable pool.
  *
  * Knows about:   nodes/base, nodes/binding, nodes/contracts, peer AGENT modules, llm (messages),
  *                llm_clients (config, connection, factory), expr (expressions, templates,
@@ -507,7 +507,7 @@ export class AgentNode extends Node {
    * The steer inbox binding (`__steer_inbox`) resolves through `options.bind` (else against
    * `pool`) to the inbox's name. The node and own-flow `llm_config` layers resolve against `pool`,
    * merge over the base run start recorded, and are checked as run start checks a static agent's
-   * config (`callTimeConfig`). Nothing is rendered, recalled or sent to a model first.
+   * config (`callTimeConfig`). Nothing is rendered or sent to a model first.
    * `options.bind` is unused for the config: the bound value is the resolved config, not the values
    * it was read from.
    *

@@ -801,9 +801,10 @@ export class AgentDescriptor extends NodeDescriptor {
   /**
    * Build the runtime `AgentNode` and its flow-owned wiring.
    *
-   * Reads the `llm_config:` layer and the local variables, sets the node's `params` from the authored `input:` and its output contract from
-   * the override or the authored `output:`. `_finish` stamps the descriptor origin; the result
-   * also ranges `__llm_config` at the authored `llm_config:`, where errors about its values point.
+   * Reads the `llm_config:` layer and the local variables, and sets the node's `params` from the
+   * authored `input:` and its output contract from the override or the authored `output:`.
+   * `_finish` stamps the descriptor origin; the result also ranges `__llm_config` at the authored
+   * `llm_config:`, where errors about its values point.
    *
    * @throws LoadError for a bad `env.max_tool_iterations`, a bad variable declaration, a tool or
    *   skill grant the node refuses, an `output:` nesting deeper than

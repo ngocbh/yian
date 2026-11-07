@@ -161,7 +161,7 @@ test("a capturing evaluation keeps early binding unavailable, and capture off do
   expect(resolved).toHaveLength(2);
 });
 
-test("an agent renders inputs and variable defaults without execution or memory scope", async () => {
+test("an agent renders inputs and variable defaults", async () => {
   const node = new AgentNode("writer", {
     prompt: "${instruction}: ${topic}, ${num_sentences} sentences, ${tone}.",
     variables: variables(
@@ -261,7 +261,7 @@ test.each([
   expect(models.prompts).toEqual([]);
 });
 
-test("an ordinary run keeps variables out of wiring and pool and backward dormant", async () => {
+test("an ordinary run keeps variables out of wiring and pool", async () => {
   const flow = (
     await loadFlow(`id: local_render
 name: local_render

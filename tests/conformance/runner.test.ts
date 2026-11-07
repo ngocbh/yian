@@ -37,6 +37,7 @@ import {
   same,
   masked,
   pooled,
+  scriptLabel,
   setUp,
   sweepable,
   trace,
@@ -2505,4 +2506,29 @@ output: \${greet.output}
     expect(golden[3]).toContain('"deadline":null');
     expect(golden.join("\n")).not.toContain(DEADLINE);
   });
+});
+
+test.each([
+  ["lookup", "host.tools.lookup.results"],
+  ["docs_search", "host.tools.docs.group.search.results.chat"],
+  ["web_fetch", "host.tools.docs.group.fetch.results"],
+  ["fetch", "host.tools.docs.group.fetch.results"],
+  ["ask_user", "host.human.chat"],
+])("a call to %s takes from %s", (name, label) => {
+  const spec = readCase(`
+kind: run
+flow: x
+expect: {output: 1}
+host:
+  tools:
+    lookup: {parameters: {}, results: []}
+    docs:
+      group:
+        search: {parameters: {}, results: {chat: []}}
+        fetch: {parameters: {}, results: []}
+    web:
+      group:
+        fetch: {same_as: docs.fetch}
+`)["host"] as Case;
+  expect(scriptLabel(spec, "chat", name)).toBe(label);
 });

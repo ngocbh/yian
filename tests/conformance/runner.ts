@@ -3121,28 +3121,37 @@ function callNames(calls: readonly (readonly [string, string])[]): string {
 }
 
 /**
- * Return the label of the script a call to tool `name` from AGENT `node` takes from: its
- * `host.tools` results (a group's tool named `<group>_<tool>`, a `same_as` read as the tool it
- * names), else `host.human`.
+ * @internal Return the label of the script a call to tool `name` from AGENT `node` takes from:
+ * its `host.tools` results, else `host.human`. A group's tool is called `<group>_<tool>`, or by
+ * its own name when an agent granted it by its bare name; a `same_as` reads as the tool it names.
  */
-function scriptLabel(spec: Case, node: string, name: string): string {
-  for (const [where, stub, shown] of stubTools(spec)) {
-    if (shown === name) return `${where}.results${isMapping(stub["results"]) ? `.${node}` : ""}`;
-  }
-  return `host.human.${node}`;
+export function scriptLabel(spec: Case, node: string, name: string): string {
+  const stubs = stubTools(spec);
+  const found = stubs.find((each) => each.shown === name) ?? stubs.find((each) => each.own === name);
+  if (found === undefined) return `host.human.${node}`;
+  return `${found.where}.results${isMapping(found.stub["results"]) ? `.${node}` : ""}`;
+}
+
+/** One stub tool `host.tools` declares: where, its stub, its visible name and its own name. */
+interface StubTool {
+  readonly where: string;
+  readonly stub: Case;
+  /** A top-level stub's name, or a group's tool's `<group>_<tool>`. */
+  readonly shown: string;
+  /** The tool's own name, which a bare grant of a group's tool shows. */
+  readonly own: string;
 }
 
 /**
- * Return each stub tool `host.tools` declares, with where it is declared and the name a model
- * calls it by: a top-level stub's name, or a group's tool's `<group>_<tool>`. A `same_as` member
- * gives the stub it names, under the member's own `<group>_<tool>`.
+ * Return each stub tool `host.tools` declares. A `same_as` member gives the stub it names, under
+ * the member's own `<group>_<tool>`.
  */
-function stubTools(spec: Case): [string, Case, string][] {
-  const found: [string, Case, string][] = [];
+function stubTools(spec: Case): StubTool[] {
+  const found: StubTool[] = [];
   const named = new Map<string, [string, Case]>();
   for (const [name, entry] of Object.entries(get(spec, "tools", {}) as Case)) {
     if (!Object.hasOwn(entry as Case, "group")) {
-      found.push([`host.tools.${name}`, entry as Case, name]);
+      found.push({ where: `host.tools.${name}`, stub: entry as Case, shown: name, own: name });
       continue;
     }
     for (const [member, stub] of Object.entries((entry as Case)["group"] as Case)) {
@@ -3150,7 +3159,7 @@ function stubTools(spec: Case): [string, Case, string][] {
       const [where, declared]: [string, Case] =
         typeof same === "string" ? named.get(same)! : [`host.tools.${name}.group.${member}`, stub as Case];
       if (typeof same !== "string") named.set(`${name}.${member}`, [where, declared]);
-      found.push([where, declared, visibleToolName(name, member)]);
+      found.push({ where, stub: declared, shown: visibleToolName(name, member), own: member });
     }
   }
   return found;
@@ -3196,7 +3205,7 @@ export async function crashSweep(
   const env = caseEnv(ctx);
   const spec = get(case_, "host", {}) as Case;
   // A `same_as` member shares its stub's scripts, so each stub counts once.
-  const tools = [...new Map(stubTools(spec).map(([where, stub]) => [where, stub])).values()];
+  const tools = [...new Map(stubTools(spec).map(({ where, stub }) => [where, stub])).values()];
   const entries = tools.flatMap(({ results }) =>
     (isMapping(results) ? Object.values(results) : [results]).flat(),
   );

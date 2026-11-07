@@ -1,5 +1,6 @@
-# One tool sits in two granted groups. The agent is offered it once, under the first grant's
-# name, `toolbox_web`, and run_started records it once, under that record name.
+# One tool sits in two granted groups. The scripted request pins that the agent is offered it
+# once, under the first grant's name, `toolbox_web`, before `toolbox_a` and `company_b`; the
+# call by that name reaches it.
 kind: run
 flow: |
   id: grants

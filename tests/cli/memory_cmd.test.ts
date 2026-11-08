@@ -329,6 +329,23 @@ describe("yian memory undo", () => {
   });
 });
 
+describe("a refusal is told from a conflict", () => {
+  test("undo of an unknown change, or an edit over the size cap, is memory.refused", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    const unknown = await yian(["memory", "undo", flow, "lessons", "no-such-change", "--json"]);
+    expect(unknown.code).toBe(1);
+    expect(JSON.parse(unknown.stdout).error.code).toBe("memory.refused");
+    expect(unknown.stderr).toContain("undo refused: ");
+    const huge = await yian(["memory", "edit", flow, "lessons", "--json"], {
+      editor: async (path) => writeFileSync(path, "x".repeat(100_001)),
+    });
+    expect(huge.code).toBe(1);
+    expect(JSON.parse(huge.stdout).error.code).toBe("memory.refused");
+    rmSync(join(/your text is in (.+)$/m.exec(huge.stderr)![1]!, ".."), { recursive: true });
+  });
+});
+
 describe("yian memory edit", () => {
   /** An editor that changes the file it opens with `change`, as a person would. */
   const editing = (change: (text: string) => string) => async (path: string) =>

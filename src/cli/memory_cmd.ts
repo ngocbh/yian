@@ -239,6 +239,15 @@ async function onMemory(command: ParsedArgs, io: CliIo, named: Named, body: Memo
   }
 }
 
+/**
+ * The error code of a change that wasn't applied: `memory.conflict` when the memory's current
+ * text was in the way (it comes back as `current`), else `memory.refused` (a cap, a change no
+ * longer kept).
+ */
+function notAppliedCode(applied: Applied & { ok: false }): string {
+  return applied.current === null ? "memory.refused" : "memory.conflict";
+}
+
 /** Print `<label>: <message>` on stderr (a `{code, message}` error document under `json`); return 1. */
 async function failed(io: CliIo, json: boolean, o: { label: string; code: string; message: string }): Promise<number> {
   await printStyled(io, `${o.label}: ${o.message}`, "red");
@@ -350,8 +359,9 @@ export async function memoryHistory(command: ParsedArgs, io: CliIo): Promise<num
 /**
  * `yian memory undo FLOW NAME CHANGE` (or `--at PATH CHANGE`): undo the change `CHANGE` as the
  * user, and print the memory's new version (`--json`: `{change, version}`, `change` the undo's own
- * id). A change that can't be undone (its file changed since, or it is no longer kept) prints
- * `undo refused: <reason>` (a `memory.conflict` document) and exits 1.
+ * id). A change that can't be undone prints `undo refused: <reason>` and exits 1: a
+ * `memory.conflict` document when its file changed since, `memory.refused` otherwise (it is no
+ * longer kept, say).
  */
 export async function memoryUndo(command: ParsedArgs, io: CliIo): Promise<number> {
   const { named, value: undone } = namedWith(command, "change");
@@ -360,7 +370,7 @@ export async function memoryUndo(command: ParsedArgs, io: CliIo): Promise<number
     const id = changeId();
     const applied = await session.undo({ id, changeId: undone, author: userAuthor(io), signal: stopOf(io) });
     if (!applied.ok) {
-      return failed(io, json, { label: "undo refused", code: "memory.conflict", message: applied.reason });
+      return failed(io, json, { label: "undo refused", code: notAppliedCode(applied), message: applied.reason });
     }
     if (json) await printJson({ change: id, version: applied.version }, io.stdout);
     else await io.stdout.write(`undid ${forTerminal(undone, io.stdout)}; the memory's version is ${applied.version}\n`);
@@ -424,9 +434,9 @@ async function runEditor(env: Env, path: string, json: boolean): Promise<void> {
  * symlink or hard link, text that isn't UTF-8 or is over the cap) is refused before the editor
  * opens, as a usage error. Edited text that isn't applied is never lost: the copy stays and
  * the message says where. A file changed meanwhile prints `edit refused: <reason>` (a
- * `memory.conflict` document); a failure of the editor or the change prints `edit failed:
- * <message>` (`memory.failed`); either exits 1. `--json` prints `{change, version}` for an edit,
- * or `{change: null}` for none.
+ * `memory.conflict` document; `memory.refused` for a cap); a failure of the editor or the change
+ * prints `edit failed: <message>` (`memory.failed`); either exits 1. `--json` prints `{change,
+ * version}` for an edit, or `{change: null}` for none.
  */
 export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;
@@ -477,7 +487,7 @@ export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number
         if (!(error instanceof Error)) throw error;
         return keptFailure("edit failed", "memory.failed", error.message);
       }
-      if (!applied.ok) return keptFailure("edit refused", "memory.conflict", applied.reason);
+      if (!applied.ok) return keptFailure("edit refused", notAppliedCode(applied), applied.reason);
       if (json) await printJson({ change: id, version: applied.version }, io.stdout);
       else {
         await io.stdout.write(`edited ${forTerminal(path, io.stdout)}; the memory's version is ${applied.version}\n`);

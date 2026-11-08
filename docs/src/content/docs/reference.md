@@ -82,7 +82,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_FILE_MEMORY_MAX_FILE_CHARS` | setting | 100,000 | 1 or more | Most characters one file of a FileMemory may hold |
 | `YIAN_FILE_MEMORY_MAX_TOTAL_CHARS` | setting | 1,000,000 | 1 or more | Most characters all files of a FileMemory may hold |
 | `YIAN_FILE_MEMORY_MAX_FILES` | setting | 1,000 | 1 or more | Most files a FileMemory may hold |
-| `YIAN_FILE_MEMORY_MAX_DEPTH` | setting | 4 | 1 or more | Most folders deep a FileMemory file may sit |
+| `YIAN_FILE_MEMORY_MAX_DEPTH` | setting | 4 | 0 or more | Most folders deep a FileMemory file may sit |
 | `YIAN_FILE_MEMORY_MAX_RECALL_CHARS` | setting | 8,000 | 1 or more | Most characters of a FileMemory's recall |
 | `YIAN_FILE_MEMORY_MAX_READ_CHARS` | setting | 20,000 | 1 or more | Most characters one FileMemory list, read or search result shows |
 | `YIAN_FILE_MEMORY_MAX_RESULTS` | setting | 100 | 1 or more | Most entries a FileMemory's `list` shows, and lines its `search` shows |

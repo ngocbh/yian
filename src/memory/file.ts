@@ -181,7 +181,7 @@ export interface FileMemoryOptions {
   maxTotalChars?: number;
   /** Files the memory may hold. */
   maxFiles?: number;
-  /** Folders a file may sit under. */
+  /** Folders a file may sit under; 0 keeps every file at the top. */
   maxDepth?: number;
   /** Characters of the recall. */
   maxRecallChars?: number;
@@ -645,7 +645,7 @@ export class FileMemory extends MemoryBase {
       maxFileChars: capOption("maxFileChars", options.maxFileChars, defaults.fileMemoryMaxFileChars, 1),
       maxTotalChars,
       maxFiles: capOption("maxFiles", options.maxFiles, defaults.fileMemoryMaxFiles, 1),
-      maxDepth: capOption("maxDepth", options.maxDepth, defaults.fileMemoryMaxDepth, 1),
+      maxDepth: capOption("maxDepth", options.maxDepth, defaults.fileMemoryMaxDepth, 0),
       maxRecallChars: capOption("maxRecallChars", options.maxRecallChars, defaults.fileMemoryMaxRecallChars, 1),
       maxReadChars: capOption("maxReadChars", options.maxReadChars, defaults.fileMemoryMaxReadChars, 1),
       maxResults: capOption("maxResults", options.maxResults, defaults.fileMemoryMaxResults, 1),

@@ -240,7 +240,7 @@ export const ENTRIES = Object.freeze([
     default: 4,
     description: "Most folders deep a FileMemory file may sit",
     group: "setting",
-    minimum: 1,
+    minimum: 0,
   }),
   entry("FILE_MEMORY_MAX_RECALL_CHARS", {
     default: 8_000,

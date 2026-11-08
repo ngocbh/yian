@@ -221,6 +221,17 @@ test("the depth cap counts the folders above a file", () => {
   expect(() => new FileMemory({ root, index: "a/b/x.md", maxDepth: 1 })).toThrow("more than 1 folder deep");
 });
 
+test("a depth cap of 0 makes a flat memory: files at the top only", async () => {
+  put(root, "a.md", "A");
+  put(root, "sub/b.md", "B");
+  expect(() => new FileMemory({ root, index: "x/MEMORY.md", maxDepth: 0 })).toThrow("more than 0 folders deep");
+  const s = await new FileMemory({ root, id: "t/flat", maxDepth: 0 }).open(o);
+  expect((await s.call("list", {}, { signal })).files).toEqual([{ path: "a.md", hash: sha256("A"), chars: 1n }]);
+  const write = { id: "w", change: { op: "append", path: "sub/c.md", text: "C" }, author, signal };
+  expect(await s.apply(write)).toEqual(refusal("`sub/c.md` isn't part of the memory: more than 0 folders deep"));
+  await s.close();
+});
+
 test("bad settings are refused at construction", () => {
   expect(() => new FileMemory({ root: "" })).toThrow("root");
   expect(() => new FileMemory({ root, id: "" })).toThrow("id");

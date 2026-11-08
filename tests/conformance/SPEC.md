@@ -630,7 +630,7 @@ exits 1 when any case fails. On every `run` and `resume` case with a log it also
 invariants (in-flight nodes within `num_workers`, no record after the terminal outcome,
 `inspectRun` agreeing with a replay, a finished log resumed read-only).
 `--crash-sweep` also cuts each serial `run` case that expects `output`, isn't `pending`, and has no
-`host.sends`, `host.stop` or `host.memory` after every record but the last, resumes it (passing the
+`host.sends`, `host.stop` or `held` memory after every record but the last, resumes it (passing the
 run's `context`, `llm_config.api_key` and `llm_config.headers` again), and checks the invariants,
 plus the output and node outcomes when the case has no `host.human` or `host.jitter` and its tool
 scripts only return. What a run took from the host scripts after the cut (tool results, model
@@ -654,7 +654,13 @@ script it took from (`host.tools` or `host.human`) may keep one entry, since wha
 stays taken; its agent's `host.models` script may run out, since the agent reads the closer and
 may make a model call more; and the agent's later scripted requests are compared with that call's
 result read as the closer (`content` the closer text, `is_error: true`). A filled secret in the
-uncut run's log or in a resumed log fails the sweep too.
+uncut run's log or in a resumed log fails the sweep too, as does a memory's folder.
+
+Each cut run binds its `host.memory` memories in new folders, seeded from `files`, and its resume
+binds new instances on that cut's folders. A memory tool is resumable, so the resume sends a call
+the cut cut off again, never closing it `crashed`, with no allowance. After each resume, the cut's
+folders must hold what `expect.memory` says, so each write landed once. The resume's drift isn't
+checked: a cut after a write always shows drift.
 
 A `run` or `resume` case may have a **golden log**, `<name>.log.jsonl` beside it: the run log the
 case writes (for a `resume` case, the whole log after the resume), pinned byte for byte. Before

@@ -3036,7 +3036,8 @@ export function sourcesByRecord(entries: readonly Value[][]): Value[][] {
  * off: each call a reply up to `k` made, with no result up to `k`, that the uncut run made
  * (`made` holds the yian ids of its host calls, `<run>/<node>/<n>/<index>`), by call id with its
  * tool's name. These are the calls a resume closes `crashed`; a call the agent never made (an
- * ungranted tool, a reply past its tool-call limit) has nothing to cut off.
+ * ungranted tool, a reply past its tool-call limit) has nothing to cut off. A memory tool's call
+ * isn't a host call, so it is never here: memory tools are resumable, and the resume sends it again.
  */
 function cutCalls(
   records: readonly RecordEnvelope[],
@@ -3126,7 +3127,7 @@ function stubTools(spec: Case): StubTool[] {
 
 /**
  * Return whether `case_` gets a crash sweep: a serial `run` case expecting `output`, not
- * `pending`, with no `host.stop`, `host.sends` (an interrupt item among them) or `host.memory`.
+ * `pending`, with no `host.stop`, `host.sends` (an interrupt item among them) or `held` memory.
  */
 export function sweepable(case_: Case): boolean {
   const spec = get(case_, "host", {}) as Case;
@@ -3135,7 +3136,8 @@ export function sweepable(case_: Case): boolean {
     isZero(get(get(case_, "run", {}) as Case, "num_workers", 8n)) &&
     Object.hasOwn(case_["expect"] as Case, "output") &&
     !Object.hasOwn(case_, "pending") &&
-    !["stop", "sends", "memory"].some((key) => Object.hasOwn(spec, key))
+    !["stop", "sends"].some((key) => Object.hasOwn(spec, key)) &&
+    !Object.values(get(spec, "memory", {}) as Case).some((entry) => Object.hasOwn(entry as Case, "held"))
   );
 }
 
@@ -3143,15 +3145,18 @@ export function sweepable(case_: Case): boolean {
  * Run a `run` case's crash sweep. An uncut run writes N records; then, for each k in 0..N-2, a run
  * on a fresh host is cut after record k, the script entries it took after the cut are put back (a
  * cut right after a node's commit puts back from the node's last record before it, since the node
- * runs again), the invariants are checked at the cut, `beforeResume` (for a test, to damage the log) runs, and
- * the run is resumed. A cut inside the run start (before the START inputs' commit) must instead be
+ * runs again), the invariants are checked at the cut, `beforeResume` (for a test, to damage the log
+ * or the cut's memory folders, by input name) runs, and the run is resumed. Each run binds new
+ * memories in folders of its own, `sweep-memory/` for the uncut run and `sweep-<k>-memory/` for
+ * cut `k`, and the resume binds new instances on the cut's folders. A cut inside the run start (before the START inputs' commit) must instead be
  * refused by the resume, leaving the log as it is. The resume must end with a result whose invariants hold,
  * close `crashed` exactly the AGENT tool calls the cut cut off before their result (`cutCalls`) but
  * those to resumable stubs, which it sends again, pass its
  * host's `check()` with no entry left, and leave no filled secret in its log, as the uncut run's
  * log must not. For each call closed `crashed`, the script its call took from may keep one entry,
  * the agent's `host.models` script may run out, and the agent's later scripted requests read the
- * call's result as the closer. With no
+ * call's result as the closer. The cut's memory folders must then hold what `expect.memory` says,
+ * and no log a memory's folder. With no
  * `host.human` or `host.jitter` and only `return` entries in its tool scripts, the strong oracle
  * also holds: the same output, and the same node outcome entries in the trace, in order, with each
  * record a success names given by its kind and node rather than its seq.
@@ -3159,7 +3164,9 @@ export function sweepable(case_: Case): boolean {
 export async function crashSweep(
   case_: Case,
   ctx: CaseContext,
-  { beforeResume = (_log: string) => {} } = {},
+  {
+    beforeResume = (_log: string, _memory: ReadonlyMap<string, string>) => {},
+  }: { beforeResume?: (log: string, memory: ReadonlyMap<string, string>) => void } = {},
 ): Promise<void> {
   const flow = await loadText(case_["flow"] as string, ctx);
   const env = caseEnv(ctx);
@@ -3178,11 +3185,17 @@ export async function crashSweep(
   const inputs = get(case_, "inputs", {}) as Case;
   const args = runOptions<RunFlowOptions>(get(case_, "run", {}) as Case, RUN_OPTIONS);
   const uncutLog = join(ctx.dir, "sweep.jsonl");
-  const uncutHost = host(case_, uncutLog, env, flow);
+  const uncutMemories = caseMemories(spec, join(ctx.dir, "sweep-memory"), env);
+  const uncutHost = host(case_, uncutLog, env, flow, uncutMemories);
   const uncutHooks = runHooks(uncutLog, env, uncutHost, start);
-  const uncut = await runFlow(flow, inputs, { ...args, ...uncutHooks });
+  const uncut = await runFlow(flow, { ...inputs, ...uncutMemories.bind() }, { ...args, ...uncutHooks });
   const made = new Set([...uncutHost.calls.values()].flatMap((list) => list.map(({ call_id }) => call_id as string)));
-  checkSecrets(case_, { "the uncut run log (crash sweep)": readFileSync(uncutLog, "utf8") });
+  const uncutText = { "the uncut run log (crash sweep)": readFileSync(uncutLog, "utf8") };
+  checkSecrets(case_, uncutText);
+  checkNoRoots(uncutMemories.roots, uncutText);
+  // A case without memories passes no memory option, as before.
+  const binds = Object.hasOwn(spec, "memory");
+  const expectMemory = get(case_["expect"] as Case, "memory");
   const outcomes = (log: string) => {
     const lines = readFileSync(log, "utf8").split("\n").filter((line) => line !== "");
     return sourcesByRecord(trace(lines, flow));
@@ -3198,10 +3211,12 @@ export async function crashSweep(
   for (let k = 0; k <= count - 2; k += 1) {
     const at = ` (crash sweep, cut after record ${k})`;
     const log = join(ctx.dir, `sweep-${k}.jsonl`);
-    const scripted = host(case_, log, env, flow);
+    const memories = caseMemories(spec, join(ctx.dir, `sweep-${k}-memory`), env);
+    const memory = () => (binds ? { memory: memories.bind() } : {});
+    const scripted = host(case_, log, env, flow, memories);
     const hooks = runHooks(log, env, scripted, start);
     // The uncut run's id, so the runs agree on it when the case gives none.
-    const cut = () => runFlow(flow, inputs, { ...args, ...hooks, runId: uncut.runId });
+    const cut = () => runFlow(flow, { ...inputs, ...memories.bind() }, { ...args, ...hooks, runId: uncut.runId });
     await cutAt(k, cut, at);
     // A node's commit and its success are written with nothing awaited between them, so a cut
     // right after a commit is a crash before the success: the node runs again and takes its
@@ -3211,7 +3226,7 @@ export async function crashSweep(
     if (k < inputsCommit) {
       // A log cut inside its run start doesn't hold the run's inputs yet, so it can't be resumed.
       const before = readFileSync(log);
-      const refused = await settle(() => advance(hooks));
+      const refused = await settle(() => advance({ ...hooks, ...memory() }));
       const message = `run log ${log} ends inside its run start; start the run again`;
       if (!(refused instanceof RangeError) || refused.message !== message) {
         throw new CaseFailure(`the resume didn't refuse the incomplete run start${at}\n${failureText(refused)}`);
@@ -3221,7 +3236,7 @@ export async function crashSweep(
     }
     const reopen = { env, tools: scripted.tools, models: scripted.models };
     await checkInvariants(flow, log, reopen, null, at);
-    beforeResume(log);
+    beforeResume(log, memories.roots);
     const open = cutCalls(uncutRecords, k, uncut.runId, made);
     // The resume sends a resumable stub's cut calls again and reads their answers, so it closes
     // only the others, and only theirs get a script allowance and a model overrun.
@@ -3238,7 +3253,7 @@ export async function crashSweep(
       const { api_key: apiKey, headers } = (args.llmConfig ?? {}) as Pick<AdvanceOptions, "headers"> & {
         api_key?: string;
       };
-      resumed = await advance({ ...hooks, ...context, apiKey, headers });
+      resumed = await advance({ ...hooks, ...context, apiKey, headers, ...memory() });
     } catch (error) {
       throw new CaseFailure(`the resume raised${at}\n${failureText(error)}`);
     }
@@ -3275,7 +3290,14 @@ export async function crashSweep(
       throw new CaseFailure(`the resume's host calls differ from the script${at}\n${(error as Error).message}`);
     }
     if (left.length > 0) throw new CaseFailure(left.map((message) => `${message}${at}`).join("\n"));
-    checkSecrets(case_, { [`the run log${at}`]: readFileSync(log, "utf8") });
+    const text = { [`the run log${at}`]: readFileSync(log, "utf8") };
+    checkSecrets(case_, text);
+    checkNoRoots(memories.roots, text);
+    // Each write landed once: the cut's folders hold what the uncut run's would.
+    if (isMapping(expectMemory)) {
+      const folders = Object.keys(expectMemory).map((input) => [input, folderFiles(memories.roots.get(input)!)]);
+      compare(`memory${at}`, Object.fromEntries(folders), expectMemory);
+    }
     if (strong) {
       compare(`output${at}`, output(resumed, flow), output(uncut, flow), { byValue: true });
       compare(`node outcomes${at}`, outcomes(log), expected);

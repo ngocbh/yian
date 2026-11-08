@@ -2098,6 +2098,34 @@ expect:
     await expect(failure).rejects.toThrow("output (crash sweep, cut after record 10) differs");
   }, SWEEP);
 
+  /** Return the committed case `id`, prepared, and its set-up directory. */
+  function committed(id: string): [Case, CaseContext] {
+    return sweepCase(readFileSync(join(CASES, `${id}.yaml`), "utf8"));
+  }
+
+  test("a serial run case with `host.memory` expecting output is swept, unless a memory is `held`", () => {
+    const [case_] = committed("run-memory/file_memory__an_agent_appends_and_the_tool_result_holds_the_version");
+    expect(sweepable(case_)).toBe(true);
+    const [held] = committed("run-memory/file_memory__a_busy_memory_reaches_the_model");
+    expect(sweepable(held)).toBe(false);
+  });
+
+  test("a memory case's sweep resumes every cut on its own folders, each write landing once", async () => {
+    const [case_, ctx] = committed("run-memory/file_memory__an_agent_appends_and_the_tool_result_holds_the_version");
+    const folders = new Set<string>();
+    await crashSweep(case_, ctx, { beforeResume: (_log, memory) => folders.add(memory.get("lessons")!) });
+    // One folder per resumed cut: no cut writes where another did.
+    expect(folders.size).toBeGreaterThan(1);
+  }, SWEEP);
+
+  test("fails a memory case's sweep whose folder changes before the resume, by the expect.memory difference", async () => {
+    // The TOOL node's line is gone, or lands alone, so the folder isn't what the case expects.
+    const [case_, ctx] = committed("run-memory/file_memory__a_tool_node_appends_once");
+    const failure = crashSweep(case_, ctx, { beforeResume: (_log, memory) => rmSync(join(memory.get("lessons")!, "notes.md")) });
+    await expect(failure).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failure).rejects.toThrow("memory (crash sweep, cut after record 4) differs");
+  }, SWEEP);
+
   test("a sweep still going refuses no other run's appends", async () => {
     const [case_, ctx] = twoNodes();
     // Not awaited yet, as when its test timed out: other runs go on while it cuts.

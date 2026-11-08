@@ -1111,6 +1111,7 @@ class FileMemorySession implements MemorySession {
    * fails.
    */
   #next(change: Change, old: MemberFile | null): { text: string | null; inverse: Inverse } | Applied {
+    const path = shown(change.path);
     switch (change.op) {
       case "append": {
         if (old === null) return { text: change.text, inverse: { absent: true } };
@@ -1119,9 +1120,34 @@ class FileMemorySession implements MemorySession {
         const inverse = { truncate: Buffer.byteLength(old.text, "utf8") };
         return { text: old.text + lineBreak + change.text, inverse };
       }
+      case "create":
+        if (old !== null) return this.#conflict(`${path} already exists`, old);
+        return { text: change.text, inverse: { absent: true } };
+      case "edit": {
+        if (old === null) return refused(`${path} doesn't exist`);
+        if (change.old === "") return this.#conflict("the old text is empty; give the exact text to replace", old);
+        const at = old.text.indexOf(change.old);
+        if (at === -1) return this.#conflict(`the old text isn't in ${path}; read the file and copy it exactly`, old);
+        // Searched again from the next character, so an old text that overlaps itself counts twice.
+        if (old.text.indexOf(change.old, at + 1) !== -1) {
+          return this.#conflict(`the old text appears more than once in ${path}; give more of it`, old);
+        }
+        const text = old.text.slice(0, at) + change.new + old.text.slice(at + change.old.length);
+        return { text, inverse: { text: old.text } };
+      }
       default:
         throw new Error(`FileMemory ${change.op} isn't available yet`);
     }
+  }
+
+  /** Return a conflict over the member `file`, holding its hash and content within `maxReadChars`. */
+  #conflict(reason: string, file: MemberFile): Applied {
+    const { maxReadChars } = this.#store.limits;
+    const current: JsonObject = { path: file.path, hash: file.hash, text: firstChars(file.text, maxReadChars) };
+    if (file.chars > maxReadChars) {
+      current.cut = `${plural(file.chars - maxReadChars, "more character")} not shown; read the file for the rest`;
+    }
+    return { ok: false, reason, current };
   }
 
   /** Throw when the session is closed. */

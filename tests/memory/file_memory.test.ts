@@ -521,6 +521,11 @@ describe("read tools", () => {
 
 const author: Author = { kind: "tool", name: "save", run: "r", node: "save" };
 
+/** Return the refusal `reason`, which wrote nothing. */
+function refusal(reason: string): Applied {
+  return { ok: false, reason, current: null };
+}
+
 /** Apply `change` as change `id` on `s`. */
 function apply(s: MemorySession, change: JsonObject, id = "c1"): Promise<Applied> {
   return s.apply({ id, change, author, signal });
@@ -670,5 +675,105 @@ describe("append", () => {
     const unnamed = s.apply({ id: "", change: { op: "append", path: "a.md", text: "x" }, author, signal });
     await expect(unnamed).rejects.toThrow("a change id must be a non-empty string");
     await s.close();
+  });
+});
+
+describe("create and edit", () => {
+  test("create applies and returns {path, hash, version}, making the file's folders", async () => {
+    const s = await openAt();
+    const applied = await apply(s, { op: "create", path: "people/ada.md", text: "Ada." });
+    const version = (await s.snapshot()).version;
+    expect(applied).toEqual({ ok: true, version, result: { path: "people/ada.md", hash: sha256("Ada."), version } });
+    expect(fs.readFileSync(join(root, "people/ada.md"), "utf8")).toBe("Ada.");
+    expect(fs.statSync(join(root, "people")).mode & 0o777).toBe(0o700);
+    await s.close();
+  });
+
+  test("create on an existing file conflicts with its current hash and content, capped, writing nothing", async () => {
+    put(root, "a.md", "0123456789abc");
+    const s = await openAt({ maxReadChars: 10 });
+    const before = tree(dir);
+    expect(await apply(s, { op: "create", path: "a.md", text: "new" })).toEqual({
+      ok: false,
+      reason: "`a.md` already exists",
+      current: {
+        path: "a.md",
+        hash: sha256("0123456789abc"),
+        text: "0123456789",
+        cut: "3 more characters not shown; read the file for the rest",
+      },
+    });
+    expect(tree(dir)).toEqual(before);
+    await s.close();
+  });
+
+  test("edit replaces the exact old text once", async () => {
+    put(root, "a.md", "Prefer tabs.\nUse bun.\n");
+    const s = await openAt();
+    const applied = await apply(s, { op: "edit", path: "a.md", old: "tabs", new: "spaces" });
+    const version = (await s.snapshot()).version;
+    const text = "Prefer spaces.\nUse bun.\n";
+    expect(applied).toEqual({ ok: true, version, result: { path: "a.md", hash: sha256(text), version } });
+    expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe(text);
+    await s.close();
+  });
+
+  test.each([
+    ["absent", "Prefer tabs.", "spaces", "the old text isn't in `a.md`; read the file and copy it exactly"],
+    ["present twice", "Use", "Try", "the old text appears more than once in `a.md`; give more of it"],
+    ["overlapping itself", "aa", "b", "the old text appears more than once in `a.md`; give more of it"],
+    ["empty", "", "x", "the old text is empty; give the exact text to replace"],
+  ])("edit with old %s conflicts with the current hash and content, writing nothing", async (_, old, text, reason) => {
+    const content = "Prefer Tabs.\nUse bun.\nUse git.\naaa";
+    put(root, "a.md", content);
+    const s = await openAt();
+    const before = tree(dir);
+    expect(await apply(s, { op: "edit", path: "a.md", old, new: text })).toEqual({
+      ok: false,
+      reason,
+      current: { path: "a.md", hash: sha256(content), text: content },
+    });
+    expect(tree(dir)).toEqual(before);
+    await s.close();
+  });
+
+  test("edit of a file that doesn't exist conflicts, writing nothing", async () => {
+    const s = await openAt();
+    expect(await apply(s, { op: "edit", path: "a.md", old: "x", new: "y" })).toEqual({
+      ok: false,
+      reason: "`a.md` doesn't exist",
+      current: null,
+    });
+    expect(fs.existsSync(join(root, "a.md"))).toBe(false);
+    await s.close();
+  });
+
+  test("create and edit keep to the caps", async () => {
+    put(root, "a.md", "1234");
+    const s = await openAt({ maxFileChars: 5, maxTotalChars: 8, maxFiles: 2 });
+    const before = tree(dir);
+    expect(await apply(s, { op: "create", path: "b.md", text: "123456" }, "1")).toEqual(
+      refusal("`b.md` would hold 6 characters; a file may hold 5"),
+    );
+    expect(await apply(s, { op: "create", path: "b.md", text: "12345" }, "2")).toEqual(
+      refusal("the memory would hold 9 characters; it may hold 8"),
+    );
+    expect(await apply(s, { op: "edit", path: "a.md", old: "4", new: "456" }, "3")).toEqual(
+      refusal("`a.md` would hold 6 characters; a file may hold 5"),
+    );
+    expect(tree(dir)).toEqual(before);
+    expect((await apply(s, { op: "create", path: "b.md", text: "1" }, "4")).ok).toBe(true);
+    expect(await apply(s, { op: "create", path: "c.md", text: "1" }, "5")).toEqual(
+      refusal("the memory would hold 3 files; it may hold 2"),
+    );
+    await s.close();
+  });
+
+  test("confinement: create on a path outside the members is refused with the reason, writing nothing", async () => {
+    await expectConfined((path) => ({ op: "create", path, text: "x" }));
+  });
+
+  test("confinement: edit on a path outside the members is refused with the reason, writing nothing", async () => {
+    await expectConfined((path) => ({ op: "edit", path, old: "x", new: "y" }));
   });
 });

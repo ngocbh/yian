@@ -5,13 +5,15 @@
  * the change id, so a call sent again after a crash applies once. Every memory tool is resumable.
  * A session's outcomes and errors map to tool errors: a refusal is a permanent reported error the
  * model reads, a busy memory a reported one it may try again, and a reused change id a permanent
- * error.
+ * error. A transient provider error, such as an embedder's rate limit, is a reported error the model
+ * may try again.
  *
- * It imports `tools`, `typesys` and `diagnostics` only. The caller passes the author's kind and
+ * It imports `tools`, `llm` (its errors), `typesys` and `diagnostics` only. The caller passes the author's kind and
  * static name, since it can't read node ids here.
  */
 
 import { reprText } from "../diagnostics.ts";
+import { ProviderError } from "../llm/errors.ts";
 import type { ToolContext } from "../tools/context.ts";
 import { PermanentToolError, ReportedToolError } from "../tools/errors.ts";
 import { FunctionTool } from "../tools/function_tools.ts";
@@ -108,12 +110,18 @@ function callAuthor(author: { readonly kind: "agent" | "tool"; readonly name: st
 }
 
 /**
- * Return the error a call reports for a session's `error`: a busy memory as a reported error the
- * model may try again, a reused change id as a permanent error, and any other error as it is.
+ * Return the error a call reports for a session's `error`: a busy memory, or a provider error
+ * another attempt may fix (an embedder's rate limit, server error or timeout), as a reported error
+ * the model may try again; a reused change id as a permanent error; and any other error as it is.
  */
 function sessionError(input: string, ctx: ToolContext, error: unknown): unknown {
   const kind = memoryErrorKind(error);
   if (kind === "busy") return new ReportedToolError(`\`${input}\` is busy; try again`, { cause: error });
+  // A transient fault of the memory's own model doesn't fail the run; one another attempt can't
+  // fix (refused credentials) stays a fault, so the host sees it.
+  if (error instanceof ProviderError && error.retryable) {
+    return new ReportedToolError(`\`${input}\` couldn't embed: ${error.kind}; try again`, { cause: error });
+  }
   if (kind === "change_id_reused") {
     // Named from the call, not the error: a host's error may say anything.
     return new PermanentToolError(`\`${input}\`: change id \`${ctx.callId}\` was used for another change`, {

@@ -2,6 +2,7 @@
 
 import { expect, test } from "bun:test";
 
+import { ProviderError } from "../../src/llm/errors.ts";
 import { ChangeIdReusedError, MemoryBusyError } from "../../src/memory/base.ts";
 import { memoryTools } from "../../src/memory/tools.ts";
 import { ToolContext } from "../../src/tools/context.ts";
@@ -136,4 +137,33 @@ test("outside a run the author holds no run or node", async () => {
   const [append] = memoryTools(value, session, { input: "lessons", tools: ["append"] }, { kind: "tool", name: "save" });
   await append!.execute({ path: "a.md", text: "x" }, ctx({ callId: "abc", node: "", runId: "" }));
   expect(session.applied[0]!.author).toEqual({ kind: "tool", name: "save" });
+});
+
+test("a transient provider error, from an embedder, is a reported error the model may try again", async () => {
+  const session = new RecordingSession();
+  const [search, append] = memoryTools(value, session, { input: "lessons", tools: ["search", "append"] }, {
+    kind: "agent",
+    name: "a",
+  });
+  for (const kind of ["rate_limit", "server", "timeout"] as const) {
+    const fault = new ProviderError(kind, `embedding failed (${kind})`);
+    session.onCall = () => {
+      throw fault;
+    };
+    session.onApply = () => {
+      throw fault;
+    };
+    for (const tool of [search!, append!]) {
+      const error = await rejection(() => tool.execute({ query: "q", path: "a.md", text: "x" }, AT));
+      expect(isReportedToolError(error)).toBe(true);
+      expect(isPermanentToolError(error)).toBe(false);
+      expect((error as Error).message).toBe(`\`lessons\` couldn't embed: ${kind}; try again`);
+    }
+  }
+  // One another attempt can't fix (refused credentials) is a fault, as it is.
+  const refused = new ProviderError("auth", "embedding key refused");
+  session.onCall = () => {
+    throw refused;
+  };
+  expect(await rejection(() => search!.execute({ query: "q" }, AT))).toBe(refused);
 });

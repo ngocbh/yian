@@ -5,12 +5,13 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
-  linkSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -206,6 +207,30 @@ describe("yian memory list", () => {
       memories: [{ identity, type: "FileMemory", location }],
     });
   });
+
+  test.skipIf(process.getuid?.() === 0)(
+    "an unreadable folder is a warning, not a failure, and a symlinked .yian isn't a memory",
+    async () => {
+      const flow = flowFile();
+      await runOnce(flow, "first");
+      const root = join(home, ".yian", "memory");
+      mkdirSync(join(root, "locked"), { mode: 0o000 });
+      // A folder whose .yian points at a real memory's: listing it would show that one twice.
+      mkdirSync(join(root, "fake"));
+      symlinkSync(join(lessons().location, ".yian"), join(root, "fake", ".yian"));
+      try {
+        const result = await yian(["memory", "list", "--json"]);
+        expect(result.code, result.stderr).toBe(0);
+        expect(result.stderr).toContain(`warning: can't read ${join(root, "locked")}`);
+        expect(result.stderr).not.toContain("    at ");
+        expect(JSON.parse(result.stdout).memories.map((each: { location: string }) => each.location)).toEqual([
+          lessons().location,
+        ]);
+      } finally {
+        chmodSync(join(root, "locked"), 0o700);
+      }
+    },
+  );
 
   test("with no memories, prints nothing, or an empty list", async () => {
     expect(await yian(["memory", "list"])).toEqual({ code: 0, stdout: "", stderr: "" });

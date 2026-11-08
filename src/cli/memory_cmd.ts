@@ -133,37 +133,52 @@ interface Listed {
 
 /**
  * Return the memories under the folder `root`, by identity: each folder holding a memory's
- * identity file (`.yian/identity`). The walk follows no symlink and doesn't look inside a memory.
+ * identity file (`.yian/identity`, in a real `.yian` folder), and the folders that couldn't be
+ * read. The walk follows no symlink and doesn't look inside a memory.
  */
-function findMemories(root: string): Listed[] {
+function findMemories(root: string): { found: Listed[]; unreadable: string[] } {
   const found: Listed[] = [];
+  const unreadable: string[] = [];
   const walk = (dir: string): void => {
     let names: string[];
     try {
       names = readdirSync(dir);
     } catch (error) {
+      if (!isSystemError(error)) throw error;
       // A folder removed, or never made, holds no memory.
-      if (isSystemError(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) return;
-      throw error;
+      if (error.code !== "ENOENT" && error.code !== "ENOTDIR") unreadable.push(dir);
+      return;
     }
     for (const name of names.sort(compareCodeUnits)) {
       const path = join(dir, name);
       if (lstatOrNull(path)?.isDirectory() !== true) continue;
       const identity = storedIdentity(path);
-      if (identity === null) walk(path);
+      if (identity === undefined) unreadable.push(path);
+      else if (identity === null) walk(path);
       else found.push({ identity, type: "FileMemory", location: path });
     }
   };
   walk(root);
-  return found.sort((a, b) => compareCodeUnits(a.identity, b.identity));
+  return { found: found.sort((a, b) => compareCodeUnits(a.identity, b.identity)), unreadable };
 }
 
-/** The identity in `<dir>/.yian/identity`, one line, or `null` when there is none. */
-function storedIdentity(dir: string): string | null {
-  const path = join(dir, ".yian", "identity");
-  if (lstatOrNull(path)?.isFile() !== true) return null;
+/**
+ * The identity in `<dir>/.yian/identity`, one line; `null` when there is none (a symlinked `.yian`
+ * is another memory's, not this folder's), and `undefined` when it can't be read.
+ */
+function storedIdentity(dir: string): string | null | undefined {
+  const meta = join(dir, ".yian");
+  const path = join(meta, "identity");
+  let text: string;
+  try {
+    if (lstatOrNull(meta)?.isDirectory() !== true || lstatOrNull(path)?.isFile() !== true) return null;
+    text = readFileSync(path, "utf8");
+  } catch (error) {
+    if (isSystemError(error)) return undefined;
+    throw error;
+  }
   // A synced or hand-written identity may end in a line break.
-  const text = readFileSync(path, "utf8").replace(/\r?\n$/, "");
+  text = text.replace(/\r?\n$/, "");
   return text === "" || /[\r\n]/.test(text) ? null : text;
 }
 
@@ -175,10 +190,14 @@ function lstatOrNull(path: string): ReturnType<typeof lstatSync> | null {
 /**
  * `yian memory list`: every memory under `~/.yian/memory`, by identity, as aligned columns of its
  * identity, type and folder after a header (nothing when there is none), or with `--json` one
- * document whose `memories` holds `{identity, type, location}` each.
+ * document whose `memories` holds `{identity, type, location}` each. A folder it can't read is a
+ * `warning:` line on stderr.
  */
 export async function memoryList({ options }: ParsedArgs, io: CliIo): Promise<number> {
-  const memories = findMemories(memoryRoot(homeDir(io.env)));
+  const { found: memories, unreadable } = findMemories(memoryRoot(homeDir(io.env)));
+  for (const dir of unreadable) {
+    await printStyled(io, `warning: can't read ${dir}; a memory in it isn't listed`, "yellow");
+  }
   if (options["json"] === true) {
     const listed = memories.map(({ identity, type, location }) => ({ identity, type, location }));
     await printJson({ memories: listed }, io.stdout);

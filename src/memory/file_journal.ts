@@ -281,6 +281,27 @@ function parseLine(text: string): JournalLine | null {
   return { kind: "entry", entry: undoes === undefined ? entry : { ...entry, undoes } };
 }
 
+/** A generation line as `#create` writes it, its hex digits as zeros. */
+const GENERATION_LINE = '{"generation":"0000000000000000"}';
+
+/**
+ * Return whether the journal open at `fd`, of `size` bytes and with no line break, is the start of
+ * a generation line, as a crash while writing one leaves it.
+ */
+function isCutGenerationLine(fd: number, size: number): boolean {
+  if (size > GENERATION_LINE.length) return false;
+  const bytes = Buffer.alloc(size);
+  readAll(fd, bytes, 0);
+  const text = bytes.toString("latin1");
+  const digits = GENERATION_LINE.indexOf("0");
+  const end = GENERATION_LINE.lastIndexOf("0");
+  for (let i = 0; i < text.length; i++) {
+    const hex = i >= digits && i <= end;
+    if (hex ? !/[0-9a-f]/.test(text[i]!) : text[i] !== GENERATION_LINE[i]) return false;
+  }
+  return true;
+}
+
 /**
  * Return the first line of the journal open at `fd`, of `size` bytes, or `null` when a crash cut
  * it off (or the journal is empty).
@@ -468,7 +489,9 @@ export class Journal {
     const size = fs.fstatSync(fd).size;
     const first = readFirstLine(fd, size);
     if (first === null) {
-      // A crash cut off the generation line, so no entry follows it.
+      // Only a generation line a crash cut off has no line break, and no entry follows it. Anything
+      // else is damage, which must not be wiped: its change ids would apply again.
+      if (!isCutGenerationLine(fd, size)) throw damaged(1, "isn't a journal line");
       fs.ftruncateSync(fd, 0);
       fs.fsyncSync(fd);
       this.#reset(null);

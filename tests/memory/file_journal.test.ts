@@ -801,3 +801,31 @@ test("a compaction first resolves another session's cut-off entry, and the new j
   expect(await append(b, "bx", "from b", "b.md")).toEqual(stored as unknown as Applied);
   for (const s of [a, b, c]) await s.close();
 });
+
+test("a journal with no line break that isn't a cut-off generation line is damaged, not wiped", async () => {
+  const s = await openAt();
+  for (const n of [1, 2, 3]) await append(s, `x${n}`, `${n}`);
+  const journalPath = join(root, ".yian/journal.jsonl");
+  const flattened = fs.readFileSync(journalPath, "utf8").replaceAll("\n", " ");
+  fs.writeFileSync(journalPath, flattened);
+  await expect(openAt()).rejects.toThrow(
+    "`.yian/journal.jsonl` line 1 isn't a journal line; restore the journal or remove it",
+  );
+  await expect(append(s, "x1", "1")).rejects.toThrow("line 1 isn't a journal line");
+  expect(fs.readFileSync(journalPath, "utf8")).toBe(flattened);
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("1\n2\n3");
+  await s.close();
+});
+
+test.each(['{"generati', '{"generation":"0123', '{"generation":"0123456789abcdef"}'])(
+  "a generation line a crash cut off (%s) starts the journal again",
+  async (cut) => {
+    const s = await openAt();
+    fs.writeFileSync(join(root, ".yian/journal.jsonl"), cut);
+    const t = await openAt();
+    expect((await append(t, "x", "one")).ok).toBe(true);
+    expect(journalLines()).toHaveLength(3);
+    await s.close();
+    await t.close();
+  },
+);

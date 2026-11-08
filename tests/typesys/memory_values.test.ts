@@ -192,15 +192,21 @@ describe("memory at the write boundary", () => {
     },
   );
 
-  test("a memory slot refuses a memory of another type, naming both", () => {
+  test("a memory slot refuses a memory of another type, naming both types and no value", () => {
     const vector = new MemoryRef({ ...FIELDS, type: "VectorDBMemory" });
-    expect(() => buildValueAs(FILE_MEMORY, vector)).toThrow(
-      "<memory proj-1a2b3c4d/answer/lessons> does not match declared type FileMemory: it is a VectorDBMemory",
-    );
+    expect(() => buildValueAs(FILE_MEMORY, vector)).toThrow("a VectorDBMemory memory does not match declared type FileMemory");
   });
 
-  test("the refusal names the declared memory type", () => {
-    expect(() => buildValueAs(FILE_MEMORY, "x")).toThrow('"x" does not match declared type FileMemory');
+  // A refused value may be a memory's JSON form, whose recall must not reach a message or a log.
+  test("the refusal names the declared memory type, never the value", () => {
+    expect(() => buildValueAs(FILE_MEMORY, "x")).toThrow("a value that isn't a memory does not match declared type FileMemory");
+    let message = "";
+    try {
+      buildValueAs(FILE_MEMORY, jsonPart(ref, [], "mapping"));
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toBe("a value that isn't a memory does not match declared type FileMemory");
   });
 
   test.each([[ValueKind.ANY], [ValueKind.OBJECT]])("%p refuses a memory value", (kind) => {

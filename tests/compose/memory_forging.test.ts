@@ -1,7 +1,9 @@
 /**
  * No flow or host value can forge a memory: only a `MemoryBase` instance the runner binds, or a
- * memory value read back from the run's own log, is one. Each path below once built a `MemoryRef`
- * from a plain record, or read a memory's recall through a value.
+ * memory value read back from yian's own JSON, is one. A memory's JSON form is read back at three
+ * places only, each at a memory-typed position: the START inputs commit, a loop's carried record,
+ * and a call, map or loop child's seed. Each path below once built a `MemoryRef` from a plain
+ * record, or read a memory's recall through a value.
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

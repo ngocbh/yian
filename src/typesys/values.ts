@@ -2775,17 +2775,25 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
 
 /**
  * Check `value` against the memory type `typ` at `path`: a `MemoryRef` whose contract type is
- * `typ`'s. Its JSON form is refused: only a read of yian's own run log (`normalizeFiles`) turns
- * one back into a memory, so no value a node computes can forge one.
+ * `typ`'s. Its JSON form is refused: only a read of yian's own JSON turns one back into a memory
+ * (`normalizeFiles` at a memory position), where a run reads its START inputs commit, a loop's
+ * carried record, or a call, map or loop child's seed, so no value a node computes can forge one.
+ *
+ * The message names the types only, never the value, which may hold a memory's recall.
  *
  * @throws RangeError when `typ` names no memory type.
- * @throws TypeCheckError naming the declared type, and the value's own type when only that differs.
+ * @throws TypeCheckError naming the declared type, and the value's own memory type when only that
+ *   differs.
  */
 function buildMemory(typ: Type, value: unknown, path: ValuePath): TypedValue {
   typ.validateShape();
-  const mismatch = `${floatSpelledRepr(value)} does not match declared type ${canonicalTypeLabel(typ)}`;
-  if (!MemoryRef.isMemoryRef(value)) throw new TypeCheckError(mismatch, { path });
-  if (value.type !== typ.memory) throw new TypeCheckError(`${mismatch}: it is a ${value.type}`, { path });
+  const declared = `declared type ${canonicalTypeLabel(typ)}`;
+  if (!MemoryRef.isMemoryRef(value)) {
+    throw new TypeCheckError(`a value that isn't a memory does not match ${declared}`, { path });
+  }
+  if (value.type !== typ.memory) {
+    throw new TypeCheckError(`a ${value.type} memory does not match ${declared}`, { path });
+  }
   return new TypedValue(ValueKind.MEMORY, value);
 }
 

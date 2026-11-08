@@ -205,6 +205,24 @@ test.each(["[a_b, a]", "[a, a_b]", "[{a_b: [read]}, {a: [b_read]}]"])(
   },
 );
 
+test("a memory tool whose name is past 64 characters is refused", async () => {
+  const long = "l".repeat(60);
+  for (const tools of [`[${long}]`, `[{${long}: [rewrite]}]`]) {
+    const error = await loadErrorAsync(loadFlow(flow(`${long}: !FileMemory`, agent(tools))));
+    expect(error.diagnostic.message).toContain(
+      `, which would show as \`${long}_`,
+    );
+    expect(error.diagnostic.message).toContain("shorten the group or the tool");
+  }
+});
+
+test("a host memory tool a model can't call by name is refused", async () => {
+  const BadName = hostType("BadName", ["bad.name"]);
+  const error = await loadErrorAsync(loadFlow(flow("j: !BadName", agent("[j]")), { memoryTypes: [BadName] }));
+  expect(error.diagnostic.message).toContain("grants group `j`'s `bad.name`, which would show as `j_bad.name`");
+  expect(error.diagnostic.message).toContain("rename the tool");
+});
+
 test("a host type's grants are checked against its class's tools", async () => {
   const text = flow("j: !TradeJournal", agent("[{j: [record_trade]}]"));
   const loaded = await loadFlow(text, { memoryTypes: [TRADE_JOURNAL] });

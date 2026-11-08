@@ -3,7 +3,7 @@
 import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { BUILTIN_MEMORY_TOOLS, type MemoryBase } from "../../memory/base.ts";
 import { MEMORY_KEY_PREFIX } from "../../nodes/base.ts";
-import { expandGrants, GrantError, type GrantScope, type ToolGrant, visibleToolName } from "../../tools/grants.ts";
+import { checkVisibleNames, expandGrants, GrantError, type GrantScope, type ToolGrant } from "../../tools/grants.ts";
 import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
 import { parseType, type TypeExpr, type TypeRegistry, withMemoryTypes } from "../../typesys/types.ts";
 import { isMemoryType, type Type, TypeCheckError } from "../../typesys/values.ts";
@@ -143,8 +143,8 @@ export function memoryToolNames(
 
 /**
  * Check grants of the memory inputs `flowInputs` types as memories: each tool a grant lists is
- * one of its type's, and no tool shows to a model under a name yian reserves or another memory
- * tool of the same grants shows. A grant on a type this load doesn't know (a recorded flow's) is
+ * one of its type's, and each tool shows to a model under a name it can call, which yian doesn't
+ * reserve and no other memory tool of the same grants shows. A grant on a type this load doesn't know (a recorded flow's) is
  * left unchecked: the run's start checked it.
  *
  * @throws GrantError naming the grant and the fix.
@@ -169,7 +169,9 @@ export function checkMemoryGrants(
     identity: (group, tool) => JSON.stringify([group, tool]),
     bareMembers: false,
   };
-  for (const tool of expandGrants(known, [scope])) {
+  const granted = expandGrants(known, [scope]);
+  checkVisibleNames(granted);
+  for (const tool of granted) {
     if (!RESERVED_TOOL_NAMES.has(tool.visible)) continue;
     throw new GrantError(
       `the tool name \`${tool.visible}\` of \`{${tool.group}: [${tool.tool}]}\` is yian's; rename the input`,

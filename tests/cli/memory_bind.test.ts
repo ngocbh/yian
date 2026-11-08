@@ -203,6 +203,13 @@ describe("--memory", () => {
     expect(readFileSync(join(home, "notes", "MEMORY.md"), "utf8")).toContain("Check sums twice.");
   });
 
+  test("spaces around the name and the path are dropped", async () => {
+    const notes = join(tmp, "notes");
+    const result = await yian(["run", flowFile(APPEND), "--quiet", "--memory", ` lessons = ${notes} `]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(readFileSync(join(notes, "MEMORY.md"), "utf8")).toContain("Check sums twice.");
+  });
+
   test("two inputs given one path, however spelled, share one memory", async () => {
     const shared = join(tmp, "shared");
     const args = ["--memory", `lessons=${shared}`, "--memory", `notes=${join(tmp, "proj", "..", "shared")}/`];

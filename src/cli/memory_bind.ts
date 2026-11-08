@@ -241,8 +241,8 @@ class CliFileMemory extends FileMemory {
 
 /**
  * Return the `--memory NAME=PATH` flags as each named memory input's path, checked against the
- * flow's inputs `params`. The name is trimmed; the path is everything after the first `=`, whose
- * leading `~/` the binding reads as the home folder.
+ * flow's inputs `params`. The name is what comes before the first `=`, and the path what comes
+ * after it, each trimmed; the binding reads a leading `~/` as the home folder.
  *
  * @throws {UsageError} For a flag without `=` or a path, a name that isn't a memory input or
  *   comes twice, or a `.db` path for a FileMemory input.
@@ -254,7 +254,7 @@ export function memoryFlags(params: readonly Parameter[], flags: readonly string
     const at = flag.indexOf("=");
     if (at === -1) throw new UsageError(`Invalid value: --memory must be NAME=PATH (got ${reprText(flag)})`);
     const name = flag.slice(0, at).trim();
-    const path = flag.slice(at + 1);
+    const path = flag.slice(at + 1).trim();
     const param = params.find((each) => each.name === name);
     const typ = param?.contract?.type;
     if (param === undefined) throw refuse(`the flow has no memory input \`${name}\``);

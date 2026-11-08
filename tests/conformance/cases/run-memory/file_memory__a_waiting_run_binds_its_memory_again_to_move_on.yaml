@@ -1,0 +1,49 @@
+# The agent's first call waits for the host (`approve` is pending), so the run ends waiting. The
+# host completes it and advances the run, binding the same memory again as a new instance; the
+# agent's next reply appends through it, and the line lands.
+kind: run
+flow: |
+  id: wait
+  name: wait
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+      tools: [approve, {lessons: [append]}]
+      system_prompt: Help.
+      prompt: Ask, then note it.
+      output: str
+  output: ${answer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons}
+  tools:
+    approve:
+      parameters: {type: object, properties: {}}
+      pending: true
+  sends:
+  - {complete: r1/answer/1/0, output: approved}
+  models:
+    answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: approve, arguments: {}}
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c2, name: lessons_append, arguments: {path: notes.md, text: approved}}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: noted}]}
+expect:
+  output: {status: succeeded, output: noted}
+  memory:
+    lessons:
+      notes.md: approved

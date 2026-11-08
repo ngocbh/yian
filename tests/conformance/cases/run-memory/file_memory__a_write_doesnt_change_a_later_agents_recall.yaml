@@ -1,0 +1,98 @@
+# The recall is read once, when the run starts, and frozen: `first` appends to the index, MEMORY.md,
+# yet `second`, which runs after it, renders the recall the run started with. Neither agent holds
+# `lessons_read`, so neither sees the hint.
+kind: run
+flow: |
+  id: frozen
+  name: frozen
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  nodes:
+    first:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+      tools: [{lessons: [append]}]
+      system_prompt: Help.
+      prompt: "<memory>${lessons}</memory> Add a lesson."
+      output: str
+    second:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+        noted: ${first.output}
+      tools: []
+      system_prompt: Help.
+      prompt: "<memory>${lessons}</memory> ${noted}"
+      output: str
+  output: ${second.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files:
+        MEMORY.md: Prefer short answers.
+        notes.md: Check sums twice.
+  models:
+    first:
+      agent:
+      - request:
+          messages:
+            - format: yian.message.v1
+              role: system
+              parts:
+                - type: text
+                  text: Help.
+            - format: yian.message.v1
+              role: user
+              parts:
+                - type: text
+                  text: <memory>Prefer short answers.</memory> Add a lesson.
+          tools:
+            - name: lessons_append
+              description: Add text to the end of a file, on a new line. Creates the file and its folders when missing, and never conflicts.
+              parameters:
+                additionalProperties: false
+                properties:
+                  path:
+                    description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                    type: string
+                  text:
+                    description: The text to add.
+                    type: string
+                required:
+                  - path
+                  - text
+                type: object
+        reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: lessons_append, arguments: {path: MEMORY.md, text: Cite sources.}}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: noted}]}
+    second:
+      agent:
+      - request:
+          messages:
+            - format: yian.message.v1
+              role: system
+              parts:
+                - type: text
+                  text: Help.
+            - format: yian.message.v1
+              role: user
+              parts:
+                - type: text
+                  text: <memory>Prefer short answers.</memory> noted
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+  memory:
+    lessons:
+      MEMORY.md: |-
+        Prefer short answers.
+        Cite sources.
+      notes.md: Check sums twice.

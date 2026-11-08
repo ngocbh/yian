@@ -1,0 +1,24 @@
+# Two instances in two folders that hold one identity are two writers on one memory, so the run
+# refuses them before it starts: no log is written. One instance bound to both inputs is the fix.
+kind: run
+flow: |
+  id: twice
+  name: twice
+  input:
+    lessons: !FileMemory
+    notes: !FileMemory
+  nodes:
+    found:
+      kind: tool
+      tool_id: {lessons: list}
+  output: ${found.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/shared}
+    notes: {type: FileMemory, id: t/shared}
+expect:
+  raises:
+    class: RangeError
+    message: "`notes` and `lessons` are two memories with identity `t/shared`; bind one instance"
+  trace: []

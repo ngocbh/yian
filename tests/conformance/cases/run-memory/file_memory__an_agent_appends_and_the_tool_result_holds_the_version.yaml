@@ -1,0 +1,72 @@
+# An agent granted `{lessons: [append]}` sees one tool, `lessons_append`. Its call appends a line
+# to notes.md through the run's session, with the call id r1/answer/1/0 as the change id; the
+# tool_result step, and the next request, hold `{path, hash, version}`. The folder then holds the
+# line once.
+kind: run
+flow: |
+  id: append
+  name: append
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+      tools: [{lessons: [append]}]
+      system_prompt: Help.
+      prompt: Note that sums need checking.
+      output: str
+  output: ${answer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files:
+        notes.md: Prefer short answers.
+  models:
+    answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: lessons_append, arguments: {path: notes.md, text: Check sums twice.}}
+      - request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - {format: yian.message.v1, role: user, parts: [{type: text, text: Note that sums need checking.}]}
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - {type: tool_call, id: c1, name: lessons_append, arguments: {path: notes.md, text: Check sums twice.}}
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - type: tool_result
+              call_id: c1
+              name: lessons_append
+              content: '{"path":"notes.md","hash":"c6dd0881ffa1382f485ee2c62c4f819b767c3bd205faf8dfcc071036e496e885","version":"dcc50688f63d8ff3fd896d06e3704d88aa8c9ae2f239ea8b03ea314919eae575"}'
+          tools:
+          - name: lessons_append
+            description: Add text to the end of a file, on a new line. Creates the file and its folders when missing, and never conflicts.
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                text: {type: string, description: The text to add.}
+              required: [path, text]
+              additionalProperties: false
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: noted}]}
+expect:
+  output: {status: succeeded, output: noted}
+  memory:
+    lessons:
+      notes.md: |-
+        Prefer short answers.
+        Check sums twice.

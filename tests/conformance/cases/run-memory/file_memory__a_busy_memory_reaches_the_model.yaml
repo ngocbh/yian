@@ -1,0 +1,90 @@
+# Another writer holds the memory's lock from the agent's first reply on (`held`), and the lock
+# timeout is 0, so the reply's append finds the memory busy: nothing is written, and the model reads
+# "`lessons` is busy; try again" as an error result that isn't a conflict. It then answers.
+kind: run
+flow: |
+  id: busy
+  name: busy
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+      tools: [{lessons: [append]}]
+      system_prompt: Help.
+      prompt: Note that sums need checking.
+      output: str
+  output: ${answer.output}
+env:
+  YIAN_MEMORY_LOCK_TIMEOUT_SECONDS: "0"
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files:
+        notes.md: Prefer short answers.
+      held: {node: answer, model_call: 1}
+  models:
+    answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: lessons_append, arguments: {path: notes.md, text: Check sums twice.}}
+      - request:
+          messages:
+            - format: yian.message.v1
+              role: system
+              parts:
+                - type: text
+                  text: Help.
+            - format: yian.message.v1
+              role: user
+              parts:
+                - type: text
+                  text: Note that sums need checking.
+            - format: yian.message.v1
+              role: assistant
+              parts:
+                - type: tool_call
+                  id: c1
+                  name: lessons_append
+                  arguments:
+                    path: notes.md
+                    text: Check sums twice.
+            - format: yian.message.v1
+              role: tool
+              parts:
+                - type: tool_result
+                  call_id: c1
+                  name: lessons_append
+                  content: "`lessons` is busy; try again"
+                  is_error: true
+          tools:
+            - name: lessons_append
+              description: Add text to the end of a file, on a new line. Creates the file and its folders when missing, and never conflicts.
+              parameters:
+                additionalProperties: false
+                properties:
+                  path:
+                    description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                    type: string
+                  text:
+                    description: The text to add.
+                    type: string
+                required:
+                  - path
+                  - text
+                type: object
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: later}]}
+expect:
+  output: {status: succeeded, output: later}
+  memory:
+    lessons:
+      notes.md: Prefer short answers.

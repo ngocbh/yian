@@ -1,0 +1,38 @@
+# A TOOL node's write is a change whose id is the node's call id, `r1/add`; its output is
+# `{path, hash, version}`. The crash sweep cuts the run after every record: a cut after the write
+# landed runs the node again with the same id, which returns the stored result, so the line lands
+# once.
+kind: run
+flow: |
+  id: add
+  name: add
+  input:
+    lessons: !FileMemory
+  nodes:
+    add:
+      kind: tool
+      tool_id: {lessons: append}
+      input:
+        path: notes.md
+        text: Check sums twice.
+  output: ${add.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files:
+        notes.md: Prefer short answers.
+expect:
+  output:
+    status: succeeded
+    output:
+      path: notes.md
+      hash: c6dd0881ffa1382f485ee2c62c4f819b767c3bd205faf8dfcc071036e496e885
+      version: dcc50688f63d8ff3fd896d06e3704d88aa8c9ae2f239ea8b03ea314919eae575
+  memory:
+    lessons:
+      notes.md: |-
+        Prefer short answers.
+        Check sums twice.

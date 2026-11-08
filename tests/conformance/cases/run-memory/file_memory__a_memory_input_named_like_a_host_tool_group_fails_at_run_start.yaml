@@ -1,0 +1,31 @@
+# A memory grant names the node's own flow input, `lessons`; a host tool group of the same name
+# would make `lessons_read` ambiguous, so the run refuses to start.
+kind: run
+flow: |
+  id: clash
+  name: clash
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+      tools: [{lessons: [read]}]
+      prompt: Go.
+      output: str
+  output: ${answer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons}
+  tools:
+    lessons:
+      group:
+        read: {parameters: {type: object}, results: []}
+expect:
+  raises:
+    class: RangeError
+    message: "AGENT node 'answer': `lessons` is both a memory input and a tool group of this run; rename one"
+  trace: []

@@ -1,0 +1,92 @@
+# A partial grant `{lessons: [append, read]}` sends only those tools, in the order the grant
+# writes them, as a host group's partial grant does; the host tool granted after them follows.
+kind: run
+flow: |
+  id: grant
+  name: grant
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+      tools: [{lessons: [append, read]}, lookup]
+      system_prompt: Help.
+      prompt: Go.
+      output: str
+  output: ${answer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons}
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters: {type: object, properties: {topic: {type: string}}, required: [topic]}
+      results: []
+  models:
+    answer:
+      agent:
+      - request:
+          messages:
+            - format: yian.message.v1
+              role: system
+              parts:
+                - type: text
+                  text: Help.
+            - format: yian.message.v1
+              role: user
+              parts:
+                - type: text
+                  text: Go.
+          tools:
+            - name: lessons_append
+              description: Add text to the end of a file, on a new line. Creates the file and its folders when missing, and never conflicts.
+              parameters:
+                additionalProperties: false
+                properties:
+                  path:
+                    description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                    type: string
+                  text:
+                    description: The text to add.
+                    type: string
+                required:
+                  - path
+                  - text
+                type: object
+            - name: lessons_read
+              description: "Read a file of the memory: its text, from line offset for limit lines, and the file's hash, which delete and rewrite take as if_hash."
+              parameters:
+                additionalProperties: false
+                properties:
+                  limit:
+                    description: The most lines to read; the rest of the file when omitted.
+                    minimum: 1.0
+                    type: integer
+                  offset:
+                    description: The first line to read, counting from one; one when omitted.
+                    minimum: 1.0
+                    type: integer
+                  path:
+                    description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                    type: string
+                required:
+                  - path
+                type: object
+            - name: lookup
+              description: Look up a topic.
+              parameters:
+                type: object
+                properties:
+                  topic:
+                    type: string
+                required:
+                  - topic
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+  memory:
+    lessons: {}

@@ -1,0 +1,40 @@
+# A TOOL node's conflict can't change on a retry, so it fails the node with `node.execute` and
+# `retries: 2` doesn't retry it: the golden log holds no tool_attempt step. Nothing is written.
+kind: run
+flow: |
+  id: create
+  name: create
+  input:
+    lessons: !FileMemory
+  nodes:
+    add:
+      kind: tool
+      tool_id: {lessons: create}
+      retries: 2
+      input:
+        path: notes.md
+        text: Check sums twice.
+  output: ${add.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files:
+        notes.md: Prefer short answers.
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: |-
+        `notes.md` already exists
+        current: {"path":"notes.md","hash":"6c5664848312ecfde7706c1d55414fe710701d9ca608e37d74713ad1b31e18ae","text":"Prefer short answers."}
+      frames:
+      - label: flow.yaml
+        range: [6, 3, 6, 6]
+      node: add
+  memory:
+    lessons:
+      notes.md: Prefer short answers.

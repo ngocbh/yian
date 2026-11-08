@@ -1,0 +1,57 @@
+# An `Optional(FileMemory)` input the host leaves out is null: the START inputs hold no key for
+# it, it renders as "", and its grant gives the agent no tools, so only `lookup` is sent.
+kind: run
+flow: |
+  id: optional
+  name: optional
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    question: !str
+    notes: !Optional(FileMemory)
+  nodes:
+    answer:
+      kind: agent
+      input:
+        notes: ${input.notes}
+        question: ${input.question}
+      tools: [lookup, {notes: [read, append]}]
+      system_prompt: Help.
+      prompt: "<memory>${notes}</memory> ${question}"
+      output: str
+  output: ${answer.output}
+inputs: {question: What is 2+2?}
+run: {run_id: r1, num_workers: 0}
+host:
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters: {type: object, properties: {topic: {type: string}}, required: [topic]}
+      results: []
+  models:
+    answer:
+      agent:
+      - request:
+          messages:
+            - format: yian.message.v1
+              role: system
+              parts:
+                - type: text
+                  text: Help.
+            - format: yian.message.v1
+              role: user
+              parts:
+                - type: text
+                  text: <memory></memory> What is 2+2?
+          tools:
+            - name: lookup
+              description: Look up a topic.
+              parameters:
+                type: object
+                properties:
+                  topic:
+                    type: string
+                required:
+                  - topic
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: "4"}]}
+expect:
+  output: {status: succeeded, output: "4"}

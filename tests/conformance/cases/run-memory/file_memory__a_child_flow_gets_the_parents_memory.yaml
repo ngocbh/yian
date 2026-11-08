@@ -1,0 +1,98 @@
+# A call passes the parent's memory whole to the child's memory input `notes`. The child's agent
+# grants its own flow's input, so its tools show as `notes_read` and `notes_append`,
+# its recall's hint names `notes_read`, and its append lands in the parent's memory.
+kind: run
+flow: |
+  id: parent
+  name: parent
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  defs:
+    child:
+      input:
+        notes: !FileMemory
+      nodes:
+        write:
+          kind: agent
+          input:
+            notes: ${input.notes}
+          tools: [{notes: [read, append]}]
+          system_prompt: Help.
+          prompt: |-
+            <memory name="notes">
+            ${notes}
+            </memory>
+            Add a note.
+          output: str
+      output: ${write.output}
+  nodes:
+    c:
+      kind: call
+      call: child
+      input:
+        notes: ${input.lessons}
+  output: ${c.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files:
+        MEMORY.md: Prefer short answers.
+        notes.md: Prefer short answers.
+  models:
+    c/write:
+      agent:
+      - request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: |-
+                <memory name="notes">
+                Prefer short answers.
+                Read the rest with notes_read.
+                </memory>
+                Add a note.
+          tools:
+          - name: notes_read
+            description: "Read a file of the memory: its text, from line offset for limit lines, and the file's hash, which delete and rewrite take as if_hash."
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                offset: {type: integer, minimum: 1, description: "The first line to read, counting from one; one when omitted."}
+                limit: {type: integer, minimum: 1, description: "The most lines to read; the rest of the file when omitted."}
+              required: [path]
+              additionalProperties: false
+          - name: notes_append
+            description: Add text to the end of a file, on a new line. Creates the file and its folders when missing, and never conflicts.
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                text: {type: string, description: The text to add.}
+              required: [path, text]
+              additionalProperties: false
+        reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: notes_append, arguments: {path: notes.md, text: Check sums twice.}}
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: noted}]}
+expect:
+  output: {status: succeeded, output: noted}
+  memory:
+    lessons:
+      MEMORY.md: Prefer short answers.
+      notes.md: |-
+        Prefer short answers.
+        Check sums twice.

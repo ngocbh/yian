@@ -44,7 +44,7 @@ import type { MapNode } from "../nodes/map/node.ts";
 import { StartNode } from "../nodes/start/node.ts";
 import type { JsonObject, JsonValue } from "../typesys/json.ts";
 import { NEW_MESSAGES } from "../typesys/pool.ts";
-import { isList, isRecord, jsTypeName, type Value } from "../typesys/values.ts";
+import { isList, isMemoryType, isRecord, jsTypeName, normalizeFiles, type Value } from "../typesys/values.ts";
 import { copyGraph, Edge, END_ID, Flow, GrowthRejected, START_ID, validateGrowthMetadata } from "./model.ts";
 
 // Reserved prefix for END params synthesized from a lowered spawner post-assert. It mirrors the
@@ -230,15 +230,24 @@ export function cloneChild(
   // Seed the child START with the call-args as constants, replacing the provisional
   // `${input.X}` wiring. The spawner bound them before growing, so each value is data: a text's
   // `$` is escaped to `$$` so START's binder hands it over verbatim (a function replacer, since
-  // a `"$$"` replacement string inserts a single `$`).
+  // a `"$$"` replacement string inserts a single `$`). The seed is yian's own canonical JSON,
+  // rebuilt from the pool on replay, so a memory parameter's seed is read back as a `MemoryRef`;
+  // load lets only a lone `${input.X}` of the same memory type fill one.
   const startNs = ns(callsite, child.startId);
+  const memories = new Map(
+    (child.nodes.get(child.startId)?.params ?? []).flatMap((param) => {
+      const typ = param.contract?.type;
+      return isMemoryType(typ) ? [[param.name, typ] as const] : [];
+    }),
+  );
   wiring.set(
     startNs,
     new Map(
-      Object.entries(record).map(([param, value]) => [
-        param,
-        typeof value === "string" ? value.replaceAll("$", () => "$$") : value,
-      ]),
+      Object.entries(record).map(([param, value]): [string, unknown] => {
+        if (typeof value === "string") return [param, value.replaceAll("$", () => "$$")];
+        const memory = memories.get(param);
+        return [param, memory === undefined ? value : normalizeFiles(memory, value as Value)];
+      }),
     ),
   );
 

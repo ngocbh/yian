@@ -280,6 +280,7 @@ export type ChildFlows = Readonly<Record<string, ComposedFlow>>;
 function resolveFrom(scope: CallableScope, children: ChildFlows = {}): AssemblyScope {
   return {
     catalogBuilder: scope.catalogBuilder,
+    memoryTypes: scope.memoryTypes,
     registerPrivate: (flowId, owner, label, build) => scope.registerPrivate(flowId, owner, label, build),
     resolve: (flowId) => (Object.hasOwn(children, flowId) ? children[flowId]! : scope.resolve(flowId)),
   };

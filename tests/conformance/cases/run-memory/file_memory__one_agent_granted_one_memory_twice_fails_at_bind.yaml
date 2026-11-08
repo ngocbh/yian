@@ -1,0 +1,36 @@
+# One instance bound to `lessons` and `notes` is one memory, which the run opens once. An agent
+# granted both would see each tool twice under two names, so it fails when it binds, with
+# `contract.input`.
+kind: run
+flow: |
+  id: twice
+  name: twice
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+    notes: !FileMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+        notes: ${input.notes}
+      tools: [{lessons: [read]}, {notes: [read]}]
+      prompt: Go.
+      output: str
+  output: ${answer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons}
+    notes: {same_as: lessons}
+expect:
+  output:
+    status: failed
+    failure:
+      code: contract.input
+      message: "node 'answer': `notes` and `lessons` are the same memory; grant one"
+      frames:
+      - label: flow.yaml
+        range: [8, 3, 8, 9]
+      node: answer

@@ -1,0 +1,30 @@
+# A memory can't be a member of a record, list or dict.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  nodes:
+    a:
+      kind: agent
+      output: str
+      prompt: hi
+      input:
+        t:
+          notes: ${input.lessons}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: |-
+          flow has unresolved references:
+            node 'a' input 't' from: ${input.lessons} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` (not inside a list, record or dict)
+        frames:
+          - label: flow.yaml
+            range:
+              - 12
+              - 16
+              - 12
+              - 32

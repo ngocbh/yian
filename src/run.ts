@@ -20,8 +20,9 @@
  * `updateRunIndex` and `readRunIndex` (`runtime/run_index.ts`) keep and read the runs folder's
  * rebuildable `index.sqlite`, one row per run. For hosts that read run-log values it re-exports
  * yian's JSON form of them: `TypedValue` (the `{kind, value}` wire of a `pool_commit`,
- * `toWire`/`fromWire`), `FileRef` and `InboxRef`, the handle an `Inbox(T)` input holds
- * (`typesys/values.ts`), and `logJson`, `parseJson` and
+ * `toWire`/`fromWire`), `FileRef`, `InboxRef`, the handle an `Inbox(T)` input holds, and
+ * `MemoryRef`, the value a memory input records, with its tools' `RecordedMemoryTool` shape
+ * (`typesys/values.ts`, `typesys/memory.ts`), and `logJson`, `parseJson` and
  * `JSONDecodeError` (`typesys/json.ts`), the codec the run log itself writes and reads with, and
  * `foldRunLog`, which replays a log and gives each accepted `pool_commit`'s value, a derived one
  * rebuilt from its `from` pointers, a take's from the sends it consumed and an AGENT's new messages
@@ -32,8 +33,14 @@
  * which lists a log's calls from its steps, and `agentCall`, which rebuilds one call's request and
  * reads its attempts, reply and tool results.
  *
- * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, nodes,
- *                platform, runtime, skills, tools, typesys.
+ * A run binds each memory input to the instance its host passes (`runtime/memories.ts`): before
+ * `RunStarted` it opens and snapshots each into the value START's inputs record, and a resume
+ * binds the same memories again; `RunResult.memoryDrift` and the `MemoryDrift` type report a
+ * memory that changed since the run started (including the run's own writes), as a crash resume
+ * finds it.
+ *
+ * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory,
+ *                nodes, platform, runtime, skills, tools, typesys.
  * Never imports: the CLI.
  */
 
@@ -61,6 +68,7 @@ import { type CompiledFlow, copyGraph, type Flow } from "./compile/model.ts";
 import { typeRelation } from "./compile/validation.ts";
 import { ComposedFlow } from "./compose/build/pipeline.ts";
 import { CLOSE_MATCH_CUTOFF } from "./compose/helpers/tags.ts";
+import { memoryToolNames, memoryTypeTools } from "./compose/helpers/memory.ts";
 import { loadFlowSource } from "./compose/loader.ts";
 import { childSignature } from "./compose/nodes/resolver.ts";
 import { checkRecorded, current, type Defaults, type Env, nonDefaults, processEnv, withEnv } from "./defaults.ts";
@@ -87,6 +95,8 @@ import {
 import { validateHeaders } from "./llm_clients/connection_settings.ts";
 import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
 import { Message, NamedTool, type Request, ToolCallPart, ToolSpec } from "./llm/messages.ts";
+import { isMemory, type MemoryBase } from "./memory/base.ts";
+import { MEMORY_SCOPE_LABEL } from "./memory/tools.ts";
 import {
   type FoldedSteps,
   foldSteps,
@@ -96,7 +106,8 @@ import {
   type StepExchange,
 } from "./nodes/agent/messages.ts";
 import { staticPathOf } from "./nodes/ids.ts";
-import type { CompleteResult, Node, RebuildCaps } from "./nodes/base.ts";
+import { typeToSchema } from "./nodes/agent/structured.ts";
+import { type CompleteResult, type LocalToolSpec, type Node, NodeKind, type RebuildCaps } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
 import {
   type HostToolCall,
@@ -108,6 +119,7 @@ import {
 import { FileLockError, isMissingPath, realScheduler, type Scheduler, syncFolder, VERSION, warn } from "./platform.ts";
 import { type DeliveryOp, FlowEngine, prepareDelivery, resumedAttemptEvents } from "./runtime/engine.ts";
 import { LiveChannel } from "./runtime/live.ts";
+import { type MemoryBinding, type MemoryDrift, RunMemories } from "./runtime/memories.ts";
 import { bindStarted } from "./runtime/eval_node.ts";
 import {
   decodeRecord,
@@ -171,6 +183,7 @@ import {
   GrantError,
   type GrantedTool,
   type GrantScope,
+  localGroupScope,
   reachedGroups,
   requestToolSpecs,
   type ToolGrant,
@@ -185,7 +198,9 @@ import {
   canonicalTypeLabel,
   fromHost,
   isInboxType,
+  isMemoryType,
   isRecord,
+  MemoryRef,
   rejectDeepNesting,
   setField,
   type Type,
@@ -236,12 +251,15 @@ export {
 export {
   FileRef,
   InboxRef,
+  MemoryRef,
   type StorageKind,
   TypedValue,
   type Value,
   type ValueRecord,
 } from "./typesys/values.ts";
+export type { RecordedMemoryTool } from "./typesys/memory.ts";
 export type { WaitInfo } from "./runtime/waits.ts";
+export type { MemoryDrift } from "./runtime/memories.ts";
 export type { CompleteResult } from "./nodes/base.ts";
 export type { DeliveryOp } from "./runtime/engine.ts";
 export { DeliveryRefused, type DeliveryRefusal } from "./runtime/state.ts";
@@ -290,6 +308,12 @@ export class RunResult {
    */
   readonly crashedAttempts: ReadonlyMap<string, number>;
   /**
+   * The memories that changed since the run started (including the run's own writes), as this
+   * call's crash resume found them: one per memory whose version isn't the one recorded at the
+   * run's start; frozen, and empty for a fresh run and any other call.
+   */
+  readonly memoryDrift: readonly MemoryDrift[];
+  /**
    * The calls a waiting run waits on, by waiting node in `node_waiting` order; empty otherwise. A
    * call `settled` as the run stopped wakes its node at the next `advance`.
    */
@@ -301,8 +325,8 @@ export class RunResult {
   readonly unread: ReadonlyMap<string, readonly number[]>;
 
   /**
-   * Hold the given fields; `output` and `failure` default to `null`, `waits` to none and `unread`
-   * to an empty map.
+   * Hold the given fields; `output` and `failure` default to `null`, `memoryDrift` and `waits` to
+   * none and `unread` to an empty map.
    */
   constructor(fields: {
     input: Record<string, unknown>;
@@ -313,6 +337,7 @@ export class RunResult {
     failure?: Failure | null;
     events?: readonly RunEvent[];
     crashedAttempts?: ReadonlyMap<string, number>;
+    memoryDrift?: readonly MemoryDrift[];
     waits?: readonly WaitInfo[];
     unread?: ReadonlyMap<string, readonly number[]>;
   }) {
@@ -324,6 +349,7 @@ export class RunResult {
     this.failure = fields.failure ?? null;
     this.events = fields.events ?? [];
     this.crashedAttempts = fields.crashedAttempts ?? new Map();
+    this.memoryDrift = Object.freeze([...(fields.memoryDrift ?? [])]);
     this.waits = fields.waits ?? [];
     this.unread = fields.unread ?? new Map();
   }
@@ -546,8 +572,9 @@ function idleRun(
 /**
  * Close what a run call opened and hand the run on, whatever fails.
  *
- * 1. Servers close. Server close never rejects (`closeRunServers`), so only log close errors are
- *    noted.
+ * 1. Servers close, then memory sessions. Neither rejects (`closeRunServers`, `RunMemories.close`):
+ *    a memory's close error is noted on `primary`, else warned. Only log close errors are noted
+ *    below.
  * 2. Then, in one synchronous step: the next idle entry is built (after every await, so it holds
  *    every record appended under this hold), the log closes, and the hold is released.
  *
@@ -557,6 +584,7 @@ function idleRun(
  */
 async function closeAndRelease(parts: {
   servers: readonly McpServer[];
+  memories: RunMemories | null;
   authority: RunLog | null;
   primary: { error: unknown } | null;
   hold: RunHold | null;
@@ -570,6 +598,12 @@ async function closeAndRelease(parts: {
     else noteCleanup(pending.error, error, `${operation} also raised`);
   };
   await closeRunServers(parts.servers);
+  // A memory that fails to close can't change what the run recorded: it is noted on the call's
+  // error, or else warned, as a host's other failed cleanups are, and never thrown.
+  for (const { identity, error } of (await parts.memories?.close()) ?? []) {
+    if (primary !== null) noteCleanup(primary.error, error, `closing memory \`${identity}\` also raised`);
+    else warn(`memory \`${identity}\` didn't close: ${errorMessage(error)}`);
+  }
   let next: IdleRun | null = null;
   try {
     // Cleanup errors after a refusal are only noted on it, so the entry is still kept; only a
@@ -674,7 +708,12 @@ export interface RunFlowOptions {
  * @param inputs Caller values keyed by declared input name; any other key is an error. Each is
  *   taken through host intake (an own data property, `{n: 3}` becomes the int `3n`), and
  *   supplied text is coerced to a declared scalar; START applies the declared defaults and the
- *   full boundary type checks as its recorded execution.
+ *   full boundary type checks as its recorded execution. A memory input takes a `MemoryBase`
+ *   instance (an Optional one may be left out or `null`): before `RunStarted` each instance is
+ *   opened once and snapshotted, its value is recorded in START's inputs, and its session closes
+ *   when the run's segment ends. A session that fails to close doesn't change the result: its
+ *   error is noted on the call's error, if it failed, or else reported as a warning (`warn`, which
+ *   `withWarnings` receives).
  * @param options See `RunFlowOptions`.
  * @returns The terminal success or failure, with this call's post-durable observers.
  * @throws TypeError when `flow` isn't a `ComposedFlow`, `signal` isn't an `AbortSignal`, `live`
@@ -688,7 +727,10 @@ export interface RunFlowOptions {
  *   another non-yian value, nests deeper than `YIAN_MAX_VALUE_NESTING` levels, or has text that
  *   can't be read; or when `llmConfig` is or holds a non-yian value (a `Map`, a class instance, a
  *   Proxy).
- * @throws RangeError when an input key names no declared input; an AGENT grants a tool, group or
+ * @throws RangeError when an input key names no declared input, or a memory input isn't given a
+ *   `MemoryBase` instance; two instances hold one memory identity, or an instance's type isn't
+ *   its input's; a memory grant's input is also a host tool or group of the run, or its tool
+ *   shows under a name the node's host grants show; an AGENT grants a tool, group or
  *   skill this run lacks; a TOOL node names a tool this run lacks, or its inputs or output can't
  *   fit that tool's types; `llmConfig` or an agent's resolved model config is invalid, an agent
  *   has no provider or model, or `llmConfig.api_key` has no `provider`; or the identity, worker
@@ -697,6 +739,8 @@ export interface RunFlowOptions {
  * @throws McpConnectError when a `tools` server doesn't start or doesn't list its tools.
  * @throws AuthError when the credential store can't be read.
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
+ * @throws MemoryBusyError when a memory's lock stays held past its timeout as it is opened.
+ * @throws Error naming the input when a memory fails to open or snapshot (`RunMemories.open`).
  * @throws The signal's reason when it aborts.
  * @throws Error (code `EEXIST`) when `log` names an existing path, and the `fs` error when the log
  *   can't be created, locked, written, synced or closed.
@@ -725,16 +769,16 @@ type DriveOptions = Pick<
 >;
 
 /**
- * Refuse, by name, an option yian removed: `learnable` (learning) and `memory` (memories are flow
- * inputs now).
+ * Refuse, by name, an option yian removed: `learnable` (learning) and, unless `takesMemory` (a
+ * resume, which binds its run's memories again), `memory` (memories are flow inputs now).
  *
  * @throws RangeError when `options` holds either.
  */
-function refuseRemovedOptions(options: object): void {
+function refuseRemovedOptions(options: object, takesMemory = false): void {
   if (Object.hasOwn(options, "learnable")) {
     throw new RangeError("learnable was removed: yian no longer learns from runs; drop the option");
   }
-  if (Object.hasOwn(options, "memory")) {
+  if (!takesMemory && Object.hasOwn(options, "memory")) {
     throw new RangeError("the memory option was removed: pass each memory as a flow input");
   }
 }
@@ -748,11 +792,11 @@ function refuseRemovedOptions(options: object): void {
  *   or `onStream` isn't a function, `scheduler` lacks `now` or `sleep`, `random` isn't a function,
  *   `models` lacks `env` or `createModel`, or a `tools` entry is malformed.
  * @throws RangeError when a `tools` key is reserved, or a server was opened by another run in
- *   progress, or a removed option is given.
+ *   progress, or a removed option is given (`memory` unless `takesMemory`).
  * @throws The signal's reason when it has aborted.
  */
-function checkDriveOptions(options: DriveOptions): [string, McpServer][] {
-  refuseRemovedOptions(options);
+function checkDriveOptions(options: DriveOptions, takesMemory = false): [string, McpServer][] {
+  refuseRemovedOptions(options, takesMemory);
   const { tools = null, context, signal = null, live = null, onEvent = null, onStream = null } = options;
   const { scheduler = null, random = null, models = null } = options;
   if (signal !== null && !(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal or null");
@@ -802,11 +846,13 @@ function checkFlowBeforeServers(
 }
 
 /**
- * @internal Take each supplied input through host intake, keyed as given.
+ * @internal Take each supplied input through host intake, keyed as given. A memory input is left
+ * out: `memoryBindings` reads its instance.
  *
  * @throws TypeError when `inputs` isn't a record or is a Proxy.
- * @throws RangeError when a key names no declared input, or names an inbox, which takes events
- *   through `send` instead.
+ * @throws RangeError when a key names no declared input, names an inbox, which takes events
+ *   through `send` instead, or gives a memory input anything but a `MemoryBase` instance (or null,
+ *   for an Optional one).
  * @throws TypeCheckError when an input is an accessor property or isn't a yian value.
  */
 export function hostInputs(params: readonly Parameter[], inputs: unknown): Record<string, Value> {
@@ -814,19 +860,101 @@ export function hostInputs(params: readonly Parameter[], inputs: unknown): Recor
   if (types.isProxy(inputs)) throw new TypeError("inputs must be a mapping of input names to values, got Proxy");
   checkInputNames(params, inputs);
   const record = inputs as Readonly<Record<string, unknown>>;
+  const memories = new Set<string>();
   for (const param of params) {
     if (isInboxType(param.contract?.type) && Object.hasOwn(record, param.name)) {
       throw new RangeError(`inbox \`${param.name}\` receives events through send(); it takes no run input`);
     }
+    const typ = param.contract?.type;
+    if (!isMemoryType(typ) || !Object.hasOwn(record, param.name)) continue;
+    const value = suppliedValue(record, param.name);
+    // An Optional memory given null is left out of the START inputs, as one left out is: never
+    // recorded as null.
+    if (!isMemory(value) && !(value === null && typ.nullable)) {
+      throw new RangeError(`memory \`${param.name}\` is bound to a MemoryBase instance, not a value`);
+    }
+    memories.add(param.name);
   }
   const taken: ValueRecord = {};
   for (const name of Object.keys(record)) {
-    const where = `input ${reprText(name)}`;
-    const descriptor = Object.getOwnPropertyDescriptor(record, name)!;
-    if (!("value" in descriptor)) throw new TypeCheckError(`${where}: accessor property is not a yian value`);
-    setField(taken, name, fromHost(descriptor.value, where));
+    if (memories.has(name)) continue;
+    setField(taken, name, fromHost(suppliedValue(record, name), `input ${reprText(name)}`));
   }
   return taken;
+}
+
+/**
+ * Return the supplied input `name`, read from its data property.
+ *
+ * @throws TypeCheckError when it is an accessor property, whose getter isn't run.
+ */
+function suppliedValue(record: Readonly<Record<string, unknown>>, name: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(record, name)!;
+  if (!("value" in descriptor)) throw new TypeCheckError(`input ${reprText(name)}: accessor property is not a yian value`);
+  return descriptor.value;
+}
+
+/**
+ * Return the memory inputs `inputs` binds to `MemoryBase` instances, in declaration order, each
+ * with its input's memory type and item type. `hostInputs` checked them first.
+ */
+function memoryBindings(params: readonly Parameter[], inputs: Readonly<Record<string, unknown>>): MemoryBinding[] {
+  const bindings: MemoryBinding[] = [];
+  for (const param of params) {
+    const typ = param.contract?.type;
+    if (!isMemoryType(typ) || !Object.hasOwn(inputs, param.name)) continue;
+    const instance = suppliedValue(inputs, param.name);
+    if (!isMemory(instance)) continue;
+    const itemType = typ.element === undefined ? null : typeToSchema(typ.element);
+    bindings.push({ input: param.name, instance, type: typ.memory, itemType });
+  }
+  return bindings;
+}
+
+/**
+ * Return the value each memory input recorded in the run's START inputs, as `state`'s pool read
+ * them back, by name; an Optional memory left out recorded none.
+ */
+function startMemories(params: readonly Parameter[], state: RunState): Map<string, MemoryRef> {
+  const inputs = state.pool.store.get(state.flow.startId)?.value;
+  const recorded = new Map<string, MemoryRef>();
+  if (!isRecord(inputs)) return recorded;
+  for (const param of params) {
+    if (!isMemoryType(param.contract?.type) || !Object.hasOwn(inputs, param.name)) continue;
+    const value = inputs[param.name];
+    if (MemoryRef.isMemoryRef(value)) recorded.set(param.name, value);
+  }
+  return recorded;
+}
+
+/**
+ * Return the bindings of a resume's `memory` option, checked against the run's memory inputs and
+ * the values they recorded. An Optional memory given `null` is left out, as `runFlow` leaves it.
+ *
+ * @throws TypeError when `memory` isn't a record, or gives an input something other than a
+ *   `MemoryBase` instance (or `null`, for an Optional one).
+ * @throws RangeError when it names an input that isn't a memory input of the flow, or gives an
+ *   instance to one recorded null when the run started (an Optional memory left out).
+ */
+function resumeBindings(
+  params: readonly Parameter[],
+  memory: unknown,
+  recorded: ReadonlyMap<string, MemoryRef>,
+): MemoryBinding[] {
+  if (memory === null) return [];
+  if (!isRecord(memory) || types.isProxy(memory)) {
+    throw new TypeError("memory must be a record of memory input names to MemoryBase instances");
+  }
+  for (const name of Object.keys(memory)) {
+    const param = params.find((each) => each.name === name);
+    const typ = param?.contract?.type;
+    if (!isMemoryType(typ)) throw new RangeError(`memory \`${name}\` isn't a memory input of this run's flow`);
+    const value = suppliedValue(memory, name);
+    if (value === null && typ.nullable) continue;
+    if (!isMemory(value)) throw new TypeError(`memory \`${name}\` takes a MemoryBase instance`);
+    if (!recorded.has(name)) throw new RangeError(`memory \`${name}\` was null when the run started; drop it`);
+  }
+  return memoryBindings(params, memory);
 }
 
 /** A run's `RunStarted.call_time_llm`: the call-time agents' bases and the selection they bind from. */
@@ -1046,6 +1174,7 @@ async function startRun(
   const scheduler = options.scheduler ?? realScheduler;
   const models = options.models ?? defaultModelAccess(env);
   let runServers: McpServer[] = [];
+  let memories: RunMemories | null = null;
   let authority: RunLog | null = null;
   let primary: { error: unknown } | null = null;
   let runHold: RunHold | null = null;
@@ -1053,7 +1182,9 @@ async function startRun(
   try {
     runServers = await openRunServers(unopened, signal);
     const runTools = new ToolSet(tools, { context });
+    const hostTypes = memoryTypeTools(flow.memoryTypes);
     checkToolGrants(flow.compiled, runTools);
+    checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
     checkToolTypes(flow.compiled, runTools);
 
     // Identity belongs to the authored program, before cascade resolution or any per-run copy can
@@ -1108,6 +1239,14 @@ async function startRun(
     }
     if (apiKey !== null) bindHostCredentials(privateFlow, apiKey, headers);
     checkEffectiveLlm(effectiveLlm, apiKey, headers, staticAgentLabels(privateFlow), valueConfigSubjects(privateFlow));
+
+    // Last before the log: a memory read now is each memory's recall for the whole run.
+    memories = await RunMemories.open(memoryBindings(flow.input, inputs), {
+      create: true,
+      signal: signal ?? new AbortController().signal,
+      hostTypes,
+    });
+    for (const [name, value] of memories.values) setField(coerced as ValueRecord, name, value);
 
     const canonicalRunId = runId ?? defaultRunId();
     const pool = new VariablePool(privateFlow.startId);
@@ -1165,6 +1304,7 @@ async function startRun(
       options,
       numWorkers,
       tools: runTools,
+      memories,
       skills,
       models,
       scheduler,
@@ -1176,7 +1316,7 @@ async function startRun(
     primary = { error };
     throw error;
   } finally {
-    await closeAndRelease({ servers: runServers, authority, primary, hold: runHold, keep });
+    await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep });
   }
 }
 
@@ -1312,6 +1452,12 @@ export interface AdvanceOptions {
   /** The host's app object a tool receives as `ctx.context`; the log doesn't hold it. */
   context?: unknown;
   /**
+   * The instance of each memory input the run started with, by input name: the same memories,
+   * bound again. An unfinished run opens each with `create: false` and needs every one it
+   * recorded; an Optional memory left out takes none, or `null`, as `runFlow` takes it.
+   */
+  memory?: Readonly<Record<string, MemoryBase | null>> | null;
+  /**
    * The host's stop: aborting it stops the resumed segment, which rejects with its reason. An
    * already-aborted signal rejects before the log is locked.
    */
@@ -1341,6 +1487,13 @@ export interface AdvanceOptions {
  * specs of the tools and skills the AGENTs grant must be the recorded ones (the skills checked
  * before any server starts, the tools once the servers are open).
  *
+ * An unfinished run binds the memories it started with again (`memory`): each is opened with
+ * `create: false` and must match the identity, type, settings and tool specs its run recorded. The
+ * recorded recall stays the run's. A crash resume reads each memory's version and reports, in
+ * `RunResult.memoryDrift`, one that changed since the run started (including the run's own
+ * writes); advancing a waiting run doesn't read them. The sessions close
+ * when the segment ends, a failed close reported as `runFlow` reports it.
+ *
  * `RunResumed` is written only when the last segment crashed or stopped (work in flight, a
  * recorded stop, or no `run_waiting` as its last frontier record) or `numWorkers` changes; then the
  * starts the log left unfinished are retried first, in their recorded order, after one
@@ -1362,7 +1515,8 @@ export interface AdvanceOptions {
  * @throws TypeError when `flow` isn't a `ComposedFlow` or `null`, `signal` isn't an `AbortSignal`,
  *   `live` isn't a `LiveChannel`, `onEvent` or `onStream` isn't a function, a `tools` entry is
  *   malformed, `skills`, `scheduler`, `random` or `models` is malformed, a worker count isn't an
- *   integer, or a recorded carrier has the wrong type.
+ *   integer, a recorded carrier has the wrong type, or `memory` isn't a record of `MemoryBase`
+ *   instances (or `null`, for an Optional memory).
  * @throws ExpressionError as `runFlow`, for an unfinished run.
  * @throws RangeError when the log's prefix is invalid, the run's flow was built in code and no
  *   `flow` was passed, or its flow files were recorded and one was, `codeRoot` isn't the recorded
@@ -1373,8 +1527,10 @@ export interface AdvanceOptions {
  *   (`resume refused: tools.<name> description differs from the recorded one`), a `tools` server
  *   was opened by another run in progress, or a started call-time agent resolves to another config
  *   than the one it recorded (`node '<path>' llm_config: recorded config differs from the
- *   recomputed one; ...`), before its model call. Also when `learnable` or `memory`, a removed
- *   option, is given.
+ *   recomputed one; ...`), before its model call. Also when `learnable`, a removed option, is
+ *   given; when `memory` names an input that isn't a memory input, or gives an instance to one
+ *   recorded null (checked for any run, finished or not); or, for an unfinished run, a memory it
+ *   recorded isn't bound or isn't at its location, or differs from the recorded one.
  * @throws AuthError when a call-time agent resolves to the provider of the run's host key and
  *   `apiKey` (or a recorded header) wasn't given, before its model call, or the credential store
  *   can't be read.
@@ -1399,7 +1555,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
       throw new TypeError("advance's flow must be a ComposedFlow or null");
     }
-    const unopened = checkDriveOptions(options);
+    const unopened = checkDriveOptions(options, true);
     let { apiKey, headers } = hostCredentials(options.apiKey, options.headers);
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);
@@ -1412,6 +1568,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     const runHold = await holdForAdvance(key, locator);
     let authority: JsonlRunLog | null = null;
     let runServers: McpServer[] = [];
+    let memories: RunMemories | null = null;
     let primary: { error: unknown } | null = null;
     let keep: () => IdleRun | null = () => null;
     try {
@@ -1428,6 +1585,9 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       // The caller's credentials, which the replay used, before a flow that sends no host key
       // drops them below: a later call passing the same ones then reuses the entry.
       keep = () => idleRun(state, flow, key, opened, { hostFlow, ...credentials });
+      // Checked before any early return, so a bad binding is never silently ignored.
+      const recordedMemories = startMemories(flow.input, state);
+      const memoryBound = resumeBindings(flow.input, options.memory ?? null, recordedMemories);
       const callTime = state.callTimeLlm as CallTimeLlm | null;
       if (!usesHostKey(state.effectiveLlmByStaticPath, callTime)) {
         apiKey = null;
@@ -1472,10 +1632,18 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkRecordedSpecs("skills", start.skills, recordedSkills(flow.compiled, skills));
       runServers = await openRunServers(unopened, signal);
       const runTools = new ToolSet(tools, { context });
+      const hostTypes = memoryTypeTools(flow.memoryTypes);
       checkToolGrants(flow.compiled, runTools);
+      checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
       checkToolTypes(flow.compiled, runTools);
       checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
       checkRecordedToolGroups(start.toolGroups, recordedToolGroups(flow.compiled, runTools));
+      const reopened = await RunMemories.reopen(
+        memoryBound,
+        recordedMemories,
+        { signal: signal ?? new AbortController().signal, hostTypes, drift: crashed },
+      );
+      memories = reopened.memories;
 
       const prepared = resume ? prepareRunResumed(state, { numWorkers }) : null;
       // This segment's appends go through the live channel's wrapper.
@@ -1488,18 +1656,19 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
         options,
         numWorkers,
         tools: runTools,
+        memories,
         skills,
         models,
         scheduler,
         runDir: dirname(locator),
         hold: runHold,
       });
-      return resultFromState(state, log, events);
+      return resultFromState(state, log, events, reopened.drift);
     } catch (error) {
       primary = { error };
       throw error;
     } finally {
-      await closeAndRelease({ servers: runServers, authority, primary, hold: runHold, keep });
+      await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep });
     }
   });
 }
@@ -1755,6 +1924,7 @@ async function deliverTo(
     } finally {
       await closeAndRelease({
         servers: [],
+        memories: null,
         authority,
         primary,
         hold: runHold,
@@ -2670,7 +2840,8 @@ export async function agentCall(
 /**
  * Return what the run recorded of its grants, as a `RebuildCaps` reads them: the skills by name,
  * and a request's tool list for some grants, expanded as the live loop expands them but over the
- * groups and tools the run recorded (`null` when a grant names no recorded tool).
+ * node's own groups (its memories' recorded tools) and the groups and tools the run recorded
+ * (`null` when a grant names no recorded tool).
  */
 function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpecs"> {
   const skills = new Map(
@@ -2680,15 +2851,26 @@ function recordedGrants(state: RunState): Pick<RebuildCaps, "skills" | "toolSpec
     ]),
   );
   const scope = recordedScope(state);
-  const toolSpecs = (grants: readonly ToolGrant[], loadSkill: ToolSpec | null) => {
+  const toolSpecs = (
+    grants: readonly ToolGrant[],
+    loadSkill: ToolSpec | null,
+    local: ReadonlyMap<string, readonly LocalToolSpec[]> = new Map(),
+  ) => {
+    // The node's own groups come first, as `ToolSet.withLocalGroups` puts them live.
+    const names = new Map([...local].map(([group, specs]) => [group, specs.map((spec) => spec.name)]));
+    const scopes = local.size === 0 ? [scope] : [localGroupScope(MEMORY_SCOPE_LABEL, names), scope];
     let granted: GrantedTool[];
     try {
-      granted = expandGrants(grants, [scope]);
+      granted = expandGrants(grants, scopes);
     } catch (error) {
       if (error instanceof GrantError) return null;
       throw error;
     }
     const specOf = (tool: GrantedTool) => {
+      if (tool.scope < scopes.length - 1) {
+        const { name, description, parameters } = local.get(tool.group!)!.find((spec) => spec.name === tool.tool)!;
+        return new ToolSpec({ name, description, parameters });
+      }
       if (!Object.hasOwn(state.recordedTools, tool.key)) return null;
       const { name, description, parameters } = state.recordedTools[tool.key]!;
       return new ToolSpec({ name, description, parameters });
@@ -2834,6 +3016,7 @@ function* streamedEnvelopes(log: string, maxLineBytes: number | null): Generator
  *   handler.
  */
 function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
+  const memories = memoryInputNames(flow);
   for (const [nodeId, node] of staticNodes(flow)) {
     const grants = node.grantedTools();
     for (const grant of grants) {
@@ -2859,7 +3042,10 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       checkVisibleNames(expandGrants(grants, tools.scopes()));
     } catch (error) {
       if (!(error instanceof GrantError)) throw error;
-      throw new RangeError(`AGENT node ${reprText(nodeId)} ${error.message}`);
+      // A grant naming another flow's memory input is a host grant here.
+      const named = grants.some((grant) => memories.has(grant.kind === "name" ? grant.name : grant.group));
+      const hint = named ? "; memory grants name the node's own flow inputs" : "";
+      throw new RangeError(`AGENT node ${reprText(nodeId)} ${error.message}${hint}`);
     }
     const call = node.hostToolCall();
     if (call === null || (call.group === null && isEngineBuiltin(call.toolId))) continue;
@@ -2900,6 +3086,62 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       throw new RangeError(`TOOL node ${reprText(nodeId)} names ${reason}`);
     }
   }
+}
+
+/**
+ * Refuse a memory grant this run's host tools clash with, before any record is written: one whose
+ * memory input is also a host tool or tool group of the run, and one whose tool would show to a
+ * model under the name of a host tool the same node grants. Every static node is checked, child
+ * flows' included, each against its own flow's inputs.
+ *
+ * @param hostTypes The tool names of the host memory types the flow was loaded with, by type.
+ * @throws RangeError naming the node, the input and the fix.
+ */
+function checkMemoryGrantNames(
+  flow: CompiledFlow,
+  tools: ToolSet,
+  hostTypes: ReadonlyMap<string, readonly string[]>,
+): void {
+  const scope = tools.scope();
+  const table = { tools: hostTypes, opaque: false, clashes: new Set<string>() };
+  for (const [nodeId, node, inputs] of nodesWithFlowInputs(flow)) {
+    const grants = node.memoryGrants();
+    if (grants.length === 0) continue;
+    const where = `${node.kind.toUpperCase()} node ${reprText(nodeId)}`;
+    const hostNames = new Set(expandGrants(node.grantedTools(), tools.scopes()).map((tool) => tool.visible));
+    for (const { input, tools: listed } of grants) {
+      const host = scope.group(input) !== null ? "a tool group" : scope.hasTool(input) ? "a tool" : null;
+      if (host !== null) {
+        throw new RangeError(`${where}: \`${input}\` is both a memory input and ${host} of this run; rename one`);
+      }
+      const typ = inputs.get(input);
+      const names = listed ?? (isMemoryType(typ) ? memoryToolNames(typ, table) : null) ?? [];
+      const shown = listed === null ? input : `{${input}: [${listed.join(", ")}]}`;
+      for (const name of names) {
+        const visible = visibleToolName(input, name);
+        if (!hostNames.has(visible)) continue;
+        throw new RangeError(
+          `${where}: the memory tool \`${visible}\` of \`${shown}\` has the name of a host tool it grants; rename one`,
+        );
+      }
+    }
+  }
+}
+
+/** Return each static node of `flow` by its path, with the input types of the flow it is declared in. */
+function nodesWithFlowInputs(flow: Flow): [string, Node, ReadonlyMap<string, Type | undefined>][] {
+  const found: [string, Node, ReadonlyMap<string, Type | undefined>][] = [];
+  const collect = (graph: Flow, path: readonly string[]): void => {
+    const start = graph.nodes.get(graph.startId);
+    const inputs = new Map((start?.params ?? []).map((param) => [param.name, param.contract?.type]));
+    for (const [nodeId, node] of graph.nodes) {
+      const nodePath = [...path, nodeId];
+      found.push([nodePath.join("/"), node, inputs]);
+      for (const child of node.originChildren()) collect(child as Flow, nodePath);
+    }
+  };
+  collect(flow, []);
+  return found;
 }
 
 /** Whether a TOOL node's `toolId` is `take` or `sleep`, which the engine runs, not a tool. */
@@ -3204,6 +3446,16 @@ export function staticNodes(flow: ComposedFlow | Flow): [string, Node][] {
   return found;
 }
 
+/** Return the names of the memory inputs `flow` and its child flows declare. */
+function memoryInputNames(flow: CompiledFlow): Set<string> {
+  const names = new Set<string>();
+  for (const [, node] of staticNodes(flow)) {
+    if (node.kind !== NodeKind.START) continue;
+    for (const param of node.params ?? []) if (isMemoryType(param.contract?.type)) names.add(param.name);
+  }
+  return names;
+}
+
 /** Append each node of `graph` under `path`, then its child flows', to `found`. */
 function collectStaticNodes(graph: Flow, path: readonly string[], found: [string, Node][]): void {
   for (const [nodeId, node] of graph.nodes) {
@@ -3443,6 +3695,8 @@ async function driveSegment(
     options: Pick<RunFlowOptions, "onEvent" | "onStream" | "live" | "signal" | "random">;
     numWorkers: number;
     tools: ToolSet;
+    /** The segment's memory sessions, or `null` for a run that binds none. */
+    memories: RunMemories | null;
     skills: ReadonlyMap<string, Skill> | null;
     models: ModelAccess;
     scheduler: Scheduler;
@@ -3461,6 +3715,7 @@ async function driveSegment(
     onStream: options.onStream ?? null,
     live: options.live ?? null,
     tools: parts.tools,
+    memories: parts.memories,
     skills: parts.skills,
     models: parts.models,
     signal: options.signal ?? null,
@@ -3506,6 +3761,7 @@ function resultFromState(
   state: RunState,
   path: string | null,
   events: readonly RunEvent[],
+  memoryDrift: readonly MemoryDrift[] = [],
 ): RunResult {
   const terminal = state.result;
   const common = {
@@ -3514,6 +3770,7 @@ function resultFromState(
     log: path,
     events,
     crashedAttempts: new Map(state.crashedAttempts),
+    memoryDrift,
   };
   const unread = new Map(unreadEvents(state.waits));
   if (terminal instanceof RunSucceeded) {
@@ -3539,6 +3796,15 @@ function requiredStateRunId(state: RunState): string {
     throw new RangeError("terminal run state has no valid run_id");
   }
   return state.runId;
+}
+
+/** Return an error's message, or the thrown value as text, for a warning; never throws. */
+function errorMessage(error: unknown): string {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return "an error that can't be shown";
+  }
 }
 
 /** Return the error for the server under `key`, which another run has open or is opening. */

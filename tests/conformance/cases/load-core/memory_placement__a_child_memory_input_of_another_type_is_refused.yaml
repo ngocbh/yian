@@ -1,0 +1,36 @@
+# A child's memory input takes a memory of its own type only.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  defs:
+    child:
+      input:
+        notes: !VectorDBMemory
+      nodes:
+        g:
+          kind: code
+          output: str
+          code: return "x"
+      output: ${g.output}
+  nodes:
+    c:
+      kind: call
+      call: child
+      input:
+        notes: ${input.lessons}
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "call node 'c': binding 'notes' — child expects `VectorDBMemory`, got `FileMemory`"
+        frames:
+          - label: flow.yaml
+            range:
+              - 20
+              - 7
+              - 21
+              - 1

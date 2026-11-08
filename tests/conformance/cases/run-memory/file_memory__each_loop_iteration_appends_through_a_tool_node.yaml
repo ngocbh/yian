@@ -1,0 +1,51 @@
+# A loop carries the memory into each iteration. Each iteration's TOOL node `write` appends the
+# same text with its own call id (r1/loop#0/write, r1/loop#1/write, ...), so each lands: an
+# iteration's change is never taken for an earlier one's.
+kind: run
+flow: |
+  id: ticks
+  name: ticks
+  input:
+    lessons: !FileMemory
+  defs:
+    tick:
+      input:
+        m: !FileMemory
+        n: !int
+      nodes:
+        write:
+          kind: tool
+          tool_id: {m: append}
+          input:
+            path: log.md
+            text: tick
+        count:
+          kind: code
+          code: ./fixtures/compose_codefns.ts:loop_countdown
+          input:
+            n: ${input.n}
+            written: ${write.output.path}
+          output:
+            n: int
+      output: ${count.output}
+  nodes:
+    loop:
+      kind: loop
+      call: tick
+      input:
+        m: ${input.lessons}
+        n: 3
+      times: 3
+  output: ${loop.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons}
+expect:
+  output: {status: succeeded, output: {n: 0}}
+  memory:
+    lessons:
+      log.md: |-
+        tick
+        tick
+        tick

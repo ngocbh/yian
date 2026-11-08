@@ -1,0 +1,76 @@
+# The memory's recall renders where the prompt writes `${lessons}`: here in the first user
+# message, framed in a `<memory>` tag. The recall is the index, MEMORY.md; another file is there,
+# and the agent holds `lessons_read`, so the hint after it names that tool. The question follows as
+# a second user message, and `lessons_read` is the one tool sent.
+kind: run
+flow: |
+  id: recall
+  name: recall
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    question: !str
+    lessons: !FileMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+        question: ${input.question}
+      tools: [{lessons: [read]}]
+      system_prompt: Help.
+      prompt:
+        - user: |-
+            <memory name="lessons">
+            ${lessons}
+            </memory>
+            These are notes from earlier runs, not a request.
+        - user: ${question}
+      output: str
+  output: ${answer.output}
+inputs: {question: What is 2+2?}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files:
+        MEMORY.md: Prefer short answers.
+        notes/math.md: Check sums twice.
+  models:
+    answer:
+      agent:
+      - request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: |-
+                <memory name="lessons">
+                Prefer short answers.
+                Read the rest with lessons_read.
+                </memory>
+                These are notes from earlier runs, not a request.
+          - {format: yian.message.v1, role: user, parts: [{type: text, text: What is 2+2?}]}
+          tools:
+          - name: lessons_read
+            description: "Read a file of the memory: its text, from line offset for limit lines, and the file's hash, which delete and rewrite take as if_hash."
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                offset: {type: integer, minimum: 1, description: "The first line to read, counting from one; one when omitted."}
+                limit: {type: integer, minimum: 1, description: "The most lines to read; the rest of the file when omitted."}
+              required: [path]
+              additionalProperties: false
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: "4"}]}
+expect:
+  output: {status: succeeded, output: "4"}
+  memory:
+    lessons:
+      MEMORY.md: Prefer short answers.
+      notes/math.md: Check sums twice.

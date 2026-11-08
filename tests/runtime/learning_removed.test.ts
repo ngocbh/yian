@@ -85,11 +85,14 @@ test("runFlow refuses the removed memory option by name", async () => {
   );
 });
 
-test("advance and agentCall refuse the removed memory option by name", async () => {
+test("agentCall refuses the removed memory option by name; advance refuses the old map of memories", async () => {
   const { log } = await runSimple();
   const message = "the memory option was removed: pass each memory as a flow input";
-  await expect(advance({ log, memory: new Map(), env: hostEnv(dir) } as never)).rejects.toThrow(message);
   await expect(agentCall(log, { nodeId: "plan", n: 1 }, { memory: new Map() } as never)).rejects.toThrow(message);
+  // advance's memory binds a run's memory inputs again, by name; the old map isn't that.
+  await expect(advance({ log, memory: new Map(), env: hostEnv(dir) } as never)).rejects.toThrow(
+    "memory must be a record of memory input names to MemoryBase instances",
+  );
 });
 
 test("run_started records no old memory state and no learnable flag", async () => {
@@ -109,13 +112,13 @@ test.each([
   "memory_commit_succeeded",
   "memory_commit_failed",
 ])("a %s record is an unknown kind", (kind) => {
-  const line = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind, payload: {}, run_id: "r", schema: 28, seq: 1 });
-  expect(() => decodeRecord(line)).toThrow(`run-record kind '${kind}' is unsupported in schema 28`);
+  const line = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind, payload: {}, run_id: "r", schema: 29, seq: 1 });
+  expect(() => decodeRecord(line)).toThrow(`run-record kind '${kind}' is unsupported in schema 29`);
 });
 
 test("a schema-26 log is refused by name", () => {
   const line26 = JSON.stringify({ at: "2026-11-06T00:00:00.000Z", kind: "node_started", payload: {}, run_id: "r", schema: 26, seq: 1 });
-  expect(() => decodeRecord(line26)).toThrow("run log schema 26 predates schema 28 and is not supported");
+  expect(() => decodeRecord(line26)).toThrow("run log schema 26 predates schema 29 and is not supported");
 });
 
 test.each([Node, AgentNode, EndNode, StartNode, LoopNode, CaseNode].map((cls) => [cls.name, cls] as const))(

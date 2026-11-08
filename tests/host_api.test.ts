@@ -1,7 +1,7 @@
 /**
  * The host calls on a run log: `send`, `complete`, `close`, `cancel` and `pendingCalls`, live
  * through this process's engine or offline under the log's lock, with their typed refusals and
- * `RunBusyError`.
+ * `RunBusyError`; and a memory a host binds through the package root.
  */
 import { afterAll, describe, expect, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
@@ -33,6 +33,8 @@ import { LoadError } from "../src/compose/helpers/errors.ts";
 import { loadFlow } from "../src/compose/loader.ts";
 import { DefaultsMismatchError } from "../src/defaults.ts";
 import { CallClosed, NodeStarted, NodeSucceeded, NodeWaiting, type RunEvent, RunStarted, RunWaiting } from "../src/events.ts";
+import * as yian from "../src/index.ts";
+import { ScriptedModel } from "../src/llm/testing.ts";
 import {
   advance,
   cancel,
@@ -52,7 +54,7 @@ import { FunctionTool } from "../src/tools/function_tools.ts";
 import { inboxType, Type, TypeCheckError, ValueKind } from "../src/typesys/values.ts";
 import { gateTool, handClock } from "./helpers/inbox_fixtures.ts";
 import { processChatFlow, processEnv } from "./helpers/yian-host-api-child-hold.ts";
-import { graph, NO_ENV, rejected } from "./helpers/run_state_fixtures.ts";
+import { callReply, graph, NO_ENV, rejected, serving, textReply } from "./helpers/run_state_fixtures.ts";
 
 const ROOT = mkdtempSync(join(tmpdir(), "host-api-"));
 afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
@@ -804,4 +806,36 @@ for (const numWorkers of [0, 2]) {
 test("complete refuses {output: undefined}", async () => {
   const { log, flow, callId } = await waitingAsk();
   expect(await rejected(complete(log, callId, { output: undefined }, { env, flow }))).toBeInstanceOf(TypeError);
+});
+
+test("a host binds a FileMemory from the package root, and a run through the root reads and writes it", async () => {
+  const folder = mkdtempSync(join(ROOT, "memory-"));
+  writeFileSync(join(folder, "MEMORY.md"), "Prefer short answers.");
+  const lessons = new yian.FileMemory({ root: folder, id: "host/lessons" });
+  expect(lessons).toBeInstanceOf(yian.MemoryBase);
+  expect(yian.isMemory(lessons)).toBe(true);
+  const flow = await yian.loadFlow(`
+id: f
+name: f
+llm_config: {provider: anthropic, model: claude-test}
+input:
+  lessons: !FileMemory
+nodes:
+  answer:
+    kind: agent
+    input:
+      lessons: \${input.lessons}
+    tools: [{lessons: [append]}]
+    prompt: "\${lessons} go"
+    output: str
+output: \${answer.output}
+`);
+  const model = new ScriptedModel(
+    [callReply(["lessons_append", { path: "a.md", text: "Cite sources." }, "c1"]), textReply("done")],
+    { provider: "anthropic", model: "claude-test" },
+  );
+  const result = await yian.runFlow(flow, { lessons }, { models: serving(model), env, log: freshLog() });
+  expect([result.status, result.output]).toEqual(["succeeded", "done"]);
+  expect(JSON.stringify(model.requests[0])).toContain("Prefer short answers.");
+  expect(readFileSync(join(folder, "a.md"), "utf8")).toBe("Cite sources.");
 });

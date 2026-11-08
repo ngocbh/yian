@@ -34,9 +34,11 @@ import { ExpressionError, parseCondition, promptRefs } from "../expr/index.ts";
 import { type DeclaredTypes, evaluateWhenRecord, localDeclared } from "../expr/expressions.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { Request, ToolSpec } from "../llm/messages.ts";
+import type { MemorySession } from "../memory/base.ts";
+import type { RecordedMemoryTool } from "../typesys/memory.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
-import type { ToolGrant } from "../tools/grants.ts";
+import type { MemoryGrant, ToolGrant } from "../tools/grants.ts";
 import type { ToolSet } from "../tools/registry.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
@@ -45,6 +47,7 @@ import {
   fromHost,
   isRecord,
   jsTypeName,
+  MemoryRef,
   setField,
   type Type,
   TypeCheckError,
@@ -52,7 +55,15 @@ import {
   type Value,
   type ValueRecord,
 } from "../typesys/values.ts";
-import { applyDefaults, BindingError, copyValue, type ReservedBinder, validateParameters } from "./binding.ts";
+import {
+  applyDefaults,
+  BindingError,
+  copyValue,
+  type ReservedBinder,
+  resolveSource,
+  sourceOrigin,
+  validateParameters,
+} from "./binding.ts";
 import {
   type Assertion,
   type CallView,
@@ -136,6 +147,62 @@ export class Route {
  * no outgoing edge.
  */
 export const ELSE_HANDLE = "#else";
+
+/** The start of each reserved wiring key a node routes a memory grant through. */
+export const MEMORY_KEY_PREFIX = "__memory_";
+
+/** Return the reserved wiring key of a grant of memory input `input`: `__memory_<input>`. */
+export function memoryKey(input: string): string {
+  return `${MEMORY_KEY_PREFIX}${input}`;
+}
+
+/**
+ * Resolve the reserved binding of each memory input `grants` name, once per input, to the memory
+ * value it holds (`null` for an Optional memory left out), keyed by its reserved key.
+ *
+ * @param field The authored field the grants are in (`tools` or `tool_id`), for the message.
+ * @param bind Resolves a named source and applies the check, as `bindReserved`'s `bind`; `null`
+ *   resolves against `pool`.
+ * @throws Error when the wiring lacks a grant's reserved binding.
+ * @throws BindingError (`contract.input`) when a binding holds something other than a memory, or
+ *   two inputs hold one memory, which the node would reach twice.
+ */
+export function bindMemoryGrants(
+  nodeId: string,
+  grants: readonly MemoryGrant[],
+  field: string,
+  nodeWiring: ReadonlyMap<string, unknown>,
+  pool: VariablePool,
+  bind: ReservedBinder | null,
+): Record<string, unknown> {
+  const reserved: Record<string, unknown> = {};
+  // The input each bound memory identity came through: one node reaches a memory by one input.
+  const granted = new Map<string, string>();
+  for (const input of new Set(grants.map((grant) => grant.input))) {
+    const key = memoryKey(input);
+    if (!nodeWiring.has(key)) throw new Error(`node ${reprText(nodeId)} has no \`${key}\` wiring`);
+    const source = nodeWiring.get(key);
+    const normalize = (value: unknown): MemoryRef | null => {
+      if (value === null || MemoryRef.isMemoryRef(value)) return value;
+      throw new BindingError(`node ${reprText(nodeId)}: \`${input}\` in \`${field}:\` must be a memory`, {
+        failureCode: "contract.input",
+        origin: sourceOrigin(source),
+      });
+    };
+    const value = bind === null ? normalize(resolveSource(source, pool)) : bind(key, source, normalize);
+    reserved[key] = value;
+    if (!MemoryRef.isMemoryRef(value)) continue;
+    const other = granted.get(value.identity);
+    if (other !== undefined) {
+      throw new BindingError(`node ${reprText(nodeId)}: \`${input}\` and \`${other}\` are the same memory; grant one`, {
+        failureCode: "contract.input",
+        origin: sourceOrigin(source),
+      });
+    }
+    granted.set(value.identity, input);
+  }
+  return reserved;
+}
 
 /**
  * One deterministic graph expansion a spawner describes for the runtime to record. Frozen.
@@ -324,13 +391,15 @@ export interface RebuildCaps {
   /** The skills the run recorded, by name. */
   readonly skills: ReadonlyMap<string, Skill>;
   /**
-   * The request's tool list as the run bound it: the specs of the tools `grants` grant, as the run
-   * recorded them, each under the name the model saw, then `loadSkill` when given; `null` when a
-   * grant can't be resolved.
+   * The request's tool list as the run bound it: the specs of the tools `grants` grant, each under
+   * the name the model saw, then `loadSkill` when given; `null` when a grant can't be resolved.
+   * A grant resolves first in `local`, groups of the node's own (its memories) with their tools'
+   * specs in order, then in the tools the run recorded, as the live loop resolves it.
    */
   readonly toolSpecs: (
     grants: readonly ToolGrant[],
     loadSkill: ToolSpec | null,
+    local?: ReadonlyMap<string, readonly LocalToolSpec[]>,
   ) => readonly ToolSpec[] | null;
   /** Builds the invocation's model to read its request settings off; never called. */
   readonly models: ModelAccess | null;
@@ -535,6 +604,37 @@ export class AssertionStageError extends Error {
 }
 
 /**
+ * @internal A tool of a node's own group as a rebuilt request lists it: a recorded memory tool's
+ * spec.
+ */
+export type LocalToolSpec = Omit<RecordedMemoryTool, "write">;
+
+/** @internal A run's sessions on its memories, which every node bound to a memory shares. */
+export interface NodeMemories {
+  /**
+   * Return the session on the memory `identity`.
+   *
+   * @throws Error when the run has none: a node bound to a memory the run didn't bind.
+   */
+  session(identity: string): MemorySession;
+}
+
+/**
+ * @internal Return the run's session on the memory `identity`, through `caps.memories`.
+ *
+ * @throws CapabilityFault carrying the error when the evaluator gave no memory sessions, or none on
+ *   that memory: the run didn't bind a memory its nodes were bound to.
+ */
+export function memorySession(caps: NodeCaps, identity: string): MemorySession {
+  if (caps.memories === undefined) throw new CapabilityFault(new TypeError("the evaluator gave no memory sessions"));
+  try {
+    return caps.memories.session(identity);
+  } catch (error) {
+    throw new CapabilityFault(error);
+  }
+}
+
+/**
  * The capabilities a node's `run` and `forward` receive, as one object. The evaluator passes
  * every node its own `signal`, and the `scheduler` and `random` the host gave it, plus only what
  * the node's traits ask for.
@@ -554,6 +654,8 @@ export interface NodeCaps {
   readonly steps?: NodeSteps;
   /** The run's tool set; supplied to a node that declares `needsTools`. */
   readonly tools?: ToolSet;
+  /** The run's memory sessions; supplied to a node that declares `needsMemories` in a run that has them. */
+  readonly memories?: NodeMemories;
   /** The run's host-supplied skills by name; supplied to a node that declares `needsSkills`. */
   readonly skills?: ReadonlyMap<string, Skill>;
   /** The transient stream-chunk sink; supplied to a node that declares `needsLiveEvents`. */
@@ -641,6 +743,11 @@ export abstract class Node {
    * per-run tools and the per-run ask handler never leak between runs. TOOL and AGENT opt in.
    */
   readonly needsTools: boolean = false;
+  /**
+   * Declares "I call memory tools": the evaluator supplies the run's memory sessions, which the
+   * run opened on the memories its host bound. TOOL and AGENT opt in.
+   */
+  readonly needsMemories: boolean = false;
   /**
    * Declares "I can publish transient in-loop observers": the evaluator supplies the stream and
    * event sinks the host has. AGENT is the only built-in kind that opts in.
@@ -1137,6 +1244,15 @@ export abstract class Node {
    * is written. The base grants none.
    */
   grantedTools(): readonly ToolGrant[] {
+    return [];
+  }
+
+  /**
+   * Return the grants of memory tools a model inside this node, or the node itself, may call, by
+   * the memory input of the node's own flow. Never among `grantedTools()` or `hostToolCall()`, so
+   * the run-start tool checks never see one. The base grants none.
+   */
+  memoryGrants(): readonly MemoryGrant[] {
     return [];
   }
 

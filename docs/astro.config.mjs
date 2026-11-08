@@ -50,7 +50,7 @@ export default defineConfig({
         { label: "Get started", slug: "get-started" },
         {
           label: "Write flows",
-          items: ["flows", "expressions", "types", "agents", "code-and-tools", "models", "control-flow", "inboxes"],
+          items: ["flows", "expressions", "types", "agents", "code-and-tools", "models", "control-flow", "inboxes", "memory"],
         },
         { label: "Run and embed", items: ["cli", "embedding"] },
         { label: "Understand", items: ["how-it-works"] },

@@ -425,3 +425,20 @@ export function logJson(value: unknown): string {
 export function eventBytes(value: unknown): number {
   return new TextEncoder().encode(logJson(value)).length;
 }
+
+/**
+ * Freeze `root` and every container in it, in place, and return it.
+ *
+ * `root` must be a fresh value `parseJson` returned, so it is a tree of plain containers; nothing
+ * is checked. An explicit stack walks it, so any depth works.
+ */
+export function freezeParsed<T extends JsonValue>(root: T): T {
+  const stack: JsonValue[] = [root];
+  while (stack.length > 0) {
+    const value = stack.pop()!;
+    if (typeof value !== "object" || value === null) continue;
+    Object.freeze(value);
+    for (const item of Object.values(value)) stack.push(item);
+  }
+  return root;
+}

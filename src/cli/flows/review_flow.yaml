@@ -43,7 +43,9 @@ nodes:
         file or network tool an agent is granted or a TOOL node calls; untrusted input (a flow
         input, a file, a web page, a model's output) reaching a prompt without being marked as
         data, or reaching code; a secret (a key, a token, a password) written in the YAML; an
-        agent's tools, which should be only the ones it needs.
+        agent's tools, which should be only the ones it needs; a memory write tool (append,
+        create, edit, rewrite, delete) an agent doesn't need, since what it writes reaches every
+        later run.
       - reliability: what happens when a model call, a tool or a CODE node fails; missing
         timeouts on an ask or a wait; retries; a loop with no bound (no max:, and a condition
         the body may never meet); a case whose result is read with no else.

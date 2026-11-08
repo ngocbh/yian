@@ -1,0 +1,39 @@
+# A map can't iterate over a memory.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  defs:
+    child:
+      input:
+        notes: !FileMemory
+      nodes:
+        g:
+          kind: code
+          output: str
+          code: return "x"
+      output: ${g.output}
+  nodes:
+    m:
+      kind: map
+      call: child
+      over: ${input.lessons}
+      input:
+        notes: ${input.lessons}
+  output: ${m.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: |-
+          flow has unresolved references:
+            node 'm' map over: ${input.lessons} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` (a map's `over:` can't read a memory)
+        frames:
+          - label: flow.yaml
+            range:
+              - 19
+              - 11
+              - 19
+              - 27

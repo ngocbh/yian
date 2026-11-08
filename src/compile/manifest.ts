@@ -47,8 +47,11 @@ import {
   FileRef,
   InboxRef,
   isList,
+  isMemoryType,
   isRecord,
+  jsonPart,
   jsTypeName,
+  MemoryRef,
   Type,
   valueRepr,
   writeAsText,
@@ -87,6 +90,7 @@ const IGNORED_NODE_FIELDS = [
   "isLoop",
   "needsSkills",
   "needsTools",
+  "needsMemories",
   "needsLiveEvents",
   "needsSteps",
   "wakesWithoutWorker",
@@ -135,7 +139,8 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   // `llmConfigLabel` is render-only. `wiresLlmConfig` and `llmValueTypes` are derived from the
   // layers; the reserved wiring they decide is manifested with the wiring. `callTime` and
   // `hostCredentials` are run-resolved like `llmConfig`. `steerInbox` mirrors the reserved
-  // `__steer_inbox` wiring, manifested with the wiring.
+  // `__steer_inbox` wiring, manifested with the wiring, and `memoryInputs` the reserved
+  // `__memory_<input>` wiring of the memory grants `tools` holds as authored.
   [NodeKind.AGENT]: [
     "llmConfig",
     "llmConfigLabel",
@@ -144,6 +149,7 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
     "callTime",
     "hostCredentials",
     "steerInbox",
+    "memoryInputs",
   ],
   // `mode` is derived from `code`; CODE origins are diagnostic metadata resolved only by the
   // authoring front end; `baseDir` is where a reference resolves, not what it names; `sourceFile`
@@ -151,8 +157,9 @@ const IGNORED_KIND_FIELDS: Readonly<Record<string, readonly string[]>> = {
   // body's JavaScript, derived from `code`.
   [NodeKind.CODE]: ["mode", "baseDir", "sourceFile", "codeLineStarts", "codeOrigin", "codeLineOrigins", "stripped"],
   // `inputTypes` is derived from wiring and producer contracts; the run-start tool check reads it.
-  // `toolId` is the name messages show, derived from `toolRef`.
-  [NodeKind.TOOL]: ["inputTypes", "toolId"],
+  // `toolId` is the name messages show, derived from `toolRef`. `memoryTool` mirrors the reserved
+  // `__memory_<input>` wiring of a memory's tool, which `toolRef` names as authored.
+  [NodeKind.TOOL]: ["inputTypes", "toolId", "memoryTool"],
   [NodeKind.CASE]: [],
   // `childInputs` duplicates the recursive child's START signature.
   [NodeKind.CALL]: ["childInputs"],
@@ -201,7 +208,17 @@ const PARAMETER_FIELDS = new Set([
 const VALUE_CONTRACT_FIELDS = new Set(["type", "origins"]);
 const PARTIAL_RECORD_CONTRACT_FIELDS = new Set(["fields"]);
 const CONTRACT_ORIGINS_IGNORED_FIELDS = new Set(["default", "entries"]);
-const TYPE_FIELDS = new Set(["kind", "fields", "required", "tags", "element", "nullable", "bounds", "members"]);
+const TYPE_FIELDS = new Set([
+  "kind",
+  "fields",
+  "required",
+  "tags",
+  "element",
+  "nullable",
+  "bounds",
+  "members",
+  "memory",
+]);
 const CASE_FIELDS = new Set(["handle", "when", "origin"]);
 const FLOW_FIELDS = ["nodes", "edges", "wiring", "startId", "endId", "inputConnections", "childBoundaries"];
 const FLOW_FIELD_SET = new Set(FLOW_FIELDS);
@@ -485,6 +502,8 @@ function canonicalValue(value: unknown, ctx: ManifestContext, path: string): Jso
     // A partial LOOP driver's default for an omitted inbox field encodes as its JSON form.
     return mappingManifest([["inbox", value.inbox]], value, ctx, path, canonicalValue);
   }
+  // A partial LOOP driver's default for a carried memory field encodes as its JSON form too.
+  if (MemoryRef.isMemoryRef(value)) return canonicalValue(jsonPart(value, [], "mapping"), ctx, path);
   if (isList(value)) return { items: canonicalSequence(value, ctx, path), type: "list" };
   if (isRecord(value)) return mappingManifest(Object.entries(value), value, ctx, path, canonicalValue);
   throw new TypeError(`${path}: unsupported non-JSON value of type ${jsTypeName(value)}`);
@@ -494,7 +513,9 @@ function canonicalValue(value: unknown, ctx: ManifestContext, path: string): Jso
  * Canonicalize one resolved structural Type, including nested fields, elements and members.
  *
  * An absent refinement is `null`; `bounds` and `union` appear only when present, the members in
- * canonical order so authored order is not identity.
+ * canonical order so authored order is not identity. A memory type projects as its name, its item
+ * record and its nullability only, never the instance bound to it, so a host memory type gives
+ * the same manifest however its name was registered.
  *
  * @throws RangeError for a cyclic type or a field policy mismatch.
  * @throws TypeError or RangeError as `validateShape` does, for a bounded or union type.
@@ -503,6 +524,14 @@ function typeManifest(value: Type | null | undefined, ctx: ManifestContext, path
   if (value === null || value === undefined) return null;
   checkFields(value, TYPE_FIELDS, path);
   return within(ctx.types, value, `${path}: cyclic Type is not manifestable`, () => {
+    if (isMemoryType(value)) {
+      return {
+        item: typeManifest(value.element, ctx, `${path}.item`),
+        kind: value.kind,
+        nullable: value.nullable,
+        type: value.memory,
+      };
+    }
     const fields =
       value.fields === undefined
         ? null

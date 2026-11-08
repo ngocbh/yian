@@ -53,7 +53,9 @@ import {
   canonicalTypeLabel,
   isInboxType,
   isList,
+  isMemoryType,
   isRecord,
+  type Type,
   TypeCheckError,
   type Value,
 } from "../../typesys/values.ts";
@@ -69,7 +71,7 @@ import {
   resolveOutputBindingContract,
   type TypeFn,
 } from "../../compile/output_contracts.ts";
-import { anySourceHint, yamlQuoted } from "../helpers/tags.ts";
+import { anySourceHint, namedTypeLabel, yamlQuoted } from "../helpers/tags.ts";
 import { formerBooleanFix, valueFits } from "../helpers/yaml_words.ts";
 import { type BuildResult, siteKey } from "../nodes/base.ts";
 import { carriedFieldTypes, loopEntryInputs } from "../nodes/loop.ts";
@@ -256,7 +258,8 @@ function literalItems(result: BuildResult, wiring: ReadonlyMap<string, unknown>)
  * `"2026-01-01"` fits a `date` input but `"3"` does not fit an `int` input. A lone `${item...}`, a
  * `${ref :- fallback}` or `${ref :? message}` over a reference, and a `|` coalesce are checked
  * operand by operand (see `operandMismatch`). Any other source is checked by its resolved
- * contract. An Inbox input takes only an inbox of this flow (see `inboxMismatch`).
+ * contract. An Inbox input takes only an inbox of this flow (see `inboxMismatch`), and a memory
+ * input only a memory of this flow of the same type (see `memoryMismatch`).
  *
  * @param src The binding, raw or a `Binding`.
  * @param decl The child input, with a declared contract.
@@ -266,6 +269,7 @@ function literalItems(result: BuildResult, wiring: ReadonlyMap<string, unknown>)
  */
 function bindingMismatch(src: unknown, decl: Parameter, scope: Scope): string | null {
   if (isInboxType(decl.contract!.type)) return inboxMismatch(src, decl, scope);
+  if (isMemoryType(decl.contract!.type)) return memoryMismatch(src, decl, scope);
   const source = bindingSource(src);
   if (!(src instanceof Binding && src.contract !== null)) {
     const literal = literalValue(source);
@@ -322,6 +326,40 @@ function inboxMismatch(src: unknown, decl: Parameter, scope: Scope): string | nu
     );
   }
   return contractMismatch(contract, decl, { nonNull: false, registry: scope.registry });
+}
+
+/**
+ * Return why one binding can't fill the child's memory input `decl`, else `null`.
+ *
+ * Only a memory input of this flow, read whole as a lone `${input.<name>}`, fills one, so no
+ * literal can forge a memory; its type must then be the child's exactly: the same memory type and
+ * item record, and not Optional unless the child's is.
+ *
+ * @param src The binding, raw or a `Binding`.
+ * @param decl The child's memory input.
+ * @param scope What the node's bindings read.
+ * @returns The mismatch, or `null` when the binding fits.
+ */
+function memoryMismatch(src: unknown, decl: Parameter, scope: Scope): string | null {
+  const tree = src instanceof Binding && src.contract !== null ? null : loneSpan(bindingSource(src));
+  const path = tree === null ? null : operandPath(tree);
+  const parts = path === null ? [] : path.split(".");
+  const contract =
+    parts.length === 2 && parts[0] === "input" ? referenceContract(path!, scope.producers, scope.flowInputs) : null;
+  const registry = scope.registry ?? new Map();
+  const expected = memoryLabel(decl.contract!.type, registry);
+  if (!(isExactly(contract, ValueContract) && isMemoryType(contract.type))) {
+    return `child expects \`${expected}\`, a memory; pass a memory input of this flow, as \`\${input.<name>}\``;
+  }
+  if (typesCompatible(contract.type, decl.contract!.type)) return null;
+  return `child expects \`${expected}\`, got \`${memoryLabel(contract.type, registry)}\``;
+}
+
+/** Spell the memory type `typ` for a message, its item record by its typedef's name. */
+function memoryLabel(typ: Type, registry: TypeRegistry): string {
+  const item = typ.element === undefined ? "" : `(${namedTypeLabel(typ.element, registry)})`;
+  const text = `${typ.memory}${item}`;
+  return typ.nullable ? `Optional(${text})` : text;
 }
 
 /** Return the parsed expression of a source that is one whole `${...}`, else `null`. */

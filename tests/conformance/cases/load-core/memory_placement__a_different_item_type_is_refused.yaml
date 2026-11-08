@@ -1,0 +1,39 @@
+# A VectorDBMemory's item type must be the child's too.
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Case: {title: str}
+    Other: {name: str}
+  input:
+    cases: !VectorDBMemory(Case)
+  defs:
+    child:
+      input:
+        notes: !VectorDBMemory(Other)
+      nodes:
+        g:
+          kind: code
+          output: str
+          code: return "x"
+      output: ${g.output}
+  nodes:
+    c:
+      kind: call
+      call: child
+      input:
+        notes: ${input.cases}
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "call node 'c': binding 'notes' — child expects `VectorDBMemory(Other)`, got `VectorDBMemory(Case)`"
+        frames:
+          - label: flow.yaml
+            range:
+              - 23
+              - 7
+              - 24
+              - 1

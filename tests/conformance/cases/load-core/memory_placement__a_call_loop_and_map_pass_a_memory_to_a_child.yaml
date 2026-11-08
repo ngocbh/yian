@@ -1,0 +1,46 @@
+# A named call, a loop and a map pass a memory whole to a child's memory input of the same type.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  defs:
+    child:
+      input:
+        notes: !FileMemory
+      nodes:
+        g:
+          kind: code
+          output: str
+          code: return "x"
+      output: ${g.output}
+    body:
+      input:
+        m: !FileMemory
+        done: !bool
+      nodes: {}
+      output:
+        done: ${input.done}
+  nodes:
+    c:
+      kind: call
+      call: child
+      input:
+        notes: ${input.lessons}
+    l:
+      kind: loop
+      call: body
+      input:
+        m: ${input.lessons}
+        done: true
+      while: not done
+    m:
+      kind: map
+      call: child
+      over: [1, 2]
+      input:
+        notes: ${input.lessons}
+  output: ${c.output}
+expect:
+  load: ok

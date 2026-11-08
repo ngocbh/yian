@@ -1,0 +1,14 @@
+# Given the host's memory class, a flow input can name its type, Optional too.
+kind: load
+memory_types:
+  TradeJournal: [record_trade, list_trades]
+flow: |
+  id: f
+  name: f
+  input:
+    j: !TradeJournal
+    k: !Optional(TradeJournal)
+  nodes: {}
+  output: null
+expect:
+  load: ok

@@ -1,0 +1,27 @@
+# A memory is written only as a flow input's tag, so a typedef can't name a memory type: no
+# constructor, tag or isinstance could then build one from a value.
+kind: load
+flow: |
+  id: err-memory-alias
+  name: err_memory_alias
+  typedefs:
+    Notes: FileMemory
+  nodes:
+    echo:
+      kind: code
+      code: ./fixtures/compose_codefns.ts:echo
+      input: {topic: hello}
+      output: str
+  output: ${echo.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "bad typedefs: typedef 'Notes' names a memory type; declare memories as flow inputs (`lessons: !FileMemory`)"
+        frames:
+          - label: flow.yaml
+            range:
+              - 4
+              - 3
+              - 4
+              - 8

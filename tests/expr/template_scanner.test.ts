@@ -27,7 +27,7 @@ import {
   templateRefs,
 } from "../../src/expr/template.ts";
 import { FileRef, type Value, type ValueRecord } from "../../src/typesys/index.ts";
-import { fieldOf } from "../../src/typesys/values.ts";
+import { fieldOf, MemoryRef } from "../../src/typesys/values.ts";
 
 /** Return a `resolve` over `values`: the head, then `fieldOf` per dotted step; a miss is `null`. */
 function from(values: ValueRecord): RootResolver {
@@ -275,4 +275,17 @@ test.each<[string, Value, string]>([
   ["a date text", "2024-01-02", "2024-01-02"],
 ])("an embedded span writes %s in the text form", (_label, value, text) => {
   expect(evaluate("v=${x}", from({ x: value }))).toBe(`v=${text}`);
+});
+
+test("a memory value is never written into a template as its JSON form", () => {
+  const memory = new MemoryRef({
+    identity: "t/lessons",
+    type: "FileMemory",
+    settings: {},
+    version: "v1",
+    recall: { text: "secret notes", cut: null, hint: null },
+    tools: [],
+  });
+  expect(() => renderTemplateRecord("notes: ${m}", { m: memory })).toThrow(TypeError);
+  expect(() => renderTemplateRecord("${m}", { m: memory })).toThrow("a memory value renders only as an AGENT prompt's input");
 });

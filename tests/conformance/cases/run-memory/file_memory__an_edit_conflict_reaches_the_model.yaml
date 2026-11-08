@@ -1,0 +1,73 @@
+# An edit whose `old` text isn't in the file exactly once is a conflict: nothing is written, and
+# the model reads the reason and the file's current state as an error result. It then answers, and
+# the folder is unchanged.
+kind: run
+flow: |
+  id: conflict
+  name: conflict
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+      tools: [{lessons: [edit]}]
+      system_prompt: Help.
+      prompt: Fix the note.
+      output: str
+  output: ${answer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files:
+        notes.md: Prefer short answers.
+  models:
+    answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: lessons_edit, arguments: {path: notes.md, old: long, new: brief}}
+      - request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - {format: yian.message.v1, role: user, parts: [{type: text, text: Fix the note.}]}
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - {type: tool_call, id: c1, name: lessons_edit, arguments: {path: notes.md, old: long, new: brief}}
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - type: tool_result
+              call_id: c1
+              name: lessons_edit
+              content: |-
+                the old text isn't in `notes.md`; read the file and copy it exactly
+                current: {"path":"notes.md","hash":"6c5664848312ecfde7706c1d55414fe710701d9ca608e37d74713ad1b31e18ae","text":"Prefer short answers."}
+              is_error: true
+          tools:
+          - name: lessons_edit
+            description: Replace the text old with new in a file. Conflicts unless old appears in the file exactly once; read the file first.
+            parameters:
+              type: object
+              properties:
+                path:
+                  type: string
+                  description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                old: {type: string, description: "The exact text to replace, as the file holds it."}
+                new: {type: string, description: The text to put in its place.}
+              required: [path, old, new]
+              additionalProperties: false
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: left as is}]}
+expect:
+  output: {status: succeeded, output: left as is}
+  memory:
+    lessons:
+      notes.md: Prefer short answers.

@@ -20,7 +20,7 @@ import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.t
 import { retainFailure } from "../nodes/base.ts";
 import { type FileLock, FileLockError, isLocked, lockFile, syncFolder, VERSION } from "../platform.ts";
 import { isExactly } from "../nodes/contracts.ts";
-import { JSONDecodeError, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import { freezeParsed, JSONDecodeError, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import {
   buildValue,
   buildValueAs,
@@ -32,11 +32,11 @@ import { formatRecordTime as recordTimeText, RECORD_TIME } from "../typesys/temp
 import { isList, isRecord, jsonPart, requireFields, valueRepr, writeAsText } from "../typesys/values.ts";
 
 /** The only run-record schema that this version writes and reads. */
-export const SCHEMA_VERSION = 28;
+export const SCHEMA_VERSION = 29;
 
 /** Older TS schemas, which this version names instead of reporting as unknown. */
 const RETIRED_SCHEMAS: ReadonlySet<number> = new Set([
-  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
 ]);
 
 /** A typed value's wire object `{kind, value}`. */
@@ -85,23 +85,6 @@ export function canonicalSeed(value: unknown): [JsonValue, JsonValue] {
  */
 function canonicalCopy(value: unknown): JsonValue {
   return parseJson(logJson(value), "codec");
-}
-
-/**
- * Freeze `root` and every container in it, in place, and return it.
- *
- * `root` must be a fresh value `parseJson` returned, so it is a tree of plain containers; nothing
- * is checked. An explicit stack walks it, so any depth works.
- */
-function freezeParsed<T extends JsonValue>(root: T): T {
-  const stack: JsonValue[] = [root];
-  while (stack.length > 0) {
-    const value = stack.pop()!;
-    if (typeof value !== "object" || value === null) continue;
-    Object.freeze(value);
-    for (const item of Object.values(value)) stack.push(item);
-  }
-  return root;
 }
 
 /**

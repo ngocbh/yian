@@ -1,0 +1,16 @@
+# A TOOL node calls a memory's tool by its group form.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  nodes:
+    found:
+      kind: tool
+      tool_id: {lessons: read}
+      input:
+        path: notes.md
+  output: ${found.output}
+expect:
+  load: ok

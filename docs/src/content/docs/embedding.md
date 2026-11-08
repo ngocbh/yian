@@ -11,8 +11,8 @@ runs on disk, move messages and answers into them, and watch what they do. Insta
 
 | Import | What it's for |
 |---|---|
-| `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; host tools (`tool`, `ToolContext`, `pending`, the tool errors); `LoadError`, `Failure`, `Diagnostic` |
-| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `EventHook` and `StreamHook`; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex` |
+| `@ngocbh/yian` | Load and run flows: `loadFlow`, `runFlow`, `advance`; the host calls `send`, `withdraw`, `close`, `complete`, `interrupt`, `cancel`, `pendingCalls` and their errors `DeliveryRefused` and `RunBusyError`; host tools (`tool`, `ToolContext`, `pending`, the tool errors); memories (`FileMemory`, `MemoryBase`, `MemoryBusyError`, `ChangeIdReusedError`); `LoadError`, `Failure`, `Diagnostic` |
+| `@ngocbh/yian/run` | Everything about runs: `runFlow`, `advance`, the host calls and their errors, plus `RunResult`, `runLogPath`, `inspectRun`, `loadRecordedFlow`, the types `RunFlowOptions`, `AdvanceOptions`, `MemoryDrift`, `EventHook` and `StreamHook`; for hosts that show runs, `LiveChannel`, `iterRunRecords`, `foldRunLog`, `agentCalls`, `agentCall`, `updateRunIndex` and `readRunIndex` |
 | `@ngocbh/yian/tools` | Tools without the run API: `registerTool`, `registeredTools`, `invokeTool`, `mcpServer` and the `Mcp*` errors, `pending`, `isPending`, and the ask handler types `AskHandler` and `AskRequest` |
 | `@ngocbh/yian/skills` | `loadSkills`, `loadSkillDir`, `defaultSkillRoots`, `Skill`, `SkillError` |
 | `@ngocbh/yian/platform` | yian's file lock and SQLite wrapper, for hosts that lock files the same way: `lockFile`, `waitForLock`, `isLocked`, `FileLockError`, `openSqlite`, `sqliteErrorCode`; and `syncFolder`, which makes a folder's new entries durable |
@@ -78,7 +78,8 @@ console.log(result.status, result.output); // succeeded total: 7.5
 targets are found, in order, then the flow's `system.paths` joined onto the first entry; put the
 flow's own folder first),
 `sourceLabel` (the name errors show), `baseDir` (where `./file.ts:fn` references resolve),
-`codeRoot` (a folder every CODE file must stay inside) and `env`. A broken flow rejects with
+`codeRoot` (a folder every CODE file must stay inside), `env`, and `memoryTypes` (your own
+[memory types](/memory/#your-own-memory-types)). A broken flow rejects with
 `LoadError`, whose `diagnostic` points into the source. A CODE reference outside `codeRoot` is
 named as the flow wrote it (`'../x.ts:fn' is outside the code root`) and reads the same whether
 or not its file exists. Under `codeRoot` no CODE error names an absolute path, so you can show it
@@ -90,6 +91,9 @@ yian follows local `uses:` refs and the flow's `system.paths` as written, so an 
 If you run flows you didn't write, vet each flow and every file it imports yourself, or run yian
 in a sandbox. [`yian check --root`](/cli/#yian-check) checks that they stay inside a folder, and
 refuses a flow that sets `system.paths`.
+
+A [memory](/memory/) input takes a memory instance as its value:
+`runFlow(flow, { question, lessons: new FileMemory({ root, id }) })`.
 
 A flow that fails still resolves, with `status: "failed"`. `runFlow` rejects for problems in your
 program or setup: a bad option, a tool, provider or model the flow needs but the run lacks, an MCP
@@ -109,6 +113,7 @@ server that doesn't start, a bad `YIAN_*` value, a callback that throws, a log i
 | `waits` | What a waiting run waits on: `node`, `callId`, `tool`, `inbox`, `deadline`, `settled` |
 | `unread` | At the end of a run, the messages no take read, as send seqs by inbox |
 | `crashedAttempts` | Node attempts a resume ran again after a crash, by node id |
+| `memoryDrift` | After `advance` recovers a crash or a stop, each memory that changed since the run started, the run's own writes included: `input`, `identity`, and the `recorded` and `current` versions |
 
 ### `runFlow` options
 
@@ -147,8 +152,9 @@ holds media fails if `media` is a symlink, another user's, or writable by others
 | Waiting, with nothing new | Writes nothing and returns `waiting` again |
 
 `advance` runs the flow the log recorded, not the file on disk, with the log's inputs, run id and
-model settings. Pass again what the log doesn't hold: `tools`, `skills`, `context`, and the API key
-(`apiKey`, `headers`) of a run started with `llmConfig.api_key`.
+model settings. Pass again what the log doesn't hold: `tools`, `skills`, `context`, the memories
+(`memory: { lessons: instance }`, for any unfinished run; see [Memory](/memory/#bind-a-memory)),
+and the API key (`apiKey`, `headers`) of a run started with `llmConfig.api_key`.
 
 The log holds the `codeRoot` the flow was loaded under, so `advance` and the host calls below
 confine the recorded flow's CODE files to it without being told. Passing `codeRoot` is optional; one

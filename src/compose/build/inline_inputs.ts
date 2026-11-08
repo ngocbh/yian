@@ -247,6 +247,7 @@ export function canonicalizeInlineType(typ: Type): Type {
     nullable: typ.nullable,
     bounds: typ.bounds,
     members,
+    memory: typ.memory,
   });
 }
 

@@ -1,0 +1,182 @@
+# `tools: [lookup, lessons]` grants a host tool and a whole memory. The request lists the tools in
+# grant order, and the memory's in its spec order: list, read, search, append, create, edit,
+# delete and rewrite, each shown as `lessons_<tool>`, with the recorded descriptions and schemas.
+kind: run
+flow: |
+  id: grant
+  name: grant
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+      tools: [lookup, lessons]
+      system_prompt: Help.
+      prompt: Go.
+      output: str
+  output: ${answer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons}
+  tools:
+    lookup:
+      description: Look up a topic.
+      parameters: {type: object, properties: {topic: {type: string}}, required: [topic]}
+      results: []
+  models:
+    answer:
+      agent:
+      - request:
+          messages:
+            - format: yian.message.v1
+              role: system
+              parts:
+                - type: text
+                  text: Help.
+            - format: yian.message.v1
+              role: user
+              parts:
+                - type: text
+                  text: Go.
+          tools:
+            - name: lookup
+              description: Look up a topic.
+              parameters:
+                type: object
+                properties:
+                  topic:
+                    type: string
+                required:
+                  - topic
+            - name: lessons_list
+              description: List the memory's files, each with its hash and its size in characters. Pass dir to list one folder.
+              parameters:
+                additionalProperties: false
+                properties:
+                  dir:
+                    description: A folder of the memory to list; the whole memory when omitted.
+                    type: string
+                required: []
+                type: object
+            - name: lessons_read
+              description: "Read a file of the memory: its text, from line offset for limit lines, and the file's hash, which delete and rewrite take as if_hash."
+              parameters:
+                additionalProperties: false
+                properties:
+                  limit:
+                    description: The most lines to read; the rest of the file when omitted.
+                    minimum: 1.0
+                    type: integer
+                  offset:
+                    description: The first line to read, counting from one; one when omitted.
+                    minimum: 1.0
+                    type: integer
+                  path:
+                    description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                    type: string
+                required:
+                  - path
+                type: object
+            - name: lessons_search
+              description: Find the lines that hold query, ignoring case, in every file of the memory. Each match gives its path, line number and text, and the file's hash.
+              parameters:
+                additionalProperties: false
+                properties:
+                  query:
+                    description: The text to find.
+                    type: string
+                required:
+                  - query
+                type: object
+            - name: lessons_append
+              description: Add text to the end of a file, on a new line. Creates the file and its folders when missing, and never conflicts.
+              parameters:
+                additionalProperties: false
+                properties:
+                  path:
+                    description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                    type: string
+                  text:
+                    description: The text to add.
+                    type: string
+                required:
+                  - path
+                  - text
+                type: object
+            - name: lessons_create
+              description: Create a file holding text, and its folders when missing. Conflicts when the file exists.
+              parameters:
+                additionalProperties: false
+                properties:
+                  path:
+                    description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                    type: string
+                  text:
+                    description: The file's whole text.
+                    type: string
+                required:
+                  - path
+                  - text
+                type: object
+            - name: lessons_edit
+              description: Replace the text old with new in a file. Conflicts unless old appears in the file exactly once; read the file first.
+              parameters:
+                additionalProperties: false
+                properties:
+                  new:
+                    description: The text to put in its place.
+                    type: string
+                  old:
+                    description: The exact text to replace, as the file holds it.
+                    type: string
+                  path:
+                    description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                    type: string
+                required:
+                  - path
+                  - old
+                  - new
+                type: object
+            - name: lessons_delete
+              description: Delete a file. Conflicts unless the file's hash is if_hash, as read gives it.
+              parameters:
+                additionalProperties: false
+                properties:
+                  if_hash:
+                    description: The file's hash, as read gave it.
+                    type: string
+                  path:
+                    description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                    type: string
+                required:
+                  - path
+                  - if_hash
+                type: object
+            - name: lessons_rewrite
+              description: Replace the whole text of a file. Conflicts unless the file's hash is if_hash, as read gives it.
+              parameters:
+                additionalProperties: false
+                properties:
+                  if_hash:
+                    description: The file's hash, as read gave it.
+                    type: string
+                  path:
+                    description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                    type: string
+                  text:
+                    description: The file's whole new text.
+                    type: string
+                required:
+                  - path
+                  - text
+                  - if_hash
+                type: object
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}
+  memory:
+    lessons: {}

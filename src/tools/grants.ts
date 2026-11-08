@@ -17,6 +17,12 @@ export type ToolGrant =
   | { readonly kind: "name"; readonly name: string }
   | { readonly kind: "group"; readonly group: string; readonly tools: readonly string[] };
 
+/**
+ * A grant of a memory's tools, by the memory input of the node's own flow: `lessons` grants all
+ * its tools (`tools: null`), `{lessons: [read]}` some of them.
+ */
+export type MemoryGrant = { readonly input: string; readonly tools: readonly string[] | null };
+
 /** A grant that can't be parsed or resolved; its message names the fix. */
 export class GrantError extends RangeError {
   /** The index of the `tools:` entry at fault, or `null` when no one entry is. */
@@ -132,6 +138,23 @@ export interface GrantScope {
   identity(group: string | null, tool: string): string;
   /** Whether a bare name may reach a group's tool here (never for memory scopes). */
   readonly bareMembers: boolean;
+}
+
+/**
+ * Return a scope of groups local to one node, such as its memories: each group's tool names, in
+ * order. Only a grant naming a group reaches one; a bare name never does. A tool's identity is its
+ * group and name, so two groups' tools that would show one name stay two tools.
+ */
+export function localGroupScope(label: string, groups: ReadonlyMap<string, readonly string[]>): GrantScope {
+  return {
+    label,
+    bareMembers: false,
+    group: (name) => groups.get(name) ?? null,
+    hasTool: () => false,
+    groupsHolding: () => [],
+    groupNames: () => [...groups.keys()],
+    identity: (group, tool) => JSON.stringify([group, tool]),
+  };
 }
 
 /** One granted tool: the name the model sees, the tool it names, and that tool's identity. */

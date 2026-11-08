@@ -1,0 +1,35 @@
+# One instance bound to `lessons` and `notes` is one memory with one session: a write through
+# either input lands in its one folder, the second after the first.
+kind: run
+flow: |
+  id: shared
+  name: shared
+  input:
+    lessons: !FileMemory
+    notes: !FileMemory
+  nodes:
+    first:
+      kind: tool
+      tool_id: {lessons: append}
+      input:
+        path: log.md
+        text: first
+    second:
+      kind: tool
+      tool_id: {notes: append}
+      input:
+        path: log.md
+        text: ${"second after " + first.output.path}
+  output: ${second.output.path}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons}
+    notes: {same_as: lessons}
+expect:
+  output: {status: succeeded, output: log.md}
+  memory:
+    lessons:
+      log.md: |-
+        first
+        second after log.md

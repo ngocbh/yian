@@ -30,6 +30,7 @@ import { type FailureCode, type OriginRef, reprText } from "../../diagnostics.ts
 import { evaluateWhenRecord, localDeclared } from "../../expr/expressions.ts";
 import {
   isInboxType,
+  isMemoryType,
   normalizeFiles,
   setField,
   type Type,
@@ -361,7 +362,8 @@ export class LoopNode extends Node {
    *   while: stop when the predicate is false on the carried record.
    *   until: do-while; stop when `k >= 1` and the predicate is true (`k` 0 always continues).
    *   times: stop when `k >= this.maxIters` (`times N` is baked as `maxIters`).
-   * On stop: `Output(carried, commitAs = origin)`, without the fields the body takes as inboxes.
+   * On stop: `Output(carried, commitAs = origin)`, without the fields the body takes as inboxes or
+   * memories.
    * On continue: the runaway guard, only when `max:` is set, then `Grow([carried, k], prune)`,
    * pruning body_{k-1} and this driver unless it is the origin. The reducer retires each
    * body_{k-1} node with its whole grown subtree once every node in it is settled.
@@ -375,7 +377,7 @@ export class LoopNode extends Node {
     const origin = this.originId ?? this.id;
     const carried = this.readCarried({ ...inputs } as ValueRecord);
     const k = this.iteration;
-    if (this.shouldStopNow(carried, k)) return new Output(this.withoutInboxes(carried), { commitAs: origin });
+    if (this.shouldStopNow(carried, k)) return new Output(this.withoutCarriedOnly(carried), { commitAs: origin });
     // Guard on `shouldStop(k)`, not `k + 1`: driver@k grows body_k, the (k+1)-th body, which is
     // within budget while `k < maxIters`, so `max: M` permits exactly M body runs. A `times` loop
     // stops above instead.
@@ -431,17 +433,22 @@ export class LoopNode extends Node {
     return types;
   }
 
-  /** The names of the fields the body takes as inboxes. */
-  private inboxNames(): string[] {
-    return this.childInputs.filter((param) => isInboxType(param.contract?.type)).map((param) => param.name);
+  /** The names of the fields the body takes as inboxes or memories. */
+  private carriedOnlyNames(): string[] {
+    return this.childInputs
+      .filter((param) => isInboxType(param.contract?.type) || isMemoryType(param.contract?.type))
+      .map((param) => param.name);
   }
 
-  /** Return `carried` without the fields the body takes as inboxes: a loop carries them, never returns them. */
-  private withoutInboxes(carried: ValueRecord): ValueRecord {
-    const inboxes = this.inboxNames();
-    if (inboxes.length === 0) return carried;
+  /**
+   * Return `carried` without the fields the body takes as inboxes or memories: a loop carries
+   * them, never returns them.
+   */
+  private withoutCarriedOnly(carried: ValueRecord): ValueRecord {
+    const dropped = this.carriedOnlyNames();
+    if (dropped.length === 0) return carried;
     const kept: ValueRecord = {};
-    for (const [name, value] of Object.entries(carried)) if (!inboxes.includes(name)) setField(kept, name, value);
+    for (const [name, value] of Object.entries(carried)) if (!dropped.includes(name)) setField(kept, name, value);
     return kept;
   }
 

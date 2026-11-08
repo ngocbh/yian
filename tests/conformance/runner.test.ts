@@ -248,6 +248,37 @@ describe("checkCase", () => {
       `${RUN}host: {crash_after_record: 1}`,
       "`host.crash_after_record` is not a key of a `run` case",
     ],
+    [`${RUN}host: {memory: {m: {id: a}}}`, "`host.memory.m.type` is required"],
+    [`${RUN}host: {memory: {m: {type: VectorDBMemory}}}`, "`host.memory.m.type` must be FileMemory"],
+    [`${RUN}host: {memory: {m: {type: FileMemory, id: 1}}}`, "`host.memory.m.id` must be text"],
+    [`${RUN}host: {memory: {m: {type: FileMemory, files: {a: 1}}}}`, "`host.memory.m.files` values must be text"],
+    [
+      `${RUN}host: {memory: {m: {type: FileMemory, files: {a/../b: x}}}}`,
+      "`host.memory.m.files`: `a/../b` must be a relative path without `..`",
+    ],
+    [
+      `${RUN}host: {memory: {m: {type: FileMemory, held: {model_call: 1}}}}`,
+      "`host.memory.m.held.node` must be a node id",
+    ],
+    [
+      `${RUN}host: {memory: {m: {same_as: n}, n: {same_as: m}}}`,
+      "`host.memory.m.same_as` must name another `host.memory` entry that isn't a `same_as`",
+    ],
+    [`${RUN}inputs: {m: x}\nhost: {memory: {m: {type: FileMemory}}}`, "`inputs.m`: `host.memory` binds it"],
+    [
+      "kind: run\nflow: x\nexpect: {output: 1, memory: {m: {}}}\n",
+      "`expect.memory.m` names no `host.memory` input",
+    ],
+    [
+      "kind: run\nflow: x\nhost: {memory: {m: {type: FileMemory}}}\nexpect: {output: 1, memory: {m: {a: 1}}}\n",
+      "`expect.memory.m` must be null or a mapping of paths to text",
+    ],
+    [
+      "kind: run\nflow: x\nexpect: {output: 1, memory_drift: []}\n",
+      "`expect.memory_drift` is not a key of a `run` case",
+    ],
+    [`${RESUME}resume: {memory: {m: 1}}`, "`resume.memory.m` must be null or `{id}`"],
+    [`${RESUME}resume: {memory: {m: {id: 1}}}`, "`resume.memory.m` must be null or `{id}`"],
     [`${RUN}host: {tools: 1}`, "`host.tools` must be a mapping"],
     [`${RUN}host: {tools: {t: 1}}`, "`host.tools.t` must be a mapping"],
     [TOOLS("{docs: {group: 1}}"), "`host.tools.docs.group` must be a mapping of stub tools"],
@@ -353,7 +384,6 @@ describe("checkCase", () => {
       `${RUN}host: {models: {n: {"memory:a": []}}}`,
       `\`host.models.n.memory:a\`: the consumer must be one of ${CONSUMER_LIST}`,
     ],
-    [`${RUN}host: {memory: {}}`, "unknown key `host.memory`"],
     [`${RUN}host: {models: {n: {agent: {}}}}`, "`host.models.n.agent` must be a list"],
     [MODEL("1"), `\`${AT}\` must be a mapping`],
     [MODEL("{}"), `\`${AT}\` takes \`reply\` or \`chunks\``],
@@ -561,6 +591,16 @@ describe("checkCase", () => {
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: end}`,
     `${BARE_RESUME}run: {num_workers: 0}\nhost: {stop: {a: {after: {model_call: 1, chunk: 2}}}}`,
     `${RUN}host: {stop: {a: {after: {tool_call: 1}}}}`,
+    [
+      "kind: run",
+      "flow: x",
+      'host: {memory: {lessons: {type: FileMemory, id: t/lessons, files: {"MEMORY.md": x}},',
+      "  notes: {same_as: lessons}, other: {type: FileMemory, held: {node: a, model_call: 1}}}}",
+      'expect: {output: 1, memory: {lessons: {"MEMORY.md": "x\\ny"}, other: null}}',
+    ].join("\n"),
+    `${BARE_RESUME}run: {num_workers: 0}\nhost: {crash_after_record: 1, memory: {m: {type: FileMemory}}}\n` +
+      "resume: {memory: {m: null, n: {id: t/n}}}",
+    `kind: resume\nflow: x\nrun: {num_workers: 0}\nhost: {crash_after_record: 1}\nexpect: {output: 1, memory_drift: [m]}`,
     `${EXPR}expr: a\nitem: 1`,
     `${EXPR}expr: a\nmode: condition`,
     `${EXPR}expr: a\nitem: 1\ntypedefs: {}\nmode: strict`,
@@ -1109,6 +1149,58 @@ describe("run", () => {
     const unreached = runCase(text);
     await expect(unreached).rejects.toBeInstanceOf(CaseFailure);
     await expect(unreached).rejects.toThrow("`host.sends[0]` was never reached");
+  });
+
+  /**
+   * A `run` case whose TOOL node `add` appends `x` to `notes.md` of memory `lessons`, which holds
+   * `MEMORY.md`; the case adds `expect.memory`.
+   */
+  const MEMORY_CASE =
+    "kind: run\nflow: |\n  id: f\n  name: f\n  input:\n    lessons: !FileMemory\n  nodes:\n    add:\n" +
+    "      kind: tool\n      tool_id: {lessons: append}\n      input: {path: notes.md, text: x}\n" +
+    "  output: ${add.output.path}\n" +
+    'run: {run_id: r1, num_workers: 0}\nhost: {memory: {lessons: {type: FileMemory, id: t/lessons, files: {"MEMORY.md": m}}}}\n' +
+    "expect:\n  output: {status: succeeded, output: notes.md}\n";
+
+  test("`host.memory` binds a FileMemory on a folder holding its files; `expect.memory` reads it after the run", async () => {
+    await runCase(`${MEMORY_CASE}  memory: {lessons: {"MEMORY.md": m, notes.md: x}}\n`);
+    await expect(runCase(`${MEMORY_CASE}  memory: {lessons: {"MEMORY.md": m}}\n`)).rejects.toThrow(
+      "memory differs\n--- actual\nlessons:\n  MEMORY.md: m\n  notes.md: x\n",
+    );
+  });
+
+  test("a resume binds a new instance on the same folder; `resume.memory` binds none or another memory", async () => {
+    // Cut after `add`'s node_started (record 8): its append lands and its commit is refused. The
+    // resume runs it again with the same change id, which lands once, and reports the moved folder.
+    const resume = (memory: string, expected: string) =>
+      MEMORY_CASE.replace("kind: run", "kind: resume")
+        .replace("}}}}\n", "}}}, crash_after_record: 8}\n")
+        .replace("expect:\n", `${memory}expect:\n`)
+        .replace("  output: {status: succeeded, output: notes.md}\n", expected);
+    const text = (memory: string, expected: string) => {
+      const case_ = prepare(checkCase(readCase(resume(memory, expected))));
+      const ctx = setUp(case_, join(tmpdir(), "none"));
+      made.push(ctx.dir);
+      return RUNNERS.resume!(case_, ctx);
+    };
+    await text("", '  output: {status: succeeded, output: notes.md}\n  memory: {lessons: {"MEMORY.md": m, notes.md: x}}\n  memory_drift: [lessons]\n');
+    const missing = "memory `lessons` (`t/lessons`) isn't at its location; bind it with --memory";
+    await text("resume: {memory: {lessons: null}}\n", `  raises: {class: RangeError, message: "${missing}"}\n`);
+    const other = "resume refused: memory lessons is `t/other`, not the recorded `t/lessons`";
+    await text("resume: {memory: {lessons: {id: t/other}}}\n", `  raises: {class: RangeError, message: "${other}"}\n`);
+  });
+
+  test("a run log holding a memory's folder fails the case", async () => {
+    // The CODE node's output is the folder's path, which the log then holds.
+    const leak =
+      "import { dirname, join } from 'node:path';\nimport { fileURLToPath } from 'node:url';\n" +
+      "export function leak(): string {\n  return join(dirname(fileURLToPath(import.meta.url)), 'memory', 'lessons');\n}\n";
+    const text = MEMORY_CASE.replace(
+      "  output: ${add.output.path}\n",
+      "    where:\n      kind: code\n      code: ./leak.ts:leak\n      output: str\n" +
+        "  output: ${add.output.path + where.output}\n",
+    ).replace("run: {", `files: {leak.ts: ${JSON.stringify(leak)}}\nrun: {`);
+    await expect(runCase(text)).rejects.toThrow("memory `lessons`'s folder appears in the run log");
   });
 
   test("a `host.sends` item with `after` is sent live when the run reaches it", async () => {
@@ -2004,6 +2096,34 @@ expect:
     const failure = crashSweep(case_, ctx, { beforeResume: rewrite });
     await expect(failure).rejects.toBeInstanceOf(CaseFailure);
     await expect(failure).rejects.toThrow("output (crash sweep, cut after record 10) differs");
+  }, SWEEP);
+
+  /** Return the committed case `id`, prepared, and its set-up directory. */
+  function committed(id: string): [Case, CaseContext] {
+    return sweepCase(readFileSync(join(CASES, `${id}.yaml`), "utf8"));
+  }
+
+  test("a serial run case with `host.memory` expecting output is swept, unless a memory is `held`", () => {
+    const [case_] = committed("run-memory/file_memory__an_agent_appends_and_the_tool_result_holds_the_version");
+    expect(sweepable(case_)).toBe(true);
+    const [held] = committed("run-memory/file_memory__a_busy_memory_reaches_the_model");
+    expect(sweepable(held)).toBe(false);
+  });
+
+  test("a memory case's sweep resumes every cut on its own folders, each write landing once", async () => {
+    const [case_, ctx] = committed("run-memory/file_memory__an_agent_appends_and_the_tool_result_holds_the_version");
+    const folders = new Set<string>();
+    await crashSweep(case_, ctx, { beforeResume: (_log, memory) => folders.add(memory.get("lessons")!) });
+    // One folder per resumed cut: no cut writes where another did.
+    expect(folders.size).toBeGreaterThan(1);
+  }, SWEEP);
+
+  test("fails a memory case's sweep whose folder changes before the resume, by the expect.memory difference", async () => {
+    // The TOOL node's line is gone, or lands alone, so the folder isn't what the case expects.
+    const [case_, ctx] = committed("run-memory/file_memory__a_tool_node_appends_once");
+    const failure = crashSweep(case_, ctx, { beforeResume: (_log, memory) => rmSync(join(memory.get("lessons")!, "notes.md")) });
+    await expect(failure).rejects.toBeInstanceOf(CaseFailure);
+    await expect(failure).rejects.toThrow("memory (crash sweep, cut after record 4) differs");
   }, SWEEP);
 
   test("a sweep still going refuses no other run's appends", async () => {

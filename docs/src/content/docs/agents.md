@@ -44,7 +44,7 @@ again until it gives a final answer.
 | `output` | The reply's type (default `str`) |
 | `retries` | Extra attempts to correct a reply that doesn't fit `output:` (default 2) |
 | `asserts` | Checks on the result (see [Expressions](/expressions/)) |
-| `tools` | The tools the model may call: tools and tool groups by name, or `{group: [tool, ...]}` |
+| `tools` | The tools the model may call: tools, tool groups and [memory](/memory/) inputs by name, or `{group: [tool, ...]}` |
 | `skills` | Skill names, or `all` |
 | `steer_inbox` | An `Inbox` input whose messages steer the agent while it runs |
 | `llm_config` | Provider, model and request settings (see [Models and providers](/models/)) |
@@ -78,7 +78,8 @@ output: ${writer.output}
 - `system_prompt:` replaces yian's default instruction; it doesn't add to it. Every model call
   of the node starts with it.
 - Each `variables:` entry is a type tag and a value, checked at load. Variables can't share a
-  name with an input, and can't be named `__llm_config` or `__steer_inbox`.
+  name with an input, and can't be named `__llm_config` or `__steer_inbox`, or start with
+  `__memory_`.
 
 ### A list prompt
 
@@ -352,5 +353,6 @@ and [Embedding yian](/embedding/).
 
 ## Memory
 
-`long_term_memory:` was removed and is now a load error. Declare a memory as a flow input
-(`lessons: !FileMemory`) and render it in a prompt (`${lessons}`).
+An agent keeps notes across runs in a memory, a flow input such as `lessons: !FileMemory`.
+`${lessons}` in a prompt renders its recall, and `tools: [{lessons: [read, append]}]` grants its
+tools, which the model sees as `lessons_read` and `lessons_append`. See [Memory](/memory/).

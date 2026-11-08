@@ -1,0 +1,48 @@
+# A map passes the memory whole to each item's child, and the items run in parallel on the run's
+# one session: each item's write takes the memory's lock in turn, and every one lands. (Parallel,
+# so the crash sweep doesn't cut it.)
+kind: run
+flow: |
+  id: fan
+  name: fan
+  input:
+    lessons: !FileMemory
+  defs:
+    note:
+      input:
+        notes: !FileMemory
+        topic: !str
+      nodes:
+        write:
+          kind: tool
+          tool_id: {notes: append}
+          input:
+            path: ${input.topic + ".md"}
+            text: ${"about " + input.topic}
+      output: ${write.output.path}
+  nodes:
+    m:
+      kind: map
+      call: note
+      over: [sums, carries, signs]
+      input:
+        notes: ${input.lessons}
+        topic: ${item}
+  output: ${m.output}
+run: {run_id: r1, num_workers: 4}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files:
+        sums.md: Check sums twice.
+expect:
+  output: {status: succeeded, output: [sums.md, carries.md, signs.md]}
+  memory:
+    lessons:
+      sums.md: |-
+        Check sums twice.
+        about sums
+      carries.md: about carries
+      signs.md: about signs

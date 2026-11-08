@@ -21,6 +21,8 @@ import { types } from "node:util";
 
 import { current } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import { freezeParsed, type JsonObject, logJson, parseJson } from "./json.ts";
+import type { Recall, RecordedMemoryTool } from "./memory.ts";
 import { parseDate, parseDatetime } from "./temporal.ts";
 
 /**
@@ -124,10 +126,10 @@ export function shownNames(names: readonly string[]): string {
  *
  * The text form is compact JSON with JS number spelling: `true`, `null`, `2.5`, `2` for the
  * float 2, `Infinity`, an int's digits, text JSON-quoted, a `FileRef` as its mapping
- * `{"uri":…,"mime":…,"name":…}`, an `InboxRef` as `{"inbox":…}`, records in JS property
- * order. A part that isn't a yian value (a `Date`, a `Map`, a class instance, a symbol, a
- * function, `undefined`) shows as `<Name object>`, and an int the runtime can't stringify as
- * `<int too large to display>`.
+ * `{"uri":…,"mime":…,"name":…}`, an `InboxRef` as `{"inbox":…}`, a `MemoryRef` as
+ * `<memory identity>`, records in JS property order. A part that isn't a yian value (a `Date`, a
+ * `Map`, a class instance, a symbol, a function, `undefined`) shows as `<Name object>`, and an int
+ * the runtime can't stringify as `<int too large to display>`.
  * The value never makes it throw: when a getter or proxy trap throws, the whole value shows as
  * `<Name object>`. The writer stops once it has more than the cap can show, so a long list,
  * a deep value or a cyclic one costs time bounded by the cap.
@@ -213,6 +215,8 @@ function textForm(root: unknown, budget: number, spellFloat: (x: number) => stri
       out += bigintText(value);
     } else if (typeof value === "string") {
       out += quoteHead(value, budget);
+    } else if (MemoryRef.isMemoryRef(value)) {
+      out += `<memory ${quoteHead(value.identity, budget).slice(1, -1)}>`;
     } else if (FileRef.isFileRef(value) || InboxRef.isInboxRef(value)) {
       out += "{";
       const keys = FileRef.isFileRef(value) ? FILE_FIELDS : INBOX_FIELDS;
@@ -284,8 +288,9 @@ export function writeAsText(value: Value): string {
  * more, each item sits on its own line indented by `indent` spaces per level, items end with
  * `,`, and a key is followed by `": "`; an empty list or record is `[]` or `{}`. Text is
  * JSON-quoted with non-ASCII kept, an int is its digits, a float its JS spelling (`1` for the
- * float 1, bare `Infinity`), a `FileRef` its mapping `{"uri", "mime", "name"}`, and an
- * `InboxRef` its mapping `{"inbox"}`; records keep JS property order.
+ * float 1, bare `Infinity`), a `FileRef` its mapping `{"uri", "mime", "name"}`, an
+ * `InboxRef` its mapping `{"inbox"}`, and a `MemoryRef` its mapping `{"memory"}`; records keep JS
+ * property order.
  *
  * @throws TypeError `integer is too large for this runtime` when the runtime can't stringify an
  *   int, or `text is too long for this runtime` when the text passes the engine's string limit.
@@ -313,6 +318,7 @@ function jsonText(value: Value, indent: number | null, level: number): string {
     }
   }
   if (typeof value === "string") return JSON.stringify(value);
+  if (MemoryRef.isMemoryRef(value)) return jsonText(memoryForm(value), indent, level);
   const [open, close] = Array.isArray(value) ? (["[", "]"] as const) : (["{", "}"] as const);
   let items: string[];
   if (Array.isArray(value)) {
@@ -548,8 +554,8 @@ interface HostFrame {
 /**
  * Return a host value (a tool's result, a CODE body's return value) as a fresh yian value.
  *
- * `null`, a boolean, well-formed text, a `bigint`, a `FileRef` and an `InboxRef` are taken as
- * they are. A
+ * `null`, a boolean, well-formed text, a `bigint`, a `FileRef`, an `InboxRef` and a `MemoryRef`
+ * are taken as they are. A
  * `number` that is an integer within ±(2^53−1) becomes an int (`-0` becomes `0n`); any other
  * number but NaN (`±Infinity`, `1e20`, `2.5`, `9007199254740992`) is a float. A plain array
  * (prototype `Array.prototype`) and a plain record (prototype `Object.prototype` or `null`)
@@ -609,7 +615,9 @@ export function fromHost(value: unknown, where: string): Value {
     // Checked first: every later check (FileRef.isFileRef, isList, isRecord, jsTypeName) could
     // run a trap.
     if (types.isProxy(item)) fail("Proxy is not a yian value", ...at);
-    if (item === null || FileRef.isFileRef(item) || InboxRef.isInboxRef(item)) return item;
+    if (item === null || FileRef.isFileRef(item) || InboxRef.isInboxRef(item) || MemoryRef.isMemoryRef(item)) {
+      return item;
+    }
     const list = isList(item);
     if (list || isRecord(item)) {
       if (active.has(item)) fail("value contains itself", ...at);
@@ -662,8 +670,8 @@ interface ToHostFrame {
  * Return a yian value as a fresh host value.
  *
  * An int within ±(2^53−1) becomes a `number`; a bigger one stays a `bigint`. A float
- * (`±Infinity` included), text, a boolean, `null`, a `FileRef` and an `InboxRef` are handed over
- * as they are.
+ * (`±Infinity` included), text, a boolean, `null`, a `FileRef`, an `InboxRef` and a `MemoryRef`
+ * are handed over as they are.
  * Arrays and records become fresh arrays and records, their entries taken the same way; a
  * record key is set as an own data property, so a `__proto__` key stays data. A value shared
  * by two parents is copied once, and the walk uses an explicit stack, so any depth works.
@@ -680,7 +688,13 @@ export function toHost(value: Value): unknown {
       const n = Number(item);
       return Number.isSafeInteger(n) ? n : item;
     }
-    if (item === null || typeof item !== "object" || FileRef.isFileRef(item) || InboxRef.isInboxRef(item)) {
+    if (
+      item === null ||
+      typeof item !== "object" ||
+      FileRef.isFileRef(item) ||
+      InboxRef.isInboxRef(item) ||
+      MemoryRef.isMemoryRef(item)
+    ) {
       return item;
     }
     const shared = copies.get(item);
@@ -726,7 +740,7 @@ export function toHost(value: Value): unknown {
  * carrier stores it, and an `Any` value persists under its natural kind (`str`,
  * `object`, `list[Any]`, ...). `date` and `datetime` are stored as strings and never
  * inferred. `file` holds a `FileRef`. `inbox` is a handle on a top-level inbox, an `Inbox(T)`
- * input's value; never inferred from a record.
+ * input's value; never inferred from a record. `memory` is a memory input's value.
  */
 export const ValueKind = {
   NONE: "None",
@@ -739,6 +753,7 @@ export const ValueKind = {
   OBJECT: "object",
   FILE: "file",
   INBOX: "inbox",
+  MEMORY: "memory",
   ANY: "Any",
   LIST_ANY: "list[Any]",
   LIST_STRING: "list[str]",
@@ -761,10 +776,20 @@ const STORAGE_KINDS: ReadonlySet<string> = new Set(
 
 /**
  * A yian value as JS holds it: `null`, a `boolean`, an int as a `bigint`, a float as a
- * `number` (never NaN), a `string` (well-formed), a `FileRef`, an `InboxRef`, an array or a
- * `ValueRecord`.
+ * `number` (never NaN), a `string` (well-formed), a `FileRef`, an `InboxRef`, a `MemoryRef`, an
+ * array or a `ValueRecord`.
  */
-export type Value = null | boolean | bigint | number | string | FileRef | InboxRef | Value[] | ValueRecord;
+export type Value =
+  | null
+  | boolean
+  | bigint
+  | number
+  | string
+  | FileRef
+  | InboxRef
+  | MemoryRef
+  | Value[]
+  | ValueRecord;
 
 /**
  * A record: a plain object (prototype `Object.prototype` or `null`) whose own enumerable
@@ -894,6 +919,159 @@ export function inboxName(value: unknown): string | null {
   return isInboxForm(value) ? value.inbox : null;
 }
 
+/** The fields a `MemoryRef` is built from. */
+export interface MemoryRefInit {
+  readonly identity: string;
+  readonly type: string;
+  readonly settings: JsonObject;
+  readonly version: string;
+  readonly recall: Recall;
+  readonly tools: readonly RecordedMemoryTool[];
+}
+
+/** A memory value's fields: the keys under its JSON form's `memory`. */
+const MEMORY_FIELDS: readonly (keyof MemoryRefInit)[] = ["identity", "type", "settings", "version", "recall", "tools"];
+const RECALL_FIELDS: readonly string[] = ["text", "cut", "hint"];
+const HINT_FIELDS: readonly string[] = ["tool", "text"];
+const TOOL_FIELDS: readonly string[] = ["name", "write", "description", "parameters"];
+
+/**
+ * A memory input's value: what a run records, when it starts, of the memory bound to the input.
+ *
+ * It holds the memory's identity, contract type and settings (never a location or a credential),
+ * the version and recall read at the run's start, and its tools' specs in the type's spec order.
+ * Its JSON form is the mapping `{"memory": {identity, type, settings, version, recall, tools}}`,
+ * which is read back as a `MemoryRef` only where yian reads its own JSON at a memory position
+ * (`normalizeFiles`); a memory slot refuses it. It is frozen to the leaves, and its `settings`
+ * and tool `parameters` are copies in the form the run log reads back.
+ */
+export class MemoryRef {
+  readonly identity: string;
+  readonly type: string;
+  readonly settings: JsonObject;
+  readonly version: string;
+  readonly recall: Recall;
+  readonly tools: readonly RecordedMemoryTool[];
+  // Set only by the constructor, so an object merely given this prototype isn't a MemoryRef.
+  readonly #built = true;
+
+  /** Whether `value` is a `MemoryRef` its constructor built. */
+  static isMemoryRef(value: unknown): value is MemoryRef {
+    return typeof value === "object" && value !== null && #built in value;
+  }
+
+  /**
+   * Build a memory value from its fields.
+   *
+   * @throws RangeError when a field is missing or malformed: `identity`, `type` and a tool's or
+   *   hint's `tool` name must be non-empty text, `version`, the recall's `text` and a tool's
+   *   `description` text, the recall's `cut` text or null and its `hint` null or exactly
+   *   `{tool, text}`, each tool exactly `{name, write, description, parameters}` with a boolean
+   *   `write`, no name listed twice, and `settings` and `parameters` JSON records. Text must not
+   *   hold a lone surrogate.
+   */
+  constructor(init: MemoryRefInit) {
+    this.identity = memoryText("identity", init.identity, true);
+    this.type = memoryText("type", init.type, true);
+    this.settings = memoryJson("settings", init.settings);
+    this.version = memoryText("version", init.version, false);
+    this.recall = memoryRecall(init.recall);
+    this.tools = memoryTools(init.tools);
+    Object.freeze(this);
+  }
+}
+
+/** Return `value`, a memory field `field` that must be text (non-empty when `nonEmpty`). */
+function memoryText(field: string, value: unknown, nonEmpty: boolean): string {
+  if (typeof value !== "string" || (nonEmpty && value === "")) {
+    const expected = nonEmpty ? "non-empty text" : "text";
+    throw new RangeError(`memory ${field} must be ${expected}, got ${valueRepr(value)}`);
+  }
+  if (!value.isWellFormed()) throw new RangeError(`memory ${field} holds a lone surrogate`);
+  return value;
+}
+
+/** Return a frozen copy of the JSON record `value`, memory field `field`, as the run log reads it back. */
+function memoryJson(field: string, value: unknown): JsonObject {
+  if (!isRecord(value)) throw new RangeError(`memory ${field} must be a JSON object, got ${valueRepr(value)}`);
+  let text: string;
+  try {
+    text = logJson(jsonPart(value, [], "refuse"));
+  } catch (error) {
+    if (!(error instanceof RangeError || error instanceof TypeError)) throw error;
+    throw new RangeError(`memory ${field} must be JSON: ${error.message}`, { cause: error });
+  }
+  return freezeParsed(parseJson(text, "codec") as JsonObject);
+}
+
+/** Return a frozen copy of the recall `value`. */
+function memoryRecall(value: unknown): Recall {
+  if (!isRecord(value)) throw new RangeError(`memory recall must be a JSON object, got ${valueRepr(value)}`);
+  requireFields(value, RECALL_FIELDS, "memory recall");
+  const cut = value["cut"] === null ? null : memoryText("recall cut", value["cut"], false);
+  const hint = value["hint"];
+  let copy: Recall["hint"] = null;
+  if (hint !== null) {
+    if (!isRecord(hint)) {
+      throw new RangeError(`memory recall hint must be a JSON object or null, got ${valueRepr(hint)}`);
+    }
+    requireFields(hint, HINT_FIELDS, "memory recall hint");
+    const tool = memoryText("hint tool", hint["tool"], true);
+    copy = Object.freeze({ tool, text: memoryText("hint text", hint["text"], false) });
+  }
+  return Object.freeze({ text: memoryText("recall text", value["text"], false), cut, hint: copy });
+}
+
+/** Return a frozen copy of the tool specs `value`, in their order. */
+function memoryTools(value: unknown): readonly RecordedMemoryTool[] {
+  if (!isList(value)) throw new RangeError(`memory tools must be a list, got ${valueRepr(value)}`);
+  const names = new Set<string>();
+  const tools = value.map((tool): RecordedMemoryTool => {
+    if (!isRecord(tool)) throw new RangeError(`memory tool must be a JSON object, got ${valueRepr(tool)}`);
+    requireFields(tool, TOOL_FIELDS, "memory tool");
+    const name = memoryText("tool name", tool["name"], true);
+    if (names.has(name)) throw new RangeError(`memory tool ${reprText(name)} is listed twice`);
+    names.add(name);
+    if (typeof tool["write"] !== "boolean") {
+      throw new RangeError(`memory tool ${reprText(name)} write must be a bool, got ${valueRepr(tool["write"])}`);
+    }
+    return Object.freeze({
+      name,
+      write: tool["write"],
+      description: memoryText("tool description", tool["description"], false),
+      parameters: memoryJson("tool parameters", tool["parameters"]),
+    });
+  });
+  return Object.freeze(tools);
+}
+
+/** Return a memory value's JSON form, `{"memory": {...}}`. */
+function memoryForm(memory: MemoryRef): ValueRecord {
+  const fields: ValueRecord = {};
+  for (const field of MEMORY_FIELDS) fields[field] = memory[field] as Value;
+  return { memory: fields };
+}
+
+/**
+ * Return the `MemoryRef` a memory value's JSON form `value` holds: a record with exactly
+ * `memory`, holding exactly a `MemoryRef`'s fields, that build one. Anything else gives `null`.
+ */
+function memoryFromForm(value: unknown): MemoryRef | null {
+  if (!isRecord(value) || Object.keys(value).length !== 1) return null;
+  const fields = value["memory"];
+  if (!isRecord(fields)) return null;
+  const keys = Object.keys(fields);
+  if (keys.length !== MEMORY_FIELDS.length || !MEMORY_FIELDS.every((field) => Object.hasOwn(fields, field))) {
+    return null;
+  }
+  try {
+    return new MemoryRef(fields as unknown as MemoryRefInit);
+  } catch (error) {
+    if (error instanceof RangeError) return null;
+    throw error;
+  }
+}
+
 /**
  * Read field `name` of `value`, as a dotted `${x.name}` read sees it.
  *
@@ -965,6 +1143,7 @@ const KIND_HOLDS: ReadonlyMap<StorageKind, string> = new Map([
   [ValueKind.LIST_BOOLEAN, "an array of booleans or null"],
   [ValueKind.LIST_OBJECT, "an array of plain records or null"],
   [ValueKind.INBOX, "an inbox handle {inbox}"],
+  [ValueKind.MEMORY, "a memory value {memory}"],
 ]);
 
 /**
@@ -1015,9 +1194,9 @@ export class TypedValue {
   }
 
   /**
-   * Return the wire form `{kind, value}`, with every `FileRef` and `InboxRef` in the value (the
-   * root or nested) written as its mapping, as the run log's encoder takes it. The value is
-   * copied only on the paths to its files and handles.
+   * Return the wire form `{kind, value}`, with every `FileRef`, `InboxRef` and `MemoryRef` in the
+   * value (the root or nested) written as its mapping, as the run log's encoder takes it. The
+   * value is copied only on the paths to its files, handles and memories.
    *
    * @throws TypeCheckError when the value isn't a JSON value (see `jsonPart`): a non-JSON part,
    *   NaN, text holding a lone surrogate, or a container inside itself. The unchecked
@@ -1035,8 +1214,9 @@ export class TypedValue {
    * `number` other than NaN (an int is refused: a `float` slot given an int stores kind
    * `int`), `date` and `datetime` text in their grammar, `bool` a boolean, `object` a plain
    * record, `file` a file's mapping with exactly `uri`, `mime` and `name` (read as a
-   * `FileRef`), `inbox` a handle's mapping with exactly `inbox` (read as an `InboxRef`),
-   * `list[Any]` an array, and `list[X]` an array of `X` or null, where a
+   * `FileRef`), `inbox` a handle's mapping with exactly `inbox` (read as an `InboxRef`), `memory`
+   * a memory value's mapping with exactly `memory` (read as a `MemoryRef`), `list[Any]` an array,
+   * and `list[X]` an array of `X` or null, where a
    * `list[float]` item may also be a `bigint` (a `list(float)` slot keeps its int items).
    * Contents aren't walked: the lossless reader made the data.
    *
@@ -1061,6 +1241,13 @@ export class TypedValue {
     if (storage === ValueKind.INBOX && isRecord(value)) {
       requireFields(value, INBOX_FIELDS, "inbox handle");
       return decodedAs("inbox", () => new TypedValue(storage, new InboxRef(value["inbox"] as string)));
+    }
+    if (storage === ValueKind.MEMORY && isRecord(value)) {
+      requireFields(value, ["memory"], "memory value");
+      const fields = value["memory"];
+      if (!isRecord(fields)) throw new RangeError("invalid memory typed value: memory must be a JSON object");
+      requireFields(fields, MEMORY_FIELDS, "memory");
+      return decodedAs("memory", () => new TypedValue(storage, new MemoryRef(fields as unknown as MemoryRefInit)));
     }
     if (storage === ValueKind.DATE || storage === ValueKind.DATETIME) {
       if (typeof value === "string") {
@@ -1174,6 +1361,7 @@ export interface TypeInit {
   readonly nullable?: boolean | undefined;
   readonly bounds?: Bounds | undefined;
   readonly members?: readonly Type[] | undefined;
+  readonly memory?: string | undefined;
 }
 
 /**
@@ -1187,6 +1375,7 @@ export interface TypeInit {
  *   - number:  kind=INTEGER/NUMBER, bounds=[inclusive minimum, maximum]; `null` for an
  *              open end
  *   - union:   kind=OBJECT, members=[record member, ...] (a `Union(...)` of records)
+ *   - memory:  kind=MEMORY, memory=<the memory type's name>, element=<its item record, if any>
  * A refined specialized list uses the element's matching storage tag; `LIST_ANY` is the
  * generic carrier and may refine any element type. A plain scalar or flat list uses only
  * `kind` (see `Type.scalar`). A `LIST_ANY` with no `element` is a list whose items
@@ -1207,6 +1396,7 @@ export class Type {
   readonly nullable: boolean;
   readonly bounds: Bounds | undefined;
   readonly members: readonly Type[] | undefined;
+  readonly memory: string | undefined;
 
   /** Build a type from `init` as given; `validateShape` checks it. */
   constructor(init: TypeInit) {
@@ -1219,6 +1409,7 @@ export class Type {
     this.nullable = init.nullable === undefined ? false : init.nullable;
     this.bounds = init.bounds;
     this.members = init.members;
+    this.memory = init.memory;
   }
 
   /** Build a plain `Type` carrying only a storage tag, without refinements. */
@@ -1255,6 +1446,19 @@ export function inboxType(element: Type): Type {
 /** Whether `typ` is an `Inbox(...)` type, which always has an element type. */
 export function isInboxType(typ: Type | null | undefined): typ is Type & { readonly element: Type } {
   return typ != null && typ.kind === ValueKind.INBOX;
+}
+
+/**
+ * Return the memory type `name` (`FileMemory`, `VectorDBMemory` or a host's own). `item` is the
+ * record type of its items; pass `null` for a memory without typed items.
+ */
+export function memoryType(name: string, item: Type | null): Type {
+  return new Type({ kind: ValueKind.MEMORY, memory: name, element: item ?? undefined });
+}
+
+/** Whether `typ` is a memory type, which always names its memory type. */
+export function isMemoryType(typ: Type | null | undefined): typ is Type & { readonly memory: string } {
+  return typ != null && typ.kind === ValueKind.MEMORY;
 }
 
 /**
@@ -1346,7 +1550,18 @@ function validateTypeShape(typ: unknown, active: Set<Type>, validated: Set<Type>
     }
 
     const element = typ.element;
-    if (typ.kind === ValueKind.INBOX) {
+    if (typ.kind === ValueKind.MEMORY) {
+      if (!isNonEmptyString(typ.memory)) throw new RangeError("a memory type needs its name");
+      validateTypeMetadataString(typ.memory);
+      if (element !== undefined) {
+        validateTypeShape(element, active, validated);
+        if (element.fields === undefined || element.nullable) {
+          throw new RangeError("a memory's item type must be a record");
+        }
+      }
+    } else if (typ.memory !== undefined) {
+      throw new RangeError("only memory types may name a memory type");
+    } else if (typ.kind === ValueKind.INBOX) {
       if (element === undefined) throw new RangeError("an inbox type needs an element type");
       if (typ.nullable) throw new RangeError("an inbox is never optional");
       validateTypeShape(element, active, validated);
@@ -1492,6 +1707,7 @@ export function typeEquals(a: Type, b: Type): boolean {
     optionalEquals(a.required, b.required, setEquals) &&
     optionalEquals(a.tags, b.tags, setEquals) &&
     optionalEquals(a.element, b.element, typeEquals) &&
+    a.memory === b.memory &&
     optionalEquals(
       a.bounds,
       b.bounds,
@@ -1597,6 +1813,12 @@ function canonicalNonnullableLabel(typ: Type): [string, string] {
   if (typ.kind === ValueKind.INBOX) {
     const [label, key] = labels(typ.element!);
     return [`Inbox(${label})`, `Inbox[${key}]`];
+  }
+
+  if (typ.kind === ValueKind.MEMORY) {
+    if (typ.element === undefined) return [typ.memory!, typ.memory!];
+    const [label, key] = labels(typ.element);
+    return [`${typ.memory}(${label})`, `${typ.memory}[${key}]`];
   }
 
   if (isListKind(typ.kind)) {
@@ -1973,20 +2195,21 @@ function admitsNone(typ: Type): boolean {
 }
 
 /**
- * Whether `file` or `Inbox(T)` appears anywhere in `typ`: itself, a field, the element, or a
- * member, so some value of `typ` may hold a file or an inbox handle, a value that isn't plain
- * JSON. A type without either holds only JSON values, so every value of it is an `Any` value.
+ * Whether `file`, `Inbox(T)` or a memory appears anywhere in `typ`: itself, a field, the element,
+ * or a member, so some value of `typ` may hold a file, an inbox handle or a memory value, a value
+ * that isn't plain JSON. A type without any holds only JSON values, so every value of it is an
+ * `Any` value.
  */
 export function hasFile(typ: Type): boolean {
-  if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
+  if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX || typ.kind === ValueKind.MEMORY) return true;
   if (typ.element !== undefined && hasFile(typ.element)) return true;
   if (typ.fields !== undefined && [...typ.fields.values()].some(hasFile)) return true;
   return typ.members !== undefined && typ.members.some(hasFile);
 }
 
 /**
- * Whether every non-null value of `typ` holds a file or an inbox handle, a value that isn't
- * plain JSON, so none is an `Any` value. An `Inbox(T)` always counts.
+ * Whether every non-null value of `typ` holds a file, an inbox handle or a memory value, a value
+ * that isn't plain JSON, so none is an `Any` value. An `Inbox(T)` and a memory always count.
  *
  * A list counts when its element is a non-nullable type that requires a file: the empty list
  * is shared by every list type and is not counted as a shared value. A record counts when a
@@ -1995,7 +2218,7 @@ export function hasFile(typ: Type): boolean {
  * `Any` value) at runtime, where load can't tell.
  */
 export function requiresFile(typ: Type): boolean {
-  if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
+  if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX || typ.kind === ValueKind.MEMORY) return true;
   if (typ.members !== undefined) return typ.members.every(requiresFile);
   if (isListKind(typ.kind)) {
     const element = typ.element;
@@ -2065,8 +2288,9 @@ const FILE_FORM = new Type({
  *
  * The check is conservative: it may say two types overlap when no value satisfies both,
  * but never the reverse. It decides whether an untagged union's members can be told
- * apart from the data alone. `Any` overlaps every type except `None` and `Inbox(T)`, and an
- * inbox overlaps only another inbox. Since a `file` slot reads a file's JSON form
+ * apart from the data alone. `Any` overlaps every type except `None`, `Inbox(T)` and a memory;
+ * an inbox overlaps only another inbox, and a memory only a memory of its type (or null, when
+ * both admit it). Since a `file` slot reads a file's JSON form
  * `{uri, mime, name}`, `file` overlaps plain `object`, `Any`, and every record that admits
  * that mapping.
  *
@@ -2076,6 +2300,7 @@ const FILE_FORM = new Type({
 export function typesOverlap(a: Type, b: Type): boolean {
   if (a.kind === ValueKind.INBOX || b.kind === ValueKind.INBOX) return a.kind === b.kind;
   if (admitsNone(a) && admitsNone(b)) return true;
+  if (a.kind === ValueKind.MEMORY || b.kind === ValueKind.MEMORY) return a.kind === b.kind && a.memory === b.memory;
   if (a.kind === ValueKind.ANY || b.kind === ValueKind.ANY) {
     const other = a.kind === ValueKind.ANY ? b : a;
     return other.kind !== ValueKind.NONE;
@@ -2116,8 +2341,8 @@ export function typesOverlap(a: Type, b: Type): boolean {
 // --------------------------------------------------------------------------------------- //
 
 /**
- * Return the storage kind a scalar, file, inbox handle or record infers as, or `null` for
- * anything else.
+ * Return the storage kind a scalar, file, inbox handle, memory value or record infers as, or
+ * `null` for anything else.
  */
 function inferScalarKind(value: unknown): StorageKind | null {
   if (value === null) return ValueKind.NONE;
@@ -2127,6 +2352,7 @@ function inferScalarKind(value: unknown): StorageKind | null {
   if (typeof value === "string") return ValueKind.STRING;
   if (FileRef.isFileRef(value)) return ValueKind.FILE;
   if (InboxRef.isInboxRef(value)) return ValueKind.INBOX;
+  if (MemoryRef.isMemoryRef(value)) return ValueKind.MEMORY;
   if (isRecord(value)) return ValueKind.OBJECT;
   return null;
 }
@@ -2228,10 +2454,11 @@ function rejectNonValue(value: unknown, path: ValuePath): void {
 }
 
 /**
- * What the JSON walk does with a `FileRef` or an `InboxRef`: keep it, write it as its mapping,
- * or refuse it.
+ * What the JSON walk does with a `FileRef`, an `InboxRef` or a `MemoryRef`: keep it, write it as
+ * its mapping, or refuse it. `object` writes a file or handle as its mapping and refuses a memory,
+ * as an `object` slot stores a value: it reads every field, which a memory's recall must not reach.
  */
-type FileMode = "keep" | "mapping" | "refuse";
+type FileMode = "keep" | "mapping" | "object" | "refuse";
 
 /** An open list or record in the JSON walk. */
 interface JsonFrame {
@@ -2247,10 +2474,11 @@ interface JsonFrame {
 
 /**
  * Return `root` as a JSON value: `null`, a boolean, a `bigint`, a `number`, text, and lists and
- * records of those, with `FileRef`s and `InboxRef`s handled as `files` says.
+ * records of those, with `FileRef`s, `InboxRef`s and `MemoryRef`s handled as `files` says.
  *
  * `-0` becomes `0`, and under `"mapping"` each `FileRef` (the root too) becomes its mapping
- * `{uri, mime, name}` and each `InboxRef` its mapping `{inbox}`. Only the containers on the
+ * `{uri, mime, name}`, each `InboxRef` its mapping `{inbox}` and each `MemoryRef` its mapping
+ * `{memory}`; `"object"` maps files and handles but refuses a `MemoryRef`. Only the containers on the
  * path to a change are copied; `root` itself is returned when nothing changes, and a container
  * shared by two parents is walked once. The walk uses an explicit stack, so any depth works;
  * nesting depth is left to the boundaries.
@@ -2259,7 +2487,8 @@ interface JsonFrame {
  *   holding a lone surrogate (a key: at its record's path) is not a yian value; `undefined` or
  *   a list hole is `undefined is not a JSON value`; a container inside itself is `value
  *   contains itself` at the entry holding it; anything else (a `Date`, a `Map`, a class
- *   instance, a `FileRef` or `InboxRef` under `"refuse"`) is `<valueRepr> is not a JSON value`.
+ *   instance, a `FileRef`, `InboxRef` or `MemoryRef` under `"refuse"`) is `<valueRepr> is not a
+ *   JSON value`.
  */
 export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value {
   const stack: JsonFrame[] = [];
@@ -2285,12 +2514,17 @@ export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value
     if (typeof value === "number") return Object.is(value, -0) ? 0 : value;
     if (FileRef.isFileRef(value)) {
       if (files === "keep") return value;
-      if (files === "mapping") return { uri: value.uri, mime: value.mime, name: value.name };
+      if (files === "mapping" || files === "object") return { uri: value.uri, mime: value.mime, name: value.name };
       return fail(key, `${valueRepr(value)} is not a JSON value`);
     }
     if (InboxRef.isInboxRef(value)) {
       if (files === "keep") return value;
-      if (files === "mapping") return { inbox: value.inbox };
+      if (files === "mapping" || files === "object") return { inbox: value.inbox };
+      return fail(key, `${valueRepr(value)} is not a JSON value`);
+    }
+    if (MemoryRef.isMemoryRef(value)) {
+      if (files === "keep") return value;
+      if (files === "mapping") return memoryForm(value);
       return fail(key, `${valueRepr(value)} is not a JSON value`);
     }
     if (isList(value) || isRecord(value)) {
@@ -2527,6 +2761,8 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
     return new TypedValue(isList(json) ? ValueKind.LIST_ANY : inferScalarKind(json)!, json);
   }
 
+  if (typ.kind === ValueKind.MEMORY) return buildMemory(typ, value, path);
+
   // Named by its label, since the bare kind `inbox` isn't a type an author can write.
   if (typ.kind === ValueKind.INBOX && !scalarMatches(typ.kind, value)) {
     const label = canonicalTypeLabel(typ);
@@ -2536,6 +2772,30 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
   }
 
   return buildScalarOrList(typ.kind, value, path);
+}
+
+/**
+ * Check `value` against the memory type `typ` at `path`: a `MemoryRef` whose contract type is
+ * `typ`'s. Its JSON form is refused: only a read of yian's own JSON turns one back into a memory
+ * (`normalizeFiles` at a memory position), where a run reads its START inputs commit, a loop's
+ * carried record, or a call, map or loop child's seed, so no value a node computes can forge one.
+ *
+ * The message names the types only, never the value, which may hold a memory's recall.
+ *
+ * @throws RangeError when `typ` names no memory type.
+ * @throws TypeCheckError naming the declared type, and the value's own memory type when only that
+ *   differs.
+ */
+function buildMemory(typ: Type, value: unknown, path: ValuePath): TypedValue {
+  typ.validateShape();
+  const declared = `declared type ${canonicalTypeLabel(typ)}`;
+  if (!MemoryRef.isMemoryRef(value)) {
+    throw new TypeCheckError(`a value that isn't a memory does not match ${declared}`, { path });
+  }
+  if (value.type !== typ.memory) {
+    throw new TypeCheckError(`a ${value.type} memory does not match ${declared}`, { path });
+  }
+  return new TypedValue(ValueKind.MEMORY, value);
 }
 
 /**
@@ -2656,7 +2916,7 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
           { path: [...path, index] },
         );
       }
-      if (element === ValueKind.OBJECT) item = jsonPart(item, [...path, index], "mapping");
+      if (element === ValueKind.OBJECT) item = jsonPart(item, [...path, index], "object");
       items.push(item);
     }
     // Converting in a second pass checks every item first.
@@ -2674,15 +2934,16 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
   if (declared === ValueKind.NUMBER && typeof value === "bigint") {
     return new TypedValue(ValueKind.INTEGER, value);
   }
-  const stored = declared === ValueKind.OBJECT ? jsonPart(value, path, "mapping") : value;
+  const stored = declared === ValueKind.OBJECT ? jsonPart(value, path, "object") : value;
   return new TypedValue(declared as StorageKind, coerceScalar(declared, stored, path) as Value);
 }
 
 /**
  * Return `value` with only its file and object representation read as `typ` reads it.
  *
- * At a `file` position a file's JSON form becomes a `FileRef`, and at an `Inbox(T)` position
- * an inbox handle's JSON form becomes an `InboxRef`; at an `object` position (a plain `object`
+ * At a `file` position a file's JSON form becomes a `FileRef`, at an `Inbox(T)` position an inbox
+ * handle's JSON form becomes an `InboxRef`, and at a memory position a memory value's JSON form
+ * becomes a `MemoryRef`, which only a read of yian's own run log may ask; at an `object` position (a plain `object`
  * value, a `list(object)` item, an `object` record field) each nested `FileRef` becomes its
  * mapping. Nothing else converts: an int at a `float` position stays an int, and a
  * value that doesn't fit `typ` is walked as far as it fits and otherwise kept. A union member
@@ -2733,9 +2994,10 @@ export function normalizeFiles(typ: Type, value: Value): Value {
     return fits ? new FileRef(value) : value;
   }
   if (typ.kind === ValueKind.INBOX) return isInboxForm(value) ? new InboxRef(value.inbox) : value;
+  if (typ.kind === ValueKind.MEMORY) return memoryFromForm(value) ?? value;
   if (typ.kind === ValueKind.OBJECT && (isList(value) || isRecord(value))) {
     try {
-      return jsonPart(value, [], "mapping");
+      return jsonPart(value, [], "object");
     } catch (error) {
       if (error instanceof TypeCheckError) return value;
       throw error;
@@ -2765,8 +3027,8 @@ export function normalizeTypedFiles(typ: Type | null, typed: TypedValue): TypedV
 const READS_FILES = new WeakMap<Type, boolean>();
 
 /**
- * Whether `typ` has a `file`, `Inbox(T)` or unrefined `object` position at any depth, so
- * reading a value through it may change how a file or inbox handle is held. Unlike `hasFile`,
+ * Whether `typ` has a `file`, `Inbox(T)`, memory or unrefined `object` position at any depth, so
+ * reading a value through it may change how a file, inbox handle or memory value is held. Unlike `hasFile`,
  * it also counts plain `object` and flat `list(object)`, whose nested `FileRef`s are read as
  * mappings.
  */
@@ -2782,7 +3044,7 @@ function readsFiles(typ: Type): boolean {
 
 /** `readsFiles` without the cache for `typ` itself. */
 function computeReadsFiles(typ: Type): boolean {
-  if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX) return true;
+  if (typ.kind === ValueKind.FILE || typ.kind === ValueKind.INBOX || typ.kind === ValueKind.MEMORY) return true;
   if (isPlainObject(typ)) return true;
   if (typ.kind === ValueKind.LIST_OBJECT && typ.element === undefined) return true;
   if (typ.element !== undefined && readsFiles(typ.element)) return true;

@@ -1,0 +1,16 @@
+# `tools: [lessons]` grants every tool of the memory input `lessons` of the node's own flow, beside host grants.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  nodes:
+    a:
+      kind: agent
+      output: str
+      prompt: hi
+      tools: [lessons, search, {lessons: [read]}]
+  output: ${a.output}
+expect:
+  load: ok

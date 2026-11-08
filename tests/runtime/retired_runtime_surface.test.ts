@@ -16,6 +16,15 @@ import * as events from "../../src/events.ts";
 import { registerTemplateFn } from "../../src/expr/builtins.ts";
 import { ExpressionError, evaluateWhen } from "../../src/expr/expressions.ts";
 import * as yian from "../../src/index.ts";
+import {
+  ChangeIdReusedError,
+  isMemory,
+  MemoryBase,
+  MemoryBusyError,
+  memoryErrorKind,
+  MemoryMissingError,
+} from "../../src/memory/base.ts";
+import { FileMemory } from "../../src/memory/file.ts";
 import { checkConversation, checkMessage, ConversationError } from "../../src/nodes/agent/messages.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import * as base from "../../src/nodes/base.ts";
@@ -26,7 +35,7 @@ import { pending, ToolContext } from "../../src/tools/context.ts";
 import { PermanentToolError, ReportedToolError, TransientToolError } from "../../src/tools/errors.ts";
 import { FunctionTool, tool } from "../../src/tools/function_tools.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
-import { InboxRef } from "../../src/typesys/values.ts";
+import { InboxRef, MemoryRef } from "../../src/typesys/values.ts";
 import { assembleText, loadError } from "../helpers/declarations.ts";
 
 test.each(["entry", "controls"])("retired agent authoring field %s is rejected", (field) => {
@@ -100,6 +109,7 @@ test("only the final log-only runtime and run API remain", () => {
     apiKey: true,
     headers: true,
     context: true,
+    memory: true,
     signal: true,
     env: true,
     scheduler: true,
@@ -107,7 +117,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     checkLlmConfigs: true,
   };
-  expect(Object.keys(advanceOptions)).toHaveLength(18);
+  expect(Object.keys(advanceOptions)).toHaveLength(19);
   expect(run.advance.length).toBe(1);
 
   const result = new run.RunResult({ input: {}, status: "succeeded", runId: "r1", log: null });
@@ -120,13 +130,14 @@ test("only the final log-only runtime and run API remain", () => {
     "failure",
     "events",
     "crashedAttempts",
+    "memoryDrift",
     "waits",
     "unread",
   ]);
   expect(Object.getOwnPropertyNames(run.RunResult.prototype)).toEqual(["constructor"]);
 });
 
-test("the package root exports exactly its documented root list plus ToolAttemptsFailed, pending, the message names, InboxRef and the host calls", () => {
+test("the package root exports exactly its documented root list plus ToolAttemptsFailed, pending, the message names, InboxRef, the host calls and the memory names", () => {
   const expected: Record<string, unknown> = {
     loadFlow,
     runFlow: run.runFlow,
@@ -162,6 +173,14 @@ test("the package root exports exactly its documented root list plus ToolAttempt
     checkConversation,
     ConversationError,
     InboxRef,
+    MemoryBase,
+    FileMemory,
+    isMemory,
+    MemoryBusyError,
+    ChangeIdReusedError,
+    MemoryMissingError,
+    memoryErrorKind,
+    MemoryRef,
   };
   expect(Object.keys(yian).sort()).toEqual(Object.keys(expected).sort());
   const exported = yian as Record<string, unknown>;

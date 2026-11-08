@@ -1,0 +1,28 @@
+# An Optional memory left out when the run started is recorded as absent, and its grant gave no
+# tools. A resume given an instance for it is refused rather than bind a memory mid-run.
+kind: resume
+flow: |
+  id: note
+  name: note
+  input:
+    lessons: !FileMemory
+    notes: !Optional(FileMemory)
+  nodes:
+    add:
+      kind: tool
+      tool_id: {lessons: append}
+      input:
+        path: notes.md
+        text: Check sums twice.
+  output: ${add.output.path}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons}
+  crash_after_record: 7
+resume:
+  memory: {notes: {id: t/notes}}
+expect:
+  raises:
+    class: RangeError
+    message: "memory `notes` was null when the run started; drop it"

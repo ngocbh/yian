@@ -43,7 +43,7 @@ import {
 import { ExpressionError } from "../expr/expressions.ts";
 import { type RootRead, SourceRef } from "../expr/lineage.ts";
 import { exprRefsOf } from "../expr/template.ts";
-import { type CompleteResult, ELSE_HANDLE, Grow, Node, Output } from "../nodes/base.ts";
+import { type CompleteResult, ELSE_HANDLE, Grow, Node, NodeKind, Output } from "../nodes/base.ts";
 import { BindingError, copyValue } from "../nodes/binding.ts";
 import {
   type Binding,
@@ -66,14 +66,16 @@ import { messagesKey, NEW_MESSAGES, VariablePool } from "../typesys/pool.ts";
 import { newMessagesType } from "../typesys/types.ts";
 import {
   isInboxType,
+  isMemoryType,
   isRecord,
   jsTypeName,
   normalizeTypedFiles,
   rejectDeepNesting,
   renderValuePath,
-  type Type,
+  Type,
   TypeCheckError,
   TypedValue,
+  ValueKind,
   type ValueRecord,
   writeAsText,
 } from "../typesys/values.ts";
@@ -612,7 +614,11 @@ export function acceptedCommits(prepared: PreparedTransition): readonly { seq: n
   const plan = prepared._plan;
   // A run-start commit and a send always hold their values, and apply at once.
   if (plan.kind === "commit" && (plan.commitKind === "initial" || plan.commitKind === "send")) {
-    return [{ seq: prepared.expectedSequence, value: decodeTyped(plan.valueJson!) }];
+    let value = decodeTyped(plan.valueJson!);
+    if (plan.commitKind === "initial" && plan.key === plan.startId) {
+      value = startInputsRead(plan.originatingFlow, value);
+    }
+    return [{ seq: prepared.expectedSequence, value }];
   }
   if (plan.kind !== "success") return [];
   const seq = (prepared.record as NodeSucceededRecord).commit;
@@ -622,6 +628,20 @@ export function acceptedCommits(prepared: PreparedTransition): readonly { seq: n
     accepted.push({ seq: messages.seq, value: normalizeTypedFiles(newMessagesType(), decodeTyped(messages.valueJson)) });
   }
   return accepted;
+}
+
+/**
+ * Return the START inputs `value`, as the run log holds it, with each memory input's recorded form
+ * read back as a `MemoryRef`, which a node then reads as it was bound. It is the one place a run
+ * reads a memory value from its own log; a memory input's value came from the runner, and no other
+ * key is read this way.
+ */
+function startInputsRead(flow: CompiledFlow, value: TypedValue): TypedValue {
+  const params = flow.nodes.get(flow.startId)?.params ?? [];
+  const memories = params.filter((param) => isMemoryType(param.contract?.type));
+  if (memories.length === 0) return value;
+  const fields = new Map(memories.map((param) => [param.name, param.contract!.type] as const));
+  return normalizeTypedFiles(new Type({ kind: ValueKind.OBJECT, fields, required: new Set() }), value);
 }
 
 /**
@@ -2691,8 +2711,9 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   const initial = plan.commitKind === "initial";
   if (initial === state.inputsCommitted) throw new RangeError("pool-commit plan disagrees with the run start");
   // A run-start commit always holds its value.
-  const value = initial ? decodeTyped(plan.valueJson!) : null;
   const startInputs = initial && plan.key === plan.startId;
+  let value = initial ? decodeTyped(plan.valueJson!) : null;
+  if (startInputs) value = startInputsRead(state.flow, value!);
   const input = startInputs ? (canonicalSeed(value!.toObject())[1] as JsonObject) : null;
 
   appendAndVerify(log, prepared);
@@ -3345,7 +3366,7 @@ function retriedAgentCalls(state: RunState): string[] {
   return [...w.calls.values()]
     .filter((call) => {
       if (call.state !== "open" || !state.inFlight.has(call.nodeId)) return false;
-      if (state.flow.nodes.get(call.nodeId)?.hostToolCall() !== null) return false;
+      if (state.flow.nodes.get(call.nodeId)?.kind !== NodeKind.AGENT) return false;
       const lastWoken = w._lastWoken.get(call.nodeId);
       return lastWoken === undefined || call.seq > lastWoken;
     })
@@ -3718,7 +3739,7 @@ function hostToolName(node: Node): string | null {
  */
 function validatePendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
   const node = state.flow.nodes.get(nodeId)!;
-  if (node.hostToolCall() === null && node.grantedTools().length > 0) {
+  if (node.kind === NodeKind.AGENT) {
     validateAgentPendingStep(state, nodeId, step);
     return;
   }
@@ -3839,7 +3860,7 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
   if (call.tool === TAKE || call.tool === SLEEP) {
     throw new RangeError(`tool_result for call ${reprText(call.callId)}, a ${call.tool}, which the run settles itself`);
   }
-  const agent = state.flow.nodes.get(nodeId)!.hostToolCall() === null;
+  const agent = state.flow.nodes.get(nodeId)!.kind === NodeKind.AGENT;
   const closed = step["closed"];
   if (closed !== undefined && call.state === "open") {
     throw new RangeError(`tool_result for open call ${reprText(call.callId)} can't be a closer; only a record closes a call`);
@@ -3862,7 +3883,7 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
  * @throws RangeError when two calls of the latest reply share the key.
  */
 function resultCall(state: RunState, nodeId: string, key: unknown): Call | undefined {
-  if (state.flow.nodes.get(nodeId)!.hostToolCall() !== null) {
+  if (state.flow.nodes.get(nodeId)!.kind !== NodeKind.AGENT) {
     return [...state.waits.calls.values()].find((each) => each.resultKey === key);
   }
   const latest = latestReply(state, nodeId);

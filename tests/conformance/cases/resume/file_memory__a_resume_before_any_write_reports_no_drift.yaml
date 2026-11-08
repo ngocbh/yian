@@ -1,0 +1,28 @@
+# The crash cuts the run after the START node's success (record 7), before `add` starts. The
+# memory is unchanged while the run is down, so the resume reports no drift; then `add` runs and
+# its line lands.
+kind: resume
+flow: |
+  id: note
+  name: note
+  input:
+    lessons: !FileMemory
+  nodes:
+    add:
+      kind: tool
+      tool_id: {lessons: append}
+      input:
+        path: notes.md
+        text: Check sums twice.
+  output: ${add.output.path}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons}
+  crash_after_record: 7
+expect:
+  output: {status: succeeded, output: notes.md}
+  memory:
+    lessons:
+      notes.md: Check sums twice.
+  memory_drift: []

@@ -49,8 +49,8 @@ import {
   referenceText,
   scanTemplate,
 } from "../../expr/index.ts";
-import { Span } from "../../expr/template.ts";
-import type { Node } from "../../nodes/base.ts";
+import { Span, templateRefs } from "../../expr/template.ts";
+import { memoryKey, type Node } from "../../nodes/base.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { CallNode } from "../../nodes/call/node.ts";
 import { CaseNode } from "../../nodes/case/node.ts";
@@ -74,6 +74,7 @@ import { builtinType, type TypeRegistry } from "../../typesys/types.ts";
 import {
   canonicalTypeLabel,
   isInboxType,
+  isMemoryType,
   isRecord,
   jsTypeName,
   Type,
@@ -166,6 +167,11 @@ interface ScanOptions {
    * allowed. Defaults to telling the author to take from the inbox.
    */
   inboxTail?: string | null;
+  /**
+   * Why this site refuses a whole memory read, the error's closing words; `null` where one is
+   * allowed. Defaults to saying it can't be read here.
+   */
+  memoryTail?: string | null;
 }
 
 /** Why most sites refuse a whole inbox read: only `take` reads its events. */
@@ -174,6 +180,42 @@ const TAKE_TAIL = "(take from it with `tool_id: take`)";
 const MAP_TAIL = "(a map body can't read an inbox)";
 /** Why text, an expression, or a case's `when:` or `on:` refuses an inbox read. */
 const EXPRESSION_TAIL = "(not inside text or an expression)";
+
+/** What an error says of a memory read where it can't be, before the site's tail. */
+const MEMORY_USE =
+  "is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, " +
+  "or name it in `tools:`/`tool_id:`";
+/** Why a typed binding or a value holding a memory refuses it. */
+const MEMORY_VALUE_TAIL = "(not inside a list, record or dict)";
+/** Why a site with no tail of its own refuses a memory read. */
+const MEMORY_SITE_TAIL = "(it can't be read here)";
+
+/**
+ * Return why node `node`'s input `param` can't take a memory whole, or `null` when it can: an
+ * AGENT input, or an input a named call's, loop's or map's child declares as a memory. The child's
+ * type is checked with the other binding types.
+ */
+function memorySiteTail(nodeId: string, node: Node, param: string): string | null {
+  if (node instanceof AgentNode) return null;
+  if (node instanceof CaseNode) return EXPRESSION_TAIL;
+  if (!(node instanceof CallNode || node.isLoop || node.bindsPerItem)) {
+    return `(a ${node.kind} node can't take a memory)`;
+  }
+  if (nodeId.startsWith(SYNTH_PREFIX)) return "(pass it through a named `kind: call` node)";
+  const childInputs = (node as { childInputs?: readonly Parameter[] }).childInputs ?? [];
+  if (childInputs.some((input) => input.name === param && isMemoryType(input.contract?.type))) return null;
+  return `(the child's \`${param}\` isn't a memory input)`;
+}
+
+/**
+ * Return why node `node`'s reserved key `key` (written `label`) can't read a memory, or `null` for
+ * the key of one of its memory grants.
+ */
+function memoryReservedTail(node: Node, key: string, label: string): string | null {
+  if (node.memoryGrants().some((grant) => memoryKey(grant.input) === key)) return null;
+  if (node.bindsPerItem && key === node.itemSourceKey) return "(a map's `over:` can't read a memory)";
+  return `(\`${label}:\` can't read a memory)`;
+}
 
 /**
  * Return why node `node`'s input `param` can't take an inbox whole, or `null` when it can: a
@@ -188,6 +230,11 @@ function inboxSiteTail(nodeId: string, node: Node, param: string): string | null
   const childInputs = (node as { childInputs?: readonly Parameter[] }).childInputs ?? [];
   if (childInputs.some((input) => input.name === param && isInboxType(input.contract?.type))) return null;
   return `(the child's \`${param}\` isn't an Inbox input)`;
+}
+
+/** Whether binding `src` may pass a value whole: it is neither a typed binding nor a value holding it. */
+function bindingPassesWhole(src: unknown): boolean {
+  return !(src instanceof Binding && src.contract !== null) && !(bindingSource(src) instanceof ValueTemplate);
 }
 
 /**
@@ -252,6 +299,11 @@ function outputBindings(outputs: unknown): unknown[] {
  * other read of it (a field, text or an expression, a typed binding or value, another node kind,
  * a MAP, an inline `call(...)`, a flow output) is an error at its site. An inbox input with no
  * whole read is an error too, located at its declaration, reported only when no other one is.
+ *
+ * A memory input is read only whole too: as the lone `${input.<name>}` of an AGENT input, of an
+ * input a named call's, loop's or map's child declares as a memory, or of a node's memory grant.
+ * An AGENT's prompt and system prompt render such an input only as a lone `${<name>}` span. Any
+ * other read is an error at its site; unlike an inbox, a memory may stay unread.
  *
  * @param buildResults Built nodes with their transient ranges, keyed by node id.
  * @param flowInputs The flow's input names.
@@ -321,6 +373,9 @@ export function validateReferences(
   // The inbox inputs, and those read whole at a site that may take them.
   const inboxInputs = new Set([...inputContracts].filter(([, contract]) => isInboxType(contract.type)).map(([n]) => n));
   const inboxesRead = new Set<string>();
+  const memoryInputs = new Set(
+    [...inputContracts].filter(([, contract]) => isMemoryType(contract.type)).map(([name]) => name),
+  );
 
   /**
    * Name-check every reference a BINDING `from:` reads (coalesce and nested-default split by
@@ -357,6 +412,7 @@ export function validateReferences(
       readFacts = null,
       routedBases = new Set<string>(),
       inboxTail = TAKE_TAIL,
+      memoryTail = MEMORY_SITE_TAIL,
     } = site;
     let paths: string[];
     try {
@@ -391,6 +447,10 @@ export function validateReferences(
       const parts = path.split(".");
       if (parts[0] === "input" && inboxInputs.has(parts[1]!)) {
         checkInboxRead(text, parts, where, rng, inboxTail);
+        continue;
+      }
+      if (parts[0] === "input" && memoryInputs.has(parts[1]!)) {
+        checkMemoryRead(text, parts, where, rng, memoryTail);
         continue;
       }
       let err = classifyPath(path, validTargets, flowInputs, extraHeads);
@@ -458,6 +518,56 @@ export function validateReferences(
       `${where}: \${input.${parts[1]}} is an inbox; it is read only whole, bound to a child's Inbox input ${tail}`,
       rng,
     ]);
+  }
+
+  /**
+   * Add an error at `where` for one memory read in `text` that isn't allowed: a memory is read
+   * only whole, as the lone `${input.<name>}`, at a site whose `memoryTail` is `null`.
+   */
+  function checkMemoryRead(
+    text: string,
+    parts: readonly string[],
+    where: string,
+    rng: SourceRange | null,
+    memoryTail: string | null,
+  ): void {
+    const lone = directReferencePathParts(text);
+    let tail = memoryTail;
+    if (parts.length > 2) tail = "(a memory has no fields)";
+    else if (lone === null || lone.length !== 2) tail = EXPRESSION_TAIL;
+    if (tail !== null) errors.push([`${where}: \${input.${parts[1]}} ${MEMORY_USE} ${tail}`, rng]);
+  }
+
+  /**
+   * Add an error at `where` for each span of the prompt text `template` that reads one of the
+   * memory inputs `memories` other than as a lone `${<name>}`, which renders its recall. A
+   * malformed template is left to `checkTemplate`.
+   */
+  function checkPromptMemories(
+    where: string,
+    template: string,
+    memories: ReadonlySet<string>,
+    rng: SourceRange | null,
+  ): void {
+    if (memories.size === 0) return;
+    let segments;
+    try {
+      segments = scanTemplate(template);
+    } catch (error) {
+      if (error instanceof ExpressionError) return;
+      throw error;
+    }
+    for (const segment of segments) {
+      if (!(segment instanceof Span)) continue;
+      const lone = directReferencePathParts(`\${${segment.source}}`);
+      for (const ref of templateRefs([segment])) {
+        const parts = ref.trim().split(".");
+        if (!memories.has(parts[0]!)) continue;
+        if (lone !== null && lone.length === 1) continue;
+        const tail = parts.length > 1 ? "(a memory has no fields)" : "(not inside an expression)";
+        errors.push([`${where}: \${${parts[0]}} ${MEMORY_USE} ${tail}`, rng]);
+      }
+    }
   }
 
   /**
@@ -610,7 +720,16 @@ export function validateReferences(
     if (node instanceof AgentNode) {
       const declared = new Set((node.params ?? []).map((param) => param.name));
       for (const variable of node.variables) declared.add(variable.name);
-      const promptContracts = new Map(nodeLocals);
+      // The inputs bound to a memory: a prompt renders one only as a lone `${<name>}`, which
+      // `checkPromptMemories` checks, so no field of one is checked as a value's.
+      const memories = new Set(
+        [...nodeLocals]
+          .filter(([, local]) =>
+            local.alternatives.some((alt) => isExactly(alt, ValueContract) && isMemoryType(alt.type)),
+          )
+          .map(([name]) => name),
+      );
+      const promptContracts = new Map([...nodeLocals].filter(([name]) => !memories.has(name)));
       for (const variable of node.variables) {
         if (variable.contract !== null) promptContracts.set(variable.name, new LocalInput([variable.contract]));
       }
@@ -624,6 +743,7 @@ export function validateReferences(
       if (typeof node.prompt === "string") {
         const where = result.siteName(nodeId, "prompt");
         if (node.prompt) checkTemplate(where, node.prompt, declared, promptRange, promptSite);
+        if (node.prompt) checkPromptMemories(where, node.prompt, memories, promptRange);
       } else {
         // A list prompt: each message's text is a template; a splice names a local holding messages.
         node.prompt.forEach((item, index) => {
@@ -631,9 +751,14 @@ export function validateReferences(
           const rng = franges.get(siteKey("field", `prompt[${index}]`)) ?? promptRange;
           if ("text" in item) {
             if (item.text) checkTemplate(where, item.text, declared, rng, promptSite);
+            if (item.text) checkPromptMemories(where, item.text, memories, rng);
             return;
           }
           const ref = `\${${item.splice}}`;
+          if (memories.has(item.splice)) {
+            errors.push([`${where}: ${ref} ${MEMORY_USE} (not as a prompt splice)`, rng]);
+            return;
+          }
           checkTemplate(where, ref, declared, rng, promptSite);
           const label = declared.has(item.splice) ? spliceTypeError(promptContracts.get(item.splice)) : null;
           if (label !== null) {
@@ -646,13 +771,10 @@ export function validateReferences(
         });
       }
       if (node.systemPrompt) {
-        checkTemplate(
-          result.siteName(nodeId, "system_prompt"),
-          node.systemPrompt,
-          declared,
-          franges.get(siteKey("field", "system_prompt")) ?? nodeRange,
-          promptSite,
-        );
+        const where = result.siteName(nodeId, "system_prompt");
+        const rng = franges.get(siteKey("field", "system_prompt")) ?? nodeRange;
+        checkTemplate(where, node.systemPrompt, declared, rng, promptSite);
+        checkPromptMemories(where, node.systemPrompt, memories, rng);
       }
     }
     // Node-owned reserved wiring (`over`, `until`, ...) follows the same pool reference grammar as
@@ -683,6 +805,7 @@ export function validateReferences(
         partialUnionFields,
         constructors: false,
         inboxTail: node.bindsPerItem ? MAP_TAIL : TAKE_TAIL,
+        memoryTail: memoryReservedTail(node, key, node.reservedKeyLabel(key)),
       });
     }
 
@@ -703,6 +826,7 @@ export function validateReferences(
             extraHeads: ["item"],
             partialUnionFields,
             inboxTail: MAP_TAIL,
+            memoryTail: bindingPassesWhole(src) ? memorySiteTail(nodeId, node, param) : MEMORY_VALUE_TAIL,
           },
         );
       }
@@ -736,6 +860,7 @@ export function validateReferences(
             readFacts: read.facts,
             routedBases: read.routed,
             inboxTail: inboxSiteTail(nodeId, node, ""),
+            memoryTail: EXPRESSION_TAIL,
           });
         }
       }
@@ -753,13 +878,13 @@ export function validateReferences(
         if (scanned.has(key)) continue;
         scanned.add(key);
       }
-      // A typed binding or a value holding the inbox doesn't pass it whole.
-      const whole = !(src instanceof Binding && src.contract !== null) && !(source instanceof ValueTemplate);
+      const whole = bindingPassesWhole(src);
       scan(src, where, paramRng, {
         siteProducers: nodeProducers,
         siteInputs: nodeInputs,
         partialUnionFields,
         inboxTail: whole ? inboxSiteTail(nodeId, node, param) : TAKE_TAIL,
+        memoryTail: whole ? memorySiteTail(nodeId, node, param) : MEMORY_VALUE_TAIL,
       });
     }
   }
@@ -768,7 +893,11 @@ export function validateReferences(
   // its retained value or block range. No built node owns this source site; source-free callers
   // deliberately remain unlocated.
   for (const value of outputBindings(outputs)) {
-    scan(value, "flow output from", outputsRange, { siteProducers: producers, siteInputs: inputContracts });
+    scan(value, "flow output from", outputsRange, {
+      siteProducers: producers,
+      siteInputs: inputContracts,
+      memoryTail: "(a flow output can't be a memory)",
+    });
   }
 
   for (const [headline, problems] of [

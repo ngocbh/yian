@@ -1,0 +1,22 @@
+# The fix `long_term_memory:`'s error gives loads: declare the memory as an input and render it in
+# a prompt.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    question: !str
+    lessons: !FileMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+        question: ${input.question}
+      prompt:
+        - user: "<memory name=\"lessons\">\n${lessons}\n</memory>"
+        - user: ${question}
+      output: str
+  output: ${answer.output}
+expect:
+  load: ok

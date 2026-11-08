@@ -1,0 +1,19 @@
+# A node output can't be a memory.
+kind: load
+flow: |
+  id: f
+  name: f
+  nodes:
+    n:
+      kind: code
+      output: FileMemory
+      code: return null
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: 'an output can''t be a memory (`FileMemory` declares a flow input)'
+      frames:
+      - label: flow.yaml
+        range: [6, 13, 6, 23]

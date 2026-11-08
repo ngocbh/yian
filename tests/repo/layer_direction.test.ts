@@ -85,7 +85,7 @@ const only = (file: string) => (path: string) => path === file;
  */
 const LAYERS: readonly (readonly string[])[] = [
   ["diagnostics", "defaults", "typesys", "platform"],
-  ["events", "expr", "llm", "llm_clients", "tools", "skills"],
+  ["events", "expr", "llm", "llm_clients", "tools", "skills", "memory"],
   ["nodes"],
   ["compile"],
   ["compose", "runtime"],

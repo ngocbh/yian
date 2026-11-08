@@ -12,19 +12,24 @@
  * backoff with jitter on its scheduler, and records each retried attempt's failure and start as
  * node steps in the run log, so a resumed run continues the attempt count.
  *
- * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/tool/questions, defaults,
- *                diagnostics, platform, tools and typesys.
+ * A memory's tool (`tool_id: {lessons: read}`) is looked up in the memory the node's flow binds to
+ * that input instead, and called on the run's session on it.
+ *
+ * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/ids, nodes/tool/questions,
+ *                defaults, diagnostics, memory (memory tools), platform, tools and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
 import { current } from "../../defaults.ts";
 import { type FailureCode, reprText } from "../../diagnostics.ts";
+import { MEMORY_SCOPE_LABEL, memoryTools } from "../../memory/tools.ts";
 import { realScheduler } from "../../platform.ts";
 import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, isPending, SLEEP, TAKE, toolCallId } from "../../tools/context.ts";
 import { isPermanentToolError, isToolCheckError, isTransientToolError, ToolCheckError } from "../../tools/errors.ts";
-import { visibleToolName } from "../../tools/grants.ts";
+import { type MemoryGrant, visibleToolName } from "../../tools/grants.ts";
 import { type ToolRef, ToolSet } from "../../tools/registry.ts";
 import { eventBytes, type JsonObject } from "../../typesys/json.ts";
+import type { VariablePool } from "../../typesys/pool.ts";
 import { deadlineUtc, formatRecordTime, parseDuration } from "../../typesys/temporal.ts";
 import {
   buildValue,
@@ -32,6 +37,7 @@ import {
   fromHost,
   inboxName,
   jsonPart,
+  MemoryRef,
   jsonSafeText,
   jsTypeName,
   renderValuePath,
@@ -43,8 +49,12 @@ import {
   valueRepr,
 } from "../../typesys/values.ts";
 import {
+  bindMemoryGrants,
   CapabilityFault,
   hostOutput,
+  MEMORY_KEY_PREFIX,
+  memoryKey,
+  memorySession,
   Node,
   type NodeCaps,
   NodeKind,
@@ -52,8 +62,9 @@ import {
   Output,
   Pending,
 } from "../base.ts";
-import { BindingError } from "../binding.ts";
+import { BindingError, type ReservedBinder } from "../binding.ts";
 import { acceptsNull, type CallView, HostToolCall, outputContractType } from "../contracts.ts";
+import { staticPathOf } from "../ids.ts";
 import { dropRepeatedLabels, parseQuestions } from "./questions.ts";
 
 /**
@@ -230,6 +241,8 @@ export class ToolNode extends Node {
   readonly kind = NodeKind.TOOL;
   /** Looks up and invokes its tool in the run's tool set. */
   override readonly needsTools: boolean = true;
+  /** Calls a memory's tool on the run's session on that memory. */
+  override readonly needsMemories: boolean = true;
   /** Records each retried attempt as a durable step, so a resumed run continues the count. */
   override readonly needsSteps: boolean = true;
   /**
@@ -244,6 +257,11 @@ export class ToolNode extends Node {
   toolId: string;
   /** The tool, looked up in the run's `ToolSet`: a bare id, or a group's tool. */
   toolRef: ToolRef;
+  /**
+   * Whether `toolRef` names a memory's tool, `{<memory input>: <tool>}`, which rides the reserved
+   * `__memory_<input>` wiring instead of the run's `ToolSet`.
+   */
+  readonly memoryTool: boolean;
   /** How many times a failed tool call may be retried, at least 0. */
   retries: number;
   /** The proven type of each input's binding; an input whose type is not proven is absent. */
@@ -261,8 +279,10 @@ export class ToolNode extends Node {
    * @param options.retries How many times a failed call may be retried, at least 0; `null` or
    *   omitted means `current().toolRetries`.
    * @param options.answerSchema For `ask`, the answer schema; `null` or omitted means `[]`.
+   * @param options.memoryTool Whether `toolId` names a memory's tool by its input; defaults to
+   *   `false`.
    * @throws TypeError when `retries` isn't a safe-integer number or `null`.
-   * @throws RangeError when `retries` is negative.
+   * @throws RangeError when `retries` is negative, or a memory's tool names no memory input.
    */
   constructor(
     nodeId: string,
@@ -271,9 +291,10 @@ export class ToolNode extends Node {
       title?: string | null;
       retries?: number | null;
       answerSchema?: readonly Readonly<Record<string, unknown>>[] | null;
+      memoryTool?: boolean;
     },
   ) {
-    const { toolId, title = null, retries = null, answerSchema = null } = options;
+    const { toolId, title = null, retries = null, answerSchema = null, memoryTool = false } = options;
     super(nodeId, { title });
     if (retries !== null) {
       const message = `node ${reprText(nodeId)}: retries must be a non-negative int, got ${valueRepr(retries)}`;
@@ -282,6 +303,10 @@ export class ToolNode extends Node {
     }
     const ref = typeof toolId === "string" ? { group: null, name: toolId } : { ...toolId };
     this.toolRef = Object.freeze(ref);
+    if (memoryTool && ref.group === null) {
+      throw new RangeError(`node ${reprText(nodeId)}: a memory's tool is named \`{<memory>: <tool>}\``);
+    }
+    this.memoryTool = memoryTool;
     this.toolId = visibleToolName(this.toolRef.group, this.toolRef.name);
     this.retries = retries ?? current().toolRetries;
     this.inputTypes = new Map();
@@ -296,8 +321,12 @@ export class ToolNode extends Node {
     return BUILTIN_TOOL_IDS.has(this.toolId as BuiltinToolId) ? (this.toolId as BuiltinToolId) : null;
   }
 
-  /** Return this node's tool id and group, input names, proven input types, and output type. */
-  override hostToolCall(): HostToolCall {
+  /**
+   * Return this node's tool id and group, input names, proven input types, and output type; `null`
+   * for a memory's tool, which the run's tools never hold.
+   */
+  override hostToolCall(): HostToolCall | null {
+    if (this.memoryTool) return null;
     return new HostToolCall(
       this.toolRef.name,
       this.toolRef.group,
@@ -305,6 +334,37 @@ export class ToolNode extends Node {
       this.inputTypes,
       outputContractType(this.outputContract),
     );
+  }
+
+  /** Return the grant of the memory tool this node calls, if it names one. */
+  override memoryGrants(): readonly MemoryGrant[] {
+    if (!this.memoryTool) return [];
+    return [Object.freeze({ input: this.toolRef.group!, tools: Object.freeze([this.toolRef.name]) })];
+  }
+
+  /** Declare `__memory_<input>` for the memory whose tool this node calls. */
+  override reservedWiringKeys(): ReadonlySet<string> {
+    return new Set(this.memoryGrants().map((grant) => memoryKey(grant.input)));
+  }
+
+  /**
+   * Resolve the binding of the memory whose tool this node calls (`__memory_<input>`) to its
+   * memory value; `{}` for a host tool.
+   *
+   * @throws Error when the wiring lacks the binding.
+   * @throws BindingError (`contract.input`) when it holds something other than a memory.
+   */
+  override bindReserved(
+    nodeWiring: ReadonlyMap<string, unknown>,
+    pool: VariablePool,
+    options: { bind?: ReservedBinder | null } = {},
+  ): Record<string, unknown> {
+    return bindMemoryGrants(this.id, this.memoryGrants(), "tool_id", nodeWiring, pool, options.bind ?? null);
+  }
+
+  /** Name the reserved `__memory_<input>` key as the authored `tool_id`. */
+  override reservedKeyLabel(key: string): string {
+    return key.startsWith(MEMORY_KEY_PREFIX) ? "tool_id" : super.reservedKeyLabel(key);
   }
 
   /**
@@ -350,7 +410,31 @@ export class ToolNode extends Node {
     const held = callId === null ? undefined : caps.steps?.calls.find((call) => call.callId === callId);
     if (held !== undefined) return this.fromHeldCall(held);
     if (this.builtin === ASK) return await this.ask(inputs, caps, tools, callId);
+    if (this.memoryTool) return await this.callTool(this.toolArguments(inputs), caps, this.memoryToolSet(inputs, caps, tools), callId);
     return await this.callTool(inputs, caps, tools, callId);
+  }
+
+  /**
+   * Return `tools` with the memory tool this node calls as a local group, over the run's session on
+   * the memory its input is bound to, so `toolRef` reaches it and never a run group by that name.
+   *
+   * @throws CapabilityFault carrying the error when the evaluator gave no memory sessions, or none
+   *   on that memory.
+   * @throws TypeError when the input holds no memory: a TOOL node can't name an Optional memory.
+   */
+  private memoryToolSet(inputs: Readonly<Record<string, unknown>>, caps: NodeCaps, tools: ToolSet): ToolSet {
+    const [grant] = this.memoryGrants();
+    const { input } = grant!;
+    const value = inputs[memoryKey(input)];
+    if (!MemoryRef.isMemoryRef(value)) throw new TypeError(`TOOL node ${reprText(this.id)}: \`${input}\` holds no memory`);
+    const session = memorySession(caps, value.identity);
+    const local = memoryTools(value, session, grant!, { kind: "tool", name: staticPathOf(this.id) });
+    return tools.withLocalGroups(new Map([[input, local]]), MEMORY_SCOPE_LABEL);
+  }
+
+  /** Return the inputs a memory tool takes: the bound record without its reserved memory key. */
+  private toolArguments(inputs: Readonly<Record<string, unknown>>): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(inputs).filter(([name]) => !name.startsWith(MEMORY_KEY_PREFIX)));
   }
 
   /**

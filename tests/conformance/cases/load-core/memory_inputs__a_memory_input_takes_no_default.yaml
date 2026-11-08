@@ -1,0 +1,17 @@
+# A memory input takes no default: the runner binds it.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory notes.md
+  nodes: {}
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''lessons'': a memory input takes no default; the runner binds it'
+      frames:
+      - label: flow.yaml
+        range: [4, 12, 4, 32]

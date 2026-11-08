@@ -1,0 +1,28 @@
+# A memory grant rides the reserved wiring `__memory_<input>`, so no node input takes that name.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  nodes:
+    a:
+      kind: agent
+      output: str
+      prompt: hi
+      tools: [lessons]
+      input:
+        __memory_lessons: ${input.lessons}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: input '__memory_lessons' is reserved for memory grants; rename the input
+        frames:
+          - label: flow.yaml
+            range:
+              - 12
+              - 25
+              - 12
+              - 41

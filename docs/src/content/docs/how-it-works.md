@@ -163,12 +163,12 @@ The log is append-only:
 Every line has the same envelope. This is the record that stores `greet`'s value:
 
 ```json
-{"at":"2026-10-27T08:43:00.746Z","kind":"pool_commit","payload":{"key":"greet","kind":"str","node_id":"greet","value":"hi Ada"},"run_id":"281f84a4cdb54f26a59aaa23c0f1b593","schema":28,"seq":9}
+{"at":"2026-10-27T08:43:00.746Z","kind":"pool_commit","payload":{"key":"greet","kind":"str","node_id":"greet","value":"hi Ada"},"run_id":"281f84a4cdb54f26a59aaa23c0f1b593","schema":29,"seq":9}
 ```
 
 | Field | Meaning |
 |---|---|
-| `schema` | The log format version. This yian reads and writes only schema 28 |
+| `schema` | The log format version. This yian reads and writes only schema 29 |
 | `run_id` | The run's id; the same on every line |
 | `seq` | The record's place in the log, from 0 with no gaps |
 | `at` | When the record was written (UTC). Use `seq` for order, since clocks can move |
@@ -202,6 +202,9 @@ The `run_started` record holds everything the run needs to be rebuilt later:
 | The `YIAN_*` settings that differ from the defaults | |
 | The descriptions of the tools and skills agents use | |
 | The yian version | |
+
+A [memory](/memory/) input's value, in START's inputs, holds the memory's identity, settings,
+tools, version and recall, never its location.
 
 Steps inside a node are records too. An agent writes a `node_step` for each model reply and each
 tool result, as it goes. A tool that retries writes one for each failed attempt and one as the next
@@ -290,6 +293,7 @@ You give these again, since the log doesn't hold them:
 | API keys, in the environment | Keys are never recorded |
 | The same MCP servers and skills | Agents' tools and skills must match the recorded descriptions, and tools their recorded `resumable` flags |
 | The same `YIAN_*` settings | A resume refuses settings that differ from the recorded ones |
+| The same memories, from a host's `advance` | A resume opens each again, and refuses one that is missing or differs from the recorded one. Agents keep the recall the run started with |
 
 A resume under another yian version works, with a warning that names both versions.
 
@@ -304,6 +308,9 @@ was running when the process died runs again, so its effect may happen twice:
 | `tool` | Runs with the same `ctx.callId` and the next `ctx.attempt`. A tool with `retries:` keeps only the retries it had left |
 | `agent` | Reuses each recorded model reply and tool result without calling them again. A tool call with no recorded result is sent again, with the same `ctx.callId` and a higher `ctx.attempt`, when its tool is resumable; otherwise it is reported to the model as "The tool call was interrupted; its outcome is unknown. Check its effect before retrying." Then the agent carries on from its first unrecorded model call |
 | `case`, `call`, `map`, `loop`, START, END | Computes the same result from the same inputs |
+
+Memory tools are resumable, and a memory applies each change id once, so a memory write that a
+crash cut off lands once.
 
 So write tools that change the world to be safe to repeat. Pass `ctx.callId` to the service as an
 idempotency key: it stays the same on every attempt and after a resume. Such a tool can say

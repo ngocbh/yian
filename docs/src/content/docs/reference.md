@@ -76,6 +76,16 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_TOOL_RETRIES` | setting | 0 | 0 or more | Extra attempts a TOOL node gets after a failed tool call when the node sets none |
 | `YIAN_TOOL_RETRY_DELAY_SECONDS` | setting | 1 | 0 or more | Base wait in seconds before a TOOL node's first retry; each later wait doubles, up to the cap |
 | `YIAN_TOOL_RETRY_MAX_DELAY_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds before a TOOL node retries a failed tool call |
+| `YIAN_MEMORY_LOCK_TIMEOUT_SECONDS` | setting | 30 | 0 or more | Longest wait in seconds for a memory's lock |
+| `YIAN_MEMORY_MAX_CHANGE_IDS` | setting | 10,000 | 1 or more | Most change ids a memory keeps to answer a repeated change |
+| `YIAN_MEMORY_MAX_UNDO` | setting | 100 | 0 or more | Most changes a memory can undo |
+| `YIAN_FILE_MEMORY_MAX_FILE_CHARS` | setting | 100,000 | 1 or more | Most characters one file of a FileMemory may hold |
+| `YIAN_FILE_MEMORY_MAX_TOTAL_CHARS` | setting | 1,000,000 | 1 or more | Most characters all files of a FileMemory may hold |
+| `YIAN_FILE_MEMORY_MAX_FILES` | setting | 1,000 | 1 or more | Most files a FileMemory may hold |
+| `YIAN_FILE_MEMORY_MAX_DEPTH` | setting | 4 | 0 or more | Most folders deep a FileMemory file may sit |
+| `YIAN_FILE_MEMORY_MAX_RECALL_CHARS` | setting | 8,000 | 1 or more | Most characters of a FileMemory's recall |
+| `YIAN_FILE_MEMORY_MAX_READ_CHARS` | setting | 20,000 | 1 or more | Most characters one FileMemory list, read or search result shows |
+| `YIAN_FILE_MEMORY_MAX_RESULTS` | setting | 100 | 1 or more | Most entries a FileMemory's `list` shows, and lines its `search` shows |
 | `YIAN_MCP_CONNECT_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for an MCP server to start and list its tools |
 | `YIAN_MCP_CALL_TIMEOUT_SECONDS` | setting | 300 | 1 or more | Longest wait in seconds for one MCP tool call |
 | `YIAN_MODEL_RETRIES` | setting | 6 | 0 or more | Extra attempts a model call gets after a transport failure (a network error, 5xx, 429 or timeout) |
@@ -136,6 +146,7 @@ Provider API keys and base URLs, such as `ANTHROPIC_API_KEY`, are listed on
 | `~/.yian/runs/index.sqlite` | The run index `yian status` lists. It is rebuilt from the logs, so you can delete it |
 | `~/.claude/skills`, `~/.agents/skills` | Your skills, read when an agent grants skills |
 | `.claude/skills`, `.agents/skills` | Project skills, from the current folder up to the git root |
+| `<memory folder>/.yian/` | A FileMemory's identity, journal, lock and temp files (see [Memory](/memory/#filememory)) |
 
 `~/.yian`, `~/.yian/runs` and each run folder have mode `0700`; a log has mode `0600`. Logs are
 not encrypted and can hold prompts, replies and tool data, so keep them private.
@@ -197,12 +208,12 @@ A run log is a JSON Lines file: one record per line, appended and never rewritte
 compact JSON with its keys sorted:
 
 ```json
-{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":28,"seq":8}
+{"at":"2026-10-27T08:47:40.404Z","kind":"node_started","payload":{"node_id":"greet"},"run_id":"31fc75ac4c0640de867d47f59f928ea3","schema":29,"seq":8}
 ```
 
 | Key | What it holds |
 |---|---|
-| `schema` | The record format, `28`. yian reads only this one. A log of schema 10 to 27 reads as `run log schema N predates schema 28 and is not supported`, any other as `unsupported run-record schema: N` |
+| `schema` | The record format, `29`. yian reads only this one. A log of schema 10 to 28 reads as `run log schema N predates schema 29 and is not supported`, any other as `unsupported run-record schema: N` |
 | `run_id` | The run's id |
 | `seq` | The record's place in the log, from 0 |
 | `at` | When the record was appended, in UTC with milliseconds. Use `seq`, not `at`, for order |

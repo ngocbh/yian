@@ -1,0 +1,36 @@
+# A loop predicate can't read a memory the loop carries.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  defs:
+    body:
+      input:
+        m: !FileMemory
+        done: !bool
+      nodes: {}
+      output:
+        done: ${input.done}
+  nodes:
+    l:
+      kind: loop
+      call: body
+      input:
+        m: ${input.lessons}
+        done: false
+      while: m == null
+  output: null
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "loop node 'l': `while:` reads `m`, a memory; a loop predicate can't read a memory"
+        frames:
+          - label: flow.yaml
+            range:
+              - 14
+              - 3
+              - 14
+              - 4

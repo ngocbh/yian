@@ -1,0 +1,46 @@
+# A loop carries a memory into every iteration but never returns it.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  defs:
+    body:
+      input:
+        m: !FileMemory
+        done: !bool
+      nodes: {}
+      output:
+        done: ${input.done}
+        m: ${input.m}
+  nodes:
+    l:
+      kind: loop
+      call: body
+      input:
+        m: ${input.lessons}
+        done: false
+      while: not done
+  output: null
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: |-
+          defs entry 'body': flow has unresolved references:
+            flow output from: ${input.m} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` (a flow output can't be a memory)
+        frames:
+          - label: flow.yaml
+            range:
+              - 7
+              - 5
+              - 14
+              - 1
+            note: definition 'body'
+          - label: flow.yaml
+            range:
+              - 12
+              - 7
+              - 14
+              - 1

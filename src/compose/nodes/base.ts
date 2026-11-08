@@ -40,8 +40,9 @@ import {
   ValueContract,
 } from "../../nodes/contracts.ts";
 import { typeName, type TypeRegistry } from "../../typesys/types.ts";
-import { isList, isRecord, valueRepr, type ValueRecord } from "../../typesys/values.ts";
+import { isList, isRecord, type Type, valueRepr, type ValueRecord } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
+import { type MemoryTypeTable, NO_MEMORY_TYPES } from "../helpers/memory.ts";
 import { directReferencePath } from "../../compile/output_contracts.ts";
 import { hasSpan } from "../helpers/tags.ts";
 import { readType } from "../helpers/types.ts";
@@ -353,10 +354,18 @@ export class BuildContext {
   readonly variableDeclarationReader: VariableDeclarationReader | null;
   /** Resolves one parent binding's output contract; LOOP reads it to type a carried field its body omits. */
   readonly bindingContractReader: BindingContractReader | null;
+  /**
+   * The declared type of each input of the flow, def or inline body the node is declared in, so a
+   * grant names one of its own memory inputs.
+   */
+  readonly flowInputs: ReadonlyMap<string, Type>;
+  /** The memory types the load knows beyond the built-ins, which a grant's tools are checked against. */
+  readonly memoryTypes: MemoryTypeTable;
 
   /**
    * Create a context. Only `registry` is required; the readers, `resolver` and `baseDir` default
-   * to `null`, `sourceFile` to `"<inline-code>"` and `diagnostics` to an unlocated context.
+   * to `null`, `sourceFile` to `"<inline-code>"`, `diagnostics` to an unlocated context,
+   * `flowInputs` to none and `memoryTypes` to the built-ins only.
    */
   constructor(options: {
     registry: TypeRegistry;
@@ -368,6 +377,8 @@ export class BuildContext {
     outputContractReader?: OutputContractReader | null;
     variableDeclarationReader?: VariableDeclarationReader | null;
     bindingContractReader?: BindingContractReader | null;
+    flowInputs?: ReadonlyMap<string, Type>;
+    memoryTypes?: MemoryTypeTable;
   }) {
     const {
       registry,
@@ -379,6 +390,8 @@ export class BuildContext {
       outputContractReader = null,
       variableDeclarationReader = null,
       bindingContractReader = null,
+      flowInputs = new Map<string, Type>(),
+      memoryTypes = NO_MEMORY_TYPES,
     } = options;
     this.registry = registry;
     this.resolver = resolver;
@@ -389,6 +402,8 @@ export class BuildContext {
     this.outputContractReader = outputContractReader;
     this.variableDeclarationReader = variableDeclarationReader;
     this.bindingContractReader = bindingContractReader;
+    this.flowInputs = flowInputs;
+    this.memoryTypes = memoryTypes;
     Object.freeze(this);
   }
 }

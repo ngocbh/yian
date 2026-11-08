@@ -22,7 +22,7 @@
  */
 
 import { reprText } from "../diagnostics.ts";
-import { FileRef, InboxRef, Type, type Value, ValueKind } from "../typesys/index.ts";
+import { FileRef, InboxRef, MemoryRef, Type, type Value, ValueKind } from "../typesys/index.ts";
 import { fromHost, valueRepr, writeAsJson, writeAsText } from "../typesys/values.ts";
 import { uncallableReason } from "./grammar.ts";
 
@@ -107,7 +107,7 @@ export function bindArguments<T>(
 
 /**
  * Return a value's kind as messages name it: `null`, `bool`, `int`, `float`, `str`, `list`,
- * `record`, `file` or `inbox`.
+ * `record`, `file`, `inbox` or `memory`.
  */
 export function kindName(value: Value): string {
   if (value === null) return "null";
@@ -123,6 +123,7 @@ export function kindName(value: Value): string {
   }
   if (Array.isArray(value)) return "list";
   if (InboxRef.isInboxRef(value)) return "inbox";
+  if (MemoryRef.isMemoryRef(value)) return "memory";
   return FileRef.isFileRef(value) ? "file" : "record";
 }
 

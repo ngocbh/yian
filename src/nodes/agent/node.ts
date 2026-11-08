@@ -6,9 +6,10 @@
  * `ask_user`, are ordinary explicitly authored tool grants. A crash or host interruption unwinds
  * the node; no conversation or continuation state is stored in the graph or variable pool.
  *
- * Knows about:   nodes/base, nodes/binding, nodes/contracts, peer AGENT modules, llm (messages),
- *                llm_clients (config, connection, factory), expr (expressions, templates,
- *                lineage), skills, defaults, diagnostics and typesys.
+ * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/ids, peer AGENT modules, llm
+ *                (messages), llm_clients (config, connection, factory), expr (expressions,
+ *                templates, lineage), memory (recall rendering, memory tools), skills, tools,
+ *                defaults, diagnostics and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -28,25 +29,37 @@ import { defaultModelAccess, type ModelAccess } from "../../llm_clients/factory.
 import { MediaPart, Message as ModelMessage, MessageFormatError, TextPart } from "../../llm/messages.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL, loadSkillTool, systemPromptWithSkills } from "../../skills/tool.ts";
-import { asToolGrant, type ToolGrant } from "../../tools/grants.ts";
+import { renderRecall } from "../../memory/render.ts";
+import { grantedMemorySpecs, MEMORY_SCOPE_LABEL, memoryTools } from "../../memory/tools.ts";
+import type { FunctionTool } from "../../tools/function_tools.ts";
+import { asToolGrant, type MemoryGrant, type ToolGrant, visibleToolName } from "../../tools/grants.ts";
+import { ToolSet } from "../../tools/registry.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import {
   buildValueAs,
   isList,
   inboxName,
+  isMemoryType,
   isRecord,
-  type Type,
+  MemoryRef,
+  setField,
+  Type,
   TypeCheckError,
   TypedValue,
+  ValueKind,
   type ValueRecord,
   valueRepr,
   writeAsText,
 } from "../../typesys/values.ts";
 import {
+  bindMemoryGrants,
   CapabilityFault,
   checkNamedPrompt,
   type CompleteResult,
+  MEMORY_KEY_PREFIX,
+  memoryKey,
+  memorySession,
   type RebuildCaps,
   type RebuiltRequests,
   Node,
@@ -72,6 +85,7 @@ import {
   type ValuePath,
   ValueTemplate,
 } from "../contracts.ts";
+import { staticPathOf } from "../ids.ts";
 import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, sentCredentials, ToolIterationLimitError } from "./context.ts";
 import { Interrupted } from "./interrupts.ts";
 import { modelFailureCode } from "./live.ts";
@@ -319,6 +333,7 @@ export class AgentInterruptedError extends Error {
 export class AgentNode extends Node {
   readonly kind = NodeKind.AGENT;
   override readonly needsTools: boolean = true;
+  override readonly needsMemories: boolean = true;
   override readonly needsLiveEvents: boolean = true;
   override readonly needsSkills: boolean = true;
   override readonly needsModels: boolean = true;
@@ -333,8 +348,13 @@ export class AgentNode extends Node {
   prompt: string | readonly PromptItem[];
   /** The system prompt template replacing the default one; `null` keeps the default. */
   systemPrompt: string | null;
-  /** The authored tool grants, which may name host-filled groups. */
+  /** The authored tool grants, which may name host-filled groups and memory inputs. */
   tools: readonly ToolGrant[];
+  /**
+   * The memory inputs of this agent's flow that `tools` names, each riding the reserved
+   * `__memory_<input>` wiring; a grant naming one is a memory grant, never a host one.
+   */
+  readonly memoryInputs: readonly string[];
   /**
    * The authored source each cascade pass re-resolves: a record, or a template or binding for a
    * layer holding values.
@@ -399,8 +419,10 @@ export class AgentNode extends Node {
    * @param options.steerInbox Whether this agent reads a steer inbox; defaults to `false`.
    * @param options.steerRender The template each steer event renders through, over `${event}`;
    *   defaults to `null`, the default rendering.
+   * @param options.memoryInputs The memory inputs of the agent's flow its grants name; defaults
+   *   to none.
    * @throws TypeError for a bad `prompt` item, `systemPrompt`, `llmConfig`, `variables`,
-   *   `steerInbox` or `steerRender`.
+   *   `steerInbox`, `steerRender` or `memoryInputs`.
    * @throws RangeError for an empty list prompt or one ending in an assistant message, the retired
    *   `builtin_tools` grant, a steer render without a steer inbox, or a variable whose name repeats
    *   or whose default is missing or invalid.
@@ -420,6 +442,7 @@ export class AgentNode extends Node {
       skills?: readonly string[] | "all" | null;
       steerInbox?: boolean;
       steerRender?: string | null;
+      memoryInputs?: readonly string[] | null;
     } = {},
   ) {
     const {
@@ -434,6 +457,7 @@ export class AgentNode extends Node {
       skills = null,
       steerInbox = false,
       steerRender = null,
+      memoryInputs = null,
     } = options;
     super(nodeId, { title });
     if (isList(prompt)) checkPromptItems(nodeId, prompt);
@@ -443,6 +467,10 @@ export class AgentNode extends Node {
     }
     this.systemPrompt = systemPrompt;
     this.tools = (tools ?? []).map(asToolGrant);
+    if (memoryInputs !== null && !(isList(memoryInputs) && memoryInputs.every((input) => typeof input === "string"))) {
+      throw new TypeError(`AGENT node ${reprText(nodeId)}: memoryInputs must be a list of input names`);
+    }
+    this.memoryInputs = Object.freeze([...(memoryInputs ?? [])]);
     if (this.tools.some((grant) => grant.kind === "name" && grant.name === "builtin_tools")) {
       throw new RangeError(
         "builtin_tools belonged to the removed native Codex integration. " +
@@ -488,8 +516,8 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Declare `__llm_config` when values in the layers can reach this agent's config, and
-   * `__steer_inbox` when it reads a steer inbox.
+   * Declare `__llm_config` when values in the layers can reach this agent's config,
+   * `__steer_inbox` when it reads a steer inbox, and `__memory_<input>` for each memory it grants.
    */
   override reservedWiringKeys(): ReadonlySet<string> {
     return new Set(this.reservedKeys());
@@ -497,7 +525,11 @@ export class AgentNode extends Node {
 
   /** The reserved wiring keys this agent has. */
   private reservedKeys(): string[] {
-    return [...(this.wiresLlmConfig ? [LLM_CONFIG_KEY] : []), ...(this.steerInbox ? [STEER_INBOX_KEY] : [])];
+    return [
+      ...(this.wiresLlmConfig ? [LLM_CONFIG_KEY] : []),
+      ...(this.steerInbox ? [STEER_INBOX_KEY] : []),
+      ...this.memoryInputs.map(memoryKey),
+    ];
   }
 
   /**
@@ -511,13 +543,17 @@ export class AgentNode extends Node {
    * `options.bind` is unused for the config: the bound value is the resolved config, not the values
    * it was read from.
    *
-   * @returns `{__steer_inbox: <name>}` for an agent with a steer inbox, and `{__llm_config:
-   *   <config>}`, the resolved config with no key or header value, the shape of a `RunStarted` map
-   *   entry, for a call-time agent; `{}` for neither.
+   * Each granted memory's binding (`__memory_<input>`) resolves the same way to its memory value,
+   * or `null` for an Optional memory left out.
+   *
+   * @returns `{__steer_inbox: <name>}` for an agent with a steer inbox, `{__memory_<input>:
+   *   <memory>}` per granted memory, and `{__llm_config: <config>}`, the resolved config with no
+   *   key or header value, the shape of a `RunStarted` map entry, for a call-time agent; `{}` for
+   *   none.
    * @throws Error when the wiring lacks a reserved binding the agent has.
-   * @throws BindingError when the steer inbox binding isn't an inbox, a value breaks its tag
-   *   (`binding.type`) or fails to resolve, or the resolved config is refused (`contract.input`);
-   *   the message names the field.
+   * @throws BindingError when the steer inbox binding isn't an inbox, a memory binding isn't a
+   *   memory, a value breaks its tag (`binding.type`) or fails to resolve, or the resolved config
+   *   is refused (`contract.input`); the message names the field.
    * @throws AuthError when the config is marked for the host key the run does not hold; the
    *   host's to fix, not a failure of this node.
    */
@@ -546,6 +582,8 @@ export class AgentNode extends Node {
       reserved[STEER_INBOX_KEY] =
         bind === null ? normalize(resolveSource(source, pool)) : bind(STEER_INBOX_KEY, source, normalize);
     }
+    const memories = bindMemoryGrants(this.id, this.memoryGrants(), "tools", nodeWiring, pool, options.bind ?? null);
+    Object.assign(reserved, memories);
     if (this.callTime === null) return reserved;
     const template = nodeWiring.get(LLM_CONFIG_KEY);
     if (!(template instanceof Binding)) {
@@ -558,10 +596,11 @@ export class AgentNode extends Node {
     return reserved;
   }
 
-  /** Name the reserved `__llm_config` and `__steer_inbox` keys as the authored fields. */
+  /** Name the reserved `__llm_config`, `__steer_inbox` and `__memory_<input>` keys as the authored fields. */
   override reservedKeyLabel(key: string): string {
     if (key === LLM_CONFIG_KEY) return "llm_config";
     if (key === STEER_INBOX_KEY) return "steer_inbox";
+    if (key.startsWith(MEMORY_KEY_PREFIX)) return "tools";
     return super.reservedKeyLabel(key);
   }
 
@@ -658,9 +697,16 @@ export class AgentNode extends Node {
     }
   }
 
-  /** Return the authored `tools:` grants, which may name host-filled groups. */
+  /** Return the authored `tools:` grants of host tools and groups, which may name host-filled groups. */
   override grantedTools(): readonly ToolGrant[] {
-    return [...this.tools];
+    return this.tools.filter((grant) => !this.memoryInputs.includes(grantName(grant)));
+  }
+
+  /** Return the authored `tools:` grants of memories, in grant order. */
+  override memoryGrants(): readonly MemoryGrant[] {
+    return this.tools
+      .filter((grant) => this.memoryInputs.includes(grantName(grant)))
+      .map((grant) => Object.freeze({ input: grantName(grant), tools: grant.kind === "name" ? null : grant.tools }));
   }
 
   /**
@@ -779,22 +825,24 @@ export class AgentNode extends Node {
     config: Readonly<Record<string, unknown>> | null,
     caps: NodeCaps,
     options: {
+      inputs: Readonly<Record<string, unknown>>;
       systemPrompt: string;
       skills: readonly Skill[];
       models: ModelAccess;
       steerInbox: SteerInbox | undefined;
     },
   ): AgentRunContext {
+    const { tools, toolset } = this.invocationTools(options.inputs, caps);
     return {
       nodeId: this.id,
       messages,
-      tools: [...this.tools],
+      tools,
       llmConfig: config,
       outputType: isExactly(this.outputContract, ValueContract) ? this.outputContract.type : null,
       retries: this.retries,
       maxToolIterations: this.maxToolIterations(),
       signal: caps.signal,
-      toolset: caps.tools ?? null,
+      toolset,
       emitStream: caps.emitStream,
       emitEvent: caps.emitEvent,
       systemPrompt: options.systemPrompt,
@@ -808,6 +856,110 @@ export class AgentNode extends Node {
       random: caps.random,
       runDir: caps.runDir ?? null,
     };
+  }
+
+  /**
+   * Return the grants one invocation's model is given and the tool set they resolve in: every
+   * authored grant in its order, but none of a memory left out (an Optional one, null), and the
+   * run's tools with each bound memory's granted tools as a local group over its run session.
+   *
+   * @throws CapabilityFault carrying the error when a memory is bound but the evaluator gave no
+   *   memory sessions, or none on that memory.
+   */
+  private invocationTools(
+    inputs: Readonly<Record<string, unknown>>,
+    caps: NodeCaps,
+  ): { tools: ToolGrant[]; toolset: ToolSet | null } {
+    const { tools, memories } = this.memoryPlan(inputs);
+    const groups = new Map<string, FunctionTool[]>();
+    const author = { kind: "agent" as const, name: staticPathOf(this.id) };
+    for (const [input, value] of memories) {
+      const session = memorySession(caps, value.identity);
+      groups.set(input, memoryTools(value, session, { input, tools: this.grantedMemoryTools(input) }, author));
+    }
+    const toolset = caps.tools ?? null;
+    if (groups.size === 0) return { tools, toolset };
+    return { tools, toolset: (toolset ?? new ToolSet()).withLocalGroups(groups, MEMORY_SCOPE_LABEL) };
+  }
+
+  /**
+   * Return the grants an invocation's model is given, which the live loop and a rebuilt request
+   * both expand: every authored grant in its order, but none of a memory left out (an Optional one,
+   * null); and each bound memory a grant names, by input in grant order.
+   */
+  private memoryPlan(inputs: Readonly<Record<string, unknown>>): { tools: ToolGrant[]; memories: Map<string, MemoryRef> } {
+    const bound = this.boundMemories(inputs);
+    const tools = this.tools.filter((grant) => !bound.has(grantName(grant)) || bound.get(grantName(grant)) !== null);
+    const memories = new Map<string, MemoryRef>();
+    for (const [input, value] of bound) if (value !== null) memories.set(input, value);
+    return { tools, memories };
+  }
+
+  /**
+   * Return the memory each memory input this agent grants is bound to, by input in grant order:
+   * its reserved `__memory_<input>` value, `null` for an Optional memory left out.
+   */
+  private boundMemories(inputs: Readonly<Record<string, unknown>>): Map<string, MemoryRef | null> {
+    const bound = new Map<string, MemoryRef | null>();
+    for (const { input } of this.memoryGrants()) {
+      const value = inputs[memoryKey(input)];
+      bound.set(input, MemoryRef.isMemoryRef(value) ? value : null);
+    }
+    return bound;
+  }
+
+  /** Return the tools this agent's grants give of memory input `input`, once each; `null` for all. */
+  private grantedMemoryTools(input: string): readonly string[] | null {
+    const listed: string[] = [];
+    for (const grant of this.memoryGrants()) {
+      if (grant.input !== input) continue;
+      if (grant.tools === null) return null;
+      for (const tool of grant.tools) if (!listed.includes(tool)) listed.push(tool);
+    }
+    return listed;
+  }
+
+  /**
+   * Return the model-visible name of `value`'s hint tool when this agent holds that tool on a
+   * memory of `value`'s identity, named by the grant's input; else `null`.
+   */
+  private hintTool(value: MemoryRef, inputs: Readonly<Record<string, unknown>>): string | null {
+    const hint = value.recall.hint;
+    if (hint === null) return null;
+    for (const [input, bound] of this.boundMemories(inputs)) {
+      if (bound === null || bound.identity !== value.identity) continue;
+      const granted = this.grantedMemoryTools(input);
+      const holds = granted === null ? bound.tools.some((tool) => tool.name === hint.tool) : granted.includes(hint.tool);
+      if (holds) return visibleToolName(input, hint.tool);
+    }
+    return null;
+  }
+
+  /**
+   * Replace, in `record`, each memory input with its rendered recall (`renderRecall`), and its
+   * declared type in `types` with `str`. A memory input is one holding a `MemoryRef`, or one whose
+   * declared type is a memory type, which then holds a memory or null (an Optional one left out,
+   * which renders empty).
+   *
+   * @throws TypeError when an input declared a memory holds anything else: a bound value no
+   *   prompt may show.
+   */
+  private renderMemories(
+    record: ValueRecord,
+    types: Map<string, Type | null>,
+    inputs: Readonly<Record<string, unknown>>,
+  ): void {
+    for (const [name, value] of Object.entries(record)) {
+      if (name.startsWith(MEMORY_KEY_PREFIX)) continue;
+      const declared = isMemoryType(types.get(name));
+      let text: string;
+      if (MemoryRef.isMemoryRef(value)) text = renderRecall(value.recall, this.hintTool(value, inputs));
+      else if (declared && value === null) text = renderRecall(null, null);
+      else if (declared) throw new TypeError(`AGENT node ${reprText(this.id)}: memory input ${reprText(name)} holds no memory`);
+      else continue;
+      setField(record, name, text);
+      types.set(name, Type.scalar(ValueKind.STRING));
+    }
   }
 
   /**
@@ -893,6 +1045,7 @@ export class AgentNode extends Node {
     const env = models.env;
     checkStopped(caps);
     const ctx = this.runContext(rendered.modelMessages(), config, caps, {
+      inputs,
       systemPrompt: rendered.systemPrompt,
       skills: rendered.skills,
       models,
@@ -983,6 +1136,7 @@ export class AgentNode extends Node {
     // The inputs' declared types, and each variable's contract.
     const types = new Map(localTypes ?? []);
     for (const variable of this.variables) types.set(variable.name, (variable.contract as ValueContract).type);
+    this.renderMemories(record, types, inputs);
     const declared = localDeclared(types);
     const messages =
       typeof this.prompt === "string"
@@ -1031,7 +1185,12 @@ export class AgentNode extends Node {
       return { ...none, digestOk: false };
     }
     const system = new ModelMessage({ role: "system", parts: [new TextPart(rendered.systemPrompt)] });
-    const tools = caps.toolSpecs(this.tools, rendered.skills.length > 0 ? loadSkillTool() : null);
+    // The memories' tools as the live loop built them, from the values the run recorded.
+    const { tools: grants, memories } = this.memoryPlan(inputs);
+    const local = new Map(
+      [...memories].map(([input, value]) => [input, grantedMemorySpecs(value, { input, tools: this.grantedMemoryTools(input) })]),
+    );
+    const tools = caps.toolSpecs(grants, rendered.skills.length > 0 ? loadSkillTool() : null, local);
     const contract = this.outputContract;
     const structured = async () => {
       if (!isExactly(contract, ValueContract) || caps.models === null) return null;
@@ -1059,4 +1218,9 @@ export class AgentNode extends Node {
   override declaredVariables(): readonly Parameter[] {
     return [...this.variables];
   }
+}
+
+/** The name a grant gives: a tool or group's name, or the group of a group grant. */
+function grantName(grant: ToolGrant): string {
+  return grant.kind === "name" ? grant.name : grant.group;
 }

@@ -1,0 +1,93 @@
+# The crash cuts the agent after its reply's model_call (record 9), once its `lessons_append` call
+# wrote to MEMORY.md but before its tool_result was recorded. Memory tools are resumable, so the
+# resumed agent sends the call again with the same id (r1/answer/1/0) instead of closing it
+# `crashed`; the memory knows that change id and returns its stored result, so the line lands once.
+# The resumed request still renders the recall the run started with, and the resume reports that
+# the memory moved while the run was down.
+kind: resume
+flow: |
+  id: once
+  name: once
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        lessons: ${input.lessons}
+      tools: [{lessons: [append]}]
+      system_prompt: Help.
+      prompt: "<memory>${lessons}</memory> Add a lesson."
+      output: str
+  output: ${answer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files:
+        MEMORY.md: Prefer short answers.
+  models:
+    answer:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: lessons_append, arguments: {path: MEMORY.md, text: Cite sources.}}
+      - request:
+          messages:
+            - format: yian.message.v1
+              role: system
+              parts:
+                - type: text
+                  text: Help.
+            - format: yian.message.v1
+              role: user
+              parts:
+                - type: text
+                  text: <memory>Prefer short answers.</memory> Add a lesson.
+            - format: yian.message.v1
+              role: assistant
+              parts:
+                - type: tool_call
+                  id: c1
+                  name: lessons_append
+                  arguments:
+                    path: MEMORY.md
+                    text: Cite sources.
+            - format: yian.message.v1
+              role: tool
+              parts:
+                - type: tool_result
+                  call_id: c1
+                  name: lessons_append
+                  content: '{"path":"MEMORY.md","hash":"764650d337d7419f8c2e5cadc01be4b74c1e1c65c0583924feb1a96d30df6231","version":"137f7df0b826e8514342590243ce0db5cddd0a408edc6921f946539c96c7c4d4"}'
+          tools:
+            - name: lessons_append
+              description: Add text to the end of a file, on a new line. Creates the file and its folders when missing, and never conflicts.
+              parameters:
+                additionalProperties: false
+                properties:
+                  path:
+                    description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                    type: string
+                  text:
+                    description: The text to add.
+                    type: string
+                required:
+                  - path
+                  - text
+                type: object
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: noted}]}
+  crash_after_record: 9
+expect:
+  output: {status: succeeded, output: noted}
+  memory:
+    lessons:
+      MEMORY.md: |-
+        Prefer short answers.
+        Cite sources.
+  memory_drift: [lessons]

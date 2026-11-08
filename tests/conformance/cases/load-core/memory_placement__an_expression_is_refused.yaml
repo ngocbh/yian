@@ -1,0 +1,29 @@
+# A memory is read only whole, never inside an expression.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  nodes:
+    a:
+      kind: agent
+      output: str
+      prompt: hi
+      input:
+        t: ${input.lessons :- 1}
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: |-
+          flow has unresolved references:
+            node 'a' input 't' from: ${input.lessons} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` (not inside text or an expression)
+        frames:
+          - label: flow.yaml
+            range:
+              - 11
+              - 10
+              - 11
+              - 31

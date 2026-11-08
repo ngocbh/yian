@@ -1,0 +1,26 @@
+# A flow output can't be a memory.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  nodes:
+    c:
+      kind: code
+      code: return 1
+  output: ${input.lessons}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: |-
+          flow has unresolved references:
+            flow output from: ${input.lessons} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` (a flow output can't be a memory)
+        frames:
+          - label: flow.yaml
+            range:
+              - 9
+              - 9
+              - 9
+              - 25

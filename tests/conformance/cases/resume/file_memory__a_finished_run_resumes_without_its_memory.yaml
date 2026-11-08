@@ -1,0 +1,28 @@
+# A finished run's log resumes read-only: it opens no memory, so it needs none bound.
+kind: resume
+flow: |
+  id: note
+  name: note
+  input:
+    lessons: !FileMemory
+  nodes:
+    add:
+      kind: tool
+      tool_id: {lessons: append}
+      input:
+        path: notes.md
+        text: Check sums twice.
+  output: ${add.output.path}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons}
+  crash_after_record: end
+resume:
+  memory: {lessons: null}
+expect:
+  output: {status: succeeded, output: notes.md}
+  memory:
+    lessons:
+      notes.md: Check sums twice.
+  memory_drift: []

@@ -55,7 +55,7 @@ import {
   type SourceRange,
 } from "../diagnostics.ts";
 import { Binding, type ValuePath, ValueTemplate } from "../nodes/contracts.ts";
-import { typeName, readTypedefs, type TypeRegistry } from "../typesys/types.ts";
+import { typeName, readTypedefs, type TypeRegistry, withMemoryTypes } from "../typesys/types.ts";
 import {
   isList,
   isRecord,
@@ -70,6 +70,7 @@ import type { FlowSource } from "../runtime/log.ts";
 import { assemble, type AssembleOptions, type CallableScope as AssemblyScope, ComposedFlow } from "./build/pipeline.ts";
 import { INLINE_FLOW_PREFIX } from "./desugar/inline_bodies.ts";
 import { LoadDiagnostics, LoadError, rejectRemovedMemoryKey } from "./helpers/errors.ts";
+import { type MemoryClass, type MemoryTypeTable, memoryTypeTools, NO_MEMORY_TYPES } from "./helpers/memory.ts";
 import { boundaryFieldRanges, pathText } from "./helpers/source.ts";
 import { rejectUnreadTags } from "./helpers/tags.ts";
 import { parseUsesRef } from "./helpers/uses.ts";
@@ -121,6 +122,7 @@ function replaceFlow(
     originResolver?: OriginResolver | null;
     importDepth?: number;
     source?: FlowSource | null;
+    memoryTypes?: readonly MemoryClass[];
   },
 ): ComposedFlow {
   return new ComposedFlow(changes.compiled ?? flow.compiled, {
@@ -130,6 +132,7 @@ function replaceFlow(
     originResolver: changes.originResolver === undefined ? flow.originResolver : changes.originResolver,
     importDepth: changes.importDepth === undefined ? flow.importDepth : changes.importDepth,
     source: changes.source === undefined ? flow.source : changes.source,
+    memoryTypes: changes.memoryTypes ?? flow.memoryTypes,
   });
 }
 
@@ -322,9 +325,18 @@ export class LoadCtx {
   readonly read = new Map<string, ReadFile>();
   /** The real path every CODE reference in the import graph must resolve inside, or `null`. */
   readonly codeRoot: string | null;
+  /** The tool names of each host memory type the load was given, by contract type. */
+  readonly memoryTools: ReadonlyMap<string, readonly string[]>;
+  /** Whether a flow input's unknown tag reads as a memory type, as for a recorded flow. */
+  readonly opaqueMemoryTags: boolean;
 
-  constructor(codeRoot: string | null = null) {
+  constructor(
+    codeRoot: string | null = null,
+    options: { memoryTools?: ReadonlyMap<string, readonly string[]>; opaqueMemoryTags?: boolean } = {},
+  ) {
     this.codeRoot = codeRoot;
+    this.memoryTools = options.memoryTools ?? new Map();
+    this.opaqueMemoryTags = options.opaqueMemoryTags ?? false;
   }
 
   /**
@@ -350,9 +362,15 @@ export class LoadCtx {
   }
 }
 
-/** Return a fresh `LoadCtx` whose `codeRoot` is `codeRoot` made absolute and real, or `null`. */
-async function newLoadCtx(codeRoot: string | null): Promise<LoadCtx> {
-  return new LoadCtx(codeRoot === null ? null : await realOr(resolvePath(codeRoot)));
+/**
+ * Return a fresh `LoadCtx` whose `codeRoot` is `codeRoot` made absolute and real, or `null`, and
+ * that knows the host memory types `memoryTools`.
+ */
+async function newLoadCtx(
+  codeRoot: string | null,
+  memoryTools: ReadonlyMap<string, readonly string[]>,
+): Promise<LoadCtx> {
+  return new LoadCtx(codeRoot === null ? null : await realOr(resolvePath(codeRoot)), { memoryTools });
 }
 
 // `uses:` imports being loaded around the current one. It spans files and `loadFlow` never resets
@@ -614,6 +632,7 @@ interface LoadOptions {
   baseDir?: string | null;
   codeRoot?: string | null;
   env?: Env;
+  memoryTypes?: readonly MemoryClass[];
 }
 
 /**
@@ -644,6 +663,9 @@ interface LoadOptions {
  * @param options.env The environment this load reads the `YIAN_*` values from; default
  *   `processEnv`, which keeps the values in effect, so a `childResolver` that calls `loadFlow`
  *   without `env` loads under the caller's.
+ * @param options.memoryTypes The host's own memory classes, so a flow input can name each by its
+ *   contract's type (`j: !TradeJournal`) and a grant is checked against its tools. A class that
+ *   implements a built-in contract needs no entry. The flow keeps the list in `memoryTypes`.
  * @returns The compiled, validated flow. Its `source` holds `text` under `sourceLabel` and every
  *   file the load read, with where each `uses:` path resolved (see `FlowSource`); it is `null`
  *   when a `childResolver` returned a flow without a source (one built in code).
@@ -651,7 +673,8 @@ interface LoadOptions {
  *   offending line when source provenance is available: among them an `llm_config` value a child
  *   flow's agent would inherit before it is known.
  * @throws DefaultsError when a `YIAN_<NAME>` value in `env` isn't accepted.
- * @throws TypeError when `sourceLabel` isn't text.
+ * @throws TypeError when `sourceLabel` isn't text, or `memoryTypes` isn't a list of memory
+ *   classes with contracts a tag can name.
  */
 export async function loadFlow(text: string, options: LoadOptions = {}): Promise<ComposedFlow> {
   const { env = processEnv, ...rest } = options;
@@ -662,11 +685,13 @@ export async function loadFlow(text: string, options: LoadOptions = {}): Promise
 /** Load `text` as `loadFlow` does, under the `YIAN_*` values already in effect. */
 async function loadText(text: string, options: Omit<LoadOptions, "env">): Promise<ComposedFlow> {
   const { childResolver = null, searchPaths = null, sourceLabel = "<flow>", baseDir = null, codeRoot = null } = options;
+  const { memoryTypes = [] } = options;
   if (typeof sourceLabel !== "string") throw new TypeError("source_label must be a string");
+  const memoryTools = memoryTypeTools(memoryTypes);
   const document = parseSourceDocument(text, sourceLabel);
   // Absolute, so a CODE reference doesn't depend on the cwd when the node runs.
   const ownDir = resolvePath(baseDir ?? searchPaths?.[0] ?? process.cwd());
-  const ctx = await newLoadCtx(codeRoot);
+  const ctx = await newLoadCtx(codeRoot, memoryTools);
   const rootFile: ReadFile = { text, refs: new Map() };
   const hosted = new Map<string, unknown>();
   const resolver: ChildResolver | null =
@@ -679,7 +704,10 @@ async function loadText(text: string, options: Omit<LoadOptions, "env">): Promis
         };
   const loaded = await loadFlowFile(document, resolver, searchPaths, ctx, ownDir, rootFile);
   if (ctx.codeRoot !== null) await checkHostedCode(hosted, document, ctx.codeRoot);
-  const flow = replaceFlow(loaded, { source: await flowSource(ctx, rootFile, hosted, sourceLabel, ownDir) });
+  const flow = replaceFlow(loaded, {
+    source: await flowSource(ctx, rootFile, hosted, sourceLabel, ownDir),
+    memoryTypes: Object.freeze([...memoryTypes]),
+  });
   return checkRoot(flow);
 }
 
@@ -710,7 +738,9 @@ async function checkHostedCode(
  * the load starts at `source.root` and resolves each `uses:` ref through the file's `refs`. Each
  * file is labelled with its key's file name, and its CODE references resolve on disk in its key's
  * folder below `source.dir`, inside `source.codeRoot` when it has one (a host child's recorded
- * file included), as `loadFlow`'s `codeRoot`.
+ * file included), as `loadFlow`'s `codeRoot`. A flow input's tag naming a type no file declares
+ * reads as a memory type: the run's start checked its memories, so the host need not pass its
+ * memory classes again, and the fingerprint is the same.
  *
  * @param source A loaded flow's `source`, or a run's recorded `flow`.
  * @param options.env The environment the load reads the `YIAN_*` values from, as `loadFlow`'s.
@@ -726,7 +756,8 @@ export async function loadFlowSource(
   const { env = processEnv } = options;
   return withEnv(env, async () => {
     // Already a real path, as the load that made the source resolved it.
-    const loaded = await loadSourceFile(source, source.root, new LoadCtx(source.codeRoot));
+    const ctx = new LoadCtx(source.codeRoot, { opaqueMemoryTags: true });
+    const loaded = await loadSourceFile(source, source.root, ctx);
     return checkRoot(replaceFlow(loaded, { source }));
   });
 }
@@ -1069,7 +1100,7 @@ export async function loadFlowFile(
   rejectUnreadTags(document, new Set(), diagnostics, { typedefsOnly: true });
   let registry: TypeRegistry;
   try {
-    registry = readTypedefs(f.typedefs);
+    registry = readTypedefs(f.typedefs, ctx.memoryTools.keys());
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
     throw diagnostics.error(`bad typedefs: ${error.message}`, {
@@ -1077,6 +1108,12 @@ export async function loadFlowFile(
       cause: error,
     });
   }
+  // A host memory type the file also declares as a typedef keeps the typedef's meaning, and a
+  // flow input naming it is refused (`inputTagRegistry`); an unused one loads, since a host passes
+  // its memory types to every flow it loads.
+  const clashes = new Set([...ctx.memoryTools.keys()].filter((name) => registry.has(name)));
+  registry = withMemoryTypes(registry, ctx.memoryTools.keys());
+  const memoryTypes: MemoryTypeTable = { tools: ctx.memoryTools, opaque: ctx.opaqueMemoryTags, clashes };
 
   // `system.paths` is honored only when the file's own directory is known: it was loaded with
   // search paths, whose first entry is that directory. Without them `system.paths` is inert, so
@@ -1093,6 +1130,7 @@ export async function loadFlowFile(
   const scope = new CallableScope(f.defs, registry, external, f.uses, {
     defsCursor: root.has("defs") ? root.child("defs") : null,
     usesCursor: root.has("uses") ? root.child("uses") : null,
+    memoryTypes,
     diagnostics,
     baseDir,
   });
@@ -1215,6 +1253,7 @@ export class CallableScope implements AssemblyScope {
   readonly #diagnostics: LoadDiagnostics;
   readonly #catalogBuilder: SourceCatalogBuilder;
   readonly #baseDir: string | null;
+  readonly #memoryTypes: MemoryTypeTable;
   readonly #private = new Map<string, PrivateCallable>();
   readonly #built = new Map<string, ComposedFlow>();
   readonly #inProgress = new Set<string>();
@@ -1236,6 +1275,8 @@ export class CallableScope implements AssemblyScope {
    *   retained declaration cursor, or source-free).
    * @param options.baseDir The directory the file's CODE references resolve against (default
    *   `null`, the current directory).
+   * @param options.memoryTypes How the file's flow inputs read memory types beyond the
+   *   built-ins (default: none).
    * @throws LoadError when a name is declared in both `defs:` and `uses:`.
    */
   constructor(
@@ -1249,9 +1290,11 @@ export class CallableScope implements AssemblyScope {
       catalogBuilder?: SourceCatalogBuilder | null;
       diagnostics?: LoadDiagnostics | null;
       baseDir?: string | null;
+      memoryTypes?: MemoryTypeTable;
     } = {},
   ) {
     const { defsCursor = null, usesCursor = null, catalogBuilder = null, diagnostics = null, baseDir = null } = options;
+    this.#memoryTypes = options.memoryTypes ?? NO_MEMORY_TYPES;
     const ownedDiagnostics = diagnostics ?? LoadDiagnostics.fromCursor(defsCursor ?? usesCursor);
     const both = Object.keys(defsSection)
       .filter((name) => Object.hasOwn(uses, name))
@@ -1292,6 +1335,11 @@ export class CallableScope implements AssemblyScope {
   /** The directory this file's CODE references resolve against; `null` is the current directory. */
   get baseDir(): string | null {
     return this.#baseDir;
+  }
+
+  /** How this file's flow inputs read memory types beyond the built-ins. */
+  get memoryTypes(): MemoryTypeTable {
+    return this.#memoryTypes;
   }
 
   /** Return the range of alias `alias`'s ref, or `null`. */

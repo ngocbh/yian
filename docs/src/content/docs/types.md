@@ -56,6 +56,7 @@ unknown name is a load error that suggests a close match.
 | `Union(A, B)` | A value of one of these records (see [Unions](#unions)) |
 | `dict(K, V)` | The same as `object`; `K` and `V` must name known types |
 | `Inbox(X)` | A handle on an inbox of `X` events (see [Inboxes and waiting](/inboxes/)) |
+| `FileMemory` | A memory, written only as a flow input's tag (see [Memory](/memory/)) |
 | `Message` | A chat message, built in (see [Agents](/agents/)) |
 
 Types use parentheses, not brackets: `Optional[str]` is a load error.
@@ -95,7 +96,8 @@ output: ${input.signal.score}
 - A record written inside `{...}` splits at each comma, so quote a type with a comma in it:
   `Msg: {role: "Literal(user, assistant)", text: str}`, or write the record in block style.
 - A record can't contain itself, directly or through other typedefs.
-- A typedef can't take a built-in name, such as `str`, `Optional` or `Message`.
+- A typedef can't take a built-in name, such as `str`, `Optional`, `Message` or the memory
+  types `FileMemory` and `VectorDBMemory`, and can't name a memory type.
 - Every typedef is checked when the flow loads, even one nothing uses.
 
 `Literal` values are text. One `Literal` fits where another is expected when its values are a

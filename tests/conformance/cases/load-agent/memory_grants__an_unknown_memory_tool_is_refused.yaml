@@ -1,0 +1,26 @@
+# A memory grant is checked against its type's tools at load.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  nodes:
+    a:
+      kind: agent
+      output: str
+      prompt: hi
+      tools: [{lessons: [upsert]}]
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "node 'a' (kind=agent) grants {lessons: [upsert]}: `lessons` has no tool `upsert`; it has list, read, search, append, create, edit, delete, rewrite"
+        frames:
+          - label: flow.yaml
+            range:
+              - 10
+              - 12
+              - 10
+              - 33

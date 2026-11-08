@@ -894,3 +894,35 @@ describe("function tool types", () => {
     });
   }
 });
+
+describe("withLocalGroups", () => {
+  const tool = (name: string) =>
+    new FunctionTool({ name, description: name, parametersJsonSchema: { type: "object" }, execute: () => `local ${name}` });
+
+  test("a local group's tools resolve by group, before a run group of that name, and its scope comes first", async () => {
+    const runRead = tool("read");
+    const run = new ToolSet({ lessons: [runRead], lookup: tool("lookup") }).forRun("r");
+    const read = tool("read");
+    const local = run.withLocalGroups(new Map([["lessons", [read, tool("append")]]]), "this node's memories");
+    expect(local.resolve([{ group: "lessons", name: "read" }])).toEqual([read]);
+    expect(run.resolve([{ group: "lessons", name: "read" }])).toEqual([runRead]);
+    expect(local.runId).toBe("r");
+    const [scope, runScope] = local.scopes();
+    expect(scope!.label).toBe("this node's memories");
+    expect(scope!.group("lessons")).toEqual(["read", "append"]);
+    expect(scope!.bareMembers).toBe(false);
+    expect(runScope!.label).toBe("this run");
+    const granted = expandGrants([asToolGrant("lookup"), { kind: "group", group: "lessons", tools: ["append"] }], local.scopes());
+    expect(granted.map((each) => [each.visible, each.scope])).toEqual([
+      ["lookup", 1],
+      ["lessons_append", 0],
+    ]);
+    expect(await local.invoke({ group: "lessons", name: "append" }, {})).toBe("local append");
+    expect(() => local.resolve([{ group: "lessons", name: "edit" }])).toThrow("`lessons` has no tool `edit`; it has read, append");
+  });
+
+  test("a bare name never reaches a local group's tool", () => {
+    const local = new ToolSet({}).withLocalGroups(new Map([["lessons", [tool("read")]]]), "this node's memories");
+    expect(() => expandGrants([asToolGrant("read")], local.scopes())).toThrow("grants unknown tool or group 'read'");
+  });
+});

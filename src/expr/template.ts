@@ -51,7 +51,7 @@
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import type { Value, ValueRecord } from "../typesys/index.ts";
-import { writeAsText } from "../typesys/values.ts";
+import { MemoryRef, writeAsText } from "../typesys/values.ts";
 import { isNonPromptBuiltin, TEMPLATE_FNS } from "./builtins.ts";
 import {
   checkCalls,
@@ -273,8 +273,14 @@ function codePoints(text: string): number {
   return n;
 }
 
-/** Write `value` in the text form, turning the writer's runtime-limit error into an `ExpressionError`. */
+/**
+ * Write `value` in the text form, turning the writer's runtime-limit error into an `ExpressionError`.
+ *
+ * @throws TypeError for a memory value: only an AGENT renders one, as its recall, before its
+ *   template is read, so one here was never rendered and its JSON form must not be shown.
+ */
 function asText(value: Value): string {
+  if (MemoryRef.isMemoryRef(value)) throw new TypeError("a memory value renders only as an AGENT prompt's input");
   try {
     return writeAsText(value);
   } catch (error) {

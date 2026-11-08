@@ -6,9 +6,10 @@
  * `ask_user`, are ordinary explicitly authored tool grants. A crash or host interruption unwinds
  * the node; no conversation or continuation state is stored in the graph or variable pool.
  *
- * Knows about:   nodes/base, nodes/binding, nodes/contracts, peer AGENT modules, llm (messages),
- *                llm_clients (config, connection, factory), expr (expressions, templates,
- *                lineage), skills, defaults, diagnostics and typesys.
+ * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/ids, peer AGENT modules, llm
+ *                (messages), llm_clients (config, connection, factory), expr (expressions,
+ *                templates, lineage), memory (recall rendering, memory tools), skills, tools,
+ *                defaults, diagnostics and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
@@ -28,17 +29,26 @@ import { defaultModelAccess, type ModelAccess } from "../../llm_clients/factory.
 import { MediaPart, Message as ModelMessage, MessageFormatError, TextPart } from "../../llm/messages.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL, loadSkillTool, systemPromptWithSkills } from "../../skills/tool.ts";
-import { asToolGrant, type MemoryGrant, type ToolGrant } from "../../tools/grants.ts";
+import type { MemorySession } from "../../memory/base.ts";
+import { renderRecall } from "../../memory/render.ts";
+import { memoryTools } from "../../memory/tools.ts";
+import type { FunctionTool } from "../../tools/function_tools.ts";
+import { asToolGrant, type MemoryGrant, type ToolGrant, visibleToolName } from "../../tools/grants.ts";
+import { ToolSet } from "../../tools/registry.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import {
   buildValueAs,
   isList,
   inboxName,
+  isMemoryType,
   isRecord,
-  type Type,
+  MemoryRef,
+  setField,
+  Type,
   TypeCheckError,
   TypedValue,
+  ValueKind,
   type ValueRecord,
   valueRepr,
   writeAsText,
@@ -75,6 +85,7 @@ import {
   type ValuePath,
   ValueTemplate,
 } from "../contracts.ts";
+import { staticPathOf } from "../ids.ts";
 import { type AgentRunContext, checkStopped, DEFAULT_SYSTEM, sentCredentials, ToolIterationLimitError } from "./context.ts";
 import { Interrupted } from "./interrupts.ts";
 import { modelFailureCode } from "./live.ts";
@@ -116,6 +127,21 @@ const CONFIG_STEP_KIND = "llm_config";
 function openSteerInbox(caps: NodeCaps, inbox: string): SteerInbox {
   if (caps.openSteerInbox === undefined) throw new CapabilityFault(new TypeError("the evaluator gave no steer inbox"));
   return caps.openSteerInbox(inbox);
+}
+
+/**
+ * Return the run's session on the memory `identity`, through `caps.memories`.
+ *
+ * @throws CapabilityFault carrying the error when the evaluator gave no memory sessions, or none on
+ *   that memory: the run didn't bind a memory its nodes were bound to.
+ */
+function memorySession(caps: NodeCaps, identity: string): MemorySession {
+  if (caps.memories === undefined) throw new CapabilityFault(new TypeError("the evaluator gave no memory sessions"));
+  try {
+    return caps.memories.session(identity);
+  } catch (error) {
+    throw new CapabilityFault(error);
+  }
 }
 
 /** Whether `value` is a valid `max_tool_iterations`: a positive int, or `-1n` for no cap. */
@@ -322,6 +348,7 @@ export class AgentInterruptedError extends Error {
 export class AgentNode extends Node {
   readonly kind = NodeKind.AGENT;
   override readonly needsTools: boolean = true;
+  override readonly needsMemories: boolean = true;
   override readonly needsLiveEvents: boolean = true;
   override readonly needsSkills: boolean = true;
   override readonly needsModels: boolean = true;
@@ -813,22 +840,24 @@ export class AgentNode extends Node {
     config: Readonly<Record<string, unknown>> | null,
     caps: NodeCaps,
     options: {
+      inputs: Readonly<Record<string, unknown>>;
       systemPrompt: string;
       skills: readonly Skill[];
       models: ModelAccess;
       steerInbox: SteerInbox | undefined;
     },
   ): AgentRunContext {
+    const { tools, toolset } = this.invocationTools(options.inputs, caps);
     return {
       nodeId: this.id,
       messages,
-      tools: [...this.grantedTools()],
+      tools,
       llmConfig: config,
       outputType: isExactly(this.outputContract, ValueContract) ? this.outputContract.type : null,
       retries: this.retries,
       maxToolIterations: this.maxToolIterations(),
       signal: caps.signal,
-      toolset: caps.tools ?? null,
+      toolset,
       emitStream: caps.emitStream,
       emitEvent: caps.emitEvent,
       systemPrompt: options.systemPrompt,
@@ -842,6 +871,99 @@ export class AgentNode extends Node {
       random: caps.random,
       runDir: caps.runDir ?? null,
     };
+  }
+
+  /**
+   * Return the grants one invocation's model is given and the tool set they resolve in: every
+   * authored grant in its order, but none of a memory left out (an Optional one, null), and the
+   * run's tools with each bound memory's granted tools as a local group over its run session.
+   *
+   * @throws CapabilityFault carrying the error when a memory is bound but the evaluator gave no
+   *   memory sessions, or none on that memory.
+   */
+  private invocationTools(
+    inputs: Readonly<Record<string, unknown>>,
+    caps: NodeCaps,
+  ): { tools: ToolGrant[]; toolset: ToolSet | null } {
+    const memories = this.boundMemories(inputs);
+    const tools = this.tools.filter((grant) => !memories.has(grantName(grant)) || memories.get(grantName(grant)) !== null);
+    const groups = new Map<string, FunctionTool[]>();
+    const author = { kind: "agent" as const, name: staticPathOf(this.id) };
+    for (const [input, value] of memories) {
+      if (value === null) continue;
+      const session = memorySession(caps, value.identity);
+      groups.set(input, memoryTools(value, session, { input, tools: this.grantedMemoryTools(input) }, author));
+    }
+    const toolset = caps.tools ?? null;
+    if (groups.size === 0) return { tools, toolset };
+    return { tools, toolset: (toolset ?? new ToolSet()).withLocalGroups(groups, "this node's memories") };
+  }
+
+  /**
+   * Return the memory each memory input this agent grants is bound to, by input in grant order:
+   * its reserved `__memory_<input>` value, `null` for an Optional memory left out.
+   */
+  private boundMemories(inputs: Readonly<Record<string, unknown>>): Map<string, MemoryRef | null> {
+    const bound = new Map<string, MemoryRef | null>();
+    for (const { input } of this.memoryGrants()) {
+      const value = inputs[memoryKey(input)];
+      bound.set(input, MemoryRef.isMemoryRef(value) ? value : null);
+    }
+    return bound;
+  }
+
+  /** Return the tools this agent's grants give of memory input `input`, once each; `null` for all. */
+  private grantedMemoryTools(input: string): readonly string[] | null {
+    const listed: string[] = [];
+    for (const grant of this.memoryGrants()) {
+      if (grant.input !== input) continue;
+      if (grant.tools === null) return null;
+      for (const tool of grant.tools) if (!listed.includes(tool)) listed.push(tool);
+    }
+    return listed;
+  }
+
+  /**
+   * Return the model-visible name of `value`'s hint tool when this agent holds that tool on a
+   * memory of `value`'s identity, named by the grant's input; else `null`.
+   */
+  private hintTool(value: MemoryRef, inputs: Readonly<Record<string, unknown>>): string | null {
+    const hint = value.recall.hint;
+    if (hint === null) return null;
+    for (const [input, bound] of this.boundMemories(inputs)) {
+      if (bound === null || bound.identity !== value.identity) continue;
+      const granted = this.grantedMemoryTools(input);
+      const holds = granted === null ? bound.tools.some((tool) => tool.name === hint.tool) : granted.includes(hint.tool);
+      if (holds) return visibleToolName(input, hint.tool);
+    }
+    return null;
+  }
+
+  /**
+   * Return `record` with each memory input rendered as its recall (`renderRecall`), and `types`
+   * with each one's declared type `str`. A memory input is one holding a `MemoryRef`, or one whose
+   * declared type is a memory type, which then holds a memory or null (an Optional one left out,
+   * which renders empty).
+   *
+   * @throws TypeError when an input declared a memory holds anything else: a bound value no
+   *   prompt may show.
+   */
+  private renderMemories(
+    record: ValueRecord,
+    types: Map<string, Type | null>,
+    inputs: Readonly<Record<string, unknown>>,
+  ): void {
+    for (const [name, value] of Object.entries(record)) {
+      if (name.startsWith(MEMORY_KEY_PREFIX)) continue;
+      const declared = isMemoryType(types.get(name));
+      let text: string;
+      if (MemoryRef.isMemoryRef(value)) text = renderRecall(value.recall, this.hintTool(value, inputs));
+      else if (declared && value === null) text = renderRecall(null, null);
+      else if (declared) throw new TypeError(`AGENT node ${reprText(this.id)}: memory input ${reprText(name)} holds no memory`);
+      else continue;
+      setField(record, name, text);
+      types.set(name, Type.scalar(ValueKind.STRING));
+    }
   }
 
   /**
@@ -927,6 +1049,7 @@ export class AgentNode extends Node {
     const env = models.env;
     checkStopped(caps);
     const ctx = this.runContext(rendered.modelMessages(), config, caps, {
+      inputs,
       systemPrompt: rendered.systemPrompt,
       skills: rendered.skills,
       models,
@@ -1017,6 +1140,7 @@ export class AgentNode extends Node {
     // The inputs' declared types, and each variable's contract.
     const types = new Map(localTypes ?? []);
     for (const variable of this.variables) types.set(variable.name, (variable.contract as ValueContract).type);
+    this.renderMemories(record, types, inputs);
     const declared = localDeclared(types);
     const messages =
       typeof this.prompt === "string"

@@ -163,7 +163,8 @@ export function memoryKey(input: string): string {
  * @param bind Resolves a named source and applies the check, as `bindReserved`'s `bind`; `null`
  *   resolves against `pool`.
  * @throws Error when the wiring lacks a grant's reserved binding.
- * @throws BindingError (`contract.input`) when a binding holds something other than a memory.
+ * @throws BindingError (`contract.input`) when a binding holds something other than a memory, or
+ *   two inputs hold one memory, which the node would reach twice.
  */
 export function bindMemoryGrants(
   nodeId: string,
@@ -174,6 +175,8 @@ export function bindMemoryGrants(
   bind: ReservedBinder | null,
 ): Record<string, unknown> {
   const reserved: Record<string, unknown> = {};
+  // The input each bound memory identity came through: one node reaches a memory by one input.
+  const granted = new Map<string, string>();
   for (const input of new Set(grants.map((grant) => grant.input))) {
     const key = memoryKey(input);
     if (!nodeWiring.has(key)) throw new Error(`node ${reprText(nodeId)} has no \`${key}\` wiring`);
@@ -185,7 +188,17 @@ export function bindMemoryGrants(
         origin: sourceOrigin(source),
       });
     };
-    reserved[key] = bind === null ? normalize(resolveSource(source, pool)) : bind(key, source, normalize);
+    const value = bind === null ? normalize(resolveSource(source, pool)) : bind(key, source, normalize);
+    reserved[key] = value;
+    if (!MemoryRef.isMemoryRef(value)) continue;
+    const other = granted.get(value.identity);
+    if (other !== undefined) {
+      throw new BindingError(`node ${reprText(nodeId)}: \`${input}\` and \`${other}\` are the same memory; grant one`, {
+        failureCode: "contract.input",
+        origin: sourceOrigin(source),
+      });
+    }
+    granted.set(value.identity, input);
   }
   return reserved;
 }

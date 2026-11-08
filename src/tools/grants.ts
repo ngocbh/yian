@@ -140,6 +140,23 @@ export interface GrantScope {
   readonly bareMembers: boolean;
 }
 
+/**
+ * Return a scope of groups local to one node, such as its memories: each group's tool names, in
+ * order. Only a grant naming a group reaches one; a bare name never does. A tool's identity is its
+ * group and name, so two groups' tools that would show one name stay two tools.
+ */
+export function localGroupScope(label: string, groups: ReadonlyMap<string, readonly string[]>): GrantScope {
+  return {
+    label,
+    bareMembers: false,
+    group: (name) => groups.get(name) ?? null,
+    hasTool: () => false,
+    groupsHolding: () => [],
+    groupNames: () => [...groups.keys()],
+    identity: (group, tool) => JSON.stringify([group, tool]),
+  };
+}
+
 /** One granted tool: the name the model sees, the tool it names, and that tool's identity. */
 export interface GrantedTool {
   /** The name the model sees: `<group>_<tool>` through a group grant, else the tool's own name. */

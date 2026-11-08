@@ -30,6 +30,7 @@ import {
   requiresFile,
   Type,
   TypeCheckError,
+  typeEquals,
   ValueKind,
   writeAsText,
 } from "../typesys/values.ts";
@@ -174,7 +175,7 @@ function intervalWithin(source: Type, sink: Type): boolean {
  * Every non-null type without a `file` in it fits `Any`; `Any` fits only `Any` (and
  * `Optional(Any)`), since load can't tell which JSON value it holds.
  * `Inbox(T)` relates to `Inbox(U)` as `T` to `U`, and to nothing else, `Any` and `object`
- * included.
+ * included. A memory fits only the same memory type with an equal item record.
  *
  * @param source - Type guaranteed by the producer.
  * @param sink - Type required by the consumer slot.
@@ -186,6 +187,7 @@ export function typesCompatible(source: Type, sink: Type): boolean {
   if (source.kind === ValueKind.INBOX || sink.kind === ValueKind.INBOX) {
     return source.kind === sink.kind && typesCompatible(source.element!, sink.element!);
   }
+  if (source.kind === ValueKind.MEMORY || sink.kind === ValueKind.MEMORY) return sameMemory(source, sink);
   if (sink.kind === ValueKind.ANY) return !hasFile(source);
   if (source.kind === ValueKind.ANY) return false;
   const sourceIsList = isListKind(source.kind);
@@ -320,11 +322,23 @@ function listElement(typ: Type): Type {
   return new Type({ kind: ValueKind.ANY, nullable: true });
 }
 
+/**
+ * Whether `a` and `b` are the same memory type: the same name, and equal item records or none.
+ * Nullability is left to the caller.
+ */
+function sameMemory(a: Type, b: Type): boolean {
+  if (a.kind !== ValueKind.MEMORY || b.kind !== ValueKind.MEMORY || a.memory !== b.memory) return false;
+  return a.element === undefined || b.element === undefined ? a.element === b.element : typeEquals(a.element, b.element);
+}
+
 /** Classify the non-null values of `inferred` against `declared`. */
 function relateNonNull(inferred: Type, declared: Type): TypeRelation {
   if (inferred.kind === ValueKind.INBOX || declared.kind === ValueKind.INBOX) {
     if (inferred.kind !== declared.kind) return "disjoint";
     return typeRelation(inferred.element!, declared.element!);
+  }
+  if (inferred.kind === ValueKind.MEMORY || declared.kind === ValueKind.MEMORY) {
+    return sameMemory(inferred, declared) ? "fits" : "disjoint";
   }
   if (declared.kind === ValueKind.ANY) {
     if (!hasFile(inferred)) return "fits";

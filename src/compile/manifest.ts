@@ -47,6 +47,7 @@ import {
   FileRef,
   InboxRef,
   isList,
+  isMemoryType,
   isRecord,
   jsTypeName,
   Type,
@@ -494,7 +495,9 @@ function canonicalValue(value: unknown, ctx: ManifestContext, path: string): Jso
  * Canonicalize one resolved structural Type, including nested fields, elements and members.
  *
  * An absent refinement is `null`; `bounds` and `union` appear only when present, the members in
- * canonical order so authored order is not identity.
+ * canonical order so authored order is not identity. A memory type projects as its name, its item
+ * record and its nullability only, never the instance bound to it, so a host memory type gives
+ * the same manifest however its name was registered.
  *
  * @throws RangeError for a cyclic type or a field policy mismatch.
  * @throws TypeError or RangeError as `validateShape` does, for a bounded or union type.
@@ -503,6 +506,14 @@ function typeManifest(value: Type | null | undefined, ctx: ManifestContext, path
   if (value === null || value === undefined) return null;
   checkFields(value, TYPE_FIELDS, path);
   return within(ctx.types, value, `${path}: cyclic Type is not manifestable`, () => {
+    if (isMemoryType(value)) {
+      return {
+        item: typeManifest(value.element, ctx, `${path}.item`),
+        kind: value.kind,
+        nullable: value.nullable,
+        type: value.memory,
+      };
+    }
     const fields =
       value.fields === undefined
         ? null

@@ -8,16 +8,18 @@
  * memory binding (`memory_bind.ts`) and start-up, and the file system.
  */
 
+import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { lstatSync, readdirSync, readFileSync } from "node:fs";
-import { userInfo } from "node:os";
-import { join } from "node:path";
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir, userInfo } from "node:os";
+import { basename, join } from "node:path";
 
 import type { Env } from "../defaults.ts";
 import { compareCodeUnits, Diagnostic } from "../diagnostics.ts";
 import { type Author, type ChangeEntry, memoryErrorKind, type MemorySession } from "../memory/base.ts";
 import { FileMemory, type MemberFile, readMembers } from "../memory/file.ts";
 import { homeDir, isSystemError } from "../platform.ts";
+import type { JsonObject } from "../typesys/json.ts";
 import { isMemoryType } from "../typesys/values.ts";
 import { defaultLocation, defaultMemories, memoryRoot, projectFolder } from "./memory_bind.ts";
 import { diagnosticJson, printStyled } from "./render.ts";
@@ -319,5 +321,70 @@ export async function memoryUndo(command: ParsedArgs, io: CliIo): Promise<number
     if (json) await printJson({ change: id, version: applied.version }, io.stdout);
     else await io.stdout.write(`undid ${forTerminal(undone, io.stdout)}; the memory's version is ${applied.version}\n`);
     return 0;
+  });
+}
+
+/**
+ * Run `$EDITOR` from `env` on the file `path`, the terminal its own, and resolve once it exits. The
+ * variable may hold arguments (`code --wait`), so the shell runs it, the path passed as an argument.
+ *
+ * @throws {RangeError} When `$EDITOR` isn't set, or the editor fails or exits with an error.
+ */
+function runEditor(env: Env, path: string): Promise<void> {
+  const editor = env("EDITOR");
+  if (!editor) throw new RangeError("set $EDITOR to the editor to use");
+  return new Promise((resolve, reject) => {
+    const child = spawn("/bin/sh", ["-c", `${editor} "$1"`, "editor", path], { stdio: "inherit" });
+    child.on("error", (error) => reject(new RangeError(`the editor didn't start: ${error.message}`)));
+    child.on("exit", (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new RangeError(`the editor exited with ${signal ?? `code ${code}`}; nothing was changed`));
+    });
+  });
+}
+
+/**
+ * `yian memory edit`: open a file of the memory (`--file`, the memory's index by default) in an
+ * editor (`$EDITOR`), on a private copy, then apply what the person wrote as the user: a `rewrite`
+ * of the file, checked against the hash it had when it was read, or a `create` for a new file. An
+ * unchanged file changes nothing. A file changed meanwhile prints `edit refused: <reason>` (a
+ * `memory.conflict` document) and the copy that keeps the edited text, and exits 1. `--json`
+ * prints `{change, version}` for an edit, or `{change: null}` for none.
+ */
+export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number> {
+  const json = command.options["json"] === true;
+  return onMemory(command, io, async (session, { location }) => {
+    const path = (command.options["file"] as string | undefined) ?? String(session.info.settings["index"]);
+    const file = membersOf(session, location).find((each) => each.path === path) ?? null;
+    // Private: the copy holds the memory's text.
+    const folder = mkdtempSync(join(tmpdir(), "yian-memory-edit-"));
+    const copy = join(folder, basename(path));
+    let keep = false;
+    try {
+      writeFileSync(copy, file?.text ?? "", { mode: 0o600 });
+      await (io.editor ?? ((each: string) => runEditor(io.env, each)))(copy);
+      const text = readFileSync(copy, "utf8");
+      if (text === (file?.text ?? "")) {
+        if (json) await printJson({ change: null }, io.stdout);
+        else await io.stdout.write(`${forTerminal(path, io.stdout)} is unchanged\n`);
+        return 0;
+      }
+      const change: JsonObject =
+        file === null ? { op: "create", path, text } : { op: "rewrite", path, text, if_hash: file.hash };
+      const id = changeId();
+      const applied = await session.apply({ id, change, author: userAuthor(io), signal: stopOf(io) });
+      if (!applied.ok) {
+        keep = true;
+        const message = `${applied.reason}; your text is in ${copy}`;
+        return failed(io, json, { label: "edit refused", code: "memory.conflict", message });
+      }
+      if (json) await printJson({ change: id, version: applied.version }, io.stdout);
+      else {
+        await io.stdout.write(`edited ${forTerminal(path, io.stdout)}; the memory's version is ${applied.version}\n`);
+      }
+      return 0;
+    } finally {
+      if (!keep) rmSync(folder, { recursive: true, force: true });
+    }
   });
 }

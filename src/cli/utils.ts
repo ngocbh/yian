@@ -56,6 +56,11 @@ export interface CliIo {
    * later, it stops the run.
    */
   stop?: AbortSignal;
+  /**
+   * Open the file `path` in an editor and resolve once the person closes it; `yian memory edit`
+   * runs `$EDITOR` when absent. For tests.
+   */
+  editor?: (path: string) => Promise<void>;
 }
 
 // An escape sequence, matched whole: the CSI, OSC and DCS (SOS, PM, APC) sequences `sanitize`

@@ -439,6 +439,22 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       return memoryUndo;
     },
   },
+  "memory edit": {
+    spec: {
+      name: "memory edit",
+      summary: "Edit a file of a memory in $EDITOR; the edit is applied unless the file changed meanwhile.",
+      positionals: [MEMORY_FLOW, MEMORY_NAME],
+      options: [
+        MEMORY_AT,
+        { name: "file", type: "string", metavar: "FILE", help: "The file to edit (the memory's index by default)." },
+        JSON_OPTION,
+      ],
+    },
+    load: async () => {
+      const { memoryEdit } = await import("./memory_cmd.ts");
+      return memoryEdit;
+    },
+  },
   "skills check": {
     spec: {
       name: "skills check",

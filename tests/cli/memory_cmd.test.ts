@@ -264,3 +264,68 @@ describe("yian memory undo", () => {
     expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("first\nthird");
   });
 });
+
+describe("yian memory edit", () => {
+  /** An editor that changes the file it opens with `change`, as a person would. */
+  const editing = (change: (text: string) => string) => async (path: string) =>
+    writeFileSync(path, change(readFileSync(path, "utf8")));
+
+  test("opens the index in the editor and applies the edit as the user, with the file's hash", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    const editor = editing((text) => `${text}\nadded by hand`);
+    const result = await yian(["memory", "edit", flow, "lessons"], { editor });
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toMatch(/^edited MEMORY\.md; the memory's version is [0-9a-f]{64}\n$/);
+    expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("first\nadded by hand");
+    const [edit] = (await historyOf(flow)).changes;
+    expect(edit).toMatchObject({ op: "rewrite", target: { path: "MEMORY.md" }, author: { kind: "user", name: "ada" } });
+  });
+
+  test("a file changed while the editor was open is a conflict; the edited text is kept", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    const file = join(lessons().location, "MEMORY.md");
+    const editor = async (path: string) => {
+      // A run writes the memory while the person edits it.
+      writeFileSync(file, "first\nfrom a run");
+      writeFileSync(path, "first\nfrom the person");
+    };
+    const result = await yian(["memory", "edit", flow, "lessons", "--json"], { editor });
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout).error.code).toBe("memory.conflict");
+    const kept = /your text is in (.+)$/m.exec(result.stderr)![1]!;
+    expect(readFileSync(kept, "utf8")).toBe("first\nfrom the person");
+    expect(readFileSync(file, "utf8")).toBe("first\nfrom a run");
+    rmSync(join(kept, ".."), { recursive: true });
+  });
+
+  test("--file names another file, made when it is new; an unchanged file changes nothing", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    const made = await yian(["memory", "edit", flow, "lessons", "--file", "notes/tips.md"], {
+      editor: editing(() => "Carry the one."),
+    });
+    expect(made.code, made.stderr).toBe(0);
+    expect(readFileSync(join(lessons().location, "notes", "tips.md"), "utf8")).toBe("Carry the one.");
+    expect((await historyOf(flow)).changes[0]).toMatchObject({ op: "create", target: { path: "notes/tips.md" } });
+    const before = (await historyOf(flow)).changes.length;
+    const same = await yian(["memory", "edit", flow, "lessons"], { editor: async () => {} });
+    expect(same).toMatchObject({ code: 0, stdout: "MEMORY.md is unchanged\n" });
+    expect((await historyOf(flow)).changes).toHaveLength(before);
+  });
+
+  test("the editor is $EDITOR, run on the file; with none set, edit says so", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    // Not an editor: a command that appends a line to the file it is given.
+    const appendLine = `/bin/sh -c 'printf "%s" "
+by EDITOR" >> "$0"'`;
+    const result = await yian(["memory", "edit", flow, "lessons"], { env: envOf({ EDITOR: appendLine }) });
+    expect(result.code, result.stderr).toBe(0);
+    expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("first\nby EDITOR");
+    const none = await yian(["memory", "edit", flow, "lessons"]);
+    expect(none.code).toBe(1);
+    expect(none.stderr).toContain("set $EDITOR to the editor to use");
+  });
+});

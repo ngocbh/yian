@@ -45,7 +45,21 @@ import type {
   SqliteStatement,
   SqliteValue,
 } from "../../src/platform.ts";
-import type { Message as RootMessage } from "../../src/index.ts";
+import type {
+  Applied,
+  Author,
+  ChangeEntry,
+  Erased,
+  FileMemoryOptions,
+  MemoryContract,
+  MemoryErrorKind,
+  MemoryInfo,
+  MemorySession,
+  MemoryToolSpec,
+  Recall,
+  RecordedMemoryTool,
+  Message as RootMessage,
+} from "../../src/index.ts";
 import type {
   JsonMode,
   JsonObject,
@@ -111,6 +125,14 @@ const NAMES: Record<string, string[]> = {
     "checkConversation",
     "ConversationError",
     "InboxRef",
+    "MemoryBase",
+    "FileMemory",
+    "isMemory",
+    "MemoryBusyError",
+    "ChangeIdReusedError",
+    "MemoryMissingError",
+    "memoryErrorKind",
+    "MemoryRef",
   ],
   "./run": [
     "RunResult",
@@ -365,6 +387,18 @@ describe("entry points", () => {
       Message?,
       MessagePart?,
       RootMessage?,
+      MemoryContract?,
+      MemoryToolSpec?,
+      MemorySession?,
+      MemoryInfo?,
+      Author?,
+      Applied?,
+      Erased?,
+      ChangeEntry?,
+      Recall?,
+      RecordedMemoryTool?,
+      MemoryErrorKind?,
+      FileMemoryOptions?,
     ];
     expect(names).toEqual([]);
   });

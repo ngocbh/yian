@@ -345,7 +345,7 @@ function runIds(): string[] {
 }
 
 describe("yian memory erase", () => {
-  test("lists the runs that used the memory, erases the text everywhere, and prints the undos it disabled", async () => {
+  test("lists the runs that used the memory, erases the text everywhere, and prints the undos disabled", async () => {
     const flow = flowFile();
     await runOnce(flow, "keep this");
     await runOnce(flow, "my PIN 4321");
@@ -396,5 +396,79 @@ describe("yian memory erase", () => {
     expect(erased.code, erased.stderr).toBe(0);
     expect(output.text).toContain("Erase MEMORY.md from");
     expect(existsSync(join(lessons().location, "MEMORY.md"))).toBe(false);
+  });
+});
+
+/** `APPEND`'s memory, appended to, then a wait for a line on its inbox. */
+const WAITS = `id: answer
+name: answer
+input:
+  line: !str
+  lessons: !FileMemory
+  messages: !Inbox(str)
+nodes:
+  add:
+    kind: tool
+    tool_id: {lessons: append}
+    input:
+      path: MEMORY.md
+      text: \${input.line}
+  heard:
+    kind: tool
+    tool_id: take
+    depends_on: [add]
+    input:
+      from: \${input.messages}
+output: \${heard.output.closed}
+`;
+
+describe("yian memory reset", () => {
+  /** A waiting run and a finished one on `flow.yaml`'s memory; the waiting run's id. */
+  async function twoRuns(): Promise<string> {
+    const waits = join(project, "wait.yaml");
+    writeFileSync(waits, WAITS);
+    await runOnce(waits, "waiting");
+    const [waiting] = runIds();
+    await runOnce(flowFile(), "finished");
+    return waiting!;
+  }
+
+  test("lists the unfinished runs that use the memory, then empties it, keeping its identity", async () => {
+    const waiting = await twoRuns();
+    const finished = runIds().find((run) => run !== waiting)!;
+    const flow = join(project, "flow.yaml");
+    const result = await yian(["memory", "reset", flow, "lessons", "--yes"]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain(waiting);
+    expect(result.stdout).not.toContain(finished);
+    expect(result.stdout).toContain("a resume goes on with the emptied memory");
+    expect(result.stdout).toContain(`emptied ${lessons().identity}`);
+    expect(existsSync(join(lessons().location, "MEMORY.md"))).toBe(false);
+    expect((await historyOf(flow)).changes).toEqual([]);
+    expect(readFileSync(join(lessons().location, ".yian", "identity"), "utf8")).toBe(lessons().identity);
+  });
+
+  test("--json prints the identity and the unfinished runs; a no on the terminal keeps the memory", async () => {
+    const waiting = await twoRuns();
+    const flow = join(project, "flow.yaml");
+    const no = new FakeInput({ tty: true });
+    no.write(ENTER);
+    const declined = await yian(["memory", "reset", flow, "lessons"], {
+      stdin: no,
+      stderrStream: new FakeOutput({ tty: true }),
+    });
+    expect(declined.code).toBe(1);
+    expect(declined.stderr).toContain("nothing reset");
+    expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("waiting\nfinished");
+    const json = await yian(["memory", "reset", flow, "lessons", "--yes", "--json"]);
+    expect(json.code, json.stderr).toBe(0);
+    expect(JSON.parse(json.stdout)).toEqual({
+      format: "yian.cli.v1",
+      identity: lessons().identity,
+      runs: [expect.objectContaining({ run_id: waiting, status: "waiting" })],
+    });
+    const piped = await yian(["memory", "reset", flow, "lessons"]);
+    expect(piped.code).toBe(2);
+    expect(piped.stderr).toContain("pass --yes");
   });
 });

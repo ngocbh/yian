@@ -486,3 +486,35 @@ export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<numbe
     return 0;
   });
 }
+
+/** The index statuses of a run that hasn't ended, whose resume would go on with the memory. */
+const UNFINISHED: ReadonlySet<string> = new Set(["running", "waiting", "stopped", "crashed"]);
+
+/**
+ * `yian memory reset`: list the unfinished runs on this machine whose index records the memory
+ * (running, waiting, stopped or crashed: a resume goes on with the emptied memory), ask (`--yes`
+ * doesn't, and off a terminal it is required), then empty it: its files and history go, its
+ * identity stays. A no prints `nothing reset` and exits 1. `--json` prints `{identity, runs}`.
+ */
+export async function memoryReset(command: ParsedArgs, io: CliIo): Promise<number> {
+  const json = command.options["json"] === true;
+  checkAsks(command, io, "reset");
+  return onMemory(command, io, async (session, target) => {
+    const { identity } = session.info;
+    const runs = runsUsing(io, identity).filter((row) => UNFINISHED.has(row.status));
+    if (!json) {
+      if (runs.length === 0) await io.stdout.write(`no unfinished run on this machine uses ${identity}\n`);
+      else {
+        const heading = `the unfinished runs on this machine that use ${identity}`;
+        await printRuns(io, `${heading}; a resume goes on with the emptied memory:`, runs);
+      }
+    }
+    if (!(await goesOn(command, io, `Empty ${identity}? Its files and history go.`))) {
+      return failed(io, json, { label: "reset cancelled", code: "memory.cancelled", message: "nothing reset" });
+    }
+    await target.memory.reset({ signal: stopOf(io) });
+    if (json) await printJson({ identity, runs: runsJson(io, runs) }, io.stdout);
+    else await io.stdout.write(`emptied ${forTerminal(identity, io.stdout)}\n`);
+    return 0;
+  });
+}

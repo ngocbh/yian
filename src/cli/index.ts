@@ -444,7 +444,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   "memory edit": {
     spec: {
       name: "memory edit",
-      summary: "Edit a file of a memory in $EDITOR; the edit is applied unless the file changed meanwhile.",
+      summary: "Edit a file of a memory in $EDITOR.",
       positionals: [MEMORY_FLOW, MEMORY_NAME],
       options: [
         MEMORY_AT,
@@ -472,6 +472,18 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
     load: async () => {
       const { memoryErase } = await import("./memory_cmd.ts");
       return memoryErase;
+    },
+  },
+  "memory reset": {
+    spec: {
+      name: "memory reset",
+      summary: "Empty a memory, keeping its identity.",
+      positionals: [MEMORY_FLOW, MEMORY_NAME],
+      options: [MEMORY_AT, MEMORY_YES, JSON_OPTION],
+    },
+    load: async () => {
+      const { memoryReset } = await import("./memory_cmd.ts");
+      return memoryReset;
     },
   },
   "skills check": {

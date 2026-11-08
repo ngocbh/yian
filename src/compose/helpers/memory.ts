@@ -146,8 +146,8 @@ export function memoryToolNames(
 /**
  * Check grants of the memory inputs `flowInputs` types as memories: each tool a grant lists is
  * one of its type's, and each tool shows to a model under a name it can call, which yian doesn't
- * reserve and no other memory tool of the same grants shows. A grant on a type this load doesn't know (a recorded flow's) is
- * left unchecked: the run's start checked it.
+ * reserve and no other memory tool of the same grants shows. A grant on a type this load doesn't
+ * know (a recorded flow's) is left unchecked: the run's start checked it.
  *
  * @throws GrantError naming the grant and the fix.
  */

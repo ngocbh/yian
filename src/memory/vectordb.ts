@@ -1259,6 +1259,60 @@ export class VectorDBMemory extends MemoryBase {
   }
 
   /**
+   * Return what the store records of the memory, read holding its lock: its identity, embedding
+   * model and item schema (`null` for items that are text only), or `null` when there is no store.
+   * A host that doesn't know a store's item type opens it with this one (`yian memory --at`). A host
+   * action, never a session method.
+   *
+   * @throws Error when the store isn't a VectorDBMemory store or a memory yet.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
+  async stored(o: {
+    signal: AbortSignal;
+  }): Promise<{ identity: string; embedding: EmbeddingModel; itemSchema: JsonObject | null } | null> {
+    o.signal.throwIfAborted();
+    const { path } = this.#store;
+    if (lstatOrNull(path) === null) return null;
+    return this.#store.locked(o.signal, () =>
+      withDb(path, (db) => {
+        const { identity, settings } = memoryMeta(db, path, this.#id);
+        return { identity, embedding: settings.embedding, itemSchema: settings.item_schema };
+      }),
+    );
+  }
+
+  /**
+   * Return up to `limit` items whose ids are past `after` (0 by default), by id, retired ones
+   * included: each with its id, version, text, fields, author and why it was retired, read holding
+   * the memory's lock. A host reads a whole memory a page at a time this way (`yian memory show
+   * --all`); a session's `list` caps at `max_k` and leaves retired items out. Never a session
+   * method.
+   *
+   * @throws {RangeError} If `after` isn't an integer of at least 0, or `limit` one of at least 1.
+   * @throws Error when the store isn't a memory, or holds another identity than the constructor's `id`.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
+  async items(o: { after?: number; limit: number; signal: AbortSignal }): Promise<JsonObject[]> {
+    o.signal.throwIfAborted();
+    const after = o.after ?? 0;
+    if (!Number.isSafeInteger(after) || after < 0) {
+      throw new RangeError("items needs an id of at least 0 to read after");
+    }
+    if (!Number.isSafeInteger(o.limit) || o.limit < 1) throw new RangeError("items needs a limit of at least 1");
+    const { path } = this.#store;
+    if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
+    return this.#store.locked(o.signal, () =>
+      withDb(path, (db) => {
+        memoryMeta(db, path, this.#id);
+        const rows = db
+          .prepare("SELECT id, text, fields, version, author, retired FROM items WHERE id > ? ORDER BY id LIMIT ?")
+          .all(after, o.limit) as unknown as ItemRow[];
+        return rows.map((row) => itemResult(row, true));
+      }),
+    );
+  }
+
+  /**
    * Rebuild the store file with SQLite's `VACUUM`, holding the memory's lock, so the space deleted
    * items and history took is given back. A host action (`yian memory compact`), never a session
    * method. Temporary tables stay in memory, so no copy of a text lands in a temporary file.

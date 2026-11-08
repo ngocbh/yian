@@ -1423,6 +1423,33 @@ async function embedB(texts: readonly string[], o: EmbeddingModel & { signal: Ab
 const modelB: EmbeddingModel = { provider: "openai", model: "b" };
 
 describe("host actions", () => {
+  test("items reads every item by id, retired ones too, a page after an id at a time", async () => {
+    const s = await openAt();
+    for (const [i, text] of ["alpha", "bravo", "charlie"].entries()) await apply(s, { op: "add", text }, `a${i}`);
+    await apply(s, { op: "retire", id: 2n, if_version: 2n, why: "stale" }, "r1");
+    await s.close();
+    const first = await memory().items({ limit: 2, signal });
+    expect(first.map((item) => [item.id, item.text, item.retired ?? null])).toEqual([
+      [1n, "alpha", null],
+      [2n, "bravo", "stale"],
+    ]);
+    expect(first[0]).toMatchObject({ version: 1n, author: { kind: "tool", name: "save" } });
+    const rest = await memory().items({ after: 2, limit: 2, signal });
+    expect(rest.map((item) => item.id)).toEqual([3n]);
+    await expect(memory().items({ limit: 0, signal })).rejects.toThrow("items needs a limit of at least 1");
+  });
+
+  test("stored reads the identity, model and item schema under the lock, and is null for a missing store", async () => {
+    const typed = { type: "object", properties: { tag: { type: "string" } } };
+    await (await openAt({}, typed)).close();
+    expect(await new VectorDBMemory({ path }).stored({ signal })).toEqual({
+      identity: "t/cases",
+      embedding: model,
+      itemSchema: typed,
+    });
+    expect(await new VectorDBMemory({ path: join(dir, "none.db") }).stored({ signal })).toBeNull();
+  });
+
   test("reembed embeds every item again in batches under the lock, then records the new model", async () => {
     const s = await openAt();
     for (const [i, text] of ["alpha", "bravo", "alpha alpha", "charlie", "delta"].entries()) {

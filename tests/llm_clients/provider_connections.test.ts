@@ -40,6 +40,7 @@ import {
   connectionSnapshot,
   ConnectionSnapshot,
   defaultEmbedding,
+  embeddingModel,
   HOST_KEY_MARKER,
   headerNameDiff,
   keyIdentity,
@@ -646,6 +647,12 @@ describe("the default embedding model", () => {
     expect(rangeError(() => defaultEmbedding({ env })).message).toBe(
       "YIAN_DEFAULT_EMBEDDING='text-embedding-3-small' is invalid: give it as provider/model",
     );
+    vars.set("YIAN_DEFAULT_EMBEDDING", "openai/text\u001b[31m");
+    expect(rangeError(() => defaultEmbedding({ env })).message).toEndWith(
+      "is invalid: provider/model can't hold control characters",
+    );
+    expect(() => embeddingModel("open\nai/x")).toThrow("provider/model can't hold control characters");
+    expect(() => embeddingModel("openai/x\u0085")).toThrow("provider/model can't hold control characters");
     vars.set("YIAN_DEFAULT_EMBEDDING", "anthropic/claude");
     expect(rangeError(() => defaultEmbedding({ env })).message).toStartWith(
       "YIAN_DEFAULT_EMBEDDING='anthropic/claude' is invalid: provider `anthropic` has no embeddings API",

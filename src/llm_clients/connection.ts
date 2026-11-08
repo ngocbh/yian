@@ -533,9 +533,12 @@ export function checkEmbeddingProvider(provider: string): void {
 /**
  * Return the embedding model `text` names as `provider/model`.
  *
- * @throws {RangeError} `text` isn't `provider/model`, or its provider has no embeddings API.
+ * @throws {RangeError} `text` isn't `provider/model`, holds a control character, or its provider
+ *   has no embeddings API.
  */
 export function embeddingModel(text: string): EmbeddingModel {
+  // A store records the model, and messages and `yian memory` print it.
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(text)) throw new RangeError("provider/model can't hold control characters");
   const at = text.indexOf("/");
   const provider = text.slice(0, at).trim();
   const model = text.slice(at + 1).trim();

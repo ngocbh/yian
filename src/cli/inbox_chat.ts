@@ -69,7 +69,7 @@ import {
   validateRunLogOptions,
   waitingText,
 } from "./run.ts";
-import { bindMemories } from "./memory_bind.ts";
+import { bindMemories, driftNote, resumeMemories } from "./memory_bind.ts";
 import { sanitize } from "./sanitize.ts";
 import { cliLayer, freshLog, loadFlowFile, preflightKeys } from "./startup.ts";
 import {
@@ -683,10 +683,14 @@ export async function inboxChat(
 
   try {
     // A memory's `open` notes, such as a memory it created, are the chat's own notes.
-    const memory = bindMemories(flow, options.memory ?? [], {
+    const binding = {
       home: homeDir(io.env),
-      note: (line) => void note(`${forTerminal(line, io.stderr)}\n`).catch(() => {}),
-    });
+      note: (line: string) => void note(`${forTerminal(line, io.stderr)}\n`).catch(() => {}),
+    };
+    const memory =
+      resumed === null
+        ? bindMemories(flow, options.memory ?? [], binding)
+        : resumeMemories(flow, resumed, options.memory ?? [], binding);
     if (host.start) {
       const code = await host.start(terminal);
       if (code !== null) return code;
@@ -867,10 +871,15 @@ export async function inboxChat(
         turning = false;
       }
     };
-    /** Run `step` as a move of the turn: the flusher sends child events at once meanwhile. */
-    const moveStep = (step: () => Promise<RunResult>): Promise<RunResult> => {
+    /**
+     * Run `step` as a move of the turn: the flusher sends child events at once meanwhile. A memory
+     * a crash resume found changed is noted.
+     */
+    const moveStep = async (step: () => Promise<RunResult>): Promise<RunResult> => {
       flusher?.beginTurn();
-      return step();
+      const result = await step();
+      for (const drift of result.memoryDrift) await note(`${forTerminal(driftNote(drift), io.stderr)}\n`);
+      return result;
     };
     /**
      * Run `first` as a move, then, while it leaves the run waiting with an event it sent unread,

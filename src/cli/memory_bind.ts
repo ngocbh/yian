@@ -12,13 +12,16 @@ import { createHash } from "node:crypto";
 import { lstatSync, type Stats } from "node:fs";
 import { basename, join, relative, sep } from "node:path";
 
+import { START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { reprText } from "../diagnostics.ts";
 import type { MemoryBase, MemorySession } from "../memory/base.ts";
+import type { MemoryDrift } from "../run.ts";
 import { FileMemory, type FileMemoryOptions } from "../memory/file.ts";
 import type { Parameter } from "../nodes/contracts.ts";
+import { iterRunRecords, type PoolCommitRecord } from "../runtime/log.ts";
 import type { JsonObject } from "../typesys/json.ts";
-import { isMemoryType } from "../typesys/values.ts";
+import { isMemoryType, isRecord, type MemoryRef, TypedValue } from "../typesys/values.ts";
 import { isSystemError, leavesRoot } from "../platform.ts";
 import { resolveFlowPath } from "./confined_load.ts";
 import { UsageError } from "./utils.ts";
@@ -114,6 +117,14 @@ function lstatOrNull(path: string): Stats | null {
   }
 }
 
+/**
+ * The note for a memory a crash resume found changed since its run started, the run's own writes
+ * included: the run goes on with the recall it recorded.
+ */
+export function driftNote(drift: MemoryDrift): string {
+  return `memory \`${drift.input}\` changed since this run started; the run keeps its recorded recall`;
+}
+
 /** What `bindMemories` needs beside the flow and the flags. */
 export interface BindOptions {
   /** The home folder whose `~/.yian/memory` holds the default memories. */
@@ -184,20 +195,84 @@ export function memoryFlags(params: readonly Parameter[], flags: readonly string
  *   as `defaultIdentity` and `defaultLocation` throw, and for a flow built in code.
  */
 export function bindMemories(flow: ComposedFlow, flags: readonly string[], options: BindOptions): Record<string, MemoryBase> {
+  return bindEach(flow, flags, options, (input, optional) => (optional ? null : defaultMemory(flow, input, options)));
+}
+
+/**
+ * Return the instance each memory input of `flow`, the flow its run in `log` recorded, is bound to
+ * again for a resume, by input name: the folder its `--memory` flag names, else the default
+ * location of the identity it recorded at the run's start (`recordedMemories`), checked as a fresh
+ * default is, since a log can be edited. An Optional input left out at the start gets none.
+ * Nothing is created here, and the resume opens each memory without creating it.
+ *
+ * @throws {UsageError} As `memoryFlags` throws.
+ * @throws {RangeError} For an input of a memory type the command line can't bind; as
+ *   `defaultLocation` throws; when the log's START inputs hold a malformed memory value.
+ * @throws Error when the log can't be read.
+ */
+export function resumeMemories(
+  flow: ComposedFlow,
+  log: string,
+  flags: readonly string[],
+  options: BindOptions,
+): Record<string, MemoryBase> {
+  const recorded = recordedMemories(flow, log);
+  return bindEach(flow, flags, options, (input) => {
+    const identity = recorded.get(input);
+    // An Optional memory left out at the start takes none again.
+    if (identity === undefined) return null;
+    return new CliFileMemory({ root: defaultLocation(options.home, identity, "FileMemory"), id: identity }, options.note);
+  });
+}
+
+/**
+ * Return the identity each memory input of `flow` recorded in the START inputs of its run in
+ * `log`, by input name; an Optional memory left out recorded none.
+ *
+ * @throws {RangeError} When a memory input's recorded value isn't a memory value.
+ * @throws Error when the log can't be read.
+ */
+export function recordedMemories(flow: ComposedFlow, log: string): Map<string, string> {
+  const names = flow.input.filter((param) => isMemoryType(param.contract?.type)).map((param) => param.name);
+  const identities = new Map<string, string>();
+  if (names.length === 0) return identities;
+  for (const entry of iterRunRecords(log, { kinds: ["pool_commit"] })) {
+    const record = entry.envelope.record as PoolCommitRecord;
+    if (record.nodeId !== START_ID || record.key !== START_ID) continue;
+    const inputs = record.value?.value;
+    if (!isRecord(inputs)) break;
+    for (const name of names) {
+      if (!Object.hasOwn(inputs, name)) continue;
+      const memory = TypedValue.fromWire({ kind: "memory", value: inputs[name] }).value as MemoryRef;
+      identities.set(name, memory.identity);
+    }
+    break;
+  }
+  return identities;
+}
+
+/**
+ * Bind each memory input of `flow`: to the folder its `--memory` flag names, else to what
+ * `fallback` gives the input, given whether it is Optional (`null` for none).
+ */
+function bindEach(
+  flow: ComposedFlow,
+  flags: readonly string[],
+  options: BindOptions,
+  fallback: (input: string, optional: boolean) => CliFileMemory | null,
+): Record<string, MemoryBase> {
   const paths = memoryFlags(flow.input, flags);
   const bound: Record<string, MemoryBase> = {};
   const byRoot = new Map<string, CliFileMemory>();
   for (const param of flow.input) {
     const typ = param.contract?.type;
+    if (!isMemoryType(typ)) continue;
     const path = paths.get(param.name);
-    if (!isMemoryType(typ) || (path === undefined && typ.nullable)) continue;
-    if (typ.memory !== "FileMemory") {
+    if (typ.memory !== "FileMemory" && (path !== undefined || !typ.nullable)) {
       throw new RangeError(`\`${param.name}\` is a ${typ.memory}; the command line binds only FileMemory inputs`);
     }
-    const made =
-      path === undefined
-        ? defaultMemory(flow, param.name, options)
-        : new CliFileMemory({ root: path }, options.note);
+    const made = path === undefined ? fallback(param.name, typ.nullable) : new CliFileMemory({ root: path }, options.note);
+    if (made === null) continue;
     // Keyed by the real folder, so two spellings of one path share one memory.
     const instance = byRoot.get(made.root) ?? made;
     byRoot.set(instance.root, instance);

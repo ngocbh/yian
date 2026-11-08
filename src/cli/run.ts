@@ -82,7 +82,7 @@ import { McpConnectError, McpSdkMissingError, type McpServer } from "../tools/mc
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { loadConfined } from "./confined_load.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
-import { bindMemories } from "./memory_bind.ts";
+import { bindMemories, driftNote, resumeMemories } from "./memory_bind.ts";
 import {
   box,
   diagnosticJson,
@@ -1248,6 +1248,7 @@ async function startRun(
       // configuration, and its recorded keys are checked once it is replayed.
       if (options.resume !== undefined) {
         const log = options.resume;
+        const memory = resumeMemories(flow, log, options.memory, { home: homeDir(io.env), note: memoryNote });
         const keyContext = {
           env: commandEnv,
           terminal: io.stdin.isTTY === true ? terminal : null,
@@ -1264,6 +1265,7 @@ async function startRun(
             env: commandEnv.read,
             signal: controller.signal,
             checkLlmConfigs,
+            memory,
           }),
         );
       }
@@ -1321,6 +1323,7 @@ async function startRun(
   }
   if (typeof outcome === "number") return outcome;
   const result = outcome;
+  for (const drift of result.memoryDrift) await printStyled(io, driftNote(drift), "yellow");
 
   if (result.status === "succeeded") {
     if (json) await printJson({ status: "succeeded", output: jsonValue(result.output) }, io.stdout);

@@ -238,6 +238,9 @@ function shown(path: string): string {
 function pathProblem(rel: string, maxDepth: number, folder = false): string | null {
   if (rel === "") return "an empty path";
   if (isAbsolute(rel)) return "an absolute path";
+  // Past the common file system limits the OS fails the write after its change is journaled, so
+  // such a path is refused here, with the rest of the path's checks.
+  if (Buffer.byteLength(rel, "utf8") > 1024) return "a path longer than 1024 bytes";
   const parts = rel.split("/");
   for (const part of parts) {
     if (part === "") return "an empty part";
@@ -245,6 +248,7 @@ function pathProblem(rel: string, maxDepth: number, folder = false): string | nu
     if (part === ".") return "a `.` part";
     if (part.startsWith(".")) return "a hidden name";
     if (!NAME.test(part)) return "a name other than letters, digits, `.`, `_` and `-`, starting with a letter or digit";
+    if (part.length > 255) return "a name longer than 255 bytes";
   }
   const folders = folder ? parts.length : parts.length - 1;
   if (folders > maxDepth) return `more than ${maxDepth} folder${maxDepth === 1 ? "" : "s"} deep`;

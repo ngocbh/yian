@@ -491,6 +491,7 @@ describe("read tools", () => {
     ["a", "`a` isn't part of the memory: a folder"],
     ["a/b/c/d/e/f.md", "`a/b/c/d/e/f.md` isn't part of the memory: more than 4 folders deep"],
     ["missing.md", "`missing.md` doesn't exist"],
+    [`${"n".repeat(300)}.md`, `\`${"n".repeat(300)}.md\` isn't part of the memory: a name longer than 255 bytes`],
   ])("a read of %s is refused with its reason", async (path, reason) => {
     put(root, ".git/config", "g");
     put(root, "a/b.md", "b");
@@ -505,6 +506,15 @@ describe("read tools", () => {
     expect(isReportedToolError(error)).toBe(true);
     expect(isPermanentToolError(error)).toBe(true);
     await expect(s.call("search", { query: "secret" }, { signal })).resolves.toEqual({ matches: [] });
+    await s.close();
+  });
+
+  test("a list of a folder with a name past the file system's limit is refused, not failed", async () => {
+    const s = await openAt();
+    const dirName = "n".repeat(300);
+    await expect(s.call("list", { dir: dirName }, { signal })).rejects.toThrow(
+      `\`${dirName}\` isn't a folder of the memory: a name longer than 255 bytes`,
+    );
     await s.close();
   });
 
@@ -554,6 +564,9 @@ function tree(base: string): Record<string, string> {
   return out;
 }
 
+/** A path of four folders of 255-byte names: each name fits, the whole is 1028 bytes. */
+const LONG_PATH = ["a", "b", "c", "d"].map((letter) => letter.repeat(255)).join("/") + "/x.md";
+
 /** The paths every write refuses, with the reason it gives. */
 const REFUSED_PATHS: [string, string][] = [
   ["../x.md", "`../x.md` isn't part of the memory: a `..` part"],
@@ -570,6 +583,11 @@ const REFUSED_PATHS: [string, string][] = [
   ["linked/x.md", "`linked/x.md` isn't part of the memory: `linked` is a symlink"],
   ["link.md", "`link.md` isn't part of the memory: a symlink"],
   ["bin.dat", "`bin.dat` isn't part of the memory: not UTF-8 text"],
+  [
+    `notes/${"n".repeat(256)}.md`,
+    `\`notes/${"n".repeat(256)}.md\` isn't part of the memory: a name longer than 255 bytes`,
+  ],
+  [LONG_PATH, `\`${LONG_PATH}\` isn't part of the memory: a path longer than 1024 bytes`],
 ];
 
 /**
@@ -660,6 +678,17 @@ describe("append", () => {
 
   test("confinement: append on a path outside the members is refused with the reason, writing nothing", async () => {
     await expectConfined((path) => ({ op: "append", path, text: "x" }));
+  });
+
+  test("a name too long for the file system is refused before it is journaled; the memory keeps working", async () => {
+    const s = await openAt();
+    const path = `notes/${"b".repeat(300)}.md`;
+    expect(await apply(s, { op: "append", path, text: "x" }, "long")).toEqual(
+      refusal(`\`${path}\` isn't part of the memory: a name longer than 255 bytes`),
+    );
+    expect(fs.existsSync(join(root, ".yian/journal.jsonl"))).toBe(false);
+    expect((await apply(s, { op: "append", path: "a.md", text: "x" }, "next")).ok).toBe(true);
+    await s.close();
   });
 
   test("a change of the wrong shape is a fault, not a refusal", async () => {

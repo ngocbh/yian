@@ -1218,6 +1218,21 @@ describe("undo", () => {
     await s.close();
   });
 
+  test("an undo just past maxUndo says the memory no longer keeps what it replaced, with few ids kept", async () => {
+    const s = await openAt({ maxUndo: 1, maxChangeIds: 1 });
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "bravo" }, "e1");
+    await apply(s, { op: "add", text: "charlie" }, "a2");
+    expect(await undo(s, "e1")).toEqual(
+      refusedWith("change `e1` can't be undone: the memory no longer keeps what it replaced"),
+    );
+    // Past both windows, the change is gone from the history.
+    await apply(s, { op: "add", text: "delta" }, "a3");
+    expect(await undo(s, "e1")).toEqual(refusedWith("change `e1` isn't in the memory's history"));
+    expect(rows("history").map((row) => row.change)).toEqual(["a2", "a3"]);
+    await s.close();
+  });
+
   test("with maxUndo 0 no old text is ever written, and nothing can be undone", async () => {
     const s = await openAt({ maxUndo: 0 });
     await apply(s, { op: "add", text: "alpha" }, "a1");

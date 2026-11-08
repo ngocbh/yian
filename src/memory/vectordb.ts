@@ -942,8 +942,9 @@ function dropStaging(db: Sqlite): void {
 
 /**
  * Record change `writing` in the transaction open on `db`: its history row, its id row with the
- * result it returns, and the new version. Then drop the old text, history and ids the caps no
- * longer keep, and what a crashed reembed left. Return the outcome.
+ * result it returns, and the new version. Then drop what the caps no longer keep (the old text of
+ * changes past the last `maxUndo`, the ids past the last `maxChangeIds`, and the history rows past
+ * both) and what a crashed reembed left. Return the outcome.
  */
 function record(db: Sqlite, limits: Limits, at: string, writing: Writing, entry: HistoryEntry, result: JsonObject) {
   const { seq } = entry;
@@ -972,7 +973,9 @@ function record(db: Sqlite, limits: Limits, at: string, writing: Writing, entry:
   db.prepare("UPDATE meta SET value = ? WHERE key = 'version'").run(String(seq));
   db.prepare("DELETE FROM changes WHERE seq <= ?").run(seq - limits.maxChangeIds);
   db.prepare("UPDATE history SET before = NULL WHERE seq <= ? AND before IS NOT NULL").run(seq - limits.maxUndo);
-  db.prepare("DELETE FROM history WHERE seq <= ?").run(seq - Math.max(limits.maxUndo, limits.maxChangeIds));
+  // A row outlives its old text by maxChangeIds changes, so an undo just past maxUndo says why it
+  // can't be done rather than finding no such change, however few ids are kept.
+  db.prepare("DELETE FROM history WHERE seq <= ?").run(seq - (limits.maxUndo + limits.maxChangeIds));
   return applied;
 }
 

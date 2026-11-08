@@ -35,6 +35,7 @@ test("failure carriers have no parallel location fields", () => {
     "failure",
     "events",
     "crashedAttempts",
+    "memoryDrift",
     "waits",
     "unread",
   ]);

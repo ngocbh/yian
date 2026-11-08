@@ -718,8 +718,9 @@ async function listRunsUsing(command: ParsedArgs, io: CliIo, identity: string): 
  * `--fields` is a JSON object, the fields a typed store's item holds. A delete takes the item and
  * its history for good, so it first lists the runs that used the store and asks, as erase does.
  * Prints `<added|edited|deleted> item <id>` and the new version (`--json`: `{change, version,
- * item}`); an item that can't be read, or a change the store refuses, prints `edit refused:
- * <reason>`, and a no to the delete `delete cancelled: nothing deleted`; each exits 1.
+ * item}`, and a delete's `runs`, as erase's); an item that can't be read, or a change the store
+ * refuses, prints `edit refused: <reason>`, and a no to the delete `delete cancelled: nothing
+ * deleted`; each exits 1.
  *
  * @throws {UsageError} For `--file`, anything but exactly one of the three, `--fields` that isn't a
  *   JSON object, `--if-version` with `--add`, and a change the store can't take (an add to a typed
@@ -744,6 +745,8 @@ async function editStore(command: ParsedArgs, io: CliIo, session: MemorySession)
   const signal = stopOf(io);
   let change: JsonObject;
   let verb: string;
+  // The runs a delete listed, which its document names as erase's does.
+  let runs: RunIndexRow[] | null = null;
   if (add !== undefined) {
     change = { op: "add", text: String(add), ...(fields === undefined ? {} : { fields }) };
     verb = "added";
@@ -772,7 +775,7 @@ async function editStore(command: ParsedArgs, io: CliIo, session: MemorySession)
     verb = id !== undefined ? "edited" : "deleted";
     if (gone !== undefined) {
       const { identity } = session.info;
-      await listRunsUsing(command, io, identity);
+      runs = await listRunsUsing(command, io, identity);
       const question = `Delete item ${String(item)} from ${identity}? Its text and history go, and it can't be undone.`;
       if (!(await goesOn(command, io, question))) {
         return failed(io, json, { label: "delete cancelled", code: "memory.cancelled", message: "nothing deleted" });
@@ -792,7 +795,10 @@ async function editStore(command: ParsedArgs, io: CliIo, session: MemorySession)
     return failed(io, json, { label: "edit refused", code: notAppliedCode(applied), message: applied.reason });
   }
   const item = add !== undefined ? applied.result["id"]! : change["id"]!;
-  if (json) await printJson({ change: changed, version: applied.version, item }, io.stdout);
+  if (json) {
+    const listed = runs === null ? {} : { runs: runsJson(io, runs) };
+    await printJson({ change: changed, version: applied.version, item, ...listed }, io.stdout);
+  }
   else await io.stdout.write(`${verb} item ${String(item)}; the memory's version is ${applied.version}\n`);
   return 0;
 }

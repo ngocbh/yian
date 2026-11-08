@@ -592,7 +592,7 @@ exception: it prints JSON lines (`code`, `waiting`, then `done` or `error`).
 | `yian memory list` | `memories` |
 | `yian memory show` | `identity`, `type`, `location`, `version`, `recall`, then `characters` and `files`, or a store's `count`, `retired` and, with `--all`, `items` |
 | `yian memory history` | `changes` |
-| `yian memory undo`, `yian memory edit` | `change`, `version`, and a store edit's `item` |
+| `yian memory undo`, `yian memory edit` | `change`, `version`, a store edit's `item`, and a `--delete`'s `runs` |
 | `yian memory erase` | `runs`, `version`, `disabled_undos` |
 | `yian memory reset` | `identity`, `runs` |
 | `yian memory reembed`, `yian memory compact` | `identity`, and `embedding` for `reembed` |

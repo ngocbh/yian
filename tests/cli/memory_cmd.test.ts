@@ -1135,6 +1135,20 @@ output: \${add.output.id}
     const deleted = await yian(["memory", "edit", flow, "cases", "--delete", "1", "--yes"], vectors);
     expect(deleted.code, deleted.stderr).toBe(0);
     expect(deleted.stdout).toContain("deleted item 1;");
+    // With --json --yes nothing is listed, so the document names the runs, as erase's does.
+    await addCase(flow, "Carry the one.");
+    const json = await yian(["memory", "edit", flow, "cases", "--delete", "2", "--yes", "--json"], vectors);
+    expect(json.code, json.stderr).toBe(0);
+    const document = JSON.parse(json.stdout);
+    expect(Object.keys(document).sort()).toEqual(["change", "format", "item", "runs", "version"]);
+    expect(document.item).toBe(2);
+    expect(document.runs).toHaveLength(2);
+    expect(document.runs[0]).toEqual({
+      run_id: expect.any(String),
+      status: "succeeded",
+      started_at: expect.any(String),
+      log: expect.stringMatching(/log\.jsonl$/),
+    });
   });
 
   test("erase of an item that doesn't exist is refused before anything is listed or asked", async () => {

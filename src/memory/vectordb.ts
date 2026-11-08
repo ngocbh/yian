@@ -927,12 +927,22 @@ interface Writing {
 }
 
 /**
+ * Drop the table a reembed keeps its new vectors in. Every caller holds the memory's lock, which a
+ * reembed holds until it ends, so a table found then is one a crash left part way: its vectors are
+ * derived from texts, including ones a delete or an erase has since removed.
+ */
+function dropStaging(db: Sqlite): void {
+  db.exec("DROP TABLE IF EXISTS reembed");
+}
+
+/**
  * Record change `writing` in the transaction open on `db`: its history row, its id row with the
  * result it returns, and the new version. Then drop the old text, history and ids the caps no
- * longer keep. Return the outcome.
+ * longer keep, and what a crashed reembed left. Return the outcome.
  */
 function record(db: Sqlite, limits: Limits, at: string, writing: Writing, entry: HistoryEntry, result: JsonObject) {
   const { seq } = entry;
+  dropStaging(db);
   const applied: Applied = { ok: true, version: String(seq), result };
   db.prepare(
     "INSERT INTO history(seq, change, item, op, before, after, author, at, undoes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1380,6 +1390,7 @@ export class VectorDBMemory extends MemoryBase {
         transaction(db, () => {
           // With secure_delete on, the deleted texts are overwritten, not left in free pages.
           db.exec("DELETE FROM items; DELETE FROM history; DELETE FROM changes");
+          dropStaging(db);
           db.prepare("UPDATE meta SET value = ? WHERE key = 'version'").run(String(meta.version + 1));
         });
       });
@@ -1448,7 +1459,7 @@ export class VectorDBMemory extends MemoryBase {
       } finally {
         // A failed reembed's half-filled table goes, so the store is as it was.
         try {
-          if (staged && !db.inTransaction) db.exec("DROP TABLE IF EXISTS reembed");
+          if (staged && !db.inTransaction) dropStaging(db);
         } finally {
           db.close();
         }
@@ -1471,7 +1482,7 @@ export class VectorDBMemory extends MemoryBase {
     await this.#store.locked(o.signal, (): void => {
       withDb(path, (db) => {
         memoryMeta(db, path, this.#id);
-        db.exec("DROP TABLE IF EXISTS reembed");
+        dropStaging(db);
         db.exec("VACUUM");
       });
     }).result;

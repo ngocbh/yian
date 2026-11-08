@@ -1404,6 +1404,52 @@ describe("host actions", () => {
     await s.close();
   });
 
+  /** Leave a staging table holding a vector for each of `ids`, as a reembed a crash cut off does. */
+  function crashedReembed(ids: number[]): void {
+    const db = openSqlite(path);
+    db.exec("CREATE TABLE reembed(id INTEGER PRIMARY KEY, vector BLOB NOT NULL)");
+    for (const id of ids) db.prepare("INSERT INTO reembed(id, vector) VALUES (?, ?)").run(id, new Uint8Array(8));
+    db.close();
+  }
+
+  /** Return whether the store holds a staging table. */
+  function staged(): boolean {
+    return openSqliteRows("SELECT name FROM sqlite_master WHERE name = 'reembed'").length > 0;
+  }
+
+  /** Return the rows `sql` reads from the store. */
+  function openSqliteRows(sql: string): JsonObject[] {
+    const db = openSqlite(path, { readonly: true });
+    try {
+      return db.prepare(sql).all() as unknown as JsonObject[];
+    } finally {
+      db.close();
+    }
+  }
+
+  test.each([
+    ["an erase", (s: MemorySession) => erase(s, 1n)],
+    ["a delete", (s: MemorySession) => apply(s, { op: "delete", id: 1n, if_version: 1n }, "d1")],
+    ["an add", (s: MemorySession) => apply(s, { op: "add", text: "bravo" }, "a2")],
+  ] as const)("%s drops the staging table a crashed reembed left, with the vectors it held", async (_, write) => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    crashedReembed([1]);
+    expect(staged()).toBe(true);
+    await write(s);
+    expect(staged()).toBe(false);
+    await s.close();
+  });
+
+  test("reset drops the staging table a crashed reembed left", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    crashedReembed([1]);
+    await memory().reset({ signal });
+    expect(staged()).toBe(false);
+    await s.close();
+  });
+
   test("an embedder that breaks its contract fails the reembed, writing nothing", async () => {
     await (await openAt()).close();
     const s = await openAt();

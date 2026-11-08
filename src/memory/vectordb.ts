@@ -14,6 +14,10 @@
  * Every access holds the memory's lock, `<path>.lock`, and runs synchronously inside it, so SQLite
  * never finds the store busy and its busy timeout stays 0. Embedding happens outside the lock.
  *
+ * Each change is one `IMMEDIATE` transaction that writes its item, its history row and its id row
+ * together, so a crash leaves it whole or not at all, and a change sent again with its id returns
+ * the stored result.
+ *
  * It imports `defaults`, `platform`, `tools`, `typesys`, the embedding types of `llm`, and
  * `memory/base.ts` and `memory/file_journal.ts`.
  */
@@ -38,11 +42,14 @@ import {
   waitForLock,
 } from "../platform.ts";
 import { ReportedToolError } from "../tools/errors.ts";
+import { inputTypeFromJsonSchema } from "../tools/types.ts";
 import { canonicalJson, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import { buildValueAs, TypeCheckError } from "../typesys/values.ts";
 import {
   type Applied,
   type Author,
   type ChangeEntry,
+  ChangeIdReusedError,
   type Erased,
   MemoryBase,
   MemoryBusyError,
@@ -52,7 +59,7 @@ import {
   type MemoryToolSpec,
   type Recall,
 } from "./base.ts";
-import { charCount, isObject, openRegular } from "./file_journal.ts";
+import { asAuthor, charCount, isObject, openRegular } from "./file_journal.ts";
 
 /** The layout of the store's tables; a store of another layout is refused. */
 const STORE_VERSION = 1;
@@ -693,6 +700,237 @@ function storedDimensions(db: Sqlite): number | null {
   return row === undefined ? null : (row.bytes as number) / Float32Array.BYTES_PER_ELEMENT;
 }
 
+/** A VectorDBMemory change, checked for shape: a write tool's arguments plus `op`, its name. */
+type Change =
+  | { op: "add"; text: string; fields: JsonObject | null }
+  | { op: "edit"; id: number; if_version: number; text: string | undefined; fields: JsonObject | undefined }
+  | { op: "retire"; id: number; if_version: number; why: string }
+  | { op: "delete"; id: number; if_version: number };
+
+/** The fields each change takes besides `op`, in order. */
+const CHANGE_FIELDS: Readonly<Record<Change["op"], readonly string[]>> = Object.freeze({
+  add: ["text", "fields"],
+  edit: ["id", "if_version", "text", "fields"],
+  retire: ["id", "if_version", "why"],
+  delete: ["id", "if_version"],
+});
+
+/** Return `names` joined for a message: `a`, `a and b`, `a, b and c`. */
+function listed(names: readonly string[]): string {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/**
+ * Return `fields` when it fits the item schema `schema`.
+ *
+ * @throws {TypeError} If it isn't an object, or doesn't fit, naming where.
+ */
+function checkFields(op: string, fields: unknown, schema: JsonObject): JsonObject {
+  if (!isObject(fields)) throw new TypeError(`a VectorDBMemory ${op}'s fields must be an object`);
+  // The check a tool call's arguments get; a schema too deep to translate isn't checked.
+  const type = inputTypeFromJsonSchema(schema);
+  if (type === null) return fields;
+  try {
+    buildValueAs(type, fields);
+  } catch (error) {
+    if (!(error instanceof TypeCheckError)) throw error;
+    throw new TypeError(`a VectorDBMemory ${op}'s fields don't fit the item type: ${error.message}`);
+  }
+  return fields;
+}
+
+/**
+ * Return `change` as a VectorDBMemory change, its ints as numbers, on a memory whose items are
+ * typed by `schema` (`null` for text only).
+ *
+ * @throws {TypeError} If its `op` isn't a VectorDBMemory change, or its fields aren't that
+ *   change's, each of its type; or its item fields are given to a memory of text, missing from an
+ *   add to a typed memory, or don't fit the item type.
+ */
+function checkChange(change: JsonObject, schema: JsonObject | null): Change {
+  const op: unknown = isObject(change) ? change.op : undefined;
+  if (typeof op !== "string" || !Object.hasOwn(CHANGE_FIELDS, op)) {
+    const ops = Object.keys(CHANGE_FIELDS).join(", ");
+    throw new TypeError(`VectorDBMemory has no change ${String(op)}; its changes are ${ops}`);
+  }
+  const allowed = CHANGE_FIELDS[op as Change["op"]];
+  const extra = Object.keys(change).filter((key) => key !== "op" && !allowed.includes(key));
+  if (extra.length > 0) throw new TypeError(`a VectorDBMemory ${op} takes ${listed(allowed)}, not ${listed(extra)}`);
+  const has = (key: string) => change[key] !== undefined;
+  const text = (key: string): string => {
+    const value = change[key];
+    if (typeof value !== "string" || !value.isWellFormed()) {
+      throw new TypeError(`a VectorDBMemory ${op} needs ${key} as a string`);
+    }
+    return value;
+  };
+  const int = (key: string): number => {
+    const value = change[key];
+    const number = typeof value === "bigint" ? Number(value) : value;
+    if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 1) {
+      throw new TypeError(`a VectorDBMemory ${op} needs ${key} as an integer of at least 1`);
+    }
+    return number;
+  };
+  const fields = (): JsonObject | undefined => {
+    if (!has("fields")) return undefined;
+    if (schema === null) throw new TypeError(`this memory's items are text only; an ${op} takes no fields`);
+    return checkFields(op, change.fields, schema);
+  };
+  switch (op as Change["op"]) {
+    case "add": {
+      const checked = { op: "add" as const, text: text("text"), fields: fields() ?? null };
+      if (checked.fields === null && schema !== null) {
+        throw new TypeError("an add to this memory needs fields, since its items are typed");
+      }
+      return checked;
+    }
+    case "edit": {
+      const checked = {
+        op: "edit" as const,
+        id: int("id"),
+        if_version: int("if_version"),
+        text: has("text") ? text("text") : undefined,
+        fields: fields(),
+      };
+      if (checked.text === undefined && checked.fields === undefined) {
+        throw new TypeError("an edit needs text, fields or both");
+      }
+      return checked;
+    }
+    case "retire":
+      return { op: "retire", id: int("id"), if_version: int("if_version"), why: text("why") };
+    case "delete":
+      return { op: "delete", id: int("id"), if_version: int("if_version") };
+  }
+}
+
+/**
+ * Return `author` with only its own fields.
+ *
+ * @throws {TypeError} If it isn't `{kind, name, run?, node?}` with a known kind.
+ */
+function checkAuthor(author: Author): Author {
+  const checked = asAuthor(author);
+  if (checked === null) {
+    throw new TypeError("a change's author must be {kind, name, run?, node?}, its kind agent, tool, user or host");
+  }
+  return checked;
+}
+
+/** Return a refusal that wrote nothing. */
+function refused(reason: string): Applied {
+  return { ok: false, reason, current: null };
+}
+
+/** Return a conflict over the item `row`, holding its current state as `read` shows it. */
+function conflict(reason: string, row: ItemRow): Applied {
+  return { ok: false, reason, current: itemResult(row, true) };
+}
+
+/** Return why `text` can't be an item's text under `limits`, or `null` when it can. */
+function textProblem(text: string, limits: Limits): string | null {
+  if (text === "") return "an item's text can't be empty";
+  const chars = charCount(text);
+  if (chars <= limits.maxTextChars) return null;
+  return `the text is ${chars} characters; an item may hold ${limits.maxTextChars}`;
+}
+
+/** What `history.before` holds for a change that made its item: undoing it removes the item. */
+const ABSENT_STATE = '{"absent":true}';
+
+/** Return what `history.before` holds for an item that was `row`: undoing the change writes it back. */
+function stateOf(row: ItemRow): string {
+  return logJson({ text: row.text, fields: storedJson(row.fields), retired: row.retired });
+}
+
+/**
+ * Return the stored result of change `id`, or `null` when the table doesn't hold it.
+ *
+ * @throws {ChangeIdReusedError} If it holds `id` for a change with another digest.
+ */
+function knownChange(db: Sqlite, id: string, digest: string): Applied | null {
+  const row = db.prepare("SELECT digest, result FROM changes WHERE id = ?").get(id);
+  if (row === undefined) return null;
+  if (row.digest !== digest) throw new ChangeIdReusedError(id);
+  const stored = storedJson(row.result);
+  if (!isObject(stored) || stored.ok !== true || typeof stored.version !== "string" || !isObject(stored.result)) {
+    throw new Error("this memory's store has a damaged change-id table");
+  }
+  return { ok: true, version: stored.version, result: stored.result };
+}
+
+/** One change as `history` records it. */
+interface HistoryEntry {
+  /** The memory's version after the change. */
+  readonly seq: number;
+  readonly item: number;
+  readonly op: string;
+  /** What undoing it writes back, or `null` when it can't be undone. */
+  readonly before: string | null;
+  /** The item's version after it, or `null` when it left no item. */
+  readonly after: number | null;
+  /** For an undo, the id of the change it undid. */
+  readonly undoes: string | null;
+}
+
+/** A change being written: its id, its digest and its author. */
+interface Writing {
+  readonly id: string;
+  readonly digest: string;
+  readonly author: Author;
+}
+
+/**
+ * Record change `writing` in the transaction open on `db`: its history row, its id row with the
+ * result it returns, and the new version. Then drop the old text, history and ids the caps no
+ * longer keep. Return the outcome.
+ */
+function record(db: Sqlite, limits: Limits, at: string, writing: Writing, entry: HistoryEntry, result: JsonObject) {
+  const { seq } = entry;
+  const applied: Applied = { ok: true, version: String(seq), result };
+  db.prepare(
+    "INSERT INTO history(seq, change, item, op, before, after, author, at, undoes) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    seq,
+    writing.id,
+    entry.item,
+    entry.op,
+    // With no undos kept, the old text is never written.
+    limits.maxUndo === 0 ? null : entry.before,
+    entry.after,
+    canonicalJson(writing.author),
+    at,
+    entry.undoes,
+  );
+  db.prepare("INSERT INTO changes(id, digest, result, seq) VALUES (?, ?, ?, ?)").run(
+    writing.id,
+    writing.digest,
+    logJson(applied),
+    seq,
+  );
+  db.prepare("UPDATE meta SET value = ? WHERE key = 'version'").run(String(seq));
+  db.prepare("DELETE FROM changes WHERE seq <= ?").run(seq - limits.maxChangeIds);
+  db.prepare("UPDATE history SET before = NULL WHERE seq <= ? AND before IS NOT NULL").run(seq - limits.maxUndo);
+  db.prepare("DELETE FROM history WHERE seq <= ?").run(seq - Math.max(limits.maxUndo, limits.maxChangeIds));
+  return applied;
+}
+
+/**
+ * Check that `vector` is as long as the store's vectors.
+ *
+ * @throws Error naming both lengths, since the store's vectors came from another model.
+ */
+function checkDimensions(db: Sqlite, vector: Float32Array): void {
+  const dimensions = storedDimensions(db);
+  if (dimensions !== null && dimensions !== vector.length) {
+    throw new Error(
+      `the embedder returned vectors of ${vector.length} dimensions, but this memory's items have ${dimensions}; ` +
+        "re-embed it with `yian memory reembed`",
+    );
+  }
+}
+
 /** What a session needs of its memory: the store, its caps, its lock and its clock. */
 interface Store {
   /** The store's SQLite file, symlinks resolved. */
@@ -1076,9 +1314,27 @@ class VectorDBSession implements MemorySession {
     });
   }
 
-  async apply(_c: { id: string; change: JsonObject; author: Author; signal: AbortSignal }): Promise<Applied> {
+  /**
+   * Apply one change, unless its id is known: then return the stored outcome without embedding.
+   *
+   * Holding the lock, it checks the id, the precondition and the caps; a refusal (`ok: false`)
+   * writes nothing. A change that needs its text embedded releases the lock, embeds, and takes it
+   * again to check the id and the precondition once more and write. Each write is one transaction:
+   * the item, its history row and its id row.
+   *
+   * @throws {ChangeIdReusedError} If `id` was applied with a different change.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   * @throws {TypeError} If `id`, `change` or `author` has the wrong shape.
+   * @throws Error when the embedder fails, and nothing is written.
+   */
+  async apply(c: { id: string; change: JsonObject; author: Author; signal: AbortSignal }): Promise<Applied> {
     this.#checkOpen();
-    throw new Error("VectorDBMemory changes aren't available yet");
+    c.signal.throwIfAborted();
+    if (typeof c.id !== "string" || c.id === "") throw new TypeError("a change id must be a non-empty string");
+    const author = checkAuthor(c.author);
+    const change = checkChange(c.change, this.#stored.item_schema);
+    const writing: Writing = { id: c.id, digest: sha256(canonicalJson(c.change)), author };
+    return this.#track(this.#apply(writing, change, c.signal));
   }
 
   async undo(_o: { id: string; changeId: string; author: Author; signal: AbortSignal }): Promise<Applied> {
@@ -1101,6 +1357,108 @@ class VectorDBSession implements MemorySession {
     this.#closed = true;
     // A change queues its second turn after its first settles, so wait until none is left.
     while (this.#pending.size > 0) await Promise.all([...this.#pending]);
+  }
+
+  /** Apply `change` as `writing`: check and write at once, or check, embed, then check again and write. */
+  async #apply(writing: Writing, change: Change, signal: AbortSignal): Promise<Applied> {
+    const first = await this.#locked(signal, (db): Applied | null => {
+      const known = knownChange(db, writing.id, writing.digest);
+      if (known !== null) return known;
+      const plan = this.#plan(db, change);
+      if ("ok" in plan) return plan;
+      return plan.embed === null ? this.#write(db, writing, change, plan, null) : null;
+    });
+    if (first !== null) return first;
+    // Embedded outside the lock: a slow embedding call mustn't hold up the memory's other writers.
+    const text = change.op === "add" || change.op === "edit" ? change.text! : "";
+    const [vector] = await this.#embed([text], signal);
+    return this.#locked(signal, (db) => {
+      const known = knownChange(db, writing.id, writing.digest);
+      if (known !== null) return known;
+      const plan = this.#plan(db, change);
+      if ("ok" in plan) return plan;
+      return this.#write(db, writing, change, plan, plan.embed === null ? null : vector!);
+    });
+  }
+
+  /**
+   * Check `change` against the store: the caps, the item it names and its precondition. Return
+   * the refusal or conflict, or the item it changes and the text to embed for it (`null` when its
+   * vector stays).
+   */
+  #plan(db: Sqlite, change: Change): Applied | { row: ItemRow | null; embed: string | null } {
+    const { limits } = this.#store;
+    const text = change.op === "add" || change.op === "edit" ? change.text : undefined;
+    const textWhy = text === undefined ? null : textProblem(text, limits);
+    if (textWhy !== null) return refused(textWhy);
+    if (change.op === "add") {
+      const count = Number(db.prepare("SELECT count(*) AS n FROM items").get()!.n);
+      if (count >= limits.maxItems) return refused(`the memory holds ${count} items; it may hold ${limits.maxItems}`);
+      return { row: null, embed: change.text };
+    }
+    const row = itemRow(db, change.id);
+    if (row === undefined) return refused(`item ${change.id} doesn't exist`);
+    if (row.version !== change.if_version) {
+      return conflict(
+        `item ${change.id} changed since it was read: its version is ${row.version}, not ${change.if_version}`,
+        row,
+      );
+    }
+    if (change.op === "retire" && row.retired !== null) return conflict(`item ${change.id} is already retired`, row);
+    return { row, embed: text !== undefined && text !== row.text ? text : null };
+  }
+
+  /** Write `change`, which `#plan` passed, with `vector` as its item's new vector, in one transaction. */
+  #write(db: Sqlite, writing: Writing, change: Change, plan: { row: ItemRow | null }, vector: Float32Array | null) {
+    const { limits, scheduler } = this.#store;
+    if (vector !== null) checkDimensions(db, vector);
+    const at = new Date(scheduler.now()).toISOString();
+    const author = canonicalJson(writing.author);
+    return transaction(db, () => {
+      const seq = storedVersion(db) + 1;
+      const { row } = plan;
+      let entry: HistoryEntry;
+      switch (change.op) {
+        case "add": {
+          const fields = change.fields === null ? null : logJson(change.fields);
+          const inserted = db
+            .prepare("INSERT INTO items(text, fields, version, author, retired, vector) VALUES (?, ?, ?, ?, NULL, ?)")
+            .run(change.text, fields, seq, author, bytesOf(vector!));
+          const item = Number(inserted.lastInsertRowid);
+          entry = { seq, item, op: "add", before: ABSENT_STATE, after: seq, undoes: null };
+          break;
+        }
+        case "edit": {
+          const fields = change.fields === undefined ? row!.fields : logJson(change.fields);
+          db.prepare("UPDATE items SET text = ?, fields = ?, version = ?, author = ? WHERE id = ?").run(
+            change.text ?? row!.text,
+            fields,
+            seq,
+            author,
+            row!.id,
+          );
+          if (vector !== null) db.prepare("UPDATE items SET vector = ? WHERE id = ?").run(bytesOf(vector), row!.id);
+          entry = { seq, item: row!.id, op: "edit", before: stateOf(row!), after: seq, undoes: null };
+          break;
+        }
+        case "retire":
+          db.prepare("UPDATE items SET retired = ?, version = ?, author = ? WHERE id = ?").run(
+            change.why,
+            seq,
+            author,
+            row!.id,
+          );
+          entry = { seq, item: row!.id, op: "retire", before: stateOf(row!), after: seq, undoes: null };
+          break;
+        case "delete":
+          // The item's text goes from its row and from every history row that holds it.
+          db.prepare("DELETE FROM items WHERE id = ?").run(row!.id);
+          db.prepare("DELETE FROM history WHERE item = ?").run(row!.id);
+          entry = { seq, item: row!.id, op: "delete", before: null, after: null, undoes: null };
+          break;
+      }
+      return record(db, limits, at, writing, entry, { id: BigInt(entry.item), version: BigInt(seq) });
+    });
   }
 
   /**

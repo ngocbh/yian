@@ -1,6 +1,7 @@
-/** VectorDBMemory: its store, identity and settings, recall and read tools. */
+/** VectorDBMemory: its store, identity and settings, recall, read tools and writes. */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
@@ -8,8 +9,10 @@ import { join } from "node:path";
 
 import type { EmbeddingModel } from "../../src/llm/embeddings.ts";
 import {
+  type Applied,
   type Author,
   BUILTIN_MEMORY_TOOLS,
+  ChangeIdReusedError,
   checkContract,
   MemoryBusyError,
   memoryErrorKind,
@@ -670,3 +673,420 @@ describe("read and list", () => {
     await s.close();
   });
 });
+
+const author: Author = { kind: "tool", name: "save", run: "r", node: "save" };
+
+/** Apply `change` as change `id` on `s`. */
+function apply(s: MemorySession, change: JsonObject, id = "c1"): Promise<Applied> {
+  return s.apply({ id, change, author, signal });
+}
+
+/** Return the rows of `table` in the store, read straight from the file. */
+function rows(table: string, at = path): JsonObject[] {
+  const db = openSqlite(at, { readonly: true });
+  try {
+    return db.prepare(`SELECT * FROM ${table}`).all() as unknown as JsonObject[];
+  } finally {
+    db.close();
+  }
+}
+
+/** Return whether any of the store's files holds `text` in its bytes. */
+function storeHolds(text: string): boolean {
+  return fs
+    .readdirSync(join(dir, "store"))
+    .some((name) => fs.readFileSync(join(dir, "store", name)).includes(Buffer.from(text, "utf8")));
+}
+
+describe("writes", () => {
+  test("add never conflicts and returns {id, version}; the item carries its author", async () => {
+    const s = await openAt();
+    expect(await apply(s, { op: "add", text: "alpha" }, "a1")).toEqual({
+      ok: true,
+      version: "1",
+      result: { id: 1n, version: 1n },
+    });
+    expect(await apply(s, { op: "add", text: "bravo" }, "a2")).toEqual({
+      ok: true,
+      version: "2",
+      result: { id: 2n, version: 2n },
+    });
+    expect(await call(s, "read", { id: 2n })).toEqual({ id: 2n, version: 2n, text: "bravo", author });
+    expect(embedded.map((each) => each.texts)).toEqual([["alpha"], ["bravo"]]);
+    expect((await s.snapshot()).version).toBe("2");
+    await s.close();
+  });
+
+  test("a typed memory's add needs fields that fit the item type; a text-only one takes none", async () => {
+    const typed = await openAt({ path: join(dir, "typed.db") }, CASE);
+    const fields = { title: "flaky", tags: ["ci"] };
+    expect((await apply(typed, { op: "add", text: "alpha", fields }, "t1")).ok).toBe(true);
+    expect(await call(typed, "read", { id: 1n })).toMatchObject({ fields });
+    await expect(apply(typed, { op: "add", text: "alpha" }, "t2")).rejects.toThrow(
+      "an add to this memory needs fields, since its items are typed",
+    );
+    await expect(apply(typed, { op: "add", text: "alpha", fields: { title: 3n, tags: [] } }, "t3")).rejects.toThrow(
+      "a VectorDBMemory add's fields don't fit the item type",
+    );
+    await typed.close();
+    const text = await openAt();
+    await expect(apply(text, { op: "add", text: "alpha", fields }, "t4")).rejects.toThrow(
+      "this memory's items are text only; an add takes no fields",
+    );
+    await text.close();
+  });
+
+  test("edit changes the text, the fields or both, and embeds only a new text", async () => {
+    const s = await openAt({ path: join(dir, "typed.db") }, CASE);
+    await apply(s, { op: "add", text: "alpha", fields: { title: "a", tags: [] } }, "a1");
+    embedded = [];
+    const fields = { title: "b", tags: ["x"] };
+    expect(await apply(s, { op: "edit", id: 1n, if_version: 1n, fields }, "e1")).toEqual({
+      ok: true,
+      version: "2",
+      result: { id: 1n, version: 2n },
+    });
+    expect(embedded).toEqual([]);
+    expect(await apply(s, { op: "edit", id: 1n, if_version: 2n, text: "bravo" }, "e2")).toMatchObject({ ok: true });
+    expect(embedded.map((each) => each.texts)).toEqual([["bravo"]]);
+    expect(await call(s, "read", { id: 1n })).toMatchObject({ version: 3n, text: "bravo", fields });
+    const found = await call(s, "search", { query: "bravo", k: 1n });
+    expect(found.items).toEqual([{ id: 1n, version: 3n, score: 1, text: "bravo", fields }]);
+    await expect(apply(s, { op: "edit", id: 1n, if_version: 3n }, "e3")).rejects.toThrow(
+      "an edit needs text, fields or both",
+    );
+    await s.close();
+  });
+
+  test("edit, retire and delete with a stale if_version conflict with the item's current state", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "alpha bravo" }, "e1");
+    embedded = [];
+    const current = { id: 1n, version: 2n, text: "alpha bravo", author };
+    const reason = "item 1 changed since it was read: its version is 2, not 1";
+    const stale: JsonObject[] = [
+      { op: "edit", id: 1n, if_version: 1n, text: "charlie" },
+      { op: "retire", id: 1n, if_version: 1n, why: "old" },
+      { op: "delete", id: 1n, if_version: 1n },
+    ];
+    for (const change of stale) {
+      expect(await apply(s, change, `stale-${String(change.op)}`)).toEqual({ ok: false, reason, current });
+    }
+    // A conflict is found before anything is embedded, and writes nothing.
+    expect(embedded).toEqual([]);
+    expect((await s.snapshot()).version).toBe("2");
+    expect(await apply(s, { op: "edit", id: 9n, if_version: 1n, text: "x" }, "missing")).toEqual({
+      ok: false,
+      reason: "item 9 doesn't exist",
+      current: null,
+    });
+    await s.close();
+  });
+
+  test("retire hides an item from search, list and the recall, and keeps it for read", async () => {
+    const s = await openAt({ recallRecent: 5 });
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "add", text: "alpha bravo" }, "a2");
+    expect(await apply(s, { op: "retire", id: 1n, if_version: 1n, why: "a duplicate" }, "r1")).toMatchObject({
+      ok: true,
+      result: { id: 1n, version: 3n },
+    });
+    expect(((await call(s, "search", { query: "alpha", k: 5n })).items as JsonObject[]).map((i) => i.id)).toEqual([2n]);
+    expect(((await call(s, "list", {})).items as JsonObject[]).map((i) => i.id)).toEqual([2n]);
+    expect((await s.snapshot()).recall.text).toBe("1 item\n[2] alpha bravo");
+    expect(await call(s, "read", { id: 1n })).toMatchObject({ version: 3n, retired: "a duplicate" });
+    expect(await apply(s, { op: "retire", id: 1n, if_version: 3n, why: "again" }, "r2")).toMatchObject({
+      ok: false,
+      reason: "item 1 is already retired",
+    });
+    await s.close();
+  });
+
+  test("delete erases the item's text, its vector and its history rows from the store", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "secret alpha" }, "a1");
+    await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "secret bravo" }, "e1");
+    await apply(s, { op: "add", text: "kept" }, "a2");
+    expect(storeHolds("secret alpha")).toBe(true);
+    expect(await apply(s, { op: "delete", id: 1n, if_version: 2n }, "d1")).toEqual({
+      ok: true,
+      version: "4",
+      result: { id: 1n, version: 4n },
+    });
+    expectRefusal(await rejection(call(s, "read", { id: 1n })), "item 1 doesn't exist");
+    expect(rows("items").map((row) => row.id)).toEqual([2]);
+    expect(rows("history").filter((row) => row.item === 1).map((row) => row.op)).toEqual(["delete"]);
+    expect(storeHolds("secret alpha")).toBe(false);
+    expect(storeHolds("secret bravo")).toBe(false);
+    expect(storeHolds("kept")).toBe(true);
+    await s.close();
+  });
+
+  test("an add over maxItems, or a text over maxTextChars, is refused with the reason before embedding", async () => {
+    const s = await openAt({ maxItems: 2, maxTextChars: 5 });
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "add", text: "bravo" }, "a2");
+    await apply(s, { op: "retire", id: 2n, if_version: 2n, why: "x" }, "r1");
+    embedded = [];
+    // A retired item still takes its place.
+    expect(await apply(s, { op: "add", text: "delta" }, "a3")).toEqual({
+      ok: false,
+      reason: "the memory holds 2 items; it may hold 2",
+      current: null,
+    });
+    expect(await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "charlie" }, "e1")).toEqual({
+      ok: false,
+      reason: "the text is 7 characters; an item may hold 5",
+      current: null,
+    });
+    expect(await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "" }, "e2")).toEqual({
+      ok: false,
+      reason: "an item's text can't be empty",
+      current: null,
+    });
+    expect(embedded).toEqual([]);
+    expect((await s.snapshot()).version).toBe("3");
+    await s.close();
+  });
+
+  test("a failed embed writes nothing, and the same id applies once embedding works", async () => {
+    let fail = true;
+    const s = await openAt({
+      embed: (texts, o) => (fail ? Promise.reject(new Error("503 unavailable")) : embed(texts, o)),
+    });
+    await expect(apply(s, { op: "add", text: "alpha" }, "a1")).rejects.toThrow("503 unavailable");
+    expect(rows("items")).toEqual([]);
+    expect(rows("changes")).toEqual([]);
+    expect((await s.snapshot()).version).toBe("0");
+    fail = false;
+    expect(await apply(s, { op: "add", text: "alpha" }, "a1")).toMatchObject({ ok: true, version: "1" });
+    await s.close();
+  });
+
+  test("a vector of another length than the store's is a fault that writes nothing", async () => {
+    await (await openAt()).close();
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    const short = await openAt({ embed: async (texts) => texts.map(() => new Float32Array([1, 0, 0])) });
+    await expect(apply(short, { op: "add", text: "bravo" }, "a2")).rejects.toThrow(
+      "the embedder returned vectors of 3 dimensions, but this memory's items have 4; " +
+        "re-embed it with `yian memory reembed`",
+    );
+    expect(rows("items")).toHaveLength(1);
+    await s.close();
+    await short.close();
+  });
+
+  test("a known id returns its stored result without embedding again; another change under it is refused", async () => {
+    const s = await openAt();
+    const first = await apply(s, { op: "add", text: "alpha" }, "a1");
+    embedded = [];
+    expect(await apply(s, { op: "add", text: "alpha" }, "a1")).toEqual(first);
+    expect(embedded).toEqual([]);
+    expect(rows("items")).toHaveLength(1);
+    const reused = await rejection(apply(s, { op: "add", text: "bravo" }, "a1"));
+    expect(reused).toBeInstanceOf(ChangeIdReusedError);
+    expect(memoryErrorKind(reused)).toBe("change_id_reused");
+    expect(embedded).toEqual([]);
+    // An int given as a number is the same change as one given as a bigint.
+    const retire = { op: "retire", id: 1n, if_version: 1n, why: "x" };
+    const retired = await apply(s, retire, "r1");
+    expect(await apply(s, { ...retire, id: 1, if_version: 1 }, "r1")).toEqual(retired);
+    await s.close();
+  });
+
+  test("a conflict records no id: the same id applies once its precondition holds", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "bravo" }, "e1");
+    const change = { op: "retire", id: 1n, if_version: 3n, why: "x" };
+    expect((await apply(s, change, "r1")).ok).toBe(false);
+    await apply(s, { op: "edit", id: 1n, if_version: 2n, text: "charlie" }, "e2");
+    expect(await apply(s, change, "r1")).toMatchObject({ ok: true, version: "4" });
+    await s.close();
+  });
+
+  test("after maxChangeIds later changes, an old id applies again", async () => {
+    const s = await openAt({ maxChangeIds: 2 });
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "add", text: "bravo" }, "a2");
+    expect(rows("changes").map((row) => row.id)).toEqual(["a1", "a2"]);
+    await apply(s, { op: "add", text: "charlie" }, "a3");
+    expect(rows("changes").map((row) => row.id)).toEqual(["a2", "a3"]);
+    expect(await apply(s, { op: "add", text: "alpha" }, "a1")).toMatchObject({ ok: true, result: { id: 4n } });
+    await s.close();
+  });
+
+  test("the lock is released while a change embeds, and its precondition is checked again after", async () => {
+    const s = await openAt();
+    const other = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    const locked: boolean[] = [];
+    const racing = await openAt({
+      embed: async (texts, o) => {
+        locked.push(isLocked(`${path}.lock`));
+        // Another writer gets the lock while this change embeds, and moves the item on.
+        await apply(other, { op: "edit", id: 1n, if_version: 1n, text: "bravo" }, "e-other");
+        return embed(texts, o);
+      },
+    });
+    expect(await apply(racing, { op: "edit", id: 1n, if_version: 1n, text: "charlie" }, "e-mine")).toEqual({
+      ok: false,
+      reason: "item 1 changed since it was read: its version is 2, not 1",
+      current: { id: 1n, version: 2n, text: "bravo", author },
+    });
+    expect(locked).toEqual([false]);
+    for (const each of [s, other, racing]) await each.close();
+  });
+
+  test("one id sent by two sessions at once is applied once; both get its result", async () => {
+    const a = await openAt();
+    const b = await openAt();
+    const change = { op: "add", text: "alpha" };
+    const [first, second] = await Promise.all([apply(a, change, "same"), apply(b, change, "same")]);
+    expect(first).toEqual(second!);
+    expect(rows("items")).toHaveLength(1);
+    // Both embedded, since neither had applied when the other checked the id.
+    expect(embedded).toHaveLength(2);
+    await a.close();
+    await b.close();
+  });
+
+  test("a change writes its item, history row and id row in one transaction; a failure writes none", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    expect(rows("history")).toEqual([
+      {
+        seq: 1,
+        change: "a1",
+        item: 1,
+        op: "add",
+        before: '{"absent":true}',
+        after: 1,
+        author: '{"kind":"tool","name":"save","node":"save","run":"r"}',
+        at: expect.any(String),
+        undoes: null,
+      },
+    ]);
+    expect(rows("changes")).toEqual([
+      { id: "a1", digest: expect.any(String), result: expect.stringContaining('"ok":true'), seq: 1 },
+    ]);
+    // A store whose history table can't take the row: the item and id rows roll back with it.
+    const db = openSqlite(path);
+    db.exec("CREATE TRIGGER no_history BEFORE INSERT ON history BEGIN SELECT RAISE(ABORT, 'no history'); END");
+    db.close();
+    await expect(apply(s, { op: "add", text: "bravo" }, "a2")).rejects.toThrow("no history");
+    expect(rows("items")).toHaveLength(1);
+    expect(rows("changes")).toHaveLength(1);
+    expect(metaRows().version).toBe("1");
+    await s.close();
+  });
+
+  test("a change of the wrong shape is a fault, not a refusal", async () => {
+    const s = await openAt();
+    await expect(apply(s, { op: "upsert", text: "x" })).rejects.toThrow(
+      "VectorDBMemory has no change upsert; its changes are add, edit, retire, delete",
+    );
+    await expect(apply(s, { op: "add", text: "x", id: 1n })).rejects.toThrow(
+      "a VectorDBMemory add takes text and fields, not id",
+    );
+    await expect(apply(s, { op: "retire", id: 1n, if_version: 1n })).rejects.toThrow(
+      "a VectorDBMemory retire needs why as a string",
+    );
+    await expect(apply(s, { op: "delete", id: "1", if_version: 1n })).rejects.toThrow(TypeError);
+    await expect(s.apply({ id: "", change: { op: "add", text: "x" }, author, signal })).rejects.toThrow(TypeError);
+    await expect(
+      s.apply({ id: "x", change: { op: "add", text: "x" }, author: { kind: "robot" } as unknown as Author, signal }),
+    ).rejects.toThrow(TypeError);
+    expect(rows("changes")).toEqual([]);
+    await s.close();
+  });
+
+  test("close waits for a change that is embedding, which then lands", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const s = await openAt({
+      embed: async (texts, o) => {
+        await gate;
+        return embed(texts, o);
+      },
+    });
+    const adding = apply(s, { op: "add", text: "alpha" }, "a1");
+    let closed = false;
+    const closing = s.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(closed).toBe(false);
+    release();
+    await closing;
+    expect(await adding).toMatchObject({ ok: true });
+    expect(rows("items")).toHaveLength(1);
+  });
+});
+
+/** The children a test started, killed after it if still running. */
+const children: ChildProcess[] = [];
+
+afterEach(() => {
+  for (const child of children.splice(0)) {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }
+});
+
+/**
+ * Run a Bun child that opens the store at `path` and adds `count` items as ids `<who>-<i>`, with an
+ * embedder that gives every text the same vector, and resolve with its exit code and stderr. A
+ * child still running after 60 s is killed, so a hung lock can't leave it behind.
+ */
+function adder(who: string, count: number): Promise<{ code: number | null; stderr: string }> {
+  const source = new URL("../../src/memory/vectordb.ts", import.meta.url).href;
+  const script = `
+const { VectorDBMemory } = await import(${JSON.stringify(source)});
+const signal = new AbortController().signal;
+const embed = async (texts) => texts.map(() => new Float32Array([1, 0, 0, 0]));
+const m = new VectorDBMemory({ path: ${JSON.stringify(path)}, embed });
+const s = await m.open({ create: false, itemType: null, signal });
+const who = ${JSON.stringify(who)};
+for (let i = 0; i < ${count}; i++) {
+  const change = { op: "add", text: who + " " + i };
+  const applied = await s.apply({ id: who + "-" + i, change, author: { kind: "host", name: who }, signal });
+  if (!applied.ok) throw new Error(JSON.stringify(applied));
+}
+await s.close();
+`;
+  const child = spawn(process.execPath, ["-e", script], { stdio: ["ignore", "ignore", "pipe"], env: {} });
+  children.push(child);
+  let stderr = "";
+  child.stderr!.setEncoding("utf8").on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`${who} still ran after 60 s; stderr:\n${stderr}`));
+    }, 60_000);
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ code, stderr });
+    });
+  });
+}
+
+test("writers in separate processes serialize through the lock: every add lands once, none is busy", async () => {
+  await (await openAt()).close();
+  const ran = await Promise.all([adder("p", 8), adder("q", 8)]);
+  for (const { code, stderr } of ran) expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+  const texts = rows("items").map((row) => row.text as string);
+  const expected = ["p", "q"].flatMap((who) => Array.from({ length: 8 }, (_, i) => `${who} ${i}`));
+  expect([...texts].sort()).toEqual([...expected].sort());
+  expect(rows("changes")).toHaveLength(16);
+  expect(metaRows().version).toBe("16");
+}, 120_000);

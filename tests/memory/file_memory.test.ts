@@ -1092,3 +1092,50 @@ describe("history and undo", () => {
     await s.close();
   });
 });
+
+describe("errors name no location", () => {
+  const asUser = process.platform !== "win32" && process.getuid!() !== 0;
+
+  test.if(asUser)("an OS error from a write names paths in the memory, never its location", async () => {
+    put(root, "ro/a.md", "A");
+    const s = await openAt();
+    fs.chmodSync(join(root, "ro"), 0o500);
+    let error: unknown;
+    try {
+      error = await rejection(apply(s, { op: "append", path: "ro/a.md", text: "x" }, "x"));
+    } finally {
+      fs.chmodSync(join(root, "ro"), 0o700);
+    }
+    expect((error as NodeJS.ErrnoException).code).toBe("EACCES");
+    expect((error as Error).message).toContain("ro/a.md");
+    expect(`${(error as Error).message} ${(error as Error).stack}`).not.toContain(dir);
+    expect(Object.values(error as object).join(" ")).not.toContain(dir);
+    // The change was journaled before the rename failed; the next write resolves it and goes on.
+    expect((await apply(s, { op: "append", path: "ro/a.md", text: "x" }, "x")).ok).toBe(true);
+    await s.close();
+  });
+
+  test.if(asUser)("an OS error from a read names no location", async () => {
+    put(root, "a.md", "A");
+    fs.chmodSync(join(root, "a.md"), 0o000);
+    const s = await openAt();
+    const error = await rejection(s.call("read", { path: "a.md" }, { signal }));
+    expect((error as NodeJS.ErrnoException).code).toBe("EACCES");
+    expect(`${(error as Error).message} ${(error as Error).stack}`).not.toContain(dir);
+    await s.close();
+  });
+
+  test("a busy memory's error names no location, not even in its cause", async () => {
+    const s = await openAt({ lockTimeoutMs: 0 });
+    const lock = lockFile(join(root, ".yian/lock"), { private: true });
+    try {
+      const error = await rejection(s.snapshot());
+      expect(error).toBeInstanceOf(MemoryBusyError);
+      expect(String((error as Error).cause ?? "")).not.toContain(dir);
+      expect((error as Error).message).not.toContain(dir);
+    } finally {
+      lock.release();
+    }
+    await s.close();
+  });
+});

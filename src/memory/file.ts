@@ -672,7 +672,8 @@ export class FileMemory extends MemoryBase {
             lock = await waitForLock(join(real, META, "lock"), { timeoutMs, signal, scheduler, private: true });
           } catch (error) {
             if (error instanceof FileLockError && error.reason === "busy") {
-              throw new MemoryBusyError("this memory is busy: another writer holds its lock", { cause: error });
+              // No cause: the lock's error names its path, and this one can reach a model.
+              throw new MemoryBusyError("this memory is busy: another writer holds its lock");
             }
             throw error;
           }
@@ -878,6 +879,25 @@ function clearTmp(root: string): void {
   for (const name of names) fs.rmSync(join(tmp, name), { recursive: true, force: true });
 }
 
+/**
+ * Return `error` with the memory's location taken out of its message: an OS error names absolute
+ * paths, and a session's errors can reach a model and a run log, which never hold a location.
+ * Paths in the memory stay, relative to its root. A system error keeps its code.
+ */
+function withoutLocation(error: unknown, root: string): unknown {
+  if (!(error instanceof Error) || !error.message.includes(root)) return error;
+  const copy: Error & { code?: unknown; syscall?: unknown; errno?: unknown } = new Error(
+    error.message.replaceAll(`${root}/`, "").replaceAll(root, "the memory"),
+  );
+  copy.name = error.name;
+  // Not `path`, `dest` or `cause`, which hold the location too.
+  const { code, syscall, errno } = error as NodeJS.ErrnoException;
+  if (code !== undefined) copy.code = code;
+  if (syscall !== undefined) copy.syscall = syscall;
+  if (errno !== undefined) copy.errno = errno;
+  return copy;
+}
+
 /** One open FileMemory. Read tools take no lock; writes and snapshots take the memory's lock. */
 class FileMemorySession implements MemorySession {
   readonly info: MemoryInfo;
@@ -923,11 +943,15 @@ class FileMemorySession implements MemorySession {
       throw new TypeError(`FileMemory has no tool ${tool}; it has ${TOOLS.map((each) => each.name).join(", ")}`);
     }
     if (spec.write) throw new TypeError(`${tool} is a write tool: apply it as a change`);
-    if (tool === "list") return this.#list(stringArg(args, "dir", false));
-    if (tool === "read") {
-      return this.#read(stringArg(args, "path", true), countArg(args, "offset"), countArg(args, "limit"));
+    try {
+      if (tool === "list") return this.#list(stringArg(args, "dir", false));
+      if (tool === "read") {
+        return this.#read(stringArg(args, "path", true), countArg(args, "offset"), countArg(args, "limit"));
+      }
+      return this.#search(stringArg(args, "query", true));
+    } catch (error) {
+      throw withoutLocation(error, this.#store.root);
     }
-    return this.#search(stringArg(args, "query", true));
   }
 
   /**
@@ -1333,7 +1357,9 @@ class FileMemorySession implements MemorySession {
   /** Run `body` holding the memory's lock, in this process's turn on the memory. */
   #locked<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
     if (this.#closed) return Promise.reject(new Error("this FileMemory session is closed"));
-    const run = this.#store.locked(signal, body);
+    const run = this.#store.locked(signal, body).catch((error: unknown) => {
+      throw withoutLocation(error, this.#store.root);
+    });
     this.#last = run.then(
       () => undefined,
       () => undefined,

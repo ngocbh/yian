@@ -287,9 +287,23 @@ describe("recall and snapshot", () => {
   test("over maxRecallChars the listing is cut, saying how many files it doesn't show", async () => {
     for (const name of ["a", "b", "c", "d", "e"]) put(root, `${name}.md`, `${name} line`);
     const s = await openAt({ maxRecallChars: 20 });
+    // b.md's line doesn't fit, but its path does; nothing more fits after it.
     expect((await s.snapshot()).recall).toEqual({
-      text: "a.md: a line",
-      cut: "4 more files not shown",
+      text: "a.md: a line\nb.md",
+      cut: "3 more files not shown",
+      hint: { tool: "read", text: "Read them with {tool}." },
+    });
+    await s.close();
+  });
+
+  test("a first line longer than maxRecallChars shows its file's path alone, and later files still show", async () => {
+    put(root, "a.md", `${"x".repeat(100)}\nmore`);
+    put(root, "b.md", "short b");
+    put(root, "c.md", "short c");
+    const s = await openAt({ maxRecallChars: 50 });
+    expect((await s.snapshot()).recall).toEqual({
+      text: "a.md\nb.md: short b\nc.md: short c",
+      cut: null,
       hint: { tool: "read", text: "Read them with {tool}." },
     });
     await s.close();

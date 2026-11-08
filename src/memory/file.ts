@@ -421,7 +421,8 @@ function realRoot(path: string): string {
 
 /**
  * Return the recall of a memory whose members are `members`: the index's text when it is a
- * member, else each member's path and first line, within `maxRecallChars`.
+ * member, else each member's path and first line, in path order, within `maxRecallChars`. A
+ * member whose line doesn't fit shows its path alone, if that fits.
  */
 function recallOf(
   members: { files: MemberFile[]; skipped: number },
@@ -441,12 +442,15 @@ function recallOf(
   let used = 0;
   for (const file of members.files) {
     const first = (linesOf(file.text)[0] ?? "").replace(/\r$/, "");
-    const line = first === "" ? file.path : `${file.path}: ${first}`;
-    const cost = charCount(line) + (lines.length > 0 ? 1 : 0);
-    // Whole lines only, in path order: a line cut short would misquote its file.
-    if (used + cost > maxRecallChars) break;
-    lines.push(line);
-    used += cost;
+    // A whole first line, or else the path alone: a line cut short would misquote its file, and
+    // one long line mustn't hide the files after it.
+    for (const line of first === "" ? [file.path] : [`${file.path}: ${first}`, file.path]) {
+      const cost = charCount(line) + (lines.length > 0 ? 1 : 0);
+      if (used + cost > maxRecallChars) continue;
+      lines.push(line);
+      used += cost;
+      break;
+    }
   }
   const notes: string[] = [];
   const unshown = members.files.length - lines.length;

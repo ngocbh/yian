@@ -22,8 +22,7 @@
  */
 
 import { reprText } from "../diagnostics.ts";
-import { FileRef, InboxRef, Type, type Value, ValueKind } from "../typesys/index.ts";
-import { MemoryRef } from "../typesys/values.ts";
+import { FileRef, InboxRef, MemoryRef, Type, type Value, ValueKind } from "../typesys/index.ts";
 import { fromHost, valueRepr, writeAsJson, writeAsText } from "../typesys/values.ts";
 import { uncallableReason } from "./grammar.ts";
 

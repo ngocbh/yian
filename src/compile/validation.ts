@@ -328,7 +328,8 @@ function listElement(typ: Type): Type {
  */
 function sameMemory(a: Type, b: Type): boolean {
   if (a.kind !== ValueKind.MEMORY || b.kind !== ValueKind.MEMORY || a.memory !== b.memory) return false;
-  return a.element === undefined || b.element === undefined ? a.element === b.element : typeEquals(a.element, b.element);
+  if (a.element === undefined || b.element === undefined) return a.element === b.element;
+  return typeEquals(a.element, b.element);
 }
 
 /** Classify the non-null values of `inferred` against `declared`. */

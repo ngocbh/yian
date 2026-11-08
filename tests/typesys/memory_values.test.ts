@@ -7,6 +7,8 @@ import { logJson, parseJson } from "../../src/typesys/json.ts";
 import {
   buildValue,
   buildValueAs,
+  InboxRef,
+  jsonPart,
   fieldOf,
   fromHost,
   hasFile,
@@ -164,11 +166,19 @@ describe("memory at the write boundary", () => {
     expect(buildValue(ref).kind).toBe(ValueKind.MEMORY);
   });
 
-  test.each([[ref], [{ memory: FIELDS }]])("a memory slot stores a MemoryRef for %#", (value) => {
-    const stored = buildValueAs(FILE_MEMORY, value);
+  test("a memory slot stores the MemoryRef it is given", () => {
+    const stored = buildValueAs(FILE_MEMORY, ref);
     expect(stored.kind).toBe(ValueKind.MEMORY);
-    expect(MemoryRef.isMemoryRef(stored.value)).toBe(true);
-    expect(stored.value).toEqual(ref);
+    expect(stored.value).toBe(ref);
+  });
+
+  test("a memory slot refuses a memory value's JSON form: only a read of yian's own log builds one", () => {
+    expect(() => buildValueAs(FILE_MEMORY, { memory: FIELDS })).toThrow(TypeCheckError);
+    expect(() => buildValueAs(FILE_MEMORY, jsonPart(ref, [], "mapping"))).toThrow("does not match declared type FileMemory");
+  });
+
+  test("a memory slot with no memory type named is refused as malformed", () => {
+    expect(() => buildValueAs(ValueKind.MEMORY, ref)).toThrow("a memory type needs its name");
   });
 
   test("an Optional memory slot takes null", () => {
@@ -196,10 +206,29 @@ describe("memory at the write boundary", () => {
   test.each([[ValueKind.ANY], [ValueKind.OBJECT]])("%p refuses a memory value", (kind) => {
     expect(() => buildValueAs(kind, ref)).toThrow(TypeCheckError);
   });
+
+  // An object slot reads every field of its value, so a memory nested in one would show its recall.
+  test.each([
+    ["an object field", Type.scalar(ValueKind.OBJECT), { a: ref }],
+    ["a deeper object field", Type.scalar(ValueKind.OBJECT), { a: [{ b: ref }] }],
+    ["a list(object) item's field", Type.scalar(ValueKind.LIST_OBJECT), [{ a: ref }]],
+    ["an Any field", Type.scalar(ValueKind.ANY), { a: ref }],
+  ])("%s refuses a nested memory value", (_, typ, value) => {
+    expect(() => buildValueAs(typ, value as never)).toThrow("is not a JSON value");
+  });
+
+  test("an object slot still reads a nested file or inbox handle as its mapping", () => {
+    expect(buildValueAs(Type.scalar(ValueKind.OBJECT), { a: new InboxRef("m") } as never).value).toEqual({ a: { inbox: "m" } });
+  });
 });
 
 describe("memory reading type", () => {
-  test("a record's memory field reads its mapping back as a MemoryRef", () => {
+  test("an object position keeps a nested memory value as it is, never its readable mapping", () => {
+    const read = normalizeFiles(Type.scalar(ValueKind.OBJECT), { a: ref } as never) as { a: unknown };
+    expect(read.a).toBe(ref);
+  });
+
+  test("a record's memory field reads its mapping back as a MemoryRef, as a read of the run log does", () => {
     const read = normalizeFiles(INPUTS, { q: "x", lessons: { memory: FIELDS } } as never) as { lessons: unknown };
     expect(MemoryRef.isMemoryRef(read.lessons)).toBe(true);
   });

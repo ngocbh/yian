@@ -21,7 +21,7 @@ import { types } from "node:util";
 
 import { current } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
-import { type JsonObject, type JsonValue, logJson, parseJson } from "./json.ts";
+import { freezeParsed, type JsonObject, logJson, parseJson } from "./json.ts";
 import type { Recall, RecordedMemoryTool } from "./memory.ts";
 import { parseDate, parseDatetime } from "./temporal.ts";
 
@@ -127,9 +127,9 @@ export function shownNames(names: readonly string[]): string {
  * The text form is compact JSON with JS number spelling: `true`, `null`, `2.5`, `2` for the
  * float 2, `Infinity`, an int's digits, text JSON-quoted, a `FileRef` as its mapping
  * `{"uri":…,"mime":…,"name":…}`, an `InboxRef` as `{"inbox":…}`, a `MemoryRef` as
- * `<memory identity>`, records in JS property order. A part that isn't a yian value (a `Date`, a `Map`, a class instance, a symbol, a
- * function, `undefined`) shows as `<Name object>`, and an int the runtime can't stringify as
- * `<int too large to display>`.
+ * `<memory identity>`, records in JS property order. A part that isn't a yian value (a `Date`, a
+ * `Map`, a class instance, a symbol, a function, `undefined`) shows as `<Name object>`, and an int
+ * the runtime can't stringify as `<int too large to display>`.
  * The value never makes it throw: when a getter or proxy trap throws, the whole value shows as
  * `<Name object>`. The writer stops once it has more than the cap can show, so a long list,
  * a deep value or a cyclic one costs time bounded by the cap.
@@ -1000,7 +1000,7 @@ function memoryJson(field: string, value: unknown): JsonObject {
     if (!(error instanceof RangeError || error instanceof TypeError)) throw error;
     throw new RangeError(`memory ${field} must be JSON: ${error.message}`, { cause: error });
   }
-  return deepFreeze(parseJson(text, "codec") as JsonObject);
+  return freezeParsed(parseJson(text, "codec") as JsonObject);
 }
 
 /** Return a frozen copy of the recall `value`. */
@@ -1011,9 +1011,12 @@ function memoryRecall(value: unknown): Recall {
   const hint = value["hint"];
   let copy: Recall["hint"] = null;
   if (hint !== null) {
-    if (!isRecord(hint)) throw new RangeError(`memory recall hint must be a JSON object or null, got ${valueRepr(hint)}`);
+    if (!isRecord(hint)) {
+      throw new RangeError(`memory recall hint must be a JSON object or null, got ${valueRepr(hint)}`);
+    }
     requireFields(hint, HINT_FIELDS, "memory recall hint");
-    copy = Object.freeze({ tool: memoryText("hint tool", hint["tool"], true), text: memoryText("hint text", hint["text"], false) });
+    const tool = memoryText("hint tool", hint["tool"], true);
+    copy = Object.freeze({ tool, text: memoryText("hint text", hint["text"], false) });
   }
   return Object.freeze({ text: memoryText("recall text", value["text"], false), cut, hint: copy });
 }
@@ -1039,18 +1042,6 @@ function memoryTools(value: unknown): readonly RecordedMemoryTool[] {
     });
   });
   return Object.freeze(tools);
-}
-
-/** Freeze `root` and every container in it, in place, and return it. */
-function deepFreeze<T extends JsonValue>(root: T): T {
-  const stack: JsonValue[] = [root];
-  while (stack.length > 0) {
-    const value = stack.pop()!;
-    if (typeof value !== "object" || value === null || Object.isFrozen(value)) continue;
-    Object.freeze(value);
-    for (const item of Object.values(value)) stack.push(item);
-  }
-  return root;
 }
 
 /** Return a memory value's JSON form, `{"memory": {...}}`. */
@@ -2382,8 +2373,8 @@ function temporalError(declared: ValueKind, value: string): string | null {
 
 /**
  * Whether `value` fits the scalar kind `declared`. A `float` slot takes an int (which stays
- * an int); a `file` slot takes a `FileRef` or a file's JSON form, an `inbox` slot an
- * `InboxRef` or its JSON form, and a `memory` slot a `MemoryRef` or its JSON form.
+ * an int); a `file` slot takes a `FileRef` or a file's JSON form, and an `inbox` slot an
+ * `InboxRef` or its JSON form.
  */
 function scalarMatches(declared: ValueKind, value: unknown): boolean {
   switch (declared) {
@@ -2406,8 +2397,6 @@ function scalarMatches(declared: ValueKind, value: unknown): boolean {
       return FileRef.isFileRef(value) || isFileForm(value);
     case ValueKind.INBOX:
       return InboxRef.isInboxRef(value) || isInboxForm(value);
-    case ValueKind.MEMORY:
-      return MemoryRef.isMemoryRef(value) || memoryFromForm(value) !== null;
     default:
       return false;
   }
@@ -2415,8 +2404,8 @@ function scalarMatches(declared: ValueKind, value: unknown): boolean {
 
 /**
  * Return `value` as a `declared` slot stores it: `-0` in a `float` slot becomes `0`; a file's
- * JSON form in a `file` slot becomes a `FileRef`, an inbox handle's in an `inbox` slot an
- * `InboxRef`, and a memory value's in a `memory` slot a `MemoryRef`. Any other value (an int in a `float` slot too) is returned unchanged.
+ * JSON form in a `file` slot becomes a `FileRef`, and an inbox handle's in an `inbox` slot an
+ * `InboxRef`. Any other value (an int in a `float` slot too) is returned unchanged.
  *
  * @throws TypeCheckError at `path` when a file form's text holds a lone surrogate.
  */
@@ -2427,7 +2416,6 @@ function coerceScalar(declared: ValueKind, value: unknown, path: ValuePath): unk
     return new FileRef(value);
   }
   if (declared === ValueKind.INBOX && isInboxForm(value)) return new InboxRef(value.inbox);
-  if (declared === ValueKind.MEMORY) return memoryFromForm(value) ?? value;
   return value;
 }
 
@@ -2466,9 +2454,10 @@ function rejectNonValue(value: unknown, path: ValuePath): void {
 
 /**
  * What the JSON walk does with a `FileRef`, an `InboxRef` or a `MemoryRef`: keep it, write it as
- * its mapping, or refuse it.
+ * its mapping, or refuse it. `object` writes a file or handle as its mapping and refuses a memory,
+ * as an `object` slot stores a value: it reads every field, which a memory's recall must not reach.
  */
-type FileMode = "keep" | "mapping" | "refuse";
+type FileMode = "keep" | "mapping" | "object" | "refuse";
 
 /** An open list or record in the JSON walk. */
 interface JsonFrame {
@@ -2488,7 +2477,7 @@ interface JsonFrame {
  *
  * `-0` becomes `0`, and under `"mapping"` each `FileRef` (the root too) becomes its mapping
  * `{uri, mime, name}`, each `InboxRef` its mapping `{inbox}` and each `MemoryRef` its mapping
- * `{memory}`. Only the containers on the
+ * `{memory}`; `"object"` maps files and handles but refuses a `MemoryRef`. Only the containers on the
  * path to a change are copied; `root` itself is returned when nothing changes, and a container
  * shared by two parents is walked once. The walk uses an explicit stack, so any depth works;
  * nesting depth is left to the boundaries.
@@ -2524,12 +2513,12 @@ export function jsonPart(root: unknown, path: ValuePath, files: FileMode): Value
     if (typeof value === "number") return Object.is(value, -0) ? 0 : value;
     if (FileRef.isFileRef(value)) {
       if (files === "keep") return value;
-      if (files === "mapping") return { uri: value.uri, mime: value.mime, name: value.name };
+      if (files === "mapping" || files === "object") return { uri: value.uri, mime: value.mime, name: value.name };
       return fail(key, `${valueRepr(value)} is not a JSON value`);
     }
     if (InboxRef.isInboxRef(value)) {
       if (files === "keep") return value;
-      if (files === "mapping") return { inbox: value.inbox };
+      if (files === "mapping" || files === "object") return { inbox: value.inbox };
       return fail(key, `${valueRepr(value)} is not a JSON value`);
     }
     if (MemoryRef.isMemoryRef(value)) {
@@ -2785,17 +2774,19 @@ function buildForType(typ: Type, value: unknown, path: ValuePath): TypedValue {
 }
 
 /**
- * Check `value` against the memory type `typ` at `path`: a `MemoryRef`, or its JSON form, whose
- * contract type is `typ`'s. Returns it stored as a `MemoryRef`.
+ * Check `value` against the memory type `typ` at `path`: a `MemoryRef` whose contract type is
+ * `typ`'s. Its JSON form is refused: only a read of yian's own run log (`normalizeFiles`) turns
+ * one back into a memory, so no value a node computes can forge one.
  *
+ * @throws RangeError when `typ` names no memory type.
  * @throws TypeCheckError naming the declared type, and the value's own type when only that differs.
  */
 function buildMemory(typ: Type, value: unknown, path: ValuePath): TypedValue {
-  const memory = MemoryRef.isMemoryRef(value) ? value : memoryFromForm(value);
+  typ.validateShape();
   const mismatch = `${floatSpelledRepr(value)} does not match declared type ${canonicalTypeLabel(typ)}`;
-  if (memory === null) throw new TypeCheckError(mismatch, { path });
-  if (memory.type !== typ.memory) throw new TypeCheckError(`${mismatch}: it is a ${memory.type}`, { path });
-  return new TypedValue(ValueKind.MEMORY, memory);
+  if (!MemoryRef.isMemoryRef(value)) throw new TypeCheckError(mismatch, { path });
+  if (value.type !== typ.memory) throw new TypeCheckError(`${mismatch}: it is a ${value.type}`, { path });
+  return new TypedValue(ValueKind.MEMORY, value);
 }
 
 /**
@@ -2916,7 +2907,7 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
           { path: [...path, index] },
         );
       }
-      if (element === ValueKind.OBJECT) item = jsonPart(item, [...path, index], "mapping");
+      if (element === ValueKind.OBJECT) item = jsonPart(item, [...path, index], "object");
       items.push(item);
     }
     // Converting in a second pass checks every item first.
@@ -2934,7 +2925,7 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
   if (declared === ValueKind.NUMBER && typeof value === "bigint") {
     return new TypedValue(ValueKind.INTEGER, value);
   }
-  const stored = declared === ValueKind.OBJECT ? jsonPart(value, path, "mapping") : value;
+  const stored = declared === ValueKind.OBJECT ? jsonPart(value, path, "object") : value;
   return new TypedValue(declared as StorageKind, coerceScalar(declared, stored, path) as Value);
 }
 
@@ -2943,7 +2934,7 @@ function buildScalarOrList(declared: ValueKind, value: unknown, path: ValuePath)
  *
  * At a `file` position a file's JSON form becomes a `FileRef`, at an `Inbox(T)` position an inbox
  * handle's JSON form becomes an `InboxRef`, and at a memory position a memory value's JSON form
- * becomes a `MemoryRef`; at an `object` position (a plain `object`
+ * becomes a `MemoryRef`, which only a read of yian's own run log may ask; at an `object` position (a plain `object`
  * value, a `list(object)` item, an `object` record field) each nested `FileRef` becomes its
  * mapping. Nothing else converts: an int at a `float` position stays an int, and a
  * value that doesn't fit `typ` is walked as far as it fits and otherwise kept. A union member
@@ -2997,7 +2988,7 @@ export function normalizeFiles(typ: Type, value: Value): Value {
   if (typ.kind === ValueKind.MEMORY) return memoryFromForm(value) ?? value;
   if (typ.kind === ValueKind.OBJECT && (isList(value) || isRecord(value))) {
     try {
-      return jsonPart(value, [], "mapping");
+      return jsonPart(value, [], "object");
     } catch (error) {
       if (error instanceof TypeCheckError) return value;
       throw error;

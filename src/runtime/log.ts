@@ -20,7 +20,7 @@ import { compareCodeUnits, Failure, OriginRef, reprText } from "../diagnostics.t
 import { retainFailure } from "../nodes/base.ts";
 import { type FileLock, FileLockError, isLocked, lockFile, syncFolder, VERSION } from "../platform.ts";
 import { isExactly } from "../nodes/contracts.ts";
-import { JSONDecodeError, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
+import { freezeParsed, JSONDecodeError, type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import {
   buildValue,
   buildValueAs,
@@ -85,23 +85,6 @@ export function canonicalSeed(value: unknown): [JsonValue, JsonValue] {
  */
 function canonicalCopy(value: unknown): JsonValue {
   return parseJson(logJson(value), "codec");
-}
-
-/**
- * Freeze `root` and every container in it, in place, and return it.
- *
- * `root` must be a fresh value `parseJson` returned, so it is a tree of plain containers; nothing
- * is checked. An explicit stack walks it, so any depth works.
- */
-function freezeParsed<T extends JsonValue>(root: T): T {
-  const stack: JsonValue[] = [root];
-  while (stack.length > 0) {
-    const value = stack.pop()!;
-    if (typeof value !== "object" || value === null) continue;
-    Object.freeze(value);
-    for (const item of Object.values(value)) stack.push(item);
-  }
-  return root;
 }
 
 /**

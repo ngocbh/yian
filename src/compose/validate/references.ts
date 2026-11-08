@@ -198,7 +198,9 @@ const MEMORY_SITE_TAIL = "(it can't be read here)";
 function memorySiteTail(nodeId: string, node: Node, param: string): string | null {
   if (node instanceof AgentNode) return null;
   if (node instanceof CaseNode) return EXPRESSION_TAIL;
-  if (!(node instanceof CallNode || node.isLoop || node.bindsPerItem)) return `(a ${node.kind} node can't take a memory)`;
+  if (!(node instanceof CallNode || node.isLoop || node.bindsPerItem)) {
+    return `(a ${node.kind} node can't take a memory)`;
+  }
   if (nodeId.startsWith(SYNTH_PREFIX)) return "(pass it through a named `kind: call` node)";
   const childInputs = (node as { childInputs?: readonly Parameter[] }).childInputs ?? [];
   if (childInputs.some((input) => input.name === param && isMemoryType(input.contract?.type))) return null;
@@ -367,7 +369,9 @@ export function validateReferences(
   // The inbox inputs, and those read whole at a site that may take them.
   const inboxInputs = new Set([...inputContracts].filter(([, contract]) => isInboxType(contract.type)).map(([n]) => n));
   const inboxesRead = new Set<string>();
-  const memoryInputs = new Set([...inputContracts].filter(([, contract]) => isMemoryType(contract.type)).map(([n]) => n));
+  const memoryInputs = new Set(
+    [...inputContracts].filter(([, contract]) => isMemoryType(contract.type)).map(([name]) => name),
+  );
 
   /**
    * Name-check every reference a BINDING `from:` reads (coalesce and nested-default split by
@@ -716,7 +720,9 @@ export function validateReferences(
       // `checkPromptMemories` checks, so no field of one is checked as a value's.
       const memories = new Set(
         [...nodeLocals]
-          .filter(([, local]) => local.alternatives.some((alt) => isExactly(alt, ValueContract) && isMemoryType(alt.type)))
+          .filter(([, local]) =>
+            local.alternatives.some((alt) => isExactly(alt, ValueContract) && isMemoryType(alt.type)),
+          )
           .map(([name]) => name),
       );
       const promptContracts = new Map([...nodeLocals].filter(([name]) => !memories.has(name)));

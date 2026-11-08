@@ -66,14 +66,16 @@ import { messagesKey, NEW_MESSAGES, VariablePool } from "../typesys/pool.ts";
 import { newMessagesType } from "../typesys/types.ts";
 import {
   isInboxType,
+  isMemoryType,
   isRecord,
   jsTypeName,
   normalizeTypedFiles,
   rejectDeepNesting,
   renderValuePath,
-  type Type,
+  Type,
   TypeCheckError,
   TypedValue,
+  ValueKind,
   type ValueRecord,
   writeAsText,
 } from "../typesys/values.ts";
@@ -612,7 +614,11 @@ export function acceptedCommits(prepared: PreparedTransition): readonly { seq: n
   const plan = prepared._plan;
   // A run-start commit and a send always hold their values, and apply at once.
   if (plan.kind === "commit" && (plan.commitKind === "initial" || plan.commitKind === "send")) {
-    return [{ seq: prepared.expectedSequence, value: decodeTyped(plan.valueJson!) }];
+    let value = decodeTyped(plan.valueJson!);
+    if (plan.commitKind === "initial" && plan.key === plan.startId) {
+      value = startInputsRead(plan.originatingFlow, value);
+    }
+    return [{ seq: prepared.expectedSequence, value }];
   }
   if (plan.kind !== "success") return [];
   const seq = (prepared.record as NodeSucceededRecord).commit;
@@ -622,6 +628,20 @@ export function acceptedCommits(prepared: PreparedTransition): readonly { seq: n
     accepted.push({ seq: messages.seq, value: normalizeTypedFiles(newMessagesType(), decodeTyped(messages.valueJson)) });
   }
   return accepted;
+}
+
+/**
+ * Return the START inputs `value`, as the run log holds it, with each memory input's recorded form
+ * read back as a `MemoryRef`, which a node then reads as it was bound. It is the one place a run
+ * reads a memory value from its own log; a memory input's value came from the runner, and no other
+ * key is read this way.
+ */
+function startInputsRead(flow: CompiledFlow, value: TypedValue): TypedValue {
+  const params = flow.nodes.get(flow.startId)?.params ?? [];
+  const memories = params.filter((param) => isMemoryType(param.contract?.type));
+  if (memories.length === 0) return value;
+  const fields = new Map(memories.map((param) => [param.name, param.contract!.type] as const));
+  return normalizeTypedFiles(new Type({ kind: ValueKind.OBJECT, fields, required: new Set() }), value);
 }
 
 /**
@@ -2691,8 +2711,9 @@ function commitPoolCommit(log: RunLog, state: RunState, prepared: PreparedTransi
   const initial = plan.commitKind === "initial";
   if (initial === state.inputsCommitted) throw new RangeError("pool-commit plan disagrees with the run start");
   // A run-start commit always holds its value.
-  const value = initial ? decodeTyped(plan.valueJson!) : null;
   const startInputs = initial && plan.key === plan.startId;
+  let value = initial ? decodeTyped(plan.valueJson!) : null;
+  if (startInputs) value = startInputsRead(state.flow, value!);
   const input = startInputs ? (canonicalSeed(value!.toObject())[1] as JsonObject) : null;
 
   appendAndVerify(log, prepared);

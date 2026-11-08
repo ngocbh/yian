@@ -204,7 +204,17 @@ const PARAMETER_FIELDS = new Set([
 const VALUE_CONTRACT_FIELDS = new Set(["type", "origins"]);
 const PARTIAL_RECORD_CONTRACT_FIELDS = new Set(["fields"]);
 const CONTRACT_ORIGINS_IGNORED_FIELDS = new Set(["default", "entries"]);
-const TYPE_FIELDS = new Set(["kind", "fields", "required", "tags", "element", "nullable", "bounds", "members", "memory"]);
+const TYPE_FIELDS = new Set([
+  "kind",
+  "fields",
+  "required",
+  "tags",
+  "element",
+  "nullable",
+  "bounds",
+  "members",
+  "memory",
+]);
 const CASE_FIELDS = new Set(["handle", "when", "origin"]);
 const FLOW_FIELDS = ["nodes", "edges", "wiring", "startId", "endId", "inputConnections", "childBoundaries"];
 const FLOW_FIELD_SET = new Set(FLOW_FIELDS);

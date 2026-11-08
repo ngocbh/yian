@@ -168,6 +168,7 @@ output: done
     runs = new ChildRuns({
       root,
       logDir: join(tmp, "runs"),
+      home: join(tmp, "home"),
       env: NO_ENV,
       llmConfig: {},
       scheduler,
@@ -401,6 +402,29 @@ output: done
   );
 
   test(
+    "a flow's memory input is left out of its inputs: the run binds its default; a value for it is refused",
+    async () => {
+      writeFileSync(
+        join(root, "remember.yaml"),
+        "id: remember\nname: remember\ninput:\n  lessons: !FileMemory\nnodes:\n  add:\n    kind: tool\n" +
+          "    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
+      );
+      const { requests, invoke, json } = runTools();
+      const given = await rejection(
+        Promise.resolve(invoke("start_flow", { path: "remember.yaml", inputs: { lessons: "x" } })),
+      );
+      expect(isReportedToolError(given)).toBe(true);
+      expect(given.message).toBe("bad inputs: `lessons` is a memory; leave it out, and the run gets its default");
+      expect(requests).toHaveLength(0);
+      await json("start_flow", { path: "remember.yaml", inputs: {} });
+      const done = await settledJson(json, "r1");
+      expect(done).toMatchObject({ status: "succeeded", output: "MEMORY.md" });
+      expect((done["memory_notes"] as string[])[0]).toEndWith("(new)");
+    },
+    TIMEOUT,
+  );
+
+  test(
     "inputs a flow doesn't declare, or not a record, are refused before asking",
     async () => {
       writeFileSync(join(root, "greet.yaml"), GREET);
@@ -606,6 +630,7 @@ describe("report_issue", () => {
       runs = new ChildRuns({
         root,
         logDir: join(tmp, "runs"),
+        home: join(tmp, "home"),
         env,
         llmConfig: { provider: "xai", model: "grok-4.3" },
         models: serving(model, env),
@@ -699,6 +724,7 @@ output: \${hi.output}
     runs = new ChildRuns({
       root,
       logDir: join(tmp, "runs"),
+      home: join(tmp, "home"),
       env,
       llmConfig: { provider: "xai", model: "grok-4.3" },
       models: serving(model, env),

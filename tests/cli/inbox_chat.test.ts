@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -283,6 +283,42 @@ describe("yian chat", () => {
       expect(inspectRun(log).status).toBe("succeeded");
       // Off a TTY the prompt is plain: no escape codes or carriage returns on stderr.
       expect((io.stderrStream as FakeOutput).text).toBe("> You: \n".repeat(3));
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a memory input gets its default, said once it is made, and is bound again for each turn",
+    async () => {
+      const home = join(tmp, "home");
+      const keep = `id: keep
+name: keep
+input:
+  messages: !Inbox(str)
+  lessons: !FileMemory
+nodes:
+  heard:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.messages}
+  add:
+    kind: tool
+    tool_id: {lessons: append}
+    depends_on: [heard]
+    input: {path: MEMORY.md, text: kept}
+output: \${add.output.path}
+`;
+      const { io, stdin, stderr } = chatIo({ env: { HOME: home } });
+      stdin.write("hi\n");
+      const { code } = await runChat(flowFile(keep), io);
+      expect(code, stderr()).toBe(0);
+      const projects = readdirSync(join(home, ".yian", "memory"));
+      expect(projects).toHaveLength(1);
+      const location = join(realpathSync(home), ".yian", "memory", projects[0]!, "keep", "lessons");
+      expect(stderr()).toContain(`memory lessons: ${projects[0]}/keep/lessons at ${location} (new)\n`);
+      expect(readFileSync(join(location, "MEMORY.md"), "utf8")).toBe("kept");
+      expect(stderr()).toContain("session ended");
     },
     TIMEOUT,
   );

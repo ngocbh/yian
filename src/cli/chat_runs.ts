@@ -9,8 +9,11 @@
  * the driver, which runs one more pass once the current one ends. Nothing else wakes a waiting
  * run at its `wakeAt`, so between passes the driver sleeps until then.
  *
- * Every status a child publishes carries the replies no reader has marked read (`markRead`), so a
- * reader that falls behind loses none; asks are always the run's open ones.
+ * Every status a child publishes carries the replies and memory notes no reader has marked read
+ * (`markRead`), so a reader that falls behind loses none; asks are always the run's open ones.
+ *
+ * A child's memory inputs are bound to their defaults, as `yian run` binds them, and every pass
+ * gets the same instances.
  *
  * A child's `ask` returns `pending()`, so the child waits durably for the user's answer, which the
  * chat relays with `answer`. The children's stop is their own, tied to the chat's exit by
@@ -18,7 +21,8 @@
  *
  * Knows about: the run boundary (`runFlow`, `advance`, the deliveries, `pendingCalls`,
  * `runLogPath`), the waits' `wakeAt` and the record-time reader, compose, the run events, the tool
- * registry and the `pending` marker, skills, the CLI's key preflight (`startup.ts`).
+ * registry and the `pending` marker, skills, the CLI's key preflight (`startup.ts`) and memory
+ * binding (`memory_bind.ts`).
  */
 
 import { appendFileSync } from "node:fs";
@@ -29,6 +33,7 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import type { Env } from "../defaults.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "../events.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
+import type { MemoryBase } from "../memory/base.ts";
 import type { Scheduler } from "../platform.ts";
 import {
   advance,
@@ -50,6 +55,7 @@ import { pending, TAKE } from "../tools/context.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { builtinType } from "../typesys/types.ts";
 import { isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
+import { bindMemories, driftNote } from "./memory_bind.ts";
 import { removeEmptyDir } from "./run.ts";
 import { ensureProviderKeys } from "./startup.ts";
 import { CommandEnv, sleepUntil } from "./utils.ts";
@@ -84,6 +90,11 @@ export interface ChildStatus {
    */
   readonly replies?: readonly string[];
   /**
+   * What the chat noted about the child's memories and no reader has marked read, oldest first: a
+   * memory its start created, or one a crash resume found changed since the run started.
+   */
+  readonly memory_notes?: readonly string[];
+  /**
    * Something the chat couldn't do with the run, in words: a delivery the run refused or one made
    * after the chat ended (only on the status that call returns), or the error that stopped the
    * driver of a failed child.
@@ -110,6 +121,8 @@ export interface ChildRunsOptions {
   env: Env;
   /** The `--provider`/`--model` layer, possibly empty; `setLlmConfig` replaces it. */
   llmConfig: Readonly<Record<string, string>>;
+  /** The home folder whose `~/.yian/memory` holds the children's default memories. */
+  home: string;
   /** For tests: the model builder AGENT nodes use. */
   models?: ModelAccess | null;
   /** The clock the children's records and waits run on. */
@@ -170,9 +183,10 @@ interface Child {
   /** When it started, on the children's clock. */
   readonly since: number;
   readonly log: string;
-  /** The tools and skills every pass of the child is given. */
+  /** The tools, skills and memories every pass of the child is given. */
   readonly tools: Record<string, ToolEntry>;
   readonly skills: ReadonlyMap<string, Skill> | null;
+  readonly memory: Readonly<Record<string, MemoryBase>>;
   /** The last published status. */
   status: ChildStatus;
   readonly waiters: Set<Waiter>;
@@ -180,16 +194,25 @@ interface Child {
   dirty: boolean;
   /** The driver's rest between passes, which a nudge ends; `null` while it doesn't rest. */
   rest: AbortController | null;
-  /** What the child's `reply` nodes said during the current pass. */
-  readonly fresh: string[];
-  /** The replies published and not marked read, each with the seq of the status that first held it. */
-  unread: { readonly seq: number; readonly text: string }[];
+  /** What the child's `reply` nodes said, and the chat noted about its memories, during the current pass. */
+  readonly fresh: Said[];
+  /**
+   * The replies and memory notes published and not marked read, each with the seq of the status
+   * that first held it.
+   */
+  unread: (Said & { readonly seq: number })[];
   /** Whether the run's log holds its start. */
   started: boolean;
   /** The child's own stop: it stops the driver and leaves the log as it is. */
   readonly halt: AbortController;
   /** Settles once the driver has stopped. */
   done: Promise<void>;
+}
+
+/** A reply of the child's, or a note of the chat's about its memories. */
+interface Said {
+  readonly kind: "reply" | "memory";
+  readonly text: string;
 }
 
 /** The console methods a CODE worker's output is replayed through. */
@@ -272,7 +295,9 @@ export class ChildRuns {
    * on in the background; `next(id, seq)` then sees every later status.
    *
    * Starts run one at a time in call order, so ids follow it, and an id is taken only by a start
-   * that succeeds. Each first checks the provider keys the flow's agents need, without a prompt.
+   * that succeeds. Each first checks the provider keys the flow's agents need, without a prompt,
+   * then binds the flow's memory inputs to their defaults under `home` (`bindMemories`), as
+   * `yian run` does; every pass of the child gets the same instances.
    * `options.signal` is the caller's: aborting it before the start begins rejects, and after it
    * does nothing to the child. `options.name` is what `live` lists it by (the flow's file, say);
    * the flow's name when absent. `options.tools` are host tools this child alone gets, beside the
@@ -280,6 +305,8 @@ export class ChildRuns {
    *
    * @throws {MissingKeyError} When an agent's provider needs a key that isn't set, before anything
    *   is written; `ensureProviderKeys`' other errors likewise.
+   * @throws {RangeError} When a memory input has no default (`bindMemories`), before anything is
+   *   written.
    * @throws {Error} When the chat was disposed; the signal's reason once it aborted; what `runFlow`
    *   throws before the run starts (a tool the flow names that the run lacks, say), with no log
    *   left behind.
@@ -322,6 +349,9 @@ export class ChildRuns {
     // No terminal: a missing key is reported to the assistant rather than prompted for mid-chat.
     await ensureProviderKeys(flow, llmConfig, inputs, { env: new CommandEnv(env), terminal: null });
     check();
+    // A memory's note, such as the one its open gives when it creates it, is said with the pass.
+    const fresh: Said[] = [];
+    const memory = bindMemories(flow, [], { home: this.#options.home, note: (text) => fresh.push({ kind: "memory", text }) });
     const id = `r${this.#started + 1}`;
     const runId = `${chatRunId}-${id}`;
     const log = runLogPath(logDir, runId);
@@ -335,11 +365,12 @@ export class ChildRuns {
       // One handler serves `ask` and `ask_user` (passing both is refused).
       tools: { ...registeredTools(), ...tools, ask: () => pending() },
       skills: skills ?? skillsFor(flow),
+      memory,
       status: { run: id, status: "running", log, seq },
       waiters: new Set(),
       dirty: false,
       rest: null,
-      fresh: [],
+      fresh,
       unread: [],
       started: false,
       halt: new AbortController(),
@@ -427,14 +458,14 @@ export class ChildRuns {
   }
 
   /**
-   * Mark child `id`'s replies published at or before status `seq` read: later statuses leave them
-   * out. Call it when a status is handed to the model.
+   * Mark child `id`'s replies and memory notes published at or before status `seq` read: later
+   * statuses leave them out. Call it when a status is handed to the model.
    *
    * @throws {RangeError} When no child has the id.
    */
   markRead(id: string, seq: number): void {
     const child = this.#child(id);
-    child.unread = child.unread.filter((reply) => reply.seq > seq);
+    child.unread = child.unread.filter((said) => said.seq > seq);
   }
 
   /**
@@ -604,7 +635,7 @@ export class ChildRuns {
       }
       // An interrupted reply succeeds with null when its output is `Optional(...)`.
       if (isReply(event) && !event.interrupted && event.output !== null) {
-        child.fresh.push(writeAsText(event.output as Value));
+        child.fresh.push({ kind: "reply", text: writeAsText(event.output as Value) });
       }
     };
     const common = {
@@ -618,7 +649,7 @@ export class ChildRuns {
     };
     try {
       let result = await this.#pass(() =>
-        runFlow(child.flow, inputs, {
+        runFlow(child.flow, { ...inputs, ...child.memory }, {
           log: child.log,
           runId,
           parent: { runId: chatRunId },
@@ -633,13 +664,16 @@ export class ChildRuns {
       // until it would only spin.
       let spent: string | null = null;
       for (;;) {
+        for (const drift of result.memoryDrift) child.fresh.push({ kind: "memory", text: driftNote(drift) });
         this.#publish(child, this.#settledStatus(child, result));
         if (result.status !== "waiting") return;
         const next = wakeAt(result.waits);
         const wake: string | null = next === spent ? null : next;
         if (await this.#rest(child, wake)) spent = wake;
         if (child.halt.signal.aborted) return;
-        result = await this.#pass(() => move({ log: child.log, ...this.#deliveryOptions(child), ...common }));
+        result = await this.#pass(() =>
+          move({ log: child.log, ...this.#deliveryOptions(child), ...common, memory: child.memory }),
+        );
       }
     } catch (error) {
       // Before the start, `start` throws it; after, it is the child's failure.
@@ -730,15 +764,20 @@ export class ChildRuns {
   }
 
   /**
-   * Make `status` `child`'s, numbered and with its unread replies, unless it says what the last
-   * one did and the pass said nothing new; tell `onStatus`, and wake its readers.
+   * Make `status` `child`'s, numbered and with its unread replies and memory notes, unless it says
+   * what the last one did and the pass said nothing new; tell `onStatus`, and wake its readers.
    */
   #publish(child: Child, status: Unnumbered): void {
     const fresh = child.fresh.splice(0);
     const seq = this.#seq + 1;
-    const unread = [...child.unread, ...fresh.map((text) => ({ seq, text }))];
-    const replies = unread.map((reply) => reply.text);
-    const next: Unnumbered = { ...status, ...(replies.length > 0 ? { replies } : {}) };
+    const unread = [...child.unread, ...fresh.map((said) => ({ ...said, seq }))];
+    const replies = unread.filter((said) => said.kind === "reply").map((said) => said.text);
+    const notes = unread.filter((said) => said.kind === "memory").map((said) => said.text);
+    const next: Unnumbered = {
+      ...status,
+      ...(replies.length > 0 ? { replies } : {}),
+      ...(notes.length > 0 ? { memory_notes: notes } : {}),
+    };
     const { seq: _, ...last } = child.status;
     if (fresh.length === 0 && isDeepStrictEqual(last, next)) return;
     this.#seq = seq;

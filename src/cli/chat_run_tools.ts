@@ -25,7 +25,7 @@ import type { Skill } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
 import { grantText, visibleToolName } from "../tools/grants.ts";
-import { buildValueAs, isInboxType, renderValuePath, TypeCheckError } from "../typesys/values.ts";
+import { buildValueAs, isInboxType, isMemoryType, renderValuePath, TypeCheckError } from "../typesys/values.ts";
 import { LIST_ITEMS } from "./chat_events.ts";
 import type { ChildRuns, ChildStatus } from "./chat_runs.ts";
 import {
@@ -60,7 +60,8 @@ const RUN = "The run's id, as start_flow returned it (r1, r2, ...).";
 const STATUS =
   "Returns the run's status as JSON: status (running, waiting, succeeded, failed or cancelled), " +
   "output, failure, waits, asks (questions with their call ids), replies (what it said since " +
-  "you last looked), note (something that couldn't be done) and log.";
+  "you last looked), memory_notes (a memory it created or that changed, since you last looked), " +
+  "note (something that couldn't be done) and log.";
 
 /** How a set of run tools reads and shows the chat's runs (`chatRunTools`' `view`). */
 interface View {
@@ -203,15 +204,22 @@ function startDigest(flow: ComposedFlow, text: string, files: readonly string[],
 
 /**
  * Check `inputs` against `flow`'s inputs before it starts, as its start would: no unknown names,
- * every required one given, each value of its declared type.
+ * every required one given, each value of its declared type. A memory input is never given: the
+ * run binds it to its default.
  *
  * @throws {ReportedToolError} `bad inputs: <why>`.
  */
 function checkStartInputs(flow: ComposedFlow, inputs: unknown): void {
   try {
+    // The run binds a memory input itself, as `yian run` binds an unbound one.
+    const given = typeof inputs === "object" && inputs !== null ? inputs : {};
+    const memory = flow.input.find((param) => isMemoryType(param.contract?.type) && Object.hasOwn(given, param.name));
+    if (memory !== undefined) {
+      throw new RangeError(`\`${memory.name}\` is a memory; leave it out, and the run gets its default`);
+    }
     const coerced = coerceInputs(flow.input, hostInputs(flow.input, inputs));
     for (const param of flow.input) {
-      if (isInboxType(param.contract?.type ?? null)) continue;
+      if (isInboxType(param.contract?.type ?? null) || isMemoryType(param.contract?.type)) continue;
       if (!Object.hasOwn(coerced, param.name)) {
         if (!param.required || param.hasDefault) continue;
         throw new RangeError(`required input ${reprText(param.name)} is missing`);
@@ -418,8 +426,8 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
           seen?.markSeen(status.run, status.seq);
         }
         shown.set(status.run, Math.max(status.seq, last));
-        // The stored status keeps the replies it was published with; once shown, they are read.
-        const { replies: _, ...unrepeated } = status;
+        // The stored status keeps the replies and notes it was published with; once shown, they are read.
+        const { replies: _, memory_notes: __, ...unrepeated } = status;
         return JSON.stringify(shownStatus(status.seq <= last ? unrepeated : status));
       },
       known: (args) => {

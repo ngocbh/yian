@@ -574,6 +574,7 @@ export async function chat(
       root,
       logDir: runsDir,
       env,
+      home: homeDir(env),
       llmConfig: current === null ? cliLayer(options) : { ...current },
       models: deps.models ?? null,
       scheduler,

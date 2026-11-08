@@ -7,12 +7,14 @@ import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { childEvent } from "../../src/cli/chat_events.ts";
 import { ChildRuns, type ChildRunsOptions, type ChildStatus } from "../../src/cli/chat_runs.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
+import { defaultIdentity, defaultLocation } from "../../src/cli/memory_bind.ts";
 import { MissingKeyError } from "../../src/cli/utils.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
-import { advance, inspectRun } from "../../src/run.ts";
+import { advance, inspectRun, RunResult } from "../../src/run.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
 import { readRunLog, type RunStartedRecord } from "../../src/runtime/log.ts";
 import { Skill } from "../../src/skills/catalog.ts";
@@ -41,6 +43,7 @@ function childRuns(options: Partial<ChildRunsOptions> = {}): ChildRuns {
   runs = new ChildRuns({
     root,
     logDir: join(root, "runs"),
+    home: join(root, "home"),
     env: NO_ENV,
     llmConfig: {},
     scheduler: heldScheduler().scheduler,
@@ -847,3 +850,103 @@ test(
 function asked(status: ChildStatus): string {
   return status.asks![0]!.call;
 }
+
+/** A flow that appends to its memory's index. */
+const REMEMBER = `id: answer
+name: answer
+input:
+  lessons: !FileMemory
+nodes:
+  add:
+    kind: tool
+    tool_id: {lessons: append}
+    input: {path: MEMORY.md, text: noted}
+output: \${add.output.path}
+`;
+
+/** Takes a line from its inbox, then appends to its memory's index. */
+const REMEMBER_LATER = `id: answer
+name: answer
+input:
+  lessons: !FileMemory
+  messages: !Inbox(str)
+nodes:
+  heard:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.messages}
+  add:
+    kind: tool
+    tool_id: {lessons: append}
+    depends_on: [heard]
+    input: {path: MEMORY.md, text: heard}
+output: \${add.output.path}
+`;
+
+describe("memory", () => {
+  test(
+    "a child's memory input gets its default, as yian run binds it, and the chat notes it created it",
+    async () => {
+      const children = childRuns();
+      const remember = await flow(REMEMBER);
+      await children.start(remember, {});
+      const first = await settled(children, "r1");
+      expect(first.status).toBe("succeeded");
+      // The flow's folder is the chat's root, so the identity is the one `yian run` gives there.
+      const identity = defaultIdentity(root, "answer", "lessons");
+      const location = defaultLocation(join(root, "home"), identity, "FileMemory");
+      expect(first.memory_notes).toEqual([`memory lessons: ${identity} at ${location} (new)`]);
+      expect(childEvent(first)!.text).toContain(`; noted ${JSON.stringify(first.memory_notes![0])}`);
+      // Read once, they aren't said again.
+      children.markRead("r1", first.seq);
+      await children.start(remember, {});
+      const second = await settled(children, "r2");
+      expect(second.status).toBe("succeeded");
+      expect(second.memory_notes).toBeUndefined();
+      expect(readFileSync(join(location, "MEMORY.md"), "utf8")).toBe("noted\nnoted");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a waiting child moves on with its memory bound again, and a drift its advance finds is noted",
+    async () => {
+      const passed: unknown[] = [];
+      const children = childRuns({
+        advance: async (options) => {
+          passed.push(options.memory);
+          const result = await advance(options);
+          const drift = { input: "lessons", identity: "i", recorded: "v1", current: "v2" };
+          return new RunResult({ ...result, memoryDrift: [drift] });
+        },
+      });
+      await children.start(await flow(REMEMBER_LATER), {});
+      const waiting = await settled(children, "r1");
+      expect(waiting.status).toBe("waiting");
+      children.markRead("r1", waiting.seq);
+      await children.message("r1", "messages", "hi");
+      const done = await settled(children, "r1", waiting.seq);
+      expect(done.status).toBe("succeeded");
+      expect(passed).toHaveLength(1);
+      expect(Object.keys(passed[0] as object)).toEqual(["lessons"]);
+      expect(done.memory_notes).toEqual([
+        "memory `lessons` changed since this run started; the run keeps its recorded recall",
+      ]);
+      const location = defaultLocation(join(root, "home"), defaultIdentity(root, "answer", "lessons"), "FileMemory");
+      expect(readFileSync(join(location, "MEMORY.md"), "utf8")).toBe("heard");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a child whose flow has no plain id isn't started",
+    async () => {
+      const children = childRuns();
+      const unnamed = await flow(REMEMBER.replace("id: answer", 'id: "Answer questions"'));
+      await expect(children.start(unnamed, {})).rejects.toThrow("give the flow a plain `id:`");
+      expect(existsSync(join(root, "runs"))).toBe(false);
+    },
+    TIMEOUT,
+  );
+});

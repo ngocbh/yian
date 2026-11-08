@@ -54,8 +54,9 @@ interface Wait {
  * The event `status` is for the assistant, or `null` when it says nothing to act on (a run
  * `running`, or waiting only for a timer with nothing said). The line names the run, then what
  * it now does (asks, with each question's call id; waits for a message on an inbox; succeeded,
- * failed or was cancelled), then what it said; child text is JSON-quoted, so the line stays one
- * line, and the line is cut at `EVENT_BODY_CHARS` with a note.
+ * failed or was cancelled), then what it said and what the chat noted about its memories; child
+ * text is JSON-quoted, so the line stays one line, and the line is cut at `EVENT_BODY_CHARS` with
+ * a note.
  */
 export function childEvent(status: ChildStatus): ChildEvent | null {
   if (status.status === "running") return null;
@@ -83,6 +84,8 @@ export function childEvent(status: ChildStatus): ChildEvent | null {
     if (inbox !== undefined) clauses.push(["waits for a message", ` on inbox ${quote(inbox.inbox)}`]);
   }
   if ((status.replies ?? []).length > 0) clauses.push(["said", ` ${status.replies!.map(quote).join(", ")}`]);
+  const notes = status.memory_notes ?? [];
+  if (notes.length > 0) clauses.push(["noted", ` ${notes.map(quote).join(", ")}`]);
   if (clauses.length === 0) return null;
   const cut = (line: string) =>
     line.length > EVENT_BODY_CHARS ? `${line.slice(0, EVENT_BODY_CHARS)}... (cut; flow_status shows all)` : line;

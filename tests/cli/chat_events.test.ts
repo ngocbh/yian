@@ -202,6 +202,7 @@ describe("EventQueue", () => {
       const runs = new ChildRuns({
         root: tmp,
         logDir: join(tmp, "runs"),
+        home: join(tmp, "home"),
         env: NO_ENV,
         llmConfig: {},
         scheduler: heldScheduler().scheduler,

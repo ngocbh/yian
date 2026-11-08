@@ -69,7 +69,7 @@ import {
   validateRunLogOptions,
   waitingText,
 } from "./run.ts";
-import { bindMemories, driftNote, resumeMemories } from "./memory_bind.ts";
+import { bindMemories, type CreatedMemory, createdLine, driftNote, resumeMemories } from "./memory_bind.ts";
 import { sanitize } from "./sanitize.ts";
 import { cliLayer, freshLog, loadFlowFile, preflightKeys } from "./startup.ts";
 import {
@@ -682,10 +682,11 @@ export async function inboxChat(
   stop.signal.addEventListener("abort", takeDown, { once: true });
 
   try {
-    // A memory's `open` notes, such as a memory it created, are the chat's own notes.
+    // A memory its `open` creates is the chat's own note, with its folder: the terminal is the user's.
     const binding = {
       home: homeDir(io.env),
-      note: (line: string) => void note(`${forTerminal(line, io.stderr)}\n`).catch(() => {}),
+      note: (created: CreatedMemory) =>
+        void note(`${forTerminal(createdLine(created, true), io.stderr)}\n`).catch(() => {}),
     };
     const memory =
       resumed === null

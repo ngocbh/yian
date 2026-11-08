@@ -3,14 +3,23 @@
  * loaded confined to a temporary root.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { childEvent } from "../../src/cli/chat_events.ts";
 import { ChildRuns, type ChildRunsOptions, type ChildStatus } from "../../src/cli/chat_runs.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
-import { defaultIdentity, defaultLocation } from "../../src/cli/memory_bind.ts";
+import { defaultIdentity, defaultLocation, projectKey } from "../../src/cli/memory_bind.ts";
 import { MissingKeyError } from "../../src/cli/utils.ts";
 import type { ComposedFlow } from "../../src/compose/build/pipeline.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -896,8 +905,10 @@ describe("memory", () => {
       // The flow's folder is the chat's root, so the identity is the one `yian run` gives there.
       const identity = defaultIdentity(root, "answer", "lessons");
       const location = defaultLocation(join(root, "home"), identity, "FileMemory");
-      expect(first.memory_notes).toEqual([`memory lessons: ${identity} at ${location} (new)`]);
+      // The identity only: the chat's statuses reach its log and its model, which never hold a location.
+      expect(first.memory_notes).toEqual([`memory lessons: ${identity} (new)`]);
       expect(childEvent(first)!.text).toContain(`; noted ${JSON.stringify(first.memory_notes![0])}`);
+      expect(JSON.stringify(first)).not.toContain(join(root, "home"));
       // Read once, they aren't said again.
       children.markRead("r1", first.seq);
       await children.start(remember, {});
@@ -935,6 +946,34 @@ describe("memory", () => {
       ]);
       const location = defaultLocation(join(root, "home"), defaultIdentity(root, "answer", "lessons"), "FileMemory");
       expect(readFileSync(join(location, "MEMORY.md"), "utf8")).toBe("heard");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a refusal to bind or open a child's memory names no location",
+    async () => {
+      const home = join(root, "home");
+      const memories = join(home, ".yian", "memory");
+      const remember = await flow(REMEMBER);
+      const location = defaultLocation(home, defaultIdentity(root, "answer", "lessons"), "FileMemory");
+      // A file where the memory's folder goes: its open refuses it.
+      mkdirSync(dirname(location), { recursive: true });
+      writeFileSync(location, "");
+      const opened = await childRuns()
+        .start(remember, {})
+        .then(() => null, (error: Error) => error.message);
+      expect(opened).toContain("memory `lessons`");
+      expect(opened).not.toContain(root);
+      // A symlinked project folder: the bind refuses it.
+      rmSync(join(memories, projectKey(root)), { recursive: true });
+      mkdirSync(join(root, "elsewhere"));
+      symlinkSync(join(root, "elsewhere"), join(memories, projectKey(root)));
+      const bound = await childRuns()
+        .start(remember, {})
+        .then(() => null, (error: Error) => error.message);
+      expect(bound).toContain(`~/.yian/memory/${projectKey(root)} is a symlink`);
+      expect(bound).not.toContain(root);
     },
     TIMEOUT,
   );

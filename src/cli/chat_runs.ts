@@ -33,7 +33,7 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import type { Env } from "../defaults.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "../events.ts";
 import type { ModelAccess } from "../llm_clients/factory.ts";
-import type { MemoryBase } from "../memory/base.ts";
+import type { FileMemory } from "../memory/file.ts";
 import type { Scheduler } from "../platform.ts";
 import {
   advance,
@@ -55,7 +55,7 @@ import { pending, TAKE } from "../tools/context.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { builtinType } from "../typesys/types.ts";
 import { isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
-import { bindMemories, driftNote } from "./memory_bind.ts";
+import { bindMemories, type CreatedMemory, createdLine, driftNote, withoutLocations } from "./memory_bind.ts";
 import { removeEmptyDir } from "./run.ts";
 import { ensureProviderKeys } from "./startup.ts";
 import { CommandEnv, sleepUntil } from "./utils.ts";
@@ -186,7 +186,7 @@ interface Child {
   /** The tools, skills and memories every pass of the child is given. */
   readonly tools: Record<string, ToolEntry>;
   readonly skills: ReadonlyMap<string, Skill> | null;
-  readonly memory: Readonly<Record<string, MemoryBase>>;
+  readonly memory: Readonly<Record<string, FileMemory>>;
   /** The last published status. */
   status: ChildStatus;
   readonly waiters: Set<Waiter>;
@@ -352,10 +352,16 @@ export class ChildRuns {
     // No terminal: a missing key is reported to the assistant rather than prompted for mid-chat.
     await ensureProviderKeys(flow, llmConfig, inputs, { env: new CommandEnv(env), terminal: null });
     check();
-    // A memory's note, such as the one its open gives when it creates it, is said with the pass.
+    // A memory the start creates is said with the pass, by identity alone: a status reaches the
+    // chat's log and its model, which never hold a location.
     const fresh: Said[] = [];
-    const note = (text: string) => void fresh.push({ kind: "memory", text });
-    const memory = bindMemories(flow, [], { home: this.#options.home, note });
+    const note = (created: CreatedMemory) => void fresh.push({ kind: "memory", text: createdLine(created, false) });
+    let memory: Record<string, FileMemory>;
+    try {
+      memory = bindMemories(flow, [], { home: this.#options.home, note });
+    } catch (error) {
+      throw withoutLocations(error, this.#options.home, []);
+    }
     const id = `r${this.#started + 1}`;
     const runId = `${chatRunId}-${id}`;
     const log = runLogPath(logDir, runId);
@@ -679,7 +685,10 @@ export class ChildRuns {
           move({ log: child.log, ...this.#deliveryOptions(child), ...common, memory: child.memory }),
         );
       }
-    } catch (error) {
+    } catch (thrown) {
+      // A memory's open names its folder, which the chat's log and model never hold.
+      const roots = Object.values(child.memory).map((each) => each.root);
+      const error = withoutLocations(thrown, this.#options.home, roots);
       // Before the start, `start` throws it; after, it is the child's failure.
       started.reject(error);
       // A halted driver leaves the run as it is, and a child that never started has no status.

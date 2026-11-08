@@ -75,7 +75,10 @@ describe("default locations", () => {
     const outside = join(tmp, "outside");
     mkdirSync(outside);
     symlinkSync(outside, join(home, ".yian/memory/proj-1234abcd"));
-    expect(() => checkDefaultLocation(home, "proj-1234abcd/f/lessons")).toThrow("is a symlink");
+    // Written from `~`: the message names no location.
+    expect(() => checkDefaultLocation(home, "proj-1234abcd/f/lessons")).toThrow(
+      "~/.yian/memory/proj-1234abcd is a symlink",
+    );
     expect(() => checkDefaultLocation(home, "../x/f/lessons")).toThrow("leaves ~/.yian/memory");
     expect(() => checkDefaultLocation(home, "a/../../x")).toThrow("leaves ~/.yian/memory");
     expect(() => checkDefaultLocation(home, ".")).toThrow("leaves ~/.yian/memory");
@@ -85,7 +88,9 @@ describe("default locations", () => {
     const root = join(home, ".yian", "memory");
     mkdirSync(join(root, "proj-1234abcd"));
     writeFileSync(join(root, "proj-1234abcd", "f"), "");
-    expect(() => checkDefaultLocation(home, "proj-1234abcd/f/lessons")).toThrow("isn't a folder");
+    expect(() => checkDefaultLocation(home, "proj-1234abcd/f/lessons")).toThrow(
+      "~/.yian/memory/proj-1234abcd/f isn't a folder",
+    );
   });
 
   test("a location that doesn't exist yet, or under a ~/.yian/memory that doesn't, passes", () => {

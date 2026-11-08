@@ -82,7 +82,7 @@ import { McpConnectError, McpSdkMissingError, type McpServer } from "../tools/mc
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { loadConfined } from "./confined_load.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
-import { bindMemories, driftNote, resumeMemories } from "./memory_bind.ts";
+import { bindMemories, type CreatedMemory, createdLine, driftNote, resumeMemories } from "./memory_bind.ts";
 import {
   box,
   diagnosticJson,
@@ -1135,9 +1135,11 @@ async function startRun(
     return fail(new Diagnostic({ code: "run.setup", message }));
   };
   const writeStack = (error: Error) => writeEngineTrace(error, engineTrace, io);
-  // A memory's own line, such as the one its `open` gives when it creates it.
-  const memoryNote = (line: string) =>
-    void io.stderr.write(`${paint(forTerminal(line, io.stderr), "dim", io.stderr, io.env)}\n`).catch(() => {});
+  // The line a memory's `open` gives when it creates it, with its folder: stderr is the user's own.
+  const memoryNote = (created: CreatedMemory) => {
+    const line = paint(forTerminal(createdLine(created, true), io.stderr), "dim", io.stderr, io.env);
+    void io.stderr.write(`${line}\n`).catch(() => {});
+  };
   const action = options.resume === undefined ? "run" : "resume";
   // Only the MCP selection's lines follow the message; the error's own notes, such as a cleanup
   // failure's, stay out of it.

@@ -15,7 +15,7 @@ import { basename, join, relative, sep } from "node:path";
 import { START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { reprText } from "../diagnostics.ts";
-import type { MemoryBase, MemorySession } from "../memory/base.ts";
+import type { MemorySession } from "../memory/base.ts";
 import { FileMemory, type FileMemoryOptions } from "../memory/file.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import { isSystemError, leavesRoot } from "../platform.ts";
@@ -97,10 +97,12 @@ export function checkDefaultLocation(home: string, path: string): string {
     at = join(at, part);
     const stats = lstatOrNull(at);
     if (stats === null) break;
+    // Written from `~`, as a host may show the message to a model.
+    const shown = `~/.yian/memory/${parts.slice(0, i + 1).join("/")}`;
     if (stats.isSymbolicLink()) {
-      throw new RangeError(`${at} is a symlink; a default memory stays inside ~/.yian/memory`);
+      throw new RangeError(`${shown} is a symlink; a default memory stays inside ~/.yian/memory`);
     }
-    if (i < parts.length - 1 && !stats.isDirectory()) throw new RangeError(`${at} isn't a folder`);
+    if (i < parts.length - 1 && !stats.isDirectory()) throw new RangeError(`${shown} isn't a folder`);
   }
   // On the real paths too, as `confined_load.ts` confines flow files.
   if (leavesRoot(relative(resolveFlowPath(root), resolveFlowPath(location)))) {
@@ -127,24 +129,64 @@ export function driftNote(drift: MemoryDrift): string {
   return `memory \`${drift.input}\` changed since this run started; the run keeps its recorded recall`;
 }
 
+/** A memory an instance's `open` created (or adopted): the inputs bound to it, its identity and folder. */
+export interface CreatedMemory {
+  readonly inputs: readonly string[];
+  readonly identity: string;
+  readonly location: string;
+}
+
+/**
+ * The line that says `created` was created: `memory lessons: <identity> at <folder> (new)`, or,
+ * without `location`, for a host whose lines reach a model or a run log, the identity alone.
+ */
+export function createdLine(created: CreatedMemory, location: boolean): string {
+  const where = location ? ` at ${created.location}` : "";
+  return `memory ${created.inputs.join(", ")}: ${created.identity}${where} (new)`;
+}
+
+/**
+ * Return `error` with the memory folders `roots` and the home folder `home` taken out of its
+ * message, for a host whose messages reach a model or a run log, which never hold a location: a
+ * root becomes `the memory's folder`, and a path under `home` is written from `~`. The class, name
+ * and a system error's code are kept.
+ */
+export function withoutLocations(error: unknown, home: string, roots: Iterable<string>): unknown {
+  if (!(error instanceof Error)) return error;
+  let message = error.message;
+  const homes = [...new Set([resolveFlowPath(home), home])];
+  for (const root of new Set(roots)) message = message.replaceAll(root, "the memory's folder");
+  for (const each of homes) message = message.replaceAll(each, "~");
+  if (message === error.message) return error;
+  const Class = error instanceof RangeError ? RangeError : error instanceof TypeError ? TypeError : Error;
+  const copy: Error & { code?: unknown; syscall?: unknown; errno?: unknown } = new Class(message);
+  copy.name = error.name;
+  // Not `path`, `dest` or `cause`, which hold the location too.
+  const { code, syscall, errno } = error as NodeJS.ErrnoException;
+  if (code !== undefined) copy.code = code;
+  if (syscall !== undefined) copy.syscall = syscall;
+  if (errno !== undefined) copy.errno = errno;
+  return copy;
+}
+
 /** What `bindMemories` needs beside the flow and the flags. */
 export interface BindOptions {
   /** The home folder whose `~/.yian/memory` holds the default memories. */
   home: string;
-  /** Shows the user a line, such as the one an instance's `open` gives when it creates a memory. */
-  note: (line: string) => void;
+  /** Told of each memory an instance's `open` creates (or adopts). */
+  note: (created: CreatedMemory) => void;
 }
 
 /**
- * A FileMemory the command line binds: its `open` notes, through `note`, each memory it creates
- * (or adopts), with the inputs bound to it, its identity and its folder.
+ * A FileMemory the command line binds: its `open` tells `note` of each memory it creates (or
+ * adopts), with the inputs bound to it, its identity and its folder.
  */
 class CliFileMemory extends FileMemory {
   /** The inputs bound to this instance, in the order they were bound. */
   readonly inputs: string[] = [];
-  readonly #note: (line: string) => void;
+  readonly #note: (created: CreatedMemory) => void;
 
-  constructor(options: FileMemoryOptions, note: (line: string) => void) {
+  constructor(options: FileMemoryOptions, note: (created: CreatedMemory) => void) {
     super(options);
     this.#note = note;
   }
@@ -156,7 +198,7 @@ class CliFileMemory extends FileMemory {
   }): Promise<MemorySession> {
     const session = await super.open(o);
     if (session.created) {
-      this.#note(`memory ${this.inputs.join(", ")}: ${session.info.identity} at ${this.root} (new)`);
+      this.#note({ inputs: [...this.inputs], identity: session.info.identity, location: this.root });
     }
     return session;
   }
@@ -206,7 +248,7 @@ export function bindMemories(
   flow: ComposedFlow,
   flags: readonly string[],
   options: BindOptions,
-): Record<string, MemoryBase> {
+): Record<string, FileMemory> {
   return bindEach(flow, flags, options, (input, optional) => (optional ? null : defaultMemory(flow, input, options)));
 }
 
@@ -227,7 +269,7 @@ export function resumeMemories(
   log: string,
   flags: readonly string[],
   options: BindOptions,
-): Record<string, MemoryBase> {
+): Record<string, FileMemory> {
   const recorded = recordedMemories(flow, log);
   return bindEach(flow, flags, options, (input) => {
     const identity = recorded.get(input);
@@ -273,9 +315,9 @@ function bindEach(
   flags: readonly string[],
   options: BindOptions,
   fallback: (input: string, optional: boolean) => CliFileMemory | null,
-): Record<string, MemoryBase> {
+): Record<string, FileMemory> {
   const paths = memoryFlags(flow.input, flags);
-  const bound: Record<string, MemoryBase> = {};
+  const bound: Record<string, FileMemory> = {};
   const byRoot = new Map<string, CliFileMemory>();
   for (const param of flow.input) {
     const typ = param.contract?.type;

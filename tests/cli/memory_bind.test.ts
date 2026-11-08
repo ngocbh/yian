@@ -34,6 +34,7 @@ import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
 import type { Embed } from "../../src/llm/embeddings.ts";
 import type { FileMemory } from "../../src/memory/file.ts";
+import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { parseJson } from "../../src/typesys/json.ts";
 import { foreignWal } from "../helpers/memory_fakes.ts";
 import { loadSchema, type Schema, validate } from "../helpers/schema.ts";
@@ -661,6 +662,21 @@ describe("VectorDBMemory inputs", () => {
     expect(result.stderr).toContain(`\`${foreign}\` isn't a VectorDBMemory store: it is a database in WAL mode`);
     expect([readFileSync(foreign), readFileSync(`${foreign}-wal`)]).toEqual(before);
     expect(readdirSync(tmp).filter((name) => name.startsWith("app.db")).sort()).toEqual(["app.db", "app.db-wal"]);
+  });
+
+  test("--embedding makes only the stores that don't exist yet; one that does keeps its own model", async () => {
+    const old = join(tmp, "old.db");
+    const two = ADD_CASE.replace("  cases: !VectorDBMemory\n", "  cases: !VectorDBMemory\n  old: !VectorDBMemory\n");
+    const flow = flowFile(two, "two.yaml");
+    const store = join(tmp, "cases.db");
+    const first = ["run", flow, "--quiet", "--memory", `old=${old}`, "--memory", `cases=${join(tmp, "first.db")}`];
+    expect((await yian([...first, "--embedding", "openai/a"], {}, { embed: fakeEmbed })).code).toBe(0);
+    const args = ["run", flow, "--quiet", "--memory", `old=${old}`, "--memory", `cases=${store}`];
+    const result = await yian([...args, "--embedding", "openai/b"], {}, { embed: fakeEmbed });
+    expect(result.code, result.stderr).toBe(0);
+    const signal = new AbortController().signal;
+    expect((await new VectorDBMemory({ path: old }).stored({ signal }))?.embedding.model).toBe("a");
+    expect((await new VectorDBMemory({ path: store }).stored({ signal }))?.embedding.model).toBe("b");
   });
 
   test("a VectorDB input given a folder is a usage error", async () => {

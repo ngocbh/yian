@@ -666,10 +666,9 @@ function bindEach(
 
 /**
  * Return the options of input `input`'s VectorDB store at `path`: its embedding model and
- * `options.embed`. Only a fresh run may make the store, so a resume gives no model and the one the
- * store recorded is used, and a preview, which opens nothing, gives none either. A fresh run's
- * model is `options.embedding`, else, for a store that doesn't exist yet,
- * `options.defaultEmbedding`'s.
+ * `options.embed`. Only a fresh run makes a store, and only one that doesn't exist yet takes a
+ * model: `options.embedding`, else `options.defaultEmbedding`'s. A store that exists keeps the
+ * model it recorded, as a resume's and a preview's (which opens nothing) do.
  *
  * @throws {RangeError} When a fresh run's store doesn't exist yet and there is no embedding model;
  *   as `options.defaultEmbedding` throws.
@@ -677,18 +676,17 @@ function bindEach(
 function storeOptions(input: string, path: string, options: BindOptions, mode: BindMode): VectorDBMemoryOptions {
   const store: VectorDBMemoryOptions = { path };
   if (options.embed !== undefined) store.embed = options.embed;
-  if (mode !== "fresh") return store;
-  let embedding = options.embedding ?? undefined;
+  if (mode !== "fresh" || lstatOrNull(path) !== null) return store;
   // The default is read only for a new store, so a broken one fails only a run that needs it.
-  if (embedding === undefined && lstatOrNull(path) === null) embedding = options.defaultEmbedding?.() ?? undefined;
-  if (embedding === undefined && lstatOrNull(path) === null) {
+  const embedding = options.embedding ?? options.defaultEmbedding?.() ?? null;
+  if (embedding === null) {
     const set =
       options.memoryFlag === false
         ? "run `yian config embedding provider/model`"
         : "pass --embedding provider/model or run `yian config embedding provider/model`";
     throw new RangeError(`\`${input}\` needs an embedding model: ${set}`);
   }
-  if (embedding !== undefined) store.embedding = embedding;
+  store.embedding = embedding;
   return store;
 }
 

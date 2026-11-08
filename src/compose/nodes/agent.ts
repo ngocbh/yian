@@ -31,6 +31,7 @@ import {
   valueLeaves,
 } from "../../nodes/agent/llm_values.ts";
 import { AgentNode, isMaxToolIterations, type PromptItem, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
+import { MEMORY_KEY_PREFIX, memoryKey } from "../../nodes/base.ts";
 import { typeToSchema } from "../../nodes/agent/structured.ts";
 import {
   Binding,
@@ -43,8 +44,9 @@ import {
 import { SkillError } from "../../skills/index.ts";
 import { GrantError, parseToolGrants, type ToolGrant } from "../../tools/grants.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isList, isRecord, type Type, typeLevels, valueRepr } from "../../typesys/values.ts";
+import { isList, isMemoryType, isRecord, type Type, typeLevels, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError, rejectRemovedMemoryKey } from "../helpers/errors.ts";
+import { checkMemoryGrants, memoryBinding, rejectMemoryKeyInputs } from "../helpers/memory.ts";
 import { readTaggedValue } from "../helpers/tags.ts";
 import { readVariables } from "../helpers/types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
@@ -809,7 +811,8 @@ export class AgentDescriptor extends NodeDescriptor {
    * @throws LoadError for a bad `env.max_tool_iterations`, a bad variable declaration, a tool or
    *   skill grant the node refuses, an `output:` nesting deeper than
    *   `current().maxAgentOutputNesting` or holding a type a model can't produce, a variable named
-   *   like an input, or an input or variable named `__llm_config` or `__steer_inbox`.
+   *   like an input, an input or variable named `__llm_config`, `__steer_inbox` or `__memory_*`,
+   *   or a memory grant naming a tool its type lacks or showing a tool under a reserved name.
    * @throws TypeError when `ctx.variableDeclarationReader` returns anything but an array of exact
    *   `Parameter`s or `null`.
    */
@@ -836,6 +839,29 @@ export class AgentDescriptor extends NodeDescriptor {
       });
     }
     const variables = this.readVariables(ctx);
+    // A grant naming a memory input of this node's own flow is a memory grant.
+    const memoryInputs = [
+      ...new Set(
+        this.tools
+          .map((grant) => (grant.kind === "name" ? grant.name : grant.group))
+          .filter((name) => isMemoryType(ctx.flowInputs.get(name))),
+      ),
+    ];
+    const toolsRange = this.fieldRanges.get(siteKey("field", "tools")) ?? this.range;
+    try {
+      checkMemoryGrants(
+        this.tools.filter((grant) => memoryInputs.includes(grant.kind === "name" ? grant.name : grant.group)),
+        ctx.flowInputs,
+        ctx.memoryTypes,
+      );
+    } catch (error) {
+      if (!(error instanceof GrantError)) throw error;
+      const separator = error.message.startsWith("grants ") ? " " : ": ";
+      throw ctx.diagnostics.error(`node ${id} (kind=${this.kind})${separator}${error.message}`, {
+        range: toolsRange,
+        cause: error,
+      });
+    }
     let node: AgentNode;
     try {
       node = new AgentNode(this.id, {
@@ -850,12 +876,12 @@ export class AgentDescriptor extends NodeDescriptor {
         skills: this.skills,
         steerInbox: this.steerInbox !== null,
         steerRender: this.steerRender,
+        memoryInputs,
       });
     } catch (error) {
       // AgentNode checks skill grants and tool names; a refusal is the loader's one error type.
       if (!(error instanceof RangeError)) throw error;
       const skillsRange = this.fieldRanges.get(siteKey("field", "skills")) ?? this.range;
-      const toolsRange = this.fieldRanges.get(siteKey("field", "tools")) ?? this.range;
       throw ctx.diagnostics.error(`node ${id}: ${error.message}`, {
         range: error instanceof SkillError ? skillsRange : toolsRange,
         cause: error,
@@ -905,6 +931,8 @@ export class AgentDescriptor extends NodeDescriptor {
         message =
           `node ${id}: variable ${reprText(STEER_INBOX_KEY)} is reserved for \`steer_inbox:\`; ` +
           "rename the variable";
+      } else if (variable.name.startsWith(MEMORY_KEY_PREFIX)) {
+        message = `node ${id}: variable ${reprText(variable.name)} is reserved for memory grants; rename the variable`;
       } else if (inputNames.has(variable.name)) {
         message = `node ${id}: variable ${reprText(variable.name)} collides with an input name`;
       } else {
@@ -930,8 +958,14 @@ export class AgentDescriptor extends NodeDescriptor {
         { range: this.fieldRanges.get(siteKey("input", STEER_INBOX_KEY)) ?? this.range },
       );
     }
+    rejectMemoryKeyInputs(
+      inputNames,
+      (name) => this.fieldRanges.get(siteKey("input", name)) ?? this.range,
+      ctx.diagnostics,
+    );
     const wiring = this.sinkWiring();
     if (this.steerInbox !== null) wiring.set(STEER_INBOX_KEY, this.steerInbox);
+    for (const input of memoryInputs) wiring.set(memoryKey(input), memoryBinding(input));
     const result = this._finish(node, wiring);
     // Errors about `llm_config` values point at the authored `llm_config:`, and errors about the
     // steer inbox at `steer_inbox:`.

@@ -50,7 +50,7 @@ import {
   scanTemplate,
 } from "../../expr/index.ts";
 import { Span, templateRefs } from "../../expr/template.ts";
-import type { Node } from "../../nodes/base.ts";
+import { memoryKey, type Node } from "../../nodes/base.ts";
 import { AgentNode, STEER_INBOX_KEY } from "../../nodes/agent/node.ts";
 import { CallNode } from "../../nodes/call/node.ts";
 import { CaseNode } from "../../nodes/case/node.ts";
@@ -207,8 +207,12 @@ function memorySiteTail(nodeId: string, node: Node, param: string): string | nul
   return `(the child's \`${param}\` isn't a memory input)`;
 }
 
-/** Return why node `node`'s reserved key `key` (written `label`) can't read a memory. */
+/**
+ * Return why node `node`'s reserved key `key` (written `label`) can't read a memory, or `null` for
+ * the key of one of its memory grants.
+ */
 function memoryReservedTail(node: Node, key: string, label: string): string | null {
+  if (node.memoryGrants().some((grant) => memoryKey(grant.input) === key)) return null;
   if (node.bindsPerItem && key === node.itemSourceKey) return "(a map's `over:` can't read a memory)";
   return `(\`${label}:\` can't read a memory)`;
 }

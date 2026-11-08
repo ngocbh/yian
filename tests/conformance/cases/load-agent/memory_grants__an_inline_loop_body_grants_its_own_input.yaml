@@ -1,0 +1,25 @@
+# An inline loop body's agent grants the body's own memory input, carried from the parent.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  nodes:
+    l:
+      kind: loop
+      input:
+        m: ${input.lessons}
+        done: false
+      nodes:
+        a:
+          kind: agent
+          output: bool
+          prompt: hi
+          tools: [{m: [read]}]
+      output:
+        done: ${a.output}
+      while: not done
+  output: null
+expect:
+  load: ok

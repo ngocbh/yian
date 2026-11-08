@@ -17,6 +17,12 @@ export type ToolGrant =
   | { readonly kind: "name"; readonly name: string }
   | { readonly kind: "group"; readonly group: string; readonly tools: readonly string[] };
 
+/**
+ * A grant of a memory's tools, by the memory input of the node's own flow: `lessons` grants all
+ * its tools (`tools: null`), `{lessons: [read]}` some of them.
+ */
+export type MemoryGrant = { readonly input: string; readonly tools: readonly string[] | null };
+
 /** A grant that can't be parsed or resolved; its message names the fix. */
 export class GrantError extends RangeError {
   /** The index of the `tools:` entry at fault, or `null` when no one entry is. */

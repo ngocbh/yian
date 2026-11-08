@@ -2181,6 +2181,8 @@ function buildNodes(
     variableDeclarationReader: readAuthoredNodeVariables,
     bindingContractReader: readBindingContract,
     baseDir,
+    flowInputs: params.types,
+    memoryTypes: scope.memoryTypes,
   });
   descriptorCache = new DescriptorBuildCache(descriptors, ctxBase);
   const buildResults = descriptorCache.buildInSourceOrder();

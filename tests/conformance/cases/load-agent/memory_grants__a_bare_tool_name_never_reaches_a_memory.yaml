@@ -1,0 +1,16 @@
+# A bare tool name is a host grant, checked at run start; it never reaches a memory's tool.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  nodes:
+    a:
+      kind: agent
+      output: str
+      prompt: hi
+      tools: [read]
+  output: ${a.output}
+expect:
+  load: ok

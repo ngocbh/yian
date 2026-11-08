@@ -28,7 +28,7 @@ import { defaultModelAccess, type ModelAccess } from "../../llm_clients/factory.
 import { MediaPart, Message as ModelMessage, MessageFormatError, TextPart } from "../../llm/messages.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL, loadSkillTool, systemPromptWithSkills } from "../../skills/tool.ts";
-import { asToolGrant, type ToolGrant } from "../../tools/grants.ts";
+import { asToolGrant, type MemoryGrant, type ToolGrant } from "../../tools/grants.ts";
 import { type JsonObject, logJson } from "../../typesys/json.ts";
 import type { VariablePool } from "../../typesys/pool.ts";
 import {
@@ -44,9 +44,12 @@ import {
   writeAsText,
 } from "../../typesys/values.ts";
 import {
+  bindMemoryGrants,
   CapabilityFault,
   checkNamedPrompt,
   type CompleteResult,
+  MEMORY_KEY_PREFIX,
+  memoryKey,
   type RebuildCaps,
   type RebuiltRequests,
   Node,
@@ -333,8 +336,13 @@ export class AgentNode extends Node {
   prompt: string | readonly PromptItem[];
   /** The system prompt template replacing the default one; `null` keeps the default. */
   systemPrompt: string | null;
-  /** The authored tool grants, which may name host-filled groups. */
+  /** The authored tool grants, which may name host-filled groups and memory inputs. */
   tools: readonly ToolGrant[];
+  /**
+   * The memory inputs of this agent's flow that `tools` names, each riding the reserved
+   * `__memory_<input>` wiring; a grant naming one is a memory grant, never a host one.
+   */
+  readonly memoryInputs: readonly string[];
   /**
    * The authored source each cascade pass re-resolves: a record, or a template or binding for a
    * layer holding values.
@@ -399,8 +407,10 @@ export class AgentNode extends Node {
    * @param options.steerInbox Whether this agent reads a steer inbox; defaults to `false`.
    * @param options.steerRender The template each steer event renders through, over `${event}`;
    *   defaults to `null`, the default rendering.
+   * @param options.memoryInputs The memory inputs of the agent's flow its grants name; defaults
+   *   to none.
    * @throws TypeError for a bad `prompt` item, `systemPrompt`, `llmConfig`, `variables`,
-   *   `steerInbox` or `steerRender`.
+   *   `steerInbox`, `steerRender` or `memoryInputs`.
    * @throws RangeError for an empty list prompt or one ending in an assistant message, the retired
    *   `builtin_tools` grant, a steer render without a steer inbox, or a variable whose name repeats
    *   or whose default is missing or invalid.
@@ -420,6 +430,7 @@ export class AgentNode extends Node {
       skills?: readonly string[] | "all" | null;
       steerInbox?: boolean;
       steerRender?: string | null;
+      memoryInputs?: readonly string[] | null;
     } = {},
   ) {
     const {
@@ -434,6 +445,7 @@ export class AgentNode extends Node {
       skills = null,
       steerInbox = false,
       steerRender = null,
+      memoryInputs = null,
     } = options;
     super(nodeId, { title });
     if (isList(prompt)) checkPromptItems(nodeId, prompt);
@@ -443,6 +455,10 @@ export class AgentNode extends Node {
     }
     this.systemPrompt = systemPrompt;
     this.tools = (tools ?? []).map(asToolGrant);
+    if (memoryInputs !== null && !(isList(memoryInputs) && memoryInputs.every((input) => typeof input === "string"))) {
+      throw new TypeError(`AGENT node ${reprText(nodeId)}: memoryInputs must be a list of input names`);
+    }
+    this.memoryInputs = Object.freeze([...(memoryInputs ?? [])]);
     if (this.tools.some((grant) => grant.kind === "name" && grant.name === "builtin_tools")) {
       throw new RangeError(
         "builtin_tools belonged to the removed native Codex integration. " +
@@ -488,8 +504,8 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Declare `__llm_config` when values in the layers can reach this agent's config, and
-   * `__steer_inbox` when it reads a steer inbox.
+   * Declare `__llm_config` when values in the layers can reach this agent's config,
+   * `__steer_inbox` when it reads a steer inbox, and `__memory_<input>` for each memory it grants.
    */
   override reservedWiringKeys(): ReadonlySet<string> {
     return new Set(this.reservedKeys());
@@ -497,7 +513,11 @@ export class AgentNode extends Node {
 
   /** The reserved wiring keys this agent has. */
   private reservedKeys(): string[] {
-    return [...(this.wiresLlmConfig ? [LLM_CONFIG_KEY] : []), ...(this.steerInbox ? [STEER_INBOX_KEY] : [])];
+    return [
+      ...(this.wiresLlmConfig ? [LLM_CONFIG_KEY] : []),
+      ...(this.steerInbox ? [STEER_INBOX_KEY] : []),
+      ...this.memoryInputs.map(memoryKey),
+    ];
   }
 
   /**
@@ -511,13 +531,17 @@ export class AgentNode extends Node {
    * `options.bind` is unused for the config: the bound value is the resolved config, not the values
    * it was read from.
    *
-   * @returns `{__steer_inbox: <name>}` for an agent with a steer inbox, and `{__llm_config:
-   *   <config>}`, the resolved config with no key or header value, the shape of a `RunStarted` map
-   *   entry, for a call-time agent; `{}` for neither.
+   * Each granted memory's binding (`__memory_<input>`) resolves the same way to its memory value,
+   * or `null` for an Optional memory left out.
+   *
+   * @returns `{__steer_inbox: <name>}` for an agent with a steer inbox, `{__memory_<input>:
+   *   <memory>}` per granted memory, and `{__llm_config: <config>}`, the resolved config with no
+   *   key or header value, the shape of a `RunStarted` map entry, for a call-time agent; `{}` for
+   *   none.
    * @throws Error when the wiring lacks a reserved binding the agent has.
-   * @throws BindingError when the steer inbox binding isn't an inbox, a value breaks its tag
-   *   (`binding.type`) or fails to resolve, or the resolved config is refused (`contract.input`);
-   *   the message names the field.
+   * @throws BindingError when the steer inbox binding isn't an inbox, a memory binding isn't a
+   *   memory, a value breaks its tag (`binding.type`) or fails to resolve, or the resolved config
+   *   is refused (`contract.input`); the message names the field.
    * @throws AuthError when the config is marked for the host key the run does not hold; the
    *   host's to fix, not a failure of this node.
    */
@@ -546,6 +570,8 @@ export class AgentNode extends Node {
       reserved[STEER_INBOX_KEY] =
         bind === null ? normalize(resolveSource(source, pool)) : bind(STEER_INBOX_KEY, source, normalize);
     }
+    const memories = bindMemoryGrants(this.id, this.memoryGrants(), "tools", nodeWiring, pool, options.bind ?? null);
+    Object.assign(reserved, memories);
     if (this.callTime === null) return reserved;
     const template = nodeWiring.get(LLM_CONFIG_KEY);
     if (!(template instanceof Binding)) {
@@ -558,10 +584,11 @@ export class AgentNode extends Node {
     return reserved;
   }
 
-  /** Name the reserved `__llm_config` and `__steer_inbox` keys as the authored fields. */
+  /** Name the reserved `__llm_config`, `__steer_inbox` and `__memory_<input>` keys as the authored fields. */
   override reservedKeyLabel(key: string): string {
     if (key === LLM_CONFIG_KEY) return "llm_config";
     if (key === STEER_INBOX_KEY) return "steer_inbox";
+    if (key.startsWith(MEMORY_KEY_PREFIX)) return "tools";
     return super.reservedKeyLabel(key);
   }
 
@@ -658,9 +685,16 @@ export class AgentNode extends Node {
     }
   }
 
-  /** Return the authored `tools:` grants, which may name host-filled groups. */
+  /** Return the authored `tools:` grants of host tools and groups, which may name host-filled groups. */
   override grantedTools(): readonly ToolGrant[] {
-    return [...this.tools];
+    return this.tools.filter((grant) => !this.memoryInputs.includes(grantName(grant)));
+  }
+
+  /** Return the authored `tools:` grants of memories, in grant order. */
+  override memoryGrants(): readonly MemoryGrant[] {
+    return this.tools
+      .filter((grant) => this.memoryInputs.includes(grantName(grant)))
+      .map((grant) => Object.freeze({ input: grantName(grant), tools: grant.kind === "name" ? null : grant.tools }));
   }
 
   /**
@@ -788,7 +822,7 @@ export class AgentNode extends Node {
     return {
       nodeId: this.id,
       messages,
-      tools: [...this.tools],
+      tools: [...this.grantedTools()],
       llmConfig: config,
       outputType: isExactly(this.outputContract, ValueContract) ? this.outputContract.type : null,
       retries: this.retries,
@@ -1031,7 +1065,7 @@ export class AgentNode extends Node {
       return { ...none, digestOk: false };
     }
     const system = new ModelMessage({ role: "system", parts: [new TextPart(rendered.systemPrompt)] });
-    const tools = caps.toolSpecs(this.tools, rendered.skills.length > 0 ? loadSkillTool() : null);
+    const tools = caps.toolSpecs(this.grantedTools(), rendered.skills.length > 0 ? loadSkillTool() : null);
     const contract = this.outputContract;
     const structured = async () => {
       if (!isExactly(contract, ValueContract) || caps.models === null) return null;
@@ -1059,4 +1093,9 @@ export class AgentNode extends Node {
   override declaredVariables(): readonly Parameter[] {
     return [...this.variables];
   }
+}
+
+/** The name a grant gives: a tool or group's name, or the group of a group grant. */
+function grantName(grant: ToolGrant): string {
+  return grant.kind === "name" ? grant.name : grant.group;
 }

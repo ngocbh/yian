@@ -36,7 +36,7 @@ import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { Request, ToolSpec } from "../llm/messages.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
-import type { ToolGrant } from "../tools/grants.ts";
+import type { MemoryGrant, ToolGrant } from "../tools/grants.ts";
 import type { ToolSet } from "../tools/registry.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import type { VariablePool } from "../typesys/pool.ts";
@@ -45,6 +45,7 @@ import {
   fromHost,
   isRecord,
   jsTypeName,
+  MemoryRef,
   setField,
   type Type,
   TypeCheckError,
@@ -52,7 +53,15 @@ import {
   type Value,
   type ValueRecord,
 } from "../typesys/values.ts";
-import { applyDefaults, BindingError, copyValue, type ReservedBinder, validateParameters } from "./binding.ts";
+import {
+  applyDefaults,
+  BindingError,
+  copyValue,
+  type ReservedBinder,
+  resolveSource,
+  sourceOrigin,
+  validateParameters,
+} from "./binding.ts";
 import {
   type Assertion,
   type CallView,
@@ -136,6 +145,49 @@ export class Route {
  * no outgoing edge.
  */
 export const ELSE_HANDLE = "#else";
+
+/** The start of each reserved wiring key a node routes a memory grant through. */
+export const MEMORY_KEY_PREFIX = "__memory_";
+
+/** Return the reserved wiring key of a grant of memory input `input`: `__memory_<input>`. */
+export function memoryKey(input: string): string {
+  return `${MEMORY_KEY_PREFIX}${input}`;
+}
+
+/**
+ * Resolve the reserved binding of each memory input `grants` name, once per input, to the memory
+ * value it holds (`null` for an Optional memory left out), keyed by its reserved key.
+ *
+ * @param field The authored field the grants are in (`tools` or `tool_id`), for the message.
+ * @param bind Resolves a named source and applies the check, as `bindReserved`'s `bind`; `null`
+ *   resolves against `pool`.
+ * @throws Error when the wiring lacks a grant's reserved binding.
+ * @throws BindingError (`contract.input`) when a binding holds something other than a memory.
+ */
+export function bindMemoryGrants(
+  nodeId: string,
+  grants: readonly MemoryGrant[],
+  field: string,
+  nodeWiring: ReadonlyMap<string, unknown>,
+  pool: VariablePool,
+  bind: ReservedBinder | null,
+): Record<string, unknown> {
+  const reserved: Record<string, unknown> = {};
+  for (const input of new Set(grants.map((grant) => grant.input))) {
+    const key = memoryKey(input);
+    if (!nodeWiring.has(key)) throw new Error(`node ${reprText(nodeId)} has no \`${key}\` wiring`);
+    const source = nodeWiring.get(key);
+    const normalize = (value: unknown): MemoryRef | null => {
+      if (value === null || MemoryRef.isMemoryRef(value)) return value;
+      throw new BindingError(`node ${reprText(nodeId)}: \`${input}\` in \`${field}:\` must be a memory`, {
+        failureCode: "contract.input",
+        origin: sourceOrigin(source),
+      });
+    };
+    reserved[key] = bind === null ? normalize(resolveSource(source, pool)) : bind(key, source, normalize);
+  }
+  return reserved;
+}
 
 /**
  * One deterministic graph expansion a spawner describes for the runtime to record. Frozen.
@@ -1137,6 +1189,15 @@ export abstract class Node {
    * is written. The base grants none.
    */
   grantedTools(): readonly ToolGrant[] {
+    return [];
+  }
+
+  /**
+   * Return the grants of memory tools a model inside this node, or the node itself, may call, by
+   * the memory input of the node's own flow. Never among `grantedTools()` or `hostToolCall()`, so
+   * the run-start tool checks never see one. The base grants none.
+   */
+  memoryGrants(): readonly MemoryGrant[] {
     return [];
   }
 

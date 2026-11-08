@@ -1,9 +1,12 @@
 /** The memory types a load knows, and how a flow input's tag reads one. */
 
-import { reprText } from "../../diagnostics.ts";
+import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { BUILTIN_MEMORY_TOOLS, type MemoryBase } from "../../memory/base.ts";
+import { MEMORY_KEY_PREFIX } from "../../nodes/base.ts";
+import { expandGrants, GrantError, type GrantScope, type ToolGrant, visibleToolName } from "../../tools/grants.ts";
+import { RESERVED_TOOL_NAMES } from "../../tools/registry.ts";
 import { parseType, type TypeExpr, type TypeRegistry, withMemoryTypes } from "../../typesys/types.ts";
-import { TypeCheckError } from "../../typesys/values.ts";
+import { isMemoryType, type Type, TypeCheckError } from "../../typesys/values.ts";
 import type { SourceCursor } from "../source/index.ts";
 import type { LoadDiagnostics } from "./errors.ts";
 
@@ -122,4 +125,77 @@ function wholeName(tag: string): string | null {
   }
   while (parsed.kind === "optional") parsed = parsed.inner;
   return parsed.kind === "ref" ? parsed.name : null;
+}
+
+/**
+ * Return the tool names of memory type `typ`, in spec order: a built-in contract's, or a host
+ * type's from `table`; `null` for a type this load doesn't know, a recorded flow's opaque one.
+ */
+export function memoryToolNames(
+  typ: Type & { readonly memory: string },
+  table: MemoryTypeTable,
+): readonly string[] | null {
+  if (Object.hasOwn(BUILTIN_MEMORY_TOOLS, typ.memory)) {
+    return BUILTIN_MEMORY_TOOLS[typ.memory as keyof typeof BUILTIN_MEMORY_TOOLS];
+  }
+  return table.tools.get(typ.memory) ?? null;
+}
+
+/**
+ * Check grants of the memory inputs `flowInputs` types as memories: each tool a grant lists is
+ * one of its type's, and no tool shows to a model under a name yian reserves or another memory
+ * tool of the same grants shows. A grant on a type this load doesn't know (a recorded flow's) is
+ * left unchecked: the run's start checked it.
+ *
+ * @throws GrantError naming the grant and the fix.
+ */
+export function checkMemoryGrants(
+  grants: readonly ToolGrant[],
+  flowInputs: ReadonlyMap<string, Type>,
+  table: MemoryTypeTable,
+): void {
+  const names = (input: string): readonly string[] | null => {
+    const typ = flowInputs.get(input);
+    return isMemoryType(typ) ? memoryToolNames(typ, table) : null;
+  };
+  const known = grants.filter((grant) => names(grant.kind === "name" ? grant.name : grant.group) !== null);
+  const scope: GrantScope = {
+    label: "this flow's memories",
+    group: names,
+    hasTool: () => false,
+    groupsHolding: () => [],
+    groupNames: () => [...flowInputs.keys()].filter((input) => names(input) !== null),
+    identity: (group, tool) => visibleToolName(group, tool),
+    bareMembers: false,
+  };
+  for (const tool of expandGrants(known, [scope])) {
+    if (!RESERVED_TOOL_NAMES.has(tool.visible)) continue;
+    throw new GrantError(
+      `the tool name \`${tool.visible}\` of \`{${tool.group}: [${tool.tool}]}\` is yian's; rename the input`,
+    );
+  }
+}
+
+/** Return the source a memory grant's reserved wiring binds: the whole `${input.<input>}`. */
+export function memoryBinding(input: string): string {
+  return `\${input.${input}}`;
+}
+
+/**
+ * Refuse a node input named like a memory grant's reserved wiring key (`__memory_<name>`).
+ *
+ * @param rangeOf The authored range of input `name`, or `null`.
+ * @throws LoadError at the first such input.
+ */
+export function rejectMemoryKeyInputs(
+  names: Iterable<string>,
+  rangeOf: (name: string) => SourceRange | null,
+  diagnostics: LoadDiagnostics,
+): void {
+  for (const name of names) {
+    if (!name.startsWith(MEMORY_KEY_PREFIX)) continue;
+    throw diagnostics.error(`input ${reprText(name)} is reserved for memory grants; rename the input`, {
+      range: rangeOf(name),
+    });
+  }
 }

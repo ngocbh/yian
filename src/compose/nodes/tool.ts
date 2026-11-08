@@ -17,15 +17,17 @@ import { current } from "../../defaults.ts";
 import { compareCodeUnits, reprText, type SourceRange } from "../../diagnostics.ts";
 import { bindingSource, isExactly, ValueContract, ValueTemplate } from "../../nodes/contracts.ts";
 import { parseQuestions, QuestionSpecError } from "../../nodes/tool/questions.ts";
+import { memoryKey } from "../../nodes/base.ts";
 import { ToolNode } from "../../nodes/tool/node.ts";
 import { LOAD_SKILL } from "../../skills/tool.ts";
 import { ASK, ASK_USER, BUILTIN_TOOL_IDS, type BuiltinToolId, SLEEP, TAKE } from "../../tools/context.ts";
-import { visibleToolName } from "../../tools/grants.ts";
+import { GrantError, visibleToolName } from "../../tools/grants.ts";
 import { RESERVED_TOOL_NAMES, type ToolRef } from "../../tools/registry.ts";
 import { parseDateOrDatetime, parseDuration } from "../../typesys/temporal.ts";
 import {
   canonicalTypeLabel,
   isInboxType,
+  isMemoryType,
   isList,
   isRecord,
   listKindForElement,
@@ -34,6 +36,7 @@ import {
   valueRepr,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
+import { checkMemoryGrants, memoryBinding, rejectMemoryKeyInputs } from "../helpers/memory.ts";
 import { literalValue, NOT_LITERAL } from "../../compile/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
@@ -306,10 +309,17 @@ export class ToolDescriptor extends NodeDescriptor {
    * ask with none answers an `object`, a prompt-only one is free form) and derives its
    * `answerSchema` from it. A literal duration (`timeout`, `for`) is wired as its seconds.
    *
-   * @throws LoadError when `output:` isn't a valid type expression, or a built-in's input is
-   *   unknown, missing or of the wrong type (at the input).
+   * A `tool_id: {<memory>: <tool>}` naming a memory input of the node's own flow calls that
+   * memory's tool, routed through the reserved `__memory_<input>` wiring, never the run's tools.
+   *
+   * @throws LoadError when `output:` isn't a valid type expression, a built-in's input is unknown,
+   *   missing or of the wrong type (at the input), an input is named like a reserved memory key,
+   *   or a memory's tool names an Optional memory or a tool its type lacks.
    */
   override build(ctx: BuildContext): BuildResult {
+    rejectMemoryKeyInputs(Object.keys(this.inputs), (name) => this.inputRange(name), ctx.diagnostics);
+    const memory = this.toolRef.group === null ? undefined : ctx.flowInputs.get(this.toolRef.group);
+    if (isMemoryType(memory)) return this.buildMemoryTool(ctx, memory);
     const builtin = BUILTIN_TOOL_IDS.has(this.toolId as BuiltinToolId);
     // A built-in is never retried by the node: take and sleep make no call, and the host owns an ask.
     const retries = builtin ? 0 : this.retries;
@@ -338,6 +348,46 @@ export class ToolDescriptor extends NodeDescriptor {
       node.outputContract = this.outputContract(ctx);
     }
     node.params = this.sinkParams();
+    return this._finish(node, wiring);
+  }
+
+  /**
+   * Build a TOOL node calling the tool `toolRef.name` of the memory input `toolRef.group`, whose
+   * type is `memory`.
+   *
+   * @throws LoadError when the memory is Optional, which a run may leave unbound, or its type lacks
+   *   the tool.
+   */
+  private buildMemoryTool(ctx: BuildContext, memory: Type): BuildResult {
+    const { group, name } = this.toolRef;
+    const input = group!;
+    const range = this.fieldRanges.get(siteKey("field", "tool_id")) ?? this.range;
+    if (memory.nullable) {
+      throw ctx.diagnostics.error(
+        `node ${reprText(this.id)}: \`tool_id: {${input}: ${name}}\` names \`${input}\`, an Optional memory; ` +
+          "a TOOL node needs one that is always bound",
+        { range },
+      );
+    }
+    try {
+      checkMemoryGrants([{ kind: "group", group: input, tools: [name] }], ctx.flowInputs, ctx.memoryTypes);
+    } catch (error) {
+      if (!(error instanceof GrantError)) throw error;
+      throw ctx.diagnostics.error(`node ${reprText(this.id)} (kind=${this.kind}) ${error.message}`, {
+        range,
+        cause: error,
+      });
+    }
+    const node = new ToolNode(this.id, {
+      toolId: this.toolRef,
+      title: this.nodeName,
+      retries: this.retries,
+      memoryTool: true,
+    });
+    node.outputContract = this.outputContract(ctx);
+    node.params = this.sinkParams();
+    const wiring = this.sinkWiring();
+    wiring.set(memoryKey(input), memoryBinding(input));
     return this._finish(node, wiring);
   }
 

@@ -1,0 +1,27 @@
+# A def's agent grants the def's own memory input, which its caller passes under another name.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  defs:
+    child:
+      input:
+        notes: !FileMemory
+      nodes:
+        a:
+          kind: agent
+          output: str
+          prompt: hi
+          tools: [notes]
+      output: ${a.output}
+  nodes:
+    c:
+      kind: call
+      call: child
+      input:
+        notes: ${input.lessons}
+  output: ${c.output}
+expect:
+  load: ok

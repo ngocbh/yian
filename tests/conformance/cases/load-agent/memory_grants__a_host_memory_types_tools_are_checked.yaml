@@ -1,0 +1,28 @@
+# A host memory type's grants are checked against its class's tools.
+kind: load
+memory_types:
+  TradeJournal: [record_trade]
+flow: |
+  id: f
+  name: f
+  input:
+    j: !TradeJournal
+  nodes:
+    a:
+      kind: agent
+      output: str
+      prompt: hi
+      tools: [{j: [erase]}]
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "node 'a' (kind=agent) grants {j: [erase]}: `j` has no tool `erase`; it has record_trade"
+        frames:
+          - label: flow.yaml
+            range:
+              - 10
+              - 12
+              - 10
+              - 26

@@ -206,13 +206,13 @@ test("hostToolCall names the tool, the inputs, their proven types and the output
   node.params = [new Parameter("symbol"), new Parameter("qty")];
   node.inputTypes = new Map([["qty", int]]);
   node.outputContract = new ValueContract(int);
-  const call = node.hostToolCall();
+  const call = node.hostToolCall()!;
   expect(call.toolId).toBe("flaky");
   expect(call.inputs).toEqual(["symbol", "qty"]);
   expect([...call.inputTypes]).toEqual([["qty", int]]);
   expect(call.outputType).toBe(int);
 
-  const bare = new ToolNode("bare", { toolId: "x" }).hostToolCall();
+  const bare = new ToolNode("bare", { toolId: "x" }).hostToolCall()!;
   expect(bare.inputs).toEqual([]);
   expect(bare.inputTypes.size).toBe(0);
   expect(bare.outputType).toBeNull();

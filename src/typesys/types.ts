@@ -17,8 +17,10 @@ import {
   canonicalUnionOrder,
   IDENTIFIER_PATTERN,
   inboxType,
+  isMemoryType,
   listKindForElement,
   literalLabel,
+  memoryType,
   NAME_PATTERN,
   Type,
   TypeCheckError,
@@ -99,6 +101,13 @@ export interface InboxExpr {
   readonly element: TypeExpr;
 }
 
+/** `FileMemory` or `VectorDBMemory(X)`: a built-in memory type, with its item record if any. */
+export interface MemoryExpr {
+  readonly kind: "memory";
+  readonly type: string;
+  readonly item: TypeExpr | null;
+}
+
 /** A parsed type expression, still unresolved against any registry. */
 export type TypeExpr =
   | ScalarExpr
@@ -108,7 +117,8 @@ export type TypeExpr =
   | EnumExpr
   | DictExpr
   | UnionExpr
-  | InboxExpr;
+  | InboxExpr
+  | MemoryExpr;
 
 const SCALAR_KEYWORDS: ReadonlySet<string> = new Set([
   "str", "int", "float", "bool", "date", "datetime", "object", "file", "None", "none", "Any",
@@ -123,6 +133,12 @@ const TYPING_CONSTRUCTORS: ReadonlySet<string> = new Set([
 const BUILTIN_RECORD_NAMES: ReadonlySet<string> = new Set(["Message"]);
 
 /**
+ * The built-in memory types, which no typedef may take. `VectorDBMemory` may name its item
+ * record, as in `VectorDBMemory(Case)`; `FileMemory` takes none.
+ */
+export const BUILTIN_MEMORY_TYPES: ReadonlySet<string> = new Set(["FileMemory", "VectorDBMemory"]);
+
+/**
  * Names a type expression may start with besides typedefs, derived from the keyword sets
  * so they cannot drift. `topics` is a retired alias, so it is not listed.
  */
@@ -130,6 +146,7 @@ export const BUILTIN_TYPE_NAMES: ReadonlySet<string> = new Set([
   ...SCALAR_KEYWORDS,
   ...TYPING_CONSTRUCTORS,
   ...BUILTIN_RECORD_NAMES,
+  ...BUILTIN_MEMORY_TYPES,
   "any",
 ]);
 
@@ -168,8 +185,9 @@ function isShadow(name: string): boolean {
  * `None`, where `Any` is any JSON value except null and `object` is a JSON object,
  * inclusive ranges `int(1..12)`/`float(0.0..1.0)` (either end may be open), and the
  * constructors `list(X)`/`Optional(X)`/`dict(K, V)`/`Literal(a, "b c")`/
- * `Union(A, B, ...)`/`Inbox(X)`, plus the `topics` alias. A bare name that is neither a
- * scalar nor a constructor is a registry reference. `Union(...)` members are only checked to
+ * `Union(A, B, ...)`/`Inbox(X)`, the memory types `FileMemory` and `VectorDBMemory`/
+ * `VectorDBMemory(X)`, plus the `topics` alias. A bare name that is neither a scalar, a
+ * constructor nor a memory type is a registry reference. `Union(...)` members are only checked to
  * be records when the type is resolved. A quoted `Literal` member takes JSON escapes.
  *
  * Example: `parseType("Union(Buy, Sell)")` gives
@@ -423,6 +441,10 @@ class TypeParser {
       }
       case "Inbox":
         return { kind: "inbox", element: this.oneType(name) };
+      case "VectorDBMemory":
+        return { kind: "memory", type: name, item: this.oneType(name) };
+      case "FileMemory":
+        throw new TypeCheckError(`FileMemory takes no item type in ${reprText(this.src)}`);
       case "Literal":
         return { kind: "enum", tags: this.literalTags() };
       case "dict":
@@ -601,7 +623,8 @@ export function bareConstructorHint(text: string): string | null {
 }
 
 /**
- * Read a bare type name: a scalar keyword, an alias, or a registry reference.
+ * Read a bare type name: a scalar keyword, a built-in memory type, an alias, or a registry
+ * reference.
  *
  * @throws TypeCheckError for the lowercase `any`, or a typing constructor written without its
  *   arguments (the hint shows them).
@@ -618,6 +641,7 @@ function namedType(name: string): TypeExpr {
   // The historical lowercase token.
   if (name === "none") return { kind: "scalar", name: "None" };
   if (SCALAR_KEYWORDS.has(name)) return { kind: "scalar", name: name as ScalarName };
+  if (BUILTIN_MEMORY_TYPES.has(name)) return { kind: "memory", type: name, item: null };
   return { kind: "ref", name };
 }
 
@@ -942,8 +966,13 @@ export interface AliasDef {
   readonly target: TypeExpr;
 }
 
-/** One typedef of a flow. */
-export type TypeDef = RecordDef | VariantDef | AliasDef;
+/** A host's own memory type, named by its class's contract; `withMemoryTypes` adds it. */
+export interface MemoryDef {
+  readonly kind: "memory";
+}
+
+/** One typedef of a flow, or a host memory type. */
+export type TypeDef = RecordDef | VariantDef | AliasDef | MemoryDef;
 
 /** A flow's typedefs by name, which a `RefExpr` resolves against. */
 export type TypeRegistry = ReadonlyMap<string, TypeDef>;
@@ -1012,9 +1041,10 @@ export function newMessagesType(): Type {
  * duplicate members, and requires every member to be a non-nullable record. Its members
  * must be told apart by a tag field or by shapes that can't overlap. A union with one
  * distinct member is that member. The result is a scalar, a typed list, a closed record,
- * a tag-constrained variant, a union of records with members in canonical order, or an
- * inbox. An inbox is a whole input: never optional, never a list item, record field or union
- * member, and never holding an inbox.
+ * a tag-constrained variant, a union of records with members in canonical order, an inbox or a
+ * memory. An inbox is a whole input: never optional, never a list item, record field or union
+ * member, and never holding an inbox. A memory is a whole input too, but may be optional; a
+ * `VectorDBMemory(X)`'s item `X` must be a record.
  *
  * `seen` holds the registry names already being resolved on the current path, the cycle
  * guard; callers pass nothing.
@@ -1026,7 +1056,7 @@ export function newMessagesType(): Type {
  *
  * @throws TypeCheckError when a `RefExpr` names an unknown type, a record or alias
  *   reference is recursive, a union member is not a record or is nullable, two union
- *   members can match the same value, or an inbox sits where it can't.
+ *   members can match the same value, or an inbox or a memory sits where it can't.
  */
 export function resolveType(
   t: TypeExpr,
@@ -1052,10 +1082,13 @@ export function resolveType(
     case "enum":
       return new Type({ kind: ValueKind.STRING, tags: new Set(t.tags) });
     case "dict":
-      if (t.args?.some((arg) => namesInbox(arg, registry, seen))) {
+      if (t.args?.some((arg) => namesWhole(arg, registry, seen) === "inbox")) {
         throw new TypeCheckError(
           `an inbox is a whole input; it can't be a dict key or value in ${reprText(formatTypeExpr(t))}`,
         );
+      }
+      if (t.args?.some((arg) => namesWhole(arg, registry, seen) === "memory")) {
+        throw new TypeCheckError(`a memory is never a dict key or value in ${reprText(formatTypeExpr(t))}`);
       }
       // Only names are checked: the dict stays a lenient object, so a record may hold itself
       // through one and its members need not resolve as a type of their own.
@@ -1070,6 +1103,9 @@ export function resolveType(
           `an inbox is a whole input; it can't be a list item in ${reprText(formatTypeExpr(t))}`,
         );
       }
+      if (isMemoryType(element)) {
+        throw new TypeCheckError(`a memory is never a list item in ${reprText(formatTypeExpr(t))}`);
+      }
       return new Type({ kind: listKindForElement(element), element });
     }
     case "inbox": {
@@ -1079,7 +1115,20 @@ export function resolveType(
           `an inbox holds values, not inboxes, in ${reprText(formatTypeExpr(t))}`,
         );
       }
+      if (isMemoryType(element)) {
+        throw new TypeCheckError(`an inbox holds values, not memories, in ${reprText(formatTypeExpr(t))}`);
+      }
       return inboxType(element);
+    }
+    case "memory": {
+      if (t.item === null) return memoryType(t.type, null);
+      const item = resolveType(t.item, registry, seen);
+      if (item.fields === undefined || item.nullable) {
+        throw new TypeCheckError(
+          `${t.type}'s item type must be a record typedef in ${reprText(formatTypeExpr(t))}`,
+        );
+      }
+      return memoryType(t.type, item);
     }
     case "ref":
       break;
@@ -1092,6 +1141,7 @@ export function resolveType(
     if (builtin !== null) return builtin;
     throw new TypeCheckError(`unknown type ${reprText(name)}`);
   }
+  if (defn.kind === "memory") return memoryType(name, null);
   const inner = new Set([...seen, name]);
   if (defn.kind === "alias") return resolveType(defn.target, registry, inner);
   if (defn.kind === "variant") {
@@ -1100,7 +1150,7 @@ export function resolveType(
   const fields = new Map<string, Type>();
   for (const [field, text] of defn.fields) {
     const typ = resolveType(parseType(text), registry, inner);
-    if (typ.kind === ValueKind.INBOX) throw inboxFieldError();
+    rejectWholeField(typ);
     fields.set(field, typ);
   }
   // An `Optional(X)` field (its resolved type is nullable) is not required.
@@ -1108,9 +1158,12 @@ export function resolveType(
   return new Type({ kind: ValueKind.OBJECT, fields, required });
 }
 
-/** Build the error for a record field typed `Inbox(...)`. */
-function inboxFieldError(): TypeCheckError {
-  return new TypeCheckError("an inbox is a whole input; it can't be a record field");
+/** Refuse `typ` as a record field's type when it is an inbox or a memory. */
+function rejectWholeField(typ: Type): void {
+  if (typ.kind === ValueKind.INBOX) {
+    throw new TypeCheckError("an inbox is a whole input; it can't be a record field");
+  }
+  if (isMemoryType(typ)) throw new TypeCheckError("a memory is never a record field");
 }
 
 /** One flattened union member: its display name, its origin and its resolved type. */
@@ -1121,7 +1174,12 @@ function resolveUnion(t: UnionExpr, registry: TypeRegistry, seen: ReadonlySet<st
   // The label is rendered only for an error: rendering recurses through the whole
   // expression, which a deeply nested union would pay at every level of resolution.
   const members: UnionPart[] = [];
-  for (const [name, origin, member] of unionParts(t, registry, seen)) {
+  const parts = unionParts(t, registry, seen);
+  // Checked before the record checks, so a memory member is named as one wherever it stands.
+  if (parts.some(([, , member]) => isMemoryType(member))) {
+    throw new TypeCheckError(`a memory is never a union member in ${reprText(formatTypeExpr(t))}`);
+  }
+  for (const [name, origin, member] of parts) {
     if (member.nullable) {
       throw new TypeCheckError(
         `${formatTypeExpr(t)}: member ${reprText(name)} is nullable; use ` +
@@ -1240,6 +1298,8 @@ export function formatTypeExpr(t: TypeExpr): string {
       return `list(${formatTypeExpr(t.element)})`;
     case "inbox":
       return `Inbox(${formatTypeExpr(t.element)})`;
+    case "memory":
+      return t.item === null ? t.type : `${t.type}(${formatTypeExpr(t.item)})`;
     case "optional":
       return `Optional(${formatTypeExpr(t.inner)})`;
     case "enum":
@@ -1286,6 +1346,8 @@ function refsInType(t: TypeExpr): Set<string> {
     case "list":
     case "inbox":
       return refsInType(t.element);
+    case "memory":
+      return t.item === null ? new Set() : refsInType(t.item);
     case "optional":
       return refsInType(t.inner);
     case "union":
@@ -1296,28 +1358,43 @@ function refsInType(t: TypeExpr): Set<string> {
 }
 
 /**
- * Whether type expression `t` is or holds an inbox, following alias names in `registry`. A name
- * that is unknown, a record, or already on the `seen` path holds none here.
+ * Return `"inbox"` or `"memory"` when type expression `t` is or holds an inbox or a memory (the
+ * first found), following alias names in `registry`, else `null`. A name that is unknown, a
+ * record, or already on the `seen` path holds neither here.
  */
-function namesInbox(t: TypeExpr, registry: TypeRegistry, seen: ReadonlySet<string>): boolean {
+function namesWhole(
+  t: TypeExpr,
+  registry: TypeRegistry,
+  seen: ReadonlySet<string>,
+): "inbox" | "memory" | null {
+  const first = (parts: readonly TypeExpr[]) => {
+    for (const part of parts) {
+      const whole = namesWhole(part, registry, seen);
+      if (whole !== null) return whole;
+    }
+    return null;
+  };
   switch (t.kind) {
     case "inbox":
-      return true;
+      return "inbox";
+    case "memory":
+      return "memory";
     case "list":
-      return namesInbox(t.element, registry, seen);
+      return namesWhole(t.element, registry, seen);
     case "optional":
-      return namesInbox(t.inner, registry, seen);
+      return namesWhole(t.inner, registry, seen);
     case "union":
-      return t.members.some((member) => namesInbox(member, registry, seen));
+      return first(t.members);
     case "dict":
-      return (t.args ?? []).some((arg) => namesInbox(arg, registry, seen));
+      return first(t.args ?? []);
     case "ref": {
       const defn = registry.get(t.name);
-      if (defn?.kind !== "alias" || seen.has(t.name)) return false;
-      return namesInbox(defn.target, registry, new Set([...seen, t.name]));
+      if (defn?.kind === "memory") return "memory";
+      if (defn?.kind !== "alias" || seen.has(t.name)) return null;
+      return namesWhole(defn.target, registry, new Set([...seen, t.name]));
     }
     default:
-      return false;
+      return null;
   }
 }
 
@@ -1363,6 +1440,9 @@ function checkLocal(t: TypeExpr, registry: TypeRegistry): void {
     case "inbox":
       checkLocal(t.element, registry);
       break;
+    case "memory":
+      if (t.item !== null) checkLocal(t.item, registry);
+      break;
     case "optional":
       checkLocal(t.inner, registry);
       break;
@@ -1395,6 +1475,8 @@ function exprLevels(t: TypeExpr, levels: ReadonlyMap<string, number>): number {
       stack.push([expr.element, above + 1]);
     } else if (expr.kind === "optional" || expr.kind === "inbox") {
       stack.push([expr.kind === "inbox" ? expr.element : expr.inner, above]);
+    } else if (expr.kind === "memory" && expr.item !== null) {
+      stack.push([expr.item, above]);
     } else if (expr.kind === "union") {
       for (const member of expr.members) stack.push([member, above]);
     } else {
@@ -1578,7 +1660,7 @@ function checkTypedefs(registry: TypeRegistry): void {
       }
       try {
         const typ = resolveType(t, registry, new Set([name]));
-        if (field !== null && typ.kind === ValueKind.INBOX) throw inboxFieldError();
+        if (field !== null) rejectWholeField(typ);
       } catch (error) {
         if (!(error instanceof TypeCheckError)) throw error;
         throw typedefError(name, field, error, { cause: error });
@@ -1701,7 +1783,8 @@ function checkCutFields(name: string, fields: Readonly<Record<string, unknown>>)
  * Example: `readTypedefs({Buy: {action: "Literal(buy)"}, Sell: {action: "Literal(sell)"},
  * Decision: "Union(Buy, Sell)"})` registers two records and an alias to their union.
  *
- * @throws TypeCheckError when a name is not PascalCase or shadows a builtin, a field name is
+ * @throws TypeCheckError when a name is not PascalCase or shadows a builtin (a built-in memory
+ *   type included), a field name is
  *   empty or holds a Unicode surrogate, a field type is not a string, a value is a union
  *   array or of another type, a typedef nests more record and list levels than the type
  *   nesting limit or ends a longer chain of typedefs each naming the next, or a typedef
@@ -1723,6 +1806,12 @@ export function readTypedefs(
     if (BUILTIN_RECORD_NAMES.has(name)) {
       throw new TypeCheckError(
         `typedef name ${reprText(name)} shadows the built-in type ${reprText(name)}`,
+        { path: [name] },
+      );
+    }
+    if (BUILTIN_MEMORY_TYPES.has(name)) {
+      throw new TypeCheckError(
+        `typedef name ${reprText(name)} shadows the built-in memory type ${reprText(name)}`,
         { path: [name] },
       );
     }
@@ -1801,4 +1890,34 @@ export function readTypedefs(
   checkAliasCycles(registry);
   checkTypedefs(registry);
   return registry;
+}
+
+/**
+ * Return `registry` with the host memory types `names` added, so a type names each as written
+ * (`TradeJournal`, `Optional(TradeJournal)`). A built-in memory type's name is skipped: a class
+ * that implements one needs no entry.
+ *
+ * @throws TypeCheckError, at `[name]`, when a name is not PascalCase, shadows a built-in name, or
+ *   is a typedef of `registry`.
+ */
+export function withMemoryTypes(registry: TypeRegistry, names: Iterable<string>): TypeRegistry {
+  const added = new Map(registry);
+  for (const name of names) {
+    if (BUILTIN_MEMORY_TYPES.has(name)) continue;
+    const fail = (message: string): never => {
+      throw new TypeCheckError(message, { path: [name] });
+    };
+    if (!PASCAL_CASE.test(name)) {
+      fail(`memory type name ${reprText(name)} must be PascalCase (an uppercase identifier)`);
+    }
+    if (BUILTIN_RECORD_NAMES.has(name)) {
+      fail(`memory type name ${reprText(name)} shadows the built-in type ${reprText(name)}`);
+    }
+    if (isShadow(name)) fail(`memory type name ${reprText(name)} shadows a builtin scalar or typing constructor`);
+    if (registry.has(name) && registry.get(name)!.kind !== "memory") {
+      fail(`the memory type ${reprText(name)} is also a typedef name; rename the typedef or the memory type`);
+    }
+    added.set(name, { kind: "memory" });
+  }
+  return added;
 }

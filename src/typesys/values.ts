@@ -726,7 +726,7 @@ export function toHost(value: Value): unknown {
  * carrier stores it, and an `Any` value persists under its natural kind (`str`,
  * `object`, `list[Any]`, ...). `date` and `datetime` are stored as strings and never
  * inferred. `file` holds a `FileRef`. `inbox` is a handle on a top-level inbox, an `Inbox(T)`
- * input's value; never inferred from a record.
+ * input's value; never inferred from a record. `memory` is a memory input's value.
  */
 export const ValueKind = {
   NONE: "None",
@@ -739,6 +739,7 @@ export const ValueKind = {
   OBJECT: "object",
   FILE: "file",
   INBOX: "inbox",
+  MEMORY: "memory",
   ANY: "Any",
   LIST_ANY: "list[Any]",
   LIST_STRING: "list[str]",
@@ -1174,6 +1175,7 @@ export interface TypeInit {
   readonly nullable?: boolean | undefined;
   readonly bounds?: Bounds | undefined;
   readonly members?: readonly Type[] | undefined;
+  readonly memory?: string | undefined;
 }
 
 /**
@@ -1187,6 +1189,7 @@ export interface TypeInit {
  *   - number:  kind=INTEGER/NUMBER, bounds=[inclusive minimum, maximum]; `null` for an
  *              open end
  *   - union:   kind=OBJECT, members=[record member, ...] (a `Union(...)` of records)
+ *   - memory:  kind=MEMORY, memory=<the memory type's name>, element=<its item record, if any>
  * A refined specialized list uses the element's matching storage tag; `LIST_ANY` is the
  * generic carrier and may refine any element type. A plain scalar or flat list uses only
  * `kind` (see `Type.scalar`). A `LIST_ANY` with no `element` is a list whose items
@@ -1207,6 +1210,7 @@ export class Type {
   readonly nullable: boolean;
   readonly bounds: Bounds | undefined;
   readonly members: readonly Type[] | undefined;
+  readonly memory: string | undefined;
 
   /** Build a type from `init` as given; `validateShape` checks it. */
   constructor(init: TypeInit) {
@@ -1219,6 +1223,7 @@ export class Type {
     this.nullable = init.nullable === undefined ? false : init.nullable;
     this.bounds = init.bounds;
     this.members = init.members;
+    this.memory = init.memory;
   }
 
   /** Build a plain `Type` carrying only a storage tag, without refinements. */
@@ -1255,6 +1260,19 @@ export function inboxType(element: Type): Type {
 /** Whether `typ` is an `Inbox(...)` type, which always has an element type. */
 export function isInboxType(typ: Type | null | undefined): typ is Type & { readonly element: Type } {
   return typ != null && typ.kind === ValueKind.INBOX;
+}
+
+/**
+ * Return the memory type `name` (`FileMemory`, `VectorDBMemory` or a host's own), whose items are
+ * `item` records, or `null` for a memory without typed items.
+ */
+export function memoryType(name: string, item: Type | null): Type {
+  return new Type({ kind: ValueKind.MEMORY, memory: name, element: item ?? undefined });
+}
+
+/** Whether `typ` is a memory type, which always names its memory type. */
+export function isMemoryType(typ: Type | null | undefined): typ is Type & { readonly memory: string } {
+  return typ != null && typ.kind === ValueKind.MEMORY;
 }
 
 /**
@@ -1346,7 +1364,18 @@ function validateTypeShape(typ: unknown, active: Set<Type>, validated: Set<Type>
     }
 
     const element = typ.element;
-    if (typ.kind === ValueKind.INBOX) {
+    if (typ.kind === ValueKind.MEMORY) {
+      if (!isNonEmptyString(typ.memory)) throw new RangeError("a memory type needs its name");
+      validateTypeMetadataString(typ.memory);
+      if (element !== undefined) {
+        validateTypeShape(element, active, validated);
+        if (element.fields === undefined || element.nullable) {
+          throw new RangeError("a memory's item type must be a record");
+        }
+      }
+    } else if (typ.memory !== undefined) {
+      throw new RangeError("only memory types may name a memory type");
+    } else if (typ.kind === ValueKind.INBOX) {
       if (element === undefined) throw new RangeError("an inbox type needs an element type");
       if (typ.nullable) throw new RangeError("an inbox is never optional");
       validateTypeShape(element, active, validated);
@@ -1492,6 +1521,7 @@ export function typeEquals(a: Type, b: Type): boolean {
     optionalEquals(a.required, b.required, setEquals) &&
     optionalEquals(a.tags, b.tags, setEquals) &&
     optionalEquals(a.element, b.element, typeEquals) &&
+    a.memory === b.memory &&
     optionalEquals(
       a.bounds,
       b.bounds,
@@ -1597,6 +1627,12 @@ function canonicalNonnullableLabel(typ: Type): [string, string] {
   if (typ.kind === ValueKind.INBOX) {
     const [label, key] = labels(typ.element!);
     return [`Inbox(${label})`, `Inbox[${key}]`];
+  }
+
+  if (typ.kind === ValueKind.MEMORY) {
+    if (typ.element === undefined) return [typ.memory!, typ.memory!];
+    const [label, key] = labels(typ.element);
+    return [`${typ.memory}(${label})`, `${typ.memory}[${key}]`];
   }
 
   if (isListKind(typ.kind)) {

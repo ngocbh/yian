@@ -247,6 +247,10 @@ describe("typedef names", () => {
     expectRejected({ Message: { role: "str" } }, "typedef name 'Message' shadows the built-in type 'Message'", ["Message"]);
   });
 
+  test.each(["FileMemory", "VectorDBMemory"])("the memory type %s is a reserved typedef name", (name) => {
+    expectRejected({ [name]: "str" }, `typedef name '${name}' shadows the built-in memory type '${name}'`, [name]);
+  });
+
   test("the part record names stay free", () => {
     expect(readTypedefs({ Text: "str", ToolCall: { id: "str" } }).size).toBe(2);
   });

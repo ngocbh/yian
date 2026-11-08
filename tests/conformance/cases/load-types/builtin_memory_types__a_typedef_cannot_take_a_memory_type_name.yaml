@@ -1,0 +1,24 @@
+# `FileMemory` is a built-in memory type, so a typedef can't take its name; the error is at the
+# typedef's key.
+kind: load
+flow: |
+  id: err-memory-typedef
+  name: err_memory_typedef
+  typedefs:
+    FileMemory: str
+  input:
+    topic: !str
+  nodes:
+    note:
+      kind: agent
+      input:
+        topic: ${input.topic}
+      output: str
+      prompt: "Rate ${topic}."
+  output: ${note.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "bad typedefs: typedef name 'FileMemory' shadows the built-in memory type 'FileMemory'"
+        frames: [{label: flow.yaml, range: [4, 3, 4, 13]}]

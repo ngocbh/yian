@@ -46,7 +46,7 @@ import { GrantError, parseToolGrants, type ToolGrant } from "../../tools/grants.
 import type { TypeRegistry } from "../../typesys/types.ts";
 import { isList, isMemoryType, isRecord, type Type, typeLevels, valueRepr } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError, rejectRemovedMemoryKey } from "../helpers/errors.ts";
-import { checkMemoryGrants, memoryBinding, rejectMemoryKeyInputs } from "../helpers/memory.ts";
+import { checkMemoryGrants, grantErrorText, memoryBinding, rejectMemoryKeyInputs } from "../helpers/memory.ts";
 import { readTaggedValue } from "../helpers/tags.ts";
 import { readVariables } from "../helpers/types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
@@ -856,8 +856,7 @@ export class AgentDescriptor extends NodeDescriptor {
       );
     } catch (error) {
       if (!(error instanceof GrantError)) throw error;
-      const separator = error.message.startsWith("grants ") ? " " : ": ";
-      throw ctx.diagnostics.error(`node ${id} (kind=${this.kind})${separator}${error.message}`, {
+      throw ctx.diagnostics.error(grantErrorText(`node ${id} (kind=${this.kind})`, error), {
         range: toolsRange,
         cause: error,
       });

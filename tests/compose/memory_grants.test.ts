@@ -223,6 +223,20 @@ test("a host memory tool a model can't call by name is refused", async () => {
   expect(error.diagnostic.message).toContain("rename the tool");
 });
 
+test("a TOOL node's memory tool named like a built-in says to rename the input", async () => {
+  const Notes = hostType("Notes", ["skill"]);
+  const nodes = "found:\n  kind: tool\n  tool_id: {load: skill}\n";
+  const error = await loadErrorAsync(loadFlow(flow("load: !Notes", nodes), { memoryTypes: [Notes] }));
+  expect(error.diagnostic.message).toBe(
+    "node 'found' (kind=tool): the tool name `load_skill` of `{load: [skill]}` is yian's; rename the input",
+  );
+});
+
+test("a TOOL node's host group tool named like a built-in still says to rename the group or the tool", async () => {
+  const error = await loadErrorAsync(loadFlow(flow("q: !str", "found:\n  kind: tool\n  tool_id: {load: skill}\n")));
+  expect(error.diagnostic.message).toContain("would show as `load_skill`, a name yian reserves; rename the group or the tool");
+});
+
 test("a host type's grants are checked against its class's tools", async () => {
   const text = flow("j: !TradeJournal", agent("[{j: [record_trade]}]"));
   const loaded = await loadFlow(text, { memoryTypes: [TRADE_JOURNAL] });

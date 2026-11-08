@@ -36,7 +36,7 @@ import {
   valueRepr,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics } from "../helpers/errors.ts";
-import { checkMemoryGrants, memoryBinding, rejectMemoryKeyInputs } from "../helpers/memory.ts";
+import { checkMemoryGrants, grantErrorText, memoryBinding, rejectMemoryKeyInputs } from "../helpers/memory.ts";
 import { literalValue, NOT_LITERAL } from "../../compile/output_contracts.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import { SourceAccessError, type SourceCursor } from "../source/index.ts";
@@ -174,16 +174,10 @@ export class ToolDescriptor extends NodeDescriptor {
     const ref = ToolDescriptor.readToolRef(nodeId, raw, rangeOf("tool_id"), diagnostics);
     delete fields["toolId"];
     fields["toolRef"] = ref;
-    // A group's tool shows as `<group>_<tool>`, which is never a built-in's name.
+    // A group's tool showing as a built-in's name is refused at build, which knows whether the
+    // group is a memory input, whose fix is to rename the input.
     const toolId = visibleToolName(ref.group, ref.name);
-    if (ref.group !== null && RESERVED_TOOL_NAMES.has(toolId)) {
-      throw diagnostics.error(
-        `node ${reprText(nodeId)} (kind=${this.kind}): \`tool_id: {${ref.group}: ${ref.name}}\` ` +
-          `would show as \`${toolId}\`, a name yian reserves; rename the group or the tool`,
-        { range: rangeOf("tool_id") },
-      );
-    }
-    if (toolId === LOAD_SKILL) {
+    if (toolId === LOAD_SKILL && ref.group === null) {
       throw diagnostics.error(`node ${reprText(nodeId)} (kind=${this.kind}): tool id \`${LOAD_SKILL}\` is reserved by yian`, {
         range: rangeOf("tool_id"),
       });
@@ -318,8 +312,17 @@ export class ToolDescriptor extends NodeDescriptor {
    */
   override build(ctx: BuildContext): BuildResult {
     rejectMemoryKeyInputs(Object.keys(this.inputs), (name) => this.inputRange(name), ctx.diagnostics);
-    const memory = this.toolRef.group === null ? undefined : ctx.flowInputs.get(this.toolRef.group);
+    const { group, name } = this.toolRef;
+    const memory = group === null ? undefined : ctx.flowInputs.get(group);
     if (isMemoryType(memory)) return this.buildMemoryTool(ctx, memory);
+    // A group's tool shows as `<group>_<tool>`, which is never a built-in's name.
+    if (group !== null && RESERVED_TOOL_NAMES.has(this.toolId)) {
+      throw ctx.diagnostics.error(
+        `node ${reprText(this.id)} (kind=${this.kind}): \`tool_id: {${group}: ${name}}\` ` +
+          `would show as \`${this.toolId}\`, a name yian reserves; rename the group or the tool`,
+        { range: this.fieldRanges.get(siteKey("field", "tool_id")) ?? this.range },
+      );
+    }
     const builtin = BUILTIN_TOOL_IDS.has(this.toolId as BuiltinToolId);
     // A built-in is never retried by the node: take and sleep make no call, and the host owns an ask.
     const retries = builtin ? 0 : this.retries;
@@ -373,7 +376,7 @@ export class ToolDescriptor extends NodeDescriptor {
       checkMemoryGrants([{ kind: "group", group: input, tools: [name] }], ctx.flowInputs, ctx.memoryTypes);
     } catch (error) {
       if (!(error instanceof GrantError)) throw error;
-      throw ctx.diagnostics.error(`node ${reprText(this.id)} (kind=${this.kind}) ${error.message}`, {
+      throw ctx.diagnostics.error(grantErrorText(`node ${reprText(this.id)} (kind=${this.kind})`, error), {
         range,
         cause: error,
       });

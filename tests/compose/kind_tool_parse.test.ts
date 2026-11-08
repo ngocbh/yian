@@ -101,9 +101,10 @@ test("tool build sets a record output contract", () => {
   expect(fields.get("qty")).toEqual(Type.scalar(ValueKind.INTEGER));
 });
 
+// Refused at build, which knows whether the group is a memory input (`memory_grants.test.ts`).
 test("a tool_id group tool that would show under a reserved name is refused in the form written", () => {
   const error = loadError(() =>
-    ToolDescriptor.parse("a", readerFor("nodes:\n  a:\n    kind: tool\n    tool_id: {load: skill}\n", "a")),
+    assembleText("id: f\nname: f\nnodes:\n  a:\n    kind: tool\n    tool_id: {load: skill}\noutput: null\n"),
   );
 
   expect(error.message).toBe(

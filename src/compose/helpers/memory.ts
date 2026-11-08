@@ -179,6 +179,14 @@ export function checkMemoryGrants(
   }
 }
 
+/**
+ * Return `error`'s message after `where` (`node 'a' (kind=agent)`), joined as each kind of grant
+ * error reads: `… grants {x: [y]}: …`, or `…: the tool name … is yian's; …`.
+ */
+export function grantErrorText(where: string, error: GrantError): string {
+  return `${where}${error.message.startsWith("grants ") ? " " : ": "}${error.message}`;
+}
+
 /** Return the source a memory grant's reserved wiring binds: the whole `${input.<input>}`. */
 export function memoryBinding(input: string): string {
   return `\${input.${input}}`;

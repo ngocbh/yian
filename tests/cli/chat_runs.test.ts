@@ -1024,6 +1024,23 @@ describe("memory", () => {
   );
 
   test(
+    "a waiting child whose memory folder lost its .yian fails saying it isn't a memory any more",
+    async () => {
+      const children = childRuns();
+      await children.start(await flow(REMEMBER_LATER), {}, { project: root });
+      const waiting = await settled(children, "r1");
+      const location = defaultLocation(join(root, "home"), defaultIdentity(root, "answer", "lessons"), "FileMemory");
+      rmSync(join(location, ".yian"), { recursive: true });
+      await children.message("r1", "messages", "hi");
+      const failed = await settled(children, "r1", waiting.seq);
+      expect(failed.note).toBe(
+        "the chat couldn't move the run: memory `lessons`: it isn't a memory any more, so the run can't continue",
+      );
+    },
+    TIMEOUT,
+  );
+
+  test(
     "a child given no project folder has no default memories",
     async () => {
       const children = childRuns();

@@ -321,10 +321,11 @@ class CliFileMemory extends FileMemory {
       // A resume's "bind it with --memory" would point back at the flag the user gave, or at one
       // the host (`yian chat`) doesn't take.
       if (memoryErrorKind(error) !== "missing" || this.#confined?.memoryFlag === true) throw error;
+      const gone = lstatOrNull(this.root) === null ? "its folder is gone" : "it isn't a memory any more";
       const reason =
         this.#confined === null
           ? "the folder given with --memory isn't a memory"
-          : "its folder is gone, so the run can't continue";
+          : `${gone}, so the run can't continue`;
       throw new RangeError(reason, { cause: error });
     }
     if (session.created) {

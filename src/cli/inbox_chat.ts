@@ -50,6 +50,14 @@ import { builtinType } from "../typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
 import type { ChildEvent } from "./chat_events.ts";
 import { type ChatEvents, ChatFlusher } from "./chat_flush.ts";
+import {
+  bindMemories,
+  type CreatedMemory,
+  createdLine,
+  driftNote,
+  projectFolder,
+  resumeMemories,
+} from "./memory_bind.ts";
 import { printStyled, renderDiagnostic, writeEngineTrace } from "./render.ts";
 import {
   checkSuppliedInputs,
@@ -69,14 +77,6 @@ import {
   validateRunLogOptions,
   waitingText,
 } from "./run.ts";
-import {
-  bindMemories,
-  type CreatedMemory,
-  createdLine,
-  driftNote,
-  projectFolder,
-  resumeMemories,
-} from "./memory_bind.ts";
 import { sanitize } from "./sanitize.ts";
 import { cliLayer, freshLog, loadFlowFile, preflightKeys } from "./startup.ts";
 import {

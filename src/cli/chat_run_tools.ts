@@ -43,8 +43,8 @@ import {
 } from "./chat_tools.ts";
 import { AUTHOR_TOOLS, loadAuthorFlow, loadReviewFlow, REVIEW_TOOLS } from "./authoring.ts";
 import { loadConfinedText } from "./confined_load.ts";
-import { type DefaultMemory, projectFolder } from "./memory_bind.ts";
 import { unifiedDiff } from "./diff.ts";
+import { type DefaultMemory, projectFolder } from "./memory_bind.ts";
 import { loadReportFlow } from "./report_issue.ts";
 
 /** The longest `wait_flow` waits, in seconds. */

@@ -274,7 +274,7 @@ export const ENTRIES = Object.freeze([
   }),
   entry("VECTOR_MEMORY_MAX_TEXT_CHARS", {
     default: 8_000,
-    description: "Most characters of one VectorDBMemory item's text, or of a search query",
+    description: "Most characters of one VectorDBMemory item's text and fields, of a retire's reason, or of a query",
     group: "setting",
     minimum: 1,
   }),

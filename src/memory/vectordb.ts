@@ -223,7 +223,10 @@ export interface VectorDBMemoryOptions {
   maxItems?: number;
   /** Items one `search` returns and one `list` shows. */
   maxK?: number;
-  /** Characters of one item's text, and of a search query. */
+  /**
+   * Characters of one item's text and fields together (the fields as yian JSON), of a retire's
+   * reason, and of a search query.
+   */
   maxTextChars?: number;
   /** Characters of the recall. */
   maxRecallChars?: number;
@@ -866,12 +869,16 @@ function conflict(reason: string, row: ItemRow): Applied {
   return { ok: false, reason, current: itemResult(row, true) };
 }
 
-/** Return why `text` can't be an item's text under `limits`, or `null` when it can. */
-function textProblem(text: string, limits: Limits): string | null {
+/**
+ * Return why an item can't hold `text` and `fields` (as the store writes them, `null` for none)
+ * under `limits`, or `null` when it can. They count together, so what a read shows stays bounded.
+ */
+function itemProblem(text: string, fields: string | null, limits: Limits): string | null {
   if (text === "") return "an item's text can't be empty";
-  const chars = charCount(text);
+  const chars = charCount(text) + (fields === null ? 0 : charCount(fields));
   if (chars <= limits.maxTextChars) return null;
-  return `the text is ${chars} characters; an item may hold ${limits.maxTextChars}`;
+  const what = fields === null ? "the text is" : "the item's text and fields are";
+  return `${what} ${chars} characters; an item may hold ${limits.maxTextChars}`;
 }
 
 /** What `history.before` holds for a change that made its item: undoing it removes the item. */
@@ -1735,14 +1742,18 @@ class VectorDBSession implements MemorySession {
    */
   #plan(db: Sqlite, change: Change): Applied | { row: ItemRow | null; embed: string | null } {
     const { limits } = this.#store;
-    const text = change.op === "add" || change.op === "edit" ? change.text : undefined;
-    const textWhy = text === undefined ? null : textProblem(text, limits);
-    if (textWhy !== null) return refused(textWhy);
     if (change.op === "add") {
+      const why = itemProblem(change.text, change.fields === null ? null : logJson(change.fields), limits);
+      if (why !== null) return refused(why);
       const count = Number(db.prepare("SELECT count(*) AS n FROM items").get()!.n);
       if (count >= limits.maxItems) return refused(`the memory holds ${count} items; it may hold ${limits.maxItems}`);
       return { row: null, embed: change.text };
     }
+    if (change.op === "edit" && change.text === "") return refused(itemProblem("", null, limits)!);
+    if (change.op === "retire" && charCount(change.why) > limits.maxTextChars) {
+      return refused(`the reason is ${charCount(change.why)} characters; it may be at most ${limits.maxTextChars}`);
+    }
+    const text = change.op === "edit" ? change.text : undefined;
     const row = itemRow(db, change.id);
     if (row === undefined) return refused(`item ${change.id} doesn't exist`);
     if (row.version !== change.if_version) {
@@ -1752,6 +1763,11 @@ class VectorDBSession implements MemorySession {
       );
     }
     if (change.op === "retire" && row.retired !== null) return conflict(`item ${change.id} is already retired`, row);
+    if (change.op === "edit") {
+      const fields = change.fields === undefined ? row.fields : logJson(change.fields);
+      const why = itemProblem(text ?? row.text, fields, limits);
+      if (why !== null) return refused(why);
+    }
     return { row, embed: text !== undefined && text !== row.text ? text : null };
   }
 

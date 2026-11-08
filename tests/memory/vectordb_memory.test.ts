@@ -1601,3 +1601,44 @@ describe("numbers that aren't ints", () => {
     await s.close();
   });
 });
+
+describe("sizes", () => {
+  const NOTED: JsonObject = {
+    type: "object",
+    properties: { note: { type: "string" } },
+    required: ["note"],
+    additionalProperties: false,
+  };
+
+  test("an item's text and fields count together against maxTextChars, written as the store keeps them", async () => {
+    const s = await openAt({ path: join(dir, "store", "noted.db"), maxTextChars: 20 }, NOTED);
+    // `{"note":"abc"}` is 14 characters, and the text 5: 19 fit.
+    expect(await apply(s, { op: "add", text: "alpha", fields: { note: "abc" } }, "a1")).toMatchObject({ ok: true });
+    embedded = [];
+    expect(await apply(s, { op: "add", text: "alpha", fields: { note: "f".repeat(10) } }, "a2")).toEqual(
+      refusedWith("the item's text and fields are 26 characters; an item may hold 20"),
+    );
+    expect(await apply(s, { op: "edit", id: 1n, if_version: 1n, fields: { note: "abcdef" } }, "e1")).toEqual(
+      refusedWith("the item's text and fields are 22 characters; an item may hold 20"),
+    );
+    // The fields the item keeps count toward a new text too.
+    expect(await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "alpha bravo" }, "e2")).toEqual(
+      refusedWith("the item's text and fields are 25 characters; an item may hold 20"),
+    );
+    expect(embedded).toEqual([]);
+    expect((await s.snapshot()).version).toBe("1");
+    await s.close();
+  });
+
+  test("a retire's reason may be at most maxTextChars", async () => {
+    const s = await openAt({ maxTextChars: 10 });
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    expect(await apply(s, { op: "retire", id: 1n, if_version: 1n, why: "r".repeat(11) }, "r1")).toEqual(
+      refusedWith("the reason is 11 characters; it may be at most 10"),
+    );
+    expect(await apply(s, { op: "retire", id: 1n, if_version: 1n, why: "r".repeat(10) }, "r2")).toMatchObject({
+      ok: true,
+    });
+    await s.close();
+  });
+});

@@ -565,9 +565,15 @@ export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<numbe
   const json = command.options["json"] === true;
   const { named, value: path } = namedWith(command, "file");
   const text = command.options["text"] as string | undefined;
+  if (text === "") throw new UsageError("Invalid value for --text: give the text to erase");
   checkAsks(command, io, "erase");
   return onMemory(command, io, named, async (session) => {
     const { identity } = session.info;
+    // Before anything is listed or asked: a path erase can't take would only fail after the yes.
+    const why = pathProblem(path, Number(session.info.settings["max_depth"]));
+    if (why !== null) {
+      throw new UsageError(`Invalid value for 'FILE': \`${path}\` can't be a file of the memory: ${why}`);
+    }
     const runs = runsUsing(io, identity);
     const unseen = "yian can't see runs on other machines or in a host's own logs";
     const heading = `the runs on this machine that used ${identity}; their logs may hold copies:`;

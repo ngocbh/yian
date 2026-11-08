@@ -562,6 +562,27 @@ describe("yian memory erase", () => {
     expect(JSON.parse(result.stdout).runs).toHaveLength(1);
   });
 
+  test("a target erase can't take is refused before it asks or lists anything", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    for (const [extra, refusal] of [
+      [["MEMORY.md", "--text", ""], "Invalid value for --text: give the text to erase"],
+      [["../x.md"], "Invalid value for 'FILE': `../x.md` can't be a file of the memory: a `..` part"],
+      [[".yian/identity"], "Invalid value for 'FILE': `.yian/identity` can't be a file of the memory: a hidden name"],
+    ] as const) {
+      const answer = new FakeInput({ tty: true });
+      answer.write(`${DOWN}${ENTER}`);
+      const output = new FakeOutput({ tty: true });
+      const args = ["memory", "erase", flow, "lessons", ...extra];
+      const result = await yian(args, { stdin: answer, stderrStream: output });
+      expect(result.code, extra.join(" ")).toBe(2);
+      expect(result.stderr).toContain(refusal);
+      expect(result.stdout).toBe("");
+      expect(output.text).not.toContain("Erase ");
+    }
+    expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("first");
+  });
+
   test("asks first on a terminal; no, or no terminal without --yes, erases nothing", async () => {
     const flow = flowFile();
     await runOnce(flow, "first");

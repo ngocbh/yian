@@ -23,7 +23,7 @@ import { homeDir, isSystemError, withWarnings } from "../platform.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../run.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { isMemoryType } from "../typesys/values.ts";
-import { defaultLocation, defaultMemories, memoryRoot, projectFolder } from "./memory_bind.ts";
+import { checkMemoryFolder, defaultLocation, defaultMemories, memoryRoot, projectFolder } from "./memory_bind.ts";
 import { diagnosticJson, printStyled } from "./render.ts";
 import { defaultRunsDir, loadFlowFile } from "./startup.ts";
 import { Terminal } from "./terminal.ts";
@@ -44,7 +44,8 @@ export interface MemoryTarget {
  * created. A flow that doesn't load prints its diagnostic and gives it back.
  *
  * @throws {UsageError} When neither or both forms are given, `name` is missing, the flow has no
- *   such memory input or it is Optional (it has no default), or `at` names a `.db` store.
+ *   such memory input or it is Optional (it has no default), or `at` names a `.db` store or a folder
+ *   that can't be a memory (`checkMemoryFolder`).
  * @throws {RangeError} When the input's default can't be bound (`defaultMemories`).
  */
 export async function resolveTarget(
@@ -63,6 +64,12 @@ export async function resolveTarget(
       throw new UsageError(
         "Invalid value for --at: a .db store is a VectorDBMemory, which yian memory doesn't open yet",
       );
+    }
+    try {
+      checkMemoryFolder(at, homeDir(io.env));
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      throw new UsageError(`Invalid value for --at: ${error.message}`);
     }
     const memory = new FileMemory({ root: at });
     return { memory, location: memory.root, identity: null };
@@ -612,7 +619,11 @@ export async function memoryReset(command: ParsedArgs, io: CliIo): Promise<numbe
         await printRuns(io, `${heading}; a resume goes on with the emptied memory:`, runs);
       }
     }
-    if (!(await goesOn(command, io, `Empty ${identity}? Its files and history go.`))) {
+    const files = membersOf(session, target.location).map((file) => file.path);
+    const named = files.length === 0 ? "" : ` (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""})`;
+    const deletes = `This deletes ${counted(files.length, "file")}${named} and its history.`;
+    const question = `Empty ${identity} at ${target.location}? ${deletes}`;
+    if (!(await goesOn(command, io, question))) {
       return failed(io, json, { label: "reset cancelled", code: "memory.cancelled", message: "nothing reset" });
     }
     await target.memory.reset({ signal: stopOf(io) });

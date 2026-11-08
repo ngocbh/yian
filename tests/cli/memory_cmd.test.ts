@@ -113,6 +113,19 @@ function lessons(): { identity: string; location: string } {
 }
 
 describe("the target", () => {
+  test("--at refuses /, the home folder and a folder holding ~/.yian", async () => {
+    for (const [path, refusal] of [
+      ["/", "`/` can't be a memory"],
+      [home, "`~` can't be a memory: it holds your home's files"],
+      [tmp, "it holds ~/.yian"],
+    ] as const) {
+      const result = await yian(["memory", "reset", "--at", path, "--yes"]);
+      expect(result.code, path).toBe(2);
+      expect(result.stderr).toContain(`Invalid value for --at: `);
+      expect(result.stderr).toContain(refusal);
+    }
+  });
+
   test("FLOW NAME is the input's default memory, and --at PATH the memory in a folder", async () => {
     const flow = flowFile();
     await runOnce(flow, "first");
@@ -608,6 +621,21 @@ describe("yian memory reset", () => {
     expect(existsSync(join(lessons().location, "MEMORY.md"))).toBe(false);
     expect((await historyOf(flow)).changes).toEqual([]);
     expect(readFileSync(join(lessons().location, ".yian", "identity"), "utf8")).toBe(lessons().identity);
+  });
+
+  test("its question names the folder and the files it deletes", async () => {
+    await twoRuns();
+    const flow = join(project, "flow.yaml");
+    for (const name of ["a.md", "b.md", "c.md"]) writeFileSync(join(lessons().location, name), "x");
+    const no = new FakeInput({ tty: true });
+    no.write(ENTER);
+    const output = new FakeOutput({ tty: true, columns: 400 });
+    const declined = await yian(["memory", "reset", flow, "lessons"], { stdin: no, stderrStream: output });
+    expect(declined.code).toBe(1);
+    const { identity, location } = lessons();
+    expect(output.text).toContain(
+      `Empty ${identity} at ${location}? This deletes 4 files (MEMORY.md, a.md, b.md, …) and its history.`,
+    );
   });
 
   test("a run that is running on the memory refuses the reset until it stops", async () => {

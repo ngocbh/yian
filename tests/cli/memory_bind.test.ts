@@ -268,6 +268,25 @@ describe("--memory", () => {
     expect(runFolders()).toEqual([]);
   });
 
+  test("/, the home folder, or a folder holding ~/.yian can't be a memory, however it is reached", async () => {
+    const flow = flowFile(APPEND);
+    symlinkSync(home, join(tmp, "home-link"));
+    for (const [path, refusal] of [
+      ["/", "`/` can't be a memory: it holds the whole file system"],
+      [home, "`~` can't be a memory: it holds your home's files"],
+      [join(tmp, "home-link"), "`~` can't be a memory: it holds your home's files"],
+      [tmp, `\`${tmp}\` can't be a memory: it holds ~/.yian`],
+      [join(home, ".yian"), `\`${join(home, ".yian")}\` can't be a memory: it holds ~/.yian`],
+    ] as const) {
+      const result = await yian(["run", flow, "--quiet", "--memory", `lessons=${path}`]);
+      expect(result.code, path).toBe(2);
+      expect(result.stderr).toContain(`Invalid value for --memory: ${refusal}`);
+    }
+    expect(existsSync(join(home, ".yian", "identity"))).toBe(false);
+    expect(existsSync(join(home, ".yian", ".yian"))).toBe(false);
+    expect(runFolders()).toEqual([]);
+  });
+
   test("a flag naming no memory input, a .db for a FileMemory, a repeat or a bad form is a usage error", async () => {
     const flow = flowFile(TWO);
     const cases: [string[], string][] = [

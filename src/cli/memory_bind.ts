@@ -145,6 +145,26 @@ function lstatOrNull(path: string): Stats | null {
 }
 
 /**
+ * Refuse a folder that can't be a memory, compared by real paths: `/`, the home folder, or a
+ * folder that holds `~/.yian` (or is it). Binding adopts a folder's files as the memory's, and a
+ * reset deletes them, so one of these would take everything under it.
+ *
+ * @throws {RangeError} Naming the folder and why.
+ */
+export function checkMemoryFolder(path: string, home: string): void {
+  const real = realOr(resolve(path));
+  const why =
+    real === "/"
+      ? "`/` can't be a memory: it holds the whole file system"
+      : real === realOr(home)
+        ? "`~` can't be a memory: it holds your home's files"
+        : leavesRoot(relative(real, realOr(join(home, ".yian"))))
+          ? null
+          : `\`${path}\` can't be a memory: it holds ~/.yian`;
+  if (why !== null) throw new RangeError(why);
+}
+
+/**
  * The note for a memory a crash resume found changed since its run started, the run's own writes
  * included: the run goes on with the recall it recorded.
  */
@@ -474,6 +494,14 @@ function bindEach(
     const given = paths.get(param.name);
     // As the auth store reads its path: `--memory=NAME=~/x` reaches us unexpanded.
     const path = given === "~" || given?.startsWith("~/") ? options.home + given.slice(1) : given;
+    if (path !== undefined) {
+      try {
+        checkMemoryFolder(path, options.home);
+      } catch (error) {
+        if (!(error instanceof RangeError)) throw error;
+        throw new UsageError(`Invalid value for --memory: ${error.message}`);
+      }
+    }
     const made =
       path === undefined ? fallback(param.name, typ.nullable) : new CliFileMemory({ root: path }, options.note);
     if (made === null) continue;

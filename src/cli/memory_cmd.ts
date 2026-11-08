@@ -163,7 +163,8 @@ export async function memoryList({ options }: ParsedArgs, io: CliIo): Promise<nu
   const table = [["identity", "type", "folder"], ...memories.map((each) => [each.identity, each.type, each.location])];
   const widths = [0, 1].map((column) => Math.max(...table.map((cells) => cells[column]!.length)));
   const lines = table.map((cells) => cells.map((cell, i) => (i < 2 ? cell.padEnd(widths[i]!) : cell)).join("  "));
-  await io.stdout.write(`${lines.join("\n")}\n`);
+  // An identity is read from the memory's folder, which anyone who can write there can change.
+  await io.stdout.write(`${forTerminal(lines.join("\n"), io.stdout)}\n`);
   return 0;
 }
 
@@ -553,7 +554,9 @@ export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<numbe
     const runs = runsUsing(io, identity);
     const unseen = "yian can't see runs on other machines or in a host's own logs";
     if (!json) {
-      if (runs.length === 0) await io.stdout.write(`no run on this machine used ${identity}; ${unseen}\n`);
+      if (runs.length === 0) {
+        await io.stdout.write(`${forTerminal(`no run on this machine used ${identity}; ${unseen}`, io.stdout)}\n`);
+      }
       else {
         await printRuns(io, `the runs on this machine that used ${identity}; their logs may hold copies:`, runs);
         await io.stdout.write(`${unseen}\n`);
@@ -593,7 +596,9 @@ export async function memoryReset(command: ParsedArgs, io: CliIo): Promise<numbe
     const { identity } = session.info;
     const runs = runsUsing(io, identity).filter((row) => UNFINISHED.has(row.status));
     if (!json) {
-      if (runs.length === 0) await io.stdout.write(`no unfinished run on this machine uses ${identity}\n`);
+      if (runs.length === 0) {
+        await io.stdout.write(`${forTerminal(`no unfinished run on this machine uses ${identity}`, io.stdout)}\n`);
+      }
       else {
         const heading = `the unfinished runs on this machine that use ${identity}`;
         await printRuns(io, `${heading}; a resume goes on with the emptied memory:`, runs);

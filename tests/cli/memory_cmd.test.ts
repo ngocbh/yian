@@ -189,6 +189,49 @@ async function historyOf(flow: string): Promise<{ changes: Record<string, any>[]
   return JSON.parse(result.stdout);
 }
 
+describe("memory text on the terminal", () => {
+  /** An identity a hand edit could leave, holding a screen clear and a title change. */
+  const EVIL = "evil\x1b[2J\x1b]0;owned\x07name";
+
+  /** A memory whose identity is `EVIL`, at `<tmp>/evil` and under `~/.yian/memory`. */
+  async function evilMemory(): Promise<string> {
+    const at = join(tmp, "evil");
+    const session = await new FileMemory({ root: at, id: EVIL }).open({
+      create: true,
+      itemType: null,
+      signal: new AbortController().signal,
+    });
+    await session.close();
+    mkdirSync(join(home, ".yian", "memory", "p", "f"), { recursive: true });
+    symlinkSync(at, join(home, ".yian", "memory", "p", "f", "linked"));
+    const under = join(home, ".yian", "memory", "p", "f", "x");
+    mkdirSync(join(under, ".yian"), { recursive: true });
+    writeFileSync(join(under, ".yian", "identity"), EVIL);
+    return at;
+  }
+
+  test("list and erase's lines drop an identity's control sequences, and its question shows them", async () => {
+    const at = await evilMemory();
+    const tty = { write: async (text: string) => void shownOut.push(text), isTTY: true };
+    const shownOut: string[] = [];
+    const listed = await main(["memory", "list"], { ...testIo().io, stdout: tty });
+    expect(listed).toBe(0);
+    expect(shownOut.join("")).toContain("evilname");
+    expect(shownOut.join("")).not.toContain("\x1b");
+    shownOut.length = 0;
+    const input = new FakeInput({ tty: true });
+    input.write(ENTER);
+    const output = new FakeOutput({ tty: true });
+    const io = { ...testIo().io, stdout: tty, stdin: input, stderrStream: output };
+    expect(await main(["memory", "erase", "--at", at, "MEMORY.md"], io)).toBe(1);
+    expect(shownOut.join("")).toContain("no run on this machine used evilname");
+    expect(shownOut.join("")).not.toContain("\x1b");
+    expect(output.text).toContain("evil^[[2J^[]0;owned^Gname");
+    expect(output.text).not.toContain("\x1b[2J");
+    expect(output.text).not.toContain("\x07");
+  });
+});
+
 describe("yian memory show", () => {
   test("prints the identity, folder, counts and recall; --all every file", async () => {
     const flow = flowFile();

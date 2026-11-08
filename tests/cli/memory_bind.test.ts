@@ -197,6 +197,12 @@ describe("--memory", () => {
     expect(readFileSync(join(notes, ".yian", "identity"), "utf8")).toMatch(/^at-[0-9a-f]{16}$/);
   });
 
+  test("a path starting ~/ is under the home, as the shell would expand it", async () => {
+    const result = await yian(["run", flowFile(APPEND), "--quiet", "--memory=lessons=~/notes"]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(readFileSync(join(home, "notes", "MEMORY.md"), "utf8")).toContain("Check sums twice.");
+  });
+
   test("two inputs given one path, however spelled, share one memory", async () => {
     const shared = join(tmp, "shared");
     const args = ["--memory", `lessons=${shared}`, "--memory", `notes=${join(tmp, "proj", "..", "shared")}/`];

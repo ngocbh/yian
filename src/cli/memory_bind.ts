@@ -241,7 +241,8 @@ class CliFileMemory extends FileMemory {
 
 /**
  * Return the `--memory NAME=PATH` flags as each named memory input's path, checked against the
- * flow's inputs `params`. The name is trimmed; the path is everything after the first `=`.
+ * flow's inputs `params`. The name is trimmed; the path is everything after the first `=`, whose
+ * leading `~/` the binding reads as the home folder.
  *
  * @throws {UsageError} For a flag without `=` or a path, a name that isn't a memory input or
  *   comes twice, or a `.db` path for a FileMemory input.
@@ -364,7 +365,9 @@ function bindEach(
   for (const param of flow.input) {
     const typ = param.contract?.type;
     if (!isMemoryType(typ)) continue;
-    const path = paths.get(param.name);
+    const given = paths.get(param.name);
+    // As the auth store reads its path: `--memory=NAME=~/x` reaches us unexpanded.
+    const path = given === "~" || given?.startsWith("~/") ? options.home + given.slice(1) : given;
     const made =
       path === undefined ? fallback(param.name, typ.nullable) : new CliFileMemory({ root: path }, options.note);
     if (made === null) continue;

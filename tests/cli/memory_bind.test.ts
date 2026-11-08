@@ -5,7 +5,18 @@
  * a temporary folder.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -234,5 +245,138 @@ output: \${found.output}
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("`cases` is a VectorDBMemory; the command line binds only FileMemory inputs");
     expect(runFolders()).toEqual([]);
+  });
+});
+
+/** The one project folder under `~/.yian/memory`, and the project key it is named by. */
+function projectFolder(): { key: string; path: string } {
+  const root = join(home, ".yian", "memory");
+  const keys = readdirSync(root);
+  expect(keys).toHaveLength(1);
+  expect(keys[0]).toMatch(/^proj-[0-9a-f]{8}$/);
+  return { key: keys[0]!, path: join(root, keys[0]!) };
+}
+
+/** Server-Sent Events of an OpenAI Responses stream answering "ok". */
+const RESPONSES_REPLY = (() => {
+  const message = { id: "msg_1", type: "message", role: "assistant", content: [{ type: "output_text", text: "ok" }] };
+  const events: [string, Record<string, unknown>][] = [
+    ["response.output_item.added", { output_index: 0, item: { ...message, content: [] } }],
+    ["response.output_text.delta", { output_index: 0, content_index: 0, item_id: "msg_1", delta: "ok" }],
+    ["response.completed", { response: { id: "resp_1", status: "completed", output: [message] } }],
+  ];
+  return events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`).join("");
+})();
+
+/** Run `body` with a `fetch` that answers every model request "ok", recording each body sent. */
+async function withModel<T>(body: (sent: string[]) => Promise<T>): Promise<T> {
+  const original = globalThis.fetch;
+  const sent: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    sent.push(await new Request(input as string, init).text());
+    return new Response(RESPONSES_REPLY, { headers: { "content-type": "text/event-stream" } });
+  }) as typeof fetch;
+  try {
+    return await body(sent);
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+/** A flow whose agent reads the memory's recall, then appends the question to its index. */
+const RECALL = `id: answer
+name: answer
+llm_config: {provider: openai, model: offline-model}
+input:
+  question: !str
+  lessons: !FileMemory
+nodes:
+  reply:
+    kind: agent
+    input:
+      lessons: \${input.lessons}
+      question: \${input.question}
+    prompt:
+      - user: |-
+          <memory name="lessons">
+          \${lessons}
+          </memory>
+      - user: \${question}
+    output: str
+  keep:
+    kind: tool
+    tool_id: {lessons: append}
+    depends_on: [reply]
+    input:
+      path: MEMORY.md
+      text: \${input.question}
+output: \${reply.output}
+`;
+
+describe("default memories", () => {
+  test("an unbound memory input gets its project's default, and the run says it created it", async () => {
+    const result = await yian(["run", flowFile(APPEND), "--quiet"]);
+    expect(result.code, result.stderr).toBe(0);
+    const { key, path } = projectFolder();
+    const location = join(path, "answer", "lessons");
+    expect(readFileSync(join(location, "MEMORY.md"), "utf8")).toContain("Check sums twice.");
+    expect(readFileSync(join(location, ".yian", "identity"), "utf8")).toBe(`${key}/answer/lessons`);
+    expect(result.stderr).toContain(`memory lessons: ${key}/answer/lessons at ${location} (new)\n`);
+    // Private, as the run folders are.
+    for (const folder of [path, join(path, "answer"), location]) expect(statSync(folder).mode & 0o777).toBe(0o700);
+  });
+
+  test("a second run says nothing about the memory, and its prompt holds what the first appended", async () => {
+    const vars = { OPENAI_API_KEY: "sk-fake", YIAN_AUTH_FILE: join(tmp, "auth.json"), XDG_CONFIG_HOME: join(tmp, "xdg") };
+    const flow = flowFile(RECALL);
+    await withModel(async (sent) => {
+      const first = await yian(["run", flow, "--quiet", "--input", "question=What is 2+2?"], vars);
+      expect(first.code, first.stderr).toBe(0);
+      expect(first.stderr).toContain("(new)");
+      expect(sent).toHaveLength(1);
+      expect(sent[0]).not.toContain("What is 2+2?\\n</memory>");
+      const second = await yian(["run", flow, "--quiet", "--input", "question=And 3+3?"], vars);
+      expect(second.code, second.stderr).toBe(0);
+      expect(second.stderr).not.toMatch(/^memory /m);
+      expect(sent).toHaveLength(2);
+      expect(sent[1]).toContain("What is 2+2?\\n</memory>");
+    });
+  });
+
+  test("a --memory folder that holds files is adopted: one (new) line, and none on the next run", async () => {
+    const notes = join(tmp, "notes");
+    mkdirSync(notes);
+    writeFileSync(join(notes, "old.md"), "Kept.\n");
+    const flow = flowFile(APPEND);
+    const first = await yian(["run", flow, "--quiet", "--memory", `lessons=${notes}`]);
+    expect(first.code, first.stderr).toBe(0);
+    const identity = readFileSync(join(notes, ".yian", "identity"), "utf8");
+    expect(first.stderr.match(/\(new\)/g)).toHaveLength(1);
+    expect(first.stderr).toContain(`memory lessons: ${identity} at ${notes} (new)\n`);
+    expect(readFileSync(join(notes, "old.md"), "utf8")).toBe("Kept.\n");
+    const second = await yian(["run", flow, "--quiet", "--memory", `lessons=${notes}`]);
+    expect(second.code, second.stderr).toBe(0);
+    expect(second.stderr).not.toMatch(/^memory /m);
+  });
+
+  test("an Optional memory input left unbound stays null: no default is made for it", async () => {
+    const flow = flowFile(APPEND.replace("  lessons: !FileMemory\n", "  lessons: !FileMemory\n  notes: !Optional(FileMemory)\n"));
+    const result = await yian(["run", flow, "--quiet"]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(readdirSync(join(projectFolder().path, "answer"))).toEqual(["lessons"]);
+    expect(result.stderr).not.toContain("memory notes");
+  });
+
+  test("a flow whose id isn't plain is refused before any log or memory is written", async () => {
+    const result = await yian(["run", flowFile(APPEND.replace("id: answer", 'id: "Answer questions"')), "--quiet"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(
+      "give the flow a plain `id:` (letters, digits, `.`, `_`, `-`) or bind `lessons` with --memory",
+    );
+    expect(runFolders()).toEqual([]);
+    expect(readdirSync(join(home, ".yian", "memory"))).toEqual([]);
+    // --memory binds it instead.
+    const bound = await yian(["run", flowFile(APPEND.replace("id: answer", 'id: "Answer questions"')), "--quiet", "--memory", `lessons=${join(tmp, "n")}`]);
+    expect(bound.code, bound.stderr).toBe(0);
   });
 });

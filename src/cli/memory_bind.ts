@@ -173,11 +173,15 @@ export function memoryFlags(params: readonly Parameter[], flags: readonly string
 }
 
 /**
- * Return the instance each memory input of `flow` that a `--memory` flag names is bound to, by
- * input name. Inputs given one folder, however its path is spelled, share one instance.
+ * Return the instance each memory input of `flow` is bound to, by input name: the folder its
+ * `--memory` flag names, else, for an input that isn't Optional, its default (`defaultIdentity`
+ * at `defaultLocation`). An Optional input left unbound gets none, so it stays null. Inputs given
+ * one folder, however its path is spelled, share one instance. Nothing is created here: an
+ * instance's `open` creates its memory, and notes it.
  *
  * @throws {UsageError} As `memoryFlags` throws.
- * @throws {RangeError} For an input of a memory type the command line can't bind.
+ * @throws {RangeError} For an input of a memory type the command line can't bind; for a default,
+ *   as `defaultIdentity` and `defaultLocation` throw, and for a flow built in code.
  */
 export function bindMemories(flow: ComposedFlow, flags: readonly string[], options: BindOptions): Record<string, MemoryBase> {
   const paths = memoryFlags(flow.input, flags);
@@ -186,11 +190,14 @@ export function bindMemories(flow: ComposedFlow, flags: readonly string[], optio
   for (const param of flow.input) {
     const typ = param.contract?.type;
     const path = paths.get(param.name);
-    if (!isMemoryType(typ) || path === undefined) continue;
+    if (!isMemoryType(typ) || (path === undefined && typ.nullable)) continue;
     if (typ.memory !== "FileMemory") {
       throw new RangeError(`\`${param.name}\` is a ${typ.memory}; the command line binds only FileMemory inputs`);
     }
-    const made = new CliFileMemory({ root: path }, options.note);
+    const made =
+      path === undefined
+        ? defaultMemory(flow, param.name, options)
+        : new CliFileMemory({ root: path }, options.note);
     // Keyed by the real folder, so two spellings of one path share one memory.
     const instance = byRoot.get(made.root) ?? made;
     byRoot.set(instance.root, instance);
@@ -198,4 +205,16 @@ export function bindMemories(flow: ComposedFlow, flags: readonly string[], optio
     bound[param.name] = instance;
   }
   return bound;
+}
+
+/**
+ * Return the default instance of `flow`'s memory input `input`: its default identity, at its
+ * default location under `options.home`.
+ *
+ * @throws {RangeError} As `defaultIdentity` and `defaultLocation` throw, and for a flow built in code.
+ */
+function defaultMemory(flow: ComposedFlow, input: string, options: BindOptions): CliFileMemory {
+  if (flow.source === null) throw new RangeError(`a flow built in code has no default memories; bind \`${input}\``);
+  const identity = defaultIdentity(flow.source.dir, flow.compiled.flowId, input);
+  return new CliFileMemory({ root: defaultLocation(options.home, identity, "FileMemory"), id: identity }, options.note);
 }

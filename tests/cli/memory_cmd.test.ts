@@ -548,6 +548,20 @@ describe("yian memory erase", () => {
     expect(existsSync(join(lessons().location, "MEMORY.md"))).toBe(false);
   });
 
+  test("--json that asks on a terminal shows the runs on stderr; stdout holds one document", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    const yes = new FakeInput({ tty: true });
+    yes.write(`${DOWN}${ENTER}`);
+    const args = ["memory", "erase", flow, "lessons", "MEMORY.md", "--json"];
+    const result = await yian(args, { stdin: yes, stderrStream: new FakeOutput({ tty: true }) });
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stderr).toContain(`the runs on this machine that used ${lessons().identity}`);
+    expect(result.stderr).toContain(runIds()[0]!);
+    expect(result.stdout.trimEnd().split("\n")).toHaveLength(1);
+    expect(JSON.parse(result.stdout).runs).toHaveLength(1);
+  });
+
   test("asks first on a terminal; no, or no terminal without --yes, erases nothing", async () => {
     const flow = flowFile();
     await runOnce(flow, "first");

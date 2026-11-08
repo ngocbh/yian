@@ -513,10 +513,20 @@ function runsJson(io: CliIo, runs: readonly RunIndexRow[]): Record<string, unkno
   }));
 }
 
-/** Print `runs` under `heading`, one line each with its id, status, start time and log. */
-async function printRuns(io: CliIo, heading: string, runs: readonly RunIndexRow[]): Promise<void> {
-  const lines = [heading, ...runsJson(io, runs).map((run) => `  ${Object.values(run).map(String).join("  ")}`)];
-  await io.stdout.write(`${forTerminal(lines.join("\n"), io.stdout)}\n`);
+/** `runs` as lines, each with its id, status, start time and log. */
+function runLines(io: CliIo, runs: readonly RunIndexRow[]): string[] {
+  return runsJson(io, runs).map((run) => `  ${Object.values(run).map(String).join("  ")}`);
+}
+
+/**
+ * Show `lines`, a command's listing before it asks, where the person reads them: on stdout, or
+ * under `--json` on stderr when the command asks (stdout holds only the document), and nowhere
+ * when it doesn't ask, since the document holds them.
+ */
+async function showListing(command: ParsedArgs, io: CliIo, lines: readonly string[]): Promise<void> {
+  if (command.options["json"] === true && command.options["yes"] === true) return;
+  const out = command.options["json"] === true ? io.stderr : io.stdout;
+  await out.write(`${forTerminal(lines.join("\n"), out)}\n`);
 }
 
 /**
@@ -560,15 +570,14 @@ export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<numbe
     const { identity } = session.info;
     const runs = runsUsing(io, identity);
     const unseen = "yian can't see runs on other machines or in a host's own logs";
-    if (!json) {
-      if (runs.length === 0) {
-        await io.stdout.write(`${forTerminal(`no run on this machine used ${identity}; ${unseen}`, io.stdout)}\n`);
-      }
-      else {
-        await printRuns(io, `the runs on this machine that used ${identity}; their logs may hold copies:`, runs);
-        await io.stdout.write(`${unseen}\n`);
-      }
-    }
+    const heading = `the runs on this machine that used ${identity}; their logs may hold copies:`;
+    await showListing(
+      command,
+      io,
+      runs.length === 0
+        ? [`no run on this machine used ${identity}; ${unseen}`]
+        : [heading, ...runLines(io, runs), unseen],
+    );
     const what = text === undefined ? path : `${JSON.stringify(text)} from ${path}`;
     if (!(await goesOn(command, io, `Erase ${what} from ${identity}? It can't be undone.`))) {
       return failed(io, json, { label: "erase cancelled", code: "memory.cancelled", message: "nothing erased" });
@@ -610,15 +619,14 @@ export async function memoryReset(command: ParsedArgs, io: CliIo): Promise<numbe
       const message = `run ${live.runId} is running on this memory; stop it first`;
       return failed(io, json, { label: "reset refused", code: "memory.refused", message });
     }
-    if (!json) {
-      if (runs.length === 0) {
-        await io.stdout.write(`${forTerminal(`no unfinished run on this machine uses ${identity}`, io.stdout)}\n`);
-      }
-      else {
-        const heading = `the unfinished runs on this machine that use ${identity}`;
-        await printRuns(io, `${heading}; a resume goes on with the emptied memory:`, runs);
-      }
-    }
+    const heading = `the unfinished runs on this machine that use ${identity}`;
+    await showListing(
+      command,
+      io,
+      runs.length === 0
+        ? [`no unfinished run on this machine uses ${identity}`]
+        : [`${heading}; a resume goes on with the emptied memory:`, ...runLines(io, runs)],
+    );
     const files = membersOf(session, target.location).map((file) => file.path);
     const named = files.length === 0 ? "" : ` (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""})`;
     const deletes = `This deletes ${counted(files.length, "file")}${named} and its history.`;

@@ -393,14 +393,19 @@ describe("read tools", () => {
     await s.close();
   });
 
-  test("list keeps within maxReadChars", async () => {
+  test("list keeps its paths within maxReadChars, and always shows one", async () => {
     for (const name of ["a", "b", "c"]) put(root, `${name}.md`, name);
-    // Each entry counts as its JSON text: 99 characters for these.
-    const s = await openAt({ maxReadChars: 150 });
+    // A list counts the characters of the paths it shows: 4 for each of these.
+    const s = await openAt({ maxReadChars: 9 });
     const listed = await s.call("list", {}, { signal });
-    expect((listed.files as JsonObject[]).map((file) => file.path)).toEqual(["a.md"]);
-    expect(listed.cut).toBe("2 more; list a folder with dir");
+    expect((listed.files as JsonObject[]).map((file) => file.path)).toEqual(["a.md", "b.md"]);
+    expect(listed.cut).toBe("1 more; list a folder with dir");
+    const narrow = await openAt({ maxReadChars: 2 });
+    const one = await narrow.call("list", {}, { signal });
+    expect((one.files as JsonObject[]).map((file) => file.path)).toEqual(["a.md"]);
+    expect(one.cut).toBe("2 more; list a folder with dir");
     await s.close();
+    await narrow.close();
   });
 
   test("list of a folder that isn't there, or isn't part of the memory, is refused", async () => {
@@ -480,7 +485,8 @@ describe("read tools", () => {
     const found = await s.call("search", { query: "x" }, { signal });
     expect((found.matches as JsonObject[]).map((match) => match.text)).toEqual(["x1", "x2"]);
     expect(found.cut).toBe("2 more matching lines not shown");
-    const narrow = await openAt({ maxReadChars: 5 });
+    // A search counts each match's path and line: 8 characters for a.md's first.
+    const narrow = await openAt({ maxReadChars: 12 });
     put(root, "a.md", "xxxx\nxxxx");
     const cut = await narrow.call("search", { query: "x" }, { signal });
     expect((cut.matches as JsonObject[]).map((match) => match.text)).toEqual(["xxxx"]);
@@ -492,6 +498,18 @@ describe("read tools", () => {
     });
     await s.close();
     await narrow.close();
+  });
+
+  test("a result's size counts the text it shows, so many short matches stay within maxReadChars", async () => {
+    for (let i = 0; i < 30; i++) put(root, `f${String(i).padStart(2, "0")}.md`, "hit");
+    const s = await openAt({ maxReadChars: 50 });
+    const found = await s.call("search", { query: "hit" }, { signal });
+    const matches = found.matches as JsonObject[];
+    const shownChars = matches.reduce((sum, match) => sum + String(match.path).length + String(match.text).length, 0);
+    expect(shownChars).toBeLessThanOrEqual(50);
+    expect(matches).toHaveLength(5);
+    expect(found.cut).toBe("25 more matching lines not shown");
+    await s.close();
   });
 
   test.each([

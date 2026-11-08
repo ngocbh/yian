@@ -182,7 +182,10 @@ export interface FileMemoryOptions {
   maxDepth?: number;
   /** Characters of the recall. */
   maxRecallChars?: number;
-  /** Characters one read tool result shows. */
+  /**
+   * Characters of text one read tool result shows: the paths `list` shows, the lines `read` shows,
+   * and each `search` match's path and line. Each shows at least one entry, a line cut to fit.
+   */
   maxReadChars?: number;
   /** Entries `list` shows and lines `search` shows. */
   maxResults?: number;
@@ -1021,7 +1024,10 @@ class FileMemorySession implements MemorySession {
     await this.#last;
   }
 
-  /** List the members, or those under `dir`, within `maxResults` and `maxReadChars`. */
+  /**
+   * List the members, or those under `dir`, within `maxResults` and `maxReadChars`: the paths
+   * shown count, and the first is shown whatever its size.
+   */
   #list(dir: string | undefined): JsonObject {
     const { root, limits } = this.#store;
     let prefix = "";
@@ -1035,9 +1041,10 @@ class FileMemorySession implements MemorySession {
     const listed: JsonObject[] = [];
     let used = 0;
     for (const file of files) {
-      // An entry counts as its JSON text, the size a model reads.
-      const cost = JSON.stringify({ path: file.path, hash: file.hash, chars: file.chars }).length;
-      if (listed.length === limits.maxResults || used + cost > limits.maxReadChars) break;
+      // A path is never cut, so the first one shows whatever its size.
+      const cost = charCount(file.path);
+      if (listed.length === limits.maxResults) break;
+      if (listed.length > 0 && used + cost > limits.maxReadChars) break;
       listed.push({ path: file.path, hash: file.hash, chars: BigInt(file.chars) });
       used += cost;
     }
@@ -1083,7 +1090,10 @@ class FileMemorySession implements MemorySession {
     return result;
   }
 
-  /** Find the members' lines holding `query`, ignoring case, within `maxResults` and `maxReadChars`. */
+  /**
+   * Find the members' lines holding `query`, ignoring case, within `maxResults` and
+   * `maxReadChars`: each match's path and line count, and a first match too long is shown cut.
+   */
   #search(query: string): JsonObject {
     const { root, limits } = this.#store;
     if (query === "") throw refusal("query is empty");
@@ -1099,16 +1109,18 @@ class FileMemorySession implements MemorySession {
         const line = lines[i]!;
         if (!line.toLowerCase().includes(needle)) continue;
         const match = { path: file.path, hash: file.hash, line: BigInt(i + 1) };
-        const cost = charCount(line);
+        const cost = charCount(file.path) + charCount(line);
         if (full || matches.length === limits.maxResults || used + cost > limits.maxReadChars) {
           full = true;
           if (matches.length > 0) {
             unshown++;
             continue;
           }
-          // A first match longer than the cap is shown cut, so a search that matched isn't empty.
-          matches.push({ ...match, text: firstChars(line, limits.maxReadChars) });
-          notes.push(`line ${i + 1} of ${file.path} is cut after ${limits.maxReadChars} characters`);
+          // A first match longer than the cap is shown with its line cut, so a search that matched
+          // isn't empty.
+          const room = Math.max(0, limits.maxReadChars - charCount(file.path));
+          matches.push({ ...match, text: firstChars(line, room) });
+          notes.push(`line ${i + 1} of ${file.path} is cut after ${plural(room, "character")}`);
           continue;
         }
         matches.push({ ...match, text: line });

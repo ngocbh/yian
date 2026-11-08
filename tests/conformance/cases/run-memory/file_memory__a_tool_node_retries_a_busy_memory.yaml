@@ -1,0 +1,51 @@
+# Another writer holds the memory's lock from `plan`'s reply on, and the lock timeout is 0. A busy
+# memory, unlike a conflict, may free up, so the TOOL node retries it (`retries: 1`, the golden log
+# holds the failed attempt), then fails with `node.execute`. Nothing is written.
+kind: run
+flow: |
+  id: retry
+  name: retry
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  nodes:
+    plan:
+      kind: agent
+      tools: []
+      system_prompt: Help.
+      prompt: What should we note?
+      output: str
+    add:
+      kind: tool
+      tool_id: {lessons: append}
+      retries: 1
+      input:
+        path: notes.md
+        text: ${plan.output}
+  output: ${add.output}
+env:
+  YIAN_MEMORY_LOCK_TIMEOUT_SECONDS: "0"
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      held: {node: plan, model_call: 1}
+  jitter: [0.0]
+  models:
+    plan:
+      agent:
+      - reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: Check sums twice.}]}
+expect:
+  output:
+    status: failed
+    failure:
+      code: node.execute
+      message: "tool 'lessons_append' failed after 2 attempts: attempt 1: ReportedToolError: `lessons` is busy; try again; attempt 2: ReportedToolError: `lessons` is busy; try again"
+      frames:
+      - label: flow.yaml
+        range: [13, 3, 13, 6]
+      node: add
+  memory:
+    lessons: {}

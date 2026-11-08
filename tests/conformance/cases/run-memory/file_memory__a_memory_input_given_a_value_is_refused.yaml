@@ -1,0 +1,18 @@
+# A memory input is bound to a memory instance by the host, never given a value as other inputs
+# are, so the run refuses to start.
+kind: run
+flow: |
+  id: value
+  name: value
+  input:
+    lessons: !FileMemory
+  nodes:
+    found:
+      kind: tool
+      tool_id: {lessons: list}
+  output: ${found.output}
+inputs: {lessons: /srv/memory/lessons}
+run: {run_id: r1, num_workers: 0}
+expect:
+  raises: {class: RangeError, message: "memory `lessons` is bound to a MemoryBase instance, not a value"}
+  trace: []

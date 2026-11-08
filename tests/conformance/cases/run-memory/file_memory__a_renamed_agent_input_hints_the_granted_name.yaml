@@ -1,0 +1,69 @@
+# The agent renders its input `notes`, bound to the flow input `lessons`, and holds `read` through
+# the grant `{lessons: [read]}`. The hint names the tool as the model sees it, after the grant's
+# input: `lessons_read`.
+kind: run
+flow: |
+  id: renamed
+  name: renamed
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    lessons: !FileMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        notes: ${input.lessons}
+      tools: [{lessons: [read]}]
+      system_prompt: Help.
+      prompt: "<memory>${notes}</memory> Go."
+      output: str
+  output: ${answer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons:
+      type: FileMemory
+      id: t/lessons
+      files:
+        MEMORY.md: Prefer short answers.
+        notes.md: Check sums twice.
+  models:
+    answer:
+      agent:
+      - request:
+          messages:
+            - format: yian.message.v1
+              role: system
+              parts:
+                - type: text
+                  text: Help.
+            - format: yian.message.v1
+              role: user
+              parts:
+                - type: text
+                  text: |-
+                    <memory>Prefer short answers.
+                    Read the rest with lessons_read.</memory> Go.
+          tools:
+            - name: lessons_read
+              description: "Read a file of the memory: its text, from line offset for limit lines, and the file's hash, which delete and rewrite take as if_hash."
+              parameters:
+                additionalProperties: false
+                properties:
+                  limit:
+                    description: The most lines to read; the rest of the file when omitted.
+                    minimum: 1.0
+                    type: integer
+                  offset:
+                    description: The first line to read, counting from one; one when omitted.
+                    minimum: 1.0
+                    type: integer
+                  path:
+                    description: "A file's path in the memory, such as `notes/tools.md`: folders and a file name made of letters, digits, `.`, `_` and `-`, each starting with a letter or digit."
+                    type: string
+                required:
+                  - path
+                type: object
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: done}]}
+expect:
+  output: {status: succeeded, output: done}

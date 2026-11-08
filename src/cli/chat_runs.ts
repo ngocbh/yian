@@ -365,7 +365,7 @@ export class ChildRuns {
     const note = (created: CreatedMemory) => void fresh.push({ kind: "memory", text: createdLine(created, false) });
     let memory: Record<string, FileMemory>;
     try {
-      memory = bindMemories(flow, [], { home: this.#options.home, note, project });
+      memory = bindMemories(flow, [], { home: this.#options.home, note, project, memoryFlag: false });
     } catch (error) {
       throw withoutLocations(error, this.#options.home, []);
     }

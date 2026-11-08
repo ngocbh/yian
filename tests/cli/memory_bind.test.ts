@@ -67,6 +67,10 @@ describe("default identities", () => {
     expect(() => defaultIdentity("/p/proj", "Answer questions", "lessons")).toThrow(refusal);
     expect(() => defaultIdentity("/p/proj", ".hidden", "lessons")).toThrow(refusal);
     expect(() => defaultIdentity("/p/proj", null, "lessons")).toThrow(refusal);
+    // A host without --memory doesn't suggest it.
+    expect(() => defaultIdentity("/p/proj", ".hidden", "lessons", false)).toThrow(
+      "give the flow a plain `id:` (letters, digits, `.`, `_`, `-`) so `lessons` gets a default memory",
+    );
   });
 });
 

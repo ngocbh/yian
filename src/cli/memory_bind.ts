@@ -67,14 +67,19 @@ export function projectFolder(path: string): string {
  * Return the default identity of memory input `input` of the flow `flowId` whose file is in the
  * project folder `dir` (`projectFolder`): `<project key>/<flow id>/<input>`.
  *
+ * @param memoryFlag Whether the host takes `--memory`, which the refusal then suggests.
  * @throws {RangeError} When the flow has no `id:`, or one that isn't a plain name of at most 100
  *   characters.
  */
-export function defaultIdentity(dir: string, flowId: string | null | undefined, input: string): string {
+export function defaultIdentity(
+  dir: string,
+  flowId: string | null | undefined,
+  input: string,
+  memoryFlag = true,
+): string {
   if (flowId == null || flowId.length > PLAIN_ID_CHARS || !PLAIN_ID.test(flowId)) {
-    throw new RangeError(
-      `give the flow a plain \`id:\` (letters, digits, \`.\`, \`_\`, \`-\`) or bind \`${input}\` with --memory`,
-    );
+    const instead = memoryFlag ? `or bind \`${input}\` with --memory` : `so \`${input}\` gets a default memory`;
+    throw new RangeError(`give the flow a plain \`id:\` (letters, digits, \`.\`, \`_\`, \`-\`) ${instead}`);
   }
   return `${projectKey(dir)}/${flowId}/${input}`;
 }
@@ -188,6 +193,8 @@ export interface BindOptions {
   home: string;
   /** Told of each memory an instance's `open` creates (or adopts). */
   note: (created: CreatedMemory) => void;
+  /** Whether the host takes `--memory`, which its refusals then suggest; true when absent. */
+  memoryFlag?: boolean;
 }
 
 /**
@@ -292,12 +299,15 @@ export function bindMemories(
   flags: readonly string[],
   options: BindOptions & { project: string | null },
 ): Record<string, FileMemory> {
+  const { memoryFlag = true } = options;
   return bindEach(flow, flags, options, (input, optional) => {
     if (optional) return null;
     if (options.project === null) {
-      throw new RangeError(`a flow with no file has no default memories; bind \`${input}\``);
+      const refusal = "a flow with no file has no default memories";
+      const instead = memoryFlag ? `; bind \`${input}\`` : `, so \`${input}\` can't be bound`;
+      throw new RangeError(`${refusal}${instead}`);
     }
-    return defaultInstance(defaultIdentity(options.project, flow.compiled.flowId, input), options);
+    return defaultInstance(defaultIdentity(options.project, flow.compiled.flowId, input, memoryFlag), options);
   });
 }
 

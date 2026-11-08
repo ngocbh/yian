@@ -983,7 +983,7 @@ describe("memory", () => {
     async () => {
       const children = childRuns();
       await expect(children.start(await flow(REMEMBER), {})).rejects.toThrow(
-        "a flow with no file has no default memories; bind `lessons`",
+        "a flow with no file has no default memories, so `lessons` can't be bound",
       );
     },
     TIMEOUT,
@@ -994,7 +994,14 @@ describe("memory", () => {
     async () => {
       const children = childRuns();
       const unnamed = await flow(REMEMBER.replace("id: answer", 'id: "Answer questions"'));
-      await expect(children.start(unnamed, {}, { project: root })).rejects.toThrow("give the flow a plain `id:`");
+      // The chat has no --memory to suggest.
+      const refused = await children.start(unnamed, {}, { project: root }).then(
+        () => null,
+        (error: Error) => error.message,
+      );
+      expect(refused).toBe(
+        "give the flow a plain `id:` (letters, digits, `.`, `_`, `-`) so `lessons` gets a default memory",
+      );
       expect(existsSync(join(root, "runs"))).toBe(false);
     },
     TIMEOUT,

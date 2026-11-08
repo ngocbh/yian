@@ -338,6 +338,7 @@ export class FlowEngine {
   readonly onStream: ((chunk: StreamChunk) => unknown) | null;
   /** The run's tool set bound to the state's run id and the run signal. */
   readonly tools: ToolSet;
+  /** The run's sessions on its memories, which nodes declaring `needsMemories` get; `null` for none. */
   readonly memories: NodeMemories | null;
   readonly skills: ReadonlyMap<string, Skill> | null;
   readonly scheduler: Scheduler | null;

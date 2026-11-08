@@ -24,6 +24,7 @@ import { MemoryRef } from "../typesys/values.ts";
 export interface MemoryBinding {
   /** The input's name. */
   readonly input: string;
+  /** The memory the host bound to the input; one instance bound to several inputs opens once. */
   readonly instance: MemoryBase;
   /** The input's memory type: the contract type its instance must declare. */
   readonly type: string;
@@ -35,6 +36,7 @@ export interface MemoryBinding {
 export interface OpenMemoriesOptions {
   /** `false` refuses a memory that doesn't exist yet, as a resume does. */
   readonly create: boolean;
+  /** Stops the opens and snapshots: a call rejects with its reason, once it aborts. */
   readonly signal: AbortSignal;
   /**
    * The tool names of each host memory type the flow was loaded with, by contract type; a bound
@@ -45,6 +47,7 @@ export interface OpenMemoriesOptions {
 
 /** How `RunMemories.reopen` opens the memories a resumed run started with. */
 export interface ReopenMemoriesOptions {
+  /** As `OpenMemoriesOptions.signal`. */
   readonly signal: AbortSignal;
   /** As `OpenMemoriesOptions.hostTypes`. */
   readonly hostTypes?: ReadonlyMap<string, readonly string[]>;

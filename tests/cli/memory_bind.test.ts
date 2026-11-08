@@ -18,7 +18,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { main } from "../../src/cli/index.ts";
@@ -319,6 +319,53 @@ nodes:
       text: \${input.question}
 output: \${reply.output}
 `;
+
+describe("a memory that fails to start", () => {
+  test("another memory at the default location refuses the run: a setup failure, as text and --json", async () => {
+    const flow = flowFile(APPEND);
+    const identity = defaultIdentity(realpathSync(join(tmp, "proj")), "answer", "lessons");
+    const location = defaultLocation(home, identity, "FileMemory");
+    mkdirSync(join(location, ".yian", "tmp"), { recursive: true });
+    writeFileSync(join(location, ".yian", "identity"), "someone/else");
+    const text = await yian(["run", flow, "--quiet"]);
+    expect(text.code).toBe(1);
+    expect(text.stderr).toContain(`run failed: memory \`lessons\`: this memory is`);
+    // Reported, not thrown: no stack.
+    expect(text.stderr).not.toContain("    at ");
+    const json = await yian(["run", flow, "--quiet", "--json"]);
+    expect(json.code).toBe(1);
+    const { error } = JSON.parse(json.stdout);
+    expect(error.code).toBe("run.setup");
+    expect(error.message).toStartWith("memory `lessons`: this memory is");
+  });
+
+  test("a file where the memory's folder goes refuses the run: a setup failure", async () => {
+    const flow = flowFile(APPEND);
+    const identity = defaultIdentity(realpathSync(join(tmp, "proj")), "answer", "lessons");
+    const location = defaultLocation(home, identity, "FileMemory");
+    mkdirSync(dirname(location), { recursive: true });
+    writeFileSync(location, "");
+    const json = await yian(["run", flow, "--quiet", "--json"]);
+    expect(json.code).toBe(1);
+    expect(json.stderr).not.toContain("    at ");
+    expect(JSON.parse(json.stdout).error).toMatchObject({
+      code: "run.setup",
+      message: expect.stringContaining("isn't a folder"),
+    });
+  });
+
+  test("a flow id longer than 100 characters isn't plain: refused before anything is written", async () => {
+    const plain = "give the flow a plain `id:` (letters, digits, `.`, `_`, `-`) or bind `lessons` with --memory";
+    expect(() => defaultIdentity("/p/proj", "x".repeat(101), "lessons")).toThrow(plain);
+    expect(defaultIdentity("/p/proj", "x".repeat(100), "lessons")).toEndWith(`/${"x".repeat(100)}/lessons`);
+    const long = flowFile(APPEND.replace("id: answer", `id: ${"x".repeat(300)}`));
+    const result = await yian(["run", long, "--quiet", "--json"]);
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout).error.message).toBe(plain);
+    expect(runFolders()).toEqual([]);
+    expect(readdirSync(join(home, ".yian", "memory"))).toEqual([]);
+  });
+});
 
 describe("default memories", () => {
   test("an unbound memory input gets its project's default, and the run says it created it", async () => {

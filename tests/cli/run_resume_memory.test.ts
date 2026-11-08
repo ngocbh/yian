@@ -144,6 +144,21 @@ test("a memory that isn't at its location refuses the resume, and nothing is cre
   expect(readFileSync(log)).toEqual(before);
 });
 
+test("another memory at the default location refuses the resume: a setup failure, text and --json", async () => {
+  const log = await interrupted(flowFile(TWO_STEPS), defaultInstance(), "second");
+  const { location } = defaults();
+  rmSync(location, { recursive: true });
+  mkdirSync(join(location, ".yian", "tmp"), { recursive: true });
+  writeFileSync(join(location, ".yian", "identity"), "someone/else");
+  const text = await yian(["run", "--resume", log, "--quiet"]);
+  expect(text.code).toBe(1);
+  expect(text.stderr).toContain("resume failed: memory `lessons`: this memory is");
+  expect(text.stderr).not.toContain("    at ");
+  const json = await yian(["run", "--resume", log, "--quiet", "--json"]);
+  expect(json.code).toBe(1);
+  expect(JSON.parse(json.stdout).error).toMatchObject({ code: "run.setup" });
+});
+
 test("an identity edited in the log to leave ~/.yian/memory is refused", async () => {
   const log = await interrupted(flowFile(TWO_STEPS), defaultInstance(), "second");
   const { identity } = defaults();

@@ -35,6 +35,9 @@ const PROJECT_NAME_CHARS = 32;
 /** What a flow's `id:` must be for its memories to get a default identity: a plain name. */
 const PLAIN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/** The longest flow `id:` a default identity takes, so its folder's name stays within the OS's limit. */
+const PLAIN_ID_CHARS = 100;
+
 /** Return the folder the CLI's default memories live in, `~/.yian/memory`, under `home`. */
 export function memoryRoot(home: string): string {
   return join(home, ".yian", "memory");
@@ -55,10 +58,11 @@ export function projectKey(dir: string): string {
  * Return the default identity of memory input `input` of the flow `flowId` whose file is in the
  * folder `dir` (a real path): `<project key>/<flow id>/<input>`.
  *
- * @throws {RangeError} When the flow has no `id:`, or one that isn't a plain name.
+ * @throws {RangeError} When the flow has no `id:`, or one that isn't a plain name of at most 100
+ *   characters.
  */
 export function defaultIdentity(dir: string, flowId: string | null | undefined, input: string): string {
-  if (flowId == null || !PLAIN_ID.test(flowId)) {
+  if (flowId == null || flowId.length > PLAIN_ID_CHARS || !PLAIN_ID.test(flowId)) {
     throw new RangeError(
       `give the flow a plain \`id:\` (letters, digits, \`.\`, \`_\`, \`-\`) or bind \`${input}\` with --memory`,
     );

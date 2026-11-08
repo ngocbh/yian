@@ -68,6 +68,7 @@ const ALLOWED: Record<string, string> = {
   "cli/inbox_chat.ts: SECOND_PRESS_MS": "how soon a second Ctrl-C cancels the chat's run",
   "cli/memory_bind.ts: PROJECT_KEY_HEX": "hex digits of a project key",
   "cli/memory_bind.ts: PROJECT_NAME_CHARS": "longest folder-name part of a project key",
+  "cli/memory_bind.ts: PLAIN_ID_CHARS": "longest flow id a default memory identity takes",
   "cli/render.ts: ERR_CONTEXT": "lines of YAML shown around an error",
   "cli/render.ts: SGR": "terminal color and style codes",
   "cli/run.ts: SPIN_MS": "spinner frame interval",

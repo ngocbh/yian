@@ -159,6 +159,8 @@ test("a failed open or snapshot closes the sessions opened so far", async () => 
   failing.failOpen = new Error("disk gone");
   const error = await rejection(() => RunMemories.open([bind("a", first), bind("b", failing)], fresh));
   expect((error as Error).message).toBe("memory `b`: disk gone");
+  // A refusal of the host's setup, not a fault of the engine.
+  expect(error).toBeInstanceOf(RangeError);
   expect(first.sessions[0]!.closed).toBe(1);
 
   const snapped = new FakeMemory(() => {
@@ -172,6 +174,16 @@ test("a failed open or snapshot closes the sessions opened so far", async () => 
   await expect(RunMemories.open([bind("d", other), bind("c", snapped)], fresh)).rejects.toThrow("memory `c`: unreadable");
   expect(other.sessions[0]!.closed).toBe(1);
   expect(snapped.sessions[0]!.closed).toBe(1);
+});
+
+test("a system error at open keeps its code, named by its input", async () => {
+  const failing = new FakeMemory();
+  const denied = new Error("EACCES: permission denied, mkdir");
+  failing.failOpen = Object.assign(denied, { code: "EACCES", syscall: "mkdir" });
+  const error = (await rejection(() => RunMemories.open([bind("lessons", failing)], fresh))) as NodeJS.ErrnoException;
+  expect(error.message).toBe("memory `lessons`: EACCES: permission denied, mkdir");
+  expect([error.code, error.syscall]).toEqual(["EACCES", "mkdir"]);
+  expect(error.cause).toBe(failing.failOpen);
 });
 
 test("a busy memory at open stays busy, named by its input", async () => {

@@ -1405,3 +1405,94 @@ describe("erase and reset", () => {
     expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("A");
   });
 });
+
+describe("the memory's own entries in .yian/", () => {
+  /** Make a memory with one change, then a folder outside it holding a file to protect. */
+  async function withVictim(): Promise<string> {
+    const s = await openAt();
+    await apply(s, { op: "create", path: "a.md", text: "x" }, "c1");
+    await s.close();
+    const victim = join(dir, "victim");
+    put(victim, "important.txt", "keep me");
+    put(victim, "sub/deep.txt", "keep me too");
+    return victim;
+  }
+
+  test.each([
+    ["open", (memory: FileMemory) => memory.open({ ...o, create: false })],
+    ["reset", (memory: FileMemory) => memory.reset({ signal })],
+  ])("%s refuses a .yian/tmp that is a symlink, and deletes nothing through it", async (_, use) => {
+    const victim = await withVictim();
+    fs.rmSync(join(root, ".yian/tmp"), { recursive: true });
+    fs.symlinkSync(victim, join(root, ".yian/tmp"));
+    await expect(use(new FileMemory({ root, id: "t/x" }))).rejects.toThrow(
+      "`.yian/tmp` isn't a folder of this memory (a symlink); remove it",
+    );
+    expect(tree(victim)).toEqual({ "important.txt": "keep me", sub: "dir", "sub/deep.txt": "keep me too" });
+    expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("x");
+  });
+
+  test("a folder that arrives with .yian/tmp pointing above it is refused, and its neighbours are kept", async () => {
+    const parent = join(dir, "projects");
+    const memoryRoot = join(parent, "mem");
+    put(memoryRoot, ".yian/identity", "team/notes");
+    put(memoryRoot, "notes.md", "hi");
+    fs.symlinkSync("../..", join(memoryRoot, ".yian/tmp"));
+    put(parent, "other-project/work.txt", "precious");
+    await expect(new FileMemory({ root: memoryRoot }).open({ ...o, create: false })).rejects.toThrow(
+      "`.yian/tmp` isn't a folder of this memory (a symlink); remove it",
+    );
+    expect(fs.readFileSync(join(parent, "other-project/work.txt"), "utf8")).toBe("precious");
+  });
+
+  test("a session's next call refuses a .yian/tmp swapped for a symlink after it opened", async () => {
+    const s = await openAt();
+    const victim = join(dir, "victim");
+    put(victim, "important.txt", "keep me");
+    fs.rmSync(join(root, ".yian/tmp"), { recursive: true });
+    fs.symlinkSync(victim, join(root, ".yian/tmp"));
+    for (const call of [() => s.history({ limit: 5 }), () => apply(s, { op: "append", path: "a.md", text: "x" })]) {
+      await expect(call()).rejects.toThrow("`.yian/tmp` isn't a folder of this memory (a symlink); remove it");
+    }
+    expect(fs.readFileSync(join(victim, "important.txt"), "utf8")).toBe("keep me");
+    await s.close();
+  });
+
+  test.each([
+    [".yian", "symlink", "`.yian` isn't a folder of this memory (a symlink); remove it"],
+    [".yian/journal.jsonl", "symlink", "`.yian/journal.jsonl` isn't a file of this memory (a symlink); replace it"],
+    [".yian/journal.jsonl", "hard link", "`.yian/journal.jsonl` isn't a file of this memory (a hard link); replace it"],
+    [".yian/identity", "symlink", "`.yian/identity` isn't a file of this memory (a symlink); replace it with a copy"],
+    [".yian/lock", "symlink", "`.yian/lock` isn't a file of this memory (a symlink); remove it"],
+    [".yian/tmp", "file", "`.yian/tmp` isn't a folder of this memory (not a folder); remove it"],
+  ])("open refuses %s as a %s", async (name, kind, message) => {
+    const s = await openAt();
+    await apply(s, { op: "create", path: "a.md", text: "x" }, "c1");
+    await s.close();
+    const path = join(root, name);
+    const copy = join(dir, "copy");
+    if (kind === "hard link") {
+      fs.linkSync(path, copy);
+    } else {
+      fs.cpSync(path, copy, { recursive: true });
+      fs.rmSync(path, { recursive: true });
+      if (kind === "symlink") fs.symlinkSync(copy, path);
+      else fs.writeFileSync(path, "");
+    }
+    await expect(new FileMemory({ root, id: "t/x" }).open({ ...o, create: false })).rejects.toThrow(message);
+  });
+
+  test("temp cleanup unlinks only plain files directly in .yian/tmp, and follows nothing", async () => {
+    const s = await openAt();
+    const victim = join(dir, "victim");
+    put(victim, "important.txt", "keep me");
+    fs.symlinkSync(victim, join(root, ".yian/tmp/link"));
+    put(root, ".yian/tmp/folder/inner.txt", "left alone");
+    put(root, ".yian/tmp/0123456789abcdef", "left by a crash");
+    expect((await apply(s, { op: "create", path: "a.md", text: "x" }, "c1")).ok).toBe(true);
+    expect(fs.readdirSync(join(root, ".yian/tmp")).sort()).toEqual(["folder", "link"]);
+    expect(fs.readFileSync(join(victim, "important.txt"), "utf8")).toBe("keep me");
+    expect(fs.readFileSync(join(root, ".yian/tmp/folder/inner.txt"), "utf8")).toBe("left alone");
+    await s.close();
+  });
+});

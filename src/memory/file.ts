@@ -684,6 +684,8 @@ export class FileMemory extends MemoryBase {
       scheduler,
       locked<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
         return inTurn(real, async () => {
+          // Checked before the lock file is opened, and on every call: the folder may change.
+          checkMeta(real);
           let lock: FileLock;
           try {
             lock = await waitForLock(join(real, META, "lock"), { timeoutMs, signal, scheduler, private: true });
@@ -733,6 +735,7 @@ export class FileMemory extends MemoryBase {
     } else if (!stats.isDirectory()) {
       throw new Error(`${shown(root)} isn't a folder`);
     }
+    checkMeta(root);
     let identity = storedIdentity(root);
     let created = false;
     if (identity === null) {
@@ -770,6 +773,7 @@ export class FileMemory extends MemoryBase {
   override async reset(o: { signal: AbortSignal }): Promise<void> {
     o.signal.throwIfAborted();
     const { root, limits } = this.#store;
+    if (lstatOrNull(root)?.isDirectory() === true) checkMeta(root);
     if (lstatOrNull(root)?.isDirectory() !== true || storedIdentity(root) === null) {
       throw new Error(`${shown(root)} isn't a memory yet`);
     }
@@ -936,7 +940,11 @@ function checkEraseTarget(target: JsonObject): { path: string; text?: string } {
   return { path, text };
 }
 
-/** Remove what a crash left in `.yian/tmp/`: holding the lock, no write is using it. */
+/**
+ * Remove the temp files a crash left in `.yian/tmp/`: holding the lock, no write is using them.
+ * Only regular files directly in it go, each unlinked; anything else is left alone and nothing is
+ * followed, and `checkMeta` has made sure the folder itself is no symlink.
+ */
 function clearTmp(root: string): void {
   const tmp = join(root, META, "tmp");
   let names: string[];
@@ -946,7 +954,43 @@ function clearTmp(root: string): void {
     if (isSystemError(error) && error.code === "ENOENT") return;
     throw error;
   }
-  for (const name of names) fs.rmSync(join(tmp, name), { recursive: true, force: true });
+  for (const name of names) {
+    if (lstatOrNull(join(tmp, name))?.isFile() === true) fs.unlinkSync(join(tmp, name));
+  }
+}
+
+/**
+ * The memory's own entries in `.yian/`, what each must be, and what to do when it isn't: a
+ * symlinked folder would let temp cleanup or a write reach outside the memory, and a linked
+ * journal would keep what an erase removed.
+ */
+const META_ENTRIES: readonly { name: string; folder: boolean; fix: string }[] = [
+  { name: META, folder: true, fix: "remove it" },
+  { name: `${META}/tmp`, folder: true, fix: "remove it" },
+  { name: `${META}/identity`, folder: false, fix: "replace it with a copy" },
+  { name: `${META}/journal.jsonl`, folder: false, fix: "replace it with a copy" },
+  { name: `${META}/lock`, folder: false, fix: "remove it" },
+];
+
+/**
+ * Check, with `lstat`, that each of the memory's own entries in `.yian/` that exists is a real
+ * folder or a regular file with one link.
+ *
+ * @throws Error naming the entry, what it is instead, and what to do.
+ */
+function checkMeta(root: string): void {
+  for (const { name, folder, fix } of META_ENTRIES) {
+    const stats = lstatOrNull(join(root, name));
+    if (stats === null) continue;
+    let why: string | null = null;
+    if (stats.isSymbolicLink()) why = "a symlink";
+    else if (folder) why = stats.isDirectory() ? null : "not a folder";
+    else if (!stats.isFile()) why = "not a regular file";
+    else if (stats.nlink > 1) why = "a hard link";
+    if (why !== null) {
+      throw new Error(`\`${name}\` isn't a ${folder ? "folder" : "file"} of this memory (${why}); ${fix}`);
+    }
+  }
 }
 
 /**

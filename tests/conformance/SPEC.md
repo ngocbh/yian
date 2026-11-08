@@ -378,14 +378,14 @@ A case can't hold code, so its host is declared under `host`.
 
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,
 attempt, node}`. A memory's tools aren't host tools, so their calls aren't listed.
-
-`expect.memory` maps `host.memory` inputs to the files in their folders after the run: each file
-outside `.yian/`, by its `/`-separated path, to its text; `null` when there is no folder.
 Calls answered from `human` are listed too, under the name they were made by (`ask` for a
 TOOL `ask`, `ask_user` for an agent's call); their `args` are the request in
 data form (`question`, `questions`, `answer_schema`, `title`, `node_id`, `options`, `deadline`
 and the host's extras; nulls left out).
 A TOOL `ask` never sends `options`; a model's `ask_user` call can.
+
+`expect.memory` maps `host.memory` inputs to the files in their folders after the run: each file
+outside `.yian/`, by its `/`-separated path, to its text; `null` when there is no folder.
 
 The format reserves the host key `skills` (skill directories, given as `files`); a case that
 uses it fails.

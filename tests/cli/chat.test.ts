@@ -419,6 +419,40 @@ test(
 );
 
 test(
+  "a child's new default memory is noted by identity; its folder reaches neither the log nor the model",
+  async () => {
+    writeFileSync(
+      join(root, "remember.yaml"),
+      "id: answer\nname: answer\ninput:\n  lessons: !FileMemory\nnodes:\n  add:\n    kind: tool\n" +
+        "    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
+    );
+    const { io, stdin, stdout, screen } = chatIo({ tty: true });
+    const script = [
+      callReply(["start_flow", { path: "remember.yaml", inputs: {} }, "c1"]),
+      callReply(["wait_flow", { run: "r1", seconds: 30 }, "c2"]),
+      textReply("done"),
+    ];
+    const model = new AnsweringModel((_, count) => script[count - 1] ?? textReply("noted"));
+    const chatting = runChat(io, model);
+    await until(() => screen().includes("You:"));
+    stdin.write(`remember${ENTER}`);
+    await until(() => screen().includes("Run remember.yaml"));
+    stdin.write(ENTER);
+    await until(() => stdout().includes("done"));
+    stdin.write(`/exit${ENTER}`);
+    const { code, log } = await chatting;
+    expect(code).toBe(0);
+    const memories = join(home, ".yian", "memory");
+    const [project] = readdirSync(memories);
+    const waited = JSON.parse(toolResults(model.requests[2]!)[1]!);
+    expect(waited.memory_notes).toEqual([`memory lessons: ${project}/answer/lessons (new)`]);
+    expect(readFileSync(log, "utf8")).not.toContain(memories);
+    for (const request of model.requests) expect(shown(request)).not.toContain(memories);
+  },
+  TIMEOUT,
+);
+
+test(
   "a child's question reaches the assistant as a message authored yian, and its answer goes back",
   async () => {
     writeFileSync(join(root, "region.yaml"), region());

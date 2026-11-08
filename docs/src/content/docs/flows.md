@@ -116,8 +116,9 @@ Text from `--input` becomes an `int`, `float` or `bool` when the input has that 
 [Types](/types/#inputs-from-the-command-line)).
 
 Two kinds of input take no value. An inbox (`notes: !Inbox(str)`) gets messages while the run
-goes on (see [Inboxes and waiting](/inboxes/)). A memory (`lessons: !FileMemory`) is bound by the
-program that runs the flow (see [Memory](/memory/)).
+goes on (see [Inboxes and waiting](/inboxes/)). A memory (`lessons: !FileMemory`) is bound by
+`yian run`, to one it keeps per project, or by the program that runs the flow (see
+[Memory](/memory/#bind-a-memory)).
 
 ## Nodes
 

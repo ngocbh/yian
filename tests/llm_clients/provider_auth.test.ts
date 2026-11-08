@@ -839,7 +839,7 @@ describe("AuthStore", () => {
   test("savedSecrets on a missing store is empty and creates nothing", () => {
     const missing = new AuthStore(join(tmp, "missing", "auth.json"));
     expect(missing.savedSecrets("anthropic")).toEqual([]);
-    expect(missing.read()).toEqual({ defaultProvider: null, selections: [] });
+    expect(missing.read()).toEqual({ defaultProvider: null, selections: [], defaultEmbedding: null });
     expect(missing.selection()).toBeNull();
     expect(fs.existsSync(join(tmp, "missing"))).toBe(false);
   });

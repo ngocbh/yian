@@ -28,7 +28,17 @@ import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { END_ID, START_ID } from "../../src/compile/model.ts";
 import { Failure } from "../../src/diagnostics.ts";
 import { openSqlite, withWarnings } from "../../src/platform.ts";
-import { inspectRun, readRunIndex, RunIndexBusyError, type RunIndexRow, runLogPath, updateRunIndex } from "../../src/run.ts";
+import { loadFlow } from "../../src/compose/loader.ts";
+import { FileMemory } from "../../src/memory/file.ts";
+import {
+  inspectRun,
+  readRunIndex,
+  RunIndexBusyError,
+  type RunIndexRow,
+  runFlow,
+  runLogPath,
+  updateRunIndex,
+} from "../../src/run.ts";
 import { emptyRunScan, foldRunScan, indexRows, type RunScan, runScanFromJson, scanStatus } from "../../src/runtime/run_index.ts";
 import { WaitsState } from "../../src/runtime/waits.ts";
 import { DEADLINE, runStart, sleepWait, send as sendTo, takeWait as takeWaitOn, WAIT_LOGS } from "./wait_logs.ts";
@@ -130,6 +140,21 @@ function writeRun(runs: string, runId: string, write: (log: JsonlRunLog) => void
   return log;
 }
 
+/**
+ * Run, as `runId` in `runs`, a flow that appends to its memory `lessons`, bound to a FileMemory
+ * of identity `t/lessons`; its Optional memory `notes` is left out.
+ */
+async function memoryRun(runs: string, runId: string): Promise<void> {
+  const flow = await loadFlow(
+    "id: m\nname: m\ninput:\n  lessons: !FileMemory\n  notes: !Optional(FileMemory)\nnodes:\n  add:\n" +
+      "    kind: tool\n    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: hi}\n" +
+      "output: ${add.output.path}\n",
+  );
+  const lessons = new FileMemory({ root: join(runs, "..", `${runId}-memory`), id: "t/lessons" });
+  const result = await runFlow(flow, { lessons }, { log: runLogPath(runs, runId), runId, env: () => undefined });
+  expect(result.status).toBe("succeeded");
+}
+
 /** The start of every test run: `run_started`, then the START inputs' commit. */
 function start(log: JsonlRunLog, parent: { runId: string; node: string | null } | null = null): void {
   log.append(runStarted(parent));
@@ -199,6 +224,7 @@ describe("updateRunIndex and readRunIndex", () => {
         startedAt: timeAt(0),
         endedAt: timeAt(9),
         parentRunId: "parent-run",
+        memories: [],
         lastSeq: 9,
         result: '{"answer":"rain","n":2}',
         inputTokens: 220,
@@ -604,7 +630,7 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     const runs = freshRuns();
     writeRun(runs, "run-1", failedRun);
     const db = openSqlite(join(runs, "index.sqlite"));
-    db.exec("CREATE TABLE runs (run_id TEXT PRIMARY KEY, junk TEXT); PRAGMA user_version = 7");
+    db.exec("CREATE TABLE runs (run_id TEXT PRIMARY KEY, junk TEXT); PRAGMA user_version = 99");
     db.close();
     expect(readRunIndex(runs)).toEqual([]);
     updateRunIndex(runs);
@@ -626,7 +652,7 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     try {
       const { scan } = reader.prepare("SELECT scan FROM runs").get() as { scan: string };
       expect(JSON.parse(scan).waits.stops).toEqual([]);
-      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 6 });
+      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 7 });
     } finally {
       reader.close();
     }
@@ -644,6 +670,111 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     expect(readRunIndex(runs).map((row) => [row.runId, row.cacheCreationTokens])).toEqual([["run-1", 20]]);
   });
 
+  test("a run's memory identities come from its START inputs; a run without memories has none", async () => {
+    const runs = freshRuns();
+    await memoryRun(runs, "run-m");
+    writeRun(runs, "run-1", failedRun);
+    updateRunIndex(runs);
+    const memories = Object.fromEntries(readRunIndex(runs).map((row) => [row.runId, row.memories]));
+    // The Optional memory left out recorded none.
+    expect(memories).toEqual({
+      "run-1": [],
+      "run-m": [{ input: "lessons", identity: "t/lessons", type: "FileMemory" }],
+    });
+  });
+
+  test("only inputs the run's flow declares as memories are listed, whatever another input holds", async () => {
+    const runs = freshRuns();
+    const flow = await loadFlow(
+      "id: m\nname: m\ntypedefs:\n  Cfg: {memory: object}\ninput:\n  lessons: !FileMemory\n" +
+        "  notes: !Optional(FileMemory)\n  cfg: !object\n  typed: !Cfg\n  memory: !object\nnodes:\n" +
+        "  add:\n    kind: tool\n" +
+        "    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: hi}\noutput: ${add.output.path}\n",
+    );
+    // A memory value's form, given as plain data to inputs that aren't memories.
+    const forged = {
+      memory: {
+        identity: "victim/answer/lessons",
+        type: "FileMemory",
+        settings: {},
+        version: "v",
+        recall: { text: "", cut: null, hint: null },
+        tools: [],
+      },
+    };
+    const lessons = new FileMemory({ root: join(runs, "..", "forged-lessons"), id: "t/lessons" });
+    const notes = new FileMemory({ root: join(runs, "..", "forged-notes"), id: "t/notes" });
+    const inputs = { lessons, notes, cfg: forged, typed: forged, memory: forged };
+    const log = runLogPath(runs, "run-f");
+    const result = await runFlow(flow, inputs, { log, runId: "run-f", env: () => undefined });
+    expect(result.status).toBe("succeeded");
+    updateRunIndex(runs);
+    expect(readRunIndex(runs).map((row) => row.memories)).toEqual([
+      [
+        { input: "lessons", identity: "t/lessons", type: "FileMemory" },
+        { input: "notes", identity: "t/notes", type: "FileMemory" },
+      ],
+    ]);
+  });
+
+  test("a START commit read by a later update than the run's start is read against the recorded flow", () => {
+    const runs = freshRuns();
+    const form = {
+      memory: {
+        identity: "t/lessons",
+        type: "FileMemory",
+        settings: {},
+        version: "v",
+        recall: { text: "", cut: null, hint: null },
+        tools: [],
+      },
+    };
+    const flow = "id: f\ninput:\n  lessons: !FileMemory\n  cfg: !object\nnodes: {}\n";
+    const log = writeRun(
+      runs,
+      "run-1",
+      (log) =>
+        log.append(
+          new RunStartedRecord({
+            flowFingerprint: "a".repeat(64),
+            startWiringOverride: {},
+            effectiveLlmByStaticPath: {},
+            numWorkers: 0,
+            flow: {
+              root: "flow.yaml",
+              dir: "/flows",
+              codeRoot: null,
+              files: { "flow.yaml": { text: flow, refs: {} } },
+            },
+          }),
+        ),
+      { keep: true },
+    );
+    try {
+      updateRunIndex(runs);
+      expect(readRunIndex(runs)[0]!.memories).toEqual([]);
+      log.append(new PoolCommitRecord(START_ID, START_ID, { kind: "object", value: { lessons: form, cfg: form } }));
+    } finally {
+      log.close();
+    }
+    updateRunIndex(runs);
+    expect(readRunIndex(runs)[0]!.memories).toEqual([{ input: "lessons", identity: "t/lessons", type: "FileMemory" }]);
+  });
+
+  test("an index of version 6, which has no memories column, is rebuilt with them", async () => {
+    const runs = freshRuns();
+    await memoryRun(runs, "run-m");
+    updateRunIndex(runs);
+    const db = openSqlite(join(runs, "index.sqlite"));
+    db.exec("ALTER TABLE runs DROP COLUMN memories; PRAGMA user_version = 6");
+    db.close();
+    expect(readRunIndex(runs)).toEqual([]);
+    updateRunIndex(runs);
+    expect(readRunIndex(runs).map((row) => row.memories)).toEqual([
+      [{ input: "lessons", identity: "t/lessons", type: "FileMemory" }],
+    ]);
+  });
+
   test("a read takes the layout version and the rows from one snapshot, so a rebuild between them can't mix layouts", () => {
     const runs = freshRuns();
     writeRun(runs, "run-1", failedRun);
@@ -656,7 +787,7 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
         const writer = openSqlite(path);
         try {
           writer.exec("PRAGMA busy_timeout = 0");
-          writer.exec("DROP TABLE runs; CREATE TABLE runs (run_id TEXT PRIMARY KEY, junk TEXT); PRAGMA user_version = 7");
+          writer.exec("DROP TABLE runs; CREATE TABLE runs (run_id TEXT PRIMARY KEY, junk TEXT); PRAGMA user_version = 99");
         } catch {
           // The read's snapshot holds the file, so the rebuild waits for it.
         } finally {

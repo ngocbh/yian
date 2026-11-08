@@ -132,6 +132,7 @@ yian reads these variables:
 | `YIAN_<NAME>` | Changes one default or limit; there is one per row of the [table above](#all-defaults-and-limits) |
 | `YIAN_DEFAULT_PROVIDER` | The provider for agents that set none, ahead of the saved default login |
 | `YIAN_DEFAULT_MODEL` | The model for agents that set none, ahead of the saved login's model. Ignored unless a default provider is set |
+| `YIAN_DEFAULT_EMBEDDING` | The embedding model, as `provider/model`, a new VectorDB memory is made with when `yian run` gets no `--embedding`, ahead of the one `yian config embedding` saved |
 | `YIAN_AUTH_FILE` | The saved-logins file to use (see [Files and folders](#files-and-folders)) |
 | `HOME` | Your home folder, for `~/.yian`, `~/.config` and the skill folders. When unset or empty, yian asks the system |
 | `XDG_CONFIG_HOME` | The folder that holds `yian/auth.json`, in place of `~/.config` |
@@ -145,12 +146,13 @@ Provider API keys and base URLs, such as `ANTHROPIC_API_KEY`, are listed on
 
 | Path | What it holds |
 |---|---|
-| `~/.config/yian/auth.json` | Your saved provider logins. `$YIAN_AUTH_FILE`, or `$XDG_CONFIG_HOME/yian/auth.json`, takes its place. Written with mode `0600`, beside a `.lock` file, in a folder that is yours with mode `0700` and not a symbolic link |
+| `~/.config/yian/auth.json` | Your saved provider logins and default embedding model. `$YIAN_AUTH_FILE`, or `$XDG_CONFIG_HOME/yian/auth.json`, takes its place. Written with mode `0600`, beside a `.lock` file, in a folder that is yours with mode `0700` and not a symbolic link |
 | `~/.yian/mcp.json` | MCP servers `yian run` reads, when a flow needs a tool yian doesn't have |
 | `~/.yian/runs/<run_id>/log.jsonl` | A run's log, written by `yian run` and `yian chat` |
 | `~/.yian/runs/<run_id>/log.jsonl.lock` | The lock the process writing the log holds |
 | `~/.yian/runs/<run_id>/media/` | Media files the run keeps, named by their SHA-256 |
 | `~/.yian/runs/index.sqlite` | The run index `yian status` lists. It is rebuilt from the logs, so you can delete it |
+| `~/.yian/memory/<project>/<flow id>/<input>` | The default memory `yian run` keeps for a flow's memory input: a folder, or `<input>.db` for a VectorDBMemory (see [CLI](/cli/#memory)) |
 | `~/.claude/skills`, `~/.agents/skills` | Your skills, read when an agent grants skills |
 | `.claude/skills`, `.agents/skills` | Project skills, from the current folder up to the git root |
 | `<memory folder>/.yian/` | A FileMemory's identity, journal, lock and temp files (see [Memory](/memory/#filememory)) |
@@ -209,6 +211,10 @@ A `--json` command that fails without its own result prints an error document wh
 | `models.failed` | `yian models` couldn't list the models. `error.status` is the HTTP status, or `null` |
 | `models.timeout` | The listing took longer than `--timeout`. `error.status` is `null` |
 | `skill.invalid` | `yian skills check`: a directory holds no valid `SKILL.md` |
+| `memory.conflict` | `yian memory`: a file or item changed since it was read, so the edit or undo changed nothing |
+| `memory.refused` | `yian memory`: the change isn't allowed, such as an item that doesn't exist, an undo of a change no longer kept, or a reset while a run is running |
+| `memory.cancelled` | `yian memory erase`, `reset` or `edit --delete`: you said no |
+| `memory.failed` | `yian memory` failed: the memory can't be read or isn't one, or the editor failed. A memory that isn't there yet is a usage error, with no document |
 
 ## Run log records
 

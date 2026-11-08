@@ -25,7 +25,15 @@ import type { Skill } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
 import { grantText, visibleToolName } from "../tools/grants.ts";
-import { buildValueAs, isInboxType, renderValuePath, TypeCheckError } from "../typesys/values.ts";
+import {
+  buildValueAs,
+  isInboxType,
+  isMemoryType,
+  renderValuePath,
+  TypeCheckError,
+  type Value,
+  writeAsJson,
+} from "../typesys/values.ts";
 import { LIST_ITEMS } from "./chat_events.ts";
 import type { ChildRuns, ChildStatus } from "./chat_runs.ts";
 import {
@@ -44,6 +52,7 @@ import {
 import { AUTHOR_TOOLS, loadAuthorFlow, loadReviewFlow, REVIEW_TOOLS } from "./authoring.ts";
 import { loadConfinedText } from "./confined_load.ts";
 import { unifiedDiff } from "./diff.ts";
+import { type DefaultMemory, projectFolder } from "./memory_bind.ts";
 import { loadReportFlow } from "./report_issue.ts";
 
 /** The longest `wait_flow` waits, in seconds. */
@@ -60,7 +69,8 @@ const RUN = "The run's id, as start_flow returned it (r1, r2, ...).";
 const STATUS =
   "Returns the run's status as JSON: status (running, waiting, succeeded, failed or cancelled), " +
   "output, failure, waits, asks (questions with their call ids), replies (what it said since " +
-  "you last looked), note (something that couldn't be done) and log.";
+  "you last looked), memory_notes (a memory it created or that changed, since you last looked), " +
+  "note (something that couldn't be done) and log.";
 
 /** How a set of run tools reads and shows the chat's runs (`chatRunTools`' `view`). */
 interface View {
@@ -145,7 +155,7 @@ export function shownStatus(status: ChildStatus): Record<string, unknown> {
   }
   if (output !== undefined) {
     // An output too long as JSON is shown as its cut JSON text.
-    const json = JSON.stringify(output) ?? "null";
+    const json = writeAsJson(output as Value);
     if (typeof output === "string") shown["output"] = cutText(output);
     else shown["output"] = json.length > STATUS_TEXT_CHARS ? cutText(json) : output;
   }
@@ -203,15 +213,22 @@ function startDigest(flow: ComposedFlow, text: string, files: readonly string[],
 
 /**
  * Check `inputs` against `flow`'s inputs before it starts, as its start would: no unknown names,
- * every required one given, each value of its declared type.
+ * every required one given, each value of its declared type. A memory input is never given: the
+ * run binds it to its default.
  *
  * @throws {ReportedToolError} `bad inputs: <why>`.
  */
 function checkStartInputs(flow: ComposedFlow, inputs: unknown): void {
   try {
+    // The run binds a memory input itself, as `yian run` binds an unbound one.
+    const given = typeof inputs === "object" && inputs !== null ? inputs : {};
+    const memory = flow.input.find((param) => isMemoryType(param.contract?.type) && Object.hasOwn(given, param.name));
+    if (memory !== undefined) {
+      throw new RangeError(`\`${memory.name}\` is a memory; leave it out, and the run gets its default`);
+    }
     const coerced = coerceInputs(flow.input, hostInputs(flow.input, inputs));
     for (const param of flow.input) {
-      if (isInboxType(param.contract?.type ?? null)) continue;
+      if (isInboxType(param.contract?.type ?? null) || isMemoryType(param.contract?.type)) continue;
       if (!Object.hasOwn(coerced, param.name)) {
         if (!param.required || param.hasDefault) continue;
         throw new RangeError(`required input ${reprText(param.name)} is missing`);
@@ -418,9 +435,10 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
           seen?.markSeen(status.run, status.seq);
         }
         shown.set(status.run, Math.max(status.seq, last));
-        // The stored status keeps the replies it was published with; once shown, they are read.
-        const { replies: _, ...unrepeated } = status;
-        return JSON.stringify(shownStatus(status.seq <= last ? unrepeated : status));
+        // The stored status keeps the replies and notes it was published with; once shown, they are read.
+        const { replies: _, memory_notes: __, ...unrepeated } = status;
+        // yian's JSON, so an int output (a bigint) is written as its digits.
+        return writeAsJson(shownStatus(status.seq <= last ? unrepeated : status) as Value);
       },
       known: (args) => {
         const id = knownRun(runs, args);
@@ -661,8 +679,22 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
     checkStartInputs(flow, inputs);
     const files = codeFiles(flow);
     const root = resolveRoot(host.root);
+    // Its memories are keyed by the folder `path` names, as `yian run` keys them.
+    const project = projectFolder(resolve(root, path));
+    let memories: DefaultMemory[];
+    try {
+      memories = runs.defaultMemories(flow, project);
+    } catch (error) {
+      if (error instanceof Error) return `not started: ${error.message}`;
+      throw error;
+    }
     const can = capabilities(flow, files.map((each) => slashed(relative(root, each))));
-    const digest = startDigest(flow, text, files, can);
+    // The user sees when a flow (a draft, say) would use a memory another flow made. Which one it
+    // binds is part of what is approved; whether it exists yet isn't.
+    const named = memories.map(({ input, identity }) => `${input} → ${identity}`);
+    const marked = memories.map(({ exists }, i) => `${named[i]} (${exists ? "existing" : "new"})`);
+    const memoryLine = (list: readonly string[]) => (list.length === 0 ? [] : [`memories: ${list.join(", ")}`]);
+    const digest = startDigest(flow, text, files, [...can, ...memoryLine(named)]);
     if (approved.get(real) !== digest) {
       // A draft is on no disk for the user to read, so the card shows all of it.
       const draft = content !== undefined;
@@ -672,6 +704,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
           `Starts ${draft ? "the draft " : ""}${file} in the background.`,
           `inputs: ${cutText(JSON.stringify(inputs))}`,
           ...can,
+          ...memoryLine(marked),
         ].join("\n"),
         diff: draft
           ? unifiedDiff("", text, { oldLabel: "/dev/null", newLabel: `${file} (draft)` })
@@ -685,7 +718,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
     }
     let id: string;
     try {
-      ({ id } = await runs.start(flow, inputs as Record<string, unknown>, { signal, name: file }));
+      ({ id } = await runs.start(flow, inputs as Record<string, unknown>, { signal, name: file, project }));
     } catch (error) {
       if (error instanceof Error) return `not started: ${error.message}`;
       throw error;

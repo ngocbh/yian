@@ -26,12 +26,17 @@ import {
 const OPTIONAL_ENTRY_KEYS = new Set(["endpoint", "organization", "project"]);
 const ENTRY_KEYS = ["method", "model", "credential_id", "credentials"];
 const STORE_KEYS = ["version", "default_provider", "providers"];
+// Written only when set, so a store without a default embedding model reads as before.
+const EMBEDDING_KEY = "default_embedding";
 const OAUTH_KEYS = ["access_token", "refresh_token", "expires_at", "account_id"];
 
 const OVERSIZED = "Credential storage exceeds its size limit";
 
 /** Saved logins by provider, in file order. */
 type Providers = Map<string, [ProviderSelection, Credentials | null]>;
+
+/** What a store holds: the default provider, the logins, and the default embedding model. */
+type Saved = [defaultProvider: string | null, providers: Providers, defaultEmbedding: string | null];
 
 /**
  * How a refresh flight ended: its credentials, the locked section's error, or `stopped` when the
@@ -274,10 +279,15 @@ function spacedJson(value: unknown): string {
   return `{${entries.map(([key, item]) => `${spacedJson(key)}: ${spacedJson(item)}`).join(", ")}}`;
 }
 
-/** Return the provider choice and saved logins `text` holds; throw if it is not a v1 store. */
-function parseStore(text: string): [string | null, Providers] {
+/** Return the provider choice, saved logins and embedding model `text` holds; throw if it is not a v1 store. */
+function parseStore(text: string): Saved {
   const value = parseJson(text, "plain");
-  if (!isRecord(value) || !hasKeys(value, STORE_KEYS)) throw new TypeError("store");
+  if (!isRecord(value)) throw new TypeError("store");
+  const embedding = value[EMBEDDING_KEY];
+  if (!hasKeys(value, embedding === undefined ? STORE_KEYS : [...STORE_KEYS, EMBEDDING_KEY])) {
+    throw new TypeError("store");
+  }
+  if (embedding !== undefined && typeof embedding !== "string") throw new TypeError(EMBEDDING_KEY);
   const providerEntries = value["providers"];
   if (value["version"] !== 1n || !isRecord(providerEntries)) throw new TypeError("store");
   const providers: Providers = new Map();
@@ -305,18 +315,20 @@ function parseStore(text: string): [string | null, Providers] {
   if (fallback !== null && (typeof fallback !== "string" || !providers.has(fallback))) {
     throw new TypeError("default_provider");
   }
-  return [fallback, providers];
+  return [fallback, providers, embedding ?? null];
 }
 
 /**
- * Persist one saved login per provider, with an optional default, privately.
+ * Persist one saved login per provider, with an optional default, and an optional default
+ * embedding model, privately.
  *
  * A login holds an API key, a subscription, or no credential; an Azure login also holds its
  * endpoint. An API-key login may hold connection settings: extra request headers and, for
  * `openai`, an organization and project id. The store is a JSON file in a directory that, like
  * the file, must be private to its owner and not a symbolic link. Reading a missing store never
  * creates a directory or lock file. Selection and credentials are committed together by `save`;
- * `remove`, `setDefault` and `delete` change a saved store and never create one. Writes and
+ * `setDefaultEmbedding` also creates a store, while `remove`, `setDefault` and `delete` change a
+ * saved store and never create one. Writes and
  * refreshes hold the `<path>.lock` file lock; a refresh reloads under it and cannot replace a newer
  * connection. The store is POSIX-only.
  *
@@ -396,9 +408,9 @@ export class AuthStore {
     if (info.dev !== directory.dev || info.ino !== directory.ino) throw changed("folder", dirname(this.path));
   }
 
-  /** Read the default provider and saved logins from the store in `directory`; empty if none. */
-  #load(directory: Directory | null): [string | null, Providers] {
-    if (directory === null) return [null, new Map()];
+  /** Read what the store in `directory` holds; empty if none. */
+  #load(directory: Directory | null): Saved {
+    if (directory === null) return [null, new Map(), null];
     const limit = current().maxAuthStoreBytes;
     // Allocated before the open, so a failed allocation leaves no descriptor open.
     const raw = new Uint8Array(limit + 1);
@@ -410,7 +422,7 @@ export class AuthStore {
       if (!isMissing(error)) throw accessError();
       // A missing file in a swapped-in directory says nothing about the checked one.
       this.#checkSameDirectory(directory);
-      return [null, new Map()];
+      return [null, new Map(), null];
     }
     let size = 0;
     try {
@@ -433,7 +445,7 @@ export class AuthStore {
   }
 
   /** Load the store without the lock, creating nothing. */
-  #snapshot(): [string | null, Providers] {
+  #snapshot(): Saved {
     this.#signal?.throwIfAborted();
     const directory = this.#openDirectory();
     try {
@@ -474,14 +486,14 @@ export class AuthStore {
   }
 
   /**
-   * Atomically replace the store in `directory` with `defaultProvider` and `providers`.
+   * Atomically replace the store in `directory` with `saved`.
    *
    * Checks that the directory path still names `directory`, writes a private temporary file
    * beside the store, then renames it over the store and checks that the store path and its
    * directory still name what was written and checked.
    */
-  #write(directory: Directory, defaultProvider: string | null, providers: Providers): void {
-    const value = {
+  #write(directory: Directory, [defaultProvider, providers, defaultEmbedding]: Saved): void {
+    const value: Record<string, unknown> = {
       version: 1,
       default_provider: defaultProvider,
       providers: Object.fromEntries(
@@ -499,6 +511,7 @@ export class AuthStore {
         }),
       ),
     };
+    if (defaultEmbedding !== null) value[EMBEDDING_KEY] = defaultEmbedding;
     const raw = new TextEncoder().encode(`${spacedJson(value)}\n`);
     if (raw.length > current().maxAuthStoreBytes) throw new AuthError(OVERSIZED);
     // Checked before the temporary file exists, so a swapped-in directory never receives it.
@@ -534,9 +547,9 @@ export class AuthStore {
 
   /** Read a nonsecret snapshot without creating or changing storage. */
   read(): AuthState {
-    const [defaultProvider, providers] = this.#snapshot();
+    const [defaultProvider, providers, defaultEmbedding] = this.#snapshot();
     const selections = Object.freeze(Array.from(providers.values(), ([selection]) => selection));
-    return Object.freeze({ defaultProvider, selections });
+    return Object.freeze({ defaultProvider, selections, defaultEmbedding });
   }
 
   /** Find the explicit provider's selection, or the saved default's; `null` if there is none. */
@@ -621,9 +634,9 @@ export class AuthStore {
     const directory = this.#openDirectory(true)!;
     try {
       await this.#locked(() => {
-        const [defaultProvider, providers] = this.#load(directory);
+        const [defaultProvider, providers, defaultEmbedding] = this.#load(directory);
         providers.set(provider, [selection, credentials]);
-        this.#write(directory, makeDefault ? provider : defaultProvider, providers);
+        this.#write(directory, [makeDefault ? provider : defaultProvider, providers, defaultEmbedding]);
       });
     } finally {
       closeFd(directory.fd);
@@ -639,7 +652,7 @@ export class AuthStore {
     if (directory === null) throw missing();
     try {
       await this.#locked(() => {
-        let [defaultProvider, providers] = this.#load(directory);
+        let [defaultProvider, providers, defaultEmbedding] = this.#load(directory);
         if (!providers.has(provider)) throw missing();
         if (remove) {
           providers.delete(provider);
@@ -647,7 +660,7 @@ export class AuthStore {
         } else {
           defaultProvider = provider;
         }
-        this.#write(directory, defaultProvider, providers);
+        this.#write(directory, [defaultProvider, providers, defaultEmbedding]);
       });
     } finally {
       closeFd(directory.fd);
@@ -670,6 +683,25 @@ export class AuthStore {
    */
   setDefault(provider: string): Promise<void> {
     return this.#update(provider, false);
+  }
+
+  /**
+   * Save `embedding`, a `provider/model` the caller checked, as the model a new VectorDB memory is
+   * made with, creating the store if there is none.
+   *
+   * @throws AuthError Storage fails.
+   */
+  async setDefaultEmbedding(embedding: string): Promise<void> {
+    this.#signal?.throwIfAborted();
+    const directory = this.#openDirectory(true)!;
+    try {
+      await this.#locked(() => {
+        const [defaultProvider, providers] = this.#load(directory);
+        this.#write(directory, [defaultProvider, providers, embedding]);
+      });
+    } finally {
+      closeFd(directory.fd);
+    }
   }
 
   /**
@@ -774,7 +806,7 @@ export class AuthStore {
       if (fresh(saved)) return saved;
       // A saved login means the directory exists.
       const locked = () => this.#locked(async () => {
-        const [defaultProvider, providers] = this.#load(directory!);
+        const [defaultProvider, providers, defaultEmbedding] = this.#load(directory!);
         const [selection, credentials] = pinned(providers);
         if (fresh(credentials)) return credentials;
         if (refresh === undefined) throw new AuthError("Subscription credentials expired; sign in again");
@@ -792,7 +824,7 @@ export class AuthStore {
         const checked = updated as OAuthCredentials;
         if (!fresh(checked)) throw new AuthError("Subscription refresh returned expired credentials");
         providers.set(provider, [selection, checked]);
-        this.#write(directory!, defaultProvider, providers);
+        this.#write(directory!, [defaultProvider, providers, defaultEmbedding]);
         return checked;
       });
       // Without a refresh the locked section only returns a fresh token or fails: nothing to share.

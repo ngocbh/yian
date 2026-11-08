@@ -6,7 +6,7 @@
  * are held to the same table.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -39,6 +39,8 @@ import {
   connectionCredentials,
   connectionSnapshot,
   ConnectionSnapshot,
+  defaultEmbedding,
+  embeddingModel,
   HOST_KEY_MARKER,
   headerNameDiff,
   keyIdentity,
@@ -613,6 +615,58 @@ test("snapshot connections per provider", async () => {
     credential_id: null,
     endpoint: "https://api.openai.com/v1",
     store_path: null,
+  });
+});
+
+describe("the default embedding model", () => {
+  const small = { provider: "openai", model: "text-embedding-3-small" };
+
+  test("is the saved one, which the store keeps as logins change", async () => {
+    const store = authStore();
+    expect(defaultEmbedding({ env })).toBeNull();
+
+    await store.setDefaultEmbedding("openai/text-embedding-3-small");
+    await store.save("anthropic", new ApiKeyCredentials("saved-secret"), "m");
+    await store.setDefault("anthropic");
+    await store.remove("anthropic");
+
+    expect(defaultEmbedding({ env })).toEqual(small);
+    expect(store.read().defaultEmbedding).toBe("openai/text-embedding-3-small");
+    expect(JSON.parse(readFileSync(store.path, "utf8"))["default_embedding"]).toBe("openai/text-embedding-3-small");
+  });
+
+  test("YIAN_DEFAULT_EMBEDDING overrides the saved one", async () => {
+    await authStore().setDefaultEmbedding("openai/text-embedding-3-small");
+    vars.set("YIAN_DEFAULT_EMBEDDING", "vllm/bge-m3");
+
+    expect(defaultEmbedding({ env })).toEqual({ provider: "vllm", model: "bge-m3" });
+  });
+
+  test("refuses a value that isn't provider/model on a provider with embeddings", async () => {
+    vars.set("YIAN_DEFAULT_EMBEDDING", "text-embedding-3-small");
+    expect(rangeError(() => defaultEmbedding({ env })).message).toBe(
+      "YIAN_DEFAULT_EMBEDDING='text-embedding-3-small' is invalid: give it as provider/model",
+    );
+    vars.set("YIAN_DEFAULT_EMBEDDING", "openai/text\u001b[31m");
+    expect(rangeError(() => defaultEmbedding({ env })).message).toEndWith(
+      "is invalid: provider/model can't hold control characters",
+    );
+    expect(() => embeddingModel("open\nai/x")).toThrow("provider/model can't hold control characters");
+    expect(() => embeddingModel("openai/x\u0085")).toThrow("provider/model can't hold control characters");
+    vars.set("YIAN_DEFAULT_EMBEDDING", "anthropic/claude");
+    expect(rangeError(() => defaultEmbedding({ env })).message).toStartWith(
+      "YIAN_DEFAULT_EMBEDDING='anthropic/claude' is invalid: provider `anthropic` has no embeddings API",
+    );
+  });
+
+  test("a store without one reads as before, and one that isn't text is malformed", async () => {
+    const store = authStore();
+    const write = (value: object) => writeFileSync(store.path, JSON.stringify(value), { mode: 0o600 });
+    write({ version: 1, default_provider: null, providers: {} });
+    expect(store.read().defaultEmbedding).toBeNull();
+
+    write({ version: 1, default_provider: null, providers: {}, default_embedding: null });
+    expect(thrown(() => store.read())).toBeInstanceOf(AuthError);
   });
 });
 

@@ -9,20 +9,24 @@
  * while a writer holds a run's lock. A run whose log can't be read keeps a row marked unreadable
  * at the first record yian couldn't read, holding the records before it.
  *
- * Knows about: compile (the END id), diagnostics, platform, runtime/log, runtime/state
- * (`addCrashedAttempts`), runtime/waits (the waits fold), typesys.
+ * Knows about: compile (the START and END ids), compose's source parser (a run's declared memory
+ * inputs), diagnostics, platform, runtime/log, runtime/state (`addCrashedAttempts`), runtime/waits
+ * (the waits fold), typesys.
  */
 
 import fs from "node:fs";
 import { join } from "node:path";
 
-import { END_ID } from "../compile/model.ts";
+import { END_ID, START_ID } from "../compile/model.ts";
+import { SourceDocument } from "../compose/source/document.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { openSqlite, type Sqlite, type SqliteRow, sqliteErrorCode, warn } from "../platform.ts";
 import { logJson } from "../typesys/json.ts";
-import { isRecord, shownText, valueRepr } from "../typesys/values.ts";
+import { parseType, type TypeExpr } from "../typesys/types.ts";
+import { isRecord, type MemoryRef, shownText, TypedValue, valueRepr } from "../typesys/values.ts";
 import {
   checkMaxLineBytes,
+  type FlowSource,
   isRunLogLocked,
   iterRunRecords,
   NodeExpandedRecord,
@@ -51,7 +55,7 @@ import { applyWaitsRecord, type WaitInfo, WaitsState, wakeableNodes, wakeAt, wai
 const INDEX_FILE = "index.sqlite";
 
 /** The index layout's version, kept in `PRAGMA user_version`; an index of another is rebuilt. */
-const INDEX_VERSION = 6;
+const INDEX_VERSION = 7;
 
 /** How long an update or read waits for SQLite's lock by default, in milliseconds. */
 const DEFAULT_TIMEOUT_MS = 5000;
@@ -61,6 +65,8 @@ const DEFAULT_TIMEOUT_MS = 5000;
 // column holds a status that could drift from them. The `unreadable_*` columns are set for a log
 // that can't be read; `log_size`, `log_mtime` and `max_line_bytes` are what it was read with, so a
 // later update reads it again only when the log changed or a higher limit may read further.
+// `memories` holds the run's memory inputs as JSON (`RunIndexMemory`s): identities, never a
+// location, which no log holds either.
 const SCHEMA = `CREATE TABLE runs (
   run_id TEXT PRIMARY KEY,
   flow TEXT,
@@ -80,7 +86,8 @@ const SCHEMA = `CREATE TABLE runs (
   unreadable_reason TEXT,
   log_size INTEGER,
   log_mtime REAL,
-  max_line_bytes INTEGER
+  max_line_bytes INTEGER,
+  memories TEXT NOT NULL
 )`;
 
 const COLUMNS = [
@@ -103,9 +110,20 @@ const COLUMNS = [
   "log_size",
   "log_mtime",
   "max_line_bytes",
+  "memories",
 ];
 
 const SQLITE_BUSY = 5;
+
+/** A memory input of a run, as its START inputs recorded it. */
+export interface RunIndexMemory {
+  /** The memory input's name. */
+  readonly input: string;
+  /** The memory's identity, fixed when it was created; never its location. */
+  readonly identity: string;
+  /** Its memory type, such as `FileMemory`. */
+  readonly type: string;
+}
 
 /** A run's status in the index; `running` is only ever put on top at read time. */
 export type RunIndexStatus = "running" | ReturnType<typeof scanStatus>;
@@ -129,6 +147,11 @@ export interface RunIndexRow {
   readonly endedAt: string | null;
   /** The id of the run that started this one (`run_started.parent`), or `null`. */
   readonly parentRunId: string | null;
+  /**
+   * The memories the run was bound to, as its START inputs recorded them, in input-name order; an
+   * Optional memory left out recorded none. `yian memory` finds the runs that used a memory here.
+   */
+  readonly memories: readonly RunIndexMemory[];
   /** The seq of the last record the index read, or `null` when it read none (see `unreadable`). */
   readonly lastSeq: number | null;
   /**
@@ -353,6 +376,7 @@ interface StoredRow {
   startedAt: string | null;
   endedAt: string | null;
   parentRunId: string | null;
+  memories: RunIndexMemory[];
   lastSeq: number | null;
   result: string | null;
   inputTokens: number;
@@ -632,6 +656,8 @@ function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.S
   // The values of the top-level END's commits read in this pass, by seq; one read earlier is
   // found again through the offsets.
   const endCommits = new Map<number, string | null>();
+  // The memory inputs the run's flow declares, once this pass has read them (`undefined` until).
+  let declared: ReadonlySet<string> | null | undefined;
   try {
     for (const entry of iterRunRecords(log, options)) {
       const record = entry.envelope.record;
@@ -642,19 +668,27 @@ function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.S
         }
         row = emptyRow(runId);
         row.flow = record.flow === null ? null : join(record.flow.dir, record.flow.root);
+        declared = declaredMemories(record.flow);
         row.startedAt = entry.at;
         row.parentRunId = record.parent?.runId ?? null;
       }
       // Read before the row changes, so a failure leaves it at the record before this one.
       let result = row.result;
+      let memories = row.memories;
       if (record instanceof PoolCommitRecord) {
         if (record.nodeId === END_ID) endCommits.set(entry.seq, record.value === null ? null : logJson(record.value.value));
+        else if (record.nodeId === START_ID && record.key === START_ID) {
+          // An earlier pass read the run's start; its flow is read again from the log's first record.
+          if (declared === undefined) declared = declaredMemories(startedFlow(log, maxLineBytes));
+          memories = startMemories(record.value?.value, declared);
+        }
       } else if (record instanceof NodeSucceededRecord && record.nodeId === END_ID) {
         result = endCommits.has(record.commit) ? endCommits.get(record.commit)! : committedValue(log, record.commit, maxLineBytes);
       }
       row.lastSeq = entry.seq;
       row.offset = entry.end;
       row.result = result;
+      row.memories = memories;
       lastAt = entry.at;
       foldRunScan(row.scan, entry.envelope);
       if (record instanceof NodeStepRecord) addUsage(row, record.step);
@@ -675,6 +709,98 @@ function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.S
   return row;
 }
 
+/**
+ * Return the memory inputs the top-level START inputs `inputs` recorded, by input name: each input
+ * the run's flow declares a memory (`declared`) whose value is a memory value's form. Another input
+ * may hold plain data of that form, so the declaration decides. A flow built in code recorded no
+ * declarations (`null`); then each field of that form counts.
+ */
+function startMemories(inputs: unknown, declared: ReadonlySet<string> | null): RunIndexMemory[] {
+  if (!isRecord(inputs)) return [];
+  const memories: RunIndexMemory[] = [];
+  for (const input of Object.keys(inputs).sort(compareCodeUnits)) {
+    if (declared !== null && !declared.has(input)) continue;
+    let memory: MemoryRef;
+    try {
+      memory = TypedValue.fromWire({ kind: "memory", value: inputs[input] }).value as MemoryRef;
+    } catch (error) {
+      if (error instanceof RangeError) continue;
+      throw error;
+    }
+    memories.push({ input, identity: memory.identity, type: memory.type });
+  }
+  return memories;
+}
+
+/**
+ * Return the names of the memory inputs the flow `source` declares, read from the tags of its root
+ * file's `input:` without loading the flow: a memory type, alone or in `Optional(...)`, or a name
+ * that is none of the file's typedefs, which only a host's memory type can be. `null` for a flow
+ * built in code, which has no recorded source, or a root file that doesn't parse.
+ */
+function declaredMemories(source: FlowSource | null): ReadonlySet<string> | null {
+  const text = source?.files[source.root]?.text;
+  if (text === undefined) return null;
+  let document: SourceDocument;
+  try {
+    document = SourceDocument.parse(text);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    return null;
+  }
+  const top = document.root.value;
+  const typedefs = new Set(isRecord(top) && isRecord(top["typedefs"]) ? Object.keys(top["typedefs"]) : []);
+  const names = new Set<string>();
+  for (const node of document.taggedNodes({ skipTopLevel: (key) => key !== "input" })) {
+    const [section, name, ...deeper] = node.keyPath;
+    if (node.isKey || section !== "input" || typeof name !== "string" || deeper.length > 0) continue;
+    let typ: TypeExpr;
+    try {
+      typ = parseType(node.tag);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      continue;
+    }
+    while (typ.kind === "optional") typ = typ.inner;
+    if (typ.kind === "memory" || (typ.kind === "ref" && !typedefs.has(typ.name))) names.add(name);
+  }
+  return names;
+}
+
+/**
+ * Return the flow the run in `log` started from, as its first record recorded it, or `null` when it
+ * records none.
+ */
+function startedFlow(log: string, maxLineBytes: number | null): FlowSource | null {
+  for (const entry of iterRunRecords(log, { maxLineBytes })) {
+    const record = entry.envelope.record;
+    return record instanceof RunStartedRecord ? record.flow : null;
+  }
+  return null;
+}
+
+/**
+ * Return the stored `memories` column.
+ *
+ * @throws RangeError when it isn't a JSON array of `{input, identity, type}` texts.
+ */
+function memoriesFromJson(text: unknown): RunIndexMemory[] {
+  let parsed: unknown;
+  try {
+    parsed = typeof text === "string" ? JSON.parse(text) : null;
+  } catch {
+    parsed = null;
+  }
+  const valid =
+    Array.isArray(parsed) &&
+    parsed.every(
+      (each) =>
+        isRecord(each) && ["input", "identity", "type"].every((field) => typeof each[field] === "string"),
+    );
+  if (!valid) throw new RangeError("the stored memories aren't a list of memory inputs");
+  return (parsed as RunIndexMemory[]).map(({ input, identity, type }) => ({ input, identity, type }));
+}
+
 /** Return the row of the run `runId` before any record is read. */
 function emptyRow(runId: string): StoredRow {
   return {
@@ -683,6 +809,7 @@ function emptyRow(runId: string): StoredRow {
     startedAt: null,
     endedAt: null,
     parentRunId: null,
+    memories: [],
     lastSeq: null,
     result: null,
     inputTokens: 0,
@@ -753,6 +880,7 @@ function toColumns(row: StoredRow): (string | number | null)[] {
     row.unreadable?.size ?? null,
     row.unreadable?.mtimeMs ?? null,
     row.unreadable?.maxLineBytes ?? null,
+    JSON.stringify(row.memories),
   ];
 }
 
@@ -764,6 +892,7 @@ function fromColumns(columns: SqliteRow): StoredRow {
     startedAt: columns["started_at"] as string | null,
     endedAt: columns["ended_at"] as string | null,
     parentRunId: columns["parent_run_id"] as string | null,
+    memories: memoriesFromJson(columns["memories"]),
     lastSeq: columns["last_seq"] as number | null,
     result: columns["result"] as string | null,
     inputTokens: columns["input_tokens"] as number,

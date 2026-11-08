@@ -266,6 +266,7 @@ export { DeliveryRefused, type DeliveryRefusal } from "./runtime/state.ts";
 export {
   readRunIndex,
   RunIndexBusyError,
+  type RunIndexMemory,
   type RunIndexRow,
   type RunIndexStatus,
   updateRunIndex,
@@ -740,7 +741,8 @@ export interface RunFlowOptions {
  * @throws AuthError when the credential store can't be read.
  * @throws DefaultsError when a `YIAN_<NAME>` variable in `env` holds a value its entry doesn't accept.
  * @throws MemoryBusyError when a memory's lock stays held past its timeout as it is opened.
- * @throws Error naming the input when a memory fails to open or snapshot (`RunMemories.open`).
+ * @throws RangeError naming the input when a memory refuses to open or snapshot, or an Error with
+ *   the OS error's code when that failed (`RunMemories.open`).
  * @throws The signal's reason when it aborts.
  * @throws Error (code `EEXIST`) when `log` names an existing path, and the `fs` error when the log
  *   can't be created, locked, written, synced or closed.

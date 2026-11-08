@@ -56,7 +56,7 @@ describe("yian help", () => {
   test("a group alone prints its help and exits 2", async () => {
     for (const [group, summary] of [
       ["skills", "Check skill directories."],
-      ["config", "Check an llm_config layer."],
+      ["config", "Check an llm_config layer, or set the default embedding model."],
     ]) {
       const { io, stdout } = testIo();
       expect(await main([group!], io)).toBe(2);

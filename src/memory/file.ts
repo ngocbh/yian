@@ -237,11 +237,11 @@ interface Limits {
 }
 
 /**
- * Return why the relative path `rel` can't name a member, or with `folder` a folder of members, by
- * its text alone, or `null` when it can. Its components are plain names, and a file sits under at
- * most `maxDepth` folders.
+ * @internal Return why the relative path `rel` can't name a member, or with `folder` a folder of
+ * members, by its text alone, or `null` when it can. Its components are plain names, and a file
+ * sits under at most `maxDepth` folders.
  */
-function pathProblem(rel: string, maxDepth: number, folder = false): string | null {
+export function pathProblem(rel: string, maxDepth: number, folder = false): string | null {
   if (rel === "") return "an empty path";
   if (isAbsolute(rel)) return "an absolute path";
   // Past the common file system limits the OS fails the write after its change is journaled, so
@@ -262,15 +262,15 @@ function pathProblem(rel: string, maxDepth: number, folder = false): string | nu
 }
 
 /**
- * Return why the existing components of `rel` under `root` can't lead to a member, or with
- * `folder` to a folder of members, checked with `lstat`, or `null` when they can. A missing
+ * @internal Return why the existing components of `rel` under `root` can't lead to a member, or
+ * with `folder` to a folder of members, checked with `lstat`, or `null` when they can. A missing
  * component is fine: a write creates it.
  *
  * The check and the use are separate path walks: Node has no `openat`, so a local process that
  * can write in the memory's folder and swaps a checked folder for a symlink in between can
  * redirect a read or a write. Only the last component is opened without following a symlink.
  */
-function diskProblem(root: string, rel: string, folder = false): string | null {
+export function diskProblem(root: string, rel: string, folder = false): string | null {
   const parts = rel.split("/");
   let path = root;
   for (let i = 0; i < parts.length; i++) {

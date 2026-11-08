@@ -1084,6 +1084,19 @@ describe("auth list, default and remove", () => {
     expect(existsSync(setup.path)).toBe(false);
   });
 
+  test("--remove --auth-file F says it also took F's default embedding model", async () => {
+    const setup = setupAuth();
+    const path = join(tmp, "auth", "other.json");
+    const store = new AuthStore(path);
+    await saveEachKind(store);
+    await store.setDefaultEmbedding("openai/text-embedding-3-small");
+    const result = await runAuth(setup, undefined, { remove: true, "auth-file": path });
+    expect(result).toMatchObject({
+      code: 0,
+      out: `Removed the saved logins in ${path}, and its default embedding model openai/text-embedding-3-small\n`,
+    });
+  });
+
   const wholeFile = "--remove without a provider deletes the whole --auth-file; it takes no --default or setup option";
   test.each<[string, Record<string, OptionValue>]>([
     ["--default", { default: true }],

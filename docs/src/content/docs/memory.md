@@ -34,7 +34,7 @@ nodes:
 output: ${answer.output}
 ```
 
-- A memory input takes no default and no value: your program binds it (see
+- A memory input takes no default and no value: `yian run` or your program binds it (see
   [Bind a memory](#bind-a-memory)).
 - An `!Optional(FileMemory)` input may be left unbound. It then renders as `""` and its grants give
   no tools.
@@ -202,15 +202,15 @@ output: ${triage.output}
 - An item's version is the memory's change count at the item's last change. `search`, `read` and
   `list` give it.
 - The embedding model is part of the memory. A new store records it, and an instance built with
-  another model is refused. `memory.reembed({embedding, embed, signal})` embeds every item again
-  with a new model; no run does.
+  another model is refused. `memory.reembed({embedding, embed, signal})`, or
+  `yian memory reembed`, embeds every item again with a new model; no run does.
 - A search or write embeds outside the memory's lock. If the embedder fails, nothing is written.
 - `maxItems`, `maxK` and `maxTextChars` refuse a call that passes them, with the reason, and the
   recall is cut to `maxRecallChars`. [Reference](/reference/#all-defaults-and-limits) lists the
   defaults.
 - The store is one SQLite file, mode 0600, beside its lock `<path>.lock`. Every read and write
   takes the lock, so writers in any process take turns; keep the file on a local disk. Deleted
-  text is overwritten, and `memory.compact({signal})` gives the space back.
+  text is overwritten, and `memory.compact({signal})` (`yian memory compact`) gives the space back.
 - `undo`, `history`, `reset` and `erase({target: {item}})` work as for a FileMemory (see
   [Undo, erase and reset](#undo-erase-and-reset)). A delete or an erase can't be undone.
 
@@ -236,8 +236,9 @@ An instance for `advance` may leave `embedding` out: the store's model is used.
 
 ## Bind a memory
 
-`yian run` doesn't bind memories, so run a flow with a memory input from your program (see
-[Embedding yian](/embedding/)). Pass each memory as its input:
+`yian run` binds each memory input to one it keeps per project, or to the folder or store
+`--memory` names, and `yian memory` reads and changes them (see [CLI](/cli/#memory)). From your
+program, pass each memory as its input (see [Embedding yian](/embedding/)):
 
 ```ts check=fragment
 import { advance, FileMemory, runFlow } from "@ngocbh/yian";
@@ -276,7 +277,8 @@ Resuming a run:
 
 ## Undo, erase and reset
 
-Outside a run, your program changes a memory through a session:
+Outside a run, `yian memory` (see [CLI](/cli/#yian-memory)) or your program changes a memory. Your
+program does it through a session:
 
 ```ts check=fragment
 const memory = new FileMemory({ root: "./memory/lessons" });
@@ -340,3 +342,9 @@ nodes:
     output: str
 output: ${tidy.output}
 ```
+
+A default memory belongs to its flow's `id:`, so `yian run tidy.yaml` alone tidies the flow's own,
+empty `<project>/tidy-lessons/lessons`. To tidy another flow's memory, pass the folder
+`yian memory list` shows: `yian run tidy.yaml --memory lessons=FOLDER`, or bind it from your
+program. `yian chat` binds only each flow's own defaults, so it can't run this tidy on another
+flow's memory.

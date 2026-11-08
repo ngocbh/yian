@@ -351,6 +351,102 @@ function checkFiles(path: string): void {
   }
 }
 
+/** The SQLite primary result code for a file that isn't a database. */
+const SQLITE_NOTADB = 26;
+
+/** The 16 bytes every SQLite database file starts with. */
+const SQLITE_MAGIC = "SQLite format 3\0";
+
+/** The error for the file at `path`, which isn't a store, saying `why`. */
+function notAStore(path: string, why: string): Error {
+  return new Error(`${shown(path)} isn't a VectorDBMemory store: ${why}`);
+}
+
+/** Return `error`, or, when SQLite found the file isn't a database, the error saying so. */
+function translated(error: unknown, path: string): unknown {
+  const code = sqliteErrorCode(error);
+  return code !== undefined && (code & 0xff) === SQLITE_NOTADB ? notAStore(path, "it isn't a SQLite database") : error;
+}
+
+/**
+ * Check, from its header alone and without SQLite, that the file at `path` can be this memory's
+ * store: empty (a store not made yet), or a SQLite database in rollback-journal mode, as every
+ * store is. A database in WAL mode is another program's, and opening it to look would switch its
+ * journal mode, checkpointing and deleting its `-wal`.
+ *
+ * @returns How many bytes of the header there are: 0 for an empty file.
+ * @throws Error naming the file and why it isn't a store; a system error when it can't be read.
+ */
+function checkHeader(path: string): number {
+  const fd = openRegular(path, fs.constants.O_RDONLY);
+  const header = new Uint8Array(100);
+  let size: number;
+  try {
+    size = fs.readSync(fd, header, 0, header.length, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (size === 0) return 0;
+  if (size < header.length || new TextDecoder().decode(header.subarray(0, 16)) !== SQLITE_MAGIC) {
+    throw notAStore(path, "it isn't a SQLite database");
+  }
+  // Bytes 18 and 19 are the file's write and read versions: 1 for a rollback journal, 2 for WAL.
+  if (header[18] !== 1 || header[19] !== 1) throw notAStore(path, "it is a database in WAL mode");
+  return size;
+}
+
+/**
+ * Check, changing nothing and before the memory's lock is taken, that the file at `path`, when
+ * there is one, may be locked as a store, so a file that isn't one gets no lock file beside it:
+ * its files (`checkFiles`) and header (`checkHeader`), then, for a file with no lock file, its
+ * tables (`checkTables`). yian makes a store's lock file before the store and never removes it, so
+ * a file without one is no store it made: with a rollback journal beside it, it is refused unread,
+ * since reading would roll the journal back. An empty file may become a store. A file with a lock
+ * file is checked holding the lock (`checkLocked`), where no writer is mid-commit.
+ *
+ * @throws Error as `checkFiles`, `checkHeader` and `readMeta` throw, and for such a journal.
+ */
+function checkBeforeLock(path: string): void {
+  const stats = lstatOrNull(path);
+  if (stats === null || stats.isDirectory()) return;
+  checkFiles(path);
+  checkHeader(path);
+  if (stats.size === 0 || lstatOrNull(`${path}.lock`) !== null) return;
+  if (lstatOrNull(`${path}-journal`) !== null) throw notAStore(path, "it has a rollback journal and no lock file");
+  checkTables(path);
+}
+
+/**
+ * Check, holding the memory's lock, the store file at `path` before a writing connection opens it:
+ * its header, then its tables (`checkTables`), unless it is empty or a rollback journal beside it,
+ * a crash's, must be rolled back first, which only a writing connection does.
+ *
+ * @throws Error as `checkHeader` and `readMeta` throw.
+ */
+function checkLocked(path: string): void {
+  if (checkHeader(path) === 0 || lstatOrNull(`${path}-journal`) !== null) return;
+  checkTables(path);
+}
+
+/**
+ * Check the tables of the database at `path` with `readMeta`, through a read-only connection, so
+ * a file that isn't a store is left as it was.
+ *
+ * @throws Error as `readMeta` throws, and when the file isn't a database.
+ */
+function checkTables(path: string): void {
+  try {
+    const db = openSqlite(path, { readonly: true });
+    try {
+      readMeta(db, path);
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    throw translated(error, path);
+  }
+}
+
 /**
  * @internal Open the store at `path` with the settings every access uses: no busy timeout, since
  * the memory's lock serializes all access; `secure_delete`, so deleted text doesn't stay in free
@@ -377,18 +473,37 @@ export function openStore(path: string): Sqlite {
 }
 
 /**
- * Run `fn` on a connection to the store at `path`, closed after it.
+ * Run `fn` on a connection to the store at `path`, closed after it. The file is checked first:
+ * with `full`, as `checkLocked` checks it, else only its header.
  *
  * @throws Error when the store file is gone, rather than letting SQLite make an empty one.
  */
-function withDb<T>(path: string, fn: (db: Sqlite) => T): T {
+function withDb<T>(path: string, fn: (db: Sqlite) => T, full = false): T {
   if (lstatOrNull(path) === null) throw new Error("this memory's store file is gone");
-  const db = openStore(path);
+  // Again under the lock: the file may have been swapped since it was checked.
+  if (full) checkLocked(path);
+  else checkHeader(path);
+  let db: Sqlite;
+  try {
+    db = openStore(path);
+  } catch (error) {
+    throw translated(error, path);
+  }
   try {
     return fn(db);
+  } catch (error) {
+    throw translated(error, path);
   } finally {
     db.close();
   }
+}
+
+/**
+ * `withDb` for an open or a host action, the first access to a store a caller hasn't seen: the
+ * file checked in full (`checkLocked`) before a writing connection opens it.
+ */
+function withCheckedDb<T>(path: string, fn: (db: Sqlite) => T): T {
+  return withDb(path, fn, true);
 }
 
 /** Run `fn` in one `BEGIN IMMEDIATE` transaction on `db`, rolled back when it throws. */
@@ -1003,9 +1118,6 @@ function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-/** The SQLite primary result code for a file that isn't a database. */
-const SQLITE_NOTADB = 26;
-
 /**
  * A memory kept as a SQLite store of items, searched by embedding.
  *
@@ -1123,6 +1235,8 @@ export class VectorDBMemory extends MemoryBase {
       if (lstatOrNull(dirname(path)) === null) makeFolder(dirname(path));
     } else if (stats.isDirectory()) {
       throw new Error(`${shown(path)} is a folder, not a store file`);
+    } else {
+      checkBeforeLock(path);
     }
     let created = false;
     let meta: Meta;
@@ -1132,7 +1246,7 @@ export class VectorDBMemory extends MemoryBase {
           canCreate();
           makeStoreFile(path);
         }
-        return withDb(path, (db) => {
+        return withCheckedDb(path, (db) => {
           const stored = readMeta(db, path);
           if (stored !== null) return stored;
           if (!o.create) throw new MemoryMissingError("the memory isn't at its location: its store isn't a memory yet");
@@ -1143,11 +1257,7 @@ export class VectorDBMemory extends MemoryBase {
         });
       });
     } catch (error) {
-      const code = sqliteErrorCode(error);
-      if (code !== undefined && (code & 0xff) === SQLITE_NOTADB) {
-        throw new Error(`${shown(path)} isn't a VectorDBMemory store: it isn't a SQLite database`);
-      }
-      throw error;
+      throw translated(error, path);
     }
     if (this.#id !== undefined && meta.identity !== this.#id) {
       throw new Error(`this memory is ${shown(meta.identity)}, not ${shown(this.#id)}`);
@@ -1175,8 +1285,9 @@ export class VectorDBMemory extends MemoryBase {
     o.signal.throwIfAborted();
     const { path } = this.#store;
     if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
+    checkBeforeLock(path);
     await this.#store.locked(o.signal, (): void => {
-      withDb(path, (db) => {
+      withCheckedDb(path, (db) => {
         const meta = memoryMeta(db, path, this.#id);
         transaction(db, () => {
           // With secure_delete on, the deleted texts are overwritten, not left in free pages.
@@ -1210,10 +1321,17 @@ export class VectorDBMemory extends MemoryBase {
     if (typeof o.embed !== "function") throw new TypeError("reembed needs embed as a function");
     const { path } = this.#store;
     if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
+    checkBeforeLock(path);
     await this.#store.hold(o.signal, async () => {
       if (lstatOrNull(path) === null) throw new Error("this memory's store file is gone");
+      checkLocked(path);
       // One connection for the whole action: it holds no transaction while it waits for the embedder.
-      const db = openStore(path);
+      let db: Sqlite;
+      try {
+        db = openStore(path);
+      } catch (error) {
+        throw translated(error, path);
+      }
       let staged = false;
       try {
         const meta = memoryMeta(db, path, this.#id);
@@ -1259,6 +1377,69 @@ export class VectorDBMemory extends MemoryBase {
   }
 
   /**
+   * Return what the store records of the memory, read holding its lock: its identity, embedding
+   * model, item schema (`null` for items that are text only), and how many items it holds
+   * (`count`, retired ones included) and how many are retired; or `null` when there is no store.
+   * A host that doesn't know a store's item type opens it with this one (`yian memory --at`). A host
+   * action, never a session method.
+   *
+   * @throws Error when the store isn't a VectorDBMemory store or a memory yet.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
+  async stored(o: { signal: AbortSignal }): Promise<{
+    identity: string;
+    embedding: EmbeddingModel;
+    itemSchema: JsonObject | null;
+    count: number;
+    retired: number;
+  } | null> {
+    o.signal.throwIfAborted();
+    const { path } = this.#store;
+    if (lstatOrNull(path) === null) return null;
+    checkBeforeLock(path);
+    return this.#store.locked(o.signal, () =>
+      withCheckedDb(path, (db) => {
+        const { identity, settings } = memoryMeta(db, path, this.#id);
+        const counts = db.prepare("SELECT COUNT(*) AS count, COUNT(retired) AS retired FROM items").get()!;
+        const { embedding, item_schema: itemSchema } = settings;
+        return { identity, embedding, itemSchema, count: counts.count as number, retired: counts.retired as number };
+      }),
+    );
+  }
+
+  /**
+   * Return up to `limit` items whose ids are past `after` (0 by default), by id, retired ones
+   * included: each with its id, version, text, fields, author and why it was retired, read holding
+   * the memory's lock. A host reads a whole memory a page at a time this way (`yian memory show
+   * --all`); a session's `list` caps at `max_k` and leaves retired items out. Never a session
+   * method.
+   *
+   * @throws {RangeError} If `after` isn't an integer of at least 0, or `limit` one of at least 1.
+   * @throws Error when the store isn't a memory, or holds another identity than the constructor's `id`.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
+  async items(o: { after?: number; limit: number; signal: AbortSignal }): Promise<JsonObject[]> {
+    o.signal.throwIfAborted();
+    const after = o.after ?? 0;
+    if (!Number.isSafeInteger(after) || after < 0) {
+      throw new RangeError("items needs an id of at least 0 to read after");
+    }
+    if (!Number.isSafeInteger(o.limit) || o.limit < 1) throw new RangeError("items needs a limit of at least 1");
+    const { path } = this.#store;
+    if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
+    checkBeforeLock(path);
+    return this.#store.locked(o.signal, () =>
+      withCheckedDb(path, (db) => {
+        memoryMeta(db, path, this.#id);
+        const rows = db
+          .prepare("SELECT id, text, fields, version, author, retired FROM items WHERE id > ? ORDER BY id LIMIT ?")
+          .all(after, o.limit) as unknown as ItemRow[];
+        return rows.map((row) => itemResult(row, true));
+      }),
+    );
+  }
+
+  /**
    * Rebuild the store file with SQLite's `VACUUM`, holding the memory's lock, so the space deleted
    * items and history took is given back. A host action (`yian memory compact`), never a session
    * method. Temporary tables stay in memory, so no copy of a text lands in a temporary file.
@@ -1270,8 +1451,9 @@ export class VectorDBMemory extends MemoryBase {
     o.signal.throwIfAborted();
     const { path } = this.#store;
     if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
+    checkBeforeLock(path);
     await this.#store.locked(o.signal, (): void => {
-      withDb(path, (db) => {
+      withCheckedDb(path, (db) => {
         memoryMeta(db, path, this.#id);
         dropStaging(db);
         db.exec("VACUUM");

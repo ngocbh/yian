@@ -1,10 +1,11 @@
 /**
- * Provider setup over staged authentication and an atomic store, `llm_config` checks, the provider
- * list, and model listings.
+ * Provider setup over staged authentication and an atomic store, `llm_config` checks, the default
+ * embedding model, the provider list, and model listings.
  *
  * `auth` works on the store at `--auth-file`, `$YIAN_AUTH_FILE` or the default path; with `--json`,
  * its removal prints one `yian.cli.v1` document and its OpenAI device sign-in prints JSON lines.
- * `configCheck` checks a host `llm_config` layer read from stdin, `providers` lists the providers
+ * `configCheck` checks a host `llm_config` layer read from stdin, `configEmbedding` saves the
+ * default embedding model in the same store, `providers` lists the providers
  * and the login kinds `auth` can save for each, and `models` (`yian models`) lists the models an
  * OpenAI subscription login or a provider's key offers.
  */
@@ -13,6 +14,7 @@ import { spawn } from "node:child_process";
 import type { EventEmitter } from "node:events";
 
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import type { EmbeddingModel } from "../llm/embeddings.ts";
 import { collect } from "../llm/events.ts";
 import { Message, Request, TextPart } from "../llm/messages.ts";
 import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS, PROVIDER_API_KEY_ENV } from "../llm_clients/api_key_env.ts";
@@ -31,7 +33,7 @@ import {
   validateHeaderValue,
   validateOrganization,
 } from "../llm_clients/connection_settings.ts";
-import { callCredentials, ConnectionSnapshot } from "../llm_clients/connection.ts";
+import { callCredentials, ConnectionSnapshot, embeddingModel } from "../llm_clients/connection.ts";
 import { chatModelFromConfig, warnOnce } from "../llm_clients/factory.ts";
 import { listModels, MODEL_LIST_TIMEOUT_SECONDS, ModelListError, timeoutMilliseconds } from "../llm_clients/model_list.ts";
 import { ValidationError } from "../llm_clients/provider_blocks.ts";
@@ -962,9 +964,18 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
             "--remove without a provider deletes the whole --auth-file; it takes no --default or setup option",
           );
         }
-        await open(authFile).delete();
+        const store = open(authFile);
+        let embedding: string | null = null;
+        try {
+          embedding = store.read().defaultEmbedding;
+        } catch (error) {
+          // A damaged file is deleted all the same: that is how it is fixed.
+          if (!(error instanceof AuthError)) throw error;
+        }
+        await store.delete();
+        const also = embedding === null ? "" : `, and its default embedding model ${embedding}`;
         if (json) await printJson({ ok: true }, io.stdout);
-        else await io.stdout.write(`Removed the saved logins in ${authFile}\n`);
+        else await io.stdout.write(`${forTerminal(`Removed the saved logins in ${authFile}${also}`, io.stdout)}\n`);
         return 0;
       }
       if (options.default || options.remove || setup) {
@@ -1094,6 +1105,55 @@ export async function configCheck(command: ParsedArgs, io: CliIo): Promise<numbe
     await io.stderr.write(errors.map(({ field, message }) => `${field ? `${field}: ${message}` : message}\n`).join(""));
   }
   return errors.length === 0 ? 0 : 1;
+}
+
+/**
+ * Save `provider/model` in the auth store as the embedding model a new VectorDB memory is made with
+ * when the run gives no `--embedding`. `YIAN_DEFAULT_EMBEDDING`, when set, still wins; the command
+ * then says so on stderr. Without a model, print the default a run would use and where it comes
+ * from: `YIAN_DEFAULT_EMBEDDING`, the store's file, or none.
+ *
+ * @returns 0, or 1 when the store can't be read or written.
+ * @throws {UsageError} The model isn't `provider/model` on a provider with embeddings.
+ */
+export async function configEmbedding(command: ParsedArgs, io: CliIo): Promise<number> {
+  const given = command.args["model"] as string | undefined;
+  let model: EmbeddingModel | null = null;
+  try {
+    if (given !== undefined) model = embeddingModel(given);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw new UsageError(`Invalid value for 'MODEL': ${error.message}`);
+  }
+  const store = new AuthStore(null, { env: io.env });
+  const text = model === null ? null : `${model.provider}/${model.model}`;
+  try {
+    if (text === null) return await showEmbedding(io, store);
+    await store.setDefaultEmbedding(text);
+  } catch (error) {
+    if (!(error instanceof AuthError)) throw error;
+    await io.stderr.write(`${forTerminal(error.message, io.stderr)}\n`);
+    return 1;
+  }
+  await io.stdout.write(`saved the default embedding model ${forTerminal(text, io.stdout)}\n`);
+  const set = io.env("YIAN_DEFAULT_EMBEDDING");
+  if (set) {
+    await io.stderr.write(`YIAN_DEFAULT_EMBEDDING=${forTerminal(set, io.stderr)} is set, and runs use it instead\n`);
+  }
+  return 0;
+}
+
+/** Print the default embedding model a run would use and where it comes from; return 0. */
+async function showEmbedding(io: CliIo, store: AuthStore): Promise<number> {
+  const set = io.env("YIAN_DEFAULT_EMBEDDING");
+  const saved = set ? null : store.read().defaultEmbedding;
+  const line = set
+    ? `default embedding model: ${set}, from YIAN_DEFAULT_EMBEDDING`
+    : saved !== null
+      ? `default embedding model: ${saved}, saved in ${store.path}`
+      : "no default embedding model; set one with `yian config embedding provider/model`";
+  await io.stdout.write(`${forTerminal(line, io.stdout)}\n`);
+  return 0;
 }
 
 /**

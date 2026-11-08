@@ -25,6 +25,7 @@ import { parseArgs } from "node:util";
 
 import { current, type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
+import type { Embed } from "../llm/embeddings.ts";
 import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
 import { type Scheduler, SLEEP_CHUNK_MS } from "../platform.ts";
 import { logJson } from "../typesys/json.ts";
@@ -56,6 +57,18 @@ export interface CliIo {
    * later, it stops the run.
    */
   stop?: AbortSignal;
+  /**
+   * Open the file `path` in an editor and resolve once the person closes it; `yian memory edit`
+   * runs `$EDITOR` when absent. For tests.
+   */
+  editor?: (path: string) => Promise<void>;
+  /** The embeddings call a VectorDB memory makes; `defaultEmbed` over `env` when absent. For tests. */
+  embed?: Embed;
+  /**
+   * The account's home folder as the system records it, which `--memory` and `--at` refuse beside
+   * `HOME`'s; `accountHome` (`os.userInfo`) when absent. For tests.
+   */
+  accountHome?: () => string | null;
 }
 
 // An escape sequence, matched whole: the CSI, OSC and DCS (SOS, PM, APC) sequences `sanitize`
@@ -310,8 +323,11 @@ function optionHint(option: OptionSpec): string {
   return option.short === undefined ? `'--${option.name}'` : `'--${option.name}' / '-${option.short}'`;
 }
 
-/** Throw a `UsageError` if `value` doesn't pass `check`, in Click's order and words. */
-function checkPath(hint: string, value: string, check: PathCheck): void {
+/**
+ * @internal Throw a `UsageError` if `value` doesn't pass `check`, in Click's order and words; `hint`
+ * names the argument (`'FLOW'`), as a message shows it.
+ */
+export function checkPath(hint: string, value: string, check: PathCheck): void {
   const kind = check.dir ? "Directory" : "File";
   const fail = (what: string): never => {
     throw new UsageError(`Invalid value for ${hint}: ${kind} ${reprText(value)} ${what}.`);
@@ -546,6 +562,37 @@ export async function printJson(document: Readonly<Record<string, unknown>>, out
   // Key by key: a whole-document `logJson` would sort `format` among the other keys.
   const fields = keys.map((key) => `${logJson(key)}:${logJson(doc[key])}`);
   await out.write(`{${fields.join(",")}}\n`);
+}
+
+/**
+ * Print `document` as `printJson` does, with the list under `key` written as `pages` yields it, so
+ * a long list is never held whole. A page that fails to come leaves the document unfinished, its
+ * line ended, so an error document printed after it is a line of its own.
+ */
+export async function printJsonPaged(
+  document: Readonly<Record<string, unknown>>,
+  key: string,
+  pages: AsyncIterable<readonly unknown[]>,
+  out: Writer,
+): Promise<void> {
+  const doc: Record<string, unknown> = { format: JSON_FORMAT, ...document, [key]: [] };
+  const keys = ["format", ...Object.keys(doc).filter((each) => each !== "format").sort(compareCodeUnits)];
+  const at = keys.indexOf(key);
+  const field = (name: string) => `${logJson(name)}:${logJson(doc[name])}`;
+  await out.write(`{${[...keys.slice(0, at).map(field), `${logJson(key)}:[`].join(",")}`);
+  let first = true;
+  try {
+    for await (const page of pages) {
+      if (page.length === 0) continue;
+      await out.write(`${first ? "" : ","}${page.map((item) => logJson(item)).join(",")}`);
+      first = false;
+    }
+  } catch (error) {
+    await out.write("\n");
+    throw error;
+  }
+  const rest = keys.slice(at + 1).map(field);
+  await out.write(`]${rest.length === 0 ? "" : `,${rest.join(",")}`}}\n`);
 }
 
 /** A provider key that is required but not set, and that no prompt supplied. */

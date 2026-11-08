@@ -46,6 +46,7 @@ import {
 } from "./auth/common.ts";
 import { azureResourceEndpoint, LLMConfig, splitOllamaBaseUrl } from "./config.ts";
 import {
+  checkEmbeddingProvider,
   checkModelConfig,
   type Connection,
   connectionCredentials,
@@ -60,7 +61,6 @@ import {
   GOOGLE_ENDPOINT,
   OLLAMA_ENDPOINT,
   OPENAI_API_ENDPOINT,
-  OPENAI_COMPATIBLE,
   prefersResponses,
   PROVIDER_BASE_URL,
 } from "./endpoints.ts";
@@ -625,13 +625,7 @@ export async function embedderFromConfig(
   } = {},
 ): Promise<Embedder> {
   const { provider, model } = config;
-  if (!OPENAI_COMPATIBLE.includes(provider)) {
-    const others = OPENAI_COMPATIBLE.filter((name) => name !== "openai").join(", ");
-    throw new RangeError(
-      `provider \`${provider}\` has no embeddings API yian supports; use openai or an OpenAI-compatible ` +
-        `provider (${others})`,
-    );
-  }
+  checkEmbeddingProvider(provider);
   if (typeof model !== "string" || model === "") throw new RangeError("an embedding model needs a model name");
   const { env = processEnv, send, scheduler } = options;
   const resolved = await resolveProviderAccess({ provider, model }, options);

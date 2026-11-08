@@ -7,6 +7,7 @@
  */
 
 import { noteCleanup } from "../diagnostics.ts";
+import { isSystemError } from "../platform.ts";
 import {
   BUILTIN_MEMORY_TOOLS,
   checkContract,
@@ -103,7 +104,8 @@ export class RunMemories {
    * @throws RangeError when an instance's contract type isn't its input's, one instance is bound to
    *   inputs of different item types, or two instances hold one identity.
    * @throws MemoryBusyError when a memory's lock stays held past its timeout, naming the input.
-   * @throws Error naming the input for another failed `open` or `snapshot`, its cause the error.
+   * @throws RangeError naming the input for another failed `open` or `snapshot`, or an Error with
+   *   the same code for a system error, its cause the error.
    * @throws The signal's reason once it aborted.
    */
   static async open(bindings: readonly MemoryBinding[], options: OpenMemoriesOptions): Promise<RunMemories> {
@@ -317,11 +319,12 @@ function checkSession(input: string, contract: MemoryContract, session: MemorySe
 
 /**
  * Run one session step for input `input`, naming the input in its failure: a busy memory stays
- * busy, a missing one says to bind it, and any other error is wrapped. A stop's reason passes
- * through.
+ * busy, a missing one says to bind it, a system error keeps its code, and any other error is a
+ * `RangeError`, the memory refusing what the host bound. A stop's reason passes through.
  *
  * @param identity The memory's recorded identity, for a missing memory's message, or `null`.
- * @throws MemoryBusyError, RangeError or Error naming the input, the original its cause.
+ * @throws MemoryBusyError, RangeError, or an Error with the system error's code, naming the
+ *   input, the original its cause.
  */
 async function sessionStep<T>(
   input: string,
@@ -339,7 +342,11 @@ async function sessionStep<T>(
         cause: error,
       });
     }
-    throw new Error(`memory \`${input}\`: ${errorText(error)}`, { cause: error });
+    const message = `memory \`${input}\`: ${errorText(error)}`;
+    if (!isSystemError(error)) throw new RangeError(message, { cause: error });
+    // Its code, so a host reads it as the OS error it is; not its `path`, which holds a location.
+    const { code, syscall, errno } = error;
+    throw Object.assign(new Error(message, { cause: error }), { code, syscall, errno });
   }
 }
 

@@ -1541,8 +1541,9 @@ export class Terminal {
   }
 
   /**
-   * A single choice among strings; null when cancelled or closed. Each choice is drawn through
-   * `visible` (a provider's model ids are choices) and answered as given. With `cancellable`, Esc
+   * A single choice among strings; null when cancelled or closed. The label is drawn through
+   * `sanitize` and each choice through `visible` (a provider's model ids are choices); a choice is
+   * answered as given. With `cancellable`, Esc
    * or Ctrl-C answers null and leaves the terminal open; otherwise Ctrl-C closes it.
    */
   async askChoice(
@@ -1557,9 +1558,11 @@ export class Terminal {
     }
     const initial = options.initial === undefined ? 0 : choices.indexOf(options.initial);
     const escapes = options.cancellable === true;
+    // As `approve` shows its title: a sequence in the question is shown, not sent to the terminal.
+    const shown = sanitize(label, { sequences: "show" });
     const ended = await this.#runTurn(
       options.signal,
-      (run) => run(selectWidget({ label, titles: choices.map(visible), initial, escapes })),
+      (run) => run(selectWidget({ label: shown, titles: choices.map(visible), initial, escapes })),
       { keepOpen: escapes },
     );
     return "value" in ended ? choices[ended.value]! : null;

@@ -32,6 +32,7 @@ import {
   type OptionSpec,
   type ParsedArgs,
   parseCommand,
+  type PositionalSpec,
   printJson,
   processIo,
   relay,
@@ -51,6 +52,33 @@ interface Command {
 
 const JSON_HELP = "Print one yian.cli.v1 JSON document on stdout.";
 const JSON_OPTION: OptionSpec = { name: "json", type: "boolean", help: JSON_HELP };
+
+/** `yian memory`'s two ways to name a memory: `FLOW NAME`, an input's default, or `--at PATH`. */
+const MEMORY_FLOW: PositionalSpec = {
+  name: "flow",
+  help: "A flow file; with NAME, that input's default memory.",
+  optional: true,
+  path: { exists: true, dir: false, readable: true },
+};
+const MEMORY_NAME: PositionalSpec = { name: "name", help: "A memory input of FLOW.", optional: true };
+const MEMORY_AT: OptionSpec = {
+  name: "at",
+  type: "string",
+  metavar: "PATH",
+  help: "The memory's folder or .db store, instead of FLOW NAME.",
+};
+
+const MEMORY_YES: OptionSpec = { name: "yes", type: "boolean", help: "Don't ask first." };
+
+/**
+ * The positionals of a `yian memory` command with an argument of its own after the memory:
+ * `FLOW NAME <last>`, or with `--at` `<last>` alone. All are optional, as the parser fills them in
+ * order; the command reads them as one list. The command checks FLOW, which may be `<last>`.
+ */
+function memoryThen(last: { name: string; help: string }): PositionalSpec[] {
+  const { path: _, ...flow } = MEMORY_FLOW;
+  return [flow, MEMORY_NAME, { ...last, optional: true }];
+}
 
 /** The commands by name, in the order the root help lists them. */
 export const COMMANDS: Readonly<Record<string, Command>> = {
@@ -130,6 +158,19 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
             "first when it exists.",
         },
         {
+          name: "memory",
+          type: "string",
+          multiple: true,
+          metavar: "NAME=PATH",
+          help: "Bind memory input NAME to the folder or .db store PATH (repeatable); inputs given one path share it.",
+        },
+        {
+          name: "embedding",
+          type: "string",
+          metavar: "PROVIDER/MODEL",
+          help: "The embedding model a new VectorDB memory is made with; `yian config embedding`'s when absent.",
+        },
+        {
           name: "json",
           type: "boolean",
           help: "Print one yian.cli.v1 JSON document on stdout: the run's result, or the error that stopped it.",
@@ -154,6 +195,8 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
             model: o["model"] as string | undefined,
             engineTrace: o["engine-trace"] === true,
             mcpConfig: o["mcp-config"] as string[],
+            memory: o["memory"] as string[],
+            embedding: o["embedding"] as string | undefined,
             json: o["json"] === true,
           },
           io,
@@ -363,6 +406,171 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       return configCheck;
     },
   },
+  "config embedding": {
+    spec: {
+      name: "config embedding",
+      summary: "Save the embedding model a new VectorDB memory is made with when --embedding is absent.",
+      positionals: [
+        {
+          name: "model",
+          help: "The model as provider/model, such as openai/text-embedding-3-small; without it, show the default.",
+          optional: true,
+        },
+      ],
+      options: [],
+    },
+    load: async () => {
+      const { configEmbedding } = await import("./auth.ts");
+      return configEmbedding;
+    },
+  },
+  "memory list": {
+    spec: {
+      name: "memory list",
+      summary: "List the memories under ~/.yian/memory: each one's identity, type and folder or store.",
+      positionals: [],
+      options: [JSON_OPTION],
+    },
+    load: async () => {
+      const { memoryList } = await import("./memory_cmd.ts");
+      return memoryList;
+    },
+  },
+  "memory show": {
+    spec: {
+      name: "memory show",
+      summary: "Show a memory: where it is, its counts and the recall a prompt shows each run.",
+      positionals: [MEMORY_FLOW, MEMORY_NAME],
+      options: [
+        MEMORY_AT,
+        { name: "all", type: "boolean", help: "Also print every file, or a store's every item." },
+        JSON_OPTION,
+      ],
+    },
+    load: async () => {
+      const { memoryShow } = await import("./memory_cmd.ts");
+      return memoryShow;
+    },
+  },
+  "memory history": {
+    spec: {
+      name: "memory history",
+      summary: "List a memory's changes, newest first, with who made each.",
+      positionals: [MEMORY_FLOW, MEMORY_NAME],
+      options: [
+        MEMORY_AT,
+        { name: "limit", type: "int", min: 0, help: "The most changes to list (20)." },
+        JSON_OPTION,
+      ],
+    },
+    load: async () => {
+      const { memoryHistory } = await import("./memory_cmd.ts");
+      return memoryHistory;
+    },
+  },
+  "memory undo": {
+    spec: {
+      name: "memory undo",
+      summary: "Undo one change to a memory: FLOW NAME CHANGE, or --at PATH CHANGE.",
+      positionals: memoryThen({ name: "change", help: "The change's id, as history lists it." }),
+      options: [MEMORY_AT, JSON_OPTION],
+    },
+    load: async () => {
+      const { memoryUndo } = await import("./memory_cmd.ts");
+      return memoryUndo;
+    },
+  },
+  "memory edit": {
+    spec: {
+      name: "memory edit",
+      summary: "Edit a file of a memory in $EDITOR, or add, change or delete a store's item.",
+      positionals: [MEMORY_FLOW, MEMORY_NAME],
+      options: [
+        MEMORY_AT,
+        { name: "file", type: "string", metavar: "FILE", help: "The file to edit (the memory's index by default)." },
+        { name: "add", type: "string", metavar: "TEXT", help: "VectorDBMemory: add an item holding TEXT." },
+        { name: "id", type: "int", min: 1, metavar: "N", help: "VectorDBMemory: the item whose text --text replaces." },
+        { name: "text", type: "string", metavar: "TEXT", help: "VectorDBMemory: item N's new text." },
+        {
+          name: "fields",
+          type: "string",
+          metavar: "JSON",
+          help: "VectorDBMemory: the fields, a JSON object, of the item --add adds or --id changes.",
+        },
+        { name: "delete", type: "int", min: 1, metavar: "N", help: "VectorDBMemory: delete item N, after asking." },
+        {
+          name: "if-version",
+          type: "int",
+          min: 1,
+          metavar: "V",
+          help: "VectorDBMemory: change or delete item N only while its version is V, as show gave it.",
+        },
+        MEMORY_YES,
+        JSON_OPTION,
+      ],
+    },
+    load: async () => {
+      const { memoryEdit } = await import("./memory_cmd.ts");
+      return memoryEdit;
+    },
+  },
+  "memory erase": {
+    spec: {
+      name: "memory erase",
+      summary: "Erase a file, text in it, or an item from a memory and its history.",
+      positionals: memoryThen({ name: "target", help: "The file to erase from, or a VectorDBMemory's item id." }),
+      options: [
+        MEMORY_AT,
+        { name: "text", type: "string", help: "Erase only this text from the file." },
+        MEMORY_YES,
+        JSON_OPTION,
+      ],
+    },
+    load: async () => {
+      const { memoryErase } = await import("./memory_cmd.ts");
+      return memoryErase;
+    },
+  },
+  "memory reset": {
+    spec: {
+      name: "memory reset",
+      summary: "Empty a memory, keeping its identity.",
+      positionals: [MEMORY_FLOW, MEMORY_NAME],
+      options: [MEMORY_AT, MEMORY_YES, JSON_OPTION],
+    },
+    load: async () => {
+      const { memoryReset } = await import("./memory_cmd.ts");
+      return memoryReset;
+    },
+  },
+  "memory reembed": {
+    spec: {
+      name: "memory reembed",
+      summary: "Embed every item of a VectorDB store again with another model.",
+      positionals: [MEMORY_FLOW, MEMORY_NAME],
+      options: [
+        MEMORY_AT,
+        { name: "embedding", type: "string", metavar: "PROVIDER/MODEL", help: "The model to embed with." },
+        JSON_OPTION,
+      ],
+    },
+    load: async () => {
+      const { memoryReembed } = await import("./memory_cmd.ts");
+      return memoryReembed;
+    },
+  },
+  "memory compact": {
+    spec: {
+      name: "memory compact",
+      summary: "Rebuild a VectorDB store's file, giving back the space deleted items took.",
+      positionals: [MEMORY_FLOW, MEMORY_NAME],
+      options: [MEMORY_AT, JSON_OPTION],
+    },
+    load: async () => {
+      const { memoryCompact } = await import("./memory_cmd.ts");
+      return memoryCompact;
+    },
+  },
   "skills check": {
     spec: {
       name: "skills check",
@@ -379,7 +587,8 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
 
 /** The groups by name, each with its one-line summary. */
 export const GROUPS: Readonly<Record<string, string>> = {
-  config: "Check an llm_config layer.",
+  config: "Check an llm_config layer, or set the default embedding model.",
+  memory: "List the memories flows keep, and show or change one.",
   skills: "Check skill directories.",
 };
 
@@ -498,7 +707,8 @@ export async function main(argv: readonly string[], io: CliIo = processIo()): Pr
     );
   } catch (error) {
     if (error instanceof UsageError) {
-      await io.stderr.write(usageError(spec, error));
+      // A usage error can quote what it was given, or a memory's identity: only text reaches a terminal.
+      await io.stderr.write(forTerminal(usageError(spec, error), io.stderr));
       return 2;
     }
     await io.stderr.write(`${forTerminal((error instanceof Error && error.stack) || String(error), io.stderr)}\n`);

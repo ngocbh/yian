@@ -43,24 +43,27 @@ import {
   canonicalTypeLabel,
   FileRef,
   isInboxType,
+  isMemoryType,
   isRecord,
   type Value,
   writeAsText,
 } from "../typesys/values.ts";
 import { apiKeyEnvNames, OPTIONAL_API_KEY_PROVIDERS } from "../llm_clients/api_key_env.ts";
 import { AuthError } from "../llm_clients/auth/index.ts";
+import { defaultEmbed } from "../llm_clients/factory.ts";
 import { StorageError } from "../llm_clients/auth/store.ts";
 import {
   type AgentConfig,
   type Connection,
   connectionCredentials,
+  defaultEmbedding,
   HEADER_NAMES_KEY,
   HOST_KEY_MARKER,
   keyIdentity,
 } from "../llm_clients/connection.ts";
 import { checkInputNames } from "../nodes/binding.ts";
 import type { Parameter } from "../nodes/contracts.ts";
-import { FileLockError, isSystemError, sqliteErrorCode, statOrNull, withWarnings } from "../platform.ts";
+import { FileLockError, homeDir, isSystemError, sqliteErrorCode, statOrNull, withWarnings } from "../platform.ts";
 import {
   advance,
   inspectRun,
@@ -81,6 +84,16 @@ import { McpConnectError, McpSdkMissingError, type McpServer } from "../tools/mc
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { loadConfined } from "./confined_load.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
+import {
+  accountHome,
+  bindMemories,
+  type CreatedMemory,
+  createdLine,
+  driftNote,
+  embeddingFlag,
+  projectFolder,
+  resumeMemories,
+} from "./memory_bind.ts";
 import {
   box,
   diagnosticJson,
@@ -477,9 +490,10 @@ export const INPUTS_HINT = "Invalid value for '--input' / '--inputs'";
 
 /**
  * @internal Check that each name in `supplied` is one of `decls`' inputs that take a value at the
- * start; an inbox input takes events through `send`, so a value for one is refused too.
+ * start; an inbox input takes events through `send`, and a memory input is bound with `--memory`,
+ * so a value for either is refused too.
  *
- * @throws {UsageError} For a name of an inbox input, or one no input has.
+ * @throws {UsageError} For a name of an inbox or memory input, or one no input has.
  */
 export function checkSuppliedInputs(decls: readonly Parameter[], supplied: Readonly<Record<string, unknown>>): void {
   // An inbox takes events through `send`, never a value at the start.
@@ -488,6 +502,11 @@ export function checkSuppliedInputs(decls: readonly Parameter[], supplied: Reado
   if (inbox.length > 0) {
     const name = JSON.stringify(inbox.sort(compareCodeUnits)[0]);
     throw new UsageError(`${INPUTS_HINT}: input ${name} is an inbox; it takes messages through send, not a value`);
+  }
+  // A memory is bound to an instance, never given as a value.
+  const memory = decls.find((decl) => isMemoryType(decl.contract?.type) && Object.hasOwn(supplied, decl.name));
+  if (memory !== undefined) {
+    throw new UsageError(`${INPUTS_HINT}: \`${memory.name}\` is a memory; bind it with --memory`);
   }
   const values = decls.filter((decl) => !isInbox(decl));
   try {
@@ -501,8 +520,8 @@ export function checkSuppliedInputs(decls: readonly Parameter[], supplied: Reado
 /**
  * @internal Return the inputs to add to `supplied`: each declaration it lacks (key presence)
  * answered at `terminal`'s prompts, or `{}` without a terminal, leaving optional and defaulted
- * inputs absent for START. An inbox input is never asked for. Returns null when a prompt is
- * cancelled.
+ * inputs absent for START. An inbox or memory input is never asked for. Returns null when a prompt
+ * is cancelled.
  *
  * @throws {UsageError} Without a terminal, when required inputs are missing, naming them all in
  *   declaration order.
@@ -512,8 +531,10 @@ export async function gatherMissingInputs(
   supplied: Readonly<Record<string, unknown>>,
   terminal: Terminal | null,
 ): Promise<Record<string, unknown> | null> {
-  // An inbox takes events through `send`, never a value at the start.
-  const values = decls.filter((decl) => !isInboxType(decl.contract?.type ?? null));
+  // An inbox takes events through `send`, and a memory is bound, never a value given at the start.
+  const values = decls.filter(
+    (decl) => !isInboxType(decl.contract?.type ?? null) && !isMemoryType(decl.contract?.type),
+  );
   if (terminal !== null) return terminal.promptInputs(values, supplied);
   const required = values.filter((decl) => decl.required && !Object.hasOwn(supplied, decl.name));
   if (required.length > 0) {
@@ -550,9 +571,9 @@ export const CHAT_FLOW_FILE = "chat.yaml";
  * Run before input files are read, prompts are shown, or provider configuration is resolved.
  *
  * @throws {UsageError} When `resume` is given with `flow` (the resume runs the flow the log
- *   recorded), or with `--input`, `--inputs`, `--provider`, `--model` or `--log` (each one given is
- *   named, in that order); when neither `flow` nor `resume` is given; or when a directory entry,
- *   even a dangling symlink, exists at `log`.
+ *   recorded), or with `--input`, `--inputs`, `--provider`, `--model`, `--embedding` or `--log`
+ *   (each one given is named, in that order); when neither `flow` nor `resume` is given; or when a
+ *   directory entry, even a dangling symlink, exists at `log`.
  */
 export function validateRunLogOptions(options: {
   flow?: string | undefined;
@@ -560,10 +581,11 @@ export function validateRunLogOptions(options: {
   inputs?: string | undefined;
   provider?: string | undefined;
   model?: string | undefined;
+  embedding?: string | undefined;
   log?: string | undefined;
   resume?: string | undefined;
 }): void {
-  const { flow, inputValues, inputs, provider, model, log, resume } = options;
+  const { flow, inputValues, inputs, provider, model, embedding, log, resume } = options;
   if (resume === undefined && flow === undefined) throw new UsageError("Missing argument 'FLOW'.");
   if (resume !== undefined) {
     // An edited flow file means a new run, so a resume never reads one.
@@ -575,6 +597,7 @@ export function validateRunLogOptions(options: {
     if (inputs !== undefined) conflicts.push("--inputs");
     if (provider !== undefined) conflicts.push("--provider");
     if (model !== undefined) conflicts.push("--model");
+    if (embedding !== undefined) conflicts.push("--embedding");
     if (log !== undefined) conflicts.push("--log");
     if (conflicts.length > 0) {
       throw new UsageError(`Invalid value: --resume cannot be combined with ${conflicts.join(", ")}`);
@@ -643,6 +666,10 @@ export interface RunOptions {
   model?: string | undefined;
   engineTrace: boolean;
   mcpConfig: readonly string[];
+  /** The `--memory NAME=PATH` flags. */
+  memory: readonly string[];
+  /** The `--embedding provider/model` a new VectorDB memory is made with. */
+  embedding?: string | undefined;
   json: boolean;
 }
 
@@ -1123,6 +1150,11 @@ async function startRun(
     return fail(new Diagnostic({ code: "run.setup", message }));
   };
   const writeStack = (error: Error) => writeEngineTrace(error, engineTrace, io);
+  // The line a memory's `open` gives when it creates it, with its folder: stderr is the user's own.
+  const memoryNote = (created: CreatedMemory) => {
+    const line = paint(forTerminal(createdLine(created, true), io.stderr), "dim", io.stderr, io.env);
+    void io.stderr.write(`${line}\n`).catch(() => {});
+  };
   const action = options.resume === undefined ? "run" : "resume";
   // Only the MCP selection's lines follow the message; the error's own notes, such as a cleanup
   // failure's, stay out of it.
@@ -1237,6 +1269,12 @@ async function startRun(
       // configuration, and its recorded keys are checked once it is replayed.
       if (options.resume !== undefined) {
         const log = options.resume;
+        const memory = resumeMemories(flow, log, options.memory, {
+          home: homeDir(io.env),
+          note: memoryNote,
+          embed: io.embed ?? defaultEmbed(commandEnv.read),
+          accountHome: io.accountHome ?? accountHome,
+        });
         const keyContext = {
           env: commandEnv,
           terminal: io.stdin.isTTY === true ? terminal : null,
@@ -1253,12 +1291,22 @@ async function startRun(
             env: commandEnv.read,
             signal: controller.signal,
             checkLlmConfigs,
+            memory,
           }),
         );
       }
       const supplied = mergeInputs(options.inputs, options.inputValues);
       // Before prompting, so a typo'd name fails instead of prompting for the real one.
       checkSuppliedInputs(flow.input, supplied);
+      const memories = bindMemories(flow, options.memory, {
+        home: homeDir(io.env),
+        note: memoryNote,
+        project: projectFolder(flowPath!),
+        embedding: embeddingFlag(options.embedding),
+        defaultEmbedding: () => defaultEmbedding({ env: commandEnv.read }),
+        embed: io.embed ?? defaultEmbed(commandEnv.read),
+        accountHome: io.accountHome ?? accountHome,
+      });
       // A signal during the load stops the command before it prompts.
       controller.signal.throwIfAborted();
       const prompter = io.stdin.isTTY === true ? terminal : null;
@@ -1281,7 +1329,7 @@ async function startRun(
       return startLogged(
         log,
         (tools) =>
-          runFlow(flow, supplied, {
+          runFlow(flow, { ...supplied, ...memories }, {
             log,
             runId,
             llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
@@ -1309,6 +1357,7 @@ async function startRun(
   }
   if (typeof outcome === "number") return outcome;
   const result = outcome;
+  for (const drift of result.memoryDrift) await printStyled(io, driftNote(drift), "yellow");
 
   if (result.status === "succeeded") {
     if (json) await printJson({ status: "succeeded", output: jsonValue(result.output) }, io.stdout);
@@ -1498,7 +1547,8 @@ export async function status(log: string | undefined, { json }: { json: boolean 
  * (`unreadable at seq N` for a log yian can't read from seq N), start time and flow file (`-` for
  * none, or a flow built in code); nothing when there are no runs. With `json`, one document whose
  * `runs` holds each row: `run_id`, `flow`, `status`, `started_at`, `ended_at`, `parent_run_id`,
- * `last_seq`, `result` (the run's output, `null` until it succeeded), the token sums, for a waiting
+ * `memories` (each memory input's `input`, `identity` and `type`, never its location), `last_seq`,
+ * `result` (the run's output, `null` until it succeeded), the token sums, for a waiting
  * run `ready` and `wake_at` (`false` and `null` otherwise), and `unreadable` (`seq` and `reason`,
  * or `null`). A log the update can't read is a `warning:` line on stderr: once until it changes, or
  * on every update for a file error such as no permission, which leaves the run's row as it was. An
@@ -1531,6 +1581,7 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
       started_at: row.startedAt,
       ended_at: row.endedAt,
       parent_run_id: row.parentRunId,
+      memories: row.memories.map(({ input, identity, type }) => ({ input, identity, type })),
       last_seq: row.lastSeq === null ? null : BigInt(row.lastSeq),
       result: row.result === null ? null : parseJson(row.result, "codec"),
       input_tokens: BigInt(row.inputTokens),

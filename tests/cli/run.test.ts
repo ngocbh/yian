@@ -585,7 +585,7 @@ describe("main", () => {
     expect(stdout()).toStartWith("Usage: yian skills check [OPTIONS] DIRS...\n");
   });
 
-  test("run has no memory flags: --memory-root is an unknown option and the help lists none", async () => {
+  test("run's old memory flags are gone: --memory-root is an unknown option and the help lists only --memory", async () => {
     const flow = join(tmp, "flow.yaml");
     writeFileSync(flow, "id: f\n");
     for (const flag of ["--memory-root", "--memory-storage"]) {
@@ -596,7 +596,8 @@ describe("main", () => {
     }
     const { io, stdout } = testIo();
     expect(await main(["run", "--help"], io)).toBe(0);
-    expect(stdout()).not.toContain("memory");
+    expect(stdout()).toContain("--memory NAME=PATH");
+    expect(stdout()).not.toContain("--memory-");
   });
 });
 
@@ -1651,6 +1652,7 @@ describe("status", () => {
         started_at: succeeded.startedAt,
         ended_at: succeeded.endedAt,
         parent_run_id: null,
+        memories: [],
         last_seq: succeeded.lastSeq,
         result: { topic: "clouds" },
         input_tokens: 0,

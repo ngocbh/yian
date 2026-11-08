@@ -593,6 +593,11 @@ export type Env = (name: string) => string | undefined;
 /** Read `process.env`; a name that is not an own property, such as `"__proto__"`, is unset. */
 export const processEnv: Env = (name) => (Object.hasOwn(process.env, name) ? process.env[name] : undefined);
 
+/** Return the names `process.env` holds, so a child's environment can be read through an `Env`. */
+export function processEnvNames(): string[] {
+  return Object.keys(process.env);
+}
+
 /**
  * Return the values `env` sets, with built-in values for the rest.
  *

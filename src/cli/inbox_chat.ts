@@ -25,8 +25,9 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { Diagnostic, shellQuote } from "../diagnostics.ts";
 import { NodeSucceeded, type RunEvent, RunStarted, type StreamChunk } from "../events.ts";
-import type { ModelAccess } from "../llm_clients/factory.ts";
-import { realScheduler, type Scheduler } from "../platform.ts";
+import { defaultEmbedding } from "../llm_clients/connection.ts";
+import { defaultEmbed, type ModelAccess } from "../llm_clients/factory.ts";
+import { homeDir, realScheduler, type Scheduler } from "../platform.ts";
 import {
   advance,
   cancel,
@@ -50,6 +51,16 @@ import { builtinType } from "../typesys/types.ts";
 import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
 import type { ChildEvent } from "./chat_events.ts";
 import { type ChatEvents, ChatFlusher } from "./chat_flush.ts";
+import {
+  accountHome,
+  bindMemories,
+  type CreatedMemory,
+  createdLine,
+  driftNote,
+  embeddingFlag,
+  projectFolder,
+  resumeMemories,
+} from "./memory_bind.ts";
 import { printStyled, renderDiagnostic, writeEngineTrace } from "./render.ts";
 import {
   checkSuppliedInputs,
@@ -100,6 +111,10 @@ export interface InboxChatOptions {
   provider?: string | undefined;
   model?: string | undefined;
   engineTrace: boolean;
+  /** The `--memory NAME=PATH` flags; absent binds no input by flag. */
+  memory?: readonly string[] | undefined;
+  /** The `--embedding provider/model` a new VectorDB memory is made with. */
+  embedding?: string | undefined;
 }
 
 /**
@@ -679,6 +694,23 @@ export async function inboxChat(
   stop.signal.addEventListener("abort", takeDown, { once: true });
 
   try {
+    // A memory its `open` creates is the chat's own note, with its folder: the terminal is the user's.
+    const binding = {
+      home: homeDir(io.env),
+      note: (created: CreatedMemory) =>
+        void note(`${forTerminal(createdLine(created, true), io.stderr)}\n`).catch(() => {}),
+      embed: io.embed ?? defaultEmbed(env.read),
+      accountHome: io.accountHome ?? accountHome,
+    };
+    const memory =
+      resumed === null
+        ? bindMemories(flow, options.memory ?? [], {
+            ...binding,
+            project: flowPath === undefined ? null : projectFolder(flowPath),
+            embedding: embeddingFlag(options.embedding),
+            defaultEmbedding: () => defaultEmbedding({ env: env.read }),
+          })
+        : resumeMemories(flow, resumed, options.memory ?? [], binding);
     if (host.start) {
       const code = await host.start(terminal);
       if (code !== null) return code;
@@ -859,10 +891,15 @@ export async function inboxChat(
         turning = false;
       }
     };
-    /** Run `step` as a move of the turn: the flusher sends child events at once meanwhile. */
-    const moveStep = (step: () => Promise<RunResult>): Promise<RunResult> => {
+    /**
+     * Run `step` as a move of the turn: the flusher sends child events at once meanwhile. A memory
+     * a crash resume found changed is noted.
+     */
+    const moveStep = async (step: () => Promise<RunResult>): Promise<RunResult> => {
       flusher?.beginTurn();
-      return step();
+      const result = await step();
+      for (const drift of result.memoryDrift) await note(`${forTerminal(driftNote(drift), io.stderr)}\n`);
+      return result;
     };
     /**
      * Run `first` as a move, then, while it leaves the run waiting with an event it sent unread,
@@ -887,7 +924,7 @@ export async function inboxChat(
         const last = lastWaitingSeq(path);
         const events = tracked && flusher!.afterTurn(seqs, last);
         if (!events && !lines.some((seq) => seq > last)) break;
-        settled = await moveStep(() => move({ log: path, checkLlmConfigs, ...shared }));
+        settled = await moveStep(() => move({ log: path, checkLlmConfigs, memory, ...shared }));
       }
       return settled;
     };
@@ -905,7 +942,7 @@ export async function inboxChat(
       lineSending = landed;
       liveSends = liveSends.then(() => landed);
     };
-    const advanceRun = () => settle(() => move({ log: path, checkLlmConfigs, ...shared }));
+    const advanceRun = () => settle(() => move({ log: path, checkLlmConfigs, memory, ...shared }));
     const moveOn = () => inTurn(advanceRun);
     /**
      * Close the inbox, as `/exit` does, and move the run on. A run that ended under the chat (a
@@ -983,14 +1020,14 @@ export async function inboxChat(
     let result: RunResult = await inTurn(() =>
       settle(() =>
         resumed === null
-          ? runFlow(flow, supplied, {
+          ? runFlow(flow, { ...supplied, ...memory }, {
               log: path,
               runId,
               llmConfig: Object.keys(cliCfg).length > 0 ? cliCfg : null,
               numWorkers: options.numWorkers,
               ...shared,
             })
-          : move({ log: path, numWorkers: options.numWorkers ?? null, checkLlmConfigs, ...shared }),
+          : move({ log: path, numWorkers: options.numWorkers ?? null, checkLlmConfigs, memory, ...shared }),
       ),
     );
     let cancelled = false;
@@ -1199,13 +1236,13 @@ export async function runOrChat(
 ): Promise<number> {
   if (options.resume !== undefined) {
     if (!(await chatsOnResume(flowPath, options, io))) return run(flowPath, options, io);
-    const { inbox, numWorkers, engineTrace, resume } = options;
-    return inboxChat(undefined, { inbox, inputValues: [], numWorkers, engineTrace, resume }, io, deps);
+    const { inbox, numWorkers, engineTrace, resume, memory } = options;
+    return inboxChat(undefined, { inbox, inputValues: [], numWorkers, engineTrace, resume, memory }, io, deps);
   }
   const flow = await chatFlow(flowPath, options, io);
   if (flow === null) return run(flowPath, options, io);
-  const { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace } = options;
-  const chatOptions = { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace };
+  const { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace, memory, embedding } = options;
+  const chatOptions = { inbox, inputValues, inputs, log, numWorkers, provider, model, engineTrace, memory, embedding };
   return inboxChat(flowPath!, chatOptions, io, deps, { flow });
 }
 
@@ -1216,7 +1253,7 @@ export async function runOrChat(
  */
 async function chatsOnResume(flowPath: string | undefined, options: RunOrChatOptions, io: CliIo): Promise<boolean> {
   if (flowPath !== undefined || options.json || !atTerminal(io)) return false;
-  const fresh = [options.inputs, options.log, options.provider, options.model];
+  const fresh = [options.inputs, options.log, options.provider, options.model, options.embedding];
   if (fresh.some((value) => value !== undefined) || options.inputValues.length > 0) return false;
   let flow: ComposedFlow | null;
   try {

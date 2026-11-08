@@ -382,7 +382,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["run_id", "flow", "status", "started_at", "ended_at", "parent_run_id", "last_seq", "result", "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens", "reasoning_tokens", "ready", "wake_at", "unreadable"],
+            "required": ["run_id", "flow", "status", "started_at", "ended_at", "parent_run_id", "memories", "last_seq", "result", "input_tokens", "output_tokens", "cache_read_tokens", "cache_creation_tokens", "reasoning_tokens", "ready", "wake_at", "unreadable"],
             "properties": {
               "run_id": {"type": "string"},
               "flow": {"type": ["string", "null"]},
@@ -390,6 +390,16 @@
               "started_at": {"type": ["string", "null"], "description": "Null when the log's first record can't be read."},
               "ended_at": {"type": ["string", "null"]},
               "parent_run_id": {"type": ["string", "null"]},
+              "memories": {
+                "description": "The memories the run was bound to, as its START inputs recorded them, by input name; an Optional memory left out isn't listed. Identities only, never a location.",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["input", "identity", "type"],
+                  "additionalProperties": false,
+                  "properties": {"input": {"type": "string"}, "identity": {"type": "string"}, "type": {"type": "string"}}
+                }
+              },
               "last_seq": {"type": ["integer", "null"], "minimum": 0, "description": "Null when no record could be read."},
               "result": {"description": "The run's output once it succeeded, else null."},
               "input_tokens": {"type": "integer", "minimum": 0},

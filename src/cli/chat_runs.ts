@@ -9,8 +9,11 @@
  * the driver, which runs one more pass once the current one ends. Nothing else wakes a waiting
  * run at its `wakeAt`, so between passes the driver sleeps until then.
  *
- * Every status a child publishes carries the replies no reader has marked read (`markRead`), so a
- * reader that falls behind loses none; asks are always the run's open ones.
+ * Every status a child publishes carries the replies and memory notes no reader has marked read
+ * (`markRead`), so a reader that falls behind loses none; asks are always the run's open ones.
+ *
+ * A child's memory inputs are bound to their defaults, as `yian run` binds them, and every pass
+ * gets the same instances.
  *
  * A child's `ask` returns `pending()`, so the child waits durably for the user's answer, which the
  * chat relays with `answer`. The children's stop is their own, tied to the chat's exit by
@@ -18,7 +21,8 @@
  *
  * Knows about: the run boundary (`runFlow`, `advance`, the deliveries, `pendingCalls`,
  * `runLogPath`), the waits' `wakeAt` and the record-time reader, compose, the run events, the tool
- * registry and the `pending` marker, skills, the CLI's key preflight (`startup.ts`).
+ * registry and the `pending` marker, skills, the CLI's key preflight (`startup.ts`) and memory
+ * binding (`memory_bind.ts`).
  */
 
 import { appendFileSync } from "node:fs";
@@ -28,7 +32,9 @@ import { format, isDeepStrictEqual } from "node:util";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import type { Env } from "../defaults.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "../events.ts";
-import type { ModelAccess } from "../llm_clients/factory.ts";
+import type { Embed } from "../llm/embeddings.ts";
+import { defaultEmbedding } from "../llm_clients/connection.ts";
+import { defaultEmbed, type ModelAccess } from "../llm_clients/factory.ts";
 import type { Scheduler } from "../platform.ts";
 import {
   advance,
@@ -50,6 +56,17 @@ import { pending, TAKE } from "../tools/context.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { builtinType } from "../typesys/types.ts";
 import { isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
+import {
+  bindMemories,
+  type CliMemory,
+  type CreatedMemory,
+  createdLine,
+  type DefaultMemory,
+  defaultMemories,
+  driftNote,
+  memoryLocation,
+  withoutLocations,
+} from "./memory_bind.ts";
 import { removeEmptyDir } from "./run.ts";
 import { ensureProviderKeys } from "./startup.ts";
 import { CommandEnv, sleepUntil } from "./utils.ts";
@@ -84,6 +101,11 @@ export interface ChildStatus {
    */
   readonly replies?: readonly string[];
   /**
+   * What the chat noted about the child's memories and no reader has marked read, oldest first: a
+   * memory its start created, or one a crash resume found changed since the run started.
+   */
+  readonly memory_notes?: readonly string[];
+  /**
    * Something the chat couldn't do with the run, in words: a delivery the run refused or one made
    * after the chat ended (only on the status that call returns), or the error that stopped the
    * driver of a failed child.
@@ -110,8 +132,12 @@ export interface ChildRunsOptions {
   env: Env;
   /** The `--provider`/`--model` layer, possibly empty; `setLlmConfig` replaces it. */
   llmConfig: Readonly<Record<string, string>>;
+  /** The home folder whose `~/.yian/memory` holds the children's default memories. */
+  home: string;
   /** For tests: the model builder AGENT nodes use. */
   models?: ModelAccess | null;
+  /** For tests: the embeddings call VectorDB memories make; `defaultEmbed` over `env` when absent. */
+  embed?: Embed;
   /** The clock the children's records and waits run on. */
   scheduler: Scheduler;
   /** The chat's own run id: each child's is `<chatRunId>-r<n>`, and its parent is the chat. */
@@ -170,9 +196,10 @@ interface Child {
   /** When it started, on the children's clock. */
   readonly since: number;
   readonly log: string;
-  /** The tools and skills every pass of the child is given. */
+  /** The tools, skills and memories every pass of the child is given. */
   readonly tools: Record<string, ToolEntry>;
   readonly skills: ReadonlyMap<string, Skill> | null;
+  readonly memory: Readonly<Record<string, CliMemory>>;
   /** The last published status. */
   status: ChildStatus;
   readonly waiters: Set<Waiter>;
@@ -180,16 +207,28 @@ interface Child {
   dirty: boolean;
   /** The driver's rest between passes, which a nudge ends; `null` while it doesn't rest. */
   rest: AbortController | null;
-  /** What the child's `reply` nodes said during the current pass. */
-  readonly fresh: string[];
-  /** The replies published and not marked read, each with the seq of the status that first held it. */
-  unread: { readonly seq: number; readonly text: string }[];
+  /**
+   * What the child's `reply` nodes said, and the chat noted about its memories, during the
+   * current pass.
+   */
+  readonly fresh: Said[];
+  /**
+   * The replies and memory notes published and not marked read, each with the seq of the status
+   * that first held it.
+   */
+  unread: (Said & { readonly seq: number })[];
   /** Whether the run's log holds its start. */
   started: boolean;
   /** The child's own stop: it stops the driver and leaves the log as it is. */
   readonly halt: AbortController;
   /** Settles once the driver has stopped. */
   done: Promise<void>;
+}
+
+/** A reply of the child's, or a note of the chat's about its memories. */
+interface Said {
+  readonly kind: "reply" | "memory";
+  readonly text: string;
 }
 
 /** The console methods a CODE worker's output is replayed through. */
@@ -272,7 +311,10 @@ export class ChildRuns {
    * on in the background; `next(id, seq)` then sees every later status.
    *
    * Starts run one at a time in call order, so ids follow it, and an id is taken only by a start
-   * that succeeds. Each first checks the provider keys the flow's agents need, without a prompt.
+   * that succeeds. Each first checks the provider keys the flow's agents need, without a prompt,
+   * then binds the flow's memory inputs to their defaults under `home` (`bindMemories`), keyed by
+   * `options.project`, the flow file's project folder, as `yian run` does; every pass of the child
+   * gets the same instances.
    * `options.signal` is the caller's: aborting it before the start begins rejects, and after it
    * does nothing to the child. `options.name` is what `live` lists it by (the flow's file, say);
    * the flow's name when absent. `options.tools` are host tools this child alone gets, beside the
@@ -280,6 +322,8 @@ export class ChildRuns {
    *
    * @throws {MissingKeyError} When an agent's provider needs a key that isn't set, before anything
    *   is written; `ensureProviderKeys`' other errors likewise.
+   * @throws {RangeError} When a memory input has no default (`bindMemories`), before anything is
+   *   written.
    * @throws {Error} When the chat was disposed; the signal's reason once it aborted; what `runFlow`
    *   throws before the run starts (a tool the flow names that the run lacks, say), with no log
    *   left behind.
@@ -292,13 +336,15 @@ export class ChildRuns {
       name?: string;
       tools?: Readonly<Record<string, ToolEntry>>;
       skills?: ReadonlyMap<string, Skill>;
+      project?: string | null;
     } = {},
   ): Promise<{ id: string; log: string; seq: number }> {
     const name = options.name ?? flow.name ?? flow.compiled.flowId ?? "flow";
     const tools = options.tools ?? {};
     const skills = options.skills ?? null;
     const signal = options.signal ?? null;
-    const turn = this.#starting.then(() => this.#begin(flow, inputs, name, tools, skills, signal));
+    const project = options.project ?? null;
+    const turn = this.#starting.then(() => this.#begin(flow, inputs, { name, tools, skills, project }, signal));
     this.#starting = turn.catch(() => {});
     return turn;
   }
@@ -307,11 +353,15 @@ export class ChildRuns {
   async #begin(
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
-    name: string,
-    tools: Readonly<Record<string, ToolEntry>>,
-    skills: ReadonlyMap<string, Skill> | null,
+    given: {
+      name: string;
+      tools: Readonly<Record<string, ToolEntry>>;
+      skills: ReadonlyMap<string, Skill> | null;
+      project: string | null;
+    },
     signal: AbortSignal | null,
   ): Promise<{ id: string; log: string; seq: number }> {
+    const { name, tools, skills, project } = given;
     const check = () => {
       if (this.#disposed) throw new Error("the chat's runs were disposed");
       signal?.throwIfAborted();
@@ -322,6 +372,18 @@ export class ChildRuns {
     // No terminal: a missing key is reported to the assistant rather than prompted for mid-chat.
     await ensureProviderKeys(flow, llmConfig, inputs, { env: new CommandEnv(env), terminal: null });
     check();
+    // A memory the start creates is said with the pass, by identity alone: a status reaches the
+    // chat's log and its model, which never hold a location.
+    const fresh: Said[] = [];
+    const note = (created: CreatedMemory) => void fresh.push({ kind: "memory", text: createdLine(created, false) });
+    let memory: Record<string, CliMemory>;
+    try {
+      const embed = this.#options.embed ?? defaultEmbed(env);
+      const options = { home: this.#options.home, note, project, memoryFlag: false, embed };
+      memory = bindMemories(flow, [], { ...options, defaultEmbedding: () => defaultEmbedding({ env }) });
+    } catch (error) {
+      throw withoutLocations(error, this.#options.home, []);
+    }
     const id = `r${this.#started + 1}`;
     const runId = `${chatRunId}-${id}`;
     const log = runLogPath(logDir, runId);
@@ -335,11 +397,12 @@ export class ChildRuns {
       // One handler serves `ask` and `ask_user` (passing both is refused).
       tools: { ...registeredTools(), ...tools, ask: () => pending() },
       skills: skills ?? skillsFor(flow),
+      memory,
       status: { run: id, status: "running", log, seq },
       waiters: new Set(),
       dirty: false,
       rest: null,
-      fresh: [],
+      fresh,
       unread: [],
       started: false,
       halt: new AbortController(),
@@ -356,6 +419,24 @@ export class ChildRuns {
     }
     this.#started += 1;
     return { id, log, seq };
+  }
+
+  /**
+   * Return the default memories `flow`'s start would bind, keyed by `project` as `start` keys
+   * them, by identity and whether each exists yet: for the start's approval, never a location. A
+   * new store's embedding model is the default `start` would use.
+   *
+   * @throws {RangeError} As `start` throws for a memory input with no default, or a new store with
+   *   no embedding model, naming no location.
+   */
+  defaultMemories(flow: ComposedFlow, project: string | null): DefaultMemory[] {
+    const { home, env } = this.#options;
+    try {
+      const options = { home, project, memoryFlag: false, defaultEmbedding: () => defaultEmbedding({ env }) };
+      return defaultMemories(flow, options);
+    } catch (error) {
+      throw withoutLocations(error, home, []);
+    }
   }
 
   /**
@@ -427,14 +508,14 @@ export class ChildRuns {
   }
 
   /**
-   * Mark child `id`'s replies published at or before status `seq` read: later statuses leave them
-   * out. Call it when a status is handed to the model.
+   * Mark child `id`'s replies and memory notes published at or before status `seq` read: later
+   * statuses leave them out. Call it when a status is handed to the model.
    *
    * @throws {RangeError} When no child has the id.
    */
   markRead(id: string, seq: number): void {
     const child = this.#child(id);
-    child.unread = child.unread.filter((reply) => reply.seq > seq);
+    child.unread = child.unread.filter((said) => said.seq > seq);
   }
 
   /**
@@ -604,7 +685,7 @@ export class ChildRuns {
       }
       // An interrupted reply succeeds with null when its output is `Optional(...)`.
       if (isReply(event) && !event.interrupted && event.output !== null) {
-        child.fresh.push(writeAsText(event.output as Value));
+        child.fresh.push({ kind: "reply", text: writeAsText(event.output as Value) });
       }
     };
     const common = {
@@ -618,7 +699,7 @@ export class ChildRuns {
     };
     try {
       let result = await this.#pass(() =>
-        runFlow(child.flow, inputs, {
+        runFlow(child.flow, { ...inputs, ...child.memory }, {
           log: child.log,
           runId,
           parent: { runId: chatRunId },
@@ -633,15 +714,22 @@ export class ChildRuns {
       // until it would only spin.
       let spent: string | null = null;
       for (;;) {
+        for (const drift of result.memoryDrift) child.fresh.push({ kind: "memory", text: driftNote(drift) });
         this.#publish(child, this.#settledStatus(child, result));
         if (result.status !== "waiting") return;
         const next = wakeAt(result.waits);
         const wake: string | null = next === spent ? null : next;
         if (await this.#rest(child, wake)) spent = wake;
         if (child.halt.signal.aborted) return;
-        result = await this.#pass(() => move({ log: child.log, ...this.#deliveryOptions(child), ...common }));
+        result = await this.#pass(() =>
+          move({ log: child.log, ...this.#deliveryOptions(child), ...common, memory: child.memory }),
+        );
       }
-    } catch (error) {
+    } catch (thrown) {
+      // A memory's open names its folder or store, which the chat's log and model never hold. A
+      // store's own folder, in an OS error on making it, is under ~/.yian/memory, written from `~`.
+      const roots = Object.values(child.memory).map(memoryLocation);
+      const error = withoutLocations(thrown, this.#options.home, roots);
       // Before the start, `start` throws it; after, it is the child's failure.
       started.reject(error);
       // A halted driver leaves the run as it is, and a child that never started has no status.
@@ -730,15 +818,20 @@ export class ChildRuns {
   }
 
   /**
-   * Make `status` `child`'s, numbered and with its unread replies, unless it says what the last
-   * one did and the pass said nothing new; tell `onStatus`, and wake its readers.
+   * Make `status` `child`'s, numbered and with its unread replies and memory notes, unless it says
+   * what the last one did and the pass said nothing new; tell `onStatus`, and wake its readers.
    */
   #publish(child: Child, status: Unnumbered): void {
     const fresh = child.fresh.splice(0);
     const seq = this.#seq + 1;
-    const unread = [...child.unread, ...fresh.map((text) => ({ seq, text }))];
-    const replies = unread.map((reply) => reply.text);
-    const next: Unnumbered = { ...status, ...(replies.length > 0 ? { replies } : {}) };
+    const unread = [...child.unread, ...fresh.map((said) => ({ ...said, seq }))];
+    const replies = unread.filter((said) => said.kind === "reply").map((said) => said.text);
+    const notes = unread.filter((said) => said.kind === "memory").map((said) => said.text);
+    const next: Unnumbered = {
+      ...status,
+      ...(replies.length > 0 ? { replies } : {}),
+      ...(notes.length > 0 ? { memory_notes: notes } : {}),
+    };
     const { seq: _, ...last } = child.status;
     if (fresh.length === 0 && isDeepStrictEqual(last, next)) return;
     this.#seq = seq;

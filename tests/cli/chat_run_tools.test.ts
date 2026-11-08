@@ -4,13 +4,16 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
@@ -25,10 +28,16 @@ import {
   ToolRefused,
 } from "../../src/cli/chat_tools.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
+import { main } from "../../src/cli/index.ts";
+import { defaultLocation, projectKey } from "../../src/cli/memory_bind.ts";
+import type { CliIo } from "../../src/cli/utils.ts";
 import type { ApproveRequest } from "../../src/cli/terminal.ts";
+import type { Env } from "../../src/defaults.ts";
+import type { Embed } from "../../src/llm/embeddings.ts";
 import type { Response } from "../../src/llm/messages.ts";
 import { compareCodeUnits } from "../../src/diagnostics.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { isReportedToolError } from "../../src/tools/errors.ts";
@@ -164,15 +173,18 @@ output: done
     answer: string | null = "Approve",
     scheduler = heldScheduler().scheduler,
     queue: EventQueue | null = null,
+    children: { env?: Env; embed?: Embed } = {},
   ) {
     runs = new ChildRuns({
       root,
       logDir: join(tmp, "runs"),
-      env: NO_ENV,
+      home: join(tmp, "home"),
+      env: children.env ?? NO_ENV,
       llmConfig: {},
       scheduler,
       chatRunId: "chat-1",
       skillsFor: () => null,
+      ...(children.embed === undefined ? {} : { embed: children.embed }),
     });
     const requests: ApproveRequest[] = [];
     const seen: [string, number][] = [];
@@ -401,6 +413,134 @@ output: done
   );
 
   test(
+    "a flow's int output reads back as its digits in flow_status and wait_flow",
+    async () => {
+      writeFileSync(join(root, "legs.yaml"), LEGS);
+      const { invoke, json } = runTools();
+      await json("start_flow", { path: "legs.yaml", inputs: { legs: [{ to: "a", mode: "train" }] } });
+      expect(await settledJson(json, "r1")).toMatchObject({ status: "succeeded", output: 1 });
+      expect(String(await invoke("flow_status", { run: "r1" }))).toContain('"output":1');
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a flow's memory input is left out of its inputs: the run binds its default; a value for it is refused",
+    async () => {
+      writeFileSync(
+        join(root, "remember.yaml"),
+        "id: remember\nname: remember\ninput:\n  lessons: !FileMemory\nnodes:\n  add:\n    kind: tool\n" +
+          "    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
+      );
+      const { requests, invoke, json } = runTools();
+      const given = await rejection(
+        Promise.resolve(invoke("start_flow", { path: "remember.yaml", inputs: { lessons: "x" } })),
+      );
+      expect(isReportedToolError(given)).toBe(true);
+      expect(given.message).toBe("bad inputs: `lessons` is a memory; leave it out, and the run gets its default");
+      expect(requests).toHaveLength(0);
+      await json("start_flow", { path: "remember.yaml", inputs: {} });
+      const done = await settledJson(json, "r1");
+      expect(done).toMatchObject({ status: "succeeded", output: "MEMORY.md" });
+      expect((done["memory_notes"] as string[])[0]).toEndWith("(new)");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a VectorDB flow's card needs a default embedding model for a new store, and its start uses that model",
+    async () => {
+      writeFileSync(
+        join(root, "cases.yaml"),
+        "id: cases\nname: cases\ninput:\n  line: !str\n  cases: !VectorDBMemory\nnodes:\n  add:\n" +
+          "    kind: tool\n    tool_id: {cases: add}\n    input:\n      text: ${input.line}\noutput: ${add.output.id}\n",
+      );
+      const embed: Embed = async (texts) => texts.map(() => Float32Array.of(1, 1, 0, 0));
+      // The store a test reads is its own, never the account's.
+      const vars: Record<string, string> = { YIAN_AUTH_FILE: join(tmp, "auth.json") };
+      const env: Env = (name) => vars[name];
+      const none = runTools("Approve", undefined, null, { env, embed });
+      const refused = String(await none.invoke("start_flow", { path: "cases.yaml", inputs: { line: "a" } }));
+      expect(refused).toBe("not started: `cases` needs an embedding model: run `yian config embedding provider/model`");
+      // Refused before the card: the user isn't asked to approve a start that can't happen.
+      expect(none.requests).toHaveLength(0);
+      expect(existsSync(join(tmp, "home", ".yian"))).toBe(false);
+      await runs?.dispose();
+
+      vars["YIAN_DEFAULT_EMBEDDING"] = "openai/text-embedding-3-small";
+      const { requests, json } = runTools("Approve", undefined, null, { env, embed });
+      const identity = `${projectKey(root)}/cases/cases`;
+      await json("start_flow", { path: "cases.yaml", inputs: { line: "Check sums twice." } });
+      expect(requests).toHaveLength(1);
+      expect(requests[0]!.body).toContain(`\nmemories: cases → ${identity} (new)`);
+      expect(await settledJson(json, "r1")).toMatchObject({ status: "succeeded", output: 1 });
+      const store = new VectorDBMemory({ path: defaultLocation(join(tmp, "home"), identity, "VectorDBMemory") });
+      const stored = await store.stored({ signal: new AbortController().signal });
+      expect(stored?.embedding).toEqual({ provider: "openai", model: "text-embedding-3-small" });
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "the start card names the memories a flow binds, by identity, new or existing",
+    async () => {
+      writeFileSync(
+        join(root, "remember.yaml"),
+        "id: remember\nname: remember\ninput:\n  lessons: !FileMemory\n  notes: !Optional(FileMemory)\n" +
+          "nodes:\n  add:\n    kind: tool\n    tool_id: {lessons: append}\n" +
+          "    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
+      );
+      const { requests, json } = runTools();
+      const identity = `${projectKey(root)}/remember/lessons`;
+      await json("start_flow", { path: "remember.yaml", inputs: {} });
+      expect((await settledJson(json, "r1"))["status"]).toBe("succeeded");
+      // The Optional memory stays null, so it isn't named; no folder is shown.
+      expect(requests[0]!.body).toContain(`\nmemories: lessons → ${identity} (new)`);
+      expect(requests[0]!.body).not.toContain("notes");
+      expect(requests[0]!.body).not.toContain(join(tmp, "home"));
+      await json("start_flow", { path: "remember.yaml", inputs: {} });
+      expect((await settledJson(json, "r2"))["status"]).toBe("succeeded");
+      expect(requests[1]!.body).toContain(`\nmemories: lessons → ${identity} (existing)`);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a symlinked flow file's memory is keyed by the folder it was given in, as yian run keys it",
+    async () => {
+      mkdirSync(join(root, "proj"));
+      mkdirSync(join(root, "shared"));
+      writeFileSync(
+        join(root, "shared", "remember.yaml"),
+        "id: remember\nname: remember\ninput:\n  lessons: !FileMemory\nnodes:\n  add:\n    kind: tool\n" +
+          "    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
+      );
+      symlinkSync(join(root, "shared", "remember.yaml"), join(root, "proj", "remember.yaml"));
+      const home = join(tmp, "home");
+      mkdirSync(home);
+      const err: string[] = [];
+      const io: CliIo = {
+        stdout: { write: async () => {} },
+        stderr: { write: async (text) => void err.push(text) },
+        stdin: new PassThrough(),
+        stderrStream: new PassThrough(),
+        env: (name) => (name === "HOME" ? home : undefined),
+      };
+      expect(await main(["run", join(root, "proj", "remember.yaml"), "--quiet"], io), err.join("")).toBe(0);
+      const key = projectKey(join(root, "proj"));
+      expect(readdirSync(join(home, ".yian", "memory"))).toEqual([key]);
+      const { json } = runTools();
+      await json("start_flow", { path: "proj/remember.yaml", inputs: {} });
+      const done = await settledJson(json, "r1");
+      expect(done).toMatchObject({ status: "succeeded" });
+      // The memory yian run made: not new, and no second project.
+      expect(done["memory_notes"]).toBeUndefined();
+      expect(readdirSync(join(home, ".yian", "memory"))).toEqual([key]);
+    },
+    TIMEOUT,
+  );
+
+  test(
     "inputs a flow doesn't declare, or not a record, are refused before asking",
     async () => {
       writeFileSync(join(root, "greet.yaml"), GREET);
@@ -606,6 +746,7 @@ describe("report_issue", () => {
       runs = new ChildRuns({
         root,
         logDir: join(tmp, "runs"),
+        home: join(tmp, "home"),
         env,
         llmConfig: { provider: "xai", model: "grok-4.3" },
         models: serving(model, env),
@@ -699,6 +840,7 @@ output: \${hi.output}
     runs = new ChildRuns({
       root,
       logDir: join(tmp, "runs"),
+      home: join(tmp, "home"),
       env,
       llmConfig: { provider: "xai", model: "grok-4.3" },
       models: serving(model, env),

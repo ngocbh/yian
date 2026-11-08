@@ -224,6 +224,8 @@ output:
   first user message, and grant only the tools the agent needs: `tools: [{lessons: [read,
   append]}]` shows `lessons_read` and `lessons_append`. A memory takes no default, field read or
   expression. See `templates/memory.yaml` and [Memory](https://yian.readthedocs.io/memory/).
+  `yian run` keeps an unbound memory input per project; `--memory NAME=PATH` binds one to a path,
+  inputs given one path share it, and a new store needs `--embedding provider/model`.
 - **`cases: !VectorDBMemory(Case)` holds items found by meaning**, each a text with `Case` fields.
   Search it in a TOOL node (`tool_id: {cases: search}`, with `query` and `k` in its `input:`) and
   pass the hits to the agent; grant `{cases: [add]}` to keep new items.

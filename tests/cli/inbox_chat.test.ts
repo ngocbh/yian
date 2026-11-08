@@ -6,7 +6,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -39,6 +39,7 @@ import {
   RunWaitingRecord,
 } from "../../src/runtime/log.ts";
 import type { ToolContext } from "../../src/tools/context.ts";
+import { defaultIdentity, defaultLocation } from "../../src/cli/memory_bind.ts";
 import { FunctionTool } from "../../src/tools/function_tools.ts";
 import { NO_ENV, SUMMARIZER_FIRST_LINE, writeSmallBudgetChat } from "../helpers/run_state_fixtures.ts";
 import { heldScheduler } from "../helpers/schedulers.ts";
@@ -283,6 +284,63 @@ describe("yian chat", () => {
       expect(inspectRun(log).status).toBe("succeeded");
       // Off a TTY the prompt is plain: no escape codes or carriage returns on stderr.
       expect((io.stderrStream as FakeOutput).text).toBe("> You: \n".repeat(3));
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a memory input gets its default, said once it is made, and is bound again for each turn",
+    async () => {
+      const home = join(tmp, "home");
+      const keep = `id: keep
+name: keep
+input:
+  messages: !Inbox(str)
+  lessons: !FileMemory
+nodes:
+  heard:
+    kind: tool
+    tool_id: take
+    input:
+      from: \${input.messages}
+  add:
+    kind: tool
+    tool_id: {lessons: append}
+    depends_on: [heard]
+    input: {path: MEMORY.md, text: kept}
+output: \${add.output.path}
+`;
+      const { io, stdin, stderr } = chatIo({ env: { HOME: home } });
+      stdin.write("hi\n");
+      const { code } = await runChat(flowFile(keep), io);
+      expect(code, stderr()).toBe(0);
+      const projects = readdirSync(join(home, ".yian", "memory"));
+      expect(projects).toHaveLength(1);
+      const location = join(realpathSync(home), ".yian", "memory", projects[0]!, "keep", "lessons");
+      expect(stderr()).toContain(`memory lessons: ${projects[0]}/keep/lessons at ${location} (new)\n`);
+      expect(readFileSync(join(location, "MEMORY.md"), "utf8")).toBe("kept");
+      expect(stderr()).toContain("session ended");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a memory that refuses to open fails the chat with its reason, before the run starts",
+    async () => {
+      const home = join(tmp, "home");
+      const flow = flowFile(
+        "id: keep\nname: keep\ninput:\n  messages: !Inbox(str)\n  lessons: !FileMemory\nnodes:\n  heard:\n" +
+          "    kind: tool\n    tool_id: take\n    input:\n      from: ${input.messages}\noutput: done\n",
+      );
+      const location = defaultLocation(home, defaultIdentity(realpathSync(tmp), "keep", "lessons"), "FileMemory");
+      mkdirSync(join(location, ".yian", "tmp"), { recursive: true });
+      writeFileSync(join(location, ".yian", "identity"), "someone/else");
+      const { io, stdin, stderr } = chatIo({ env: { HOME: home } });
+      stdin.write("hi\n");
+      const { code, log } = await runChat(flow, io);
+      expect(code).toBe(1);
+      expect(stderr()).toContain("chat failed: memory `lessons`: this memory is");
+      expect(existsSync(log)).toBe(false);
     },
     TIMEOUT,
   );
@@ -1017,6 +1075,7 @@ describe("runOrChat", () => {
         verbose: false,
         engineTrace: false,
         mcpConfig: [],
+        memory: [],
         json: false,
         ...(options.resume === undefined ? { log } : {}),
         ...options,

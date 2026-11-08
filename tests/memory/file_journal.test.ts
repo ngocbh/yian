@@ -17,7 +17,7 @@ import {
 } from "../../src/memory/base.ts";
 import { FileMemory, type FileMemoryOptions, memoryVersion, readMembers } from "../../src/memory/file.ts";
 import { Journal, type JournalEntry } from "../../src/memory/file_journal.ts";
-import { lockFile, virtualScheduler } from "../../src/platform.ts";
+import { lockFile, realScheduler, virtualScheduler } from "../../src/platform.ts";
 import { canonicalJson, type JsonObject } from "../../src/typesys/json.ts";
 
 let dir: string;
@@ -913,4 +913,49 @@ test.each([
   expect(journalBody().filter((line) => line.id === "noop")).toHaveLength(2);
   await s.close();
   await t.close();
+});
+
+test("a queued call waits at most its timeout from when it was made; an abort while queued is at once", async () => {
+  const s = await openAt({ lockTimeoutMs: 400, scheduler: realScheduler });
+  const lock = lockFile(join(root, ".yian/lock"), { private: true });
+  const start = Date.now();
+  const stop = new AbortController();
+  const ended = (p: Promise<unknown>) =>
+    p.then(
+      () => ({ ok: true, ms: Date.now() - start }),
+      (error: unknown) => ({ error, ms: Date.now() - start }),
+    );
+  try {
+    const first = ended(append(s, "q1", "1"));
+    const change = { op: "append", path: "a.md", text: "2" };
+    const aborted = ended(s.apply({ id: "q2", change, author, signal: stop.signal }));
+    const third = ended(append(s, "q3", "3"));
+    setTimeout(() => stop.abort(new Error("stopped")), 50);
+    const [one, two, three] = await Promise.all([first, aborted, third]);
+    expect((two as { error: Error }).error.message).toBe("stopped");
+    expect(two.ms).toBeLessThan(300);
+    expect((one as { error: unknown }).error).toBeInstanceOf(MemoryBusyError);
+    expect((three as { error: unknown }).error).toBeInstanceOf(MemoryBusyError);
+    // Queued behind the first, the third had used up its own 400 ms by then, so it fails then too.
+    expect(three.ms).toBeLessThan(700);
+  } finally {
+    lock.release();
+  }
+  await s.close();
+});
+
+test("an abort while queued leaves the others in their order", async () => {
+  const s = await openAt({ lockTimeoutMs: 5_000, scheduler: realScheduler });
+  const lock = lockFile(join(root, ".yian/lock"), { private: true });
+  const stop = new AbortController();
+  const first = append(s, "q1", "1");
+  const aborted = s.apply({ id: "q2", change: { op: "append", path: "a.md", text: "2" }, author, signal: stop.signal });
+  const third = append(s, "q3", "3");
+  stop.abort(new Error("stopped"));
+  await expect(aborted).rejects.toThrow("stopped");
+  setTimeout(() => lock.release(), 150);
+  expect((await first).ok).toBe(true);
+  expect((await third).ok).toBe(true);
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("1\n3");
+  await s.close();
 });

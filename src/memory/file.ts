@@ -605,9 +605,11 @@ interface Store {
   readonly scheduler: Scheduler;
   /**
    * Run `body` holding the memory's lock, after this process's earlier calls on the memory: they
-   * take turns, so only another process's writer makes it wait for the lock, at most the timeout.
+   * take turns, so only another process's writer makes it wait for the lock. It waits at most the
+   * lock timeout from when it was called, its time in the queue included, and an abort while it
+   * is queued rejects it at once.
    *
-   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   * @throws {MemoryBusyError} If the lock is still held by another writer at the deadline.
    */
   locked<T>(signal: AbortSignal | undefined, body: () => T): Promise<T>;
 }
@@ -618,9 +620,20 @@ interface Store {
  */
 const TURNS = new Map<string, Promise<void>>();
 
-/** Run `fn` once this process's earlier turns on the memory at `root` have finished. */
-function inTurn<T>(root: string, fn: () => Promise<T>): Promise<T> {
-  const run = (TURNS.get(root) ?? Promise.resolve()).then(fn);
+/**
+ * Run `fn` once this process's earlier turns on the memory at `root` have finished.
+ *
+ * An abort of `signal` while the call is queued rejects it at once with the signal's reason; its
+ * turn, when it comes, does nothing, so the calls after it keep their order. Once its turn has
+ * started, `fn` answers the abort itself, so a change it applies is never reported as aborted.
+ */
+function inTurn<T>(root: string, signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> {
+  let started = false;
+  const run = (TURNS.get(root) ?? Promise.resolve()).then(() => {
+    started = true;
+    signal?.throwIfAborted();
+    return fn();
+  });
   const done = run.then(
     () => undefined,
     () => undefined,
@@ -629,7 +642,14 @@ function inTurn<T>(root: string, fn: () => Promise<T>): Promise<T> {
   void done.then(() => {
     if (TURNS.get(root) === done) TURNS.delete(root);
   });
-  return run;
+  if (signal === undefined) return run;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      if (!started) reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    void run.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
 }
 
 /**
@@ -693,12 +713,15 @@ export class FileMemory extends MemoryBase {
       limits,
       scheduler,
       locked<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
-        return inTurn(real, async () => {
+        const deadline = scheduler.now() + timeoutMs;
+        return inTurn(real, signal, async () => {
           // Checked before the lock file is opened, and on every call: the folder may change.
           checkMeta(real);
+          // Only what is left of the timeout: a call waits it out once, queued or not.
+          const left = Math.max(0, deadline - scheduler.now());
           let lock: FileLock;
           try {
-            lock = await waitForLock(join(real, META, "lock"), { timeoutMs, signal, scheduler, private: true });
+            lock = await waitForLock(join(real, META, "lock"), { timeoutMs: left, signal, scheduler, private: true });
           } catch (error) {
             if (error instanceof FileLockError && error.reason === "busy") {
               // No cause: the lock's error names its path, and this one can reach a model.

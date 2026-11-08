@@ -361,6 +361,11 @@ function makeStoreFile(path: string): void {
  * The files the store is made of, what each is called in a message, and what to do when one isn't
  * a plain file. A symlink would let SQLite read or write elsewhere, and another hard link to the
  * store would be a second name with a lock of its own.
+ *
+ * A plain file is still trusted to be this store's: a hot journal copied in from another store
+ * rolls the pages its transaction changed into this one on the next access. When those carry the
+ * other store's `meta`, an open given `id`, and every session, refuse the identity they find;
+ * other pages mixed in go unnoticed.
  */
 const STORE_FILES: readonly { suffix: string; role: string; fix: string }[] = [
   { suffix: "", role: "store file", fix: "replace it with a copy" },

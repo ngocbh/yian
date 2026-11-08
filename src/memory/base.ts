@@ -45,7 +45,8 @@ export abstract class MemoryBase {
   /**
    * Open a session on the memory for one run.
    *
-   * @param o.create `false` refuses a memory that doesn't exist yet, as a resume does.
+   * @param o.create `false` refuses a memory that doesn't exist yet, as a resume does, with a
+   *   `MemoryMissingError`.
    * @param o.itemType The JSON Schema of a typed memory's items, or `null`.
    */
   abstract open(o: {
@@ -167,8 +168,11 @@ export type ChangeEntry = {
  */
 const MEMORY_ERROR = Symbol.for("yian.memory_error");
 
-/** The kind of a session's error: its lock wait timed out, or a change id was reused. */
-export type MemoryErrorKind = "busy" | "change_id_reused";
+/**
+ * The kind of a memory's error: its lock wait timed out, a change id was reused, or the memory
+ * isn't at its location.
+ */
+export type MemoryErrorKind = "busy" | "change_id_reused" | "missing";
 
 /** A session's wait for its memory's lock timed out; nothing was written. */
 export class MemoryBusyError extends Error {
@@ -187,8 +191,17 @@ export class ChangeIdReusedError extends Error {
   }
 }
 
+/**
+ * `open({create: false})` found no memory at the instance's location: nothing there, or something
+ * that isn't a memory yet. Its message names no location, since it may reach a run's failure.
+ */
+export class MemoryMissingError extends Error {
+  override name = "MemoryMissingError";
+}
+
 Object.defineProperty(MemoryBusyError.prototype, MEMORY_ERROR, { value: "busy" });
 Object.defineProperty(ChangeIdReusedError.prototype, MEMORY_ERROR, { value: "change_id_reused" });
+Object.defineProperty(MemoryMissingError.prototype, MEMORY_ERROR, { value: "missing" });
 
 /**
  * Return the kind `error` is branded with by any copy of yian, or `null` when it has none. Never
@@ -198,7 +211,7 @@ export function memoryErrorKind(error: unknown): MemoryErrorKind | null {
   if (error === null || (typeof error !== "object" && typeof error !== "function")) return null;
   try {
     const kind: unknown = (error as { [MEMORY_ERROR]?: unknown })[MEMORY_ERROR];
-    return kind === "busy" || kind === "change_id_reused" ? kind : null;
+    return kind === "busy" || kind === "change_id_reused" || kind === "missing" ? kind : null;
   } catch {
     return null;
   }

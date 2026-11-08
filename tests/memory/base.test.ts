@@ -10,6 +10,7 @@ import {
   MemoryBase,
   MemoryBusyError,
   type MemoryContract,
+  MemoryMissingError,
   memoryErrorKind,
   type MemorySession,
   type MemoryToolSpec,
@@ -112,6 +113,9 @@ test("the errors a session throws", () => {
 test("each session error carries its kind", () => {
   expect(memoryErrorKind(new MemoryBusyError("lock wait timed out"))).toBe("busy");
   expect(memoryErrorKind(new ChangeIdReusedError("x"))).toBe("change_id_reused");
+  const missing = new MemoryMissingError("there is no folder");
+  expect(missing.name).toBe("MemoryMissingError");
+  expect(memoryErrorKind(missing)).toBe("missing");
 });
 
 test("an error from another copy of yian is read by its brand", () => {
@@ -119,6 +123,7 @@ test("an error from another copy of yian is read by its brand", () => {
   const busy = Object.assign(new Error("busy elsewhere"), { [brand]: "busy" });
   expect(memoryErrorKind(busy)).toBe("busy");
   expect(memoryErrorKind({ [brand]: "change_id_reused" })).toBe("change_id_reused");
+  expect(memoryErrorKind({ [brand]: "missing" })).toBe("missing");
 });
 
 test("anything else has no memory error kind, and the reader never throws", () => {

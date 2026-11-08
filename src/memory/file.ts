@@ -37,6 +37,7 @@ import {
   type Erased,
   MemoryBase,
   MemoryBusyError,
+  MemoryMissingError,
   type MemoryContract,
   type MemoryInfo,
   type MemorySession,
@@ -164,6 +165,9 @@ const TOOLS: readonly MemoryToolSpec[] = Object.freeze([
 
 /** A plain name: what every component of a member's path must be. */
 const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/** Why `open({create: false})` and `reset` refuse a folder that isn't a memory yet. */
+const NOT_A_MEMORY = "the memory isn't at its location: its folder isn't a memory yet";
 
 /** The folder under the root that holds the memory's own metadata, never a member. */
 const META = ".yian";
@@ -771,8 +775,9 @@ export class FileMemory extends MemoryBase {
    * Before it returns, it catches up on the journal and resolves a change a crash cut off.
    *
    * @throws {TypeError} If `itemType` isn't `null`.
-   * @throws Error when the memory doesn't exist and `create` is false, its stored identity isn't
-   *   the constructor's `id`, the root or `.yian` isn't a folder, or the journal is damaged.
+   * @throws {MemoryMissingError} If the memory doesn't exist and `create` is false.
+   * @throws Error when its stored identity isn't the constructor's `id`, the root or `.yian` isn't
+   *   a folder, or the journal is damaged.
    * @throws {MemoryBusyError} If it waits for the lock longer than the timeout.
    */
   override async open(o: {
@@ -787,7 +792,7 @@ export class FileMemory extends MemoryBase {
     const { root } = this;
     const stats = lstatOrNull(root);
     if (stats === null) {
-      if (!o.create) throw new Error(`${shown(root)} isn't a memory yet: there is no folder`);
+      if (!o.create) throw new MemoryMissingError("the memory isn't at its location: there is no folder");
       makeRoot(root);
     } else if (!stats.isDirectory()) {
       throw new Error(`${shown(root)} isn't a folder`);
@@ -796,7 +801,7 @@ export class FileMemory extends MemoryBase {
     let identity = storedIdentity(root);
     let created = false;
     if (identity === null) {
-      if (!o.create) throw new Error(`${shown(root)} isn't a memory yet`);
+      if (!o.create) throw new MemoryMissingError(NOT_A_MEMORY);
       makeDirectory(join(root, META), META);
       makeDirectory(join(root, META, "tmp"), `${META}/tmp`);
       // Two opens may adopt one folder at once: the lock lets only one of them store an identity.
@@ -824,7 +829,7 @@ export class FileMemory extends MemoryBase {
    * empty. Files that aren't part of the memory stay. Only a host or the CLI calls it, outside
    * runs; a session open on the memory reads the new generation on its next write.
    *
-   * @throws Error when the folder isn't a memory.
+   * @throws {MemoryMissingError} If the folder isn't a memory.
    * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
    */
   override async reset(o: { signal: AbortSignal }): Promise<void> {
@@ -832,7 +837,7 @@ export class FileMemory extends MemoryBase {
     const { root, limits } = this.#store;
     if (lstatOrNull(root)?.isDirectory() === true) checkMeta(root);
     if (lstatOrNull(root)?.isDirectory() !== true || storedIdentity(root) === null) {
-      throw new Error(`${shown(root)} isn't a memory yet`);
+      throw new MemoryMissingError(NOT_A_MEMORY);
     }
     await this.#store.locked(o.signal, (): void => {
       // The journal goes first: a crash part way leaves members to delete, never change ids that

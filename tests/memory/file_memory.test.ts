@@ -86,10 +86,13 @@ test("a stored identity wins; a different constructor id is refused", async () =
   await resumed.close();
 });
 
-test("open({create: false}) refuses a missing memory and creates nothing", async () => {
-  await expect(new FileMemory({ root }).open({ ...o, create: false })).rejects.toThrow(
-    `\`${root}\` isn't a memory yet: there is no folder`,
+test("open({create: false}) refuses a missing memory as missing, without its location, and creates nothing", async () => {
+  const error = await new FileMemory({ root }).open({ ...o, create: false }).then(
+    () => null,
+    (thrown: unknown) => thrown,
   );
+  expect(memoryErrorKind(error)).toBe("missing");
+  expect((error as Error).message).toBe("the memory isn't at its location: there is no folder");
   expect(fs.existsSync(root)).toBe(false);
 });
 
@@ -107,9 +110,12 @@ test("open({create: true}) adopts an existing folder with files and no .yian/, k
 
 test("open({create: false}) refuses an existing folder with no .yian/: it isn't a memory yet", async () => {
   put(root, "profile.md", "Ada.");
-  await expect(new FileMemory({ root }).open({ ...o, create: false })).rejects.toThrow(
-    `\`${root}\` isn't a memory yet`,
+  const error = await new FileMemory({ root }).open({ ...o, create: false }).then(
+    () => null,
+    (thrown: unknown) => thrown,
   );
+  expect(memoryErrorKind(error)).toBe("missing");
+  expect((error as Error).message).toBe("the memory isn't at its location: its folder isn't a memory yet");
   expect(fs.existsSync(join(root, ".yian"))).toBe(false);
 });
 
@@ -1464,7 +1470,12 @@ describe("erase and reset", () => {
 
   test("reset refuses a folder that isn't a memory", async () => {
     put(root, "a.md", "A");
-    await expect(new FileMemory({ root }).reset({ signal })).rejects.toThrow(`\`${root}\` isn't a memory yet`);
+    const error = await new FileMemory({ root }).reset({ signal }).then(
+      () => null,
+      (thrown: unknown) => thrown,
+    );
+    expect(memoryErrorKind(error)).toBe("missing");
+    expect((error as Error).message).toBe("the memory isn't at its location: its folder isn't a memory yet");
     expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("A");
   });
 });

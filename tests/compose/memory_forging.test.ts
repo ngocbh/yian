@@ -83,6 +83,15 @@ test.each(["!FileMemory ${gen.output}", "!Optional(FileMemory) ${gen.output}"])(
   },
 );
 
+test("a typedef can't name a host memory type the load was given", async () => {
+  const error = await loadErrorAsync(
+    loadFlow("id: f\nname: f\ntypedefs:\n  X: TradeJournal\nnodes: {}\noutput: null\n", { memoryTypes: [TradeJournal] }),
+  );
+  expect(error.diagnostic.message).toBe(
+    "bad typedefs: typedef 'X' names a memory type; declare memories as flow inputs (`lessons: !FileMemory`)",
+  );
+});
+
 test("a host memory type has no constructor and no typed binding", async () => {
   for (const source of ["${TradeJournal(gen.output)}", "!TradeJournal ${gen.output}"]) {
     await expect(loadFlow(flowTaking(source), { memoryTypes: [TradeJournal] })).rejects.toThrow("memory");

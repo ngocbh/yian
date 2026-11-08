@@ -1100,7 +1100,7 @@ export async function loadFlowFile(
   rejectUnreadTags(document, new Set(), diagnostics, { typedefsOnly: true });
   let registry: TypeRegistry;
   try {
-    registry = readTypedefs(f.typedefs);
+    registry = readTypedefs(f.typedefs, ctx.memoryTools.keys());
   } catch (error) {
     if (!(error instanceof TypeCheckError)) throw error;
     throw diagnostics.error(`bad typedefs: ${error.message}`, {

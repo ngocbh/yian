@@ -1790,7 +1790,8 @@ function checkCutFields(name: string, fields: Readonly<Record<string, unknown>>)
  * Every typedef is then resolved, even one nothing uses, so a bad field type, an unknown
  * name, a recursive record, an alias cycle, or a bad `Union(...)` fails here.
  *
- * `raw` maps each name to its definition; `null` or `undefined` means none.
+ * `raw` maps each name to its definition; `null` or `undefined` means none. `memoryTypes` names
+ * the host memory types the typedefs resolve against, which the registry returned leaves out.
  *
  * Example: `readTypedefs({Buy: {action: "Literal(buy)"}, Sell: {action: "Literal(sell)"},
  * Decision: "Union(Buy, Sell)"})` registers two records and an alias to their union.
@@ -1806,6 +1807,7 @@ function checkCutFields(name: string, fields: Readonly<Record<string, unknown>>)
  */
 export function readTypedefs(
   raw: Readonly<Record<string, unknown>> | null | undefined,
+  memoryTypes: Iterable<string> = [],
 ): TypeRegistry {
   const registry = new Map<string, TypeDef>();
   for (const [name, value] of Object.entries(raw ?? {})) {
@@ -1900,7 +1902,8 @@ export function readTypedefs(
     }
   }
   checkAliasCycles(registry);
-  checkTypedefs(registry);
+  // Resolved beside the host's memory types, so a typedef naming one is refused as a memory.
+  checkTypedefs(withMemoryTypes(registry, memoryTypes));
   return registry;
 }
 

@@ -83,6 +83,18 @@ describe("host memory types", () => {
     expect(() => typeFor("list(TradeJournal)", registry)).toThrow("a memory is never a list item");
   });
 
+  test.each(["TradeJournal", "Optional(TradeJournal)"])("a typedef can't name the host memory type in %s", (text) => {
+    expect(() => readTypedefs({ X: text }, ["TradeJournal"])).toThrow(
+      "typedef 'X' names a memory type; declare memories as flow inputs (`lessons: !FileMemory`)",
+    );
+  });
+
+  test("the host memory types typedefs resolve against stay out of the registry", () => {
+    const registry = readTypedefs({ R: { n: "int" }, TradeJournal: "str" }, ["TradeJournal", "Other"]);
+    expect([...registry.keys()]).toEqual(["R", "TradeJournal"]);
+    expect(registry.get("TradeJournal")!.kind).toBe("alias");
+  });
+
   test("without the registry entry a host memory type is an unknown type", () => {
     expect(() => typeFor("TradeJournal", new Map())).toThrow("unknown type 'TradeJournal'");
   });

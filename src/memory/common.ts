@@ -79,11 +79,11 @@ function afterMs(ms: number, signal: AbortSignal, fn: () => void): void {
  *
  * A call leaves the queue before its turn when `signal` aborts, rejecting with its reason, or
  * when it has waited `timeoutMs`, rejecting with `MemoryBusyError`, even while the turn ahead
- * still runs. Its turn, when it comes, does nothing, so the calls after it keep their order. Once
- * its turn has started, `fn` answers the abort and the timeout itself, so a change it applies is
- * never reported as aborted.
+ * still runs. Its turn, when it comes, does nothing, so the calls after it keep their order: once
+ * the call has settled, `fn` has finished or will never run. Once its turn has started, `fn`
+ * answers the abort and the timeout itself, so a change it applies is never reported as aborted.
  */
-function inTurn<T>(key: string, signal: AbortSignal | undefined, timeoutMs: number, fn: () => Promise<T>): Turn<T> {
+function inTurn<T>(key: string, signal: AbortSignal | undefined, timeoutMs: number, fn: () => Promise<T>): Promise<T> {
   let started = false;
   /** Why the call left the queue before its turn, once it has. */
   let left: { reason: unknown } | null = null;
@@ -104,7 +104,7 @@ function inTurn<T>(key: string, signal: AbortSignal | undefined, timeoutMs: numb
   void done.then(() => {
     if (TURNS.get(key) === done) TURNS.delete(key);
   });
-  const result = new Promise<T>((resolve, reject) => {
+  return new Promise<T>((resolve, reject) => {
     const leave = (reason: unknown) => {
       if (started || left !== null) return;
       left = { reason };
@@ -120,27 +120,16 @@ function inTurn<T>(key: string, signal: AbortSignal | undefined, timeoutMs: numb
       waiting.abort();
     });
   });
-  return { result, done };
-}
-
-/** A call's place in a memory's queue: its result, and when its turn has finished. */
-export interface Turn<T> {
-  readonly result: Promise<T>;
-  /** Settles, never rejecting, once the turn has run or been passed over. */
-  readonly done: Promise<void>;
 }
 
 /**
  * Run `body` holding the memory's lock `lock`, after this process's earlier calls on the memory:
  * they take turns, so only another process's writer makes it wait for the lock file. It waits at
  * most the lock's timeout from when it was called, its time in the queue included, and leaves the
- * queue as `inTurn` says.
- *
- * Returns the call's `result`, which rejects with `MemoryBusyError` if it is still waiting at the
- * deadline, and `done`, which settles once its turn has finished, later than `result` when the
- * call left the queue before its turn came.
+ * queue as `inTurn` says: an abort while queued rejects at once, and so does the deadline, with
+ * `MemoryBusyError`, and the body of a call that left never runs.
  */
-export function locked<T>(lock: MemoryLock, signal: AbortSignal | undefined, body: () => T | Promise<T>): Turn<T> {
+export function locked<T>(lock: MemoryLock, signal: AbortSignal | undefined, body: () => T | Promise<T>): Promise<T> {
   // A monotonic clock, so a wall-clock step while queued neither stretches nor cuts the wait.
   const deadline = performance.now() + lock.timeoutMs;
   return inTurn(lock.key, signal, lock.timeoutMs, async () => {
@@ -163,6 +152,31 @@ export function locked<T>(lock: MemoryLock, signal: AbortSignal | undefined, bod
       held.release();
     }
   });
+}
+
+/**
+ * A session's calls that haven't settled, which its `close` waits for. A call that left its
+ * memory's queue has settled, and its body never runs, so the turn it left isn't waited for: it
+ * may be behind another instance's turn that holds the lock for long.
+ */
+export class PendingCalls {
+  readonly #calls = new Set<Promise<void>>();
+
+  /** Return `promise`, kept among the pending calls until it settles. */
+  track<T>(promise: Promise<T>): Promise<T> {
+    const settled = promise.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#calls.add(settled);
+    void settled.then(() => this.#calls.delete(settled));
+    return promise;
+  }
+
+  /** Resolve once no call is pending, the calls tracked meanwhile included. */
+  async settled(): Promise<void> {
+    while (this.#calls.size > 0) await Promise.all([...this.#calls]);
+  }
 }
 
 /**

@@ -1603,7 +1603,7 @@ describe("the lock and the queue", () => {
     await s.close();
   });
 
-  test("close waits for every turn the session queued, an aborted call's included", async () => {
+  test("close waits for every call the session queued, even when its last one was aborted while queued", async () => {
     const s = await openAt({ lockTimeoutMs: 10_000 });
     const lock = lockFile(`${path}.lock`, { private: true });
     const first = s.snapshot();
@@ -1620,6 +1620,24 @@ describe("the lock and the queue", () => {
     lock.release();
     await first;
     await closing;
+    expect(closed).toBe(true);
+  });
+
+  test("close doesn't wait for the turn of a call that left the queue busy", async () => {
+    const s = await openAt({ lockTimeoutMs: 200 });
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    const stuck = new AbortController();
+    const never = () => new Promise<Float32Array[]>(() => {});
+    const reembedding = memory().reembed({ embedding: modelB, embed: never, signal: stuck.signal });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await rejection(s.snapshot())).toBeInstanceOf(MemoryBusyError);
+    // Every call of the session has returned; the reembed ahead of its busy call still holds the lock.
+    const closed = await Promise.race([
+      s.close().then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000)),
+    ]);
+    stuck.abort(new Error("stopped"));
+    await expect(reembedding).rejects.toThrow("stopped");
     expect(closed).toBe(true);
   });
 

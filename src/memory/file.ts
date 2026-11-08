@@ -46,6 +46,7 @@ import {
   lstatOrNull,
   type MemoryLock,
   openRegular,
+  PendingCalls,
   plural,
   realPath,
   refusal,
@@ -53,7 +54,6 @@ import {
   sha256,
   shown,
   stringArg,
-  type Turn,
   withoutLocation,
 } from "./common.ts";
 import {
@@ -533,7 +533,7 @@ interface Store {
   readonly limits: Limits;
   readonly scheduler: Scheduler;
   /** Run `body` holding the memory's lock, in this process's turn on the memory, as `locked` in `common.ts` does. */
-  locked<T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T>;
+  locked<T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T>;
 }
 
 /**
@@ -606,7 +606,7 @@ export class FileMemory extends MemoryBase {
       index,
       limits,
       scheduler,
-      locked: <T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T> => locked(lock, signal, body),
+      locked: <T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T> => locked(lock, signal, body),
     });
   }
 
@@ -655,7 +655,7 @@ export class FileMemory extends MemoryBase {
         replaceFile(join(root, META, "identity"), Buffer.from(made, "utf8"), join(root, META, "tmp"));
         created = true;
         return made;
-      }).result;
+      });
     }
     if (this.#id !== undefined && identity !== this.#id) {
       throw new Error(`this memory is ${shown(identity)}, not ${shown(this.#id)}`);
@@ -704,7 +704,7 @@ export class FileMemory extends MemoryBase {
         if (lstatOrNull(join(root, folder)) !== null) syncFolder(join(root, folder));
       }
       clearTmp(root);
-    }).result;
+    });
   }
 }
 
@@ -907,11 +907,8 @@ class FileMemorySession implements MemorySession {
   readonly created: boolean;
   readonly #store: Store;
   readonly #journal: Journal;
-  /**
-   * When the session's last queued turn has finished. Turns run in the order they were queued, so
-   * every earlier turn has finished by then too: `close` waits for it.
-   */
-  #last: Promise<void> = Promise.resolve();
+  /** The session's calls not yet settled: `close` waits for them. */
+  readonly #pending = new PendingCalls();
   #closed = false;
 
   /**
@@ -1093,10 +1090,13 @@ class FileMemorySession implements MemorySession {
     return { version: applied.version, disabledUndos: applied.result.disabled_undos as string[] };
   }
 
-  /** Close the session once every turn it queued has finished, aborted calls' included; later calls throw. */
+  /**
+   * Close the session once every call it made has settled; later calls throw. A call that left the
+   * queue, aborted or busy, never runs, so the turn it left isn't waited for.
+   */
   async close(): Promise<void> {
     this.#closed = true;
-    await this.#last;
+    await this.#pending.settled();
   }
 
   /**
@@ -1467,11 +1467,10 @@ class FileMemorySession implements MemorySession {
   /** Run `body` holding the memory's lock, in this process's turn on the memory. */
   #locked<T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T> {
     if (this.#closed) return Promise.reject(new Error("this FileMemory session is closed"));
-    const { result, done } = this.#store.locked(signal, body);
-    // The turn itself, not the call: an abort while queued lets the call go before its turn runs.
-    this.#last = done;
-    return result.catch((error: unknown) => {
-      throw withoutLocation(error, locationOf(this.#store.root));
-    });
+    return this.#pending.track(
+      this.#store.locked(signal, body).catch((error: unknown) => {
+        throw withoutLocation(error, locationOf(this.#store.root));
+      }),
+    );
   }
 }

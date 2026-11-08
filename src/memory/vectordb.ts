@@ -58,6 +58,7 @@ import {
   lstatOrNull,
   type MemoryLock,
   openRegular,
+  PendingCalls,
   plural,
   realPath,
   refusal,
@@ -65,7 +66,6 @@ import {
   sha256,
   shown,
   stringArg,
-  type Turn,
   withoutLocation,
 } from "./common.ts";
 
@@ -980,7 +980,7 @@ interface Store {
   readonly embedding: EmbeddingModel | undefined;
   readonly embed: Embed | undefined;
   /** Run `body` holding the memory's lock, in this process's turn on the store, as `locked` in `common.ts` does. */
-  locked<T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T>;
+  locked<T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T>;
   /**
    * Run the async `body` holding the memory's lock for as long as it runs, as `locked` runs a
    * synchronous one. Only host actions do this: every other writer waits for it, or times out.
@@ -1082,8 +1082,8 @@ export class VectorDBMemory extends MemoryBase {
       scheduler,
       embedding,
       embed: options.embed,
-      locked: <T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T> => locked(lock, signal, body),
-      hold: <T>(signal: AbortSignal, body: () => Promise<T>): Promise<T> => locked(lock, signal, body).result,
+      locked: <T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T> => locked(lock, signal, body),
+      hold: <T>(signal: AbortSignal, body: () => Promise<T>): Promise<T> => locked(lock, signal, body),
     });
   }
 
@@ -1138,7 +1138,7 @@ export class VectorDBMemory extends MemoryBase {
           const identity = this.#id ?? `at-${sha256(path).slice(0, 16)}`;
           return initStore(db, path, identity, { embedding, item_schema: itemType });
         });
-      }).result;
+      });
     } catch (error) {
       const code = sqliteErrorCode(error);
       if (code !== undefined && (code & 0xff) === SQLITE_NOTADB) {
@@ -1182,7 +1182,7 @@ export class VectorDBMemory extends MemoryBase {
           db.prepare("UPDATE meta SET value = ? WHERE key = 'version'").run(String(meta.version + 1));
         });
       });
-    }).result;
+    });
   }
 
   /**
@@ -1273,7 +1273,7 @@ export class VectorDBMemory extends MemoryBase {
         dropStaging(db);
         db.exec("VACUUM");
       });
-    }).result;
+    });
   }
 }
 
@@ -1327,8 +1327,8 @@ class VectorDBSession implements MemorySession {
   readonly #store: Store;
   /** The settings the store held when the session opened, which every access checks it still holds. */
   readonly #stored: StoredSettings;
-  /** The session's calls and turns not yet settled: `close` waits for them. */
-  readonly #pending = new Set<Promise<void>>();
+  /** The session's calls not yet settled: `close` waits for them. */
+  readonly #pending = new PendingCalls();
   /** The highest version the session has seen the store at; a store found older was restored. */
   #seen: number;
   #closed = false;
@@ -1380,7 +1380,7 @@ class VectorDBSession implements MemorySession {
     }
     if (spec.write) throw new TypeError(`${tool} is a write tool: apply it as a change`);
     if (!isObject(args)) throw new TypeError(`VectorDBMemory ${tool} takes its arguments as an object`);
-    if (tool === "search") return this.#track(this.#search(args, o.signal));
+    if (tool === "search") return this.#pending.track(this.#search(args, o.signal));
     if (tool === "read") {
       const id = intArg(args, "id", true);
       return this.#locked(o.signal, (db) => {
@@ -1424,7 +1424,7 @@ class VectorDBSession implements MemorySession {
     const author = checkAuthor(c.author);
     const change = checkChange(c.change, this.#stored.item_schema);
     const writing: Writing = { id: c.id, digest: changeDigest(change), author };
-    return this.#track(this.#apply(writing, change, c.signal));
+    return this.#pending.track(this.#apply(writing, change, c.signal));
   }
 
   /**
@@ -1445,7 +1445,7 @@ class VectorDBSession implements MemorySession {
     if (typeof o.changeId !== "string") throw new TypeError("undo needs the change id to undo as a string");
     const author = checkAuthor(o.author);
     const writing: Writing = { id: o.id, digest: sha256(logJson({ op: "undo", change: o.changeId })), author };
-    return this.#track(this.#undo(writing, o.changeId, o.signal));
+    return this.#pending.track(this.#undo(writing, o.changeId, o.signal));
   }
 
   /**
@@ -1516,11 +1516,13 @@ class VectorDBSession implements MemorySession {
     );
   }
 
-  /** Close the session once every call and turn it started has settled; later calls reject. */
+  /**
+   * Close the session once every call it made has settled; later calls reject. A call that left the
+   * queue, aborted or busy, never runs, so the turn it left isn't waited for.
+   */
   async close(): Promise<void> {
     this.#closed = true;
-    // A change queues its second turn after its first settles, so wait until none is left.
-    while (this.#pending.size > 0) await Promise.all([...this.#pending]);
+    await this.#pending.settled();
   }
 
   /** Apply `change` as `writing`: check and write at once, or check, embed, then check again and write. */
@@ -1861,17 +1863,6 @@ class VectorDBSession implements MemorySession {
     if (this.#closed) throw new Error("this VectorDBMemory session is closed");
   }
 
-  /** Return `promise`, keeping it among the pending calls `close` waits for until it settles. */
-  #track<T>(promise: Promise<T>): Promise<T> {
-    const settled = promise.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.#pending.add(settled);
-    void settled.then(() => this.#pending.delete(settled));
-    return promise;
-  }
-
   /**
    * Run `body` on the store holding the memory's lock, in this process's turn on the store, after
    * checking the store is still the session's. Its errors name no location.
@@ -1886,11 +1877,8 @@ class VectorDBSession implements MemorySession {
         this.#seen = Math.max(this.#seen, storedVersion(db));
         return result;
       });
-    const { result, done } = this.#store.locked(signal, run as Held<T>);
-    // The turn itself, not the call: an abort while queued lets the call go before its turn runs.
-    this.#track(done);
-    return this.#track(
-      result.catch((error: unknown) => {
+    return this.#pending.track(
+      this.#store.locked(signal, run as Held<T>).catch((error: unknown) => {
         throw withoutLocation(error, [
           [path, "the memory's store"],
           [dirname(path), "the memory's folder"],

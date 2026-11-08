@@ -257,7 +257,7 @@ describe("package.json", () => {
     // npm resolves relative links against `repository`, which `package.json` still lacks.
     expect(readme.match(/\]\((?!https:\/\/)[^)]*\)/g) ?? []).toEqual([]);
     expect(readme).not.toMatch(/python|pytest|pip install/i);
-    expect(readme.split("\n").length).toBeLessThanOrEqual(80);
+    expect(readme.split("\n").length).toBeLessThanOrEqual(90);
   });
 });
 

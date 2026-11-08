@@ -165,7 +165,8 @@ export function checkMemoryGrants(
     hasTool: () => false,
     groupsHolding: () => [],
     groupNames: () => [...flowInputs.keys()].filter((input) => names(input) !== null),
-    identity: (group, tool) => visibleToolName(group, tool),
+    // Structured, so two tools that would show one name stay two tools for the name check.
+    identity: (group, tool) => JSON.stringify([group, tool]),
     bareMembers: false,
   };
   for (const tool of expandGrants(known, [scope])) {

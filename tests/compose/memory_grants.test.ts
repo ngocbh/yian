@@ -196,6 +196,15 @@ test.each([
   expect(error.diagnostic.message).toContain(message);
 });
 
+test.each(["[a_b, a]", "[a, a_b]", "[{a_b: [read]}, {a: [b_read]}]"])(
+  "two memory tools that would show one name are refused (%s)",
+  async (tools) => {
+    const TA = hostType("TA", ["b_read"]);
+    const error = await loadErrorAsync(loadFlow(flow("a_b: !FileMemory\na: !TA", agent(tools)), { memoryTypes: [TA] }));
+    expect(error.diagnostic.message).toMatch(/tools 'a_b_read' \((a_b's read|a's b_read)\) and 'a_b_read' \((a_b's read|a's b_read)\) have one name; grant one/);
+  },
+);
+
 test("a host type's grants are checked against its class's tools", async () => {
   const text = flow("j: !TradeJournal", agent("[{j: [record_trade]}]"));
   const loaded = await loadFlow(text, { memoryTypes: [TRADE_JOURNAL] });

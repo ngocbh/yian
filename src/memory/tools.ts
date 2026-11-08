@@ -76,7 +76,7 @@ function memoryTool(
       try {
         return await session.call(name, args as JsonObject, { signal: ctx.signal });
       } catch (error) {
-        throw sessionError(input, ctx, error);
+        throw sessionError(input, ctx, error, name);
       }
     }
     // The tool's name goes last, so an argument can't change which change it is.
@@ -112,15 +112,22 @@ function callAuthor(author: { readonly kind: "agent" | "tool"; readonly name: st
 /**
  * Return the error a call reports for a session's `error`: a busy memory, or a provider error
  * another attempt may fix (an embedder's rate limit, server error or timeout), as a reported error
- * the model may try again; a reused change id as a permanent error; and any other error as it is.
+ * the model may try again; a write's reused change id as a permanent error; and any other error as
+ * it is.
+ *
+ * @param read The read tool's name for a read, which applies no change, so a reused change id from
+ *   it is a fault of the memory; `null` for a write.
  */
-function sessionError(input: string, ctx: ToolContext, error: unknown): unknown {
+function sessionError(input: string, ctx: ToolContext, error: unknown, read: string | null = null): unknown {
   const kind = memoryErrorKind(error);
   if (kind === "busy") return new ReportedToolError(`\`${input}\` is busy; try again`, { cause: error });
   // A transient fault of the memory's own model doesn't fail the run; one another attempt can't
   // fix (refused credentials) stays a fault, so the host sees it.
   if (error instanceof ProviderError && error.retryable) {
     return new ReportedToolError(`\`${input}\` couldn't embed: ${error.kind}; try again`, { cause: error });
+  }
+  if (kind === "change_id_reused" && read !== null) {
+    return new Error(`\`${input}\`'s ${read} tool reported a reused change id, which a read can't have`, { cause: error });
   }
   if (kind === "change_id_reused") {
     // Named from the call, not the error: a host's error may say anything.

@@ -167,3 +167,15 @@ test("a transient provider error, from an embedder, is a reported error the mode
   };
   expect(await rejection(() => search!.execute({ query: "q" }, AT))).toBe(refused);
 });
+
+test("a reused change id from a read tool is a fault, not a change's refusal", async () => {
+  const session = new RecordingSession();
+  session.onCall = () => {
+    throw new ChangeIdReusedError("x");
+  };
+  const [read] = memoryTools(value, session, { input: "lessons", tools: ["read"] }, { kind: "agent", name: "a" });
+  const error = await rejection(() => read!.execute({ path: "a.md" }, AT));
+  expect(isPermanentToolError(error)).toBe(false);
+  expect(isReportedToolError(error)).toBe(false);
+  expect((error as Error).message).toBe("`lessons`'s read tool reported a reused change id, which a read can't have");
+});

@@ -27,7 +27,7 @@ import { defaultLocation, defaultMemories, memoryRoot, projectFolder } from "./m
 import { diagnosticJson, printStyled } from "./render.ts";
 import { defaultRunsDir, loadFlowFile } from "./startup.ts";
 import { Terminal } from "./terminal.ts";
-import { atTerminal, type CliIo, forTerminal, type ParsedArgs, printJson, UsageError } from "./utils.ts";
+import { atTerminal, checkPath, type CliIo, forTerminal, type ParsedArgs, printJson, UsageError } from "./utils.ts";
 
 /** A memory `yian memory` acts on: its instance and folder, and, for a default, its identity. */
 export interface MemoryTarget {
@@ -170,19 +170,52 @@ export async function memoryList({ options }: ParsedArgs, io: CliIo): Promise<nu
 /** What a command does with the memory it opened; returns the exit code. */
 type MemoryBody = (session: MemorySession, target: MemoryTarget) => Promise<number>;
 
+/** A memory named as `FLOW NAME`; both absent with `--at`. */
+interface Named {
+  readonly flow?: string | undefined;
+  readonly name?: string | undefined;
+}
+
+/** The memory `command` names through its `flow` and `name` positionals. */
+function namedOf(command: ParsedArgs): Named {
+  return { flow: command.args["flow"] as string | undefined, name: command.args["name"] as string | undefined };
+}
+
 /**
- * Open the memory `command` names (`FLOW NAME`, or `--at`), run `body` on it, and close it. A flow
+ * Return the memory a command whose own argument comes last names, and that argument: its
+ * positionals are `FLOW NAME <argument>`, or with `--at` the argument alone. The parser fills the
+ * positionals `flow`, `name` and `argument` in order, so they are read as one list.
+ *
+ * @param argument The argument's positional, such as `change`.
+ * @throws {UsageError} For another count of positionals, showing both forms, or a FLOW that isn't
+ *   a readable file.
+ */
+function namedWith(command: ParsedArgs, argument: string): { named: Named; value: string } {
+  const given = ["flow", "name", argument]
+    .map((key) => command.args[key])
+    .filter((value): value is string => typeof value === "string");
+  const at = command.options["at"] !== undefined;
+  if (given.length !== (at ? 1 : 3)) {
+    const shown = argument.toUpperCase();
+    throw new UsageError(`Invalid value: give FLOW NAME ${shown}, or --at PATH ${shown}`);
+  }
+  if (at) return { named: {}, value: given[0]! };
+  checkPath("'FLOW'", given[0]!, { exists: true, dir: false, readable: true });
+  return { named: { flow: given[0], name: given[1] }, value: given[2]! };
+}
+
+/**
+ * Open the memory `named` (or `command`'s `--at`) names, run `body` on it, and close it. A flow
  * that doesn't load exits 1 after its diagnostic (a document under `--json`); the memory failing
  * prints `memory failed: <message>` on stderr (a `memory.failed` document) and exits 1.
  *
  * @throws {UsageError} As `resolveTarget` and `openTarget` throw.
  */
-async function onMemory(command: ParsedArgs, io: CliIo, body: MemoryBody): Promise<number> {
-  const { args, options } = command;
+async function onMemory(command: ParsedArgs, io: CliIo, named: Named, body: MemoryBody): Promise<number> {
+  const { options } = command;
   const json = options["json"] === true;
   let session: MemorySession | null = null;
   try {
-    const named = { flow: args["flow"] as string | undefined, name: args["name"] as string | undefined };
     const target = await resolveTarget({ ...named, at: options["at"] as string | undefined }, io);
     if (target instanceof Diagnostic) {
       if (json) await printJson({ error: diagnosticJson(target) }, io.stdout);
@@ -245,7 +278,7 @@ function counted(count: number, noun: string): string {
  */
 export async function memoryShow(command: ParsedArgs, io: CliIo): Promise<number> {
   const all = command.options["all"] === true;
-  return onMemory(command, io, async (session, { location }) => {
+  return onMemory(command, io, namedOf(command), async (session, { location }) => {
     const { version, recall } = await session.snapshot();
     const files = membersOf(session, location);
     const characters = files.reduce((sum, file) => sum + file.chars, 0);
@@ -294,7 +327,7 @@ function changeLine(change: ChangeEntry): string {
  */
 export async function memoryHistory(command: ParsedArgs, io: CliIo): Promise<number> {
   const limit = (command.options["limit"] as number | undefined) ?? 20;
-  return onMemory(command, io, async (session) => {
+  return onMemory(command, io, namedOf(command), async (session) => {
     const changes = await session.history({ limit });
     if (command.options["json"] === true) {
       const listed = changes.map(({ id, op, target, author, at }) => ({ id, op, target, author, at }));
@@ -307,15 +340,15 @@ export async function memoryHistory(command: ParsedArgs, io: CliIo): Promise<num
 }
 
 /**
- * `yian memory undo CHANGE`: undo the change `CHANGE` as the user, and print the memory's new
- * version (`--json`: `{change, version}`, `change` the undo's own id). A change that can't be
- * undone (its file changed since, or it is no longer kept) prints `undo refused: <reason>` (a
- * `memory.conflict` document) and exits 1.
+ * `yian memory undo FLOW NAME CHANGE` (or `--at PATH CHANGE`): undo the change `CHANGE` as the
+ * user, and print the memory's new version (`--json`: `{change, version}`, `change` the undo's own
+ * id). A change that can't be undone (its file changed since, or it is no longer kept) prints
+ * `undo refused: <reason>` (a `memory.conflict` document) and exits 1.
  */
 export async function memoryUndo(command: ParsedArgs, io: CliIo): Promise<number> {
-  const undone = command.args["change"] as string;
+  const { named, value: undone } = namedWith(command, "change");
   const json = command.options["json"] === true;
-  return onMemory(command, io, async (session) => {
+  return onMemory(command, io, named, async (session) => {
     const id = changeId();
     const applied = await session.undo({ id, changeId: undone, author: userAuthor(io), signal: stopOf(io) });
     if (!applied.ok) {
@@ -356,7 +389,7 @@ function runEditor(env: Env, path: string): Promise<void> {
  */
 export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;
-  return onMemory(command, io, async (session, { location }) => {
+  return onMemory(command, io, namedOf(command), async (session, { location }) => {
     const path = (command.options["file"] as string | undefined) ?? String(session.info.settings["index"]);
     const file = membersOf(session, location).find((each) => each.path === path) ?? null;
     // Private: the copy holds the memory's text.
@@ -446,19 +479,20 @@ async function goesOn(command: ParsedArgs, io: CliIo, question: string): Promise
 }
 
 /**
- * `yian memory erase FILE`: list the runs on this machine whose index records the memory (their
- * logs may hold copies of what is erased, and deleting them is the person's choice), say that runs
- * elsewhere can't be seen, ask (`--yes` doesn't; off a terminal it is required), then erase the
- * file, or with `--text` every occurrence of that text in it, from the memory and its history, as
- * the user, and print the new version and the undos the erase disabled. A no prints `nothing
- * erased` and exits 1. `--json` prints `{runs, version, disabled_undos}`.
+ * `yian memory erase FLOW NAME FILE` (or `--at PATH FILE`): list the runs on this machine whose
+ * index records the memory (their logs may hold copies of what is erased, and deleting them is the
+ * person's choice), say that runs elsewhere can't be seen, ask (`--yes` doesn't; off a terminal it
+ * is required), then erase the file, or with `--text` every occurrence of that text in it, from
+ * the memory and its history, as the user, and print the new version and the undos the erase
+ * disabled. A no prints `nothing erased` and exits 1. `--json` prints `{runs, version,
+ * disabled_undos}`.
  */
 export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;
-  const path = command.args["file"] as string;
+  const { named, value: path } = namedWith(command, "file");
   const text = command.options["text"] as string | undefined;
   checkAsks(command, io, "erase");
-  return onMemory(command, io, async (session) => {
+  return onMemory(command, io, named, async (session) => {
     const { identity } = session.info;
     const runs = runsUsing(io, identity);
     const unseen = "yian can't see runs on other machines or in a host's own logs";
@@ -499,7 +533,7 @@ const UNFINISHED: ReadonlySet<string> = new Set(["running", "waiting", "stopped"
 export async function memoryReset(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;
   checkAsks(command, io, "reset");
-  return onMemory(command, io, async (session, target) => {
+  return onMemory(command, io, namedOf(command), async (session, target) => {
     const { identity } = session.info;
     const runs = runsUsing(io, identity).filter((row) => UNFINISHED.has(row.status));
     if (!json) {

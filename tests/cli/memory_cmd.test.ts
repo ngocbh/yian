@@ -249,7 +249,7 @@ describe("yian memory undo", () => {
     await runOnce(flow, "first");
     await runOnce(flow, "second");
     const [newest, oldest] = (await historyOf(flow)).changes;
-    const undone = await yian(["memory", "undo", newest!.id, flow, "lessons"]);
+    const undone = await yian(["memory", "undo", flow, "lessons", newest!.id]);
     expect(undone.code, undone.stderr).toBe(0);
     expect(undone.stdout).toMatch(new RegExp(`^undid ${newest!.id}; the memory's version is [0-9a-f]{64}\\n$`));
     expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("first");
@@ -258,7 +258,7 @@ describe("yian memory undo", () => {
     expect(undo!.target.undoes).toBe(newest!.id);
     // The first append's file no longer holds only what it wrote.
     await runOnce(flow, "third");
-    const conflict = await yian(["memory", "undo", oldest!.id, flow, "lessons", "--json"]);
+    const conflict = await yian(["memory", "undo", "--at", lessons().location, oldest!.id, "--json"]);
     expect(conflict.code).toBe(1);
     expect(JSON.parse(conflict.stdout).error.code).toBe("memory.conflict");
     expect(conflict.stderr).toContain("undo refused: ");
@@ -344,12 +344,35 @@ function runIds(): string[] {
   return readdirSync(join(home, ".yian", "runs")).filter((name) => name !== "index.sqlite");
 }
 
+describe("undo and erase name the memory first", () => {
+  test("FLOW NAME then the argument, or --at PATH then it; another count shows both forms", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    const wrong: [string[], string][] = [
+      [["undo", flow, "lessons"], "give FLOW NAME CHANGE, or --at PATH CHANGE"],
+      [["undo", "--at", lessons().location, flow, "c1"], "give FLOW NAME CHANGE, or --at PATH CHANGE"],
+      [["erase", flow, "MEMORY.md", "--yes"], "give FLOW NAME FILE, or --at PATH FILE"],
+      [["erase", "--at", lessons().location, "--yes"], "give FLOW NAME FILE, or --at PATH FILE"],
+    ];
+    for (const [args, message] of wrong) {
+      const result = await yian(["memory", ...args]);
+      expect(result.code, args.join(" ")).toBe(2);
+      expect(result.stderr).toContain(`Invalid value: ${message}`);
+    }
+    const missing = await yian(["memory", "undo", join(project, "nope.yaml"), "lessons", "c1"]);
+    expect(missing.code).toBe(2);
+    expect(missing.stderr).toContain("Invalid value for 'FLOW': File");
+    const help = await yian(["memory", "undo", "--help"]);
+    expect(help.stdout).toContain("Usage: yian memory undo [OPTIONS] [FLOW] [NAME] [CHANGE]");
+  });
+});
+
 describe("yian memory erase", () => {
   test("lists the runs that used the memory, erases the text everywhere, and prints the undos disabled", async () => {
     const flow = flowFile();
     await runOnce(flow, "keep this");
     await runOnce(flow, "my PIN 4321");
-    const result = await yian(["memory", "erase", "MEMORY.md", flow, "lessons", "--text", "4321", "--yes"]);
+    const result = await yian(["memory", "erase", flow, "lessons", "MEMORY.md", "--text", "4321", "--yes"]);
     expect(result.code, result.stderr).toBe(0);
     for (const run of runIds()) expect(result.stdout).toContain(run);
     expect(result.stdout).toContain("yian can't see runs on other machines or in a host's own logs");
@@ -362,7 +385,7 @@ describe("yian memory erase", () => {
   test("--json prints the runs, the version and the disabled undos", async () => {
     const flow = flowFile();
     await runOnce(flow, "first");
-    const json = await yian(["memory", "erase", "MEMORY.md", flow, "lessons", "--yes", "--json"]);
+    const json = await yian(["memory", "erase", "--at", lessons().location, "MEMORY.md", "--yes", "--json"]);
     expect(json.code, json.stderr).toBe(0);
     const document = JSON.parse(json.stdout);
     expect(document.runs).toEqual([
@@ -376,12 +399,12 @@ describe("yian memory erase", () => {
   test("asks first on a terminal; no, or no terminal without --yes, erases nothing", async () => {
     const flow = flowFile();
     await runOnce(flow, "first");
-    const piped = await yian(["memory", "erase", "MEMORY.md", flow, "lessons"]);
+    const piped = await yian(["memory", "erase", flow, "lessons", "MEMORY.md"]);
     expect(piped.code).toBe(2);
     expect(piped.stderr).toContain("pass --yes");
     const no = new FakeInput({ tty: true });
     no.write(ENTER);
-    const declined = await yian(["memory", "erase", "MEMORY.md", flow, "lessons"], {
+    const declined = await yian(["memory", "erase", flow, "lessons", "MEMORY.md"], {
       stdin: no,
       stderrStream: new FakeOutput({ tty: true }),
     });
@@ -391,7 +414,7 @@ describe("yian memory erase", () => {
     const yes = new FakeInput({ tty: true });
     yes.write(`${DOWN}${ENTER}`);
     const output = new FakeOutput({ tty: true });
-    const args = ["memory", "erase", "MEMORY.md", flow, "lessons"];
+    const args = ["memory", "erase", flow, "lessons", "MEMORY.md"];
     const erased = await yian(args, { stdin: yes, stderrStream: output });
     expect(erased.code, erased.stderr).toBe(0);
     expect(output.text).toContain("Erase MEMORY.md from");

@@ -70,6 +70,16 @@ const MEMORY_AT: OptionSpec = {
 
 const MEMORY_YES: OptionSpec = { name: "yes", type: "boolean", help: "Don't ask first." };
 
+/**
+ * The positionals of a `yian memory` command with an argument of its own after the memory:
+ * `FLOW NAME <last>`, or with `--at` `<last>` alone. All are optional, as the parser fills them in
+ * order; the command reads them as one list. The command checks FLOW, which may be `<last>`.
+ */
+function memoryThen(last: { name: string; help: string }): PositionalSpec[] {
+  const { path: _, ...flow } = MEMORY_FLOW;
+  return [flow, MEMORY_NAME, { ...last, optional: true }];
+}
+
 /** The commands by name, in the order the root help lists them. */
 export const COMMANDS: Readonly<Record<string, Command>> = {
   run: {
@@ -432,8 +442,8 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   "memory undo": {
     spec: {
       name: "memory undo",
-      summary: "Undo one change to a memory.",
-      positionals: [{ name: "change", help: "The change's id, as history lists it." }, MEMORY_FLOW, MEMORY_NAME],
+      summary: "Undo one change to a memory: FLOW NAME CHANGE, or --at PATH CHANGE.",
+      positionals: memoryThen({ name: "change", help: "The change's id, as history lists it." }),
       options: [MEMORY_AT, JSON_OPTION],
     },
     load: async () => {
@@ -460,8 +470,8 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   "memory erase": {
     spec: {
       name: "memory erase",
-      summary: "Erase a file, or text in it, from a memory and its history.",
-      positionals: [{ name: "file", help: "The memory's file to erase from." }, MEMORY_FLOW, MEMORY_NAME],
+      summary: "Erase a file, or text in it, from a memory and its history: FLOW NAME FILE, or --at PATH FILE.",
+      positionals: memoryThen({ name: "file", help: "The memory's file to erase from." }),
       options: [
         MEMORY_AT,
         { name: "text", type: "string", help: "Erase only this text from the file." },

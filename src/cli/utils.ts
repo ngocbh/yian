@@ -315,8 +315,11 @@ function optionHint(option: OptionSpec): string {
   return option.short === undefined ? `'--${option.name}'` : `'--${option.name}' / '-${option.short}'`;
 }
 
-/** Throw a `UsageError` if `value` doesn't pass `check`, in Click's order and words. */
-function checkPath(hint: string, value: string, check: PathCheck): void {
+/**
+ * @internal Throw a `UsageError` if `value` doesn't pass `check`, in Click's order and words; `hint`
+ * names the argument (`'FLOW'`), as a message shows it.
+ */
+export function checkPath(hint: string, value: string, check: PathCheck): void {
   const kind = check.dir ? "Directory" : "File";
   const fail = (what: string): never => {
     throw new UsageError(`Invalid value for ${hint}: ${kind} ${reprText(value)} ${what}.`);

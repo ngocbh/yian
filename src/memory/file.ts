@@ -7,7 +7,8 @@
  * files) isn't part of the memory: tools refuse it and the version leaves it out. The memory's own metadata lives in
  * `<root>/.yian/`: `identity`, the journal, the lock and a temp folder.
  *
- * It imports `defaults`, `diagnostics`, `platform` and `typesys`, and `memory/base.ts`.
+ * It imports `defaults`, `diagnostics`, `platform`, `tools` and `typesys`, and `memory/base.ts` and
+ * `memory/file_journal.ts`.
  */
 
 import { createHash, randomBytes } from "node:crypto";
@@ -44,11 +45,13 @@ import {
 } from "./base.ts";
 import {
   ABSENT,
+  asAuthor,
   authorOf,
   charCount,
   type Inverse,
   Journal,
   type JournalEntry,
+  isObject,
   makeDirectory,
   openRegular,
   replaceFile,
@@ -191,7 +194,10 @@ export interface FileMemoryOptions {
   maxResults?: number;
   /** Changes the memory can undo. */
   maxUndo?: number;
-  /** Change ids the memory keeps to answer a repeated change. */
+  /**
+   * Change ids the memory keeps to answer a repeated change. Every writer on one root must use the
+   * same value: one that keeps fewer ids may apply again a change another still answers.
+   */
   maxChangeIds?: number;
   /** Characters of old text the memory keeps for undo (default `maxTotalChars`). */
   maxHistoryChars?: number;
@@ -262,6 +268,10 @@ function pathProblem(rel: string, maxDepth: number, folder = false): string | nu
  * Return why the existing components of `rel` under `root` can't lead to a member, or with
  * `folder` to a folder of members, checked with `lstat`, or `null` when they can. A missing
  * component is fine: a write creates it.
+ *
+ * The check and the use are separate path walks: Node has no `openat`, so a local process that
+ * can write in the memory's folder and swaps a checked folder for a symlink in between can
+ * redirect a read or a write. Only the last component is opened without following a symlink.
  */
 function diskProblem(root: string, rel: string, folder = false): string | null {
   const parts = rel.split("/");
@@ -525,7 +535,7 @@ function listed(names: readonly string[]): string {
  *   each a string.
  */
 function checkChange(change: JsonObject): Change {
-  const op: unknown = isJsonObject(change) ? change.op : undefined;
+  const op: unknown = isObject(change) ? change.op : undefined;
   if (typeof op !== "string" || !Object.hasOwn(CHANGE_FIELDS, op)) {
     const ops = Object.keys(CHANGE_FIELDS).join(", ");
     throw new TypeError(`FileMemory has no change ${String(op)}; its changes are ${ops}`);
@@ -541,27 +551,17 @@ function checkChange(change: JsonObject): Change {
   return change as unknown as Change;
 }
 
-/** Return whether `value` is a plain object. */
-function isJsonObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 /**
  * Return `author` with only its own fields.
  *
  * @throws {TypeError} If it isn't `{kind, name, run?, node?}` with a known kind.
  */
 function checkAuthor(author: Author): Author {
-  const ok =
-    isJsonObject(author) &&
-    ["agent", "tool", "user", "host"].includes(author.kind) &&
-    typeof author.name === "string" &&
-    (author.run === undefined || typeof author.run === "string") &&
-    (author.node === undefined || typeof author.node === "string");
-  if (!ok) {
+  const checked = asAuthor(author);
+  if (checked === null) {
     throw new TypeError("a change's author must be {kind, name, run?, node?}, its kind agent, tool, user or host");
   }
-  return authorOf(author);
+  return checked;
 }
 
 /** Return a refusal that wrote nothing. */
@@ -697,9 +697,9 @@ export class FileMemory extends MemoryBase {
    * that isn't a memory yet is adopted with its files; either stores the identity in
    * `.yian/identity` and reports `created`.
    *
-   * @throws {TypeError} If `itemType` isn't `null`.
    * Before it returns, it catches up on the journal and resolves a change a crash cut off.
    *
+   * @throws {TypeError} If `itemType` isn't `null`.
    * @throws Error when the memory doesn't exist and `create` is false, its stored identity isn't
    *   the constructor's `id`, the root or `.yian` isn't a folder, or the journal is damaged.
    * @throws {MemoryBusyError} If it waits for the lock longer than the timeout.
@@ -913,6 +913,11 @@ class FileMemorySession implements MemorySession {
   #last: Promise<void> = Promise.resolve();
   #closed = false;
 
+  /**
+   * @param store The memory it reads and writes.
+   * @param info What the memory is, as its recorded value holds it.
+   * @param created Whether the open that made this session created the memory.
+   */
   constructor(store: Store, info: MemoryInfo, created: boolean) {
     this.#store = store;
     this.#journal = new Journal(join(store.root, META), store.limits);
@@ -1043,6 +1048,7 @@ class FileMemorySession implements MemorySession {
     });
   }
 
+  /** Remove `target`'s content and every copy of it in the journal. Not available yet. */
   erase(_o: { id: string; target: JsonObject; author: Author; signal: AbortSignal }): Promise<Erased> {
     return Promise.reject(new Error("FileMemory erase isn't available yet"));
   }

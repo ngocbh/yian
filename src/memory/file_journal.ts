@@ -195,13 +195,13 @@ export function charCount(text: string): number {
   return chars;
 }
 
-/** Return whether `value` is a plain JSON object. */
-function isObject(value: unknown): value is JsonObject {
+/** @internal Return whether `value` is a plain JSON object. */
+export function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Return `value` as an `Author` when it is one. */
-function asAuthor(value: unknown): Author | null {
+/** @internal Return `value` as an `Author`, with only its own fields, when it is one. */
+export function asAuthor(value: unknown): Author | null {
   if (!isObject(value) || typeof value.name !== "string") return null;
   const { kind, name, run, node } = value;
   if (kind !== "agent" && kind !== "tool" && kind !== "user" && kind !== "host") return null;

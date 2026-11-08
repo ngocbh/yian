@@ -25,6 +25,7 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { LoadError } from "../compose/helpers/errors.ts";
 import { Diagnostic, shellQuote } from "../diagnostics.ts";
 import { NodeSucceeded, type RunEvent, RunStarted, type StreamChunk } from "../events.ts";
+import { defaultEmbedding } from "../llm_clients/connection.ts";
 import { defaultEmbed, type ModelAccess } from "../llm_clients/factory.ts";
 import { homeDir, realScheduler, type Scheduler } from "../platform.ts";
 import {
@@ -705,6 +706,7 @@ export async function inboxChat(
             ...binding,
             project: flowPath === undefined ? null : projectFolder(flowPath),
             embedding: embeddingFlag(options.embedding),
+            defaultEmbedding: () => defaultEmbedding({ env: env.read }),
           })
         : resumeMemories(flow, resumed, options.memory ?? [], binding);
     if (host.start) {

@@ -65,7 +65,7 @@ const MEMORY_AT: OptionSpec = {
   name: "at",
   type: "string",
   metavar: "PATH",
-  help: "The memory's folder, instead of FLOW NAME.",
+  help: "The memory's folder or .db store, instead of FLOW NAME.",
 };
 
 const MEMORY_YES: OptionSpec = { name: "yes", type: "boolean", help: "Don't ask first." };
@@ -168,7 +168,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
           name: "embedding",
           type: "string",
           metavar: "PROVIDER/MODEL",
-          help: "The embedding model a new VectorDB memory is made with.",
+          help: "The embedding model a new VectorDB memory is made with; `yian config embedding`'s when absent.",
         },
         {
           name: "json",
@@ -406,10 +406,22 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       return configCheck;
     },
   },
+  "config embedding": {
+    spec: {
+      name: "config embedding",
+      summary: "Save the embedding model a new VectorDB memory is made with when --embedding is absent.",
+      positionals: [{ name: "model", help: "The model as provider/model, such as openai/text-embedding-3-small." }],
+      options: [],
+    },
+    load: async () => {
+      const { configEmbedding } = await import("./auth.ts");
+      return configEmbedding;
+    },
+  },
   "memory list": {
     spec: {
       name: "memory list",
-      summary: "List the memories under ~/.yian/memory: each one's identity, type and folder.",
+      summary: "List the memories under ~/.yian/memory: each one's identity, type and folder or store.",
       positionals: [],
       options: [JSON_OPTION],
     },
@@ -421,9 +433,13 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
   "memory show": {
     spec: {
       name: "memory show",
-      summary: "Show a memory: its folder, counts and the recall a prompt shows each run.",
+      summary: "Show a memory: where it is, its counts and the recall a prompt shows each run.",
       positionals: [MEMORY_FLOW, MEMORY_NAME],
-      options: [MEMORY_AT, { name: "all", type: "boolean", help: "Also print every file." }, JSON_OPTION],
+      options: [
+        MEMORY_AT,
+        { name: "all", type: "boolean", help: "Also print every file, or a store's every item." },
+        JSON_OPTION,
+      ],
     },
     load: async () => {
       const { memoryShow } = await import("./memory_cmd.ts");
@@ -551,7 +567,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
 
 /** The groups by name, each with its one-line summary. */
 export const GROUPS: Readonly<Record<string, string>> = {
-  config: "Check an llm_config layer.",
+  config: "Check an llm_config layer, or set the default embedding model.",
   memory: "List the memories flows keep, and show or change one.",
   skills: "Check skill directories.",
 };

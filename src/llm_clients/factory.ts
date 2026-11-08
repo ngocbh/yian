@@ -46,6 +46,7 @@ import {
 } from "./auth/common.ts";
 import { azureResourceEndpoint, LLMConfig, splitOllamaBaseUrl } from "./config.ts";
 import {
+  checkEmbeddingProvider,
   checkModelConfig,
   type Connection,
   connectionCredentials,
@@ -60,7 +61,6 @@ import {
   GOOGLE_ENDPOINT,
   OLLAMA_ENDPOINT,
   OPENAI_API_ENDPOINT,
-  OPENAI_COMPATIBLE,
   prefersResponses,
   PROVIDER_BASE_URL,
 } from "./endpoints.ts";
@@ -598,21 +598,6 @@ export async function chatModelFromConfig(
   if (provider === "google") return googleModel(resolved, wiring);
   if (provider === "ollama") return ollamaModel(resolved, wiring);
   return vendorModel(provider, resolved, wiring);
-}
-
-/**
- * Check that `provider` has an embeddings API yian supports: OpenAI's, or an OpenAI-compatible
- * one.
- *
- * @throws {RangeError} Naming the providers that have one.
- */
-export function checkEmbeddingProvider(provider: string): void {
-  if (OPENAI_COMPATIBLE.includes(provider)) return;
-  const others = OPENAI_COMPATIBLE.filter((name) => name !== "openai").join(", ");
-  throw new RangeError(
-    `provider \`${provider}\` has no embeddings API yian supports; use openai or an OpenAI-compatible ` +
-      `provider (${others})`,
-  );
 }
 
 /**

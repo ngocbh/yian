@@ -1,11 +1,13 @@
 /**
  * How the command line binds a flow's memory inputs to instances: `--memory NAME=PATH` binds one
- * to a folder, and an unbound one gets its default identity, `<project key>/<flow id>/<input>`,
- * at its location under `~/.yian/memory`, confined there. The instances are `CliFileMemory`s,
- * which say when their `open` created the memory.
+ * to a folder or a `.db` store, and an unbound one gets its default identity,
+ * `<project key>/<flow id>/<input>`, at its location under `~/.yian/memory`, confined there. A new
+ * store's embedding model is `--embedding`'s, else the saved default's. The instances are
+ * `CliFileMemory`s and `CliVectorDBMemory`s, which say when their `open` created the memory.
  *
- * Knows about: compose (the flow's inputs), memory (`FileMemory`), the run log (a resumed run's
- * START inputs), the type language, the platform's path helpers and the file system.
+ * Knows about: compose (the flow's inputs), memory (`FileMemory`, `VectorDBMemory`), the embeddings
+ * client's model names, the run log (a resumed run's START inputs), the type language, the
+ * platform's path helpers and the file system.
  */
 
 import { createHash } from "node:crypto";
@@ -19,7 +21,7 @@ import { memoryErrorKind, type MemorySession } from "../memory/base.ts";
 import { FileMemory, type FileMemoryOptions } from "../memory/file.ts";
 import { VectorDBMemory, type VectorDBMemoryOptions } from "../memory/vectordb.ts";
 import type { Embed, EmbeddingModel } from "../llm/embeddings.ts";
-import { checkEmbeddingProvider } from "../llm_clients/factory.ts";
+import { embeddingModel } from "../llm_clients/connection.ts";
 import type { Parameter } from "../nodes/contracts.ts";
 import { isSystemError, leavesRoot } from "../platform.ts";
 import type { MemoryDrift } from "../run.ts";
@@ -262,19 +264,12 @@ function replacePaths(text: string, names: ReadonlyMap<string, string>): string 
  */
 export function embeddingFlag(value: string | undefined): EmbeddingModel | null {
   if (value === undefined) return null;
-  const at = value.indexOf("/");
-  const provider = value.slice(0, at).trim();
-  const model = value.slice(at + 1).trim();
-  if (at === -1 || provider === "" || model === "") {
-    throw new UsageError("Invalid value for --embedding: give it as provider/model");
-  }
   try {
-    checkEmbeddingProvider(provider);
+    return embeddingModel(value);
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
     throw new UsageError(`Invalid value for --embedding: ${error.message}`);
   }
-  return { provider, model };
 }
 
 /** What `bindMemories` needs beside the flow and the flags. */
@@ -286,10 +281,15 @@ export interface BindOptions {
   /** Whether the host takes `--memory` and `--embedding`, which its refusals then suggest; true when absent. */
   memoryFlag?: boolean;
   /**
-   * The embedding model a new VectorDB store is made with (`--embedding`, or the saved default), or
-   * `null` for none; an existing store keeps its own.
+   * The embedding model a new VectorDB store is made with (`--embedding`), or `null` for none; an
+   * existing store keeps its own.
    */
   embedding?: EmbeddingModel | null;
+  /**
+   * The model a new VectorDB store is made with when `embedding` names none (`defaultEmbedding`), or
+   * `null`. Called only for a store that doesn't exist yet.
+   */
+  defaultEmbedding?: () => EmbeddingModel | null;
   /** The embeddings call VectorDB memories make. */
   embed?: Embed;
 }
@@ -639,14 +639,20 @@ function bindEach(
 }
 
 /**
- * Return the options of input `input`'s VectorDB store at `path`: `options.embedding` and
+ * Return the options of input `input`'s VectorDB store at `path`: its embedding model and
  * `options.embed`. Only a fresh run may make the store, so a resume gives no model and the one the
- * store recorded is used.
+ * store recorded is used. A fresh run's model is `options.embedding`, else, for a store that
+ * doesn't exist yet, `options.defaultEmbedding`'s.
  *
- * @throws {RangeError} When a fresh run's store doesn't exist yet and there is no embedding model.
+ * @throws {RangeError} When a fresh run's store doesn't exist yet and there is no embedding model;
+ *   as `options.defaultEmbedding` throws.
  */
 function storeOptions(input: string, path: string, options: BindOptions, fresh: boolean): VectorDBMemoryOptions {
-  const embedding = fresh ? (options.embedding ?? undefined) : undefined;
+  let embedding = fresh ? (options.embedding ?? undefined) : undefined;
+  // The default is read only for a new store, so a broken one fails only a run that needs it.
+  if (fresh && embedding === undefined && lstatOrNull(path) === null) {
+    embedding = options.defaultEmbedding?.() ?? undefined;
+  }
   if (fresh && embedding === undefined && lstatOrNull(path) === null) {
     const set =
       options.memoryFlag === false

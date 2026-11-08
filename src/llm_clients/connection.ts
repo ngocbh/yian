@@ -14,10 +14,11 @@
  * The `YIAN_*` limits, such as `YIAN_MAX_BASE_URL_CHARS`, come through `defaults.ts`'s `current()`;
  * everything else is read only through the `env` parameter (default `processEnv`), one variable
  * at a time: `YIAN_DEFAULT_PROVIDER`, `YIAN_DEFAULT_MODEL`, `OPENAI_BASE_URL` and `OPENAI_API_KEY`
- * for the snapshot and OpenAI's credentials; for `callCredentials`, each provider's key variables
- * (`apiKeyEnvNames`, so `GEMINI_API_KEY` after Google's), `AZURE_OPENAI_AD_TOKEN` for Azure and
- * `OLLAMA_BASE_URL` for Ollama; and, through `AuthStore`, `YIAN_AUTH_FILE`, `XDG_CONFIG_HOME` and
- * `HOME` for the store path. An empty value counts as unset.
+ * for the snapshot and OpenAI's credentials; `YIAN_DEFAULT_EMBEDDING` for `defaultEmbedding`; for
+ * `callCredentials`, each provider's key variables (`apiKeyEnvNames`, so `GEMINI_API_KEY` after
+ * Google's), `AZURE_OPENAI_AD_TOKEN` for Azure and `OLLAMA_BASE_URL` for Ollama; and, through
+ * `AuthStore`, `YIAN_AUTH_FILE`, `XDG_CONFIG_HOME` and `HOME` for the store path. An empty value
+ * counts as unset.
  */
 
 import { createHash } from "node:crypto";
@@ -26,6 +27,7 @@ import { isAbsolute } from "node:path";
 import { type Env, processEnv } from "../defaults.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { BasicAuth } from "../llm/auth.ts";
+import type { EmbeddingModel } from "../llm/embeddings.ts";
 import { scrubError } from "../llm/errors.ts";
 import type { Scheduler } from "../platform.ts";
 import { isList, isRecord, valueRepr } from "../typesys/values.ts";
@@ -53,7 +55,7 @@ import {
   validateBaseUrl,
 } from "./config.ts";
 import { validateHeaderName, validateOrganization } from "./connection_settings.ts";
-import { OPENAI_API_ENDPOINT, SUBSCRIPTION_ENDPOINT } from "./endpoints.ts";
+import { OPENAI_API_ENDPOINT, OPENAI_COMPATIBLE, SUBSCRIPTION_ENDPOINT } from "./endpoints.ts";
 import { blockSchema, checkBlock, type Issue } from "./provider_blocks.ts";
 import { redactKeys } from "./redact.ts";
 
@@ -511,6 +513,59 @@ function supported(value: unknown, where: string): string {
     throw new RangeError(`${where} names an unsupported provider`);
   }
   return value;
+}
+
+/**
+ * Check that `provider` has an embeddings API yian supports: OpenAI's, or an OpenAI-compatible
+ * one.
+ *
+ * @throws {RangeError} Naming the providers that have one.
+ */
+export function checkEmbeddingProvider(provider: string): void {
+  if (OPENAI_COMPATIBLE.includes(provider)) return;
+  const others = OPENAI_COMPATIBLE.filter((name) => name !== "openai").join(", ");
+  throw new RangeError(
+    `provider \`${provider}\` has no embeddings API yian supports; use openai or an OpenAI-compatible ` +
+      `provider (${others})`,
+  );
+}
+
+/**
+ * Return the embedding model `text` names as `provider/model`.
+ *
+ * @throws {RangeError} `text` isn't `provider/model`, or its provider has no embeddings API.
+ */
+export function embeddingModel(text: string): EmbeddingModel {
+  const at = text.indexOf("/");
+  const provider = text.slice(0, at).trim();
+  const model = text.slice(at + 1).trim();
+  if (at === -1 || provider === "" || model === "") throw new RangeError("give it as provider/model");
+  checkEmbeddingProvider(provider);
+  return { provider, model };
+}
+
+/**
+ * Return the model a new VectorDB memory is made with when none is given: `YIAN_DEFAULT_EMBEDDING`,
+ * else the saved default (`yian config embedding`), else `null`. `store` defaults to the store
+ * `env` names.
+ *
+ * @throws {RangeError} The one in effect isn't `provider/model` on a provider with embeddings.
+ * @throws AuthError The store can't be read.
+ */
+export function defaultEmbedding(options: { env?: Env; store?: AuthStore } = {}): EmbeddingModel | null {
+  const { env = processEnv } = options;
+  const set = env("YIAN_DEFAULT_EMBEDDING") || null;
+  const text = set ?? (options.store ?? new AuthStore(null, { env })).read().defaultEmbedding;
+  if (text === null) return null;
+  try {
+    return embeddingModel(text);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    const named =
+      set === null ? `The saved default embedding model ${reprText(text)}` : `YIAN_DEFAULT_EMBEDDING=${reprText(text)}`;
+    const fix = set === null ? "; run `yian config embedding provider/model`" : "";
+    throw new RangeError(`${named} is invalid: ${error.message}${fix}`);
+  }
 }
 
 /** Return the nonsecret SHA-256 identity recorded for an environment API key. */

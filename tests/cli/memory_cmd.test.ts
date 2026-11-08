@@ -199,7 +199,7 @@ describe("yian memory list", () => {
     expect(text.code, text.stderr).toBe(0);
     const { identity, location } = lessons();
     expect(text.stdout.split("\n").filter(Boolean)).toEqual([
-      expect.stringMatching(/^identity\s+type\s+folder$/),
+      expect.stringMatching(/^identity\s+type\s+location$/),
       expect.stringMatching(new RegExp(`^${identity}\\s+FileMemory\\s+${location}$`)),
     ]);
     const json = await yian(["memory", "list", "--json"]);
@@ -1026,5 +1026,45 @@ describe("VectorDB stores", () => {
     expect(declined.code).toBe(1);
     const { identity, location } = cases();
     expect(output.text).toContain(`Empty ${identity} at ${location}? This deletes 1 item and its history.`);
+  });
+
+  test("config embedding saves the model a new store is made with; YIAN_DEFAULT_EMBEDDING overrides it", async () => {
+    const signal = new AbortController().signal;
+    const saved = await yian(["config", "embedding", "openai/text-embedding-3-small"]);
+    expect(saved.code, saved.stderr).toBe(0);
+    expect(saved.stdout).toBe("saved the default embedding model openai/text-embedding-3-small\n");
+    const flow = casesFile();
+    const run = ["run", flow, "--quiet", "--input", "line=Check sums twice."];
+    const ran = await yian(run, vectors);
+    expect(ran.code, ran.stderr).toBe(0);
+    const made = await new VectorDBMemory({ path: cases().location }).stored({ signal });
+    expect(made?.embedding).toEqual({ provider: "openai", model: "text-embedding-3-small" });
+
+    rmSync(join(home, ".yian", "memory"), { recursive: true });
+    const env = envOf({ YIAN_DEFAULT_EMBEDDING: "vllm/bge-m3" });
+    const overridden = await yian(run, { ...vectors, env });
+    expect(overridden.code, overridden.stderr).toBe(0);
+    const remade = await new VectorDBMemory({ path: cases().location }).stored({ signal });
+    expect(remade?.embedding).toEqual({ provider: "vllm", model: "bge-m3" });
+    const shadowed = await yian(["config", "embedding", "openai/text-embedding-3-large"], { env });
+    expect(shadowed.code, shadowed.stderr).toBe(0);
+    expect(shadowed.stderr).toBe("YIAN_DEFAULT_EMBEDDING=vllm/bge-m3 is set, and runs use it instead\n");
+  });
+
+  test("yian config embedding refuses a value that isn't provider/model on a provider with embeddings", async () => {
+    const bare = await yian(["config", "embedding", "text-embedding-3-small"]);
+    expect(bare.code).toBe(2);
+    expect(bare.stderr).toContain("Invalid value for 'MODEL': give it as provider/model");
+    const chat = await yian(["config", "embedding", "anthropic/claude"]);
+    expect(chat.code).toBe(2);
+    expect(chat.stderr).toContain("provider `anthropic` has no embeddings API");
+    expect(existsSync(join(home, ".config"))).toBe(false);
+  });
+
+  test("yian config --help says the group also sets the default embedding model", async () => {
+    const help = await yian(["config", "--help"]);
+    expect(help.code).toBe(0);
+    expect(help.stdout).toContain("Check an llm_config layer, or set the default embedding model.");
+    expect(help.stdout).toContain("embedding");
   });
 });

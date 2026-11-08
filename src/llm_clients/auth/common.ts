@@ -349,6 +349,8 @@ export function isUsableLogin(selection: ProviderSelection): boolean {
 export interface AuthState {
   readonly defaultProvider: string | null;
   readonly selections: readonly ProviderSelection[];
+  /** The saved `provider/model` a new VectorDB memory is made with, if any. */
+  readonly defaultEmbedding: string | null;
 }
 
 /** A decoded HTTP result; the body may contain credentials, so it stays out of inspection. */

@@ -1,7 +1,7 @@
 /**
  * `yian memory`: list the memories under `~/.yian/memory`, and read or change one, named as
  * `FLOW NAME` (that input's default memory, as `yian run` binds it) or `--at PATH` (a memory's
- * folder). It is a host the user runs, so its own output may name a memory's folder; a change it
+ * folder or `.db` store). It is a host the user runs, so its own output may name a memory's folder; a change it
  * makes is authored by the user.
  *
  * Knows about: compose (the flow's inputs), memory (`FileMemory`, `VectorDBMemory`), the embeddings
@@ -147,7 +147,7 @@ export async function openTarget(target: MemoryTarget, signal: AbortSignal): Pro
   }
 }
 
-/** A memory `yian memory list` found: its identity, type and folder. */
+/** A memory `yian memory list` found: its identity, type and folder or store. */
 interface Listed {
   readonly identity: string;
   readonly type: string;
@@ -237,7 +237,7 @@ export async function memoryList({ options }: ParsedArgs, io: CliIo): Promise<nu
     return 0;
   }
   if (memories.length === 0) return 0;
-  const table = [["identity", "type", "folder"], ...memories.map((each) => [each.identity, each.type, each.location])];
+  const table = [["identity", "type", "location"], ...memories.map((each) => [each.identity, each.type, each.location])];
   const widths = [0, 1].map((column) => Math.max(...table.map((cells) => cells[column]!.length)));
   const lines = table.map((cells) => cells.map((cell, i) => (i < 2 ? cell.padEnd(widths[i]!) : cell)).join("  "));
   // An identity is read from the memory's folder, which anyone who can write there can change.
@@ -361,7 +361,8 @@ function counted(count: number, noun: string): string {
  * and characters, then its recall, the part a prompt shows each run, and a note when it was cut.
  * With `--all`, every file too, each after a `== <path> (<n> characters) ==` line. `--json` prints
  * one document with the identity, type, location, version, characters, recall and files (each
- * file's text with `--all`).
+ * file's text with `--all`). A VectorDB store counts its items and retired items instead, and
+ * `--all` shows each item after a `== item <id> (version <v>) ==` line (`items` in `--json`).
  */
 export async function memoryShow(command: ParsedArgs, io: CliIo): Promise<number> {
   const all = command.options["all"] === true;
@@ -563,6 +564,9 @@ async function runEditor(env: Env, path: string, json: boolean): Promise<void> {
  * `memory.conflict` document; `memory.refused` for a cap); a failure of the editor or the change
  * prints `edit failed: <message>` (`memory.failed`); either exits 1. `--json` prints `{change,
  * version}` for an edit, or `{change: null}` for none.
+ *
+ * A VectorDB store is edited with `--add TEXT`, `--id N --text TEXT` or `--delete N` instead, with
+ * no editor (`--json`: `{change, version, item}`); a FileMemory refuses those flags.
  */
 export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;
@@ -750,13 +754,13 @@ async function goesOn(command: ParsedArgs, io: CliIo, question: string): Promise
 }
 
 /**
- * `yian memory erase FLOW NAME FILE` (or `--at PATH FILE`): list the runs on this machine whose
- * index records the memory (their logs may hold copies of what is erased, and deleting them is the
- * person's choice), say that runs elsewhere can't be seen, ask (`--yes` doesn't; off a terminal it
- * is required), then erase the file, or with `--text` every occurrence of that text in it, from
- * the memory and its history, as the user, and print the new version and the undos the erase
- * disabled. A no prints `nothing erased` and exits 1. `--json` prints `{runs, version,
- * disabled_undos}`.
+ * `yian memory erase FLOW NAME FILE` (or `--at PATH FILE`; a VectorDB store's item id in place of
+ * `FILE`): list the runs on this machine whose index records the memory (their logs may hold
+ * copies of what is erased, and deleting them is the person's choice), say that runs elsewhere
+ * can't be seen, ask (`--yes` doesn't; off a terminal it is required), then erase the file (or
+ * item), or with `--text` every occurrence of that text in the file, from the memory and its
+ * history, as the user, and print the new version and the undos the erase disabled. A no prints
+ * `nothing erased` and exits 1. `--json` prints `{runs, version, disabled_undos}`.
  */
 export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;

@@ -106,7 +106,7 @@ describe("the table", () => {
   });
 
   test("variable names are prefixed and do not collide", () => {
-    const taken = ["YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL", "YIAN_AUTH_FILE"];
+    const taken = ["YIAN_DEFAULT_PROVIDER", "YIAN_DEFAULT_MODEL", "YIAN_DEFAULT_EMBEDDING", "YIAN_AUTH_FILE"];
     const owners = ["MAX", "AGENT", "TOOL", "MEMORY", "FILE", "VECTOR", "MCP", "MODEL", "REQUEST", "EMBEDDING", "SESSION"];
     for (const entry of ENTRIES) {
       expect(entry.name).toMatch(/^[A-Z]+(?:_[A-Z]+)+$/);

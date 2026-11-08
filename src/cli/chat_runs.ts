@@ -33,6 +33,7 @@ import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import type { Env } from "../defaults.ts";
 import { NodeSucceeded, type RunEvent, RunStarted } from "../events.ts";
 import type { Embed } from "../llm/embeddings.ts";
+import { defaultEmbedding } from "../llm_clients/connection.ts";
 import { defaultEmbed, type ModelAccess } from "../llm_clients/factory.ts";
 import { FileMemory } from "../memory/file.ts";
 import type { Scheduler } from "../platform.ts";
@@ -379,7 +380,8 @@ export class ChildRuns {
     let memory: Record<string, CliMemory>;
     try {
       const embed = this.#options.embed ?? defaultEmbed(env);
-      memory = bindMemories(flow, [], { home: this.#options.home, note, project, memoryFlag: false, embed });
+      const options = { home: this.#options.home, note, project, memoryFlag: false, embed };
+      memory = bindMemories(flow, [], { ...options, defaultEmbedding: () => defaultEmbedding({ env }) });
     } catch (error) {
       throw withoutLocations(error, this.#options.home, []);
     }

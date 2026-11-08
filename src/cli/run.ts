@@ -56,6 +56,7 @@ import {
   type AgentConfig,
   type Connection,
   connectionCredentials,
+  defaultEmbedding,
   HEADER_NAMES_KEY,
   HOST_KEY_MARKER,
   keyIdentity,
@@ -1300,6 +1301,7 @@ async function startRun(
         note: memoryNote,
         project: projectFolder(flowPath!),
         embedding: embeddingFlag(options.embedding),
+        defaultEmbedding: () => defaultEmbedding({ env: commandEnv.read }),
         embed: io.embed ?? defaultEmbed(commandEnv.read),
       });
       // A signal during the load stops the command before it prompts.

@@ -581,6 +581,16 @@ function storedInverse(inverse: Inverse, limits: Limits): Inverse {
   return inverse;
 }
 
+/**
+ * Return `content` with every occurrence of `text` removed, again until none is left: removing
+ * one can join its neighbours into another (`secsecretret` without `secret` is `secret`).
+ */
+function withoutText(content: string, text: string): string {
+  let rest = content;
+  while (rest.includes(text)) rest = rest.replaceAll(text, "");
+  return rest;
+}
+
 /** Return the sum of `files`' characters. */
 function totalChars(files: readonly MemberFile[]): number {
   return files.reduce((sum, file) => sum + file.chars, 0);
@@ -1329,7 +1339,8 @@ class FileMemorySession implements MemorySession {
     const why = pathProblem(path, limits.maxDepth) ?? diskProblem(root, path);
     const old = why ?? readMemberFile(join(root, path), path, limits.maxFileChars);
     if (typeof old === "string") throw new Error(`${shown(path)} isn't part of the memory: ${old}`);
-    const next = text === undefined || old === null ? null : old.text.replaceAll(text, "");
+    const next = text === undefined || old === null ? null : withoutText(old.text, text);
+    // An inverse holding the text goes whole, so no part of one is left to join into the text again.
     const drop = ({ entry }: JournalChange): boolean => {
       const { inverse } = entry;
       if (entry.path === path) return true;

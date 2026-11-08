@@ -1262,6 +1262,19 @@ describe("erase and reset", () => {
     await s.close();
   });
 
+  test("erase removes its text until none is left, though removing it once forms it again", async () => {
+    const s = await openAt();
+    await apply(s, { op: "create", path: "a.md", text: "keep secsecretret and sesecretcret keep" }, "a1");
+    await apply(s, { op: "create", path: "b.md", text: "b: secsecretret" }, "b1");
+    await apply(s, { op: "rewrite", path: "b.md", text: "b", if_hash: sha256("b: secsecretret") }, "b2");
+    await erase(s, { path: "a.md", text: "secret" });
+    expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("keep  and  keep");
+    // b2's inverse held the text inside a longer word: the whole inverse goes.
+    expect(holding(root, "secret")).toEqual([]);
+    expect(holding(root, "sec")).toEqual([]);
+    await s.close();
+  });
+
   test("erase({path}) deletes the file and every inverse for it", async () => {
     const s = await openAt();
     await apply(s, { op: "create", path: "a.md", text: "private" }, "c1");

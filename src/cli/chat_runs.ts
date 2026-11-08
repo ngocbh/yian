@@ -194,7 +194,10 @@ interface Child {
   dirty: boolean;
   /** The driver's rest between passes, which a nudge ends; `null` while it doesn't rest. */
   rest: AbortController | null;
-  /** What the child's `reply` nodes said, and the chat noted about its memories, during the current pass. */
+  /**
+   * What the child's `reply` nodes said, and the chat noted about its memories, during the
+   * current pass.
+   */
   readonly fresh: Said[];
   /**
    * The replies and memory notes published and not marked read, each with the seq of the status
@@ -351,7 +354,8 @@ export class ChildRuns {
     check();
     // A memory's note, such as the one its open gives when it creates it, is said with the pass.
     const fresh: Said[] = [];
-    const memory = bindMemories(flow, [], { home: this.#options.home, note: (text) => fresh.push({ kind: "memory", text }) });
+    const note = (text: string) => void fresh.push({ kind: "memory", text });
+    const memory = bindMemories(flow, [], { home: this.#options.home, note });
     const id = `r${this.#started + 1}`;
     const runId = `${chatRunId}-${id}`;
     const log = runLogPath(logDir, runId);

@@ -4,8 +4,8 @@
  * at its location under `~/.yian/memory`, confined there. The instances are `CliFileMemory`s,
  * which say when their `open` created the memory.
  *
- * Knows about: compose (the flow's inputs), memory (`FileMemory`), the type language, the
- * platform's path helpers and the file system.
+ * Knows about: compose (the flow's inputs), memory (`FileMemory`), the run log (a resumed run's
+ * START inputs), the type language, the platform's path helpers and the file system.
  */
 
 import { createHash } from "node:crypto";
@@ -16,13 +16,13 @@ import { START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
 import { reprText } from "../diagnostics.ts";
 import type { MemoryBase, MemorySession } from "../memory/base.ts";
-import type { MemoryDrift } from "../run.ts";
 import { FileMemory, type FileMemoryOptions } from "../memory/file.ts";
 import type { Parameter } from "../nodes/contracts.ts";
+import { isSystemError, leavesRoot } from "../platform.ts";
+import type { MemoryDrift } from "../run.ts";
 import { iterRunRecords, type PoolCommitRecord } from "../runtime/log.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { isMemoryType, isRecord, type MemoryRef, TypedValue } from "../typesys/values.ts";
-import { isSystemError, leavesRoot } from "../platform.ts";
 import { resolveFlowPath } from "./confined_load.ts";
 import { UsageError } from "./utils.ts";
 
@@ -97,7 +97,9 @@ export function checkDefaultLocation(home: string, path: string): string {
     at = join(at, part);
     const stats = lstatOrNull(at);
     if (stats === null) break;
-    if (stats.isSymbolicLink()) throw new RangeError(`${at} is a symlink; a default memory stays inside ~/.yian/memory`);
+    if (stats.isSymbolicLink()) {
+      throw new RangeError(`${at} is a symlink; a default memory stays inside ~/.yian/memory`);
+    }
     if (i < parts.length - 1 && !stats.isDirectory()) throw new RangeError(`${at} isn't a folder`);
   }
   // On the real paths too, as `confined_load.ts` confines flow files.
@@ -147,9 +149,15 @@ class CliFileMemory extends FileMemory {
     this.#note = note;
   }
 
-  override async open(o: { create: boolean; itemType: JsonObject | null; signal: AbortSignal }): Promise<MemorySession> {
+  override async open(o: {
+    create: boolean;
+    itemType: JsonObject | null;
+    signal: AbortSignal;
+  }): Promise<MemorySession> {
     const session = await super.open(o);
-    if (session.created) this.#note(`memory ${this.inputs.join(", ")}: ${session.info.identity} at ${this.root} (new)`);
+    if (session.created) {
+      this.#note(`memory ${this.inputs.join(", ")}: ${session.info.identity} at ${this.root} (new)`);
+    }
     return session;
   }
 }
@@ -194,7 +202,11 @@ export function memoryFlags(params: readonly Parameter[], flags: readonly string
  * @throws {RangeError} For an input of a memory type the command line can't bind; for a default,
  *   as `defaultIdentity` and `defaultLocation` throw, and for a flow built in code.
  */
-export function bindMemories(flow: ComposedFlow, flags: readonly string[], options: BindOptions): Record<string, MemoryBase> {
+export function bindMemories(
+  flow: ComposedFlow,
+  flags: readonly string[],
+  options: BindOptions,
+): Record<string, MemoryBase> {
   return bindEach(flow, flags, options, (input, optional) => (optional ? null : defaultMemory(flow, input, options)));
 }
 
@@ -221,7 +233,8 @@ export function resumeMemories(
     const identity = recorded.get(input);
     // An Optional memory left out at the start takes none again.
     if (identity === undefined) return null;
-    return new CliFileMemory({ root: defaultLocation(options.home, identity, "FileMemory"), id: identity }, options.note);
+    const root = defaultLocation(options.home, identity, "FileMemory");
+    return new CliFileMemory({ root, id: identity }, options.note);
   });
 }
 
@@ -268,11 +281,13 @@ function bindEach(
     const typ = param.contract?.type;
     if (!isMemoryType(typ)) continue;
     const path = paths.get(param.name);
-    if (typ.memory !== "FileMemory" && (path !== undefined || !typ.nullable)) {
+    const made =
+      path === undefined ? fallback(param.name, typ.nullable) : new CliFileMemory({ root: path }, options.note);
+    if (made === null) continue;
+    // Nothing is opened yet, so refusing here leaves no trace.
+    if (typ.memory !== "FileMemory") {
       throw new RangeError(`\`${param.name}\` is a ${typ.memory}; the command line binds only FileMemory inputs`);
     }
-    const made = path === undefined ? fallback(param.name, typ.nullable) : new CliFileMemory({ root: path }, options.note);
-    if (made === null) continue;
     // Keyed by the real folder, so two spellings of one path share one memory.
     const instance = byRoot.get(made.root) ?? made;
     byRoot.set(instance.root, instance);
@@ -291,5 +306,6 @@ function bindEach(
 function defaultMemory(flow: ComposedFlow, input: string, options: BindOptions): CliFileMemory {
   if (flow.source === null) throw new RangeError(`a flow built in code has no default memories; bind \`${input}\``);
   const identity = defaultIdentity(flow.source.dir, flow.compiled.flowId, input);
-  return new CliFileMemory({ root: defaultLocation(options.home, identity, "FileMemory"), id: identity }, options.note);
+  const root = defaultLocation(options.home, identity, "FileMemory");
+  return new CliFileMemory({ root, id: identity }, options.note);
 }

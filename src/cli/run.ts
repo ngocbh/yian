@@ -494,7 +494,9 @@ export function checkSuppliedInputs(decls: readonly Parameter[], supplied: Reado
   }
   // A memory is bound to an instance, never given as a value.
   const memory = decls.find((decl) => isMemoryType(decl.contract?.type) && Object.hasOwn(supplied, decl.name));
-  if (memory !== undefined) throw new UsageError(`${INPUTS_HINT}: \`${memory.name}\` is a memory; bind it with --memory`);
+  if (memory !== undefined) {
+    throw new UsageError(`${INPUTS_HINT}: \`${memory.name}\` is a memory; bind it with --memory`);
+  }
   const values = decls.filter((decl) => !isInbox(decl));
   try {
     checkInputNames(values, supplied);
@@ -519,7 +521,9 @@ export async function gatherMissingInputs(
   terminal: Terminal | null,
 ): Promise<Record<string, unknown> | null> {
   // An inbox takes events through `send`, and a memory is bound, never a value given at the start.
-  const values = decls.filter((decl) => !isInboxType(decl.contract?.type ?? null) && !isMemoryType(decl.contract?.type));
+  const values = decls.filter(
+    (decl) => !isInboxType(decl.contract?.type ?? null) && !isMemoryType(decl.contract?.type),
+  );
   if (terminal !== null) return terminal.promptInputs(values, supplied);
   const required = values.filter((decl) => decl.required && !Object.hasOwn(supplied, decl.name));
   if (required.length > 0) {

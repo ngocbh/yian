@@ -31,6 +31,7 @@ import type { Embed } from "../../src/llm/embeddings.ts";
 import { FileMemory } from "../../src/memory/file.ts";
 import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { lockFile } from "../../src/platform.ts";
+import { shellWords } from "../docs/doc_blocks.ts";
 import { foreignWal } from "../helpers/memory_fakes.ts";
 import { DOWN, ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
@@ -985,11 +986,16 @@ describe("VectorDB stores", () => {
   });
 
   test("edit and erase take a store's own arguments, and refuse a FileMemory's", async () => {
+    const STORE_EDITS = "give --add TEXT, --id N with --text TEXT or --fields JSON, or --delete N";
     const flow = casesFile();
     await addCase(flow, "Check sums twice.");
     for (const [args, message] of [
-      [["edit", flow, "cases"], "give --add TEXT, --id N --text TEXT, or --delete N"],
-      [["edit", flow, "cases", "--id", "1"], "give --add TEXT, --id N --text TEXT, or --delete N"],
+      [["edit", flow, "cases"], STORE_EDITS],
+      [["edit", flow, "cases", "--id", "1"], STORE_EDITS],
+      [["edit", flow, "cases", "--delete", "1", "--fields", "{}"], "--fields goes with --add or --id"],
+      [["edit", flow, "cases", "--add", "x", "--fields", "[1]"], "Invalid value for --fields: give a JSON object"],
+      [["edit", flow, "cases", "--add", "x", "--fields", "{"], "Invalid value for --fields: give a JSON object"],
+      [["edit", flow, "cases", "--add", "x", "--fields", "{}"], "this memory's items are text only"],
       [["edit", flow, "cases", "--file", "MEMORY.md"], "--file is a FileMemory's"],
       [["erase", flow, "cases", "MEMORY.md", "--yes"], "a VectorDBMemory's TARGET is an item's id"],
       [["erase", flow, "cases", "1", "--text", "x", "--yes"], "--text is a FileMemory's"],
@@ -1002,7 +1008,50 @@ describe("VectorDB stores", () => {
     await runOnce(files, "first");
     const wrong = await yian(["memory", "edit", files, "lessons", "--add", "x"]);
     expect(wrong.code).toBe(2);
-    expect(wrong.stderr).toContain("--add, --id, --text and --delete are a VectorDBMemory's");
+    expect(wrong.stderr).toContain("--add, --id, --text, --fields and --delete are a VectorDBMemory's");
+  });
+
+  test("--fields gives a typed store's item its fields, and the CLI page's example runs as written", async () => {
+    const triage = `id: triage
+name: triage
+typedefs:
+  Case:
+    title: str
+    tags: list(str)
+input:
+  ticket: !str
+  cases: !VectorDBMemory(Case)
+nodes:
+  add:
+    kind: tool
+    tool_id: {cases: add}
+    input:
+      text: \${input.ticket}
+      fields: {title: first, tags: [setup]}
+output: \${add.output.id}
+`;
+    const flow = join(project, "triage.yaml");
+    writeFileSync(flow, triage);
+    const run = ["run", flow, "--quiet", "--input", "ticket=Check sums twice.", "--embedding", "openai/test-embedding"];
+    expect((await yian(run, vectors)).code).toBe(0);
+    const bare = await yian(["memory", "edit", flow, "cases", "--add", "No fields."], vectors);
+    expect(bare.code).toBe(2);
+    expect(bare.stderr).toContain("an add to this memory needs fields, since its items are typed");
+    // The line the CLI page shows, run from the flow's folder.
+    const page = readFileSync(fileURLToPath(new URL("../../docs/src/content/docs/cli.md", import.meta.url)), "utf8");
+    const line = page.split("\n").find((each) => each.startsWith("$ yian memory edit triage.yaml cases --add"))!;
+    const args = shellWords(line.slice(2)).slice(1).map((word) => (word === "triage.yaml" ? flow : word));
+    const added = await yian(args, vectors);
+    expect(added.code, added.stderr).toBe(0);
+    expect(added.stdout).toStartWith("added item 2;");
+    const fields = JSON.stringify({ title: "sums", tags: ["math", "checks"] });
+    const changed = await yian(["memory", "edit", flow, "cases", "--id", "1", "--fields", fields], vectors);
+    expect(changed.code, changed.stderr).toBe(0);
+    const shown = JSON.parse((await yian(["memory", "show", flow, "cases", "--all", "--json"], vectors)).stdout);
+    expect(shown.items.map((item: { id: number; text: string; fields: unknown }) => [item.id, item.fields])).toEqual([
+      [1, { title: "sums", tags: ["math", "checks"] }],
+      [2, JSON.parse(shellWords(line.slice(2)).at(-1)!)],
+    ]);
   });
 
   test("reembed re-embeds a store with --embedding's model; compact rebuilds it; a FileMemory is refused", async () => {

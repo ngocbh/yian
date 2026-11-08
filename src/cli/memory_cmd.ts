@@ -32,7 +32,8 @@ import { diskProblem, FileMemory, type MemberFile, pathProblem, readMembers } fr
 import { VectorDBMemory } from "../memory/vectordb.ts";
 import { homeDir, isSystemError, withWarnings } from "../platform.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../run.ts";
-import { type JsonObject, logJson } from "../typesys/json.ts";
+import { type JsonObject, logJson, parseJson } from "../typesys/json.ts";
+import { isRecord } from "../typesys/index.ts";
 import { isMemoryType } from "../typesys/values.ts";
 import {
   accountHome,
@@ -566,17 +567,17 @@ async function runEditor(env: Env, path: string, json: boolean): Promise<void> {
  * prints `edit failed: <message>` (`memory.failed`); either exits 1. `--json` prints `{change,
  * version}` for an edit, or `{change: null}` for none.
  *
- * A VectorDB store is edited with `--add TEXT`, `--id N --text TEXT` or `--delete N` instead, with
- * no editor (`--json`: `{change, version, item}`); a FileMemory refuses those flags.
+ * A VectorDB store is edited with `--add TEXT`, `--id N` with `--text TEXT` or `--fields JSON`, or
+ * `--delete N` instead, with no editor (`--json`: `{change, version, item}`); a FileMemory refuses
+ * those flags.
  */
 export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;
   return onMemory(command, io, namedOf(command), async (session, { memory, location }) => {
     if (memory instanceof VectorDBMemory) return editStore(command, io, session);
-    if (["add", "id", "text", "delete"].some((name) => command.options[name] !== undefined)) {
-      throw new UsageError(
-        "Invalid value: --add, --id, --text and --delete are a VectorDBMemory's; a FileMemory is edited in $EDITOR",
-      );
+    if (["add", "id", "text", "fields", "delete"].some((name) => command.options[name] !== undefined)) {
+      const flags = "--add, --id, --text, --fields and --delete";
+      throw new UsageError(`Invalid value: ${flags} are a VectorDBMemory's; a FileMemory is edited in $EDITOR`);
     }
     const path = (command.options["file"] as string | undefined) ?? String(session.info.settings["index"]);
     const file = membersOf(session, location).find((each) => each.path === path) ?? null;
@@ -643,45 +644,76 @@ export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number
   });
 }
 
+/** The ways to edit a VectorDB store, for a usage error. */
+const STORE_EDITS = "give --add TEXT, --id N with --text TEXT or --fields JSON, or --delete N";
+
 /**
- * `yian memory edit` of a VectorDB store: `--add TEXT` adds an item, `--id N --text TEXT` changes
- * item N's text and `--delete N` deletes it, each as the user and against the item's version as
- * read just before. Prints `<added|edited|deleted> item <id>` and the new version (`--json`:
- * `{change, version, item}`); a change the store refuses prints `edit refused: <reason>` and exits
- * 1.
+ * Return the `--fields JSON` object, read as yian reads JSON (an int stays an int), or `undefined`
+ * when it isn't given.
  *
- * @throws {UsageError} For `--file`, or anything but exactly one of the three.
+ * @throws {UsageError} When it isn't a JSON object.
+ */
+function fieldsOption(text: string | undefined): JsonObject | undefined {
+  if (text === undefined) return undefined;
+  let value: unknown = null;
+  try {
+    value = parseJson(text, "plain");
+  } catch {
+    // Not JSON: refused below like any other non-object.
+  }
+  if (!isRecord(value)) throw new UsageError("Invalid value for --fields: give a JSON object");
+  return value as JsonObject;
+}
+
+/**
+ * `yian memory edit` of a VectorDB store: `--add TEXT` adds an item, `--id N` changes item N's text
+ * (`--text`), fields (`--fields`) or both, and `--delete N` deletes it, each as the user and against
+ * the item's version as read just before. `--fields` is a JSON object, the fields a typed store's
+ * item holds. Prints `<added|edited|deleted> item <id>` and the new version (`--json`: `{change,
+ * version, item}`); a change the store refuses prints `edit refused: <reason>` and exits 1.
+ *
+ * @throws {UsageError} For `--file`, anything but exactly one of the three, `--fields` that isn't a
+ *   JSON object, and a change the store can't take (an add to a typed store without fields, say).
  */
 async function editStore(command: ParsedArgs, io: CliIo, session: MemorySession): Promise<number> {
   const json = command.options["json"] === true;
   const { add, id, text, delete: gone, file } = command.options as Record<string, string | number | undefined>;
-  if (file !== undefined) {
-    throw new UsageError(
-      "Invalid value for --file: --file is a FileMemory's; give --add TEXT, --id N --text TEXT, or --delete N",
-    );
-  }
+  if (file !== undefined) throw new UsageError(`Invalid value for --file: --file is a FileMemory's; ${STORE_EDITS}`);
+  const fields = fieldsOption(command.options["fields"] as string | undefined);
   const actions = [add !== undefined, id !== undefined || text !== undefined, gone !== undefined];
-  if (actions.filter(Boolean).length !== 1 || (id === undefined) !== (text === undefined)) {
-    throw new UsageError("Invalid value: give --add TEXT, --id N --text TEXT, or --delete N");
+  if (actions.filter(Boolean).length !== 1 || (id !== undefined && text === undefined && fields === undefined)) {
+    throw new UsageError(`Invalid value: ${STORE_EDITS}`);
+  }
+  if (gone !== undefined && fields !== undefined) {
+    throw new UsageError("Invalid value for --fields: --fields goes with --add or --id");
   }
   const signal = stopOf(io);
   let change: JsonObject;
   let verb: string;
   if (add !== undefined) {
-    change = { op: "add", text: String(add) };
+    change = { op: "add", text: String(add), ...(fields === undefined ? {} : { fields }) };
     verb = "added";
   } else {
     const item = BigInt((id ?? gone) as number);
     // Against the version read now: a run that changes the item meanwhile makes it a conflict.
     const current = await session.call("read", { id: item }, { signal });
+    const edited: JsonObject = fields === undefined ? {} : { fields };
+    if (text !== undefined) edited["text"] = String(text);
     change =
       id !== undefined
-        ? { op: "edit", id: item, if_version: current["version"]!, text: String(text) }
+        ? { op: "edit", id: item, if_version: current["version"]!, ...edited }
         : { op: "delete", id: item, if_version: current["version"]! };
     verb = id !== undefined ? "edited" : "deleted";
   }
   const changed = changeId();
-  const applied = await session.apply({ id: changed, change, author: userAuthor(io), signal });
+  let applied: Applied;
+  try {
+    applied = await session.apply({ id: changed, change, author: userAuthor(io), signal });
+  } catch (error) {
+    // The store checks the change before anything is written: a typed store's add needs fields.
+    if (error instanceof TypeError) throw new UsageError(`Invalid value: ${error.message}`);
+    throw error;
+  }
   if (!applied.ok) {
     return failed(io, json, { label: "edit refused", code: notAppliedCode(applied), message: applied.reason });
   }

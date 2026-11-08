@@ -485,6 +485,12 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
         { name: "add", type: "string", metavar: "TEXT", help: "VectorDBMemory: add an item holding TEXT." },
         { name: "id", type: "int", min: 1, metavar: "N", help: "VectorDBMemory: the item whose text --text replaces." },
         { name: "text", type: "string", metavar: "TEXT", help: "VectorDBMemory: item N's new text." },
+        {
+          name: "fields",
+          type: "string",
+          metavar: "JSON",
+          help: "VectorDBMemory: the fields, a JSON object, of the item --add adds or --id changes.",
+        },
         { name: "delete", type: "int", min: 1, metavar: "N", help: "VectorDBMemory: delete item N." },
         JSON_OPTION,
       ],

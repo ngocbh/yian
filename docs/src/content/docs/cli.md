@@ -425,7 +425,7 @@ $ yian memory history answer.yaml lessons --limit 5
 $ yian memory undo answer.yaml lessons 2001c567d78a491facd383297e13fc6b/add
 $ yian memory edit --at ./memory/lessons --file notes/math.md
 $ yian memory erase answer.yaml lessons MEMORY.md --text 555-0100
-$ yian memory edit triage.yaml cases --add "Ask for the order id first."
+$ yian memory edit triage.yaml cases --add "Ask for the order id first." --fields '{"title": "refunds", "tags": ["billing"]}'
 $ yian memory reembed triage.yaml cases --embedding openai/text-embedding-3-large
 ```
 
@@ -435,7 +435,7 @@ $ yian memory reembed triage.yaml cases --embedding openai/text-embedding-3-larg
 | `show` | Shows where a memory is, its size and its recall. `--all` also prints every file, or every item |
 | `history` | Lists the last changes (`--limit`, 20 by default), newest first, each with its id and author |
 | `undo CHANGE` | Undoes the change with that id |
-| `edit` | Opens a file (`--file`, the index by default) in `$EDITOR`, and applies what you save. A VectorDBMemory takes `--add TEXT`, `--id N --text TEXT` or `--delete N` instead |
+| `edit` | Opens a file (`--file`, the index by default) in `$EDITOR`, and applies what you save. A VectorDBMemory takes `--add TEXT`, `--id N` with `--text TEXT`, or `--delete N` instead; `--fields JSON` gives a typed item's fields |
 | `erase TARGET` | Erases a file, or with `--text` that text in it, or a VectorDBMemory's item `TARGET`, from the memory and its history |
 | `reset` | Empties a memory and its history, keeping its identity |
 | `reembed` | Embeds a VectorDBMemory's items again with the `--embedding` model, which the store then keeps |

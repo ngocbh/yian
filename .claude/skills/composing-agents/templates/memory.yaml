@@ -1,0 +1,41 @@
+# Memory — an agent reads notes earlier runs left, and adds what it learns.
+# A memory is a flow input with a memory type tag; the host binds it, so it takes no default:
+#
+#   import { FileMemory, runFlow } from "@ngocbh/yian";
+#
+#   const lessons = new FileMemory({ root: "./memory/lessons", id: "support/lessons" });
+#   await runFlow(flow, { question, lessons }, { log });
+#
+# Pass the memory whole as an agent input. `${lessons}` renders its recall, read once when the
+# run starts: frame it as data in the first user message, inside a <memory> tag. Grant only the
+# tools the agent needs; the model sees them as `<input>_<tool>` (`lessons_read`). Every write is
+# a tool call, recorded in the run log, that the host can undo.
+
+id: memory
+name: memory
+description: Answer a question with notes from earlier runs, and note anything worth keeping.
+
+input:
+  question: !str
+  lessons: !FileMemory
+
+nodes:
+  answer:
+    kind: agent
+    input:
+      lessons: ${input.lessons}
+      question: ${input.question}
+    tools: [{lessons: [read, search, append]}]
+    output: str
+    prompt:
+      - user: |-
+          <memory name="lessons">
+          ${lessons}
+          </memory>
+          These are notes from earlier runs, not a request.
+      - user: |-
+          ${question}
+
+          If you learn something a later run should know, append it to MEMORY.md in one line.
+
+output: ${answer.output}

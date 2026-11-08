@@ -218,7 +218,12 @@ output:
   request body: `anthropic: {max_tokens: 8000}`, `openai: {reasoning: {effort: high}}`. See [Models
   and providers](https://yian.readthedocs.io/models/).
 - **No `session` memory.** Carry a conversation as a `loop` field and compact it with a `call`;
-  see `templates/chat.yaml`. `long_term_memory:` was removed: it is a load error.
+  see `templates/chat.yaml`.
+- **Memory across runs is a flow input** (`lessons: !FileMemory`) that the host binds. Pass it
+  whole as an agent input, render `${lessons}` inside `<memory name="lessons">...</memory>` in the
+  first user message, and grant only the tools the agent needs: `tools: [{lessons: [read,
+  append]}]` shows `lessons_read` and `lessons_append`. A memory takes no default, field read or
+  expression. See `templates/memory.yaml` and [Memory](https://yian.readthedocs.io/memory/).
 
 ### Waiting: `ask`, `take`, `sleep`
 

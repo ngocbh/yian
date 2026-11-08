@@ -26,6 +26,7 @@ Each file in [templates/](templates/) loads with `yian check`. Copy one and edit
 | [loop.yaml](templates/loop.yaml) | A `loop` that asks a person each turn until `bye` |
 | [chat.yaml](templates/chat.yaml) | A chat on an `Inbox(Message)`: `take`, a steerable reply, a history compacted each turn |
 | [compact_history.yaml](templates/compact_history.yaml) | Fold older turns into a rolling summary once the history passes a budget |
+| [memory.yaml](templates/memory.yaml) | An agent that reads a memory's recall and appends what it learns |
 | [llm-config-cascade.yaml](templates/llm-config-cascade.yaml) | Flow `llm_config:`, a node override, a value, `inherit: false` |
 | [node-env-config.yaml](templates/node-env-config.yaml) | Flow `env:` with a node override (`max_tool_iterations`) |
 
@@ -53,8 +54,8 @@ Fields every node takes: `kind`, `input` (not on `case`), `asserts` (not on `cas
 
 **agent** ([Agents](https://yian.readthedocs.io/agents/)): `input`, `prompt` (a template, or a
 list of messages), `system_prompt` (replaces the default instruction), `variables` (tagged
-values the prompts read, such as `tone: !str plain`), `output`, `retries`, `tools` (tool and
-group names, or `{group: [tool, ...]}`; a group's tools show as `<group>_<tool>`), `skills`
+values the prompts read, such as `tone: !str plain`), `output`, `retries`, `tools` (tool, group
+and memory input names, or `{group: [tool, ...]}`; a group's tools show as `<group>_<tool>`), `skills`
 (names or `all`), `steer_inbox`, `llm_config`, `env` (`max_tool_iterations`).
 
 **code** ([Code and tools](https://yian.readthedocs.io/code-and-tools/)): `code` (an inline body
@@ -140,6 +141,7 @@ False values are `false`, `null`, `0`, `0.0`, `""`, `[]` and an empty record. Bu
 | `file` | Fields `uri`, `mime`, `name` |
 | `Message` | Built in: `role` (`user`, `assistant`, `tool`) and `parts` (text, tool calls, ...) |
 | `Inbox(X)` | A flow input whose events arrive while the run goes on |
+| `FileMemory` | A flow input the host binds to a memory; see [Memory](https://yian.readthedocs.io/memory/) |
 
 Records are closed: an extra field fails the check (an agent's record reply drops it instead; a
 union member's reply gets a correction). Every field is required except an `Optional(...)` one.

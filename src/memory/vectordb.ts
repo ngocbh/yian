@@ -1320,9 +1320,12 @@ export class VectorDBMemory extends MemoryBase {
       if (lstatOrNull(path) === null) throw new Error("this memory's store file is gone");
       // One connection for the whole action: it holds no transaction while it waits for the embedder.
       const db = openStore(path);
+      let staged = false;
       try {
         const meta = memoryMeta(db, path, this.#id);
+        // A table a crash left part way through an earlier reembed goes first.
         db.exec("DROP TABLE IF EXISTS reembed; CREATE TABLE reembed(id INTEGER PRIMARY KEY, vector BLOB NOT NULL)");
+        staged = true;
         const batch = db.prepare("SELECT id, text FROM items WHERE id > ? ORDER BY id LIMIT ?");
         let length: number | null = null;
         for (let after = 0; ; ) {
@@ -1350,7 +1353,7 @@ export class VectorDBMemory extends MemoryBase {
       } finally {
         // A failed reembed's half-filled table goes, so the store is as it was.
         try {
-          if (!db.inTransaction) db.exec("DROP TABLE IF EXISTS reembed");
+          if (staged && !db.inTransaction) db.exec("DROP TABLE IF EXISTS reembed");
         } finally {
           db.close();
         }

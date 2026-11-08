@@ -1453,3 +1453,58 @@ describe("host actions", () => {
     await s.close();
   });
 });
+
+describe("the lock and the queue", () => {
+  test("an abort while a call is queued rejects it at once; the calls before and after it still run", async () => {
+    const s = await openAt({ lockTimeoutMs: 10_000 });
+    const lock = lockFile(`${path}.lock`, { private: true });
+    const first = s.snapshot();
+    const controller = new AbortController();
+    const queued = call(s, "list", {}).catch(() => "failed");
+    const aborted = s.call("list", {}, { signal: controller.signal });
+    controller.abort(new Error("stopped"));
+    await expect(aborted).rejects.toThrow("stopped");
+    lock.release();
+    expect((await first).version).toBe("0");
+    expect(await queued).toEqual({ items: [] });
+    await s.close();
+  });
+
+  test("close waits for every turn the session queued, an aborted call's included", async () => {
+    const s = await openAt({ lockTimeoutMs: 10_000 });
+    const lock = lockFile(`${path}.lock`, { private: true });
+    const first = s.snapshot();
+    const controller = new AbortController();
+    const aborted = s.call("list", {}, { signal: controller.signal }).catch(() => "aborted");
+    controller.abort();
+    expect(await aborted).toBe("aborted");
+    let closed = false;
+    const closing = s.close().then(() => {
+      closed = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(closed).toBe(false);
+    lock.release();
+    await first;
+    await closing;
+    expect(closed).toBe(true);
+  });
+
+  const asUser = process.platform !== "win32" && process.getuid!() !== 0;
+
+  test.if(asUser)("an OS error from a call names no location", async () => {
+    const s = await openAt();
+    fs.chmodSync(join(dir, "store"), 0o600);
+    let error: unknown;
+    try {
+      error = await rejection(call(s, "list", {}));
+    } finally {
+      fs.chmodSync(join(dir, "store"), 0o700);
+    }
+    expect((error as NodeJS.ErrnoException).code).toBe("EACCES");
+    expect(`${(error as Error).message} ${(error as Error).stack}`).not.toContain(dir);
+    expect(Object.values(error as object).join(" ")).not.toContain(dir);
+    expect((error as Error).message).toContain("the memory's store");
+    await s.close();
+  });
+});

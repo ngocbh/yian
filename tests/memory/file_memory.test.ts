@@ -979,6 +979,27 @@ describe("delete and rewrite", () => {
   });
 });
 
+/** Make `fs.writeSync` throw, as a crash would stop it, instead of writing bytes that hold `marker`. */
+function crashOnWrite(marker: string): void {
+  const { writeSync } = fs;
+  type Offset = number | null | undefined;
+  spyOn(fs, "writeSync").mockImplementation(((fd: number, data: Uint8Array, offset: Offset, length: Offset) => {
+    const start = offset ?? 0;
+    const bytes = Buffer.from(data.buffer, data.byteOffset + start, length ?? data.length - start);
+    if (bytes.includes(marker)) throw new Error("crash before the commit line");
+    return writeSync(fd, bytes);
+  }) as typeof fs.writeSync);
+}
+
+/** Return the journal's lines, parsed. */
+function journalLines(): JsonObject[] {
+  const text = fs.readFileSync(join(root, ".yian/journal.jsonl"), "utf8");
+  return text
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line) as JsonObject);
+}
+
 /** Undo change `changeId` on `s` as change `id`. */
 function undo(s: MemorySession, changeId: string, id = `undo-${changeId}`): Promise<Applied> {
   return s.undo({ id, changeId, author: { kind: "user", name: "ada" }, signal });
@@ -1120,12 +1141,7 @@ describe("history and undo", () => {
     const s = await openAt();
     await apply(s, { op: "append", path: "a.md", text: "one" }, "1");
     const other = await openAt();
-    const { writeSync } = fs;
-    spyOn(fs, "writeSync").mockImplementation(((fd: number, data: Uint8Array, offset = 0, length?: number) => {
-      const bytes = Buffer.from(data.buffer, data.byteOffset + (offset ?? 0), length ?? data.length - (offset ?? 0));
-      if (bytes.includes('"ok":true')) throw new Error("crash before the commit line");
-      return writeSync(fd, bytes);
-    }) as typeof fs.writeSync);
+    crashOnWrite('"ok":true');
     await expect(apply(other, { op: "append", path: "a.md", text: "two" }, "x")).rejects.toThrow("crash");
     mock.restore();
     const result = await undo(s, "1");
@@ -1203,5 +1219,189 @@ describe("errors name no location", () => {
       lock.release();
     }
     await s.close();
+  });
+});
+
+/** Erase `target` on `s` as change `id`, by a person at the CLI. */
+function erase(s: MemorySession, target: JsonObject, id = "erase-1") {
+  return s.erase({ id, target, author: { kind: "user", name: "ada" }, signal });
+}
+
+/** Return every file under `base` whose bytes hold `text`, `.yian/` included. */
+function holding(base: string, text: string): string[] {
+  const found: string[] = [];
+  const walk = (rel: string): void => {
+    for (const name of fs.readdirSync(join(base, rel))) {
+      const path = rel === "" ? name : `${rel}/${name}`;
+      const stats = fs.lstatSync(join(base, path));
+      if (stats.isDirectory()) walk(path);
+      else if (stats.isFile() && fs.readFileSync(join(base, path)).includes(text)) found.push(path);
+    }
+  };
+  walk("");
+  return found;
+}
+
+describe("erase and reset", () => {
+  test("erase({path, text}) removes the text from the file and every inverse, and names the undos lost", async () => {
+    const s = await openAt();
+    await apply(s, { op: "create", path: "a.md", text: "Ada lives at SECRET-42." }, "c1");
+    await apply(s, { op: "append", path: "a.md", text: "She likes tea." }, "c2");
+    await apply(s, { op: "edit", path: "a.md", old: "tea", new: "coffee" }, "c3");
+    await apply(s, { op: "create", path: "b.md", text: "Bob knows SECRET-42 too." }, "b1");
+    await apply(s, { op: "edit", path: "b.md", old: "Bob knows SECRET-42 too.", new: "Bob knows." }, "b2");
+    await apply(s, { op: "create", path: "c.md", text: "Carol." }, "d1");
+    expect(holding(root, "SECRET-42").sort()).toEqual([".yian/journal.jsonl", "a.md"]);
+    const erased = await erase(s, { path: "a.md", text: "SECRET-42" });
+    expect(erased).toEqual({ version: (await s.snapshot()).version, disabledUndos: ["c1", "c2", "c3", "b2"] });
+    expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("Ada lives at .\nShe likes coffee.");
+    expect(holding(root, "SECRET-42")).toEqual([]);
+    // Only the undos that could have brought the text back are gone.
+    expect((await undo(s, "c3")).ok).toBe(false);
+    expect((await undo(s, "d1")).ok).toBe(true);
+    await s.close();
+  });
+
+  test("erase({path}) deletes the file and every inverse for it", async () => {
+    const s = await openAt();
+    await apply(s, { op: "create", path: "a.md", text: "private" }, "c1");
+    await apply(s, { op: "rewrite", path: "a.md", text: "more private", if_hash: sha256("private") }, "c2");
+    const erased = await erase(s, { path: "a.md" });
+    expect(erased.disabledUndos).toEqual(["c1", "c2"]);
+    expect(fs.existsSync(join(root, "a.md"))).toBe(false);
+    expect(holding(root, "private")).toEqual([]);
+    expect(await undo(s, "c2")).toEqual(
+      refusal("change `c2` can't be undone: the memory no longer keeps what it replaced"),
+    );
+    await s.close();
+  });
+
+  test("an erase is in history, with its author and time, and can't be undone", async () => {
+    const s = await openAt({ scheduler: virtualScheduler(Date.UTC(2026, 10, 7)) });
+    await apply(s, { op: "create", path: "a.md", text: "x" }, "c1");
+    await erase(s, { path: "a.md", text: "x" }, "e1");
+    expect((await s.history({ limit: 1 }))[0]).toEqual({
+      id: "e1",
+      op: "erase",
+      target: { path: "a.md" },
+      author: { kind: "user", name: "ada" },
+      at: "2026-11-07T00:00:00.000Z",
+    });
+    expect(await undo(s, "e1")).toEqual(
+      refusal("change `e1` can't be undone: the memory no longer keeps what it replaced"),
+    );
+    await s.close();
+  });
+
+  test("an erase's id answers again with its stored result; another erase under it is refused", async () => {
+    const s = await openAt();
+    await apply(s, { op: "create", path: "a.md", text: "x y" }, "c1");
+    const erased = await erase(s, { path: "a.md", text: "x" });
+    const journal = fs.readFileSync(join(root, ".yian/journal.jsonl"), "utf8");
+    expect(await erase(s, { path: "a.md", text: "x" })).toEqual(erased);
+    expect(fs.readFileSync(join(root, ".yian/journal.jsonl"), "utf8")).toBe(journal);
+    await expect(erase(s, { path: "a.md", text: "y" })).rejects.toThrow(
+      "change id `erase-1` was used for another change",
+    );
+    await s.close();
+  });
+
+  test("an erase first resolves another session's cut-off change on its path", async () => {
+    const s = await openAt();
+    await apply(s, { op: "create", path: "a.md", text: "one" }, "c1");
+    const other = await openAt();
+    crashOnWrite('"ok":true');
+    await expect(apply(other, { op: "append", path: "a.md", text: "SECRET" }, "x")).rejects.toThrow("crash");
+    mock.restore();
+    const erased = await erase(s, { path: "a.md", text: "SECRET" });
+    expect(erased.disabledUndos).toEqual(["c1", "x"]);
+    const xLines = journalLines().filter((line) => line.id === "x");
+    expect(xLines.map((line) => line.ok ?? line.inverse)).toEqual([null, true]);
+    expect(holding(root, "SECRET")).toEqual([]);
+    expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("one\n");
+    await s.close();
+    await other.close();
+  });
+
+  test("an erase a crash cut off is aborted before its file is written, and committed after", async () => {
+    const s = await openAt();
+    await apply(s, { op: "create", path: "a.md", text: "keep SECRET" }, "c1");
+    const { renameSync } = fs;
+    spyOn(fs, "renameSync").mockImplementation((from: fs.PathLike, to: fs.PathLike) => {
+      if (String(to).endsWith("a.md")) throw Object.assign(new Error("no space"), { code: "ENOSPC" });
+      renameSync(from, to);
+    });
+    await expect(erase(s, { path: "a.md", text: "SECRET" }, "e1")).rejects.toThrow("no space");
+    mock.restore();
+    // The journal was rewritten first, so the text is gone from it though the file still holds it.
+    expect(holding(root, "SECRET")).toEqual(["a.md"]);
+    const t = await openAt();
+    expect(journalLines().at(-1)).toEqual({ id: "e1", aborted: true });
+    expect(await erase(t, { path: "a.md", text: "SECRET" }, "e1")).toMatchObject({ disabledUndos: [] });
+    expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("keep ");
+
+    await apply(t, { op: "append", path: "a.md", text: "AGAIN" }, "c2");
+    // e2's own commit line, not the rewritten journal's lines.
+    crashOnWrite('{"id":"e2","ok":true');
+    await expect(erase(t, { path: "a.md", text: "AGAIN" }, "e2")).rejects.toThrow("crash");
+    mock.restore();
+    const u = await openAt();
+    expect(journalLines().at(-1)).toMatchObject({ id: "e2", ok: true, result: { disabled_undos: ["c2"] } });
+    expect(await erase(u, { path: "a.md", text: "AGAIN" }, "e2")).toMatchObject({ disabledUndos: ["c2"] });
+    expect(holding(root, "AGAIN")).toEqual([]);
+    for (const session of [s, t, u]) await session.close();
+  });
+
+  test("confinement: an erase target outside the members is refused with the reason, writing nothing", async () => {
+    put(root, "a.md", "A");
+    put(root, ".git/config", "g");
+    put(root, "bin.dat", new Uint8Array([0xff]));
+    put(dir, "outside/x.md", "outside");
+    fs.symlinkSync(join(dir, "outside"), join(root, "linked"));
+    fs.symlinkSync(join(dir, "outside/x.md"), join(root, "link.md"));
+    fs.linkSync(join(dir, "outside/x.md"), join(root, "hard.md"));
+    const s = await openAt();
+    expect((await apply(s, { op: "append", path: "a.md", text: "B" }, "first")).ok).toBe(true);
+    const before = tree(dir);
+    for (const [path, reason] of REFUSED_PATHS) {
+      await expect(erase(s, { path }, `erase-${path}`)).rejects.toThrow(reason);
+      await expect(erase(s, { path, text: "outside" }, `erase-text-${path}`)).rejects.toThrow(reason);
+    }
+    expect(tree(dir)).toEqual(before);
+    await s.close();
+  });
+
+  test("an erase target of the wrong shape is a fault", async () => {
+    const s = await openAt();
+    await expect(erase(s, { path: "a.md", text: "" })).rejects.toThrow("an erase's text must be a non-empty string");
+    await expect(erase(s, { path: "a.md", other: "x" })).rejects.toThrow("an erase takes path and text, not other");
+    await expect(erase(s, {})).rejects.toThrow("an erase needs path as a string");
+    await s.close();
+  });
+
+  test("reset empties the members, keeps the identity, and starts a new journal generation", async () => {
+    put(root, ".git/config", "kept");
+    const s = await openAt();
+    await apply(s, { op: "create", path: "a.md", text: "A" }, "c1");
+    await apply(s, { op: "create", path: "notes/b.md", text: "B" }, "c2");
+    const { generation } = journalLines()[0]!;
+    const memory = new FileMemory({ root, id: "t/x" });
+    await memory.reset({ signal });
+    expect(readMembers(root, { maxDepth: 4, maxFileChars: 100 }).files).toEqual([]);
+    expect(fs.existsSync(join(root, "notes"))).toBe(false);
+    expect(fs.readFileSync(join(root, ".git/config"), "utf8")).toBe("kept");
+    expect(fs.readFileSync(join(root, ".yian/identity"), "utf8")).toBe("t/x");
+    expect(journalLines()).toHaveLength(1);
+    expect(journalLines()[0]!.generation).not.toBe(generation);
+    // A session opened before the reset reads the new generation: its ids are gone, so c1 applies again.
+    expect((await apply(s, { op: "create", path: "a.md", text: "A" }, "c1")).ok).toBe(true);
+    expect(await s.history({ limit: 10 })).toHaveLength(1);
+    await s.close();
+  });
+
+  test("reset refuses a folder that isn't a memory", async () => {
+    put(root, "a.md", "A");
+    await expect(new FileMemory({ root }).reset({ signal })).rejects.toThrow(`\`${root}\` isn't a memory yet`);
+    expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("A");
   });
 });

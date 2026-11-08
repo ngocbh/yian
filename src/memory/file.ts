@@ -50,6 +50,7 @@ import {
   charCount,
   type Inverse,
   Journal,
+  type JournalChange,
   type JournalEntry,
   isObject,
   makeDirectory,
@@ -757,9 +758,44 @@ export class FileMemory extends MemoryBase {
     return session;
   }
 
-  /** Empty the memory, keeping its identity. */
-  override reset(_o: { signal: AbortSignal }): Promise<void> {
-    return Promise.reject(new Error("FileMemory reset isn't available yet"));
+  /**
+   * Empty the memory, keeping its identity: start a new journal generation, so its history and
+   * change ids are gone, then delete its members and the folders that held them once they are
+   * empty. Files that aren't part of the memory stay. Only a host or the CLI calls it, outside
+   * runs; a session open on the memory reads the new generation on its next write.
+   *
+   * @throws Error when the folder isn't a memory.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
+  override async reset(o: { signal: AbortSignal }): Promise<void> {
+    o.signal.throwIfAborted();
+    const { root, limits } = this.#store;
+    if (lstatOrNull(root)?.isDirectory() !== true || storedIdentity(root) === null) {
+      throw new Error(`${shown(root)} isn't a memory yet`);
+    }
+    await this.#store.locked(o.signal, () => {
+      // The journal goes first: a crash part way leaves members to delete, never change ids that
+      // would answer for changes to them.
+      new Journal(join(root, META), limits).restart();
+      const folders = new Set<string>();
+      for (const file of readMembers(root, limits).files) {
+        fs.unlinkSync(join(root, file.path));
+        for (let folder = dirname(file.path); folder !== "."; folder = dirname(folder)) folders.add(folder);
+      }
+      // Deepest first, so a folder's emptied subfolders are gone before it is tried.
+      const deepestFirst = [...folders].sort((a, b) => b.split("/").length - a.split("/").length);
+      for (const folder of deepestFirst) {
+        try {
+          fs.rmdirSync(join(root, folder));
+        } catch (error) {
+          if (!isSystemError(error) || (error.code !== "ENOTEMPTY" && error.code !== "EEXIST")) throw error;
+        }
+      }
+      for (const folder of [".", ...folders]) {
+        if (lstatOrNull(join(root, folder)) !== null) syncFolder(join(root, folder));
+      }
+      clearTmp(root);
+    });
   }
 }
 
@@ -879,7 +915,25 @@ function fileHash(root: string, rel: string, limits: Limits): string | null {
 /** Return the result a committed change `entry` reports when the memory's version is `version`. */
 function resultOf(entry: JournalEntry, version: string): JsonObject {
   const { path, after } = entry;
+  if (entry.op === "erase") return { path, version, disabled_undos: [...(entry.disables ?? [])] };
   return after === ABSENT ? { path, version } : { path, hash: after, version };
+}
+
+/**
+ * Return `target` as an erase's target: a member path, and the text to remove from it.
+ *
+ * @throws {TypeError} If it isn't `{path, text?}`, with a string path and a non-empty text.
+ */
+function checkEraseTarget(target: JsonObject): { path: string; text?: string } {
+  if (!isObject(target) || typeof target.path !== "string") throw new TypeError("an erase needs path as a string");
+  const extra = Object.keys(target).filter((key) => key !== "path" && key !== "text");
+  if (extra.length > 0) throw new TypeError(`an erase takes path and text, not ${listed(extra)}`);
+  const { path, text } = target;
+  if (text === undefined) return { path };
+  if (typeof text !== "string" || text === "" || !text.isWellFormed()) {
+    throw new TypeError("an erase's text must be a non-empty string");
+  }
+  return { path, text };
 }
 
 /** Remove what a crash left in `.yian/tmp/`: holding the lock, no write is using it. */
@@ -1059,9 +1113,40 @@ class FileMemorySession implements MemorySession {
     });
   }
 
-  /** Remove `target`'s content and every copy of it in the journal. Not available yet. */
-  erase(_o: { id: string; target: JsonObject; author: Author; signal: AbortSignal }): Promise<Erased> {
-    return Promise.reject(new Error("FileMemory erase isn't available yet"));
+  /**
+   * Erase as change `id`: remove every occurrence of `target.text` from the member `target.path`,
+   * or the whole file when there is no text, and every copy of it in the journal (each inverse for
+   * that path, and each holding the text), after resolving a change a crash cut off. It can't be
+   * undone, and it reports the change ids whose undo it disabled.
+   *
+   * The journal is rewritten first, ending in the erase's entry, which holds no text; then the
+   * file is written and the commit line appended. A crash before the file is written aborts the
+   * erase, losing only undos; run it again.
+   *
+   * @throws Error naming the reason when the path isn't part of the memory; nothing is written.
+   * @throws Error with the stored reason when this id's earlier erase has an unknown outcome.
+   * @throws {ChangeIdReusedError} If `id` was applied with a different change.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   * @throws {TypeError} If `id`, `target` or `author` has the wrong shape.
+   */
+  async erase(o: { id: string; target: JsonObject; author: Author; signal: AbortSignal }): Promise<Erased> {
+    this.#checkOpen();
+    o.signal.throwIfAborted();
+    if (typeof o.id !== "string" || o.id === "") throw new TypeError("a change id must be a non-empty string");
+    const author = checkAuthor(o.author);
+    const target = checkEraseTarget(o.target);
+    const digest = sha256(canonicalJson({ op: "erase", ...target }));
+    const applied = await this.#locked(o.signal, () => {
+      this.#recover();
+      const known = this.#journal.known(o.id);
+      if (known !== undefined) {
+        if (known.digest !== digest) throw new ChangeIdReusedError(o.id);
+        return known.applied;
+      }
+      return this.#erase(o.id, digest, target, author);
+    });
+    if (!applied.ok) throw new Error(applied.reason);
+    return { version: applied.version, disabledUndos: applied.result.disabled_undos as string[] };
   }
 
   /** Close the session once its locked calls have finished; later calls throw. */
@@ -1191,6 +1276,46 @@ class FileMemorySession implements MemorySession {
     if (typeof file === "string") throw refusal(`${shown(path)} isn't part of the memory: ${file}`);
     if (file === null) throw refusal(`${shown(path)} doesn't exist`);
     return file;
+  }
+
+  /** Rewrite the journal without `target`'s text, ending in the erase's entry; write the file; commit. */
+  #erase(id: string, digest: string, target: { path: string; text?: string }, author: Author): Applied {
+    const { root, limits, scheduler } = this.#store;
+    const { path, text } = target;
+    const why = pathProblem(path, limits.maxDepth) ?? diskProblem(root, path);
+    const old = why ?? readMemberFile(join(root, path), path, limits.maxFileChars);
+    if (typeof old === "string") throw new Error(`${shown(path)} isn't part of the memory: ${old}`);
+    const next = text === undefined || old === null ? null : old.text.replaceAll(text, "");
+    const drop = ({ entry }: JournalChange): boolean => {
+      const { inverse } = entry;
+      if (entry.path === path) return true;
+      return text !== undefined && inverse !== null && "text" in inverse && inverse.text.includes(text);
+    };
+    const undoable = this.#journal.undoable();
+    const disables = this.#journal
+      .changes()
+      .filter((change) => undoable.has(change) && drop(change))
+      .map((change) => change.entry.id);
+    const bytes = next === null ? null : Buffer.from(next, "utf8");
+    const entry: JournalEntry = {
+      id,
+      digest,
+      op: "erase",
+      path,
+      author,
+      at: new Date(scheduler.now()).toISOString(),
+      before: old?.hash ?? ABSENT,
+      after: bytes === null ? ABSENT : sha256(bytes),
+      inverse: null,
+      disables,
+    };
+    this.#journal.erase(entry, drop);
+    if (bytes !== null && next !== old?.text) writeMember(root, path, bytes);
+    else if (bytes === null && old !== null) removeMember(root, path);
+    const version = memoryVersion(readMembers(root, limits).files);
+    const applied: Applied = { ok: true, version, result: resultOf(entry, version) };
+    this.#journal.writeOutcome(id, applied);
+    return applied;
   }
 
   /** Check that change `changeId` can be undone and its file holds what it wrote, then commit the undo. */

@@ -55,6 +55,8 @@ export interface JournalEntry {
   readonly inverse: Inverse;
   /** For an undo, the id of the change it undid. */
   readonly undoes?: string;
+  /** For an erase, the ids of the changes whose undo it disabled. */
+  readonly disables?: readonly string[];
 }
 
 /** A change and its outcome, as the journal holds them: an aborted change has none. */
@@ -233,9 +235,10 @@ function asInverse(value: unknown): Inverse | undefined {
 
 /** Return the journal line of `entry`, holding `inverse` as its inverse. */
 function entryLine(entry: JournalEntry, inverse: Inverse): JsonObject {
-  const { id, digest, op, path, author, at, before, after, undoes } = entry;
+  const { id, digest, op, path, author, at, before, after, undoes, disables } = entry;
   const line: JsonObject = { id, digest, op, path, author: authorOf(author), at, before, after, inverse };
   if (undoes !== undefined) line.undoes = undoes;
+  if (disables !== undefined) line.disables = [...disables];
   return line;
 }
 
@@ -261,11 +264,12 @@ function parseLine(text: string): JournalLine | null {
   if (value.ok === false && typeof value.reason === "string" && (value.current === null || isObject(value.current))) {
     return { kind: "commit", id, applied: { ok: false, reason: value.reason, current: value.current } };
   }
-  const { digest, op, path, at, before, after, undoes } = value;
+  const { digest, op, path, at, before, after, undoes, disables } = value;
   const author = asAuthor(value.author);
   const inverse = asInverse(value.inverse);
   if (
     (undoes !== undefined && typeof undoes !== "string") ||
+    (disables !== undefined && !(Array.isArray(disables) && disables.every((id) => typeof id === "string"))) ||
     typeof digest !== "string" ||
     typeof op !== "string" ||
     typeof path !== "string" ||
@@ -278,7 +282,9 @@ function parseLine(text: string): JournalLine | null {
     return null;
   }
   const entry: JournalEntry = { id, digest, op, path, author, at, before, after, inverse };
-  return { kind: "entry", entry: undoes === undefined ? entry : { ...entry, undoes } };
+  if (undoes !== undefined) return { kind: "entry", entry: { ...entry, undoes } };
+  if (disables !== undefined) return { kind: "entry", entry: { ...entry, disables: disables as string[] } };
+  return { kind: "entry", entry };
 }
 
 /** A generation line as `#create` writes it, its hex digits as zeros. */
@@ -442,11 +448,29 @@ export class Journal {
    * `null`, and aborted changes go. Hold the lock, with no entry pending.
    */
   compact(): void {
-    const lines = this.#kept().flatMap(({ change, inverse }) => [
-      JSON.stringify(entryLine(change.entry, inverse ? change.entry.inverse : null)),
+    this.#rewrite(this.#keptLines(() => false));
+  }
+
+  /**
+   * Rewrite the journal as `compact` does, with no inverse that `drop` picks, and end it with the
+   * erase `entry`, whose outcome comes once its content is written. Hold the lock, with no entry
+   * pending. The text the dropped inverses held is then gone from the journal.
+   */
+  erase(entry: JournalEntry, drop: (change: JournalChange) => boolean): void {
+    this.#rewrite([...this.#keptLines(drop), JSON.stringify(entryLine(entry, null))]);
+  }
+
+  /** Start the journal again, as a new generation with no changes. Hold the lock. */
+  restart(): void {
+    this.#rewrite([]);
+  }
+
+  /** Return the lines a compaction keeps, with no inverse that `drop` picks. */
+  #keptLines(drop: (change: JournalChange) => boolean): string[] {
+    return this.#kept().flatMap(({ change, inverse }) => [
+      JSON.stringify(entryLine(change.entry, inverse && !drop(change) ? change.entry.inverse : null)),
       JSON.stringify({ id: change.entry.id, ...change.applied }),
     ]);
-    this.#rewrite(lines);
   }
 
   /** Return the changes a compaction keeps, in journal order, and whether each keeps its inverse. */

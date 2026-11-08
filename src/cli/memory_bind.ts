@@ -489,14 +489,24 @@ export function bindMemories(
   return bindFresh(flow, flags, options);
 }
 
-/** Bind `flow`'s memory inputs as `bindMemories` describes, to the CLI's instances. */
+/**
+ * How a binding is used: a fresh run's, which may make a new store; a resume's, which opens only
+ * what the run started with; or a preview's, which names the memories and opens none.
+ */
+type BindMode = "fresh" | "resume" | "preview";
+
+/**
+ * Bind `flow`'s memory inputs as `bindMemories` describes, to the CLI's instances; a `preview`
+ * needs no embedding model, since it makes nothing.
+ */
 function bindFresh(
   flow: ComposedFlow,
   flags: readonly string[],
   options: BindOptions & { project: string | null },
+  mode: "fresh" | "preview" = "fresh",
 ): Record<string, Bound> {
   const { memoryFlag = true } = options;
-  return bindEach(flow, flags, options, true, (input, optional, type) => {
+  return bindEach(flow, flags, options, mode, (input, optional, type) => {
     if (optional) return null;
     if (options.project === null) {
       const refusal = "a flow with no file has no default memories";
@@ -504,7 +514,7 @@ function bindFresh(
       throw new RangeError(`${refusal}${instead}`);
     }
     const identity = defaultIdentity(options.project, flow.compiled.flowId, input, memoryFlag);
-    return defaultInstance(input, identity, type, options, true);
+    return defaultInstance(input, identity, type, options, mode);
   });
 }
 
@@ -527,7 +537,7 @@ export function defaultMemories(
   options: Omit<BindOptions, "note"> & { project: string | null },
 ): DefaultMemory[] {
   // With no flags, each instance is a default.
-  const bound = bindFresh(flow, [], { ...options, note: () => {} });
+  const bound = bindFresh(flow, [], { ...options, note: () => {} }, "preview");
   return Object.entries(bound).map(([input, instance]) => ({
     input,
     identity: instance.defaultIdentity!,
@@ -559,11 +569,11 @@ export function resumeMemories(
   options: BindOptions,
 ): Record<string, CliMemory> {
   const recorded = recordedMemories(flow, log);
-  return bindEach(flow, flags, options, false, (input, _optional, type) => {
+  return bindEach(flow, flags, options, "resume", (input, _optional, type) => {
     const identity = recorded.get(input);
     // An Optional memory left out at the start takes none again.
     if (identity === undefined) return null;
-    return defaultInstance(input, identity, type, options, false);
+    return defaultInstance(input, identity, type, options, "resume");
   });
 }
 
@@ -595,14 +605,14 @@ export function recordedMemories(flow: ComposedFlow, log: string): Map<string, s
 
 /**
  * Bind each memory input of `flow`: to the path its `--memory` flag names, else to what `fallback`
- * gives the input, given whether it is Optional and its memory type (`null` for none). `fresh`
+ * gives the input, given whether it is Optional and its memory type (`null` for none). `mode`
  * says whether a new VectorDB store may be made.
  */
 function bindEach(
   flow: ComposedFlow,
   flags: readonly string[],
   options: BindOptions,
-  fresh: boolean,
+  mode: BindMode,
   fallback: (input: string, optional: boolean, type: string) => Bound | null,
 ): Record<string, Bound> {
   const paths = memoryFlags(flow.input, flags);
@@ -634,7 +644,7 @@ function bindEach(
         ? fallback(param.name, typ.nullable, typ.memory)
         : typ.memory === "FileMemory"
           ? new CliFileMemory({ root: path }, options.note)
-          : new CliVectorDBMemory(storeOptions(param.name, path, options, fresh), options.note);
+          : new CliVectorDBMemory(storeOptions(param.name, path, options, mode), options.note);
     if (made === null) continue;
     // Keyed by the real path, so two spellings of one path share one memory.
     const location = memoryLocation(made);
@@ -657,28 +667,28 @@ function bindEach(
 /**
  * Return the options of input `input`'s VectorDB store at `path`: its embedding model and
  * `options.embed`. Only a fresh run may make the store, so a resume gives no model and the one the
- * store recorded is used. A fresh run's model is `options.embedding`, else, for a store that
- * doesn't exist yet, `options.defaultEmbedding`'s.
+ * store recorded is used, and a preview, which opens nothing, gives none either. A fresh run's
+ * model is `options.embedding`, else, for a store that doesn't exist yet,
+ * `options.defaultEmbedding`'s.
  *
  * @throws {RangeError} When a fresh run's store doesn't exist yet and there is no embedding model;
  *   as `options.defaultEmbedding` throws.
  */
-function storeOptions(input: string, path: string, options: BindOptions, fresh: boolean): VectorDBMemoryOptions {
-  let embedding = fresh ? (options.embedding ?? undefined) : undefined;
+function storeOptions(input: string, path: string, options: BindOptions, mode: BindMode): VectorDBMemoryOptions {
+  const store: VectorDBMemoryOptions = { path };
+  if (options.embed !== undefined) store.embed = options.embed;
+  if (mode !== "fresh") return store;
+  let embedding = options.embedding ?? undefined;
   // The default is read only for a new store, so a broken one fails only a run that needs it.
-  if (fresh && embedding === undefined && lstatOrNull(path) === null) {
-    embedding = options.defaultEmbedding?.() ?? undefined;
-  }
-  if (fresh && embedding === undefined && lstatOrNull(path) === null) {
+  if (embedding === undefined && lstatOrNull(path) === null) embedding = options.defaultEmbedding?.() ?? undefined;
+  if (embedding === undefined && lstatOrNull(path) === null) {
     const set =
       options.memoryFlag === false
         ? "run `yian config embedding provider/model`"
         : "pass --embedding provider/model or run `yian config embedding provider/model`";
     throw new RangeError(`\`${input}\` needs an embedding model: ${set}`);
   }
-  const store: VectorDBMemoryOptions = { path };
   if (embedding !== undefined) store.embedding = embedding;
-  if (options.embed !== undefined) store.embed = options.embed;
   return store;
 }
 
@@ -688,12 +698,12 @@ function storeOptions(input: string, path: string, options: BindOptions, fresh: 
  *
  * @throws As `defaultLocation` and `storeOptions` throw.
  */
-function defaultInstance(input: string, identity: string, type: string, options: BindOptions, fresh: boolean): Bound {
+function defaultInstance(input: string, identity: string, type: string, options: BindOptions, mode: BindMode): Bound {
   const memoryFlag = options.memoryFlag ?? true;
   if (type === "VectorDBMemory") {
     const path = defaultLocation(options.home, identity, "VectorDBMemory");
     const confined = { home: options.home, path: `${identity}.db`, identity, memoryFlag };
-    const store = { ...storeOptions(input, path, options, fresh), id: identity };
+    const store = { ...storeOptions(input, path, options, mode), id: identity };
     return new CliVectorDBMemory(store, options.note, confined);
   }
   const root = defaultLocation(options.home, identity, "FileMemory");

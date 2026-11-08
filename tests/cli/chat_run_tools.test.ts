@@ -29,12 +29,15 @@ import {
 } from "../../src/cli/chat_tools.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
 import { main } from "../../src/cli/index.ts";
-import { projectKey } from "../../src/cli/memory_bind.ts";
+import { defaultLocation, projectKey } from "../../src/cli/memory_bind.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
 import type { ApproveRequest } from "../../src/cli/terminal.ts";
+import type { Env } from "../../src/defaults.ts";
+import type { Embed } from "../../src/llm/embeddings.ts";
 import type { Response } from "../../src/llm/messages.ts";
 import { compareCodeUnits } from "../../src/diagnostics.ts";
 import { ScriptedModel } from "../../src/llm/testing.ts";
+import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { Skill } from "../../src/skills/catalog.ts";
 import { ToolContext } from "../../src/tools/context.ts";
 import { isReportedToolError } from "../../src/tools/errors.ts";
@@ -170,16 +173,18 @@ output: done
     answer: string | null = "Approve",
     scheduler = heldScheduler().scheduler,
     queue: EventQueue | null = null,
+    children: { env?: Env; embed?: Embed } = {},
   ) {
     runs = new ChildRuns({
       root,
       logDir: join(tmp, "runs"),
       home: join(tmp, "home"),
-      env: NO_ENV,
+      env: children.env ?? NO_ENV,
       llmConfig: {},
       scheduler,
       chatRunId: "chat-1",
       skillsFor: () => null,
+      ...(children.embed === undefined ? {} : { embed: children.embed }),
     });
     const requests: ApproveRequest[] = [];
     const seen: [string, number][] = [];
@@ -438,6 +443,36 @@ output: done
       const done = await settledJson(json, "r1");
       expect(done).toMatchObject({ status: "succeeded", output: "MEMORY.md" });
       expect((done["memory_notes"] as string[])[0]).toEndWith("(new)");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a VectorDB flow starts with a new store made with the default embedding model, and says when there is none",
+    async () => {
+      writeFileSync(
+        join(root, "cases.yaml"),
+        "id: cases\nname: cases\ninput:\n  line: !str\n  cases: !VectorDBMemory\nnodes:\n  add:\n" +
+          "    kind: tool\n    tool_id: {cases: add}\n    input:\n      text: ${input.line}\noutput: ${add.output.id}\n",
+      );
+      const embed: Embed = async (texts) => texts.map(() => Float32Array.of(1, 1, 0, 0));
+      // The store a test reads is its own, never the account's.
+      const vars: Record<string, string> = { YIAN_AUTH_FILE: join(tmp, "auth.json") };
+      const env: Env = (name) => vars[name];
+      const none = runTools("Approve", undefined, null, { env, embed });
+      const refused = String(await none.invoke("start_flow", { path: "cases.yaml", inputs: { line: "a" } }));
+      expect(refused).toBe("not started: `cases` needs an embedding model: run `yian config embedding provider/model`");
+      await runs?.dispose();
+
+      vars["YIAN_DEFAULT_EMBEDDING"] = "openai/text-embedding-3-small";
+      const { requests, json } = runTools("Approve", undefined, null, { env, embed });
+      const identity = `${projectKey(root)}/cases/cases`;
+      await json("start_flow", { path: "cases.yaml", inputs: { line: "Check sums twice." } });
+      expect(requests[0]!.body).toContain(`\nmemories: cases → ${identity} (new)`);
+      expect(await settledJson(json, "r1")).toMatchObject({ status: "succeeded", output: 1 });
+      const store = new VectorDBMemory({ path: defaultLocation(join(tmp, "home"), identity, "VectorDBMemory") });
+      const stored = await store.stored({ signal: new AbortController().signal });
+      expect(stored?.embedding).toEqual({ provider: "openai", model: "text-embedding-3-small" });
     },
     TIMEOUT,
   );

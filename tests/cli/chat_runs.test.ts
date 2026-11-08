@@ -1004,6 +1004,34 @@ describe("memory", () => {
     TIMEOUT,
   );
 
+  test.skipIf(process.getuid?.() === 0)(
+    "an OS error making a child's store folder names it from ~/.yian/memory, not as the memory's folder",
+    async () => {
+      const home = join(root, "home");
+      mkdirSync(join(home, ".yian", "memory"), { recursive: true });
+      // The project's folder can't take the flow's: the open's mkdir fails there.
+      const key = join(home, ".yian", "memory", projectKey(root));
+      mkdirSync(key, { mode: 0o500 });
+      const cases =
+        "id: cases\nname: cases\ninput:\n  cases: !VectorDBMemory\nnodes:\n  add:\n    kind: tool\n" +
+        "    tool_id: {cases: add}\n    input: {text: x}\noutput: ${add.output.id}\n";
+      const env = (name: string) => (name === "YIAN_DEFAULT_EMBEDDING" ? "openai/m" : NO_ENV(name));
+      const embed = async (texts: readonly string[]) => texts.map(() => Float32Array.of(1, 0));
+      try {
+        const refused = await childRuns({ env, embed })
+          .start(await flow(cases), {}, { project: root })
+          .then(() => null, (error: Error) => error.message);
+        expect(refused).toContain("EACCES");
+        expect(refused).toContain(`~/.yian/memory/${projectKey(root)}/cases`);
+        expect(refused).not.toContain("the memory's folder");
+        expect(refused).not.toContain(root);
+      } finally {
+        chmodSync(key, 0o700);
+      }
+    },
+    TIMEOUT,
+  );
+
   test(
     "a waiting child whose memory folder is gone fails without pointing at --memory, which the chat lacks",
     async () => {

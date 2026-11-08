@@ -35,7 +35,6 @@ import { NodeSucceeded, type RunEvent, RunStarted } from "../events.ts";
 import type { Embed } from "../llm/embeddings.ts";
 import { defaultEmbedding } from "../llm_clients/connection.ts";
 import { defaultEmbed, type ModelAccess } from "../llm_clients/factory.ts";
-import { FileMemory } from "../memory/file.ts";
 import type { Scheduler } from "../platform.ts";
 import {
   advance,
@@ -724,12 +723,9 @@ export class ChildRuns {
         );
       }
     } catch (thrown) {
-      // A memory's open names its folder, which the chat's log and model never hold.
-      // A store's folder too: an OS error on making it names that.
-      const roots = Object.values(child.memory).flatMap((each) => {
-        const location = memoryLocation(each);
-        return each instanceof FileMemory ? [location] : [location, dirname(location)];
-      });
+      // A memory's open names its folder or store, which the chat's log and model never hold. A
+      // store's own folder, in an OS error on making it, is under ~/.yian/memory, written from `~`.
+      const roots = Object.values(child.memory).map(memoryLocation);
       const error = withoutLocations(thrown, this.#options.home, roots);
       // Before the start, `start` throws it; after, it is the child's failure.
       started.reject(error);

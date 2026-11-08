@@ -273,13 +273,18 @@ function checkInstance(binding: MemoryBinding, hostTypes: ReadonlyMap<string, re
   const loaded = hostTypes.get(type);
   if (loaded === undefined || Object.hasOwn(BUILTIN_MEMORY_TOOLS, type)) return;
   const names = contract.tools.map((tool) => tool.name);
-  if (names.join() !== loaded.join()) {
+  if (!sameNames(names, loaded)) {
     const cls = (instance.constructor as { name: string }).name;
     throw new TypeError(
       `memory \`${input}\`: ${cls}'s tools (${names.join(", ")}) aren't those of the \`${type}\` the flow was ` +
         `loaded with (${loaded.join(", ")})`,
     );
   }
+}
+
+/** Whether two lists of tool names hold the same names in the same order. */
+function sameNames(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((name, i) => name === b[i]);
 }
 
 /**
@@ -296,7 +301,7 @@ function checkSession(input: string, contract: MemoryContract, session: MemorySe
   }
   const names = info.tools.map((tool) => tool.name);
   const declared = contract.tools.map((tool) => tool.name);
-  if (names.join() !== declared.join()) {
+  if (!sameNames(names, declared)) {
     throw new TypeError(
       `memory \`${input}\`: its session's tools (${names.join(", ")}) aren't its contract's (${declared.join(", ")})`,
     );

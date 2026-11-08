@@ -265,3 +265,27 @@ test("close closes every session and returns the ones that failed, never rejecti
   expect(failed.map(({ identity, error }) => [identity, (error as Error).message])).toEqual([["t/a", "gone"]]);
   expect(fine.sessions[0]!.closed).toBe(1);
 });
+
+test("tool names are compared one by one, never as joined text", async () => {
+  const spec = (name: string) => ({ name, write: false, description: name, parameters: { type: "object" } });
+  /** A host memory class whose contract lists `declared` and whose session lists `opened`. */
+  const hostMemory = (declared: string[], opened: string[]) => {
+    class Joined extends MemoryBase {
+      static override readonly contract: MemoryContract = { type: "Joined", tools: declared.map(spec) };
+      override async open(): Promise<MemorySession> {
+        return new RecordingSession({ type: "Joined", identity: "t/j", settings: {}, tools: opened.map(spec) });
+      }
+      override reset(): Promise<void> {
+        throw new Error("not reset");
+      }
+    }
+    return new Joined();
+  };
+  const loaded = new Map([["Joined", ["find", "keep"]]]);
+  await expect(
+    RunMemories.open([bind("j", hostMemory(["find,keep"], ["find,keep"]), "Joined")], { ...fresh, hostTypes: loaded }),
+  ).rejects.toThrow("aren't those of the `Joined` the flow was loaded with");
+  await expect(RunMemories.open([bind("j", hostMemory(["find", "keep"], ["find,keep"]), "Joined")], fresh)).rejects.toThrow(
+    "its session's tools (find,keep) aren't its contract's (find, keep)",
+  );
+});

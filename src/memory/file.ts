@@ -746,6 +746,8 @@ export class FileMemory extends MemoryBase {
             throw error;
           }
           try {
+            // Again holding the lock: the folder may have changed while the call waited for it.
+            checkMeta(real);
             return body();
           } finally {
             lock.release();
@@ -996,6 +998,8 @@ function checkEraseTarget(target: JsonObject): { path: string; text?: string } {
  */
 function clearTmp(root: string): void {
   const tmp = join(root, META, "tmp");
+  // Never read through a symlink, should one appear after the check.
+  if (lstatOrNull(tmp)?.isDirectory() !== true) return;
   let names: string[];
   try {
     names = fs.readdirSync(tmp);

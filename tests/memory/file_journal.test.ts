@@ -990,3 +990,19 @@ test("close waits for every call the session queued, even when its last one was 
   expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("p1");
   expect((await first).ok).toBe(true);
 });
+
+test("the .yian check runs again once the lock is held, so a swap during the wait is caught", async () => {
+  const s = await openAt({ lockTimeoutMs: 5_000, scheduler: realScheduler });
+  const victim = join(dir, "victim");
+  fs.mkdirSync(victim);
+  fs.writeFileSync(join(victim, "important.txt"), "keep me");
+  const lock = lockFile(join(root, ".yian/lock"), { private: true });
+  const waiting = append(s, "x", "x");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  fs.rmSync(join(root, ".yian/tmp"), { recursive: true });
+  fs.symlinkSync(victim, join(root, ".yian/tmp"));
+  lock.release();
+  await expect(waiting).rejects.toThrow("`.yian/tmp` isn't a folder of this memory (a symlink); remove it");
+  expect(fs.readFileSync(join(victim, "important.txt"), "utf8")).toBe("keep me");
+  await s.close();
+});

@@ -609,9 +609,18 @@ interface Store {
    * lock timeout from when it was called, its time in the queue included, and an abort while it
    * is queued rejects it at once.
    *
-   * @throws {MemoryBusyError} If the lock is still held by another writer at the deadline.
+   * Returns the call's `result`, which rejects with `MemoryBusyError` if the lock is still held by
+   * another writer at the deadline, and `done`, which settles once its turn has finished, later
+   * than `result` when an abort let the call go before its turn came.
    */
-  locked<T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T>;
+  locked<T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T>;
+}
+
+/** A call's place in a memory's queue: its result, and when its turn has finished. */
+interface Turn<T> {
+  readonly result: Promise<T>;
+  /** Settles, never rejecting, once the turn has run or been passed over. */
+  readonly done: Promise<void>;
 }
 
 /**
@@ -633,7 +642,7 @@ const TURNS = new Map<string, Promise<void>>();
  * turn, when it comes, does nothing, so the calls after it keep their order. Once its turn has
  * started, `fn` answers the abort itself, so a change it applies is never reported as aborted.
  */
-function inTurn<T>(root: string, signal: AbortSignal | undefined, fn: () => Promise<T>): Promise<T> {
+function inTurn<T>(root: string, signal: AbortSignal | undefined, fn: () => Promise<T>): Turn<T> {
   let started = false;
   const run = (TURNS.get(root) ?? Promise.resolve()).then(() => {
     started = true;
@@ -648,14 +657,15 @@ function inTurn<T>(root: string, signal: AbortSignal | undefined, fn: () => Prom
   void done.then(() => {
     if (TURNS.get(root) === done) TURNS.delete(root);
   });
-  if (signal === undefined) return run;
-  return new Promise<T>((resolve, reject) => {
+  if (signal === undefined) return { result: run, done };
+  const result = new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       if (!started) reject(signal.reason);
     };
     signal.addEventListener("abort", onAbort, { once: true });
     void run.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   });
+  return { result, done };
 }
 
 /**
@@ -718,7 +728,7 @@ export class FileMemory extends MemoryBase {
       index,
       limits,
       scheduler,
-      locked<T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T> {
+      locked<T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T> {
         const deadline = scheduler.now() + timeoutMs;
         return inTurn(real, signal, async () => {
           // Checked before the lock file is opened, and on every call: the folder may change.
@@ -789,7 +799,7 @@ export class FileMemory extends MemoryBase {
         replaceFile(join(root, META, "identity"), Buffer.from(made, "utf8"), join(root, META, "tmp"));
         created = true;
         return made;
-      });
+      }).result;
     }
     if (this.#id !== undefined && identity !== this.#id) {
       throw new Error(`this memory is ${shown(identity)}, not ${shown(this.#id)}`);
@@ -816,7 +826,7 @@ export class FileMemory extends MemoryBase {
     if (lstatOrNull(root)?.isDirectory() !== true || storedIdentity(root) === null) {
       throw new Error(`${shown(root)} isn't a memory yet`);
     }
-    await this.#store.locked(o.signal, () => {
+    await this.#store.locked(o.signal, (): void => {
       // The journal goes first: a crash part way leaves members to delete, never change ids that
       // would answer for changes to them.
       new Journal(join(root, META), limits).restart();
@@ -838,7 +848,7 @@ export class FileMemory extends MemoryBase {
         if (lstatOrNull(join(root, folder)) !== null) syncFolder(join(root, folder));
       }
       clearTmp(root);
-    });
+    }).result;
   }
 }
 
@@ -1057,7 +1067,10 @@ class FileMemorySession implements MemorySession {
   readonly created: boolean;
   readonly #store: Store;
   readonly #journal: Journal;
-  /** The session's last locked call, settled either way: `close` waits for it. */
+  /**
+   * When the session's last queued turn has finished. Turns run in the order they were queued, so
+   * every earlier turn has finished by then too: `close` waits for it.
+   */
   #last: Promise<void> = Promise.resolve();
   #closed = false;
 
@@ -1239,7 +1252,7 @@ class FileMemorySession implements MemorySession {
     return { version: applied.version, disabledUndos: applied.result.disabled_undos as string[] };
   }
 
-  /** Close the session once its locked calls have finished; later calls throw. */
+  /** Close the session once every turn it queued has finished, aborted calls' included; later calls throw. */
   async close(): Promise<void> {
     this.#closed = true;
     await this.#last;
@@ -1613,13 +1626,11 @@ class FileMemorySession implements MemorySession {
   /** Run `body` holding the memory's lock, in this process's turn on the memory. */
   #locked<T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T> {
     if (this.#closed) return Promise.reject(new Error("this FileMemory session is closed"));
-    const run = this.#store.locked(signal, body).catch((error: unknown) => {
+    const { result, done } = this.#store.locked(signal, body);
+    // The turn itself, not the call: an abort while queued lets the call go before its turn runs.
+    this.#last = done;
+    return result.catch((error: unknown) => {
       throw withoutLocation(error, this.#store.root);
     });
-    this.#last = run.then(
-      () => undefined,
-      () => undefined,
-    );
-    return run;
   }
 }

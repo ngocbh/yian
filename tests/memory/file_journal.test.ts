@@ -975,3 +975,18 @@ test("the journal won't be rewritten while an entry has no outcome", async () =>
   expect(() => journal.erase({ ...entry, id: "e", op: "erase", inverse: null }, () => true)).toThrow(message);
   expect(fs.readFileSync(join(meta, "journal.jsonl"), "utf8")).toBe(before);
 });
+
+test("close waits for every call the session queued, even when its last one was aborted while queued", async () => {
+  const s = await openAt({ lockTimeoutMs: 5_000, scheduler: realScheduler });
+  const lock = lockFile(join(root, ".yian/lock"), { private: true });
+  const first = append(s, "p1", "p1");
+  const stop = new AbortController();
+  const second = s.apply({ id: "p2", change: { op: "append", path: "a.md", text: "p2" }, author, signal: stop.signal });
+  stop.abort(new Error("stopped"));
+  await expect(second).rejects.toThrow("stopped");
+  setTimeout(() => lock.release(), 150);
+  await s.close();
+  // The first call's turn has finished by then: its change is in the file.
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("p1");
+  expect((await first).ok).toBe(true);
+});

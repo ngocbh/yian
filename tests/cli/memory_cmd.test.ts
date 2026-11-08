@@ -338,11 +338,13 @@ describe("yian memory show", () => {
     expect(typeof json.version).toBe("string");
   });
 
-  test("a memory not made yet is a usage error, and nothing is created", async () => {
+  test("a memory not made yet is a usage error, with no document under --json, and nothing is created", async () => {
     const flow = flowFile();
     const result = await yian(["memory", "show", flow, "lessons"]);
     expect(result.code).toBe(2);
     expect(result.stderr).toContain(`no memory at ${lessons().location}`);
+    const json = await yian(["memory", "show", flow, "lessons", "--json"]);
+    expect([json.code, json.stdout]).toEqual([2, ""]);
     expect(existsSync(lessons().location)).toBe(false);
   });
 });

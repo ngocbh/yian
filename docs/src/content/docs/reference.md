@@ -213,9 +213,9 @@ A `--json` command that fails without its own result prints an error document wh
 | `models.timeout` | The listing took longer than `--timeout`. `error.status` is `null` |
 | `skill.invalid` | `yian skills check`: a directory holds no valid `SKILL.md` |
 | `memory.conflict` | `yian memory`: a file or item changed since it was read, so the edit or undo changed nothing |
-| `memory.refused` | `yian memory`: the change isn't allowed, such as an undo of a change no longer kept, or a reset while a run is running |
-| `memory.cancelled` | `yian memory erase` or `reset`: you said no |
-| `memory.failed` | `yian memory` failed: the memory is missing or can't be read, or the editor failed |
+| `memory.refused` | `yian memory`: the change isn't allowed, such as an item that doesn't exist, an undo of a change no longer kept, or a reset while a run is running |
+| `memory.cancelled` | `yian memory erase`, `reset` or `edit --delete`: you said no |
+| `memory.failed` | `yian memory` failed: the memory can't be read or isn't one, or the editor failed. A memory that isn't there yet is a usage error, with no document |
 
 ## Run log records
 

@@ -97,7 +97,7 @@ import {
   type StepExchange,
 } from "./nodes/agent/messages.ts";
 import { staticPathOf } from "./nodes/ids.ts";
-import type { CompleteResult, Node, RebuildCaps } from "./nodes/base.ts";
+import { type CompleteResult, type Node, NodeKind, type RebuildCaps } from "./nodes/base.ts";
 import { applyDefaults, BindingError, checkInputNames, coerceInputs, copyValue } from "./nodes/binding.ts";
 import {
   type HostToolCall,
@@ -2841,6 +2841,7 @@ function* streamedEnvelopes(log: string, maxLineBytes: number | null): Generator
  *   handler.
  */
 function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
+  const memories = memoryInputNames(flow);
   for (const [nodeId, node] of staticNodes(flow)) {
     const grants = node.grantedTools();
     for (const grant of grants) {
@@ -2866,7 +2867,10 @@ function checkToolGrants(flow: CompiledFlow, tools: ToolSet): void {
       checkVisibleNames(expandGrants(grants, tools.scopes()));
     } catch (error) {
       if (!(error instanceof GrantError)) throw error;
-      throw new RangeError(`AGENT node ${reprText(nodeId)} ${error.message}`);
+      // A grant naming another flow's memory input is a host grant here.
+      const named = grants.some((grant) => memories.has(grant.kind === "name" ? grant.name : grant.group));
+      const hint = named ? "; memory grants name the node's own flow inputs" : "";
+      throw new RangeError(`AGENT node ${reprText(nodeId)} ${error.message}${hint}`);
     }
     const call = node.hostToolCall();
     if (call === null || (call.group === null && isEngineBuiltin(call.toolId))) continue;
@@ -3209,6 +3213,16 @@ export function staticNodes(flow: ComposedFlow | Flow): [string, Node][] {
   const found: [string, Node][] = [];
   collectStaticNodes(flow instanceof ComposedFlow ? flow.compiled : flow, [], found);
   return found;
+}
+
+/** Return the names of the memory inputs `flow` and its child flows declare. */
+function memoryInputNames(flow: CompiledFlow): Set<string> {
+  const names = new Set<string>();
+  for (const [, node] of staticNodes(flow)) {
+    if (node.kind !== NodeKind.START) continue;
+    for (const param of node.params ?? []) if (isMemoryType(param.contract?.type)) names.add(param.name);
+  }
+  return names;
 }
 
 /** Append each node of `graph` under `path`, then its child flows', to `found`. */

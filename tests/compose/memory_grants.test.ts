@@ -5,6 +5,10 @@
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { loadFlow, loadFlowSource } from "../../src/compose/loader.ts";
 import { flowFingerprint } from "../../src/compile/manifest.ts";
 import { BUILTIN, forget, install } from "../../src/defaults.ts";
@@ -12,6 +16,7 @@ import { MemoryBase, type MemoryContract, type MemorySession } from "../../src/m
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import { Binding } from "../../src/nodes/contracts.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
+import { runFlow } from "../../src/run.ts";
 import { VariablePool } from "../../src/typesys/pool.ts";
 import { MemoryRef, TypedValue, ValueKind } from "../../src/typesys/values.ts";
 import { loadErrorAsync } from "../helpers/declarations.ts";
@@ -184,6 +189,38 @@ output: null
     .find((node) => node instanceof AgentNode) as AgentNode;
   expect(other.memoryGrants()).toEqual([]);
   expect(other.grantedTools()).toEqual([{ kind: "name", name: "lessons" }]);
+});
+
+test("an inline body agent granting its parent's memory input fails at run start, saying what grants name", async () => {
+  const text = `id: f
+name: f
+input:
+  lessons: !Optional(FileMemory)
+nodes:
+  l:
+    kind: loop
+    input:
+      done: false
+    nodes:
+      a:
+        kind: agent
+        output: bool
+        prompt: hi
+        tools: [lessons]
+        llm_config: {provider: openai, model: gpt-test}
+    output:
+      done: \${a.output}
+    while: not done
+output: null
+`;
+  const loaded = await loadFlow(text);
+  const log = join(mkdtempSync(join(tmpdir(), "yian-grants-")), "log.jsonl");
+  await expect(runFlow(loaded, {}, { env: () => undefined, log })).rejects.toThrow(
+    "grants unknown tool or group 'lessons'",
+  );
+  await expect(runFlow(loaded, {}, { env: () => undefined, log: `${log}.2` })).rejects.toThrow(
+    "; memory grants name the node's own flow inputs",
+  );
 });
 
 test.each([

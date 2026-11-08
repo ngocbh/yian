@@ -1100,6 +1100,22 @@ describe("history and undo", () => {
     await s.close();
   });
 
+  test.each([
+    ["maxUndo is 0", { maxUndo: 0 }],
+    ["its old text is over maxHistoryChars", { maxHistoryChars: 5 }],
+  ])("a change keeps no old text in the journal when %s, since no undo could use it", async (_, caps) => {
+    put(root, "a.md", "old secret text");
+    const s = await openAt(caps);
+    await apply(s, { op: "rewrite", path: "a.md", text: "new", if_hash: sha256("old secret text") }, "r");
+    const journal = fs.readFileSync(join(root, ".yian/journal.jsonl"), "utf8");
+    expect(journal).not.toContain("secret");
+    expect(JSON.parse(journal.split("\n")[1]!).inverse).toBeNull();
+    expect(await undo(s, "r")).toEqual(
+      refusal("change `r` can't be undone: the memory no longer keeps what it replaced"),
+    );
+    await s.close();
+  });
+
   test("an undo first resolves another session's cut-off change, then conflicts on the moved hash", async () => {
     const s = await openAt();
     await apply(s, { op: "append", path: "a.md", text: "one" }, "1");

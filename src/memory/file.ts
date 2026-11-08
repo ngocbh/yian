@@ -569,6 +569,17 @@ function refused(reason: string): Applied {
   return { ok: false, reason, current: null };
 }
 
+/**
+ * Return `inverse` as a new change's journal entry keeps it: `null` when no undo could ever use it,
+ * with no undos kept or an old text too big for the history on its own, so the old text never
+ * reaches the journal.
+ */
+function storedInverse(inverse: Inverse, limits: Limits): Inverse {
+  if (inverse === null || limits.maxUndo === 0) return null;
+  if ("text" in inverse && charCount(inverse.text) > limits.maxHistoryChars) return null;
+  return inverse;
+}
+
 /** Return the sum of `files`' characters. */
 function totalChars(files: readonly MemberFile[]): number {
   return files.reduce((sum, file) => sum + file.chars, 0);
@@ -1259,7 +1270,7 @@ class FileMemorySession implements MemorySession {
       at: new Date(scheduler.now()).toISOString(),
       before: old?.hash ?? ABSENT,
       after: bytes === null ? ABSENT : sha256(bytes),
-      inverse: next.inverse,
+      inverse: storedInverse(next.inverse, limits),
     };
     this.#journal.writeEntry(entry);
     if (bytes !== null) writeMember(root, path, bytes);

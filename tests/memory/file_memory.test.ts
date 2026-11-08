@@ -1265,7 +1265,8 @@ describe("erase and reset", () => {
     await apply(s, { op: "create", path: "c.md", text: "Carol." }, "d1");
     expect(holding(root, "SECRET-42").sort()).toEqual([".yian/journal.jsonl", "a.md"]);
     const erased = await erase(s, { path: "a.md", text: "SECRET-42" });
-    expect(erased).toEqual({ version: (await s.snapshot()).version, disabledUndos: ["c1", "c2", "c3", "b2"] });
+    // c1 and c2 couldn't be undone anyway, since c3 changed a.md after them.
+    expect(erased).toEqual({ version: (await s.snapshot()).version, disabledUndos: ["c3", "b2"] });
     expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("Ada lives at .\nShe likes coffee.");
     expect(holding(root, "SECRET-42")).toEqual([]);
     // Only the undos that could have brought the text back are gone.
@@ -1287,12 +1288,24 @@ describe("erase and reset", () => {
     await s.close();
   });
 
+  test("an erase names only the undos it disables: those whose file still holds what they wrote", async () => {
+    const s = await openAt();
+    await apply(s, { op: "create", path: "a.md", text: "one SECRET" }, "c1");
+    await apply(s, { op: "append", path: "a.md", text: "two" }, "c2");
+    await apply(s, { op: "create", path: "b.md", text: "has SECRET" }, "b1");
+    await apply(s, { op: "rewrite", path: "b.md", text: "clean", if_hash: sha256("has SECRET") }, "b2");
+    // A hand edit moves a.md, so neither c1 nor c2 could be undone anyway.
+    fs.writeFileSync(join(root, "a.md"), "one SECRET by hand");
+    expect(await erase(s, { path: "a.md", text: "SECRET" })).toMatchObject({ disabledUndos: ["b2"] });
+    await s.close();
+  });
+
   test("erase({path}) deletes the file and every inverse for it", async () => {
     const s = await openAt();
     await apply(s, { op: "create", path: "a.md", text: "private" }, "c1");
     await apply(s, { op: "rewrite", path: "a.md", text: "more private", if_hash: sha256("private") }, "c2");
     const erased = await erase(s, { path: "a.md" });
-    expect(erased.disabledUndos).toEqual(["c1", "c2"]);
+    expect(erased.disabledUndos).toEqual(["c2"]);
     expect(fs.existsSync(join(root, "a.md"))).toBe(false);
     expect(holding(root, "private")).toEqual([]);
     expect(await undo(s, "c2")).toEqual(
@@ -1339,7 +1352,7 @@ describe("erase and reset", () => {
     await expect(apply(other, { op: "append", path: "a.md", text: "SECRET" }, "x")).rejects.toThrow("crash");
     mock.restore();
     const erased = await erase(s, { path: "a.md", text: "SECRET" });
-    expect(erased.disabledUndos).toEqual(["c1", "x"]);
+    expect(erased.disabledUndos).toEqual(["x"]);
     const xLines = journalLines().filter((line) => line.id === "x");
     expect(xLines.map((line) => line.ok ?? line.inverse)).toEqual([null, true]);
     expect(holding(root, "SECRET")).toEqual([]);

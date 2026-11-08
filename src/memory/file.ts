@@ -1379,10 +1379,16 @@ class FileMemorySession implements MemorySession {
       );
     }
     const next = text === undefined || old === null ? null : withoutText(old.text, text);
+    // The undos it disables: those it drops that would still work, their file holding what they wrote.
     const undoable = this.#journal.undoable();
+    const hashes = new Map<string, string | null>([[path, old?.hash ?? ABSENT]]);
+    const hashOf = (rel: string) => {
+      if (!hashes.has(rel)) hashes.set(rel, fileHash(root, rel, limits));
+      return hashes.get(rel);
+    };
     const disables = this.#journal
       .changes()
-      .filter((change) => undoable.has(change) && drop(change))
+      .filter((change) => undoable.has(change) && drop(change) && hashOf(change.entry.path) === change.entry.after)
       .map((change) => change.entry.id);
     const bytes = next === null ? null : Buffer.from(next, "utf8");
     const entry: JournalEntry = {

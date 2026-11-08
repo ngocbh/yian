@@ -96,7 +96,7 @@ it says "or". A `run` or `resume` case's `expect` has exactly one of `raises` an
 
 | Kind | Keys | Checks |
 |---|---|---|
-| `load` | `flow` (required), `files`, `env` | `expect.load` |
+| `load` | `flow` (required), `files`, `env`, `memory_types` | `expect.load` |
 | `run` | `flow` (required), `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls` when present |
 | `resume` | as `run`, plus `host.crash_after_record` or `host.stop`, and `resume` | as `run`, for the resumed run |
 | `expr` | exactly one of `expr` and `template` (required), `values`, `item`, `mode`, `typedefs`, `env` | `expect.value` or `expect.raises` |
@@ -109,6 +109,8 @@ it says "or". A `run` or `resume` case's `expect` has exactly one of `raises` an
 ### `load`
 
 Loads the flow. `expect.load` is `ok`, or `{diagnostics: [<diagnostic>, ...]}` in order.
+`memory_types` maps each host memory type the load is given (`memoryTypes`) to its tool names, in
+order.
 
 ### `run`
 

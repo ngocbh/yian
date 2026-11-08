@@ -1,0 +1,23 @@
+# Only a flow input can be a memory, so a typed binding can't declare one.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  nodes:
+    n:
+      kind: code
+      input:
+        m: !FileMemory ${input.lessons}
+      code: return 1
+      output: int
+  output: ${n.output}
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''m'': `!FileMemory` declares a memory, which only a flow input can be'
+      frames:
+      - label: flow.yaml
+        range: [9, 10, 9, 38]

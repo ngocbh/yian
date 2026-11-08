@@ -1,0 +1,20 @@
+# A flow input can be a memory: `!FileMemory`, `!VectorDBMemory(T)` with a record typedef, or
+# `!Optional(FileMemory)`. Unlike an inbox, a memory input may stay unread.
+kind: load
+flow: |
+  id: f
+  name: f
+  typedefs:
+    Case: {title: str}
+  input:
+    lessons: !FileMemory
+    cases: !VectorDBMemory(Case)
+    notes: !Optional(FileMemory)
+  nodes:
+    greet:
+      kind: code
+      output: str
+      code: return "hi"
+  output: ${greet.output}
+expect:
+  load: ok

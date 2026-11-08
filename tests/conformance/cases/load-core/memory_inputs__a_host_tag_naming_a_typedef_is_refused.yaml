@@ -1,0 +1,25 @@
+# A host memory type that is also a typedef of the file can't be an input's tag: the error is at
+# the input, with a frame at the typedef first.
+kind: load
+memory_types:
+  MyStore: [read]
+flow: |
+  id: f
+  name: f
+  typedefs:
+    MyStore: {region: str}
+  input:
+    notes: !MyStore
+  nodes: {}
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''notes'': the memory type `!MyStore` is also a typedef name; rename the typedef or the memory type'
+      frames:
+      - label: flow.yaml
+        range: [4, 3, 4, 10]
+        note: typedef 'MyStore'
+      - label: flow.yaml
+        range: [6, 10, 6, 18]

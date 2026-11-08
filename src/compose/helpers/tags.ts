@@ -42,6 +42,7 @@ import {
   buildValueAs,
   canonicalTypeLabel,
   isInboxType,
+  isMemoryType,
   isListKind,
   isRecord,
   requiresFile,
@@ -63,6 +64,7 @@ import {
 } from "../source/index.ts";
 import { CALL_HEAD } from "./directives.ts";
 import type { LoadDiagnostics } from "./errors.ts";
+import { inputTagRegistry, type MemoryTypeTable, NO_MEMORY_TYPES } from "./memory.ts";
 import { isExtensionKey } from "./source.ts";
 import { formerBooleanFix, valueFits } from "./yaml_words.ts";
 
@@ -465,12 +467,12 @@ function tagTextOf(typ: Type, registry: TypeRegistry): string | null {
 }
 
 /**
- * Spell `typ` by its structure; only a list element may fall back to a typedef name. An inbox has
- * no spelling here.
+ * Spell `typ` by its structure; only a list element may fall back to a typedef name. An inbox or
+ * a memory has no spelling here.
  */
 function directTagText(typ: Type, registry: TypeRegistry): string | null {
-  // An inbox is only ever a flow input's type, so no other slot is told to tag one.
-  if (typ.members !== undefined || typ.fields !== undefined || isInboxType(typ)) return null;
+  // An inbox or a memory is only ever a flow input's type, so no other slot is told to tag one.
+  if (typ.members !== undefined || typ.fields !== undefined || isInboxType(typ) || isMemoryType(typ)) return null;
   let text: string;
   if (typ.tags !== undefined) {
     if (typ.tags.size !== 1) return null;
@@ -588,8 +590,13 @@ export interface TaggedValueOptions {
    * it at the top level.
    */
   nestedCallFix?: string;
-  /** Whether the slot may be an `Inbox(...)`: a flow or def input; defaults to `false`. */
+  /**
+   * Whether the slot is a flow input, which may be an `Inbox(...)` or a memory; defaults to
+   * `false`.
+   */
   inbox?: boolean;
+  /** How a flow input's tag reads memory types beyond the built-ins; defaults to none. */
+  memoryTypes?: MemoryTypeTable;
 }
 
 /**
@@ -666,6 +673,7 @@ class TaggedValueReader {
   readonly literalOnly: boolean;
   readonly nestedCallFix: string;
   readonly inbox: boolean;
+  readonly memoryTypes: MemoryTypeTable;
   readonly leafSites: [ValuePath, SourceCursor][] = [];
 
   constructor(registry: TypeRegistry, options: TaggedValueOptions) {
@@ -678,6 +686,7 @@ class TaggedValueReader {
     this.literalOnly = options.literalOnly ?? false;
     this.nestedCallFix = options.nestedCallFix ?? "bind it at the top level, or reword the text";
     this.inbox = options.inbox ?? false;
+    this.memoryTypes = options.memoryTypes ?? NO_MEMORY_TYPES;
   }
 
   /** Read the slot at `cursor`; see `readTaggedValue`. */
@@ -692,6 +701,12 @@ class TaggedValueReader {
         throw this.diagnostics.error(`${reprText(this.label)}: an inbox input takes no default`, {
           range: cursor.range,
         });
+      }
+      if (isMemoryType(typ) && cursor.hasValue) {
+        throw this.diagnostics.error(
+          `${reprText(this.label)}: a memory input takes no default; the runner binds it`,
+          { range: cursor.range },
+        );
       }
       const origin = this.catalogBuilder.register([...this.sitePath, "type", "root"], cursor);
       contract = new ValueContract(typ, new ContractOrigins({ default: origin }));
@@ -799,20 +814,31 @@ class TaggedValueReader {
   /**
    * Record the tag on `cursor` as consumed and return the type it names.
    *
-   * @throws LoadError when the tag names an inbox anywhere but a slot that may be one.
+   * @throws LoadError when the tag names an inbox or a memory anywhere but a flow input, or a
+   *   flow input's tag names a host memory type the file also declares as a typedef.
    */
   tagType(cursor: SourceCursor, path: ValuePath): Type {
     const definitionId = cursor.tagDefinitionId;
     if (definitionId !== null) this.ledger.add(definitionId);
     const label = pathLabel(this.label, path);
-    const typ = readTagType(cursor.tag!, this.registry, {
+    const input = path.length === 0 && this.inbox;
+    const registry = input
+      ? inputTagRegistry(cursor.tag!, this.registry, this.memoryTypes, { label, cursor, diagnostics: this.diagnostics })
+      : this.registry;
+    const typ = readTagType(cursor.tag!, registry, {
       label,
       diagnostics: this.diagnostics,
       range: cursor.range,
     });
-    if (isInboxType(typ) && (path.length > 0 || !this.inbox)) {
+    if (isInboxType(typ) && !input) {
       throw this.diagnostics.error(
         `${reprText(label)}: \`!${cursor.tag}\` declares an inbox, which only a flow input can be`,
+        { range: cursor.range },
+      );
+    }
+    if (isMemoryType(typ) && !input) {
+      throw this.diagnostics.error(
+        `${reprText(label)}: \`!${cursor.tag}\` declares a memory, which only a flow input can be`,
         { range: cursor.range },
       );
     }

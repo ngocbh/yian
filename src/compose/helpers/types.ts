@@ -40,6 +40,7 @@ import {
 import {
   boundText,
   isInboxType,
+  isMemoryType,
   isRecord,
   renderValuePath,
   Type,
@@ -49,6 +50,7 @@ import {
   valueRepr,
 } from "../../typesys/values.ts";
 import { LoadDiagnostics, LoadError } from "./errors.ts";
+import { type MemoryTypeTable, NO_MEMORY_TYPES } from "./memory.ts";
 import {
   closeTypeName,
   oldFormSuggestion,
@@ -162,6 +164,9 @@ function readTypeAndSites(
       throw diagnostics.error(`an output can't be an inbox (\`Inbox(...)\` declares a flow input)`, {
         range,
       });
+    }
+    if (isMemoryType(typ)) {
+      throw diagnostics.error(`an output can't be a memory (\`${typ.memory}\` declares a flow input)`, { range });
     }
     if (levels) {
       const added = typeLevels(typ);
@@ -387,6 +392,7 @@ function readTaggedParameter(
     diagnostics: LoadDiagnostics;
     declarationLabel: string;
     requireDefault: boolean;
+    memoryTypes: MemoryTypeTable;
   },
 ): Parameter {
   const { parameterPath, parameterOrigin, catalogBuilder, diagnostics } = options;
@@ -405,6 +411,7 @@ function readTaggedParameter(
     ledger: catalogBuilder.consumedTags,
     literalOnly: true,
     inbox: declarationLabel === "input",
+    memoryTypes: options.memoryTypes,
   });
   const contract = slot.contract!;
   if (requireDefault && !slot.hasValue) {
@@ -548,7 +555,8 @@ function readsAsText(text: string): boolean {
  * is an error that shows the tagged spelling. `sitePath` identifies the containing owner;
  * `fieldName` its section (default `input`). `declarationLabel` (default `input`) names
  * individual errors, and `requireDefault` (default `false`) selects declarations whose values
- * must include a typed literal default. Each parameter receives stable child identities for
+ * must include a typed literal default. `memoryTypes` (default none) says how an input's tag reads
+ * memory types beyond the built-ins. Each parameter receives stable child identities for
  * its key declaration, contract tree, and packed default. The resulting carriers retain only
  * `OriginRef` values.
  *
@@ -565,9 +573,10 @@ export function readSourceParameters(
     fieldName?: string;
     declarationLabel?: string;
     requireDefault?: boolean;
+    memoryTypes?: MemoryTypeTable;
   },
 ): Parameter[] {
-  const { sitePath, catalogBuilder, fieldName = "input" } = options;
+  const { sitePath, catalogBuilder, fieldName = "input", memoryTypes = NO_MEMORY_TYPES } = options;
   const { declarationLabel = "input", requireDefault = false } = options;
   const diagnostics = options.diagnostics ?? LoadDiagnostics.fromCursor(cursor);
   const mapping = cursor.value;
@@ -610,6 +619,7 @@ export function readSourceParameters(
             diagnostics,
             declarationLabel,
             requireDefault,
+            memoryTypes,
           }),
         );
       } catch (error) {

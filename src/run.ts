@@ -87,6 +87,7 @@ import {
 import { validateHeaders } from "./llm_clients/connection_settings.ts";
 import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
 import { Message, NamedTool, type Request, ToolCallPart, ToolSpec } from "./llm/messages.ts";
+import { isMemory } from "./memory/base.ts";
 import {
   type FoldedSteps,
   foldSteps,
@@ -185,6 +186,7 @@ import {
   canonicalTypeLabel,
   fromHost,
   isInboxType,
+  isMemoryType,
   isRecord,
   rejectDeepNesting,
   setField,
@@ -805,8 +807,9 @@ function checkFlowBeforeServers(
  * @internal Take each supplied input through host intake, keyed as given.
  *
  * @throws TypeError when `inputs` isn't a record or is a Proxy.
- * @throws RangeError when a key names no declared input, or names an inbox, which takes events
- *   through `send` instead.
+ * @throws RangeError when a key names no declared input, names an inbox, which takes events
+ *   through `send` instead, or gives a memory input anything but a `MemoryBase` instance (or null
+ *   for an Optional one).
  * @throws TypeCheckError when an input is an accessor property or isn't a yian value.
  */
 export function hostInputs(params: readonly Parameter[], inputs: unknown): Record<string, Value> {
@@ -817,6 +820,13 @@ export function hostInputs(params: readonly Parameter[], inputs: unknown): Recor
   for (const param of params) {
     if (isInboxType(param.contract?.type) && Object.hasOwn(record, param.name)) {
       throw new RangeError(`inbox \`${param.name}\` receives events through send(); it takes no run input`);
+    }
+    const memory = param.contract?.type;
+    if (isMemoryType(memory) && Object.hasOwn(record, param.name)) {
+      const value: unknown = record[param.name];
+      if (!isMemory(value) && !(value === null && memory.nullable)) {
+        throw new RangeError(`memory \`${param.name}\` is bound to a MemoryBase instance, not a value`);
+      }
     }
   }
   const taken: ValueRecord = {};

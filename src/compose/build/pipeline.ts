@@ -81,6 +81,7 @@ import {
   suggestTag,
   yamlQuoted,
 } from "../helpers/tags.ts";
+import type { MemoryClass, MemoryTypeTable } from "../helpers/memory.ts";
 import { readFlowInputs, readSourceParameters, readValueContract } from "../helpers/types.ts";
 import { checkWrittenValue } from "../helpers/value_nesting.ts";
 import {
@@ -347,8 +348,16 @@ export class ComposedFlow {
    * `null` for a flow built in code, or loaded over a child resume couldn't read back.
    */
   readonly source: FlowSource | null;
+  /**
+   * The host's own memory classes the flow was loaded with (`loadFlow`'s `memoryTypes`); empty
+   * for a flow loaded again from its recorded source.
+   */
+  readonly memoryTypes: readonly MemoryClass[];
 
-  /** Wrap `compiled`; the metadata, resolver and source default to `null`, `importDepth` to 0. */
+  /**
+   * Wrap `compiled`; the metadata, resolver and source default to `null`, `importDepth` to 0,
+   * and `memoryTypes` to none.
+   */
   constructor(
     compiled: CompiledFlow,
     options: {
@@ -358,6 +367,7 @@ export class ComposedFlow {
       originResolver?: OriginResolver | null;
       importDepth?: number;
       source?: FlowSource | null;
+      memoryTypes?: readonly MemoryClass[];
     } = {},
   ) {
     const {
@@ -367,6 +377,7 @@ export class ComposedFlow {
       originResolver = null,
       importDepth = 0,
       source = null,
+      memoryTypes = [],
     } = options;
     this.compiled = compiled;
     this.version = version;
@@ -375,6 +386,7 @@ export class ComposedFlow {
     this.originResolver = originResolver;
     this.importDepth = importDepth;
     this.source = source;
+    this.memoryTypes = memoryTypes;
     Object.freeze(this);
   }
 
@@ -452,6 +464,8 @@ export interface PrivateRegistrar {
 export interface CallableScope extends PrivateRegistrar {
   /** The one mutable origin registry owned by this source file. */
   readonly catalogBuilder: SourceCatalogBuilder;
+  /** How this file's flow inputs read memory types beyond the built-ins. */
+  readonly memoryTypes: MemoryTypeTable;
   /** Resolve one named or compiler-owned callable in this file scope. */
   resolve(flowId: string): ComposedFlow;
 }
@@ -1739,6 +1753,7 @@ function readFlowParameters(options: AssembleOptions, ctx: AssembleContext): Flo
         sitePath: owner,
         catalogBuilder,
         diagnostics,
+        memoryTypes: ctx.scope.memoryTypes,
       });
     } else {
       const inputRanges = new Map(

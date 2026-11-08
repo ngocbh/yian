@@ -1,0 +1,18 @@
+# Only a flow input can be a memory, so an agent variable can't.
+kind: load
+flow: |
+  id: f
+  name: f
+  kind: agent
+  variables:
+    v: !FileMemory
+  prompt: hi
+  output: str
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''v'': `!FileMemory` declares a memory, which only a flow input can be'
+      frames:
+      - label: flow.yaml
+        range: [5, 6, 5, 17]

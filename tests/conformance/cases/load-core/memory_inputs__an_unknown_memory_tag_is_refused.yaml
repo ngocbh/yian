@@ -1,0 +1,18 @@
+# A host's own memory type is known only when the load is given its class; otherwise its tag
+# names no type.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    j: !TradeJournal
+  nodes: {}
+  output: null
+expect:
+  load:
+    diagnostics:
+    - code: compose.load
+      message: '''j'': `!TradeJournal` is not a type (unknown type ''TradeJournal'')'
+      frames:
+      - label: flow.yaml
+        range: [4, 6, 4, 19]

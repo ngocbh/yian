@@ -25,6 +25,7 @@ import { synthesizeBoundaryGraph } from "../../src/compose/build/boundary.ts";
 import { readValueEntry } from "../../src/compose/desugar/value_entries.ts";
 import { inferDataEdges } from "../../src/compose/edges/data.ts";
 import { LoadDiagnostics, LoadError } from "../../src/compose/helpers/errors.ts";
+import { NO_MEMORY_TYPES } from "../../src/compose/helpers/memory.ts";
 import { AgentDescriptor } from "../../src/compose/nodes/agent.ts";
 import { BuildContext, BuildResult, type NodeDescriptor } from "../../src/compose/nodes/base.ts";
 import { CaseDescriptor } from "../../src/compose/nodes/case.ts";
@@ -696,6 +697,7 @@ function fakeScope(catalogBuilder = new SourceCatalogBuilder()): CallableScope &
   const resolved: string[] = [];
   return {
     catalogBuilder,
+    memoryTypes: NO_MEMORY_TYPES,
     resolved,
     resolve(flowId: string): ComposedFlow {
       resolved.push(flowId);

@@ -74,6 +74,7 @@ import {
   Usage,
 } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
+import { MemoryBase, type MemoryContract, type MemorySession } from "../../src/memory/base.ts";
 import { checkModelConfig, resolveModelConfig } from "../../src/llm_clients/connection.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
@@ -156,7 +157,7 @@ const COMMON: ReadonlySet<string> = new Set(["kind", "pending", "expect"]);
 const FLOW: ReadonlySet<string> = new Set(["flow", "files", "env"]);
 const RUN: ReadonlySet<string> = new Set([...FLOW, "inputs", "run", "host"]);
 const KIND_KEYS = {
-  load: FLOW,
+  load: new Set([...FLOW, "memory_types"]),
   run: RUN,
   resume: new Set([...RUN, "resume"]),
   expr: new Set(["expr", "template", "values", "item", "mode", "typedefs", "env"]),
@@ -1358,13 +1359,37 @@ export async function main(
 
 /**
  * Load `text` as the case's `flow.yaml` under the defaults `env` sets, resolving `uses:` paths
- * and CODE references in the case directory.
+ * and CODE references in the case directory, with the host memory classes `memoryTypes`.
  */
-async function loadText(text: string, ctx: CaseContext): Promise<ComposedFlow> {
+async function loadText(
+  text: string,
+  ctx: CaseContext,
+  memoryTypes: readonly (typeof MemoryBase)[] = [],
+): Promise<ComposedFlow> {
   // Scoped to the load's own async work, not installed, so a load still running after its test
   // timed out can't change what a later test reads.
-  const options = { searchPaths: [ctx.dir], sourceLabel: "flow.yaml", baseDir: ctx.dir };
+  const options = { searchPaths: [ctx.dir], sourceLabel: "flow.yaml", baseDir: ctx.dir, memoryTypes };
   return await withEnv(caseEnv(ctx), () => loadFlow(text, options));
+}
+
+/**
+ * Return a memory class per `memory_types` entry: a contract of that type whose read tools have
+ * the names listed, in order. A load reads only the contract, so the classes never open.
+ */
+function memoryClasses(entries: Case): (typeof MemoryBase)[] {
+  return Object.entries(mapping("memory_types", entries)).map(([type, tools]) => {
+    const contract: MemoryContract = {
+      type,
+      tools: (tools as string[]).map((name) => ({ name, write: false, description: name, parameters: { type: "object" } })),
+    };
+    return class extends MemoryBase {
+      static override readonly contract = contract;
+      override open(): Promise<MemorySession> {
+        throw new Error("a load case never opens a memory");
+      }
+      override async reset(): Promise<void> {}
+    };
+  });
 }
 
 /** Return `diagnostic` in the case's diagnostic form. */
@@ -1387,7 +1412,7 @@ function diagnosticForm(diagnostic: Diagnostic): Case {
 async function runLoad(case_: Case, ctx: CaseContext): Promise<void> {
   const compute = async () => {
     try {
-      await loadText(case_["flow"] as string, ctx);
+      await loadText(case_["flow"] as string, ctx, memoryClasses(get(case_, "memory_types", {}) as Case));
     } catch (error) {
       if (!(error instanceof LoadError)) throw error;
       return { load: { diagnostics: [diagnosticForm(error.diagnostic)] } };

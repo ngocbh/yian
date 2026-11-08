@@ -16,7 +16,7 @@ import {
   type MemorySession,
 } from "../../src/memory/base.ts";
 import { FileMemory, type FileMemoryOptions, memoryVersion, readMembers } from "../../src/memory/file.ts";
-import { Journal } from "../../src/memory/file_journal.ts";
+import { Journal, type JournalEntry } from "../../src/memory/file_journal.ts";
 import { lockFile, virtualScheduler } from "../../src/platform.ts";
 import { canonicalJson, type JsonObject } from "../../src/typesys/json.ts";
 
@@ -865,4 +865,23 @@ test("starting a journal never overwrites one the session hasn't read", () => {
     "`.yian/journal.jsonl` isn't empty, but this session hasn't read it; try again",
   );
   expect(fs.readFileSync(journalPath, "utf8")).toBe(existing);
+});
+
+test("the journal refuses a line out of order before writing it", async () => {
+  const s = await openAt();
+  await append(s, "x", "one");
+  await s.close();
+  const meta = join(root, ".yian");
+  const journalPath = join(meta, "journal.jsonl");
+  const journal = new Journal(meta, { maxChangeIds: 10, maxUndo: 10, maxHistoryChars: 100 });
+  expect(journal.catchUp()).toBeNull();
+  const before = fs.readFileSync(journalPath, "utf8");
+  // An outcome with no entry before it, and then a second entry while one has no outcome.
+  expect(() => journal.writeOutcome("y", "aborted")).toThrow("has an outcome for no entry");
+  expect(fs.readFileSync(journalPath, "utf8")).toBe(before);
+  const entry = { ...(journalLines()[1] as unknown as JournalEntry), id: "y" };
+  journal.writeEntry(entry);
+  const withEntry = fs.readFileSync(journalPath, "utf8");
+  expect(() => journal.writeEntry({ ...entry, id: "z" })).toThrow("has an entry with no outcome before later entries");
+  expect(fs.readFileSync(journalPath, "utf8")).toBe(withEntry);
 });

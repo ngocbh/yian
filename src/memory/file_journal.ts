@@ -523,25 +523,33 @@ export class Journal {
     this.#offset += end;
   }
 
+  /**
+   * Check that `parsed` may be line `line`: a generation line comes first and only first, an entry
+   * follows an outcome, and an outcome follows its own entry.
+   *
+   * @throws Error naming the line, as for a damaged journal.
+   */
+  #checkOrder(parsed: JournalLine, line: number): void {
+    if ((parsed.kind === "generation") !== (line === 1)) throw damaged(line, "isn't a journal line");
+    if (parsed.kind === "entry" && this.#pending !== null) {
+      throw damaged(this.#pending.line, "has an entry with no outcome before later entries");
+    }
+    if ((parsed.kind === "commit" || parsed.kind === "abort") && this.#pending?.entry.id !== parsed.id) {
+      throw damaged(line, "has an outcome for no entry");
+    }
+  }
+
   /** Take one journal line, of `bytes` bytes, into the table, the changes and the pending entry. */
   #fold(parsed: JournalLine, line: number, bytes: number): void {
-    if (parsed.kind === "generation") {
-      if (line !== 1) throw damaged(line, "isn't a journal line");
-      return;
-    }
-    if (line === 1) throw damaged(line, "isn't a journal line");
+    this.#checkOrder(parsed, line);
+    if (parsed.kind === "generation") return;
     if (parsed.kind === "entry") {
-      if (this.#pending !== null) {
-        throw damaged(this.#pending.line, "has an entry with no outcome before later entries");
-      }
       this.#pending = { entry: parsed.entry, line, bytes };
       return;
     }
-    if (this.#pending === null || this.#pending.entry.id !== parsed.id) {
-      throw damaged(line, "has an outcome for no entry");
-    }
+    // An outcome: `#checkOrder` made sure its entry is the pending one.
+    const { entry, bytes: entryBytes } = this.#pending!;
     if (parsed.kind === "commit") {
-      const { entry, bytes: entryBytes } = this.#pending;
       this.#remember(parsed.id, entry.digest, parsed.applied);
       // The same line with `null` for its inverse: what a compaction that drops it writes.
       const bareBytes =
@@ -578,6 +586,8 @@ export class Journal {
     // Never write a line the next read would refuse.
     const parsed = parseLine(text);
     if (parsed === null) throw new TypeError(`not a journal line: ${text}`);
+    // Checked against an empty journal's first entry line when there is none yet.
+    this.#checkOrder(parsed, this.#generation === null ? 2 : this.#lines + 1);
     if (this.#generation === null) this.#create();
     const bytes = Buffer.from(`${text}\n`, "utf8");
     const fd = openRegular(this.#path, fs.constants.O_WRONLY | fs.constants.O_APPEND);

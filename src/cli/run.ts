@@ -1513,7 +1513,8 @@ export async function status(log: string | undefined, { json }: { json: boolean 
  * (`unreadable at seq N` for a log yian can't read from seq N), start time and flow file (`-` for
  * none, or a flow built in code); nothing when there are no runs. With `json`, one document whose
  * `runs` holds each row: `run_id`, `flow`, `status`, `started_at`, `ended_at`, `parent_run_id`,
- * `last_seq`, `result` (the run's output, `null` until it succeeded), the token sums, for a waiting
+ * `memories` (each memory input's `input`, `identity` and `type`, never its location), `last_seq`,
+ * `result` (the run's output, `null` until it succeeded), the token sums, for a waiting
  * run `ready` and `wake_at` (`false` and `null` otherwise), and `unreadable` (`seq` and `reason`,
  * or `null`). A log the update can't read is a `warning:` line on stderr: once until it changes, or
  * on every update for a file error such as no permission, which leaves the run's row as it was. An
@@ -1546,6 +1547,7 @@ async function listRuns({ json }: { json: boolean }, io: CliIo): Promise<number>
       started_at: row.startedAt,
       ended_at: row.endedAt,
       parent_run_id: row.parentRunId,
+      memories: row.memories.map(({ input, identity, type }) => ({ input, identity, type })),
       last_seq: row.lastSeq === null ? null : BigInt(row.lastSeq),
       result: row.result === null ? null : parseJson(row.result, "codec"),
       input_tokens: BigInt(row.inputTokens),

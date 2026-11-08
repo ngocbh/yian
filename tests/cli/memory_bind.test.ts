@@ -24,6 +24,8 @@ import { PassThrough } from "node:stream";
 import { main } from "../../src/cli/index.ts";
 import { checkDefaultLocation, defaultIdentity, defaultLocation, projectKey } from "../../src/cli/memory_bind.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
+import { parseJson } from "../../src/typesys/json.ts";
+import { loadSchema, type Schema, validate } from "../helpers/schema.ts";
 
 let tmp: string;
 let home: string;
@@ -324,6 +326,20 @@ describe("default memories", () => {
     expect(result.stderr).toContain(`memory lessons: ${key}/answer/lessons at ${location} (new)\n`);
     // Private, as the run folders are.
     for (const folder of [path, join(path, "answer"), location]) expect(statSync(folder).mode & 0o777).toBe(0o700);
+  });
+
+  test("yian status --json lists each run's memory identities", async () => {
+    expect((await yian(["run", flowFile(APPEND), "--quiet"])).code).toBe(0);
+    const { key } = projectFolder();
+    const status = await yian(["status", "--json"]);
+    expect(status.code, status.stderr).toBe(0);
+    const schema = loadSchema("cli.schema.json");
+    const runsDocument = (schema.$defs as Record<string, Schema>).runs_document!;
+    expect(validate(schema, runsDocument, parseJson(status.stdout, "plain"))).toEqual([]);
+    const [run] = JSON.parse(status.stdout).runs;
+    expect(run.memories).toEqual([{ input: "lessons", identity: `${key}/answer/lessons`, type: "FileMemory" }]);
+    // Identities only: the folder is nowhere in the listing.
+    expect(status.stdout).not.toContain(join(home, ".yian", "memory"));
   });
 
   test("a second run says nothing about the memory, and its prompt holds what the first appended", async () => {

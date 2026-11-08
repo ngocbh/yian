@@ -1652,6 +1652,7 @@ describe("status", () => {
         started_at: succeeded.startedAt,
         ended_at: succeeded.endedAt,
         parent_run_id: null,
+        memories: [],
         last_seq: succeeded.lastSeq,
         result: { topic: "clouds" },
         input_tokens: 0,

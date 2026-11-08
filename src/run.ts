@@ -266,6 +266,7 @@ export { DeliveryRefused, type DeliveryRefusal } from "./runtime/state.ts";
 export {
   readRunIndex,
   RunIndexBusyError,
+  type RunIndexMemory,
   type RunIndexRow,
   type RunIndexStatus,
   updateRunIndex,

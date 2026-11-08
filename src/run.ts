@@ -924,12 +924,12 @@ function startMemories(params: readonly Parameter[], state: RunState): Map<strin
 
 /**
  * Return the bindings of a resume's `memory` option, checked against the run's memory inputs and
- * the values they recorded.
+ * the values they recorded. An Optional memory given `null` is left out, as `runFlow` leaves it.
  *
  * @throws TypeError when `memory` isn't a record, or gives an input something other than a
- *   `MemoryBase` instance.
- * @throws RangeError when it names an input that isn't a memory input of the flow, or one recorded
- *   null when the run started (an Optional memory left out).
+ *   `MemoryBase` instance (or `null`, for an Optional one).
+ * @throws RangeError when it names an input that isn't a memory input of the flow, or gives an
+ *   instance to one recorded null when the run started (an Optional memory left out).
  */
 function resumeBindings(
   params: readonly Parameter[],
@@ -942,10 +942,11 @@ function resumeBindings(
   }
   for (const name of Object.keys(memory)) {
     const param = params.find((each) => each.name === name);
-    if (param === undefined || !isMemoryType(param.contract?.type)) {
-      throw new RangeError(`memory \`${name}\` isn't a memory input of this run's flow`);
-    }
-    if (!isMemory(suppliedValue(memory, name))) throw new TypeError(`memory \`${name}\` takes a MemoryBase instance`);
+    const typ = param?.contract?.type;
+    if (!isMemoryType(typ)) throw new RangeError(`memory \`${name}\` isn't a memory input of this run's flow`);
+    const value = suppliedValue(memory, name);
+    if (value === null && typ.nullable) continue;
+    if (!isMemory(value)) throw new TypeError(`memory \`${name}\` takes a MemoryBase instance`);
     if (!recorded.has(name)) throw new RangeError(`memory \`${name}\` was null when the run started; drop it`);
   }
   return memoryBindings(params, memory);
@@ -1448,9 +1449,9 @@ export interface AdvanceOptions {
   /**
    * The instance of each memory input the run started with, by input name: the same memories,
    * bound again. An unfinished run opens each with `create: false` and needs every one it
-   * recorded; an Optional memory left out takes none.
+   * recorded; an Optional memory left out takes none, or `null`, as `runFlow` takes it.
    */
-  memory?: Readonly<Record<string, MemoryBase>> | null;
+  memory?: Readonly<Record<string, MemoryBase | null>> | null;
   /**
    * The host's stop: aborting it stops the resumed segment, which rejects with its reason. An
    * already-aborted signal rejects before the log is locked.

@@ -234,7 +234,16 @@ test("a memory recorded null needs no instance on resume, and one passed for it 
       memory: { lessons: new FileMemory({ root }), notes: new FakeMemory() },
     }),
   ).rejects.toThrow("memory `notes` was null when the run started; drop it");
-  const resumed = await advance({ log, models: serving(scripted([textReply("done")])), env: NO_ENV, memory: { lessons: new FileMemory({ root }) } });
+  // null for it, as runFlow takes one, is the same as leaving it out; a required memory takes none.
+  await expect(
+    advance({ log, models: serving(scripted([])), env: NO_ENV, memory: { lessons: null, notes: null } }),
+  ).rejects.toThrow("memory `lessons` takes a MemoryBase instance");
+  const resumed = await advance({
+    log,
+    models: serving(scripted([textReply("done")])),
+    env: NO_ENV,
+    memory: { lessons: new FileMemory({ root }), notes: null },
+  });
   expect(resumed.status, resumed.failure?.message).toBe("succeeded");
 });
 

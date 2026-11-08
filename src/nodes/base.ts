@@ -611,6 +611,21 @@ export interface NodeMemories {
 }
 
 /**
+ * Return the run's session on the memory `identity`, through `caps.memories`.
+ *
+ * @throws CapabilityFault carrying the error when the evaluator gave no memory sessions, or none on
+ *   that memory: the run didn't bind a memory its nodes were bound to.
+ */
+export function memorySession(caps: NodeCaps, identity: string): MemorySession {
+  if (caps.memories === undefined) throw new CapabilityFault(new TypeError("the evaluator gave no memory sessions"));
+  try {
+    return caps.memories.session(identity);
+  } catch (error) {
+    throw new CapabilityFault(error);
+  }
+}
+
+/**
  * The capabilities a node's `run` and `forward` receive, as one object. The evaluator passes
  * every node its own `signal`, and the `scheduler` and `random` the host gave it, plus only what
  * the node's traits ask for.

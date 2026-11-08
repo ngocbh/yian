@@ -12,13 +12,17 @@
  * backoff with jitter on its scheduler, and records each retried attempt's failure and start as
  * node steps in the run log, so a resumed run continues the attempt count.
  *
- * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/tool/questions, defaults,
- *                diagnostics, platform, tools and typesys.
+ * A memory's tool (`tool_id: {lessons: read}`) is looked up in the memory the node's flow binds to
+ * that input instead, and called on the run's session on it.
+ *
+ * Knows about:   nodes/base, nodes/binding, nodes/contracts, nodes/ids, nodes/tool/questions,
+ *                defaults, diagnostics, memory (memory tools), platform, tools and typesys.
  * Never imports: compile, compose, runtime, the package-root run boundary, or the CLI.
  */
 
 import { current } from "../../defaults.ts";
 import { type FailureCode, reprText } from "../../diagnostics.ts";
+import { memoryTools } from "../../memory/tools.ts";
 import { realScheduler } from "../../platform.ts";
 import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, isPending, SLEEP, TAKE, toolCallId } from "../../tools/context.ts";
 import { isPermanentToolError, isToolCheckError, isTransientToolError, ToolCheckError } from "../../tools/errors.ts";
@@ -33,6 +37,7 @@ import {
   fromHost,
   inboxName,
   jsonPart,
+  MemoryRef,
   jsonSafeText,
   jsTypeName,
   renderValuePath,
@@ -49,6 +54,7 @@ import {
   hostOutput,
   MEMORY_KEY_PREFIX,
   memoryKey,
+  memorySession,
   Node,
   type NodeCaps,
   NodeKind,
@@ -58,6 +64,7 @@ import {
 } from "../base.ts";
 import { BindingError, type ReservedBinder } from "../binding.ts";
 import { acceptsNull, type CallView, HostToolCall, outputContractType } from "../contracts.ts";
+import { staticPathOf } from "../ids.ts";
 import { dropRepeatedLabels, parseQuestions } from "./questions.ts";
 
 /**
@@ -234,6 +241,8 @@ export class ToolNode extends Node {
   readonly kind = NodeKind.TOOL;
   /** Looks up and invokes its tool in the run's tool set. */
   override readonly needsTools: boolean = true;
+  /** Calls a memory's tool on the run's session on that memory. */
+  override readonly needsMemories: boolean = true;
   /** Records each retried attempt as a durable step, so a resumed run continues the count. */
   override readonly needsSteps: boolean = true;
   /**
@@ -401,7 +410,31 @@ export class ToolNode extends Node {
     const held = callId === null ? undefined : caps.steps?.calls.find((call) => call.callId === callId);
     if (held !== undefined) return this.fromHeldCall(held);
     if (this.builtin === ASK) return await this.ask(inputs, caps, tools, callId);
+    if (this.memoryTool) return await this.callTool(this.toolArguments(inputs), caps, this.memoryToolSet(inputs, caps, tools), callId);
     return await this.callTool(inputs, caps, tools, callId);
+  }
+
+  /**
+   * Return `tools` with the memory tool this node calls as a local group, over the run's session on
+   * the memory its input is bound to, so `toolRef` reaches it and never a run group by that name.
+   *
+   * @throws CapabilityFault carrying the error when the evaluator gave no memory sessions, or none
+   *   on that memory.
+   * @throws TypeError when the input holds no memory: a TOOL node can't name an Optional memory.
+   */
+  private memoryToolSet(inputs: Readonly<Record<string, unknown>>, caps: NodeCaps, tools: ToolSet): ToolSet {
+    const [grant] = this.memoryGrants();
+    const { input } = grant!;
+    const value = inputs[memoryKey(input)];
+    if (!MemoryRef.isMemoryRef(value)) throw new TypeError(`TOOL node ${reprText(this.id)}: \`${input}\` holds no memory`);
+    const session = memorySession(caps, value.identity);
+    const local = memoryTools(value, session, grant!, { kind: "tool", name: staticPathOf(this.id) });
+    return tools.withLocalGroups(new Map([[input, local]]), "this node's memories");
+  }
+
+  /** Return the inputs a memory tool takes: the bound record without its reserved memory key. */
+  private toolArguments(inputs: Readonly<Record<string, unknown>>): Record<string, unknown> {
+    return Object.fromEntries(Object.entries(inputs).filter(([name]) => !name.startsWith(MEMORY_KEY_PREFIX)));
   }
 
   /**

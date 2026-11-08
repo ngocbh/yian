@@ -29,7 +29,6 @@ import { defaultModelAccess, type ModelAccess } from "../../llm_clients/factory.
 import { MediaPart, Message as ModelMessage, MessageFormatError, TextPart } from "../../llm/messages.ts";
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL, loadSkillTool, systemPromptWithSkills } from "../../skills/tool.ts";
-import type { MemorySession } from "../../memory/base.ts";
 import { renderRecall } from "../../memory/render.ts";
 import { memoryTools } from "../../memory/tools.ts";
 import type { FunctionTool } from "../../tools/function_tools.ts";
@@ -60,6 +59,7 @@ import {
   type CompleteResult,
   MEMORY_KEY_PREFIX,
   memoryKey,
+  memorySession,
   type RebuildCaps,
   type RebuiltRequests,
   Node,
@@ -127,21 +127,6 @@ const CONFIG_STEP_KIND = "llm_config";
 function openSteerInbox(caps: NodeCaps, inbox: string): SteerInbox {
   if (caps.openSteerInbox === undefined) throw new CapabilityFault(new TypeError("the evaluator gave no steer inbox"));
   return caps.openSteerInbox(inbox);
-}
-
-/**
- * Return the run's session on the memory `identity`, through `caps.memories`.
- *
- * @throws CapabilityFault carrying the error when the evaluator gave no memory sessions, or none on
- *   that memory: the run didn't bind a memory its nodes were bound to.
- */
-function memorySession(caps: NodeCaps, identity: string): MemorySession {
-  if (caps.memories === undefined) throw new CapabilityFault(new TypeError("the evaluator gave no memory sessions"));
-  try {
-    return caps.memories.session(identity);
-  } catch (error) {
-    throw new CapabilityFault(error);
-  }
 }
 
 /** Whether `value` is a valid `max_tool_iterations`: a positive int, or `-1n` for no cap. */

@@ -21,10 +21,10 @@
  *   `MemoryRef` (`typesys/values`), the value a memory input records when a run starts.
  *
  * `RunResult` is on `yian/run` (`run.ts`), with `MemoryDrift`, a memory a crash resume found
- * changed. `Message`, `MessagePart`, `checkMessage`,
- * `checkConversation` and `ConversationError` (`nodes/agent/messages`), the built-in message value
- * and the conversation a model route can send, are also on `yian/run`.
- * `InboxRef` (`typesys/values`), the handle an `Inbox(T)` input holds, is on both.
+ * changed. `Message`, `MessagePart`, `checkMessage`, `checkConversation` and `ConversationError`
+ * (`nodes/agent/messages`), the built-in message value and the conversation a model route can
+ * send, are also on `yian/run`. `InboxRef` (`typesys/values`), the handle an `Inbox(T)` input
+ * holds, is on both, as are `MemoryRef` and `RecordedMemoryTool`.
  *
  * Knows about: compile, compose, diagnostics, expr, memory, nodes, `run`, tools and typesys.
  * Never imports: the CLI; nothing in the package imports this module.

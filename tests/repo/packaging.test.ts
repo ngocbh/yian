@@ -66,6 +66,7 @@ import type {
   JsonValue,
   Message,
   MessagePart,
+  RecordedMemoryTool as RunRecordedMemoryTool,
   StorageKind,
   Value,
   ValueRecord,
@@ -158,6 +159,7 @@ const NAMES: Record<string, string[]> = {
     "TypedValue",
     "FileRef",
     "InboxRef",
+    "MemoryRef",
     "logJson",
     "parseJson",
     "JSONDecodeError",
@@ -399,6 +401,7 @@ describe("entry points", () => {
       RecordedMemoryTool?,
       MemoryErrorKind?,
       FileMemoryOptions?,
+      RunRecordedMemoryTool?,
     ];
     expect(names).toEqual([]);
   });

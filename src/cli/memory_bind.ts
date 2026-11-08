@@ -490,23 +490,19 @@ export function bindMemories(
 }
 
 /**
- * How a binding is used: a fresh run's, which may make a new store; a resume's, which opens only
- * what the run started with; or a preview's, which names the memories and opens none.
+ * How a binding is used: a fresh run's, which may make a new store, or a resume's, which opens
+ * only what the run started with.
  */
-type BindMode = "fresh" | "resume" | "preview";
+type BindMode = "fresh" | "resume";
 
-/**
- * Bind `flow`'s memory inputs as `bindMemories` describes, to the CLI's instances; a `preview`
- * needs no embedding model, since it makes nothing.
- */
+/** Bind `flow`'s memory inputs as `bindMemories` describes, to the CLI's instances. */
 function bindFresh(
   flow: ComposedFlow,
   flags: readonly string[],
   options: BindOptions & { project: string | null },
-  mode: "fresh" | "preview" = "fresh",
 ): Record<string, Bound> {
   const { memoryFlag = true } = options;
-  return bindEach(flow, flags, options, mode, (input, optional, type) => {
+  return bindEach(flow, flags, options, "fresh", (input, optional, type) => {
     if (optional) return null;
     if (options.project === null) {
       const refusal = "a flow with no file has no default memories";
@@ -514,7 +510,7 @@ function bindFresh(
       throw new RangeError(`${refusal}${instead}`);
     }
     const identity = defaultIdentity(options.project, flow.compiled.flowId, input, memoryFlag);
-    return defaultInstance(input, identity, type, options, mode);
+    return defaultInstance(input, identity, type, options, "fresh");
   });
 }
 
@@ -528,16 +524,18 @@ export interface DefaultMemory {
 /**
  * Return the default memory each memory input of `flow` gets when no flag binds it, in declaration
  * order, as `bindMemories` binds them: its identity, and whether a memory is at its location yet.
- * An Optional input gets none, so it isn't listed. Nothing is created.
+ * An Optional input gets none, so it isn't listed. Nothing is created, but a new store's embedding
+ * model is resolved as the bind resolves it, so a start that would fail for want of one is refused
+ * here, before anyone approves it.
  *
- * @throws As `bindMemories` throws for a default.
+ * @throws As `bindMemories` throws for a default, a new store with no embedding model included.
  */
 export function defaultMemories(
   flow: ComposedFlow,
   options: Omit<BindOptions, "note"> & { project: string | null },
 ): DefaultMemory[] {
   // With no flags, each instance is a default.
-  const bound = bindFresh(flow, [], { ...options, note: () => {} }, "preview");
+  const bound = bindFresh(flow, [], { ...options, note: () => {} });
   return Object.entries(bound).map(([input, instance]) => ({
     input,
     identity: instance.defaultIdentity!,
@@ -668,8 +666,7 @@ function bindEach(
  * Return the options of input `input`'s VectorDB store at `path`: its embedding model and
  * `options.embed`. Only a fresh run makes a store, and only one that doesn't exist yet, or is an
  * empty file (one whose making stopped short), takes a model: `options.embedding`, else
- * `options.defaultEmbedding`'s. A store that exists keeps the model it recorded, as a resume's and a
- * preview's (which opens nothing) do.
+ * `options.defaultEmbedding`'s. A store that exists keeps the model it recorded, as a resume's does.
  *
  * @throws {RangeError} When a fresh run's store doesn't exist yet and there is no embedding model;
  *   as `options.defaultEmbedding` throws.

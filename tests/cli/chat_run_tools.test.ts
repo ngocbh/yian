@@ -448,7 +448,7 @@ output: done
   );
 
   test(
-    "a VectorDB flow starts with a new store made with the default embedding model, and says when there is none",
+    "a VectorDB flow's card needs a default embedding model for a new store, and its start uses that model",
     async () => {
       writeFileSync(
         join(root, "cases.yaml"),
@@ -462,12 +462,16 @@ output: done
       const none = runTools("Approve", undefined, null, { env, embed });
       const refused = String(await none.invoke("start_flow", { path: "cases.yaml", inputs: { line: "a" } }));
       expect(refused).toBe("not started: `cases` needs an embedding model: run `yian config embedding provider/model`");
+      // Refused before the card: the user isn't asked to approve a start that can't happen.
+      expect(none.requests).toHaveLength(0);
+      expect(existsSync(join(tmp, "home", ".yian"))).toBe(false);
       await runs?.dispose();
 
       vars["YIAN_DEFAULT_EMBEDDING"] = "openai/text-embedding-3-small";
       const { requests, json } = runTools("Approve", undefined, null, { env, embed });
       const identity = `${projectKey(root)}/cases/cases`;
       await json("start_flow", { path: "cases.yaml", inputs: { line: "Check sums twice." } });
+      expect(requests).toHaveLength(1);
       expect(requests[0]!.body).toContain(`\nmemories: cases → ${identity} (new)`);
       expect(await settledJson(json, "r1")).toMatchObject({ status: "succeeded", output: 1 });
       const store = new VectorDBMemory({ path: defaultLocation(join(tmp, "home"), identity, "VectorDBMemory") });

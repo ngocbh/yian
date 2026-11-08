@@ -423,14 +423,17 @@ export class ChildRuns {
 
   /**
    * Return the default memories `flow`'s start would bind, keyed by `project` as `start` keys
-   * them, by identity and whether each exists yet: for the start's approval, never a location.
+   * them, by identity and whether each exists yet: for the start's approval, never a location. A
+   * new store's embedding model is the default `start` would use.
    *
-   * @throws {RangeError} As `start` throws for a memory input with no default, naming no location.
+   * @throws {RangeError} As `start` throws for a memory input with no default, or a new store with
+   *   no embedding model, naming no location.
    */
   defaultMemories(flow: ComposedFlow, project: string | null): DefaultMemory[] {
-    const { home } = this.#options;
+    const { home, env } = this.#options;
     try {
-      return defaultMemories(flow, { home, project, memoryFlag: false });
+      const options = { home, project, memoryFlag: false, defaultEmbedding: () => defaultEmbedding({ env }) };
+      return defaultMemories(flow, options);
     } catch (error) {
       throw withoutLocations(error, home, []);
     }

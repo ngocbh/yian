@@ -26,6 +26,7 @@ import { openStore, VectorDBMemory, type VectorDBMemoryOptions } from "../../src
 import { isLocked, lockFile, openSqlite, virtualScheduler } from "../../src/platform.ts";
 import { isPermanentToolError, isReportedToolError } from "../../src/tools/errors.ts";
 import { type JsonObject, logJson } from "../../src/typesys/json.ts";
+import { foreignWal } from "../helpers/memory_fakes.ts";
 
 let dir: string;
 let path: string;
@@ -336,6 +337,48 @@ test("a file that isn't a VectorDBMemory store is refused, and left as it was", 
   const check = openSqlite(other, { readonly: true });
   expect(check.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toEqual([{ name: "runs" }]);
   check.close();
+});
+
+/** Each host action and an open, on `m`, each to be refused. */
+function everyAction(m: VectorDBMemory): [string, () => Promise<unknown>][] {
+  return [
+    ["open", () => m.open(o)],
+    ["stored", () => m.stored({ signal })],
+    ["items", () => m.items({ limit: 10, signal })],
+    ["compact", () => m.compact({ signal })],
+    ["reset", () => m.reset({ signal })],
+    ["reembed", () => m.reembed({ embedding: model, embed, signal })],
+  ];
+}
+
+test("another program's WAL database is refused unopened: its bytes and -wal stay, with no lock beside", async () => {
+  const foreign = foreignWal(dir, "app.db");
+  const before = [fs.readFileSync(foreign), fs.readFileSync(`${foreign}-wal`)];
+  for (const [action, run] of everyAction(memory({ path: foreign }))) {
+    const refusal = `\`${foreign}\` isn't a VectorDBMemory store: it is a database in WAL mode`;
+    await expect(run(), action).rejects.toThrow(refusal);
+  }
+  expect([fs.readFileSync(foreign), fs.readFileSync(`${foreign}-wal`)]).toEqual(before);
+  expect(fs.readdirSync(dir).filter((name) => name.startsWith("app.db")).sort()).toEqual(["app.db", "app.db-wal"]);
+});
+
+test("a file that isn't a store is refused by every action before a lock file is made beside it", async () => {
+  const text = join(dir, "notes.db");
+  fs.writeFileSync(text, "my important notes\n");
+  for (const [action, run] of everyAction(memory({ path: text }))) {
+    await expect(run(), action).rejects.toThrow(`\`${text}\` isn't a VectorDBMemory store: it isn't a SQLite database`);
+  }
+  const other = join(dir, "other.db");
+  const db = openSqlite(other);
+  db.exec("CREATE TABLE runs(id TEXT)");
+  db.close();
+  const bytes = fs.readFileSync(other);
+  for (const [action, run] of everyAction(memory({ path: other }))) {
+    await expect(run(), action).rejects.toThrow(`\`${other}\` isn't a VectorDBMemory store: it holds other tables`);
+  }
+  expect(fs.readFileSync(other)).toEqual(bytes);
+  expect(fs.readFileSync(text, "utf8")).toBe("my important notes\n");
+  expect(fs.existsSync(`${text}.lock`) || fs.existsSync(`${other}.lock`)).toBe(false);
 });
 
 test("a store of a newer layout is refused, naming its version", async () => {

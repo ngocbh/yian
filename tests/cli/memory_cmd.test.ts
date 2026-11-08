@@ -31,6 +31,7 @@ import type { Embed } from "../../src/llm/embeddings.ts";
 import { FileMemory } from "../../src/memory/file.ts";
 import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { lockFile } from "../../src/platform.ts";
+import { foreignWal } from "../helpers/memory_fakes.ts";
 import { DOWN, ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 let tmp: string;
@@ -1027,6 +1028,21 @@ describe("VectorDB stores", () => {
       const refusal = `Invalid value: ${command[0]} is a VectorDBMemory's; ${lessons().identity} is a FileMemory`;
       expect(refused.stderr).toContain(refusal);
     }
+  });
+
+  test("show --at and list leave another program's WAL database as it was, with no lock beside it", async () => {
+    const folder = join(home, ".yian", "memory", "apps");
+    mkdirSync(folder, { recursive: true });
+    const foreign = foreignWal(folder, "app.db");
+    const before = [readFileSync(foreign), readFileSync(`${foreign}-wal`)];
+    const shown = await yian(["memory", "show", "--at", foreign], vectors);
+    expect(shown.code).toBe(1);
+    expect(shown.stderr).toContain("isn't a VectorDBMemory store: it is a database in WAL mode");
+    const listed = await yian(["memory", "list"], vectors);
+    expect(listed.code, listed.stderr).toBe(0);
+    expect(listed.stderr).toContain("it is a database in WAL mode");
+    expect([readFileSync(foreign), readFileSync(`${foreign}-wal`)]).toEqual(before);
+    expect(readdirSync(folder).sort()).toEqual(["app.db", "app.db-wal"]);
   });
 
   test("reset's question counts the store's items", async () => {

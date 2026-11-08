@@ -351,6 +351,75 @@ function checkFiles(path: string): void {
   }
 }
 
+/** The SQLite primary result code for a file that isn't a database. */
+const SQLITE_NOTADB = 26;
+
+/** The 16 bytes every SQLite database file starts with. */
+const SQLITE_MAGIC = "SQLite format 3\0";
+
+/** The error for the file at `path`, which isn't a store, saying `why`. */
+function notAStore(path: string, why: string): Error {
+  return new Error(`${shown(path)} isn't a VectorDBMemory store: ${why}`);
+}
+
+/** Return `error`, or, when SQLite found the file isn't a database, the error saying so. */
+function translated(error: unknown, path: string): unknown {
+  const code = sqliteErrorCode(error);
+  return code !== undefined && (code & 0xff) === SQLITE_NOTADB ? notAStore(path, "it isn't a SQLite database") : error;
+}
+
+/**
+ * Check, from its header alone and without SQLite, that the file at `path` can be this memory's
+ * store: empty (a store not made yet), or a SQLite database in rollback-journal mode, as every
+ * store is. A database in WAL mode is another program's, and opening it to look would switch its
+ * journal mode, checkpointing and deleting its `-wal`.
+ *
+ * @throws Error naming the file and why it isn't a store; a system error when it can't be read.
+ */
+function checkHeader(path: string): void {
+  const fd = openRegular(path, fs.constants.O_RDONLY);
+  const header = new Uint8Array(100);
+  let size: number;
+  try {
+    size = fs.readSync(fd, header, 0, header.length, 0);
+  } finally {
+    fs.closeSync(fd);
+  }
+  if (size === 0) return;
+  if (size < header.length || new TextDecoder().decode(header.subarray(0, 16)) !== SQLITE_MAGIC) {
+    throw notAStore(path, "it isn't a SQLite database");
+  }
+  // Bytes 18 and 19 are the file's write and read versions: 1 for a rollback journal, 2 for WAL.
+  if (header[18] !== 1 || header[19] !== 1) throw notAStore(path, "it is a database in WAL mode");
+}
+
+/**
+ * Check, changing nothing, that the file at `path`, when there is one, is a VectorDBMemory store
+ * or empty: its files (`checkFiles`), its header (`checkHeader`), then its tables (`readMeta`),
+ * read through a read-only connection. Run before the memory's lock is taken, so a file that isn't
+ * a store gets no lock file beside it. With a rollback journal beside the file, the tables are left
+ * to the locked access, since reading them would first roll the journal back.
+ *
+ * @throws Error as `checkFiles`, `checkHeader` and `readMeta` throw.
+ */
+function checkStoreFile(path: string): void {
+  const stats = lstatOrNull(path);
+  if (stats === null || stats.isDirectory()) return;
+  checkFiles(path);
+  checkHeader(path);
+  if (stats.size === 0 || lstatOrNull(`${path}-journal`) !== null) return;
+  try {
+    const db = openSqlite(path, { readonly: true });
+    try {
+      readMeta(db, path);
+    } finally {
+      db.close();
+    }
+  } catch (error) {
+    throw translated(error, path);
+  }
+}
+
 /**
  * @internal Open the store at `path` with the settings every access uses: no busy timeout, since
  * the memory's lock serializes all access; `secure_delete`, so deleted text doesn't stay in free
@@ -383,9 +452,18 @@ export function openStore(path: string): Sqlite {
  */
 function withDb<T>(path: string, fn: (db: Sqlite) => T): T {
   if (lstatOrNull(path) === null) throw new Error("this memory's store file is gone");
-  const db = openStore(path);
+  // Again under the lock: the file may have been swapped since it was checked.
+  checkHeader(path);
+  let db: Sqlite;
+  try {
+    db = openStore(path);
+  } catch (error) {
+    throw translated(error, path);
+  }
   try {
     return fn(db);
+  } catch (error) {
+    throw translated(error, path);
   } finally {
     db.close();
   }
@@ -1003,9 +1081,6 @@ function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 
-/** The SQLite primary result code for a file that isn't a database. */
-const SQLITE_NOTADB = 26;
-
 /**
  * A memory kept as a SQLite store of items, searched by embedding.
  *
@@ -1123,6 +1198,8 @@ export class VectorDBMemory extends MemoryBase {
       if (lstatOrNull(dirname(path)) === null) makeFolder(dirname(path));
     } else if (stats.isDirectory()) {
       throw new Error(`${shown(path)} is a folder, not a store file`);
+    } else {
+      checkStoreFile(path);
     }
     let created = false;
     let meta: Meta;
@@ -1143,11 +1220,7 @@ export class VectorDBMemory extends MemoryBase {
         });
       });
     } catch (error) {
-      const code = sqliteErrorCode(error);
-      if (code !== undefined && (code & 0xff) === SQLITE_NOTADB) {
-        throw new Error(`${shown(path)} isn't a VectorDBMemory store: it isn't a SQLite database`);
-      }
-      throw error;
+      throw translated(error, path);
     }
     if (this.#id !== undefined && meta.identity !== this.#id) {
       throw new Error(`this memory is ${shown(meta.identity)}, not ${shown(this.#id)}`);
@@ -1175,6 +1248,7 @@ export class VectorDBMemory extends MemoryBase {
     o.signal.throwIfAborted();
     const { path } = this.#store;
     if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
+    checkStoreFile(path);
     await this.#store.locked(o.signal, (): void => {
       withDb(path, (db) => {
         const meta = memoryMeta(db, path, this.#id);
@@ -1210,10 +1284,17 @@ export class VectorDBMemory extends MemoryBase {
     if (typeof o.embed !== "function") throw new TypeError("reembed needs embed as a function");
     const { path } = this.#store;
     if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
+    checkStoreFile(path);
     await this.#store.hold(o.signal, async () => {
       if (lstatOrNull(path) === null) throw new Error("this memory's store file is gone");
+      checkHeader(path);
       // One connection for the whole action: it holds no transaction while it waits for the embedder.
-      const db = openStore(path);
+      let db: Sqlite;
+      try {
+        db = openStore(path);
+      } catch (error) {
+        throw translated(error, path);
+      }
       let staged = false;
       try {
         const meta = memoryMeta(db, path, this.#id);
@@ -1273,6 +1354,7 @@ export class VectorDBMemory extends MemoryBase {
     o.signal.throwIfAborted();
     const { path } = this.#store;
     if (lstatOrNull(path) === null) return null;
+    checkStoreFile(path);
     return this.#store.locked(o.signal, () =>
       withDb(path, (db) => {
         const { identity, settings } = memoryMeta(db, path, this.#id);
@@ -1301,6 +1383,7 @@ export class VectorDBMemory extends MemoryBase {
     if (!Number.isSafeInteger(o.limit) || o.limit < 1) throw new RangeError("items needs a limit of at least 1");
     const { path } = this.#store;
     if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
+    checkStoreFile(path);
     return this.#store.locked(o.signal, () =>
       withDb(path, (db) => {
         memoryMeta(db, path, this.#id);
@@ -1324,6 +1407,7 @@ export class VectorDBMemory extends MemoryBase {
     o.signal.throwIfAborted();
     const { path } = this.#store;
     if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
+    checkStoreFile(path);
     await this.#store.locked(o.signal, (): void => {
       withDb(path, (db) => {
         memoryMeta(db, path, this.#id);

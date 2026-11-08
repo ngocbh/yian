@@ -1,8 +1,12 @@
 /**
  * Fake memories for tests: `RecordingSession`, a `MemorySession` that records the calls it gets and
- * answers as its test sets, `FakeMemory`, a `MemoryBase` over one that counts its opens, and
- * `wordEmbed`, a deterministic embedder for a VectorDBMemory.
+ * answers as its test sets, `FakeMemory`, a `MemoryBase` over one that counts its opens,
+ * `wordEmbed`, a deterministic embedder for a VectorDBMemory, and `foreignWal`, another program's
+ * database a VectorDBMemory must leave alone.
  */
+
+import fs from "node:fs";
+import { join } from "node:path";
 
 import {
   type Applied,
@@ -17,6 +21,7 @@ import {
 } from "../../src/memory/base.ts";
 import type { EmbeddingModel } from "../../src/llm/embeddings.ts";
 import { FileMemory } from "../../src/memory/file.ts";
+import { openSqlite } from "../../src/platform.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { MemoryRef } from "../../src/typesys/values.ts";
 
@@ -146,4 +151,23 @@ export function wordEmbed(): ((
     });
   };
   return Object.assign(embed, { calls });
+}
+
+/**
+ * Make `<dir>/<name>`, another program's database in WAL mode whose last insert is still only in
+ * its `-wal` (copied while the writer had it open); return the database's path.
+ */
+export function foreignWal(dir: string, name: string): string {
+  const source = join(dir, `${name}.source`);
+  const db = openSqlite(source);
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("CREATE TABLE notes(x); INSERT INTO notes VALUES (1)");
+  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+  db.exec("INSERT INTO notes VALUES (2)");
+  const copy = join(dir, name);
+  fs.copyFileSync(source, copy);
+  fs.copyFileSync(`${source}-wal`, `${copy}-wal`);
+  db.close();
+  fs.rmSync(source);
+  return copy;
 }

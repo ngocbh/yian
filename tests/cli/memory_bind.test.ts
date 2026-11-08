@@ -35,6 +35,7 @@ import { loadFlow } from "../../src/compose/loader.ts";
 import type { Embed } from "../../src/llm/embeddings.ts";
 import type { FileMemory } from "../../src/memory/file.ts";
 import { parseJson } from "../../src/typesys/json.ts";
+import { foreignWal } from "../helpers/memory_fakes.ts";
 import { loadSchema, type Schema, validate } from "../helpers/schema.ts";
 
 let tmp: string;
@@ -649,6 +650,17 @@ describe("VectorDBMemory inputs", () => {
     );
     expect(shared.code, shared.stderr).toBe(0);
     expect(shared.stdout).toBe("3\n");
+  });
+
+  test("a .db that is another program's WAL database is refused, its bytes and -wal as they were", async () => {
+    const foreign = foreignWal(tmp, "app.db");
+    const before = [readFileSync(foreign), readFileSync(`${foreign}-wal`)];
+    const args = ["run", flowFile(ADD_CASE), "--quiet", "--memory", `cases=${foreign}`, ...embedding];
+    const result = await yian(args, {}, { embed: fakeEmbed });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(`\`${foreign}\` isn't a VectorDBMemory store: it is a database in WAL mode`);
+    expect([readFileSync(foreign), readFileSync(`${foreign}-wal`)]).toEqual(before);
+    expect(readdirSync(tmp).filter((name) => name.startsWith("app.db")).sort()).toEqual(["app.db", "app.db-wal"]);
   });
 
   test("a VectorDB input given a folder is a usage error", async () => {

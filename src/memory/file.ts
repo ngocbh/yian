@@ -3,8 +3,8 @@
  *
  * Its members are the regular files whose path components are plain names, within the depth cap,
  * holding UTF-8 text within the per-file cap. Everything else in the folder (hidden entries such
- * as `.git` and `.yian/`, other names, symlinks, binary or oversized files) isn't part of the
- * memory: tools refuse it and the version leaves it out. The memory's own metadata lives in
+ * as `.git` and `.yian/`, other names, symlinks, files with another hard link, binary or oversized
+ * files) isn't part of the memory: tools refuse it and the version leaves it out. The memory's own metadata lives in
  * `<root>/.yian/`: `identity`, the journal, the lock and a temp folder.
  *
  * It imports `defaults`, `diagnostics`, `platform` and `typesys`, and `memory/base.ts`.
@@ -278,6 +278,9 @@ function diskProblem(root: string, rel: string, folder = false): string | null {
       return stats.isFile() ? "a file" : "not a folder";
     }
     if (!stats.isFile()) return stats.isDirectory() ? "a folder" : "not a regular file";
+    // A file with another link may be outside the root: it is read through like a symlink, and
+    // keeps text that an erase removed from the memory.
+    if (stats.nlink > 1) return "a hard link";
   }
   return null;
 }
@@ -316,8 +319,8 @@ export interface MemberFile {
 }
 
 /**
- * Read the file at `path` as a member, or return why it isn't one (not a regular file, not UTF-8
- * text, or over `maxFileChars` characters), or `null` when nothing is there.
+ * Read the file at `path` as a member, or return why it isn't one (not a regular file, a hard
+ * link, not UTF-8 text, or over `maxFileChars` characters), or `null` when nothing is there.
  */
 function readMemberFile(path: string, rel: string, maxFileChars: number): MemberFile | string | null {
   let fd: number;
@@ -334,8 +337,10 @@ function readMemberFile(path: string, rel: string, maxFileChars: number): Member
   }
   let bytes: Buffer;
   try {
+    const stats = fs.fstatSync(fd);
+    if (stats.nlink > 1) return "a hard link";
     // A UTF-8 character takes at most four bytes, so a bigger file is over the cap unread.
-    if (fs.fstatSync(fd).size > 4 * maxFileChars) return `over ${maxFileChars} characters`;
+    if (stats.size > 4 * maxFileChars) return `over ${maxFileChars} characters`;
     bytes = fs.readFileSync(fd);
   } finally {
     fs.closeSync(fd);

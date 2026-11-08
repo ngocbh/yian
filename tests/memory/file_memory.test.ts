@@ -518,6 +518,7 @@ describe("read tools", () => {
     ["/etc/passwd", "`/etc/passwd` isn't part of the memory: an absolute path"],
     ["linked/a.md", "`linked/a.md` isn't part of the memory: `linked` is a symlink"],
     ["link.md", "`link.md` isn't part of the memory: a symlink"],
+    ["hard.md", "`hard.md` isn't part of the memory: a hard link"],
     ["bin.dat", "`bin.dat` isn't part of the memory: not UTF-8 text"],
     ["big.md", "`big.md` isn't part of the memory: over 10 characters"],
     ["a", "`a` isn't part of the memory: a folder"],
@@ -532,12 +533,26 @@ describe("read tools", () => {
     put(dir, "outside/a.md", "secret");
     fs.symlinkSync(join(dir, "outside"), join(root, "linked"));
     fs.symlinkSync(join(dir, "outside/a.md"), join(root, "link.md"));
+    fs.linkSync(join(dir, "outside/a.md"), join(root, "hard.md"));
     const s = await openAt({ maxFileChars: 10 });
     const error = await rejection(s.call("read", { path }, { signal }));
     expect((error as Error).message).toBe(reason);
     expect(isReportedToolError(error)).toBe(true);
     expect(isPermanentToolError(error)).toBe(true);
     await expect(s.call("search", { query: "secret" }, { signal })).resolves.toEqual({ matches: [] });
+    await s.close();
+  });
+
+  test("a file hard-linked elsewhere isn't part of the memory: list, search and recall skip it", async () => {
+    put(dir, "secret.txt", "SECRET");
+    put(root, "a.md", "A");
+    fs.linkSync(join(dir, "secret.txt"), join(root, "notes.md"));
+    const s = await openAt();
+    expect(await s.call("list", {}, { signal })).toEqual({ files: [{ path: "a.md", hash: sha256("A"), chars: 1n }] });
+    expect(await s.call("search", { query: "secret" }, { signal })).toEqual({ matches: [] });
+    const { version, recall } = await s.snapshot();
+    expect(recall.cut).toBe("1 entry skipped: not part of the memory");
+    expect(version).toBe(memoryVersion([{ path: "a.md", text: "A", hash: sha256("A"), chars: 1 }]));
     await s.close();
   });
 
@@ -614,6 +629,7 @@ const REFUSED_PATHS: [string, string][] = [
   ["/tmp/x.md", "`/tmp/x.md` isn't part of the memory: an absolute path"],
   ["linked/x.md", "`linked/x.md` isn't part of the memory: `linked` is a symlink"],
   ["link.md", "`link.md` isn't part of the memory: a symlink"],
+  ["hard.md", "`hard.md` isn't part of the memory: a hard link"],
   ["bin.dat", "`bin.dat` isn't part of the memory: not UTF-8 text"],
   [
     `notes/${"n".repeat(256)}.md`,
@@ -634,6 +650,7 @@ async function expectConfined(change: (path: string) => JsonObject): Promise<voi
   put(dir, "outside/x.md", "outside");
   fs.symlinkSync(join(dir, "outside"), join(root, "linked"));
   fs.symlinkSync(join(dir, "outside/x.md"), join(root, "link.md"));
+  fs.linkSync(join(dir, "outside/x.md"), join(root, "hard.md"));
   const s = await openAt();
   // A first change makes the journal, so a refusal can be seen to leave it alone.
   expect((await apply(s, { op: "append", path: "a.md", text: "B" }, "first")).ok).toBe(true);

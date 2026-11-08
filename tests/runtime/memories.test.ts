@@ -18,7 +18,7 @@ import {
 } from "../../src/memory/base.ts";
 import { FileMemory } from "../../src/memory/file.ts";
 import { type MemoryBinding, RunMemories } from "../../src/runtime/memories.ts";
-import { logJson } from "../../src/typesys/json.ts";
+import { type JsonObject, logJson } from "../../src/typesys/json.ts";
 import { jsonPart, MemoryRef } from "../../src/typesys/values.ts";
 import { FakeMemory, fileInfo, RecordingSession } from "../helpers/memory_fakes.ts";
 
@@ -28,9 +28,9 @@ afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 const signal = new AbortController().signal;
 const fresh = { create: true, signal };
 
-/** Bind `instance` to input `input` of type FileMemory. */
-function bind(input: string, instance: MemoryBase, type = "FileMemory"): MemoryBinding {
-  return { input, instance, type, itemType: null };
+/** Bind `instance` to input `input` of type `type`, its items of the JSON Schema `itemType`. */
+function bind(input: string, instance: MemoryBase, type = "FileMemory", itemType: JsonObject | null = null): MemoryBinding {
+  return { input, instance, type, itemType };
 }
 
 /** Return what `run` rejects with; fail when it resolves. */
@@ -54,6 +54,27 @@ test("one instance bound to two inputs is opened once and gets one session", asy
   expect(memories.values.get("lessons")).toEqual(memories.values.get("notes")!);
   await memories.close();
   expect(memory.sessions[0]!.closed).toBe(1);
+});
+
+test("one instance bound to two inputs of different item types is refused, before anything opens", async () => {
+  const memory = new FakeMemory(() => new RecordingSession(fileInfo("t/x")));
+  const cases = { type: "object", properties: { title: { type: "string" } } };
+  const notes = { type: "object", properties: { body: { type: "integer" } } };
+  await expect(
+    RunMemories.open([bind("a", memory, "FileMemory", cases), bind("b", memory, "FileMemory", notes)], fresh),
+  ).rejects.toThrow("memory inputs `a` and `b` share one instance but declare different item types");
+  await expect(
+    RunMemories.open([bind("a", memory, "FileMemory", cases), bind("b", memory, "FileMemory", null)], fresh),
+  ).rejects.toThrow("memory inputs `a` and `b` share one instance but declare different item types");
+  expect(memory.opens).toBe(0);
+  // The same item type, its keys in another order, is one type.
+  const reordered = { properties: { title: { type: "string" } }, type: "object" };
+  const memories = await RunMemories.open(
+    [bind("a", memory, "FileMemory", cases), bind("b", memory, "FileMemory", reordered)],
+    fresh,
+  );
+  expect(memory.opens).toBe(1);
+  await memories.close();
 });
 
 test("two instances with one identity fail", async () => {

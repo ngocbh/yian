@@ -93,8 +93,8 @@ export class RunMemories {
    * sessions opened so far are closed.
    *
    * @throws TypeError when an instance's contract or its session's info is malformed or differs.
-   * @throws RangeError when an instance's contract type isn't its input's, or two instances hold one
-   *   identity.
+   * @throws RangeError when an instance's contract type isn't its input's, one instance is bound to
+   *   inputs of different item types, or two instances hold one identity.
    * @throws MemoryBusyError when a memory's lock stays held past its timeout, naming the input.
    * @throws Error naming the input for another failed `open` or `snapshot`, its cause the error.
    * @throws The signal's reason once it aborted.
@@ -197,6 +197,7 @@ async function openSessions(
 ): Promise<Opened[]> {
   const { create, signal } = options;
   for (const binding of bindings) checkInstance(binding, options.hostTypes ?? new Map());
+  checkSharedItemTypes(bindings);
   const opened: Opened[] = [];
   try {
     for (const { input, instance, itemType } of bindings) {
@@ -222,6 +223,23 @@ async function openSessions(
     throw error;
   }
   return opened;
+}
+
+/**
+ * Refuse one instance bound to inputs of different item types: it opens once, with the first
+ * input's item type, so another's would never reach it.
+ *
+ * @throws RangeError naming the two inputs.
+ */
+function checkSharedItemTypes(bindings: readonly MemoryBinding[]): void {
+  for (const binding of bindings) {
+    const first = bindings.find((each) => each.instance === binding.instance)!;
+    // By value, keys sorted, so one schema written in another key order is the same type.
+    if (first === binding || logJson(first.itemType) === logJson(binding.itemType)) continue;
+    throw new RangeError(
+      `memory inputs \`${first.input}\` and \`${binding.input}\` share one instance but declare different item types`,
+    );
+  }
 }
 
 /** Return the contract `instance`'s class declares, which `checkContract` has checked. */

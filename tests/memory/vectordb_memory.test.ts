@@ -1327,6 +1327,21 @@ describe("erase, history and reset", () => {
     await s.close();
   });
 
+  test("erasing an item the memory holds nothing of is refused, recording nothing", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await expect(erase(s, 42n, "x1")).rejects.toThrow("item 42 isn't in the memory: there is nothing to erase");
+    expect((await s.history({ limit: 5 })).map((entry) => entry.id)).toEqual(["a1"]);
+    expect((await s.snapshot()).version).toBe("1");
+    // The id wasn't used, so it erases an item that is there.
+    expect(await erase(s, 1n, "x1")).toEqual({ version: "2", disabledUndos: ["a1"] });
+    // A deleted item's delete is still in the history, so erasing it goes on.
+    await apply(s, { op: "add", text: "bravo" }, "a2");
+    await apply(s, { op: "delete", id: 2n, if_version: 3n }, "d2");
+    expect(await erase(s, 2n, "x2")).toEqual({ version: "5", disabledUndos: [] });
+    await s.close();
+  });
+
   test("an erase target of the wrong shape is a fault", async () => {
     const s = await openAt();
     const bad = (target: JsonObject) => s.erase({ id: "x", target, author: user, signal });

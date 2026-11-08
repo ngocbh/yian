@@ -1672,6 +1672,8 @@ class VectorDBSession implements MemorySession {
    * undo it disabled: the item's last change, when it could still be undone. The ids' digests stay,
    * but they hold no text.
    *
+   * @throws Error when the memory holds nothing of the item, neither it nor a history row of it;
+   *   nothing is recorded, so the id stays free.
    * @throws {ChangeIdReusedError} If `id` was applied with a different change.
    * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
    * @throws {TypeError} If `id`, `target` or `author` has the wrong shape.
@@ -1688,6 +1690,10 @@ class VectorDBSession implements MemorySession {
       if (known !== null) return known;
       const row = itemRow(db, item);
       const last = latestChange(db, { item });
+      // An erase that removes nothing isn't a change: as for a path that isn't a member of a folder.
+      if (row === undefined && last === undefined) {
+        throw new Error(`item ${item} isn't in the memory: there is nothing to erase`);
+      }
       const disabled = last !== undefined && undoable(db, last, row) ? [last.change] : [];
       const at = new Date(this.#store.scheduler.now()).toISOString();
       return transaction(db, () => {

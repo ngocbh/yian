@@ -15,7 +15,7 @@ import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir, userInfo } from "node:os";
 import { basename, join } from "node:path";
 
-import type { Env } from "../defaults.ts";
+import { type Env, processEnvNames } from "../defaults.ts";
 import { compareCodeUnits, Diagnostic } from "../diagnostics.ts";
 import { type Author, type ChangeEntry, memoryErrorKind, type MemorySession } from "../memory/base.ts";
 import { FileMemory, type MemberFile, readMembers } from "../memory/file.ts";
@@ -361,8 +361,23 @@ export async function memoryUndo(command: ParsedArgs, io: CliIo): Promise<number
 }
 
 /**
- * Run `$EDITOR` from `env` on the file `path`, the terminal its own, and resolve once it exits. The
- * variable may hold arguments (`code --wait`), so the shell runs it, the path passed as an argument.
+ * The environment a child of the command gets: each variable as `env` reads it, over the process's
+ * names and those an editor and its shell look for, so a command's own environment reaches it.
+ */
+function childEnv(env: Env): Record<string, string> {
+  const names = new Set([...processEnvNames(), "HOME", "PATH", "TMPDIR", "TERM", "EDITOR", "USER", "LANG"]);
+  const values: Record<string, string> = {};
+  for (const name of names) {
+    const value = env(name);
+    if (value !== undefined) values[name] = value;
+  }
+  return values;
+}
+
+/**
+ * Run `$EDITOR` from `env` on the file `path`, the terminal its own and `env` its environment, and
+ * resolve once it exits. The variable may hold arguments (`code --wait`), so the shell runs it,
+ * the path passed as an argument.
  *
  * @throws {RangeError} When `$EDITOR` isn't set, or the editor fails or exits with an error.
  */
@@ -370,7 +385,8 @@ function runEditor(env: Env, path: string): Promise<void> {
   const editor = env("EDITOR");
   if (!editor) throw new RangeError("set $EDITOR to the editor to use");
   return new Promise((resolve, reject) => {
-    const child = spawn("/bin/sh", ["-c", `${editor} "$1"`, "editor", path], { stdio: "inherit" });
+    const command = ["-c", `${editor} "$1"`, "editor", path];
+    const child = spawn("/bin/sh", command, { stdio: "inherit", env: childEnv(env) });
     child.on("error", (error) => reject(new RangeError(`the editor didn't start: ${error.message}`)));
     child.on("exit", (code, signal) => {
       if (code === 0) resolve();
@@ -392,8 +408,8 @@ export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number
   return onMemory(command, io, namedOf(command), async (session, { location }) => {
     const path = (command.options["file"] as string | undefined) ?? String(session.info.settings["index"]);
     const file = membersOf(session, location).find((each) => each.path === path) ?? null;
-    // Private: the copy holds the memory's text.
-    const folder = mkdtempSync(join(tmpdir(), "yian-memory-edit-"));
+    // Private: the copy holds the memory's text. In the command's TMPDIR, as the editor would look.
+    const folder = mkdtempSync(join(io.env("TMPDIR") || tmpdir(), "yian-memory-edit-"));
     const copy = join(folder, basename(path));
     let keep = false;
     try {

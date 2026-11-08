@@ -35,6 +35,7 @@ beforeEach(() => {
   project = join(tmp, "proj");
   mkdirSync(home);
   mkdirSync(project);
+  mkdirSync(join(tmp, "tmpdir"));
 });
 
 afterEach(() => {
@@ -43,7 +44,8 @@ afterEach(() => {
 
 /** The command's environment: the temporary home, and `vars`. */
 function envOf(vars: Record<string, string> = {}): (name: string) => string | undefined {
-  const values: Record<string, string> = { HOME: home, USER: "ada", ...vars };
+  // The editor's copy goes in the test's own temporary folder, never the real one.
+  const values: Record<string, string> = { HOME: home, USER: "ada", TMPDIR: join(tmp, "tmpdir"), ...vars };
   return (name) => (Object.hasOwn(values, name) ? values[name] : undefined);
 }
 
@@ -314,6 +316,25 @@ describe("yian memory edit", () => {
     const same = await yian(["memory", "edit", flow, "lessons"], { editor: async () => {} });
     expect(same).toMatchObject({ code: 0, stdout: "MEMORY.md is unchanged\n" });
     expect((await historyOf(flow)).changes).toHaveLength(before);
+  });
+
+  test("the copy is made in the command's TMPDIR, and $EDITOR runs with the command's environment", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    const opened: string[] = [];
+    const editor = async (path: string) => {
+      opened.push(path);
+      writeFileSync(path, "first\nedited");
+    };
+    expect((await yian(["memory", "edit", flow, "lessons"], { editor })).code).toBe(0);
+    expect(opened[0]).toStartWith(join(tmp, "tmpdir", "yian-memory-edit-"));
+    // The copy's folder is gone once the edit applied.
+    expect(readdirSync(join(tmp, "tmpdir"))).toEqual([]);
+    // The command's HOME is the test's, not the test process's.
+    const appendHome = `/bin/sh -c 'printf "\n%s" "$HOME" >> "$0"'`;
+    const marked = await yian(["memory", "edit", flow, "lessons"], { env: envOf({ EDITOR: appendHome }) });
+    expect(marked.code, marked.stderr).toBe(0);
+    expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe(`first\nedited\n${home}`);
   });
 
   test("the editor is $EDITOR, run on the file; with none set, edit says so", async () => {

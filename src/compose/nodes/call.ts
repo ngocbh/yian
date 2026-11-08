@@ -18,7 +18,7 @@ import { reprText, type SourceRange } from "../../diagnostics.ts";
 import { CallNode } from "../../nodes/call/node.ts";
 import { ContractOrigins, isExactly, type Parameter, ValueContract } from "../../nodes/contracts.ts";
 import { MapNode } from "../../nodes/map/node.ts";
-import { isInboxType, listKindForElement, Type } from "../../typesys/values.ts";
+import { isInboxType, isMemoryType, listKindForElement, Type } from "../../typesys/values.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
 import type { SourceCursor } from "../source/index.ts";
 import {
@@ -219,7 +219,7 @@ function listOf(element: Type): Type {
 /**
  * Check a CALL's or MAP's parameters by name and arity against the child's signature, appending
  * one message per problem to `errors`: a parameter the child doesn't declare, and a required
- * child input left unbound. The binding types are checked later, over the flow's wiring.
+ * child input or a memory input left unbound. The binding types are checked later, over the flow's wiring.
  *
  * @param kind The node's kind (`call` or `map`), named in messages.
  * @param labels The descriptor's `fieldLabels`: an inline call's `input '<p>'` entry names its
@@ -248,7 +248,13 @@ function checkChildBindings(
   }
   const callLabel = labels.get("call") || `${kind} node ${reprText(nodeId)}`;
   for (const input of sig.inputs) {
-    if (input.required && !bound.has(input.name)) {
+    if (bound.has(input.name)) continue;
+    if (isMemoryType(input.contract?.type)) {
+      // Even an Optional one: the child would see null where its caller has a memory.
+      errors.push(
+        `${callLabel}: the runner binds only the top-level flow's memories; pass \`${input.name}\` from the caller`,
+      );
+    } else if (input.required) {
       errors.push(`${callLabel}: required callable input ${reprText(input.name)} is unbound`);
     }
   }

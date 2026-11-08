@@ -1,0 +1,24 @@
+# An agent takes a memory whole and renders it in its prompt and system prompt; an Optional one too.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+    notes: !Optional(FileMemory)
+    question: !str
+  nodes:
+    answer:
+      kind: agent
+      output: str
+      input:
+        lessons: ${input.lessons}
+        notes: ${input.notes}
+        question: ${input.question}
+      system_prompt: "<memory name=\"notes\">\n${notes}\n</memory>"
+      prompt:
+        - user: "<memory name=\"lessons\">\n${lessons}\n</memory>"
+        - user: ${question}
+  output: ${answer.output}
+expect:
+  load: ok

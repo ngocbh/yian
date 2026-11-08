@@ -1,0 +1,38 @@
+# An inline call(...) can't pass a memory; a named call node can.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  defs:
+    child:
+      input:
+        notes: !FileMemory
+      nodes:
+        g:
+          kind: code
+          output: str
+          code: return "x"
+      output: ${g.output}
+  nodes:
+    c:
+      kind: code
+      code: return 1
+      input:
+        t: call(child, notes=${input.lessons})
+  output: null
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: |-
+          flow has unresolved references:
+            node 'c' input 't' call(child) argument 'notes' from: ${input.lessons} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` (pass it through a named `kind: call` node)
+        frames:
+          - label: flow.yaml
+            range:
+              - 20
+              - 10
+              - 20
+              - 45

@@ -9,6 +9,7 @@
  * - the keyword form names a union (construct a member instead) or a type that is no record, a
  *   field `T` doesn't have, or leaves out a required field;
  * - `T` is an inbox type, which has no constructor;
+ * - `T` is a memory type, which has none either;
  * - a field read on the result (`T(x).f`) names a field `T` can't have.
  *
  * `builtinFieldErrors` rejects a field read on a builtin whose result type is known
@@ -31,7 +32,7 @@ import { constructorShapeError, inferExprType, ISINSTANCE, splitReference, steps
 import { callSuffixOf, type ExprNode, iterSubtreesTopdown, Token, Tree } from "../../expr/grammar.ts";
 import { outputContractFieldError, ValueContract } from "../../nodes/contracts.ts";
 import type { RefExpr, TypeRegistry } from "../../typesys/types.ts";
-import { canonicalTypeLabel, isInboxType, type Type } from "../../typesys/values.ts";
+import { canonicalTypeLabel, isInboxType, isMemoryType, type Type } from "../../typesys/values.ts";
 import { constructorTypeFn } from "../helpers/isinstance_types.ts";
 import { literalType, type TypeFn } from "../../compile/output_contracts.ts";
 
@@ -62,6 +63,11 @@ export function constructorErrors(tree: ExprNode, registry: TypeRegistry, refTyp
     if (isInboxType(typ)) {
       // A handle names a top-level inbox; building one from a value would forge it.
       errors.push(`\`${name}\` is an inbox type; it has no constructor`);
+      continue;
+    }
+    if (isMemoryType(typ)) {
+      // Only the runner binds a memory; building one from a value would forge it.
+      errors.push(`\`${name}\` is a memory type; it has no constructor`);
       continue;
     }
     const args = callSuffix.children as Tree[];

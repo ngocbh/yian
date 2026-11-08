@@ -70,7 +70,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { messagesKey, NEW_MESSAGES, poolRootLength } from "../../typesys/pool.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isInboxType, ValueKind } from "../../typesys/values.ts";
+import { isInboxType, isMemoryType, ValueKind } from "../../typesys/values.ts";
 import { desugarCallDirectives } from "../desugar/inline_calls.ts";
 import { LoadDiagnostics, LoadError } from "../helpers/errors.ts";
 import { collectConstructorNames, collectIsinstanceNames } from "../helpers/isinstance_types.ts";
@@ -176,7 +176,7 @@ export class LoweredAsserts {
  * @param options.diagnostics Factory for located load errors (default an unlocated one).
  * @returns The lowered START/END asserts with the synth END params and their wiring.
  * @throws LoadError on the first assert holding a lone surrogate, malformed assert, bad ref,
- *   impossible check, bad field read, `${system}` ref, or read of an inbox input.
+ *   impossible check, bad field read, `${system}` ref, or read of an inbox or memory input.
  * @throws TypeError when a producer contract is neither an exact `ValueContract` nor a
  *   `PartialRecordContract`.
  */
@@ -294,6 +294,12 @@ export function lowerFlowAsserts(
       if (input !== undefined && isInboxType(inputContracts.get(input)?.type)) {
         throw diagnostics.error(
           `assert ${reprText(assertion.display)}: \${input.${input}} is an inbox; an assert can't read it`,
+          { range: rng },
+        );
+      }
+      if (input !== undefined && isMemoryType(inputContracts.get(input)?.type)) {
+        throw diagnostics.error(
+          `assert ${reprText(assertion.display)}: \${input.${input}} is a memory; an assert can't read it`,
           { range: rng },
         );
       }
@@ -598,8 +604,11 @@ export function validateNodeAsserts(
         } else if (declared.has(head)) {
           const local = nodeLocals.get(head);
           const inbox = local?.alternatives.some((alt) => isExactly(alt, ValueContract) && isInboxType(alt.type));
+          const memory = local?.alternatives.some((alt) => isExactly(alt, ValueContract) && isMemoryType(alt.type));
           if (inbox) {
             errors.push([`node ${reprText(nid)} assert: \${${head}} is an inbox; an assert can't read it`, errorRange]);
+          } else if (memory) {
+            errors.push([`node ${reprText(nid)} assert: \${${head}} is a memory; an assert can't read it`, errorRange]);
           } else if (local !== undefined && local.alternatives.length > 0) {
             roots.set(head, local.alternatives);
             if (local.source !== null) unionRoots.set(head, local.source);

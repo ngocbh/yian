@@ -1,0 +1,35 @@
+# The runner binds only the top-level flow's memories, so a child's memory input must be passed from its caller.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  defs:
+    child:
+      input:
+        notes: !FileMemory
+      nodes:
+        g:
+          kind: code
+          output: str
+          code: return "x"
+      output: ${g.output}
+  nodes:
+    c:
+      kind: call
+      call: child
+      input: {}
+  output: ${c.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: "call node 'c': the runner binds only the top-level flow's memories; pass `notes` from the caller"
+        frames:
+          - label: flow.yaml
+            range:
+              - 16
+              - 3
+              - 16
+              - 4

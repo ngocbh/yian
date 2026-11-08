@@ -35,7 +35,7 @@ import {
 } from "../../nodes/contracts.ts";
 import { LoopNode } from "../../nodes/loop/node.ts";
 import type { TypeRegistry } from "../../typesys/types.ts";
-import { isInboxType, Type, ValueKind, valueRepr, writeAsText } from "../../typesys/values.ts";
+import { isInboxType, isMemoryType, Type, ValueKind, valueRepr, writeAsText } from "../../typesys/values.ts";
 import { AllOf, type Guard, Holds, NotNullCheck, proves, sameGuard } from "../helpers/condition_guards.ts";
 import type { LoadDiagnostics } from "../helpers/errors.ts";
 import {
@@ -269,8 +269,11 @@ export class LoopDescriptor extends NodeDescriptor {
     // it references; at least one of them, all carried. The body's input names are carried too.
     const carriedNames = Object.keys(this.inputs);
     const carried = new Set(carriedNames);
-    // The body's inbox inputs: carried into every iteration, never part of the loop's output.
+    // The body's inbox and memory inputs: carried into every iteration, never part of the loop's
+    // output.
     const inboxFields = new Set(sig.inputs.filter((input) => isInboxType(input.contract?.type)).map((p) => p.name));
+    const memoryFields = new Set(sig.inputs.filter((input) => isMemoryType(input.contract?.type)).map((p) => p.name));
+    const carriedOnly = new Set([...inboxFields, ...memoryFields]);
     const carriedText = namesText(carriedNames);
     const outNames = contractFieldNames(sig.output);
     if (outNames === null || outNames.size === 0) {
@@ -282,10 +285,11 @@ export class LoopDescriptor extends NodeDescriptor {
     } else {
       const outside = [...outNames].filter((name) => !carried.has(name));
       // The loop drops its inbox fields at the end, so a returned one would never reach its output.
-      const returnedInboxes = [...outNames].filter((name) => inboxFields.has(name)).toSorted(compareCodeUnits);
+      const returnedInboxes = [...outNames].filter((name) => carriedOnly.has(name)).toSorted(compareCodeUnits);
       for (const name of returnedInboxes) {
+        const what = inboxFields.has(name) ? "an inbox" : "a memory";
         errors.push(
-          `${subject}: body output field \`${name}\` names an inbox input; a loop carries an inbox, never returns it`,
+          `${subject}: body output field \`${name}\` names ${what} input; a loop carries ${what}, never returns it`,
         );
       }
       if (returnedInboxes.length === 0 && outside.length > 0) {
@@ -298,7 +302,7 @@ export class LoopDescriptor extends NodeDescriptor {
         node.outputContract = combineOutputContracts(
           new Map(
             carriedNames
-              .filter((name) => !inboxFields.has(name))
+              .filter((name) => !carriedOnly.has(name))
               .map((name) => [
                 name,
                 outNames.has(name) ? projectOutputContract(sig.output!, [name]) : this.seedContract(ctx, name),
@@ -344,9 +348,10 @@ export class LoopDescriptor extends NodeDescriptor {
             `the carried record ${carriedText}`,
         );
       }
-      const inboxHeads = [...heads].filter((head) => inboxFields.has(head)).toSorted(compareCodeUnits);
+      const inboxHeads = [...heads].filter((head) => carriedOnly.has(head)).toSorted(compareCodeUnits);
       for (const head of inboxHeads) {
-        errors.push(`${subject}: \`${key}:\` reads \`${head}\`, an inbox; a loop predicate can't read an inbox`);
+        const what = inboxFields.has(head) ? "an inbox" : "a memory";
+        errors.push(`${subject}: \`${key}:\` reads \`${head}\`, ${what}; a loop predicate can't read ${what}`);
       }
       if (tree !== null && errors.length === 0 && node.outputContract !== null) {
         // With the field names valid, the output contract is the carried record's: the body's for

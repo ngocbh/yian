@@ -1,0 +1,31 @@
+# A prompt renders a memory in text, never as a splice.
+kind: load
+flow: |
+  id: f
+  name: f
+  input:
+    lessons: !FileMemory
+  nodes:
+    a:
+      kind: agent
+      output: str
+      input:
+        lessons: ${input.lessons}
+      prompt:
+        - ${lessons}
+        - user: hi
+  output: ${a.output}
+expect:
+  load:
+    diagnostics:
+      - code: compose.load
+        message: |-
+          flow has unresolved references:
+            node 'a' prompt[0]: ${lessons} is a memory; use it whole as an agent input, in prompt text, as a child's memory input of the same type, or name it in `tools:`/`tool_id:` (not as a prompt splice)
+        frames:
+          - label: flow.yaml
+            range:
+              - 12
+              - 9
+              - 12
+              - 19

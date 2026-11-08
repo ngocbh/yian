@@ -49,7 +49,9 @@ import {
   isList,
   isMemoryType,
   isRecord,
+  jsonPart,
   jsTypeName,
+  MemoryRef,
   Type,
   valueRepr,
   writeAsText,
@@ -486,6 +488,8 @@ function canonicalValue(value: unknown, ctx: ManifestContext, path: string): Jso
     // A partial LOOP driver's default for an omitted inbox field encodes as its JSON form.
     return mappingManifest([["inbox", value.inbox]], value, ctx, path, canonicalValue);
   }
+  // A partial LOOP driver's default for a carried memory field encodes as its JSON form too.
+  if (MemoryRef.isMemoryRef(value)) return canonicalValue(jsonPart(value, [], "mapping"), ctx, path);
   if (isList(value)) return { items: canonicalSequence(value, ctx, path), type: "list" };
   if (isRecord(value)) return mappingManifest(Object.entries(value), value, ctx, path, canonicalValue);
   throw new TypeError(`${path}: unsupported non-JSON value of type ${jsTypeName(value)}`);

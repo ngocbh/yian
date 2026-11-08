@@ -1121,6 +1121,16 @@ output: \${add.output.id}
     expect(deleted.stdout).toContain("deleted item 1;");
   });
 
+  test("erase of an item that doesn't exist is refused before anything is listed or asked", async () => {
+    const flow = casesFile();
+    await addCase(flow, "Check sums twice.");
+    const missing = await yian(["memory", "erase", flow, "cases", "99", "--yes", "--json"], vectors);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).toContain("erase refused: item 99 doesn't exist");
+    expect(missing.stderr).not.toContain("the runs on this machine");
+    expect(JSON.parse(missing.stdout).error).toEqual({ code: "memory.refused", message: "item 99 doesn't exist" });
+  });
+
   test("--if-version pins the version the person saw; a newer one is a conflict", async () => {
     const flow = casesFile();
     await addCase(flow, "Check sums twice.");

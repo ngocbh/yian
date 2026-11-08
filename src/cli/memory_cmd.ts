@@ -861,7 +861,8 @@ async function goesOn(command: ParsedArgs, io: CliIo, question: string): Promise
  * can't be seen, ask (`--yes` doesn't; off a terminal it is required), then erase the file (or
  * item), or with `--text` every occurrence of that text in the file, from the memory and its
  * history, as the user, and print the new version and the undos the erase disabled. A no prints
- * `nothing erased` and exits 1. `--json` prints `{runs, version, disabled_undos}`.
+ * `nothing erased`, and an item that doesn't exist `erase refused: <reason>` before anything is
+ * listed or asked; each exits 1. `--json` prints `{runs, version, disabled_undos}`.
  */
 export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;
@@ -873,6 +874,12 @@ export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<numbe
     const { identity } = session.info;
     // Before anything is listed or asked: a target erase can't take would only fail after the yes.
     const { target, what } = eraseTarget(memory, session, given, text);
+    if (memory instanceof VectorDBMemory) {
+      const item = await readItem(session, target["item"] as bigint, stopOf(io));
+      if (typeof item === "string") {
+        return failed(io, json, { label: "erase refused", code: "memory.refused", message: item });
+      }
+    }
     const runs = await listRunsUsing(command, io, identity);
     if (!(await goesOn(command, io, `Erase ${what} from ${identity}? It can't be undone.`))) {
       return failed(io, json, { label: "erase cancelled", code: "memory.cancelled", message: "nothing erased" });

@@ -86,6 +86,10 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_FILE_MEMORY_MAX_RECALL_CHARS` | setting | 8,000 | 1 or more | Most characters of a FileMemory's recall |
 | `YIAN_FILE_MEMORY_MAX_READ_CHARS` | setting | 20,000 | 1 or more | Most characters one FileMemory list, read or search result shows |
 | `YIAN_FILE_MEMORY_MAX_RESULTS` | setting | 100 | 1 or more | Most entries a FileMemory's `list` shows, and lines its `search` shows |
+| `YIAN_VECTOR_MEMORY_MAX_ITEMS` | setting | 20,000 | 1 or more | Most items a VectorDBMemory may hold |
+| `YIAN_VECTOR_MEMORY_MAX_K` | setting | 50 | 1 or more | Most items a VectorDBMemory's `search` returns and its `list` shows |
+| `YIAN_VECTOR_MEMORY_MAX_TEXT_CHARS` | setting | 8,000 | 1 or more | Most characters of one VectorDBMemory item's text, or of a search query |
+| `YIAN_VECTOR_MEMORY_MAX_RECALL_CHARS` | setting | 4,000 | 1 or more | Most characters of a VectorDBMemory's recall |
 | `YIAN_MCP_CONNECT_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for an MCP server to start and list its tools |
 | `YIAN_MCP_CALL_TIMEOUT_SECONDS` | setting | 300 | 1 or more | Longest wait in seconds for one MCP tool call |
 | `YIAN_MODEL_RETRIES` | setting | 6 | 0 or more | Extra attempts a model call gets after a transport failure (a network error, 5xx, 429 or timeout) |

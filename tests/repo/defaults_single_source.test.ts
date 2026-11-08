@@ -37,6 +37,7 @@ const ALLOWED: Record<string, string> = {
   "platform.ts: SQLITE_NOTADB": "SQLite result code",
   "platform.ts: primaryCode.??": "no SQLite result code, which matches no primary code",
   "runtime/run_index.ts: SQLITE_BUSY": "SQLite result code",
+  "memory/vectordb.ts: SQLITE_NOTADB": "SQLite result code",
   "runtime/run_index.ts: busyOr.??": "no SQLite result code, which matches no primary code",
   "compile/validation.ts: RELATION_RANK": "ordering of type relations",
   "expr/grammar.ts: LEVEL": "operator precedence levels",

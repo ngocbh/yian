@@ -260,6 +260,30 @@ export const ENTRIES = Object.freeze([
     group: "setting",
     minimum: 1,
   }),
+  entry("VECTOR_MEMORY_MAX_ITEMS", {
+    default: 20_000,
+    description: "Most items a VectorDBMemory may hold",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("VECTOR_MEMORY_MAX_K", {
+    default: 50,
+    description: "Most items a VectorDBMemory's `search` returns and its `list` shows",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("VECTOR_MEMORY_MAX_TEXT_CHARS", {
+    default: 8_000,
+    description: "Most characters of one VectorDBMemory item's text, or of a search query",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("VECTOR_MEMORY_MAX_RECALL_CHARS", {
+    default: 4_000,
+    description: "Most characters of a VectorDBMemory's recall",
+    group: "setting",
+    minimum: 1,
+  }),
   // A hung MCP server would otherwise stall the run forever; a run reads these when it
   // talks to a server, so they don't change the loaded flow.
   entry("MCP_CONNECT_TIMEOUT_SECONDS", {

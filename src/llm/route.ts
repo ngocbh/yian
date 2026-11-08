@@ -4,6 +4,8 @@ import { type Auth, checkConnectionHeaderValue } from "./auth.ts";
 
 // An RFC 7230 token.
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+// The openai and anthropic SDKs send this Accept on every request, streamed ones too.
+const DEFAULT_HEADERS = { "content-type": "application/json", accept: "application/json" };
 
 /** One provider endpoint and how to call it. */
 export class Route {
@@ -54,6 +56,19 @@ export class Route {
       }
       checkConnectionHeaderValue(name, value);
     }
+  }
+
+  /**
+   * Resolve the auth and return one request's headers: `content-type` and `accept` of
+   * `application/json`, replaced by this route's headers, then by the auth headers, of any case.
+   *
+   * @throws What the auth source throws, unchanged.
+   */
+  async requestHeaders(): Promise<Headers> {
+    const headers = new Headers(DEFAULT_HEADERS);
+    for (const [name, value] of Object.entries(this.headers)) headers.set(name, value);
+    for (const [name, value] of Object.entries(await this.auth.headers())) headers.set(name, value);
+    return headers;
   }
 
   /**

@@ -86,12 +86,18 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_FILE_MEMORY_MAX_RECALL_CHARS` | setting | 8,000 | 1 or more | Most characters of a FileMemory's recall |
 | `YIAN_FILE_MEMORY_MAX_READ_CHARS` | setting | 20,000 | 1 or more | Most characters one FileMemory list, read or search result shows |
 | `YIAN_FILE_MEMORY_MAX_RESULTS` | setting | 100 | 1 or more | Most entries a FileMemory's `list` shows, and lines its `search` shows |
+| `YIAN_VECTOR_MEMORY_MAX_ITEMS` | setting | 20,000 | 1 or more | Most items a VectorDBMemory may hold |
+| `YIAN_VECTOR_MEMORY_MAX_K` | setting | 50 | 1 or more | Most items a VectorDBMemory's `search` returns and its `list` shows |
+| `YIAN_VECTOR_MEMORY_MAX_TEXT_CHARS` | setting | 8,000 | 1 or more | Most characters of one VectorDBMemory item's text and fields, of a retire's reason, or of a query |
+| `YIAN_VECTOR_MEMORY_MAX_RECALL_CHARS` | setting | 4,000 | 1 or more | Most characters of a VectorDBMemory's recall |
 | `YIAN_MCP_CONNECT_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for an MCP server to start and list its tools |
 | `YIAN_MCP_CALL_TIMEOUT_SECONDS` | setting | 300 | 1 or more | Longest wait in seconds for one MCP tool call |
 | `YIAN_MODEL_RETRIES` | setting | 6 | 0 or more | Extra attempts a model call gets after a transport failure (a network error, 5xx, 429 or timeout) |
 | `YIAN_MODEL_FIRST_RESPONSE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds from sending a model request to the first bytes of its response |
 | `YIAN_MODEL_IDLE_TIMEOUT_SECONDS` | setting | 240 | 1 or more | Longest wait in seconds between bytes of a streamed model response |
 | `YIAN_REQUEST_TIMEOUT_SECONDS` | setting | 30 | 1 or more | Longest wait in seconds for a short request (model listing, sign-in calls) |
+| `YIAN_EMBEDDING_TIMEOUT_SECONDS` | setting | 60 | 1 or more | Longest wait in seconds for one embeddings request |
+| `YIAN_EMBEDDING_BATCH_ITEMS` | setting | 64 | 1 or more | Most texts sent in one embeddings request; more go in several requests |
 | `YIAN_MAX_AUTH_RESPONSE_BYTES` | input cap | 1,048,576 | 1 or more | Largest response body read from a sign-in server |
 | `YIAN_MAX_AUTH_STORE_BYTES` | input cap | 1,048,576 | 1 or more | Largest auth store file read or written |
 | `YIAN_MAX_OAUTH_CALLBACK_BYTES` | input cap | 16,384 | 1 or more | Largest request header block read from the sign-in callback |
@@ -99,6 +105,7 @@ An entry whose valid values say "can only be lowered" has its default as its max
 | `YIAN_MAX_MODEL_LIST_PAGES` | input cap | 100 | 1 or more | Most pages read from a provider's model listing |
 | `YIAN_MAX_MCP_MESSAGE_BYTES` | input cap | 16,777,216 | 1 or more | Largest message read from an MCP server: a stdio line, an SSE event or an HTTP reply body |
 | `YIAN_MAX_MODEL_EVENT_BYTES` | input cap | 16,777,216 | 1 or more | Largest event read from a model's reply stream: an SSE event's data or one NDJSON line |
+| `YIAN_MAX_EMBEDDING_REPLY_BYTES` | input cap | 33,554,432 | 1 or more | Largest reply read from an embeddings request |
 | `YIAN_MAX_EVENT_BYTES` | input cap | 1,048,576 | 1 or more | Largest event sent to a run's inbox, host call's pending step or completed answer, in run-log JSON bytes |
 | `YIAN_MAX_BASE_URL_CHARS` | input cap | 2,048 | 1 or more | Longest provider base URL accepted |
 | `YIAN_MAX_CONNECTION_HEADERS` | input cap | 32 | 1 or more | Most extra request headers a provider connection may send |
@@ -147,6 +154,7 @@ Provider API keys and base URLs, such as `ANTHROPIC_API_KEY`, are listed on
 | `~/.claude/skills`, `~/.agents/skills` | Your skills, read when an agent grants skills |
 | `.claude/skills`, `.agents/skills` | Project skills, from the current folder up to the git root |
 | `<memory folder>/.yian/` | A FileMemory's identity, journal, lock and temp files (see [Memory](/memory/#filememory)) |
+| `<store path>`, `<store path>.lock` | A VectorDBMemory's SQLite store and its lock, with mode `0600` (see [Memory](/memory/#vectordbmemory)) |
 
 `~/.yian`, `~/.yian/runs` and each run folder have mode `0700`; a log has mode `0600`. Logs are
 not encrypted and can hold prompts, replies and tool data, so keep them private.

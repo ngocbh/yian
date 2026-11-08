@@ -1,6 +1,7 @@
 /**
  * Build the chat model an `llm_config` selects: the route (where requests go and how they
- * authenticate) and the wire protocol, from the validated config and its pinned connection.
+ * authenticate) and the wire protocol, from the validated config and its pinned connection. An
+ * embedding model's `/embeddings` client resolves its credentials the same way.
  *
  * Routes are data: one small builder per provider family returns a `RouteModel`; there is no
  * plugin loading and no SDK. The environment is read only through the injected `env` (default
@@ -23,6 +24,7 @@ import {
   type Secret,
   SubscriptionAuth,
 } from "../llm/auth.ts";
+import { type Embed, type Embedder, type EmbeddingModel, openaiEmbeddings } from "../llm/embeddings.ts";
 import type { ChatModel } from "../llm/events.ts";
 import { RouteModel } from "../llm/executor.ts";
 import type { ReplayDegradedReason } from "../llm/messages.ts";
@@ -58,6 +60,7 @@ import {
   GOOGLE_ENDPOINT,
   OLLAMA_ENDPOINT,
   OPENAI_API_ENDPOINT,
+  OPENAI_COMPATIBLE,
   prefersResponses,
   PROVIDER_BASE_URL,
 } from "./endpoints.ts";
@@ -133,10 +136,17 @@ function credentialsOf<T extends Credentials>(
   return credentials;
 }
 
-/** What a route builder gets: the resolved key, endpoint and headers of one config. */
-interface Resolved {
+/** What a route builder gets: the provider and model one config selects, and their key, endpoint and headers. */
+export interface Resolved {
+  provider: string;
   model: string;
   block: JsonObject;
+  /**
+   * The pinned ChatGPT subscription connection when calls go to the subscription endpoint, else
+   * `null`. With a subscription nothing else is resolved: the key, key at build and base URL are
+   * `null` and the headers empty.
+   */
+  subscription: Connection | null;
   /**
    * What the auth sends: a key, or a function reading it per request (OpenAI only); `null` leaves
    * the key to the provider's environment default.
@@ -162,6 +172,11 @@ interface Wiring {
 /** Read the credentials `connection` pins for `provider`. */
 type Read = (connection: Connection, provider: string) => Promise<Credentials>;
 
+/** Return the `Read` that resolves pinned credentials through `env`, `signal` and `scheduler`. */
+function reader(env: Env, signal: AbortSignal | undefined, scheduler: Scheduler | undefined): Read {
+  return (connection, provider) => connectionCredentials(connection, provider, { env, signal, scheduler });
+}
+
 /** Wrap `auth` so it also sends the secret connection headers, when there are any. */
 function withHeaders(auth: Auth, headers: Record<string, string>): Auth {
   return Object.keys(headers).length > 0 ? new ExtraHeadersAuth(auth, headers) : auth;
@@ -175,12 +190,40 @@ function missingKey(provider: string, variables: readonly string[]): RangeError 
   );
 }
 
+/**
+ * Return the endpoint an OpenAI API-key call goes to: the resolved one, else a non-empty
+ * `OPENAI_BASE_URL`, else `OPENAI_API_ENDPOINT`.
+ */
+function openaiBaseUrl(resolved: Resolved, env: Env): string {
+  // Only a host key on a pinned subscription connection has no endpoint.
+  return resolved.baseUrl ?? (env("OPENAI_BASE_URL") || OPENAI_API_ENDPOINT);
+}
+
+/**
+ * Return the key and base URL a Chat Completions vendor's calls use (xAI, DeepSeek, Qwen, GLM,
+ * MiniMax, OpenRouter, vLLM).
+ *
+ * The key is the resolved one, else the provider's non-empty key variable, else `null` for vLLM;
+ * the base URL the resolved one, else (vLLM) a non-empty `VLLM_BASE_URL` as written, else
+ * `PROVIDER_BASE_URL`; each variable is read only when no earlier source matched. Throws
+ * `RangeError` naming the key variable if no key is found.
+ */
+function vendorAccess(provider: string, resolved: Resolved, env: Env): { key: string | null; baseUrl: string } {
+  // Every Chat Completions vendor has a key variable.
+  const variable = getApiKeyEnv(provider)!;
+  const key = resolved.keyAtBuild ?? (env(variable) || null);
+  if (key === null && !OPTIONAL_API_KEY_PROVIDERS.has(provider)) {
+    throw missingKey(provider, [variable]);
+  }
+  const envBaseUrl = resolved.baseUrl === null && provider === "vllm" ? env("VLLM_BASE_URL") : undefined;
+  return { key, baseUrl: resolved.baseUrl ?? (envBaseUrl || PROVIDER_BASE_URL[provider]!) };
+}
+
 /** Build the OpenAI API-key route: Responses with a bearer key. */
 function openaiModel(resolved: Resolved, wiring: Wiring): RouteModel {
   const route = new Route({
     provider: "openai",
-    // Only a host key on a pinned subscription connection has no endpoint.
-    baseUrl: resolved.baseUrl ?? (wiring.env("OPENAI_BASE_URL") || OPENAI_API_ENDPOINT),
+    baseUrl: openaiBaseUrl(resolved, wiring.env),
     path: "responses",
     // `resolveModelConfig` pins every OpenAI config to a connection, so a key is always resolved.
     auth: withHeaders(new BearerAuth(resolved.key!), resolved.secretHeaders),
@@ -200,26 +243,17 @@ function openaiModel(resolved: Resolved, wiring: Wiring): RouteModel {
  * Build a Chat Completions vendor's route (xAI, DeepSeek, Qwen, GLM, MiniMax, OpenRouter, vLLM):
  * `chat/completions`, or `responses` for a name-routed model, with a bearer key.
  *
- * The key is the resolved one, else the provider's non-empty key variable, else `"EMPTY"` for
- * vLLM; the base URL the resolved one, else (vLLM) a non-empty `VLLM_BASE_URL` as written, else
- * `PROVIDER_BASE_URL`; each variable is read only when no earlier source matched. Throws
- * `RangeError` naming the key variable if no key is found.
+ * The key and base URL come from `vendorAccess`, which throws `RangeError` naming the key
+ * variable if no key is found; a keyless vLLM sends `"EMPTY"`.
  */
 function vendorModel(provider: string, resolved: Resolved, wiring: Wiring): RouteModel {
   const { model, block } = resolved;
-  // Every Chat Completions vendor has a key variable.
-  const variable = getApiKeyEnv(provider)!;
-  const key = resolved.keyAtBuild ?? (wiring.env(variable) || null);
-  if (key === null && !OPTIONAL_API_KEY_PROVIDERS.has(provider)) {
-    throw missingKey(provider, [variable]);
-  }
+  const { key, baseUrl } = vendorAccess(provider, resolved, wiring.env);
   // `checkModelConfig` refused a block on a name-routed model.
   const responses = prefersResponses(model);
-  const envBaseUrl =
-    resolved.baseUrl === null && provider === "vllm" ? wiring.env("VLLM_BASE_URL") : undefined;
   const route = new Route({
     provider,
-    baseUrl: resolved.baseUrl ?? (envBaseUrl || PROVIDER_BASE_URL[provider]!),
+    baseUrl,
     path: responses ? "responses" : "chat/completions",
     // A keyless vLLM server ignores the value; sending "EMPTY" keeps today's wire request.
     auth: withHeaders(new BearerAuth(key ?? "EMPTY"), resolved.secretHeaders),
@@ -431,50 +465,32 @@ async function subscriptionModel(
 }
 
 /**
- * Resolve an `llm_config` (a record of host values, or an `LLMConfig`) into a ready chat model.
+ * Resolve an `llm_config` (a record of host values, or an `LLMConfig`) into its provider and
+ * model and the key, endpoint and headers its calls use, as `chatModelFromConfig` does before it
+ * picks a route.
  *
  * Unset `provider`/`model` come from one saved and environment selection snapshot (`snapshot`,
  * else one read from `env`). A recorded connection keeps its pinned method and identity, so a
- * later login or removal fails the build instead of changing accounts. A ChatGPT subscription
- * connection with no config key goes to the subscription endpoint; its credentials are read once
- * at build and again on every request.
+ * later login or removal fails here instead of changing accounts. A ChatGPT subscription
+ * connection with no config key comes back as `subscription`, with nothing else resolved.
  *
  * Otherwise a config `api_key` authenticates in place of any saved login or environment key. An
- * OpenAI connection's key is read once at build (for the replay account) and again on every
- * request, so a key changed after the build fails the first request; another provider's saved
- * key is read once at build. A config `base_url` replaces the endpoint. A config
- * `organization`, `project` and `headers` travel with the config key; a saved login's key brings
- * the settings saved with it instead (its header names must equal the recorded ones); an
- * environment key sends none. A model outside the provider's known list gets
- * `onWarning("Model '<model>' is not in the known model list for provider '<p>'. Continuing
- * anyway.")` (default: `warn`, once per text per process); the subscription never
- * warns. A Chat Completions vendor's or Azure deployment's model that `prefersResponses` goes to
- * the Responses API. Ollama sends only the credentials written in `OLLAMA_BASE_URL`, never a key.
+ * OpenAI connection's key is read once here (for the replay account, so a missing or changed key
+ * fails now) and `key` reads it again on every request; another provider's saved key is read once
+ * here, and its environment key is left to the route builder. A config `base_url` replaces the
+ * endpoint. A config `organization`, `project` and `headers` travel with the config key; a saved
+ * login's key brings the settings saved with it instead (its header names must equal the recorded
+ * ones); an environment key sends none. `signal` and `scheduler` go to every credential read.
  *
- * `send` and `scheduler` go to the model's transport (`scheduler` also to the credential store),
- * `signal` to every credential read, and `onReplayDegraded` to the protocol.
- *
- * Throws `RangeError` if `checkModelConfig` rejects the config (e.g. a block the API it reaches
- * refuses, or a Chat Completions block on a model routed to the Responses API), a vendor,
- * Anthropic or Google key is missing, `OLLAMA_BASE_URL` is malformed, or Azure has no credential
- * or no `OPENAI_API_VERSION`; `AuthError` if a pinned login changed or was removed, an OpenAI key is
- * missing or changed, or saved header names differ from the recorded ones; a `TypeCheckError` for
- * a record that holds a non-yian value.
+ * Throws `RangeError` if `checkModelConfig` rejects the config; `AuthError` if a pinned login
+ * changed or was removed, an OpenAI key is missing or changed, or saved header names differ from
+ * the recorded ones; a `TypeCheckError` for a record that holds a non-yian value.
  */
-export async function chatModelFromConfig(
+export async function resolveProviderAccess(
   config: Readonly<Record<string, unknown>> | LLMConfig,
-  options: {
-    env?: Env;
-    snapshot?: ConnectionSnapshot;
-    send?: Send;
-    scheduler?: Scheduler;
-    signal?: AbortSignal;
-    onReplayDegraded?: (reason: ReplayDegradedReason) => void;
-    onWarning?: (message: string) => void;
-  } = {},
-): Promise<RouteModel> {
-  const { env = processEnv, snapshot, send, scheduler, signal, onReplayDegraded } = options;
-  const onWarning = options.onWarning ?? ((message: string) => warnOnce(WARNED, message));
+  options: { env?: Env; snapshot?: ConnectionSnapshot; scheduler?: Scheduler; signal?: AbortSignal } = {},
+): Promise<Resolved> {
+  const { env = processEnv, snapshot, scheduler, signal } = options;
   const values = config instanceof LLMConfig
     ? config
     : (fromHost(config, "llm_config") as Record<string, unknown>);
@@ -482,12 +498,12 @@ export async function chatModelFromConfig(
   // `resolveModelConfig` sets both or throws.
   const provider = validated.provider!;
   const model = validated.model!;
-  const wiring: Wiring = { env, send, scheduler, onReplayDegraded };
-  const read: Read = (pinned, name) => connectionCredentials(pinned, name, { env, signal, scheduler });
-
+  const block = validated.blockFor(provider);
   if (validated.apiKey === null && connection !== null && connection.method === "subscription") {
-    return subscriptionModel(connection, model, validated.blockFor("openai"), wiring, read);
+    const none = { key: null, keyAtBuild: null, baseUrl: null, idHeaders: {}, secretHeaders: {} };
+    return { provider, model, block, subscription: connection, ...none };
   }
+  const read = reader(env, signal, scheduler);
 
   let key: Secret | null = null;
   let keyAtBuild: string | null = null;
@@ -526,15 +542,47 @@ export async function chatModelFromConfig(
     idHeaders = openaiIdHeaders(validated.organization, validated.project);
     secretHeaders = { ...validated.headers };
   }
-  const resolved: Resolved = {
-    model,
-    block: validated.blockFor(provider),
-    key,
-    keyAtBuild,
-    baseUrl,
-    idHeaders,
-    secretHeaders,
-  };
+  return { provider, model, block, subscription: null, key, keyAtBuild, baseUrl, idHeaders, secretHeaders };
+}
+
+/**
+ * Resolve an `llm_config` (a record of host values, or an `LLMConfig`) into a ready chat model.
+ *
+ * The provider, model, key, endpoint and headers come from `resolveProviderAccess`. A ChatGPT
+ * subscription connection with no config key goes to the subscription endpoint; its credentials
+ * are read once at build and again on every request. A model outside the provider's known list
+ * gets `onWarning("Model '<model>' is not in the known model list for provider '<p>'. Continuing
+ * anyway.")` (default: `warn`, once per text per process); the subscription never warns. A
+ * Chat Completions vendor's or Azure deployment's model that `prefersResponses` goes to the
+ * Responses API. Ollama sends only the credentials written in `OLLAMA_BASE_URL`, never a key.
+ *
+ * `send` and `scheduler` go to the model's transport (`scheduler` also to the credential store),
+ * `signal` to every credential read, and `onReplayDegraded` to the protocol.
+ *
+ * Throws what `resolveProviderAccess` throws; `RangeError` if a vendor, Anthropic or Google key is
+ * missing, `OLLAMA_BASE_URL` is malformed, or Azure has no credential or no `OPENAI_API_VERSION`;
+ * `AuthError` if the subscription login changed or was removed.
+ */
+export async function chatModelFromConfig(
+  config: Readonly<Record<string, unknown>> | LLMConfig,
+  options: {
+    env?: Env;
+    snapshot?: ConnectionSnapshot;
+    send?: Send;
+    scheduler?: Scheduler;
+    signal?: AbortSignal;
+    onReplayDegraded?: (reason: ReplayDegradedReason) => void;
+    onWarning?: (message: string) => void;
+  } = {},
+): Promise<RouteModel> {
+  const { env = processEnv, snapshot, send, scheduler, signal, onReplayDegraded } = options;
+  const onWarning = options.onWarning ?? ((message: string) => warnOnce(WARNED, message));
+  const resolved = await resolveProviderAccess(config, { env, snapshot, scheduler, signal });
+  const { provider, model, subscription } = resolved;
+  const wiring: Wiring = { env, send, scheduler, onReplayDegraded };
+  if (subscription !== null) {
+    return subscriptionModel(subscription, model, resolved.block, wiring, reader(env, signal, scheduler));
+  }
   // After the credential and header reads, so a removed login or
   // mismatched header names raise without a warning, while a missing environment key (outside
   // OpenAI) still warns first.
@@ -550,6 +598,79 @@ export async function chatModelFromConfig(
   if (provider === "google") return googleModel(resolved, wiring);
   if (provider === "ollama") return ollamaModel(resolved, wiring);
   return vendorModel(provider, resolved, wiring);
+}
+
+/**
+ * Build the embeddings client for `config`, an embedding model on an OpenAI-compatible provider,
+ * with the key, endpoint and headers that provider's chat calls would use.
+ *
+ * The provider and model are both required, never filled from the chat defaults. Credentials
+ * resolve through `resolveProviderAccess`, saved logins included: OpenAI's key is read again on
+ * every request; a vendor's key and base URL fall back as its chat route's do (`vendorAccess`),
+ * and a keyless vLLM sends no auth header. `send` and `scheduler` go to the client, `signal` to
+ * every credential read the build makes.
+ *
+ * Throws `RangeError` for a provider outside `OPENAI_COMPATIBLE` or an empty model, before
+ * anything is read; `AuthError` for an OpenAI ChatGPT subscription login, which can't embed; and
+ * what `resolveProviderAccess` and `vendorAccess` throw.
+ */
+export async function embedderFromConfig(
+  config: EmbeddingModel,
+  options: {
+    env?: Env;
+    snapshot?: ConnectionSnapshot;
+    send?: Send;
+    scheduler?: Scheduler;
+    signal?: AbortSignal;
+  } = {},
+): Promise<Embedder> {
+  const { provider, model } = config;
+  if (!OPENAI_COMPATIBLE.includes(provider)) {
+    const others = OPENAI_COMPATIBLE.filter((name) => name !== "openai").join(", ");
+    throw new RangeError(
+      `provider \`${provider}\` has no embeddings API yian supports; use openai or an OpenAI-compatible ` +
+        `provider (${others})`,
+    );
+  }
+  if (typeof model !== "string" || model === "") throw new RangeError("an embedding model needs a model name");
+  const { env = processEnv, send, scheduler } = options;
+  const resolved = await resolveProviderAccess({ provider, model }, options);
+  if (resolved.subscription !== null) {
+    throw new AuthError("a ChatGPT subscription can't embed; sign in with an API key");
+  }
+  let auth: Auth;
+  let baseUrl: string;
+  if (provider === "openai") {
+    baseUrl = openaiBaseUrl(resolved, env);
+    // `resolveModelConfig` pins every OpenAI config to a connection, so a key is always resolved.
+    auth = new BearerAuth(resolved.key!);
+  } else {
+    const access = vendorAccess(provider, resolved, env);
+    baseUrl = access.baseUrl;
+    auth = access.key === null ? new NoAuth() : new BearerAuth(access.key);
+  }
+  return openaiEmbeddings({
+    provider,
+    baseUrl,
+    auth: withHeaders(auth, resolved.secretHeaders),
+    model,
+    headers: resolved.idHeaders,
+    send,
+    scheduler,
+  });
+}
+
+/**
+ * Return the `Embed` that builds a client through `embedderFromConfig` with `env` (default
+ * `processEnv`) on every call, from that call's provider and model, so each call reads the
+ * current saved login; the call's `signal` goes to the build and the requests. `send` and
+ * `scheduler` go to each client.
+ */
+export function defaultEmbed(env: Env = processEnv, options: { send?: Send; scheduler?: Scheduler } = {}): Embed {
+  return async (texts, { provider, model, signal }) => {
+    const embedder = await embedderFromConfig({ provider, model }, { ...options, env, signal });
+    return embedder(texts, { signal });
+  };
 }
 
 /**

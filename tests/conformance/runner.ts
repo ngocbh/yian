@@ -73,9 +73,11 @@ import {
   ToolCallPart,
   Usage,
 } from "../../src/llm/messages.ts";
+import type { EmbeddingModel } from "../../src/llm/embeddings.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { MemoryBase, type MemoryContract, type MemorySession } from "../../src/memory/base.ts";
 import { FileMemory } from "../../src/memory/file.ts";
+import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { checkModelConfig, resolveModelConfig } from "../../src/llm_clients/connection.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
@@ -88,8 +90,9 @@ import {
 } from "../../src/expr/expressions.ts";
 import { type ExprNode, parseExpr } from "../../src/expr/grammar.ts";
 import { evalBinding, renderTemplateRecord } from "../../src/expr/template.ts";
+import { typeToSchema } from "../../src/nodes/agent/structured.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { type FileLock, lockFile, virtualScheduler } from "../../src/platform.ts";
+import { type FileLock, lockFile, openSqlite, virtualScheduler } from "../../src/platform.ts";
 import {
   inspectRun,
   replayRunLog,
@@ -128,7 +131,16 @@ import type { AskRequest, AskTool, ToolEntry } from "../../src/tools/registry.ts
 import { canonicalJson, logJson, parseJson } from "../../src/typesys/json.ts";
 import type { JsonMode, JsonObject } from "../../src/typesys/json.ts";
 import { readTypedefs, typeFor } from "../../src/typesys/types.ts";
-import { buildValueAs, FileRef, fromHost, InboxRef, isRecord, jsonPart, MemoryRef } from "../../src/typesys/values.ts";
+import {
+  buildValueAs,
+  FileRef,
+  fromHost,
+  InboxRef,
+  isMemoryType,
+  isRecord,
+  jsonPart,
+  MemoryRef,
+} from "../../src/typesys/values.ts";
 import type { Type, Value as YianValue, ValueRecord } from "../../src/typesys/values.ts";
 import { withAppendHook } from "../helpers/append_hook.ts";
 import { validate } from "../helpers/schema.ts";
@@ -665,9 +677,16 @@ function checkFiles(where: string, files: Value | undefined): void {
   }
 }
 
+/** The keys a `host.memory` entry of each memory type takes. */
+const MEMORY_KEYS: Readonly<Record<string, ReadonlySet<string>>> = {
+  FileMemory: new Set(["type", "id", "files", "held"]),
+  VectorDBMemory: new Set(["type", "id", "embedding", "items", "recall_recent"]),
+};
+
 /**
  * Throw unless `value` is `host.memory`: input names to `{type: FileMemory, id, files, held}`
- * (`held` a point with its `node`), or to `{same_as: <input>}` naming an entry that isn't one.
+ * (`held` a point with its `node`) or `{type: VectorDBMemory, id, embedding, items,
+ * recall_recent}`, or to `{same_as: <input>}` naming an entry that isn't one.
  */
 function checkMemory(value: Value | undefined): void {
   const entries = mapping("host.memory", value);
@@ -681,15 +700,45 @@ function checkMemory(value: Value | undefined): void {
       }
       continue;
     }
-    const memory = keys(where, entry, new Set(["type", "id", "files", "held"]), { required: ["type"] });
-    if (memory["type"] !== "FileMemory") throw new Error(`\`${where}.type\` must be FileMemory`);
+    const type = get(mapping(where, entry), "type");
+    if (type === undefined) throw new Error(`\`${where}.type\` is required`);
+    if (typeof type !== "string" || !Object.hasOwn(MEMORY_KEYS, type)) {
+      throw new Error(`\`${where}.type\` must be FileMemory or VectorDBMemory`);
+    }
+    const memory = keys(where, entry, MEMORY_KEYS[type]!, { required: type === "VectorDBMemory" ? ["embedding"] : [] });
     if (typeof get(memory, "id", "") !== "string") throw new Error(`\`${where}.id\` must be text`);
+    if (type === "VectorDBMemory") {
+      checkVectorEntry(where, memory);
+      continue;
+    }
     checkFiles(`${where}.files`, get(memory, "files", {}));
     if (Object.hasOwn(memory, "held")) {
       const { node, ...point } = mapping(`${where}.held`, memory["held"]);
       if (typeof node !== "string") throw new Error(`\`${where}.held.node\` must be a node id`);
       checkPoint(`${where}.held`, point);
     }
+  }
+}
+
+/** Throw unless the VectorDBMemory entry `memory`, at `where`, holds an embedding model, items and a recall count. */
+function checkVectorEntry(where: string, memory: Case): void {
+  const embedding = memory["embedding"];
+  const texts = (keys: string[]) => isMapping(embedding) && keys.every((key) => typeof embedding[key] === "string");
+  if (!texts(["provider", "model"]) || Object.keys(embedding as Case).length !== 2) {
+    throw new Error(`\`${where}.embedding\` must be \`{provider, model}\`, each text`);
+  }
+  const items = get(memory, "items", []);
+  const isItem = (item: Value) =>
+    isMapping(item) &&
+    typeof item["text"] === "string" &&
+    Object.keys(item).every((key) => key === "text" || (key === "fields" && isMapping(item["fields"])));
+  if (!Array.isArray(items) || !items.every(isItem)) {
+    const shape = "a list of `{text, fields}`, each `text` text and `fields` a mapping";
+    throw new Error(`\`${where}.items\` must be ${shape}`);
+  }
+  const recent = get(memory, "recall_recent", 0n);
+  if (typeof recent !== "bigint" || recent < 0n) {
+    throw new Error(`\`${where}.recall_recent\` must be an int of 0 or more`);
   }
 }
 
@@ -797,11 +846,18 @@ function checkHttp(value: Value | undefined): void {
   });
 }
 
+/** Return the memory type of `host.memory` entry `input` in `memory`, through its `same_as`. */
+function memoryType(memory: Case, input: string): Value | undefined {
+  const entry = memory[input] as Case;
+  const same = get(entry, "same_as");
+  return get((typeof same === "string" ? memory[same] : entry) as Case, "type");
+}
+
 /**
  * Throw unless the case's memories are used as the format says: no `inputs` key binds a
- * `host.memory` input; `expect.memory` maps `host.memory` inputs to null or a mapping of paths
- * to text; `expect.memory_drift` lists input names; `resume.memory` maps input names to null or
- * `{id}`.
+ * `host.memory` input; `expect.memory` maps `host.memory` inputs to null or, for a FileMemory, a
+ * mapping of paths to text and, for a VectorDBMemory, a list of items; `expect.memory_drift`
+ * lists input names; `resume.memory` maps input names to null or `{id}`.
  */
 function checkMemoryUse(case_: Case, expect: Case): void {
   const memory = get(get(case_, "host", {}) as Case, "memory", {}) as Case;
@@ -813,6 +869,19 @@ function checkMemoryUse(case_: Case, expect: Case): void {
     const where = `expect.memory.${input}`;
     if (!Object.hasOwn(memory, input)) throw new Error(`\`${where}\` names no \`host.memory\` input`);
     if (files === null) continue;
+    if (memoryType(memory, input) === "VectorDBMemory") {
+      const fields = new Set(["id", "text", "fields", "retired"]);
+      const isItem = (item: Value) =>
+        isMapping(item) &&
+        typeof item["id"] === "bigint" &&
+        typeof item["text"] === "string" &&
+        Object.keys(item).every((key) => fields.has(key)) &&
+        (!Object.hasOwn(item, "retired") || typeof item["retired"] === "string");
+      if (!Array.isArray(files) || !files.every(isItem)) {
+        throw new Error(`\`${where}\` must be null or a list of items \`{id, text, fields, retired}\``);
+      }
+      continue;
+    }
     if (!isMapping(files) || Object.values(files).some((text) => typeof text !== "string")) {
       throw new Error(`\`${where}\` must be null or a mapping of paths to text`);
     }
@@ -1904,6 +1973,15 @@ interface CaseMemories {
   real(input: string): string;
   /** Return a new instance per entry on its folder, by input name; a `same_as` input shares its entry's. */
   bind(): Record<string, MemoryBase>;
+  /** Return a new instance of `input`'s entry in the folder `root`, with identity `id`. */
+  make(input: string, root: string, id: string | undefined): MemoryBase;
+  /** Return the JSON Schema of `input`'s item type, which a run opens its memory with, or `null`. */
+  itemType(input: string): JsonObject | null;
+  /**
+   * Return what `expect.memory` compares for `input`: a FileMemory's files, or a VectorDBMemory's
+   * items; `null` when there is no folder or store.
+   */
+  contents(input: string): Value;
 }
 
 /** Write `files`, relative paths to text, under `root`: folders 0700, files 0600. */
@@ -1916,27 +1994,112 @@ function writeFolder(root: string, files: Readonly<Record<string, string>>): voi
   }
 }
 
-/** Return a FileMemory on `root` with identity `id`, its defaults read from `env`, as the run's are. */
-function fileMemory(root: string, id: string | undefined, env: Env): FileMemory {
+/** The words of the runner's embedder, one dimension each. */
+const EMBED_WORDS = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel"];
+
+/** The runner's embedder: each text's vector counts the words `alpha` to `hotel` in it, one dimension each. */
+async function wordCounts(texts: readonly string[]): Promise<Float32Array[]> {
+  return texts.map((text) => {
+    const words = text.toLowerCase().split(/[^a-z]+/);
+    return Float32Array.from(EMBED_WORDS.map((word) => words.filter((each) => each === word).length));
+  });
+}
+
+/** The file a VectorDBMemory entry's store is, in its folder. */
+const STORE_FILE = "store.db";
+
+/**
+ * Return a new instance of the `host.memory` entry `entry`'s type in the folder `root`, with
+ * identity `id`, its defaults read from `env`, as the run's are: a FileMemory on the folder, or a
+ * VectorDBMemory on its store, embedded by the runner's embedder.
+ */
+function entryMemory(entry: Case, root: string, id: string | undefined, env: Env): MemoryBase {
   // A virtual clock of its own: its one sleep is a lock wait, which then takes no time.
-  return withEnv(env, () => new FileMemory({ root, ...(id === undefined ? {} : { id }), scheduler: virtualScheduler(Date.now()) }));
+  const scheduler = virtualScheduler(Date.now());
+  const named = id === undefined ? {} : { id };
+  return withEnv(env, () => {
+    if (entry["type"] === "FileMemory") return new FileMemory({ root, ...named, scheduler });
+    return new VectorDBMemory({
+      path: join(root, STORE_FILE),
+      ...named,
+      embedding: entry["embedding"] as unknown as EmbeddingModel,
+      embed: wordCounts,
+      recallRecent: Number(get(entry, "recall_recent", 0n)),
+      scheduler,
+    });
+  });
+}
+
+/** Return the JSON Schema of `flow`'s memory input `input`'s item type, as a run computes it, or `null`. */
+function flowItemType(flow: ComposedFlow, input: string): JsonObject | null {
+  const typ = flow.input.find((param) => param.name === input)?.contract?.type;
+  return isMemoryType(typ) && typ.element !== undefined ? typeToSchema(typ.element) : null;
+}
+
+/** Make `memory`'s store, typed `itemType`, and add `items` to it in order, as a host: ids 1, 2, ... */
+async function seedItems(memory: MemoryBase, itemType: JsonObject | null, items: readonly Case[]): Promise<void> {
+  const signal = new AbortController().signal;
+  const session = await memory.open({ create: true, itemType, signal });
+  try {
+    for (const [i, item] of items.entries()) {
+      const change: JsonObject = { op: "add", text: item["text"] as string };
+      if (Object.hasOwn(item, "fields")) change["fields"] = item["fields"] as JsonObject;
+      const author = { kind: "host", name: "conformance" } as const;
+      const applied = await session.apply({ id: `seed-${i + 1}`, change, author, signal });
+      if (!applied.ok) throw new Error(`\`host.memory\` item ${i + 1} was refused: ${applied.reason}`);
+    }
+  } finally {
+    await session.close();
+  }
 }
 
 /**
- * Return the memories `host.memory` in `spec` declares, each entry's folder `<dir>/<input>`
- * holding its `files` (no folder without them), its instances built with `env`.
+ * Return the items of the VectorDBMemory store at `path`, in id order, each `{id, text, fields,
+ * retired}` with `fields` and `retired` left out when it has none, or `null` when there is no store.
  */
-function caseMemories(spec: Case, dir: string, env: Env): CaseMemories {
+function storeItems(path: string): Value {
+  if (!existsSync(path)) return null;
+  const db = openSqlite(path, { readonly: true });
+  try {
+    return db
+      .prepare("SELECT id, text, fields, retired FROM items ORDER BY id")
+      .all()
+      .map((row) => {
+        const item: Case = { id: BigInt(Number(row.id)), text: row.text as string };
+        if (row.fields !== null) item["fields"] = parseJson(row.fields as string, "codec") as Value;
+        if (row.retired !== null) item["retired"] = row.retired as string;
+        return item;
+      });
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Return the memories `host.memory` in `spec` declares for `flow`, each entry's folder
+ * `<dir>/<input>` holding its `files` (no folder without them), or its store `store.db` holding its
+ * `items`, added with the input's item type (no store without them); its instances built with `env`.
+ */
+async function caseMemories(spec: Case, dir: string, env: Env, flow: ComposedFlow): Promise<CaseMemories> {
   const entries = get(spec, "memory", {}) as Case;
   const own = (input: string) => {
-    const same = (entries[input] as Case)["same_as"];
+    const same = (entries[input] as Case | undefined)?.["same_as"];
     return typeof same === "string" ? same : input;
   };
+  // A `resume.memory` input may have no entry (an Optional memory left out): it binds a FileMemory.
+  const entry = (input: string) => (entries[own(input)] as Case | undefined) ?? { type: "FileMemory" };
   const roots = new Map(Object.keys(entries).map((input) => [input, join(dir, own(input))]));
+  const make = (input: string, root: string, id: string | undefined) => entryMemory(entry(input), root, id, env);
+  const itemType = (input: string) => flowItemType(flow, input);
+  const idOf = (input: string) => get(entry(input), "id") as string | undefined;
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  for (const [input, entry] of Object.entries(entries)) {
-    const files = (entry as Case)["files"];
+  for (const input of Object.keys(entries)) {
+    if (own(input) !== input) continue;
+    const { files, items } = entry(input);
     if (isMapping(files)) writeFolder(roots.get(input)!, files as Record<string, string>);
+    if (Array.isArray(items)) {
+      await seedItems(make(input, roots.get(input)!, idOf(input)), itemType(input), items as Case[]);
+    }
   }
   const real = realpathSync(dir);
   return {
@@ -1946,38 +2109,44 @@ function caseMemories(spec: Case, dir: string, env: Env): CaseMemories {
       const made = new Map<string, MemoryBase>();
       for (const input of Object.keys(entries)) {
         const name = own(input);
-        if (!made.has(name)) made.set(name, fileMemory(roots.get(name)!, get(entries[name] as Case, "id") as string | undefined, env));
+        if (!made.has(name)) made.set(name, make(name, roots.get(name)!, idOf(name)));
       }
       return Object.fromEntries(Object.keys(entries).map((input) => [input, made.get(own(input))!]));
     },
+    make,
+    itemType,
+    contents: (input) =>
+      entry(input)["type"] === "VectorDBMemory"
+        ? storeItems(join(roots.get(input)!, STORE_FILE))
+        : folderFiles(roots.get(input)!),
   };
 }
 
 /**
  * Return how a resume binds the case's `memories`: new instances on their folders, but as
- * `resume.memory` says: `null` binds nothing, and `{id}` binds a memory of that identity in a
- * folder of its own, `<dir>/resume-<input>`, made now. Also return those folders.
+ * `resume.memory` says: `null` binds nothing, and `{id}` binds a memory of that identity and its
+ * entry's type in a folder of its own, `<dir>/resume-<input>`, made now. Also return those folders.
  */
 async function resumeMemories(
   case_: Case,
   memories: CaseMemories,
   dir: string,
-  env: Env,
 ): Promise<{ bind: () => Record<string, MemoryBase>; roots: Map<string, string> }> {
   const overrides = get(get(case_, "resume", {}) as Case, "memory", {}) as Case;
   const roots = new Map<string, string>();
   for (const [input, binding] of Object.entries(overrides)) {
     if (binding === null) continue;
     const root = join(dir, `resume-${input}`);
-    const made = fileMemory(root, (binding as Case)["id"] as string, env);
-    await (await made.open({ create: true, itemType: null, signal: new AbortController().signal })).close();
+    const made = memories.make(input, root, (binding as Case)["id"] as string);
+    const signal = new AbortController().signal;
+    await (await made.open({ create: true, itemType: memories.itemType(input), signal })).close();
     roots.set(input, root);
   }
   const bind = () => {
     const bound = memories.bind();
     for (const [input, binding] of Object.entries(overrides)) {
       if (binding === null) delete bound[input];
-      else bound[input] = fileMemory(roots.get(input)!, (binding as Case)["id"] as string, env);
+      else bound[input] = memories.make(input, roots.get(input)!, (binding as Case)["id"] as string);
     }
     return bound;
   };
@@ -2638,7 +2807,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const env = caseEnv(ctx);
   const spec = get(case_, "host", {}) as Case;
   const folders = join(ctx.dir, "memory");
-  const memories = caseMemories(spec, folders, env);
+  const memories = await caseMemories(spec, folders, env, flow);
   const scripted = host(case_, log, env, flow, memories);
   const { tools, models, inbox, stop, calls, check, sent } = scripted;
   const run = get(case_, "run", {}) as Case;
@@ -2682,7 +2851,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       }
       events.length = 0;
       chunks.length = 0;
-      const resumed = await resumeMemories(case_, memories, folders, env);
+      const resumed = await resumeMemories(case_, memories, folders);
       roots.push(...resumed.roots);
       if (binds) bound = () => ({ memory: resumed.bind() });
       const resumeArguments = runOptions<AdvanceOptions>(resumeArgs, RESUME_OPTIONS);
@@ -2744,7 +2913,7 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   // A raised error is compared as is, without placeholders.
   actual = placeholders(actual, runId);
   const named = Object.keys(get(case_["expect"] as Case, "memory", {}) as Case);
-  const memory = Object.fromEntries(named.map((input) => [input, folderFiles(memories.roots.get(input)!)]));
+  const memory = Object.fromEntries(named.map((input) => [input, memories.contents(input)]));
   return { ...actual, memory, ...(drift === null ? {} : { memory_drift: drift }), ...caught, left };
 }
 
@@ -3185,7 +3354,7 @@ export async function crashSweep(
   const inputs = get(case_, "inputs", {}) as Case;
   const args = runOptions<RunFlowOptions>(get(case_, "run", {}) as Case, RUN_OPTIONS);
   const uncutLog = join(ctx.dir, "sweep.jsonl");
-  const uncutMemories = caseMemories(spec, join(ctx.dir, "sweep-memory"), env);
+  const uncutMemories = await caseMemories(spec, join(ctx.dir, "sweep-memory"), env, flow);
   const uncutHost = host(case_, uncutLog, env, flow, uncutMemories);
   const uncutHooks = runHooks(uncutLog, env, uncutHost, start);
   const uncut = await runFlow(flow, { ...inputs, ...uncutMemories.bind() }, { ...args, ...uncutHooks });
@@ -3211,7 +3380,7 @@ export async function crashSweep(
   for (let k = 0; k <= count - 2; k += 1) {
     const at = ` (crash sweep, cut after record ${k})`;
     const log = join(ctx.dir, `sweep-${k}.jsonl`);
-    const memories = caseMemories(spec, join(ctx.dir, `sweep-${k}-memory`), env);
+    const memories = await caseMemories(spec, join(ctx.dir, `sweep-${k}-memory`), env, flow);
     const memory = () => (binds ? { memory: memories.bind() } : {});
     const scripted = host(case_, log, env, flow, memories);
     const hooks = runHooks(log, env, scripted, start);
@@ -3295,8 +3464,8 @@ export async function crashSweep(
     checkNoRoots(memories.roots, text);
     // Each write landed once: the cut's folders hold what the uncut run's would.
     if (isMapping(expectMemory)) {
-      const folders = Object.keys(expectMemory).map((input) => [input, folderFiles(memories.roots.get(input)!)]);
-      compare(`memory${at}`, Object.fromEntries(folders), expectMemory);
+      const contents = Object.keys(expectMemory).map((input) => [input, memories.contents(input)]);
+      compare(`memory${at}`, Object.fromEntries(contents), expectMemory);
     }
     if (strong) {
       compare(`output${at}`, output(resumed, flow), output(uncut, flow), { byValue: true });

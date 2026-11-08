@@ -1,6 +1,7 @@
 /**
  * Fake memories for tests: `RecordingSession`, a `MemorySession` that records the calls it gets and
- * answers as its test sets, and `FakeMemory`, a `MemoryBase` over one that counts its opens.
+ * answers as its test sets, `FakeMemory`, a `MemoryBase` over one that counts its opens, and
+ * `wordEmbed`, a deterministic embedder for a VectorDBMemory.
  */
 
 import {
@@ -14,6 +15,7 @@ import {
   type MemorySession,
   type Recall,
 } from "../../src/memory/base.ts";
+import type { EmbeddingModel } from "../../src/llm/embeddings.ts";
 import { FileMemory } from "../../src/memory/file.ts";
 import type { JsonObject } from "../../src/typesys/json.ts";
 import { MemoryRef } from "../../src/typesys/values.ts";
@@ -122,4 +124,26 @@ export class FakeMemory extends MemoryBase {
   override reset(): Promise<void> {
     throw new Error("reset isn't faked");
   }
+}
+
+/** The words that each own one dimension of a `wordEmbed` vector. */
+const WORDS = ["alpha", "bravo", "charlie", "delta"];
+
+/**
+ * A deterministic embedder: each text's vector counts the words `alpha` to `delta` in it, one
+ * dimension each, plus one so that no vector is zero. `calls` holds each call's texts and model.
+ */
+export function wordEmbed(): ((
+  texts: readonly string[],
+  o: EmbeddingModel & { signal: AbortSignal },
+) => Promise<Float32Array[]>) & { calls: { texts: string[]; model: string }[] } {
+  const calls: { texts: string[]; model: string }[] = [];
+  const embed = async (texts: readonly string[], o: EmbeddingModel & { signal: AbortSignal }) => {
+    calls.push({ texts: [...texts], model: `${o.provider}/${o.model}` });
+    return texts.map((text) => {
+      const words = text.toLowerCase().split(/[^a-z]+/);
+      return Float32Array.from([...WORDS.map((word) => words.filter((each) => each === word).length), 1]);
+    });
+  };
+  return Object.assign(embed, { calls });
 }

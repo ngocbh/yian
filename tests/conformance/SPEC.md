@@ -147,7 +147,8 @@ reports moved while the run was down (`RunResult.memoryDrift`).
 
 The resume binds each `host.memory` input to a new instance on the same folder, except as
 `resume.memory` says, by input: `null` binds nothing, and `{id: <identity>}` binds a memory of that
-identity in a folder of its own, made before the resume.
+identity and the entry's type (a FileMemory for an input with no entry) in a folder of its own,
+made before the resume.
 
 ### `expr`
 
@@ -369,6 +370,13 @@ A case can't hold code, so its host is declared under `host`.
   directory, which holds `files` before the run (absent: there is no folder). Its defaults come
   from `env`, as the run's do. With `held`, once the run reaches the [point](#points), the runner
   takes the memory's lock and holds it until the run ends, as another writer would. An entry
+  `{type: VectorDBMemory, id: <identity>, embedding: {provider, model}, items: [{text, fields}],
+  recall_recent: <n>}` (`embedding` required) is a VectorDBMemory with that `id`, embedding model
+  and `recall_recent`, on the store `memory/<input>/store.db`. With `items`, the runner makes the
+  store before the run, typed by the input's item type, and adds each item in order as a host
+  (absent: there is no store). Its embedder is the runner's own: each text's vector counts the
+  words `alpha`, `bravo`, `charlie`, `delta`, `echo`, `foxtrot`, `golf` and `hotel` in it, one
+  dimension each, so no case calls an embeddings API. An entry
   `{same_as: <input>}` binds the instance of another entry, so both inputs are one memory. A memory
   input is bound by `memory`, never by `inputs`. Each run and each `advance` gets new instances on
   the same folders, as a host restarted between them would. The run's log, output, events and
@@ -384,8 +392,11 @@ data form (`question`, `questions`, `answer_schema`, `title`, `node_id`, `option
 and the host's extras; nulls left out).
 A TOOL `ask` never sends `options`; a model's `ask_user` call can.
 
-`expect.memory` maps `host.memory` inputs to the files in their folders after the run: each file
-outside `.yian/`, by its `/`-separated path, to its text; `null` when there is no folder.
+`expect.memory` maps `host.memory` inputs to their contents after the run: for a FileMemory, each
+file in its folder outside `.yian/`, by its `/`-separated path, to its text; for a VectorDBMemory,
+its items in id order, each `{id, text, fields, retired}` (`fields` absent for an item of text only,
+`retired` absent while it is live, else why it was retired). `null` when there is no folder or
+store.
 
 The format reserves the host key `skills` (skill directories, given as `files`); a case that
 uses it fails.
@@ -617,7 +628,7 @@ A case's group is its directory under `cases/`.
 | `run-case`, `run-loop`, `run-map-call` | run | control flow and growth |
 | `run-leaves` | run | TOOL (retries, call ids, `ask`, `sleep`), CODE |
 | `run-agent` | run | AGENT with scripted models: plain, structured, tool loop, steers, interrupts, retries |
-| `run-memory` | run | FileMemory inputs: recall, grants, memory tools in agents and TOOL nodes, errors the model sees, sharing |
+| `run-memory` | run | FileMemory and VectorDBMemory inputs: recall, grants, memory tools in agents and TOOL nodes, errors the model sees, sharing |
 | `resume` | resume | recovery, TOOL attempts across a resume, crashed-attempt counts, re-supplied keys, re-bound memories |
 | `cli` | cli | non-interactive `yian run`, the `--json` commands, `yian status --json` |
 
@@ -656,10 +667,10 @@ may make a model call more; and the agent's later scripted requests are compared
 result read as the closer (`content` the closer text, `is_error: true`). A filled secret in the
 uncut run's log or in a resumed log fails the sweep too, as does a memory's folder.
 
-Each cut run binds its `host.memory` memories in new folders, seeded from `files`, and its resume
-binds new instances on that cut's folders. A memory tool is resumable, so the resume sends a call
-the cut cut off again, never closing it `crashed`, with no allowance. After each resume, the cut's
-folders must hold what `expect.memory` says, so each write landed once. The resume's drift isn't
+Each cut run binds its `host.memory` memories in new folders, seeded from `files` or `items`, and
+its resume binds new instances on that cut's folders. A memory tool is resumable, so the resume
+sends a call the cut cut off again, never closing it `crashed`, with no allowance. After each
+resume, the cut's memories must hold what `expect.memory` says, so each write landed once. The resume's drift isn't
 checked: a cut after a write always shows drift.
 
 A `run` or `resume` case may have a **golden log**, `<name>.log.jsonl` beside it: the run log the

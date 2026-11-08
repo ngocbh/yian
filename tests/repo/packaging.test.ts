@@ -59,6 +59,7 @@ import type {
   Recall,
   RecordedMemoryTool,
   Message as RootMessage,
+  VectorDBMemoryOptions,
 } from "../../src/index.ts";
 import type {
   JsonMode,
@@ -128,6 +129,7 @@ const NAMES: Record<string, string[]> = {
     "InboxRef",
     "MemoryBase",
     "FileMemory",
+    "VectorDBMemory",
     "isMemory",
     "MemoryBusyError",
     "ChangeIdReusedError",
@@ -400,6 +402,7 @@ describe("entry points", () => {
       RecordedMemoryTool?,
       MemoryErrorKind?,
       FileMemoryOptions?,
+      VectorDBMemoryOptions?,
       RunRecordedMemoryTool?,
     ];
     expect(names).toEqual([]);

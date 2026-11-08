@@ -1,0 +1,77 @@
+# An agent granted `{cases: [add]}` adds an item with its typed fields: the `add` tool's `fields`
+# take the item type's schema, and the tool result holds the new item's id and the memory's version.
+# The recall is the count alone, with no hint, since the agent doesn't hold `cases_search`.
+kind: run
+flow: |
+  id: keep
+  name: keep
+  llm_config: {provider: anthropic, model: claude-test}
+  typedefs:
+    Case:
+      title: str
+      tags: list(str)
+  input:
+    cases: !VectorDBMemory(Case)
+  nodes:
+    keep:
+      kind: agent
+      input:
+        cases: ${input.cases}
+      tools: [{cases: [add]}]
+      system_prompt: Help.
+      prompt: "<memory>${cases}</memory> Keep the outage."
+      output: str
+  output: ${keep.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    cases:
+      type: VectorDBMemory
+      id: t/cases
+      embedding: {provider: openai, model: text-embedding-3-small}
+      items:
+      - {text: alpha bravo, fields: {title: Login, tags: [auth]}}
+  models:
+    keep:
+      agent:
+      - reply:
+          format: yian.message.v1
+          role: assistant
+          parts:
+          - {type: tool_call, id: c1, name: cases_add, arguments: {text: charlie delta, fields: {title: Outage, tags: [ops]}}}
+      - request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - {format: yian.message.v1, role: user, parts: [{type: text, text: <memory>1 item</memory> Keep the outage.}]}
+          - format: yian.message.v1
+            role: assistant
+            parts:
+            - {type: tool_call, id: c1, name: cases_add, arguments: {text: charlie delta, fields: {title: Outage, tags: [ops]}}}
+          - format: yian.message.v1
+            role: tool
+            parts:
+            - {type: tool_result, call_id: c1, name: cases_add, content: '{"id":2,"version":2}'}
+          tools:
+          - name: cases_add
+            description: "Add an item: its text and, when the memory's items are typed, its fields. Never conflicts."
+            parameters:
+              type: object
+              properties:
+                text: {type: string, description: "The item's text, which search compares."}
+                fields:
+                  type: object
+                  title: Record
+                  description: The item's typed fields.
+                  properties:
+                    title: {type: string, title: Title}
+                    tags: {type: array, title: Tags, items: {type: string}}
+                  required: [title, tags]
+              required: [text, fields]
+              additionalProperties: false
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: kept}]}
+expect:
+  output: {status: succeeded, output: kept}
+  memory:
+    cases:
+    - {id: 1, text: alpha bravo, fields: {title: Login, tags: [auth]}}
+    - {id: 2, text: charlie delta, fields: {title: Outage, tags: [ops]}}

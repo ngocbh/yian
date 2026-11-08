@@ -25,6 +25,7 @@ import {
   MemoryMissingError,
 } from "../../src/memory/base.ts";
 import { FileMemory } from "../../src/memory/file.ts";
+import { VectorDBMemory } from "../../src/memory/vectordb.ts";
 import { checkConversation, checkMessage, ConversationError } from "../../src/nodes/agent/messages.ts";
 import { AgentNode } from "../../src/nodes/agent/node.ts";
 import * as base from "../../src/nodes/base.ts";
@@ -175,6 +176,7 @@ test("the package root exports exactly its documented root list plus ToolAttempt
     InboxRef,
     MemoryBase,
     FileMemory,
+    VectorDBMemory,
     isMemory,
     MemoryBusyError,
     ChangeIdReusedError,
@@ -185,9 +187,11 @@ test("the package root exports exactly its documented root list plus ToolAttempt
   expect(Object.keys(yian).sort()).toEqual(Object.keys(expected).sort());
   const exported = yian as Record<string, unknown>;
   expect(Object.keys(expected).filter((name) => exported[name] !== expected[name])).toEqual([]);
-  // The type export, checked by `tsc`.
+  // The type exports, checked by `tsc`.
   const m: yian.Message = { role: "user", parts: [] };
   expect(m.parts).toEqual([]);
+  const options: yian.VectorDBMemoryOptions = { path: "cases.db" };
+  expect(options.path).toBe("cases.db");
 });
 
 test("yian/run has no BackwardOutcome; Steering is gone, replaced by interrupt(run, inbox)", () => {

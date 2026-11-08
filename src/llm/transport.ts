@@ -11,7 +11,7 @@
 
 import { current } from "../defaults.ts";
 import { RedirectError, realScheduler, safeFetch, type Scheduler, type Send } from "../platform.ts";
-import { scrub } from "./auth.ts";
+import { dropCredentialTail, scrub } from "./auth.ts";
 import { ProviderError } from "./errors.ts";
 import { JSONDecodeError, type JsonValue, parseJson } from "../typesys/json.ts";
 
@@ -63,6 +63,11 @@ export interface ShortRequestOptions {
   timeoutMs?: number;
   /** The largest body accepted, in bytes; defaults to no cap. */
   maxBytes?: number;
+  /**
+   * Whether a non-2xx body is read only to its first `MAX_ERROR_BODY_BYTES`, as a model call's
+   * is, with its text cut by `errorBodyText`, instead of whole under `maxBytes`; defaults to false.
+   */
+  cutErrorBody?: boolean;
   /** Stops the request; a stop rejects with `signal.reason`. */
   signal?: AbortSignal;
   /** The clock the timer runs on; defaults to `realScheduler`. */
@@ -83,6 +88,26 @@ export interface ShortReply {
    * @throws ProviderError Of kind `protocol` when the text isn't JSON.
    */
   json(): JsonValue;
+}
+
+/** The most bytes of an error reply's body read: its error text never needs more. */
+export const MAX_ERROR_BODY_BYTES = 64 * 1024;
+
+/**
+ * Return the first `MAX_ERROR_BODY_BYTES` of `chunks`, `size` bytes in all, decoded as UTF-8 with
+ * replacement. Text cut at the cap loses what `dropCredentialTail` drops: the cut may split a
+ * credential, and no scrub matches the part before it.
+ */
+export function errorBodyText(chunks: readonly Uint8Array[], size: number, credentials: readonly string[]): string {
+  const bytes = new Uint8Array(Math.min(size, MAX_ERROR_BODY_BYTES));
+  let at = 0;
+  for (const chunk of chunks) {
+    const part = chunk.subarray(0, bytes.length - at);
+    bytes.set(part, at);
+    at += part.length;
+  }
+  const text = new TextDecoder().decode(bytes);
+  return size < MAX_ERROR_BODY_BYTES ? text : dropCredentialTail(text, credentials);
 }
 
 /** The part of a body reader the transport uses; Node's and Bun's reader types differ. */
@@ -291,34 +316,47 @@ export async function openExchange(url: string, init: RequestInit, options: Exch
  * timer, for replies such as a model listing or a sign-in call.
  *
  * Errors map as in `openExchange`, named by `name`. A body larger than `maxBytes` aborts
- * the request and throws a `protocol` `ProviderError`. A non-2xx reply is returned: the
- * caller decides what it means.
+ * the request and throws a `protocol` `ProviderError`, except a non-2xx body under
+ * `cutErrorBody`, which is cut instead. A non-2xx reply is returned: the caller decides what it
+ * means.
  */
 export async function shortRequest(url: string, init: RequestInit, options: ShortRequestOptions): Promise<ShortReply> {
-  const { name, credentials = () => [], maxBytes = Infinity, signal, scheduler = realScheduler, send } = options;
+  const {
+    name,
+    credentials = () => [],
+    maxBytes = Infinity,
+    cutErrorBody = false,
+    signal,
+    scheduler = realScheduler,
+    send,
+  } = options;
   const timeoutMs = options.timeoutMs ?? current().requestTimeoutSeconds * 1000;
   signal?.throwIfAborted();
   const request = requestControl(url, init, { provider: name, credentials, signal, send });
   let response: Response;
   let chunks: Uint8Array[];
   let size: number;
+  let cut: boolean;
   try {
-    [response, chunks, size] = await timed(
+    [response, chunks, size, cut] = await timed(
       (async () => {
         const [reply, reader] = await request.send();
+        const cutting = cutErrorBody && (reply.status < 200 || reply.status >= 300);
         const read: Uint8Array[] = [];
         let total = 0;
         while (reader) {
           const chunk = await nextChunk(reader);
           if (chunk === undefined) break;
           total += chunk.byteLength;
-          if (total > maxBytes) {
+          if (!cutting && total > maxBytes) {
             const message = `${name} response is larger than ${maxBytes} bytes`;
             throw new ProviderError("protocol", message, { status: reply.status, provider: name });
           }
           read.push(chunk);
+          // The rest of an error body can't change what the error says.
+          if (cutting && total >= MAX_ERROR_BODY_BYTES) break;
         }
-        return [reply, read, total] as const;
+        return [reply, read, total, cutting] as const;
       })(),
       timeoutMs,
       scheduler,
@@ -330,13 +368,18 @@ export async function shortRequest(url: string, init: RequestInit, options: Shor
   } finally {
     request.release();
   }
-  const bytes = new Uint8Array(size);
-  let at = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, at);
-    at += chunk.byteLength;
+  let text: string;
+  if (cut) {
+    text = errorBodyText(chunks, size, [...credentials()]);
+  } else {
+    const bytes = new Uint8Array(size);
+    let at = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, at);
+      at += chunk.byteLength;
+    }
+    text = new TextDecoder().decode(bytes);
   }
-  const text = new TextDecoder().decode(bytes);
   return {
     status: response.status,
     headers: response.headers,

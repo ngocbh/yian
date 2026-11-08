@@ -5,18 +5,19 @@
  */
 
 import { afterAll, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { loadFlow } from "../src/compose/loader.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { FileMemory } from "../src/memory/file.ts";
-import { withWarnings } from "../src/platform.ts";
+import { VectorDBMemory, type VectorDBMemoryOptions } from "../src/memory/vectordb.ts";
+import { openSqlite, withWarnings } from "../src/platform.ts";
 import { advance, agentCall, agentCalls, complete, foldRunLog, inspectRun, type RunFlowOptions, runFlow } from "../src/run.ts";
 import { pending } from "../src/tools/context.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
-import { FakeMemory, fileInfo, RecordingSession } from "./helpers/memory_fakes.ts";
+import { FakeMemory, fileInfo, RecordingSession, wordEmbed } from "./helpers/memory_fakes.ts";
 import { callReply, crashAfter, NO_ENV, serving, textReply } from "./helpers/run_state_fixtures.ts";
 
 const tmp = mkdtempSync(join(tmpdir(), "yian-run-memory-resume-"));
@@ -299,4 +300,103 @@ output: \${hold.output}
       "memory `lessons` takes a MemoryBase instance",
     );
   }
+});
+
+/** A flow whose agent is granted `add` on `cases`, a VectorDBMemory of `Case` items. */
+const VECTOR_FLOW = `
+id: v
+name: v
+llm_config: {provider: anthropic, model: claude-test}
+typedefs:
+  Case:
+    title: str
+    tags: list(str)
+input:
+  cases: !VectorDBMemory(Case)
+nodes:
+  keep:
+    kind: agent
+    input:
+      cases: \${input.cases}
+    tools: [{cases: [add]}]
+    prompt: "<memory>\${cases}</memory> keep it"
+    output: str
+output: \${keep.output}
+`;
+
+/** The replies of a run that adds one case, then answers. */
+const addReplies = (): Reply[] => [
+  callReply(["cases_add", { text: "alpha outage", fields: { title: "Outage", tags: ["ops"] } }, "c1"]),
+  textReply("done"),
+];
+
+/** A VectorDBMemory on `path` with identity `t/cases`, embedded as `openai/small` unless `options` say otherwise. */
+function cases(path: string, options: Partial<VectorDBMemoryOptions> = {}): VectorDBMemory {
+  const embedding = { provider: "openai", model: "small" };
+  return new VectorDBMemory({ path, id: "t/cases", embedding, embed: wordEmbed(), ...options });
+}
+
+/** Run `VECTOR_FLOW` over `log` with its store at `path`, crashing once the reply's `model_call` step is written. */
+async function crashedVectorRun(log: string, path: string): Promise<void> {
+  const probe = runLog();
+  await runFlow(await loadFlow(VECTOR_FLOW), { cases: cases(join(mkdtempSync(join(tmp, "v-")), "probe.db")) }, {
+    models: serving(scripted(addReplies())),
+    env: NO_ENV,
+    log: probe,
+  });
+  const k = readFileSync(probe, "utf8").split("\n").findIndex((line) => line.includes('"model_call"')) + 1;
+  await crashAfter(k, async () =>
+    runFlow(await loadFlow(VECTOR_FLOW), { cases: cases(path) }, {
+      models: serving(scripted(addReplies())),
+      env: NO_ENV,
+      log,
+    }),
+  );
+}
+
+/** The store at `path`'s items as `[id, text]`, read straight from its file. */
+function storedItems(path: string): [unknown, unknown][] {
+  const db = openSqlite(path, { readonly: true });
+  try {
+    return db.prepare("SELECT id, text FROM items ORDER BY id").all().map((row) => [row.id, row.text]);
+  } finally {
+    db.close();
+  }
+}
+
+test("after a crash once a cases_add call started, a resume opens the store again and the add lands once", async () => {
+  const path = join(mkdtempSync(join(tmp, "v-")), "cases.db");
+  const log = runLog();
+  await crashedVectorRun(log, path);
+  // A resume's instance may leave the embedding model out: the store's is used.
+  const embed = wordEmbed();
+  const resumed = await advance({
+    log,
+    models: serving(scripted([textReply("done")])),
+    env: NO_ENV,
+    memory: { cases: new VectorDBMemory({ path, embed }) },
+  });
+  expect(resumed.status, resumed.failure?.message).toBe("succeeded");
+  // The add sent again under its call id returned its stored result, embedding nothing.
+  expect(embed.calls).toEqual([]);
+  expect(storedItems(path)).toEqual([[1, "alpha outage"]]);
+  expect(resumed.memoryDrift).toMatchObject([{ input: "cases", identity: "t/cases", recorded: "0", current: "1" }]);
+});
+
+test("a resume whose store is gone, or bound to another embedding model, is refused, creating nothing", async () => {
+  const path = join(mkdtempSync(join(tmp, "v-")), "cases.db");
+  const log = runLog();
+  await crashedVectorRun(log, path);
+  const before = readFileSync(log, "utf8");
+  const resume = (memory: VectorDBMemory) =>
+    advance({ log, models: serving(scripted([])), env: NO_ENV, memory: { cases: memory } });
+  await expect(resume(cases(path, { embedding: { provider: "openai", model: "large" } }))).rejects.toThrow(
+    "memory `cases`: this memory was embedded with openai/small; re-embed it with `yian memory reembed`",
+  );
+  rmSync(path);
+  await expect(resume(cases(path))).rejects.toThrow(
+    "memory `cases` (`t/cases`) isn't at its location; bind it with --memory",
+  );
+  expect(existsSync(path)).toBe(false);
+  expect(readFileSync(log, "utf8")).toBe(before);
 });

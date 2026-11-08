@@ -260,6 +260,30 @@ export const ENTRIES = Object.freeze([
     group: "setting",
     minimum: 1,
   }),
+  entry("VECTOR_MEMORY_MAX_ITEMS", {
+    default: 20_000,
+    description: "Most items a VectorDBMemory may hold",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("VECTOR_MEMORY_MAX_K", {
+    default: 50,
+    description: "Most items a VectorDBMemory's `search` returns and its `list` shows",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("VECTOR_MEMORY_MAX_TEXT_CHARS", {
+    default: 8_000,
+    description: "Most characters of one VectorDBMemory item's text and fields, of a retire's reason, or of a query",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("VECTOR_MEMORY_MAX_RECALL_CHARS", {
+    default: 4_000,
+    description: "Most characters of a VectorDBMemory's recall",
+    group: "setting",
+    minimum: 1,
+  }),
   // A hung MCP server would otherwise stall the run forever; a run reads these when it
   // talks to a server, so they don't change the loaded flow.
   entry("MCP_CONNECT_TIMEOUT_SECONDS", {
@@ -295,6 +319,18 @@ export const ENTRIES = Object.freeze([
   entry("REQUEST_TIMEOUT_SECONDS", {
     default: 30,
     description: "Longest wait in seconds for a short request (model listing, sign-in calls)",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("EMBEDDING_TIMEOUT_SECONDS", {
+    default: 60,
+    description: "Longest wait in seconds for one embeddings request",
+    group: "setting",
+    minimum: 1,
+  }),
+  entry("EMBEDDING_BATCH_ITEMS", {
+    default: 64,
+    description: "Most texts sent in one embeddings request; more go in several requests",
     group: "setting",
     minimum: 1,
   }),
@@ -342,6 +378,14 @@ export const ENTRIES = Object.freeze([
   entry("MAX_MODEL_EVENT_BYTES", {
     default: 16 * 1024 * 1024,
     description: "Largest event read from a model's reply stream: an SSE event's data or one NDJSON line",
+    group: "input cap",
+    minimum: 1,
+  }),
+  // 64 texts at 3,072 dimensions take about 4 MiB as JSON numbers; this leaves room for larger
+  // batches and models.
+  entry("MAX_EMBEDDING_REPLY_BYTES", {
+    default: 32 * 1024 * 1024,
+    description: "Largest reply read from an embeddings request",
     group: "input cap",
     minimum: 1,
   }),

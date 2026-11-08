@@ -944,6 +944,30 @@ test("a queued call waits at most its timeout from when it was made; an abort wh
   await s.close();
 });
 
+test("a call queued behind a longer wait on the root is busy at its own deadline, while that wait goes on", async () => {
+  const patient = await openAt({ lockTimeoutMs: 10_000, scheduler: realScheduler });
+  const hasty = await openAt({ lockTimeoutMs: 200, scheduler: realScheduler });
+  const lock = lockFile(join(root, ".yian/lock"), { private: true });
+  let first: Promise<Applied>;
+  let queued: unknown;
+  let waited: number;
+  try {
+    first = append(patient, "p1", "p1");
+    const started = performance.now();
+    queued = await append(hasty, "h1", "h1").catch((error: unknown) => error);
+    waited = performance.now() - started;
+  } finally {
+    lock.release();
+  }
+  expect(queued).toBeInstanceOf(MemoryBusyError);
+  expect(waited).toBeLessThan(2_000);
+  expect((await first).ok).toBe(true);
+  // The busy call left the queue for good: its change never lands.
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("p1");
+  await patient.close();
+  await hasty.close();
+});
+
 test("an abort while queued leaves the others in their order", async () => {
   const s = await openAt({ lockTimeoutMs: 5_000, scheduler: realScheduler });
   const lock = lockFile(join(root, ".yian/lock"), { private: true });
@@ -989,6 +1013,32 @@ test("close waits for every call the session queued, even when its last one was 
   // The first call's turn has finished by then: its change is in the file.
   expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("p1");
   expect((await first).ok).toBe(true);
+});
+
+test("close doesn't wait for the turn of a call that left the queue, busy or aborted", async () => {
+  const patient = await openAt({ lockTimeoutMs: 10_000, scheduler: realScheduler });
+  const hasty = await openAt({ lockTimeoutMs: 200, scheduler: realScheduler });
+  const lock = lockFile(join(root, ".yian/lock"), { private: true });
+  const first = append(patient, "p1", "p1");
+  let closed: boolean;
+  try {
+    const stop = new AbortController();
+    const aborted = hasty.apply({ id: "h1", change: { op: "append", path: "a.md", text: "h1" }, author, signal: stop.signal });
+    stop.abort(new Error("stopped"));
+    await expect(aborted).rejects.toThrow("stopped");
+    expect(await append(hasty, "h2", "h2").catch((error: unknown) => error)).toBeInstanceOf(MemoryBusyError);
+    // Every call of `hasty` has returned; the turn ahead of them still waits for the lock.
+    closed = await Promise.race([
+      hasty.close().then(() => true),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 1_000)),
+    ]);
+  } finally {
+    lock.release();
+  }
+  expect(closed).toBe(true);
+  expect((await first).ok).toBe(true);
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("p1");
+  await patient.close();
 });
 
 test("the .yian check runs again once the lock is held, so a swap during the wait is caught", async () => {

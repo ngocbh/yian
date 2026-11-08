@@ -1,0 +1,62 @@
+# With `recall_recent: 2`, a VectorDBMemory's recall is the count of its items, then the two newest,
+# newest first, each as `[<id>] <text>`. The agent holds `cases_search`, so the hint after them
+# names it.
+kind: run
+flow: |
+  id: recall
+  name: recall
+  llm_config: {provider: anthropic, model: claude-test}
+  input:
+    cases: !VectorDBMemory
+  nodes:
+    answer:
+      kind: agent
+      input:
+        cases: ${input.cases}
+      tools: [{cases: [search]}]
+      system_prompt: Help.
+      prompt: "<memory>${cases}</memory> Which case is newest?"
+      output: str
+  output: ${answer.output}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    cases:
+      type: VectorDBMemory
+      id: t/cases
+      embedding: {provider: openai, model: text-embedding-3-small}
+      recall_recent: 2
+      items:
+      - {text: alpha bravo}
+      - {text: charlie delta}
+      - {text: echo foxtrot}
+  models:
+    answer:
+      agent:
+      - request:
+          messages:
+          - {format: yian.message.v1, role: system, parts: [{type: text, text: Help.}]}
+          - format: yian.message.v1
+            role: user
+            parts:
+            - type: text
+              text: |-
+                <memory>3 items
+                [3] echo foxtrot
+                [2] charlie delta
+                Search them with cases_search.</memory> Which case is newest?
+          tools:
+          - name: cases_search
+            description: >-
+              Find the items whose text is most like query, best first, each with its id, version and similarity
+              score. Retired items aren't searched. Pass filter to search only the items whose fields equal its values.
+            parameters:
+              type: object
+              properties:
+                query: {type: string, description: What to look for.}
+                k: {type: integer, minimum: 1.0, maximum: 50.0, description: "How many items to return, best first."}
+              required: [query, k]
+              additionalProperties: false
+        reply: {format: yian.message.v1, role: assistant, parts: [{type: text, text: case 3}]}
+expect:
+  output: {status: succeeded, output: case 3}

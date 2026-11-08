@@ -14,7 +14,7 @@
  * Every writer reads what the others appended (catches up) before it writes, holding the
  * memory's lock, so only the journal's last entry can lack an outcome.
  *
- * It imports `platform`, `typesys` and `memory/base.ts`.
+ * It imports `platform`, `typesys`, `memory/base.ts` and `memory/common.ts`.
  */
 
 import { randomBytes } from "node:crypto";
@@ -25,6 +25,7 @@ import { dirname, join } from "node:path";
 import { isSystemError, syncFolder } from "../platform.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import type { Applied, Author } from "./base.ts";
+import { asAuthor, authorOf, charCount, isObject, openRegular } from "./common.ts";
 
 /** The hash `before` or `after` holds when there is no file. */
 export const ABSENT = "absent";
@@ -101,27 +102,6 @@ type JournalLine =
 /** The journal's name in `.yian/`, as messages show it. */
 const SHOWN = "`.yian/journal.jsonl`";
 
-/**
- * @internal Open the regular file at `path` with `flags`, never following a symlink at its last
- * component, and return its descriptor.
- *
- * @throws Error a Node system error when the open fails or `path` isn't a regular file.
- */
-export function openRegular(path: string, flags: number, mode?: number): number {
-  // Non-blocking, so a FIFO's open returns (or fails ENXIO for writing) instead of blocking the
-  // thread until a peer opens it; regular files ignore the flag. The flags are missing on Windows.
-  const { O_NOCTTY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
-  const fd = fs.openSync(path, flags | (O_NONBLOCK ?? 0) | (O_NOCTTY ?? 0) | (O_NOFOLLOW ?? 0), mode);
-  // Checked on the open descriptor, so a swap after a path check can't slip through.
-  const stats = fs.fstatSync(fd);
-  if (stats.isFile()) return fd;
-  fs.closeSync(fd);
-  throw Object.assign(new Error(`not a regular file: ${path}`), {
-    code: stats.isDirectory() ? "EISDIR" : "EINVAL",
-    syscall: "open",
-  });
-}
-
 /** @internal Write all of `bytes` to `fd` at its current position. */
 export function writeAll(fd: number, bytes: Uint8Array): void {
   for (let done = 0; done < bytes.length; ) done += fs.writeSync(fd, bytes, done, bytes.length - done);
@@ -185,38 +165,6 @@ function damaged(line: number, what: string): Error {
   return new Error(
     `${SHOWN} line ${line} ${what}; restore the journal or remove it (undo history and change ids are lost)`,
   );
-}
-
-/** @internal Return the number of code points in `text`, which holds no lone surrogate. */
-export function charCount(text: string): number {
-  let chars = text.length;
-  for (let i = 0; i < text.length; i++) {
-    const unit = text.charCodeAt(i);
-    if (unit >= 0xd800 && unit <= 0xdbff) chars--;
-  }
-  return chars;
-}
-
-/** @internal Return whether `value` is a plain JSON object. */
-export function isObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** @internal Return `value` as an `Author`, with only its own fields, when it is one. */
-export function asAuthor(value: unknown): Author | null {
-  if (!isObject(value) || typeof value.name !== "string") return null;
-  const { kind, name, run, node } = value;
-  if (kind !== "agent" && kind !== "tool" && kind !== "user" && kind !== "host") return null;
-  if ((run !== undefined && typeof run !== "string") || (node !== undefined && typeof node !== "string")) return null;
-  return authorOf({ kind, name, run, node });
-}
-
-/** @internal Return `author` with only its own fields, in a fixed order. */
-export function authorOf(author: Author): Author {
-  const copy: Author = { kind: author.kind, name: author.name };
-  if (author.run !== undefined) copy.run = author.run;
-  if (author.node !== undefined) copy.node = author.node;
-  return copy;
 }
 
 /** Return `value` as an `Inverse` when it is one, or `undefined`. */

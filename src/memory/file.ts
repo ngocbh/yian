@@ -7,27 +7,17 @@
  * files) isn't part of the memory: tools refuse it and the version leaves it out. The memory's own metadata lives in
  * `<root>/.yian/`: `identity`, the journal, the lock and a temp folder.
  *
- * It imports `defaults`, `diagnostics`, `platform`, `tools` and `typesys`, and `memory/base.ts` and
- * `memory/file_journal.ts`.
+ * It imports `defaults`, `diagnostics`, `platform` and `typesys`, and `memory/base.ts`,
+ * `memory/common.ts` and `memory/file_journal.ts`.
  */
 
-import { createHash, randomBytes } from "node:crypto";
 // The default import keeps calls patchable by test spies.
 import fs from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 import { current } from "../defaults.ts";
 import { compareCodeUnits } from "../diagnostics.ts";
-import {
-  type FileLock,
-  FileLockError,
-  isSystemError,
-  realScheduler,
-  type Scheduler,
-  syncFolder,
-  waitForLock,
-} from "../platform.ts";
-import { ReportedToolError } from "../tools/errors.ts";
+import { isSystemError, realScheduler, type Scheduler, syncFolder } from "../platform.ts";
 import { canonicalJson, type JsonObject } from "../typesys/json.ts";
 import {
   type Applied,
@@ -36,7 +26,6 @@ import {
   ChangeIdReusedError,
   type Erased,
   MemoryBase,
-  MemoryBusyError,
   MemoryMissingError,
   type MemoryContract,
   type MemoryInfo,
@@ -45,17 +34,35 @@ import {
   type Recall,
 } from "./base.ts";
 import {
-  ABSENT,
-  asAuthor,
   authorOf,
+  capOption,
   charCount,
+  checkAuthor,
+  firstChars,
+  type Held,
+  isObject,
+  listed,
+  locked,
+  lstatOrNull,
+  type MemoryLock,
+  openRegular,
+  PendingCalls,
+  plural,
+  realPath,
+  refusal,
+  refused,
+  sha256,
+  shown,
+  stringArg,
+  withoutLocation,
+} from "./common.ts";
+import {
+  ABSENT,
   type Inverse,
   Journal,
   type JournalChange,
   type JournalEntry,
-  isObject,
   makeDirectory,
-  openRegular,
   replaceFile,
 } from "./file_journal.ts";
 
@@ -230,24 +237,6 @@ interface Limits {
 }
 
 /**
- * Return `value` when it is a safe integer of at least `minimum`, else its default.
- *
- * @throws {RangeError} If `value` is given and isn't such an integer.
- */
-function capOption(name: string, value: number | undefined, fallback: number, minimum: number): number {
-  if (value === undefined) return fallback;
-  if (!Number.isSafeInteger(value) || value < minimum) {
-    throw new RangeError(`FileMemory ${name} must be an integer of at least ${minimum}, not ${String(value)}`);
-  }
-  return value;
-}
-
-/** Return `path` in backticks for a message, a control character escaped. */
-function shown(path: string): string {
-  return `\`${JSON.stringify(path).slice(1, -1)}\``;
-}
-
-/**
  * Return why the relative path `rel` can't name a member, or with `folder` a folder of members, by
  * its text alone, or `null` when it can. Its components are plain names, and a file sits under at
  * most `maxDepth` folders.
@@ -303,29 +292,12 @@ function diskProblem(root: string, rel: string, folder = false): string | null {
   return null;
 }
 
-/** Return the first `limit` code points of `text`. */
-function firstChars(text: string, limit: number): string {
-  let index = 0;
-  for (let n = 0; n < limit && index < text.length; n++) index += text.codePointAt(index)! > 0xffff ? 2 : 1;
-  return text.slice(0, index);
-}
-
-/** Return `count` and `noun`, plural unless `count` is 1: `plural(2, "file")` is `"2 files"`. */
-function plural(count: number, noun: string, nouns = `${noun}s`): string {
-  return `${count} ${count === 1 ? noun : nouns}`;
-}
-
 /** Return the lines of `text`: a final line break ends the last line rather than starting one. */
 function linesOf(text: string): string[] {
   if (text === "") return [];
   const lines = text.split("\n");
   if (lines.at(-1) === "") lines.pop();
   return lines;
-}
-
-/** Return the sha256 hex digest of `data`. */
-function sha256(data: string | Uint8Array): string {
-  return createHash("sha256").update(data).digest("hex");
 }
 
 /**
@@ -433,21 +405,6 @@ export function memoryVersion(files: readonly MemberFile[]): string {
   return sha256(canonicalJson(pairs));
 }
 
-/** Return `path`'s real path, resolving the symlinks of the part of it that exists. */
-function realRoot(path: string): string {
-  const rest: string[] = [];
-  let head = resolve(path);
-  for (;;) {
-    try {
-      return join(fs.realpathSync(head), ...rest.reverse());
-    } catch (error) {
-      if (!isSystemError(error) || error.code !== "ENOENT" || dirname(head) === head) throw error;
-      rest.push(basename(head));
-      head = dirname(head);
-    }
-  }
-}
-
 /**
  * Return the recall of a memory whose members are `members`: the index's text when it is a
  * member, else each member's path and first line, in path order, within `maxRecallChars`. A
@@ -492,21 +449,6 @@ function recallOf(
   };
 }
 
-/** A refusal the calling model reads: a TOOL node doesn't retry it, since it can't change. */
-function refusal(message: string): ReportedToolError {
-  return new ReportedToolError(message, { permanent: true });
-}
-
-/** Return `args[name]` when it is a string, or `undefined` when it is absent and not `required`. */
-function stringArg(args: JsonObject, name: string, required: true): string;
-function stringArg(args: JsonObject, name: string, required: false): string | undefined;
-function stringArg(args: JsonObject, name: string, required: boolean): string | undefined {
-  const value = Object.hasOwn(args, name) ? args[name] : undefined;
-  if (value === undefined && !required) return undefined;
-  if (typeof value !== "string") throw new TypeError(`FileMemory ${name} must be a string`);
-  return value;
-}
-
 /** Return `args[name]` as a number when it is an integer of at least 1, or `undefined` when absent. */
 function countArg(args: JsonObject, name: string): number | undefined {
   const value = Object.hasOwn(args, name) ? args[name] : undefined;
@@ -534,11 +476,6 @@ const CHANGE_FIELDS: Readonly<Record<Change["op"], readonly string[]>> = Object.
   rewrite: ["path", "text", "if_hash"],
 });
 
-/** Return `names` joined for a message: `a`, `a and b`, `a, b and c`. */
-function listed(names: readonly string[]): string {
-  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-}
-
 /**
  * Return `change` as a FileMemory change.
  *
@@ -560,24 +497,6 @@ function checkChange(change: JsonObject): Change {
     if (!value.isWellFormed()) throw new TypeError(`a FileMemory ${op}'s ${field} holds a lone surrogate`);
   }
   return change as unknown as Change;
-}
-
-/**
- * Return `author` with only its own fields.
- *
- * @throws {TypeError} If it isn't `{kind, name, run?, node?}` with a known kind.
- */
-function checkAuthor(author: Author): Author {
-  const checked = asAuthor(author);
-  if (checked === null) {
-    throw new TypeError("a change's author must be {kind, name, run?, node?}, its kind agent, tool, user or host");
-  }
-  return checked;
-}
-
-/** Return a refusal that wrote nothing. */
-function refused(reason: string): Applied {
-  return { ok: false, reason, current: null };
 }
 
 /**
@@ -613,71 +532,8 @@ interface Store {
   readonly index: string;
   readonly limits: Limits;
   readonly scheduler: Scheduler;
-  /**
-   * Run `body` holding the memory's lock, after this process's earlier calls on the memory: they
-   * take turns, so only another process's writer makes it wait for the lock. It waits at most the
-   * lock timeout from when it was called, its time in the queue included, and an abort while it
-   * is queued rejects it at once.
-   *
-   * Returns the call's `result`, which rejects with `MemoryBusyError` if the lock is still held by
-   * another writer at the deadline, and `done`, which settles once its turn has finished, later
-   * than `result` when an abort let the call go before its turn came.
-   */
-  locked<T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T>;
-}
-
-/** A call's place in a memory's queue: its result, and when its turn has finished. */
-interface Turn<T> {
-  readonly result: Promise<T>;
-  /** Settles, never rejecting, once the turn has run or been passed over. */
-  readonly done: Promise<void>;
-}
-
-/**
- * A body that runs holding a memory's lock. It must finish before it returns, so it can't be async:
- * the lock is released when it returns, and an async body would go on without it.
- */
-type Held<T> = (() => T) & (T extends PromiseLike<unknown> ? never : unknown);
-
-/**
- * This process's calls that hold a memory's lock, keyed by the memory's real root and chained, so
- * its sessions and opens take turns rather than poll the lock against each other.
- */
-const TURNS = new Map<string, Promise<void>>();
-
-/**
- * Run `fn` once this process's earlier turns on the memory at `root` have finished.
- *
- * An abort of `signal` while the call is queued rejects it at once with the signal's reason; its
- * turn, when it comes, does nothing, so the calls after it keep their order. Once its turn has
- * started, `fn` answers the abort itself, so a change it applies is never reported as aborted.
- */
-function inTurn<T>(root: string, signal: AbortSignal | undefined, fn: () => Promise<T>): Turn<T> {
-  let started = false;
-  const run = (TURNS.get(root) ?? Promise.resolve()).then(() => {
-    started = true;
-    signal?.throwIfAborted();
-    return fn();
-  });
-  const done = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  TURNS.set(root, done);
-  void done.then(() => {
-    if (TURNS.get(root) === done) TURNS.delete(root);
-  });
-  if (signal === undefined) return { result: run, done };
-  const result = new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      if (!started) reject(signal.reason);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    // A signal aborted already never fires its listeners.
-    if (signal.aborted) onAbort();
-    void run.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-  });
-  return { result, done };
+  /** Run `body` holding the memory's lock, in this process's turn on the memory, as `locked` in `common.ts` does. */
+  locked<T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T>;
 }
 
 /**
@@ -710,18 +566,20 @@ export class FileMemory extends MemoryBase {
       throw new TypeError("FileMemory id must be a non-empty string on one line");
     }
     const defaults = current();
-    const maxTotalChars = capOption("maxTotalChars", options.maxTotalChars, defaults.fileMemoryMaxTotalChars, 1);
+    const cap = (name: string, value: number | undefined, fallback: number, minimum: number) =>
+      capOption("FileMemory", name, value, fallback, minimum);
+    const maxTotalChars = cap("maxTotalChars", options.maxTotalChars, defaults.fileMemoryMaxTotalChars, 1);
     const limits: Limits = Object.freeze({
-      maxFileChars: capOption("maxFileChars", options.maxFileChars, defaults.fileMemoryMaxFileChars, 1),
+      maxFileChars: cap("maxFileChars", options.maxFileChars, defaults.fileMemoryMaxFileChars, 1),
       maxTotalChars,
-      maxFiles: capOption("maxFiles", options.maxFiles, defaults.fileMemoryMaxFiles, 1),
-      maxDepth: capOption("maxDepth", options.maxDepth, defaults.fileMemoryMaxDepth, 0),
-      maxRecallChars: capOption("maxRecallChars", options.maxRecallChars, defaults.fileMemoryMaxRecallChars, 1),
-      maxReadChars: capOption("maxReadChars", options.maxReadChars, defaults.fileMemoryMaxReadChars, 1),
-      maxResults: capOption("maxResults", options.maxResults, defaults.fileMemoryMaxResults, 1),
-      maxUndo: capOption("maxUndo", options.maxUndo, defaults.memoryMaxUndo, 0),
-      maxChangeIds: capOption("maxChangeIds", options.maxChangeIds, defaults.memoryMaxChangeIds, 1),
-      maxHistoryChars: capOption("maxHistoryChars", options.maxHistoryChars, maxTotalChars, 0),
+      maxFiles: cap("maxFiles", options.maxFiles, defaults.fileMemoryMaxFiles, 1),
+      maxDepth: cap("maxDepth", options.maxDepth, defaults.fileMemoryMaxDepth, 0),
+      maxRecallChars: cap("maxRecallChars", options.maxRecallChars, defaults.fileMemoryMaxRecallChars, 1),
+      maxReadChars: cap("maxReadChars", options.maxReadChars, defaults.fileMemoryMaxReadChars, 1),
+      maxResults: cap("maxResults", options.maxResults, defaults.fileMemoryMaxResults, 1),
+      maxUndo: cap("maxUndo", options.maxUndo, defaults.memoryMaxUndo, 0),
+      maxChangeIds: cap("maxChangeIds", options.maxChangeIds, defaults.memoryMaxChangeIds, 1),
+      maxHistoryChars: cap("maxHistoryChars", options.maxHistoryChars, maxTotalChars, 0),
     });
     const why = typeof index === "string" ? pathProblem(index, limits.maxDepth) : "not a string";
     if (why !== null) throw new TypeError(`FileMemory index ${shown(String(index))} isn't a member path: ${why}`);
@@ -731,42 +589,24 @@ export class FileMemory extends MemoryBase {
       throw new RangeError(`FileMemory lockTimeoutMs must be 0 or more milliseconds, not ${String(timeoutMs)}`);
     }
     // Resolved now, so a later chdir or a swapped symlink doesn't move the memory.
-    const real = realRoot(root);
+    const real = realPath(root);
     const scheduler = options.scheduler ?? realScheduler;
     this.root = real;
     this.#id = id;
+    const lock: MemoryLock = {
+      key: real,
+      path: join(real, META, "lock"),
+      timeoutMs,
+      scheduler,
+      // The folder may change: its own entries are checked on every call.
+      check: () => checkMeta(real),
+    };
     this.#store = Object.freeze({
       root: real,
       index,
       limits,
       scheduler,
-      locked<T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T> {
-        // A monotonic clock, so a wall-clock step while queued neither stretches nor cuts the wait.
-        const deadline = performance.now() + timeoutMs;
-        return inTurn(real, signal, async () => {
-          // Checked before the lock file is opened, and on every call: the folder may change.
-          checkMeta(real);
-          // Only what is left of the timeout: a call waits it out once, queued or not.
-          const left = Math.max(0, deadline - performance.now());
-          let lock: FileLock;
-          try {
-            lock = await waitForLock(join(real, META, "lock"), { timeoutMs: left, signal, scheduler, private: true });
-          } catch (error) {
-            if (error instanceof FileLockError && error.reason === "busy") {
-              // No cause: the lock's error names its path, and this one can reach a model.
-              throw new MemoryBusyError("this memory is busy: another writer holds its lock");
-            }
-            throw error;
-          }
-          try {
-            // Again holding the lock: the folder may have changed while the call waited for it.
-            checkMeta(real);
-            return body();
-          } finally {
-            lock.release();
-          }
-        });
-      },
+      locked: <T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T> => locked(lock, signal, body),
     });
   }
 
@@ -815,7 +655,7 @@ export class FileMemory extends MemoryBase {
         replaceFile(join(root, META, "identity"), Buffer.from(made, "utf8"), join(root, META, "tmp"));
         created = true;
         return made;
-      }).result;
+      });
     }
     if (this.#id !== undefined && identity !== this.#id) {
       throw new Error(`this memory is ${shown(identity)}, not ${shown(this.#id)}`);
@@ -864,17 +704,7 @@ export class FileMemory extends MemoryBase {
         if (lstatOrNull(join(root, folder)) !== null) syncFolder(join(root, folder));
       }
       clearTmp(root);
-    }).result;
-  }
-}
-
-/** `fs.lstatSync`, or `null` when nothing is at `path`. */
-function lstatOrNull(path: string): fs.Stats | null {
-  try {
-    return fs.lstatSync(path);
-  } catch (error) {
-    if (isSystemError(error) && error.code === "ENOENT") return null;
-    throw error;
+    });
   }
 }
 
@@ -1061,22 +891,14 @@ function checkMeta(root: string): void {
 }
 
 /**
- * Return `error` with the memory's location taken out of its message: an OS error names absolute
- * paths, and a session's errors can reach a model and a run log, which never hold a location.
- * Paths in the memory stay, relative to its root. A system error keeps its code.
+ * Return what `withoutLocation` replaces in a session's errors: the root and its paths, which name
+ * the memory's location. Paths in the memory stay, relative to its root.
  */
-function withoutLocation(error: unknown, root: string): unknown {
-  if (!(error instanceof Error) || !error.message.includes(root)) return error;
-  const copy: Error & { code?: unknown; syscall?: unknown; errno?: unknown } = new Error(
-    error.message.replaceAll(`${root}/`, "").replaceAll(root, "the memory"),
-  );
-  copy.name = error.name;
-  // Not `path`, `dest` or `cause`, which hold the location too.
-  const { code, syscall, errno } = error as NodeJS.ErrnoException;
-  if (code !== undefined) copy.code = code;
-  if (syscall !== undefined) copy.syscall = syscall;
-  if (errno !== undefined) copy.errno = errno;
-  return copy;
+function locationOf(root: string): [string, string][] {
+  return [
+    [`${root}/`, ""],
+    [root, "the memory"],
+  ];
 }
 
 /** One open FileMemory. Read tools take no lock; writes and snapshots take the memory's lock. */
@@ -1085,11 +907,8 @@ class FileMemorySession implements MemorySession {
   readonly created: boolean;
   readonly #store: Store;
   readonly #journal: Journal;
-  /**
-   * When the session's last queued turn has finished. Turns run in the order they were queued, so
-   * every earlier turn has finished by then too: `close` waits for it.
-   */
-  #last: Promise<void> = Promise.resolve();
+  /** The session's calls not yet settled: `close` waits for them. */
+  readonly #pending = new PendingCalls();
   #closed = false;
 
   /**
@@ -1133,13 +952,14 @@ class FileMemorySession implements MemorySession {
     }
     if (spec.write) throw new TypeError(`${tool} is a write tool: apply it as a change`);
     try {
-      if (tool === "list") return this.#list(stringArg(args, "dir", false));
+      if (tool === "list") return this.#list(stringArg("FileMemory", args, "dir", false));
       if (tool === "read") {
-        return this.#read(stringArg(args, "path", true), countArg(args, "offset"), countArg(args, "limit"));
+        const path = stringArg("FileMemory", args, "path", true);
+        return this.#read(path, countArg(args, "offset"), countArg(args, "limit"));
       }
-      return this.#search(stringArg(args, "query", true));
+      return this.#search(stringArg("FileMemory", args, "query", true));
     } catch (error) {
-      throw withoutLocation(error, this.#store.root);
+      throw withoutLocation(error, locationOf(this.#store.root));
     }
   }
 
@@ -1270,10 +1090,13 @@ class FileMemorySession implements MemorySession {
     return { version: applied.version, disabledUndos: applied.result.disabled_undos as string[] };
   }
 
-  /** Close the session once every turn it queued has finished, aborted calls' included; later calls throw. */
+  /**
+   * Close the session once every call it made has settled; later calls throw. A call that left the
+   * queue, aborted or busy, never runs, so the turn it left isn't waited for.
+   */
   async close(): Promise<void> {
     this.#closed = true;
-    await this.#last;
+    await this.#pending.settled();
   }
 
   /**
@@ -1644,11 +1467,10 @@ class FileMemorySession implements MemorySession {
   /** Run `body` holding the memory's lock, in this process's turn on the memory. */
   #locked<T>(signal: AbortSignal | undefined, body: Held<T>): Promise<T> {
     if (this.#closed) return Promise.reject(new Error("this FileMemory session is closed"));
-    const { result, done } = this.#store.locked(signal, body);
-    // The turn itself, not the call: an abort while queued lets the call go before its turn runs.
-    this.#last = done;
-    return result.catch((error: unknown) => {
-      throw withoutLocation(error, this.#store.root);
-    });
+    return this.#pending.track(
+      this.#store.locked(signal, body).catch((error: unknown) => {
+        throw withoutLocation(error, locationOf(this.#store.root));
+      }),
+    );
   }
 }

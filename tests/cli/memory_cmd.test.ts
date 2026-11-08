@@ -113,6 +113,15 @@ function lessons(): { identity: string; location: string } {
 }
 
 describe("the target", () => {
+  test("a flow whose id can't name a default doesn't point at --memory, which yian memory lacks", async () => {
+    const path = join(project, "flow.yaml");
+    writeFileSync(path, APPEND.replace("id: answer", 'id: "Answer questions"'));
+    const result = await yian(["memory", "show", path, "lessons"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("so `lessons` gets a default memory");
+    expect(result.stderr).not.toContain("--memory");
+  });
+
   test("--at refuses /, the home folder and a folder holding ~/.yian", async () => {
     for (const [path, refusal] of [
       ["/", "`/` can't be a memory"],

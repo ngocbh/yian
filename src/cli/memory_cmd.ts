@@ -80,7 +80,8 @@ export async function resolveTarget(
   const typ = flow.input.find((param) => param.name === name)?.contract?.type;
   if (!isMemoryType(typ)) throw new UsageError(`Invalid value: the flow has no memory input \`${name}\``);
   const home = homeDir(io.env);
-  const defaults = defaultMemories(flow, { home, project: projectFolder(flowPath!) });
+  // yian memory names a memory with --at, not --memory.
+  const defaults = defaultMemories(flow, { home, project: projectFolder(flowPath!), memoryFlag: false });
   const found = defaults.find((each) => each.input === name);
   if (found === undefined) {
     throw new UsageError(

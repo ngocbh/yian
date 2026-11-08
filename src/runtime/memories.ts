@@ -17,7 +17,7 @@ import {
   type MemorySession,
   type Recall,
 } from "../memory/base.ts";
-import type { JsonObject } from "../typesys/json.ts";
+import { type JsonObject, logJson } from "../typesys/json.ts";
 import { MemoryRef } from "../typesys/values.ts";
 
 /** One memory input of a run and the instance a host bound to it. */
@@ -41,6 +41,26 @@ export interface OpenMemoriesOptions {
    * instance of such a type must declare the same tools.
    */
   readonly hostTypes?: ReadonlyMap<string, readonly string[]>;
+}
+
+/** How `RunMemories.reopen` opens the memories a resumed run started with. */
+export interface ReopenMemoriesOptions {
+  readonly signal: AbortSignal;
+  /** As `OpenMemoriesOptions.hostTypes`. */
+  readonly hostTypes?: ReadonlyMap<string, readonly string[]>;
+  /** Whether to read each memory's version and report drift: only a crash resume does. */
+  readonly drift: boolean;
+}
+
+/** A memory whose version moved since its run started, as a crash resume found it. */
+export interface MemoryDrift {
+  /** The first input bound to the memory. */
+  readonly input: string;
+  readonly identity: string;
+  /** The version the run recorded when it started. */
+  readonly recorded: string;
+  /** The version the memory holds now. */
+  readonly current: string;
 }
 
 /** One open session and the inputs bound to its instance. */
@@ -98,6 +118,49 @@ export class RunMemories {
   }
 
   /**
+   * Open again, never creating one, the memories a resumed run started with: each input's
+   * instance is checked as `open` checks it, then its identity, type, settings and tool specs
+   * against the value the run recorded. With `drift`, each memory's version is read and compared
+   * with the recorded one. The recorded values stay the run's: a resume never takes a new recall.
+   *
+   * @param recorded The value each memory input recorded at the run's start; an Optional one left
+   *   out has none and takes no binding.
+   * @returns The sessions, and one drift entry per memory whose version moved (none without
+   *   `drift`), frozen.
+   * @throws RangeError when a recorded memory has no binding or isn't at its location ("bind it
+   *   with --memory"), or its identity, type, settings or tool specs differ from the recorded ones.
+   * @throws As `open` throws, for the instance checks and a failed open or snapshot.
+   */
+  static async reopen(
+    bindings: readonly MemoryBinding[],
+    recorded: ReadonlyMap<string, MemoryRef>,
+    options: ReopenMemoriesOptions,
+  ): Promise<{ memories: RunMemories; drift: readonly MemoryDrift[] }> {
+    for (const [input, value] of recorded) {
+      if (!bindings.some((binding) => binding.input === input)) throw missingMemory(input, value.identity);
+    }
+    const opened = await openSessions(bindings, { ...options, create: false }, recorded);
+    try {
+      const drift: MemoryDrift[] = [];
+      for (const { inputs, session } of opened) {
+        for (const input of inputs) checkRecorded(input, session, recorded.get(input)!);
+        if (!options.drift) continue;
+        const [input] = inputs;
+        const { version } = await sessionStep(input!, options.signal, () => session.snapshot());
+        const was = recorded.get(input!)!.version;
+        if (version !== was) {
+          drift.push(Object.freeze({ input: input!, identity: session.info.identity, recorded: was, current: version }));
+        }
+      }
+      const values = new Map(bindings.map(({ input }) => [input, recorded.get(input)!]));
+      return { memories: new RunMemories(values, sessionsByIdentity(opened)), drift: Object.freeze(drift) };
+    } catch (error) {
+      await closeAll(opened, error);
+      throw error;
+    }
+  }
+
+  /**
    * Return the session on the memory `identity`.
    *
    * @throws Error when this run has none: a node bound to a memory the run didn't bind.
@@ -127,7 +190,11 @@ export class RunMemories {
  * Check each binding's instance, then open each distinct instance once and check its session.
  * The sessions are closed again if a check fails.
  */
-async function openSessions(bindings: readonly MemoryBinding[], options: OpenMemoriesOptions): Promise<Opened[]> {
+async function openSessions(
+  bindings: readonly MemoryBinding[],
+  options: OpenMemoriesOptions,
+  recorded: ReadonlyMap<string, MemoryRef> = new Map(),
+): Promise<Opened[]> {
   const { create, signal } = options;
   for (const binding of bindings) checkInstance(binding, options.hostTypes ?? new Map());
   const opened: Opened[] = [];
@@ -138,7 +205,8 @@ async function openSessions(bindings: readonly MemoryBinding[], options: OpenMem
         known.inputs.push(input);
         continue;
       }
-      const session = await sessionStep(input, signal, () => instance.open({ create, itemType, signal }));
+      const identity = recorded.get(input)?.identity ?? null;
+      const session = await sessionStep(input, signal, () => instance.open({ create, itemType, signal }), identity);
       opened.push({ instance, inputs: [input], session });
       checkSession(input, contractOf(instance), session);
       const other = opened.find((each) => each.session !== session && each.session.info.identity === session.info.identity);
@@ -215,21 +283,59 @@ function checkSession(input: string, contract: MemoryContract, session: MemorySe
 
 /**
  * Run one session step for input `input`, naming the input in its failure: a busy memory stays
- * busy, and any other error is wrapped. A stop's reason passes through.
+ * busy, a missing one says to bind it, and any other error is wrapped. A stop's reason passes
+ * through.
  *
- * @throws MemoryBusyError or Error naming the input, the original its cause.
+ * @param identity The memory's recorded identity, for a missing memory's message, or `null`.
+ * @throws MemoryBusyError, RangeError or Error naming the input, the original its cause.
  */
-async function sessionStep<T>(input: string, signal: AbortSignal, step: () => Promise<T>): Promise<T> {
+async function sessionStep<T>(
+  input: string,
+  signal: AbortSignal,
+  step: () => Promise<T>,
+  identity: string | null = null,
+): Promise<T> {
   try {
     return await step();
   } catch (error) {
     if (signal.aborted) throw error;
+    if (memoryErrorKind(error) === "missing") throw missingMemory(input, identity, error);
     if (memoryErrorKind(error) === "busy") {
       throw new MemoryBusyError(`memory \`${input}\` is busy: another writer holds its lock; try again`, {
         cause: error,
       });
     }
     throw new Error(`memory \`${input}\`: ${errorText(error)}`, { cause: error });
+  }
+}
+
+/** The refusal of a memory input whose memory isn't bound, or isn't at its instance's location. */
+function missingMemory(input: string, identity: string | null, cause?: unknown): RangeError {
+  const which = identity === null ? "" : ` (\`${identity}\`)`;
+  return new RangeError(`memory \`${input}\`${which} isn't at its location; bind it with --memory`, { cause });
+}
+
+/**
+ * Check a reopened session against the value input `input` recorded: its identity and type, then
+ * its settings and tool specs, compared as a value built from the session's info records them.
+ *
+ * @throws RangeError naming the input and what differs.
+ */
+function checkRecorded(input: string, session: MemorySession, recorded: MemoryRef): void {
+  const { identity, type } = session.info;
+  if (identity !== recorded.identity) {
+    throw new RangeError(`resume refused: memory ${input} is \`${identity}\`, not the recorded \`${recorded.identity}\``);
+  }
+  if (type !== recorded.type) {
+    throw new RangeError(`resume refused: memory ${input} is a \`${type}\`, not the recorded \`${recorded.type}\``);
+  }
+  // Built as the run built the recorded one, so both are in the form the run log reads back.
+  const live = memoryValue(input, session, { version: recorded.version, recall: recorded.recall });
+  if (logJson(live.settings) !== logJson(recorded.settings)) {
+    throw new RangeError(`resume refused: memory ${input} settings differ from the recorded ones`);
+  }
+  if (logJson(live.tools) !== logJson(recorded.tools)) {
+    throw new RangeError(`resume refused: memory ${input} tools differ from the recorded ones`);
   }
 }
 

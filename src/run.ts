@@ -88,7 +88,7 @@ import {
 import { validateHeaders } from "./llm_clients/connection_settings.ts";
 import { defaultModelAccess, type ModelAccess } from "./llm_clients/factory.ts";
 import { Message, NamedTool, type Request, ToolCallPart, ToolSpec } from "./llm/messages.ts";
-import { isMemory } from "./memory/base.ts";
+import { isMemory, type MemoryBase } from "./memory/base.ts";
 import {
   type FoldedSteps,
   foldSteps,
@@ -111,7 +111,7 @@ import {
 import { FileLockError, isMissingPath, realScheduler, type Scheduler, syncFolder, VERSION, warn } from "./platform.ts";
 import { type DeliveryOp, FlowEngine, prepareDelivery, resumedAttemptEvents } from "./runtime/engine.ts";
 import { LiveChannel } from "./runtime/live.ts";
-import { type MemoryBinding, RunMemories } from "./runtime/memories.ts";
+import { type MemoryBinding, type MemoryDrift, RunMemories } from "./runtime/memories.ts";
 import { bindStarted } from "./runtime/eval_node.ts";
 import {
   decodeRecord,
@@ -191,6 +191,7 @@ import {
   isInboxType,
   isMemoryType,
   isRecord,
+  MemoryRef,
   rejectDeepNesting,
   setField,
   type Type,
@@ -247,6 +248,7 @@ export {
   type ValueRecord,
 } from "./typesys/values.ts";
 export type { WaitInfo } from "./runtime/waits.ts";
+export type { MemoryDrift } from "./runtime/memories.ts";
 export type { CompleteResult } from "./nodes/base.ts";
 export type { DeliveryOp } from "./runtime/engine.ts";
 export { DeliveryRefused, type DeliveryRefusal } from "./runtime/state.ts";
@@ -295,6 +297,11 @@ export class RunResult {
    */
   readonly crashedAttempts: ReadonlyMap<string, number>;
   /**
+   * The memories whose version moved since the run started, as this call's crash resume found
+   * them, one per memory; frozen, and empty for a fresh run and any other call.
+   */
+  readonly memoryDrift: readonly MemoryDrift[];
+  /**
    * The calls a waiting run waits on, by waiting node in `node_waiting` order; empty otherwise. A
    * call `settled` as the run stopped wakes its node at the next `advance`.
    */
@@ -306,8 +313,8 @@ export class RunResult {
   readonly unread: ReadonlyMap<string, readonly number[]>;
 
   /**
-   * Hold the given fields; `output` and `failure` default to `null`, `waits` to none and `unread`
-   * to an empty map.
+   * Hold the given fields; `output` and `failure` default to `null`, `memoryDrift` and `waits` to
+   * none and `unread` to an empty map.
    */
   constructor(fields: {
     input: Record<string, unknown>;
@@ -318,6 +325,7 @@ export class RunResult {
     failure?: Failure | null;
     events?: readonly RunEvent[];
     crashedAttempts?: ReadonlyMap<string, number>;
+    memoryDrift?: readonly MemoryDrift[];
     waits?: readonly WaitInfo[];
     unread?: ReadonlyMap<string, readonly number[]>;
   }) {
@@ -329,6 +337,7 @@ export class RunResult {
     this.failure = fields.failure ?? null;
     this.events = fields.events ?? [];
     this.crashedAttempts = fields.crashedAttempts ?? new Map();
+    this.memoryDrift = Object.freeze([...(fields.memoryDrift ?? [])]);
     this.waits = fields.waits ?? [];
     this.unread = fields.unread ?? new Map();
   }
@@ -744,16 +753,16 @@ type DriveOptions = Pick<
 >;
 
 /**
- * Refuse, by name, an option yian removed: `learnable` (learning) and `memory` (memories are flow
- * inputs now).
+ * Refuse, by name, an option yian removed: `learnable` (learning) and, unless `takesMemory` (a
+ * resume, which binds its run's memories again), `memory` (memories are flow inputs now).
  *
  * @throws RangeError when `options` holds either.
  */
-function refuseRemovedOptions(options: object): void {
+function refuseRemovedOptions(options: object, takesMemory = false): void {
   if (Object.hasOwn(options, "learnable")) {
     throw new RangeError("learnable was removed: yian no longer learns from runs; drop the option");
   }
-  if (Object.hasOwn(options, "memory")) {
+  if (!takesMemory && Object.hasOwn(options, "memory")) {
     throw new RangeError("the memory option was removed: pass each memory as a flow input");
   }
 }
@@ -767,11 +776,11 @@ function refuseRemovedOptions(options: object): void {
  *   or `onStream` isn't a function, `scheduler` lacks `now` or `sleep`, `random` isn't a function,
  *   `models` lacks `env` or `createModel`, or a `tools` entry is malformed.
  * @throws RangeError when a `tools` key is reserved, or a server was opened by another run in
- *   progress, or a removed option is given.
+ *   progress, or a removed option is given (`memory` unless `takesMemory`).
  * @throws The signal's reason when it has aborted.
  */
-function checkDriveOptions(options: DriveOptions): [string, McpServer][] {
-  refuseRemovedOptions(options);
+function checkDriveOptions(options: DriveOptions, takesMemory = false): [string, McpServer][] {
+  refuseRemovedOptions(options, takesMemory);
   const { tools = null, context, signal = null, live = null, onEvent = null, onStream = null } = options;
   const { scheduler = null, random = null, models = null } = options;
   if (signal !== null && !(signal instanceof AbortSignal)) throw new TypeError("signal must be an AbortSignal or null");
@@ -884,6 +893,51 @@ export function memoryBindings(params: readonly Parameter[], inputs: Readonly<Re
     bindings.push({ input: param.name, instance, type: typ.memory, itemType });
   }
   return bindings;
+}
+
+/**
+ * Return the value each memory input recorded in the run's START inputs, as `state`'s pool read
+ * them back, by name; an Optional memory left out recorded none.
+ */
+function startMemories(params: readonly Parameter[], state: RunState): Map<string, MemoryRef> {
+  const inputs = state.pool.store.get(state.flow.startId)?.value;
+  const recorded = new Map<string, MemoryRef>();
+  if (!isRecord(inputs)) return recorded;
+  for (const param of params) {
+    if (!isMemoryType(param.contract?.type) || !Object.hasOwn(inputs, param.name)) continue;
+    const value = inputs[param.name];
+    if (MemoryRef.isMemoryRef(value)) recorded.set(param.name, value);
+  }
+  return recorded;
+}
+
+/**
+ * Return the bindings of a resume's `memory` option, checked against the run's memory inputs and
+ * the values they recorded.
+ *
+ * @throws TypeError when `memory` isn't a record, or gives an input something other than a
+ *   `MemoryBase` instance.
+ * @throws RangeError when it names an input that isn't a memory input of the flow, or one recorded
+ *   null when the run started (an Optional memory left out).
+ */
+function resumeBindings(
+  params: readonly Parameter[],
+  memory: unknown,
+  recorded: ReadonlyMap<string, MemoryRef>,
+): MemoryBinding[] {
+  if (memory === null) return [];
+  if (!isRecord(memory) || types.isProxy(memory)) {
+    throw new TypeError("memory must be a record of memory input names to MemoryBase instances");
+  }
+  for (const name of Object.keys(memory)) {
+    const param = params.find((each) => each.name === name);
+    if (param === undefined || !isMemoryType(param.contract?.type)) {
+      throw new RangeError(`memory \`${name}\` isn't a memory input of this run's flow`);
+    }
+    if (!isMemory(suppliedValue(memory, name))) throw new TypeError(`memory \`${name}\` takes a MemoryBase instance`);
+    if (!recorded.has(name)) throw new RangeError(`memory \`${name}\` was null when the run started; drop it`);
+  }
+  return memoryBindings(params, memory);
 }
 
 /** A run's `RunStarted.call_time_llm`: the call-time agents' bases and the selection they bind from. */
@@ -1381,6 +1435,12 @@ export interface AdvanceOptions {
   /** The host's app object a tool receives as `ctx.context`; the log doesn't hold it. */
   context?: unknown;
   /**
+   * The instance of each memory input the run started with, by input name: the same memories,
+   * bound again. An unfinished run opens each with `create: false` and needs every one it
+   * recorded; an Optional memory left out takes none.
+   */
+  memory?: Readonly<Record<string, MemoryBase>> | null;
+  /**
    * The host's stop: aborting it stops the resumed segment, which rejects with its reason. An
    * already-aborted signal rejects before the log is locked.
    */
@@ -1409,6 +1469,11 @@ export interface AdvanceOptions {
  * a log another yian version started is resumed with a warning naming both versions, and the host's
  * specs of the tools and skills the AGENTs grant must be the recorded ones (the skills checked
  * before any server starts, the tools once the servers are open).
+ *
+ * An unfinished run binds the memories it started with again (`memory`): each is opened with
+ * `create: false` and must match the identity, type, settings and tool specs its run recorded. The
+ * recorded recall stays the run's. A crash resume reads each memory's version and reports one that
+ * moved in `RunResult.memoryDrift`; advancing a waiting run doesn't read them.
  *
  * `RunResumed` is written only when the last segment crashed or stopped (work in flight, a
  * recorded stop, or no `run_waiting` as its last frontier record) or `numWorkers` changes; then the
@@ -1442,8 +1507,10 @@ export interface AdvanceOptions {
  *   (`resume refused: tools.<name> description differs from the recorded one`), a `tools` server
  *   was opened by another run in progress, or a started call-time agent resolves to another config
  *   than the one it recorded (`node '<path>' llm_config: recorded config differs from the
- *   recomputed one; ...`), before its model call. Also when `learnable` or `memory`, a removed
- *   option, is given.
+ *   recomputed one; ...`), before its model call. Also when `learnable`, a removed option, is
+ *   given; or, for an unfinished run, a memory it recorded isn't bound or isn't at its location,
+ *   differs from the recorded one, or `memory` names an input that isn't a memory input or one
+ *   recorded null.
  * @throws AuthError when a call-time agent resolves to the provider of the run's host key and
  *   `apiKey` (or a recorded header) wasn't given, before its model call, or the credential store
  *   can't be read.
@@ -1468,7 +1535,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     if (hostFlow !== null && !(hostFlow instanceof ComposedFlow)) {
       throw new TypeError("advance's flow must be a ComposedFlow or null");
     }
-    const unopened = checkDriveOptions(options);
+    const unopened = checkDriveOptions(options, true);
     let { apiKey, headers } = hostCredentials(options.apiKey, options.headers);
     // The absolute path is taken once, so a later directory change can't move the log.
     const locator = resolve(log);
@@ -1481,6 +1548,7 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
     const runHold = await holdForAdvance(key, locator);
     let authority: JsonlRunLog | null = null;
     let runServers: McpServer[] = [];
+    let memories: RunMemories | null = null;
     let primary: { error: unknown } | null = null;
     let keep: () => IdleRun | null = () => null;
     try {
@@ -1541,10 +1609,19 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
       checkRecordedSpecs("skills", start.skills, recordedSkills(flow.compiled, skills));
       runServers = await openRunServers(unopened, signal);
       const runTools = new ToolSet(tools, { context });
+      const hostTypes = memoryTypeTools(flow.memoryTypes);
       checkToolGrants(flow.compiled, runTools);
+      checkMemoryGrantNames(flow.compiled, runTools, hostTypes);
       checkToolTypes(flow.compiled, runTools);
       checkRecordedSpecs("tools", start.tools, recordedTools(flow.compiled, runTools));
       checkRecordedToolGroups(start.toolGroups, recordedToolGroups(flow.compiled, runTools));
+      const recordedMemories = startMemories(flow.input, state);
+      const reopened = await RunMemories.reopen(
+        resumeBindings(flow.input, options.memory ?? null, recordedMemories),
+        recordedMemories,
+        { signal: signal ?? new AbortController().signal, hostTypes, drift: crashed },
+      );
+      memories = reopened.memories;
 
       const prepared = resume ? prepareRunResumed(state, { numWorkers }) : null;
       // This segment's appends go through the live channel's wrapper.
@@ -1557,19 +1634,19 @@ export async function advance(options: AdvanceOptions): Promise<RunResult> {
         options,
         numWorkers,
         tools: runTools,
-        memories: null,
+        memories,
         skills,
         models,
         scheduler,
         runDir: dirname(locator),
         hold: runHold,
       });
-      return resultFromState(state, log, events);
+      return resultFromState(state, log, events, reopened.drift);
     } catch (error) {
       primary = { error };
       throw error;
     } finally {
-      await closeAndRelease({ servers: runServers, memories: null, authority, primary, hold: runHold, keep });
+      await closeAndRelease({ servers: runServers, memories, authority, primary, hold: runHold, keep });
     }
   });
 }
@@ -3650,6 +3727,7 @@ function resultFromState(
   state: RunState,
   path: string | null,
   events: readonly RunEvent[],
+  memoryDrift: readonly MemoryDrift[] = [],
 ): RunResult {
   const terminal = state.result;
   const common = {
@@ -3658,6 +3736,7 @@ function resultFromState(
     log: path,
     events,
     crashedAttempts: new Map(state.crashedAttempts),
+    memoryDrift,
   };
   const unread = new Map(unreadEvents(state.waits));
   if (terminal instanceof RunSucceeded) {

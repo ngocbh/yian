@@ -100,6 +100,7 @@ test("only the final log-only runtime and run API remain", () => {
     apiKey: true,
     headers: true,
     context: true,
+    memory: true,
     signal: true,
     env: true,
     scheduler: true,
@@ -107,7 +108,7 @@ test("only the final log-only runtime and run API remain", () => {
     models: true,
     checkLlmConfigs: true,
   };
-  expect(Object.keys(advanceOptions)).toHaveLength(18);
+  expect(Object.keys(advanceOptions)).toHaveLength(19);
   expect(run.advance.length).toBe(1);
 
   const result = new run.RunResult({ input: {}, status: "succeeded", runId: "r1", log: null });
@@ -120,6 +121,7 @@ test("only the final log-only runtime and run API remain", () => {
     "failure",
     "events",
     "crashedAttempts",
+    "memoryDrift",
     "waits",
     "unread",
   ]);

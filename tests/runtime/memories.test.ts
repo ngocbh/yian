@@ -193,3 +193,39 @@ test("an unknown identity has no session", async () => {
   const memories = await RunMemories.open([], fresh);
   expect(() => memories.session("t/x")).toThrow("this run has no session on memory `t/x`");
 });
+
+test("reopen opens with create: false, snapshots only for drift, and reports one entry per memory", async () => {
+  let version = "v1";
+  const memory = new FakeMemory(() => {
+    const session = new RecordingSession(fileInfo("t/x"));
+    session.onSnapshot = () => ({ version, recall: { text: version, cut: null, hint: null } });
+    return session;
+  });
+  const first = await RunMemories.open([bind("lessons", memory), bind("notes", memory)], fresh);
+  const recorded = first.values;
+  await first.close();
+  const waking = await RunMemories.reopen([bind("lessons", memory), bind("notes", memory)], recorded, { signal, drift: false });
+  expect(memory.openedWith.at(-1)).toEqual({ create: false, itemType: null });
+  expect(memory.sessions.at(-1)!.snapshots).toBe(0);
+  expect(waking.drift).toEqual([]);
+  expect(waking.memories.values.get("lessons")).toBe(recorded.get("lessons")!);
+  await waking.memories.close();
+  version = "v2";
+  const crashed = await RunMemories.reopen([bind("lessons", memory), bind("notes", memory)], recorded, { signal, drift: true });
+  expect(crashed.drift).toEqual([{ input: "lessons", identity: "t/x", recorded: "v1", current: "v2" }]);
+  expect(Object.isFrozen(crashed.drift)).toBe(true);
+  // The recall stays the recorded one.
+  expect(crashed.memories.values.get("notes")!.recall.text).toBe("v1");
+  await crashed.memories.close();
+});
+
+test("reopen refuses a recorded memory with no binding before opening anything", async () => {
+  const memory = new FakeMemory(() => new RecordingSession(fileInfo("t/x")));
+  const opened = await RunMemories.open([bind("lessons", memory)], fresh);
+  await opened.close();
+  const other = new FakeMemory();
+  await expect(
+    RunMemories.reopen([bind("notes", other)], new Map([["lessons", opened.values.get("lessons")!]]), { signal, drift: true }),
+  ).rejects.toThrow("memory `lessons` (`t/x`) isn't at its location; bind it with --memory");
+  expect(other.opens).toBe(0);
+});

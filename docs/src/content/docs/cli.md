@@ -441,8 +441,10 @@ $ yian memory reembed triage.yaml cases --embedding openai/text-embedding-3-larg
 | `reembed` | Embeds a VectorDBMemory's items again with the `--embedding` model, which the store then keeps |
 | `compact` | Rebuilds a VectorDBMemory's file, giving back the space deleted items took |
 
-- `erase` and `reset` first list the runs on this machine that used the memory, then ask. `--yes`
-  doesn't ask, and off a terminal it is required. A `no` exits 1.
+- `erase`, `reset` and `edit --delete` first list the runs on this machine that used the memory,
+  then ask. `--yes` doesn't ask, and off a terminal it is required. A `no` exits 1.
+- `edit --id N` and `--delete N` take `--if-version V`, the item's version as `show` gave it; a
+  newer one is a conflict.
 - An erase doesn't reach run logs, which can hold copies of the text: delete those yourself.
 - `reset` refuses while a run is running on the memory. A waiting, stopped or crashed run resumes
   with the emptied memory.

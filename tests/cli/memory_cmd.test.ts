@@ -972,7 +972,7 @@ describe("VectorDB stores", () => {
     });
     expect(edited.code, edited.stderr).toBe(0);
     expect(edited.stdout).toStartWith("edited item 1;");
-    const deleted = await yian(["memory", "edit", flow, "cases", "--delete", "2"], { embed: fakeEmbed });
+    const deleted = await yian(["memory", "edit", flow, "cases", "--delete", "2", "--yes"], { embed: fakeEmbed });
     expect(deleted.code, deleted.stderr).toBe(0);
     const [newest] = JSON.parse((await yian(["memory", "history", flow, "cases", "--json"], vectors)).stdout).changes;
     expect(newest).toMatchObject({ op: "delete", target: { item: 2 }, author: { kind: "user", name: "ada" } });
@@ -992,7 +992,7 @@ describe("VectorDB stores", () => {
     for (const [args, message] of [
       [["edit", flow, "cases"], STORE_EDITS],
       [["edit", flow, "cases", "--id", "1"], STORE_EDITS],
-      [["edit", flow, "cases", "--delete", "1", "--fields", "{}"], "--fields goes with --add or --id"],
+      [["edit", flow, "cases", "--delete", "1", "--yes", "--fields", "{}"], "--fields goes with --add or --id"],
       [["edit", flow, "cases", "--add", "x", "--fields", "[1]"], "Invalid value for --fields: give a JSON object"],
       [["edit", flow, "cases", "--add", "x", "--fields", "{"], "Invalid value for --fields: give a JSON object"],
       [["edit", flow, "cases", "--add", "x", "--fields", "{}"], "this memory's items are text only"],
@@ -1008,7 +1008,7 @@ describe("VectorDB stores", () => {
     await runOnce(files, "first");
     const wrong = await yian(["memory", "edit", files, "lessons", "--add", "x"]);
     expect(wrong.code).toBe(2);
-    expect(wrong.stderr).toContain("--add, --id, --text, --fields and --delete are a VectorDBMemory's");
+    expect(wrong.stderr).toContain("--add, --id, --text, --fields, --delete and --if-version are a VectorDBMemory's");
   });
 
   test("--fields gives a typed store's item its fields, and the CLI page's example runs as written", async () => {
@@ -1092,6 +1092,53 @@ output: \${add.output.id}
     expect(listed.stderr).toContain("it is a database in WAL mode");
     expect([readFileSync(foreign), readFileSync(`${foreign}-wal`)]).toEqual(before);
     expect(readdirSync(folder).sort()).toEqual(["app.db", "app.db-wal"]);
+  });
+
+  test("edit --delete lists the runs that used the store and asks, as erase does; no item, no ask", async () => {
+    const flow = casesFile();
+    await addCase(flow, "Check sums twice.");
+    const { identity } = cases();
+    const piped = await yian(["memory", "edit", flow, "cases", "--delete", "1"], vectors);
+    expect(piped.code).toBe(2);
+    expect(piped.stderr).toContain("Invalid value: delete asks first; off a terminal, pass --yes");
+    const no = new FakeInput({ tty: true });
+    no.write(ENTER);
+    const output = new FakeOutput({ tty: true, columns: 400 });
+    const terminal = { ...vectors, stdin: no, stderrStream: output };
+    const declined = await yian(["memory", "edit", flow, "cases", "--delete", "1"], terminal);
+    expect(declined.code).toBe(1);
+    expect(declined.stdout).toContain(`the runs on this machine that used ${identity}; their logs may hold copies:`);
+    expect(output.text).toContain(`Delete item 1 from ${identity}? Its text and history go, and it can't be undone.`);
+    expect(declined.stderr).toContain("delete cancelled: nothing deleted");
+    const missing = await yian(["memory", "edit", flow, "cases", "--delete", "99", "--yes", "--json"], vectors);
+    expect(missing.code).toBe(1);
+    expect(missing.stderr).not.toContain("the runs on this machine");
+    expect(JSON.parse(missing.stdout).error).toEqual({ code: "memory.refused", message: "item 99 doesn't exist" });
+    const deleted = await yian(["memory", "edit", flow, "cases", "--delete", "1", "--yes"], vectors);
+    expect(deleted.code, deleted.stderr).toBe(0);
+    expect(deleted.stdout).toContain("deleted item 1;");
+  });
+
+  test("--if-version pins the version the person saw; a newer one is a conflict", async () => {
+    const flow = casesFile();
+    await addCase(flow, "Check sums twice.");
+    const [item] = JSON.parse((await yian(["memory", "show", flow, "cases", "--all", "--json"], vectors)).stdout).items;
+    const seen = String(item.version);
+    const pin = ["--if-version", seen];
+    const first = await yian(["memory", "edit", flow, "cases", "--id", "1", "--text", "Thrice.", ...pin], vectors);
+    expect(first.code, first.stderr).toBe(0);
+    const stale = await yian(["memory", "edit", flow, "cases", "--id", "1", "--text", "Twice.", ...pin], vectors);
+    expect(stale.code).toBe(1);
+    expect(stale.stderr).toContain("edit refused: ");
+    const gone = ["memory", "edit", flow, "cases", "--delete", "1", "--yes", "--if-version", seen, "--json"];
+    const conflict = await yian(gone, vectors);
+    expect(conflict.code).toBe(1);
+    expect(JSON.parse(conflict.stdout).error.code).toBe("memory.conflict");
+    const added = await yian(["memory", "edit", flow, "cases", "--add", "x", "--if-version", "1"], vectors);
+    expect(added.code).toBe(2);
+    expect(added.stderr).toContain("Invalid value for --if-version: --if-version goes with --id or --delete");
+    const shown = JSON.parse((await yian(["memory", "show", flow, "cases", "--all", "--json"], vectors)).stdout);
+    expect(shown.items.map((each: { text: string }) => each.text)).toEqual(["Thrice."]);
   });
 
   test("reset's question counts the store's items", async () => {

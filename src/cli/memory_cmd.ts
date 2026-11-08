@@ -32,6 +32,7 @@ import { diskProblem, FileMemory, type MemberFile, pathProblem, readMembers } fr
 import { VectorDBMemory } from "../memory/vectordb.ts";
 import { homeDir, isSystemError, withWarnings } from "../platform.ts";
 import { readRunIndex, type RunIndexRow, updateRunIndex } from "../run.ts";
+import { isReportedToolError } from "../tools/errors.ts";
 import { type JsonObject, logJson, parseJson } from "../typesys/json.ts";
 import { isRecord } from "../typesys/index.ts";
 import { isMemoryType } from "../typesys/values.ts";
@@ -573,10 +574,11 @@ async function runEditor(env: Env, path: string, json: boolean): Promise<void> {
  */
 export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;
+  if (command.options["delete"] !== undefined) checkAsks(command, io, "delete");
   return onMemory(command, io, namedOf(command), async (session, { memory, location }) => {
     if (memory instanceof VectorDBMemory) return editStore(command, io, session);
-    if (["add", "id", "text", "fields", "delete"].some((name) => command.options[name] !== undefined)) {
-      const flags = "--add, --id, --text, --fields and --delete";
+    if (["add", "id", "text", "fields", "delete", "if-version"].some((name) => command.options[name] !== undefined)) {
+      const flags = "--add, --id, --text, --fields, --delete and --if-version";
       throw new UsageError(`Invalid value: ${flags} are a VectorDBMemory's; a FileMemory is edited in $EDITOR`);
     }
     const path = (command.options["file"] as string | undefined) ?? String(session.info.settings["index"]);
@@ -666,14 +668,44 @@ function fieldsOption(text: string | undefined): JsonObject | undefined {
 }
 
 /**
+ * Return item `id` of the store `session` is open on, as its `read` gives it, or the reason it
+ * can't be read (`item 9 doesn't exist`, say).
+ */
+async function readItem(session: MemorySession, id: bigint, signal: AbortSignal): Promise<JsonObject | string> {
+  try {
+    return (await session.call("read", { id }, { signal })) as JsonObject;
+  } catch (error) {
+    if (isReportedToolError(error) && error instanceof Error) return error.message;
+    throw error;
+  }
+}
+
+/**
+ * Show the runs on this machine whose index records the memory `identity`, whose logs may hold
+ * copies of what a change takes out for good, and that runs elsewhere can't be seen; return them.
+ */
+async function listRunsUsing(command: ParsedArgs, io: CliIo, identity: string): Promise<RunIndexRow[]> {
+  const runs = runsUsing(io, identity);
+  const unseen = "yian can't see runs on other machines or in a host's own logs";
+  const heading = `the runs on this machine that used ${identity}; their logs may hold copies:`;
+  const none = `no run on this machine used ${identity}; ${unseen}`;
+  await showListing(command, io, runs.length === 0 ? [none] : [heading, ...runLines(io, runs), unseen]);
+  return runs;
+}
+
+/**
  * `yian memory edit` of a VectorDB store: `--add TEXT` adds an item, `--id N` changes item N's text
  * (`--text`), fields (`--fields`) or both, and `--delete N` deletes it, each as the user and against
- * the item's version as read just before. `--fields` is a JSON object, the fields a typed store's
- * item holds. Prints `<added|edited|deleted> item <id>` and the new version (`--json`: `{change,
- * version, item}`); a change the store refuses prints `edit refused: <reason>` and exits 1.
+ * the item's version: `--if-version V`, the one the person saw, else the one read just before.
+ * `--fields` is a JSON object, the fields a typed store's item holds. A delete takes the item and
+ * its history for good, so it first lists the runs that used the store and asks, as erase does.
+ * Prints `<added|edited|deleted> item <id>` and the new version (`--json`: `{change, version,
+ * item}`); an item that can't be read, or a change the store refuses, prints `edit refused:
+ * <reason>`, and a no to the delete `delete cancelled: nothing deleted`; each exits 1.
  *
  * @throws {UsageError} For `--file`, anything but exactly one of the three, `--fields` that isn't a
- *   JSON object, and a change the store can't take (an add to a typed store without fields, say).
+ *   JSON object, `--if-version` with `--add`, and a change the store can't take (an add to a typed
+ *   store without fields, say).
  */
 async function editStore(command: ParsedArgs, io: CliIo, session: MemorySession): Promise<number> {
   const json = command.options["json"] === true;
@@ -687,6 +719,10 @@ async function editStore(command: ParsedArgs, io: CliIo, session: MemorySession)
   if (gone !== undefined && fields !== undefined) {
     throw new UsageError("Invalid value for --fields: --fields goes with --add or --id");
   }
+  const pinned = command.options["if-version"] as number | undefined;
+  if (add !== undefined && pinned !== undefined) {
+    throw new UsageError("Invalid value for --if-version: --if-version goes with --id or --delete");
+  }
   const signal = stopOf(io);
   let change: JsonObject;
   let verb: string;
@@ -695,15 +731,29 @@ async function editStore(command: ParsedArgs, io: CliIo, session: MemorySession)
     verb = "added";
   } else {
     const item = BigInt((id ?? gone) as number);
-    // Against the version read now: a run that changes the item meanwhile makes it a conflict.
-    const current = await session.call("read", { id: item }, { signal });
+    // Read before anything is listed or asked: an item that isn't there needs no question.
+    const current = await readItem(session, item, signal);
+    if (typeof current === "string") {
+      return failed(io, json, { label: "edit refused", code: "memory.refused", message: current });
+    }
+    // Without --if-version, against the version read now: a run that changes the item meanwhile
+    // makes it a conflict.
+    const version = pinned === undefined ? current["version"]! : BigInt(pinned);
     const edited: JsonObject = fields === undefined ? {} : { fields };
     if (text !== undefined) edited["text"] = String(text);
     change =
       id !== undefined
-        ? { op: "edit", id: item, if_version: current["version"]!, ...edited }
-        : { op: "delete", id: item, if_version: current["version"]! };
+        ? { op: "edit", id: item, if_version: version, ...edited }
+        : { op: "delete", id: item, if_version: version };
     verb = id !== undefined ? "edited" : "deleted";
+    if (gone !== undefined) {
+      const { identity } = session.info;
+      await listRunsUsing(command, io, identity);
+      const question = `Delete item ${String(item)} from ${identity}? Its text and history go, and it can't be undone.`;
+      if (!(await goesOn(command, io, question))) {
+        return failed(io, json, { label: "delete cancelled", code: "memory.cancelled", message: "nothing deleted" });
+      }
+    }
   }
   const changed = changeId();
   let applied: Applied;
@@ -805,16 +855,7 @@ export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<numbe
     const { identity } = session.info;
     // Before anything is listed or asked: a target erase can't take would only fail after the yes.
     const { target, what } = eraseTarget(memory, session, given, text);
-    const runs = runsUsing(io, identity);
-    const unseen = "yian can't see runs on other machines or in a host's own logs";
-    const heading = `the runs on this machine that used ${identity}; their logs may hold copies:`;
-    await showListing(
-      command,
-      io,
-      runs.length === 0
-        ? [`no run on this machine used ${identity}; ${unseen}`]
-        : [heading, ...runLines(io, runs), unseen],
-    );
+    const runs = await listRunsUsing(command, io, identity);
     if (!(await goesOn(command, io, `Erase ${what} from ${identity}? It can't be undone.`))) {
       return failed(io, json, { label: "erase cancelled", code: "memory.cancelled", message: "nothing erased" });
     }

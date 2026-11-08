@@ -69,6 +69,8 @@ const ALLOWED: Record<string, string> = {
   "cli/memory_bind.ts: PROJECT_KEY_HEX": "hex digits of a project key",
   "cli/memory_bind.ts: PROJECT_NAME_CHARS": "longest folder-name part of a project key",
   "cli/memory_bind.ts: PLAIN_ID_CHARS": "longest flow id a default memory identity takes",
+  "cli/memory_cmd.ts: HISTORY_LIMIT": "changes yian memory history lists without --limit",
+  "cli/memory_cmd.ts: ITEMS_PAGE": "items yian memory show --all reads from a store at a time",
   "cli/render.ts: ERR_CONTEXT": "lines of YAML shown around an error",
   "cli/render.ts: SGR": "terminal color and style codes",
   "cli/run.ts: SPIN_MS": "spinner frame interval",

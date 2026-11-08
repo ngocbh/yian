@@ -482,13 +482,16 @@ function changeLine(change: ChangeEntry): string {
   return `${change.id}  ${change.at}  ${change.op} ${what}${undoing} by ${authorText(change.author)}`;
 }
 
+/** The changes `yian memory history` lists without `--limit`. */
+const HISTORY_LIMIT = 20;
+
 /**
  * `yian memory history`: the memory's last changes (`--limit`, 20 by default), newest first, one
  * line each with its id, time, op, path and author (with the run and node that made it). `--json`
  * prints one document whose `changes` holds each change's `id`, `op`, `target`, `author` and `at`.
  */
 export async function memoryHistory(command: ParsedArgs, io: CliIo): Promise<number> {
-  const limit = (command.options["limit"] as number | undefined) ?? 20;
+  const limit = (command.options["limit"] as number | undefined) ?? HISTORY_LIMIT;
   return onMemory(command, io, namedOf(command), async (session) => {
     const changes = await session.history({ limit });
     if (command.options["json"] === true) {

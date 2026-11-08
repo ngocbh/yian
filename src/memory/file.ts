@@ -663,6 +663,8 @@ function inTurn<T>(root: string, signal: AbortSignal | undefined, fn: () => Prom
       if (!started) reject(signal.reason);
     };
     signal.addEventListener("abort", onAbort, { once: true });
+    // A signal aborted already never fires its listeners.
+    if (signal.aborted) onAbort();
     void run.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   });
   return { result, done };

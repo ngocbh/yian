@@ -1006,3 +1006,19 @@ test("the .yian check runs again once the lock is held, so a swap during the wai
   expect(fs.readFileSync(join(victim, "important.txt"), "utf8")).toBe("keep me");
   await s.close();
 });
+
+test("a call queued with a signal already aborted is rejected at once", async () => {
+  const s = await openAt({ lockTimeoutMs: 2_000, scheduler: realScheduler });
+  const lock = lockFile(join(root, ".yian/lock"), { private: true });
+  const blocker = s.history({ limit: 1 }).catch((error: unknown) => error);
+  const stop = new AbortController();
+  stop.abort(new Error("stopped"));
+  const start = Date.now();
+  // `recover`, which open calls, is the one way in that doesn't check the signal itself first.
+  const recover = (s as unknown as { recover(signal: AbortSignal): Promise<void> }).recover(stop.signal);
+  await expect(recover).rejects.toThrow("stopped");
+  expect(Date.now() - start).toBeLessThan(500);
+  lock.release();
+  await blocker;
+  await s.close();
+});

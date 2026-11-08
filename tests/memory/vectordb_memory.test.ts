@@ -148,12 +148,14 @@ test("a stored identity wins over none; another id is refused", async () => {
   await resumed.close();
 });
 
-test("open({create: false}) refuses a missing store and creates nothing", async () => {
+test("open({create: false}) refuses a missing store as missing, naming no location, and creates nothing", async () => {
   fs.mkdirSync(join(dir, "store"));
-  await expect(memory().open({ ...o, create: false })).rejects.toThrow(`\`${path}\` isn't a memory yet`);
+  const error = await rejection(memory().open({ ...o, create: false }));
+  expect(memoryErrorKind(error)).toBe("missing");
+  expect((error as Error).message).toBe("the memory isn't at its location: there is no store");
   expect(fs.readdirSync(join(dir, "store"))).toEqual([]);
   await expect(memory({ path: join(dir, "none", "m.db") }).open({ ...o, create: false })).rejects.toThrow(
-    "isn't a memory yet",
+    "the memory isn't at its location: there is no store",
   );
   expect(fs.existsSync(join(dir, "none"))).toBe(false);
 });
@@ -161,7 +163,9 @@ test("open({create: false}) refuses a missing store and creates nothing", async 
 test("an empty file left where a store was being made becomes the store; create: false refuses it", async () => {
   fs.mkdirSync(join(dir, "store"), { mode: 0o700 });
   fs.writeFileSync(path, "", { mode: 0o600 });
-  await expect(memory().open({ ...o, create: false })).rejects.toThrow(`\`${path}\` isn't a memory yet`);
+  const error = await rejection(memory().open({ ...o, create: false }));
+  expect(memoryErrorKind(error)).toBe("missing");
+  expect((error as Error).message).toBe("the memory isn't at its location: its store isn't a memory yet");
   const s = await openAt();
   expect(s.created).toBe(true);
   expect(metaRows().identity).toBe("t/cases");

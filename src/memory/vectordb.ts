@@ -41,6 +41,7 @@ import {
   MemoryBase,
   type MemoryContract,
   type MemoryInfo,
+  MemoryMissingError,
   type MemorySession,
   type MemoryToolSpec,
   type Recall,
@@ -1094,8 +1095,10 @@ export class VectorDBMemory extends MemoryBase {
    *
    * @param o.itemType The JSON Schema of the items' fields, or `null` for items that are text only.
    * @throws {TypeError} If `itemType` isn't a JSON object or `null`.
-   * @throws Error when the store doesn't exist and `create` is false, isn't a VectorDBMemory store,
-   *   or its stored identity, embedding model or item schema isn't the given one.
+   * @throws {MemoryMissingError} If `create` is false and there is no store, or its file holds no
+   *   memory yet.
+   * @throws Error when the store isn't a VectorDBMemory store, or its stored identity, embedding
+   *   model or item schema isn't the given one.
    * @throws {MemoryBusyError} If it waits for the lock longer than the timeout.
    */
   override async open(o: {
@@ -1111,7 +1114,7 @@ export class VectorDBMemory extends MemoryBase {
     const { path, embedding } = this.#store;
     // Checked before anything is made, so a refused open leaves no folder or file behind.
     const canCreate = () => {
-      if (!o.create) throw new Error(`${shown(path)} isn't a memory yet: there is no store`);
+      if (!o.create) throw new MemoryMissingError("the memory isn't at its location: there is no store");
       if (embedding === undefined) throw new Error("a new VectorDBMemory needs an embedding model");
     };
     const stats = lstatOrNull(path);
@@ -1132,7 +1135,7 @@ export class VectorDBMemory extends MemoryBase {
         return withDb(path, (db) => {
           const stored = readMeta(db, path);
           if (stored !== null) return stored;
-          if (!o.create) throw new Error(`${shown(path)} isn't a memory yet`);
+          if (!o.create) throw new MemoryMissingError("the memory isn't at its location: its store isn't a memory yet");
           if (embedding === undefined) throw new Error("a new VectorDBMemory needs an embedding model");
           created = true;
           const identity = this.#id ?? `at-${sha256(path).slice(0, 16)}`;

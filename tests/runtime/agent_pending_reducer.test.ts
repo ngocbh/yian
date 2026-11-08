@@ -106,6 +106,17 @@ describe("an agent's pending step", () => {
     expect(state.waits.calls.get(agentCall("a", 1, 0))!.deadline).toBe("2026-10-21T00:00:00.000Z");
   });
 
+  // An agent is told apart by its kind, not by calling no host tool: a TOOL node calling a
+  // memory's tool calls none either.
+  test("an agent whose grants are all memories is checked as an agent", () => {
+    const memoryOnly = new AgentNode("m", { prompt: "go", tools: ["lessons"], memoryInputs: ["lessons"] });
+    const { log, state } = started(paramFlow([], memoryOnly));
+    start(log, state, "m");
+    expect(() => prepareNodeStep(state, "m", { ...pendingOf("m", 1, 0, "c1"), tool: "take" })).toThrow(
+      "an agent's pending tool must name a host tool",
+    );
+  });
+
   test("agent pending refusals", () => {
     const { log, state } = started(paramFlow([], agent("a"), agent("b")));
     start(log, state, "a");

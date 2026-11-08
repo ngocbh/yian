@@ -43,7 +43,7 @@ import {
 import { ExpressionError } from "../expr/expressions.ts";
 import { type RootRead, SourceRef } from "../expr/lineage.ts";
 import { exprRefsOf } from "../expr/template.ts";
-import { type CompleteResult, ELSE_HANDLE, Grow, Node, Output } from "../nodes/base.ts";
+import { type CompleteResult, ELSE_HANDLE, Grow, Node, NodeKind, Output } from "../nodes/base.ts";
 import { BindingError, copyValue } from "../nodes/binding.ts";
 import {
   type Binding,
@@ -3366,7 +3366,7 @@ function retriedAgentCalls(state: RunState): string[] {
   return [...w.calls.values()]
     .filter((call) => {
       if (call.state !== "open" || !state.inFlight.has(call.nodeId)) return false;
-      if (state.flow.nodes.get(call.nodeId)?.hostToolCall() !== null) return false;
+      if (state.flow.nodes.get(call.nodeId)?.kind !== NodeKind.AGENT) return false;
       const lastWoken = w._lastWoken.get(call.nodeId);
       return lastWoken === undefined || call.seq > lastWoken;
     })
@@ -3739,7 +3739,7 @@ function hostToolName(node: Node): string | null {
  */
 function validatePendingStep(state: RunState, nodeId: string, step: Readonly<JsonObject>): void {
   const node = state.flow.nodes.get(nodeId)!;
-  if (node.hostToolCall() === null && node.grantedTools().length > 0) {
+  if (node.kind === NodeKind.AGENT) {
     validateAgentPendingStep(state, nodeId, step);
     return;
   }
@@ -3860,7 +3860,7 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
   if (call.tool === TAKE || call.tool === SLEEP) {
     throw new RangeError(`tool_result for call ${reprText(call.callId)}, a ${call.tool}, which the run settles itself`);
   }
-  const agent = state.flow.nodes.get(nodeId)!.hostToolCall() === null;
+  const agent = state.flow.nodes.get(nodeId)!.kind === NodeKind.AGENT;
   const closed = step["closed"];
   if (closed !== undefined && call.state === "open") {
     throw new RangeError(`tool_result for open call ${reprText(call.callId)} can't be a closer; only a record closes a call`);
@@ -3883,7 +3883,7 @@ function validateToolResultStep(state: RunState, nodeId: string, step: Readonly<
  * @throws RangeError when two calls of the latest reply share the key.
  */
 function resultCall(state: RunState, nodeId: string, key: unknown): Call | undefined {
-  if (state.flow.nodes.get(nodeId)!.hostToolCall() !== null) {
+  if (state.flow.nodes.get(nodeId)!.kind !== NodeKind.AGENT) {
     return [...state.waits.calls.values()].find((each) => each.resultKey === key);
   }
   const latest = latestReply(state, nodeId);

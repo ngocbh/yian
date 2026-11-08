@@ -783,10 +783,10 @@ export class ToolSet {
   }
 
   /**
-   * Return a copy that also holds `groups`, tools local to one node such as its memories, each
-   * group's tools in order. A ref `{group, name}` to one of them resolves to it, before any group
-   * of this set by that name, and `scopes()` tries them first; a bare name never reaches them. The
-   * copy keeps this set's run, signal, context and tools.
+   * @internal Return a copy that also holds `groups`, tools local to one node such as its
+   * memories, each group's tools in order. A ref `{group, name}` to one of them resolves to it,
+   * before any group of this set by that name, and `scopes()` tries them first; a bare name never
+   * reaches them. The copy keeps this set's run, signal, context and tools.
    *
    * @param label What the local groups are, for messages: `this node's memories`.
    * @throws {RangeError} A group holds two tools with one name.

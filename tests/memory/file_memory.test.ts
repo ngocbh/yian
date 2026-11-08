@@ -777,3 +777,92 @@ describe("create and edit", () => {
     await expectConfined((path) => ({ op: "edit", path, old: "x", new: "y" }));
   });
 });
+
+describe("delete and rewrite", () => {
+  test("delete applies when the file's hash is if_hash, and returns {path, version}", async () => {
+    put(root, "a.md", "A");
+    put(root, "b.md", "B");
+    const s = await openAt();
+    const applied = await apply(s, { op: "delete", path: "a.md", if_hash: sha256("A") });
+    const version = (await s.snapshot()).version;
+    expect(applied).toEqual({ ok: true, version, result: { path: "a.md", version } });
+    expect(fs.existsSync(join(root, "a.md"))).toBe(false);
+    expect(fs.readFileSync(join(root, ".yian/journal.jsonl"), "utf8")).toContain(
+      `"before":"${sha256("A")}","after":"absent","inverse":{"text":"A"}`,
+    );
+    await s.close();
+  });
+
+  test("rewrite applies when the file's hash is if_hash, and returns {path, hash, version}", async () => {
+    put(root, "a.md", "old");
+    const s = await openAt();
+    const applied = await apply(s, { op: "rewrite", path: "a.md", text: "new", if_hash: sha256("old") });
+    const version = (await s.snapshot()).version;
+    expect(applied).toEqual({ ok: true, version, result: { path: "a.md", hash: sha256("new"), version } });
+    expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("new");
+    await s.close();
+  });
+
+  test.each([
+    ["delete", { op: "delete", path: "a.md", if_hash: sha256("stale") }],
+    ["rewrite", { op: "rewrite", path: "a.md", text: "new", if_hash: sha256("stale") }],
+  ])("%s with another hash conflicts with the current state, writing nothing", async (_, change) => {
+    put(root, "a.md", "now");
+    const s = await openAt();
+    const before = tree(dir);
+    expect(await apply(s, change)).toEqual({
+      ok: false,
+      reason: "`a.md` changed since it was read: its hash isn't if_hash",
+      current: { path: "a.md", hash: sha256("now"), text: "now" },
+    });
+    expect(tree(dir)).toEqual(before);
+    await s.close();
+  });
+
+  test.each([
+    ["delete", { op: "delete", path: "a.md", if_hash: sha256("x") }],
+    ["rewrite", { op: "rewrite", path: "a.md", text: "new", if_hash: sha256("x") }],
+  ])("%s of a file that doesn't exist conflicts, writing nothing", async (_, change) => {
+    const s = await openAt();
+    expect(await apply(s, change)).toEqual({ ok: false, reason: "`a.md` doesn't exist", current: null });
+    expect(fs.existsSync(join(root, "a.md"))).toBe(false);
+    await s.close();
+  });
+
+  test("rewrite keeps to the caps", async () => {
+    put(root, "a.md", "1234");
+    put(root, "b.md", "1234");
+    const s = await openAt({ maxFileChars: 5, maxTotalChars: 9 });
+    const before = tree(dir);
+    const hash = sha256("1234");
+    expect(await apply(s, { op: "rewrite", path: "a.md", text: "123456", if_hash: hash }, "1")).toEqual(
+      refusal("`a.md` would hold 6 characters; a file may hold 5"),
+    );
+    expect(tree(dir)).toEqual(before);
+    expect((await apply(s, { op: "rewrite", path: "a.md", text: "12345", if_hash: hash }, "2")).ok).toBe(true);
+    expect(await apply(s, { op: "rewrite", path: "b.md", text: "12345", if_hash: hash }, "3")).toEqual(
+      refusal("the memory would hold 10 characters; it may hold 9"),
+    );
+    await s.close();
+  });
+
+  test("a memory already over its total cap by hand still takes a change that doesn't grow it", async () => {
+    put(root, "a.md", "1234567890");
+    const s = await openAt({ maxTotalChars: 5 });
+    expect(await apply(s, { op: "append", path: "a.md", text: "x" }, "1")).toEqual(
+      refusal("the memory would hold 12 characters; it may hold 5"),
+    );
+    expect((await apply(s, { op: "rewrite", path: "a.md", text: "12", if_hash: sha256("1234567890") }, "2")).ok).toBe(
+      true,
+    );
+    await s.close();
+  });
+
+  test("confinement: delete on a path outside the members is refused with the reason, writing nothing", async () => {
+    await expectConfined((path) => ({ op: "delete", path, if_hash: sha256("x") }));
+  });
+
+  test("confinement: rewrite on a path outside the members is refused with the reason, writing nothing", async () => {
+    await expectConfined((path) => ({ op: "rewrite", path, text: "x", if_hash: sha256("x") }));
+  });
+});

@@ -1135,8 +1135,13 @@ class FileMemorySession implements MemorySession {
         const text = old.text.slice(0, at) + change.new + old.text.slice(at + change.old.length);
         return { text, inverse: { text: old.text } };
       }
-      default:
-        throw new Error(`FileMemory ${change.op} isn't available yet`);
+      case "delete":
+      case "rewrite":
+        if (old === null) return refused(`${path} doesn't exist`);
+        if (old.hash !== change.if_hash) {
+          return this.#conflict(`${path} changed since it was read: its hash isn't if_hash`, old);
+        }
+        return { text: change.op === "delete" ? null : change.text, inverse: { text: old.text } };
     }
   }
 

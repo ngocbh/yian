@@ -97,8 +97,8 @@ it says "or". A `run` or `resume` case's `expect` has exactly one of `raises` an
 | Kind | Keys | Checks |
 |---|---|---|
 | `load` | `flow` (required), `files`, `env`, `memory_types` | `expect.load` |
-| `run` | `flow` (required), `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls` when present |
-| `resume` | as `run`, plus `host.crash_after_record` or `host.stop`, and `resume` | as `run`, for the resumed run |
+| `run` | `flow` (required), `files`, `env`, `inputs`, `run`, `host` | `expect.raises`, or `expect.output`; then `trace`, `events`, `stream`, `tool_calls`, `memory` when present |
+| `resume` | as `run`, plus `host.crash_after_record` or `host.stop`, and `resume` | as `run`, for the resumed run, plus `memory_drift` when present |
 | `expr` | exactly one of `expr` and `template` (required), `values`, `item`, `mode`, `typedefs`, `env` | `expect.value` or `expect.raises` |
 | `value` | `type` and `value` (required), `typedefs`, `env` | `expect.value` and `expect.kind`, or `expect.raises` |
 | `defaults` | `env` | `expect.defaults` or `expect.raises` |
@@ -139,9 +139,15 @@ abandoned, and the runner checks that the cut happened. The cut still runs the r
 first run run to its end (a first run that raises fails the case), so the resume is a finished
 run's, read-only. With `host.stop`, the first run must reject with the stop, and the resume
 continues the stopped run. Then the flow is resumed from the log with the `resume` arguments
-`num_workers` (absent: the recorded value), `api_key`, `headers` and `context` (`context` as in
-`run`). The expectations are for the resumed run: its output, the trace of the whole log, the
-events and stream of the resume call, and `tool_calls` over both runs.
+`num_workers` (absent: the recorded value), `api_key`, `headers`, `context` (`context` as in
+`run`) and `memory` (below). The expectations are for the resumed run: its output, the trace of
+the whole log, the events and stream of the resume call, `tool_calls` over both runs, the memory
+folders after the resume, and `memory_drift`, the inputs, in order, whose memory the resume call
+reports moved while the run was down (`RunResult.memoryDrift`).
+
+The resume binds each `host.memory` input to a new instance on the same folder, except as
+`resume.memory` says, by input: `null` binds nothing, and `{id: <identity>}` binds a memory of that
+identity in a folder of its own, made before the resume.
 
 ### `expr`
 
@@ -357,10 +363,24 @@ A case can't hold code, so its host is declared under `host`.
   `run` case expects `raises: {class: ConformanceStop, message: conformance stop}`, and its trace
   ends with `run_stopped`. A stop whose point is never reached fails the case after the
   comparisons, like a leftover entry.
+- **`memory`**: memories the host binds to the flow's memory inputs, by input name. An entry is
+  `{type: FileMemory, id: <identity>, files: {<path>: <text>}, held: {node: <node id>, <point>}}`
+  (`type` required): a FileMemory with that `id` on the folder `memory/<input>` in the case
+  directory, which holds `files` before the run (absent: there is no folder). Its defaults come
+  from `env`, as the run's do. With `held`, once the run reaches the [point](#points), the runner
+  takes the memory's lock and holds it until the run ends, as another writer would. An entry
+  `{same_as: <input>}` binds the instance of another entry, so both inputs are one memory. A memory
+  input is bound by `memory`, never by `inputs`. Each run and each `advance` gets new instances on
+  the same folders, as a host restarted between them would. The run's log, output, events and
+  errors must never hold a memory's folder, as given or with symlinks resolved; the runner fails
+  the case if one does.
 - **`crash_after_record`**: `resume` cases only (above).
 
 `expect.tool_calls` lists, per tool that was called, each call in order as `{args, call_id,
-attempt, node}`.
+attempt, node}`. A memory's tools aren't host tools, so their calls aren't listed.
+
+`expect.memory` maps `host.memory` inputs to the files in their folders after the run: each file
+outside `.yian/`, by its `/`-separated path, to its text; `null` when there is no folder.
 Calls answered from `human` are listed too, under the name they were made by (`ask` for a
 TOOL `ask`, `ask_user` for an agent's call); their `args` are the request in
 data form (`question`, `questions`, `answer_schema`, `title`, `node_id`, `options`, `deadline`
@@ -597,7 +617,8 @@ A case's group is its directory under `cases/`.
 | `run-case`, `run-loop`, `run-map-call` | run | control flow and growth |
 | `run-leaves` | run | TOOL (retries, call ids, `ask`, `sleep`), CODE |
 | `run-agent` | run | AGENT with scripted models: plain, structured, tool loop, steers, interrupts, retries |
-| `resume` | resume | recovery, TOOL attempts across a resume, crashed-attempt counts, re-supplied keys |
+| `run-memory` | run | FileMemory inputs: recall, grants, memory tools in agents and TOOL nodes, errors the model sees, sharing |
+| `resume` | resume | recovery, TOOL attempts across a resume, crashed-attempt counts, re-supplied keys, re-bound memories |
 | `cli` | cli | non-interactive `yian run`, the `--json` commands, `yian status --json` |
 
 ## Running the suite
@@ -609,7 +630,7 @@ exits 1 when any case fails. On every `run` and `resume` case with a log it also
 invariants (in-flight nodes within `num_workers`, no record after the terminal outcome,
 `inspectRun` agreeing with a replay, a finished log resumed read-only).
 `--crash-sweep` also cuts each serial `run` case that expects `output`, isn't `pending`, and has no
-`host.sends` or `host.stop` after every record but the last, resumes it (passing the
+`host.sends`, `host.stop` or `host.memory` after every record but the last, resumes it (passing the
 run's `context`, `llm_config.api_key` and `llm_config.headers` again), and checks the invariants,
 plus the output and node outcomes when the case has no `host.human` or `host.jitter` and its tool
 scripts only return. What a run took from the host scripts after the cut (tool results, model

@@ -75,6 +75,7 @@ import {
 } from "../../src/llm/messages.ts";
 import { ScriptedModel, type ScriptedReply } from "../../src/llm/testing.ts";
 import { MemoryBase, type MemoryContract, type MemorySession } from "../../src/memory/base.ts";
+import { FileMemory } from "../../src/memory/file.ts";
 import { checkModelConfig, resolveModelConfig } from "../../src/llm_clients/connection.ts";
 import type { ModelAccess } from "../../src/llm_clients/factory.ts";
 import {
@@ -88,7 +89,7 @@ import {
 import { type ExprNode, parseExpr } from "../../src/expr/grammar.ts";
 import { evalBinding, renderTemplateRecord } from "../../src/expr/template.ts";
 import { ToolNode } from "../../src/nodes/tool/node.ts";
-import { virtualScheduler } from "../../src/platform.ts";
+import { type FileLock, lockFile, virtualScheduler } from "../../src/platform.ts";
 import {
   inspectRun,
   replayRunLog,
@@ -184,11 +185,11 @@ const RESULTS = {
   json: [["value"], ["text"], ["raises"]],
 } satisfies Record<Kind, readonly (readonly string[])[]>;
 const RUN_OPTIONAL: ReadonlySet<string> = new Set([
-  "trace", "events", "stream", "tool_calls",
+  "trace", "events", "stream", "tool_calls", "memory",
 ]);
 const OPTIONAL: Partial<Record<Kind, ReadonlySet<string>>> = {
   run: RUN_OPTIONAL,
-  resume: RUN_OPTIONAL,
+  resume: new Set([...RUN_OPTIONAL, "memory_drift"]),
   cli: new Set(["stdout", "stderr", "json", "json_lines", "exists"]),
 };
 const KIND_NAMES = Object.keys(KIND_KEYS) as Kind[];
@@ -207,11 +208,11 @@ const ALL_EXPECT_KEYS: ReadonlySet<string> = new Set(
 const RUN_KEYS: ReadonlySet<string> = new Set([
   "run_id", "num_workers", "llm_config", "context",
 ]);
-const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "headers", "context"]);
+const RESUME_KEYS: ReadonlySet<string> = new Set(["num_workers", "api_key", "headers", "context", "memory"]);
 // Host keys the format reserves and this runner doesn't support yet.
 const RESERVED_HOST_KEYS: readonly string[] = ["skills"];
 const HOST_KEYS: ReadonlySet<string> = new Set([
-  "tools", "human", "jitter", "models", "stop", "sends", ...RESERVED_HOST_KEYS,
+  "tools", "human", "jitter", "models", "stop", "sends", "memory", ...RESERVED_HOST_KEYS,
 ]);
 const RESUME_HOST_KEYS: ReadonlySet<string> = new Set([...HOST_KEYS, "crash_after_record"]);
 /** The `[section, key]` pairs a case may not use yet: it fails before it is set up. */
@@ -654,6 +655,44 @@ function checkStub(where: string, entry: Value | undefined): void {
   }
 }
 
+/** Throw unless `files`, at `where`, maps relative paths without `..` to text. */
+function checkFiles(where: string, files: Value | undefined): void {
+  for (const [path, text] of Object.entries(mapping(where, files))) {
+    if (typeof text !== "string") throw new Error(`\`${where}\` values must be text`);
+    if (path.startsWith("/") || path.split("/").includes("..")) {
+      throw new Error(`\`${where}\`: \`${path}\` must be a relative path without \`..\``);
+    }
+  }
+}
+
+/**
+ * Throw unless `value` is `host.memory`: input names to `{type: FileMemory, id, files, held}`
+ * (`held` a point with its `node`), or to `{same_as: <input>}` naming an entry that isn't one.
+ */
+function checkMemory(value: Value | undefined): void {
+  const entries = mapping("host.memory", value);
+  for (const [input, entry] of Object.entries(entries)) {
+    const where = `host.memory.${input}`;
+    if (isMapping(entry) && Object.hasOwn(entry, "same_as")) {
+      const same = keys(where, entry, new Set(["same_as"]))["same_as"];
+      const named = typeof same === "string" && same !== input ? get(entries, same) : undefined;
+      if (!isMapping(named) || Object.hasOwn(named, "same_as")) {
+        throw new Error(`\`${where}.same_as\` must name another \`host.memory\` entry that isn't a \`same_as\``);
+      }
+      continue;
+    }
+    const memory = keys(where, entry, new Set(["type", "id", "files", "held"]), { required: ["type"] });
+    if (memory["type"] !== "FileMemory") throw new Error(`\`${where}.type\` must be FileMemory`);
+    if (typeof get(memory, "id", "") !== "string") throw new Error(`\`${where}.id\` must be text`);
+    checkFiles(`${where}.files`, get(memory, "files", {}));
+    if (Object.hasOwn(memory, "held")) {
+      const { node, ...point } = mapping(`${where}.held`, memory["held"]);
+      if (typeof node !== "string") throw new Error(`\`${where}.held.node\` must be a node id`);
+      checkPoint(`${where}.held`, point);
+    }
+  }
+}
+
 /**
  * Throw unless `value`, the host, its tools, models and their scripts use only the format's keys.
  */
@@ -687,6 +726,7 @@ function checkHost(value: Value | undefined, kind: Kind): void {
     }
   }
   checkModels(get(host, "models", {}));
+  checkMemory(get(host, "memory", {}));
   checkStop(get(host, "stop", {}));
   checkSends(get(host, "sends", []), kind);
   const human = mapping("host.human", get(host, "human", {}));
@@ -755,6 +795,38 @@ function checkHttp(value: Value | undefined): void {
       throw new Error(`\`${where}.response.delay\` must be a finite non-negative number`);
     }
   });
+}
+
+/**
+ * Throw unless the case's memories are used as the format says: no `inputs` key binds a
+ * `host.memory` input; `expect.memory` maps `host.memory` inputs to null or a mapping of paths
+ * to text; `expect.memory_drift` lists input names; `resume.memory` maps input names to null or
+ * `{id}`.
+ */
+function checkMemoryUse(case_: Case, expect: Case): void {
+  const memory = get(get(case_, "host", {}) as Case, "memory", {}) as Case;
+  const inputs = get(case_, "inputs", {});
+  for (const input of Object.keys(memory)) {
+    if (isMapping(inputs) && Object.hasOwn(inputs, input)) throw new Error(`\`inputs.${input}\`: \`host.memory\` binds it`);
+  }
+  for (const [input, files] of Object.entries(mapping("expect.memory", get(expect, "memory", {})))) {
+    const where = `expect.memory.${input}`;
+    if (!Object.hasOwn(memory, input)) throw new Error(`\`${where}\` names no \`host.memory\` input`);
+    if (files === null) continue;
+    if (!isMapping(files) || Object.values(files).some((text) => typeof text !== "string")) {
+      throw new Error(`\`${where}\` must be null or a mapping of paths to text`);
+    }
+    checkFiles(where, files);
+  }
+  const drift = get(expect, "memory_drift", []);
+  if (!Array.isArray(drift) || drift.some((input) => typeof input !== "string")) {
+    throw new Error("`expect.memory_drift` must be a list of input names");
+  }
+  const resume = get(case_, "resume", {}) as Case;
+  for (const [input, binding] of Object.entries(mapping("resume.memory", get(resume, "memory", {})))) {
+    const bound = isMapping(binding) && Object.keys(binding).join() === "id" && typeof binding["id"] === "string";
+    if (binding !== null && !bound) throw new Error(`\`resume.memory.${input}\` must be null or \`{id}\``);
+  }
 }
 
 /** Return whether `value` names a kind of case. */
@@ -831,6 +903,7 @@ export function checkCase(case_: Case): Case {
     }
   }
   if (Object.hasOwn(case_, "host")) checkHost(case_["host"], kind);
+  checkMemoryUse(case_, expect);
   // Both were checked as mappings above when present.
   const run = get(case_, "run", {}) as Case;
   if (kind === "resume") {
@@ -1582,12 +1655,13 @@ class ConformanceStop extends Error {
 }
 
 /**
- * The run points an AGENT reaches: the `host.stop` points, and the `host.sends` items delivered at
- * a point (`after`), a send, a withdraw or an interrupt.
+ * The run points an AGENT reaches: the `host.stop` points, the `host.sends` items delivered at
+ * a point (`after`), a send, a withdraw or an interrupt, and the `host.memory` locks taken at a
+ * point (`held`).
  *
  * Reaching a stop calls `onStop`; reaching a send calls `deliver`, a withdraw `withdraw`, an
- * interrupt `interrupt`. Calls are counted, and points reached, only once `armed`, so that runs
- * before the main one neither count nor act.
+ * interrupt `interrupt`, a lock `hold`. Calls are counted, and points reached, only once `armed`,
+ * so that runs before the main one neither count nor act.
  */
 class Inbox {
   armed = false;
@@ -1597,6 +1671,7 @@ class Inbox {
   readonly #deliver: (inbox: string, event: Value) => void;
   readonly #interrupt: (inbox: string) => void;
   readonly #withdraw: (inbox: string) => void;
+  readonly #hold: (input: string) => void;
 
   constructor(
     stop: Case = {},
@@ -1605,13 +1680,21 @@ class Inbox {
     deliver: (inbox: string, event: Value) => void = () => {},
     interrupt: (inbox: string) => void = () => {},
     withdraw: (inbox: string) => void = () => {},
+    memory: Case = {},
+    hold: (input: string) => void = () => {},
   ) {
     this.#onStop = onStop;
     this.#deliver = deliver;
     this.#interrupt = interrupt;
     this.#withdraw = withdraw;
+    this.#hold = hold;
     for (const [node, action] of Object.entries(stop)) {
       this.#pending.push({ label: `host.stop.${node}`, node, action: { ...(action as Case), stop: true } });
+    }
+    for (const [input, entry] of Object.entries(memory)) {
+      if (!Object.hasOwn(entry as Case, "held")) continue;
+      const { node, ...point } = (entry as Case)["held"] as Case;
+      this.#pending.push({ label: `host.memory.${input}.held`, node: node as string, action: { after: point, hold: input } });
     }
     sends.forEach((item, index) => {
       if (!Object.hasOwn(item, "after")) return;
@@ -1625,10 +1708,17 @@ class Inbox {
     });
   }
 
-  /** Send `action`'s event, withdraw its inbox's unread sends, interrupt its readers, or stop the run. */
+  /**
+   * Send `action`'s event, withdraw its inbox's unread sends, interrupt its readers, take its
+   * memory's lock, or stop the run.
+   */
   #act(action: Case): void {
     if (action["stop"] === true) {
       this.#onStop();
+      return;
+    }
+    if (Object.hasOwn(action, "hold")) {
+      this.#hold(action["hold"] as string);
       return;
     }
     if (Object.hasOwn(action, "send")) {
@@ -1806,6 +1896,129 @@ function nextSequence(path: string): number {
   return existsSync(path) ? readFileSync(path, "utf8").split("\n").length - 1 : 0;
 }
 
+/** The memories a case's host binds, each in a folder of its own under one directory. */
+interface CaseMemories {
+  /** Each `host.memory` input's folder, by input name; a `same_as` input's is its entry's. */
+  readonly roots: ReadonlyMap<string, string>;
+  /** Return `input`'s folder with symlinks resolved, as FileMemory resolves it. */
+  real(input: string): string;
+  /** Return a new instance per entry on its folder, by input name; a `same_as` input shares its entry's. */
+  bind(): Record<string, MemoryBase>;
+}
+
+/** Write `files`, relative paths to text, under `root`: folders 0700, files 0600. */
+function writeFolder(root: string, files: Readonly<Record<string, string>>): void {
+  mkdirSync(root, { recursive: true, mode: 0o700 });
+  for (const [name, text] of Object.entries(files)) {
+    const path = join(root, name);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+    writeFileSync(path, text, { mode: 0o600 });
+  }
+}
+
+/** Return a FileMemory on `root` with identity `id`, its defaults read from `env`, as the run's are. */
+function fileMemory(root: string, id: string | undefined, env: Env): FileMemory {
+  // A virtual clock of its own: its one sleep is a lock wait, which then takes no time.
+  return withEnv(env, () => new FileMemory({ root, ...(id === undefined ? {} : { id }), scheduler: virtualScheduler(Date.now()) }));
+}
+
+/**
+ * Return the memories `host.memory` in `spec` declares, each entry's folder `<dir>/<input>`
+ * holding its `files` (no folder without them), its instances built with `env`.
+ */
+function caseMemories(spec: Case, dir: string, env: Env): CaseMemories {
+  const entries = get(spec, "memory", {}) as Case;
+  const own = (input: string) => {
+    const same = (entries[input] as Case)["same_as"];
+    return typeof same === "string" ? same : input;
+  };
+  const roots = new Map(Object.keys(entries).map((input) => [input, join(dir, own(input))]));
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  for (const [input, entry] of Object.entries(entries)) {
+    const files = (entry as Case)["files"];
+    if (isMapping(files)) writeFolder(roots.get(input)!, files as Record<string, string>);
+  }
+  const real = realpathSync(dir);
+  return {
+    roots,
+    real: (input) => join(real, own(input)),
+    bind: () => {
+      const made = new Map<string, MemoryBase>();
+      for (const input of Object.keys(entries)) {
+        const name = own(input);
+        if (!made.has(name)) made.set(name, fileMemory(roots.get(name)!, get(entries[name] as Case, "id") as string | undefined, env));
+      }
+      return Object.fromEntries(Object.keys(entries).map((input) => [input, made.get(own(input))!]));
+    },
+  };
+}
+
+/**
+ * Return how a resume binds the case's `memories`: new instances on their folders, but as
+ * `resume.memory` says: `null` binds nothing, and `{id}` binds a memory of that identity in a
+ * folder of its own, `<dir>/resume-<input>`, made now. Also return those folders.
+ */
+async function resumeMemories(
+  case_: Case,
+  memories: CaseMemories,
+  dir: string,
+  env: Env,
+): Promise<{ bind: () => Record<string, MemoryBase>; roots: Map<string, string> }> {
+  const overrides = get(get(case_, "resume", {}) as Case, "memory", {}) as Case;
+  const roots = new Map<string, string>();
+  for (const [input, binding] of Object.entries(overrides)) {
+    if (binding === null) continue;
+    const root = join(dir, `resume-${input}`);
+    const made = fileMemory(root, (binding as Case)["id"] as string, env);
+    await (await made.open({ create: true, itemType: null, signal: new AbortController().signal })).close();
+    roots.set(input, root);
+  }
+  const bind = () => {
+    const bound = memories.bind();
+    for (const [input, binding] of Object.entries(overrides)) {
+      if (binding === null) delete bound[input];
+      else bound[input] = fileMemory(roots.get(input)!, (binding as Case)["id"] as string, env);
+    }
+    return bound;
+  };
+  return { bind, roots };
+}
+
+/**
+ * Return the files in the folder `root` but `.yian/`, by `/`-separated path, or `null` when there
+ * is no folder.
+ */
+function folderFiles(root: string): Case | null {
+  if (!existsSync(root)) return null;
+  const files: Case = {};
+  const walk = (rel: string): void => {
+    for (const entry of readdirSync(join(root, rel), { withFileTypes: true })) {
+      const path = rel === "" ? entry.name : `${rel}/${entry.name}`;
+      if (path === ".yian") continue;
+      if (entry.isDirectory()) walk(path);
+      else files[path] = readFileSync(join(root, path), "utf8");
+    }
+  };
+  walk("");
+  return files;
+}
+
+/**
+ * Throw a `CaseFailure` when one of `texts` holds a memory's folder from `roots`, by input name,
+ * as given or with symlinks resolved: a run's log, output and errors never hold a memory's
+ * location.
+ */
+function checkNoRoots(roots: Iterable<readonly [string, string]>, texts: Record<string, string>): void {
+  const leaks: string[] = [];
+  for (const [input, root] of roots) {
+    const forms = existsSync(root) ? [root, realpathSync(root)] : [root];
+    for (const [where, text] of Object.entries(texts)) {
+      if (forms.some((form) => text.includes(form))) leaks.push(`memory \`${input}\`'s folder appears in ${where}`);
+    }
+  }
+  if (leaks.length > 0) throw new CaseFailure(leaks.join("\n"));
+}
+
 /** A case's scripted host: what `runFlow` gets from it, what it records, and its check. */
 interface Host {
   /** A stub per `host.tools` entry, and the ask slot for `host.human`. */
@@ -1838,6 +2051,8 @@ interface Host {
    * entries each may leave.
    */
   check: (allowed?: { overruns?: ReadonlySet<string>; left?: ReadonlyMap<string, number> }) => string[];
+  /** Release the memory locks taken at `held` points. */
+  release: () => void;
 }
 
 /**
@@ -1848,9 +2063,11 @@ interface Host {
  * Every model the run builds is the scripted one, after its config is resolved and checked with
  * `env`. Each stub call reaches its run points once it takes its entry. `log` is the
  * run's log file. The ask slot declares, as extras, every input the `flow`'s TOOL `ask` nodes pass
- * beyond yian's ask surface, such as an `adaptive_questions:` brief's context.
+ * beyond yian's ask surface, such as an `adaptive_questions:` brief's context. At a `host.memory`
+ * entry's `held` point, the lock of its memory, in its folder in `memories`, is taken and held
+ * until `release`.
  */
-function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
+function host(case_: Case, log: string, env: Env, flow: ComposedFlow, memories?: CaseMemories): Host {
   const spec = get(case_, "host", {}) as Case;
   const calls = new Map<string, Case[]>();
   const problems: Problem[] = [];
@@ -1862,6 +2079,7 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
   const stopError = new ConformanceStop();
   const stop = Object.hasOwn(spec, "stop") ? { signal: stopper.signal, error: stopError } : null;
   const delivered: Promise<unknown>[] = [];
+  const locks: FileLock[] = [];
   const inbox = new Inbox(
     get(spec, "stop", {}) as Case,
     () => stopper.abort(stopError),
@@ -1882,6 +2100,9 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
       taken.catch(() => {});
       delivered.push(taken);
     },
+    get(spec, "memory", {}) as Case,
+    // The run start made `.yian/`; the lock is the one FileMemory takes, so its writes wait.
+    (input) => locks.push(lockFile(join(memories!.real(input), ".yian", "lock"), { private: true })),
   );
   const scripts = new Map<string, Value[]>(
     Object.entries(get(spec, "human", {}) as Case).map(([node, answers]) => [
@@ -2041,7 +2262,12 @@ function host(case_: Case, log: string, env: Env, flow: ComposedFlow): Host {
     for (const item of taken.splice(first).reverse()) scripts.get(item.label)!.unshift(item.entry);
   };
   const sent = async (): Promise<void> => void (await Promise.all(delivered));
-  return { tools: Object.fromEntries(tools), random, models, inbox, stop, calls, taken, putBack, crashed, check, sent };
+  const release = () => {
+    for (const lock of locks.splice(0)) lock.release();
+  };
+  return {
+    tools: Object.fromEntries(tools), random, models, inbox, stop, calls, taken, putBack, crashed, check, sent, release,
+  };
 }
 
 /** Return a run's `failure` in the case's failure form. */
@@ -2399,16 +2625,21 @@ function runHooks(
  * the case directory, its waits on a virtual clock that starts at the real current time; with
  * `host.stop`, the run is stopped at its point. A `resume` case's first run is cut after record
  * `host.crash_after_record` (or, for `end`, runs to its end; with `host.stop`, is stopped) and
- * resumed with the `resume` arguments. Return the results: `trace`, `events`, `stream` (the
- * resume's), `tool_calls` (every run's), `output` or the host error as `raises` and `error` (never
- * compared), and `left`, a message per script with entries left.
+ * resumed with the `resume` arguments. Each run and `advance` binds new instances of the
+ * `host.memory` memories, in folders under `memory/` in the case directory. Return the results:
+ * `trace`, `events`, `stream` (the resume's), `tool_calls` (every run's), `output` or the host
+ * error as `raises` and `error` (never compared), `memory` (the folders `expect.memory` names,
+ * after the run), `memory_drift` (the resume's), and `left`, a message per script with entries
+ * left.
  */
 async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, unknown>> {
   const flow = await loadText(case_["flow"] as string, ctx);
   const log = join(ctx.dir, "run.jsonl");
   const env = caseEnv(ctx);
   const spec = get(case_, "host", {}) as Case;
-  const scripted = host(case_, log, env, flow);
+  const folders = join(ctx.dir, "memory");
+  const memories = caseMemories(spec, folders, env);
+  const scripted = host(case_, log, env, flow, memories);
   const { tools, models, inbox, stop, calls, check, sent } = scripted;
   const run = get(case_, "run", {}) as Case;
   const resume = get(case_, "resume", {}) as Case;
@@ -2420,52 +2651,66 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
   const inputs = get(case_, "inputs", {}) as Case;
   let signal: { signal?: AbortSignal } = stop === null ? {} : { signal: stop.signal };
   const runArguments = runOptions<RunFlowOptions>(run, RUN_OPTIONS);
-  let start = () => runFlow(flow, inputs, { ...runArguments, ...hooks, ...signal });
+  let start = () => runFlow(flow, { ...inputs, ...memories.bind() }, { ...runArguments, ...hooks, ...signal });
+  // Each `advance` binds the memories again, as a host does; a case without them passes none.
+  const { memory: resumeMemory, ...resumeArgs } = resume;
+  const binds = Object.hasOwn(spec, "memory") || resumeMemory !== undefined;
+  let bound = () => (binds ? { memory: memories.bind() } : {});
+  const roots: [string, string][] = [...memories.roots];
   // After each `host.sends` item, the run moves on with the arguments `advance` shares with `run`.
   const sharedArgs = Object.fromEntries(
     Object.entries(run).filter(([key]) => Object.hasOwn(RESUME_OPTIONS, key)),
   );
   let advanceArguments = runOptions<AdvanceOptions>(sharedArgs, RESUME_OPTIONS);
   let result: RunResult | undefined;
+  let drift: string[] | null = null;
   let caught: Record<string, unknown> = {};
-  inbox.armed = true;
-  if (case_["kind"] === "resume") {
-    await cutFirstRun(spec, () => start(), stop);
-    // The stop ended the first run; aborted for good, it would stop each later advance at once.
-    signal = {};
-    // The sends a host makes while the run is down.
-    for (const item of get(spec, "sends", []) as Case[]) {
-      if (item["down"] === true) await send(log, item["inbox"] as string, item["event"], { env });
-    }
-    events.length = 0;
-    chunks.length = 0;
-    const resumeArguments = runOptions<AdvanceOptions>(resume, RESUME_OPTIONS);
-    advanceArguments = resumeArguments;
-    start = () => advance({ ...resumeArguments, ...hooks });
-  }
   // The items sent while the run waits; the others are sent at a point, or while it is down.
   const all = get(spec, "sends", []) as Case[];
   const sends = all.filter((item) => !Object.hasOwn(item, "after") && !Object.hasOwn(item, "down"));
   // A run must not end waiting when it was given items to send while it waits, or an empty list.
   const waitingSends = Object.hasOwn(spec, "sends") && (sends.length > 0 || all.length === 0);
+  inbox.armed = true;
   try {
-    result = await start();
-    await sent();
-    // Each item is delivered while the run waits; the same collectors see every `advance`.
-    while (result.status === "waiting" && sends.length > 0) {
-      const item = sends.shift()!;
-      if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, { env });
-      else if (Object.hasOwn(item, "withdraw")) await withdraw(log, item["withdraw"] as string, { env });
-      else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, { env });
-      else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), { env });
-      else await send(log, item["inbox"] as string, item["event"], { env });
-      // A held item leaves the run waiting, so the next item lands on the same wait.
-      if (item["hold"] === true) continue;
-      result = await advance({ ...advanceArguments, ...hooks, ...signal });
-      await sent();
+    if (case_["kind"] === "resume") {
+      await cutFirstRun(spec, () => start(), stop);
+      // The stop ended the first run; aborted for good, it would stop each later advance at once.
+      signal = {};
+      // The sends a host makes while the run is down.
+      for (const item of get(spec, "sends", []) as Case[]) {
+        if (item["down"] === true) await send(log, item["inbox"] as string, item["event"], { env });
+      }
+      events.length = 0;
+      chunks.length = 0;
+      const resumed = await resumeMemories(case_, memories, folders, env);
+      roots.push(...resumed.roots);
+      if (binds) bound = () => ({ memory: resumed.bind() });
+      const resumeArguments = runOptions<AdvanceOptions>(resumeArgs, RESUME_OPTIONS);
+      advanceArguments = resumeArguments;
+      start = () => advance({ ...resumeArguments, ...hooks, ...bound() });
     }
-  } catch (error) {
-    caught = { raises: raised(error), error };
+    try {
+      result = await start();
+      if (case_["kind"] === "resume") drift = result.memoryDrift.map(({ input }) => input);
+      await sent();
+      // Each item is delivered while the run waits; the same collectors see every `advance`.
+      while (result.status === "waiting" && sends.length > 0) {
+        const item = sends.shift()!;
+        if (Object.hasOwn(item, "close")) await close(log, item["close"] as string, { env });
+        else if (Object.hasOwn(item, "withdraw")) await withdraw(log, item["withdraw"] as string, { env });
+        else if (Object.hasOwn(item, "interrupt")) await interrupt(log, item["interrupt"] as string, { env });
+        else if (Object.hasOwn(item, "complete")) await complete(log, item["complete"] as string, completion(item), { env });
+        else await send(log, item["inbox"] as string, item["event"], { env });
+        // A held item leaves the run waiting, so the next item lands on the same wait.
+        if (item["hold"] === true) continue;
+        result = await advance({ ...advanceArguments, ...hooks, ...signal, ...bound() });
+        await sent();
+      }
+    } catch (error) {
+      caught = { raises: raised(error), error };
+    }
+  } finally {
+    scripted.release();
   }
   if (waitingSends && result?.status === "waiting") {
     throw new CaseFailure("the run is still waiting after host.sends ran out");
@@ -2483,11 +2728,13 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
     tool_calls: Object.fromEntries([...calls].map(([name, list]) => [name, list.map(dataForm)])),
     ...(result !== undefined ? { output: output(result, flow) } : {}),
   };
-  checkSecrets(case_, {
+  const texts = {
     ...Object.fromEntries(Object.entries(actual).map(([name, value]) => [name, spell(value as Value)])),
     "the run log": text,
     "the raised error": str((caught["raises"] as Case | undefined)?.["message"] ?? ""),
-  });
+  };
+  checkSecrets(case_, texts);
+  checkNoRoots(roots, texts);
   // A `resume` case's results are grouped by the resumed run's `num_workers`.
   if (!isZero(get({ ...run, ...resume }, "num_workers", 8n))) actual = pooled(actual);
   const runId =
@@ -2496,7 +2743,9 @@ async function actualRun(case_: Case, ctx: CaseContext): Promise<Record<string, 
       : ((parseJson(lines[0]!, "codec") as Case)["run_id"] as string);
   // A raised error is compared as is, without placeholders.
   actual = placeholders(actual, runId);
-  return { ...actual, ...caught, left };
+  const named = Object.keys(get(case_["expect"] as Case, "memory", {}) as Case);
+  const memory = Object.fromEntries(named.map((input) => [input, folderFiles(memories.roots.get(input)!)]));
+  return { ...actual, memory, ...(drift === null ? {} : { memory_drift: drift }), ...caught, left };
 }
 
 /** The results `--write-expect` writes back. */
@@ -2525,6 +2774,9 @@ function checkResults(
   if (Object.hasOwn(expect, "output")) {
     const form = actual["output"] as Case;
     compare("output", form, expect["output"], { byValue: form["status"] === "succeeded" });
+  }
+  for (const name of ["memory", "memory_drift"]) {
+    if (Object.hasOwn(expect, name)) compare(name, actual[name], expect[name]);
   }
   for (const name of REWRITTEN) {
     if (!Object.hasOwn(expect, name)) continue;
@@ -2874,7 +3126,7 @@ function stubTools(spec: Case): StubTool[] {
 
 /**
  * Return whether `case_` gets a crash sweep: a serial `run` case expecting `output`, not
- * `pending`, with no `host.stop` or `host.sends` (an interrupt item among them).
+ * `pending`, with no `host.stop`, `host.sends` (an interrupt item among them) or `host.memory`.
  */
 export function sweepable(case_: Case): boolean {
   const spec = get(case_, "host", {}) as Case;
@@ -2883,7 +3135,7 @@ export function sweepable(case_: Case): boolean {
     isZero(get(get(case_, "run", {}) as Case, "num_workers", 8n)) &&
     Object.hasOwn(case_["expect"] as Case, "output") &&
     !Object.hasOwn(case_, "pending") &&
-    !["stop", "sends"].some((key) => Object.hasOwn(spec, key))
+    !["stop", "sends", "memory"].some((key) => Object.hasOwn(spec, key))
   );
 }
 

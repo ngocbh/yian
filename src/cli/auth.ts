@@ -964,9 +964,18 @@ export async function auth(command: ParsedArgs, io: CliIo, deps: AuthDeps = {}):
             "--remove without a provider deletes the whole --auth-file; it takes no --default or setup option",
           );
         }
-        await open(authFile).delete();
+        const store = open(authFile);
+        let embedding: string | null = null;
+        try {
+          embedding = store.read().defaultEmbedding;
+        } catch (error) {
+          // A damaged file is deleted all the same: that is how it is fixed.
+          if (!(error instanceof AuthError)) throw error;
+        }
+        await store.delete();
+        const also = embedding === null ? "" : `, and its default embedding model ${embedding}`;
         if (json) await printJson({ ok: true }, io.stdout);
-        else await io.stdout.write(`Removed the saved logins in ${authFile}\n`);
+        else await io.stdout.write(`${forTerminal(`Removed the saved logins in ${authFile}${also}`, io.stdout)}\n`);
         return 0;
       }
       if (options.default || options.remove || setup) {
@@ -1101,22 +1110,26 @@ export async function configCheck(command: ParsedArgs, io: CliIo): Promise<numbe
 /**
  * Save `provider/model` in the auth store as the embedding model a new VectorDB memory is made with
  * when the run gives no `--embedding`. `YIAN_DEFAULT_EMBEDDING`, when set, still wins; the command
- * then says so on stderr.
+ * then says so on stderr. Without a model, print the default a run would use and where it comes
+ * from: `YIAN_DEFAULT_EMBEDDING`, the store's file, or none.
  *
- * @returns 0, or 1 when the store can't be written.
+ * @returns 0, or 1 when the store can't be read or written.
  * @throws {UsageError} The model isn't `provider/model` on a provider with embeddings.
  */
 export async function configEmbedding(command: ParsedArgs, io: CliIo): Promise<number> {
-  let model: EmbeddingModel;
+  const given = command.args["model"] as string | undefined;
+  let model: EmbeddingModel | null = null;
   try {
-    model = embeddingModel(command.args["model"] as string);
+    if (given !== undefined) model = embeddingModel(given);
   } catch (error) {
     if (!(error instanceof RangeError)) throw error;
     throw new UsageError(`Invalid value for 'MODEL': ${error.message}`);
   }
-  const text = `${model.provider}/${model.model}`;
+  const store = new AuthStore(null, { env: io.env });
+  const text = model === null ? null : `${model.provider}/${model.model}`;
   try {
-    await new AuthStore(null, { env: io.env }).setDefaultEmbedding(text);
+    if (text === null) return await showEmbedding(io, store);
+    await store.setDefaultEmbedding(text);
   } catch (error) {
     if (!(error instanceof AuthError)) throw error;
     await io.stderr.write(`${forTerminal(error.message, io.stderr)}\n`);
@@ -1127,6 +1140,19 @@ export async function configEmbedding(command: ParsedArgs, io: CliIo): Promise<n
   if (set) {
     await io.stderr.write(`YIAN_DEFAULT_EMBEDDING=${forTerminal(set, io.stderr)} is set, and runs use it instead\n`);
   }
+  return 0;
+}
+
+/** Print the default embedding model a run would use and where it comes from; return 0. */
+async function showEmbedding(io: CliIo, store: AuthStore): Promise<number> {
+  const set = io.env("YIAN_DEFAULT_EMBEDDING");
+  const saved = set ? null : store.read().defaultEmbedding;
+  const line = set
+    ? `default embedding model: ${set}, from YIAN_DEFAULT_EMBEDDING`
+    : saved !== null
+      ? `default embedding model: ${saved}, saved in ${store.path}`
+      : "no default embedding model; set one with `yian config embedding provider/model`";
+  await io.stdout.write(`${forTerminal(line, io.stdout)}\n`);
   return 0;
 }
 

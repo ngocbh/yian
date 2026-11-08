@@ -1218,6 +1218,19 @@ output: \${add.output.id}
     expect(output.text).toContain(`Empty ${identity} at ${location}? This deletes 1 item and its history.`);
   });
 
+  test("config embedding with no MODEL says which model a new store gets, and where it comes from", async () => {
+    const none = await yian(["config", "embedding"]);
+    expect(none.code, none.stderr).toBe(0);
+    expect(none.stdout).toBe("no default embedding model; set one with `yian config embedding provider/model`\n");
+    await yian(["config", "embedding", "openai/text-embedding-3-small"]);
+    const saved = await yian(["config", "embedding"]);
+    const file = join(home, ".config", "yian", "auth.json");
+    expect(saved.stdout).toBe(`default embedding model: openai/text-embedding-3-small, saved in ${file}\n`);
+    const env = envOf({ YIAN_DEFAULT_EMBEDDING: "vllm/bge-m3" });
+    const set = await yian(["config", "embedding"], { env });
+    expect(set.stdout).toBe("default embedding model: vllm/bge-m3, from YIAN_DEFAULT_EMBEDDING\n");
+  });
+
   test("config embedding saves the model a new store is made with; YIAN_DEFAULT_EMBEDDING overrides it", async () => {
     const signal = new AbortController().signal;
     const saved = await yian(["config", "embedding", "openai/text-embedding-3-small"]);

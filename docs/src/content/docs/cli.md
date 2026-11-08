@@ -477,7 +477,7 @@ $ yian auth anthropic --remove
 | `--project` | id | OpenAI API key only: the project id sent with each request |
 | `--header` | `NAME=VARIABLE` or `NAME` | An extra request header saved with the key, its value read from `VARIABLE` or a hidden prompt. Repeat it for more |
 | `--default` | | Make an already-saved provider the default |
-| `--remove` | | Delete the provider's login. Without a provider, delete the whole `--auth-file` |
+| `--remove` | | Delete the provider's login. Without a provider, delete the whole `--auth-file`, its default embedding model included |
 | `--auth-file` | path | Use this file instead of `$YIAN_AUTH_FILE` or the default (see [Files and folders](/reference/#files-and-folders)). Its folder must be yours, mode `0700` |
 | `--json` | | For `--remove` and for OpenAI device sign-in only |
 
@@ -560,7 +560,8 @@ saved the default embedding model openai/text-embedding-3-small
 
 The provider must be `openai` or an OpenAI-compatible one, such as `openrouter` or `vllm`; its
 calls use your saved API-key login or key. `YIAN_DEFAULT_EMBEDDING=provider/model` takes the saved
-model's place.
+model's place. With no model, the command prints the default and where it comes from. yian versions
+from before this command can't read a saved-logins file that holds a default embedding model.
 
 ## yian skills check
 

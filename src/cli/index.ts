@@ -410,7 +410,13 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
     spec: {
       name: "config embedding",
       summary: "Save the embedding model a new VectorDB memory is made with when --embedding is absent.",
-      positionals: [{ name: "model", help: "The model as provider/model, such as openai/text-embedding-3-small." }],
+      positionals: [
+        {
+          name: "model",
+          help: "The model as provider/model, such as openai/text-embedding-3-small; without it, show the default.",
+          optional: true,
+        },
+      ],
       options: [],
     },
     load: async () => {

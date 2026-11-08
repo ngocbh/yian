@@ -178,3 +178,9 @@ test("a host memory type has no constructor", async () => {
     "`TradeJournal` is a memory type; it has no constructor",
   );
 });
+
+test("an inline loop body takes a memory from its seed, keeping the memory type", () => {
+  const nodes = `  l:\n    kind: loop\n    input:\n      m: \${input.lessons}\n      done: false\n    nodes:\n      a:\n        kind: agent\n        output: bool\n        prompt: hi\n        input:\n          m: \${input.m}\n    output:\n      done: \${a.output}\n    while: not done\n`;
+  const loop = load(nodes).flow.compiled.nodes.get("l") as unknown as { childInputs: readonly Parameter[] };
+  expect(loop.childInputs.find((input) => input.name === "m")!.contract!.type.memory).toBe("FileMemory");
+});

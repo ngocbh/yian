@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { loadFlow } from "../src/compose/loader.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { FileMemory } from "../src/memory/file.ts";
+import { withWarnings } from "../src/platform.ts";
 import { advance, agentCall, agentCalls, complete, foldRunLog, inspectRun, type RunFlowOptions, runFlow } from "../src/run.ts";
 import { pending } from "../src/tools/context.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
@@ -180,6 +181,45 @@ output: \${hold.output}
   expect(done.memoryDrift).toEqual([]);
   expect(memory.opens).toBe(2);
   expect(memory.sessions[1]!.snapshots).toBe(0);
+});
+
+test("a resumed segment's memory that fails to close is a warning; the result stands", async () => {
+  const text = `
+id: w
+name: w
+input:
+  lessons: !FileMemory
+nodes:
+  hold:
+    kind: tool
+    tool_id: hold
+output: \${hold.output}
+`;
+  const hold = new FunctionTool({ name: "hold", description: "Hold.", parametersJsonSchema: { type: "object" }, execute: () => pending() });
+  const memory = new FakeMemory(() => {
+    const session = new RecordingSession(fileInfo("t/lessons"));
+    session.close = async () => {
+      throw new Error("rpc close failed");
+    };
+    return session;
+  });
+  const log = runLog();
+  const warnings: string[] = [];
+  const waiting = await withWarnings(
+    (message) => warnings.push(message),
+    async () => runFlow(await loadFlow(text), { lessons: memory }, { env: NO_ENV, log, tools: { hold } }),
+  );
+  expect(waiting.status).toBe("waiting");
+  await complete(log, waiting.waits[0]!.callId, { output: "x" });
+  const done = await withWarnings(
+    (message) => warnings.push(message),
+    () => advance({ log, env: NO_ENV, tools: { hold }, memory: { lessons: memory } }),
+  );
+  expect(done.status).toBe("succeeded");
+  expect(warnings).toEqual([
+    "memory `t/lessons` didn't close: rpc close failed",
+    "memory `t/lessons` didn't close: rpc close failed",
+  ]);
 });
 
 test("a memory recorded null needs no instance on resume, and one passed for it is refused", async () => {

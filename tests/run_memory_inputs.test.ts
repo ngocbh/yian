@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { loadFlow } from "../src/compose/loader.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { FileMemory } from "../src/memory/file.ts";
-import { hostInputs, type RunFlowOptions, runFlow } from "../src/run.ts";
+import { withWarnings } from "../src/platform.ts";
+import { hostInputs, inspectRun, type RunFlowOptions, runFlow } from "../src/run.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import type { JsonObject } from "../src/typesys/json.ts";
 import { FakeMemory, fileInfo, RecordingSession } from "./helpers/memory_fakes.ts";
@@ -166,4 +167,47 @@ test("a memory tool whose visible name is a host tool's fails at run start", asy
   await expect(run(whole, { question: "q", lessons: memory }, { tools: { lessons_read: tool } })).rejects.toThrow(
     "the memory tool `lessons_read` of `lessons` has the name of a host tool it grants",
   );
+});
+
+test("a memory that fails to close is a warning; the run's result stands", async () => {
+  const memory = new FakeMemory(() => {
+    const session = new RecordingSession(fileInfo("t/lessons"));
+    session.close = async () => {
+      throw new Error("rpc close failed");
+    };
+    return session;
+  });
+  const warnings: string[] = [];
+  const { result, log } = await withWarnings(
+    (message) => warnings.push(message),
+    () => run(FLOW, { question: "q", lessons: memory }),
+  );
+  expect(result.status).toBe("succeeded");
+  expect(inspectRun(log).status).toBe("succeeded");
+  expect(warnings).toEqual(["memory `t/lessons` didn't close: rpc close failed"]);
+});
+
+test("a memory that fails to close after the call failed is noted on its error, not warned", async () => {
+  const memory = new FakeMemory(() => {
+    const session = new RecordingSession(fileInfo("t/lessons"));
+    session.close = async () => {
+      throw new Error("rpc close failed");
+    };
+    return session;
+  });
+  // An existing log path fails the call once the memories are open.
+  const taken = runLog();
+  writeFileSync(taken, "");
+  const warnings: string[] = [];
+  const error = await withWarnings(
+    (message) => warnings.push(message),
+    async () => runFlow(await loadFlow(FLOW), { question: "q", lessons: memory }, { env: NO_ENV, log: taken }),
+  ).then(
+    () => null,
+    (thrown: unknown) => thrown as Error & { code?: string; notes?: string[] },
+  );
+  expect(error?.code).toBe("EEXIST");
+  expect(memory.opens).toBe(1);
+  expect(error?.notes).toEqual(["closing memory `t/lessons` also raised Error: rpc close failed"]);
+  expect(warnings).toEqual([]);
 });

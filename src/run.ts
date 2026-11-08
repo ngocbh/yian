@@ -567,8 +567,9 @@ function idleRun(
 /**
  * Close what a run call opened and hand the run on, whatever fails.
  *
- * 1. Servers close, then memory sessions. Server close never rejects (`closeRunServers`), so only
- *    memory and log close errors are noted.
+ * 1. Servers close, then memory sessions. Neither rejects (`closeRunServers`, `RunMemories.close`):
+ *    a memory's close error is noted on `primary`, else warned. Only log close errors are noted
+ *    below.
  * 2. Then, in one synchronous step: the next idle entry is built (after every await, so it holds
  *    every record appended under this hold), the log closes, and the hold is released.
  *
@@ -592,10 +593,11 @@ async function closeAndRelease(parts: {
     else noteCleanup(pending.error, error, `${operation} also raised`);
   };
   await closeRunServers(parts.servers);
-  try {
-    await parts.memories?.close();
-  } catch (error) {
-    note("memory close", error);
+  // A memory that fails to close can't change what the run recorded: it is noted on the call's
+  // error, or else warned, as a host's other failed cleanups are, and never thrown.
+  for (const { identity, error } of (await parts.memories?.close()) ?? []) {
+    if (primary !== null) noteCleanup(primary.error, error, `closing memory \`${identity}\` also raised`);
+    else warn(`memory \`${identity}\` didn't close: ${errorMessage(error)}`);
   }
   let next: IdleRun | null = null;
   try {
@@ -704,7 +706,9 @@ export interface RunFlowOptions {
  *   full boundary type checks as its recorded execution. A memory input takes a `MemoryBase`
  *   instance (an Optional one may be left out or `null`): before `RunStarted` each instance is
  *   opened once and snapshotted, its value is recorded in START's inputs, and its session closes
- *   when the run's segment ends.
+ *   when the run's segment ends. A session that fails to close doesn't change the result: its
+ *   error is noted on the call's error, if it failed, or else reported as a warning (`warn`, which
+ *   `withWarnings` receives).
  * @param options See `RunFlowOptions`.
  * @returns The terminal success or failure, with this call's post-durable observers.
  * @throws TypeError when `flow` isn't a `ComposedFlow`, `signal` isn't an `AbortSignal`, `live`
@@ -1480,7 +1484,8 @@ export interface AdvanceOptions {
  * An unfinished run binds the memories it started with again (`memory`): each is opened with
  * `create: false` and must match the identity, type, settings and tool specs its run recorded. The
  * recorded recall stays the run's. A crash resume reads each memory's version and reports one that
- * moved in `RunResult.memoryDrift`; advancing a waiting run doesn't read them.
+ * moved in `RunResult.memoryDrift`; advancing a waiting run doesn't read them. The sessions close
+ * when the segment ends, a failed close reported as `runFlow` reports it.
  *
  * `RunResumed` is written only when the last segment crashed or stopped (work in flight, a
  * recorded stop, or no `run_waiting` as its last frontier record) or `numWorkers` changes; then the
@@ -3781,6 +3786,15 @@ function requiredStateRunId(state: RunState): string {
     throw new RangeError("terminal run state has no valid run_id");
   }
   return state.runId;
+}
+
+/** Return an error's message, or the thrown value as text, for a warning; never throws. */
+function errorMessage(error: unknown): string {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return "an error that can't be shown";
+  }
 }
 
 /** Return the error for the server under `key`, which another run has open or is opening. */

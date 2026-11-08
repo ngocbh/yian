@@ -171,18 +171,22 @@ export class RunMemories {
     return session;
   }
 
-  /** Close every session; the first close error is thrown once all are closed. */
-  async close(): Promise<void> {
-    let failure: { error: unknown } | null = null;
-    for (const session of this.#sessions.values()) {
+  /**
+   * Close every session. Never rejects: a run's memories close after its records are written, so
+   * a failed close can't change its outcome.
+   *
+   * @returns Each memory whose session failed to close, by identity, with its error.
+   */
+  async close(): Promise<{ identity: string; error: unknown }[]> {
+    const failed: { identity: string; error: unknown }[] = [];
+    for (const [identity, session] of this.#sessions) {
       try {
         await session.close();
       } catch (error) {
-        if (failure === null) failure = { error };
-        else noteCleanup(failure.error, error, "closing another memory also raised");
+        failed.push({ identity, error });
       }
     }
-    if (failure !== null) throw failure.error;
+    return failed;
   }
 }
 

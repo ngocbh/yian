@@ -250,3 +250,18 @@ test("reopen refuses a recorded memory with no binding before opening anything",
   ).rejects.toThrow("memory `lessons` (`t/x`) isn't at its location; bind it with --memory");
   expect(other.opens).toBe(0);
 });
+
+test("close closes every session and returns the ones that failed, never rejecting", async () => {
+  const failing = new FakeMemory(() => {
+    const session = new RecordingSession(fileInfo("t/a"));
+    session.close = async () => {
+      throw new Error("gone");
+    };
+    return session;
+  });
+  const fine = new FakeMemory(() => new RecordingSession(fileInfo("t/b")));
+  const memories = await RunMemories.open([bind("a", failing), bind("b", fine)], fresh);
+  const failed = await memories.close();
+  expect(failed.map(({ identity, error }) => [identity, (error as Error).message])).toEqual([["t/a", "gone"]]);
+  expect(fine.sessions[0]!.closed).toBe(1);
+});

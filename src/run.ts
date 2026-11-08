@@ -32,8 +32,13 @@
  * which lists a log's calls from its steps, and `agentCall`, which rebuilds one call's request and
  * reads its attempts, reply and tool results.
  *
- * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, nodes,
- *                platform, runtime, skills, tools, typesys.
+ * A run binds each memory input to the instance its host passes (`runtime/memories.ts`): before
+ * `RunStarted` it opens and snapshots each into the value START's inputs record, and a resume
+ * binds the same memories again; `RunResult.memoryDrift` and the `MemoryDrift` type report a
+ * memory that moved while a crashed run was down.
+ *
+ * Knows about:   compile, compose, defaults, diagnostics, events, expr, llm_clients, memory,
+ *                nodes, platform, runtime, skills, tools, typesys.
  * Never imports: the CLI.
  */
 

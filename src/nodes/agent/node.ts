@@ -936,8 +936,8 @@ export class AgentNode extends Node {
   }
 
   /**
-   * Return `record` with each memory input rendered as its recall (`renderRecall`), and `types`
-   * with each one's declared type `str`. A memory input is one holding a `MemoryRef`, or one whose
+   * Replace, in `record`, each memory input with its rendered recall (`renderRecall`), and its
+   * declared type in `types` with `str`. A memory input is one holding a `MemoryRef`, or one whose
    * declared type is a memory type, which then holds a memory or null (an Optional one left out,
    * which renders empty).
    *

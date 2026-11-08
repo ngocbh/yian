@@ -408,6 +408,18 @@ output: done
   );
 
   test(
+    "a flow's int output reads back as its digits in flow_status and wait_flow",
+    async () => {
+      writeFileSync(join(root, "legs.yaml"), LEGS);
+      const { invoke, json } = runTools();
+      await json("start_flow", { path: "legs.yaml", inputs: { legs: [{ to: "a", mode: "train" }] } });
+      expect(await settledJson(json, "r1")).toMatchObject({ status: "succeeded", output: 1 });
+      expect(String(await invoke("flow_status", { run: "r1" }))).toContain('"output":1');
+    },
+    TIMEOUT,
+  );
+
+  test(
     "a flow's memory input is left out of its inputs: the run binds its default; a value for it is refused",
     async () => {
       writeFileSync(

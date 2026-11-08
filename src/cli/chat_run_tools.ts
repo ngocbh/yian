@@ -25,7 +25,15 @@ import type { Skill } from "../skills/catalog.ts";
 import { ReportedToolError } from "../tools/errors.ts";
 import { type FunctionTool, tool } from "../tools/function_tools.ts";
 import { grantText, visibleToolName } from "../tools/grants.ts";
-import { buildValueAs, isInboxType, isMemoryType, renderValuePath, TypeCheckError } from "../typesys/values.ts";
+import {
+  buildValueAs,
+  isInboxType,
+  isMemoryType,
+  renderValuePath,
+  TypeCheckError,
+  type Value,
+  writeAsJson,
+} from "../typesys/values.ts";
 import { LIST_ITEMS } from "./chat_events.ts";
 import type { ChildRuns, ChildStatus } from "./chat_runs.ts";
 import {
@@ -147,7 +155,7 @@ export function shownStatus(status: ChildStatus): Record<string, unknown> {
   }
   if (output !== undefined) {
     // An output too long as JSON is shown as its cut JSON text.
-    const json = JSON.stringify(output) ?? "null";
+    const json = writeAsJson(output as Value);
     if (typeof output === "string") shown["output"] = cutText(output);
     else shown["output"] = json.length > STATUS_TEXT_CHARS ? cutText(json) : output;
   }
@@ -429,7 +437,8 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
         shown.set(status.run, Math.max(status.seq, last));
         // The stored status keeps the replies and notes it was published with; once shown, they are read.
         const { replies: _, memory_notes: __, ...unrepeated } = status;
-        return JSON.stringify(shownStatus(status.seq <= last ? unrepeated : status));
+        // yian's JSON, so an int output (a bigint) is written as its digits.
+        return writeAsJson(shownStatus(status.seq <= last ? unrepeated : status) as Value);
       },
       known: (args) => {
         const id = knownRun(runs, args);

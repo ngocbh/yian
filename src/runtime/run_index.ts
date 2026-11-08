@@ -9,20 +9,24 @@
  * while a writer holds a run's lock. A run whose log can't be read keeps a row marked unreadable
  * at the first record yian couldn't read, holding the records before it.
  *
- * Knows about: compile (the END id), diagnostics, platform, runtime/log, runtime/state
- * (`addCrashedAttempts`), runtime/waits (the waits fold), typesys.
+ * Knows about: compile (the START and END ids), compose's source parser (a run's declared memory
+ * inputs), diagnostics, platform, runtime/log, runtime/state (`addCrashedAttempts`), runtime/waits
+ * (the waits fold), typesys.
  */
 
 import fs from "node:fs";
 import { join } from "node:path";
 
 import { END_ID, START_ID } from "../compile/model.ts";
+import { SourceDocument } from "../compose/source/document.ts";
 import { compareCodeUnits, reprText } from "../diagnostics.ts";
 import { openSqlite, type Sqlite, type SqliteRow, sqliteErrorCode, warn } from "../platform.ts";
 import { logJson } from "../typesys/json.ts";
+import { parseType, type TypeExpr } from "../typesys/types.ts";
 import { isRecord, type MemoryRef, shownText, TypedValue, valueRepr } from "../typesys/values.ts";
 import {
   checkMaxLineBytes,
+  type FlowSource,
   isRunLogLocked,
   iterRunRecords,
   NodeExpandedRecord,
@@ -652,6 +656,8 @@ function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.S
   // The values of the top-level END's commits read in this pass, by seq; one read earlier is
   // found again through the offsets.
   const endCommits = new Map<number, string | null>();
+  // The memory inputs the run's flow declares, once this pass has read them (`undefined` until).
+  let declared: ReadonlySet<string> | null | undefined;
   try {
     for (const entry of iterRunRecords(log, options)) {
       const record = entry.envelope.record;
@@ -662,6 +668,7 @@ function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.S
         }
         row = emptyRow(runId);
         row.flow = record.flow === null ? null : join(record.flow.dir, record.flow.root);
+        declared = declaredMemories(record.flow);
         row.startedAt = entry.at;
         row.parentRunId = record.parent?.runId ?? null;
       }
@@ -670,7 +677,11 @@ function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.S
       let memories = row.memories;
       if (record instanceof PoolCommitRecord) {
         if (record.nodeId === END_ID) endCommits.set(entry.seq, record.value === null ? null : logJson(record.value.value));
-        else if (record.nodeId === START_ID && record.key === START_ID) memories = startMemories(record.value?.value);
+        else if (record.nodeId === START_ID && record.key === START_ID) {
+          // An earlier pass read the run's start; its flow is read again from the log's first record.
+          if (declared === undefined) declared = declaredMemories(startedFlow(log, maxLineBytes));
+          memories = startMemories(record.value?.value, declared);
+        }
       } else if (record instanceof NodeSucceededRecord && record.nodeId === END_ID) {
         result = endCommits.has(record.commit) ? endCommits.get(record.commit)! : committedValue(log, record.commit, maxLineBytes);
       }
@@ -699,14 +710,16 @@ function readRun(log: string, runId: string, saved: StoredRow | null, stat: fs.S
 }
 
 /**
- * Return the memory inputs the top-level START inputs `inputs` recorded, by input name: each field
- * whose value is a memory value's form. The index has no flow to read the input types from, and
- * only a memory value has this form.
+ * Return the memory inputs the top-level START inputs `inputs` recorded, by input name: each input
+ * the run's flow declares a memory (`declared`) whose value is a memory value's form. Another input
+ * may hold plain data of that form, so the declaration decides. A flow built in code recorded no
+ * declarations (`null`); then each field of that form counts.
  */
-function startMemories(inputs: unknown): RunIndexMemory[] {
+function startMemories(inputs: unknown, declared: ReadonlySet<string> | null): RunIndexMemory[] {
   if (!isRecord(inputs)) return [];
   const memories: RunIndexMemory[] = [];
   for (const input of Object.keys(inputs).sort(compareCodeUnits)) {
+    if (declared !== null && !declared.has(input)) continue;
     let memory: MemoryRef;
     try {
       memory = TypedValue.fromWire({ kind: "memory", value: inputs[input] }).value as MemoryRef;
@@ -717,6 +730,53 @@ function startMemories(inputs: unknown): RunIndexMemory[] {
     memories.push({ input, identity: memory.identity, type: memory.type });
   }
   return memories;
+}
+
+/**
+ * Return the names of the memory inputs the flow `source` declares, read from the tags of its root
+ * file's `input:` without loading the flow: a memory type, alone or in `Optional(...)`, or a name
+ * that is none of the file's typedefs, which only a host's memory type can be. `null` for a flow
+ * built in code, which has no recorded source, or a root file that doesn't parse.
+ */
+function declaredMemories(source: FlowSource | null): ReadonlySet<string> | null {
+  const text = source?.files[source.root]?.text;
+  if (text === undefined) return null;
+  let document: SourceDocument;
+  try {
+    document = SourceDocument.parse(text);
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    return null;
+  }
+  const top = document.root.value;
+  const typedefs = new Set(isRecord(top) && isRecord(top["typedefs"]) ? Object.keys(top["typedefs"]) : []);
+  const names = new Set<string>();
+  for (const node of document.taggedNodes({ skipTopLevel: (key) => key !== "input" })) {
+    const [section, name, ...deeper] = node.keyPath;
+    if (node.isKey || section !== "input" || typeof name !== "string" || deeper.length > 0) continue;
+    let typ: TypeExpr;
+    try {
+      typ = parseType(node.tag);
+    } catch (error) {
+      if (!(error instanceof RangeError)) throw error;
+      continue;
+    }
+    while (typ.kind === "optional") typ = typ.inner;
+    if (typ.kind === "memory" || (typ.kind === "ref" && !typedefs.has(typ.name))) names.add(name);
+  }
+  return names;
+}
+
+/**
+ * Return the flow the run in `log` started from, as its first record recorded it, or `null` when it
+ * records none.
+ */
+function startedFlow(log: string, maxLineBytes: number | null): FlowSource | null {
+  for (const entry of iterRunRecords(log, { maxLineBytes })) {
+    const record = entry.envelope.record;
+    return record instanceof RunStartedRecord ? record.flow : null;
+  }
+  return null;
 }
 
 /**

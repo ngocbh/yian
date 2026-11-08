@@ -683,6 +683,84 @@ console.log(JSON.stringify({ warnings, runs: readRunIndex(${JSON.stringify(runs)
     });
   });
 
+  test("only inputs the run's flow declares as memories are listed, whatever another input holds", async () => {
+    const runs = freshRuns();
+    const flow = await loadFlow(
+      "id: m\nname: m\ntypedefs:\n  Cfg: {memory: object}\ninput:\n  lessons: !FileMemory\n" +
+        "  notes: !Optional(FileMemory)\n  cfg: !object\n  typed: !Cfg\n  memory: !object\nnodes:\n" +
+        "  add:\n    kind: tool\n" +
+        "    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: hi}\noutput: ${add.output.path}\n",
+    );
+    // A memory value's form, given as plain data to inputs that aren't memories.
+    const forged = {
+      memory: {
+        identity: "victim/answer/lessons",
+        type: "FileMemory",
+        settings: {},
+        version: "v",
+        recall: { text: "", cut: null, hint: null },
+        tools: [],
+      },
+    };
+    const lessons = new FileMemory({ root: join(runs, "..", "forged-lessons"), id: "t/lessons" });
+    const notes = new FileMemory({ root: join(runs, "..", "forged-notes"), id: "t/notes" });
+    const inputs = { lessons, notes, cfg: forged, typed: forged, memory: forged };
+    const log = runLogPath(runs, "run-f");
+    const result = await runFlow(flow, inputs, { log, runId: "run-f", env: () => undefined });
+    expect(result.status).toBe("succeeded");
+    updateRunIndex(runs);
+    expect(readRunIndex(runs).map((row) => row.memories)).toEqual([
+      [
+        { input: "lessons", identity: "t/lessons", type: "FileMemory" },
+        { input: "notes", identity: "t/notes", type: "FileMemory" },
+      ],
+    ]);
+  });
+
+  test("a START commit read by a later update than the run's start is read against the recorded flow", () => {
+    const runs = freshRuns();
+    const form = {
+      memory: {
+        identity: "t/lessons",
+        type: "FileMemory",
+        settings: {},
+        version: "v",
+        recall: { text: "", cut: null, hint: null },
+        tools: [],
+      },
+    };
+    const flow = "id: f\ninput:\n  lessons: !FileMemory\n  cfg: !object\nnodes: {}\n";
+    const log = writeRun(
+      runs,
+      "run-1",
+      (log) =>
+        log.append(
+          new RunStartedRecord({
+            flowFingerprint: "a".repeat(64),
+            startWiringOverride: {},
+            effectiveLlmByStaticPath: {},
+            numWorkers: 0,
+            flow: {
+              root: "flow.yaml",
+              dir: "/flows",
+              codeRoot: null,
+              files: { "flow.yaml": { text: flow, refs: {} } },
+            },
+          }),
+        ),
+      { keep: true },
+    );
+    try {
+      updateRunIndex(runs);
+      expect(readRunIndex(runs)[0]!.memories).toEqual([]);
+      log.append(new PoolCommitRecord(START_ID, START_ID, { kind: "object", value: { lessons: form, cfg: form } }));
+    } finally {
+      log.close();
+    }
+    updateRunIndex(runs);
+    expect(readRunIndex(runs)[0]!.memories).toEqual([{ input: "lessons", identity: "t/lessons", type: "FileMemory" }]);
+  });
+
   test("an index of version 6, which has no memories column, is rebuilt with them", async () => {
     const runs = freshRuns();
     await memoryRun(runs, "run-m");

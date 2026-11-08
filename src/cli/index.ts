@@ -501,7 +501,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
         {
           name: "if-version",
           type: "int",
-          min: 0,
+          min: 1,
           metavar: "V",
           help: "VectorDBMemory: change or delete item N only while its version is V, as show gave it.",
         },

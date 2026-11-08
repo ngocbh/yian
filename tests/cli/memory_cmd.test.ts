@@ -1010,6 +1010,7 @@ describe("VectorDB stores", () => {
       [["edit", flow, "cases"], STORE_EDITS],
       [["edit", flow, "cases", "--id", "1"], STORE_EDITS],
       [["edit", flow, "cases", "--delete", "1", "--yes", "--fields", "{}"], "--fields goes with --add or --id"],
+      [["edit", flow, "cases", "--id", "1", "--text", "x", "--if-version", "0"], "--if-version"],
       [["edit", flow, "cases", "--add", "x", "--fields", "[1]"], "Invalid value for --fields: give a JSON object"],
       [["edit", flow, "cases", "--add", "x", "--fields", "{"], "Invalid value for --fields: give a JSON object"],
       [["edit", flow, "cases", "--add", "x", "--fields", "{}"], "this memory's items are text only"],

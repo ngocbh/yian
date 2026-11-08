@@ -382,11 +382,12 @@ const EDITOR_SIGNALS = ["SIGINT", "SIGQUIT"] as const;
  * resolve once it exits. The variable may hold arguments (`code --wait`), so the shell runs it,
  * the path passed as an argument. Meanwhile yian ignores Ctrl-C and Ctrl-\, as git does: the
  * terminal sends them to the editor too, which handles them, and yian must outlive it to apply or
- * keep the edit.
+ * keep the edit. With `json`, the editor's stdout is yian's stderr, so stdout holds only the
+ * command's document.
  *
  * @throws {RangeError} When `$EDITOR` isn't set, or the editor fails or exits with an error.
  */
-async function runEditor(env: Env, path: string): Promise<void> {
+async function runEditor(env: Env, path: string, json: boolean): Promise<void> {
   const editor = env("EDITOR");
   if (!editor) throw new RangeError("set $EDITOR to the editor to use");
   const ignore = (): void => {};
@@ -394,7 +395,8 @@ async function runEditor(env: Env, path: string): Promise<void> {
   try {
     await new Promise<void>((resolve, reject) => {
       const command = ["-c", `${editor} "$1"`, "editor", path];
-      const child = spawn("/bin/sh", command, { stdio: "inherit", env: childEnv(env) });
+      const stdio = ["inherit", json ? 2 : "inherit", "inherit"] as const;
+      const child = spawn("/bin/sh", command, { stdio: [...stdio], env: childEnv(env) });
       child.on("error", (error) => reject(new RangeError(`the editor didn't start: ${error.message}`)));
       child.on("exit", (code, signal) => {
         if (code === 0) resolve();
@@ -434,7 +436,7 @@ export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number
     try {
       writeFileSync(copy, before, { mode: 0o600 });
       try {
-        await (io.editor ?? ((each: string) => runEditor(io.env, each)))(copy);
+        await (io.editor ?? ((each: string) => runEditor(io.env, each, json)))(copy);
       } catch (error) {
         if (!(error instanceof Error) || readFileSync(copy, "utf8") === before) throw error;
         return keptFailure("edit failed", "memory.failed", error.message);

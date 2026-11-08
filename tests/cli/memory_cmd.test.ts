@@ -611,4 +611,19 @@ describe("yian memory edit as a process", () => {
     },
     30_000,
   );
+
+  test(
+    "under --json, what the editor writes to stdout goes to stderr: stdout holds one document",
+    async () => {
+      const flow = flowFile();
+      await runOnce(flow, "first");
+      const editor = script("chatty.sh", `echo "the editor's own output"\nprintf '\\nedited' >> "$1"`);
+      const result = await yianProcess(["memory", "edit", flow, "lessons", "--json"], { EDITOR: editor });
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout.trimEnd().split("\n")).toHaveLength(1);
+      expect(JSON.parse(result.stdout)).toMatchObject({ format: "yian.cli.v1", version: expect.any(String) });
+      expect(result.stderr).toContain("the editor's own output");
+    },
+    30_000,
+  );
 });

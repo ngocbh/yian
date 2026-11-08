@@ -43,6 +43,7 @@ import {
 } from "./chat_tools.ts";
 import { AUTHOR_TOOLS, loadAuthorFlow, loadReviewFlow, REVIEW_TOOLS } from "./authoring.ts";
 import { loadConfinedText } from "./confined_load.ts";
+import { projectFolder } from "./memory_bind.ts";
 import { unifiedDiff } from "./diff.ts";
 import { loadReportFlow } from "./report_issue.ts";
 
@@ -693,7 +694,9 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
     }
     let id: string;
     try {
-      ({ id } = await runs.start(flow, inputs as Record<string, unknown>, { signal, name: file }));
+      // Its memories are keyed by the folder `path` names, as `yian run` keys them.
+      const project = projectFolder(resolve(root, path));
+      ({ id } = await runs.start(flow, inputs as Record<string, unknown>, { signal, name: file, project }));
     } catch (error) {
       if (error instanceof Error) return `not started: ${error.message}`;
       throw error;

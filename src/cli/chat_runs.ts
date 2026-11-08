@@ -299,8 +299,9 @@ export class ChildRuns {
    *
    * Starts run one at a time in call order, so ids follow it, and an id is taken only by a start
    * that succeeds. Each first checks the provider keys the flow's agents need, without a prompt,
-   * then binds the flow's memory inputs to their defaults under `home` (`bindMemories`), as
-   * `yian run` does; every pass of the child gets the same instances.
+   * then binds the flow's memory inputs to their defaults under `home` (`bindMemories`), keyed by
+   * `options.project`, the flow file's project folder, as `yian run` does; every pass of the child
+   * gets the same instances.
    * `options.signal` is the caller's: aborting it before the start begins rejects, and after it
    * does nothing to the child. `options.name` is what `live` lists it by (the flow's file, say);
    * the flow's name when absent. `options.tools` are host tools this child alone gets, beside the
@@ -322,13 +323,15 @@ export class ChildRuns {
       name?: string;
       tools?: Readonly<Record<string, ToolEntry>>;
       skills?: ReadonlyMap<string, Skill>;
+      project?: string | null;
     } = {},
   ): Promise<{ id: string; log: string; seq: number }> {
     const name = options.name ?? flow.name ?? flow.compiled.flowId ?? "flow";
     const tools = options.tools ?? {};
     const skills = options.skills ?? null;
     const signal = options.signal ?? null;
-    const turn = this.#starting.then(() => this.#begin(flow, inputs, name, tools, skills, signal));
+    const project = options.project ?? null;
+    const turn = this.#starting.then(() => this.#begin(flow, inputs, { name, tools, skills, project }, signal));
     this.#starting = turn.catch(() => {});
     return turn;
   }
@@ -337,11 +340,15 @@ export class ChildRuns {
   async #begin(
     flow: ComposedFlow,
     inputs: Readonly<Record<string, unknown>>,
-    name: string,
-    tools: Readonly<Record<string, ToolEntry>>,
-    skills: ReadonlyMap<string, Skill> | null,
+    given: {
+      name: string;
+      tools: Readonly<Record<string, ToolEntry>>;
+      skills: ReadonlyMap<string, Skill> | null;
+      project: string | null;
+    },
     signal: AbortSignal | null,
   ): Promise<{ id: string; log: string; seq: number }> {
+    const { name, tools, skills, project } = given;
     const check = () => {
       if (this.#disposed) throw new Error("the chat's runs were disposed");
       signal?.throwIfAborted();
@@ -358,7 +365,7 @@ export class ChildRuns {
     const note = (created: CreatedMemory) => void fresh.push({ kind: "memory", text: createdLine(created, false) });
     let memory: Record<string, FileMemory>;
     try {
-      memory = bindMemories(flow, [], { home: this.#options.home, note });
+      memory = bindMemories(flow, [], { home: this.#options.home, note, project });
     } catch (error) {
       throw withoutLocations(error, this.#options.home, []);
     }

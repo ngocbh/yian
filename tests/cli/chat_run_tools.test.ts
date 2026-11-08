@@ -4,13 +4,16 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
@@ -25,6 +28,9 @@ import {
   ToolRefused,
 } from "../../src/cli/chat_tools.ts";
 import { loadConfinedText } from "../../src/cli/confined_load.ts";
+import { main } from "../../src/cli/index.ts";
+import { projectKey } from "../../src/cli/memory_bind.ts";
+import type { CliIo } from "../../src/cli/utils.ts";
 import type { ApproveRequest } from "../../src/cli/terminal.ts";
 import type { Response } from "../../src/llm/messages.ts";
 import { compareCodeUnits } from "../../src/diagnostics.ts";
@@ -420,6 +426,41 @@ output: done
       const done = await settledJson(json, "r1");
       expect(done).toMatchObject({ status: "succeeded", output: "MEMORY.md" });
       expect((done["memory_notes"] as string[])[0]).toEndWith("(new)");
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a symlinked flow file's memory is keyed by the folder it was given in, as yian run keys it",
+    async () => {
+      mkdirSync(join(root, "proj"));
+      mkdirSync(join(root, "shared"));
+      writeFileSync(
+        join(root, "shared", "remember.yaml"),
+        "id: remember\nname: remember\ninput:\n  lessons: !FileMemory\nnodes:\n  add:\n    kind: tool\n" +
+          "    tool_id: {lessons: append}\n    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
+      );
+      symlinkSync(join(root, "shared", "remember.yaml"), join(root, "proj", "remember.yaml"));
+      const home = join(tmp, "home");
+      mkdirSync(home);
+      const err: string[] = [];
+      const io: CliIo = {
+        stdout: { write: async () => {} },
+        stderr: { write: async (text) => void err.push(text) },
+        stdin: new PassThrough(),
+        stderrStream: new PassThrough(),
+        env: (name) => (name === "HOME" ? home : undefined),
+      };
+      expect(await main(["run", join(root, "proj", "remember.yaml"), "--quiet"], io), err.join("")).toBe(0);
+      const key = projectKey(join(root, "proj"));
+      expect(readdirSync(join(home, ".yian", "memory"))).toEqual([key]);
+      const { json } = runTools();
+      await json("start_flow", { path: "proj/remember.yaml", inputs: {} });
+      const done = await settledJson(json, "r1");
+      expect(done).toMatchObject({ status: "succeeded" });
+      // The memory yian run made: not new, and no second project.
+      expect(done["memory_notes"]).toBeUndefined();
+      expect(readdirSync(join(home, ".yian", "memory"))).toEqual([key]);
     },
     TIMEOUT,
   );

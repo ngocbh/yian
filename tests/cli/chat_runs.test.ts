@@ -899,7 +899,7 @@ describe("memory", () => {
     async () => {
       const children = childRuns();
       const remember = await flow(REMEMBER);
-      await children.start(remember, {});
+      await children.start(remember, {}, { project: root });
       const first = await settled(children, "r1");
       expect(first.status).toBe("succeeded");
       // The flow's folder is the chat's root, so the identity is the one `yian run` gives there.
@@ -911,7 +911,7 @@ describe("memory", () => {
       expect(JSON.stringify(first)).not.toContain(join(root, "home"));
       // Read once, they aren't said again.
       children.markRead("r1", first.seq);
-      await children.start(remember, {});
+      await children.start(remember, {}, { project: root });
       const second = await settled(children, "r2");
       expect(second.status).toBe("succeeded");
       expect(second.memory_notes).toBeUndefined();
@@ -932,7 +932,7 @@ describe("memory", () => {
           return new RunResult({ ...result, memoryDrift: [drift] });
         },
       });
-      await children.start(await flow(REMEMBER_LATER), {});
+      await children.start(await flow(REMEMBER_LATER), {}, { project: root });
       const waiting = await settled(children, "r1");
       expect(waiting.status).toBe("waiting");
       children.markRead("r1", waiting.seq);
@@ -961,7 +961,7 @@ describe("memory", () => {
       mkdirSync(dirname(location), { recursive: true });
       writeFileSync(location, "");
       const opened = await childRuns()
-        .start(remember, {})
+        .start(remember, {}, { project: root })
         .then(() => null, (error: Error) => error.message);
       expect(opened).toContain("memory `lessons`");
       expect(opened).not.toContain(root);
@@ -970,10 +970,21 @@ describe("memory", () => {
       mkdirSync(join(root, "elsewhere"));
       symlinkSync(join(root, "elsewhere"), join(memories, projectKey(root)));
       const bound = await childRuns()
-        .start(remember, {})
+        .start(remember, {}, { project: root })
         .then(() => null, (error: Error) => error.message);
       expect(bound).toContain(`~/.yian/memory/${projectKey(root)} is a symlink`);
       expect(bound).not.toContain(root);
+    },
+    TIMEOUT,
+  );
+
+  test(
+    "a child given no project folder has no default memories",
+    async () => {
+      const children = childRuns();
+      await expect(children.start(await flow(REMEMBER), {})).rejects.toThrow(
+        "a flow with no file has no default memories; bind `lessons`",
+      );
     },
     TIMEOUT,
   );
@@ -983,7 +994,7 @@ describe("memory", () => {
     async () => {
       const children = childRuns();
       const unnamed = await flow(REMEMBER.replace("id: answer", 'id: "Answer questions"'));
-      await expect(children.start(unnamed, {})).rejects.toThrow("give the flow a plain `id:`");
+      await expect(children.start(unnamed, {}, { project: root })).rejects.toThrow("give the flow a plain `id:`");
       expect(existsSync(join(root, "runs"))).toBe(false);
     },
     TIMEOUT,

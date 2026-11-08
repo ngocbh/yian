@@ -333,7 +333,8 @@ describe("a default location changed between the bind and the open", () => {
   async function bound() {
     const flow = await loadFlow(APPEND, { searchPaths: [join(tmp, "proj")], sourceLabel: "flow.yaml" });
     const created: unknown[] = [];
-    const { lessons } = bindMemories(flow, [], { home, note: (each) => void created.push(each) });
+    const note = (each: unknown) => void created.push(each);
+    const { lessons } = bindMemories(flow, [], { home, note, project: realpathSync(join(tmp, "proj")) });
     return { lessons: lessons!, created };
   }
   const open = (memory: { open: FileMemory["open"] }) =>

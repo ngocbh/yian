@@ -82,7 +82,14 @@ import { McpConnectError, McpSdkMissingError, type McpServer } from "../tools/mc
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { loadConfined } from "./confined_load.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
-import { bindMemories, type CreatedMemory, createdLine, driftNote, resumeMemories } from "./memory_bind.ts";
+import {
+  bindMemories,
+  type CreatedMemory,
+  createdLine,
+  driftNote,
+  projectFolder,
+  resumeMemories,
+} from "./memory_bind.ts";
 import {
   box,
   diagnosticJson,
@@ -1278,7 +1285,11 @@ async function startRun(
       const supplied = mergeInputs(options.inputs, options.inputValues);
       // Before prompting, so a typo'd name fails instead of prompting for the real one.
       checkSuppliedInputs(flow.input, supplied);
-      const memories = bindMemories(flow, options.memory, { home: homeDir(io.env), note: memoryNote });
+      const memories = bindMemories(flow, options.memory, {
+        home: homeDir(io.env),
+        note: memoryNote,
+        project: projectFolder(flowPath!),
+      });
       // A signal during the load stops the command before it prompts.
       controller.signal.throwIfAborted();
       const prompter = io.stdin.isTTY === true ? terminal : null;

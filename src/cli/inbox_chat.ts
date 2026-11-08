@@ -69,7 +69,14 @@ import {
   validateRunLogOptions,
   waitingText,
 } from "./run.ts";
-import { bindMemories, type CreatedMemory, createdLine, driftNote, resumeMemories } from "./memory_bind.ts";
+import {
+  bindMemories,
+  type CreatedMemory,
+  createdLine,
+  driftNote,
+  projectFolder,
+  resumeMemories,
+} from "./memory_bind.ts";
 import { sanitize } from "./sanitize.ts";
 import { cliLayer, freshLog, loadFlowFile, preflightKeys } from "./startup.ts";
 import {
@@ -690,7 +697,10 @@ export async function inboxChat(
     };
     const memory =
       resumed === null
-        ? bindMemories(flow, options.memory ?? [], binding)
+        ? bindMemories(flow, options.memory ?? [], {
+            ...binding,
+            project: flowPath === undefined ? null : projectFolder(flowPath),
+          })
         : resumeMemories(flow, resumed, options.memory ?? [], binding);
     if (host.start) {
       const code = await host.start(terminal);

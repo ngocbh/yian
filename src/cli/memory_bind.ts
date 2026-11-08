@@ -10,7 +10,7 @@
 
 import { createHash } from "node:crypto";
 import { lstatSync, type Stats } from "node:fs";
-import { basename, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import { START_ID } from "../compile/model.ts";
 import type { ComposedFlow } from "../compose/build/pipeline.ts";
@@ -55,8 +55,17 @@ export function projectKey(dir: string): string {
 }
 
 /**
+ * Return the project folder of the flow file at `path`: the real path of the folder the path names,
+ * not the folder a symlinked file resolves to, so a project's own link to a shared flow keeps the
+ * project's memories. `yian run` and `yian chat` both key a flow's defaults by it.
+ */
+export function projectFolder(path: string): string {
+  return resolveFlowPath(dirname(resolve(path)));
+}
+
+/**
  * Return the default identity of memory input `input` of the flow `flowId` whose file is in the
- * folder `dir` (a real path): `<project key>/<flow id>/<input>`.
+ * project folder `dir` (`projectFolder`): `<project key>/<flow id>/<input>`.
  *
  * @throws {RangeError} When the flow has no `id:`, or one that isn't a plain name of at most 100
  *   characters.
@@ -261,21 +270,29 @@ export function memoryFlags(params: readonly Parameter[], flags: readonly string
 
 /**
  * Return the instance each memory input of `flow` is bound to, by input name: the folder its
- * `--memory` flag names, else, for an input that isn't Optional, its default (`defaultIdentity`
- * at `defaultLocation`). An Optional input left unbound gets none, so it stays null. Inputs given
- * one folder, however its path is spelled, share one instance. Nothing is created here: an
- * instance's `open` creates its memory, and notes it.
+ * `--memory` flag names, else, for an input that isn't Optional, its default (`defaultIdentity` of
+ * `options.project` at `defaultLocation`). An Optional input left unbound gets none, so it stays
+ * null. Inputs given one folder, however its path is spelled, share one instance. Nothing is
+ * created here: an instance's `open` creates its memory, and notes it.
  *
+ * @param options.project The flow file's project folder (`projectFolder`), or `null` for a flow
+ *   with no file, whose memories have no default.
  * @throws {UsageError} As `memoryFlags` throws.
  * @throws {RangeError} For an input of a memory type the command line can't bind; for a default,
- *   as `defaultIdentity` and `defaultLocation` throw, and for a flow built in code.
+ *   as `defaultIdentity` and `defaultLocation` throw, and when there is no project folder.
  */
 export function bindMemories(
   flow: ComposedFlow,
   flags: readonly string[],
-  options: BindOptions,
+  options: BindOptions & { project: string | null },
 ): Record<string, FileMemory> {
-  return bindEach(flow, flags, options, (input, optional) => (optional ? null : defaultMemory(flow, input, options)));
+  return bindEach(flow, flags, options, (input, optional) => {
+    if (optional) return null;
+    if (options.project === null) {
+      throw new RangeError(`a flow with no file has no default memories; bind \`${input}\``);
+    }
+    return defaultInstance(defaultIdentity(options.project, flow.compiled.flowId, input), options);
+  });
 }
 
 /**
@@ -362,17 +379,6 @@ function bindEach(
     bound[param.name] = instance;
   }
   return bound;
-}
-
-/**
- * Return the default instance of `flow`'s memory input `input`: its default identity, at its
- * default location under `options.home`.
- *
- * @throws {RangeError} As `defaultIdentity` and `defaultLocation` throw, and for a flow built in code.
- */
-function defaultMemory(flow: ComposedFlow, input: string, options: BindOptions): CliFileMemory {
-  if (flow.source === null) throw new RangeError(`a flow built in code has no default memories; bind \`${input}\``);
-  return defaultInstance(defaultIdentity(flow.source.dir, flow.compiled.flowId, input), options);
 }
 
 /**

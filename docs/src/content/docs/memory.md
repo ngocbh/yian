@@ -236,30 +236,9 @@ An instance for `advance` may leave `embedding` out: the store's model is used.
 
 ## Bind a memory
 
-### On the command line
-
-`yian run` binds each memory input to a memory kept per project, made on the first run. Its
-identity is `<project>/<flow id>/<input>`, and it lives in `~/.yian/memory` under that name, as a
-folder or a `.db` file. Runs of the flow in that folder share it; another project gets its own.
-
-```console
-$ yian run answer.yaml --input question="How do refunds work?"
-memory lessons: support-29f8843f/answer/lessons at /home/ada/.yian/memory/support-29f8843f/answer/lessons (new)
-```
-
-- `--memory lessons=./notes` binds a folder of your own, and `--memory cases=./cases.db` a store.
-  Inputs given one path share one memory.
-- A new store needs an embedding model: `--embedding provider/model`, or a default set with
-  `yian config embedding` or `YIAN_DEFAULT_EMBEDDING`.
-- A resume binds each memory as the run started: give it the same `--memory` flags. A crash
-  resume that finds a memory changed says so, and the run keeps the recall it started with.
-- `yian memory` lists these memories, and shows, undoes, edits, erases or resets one (see
-  [CLI](/cli/#yian-memory)).
-- `yian chat` binds the memories of the flows its assistant runs to their defaults.
-
-### From your program
-
-Pass each memory as its input (see [Embedding yian](/embedding/)):
+`yian run` binds each memory input to one it keeps per project, or to the folder or store
+`--memory` names, and `yian memory` reads and changes them (see [CLI](/cli/#memory)). From your
+program, pass each memory as its input (see [Embedding yian](/embedding/)):
 
 ```ts check=fragment
 import { advance, FileMemory, runFlow } from "@ngocbh/yian";

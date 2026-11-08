@@ -14,7 +14,7 @@ This page lists every `yian` command and flag, what each command prints, and its
 | [`yian chat`](#yian-chat) | Chat with yian's assistant, which finds, reads, checks, writes and runs flows for you |
 | [`yian check`](#yian-check) | Load flows without running them and report whether they load |
 | [`yian status`](#yian-status) | Report where a run stands, or list your runs |
-| [`yian memory`](#yian-memory) | List the memories runs keep, and show, undo, edit, erase or reset one |
+| [`yian memory`](#yian-memory) | List the memories runs keep, and show, undo, edit, erase, reset, re-embed or compact one |
 | [`yian auth`](#yian-auth) | Set up, list, choose the default among, or remove provider logins |
 | [`yian providers`](#yian-providers) | List the supported providers and their API-key variables |
 | [`yian models`](#yian-models) | List the models a login or an API key offers |
@@ -441,15 +441,16 @@ $ yian memory reembed triage.yaml cases --embedding openai/text-embedding-3-larg
 | `reembed` | Embeds a VectorDBMemory's items again with the `--embedding` model, which the store then keeps |
 | `compact` | Rebuilds a VectorDBMemory's file, giving back the space deleted items took |
 
-- `erase`, `reset` and `edit --delete` first list the runs on this machine that used the memory,
-  then ask. `--yes` doesn't ask, and off a terminal it is required. A `no` exits 1.
+- `erase` and `edit --delete` first list the runs on this machine that used the memory, and `reset`
+  the unfinished ones; then each asks. `--yes` doesn't ask, and off a terminal it is required. A
+  `no` exits 1.
 - `edit --id N` and `--delete N` take `--if-version V`, the item's version as `show` gave it; a
   newer one is a conflict.
 - An erase doesn't reach run logs, which can hold copies of the text: delete those yourself.
 - `reset` refuses while a run is running on the memory. A waiting, stopped or crashed run resumes
   with the emptied memory.
-- An edit or undo that conflicts with a change made meanwhile changes nothing and exits 1; an edit
-  keeps your text in a copy and says where.
+- An edit or undo that conflicts with a change made meanwhile changes nothing and exits 1; a
+  FileMemory edit keeps your text in a copy and says where.
 - Every command takes `--json`.
 
 ## yian auth

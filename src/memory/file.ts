@@ -1198,15 +1198,22 @@ class FileMemorySession implements MemorySession {
 
   /**
    * Erase as change `id`: remove every occurrence of `target.text` from the member `target.path`,
-   * or the whole file when there is no text, and every copy of it in the journal (each inverse for
-   * that path, and each holding the text), after resolving a change a crash cut off. It can't be
-   * undone, and it reports the change ids whose undo it disabled.
+   * until none is left, or the whole file when there is no text, and every copy of it in the
+   * journal (each inverse for that path, and each holding the text), after resolving a change a
+   * crash cut off. It can't be undone, and it reports the change ids whose undo it disabled: those
+   * whose file still held what they wrote.
    *
    * The journal is rewritten first, ending in the erase's entry, which holds no text; then the
-   * file is written and the commit line appended. A crash before the file is written aborts the
-   * erase, losing only undos; run it again.
+   * file is written and the commit line appended. A crash after the rewrite and before the file is
+   * written aborts the erase: the journal no longer holds the text, but the file still does until
+   * the erase is sent again, and the resend reports only the undos it disables then.
    *
-   * @throws Error naming the reason when the path isn't part of the memory; nothing is written.
+   * The journal keeps the hashes of files and the digests of changes. They hold no text, but a
+   * short secret, such as a PIN, can be found from them by trying every value.
+   *
+   * @throws Error naming the reason when the path isn't part of the memory. A path refused by its
+   *   text writes nothing; for a file a hand edit took out of the memory, the history is scrubbed
+   *   and the file is left for the person to remove.
    * @throws Error with the stored reason when this id's earlier erase has an unknown outcome.
    * @throws {ChangeIdReusedError} If `id` was applied with a different change.
    * @throws {MemoryBusyError} If another writer holds the lock past the timeout.

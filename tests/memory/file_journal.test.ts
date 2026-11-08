@@ -266,6 +266,17 @@ test("one session's concurrent writes queue for the lock, so none of them is bus
   await s.close();
 });
 
+test("sessions on one root in one process take turns, so none of them is busy or polls the lock", async () => {
+  const sessions: MemorySession[] = [];
+  for (let n = 0; n < 3; n++) sessions.push(await openAt({ lockTimeoutMs: 0 }));
+  const writes = Array.from({ length: 9 }, (_, n) => append(sessions[n % 3]!, `w${n}`, `w${n}`));
+  const reads = sessions.map((s) => s.snapshot());
+  const results = await Promise.all([...writes, ...reads]);
+  expect(results.every((result) => !("ok" in result) || result.ok)).toBe(true);
+  expect(fs.readFileSync(join(root, "a.md"), "utf8").split("\n")).toHaveLength(9);
+  for (const s of sessions) await s.close();
+});
+
 test("two sessions on one root serialize: both sessions' appends land, and each sees the other's", async () => {
   const a = await openAt();
   const b = await new FileMemory({ root, scheduler: virtualScheduler(START) }).open({

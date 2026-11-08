@@ -570,11 +570,32 @@ interface Store {
   readonly limits: Limits;
   readonly scheduler: Scheduler;
   /**
-   * Take the memory's lock, waiting at most the lock timeout.
+   * Run `body` holding the memory's lock, after this process's earlier calls on the memory: they
+   * take turns, so only another process's writer makes it wait for the lock, at most the timeout.
    *
-   * @throws {MemoryBusyError} If another writer holds it past the timeout.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
    */
-  lock(signal?: AbortSignal): Promise<FileLock>;
+  locked<T>(signal: AbortSignal | undefined, body: () => T): Promise<T>;
+}
+
+/**
+ * This process's calls that hold a memory's lock, keyed by the memory's real root and chained, so
+ * its sessions and opens take turns rather than poll the lock against each other.
+ */
+const TURNS = new Map<string, Promise<void>>();
+
+/** Run `fn` once this process's earlier turns on the memory at `root` have finished. */
+function inTurn<T>(root: string, fn: () => Promise<T>): Promise<T> {
+  const run = (TURNS.get(root) ?? Promise.resolve()).then(fn);
+  const done = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  TURNS.set(root, done);
+  void done.then(() => {
+    if (TURNS.get(root) === done) TURNS.delete(root);
+  });
+  return run;
 }
 
 /**
@@ -637,15 +658,23 @@ export class FileMemory extends MemoryBase {
       index,
       limits,
       scheduler,
-      async lock(signal?: AbortSignal): Promise<FileLock> {
-        try {
-          return await waitForLock(join(real, META, "lock"), { timeoutMs, signal, scheduler, private: true });
-        } catch (error) {
-          if (error instanceof FileLockError && error.reason === "busy") {
-            throw new MemoryBusyError("this memory is busy: another writer holds its lock", { cause: error });
+      locked<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
+        return inTurn(real, async () => {
+          let lock: FileLock;
+          try {
+            lock = await waitForLock(join(real, META, "lock"), { timeoutMs, signal, scheduler, private: true });
+          } catch (error) {
+            if (error instanceof FileLockError && error.reason === "busy") {
+              throw new MemoryBusyError("this memory is busy: another writer holds its lock", { cause: error });
+            }
+            throw error;
           }
-          throw error;
-        }
+          try {
+            return body();
+          } finally {
+            lock.release();
+          }
+        });
       },
     });
   }
@@ -686,17 +715,14 @@ export class FileMemory extends MemoryBase {
       makeDirectory(join(root, META), META);
       makeDirectory(join(root, META, "tmp"), `${META}/tmp`);
       // Two opens may adopt one folder at once: the lock lets only one of them store an identity.
-      const lock = await this.#store.lock(o.signal);
-      try {
-        identity = storedIdentity(root);
-        if (identity === null) {
-          identity = this.#id ?? `at-${sha256(root).slice(0, 16)}`;
-          replaceFile(join(root, META, "identity"), Buffer.from(identity, "utf8"), join(root, META, "tmp"));
-          created = true;
-        }
-      } finally {
-        lock.release();
-      }
+      identity = await this.#store.locked(o.signal, () => {
+        const stored = storedIdentity(root);
+        if (stored !== null) return stored;
+        const made = this.#id ?? `at-${sha256(root).slice(0, 16)}`;
+        replaceFile(join(root, META, "identity"), Buffer.from(made, "utf8"), join(root, META, "tmp"));
+        created = true;
+        return made;
+      });
     }
     if (this.#id !== undefined && identity !== this.#id) {
       throw new Error(`this memory is ${shown(identity)}, not ${shown(this.#id)}`);
@@ -851,8 +877,8 @@ class FileMemorySession implements MemorySession {
   readonly created: boolean;
   readonly #store: Store;
   readonly #journal: Journal;
-  // The session's own locked calls queue here, so they don't poll the lock against each other.
-  #queue: Promise<unknown> = Promise.resolve();
+  /** The session's last locked call, settled either way: `close` waits for it. */
+  #last: Promise<void> = Promise.resolve();
   #closed = false;
 
   constructor(store: Store, info: MemoryInfo, created: boolean) {
@@ -988,7 +1014,7 @@ class FileMemorySession implements MemorySession {
   /** Close the session once its locked calls have finished; later calls throw. */
   async close(): Promise<void> {
     this.#closed = true;
-    await this.#queue;
+    await this.#last;
   }
 
   /** List the members, or those under `dir`, within `maxResults` and `maxReadChars`. */
@@ -1288,18 +1314,14 @@ class FileMemorySession implements MemorySession {
     if (this.#closed) throw new Error("this FileMemory session is closed");
   }
 
-  /** Run `body` after the session's earlier locked calls, holding the memory's lock. */
+  /** Run `body` holding the memory's lock, in this process's turn on the memory. */
   #locked<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
-    this.#checkOpen();
-    const run = this.#queue.then(async () => {
-      const lock = await this.#store.lock(signal);
-      try {
-        return body();
-      } finally {
-        lock.release();
-      }
-    });
-    this.#queue = run.catch(() => undefined);
+    if (this.#closed) return Promise.reject(new Error("this FileMemory session is closed"));
+    const run = this.#store.locked(signal, body);
+    this.#last = run.then(
+      () => undefined,
+      () => undefined,
+    );
     return run;
   }
 }

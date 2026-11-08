@@ -1224,6 +1224,29 @@ describe("undo", () => {
     await s.close();
   });
 
+  test("an undo writes nothing when the text to restore changed while it embedded the old one", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "edit", id: 1n, if_version: 1n, text: "bravo" }, "e1");
+    const edited = await openAt({
+      embed: async (texts, o) => {
+        // A hand edit of the store between the passes: the change now restores another text.
+        const db = openSqlite(path);
+        db.prepare("UPDATE history SET before = ? WHERE change = 'e1'").run(
+          '{"fields":null,"retired":null,"text":"charlie"}',
+        );
+        db.close();
+        return embed(texts, o);
+      },
+    });
+    expect(await undo(edited, "e1")).toEqual(
+      refusedWith("item 1 changed while its old text was embedded; undo change `e1` again"),
+    );
+    expect(await call(s, "read", { id: 1n })).toMatchObject({ version: 2n, text: "bravo" });
+    await s.close();
+    await edited.close();
+  });
+
   test("an undo releases the lock while it embeds, and checks the item again after", async () => {
     const s = await openAt();
     const other = await openAt();

@@ -1860,6 +1860,12 @@ class VectorDBSession implements MemorySession {
       if (known !== null) return known;
       const again = this.#undoPlan(db, changeId);
       if ("ok" in again) return again;
+      // The vector must be the text's it is written with; only a hand edit of the store can make
+      // the text to restore another one between the passes.
+      if (again.embed !== null && again.embed !== first.embed) {
+        const { item } = again.change;
+        return refused(`item ${item} changed while its old text was embedded; undo change ${shown(changeId)} again`);
+      }
       return this.#undoWrite(db, writing, again, again.embed === null ? null : vector!);
     });
   }

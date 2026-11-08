@@ -146,6 +146,7 @@ Provider API keys and base URLs, such as `ANTHROPIC_API_KEY`, are listed on
 | `~/.yian/runs/index.sqlite` | The run index `yian status` lists. It is rebuilt from the logs, so you can delete it |
 | `~/.claude/skills`, `~/.agents/skills` | Your skills, read when an agent grants skills |
 | `.claude/skills`, `.agents/skills` | Project skills, from the current folder up to the git root |
+| `<memory folder>/.yian/` | A FileMemory's identity, journal, lock and temp files (see [Memory](/memory/#filememory)) |
 
 `~/.yian`, `~/.yian/runs` and each run folder have mode `0700`; a log has mode `0600`. Logs are
 not encrypted and can hold prompts, replies and tool data, so keep them private.

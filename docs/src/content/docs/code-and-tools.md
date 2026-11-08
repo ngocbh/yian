@@ -144,7 +144,7 @@ quote:
 
 | Field | Required | What it holds |
 |---|---|---|
-| `tool_id` | yes | A tool name, `{group: tool}`, or a built-in: `take`, `sleep` or `ask` |
+| `tool_id` | yes | A tool name, `{group: tool}` (a group's or a [memory](/memory/)'s tool), or a built-in: `take`, `sleep` or `ask` |
 | `input` | no | The tool's arguments, by the tool's own parameter names |
 | `output` | no | The type the result must have; without it any JSON value or file passes |
 | `retries` | no | Extra attempts after a failed call (default 0); not for `take`, `sleep`, `ask` |

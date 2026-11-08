@@ -115,6 +115,10 @@ $ yian run report.yaml --inputs inputs.json
 Text from `--input` becomes an `int`, `float` or `bool` when the input has that type (see
 [Types](/types/#inputs-from-the-command-line)).
 
+Two kinds of input take no value. An inbox (`notes: !Inbox(str)`) gets messages while the run
+goes on (see [Inboxes and waiting](/inboxes/)). A memory (`lessons: !FileMemory`) is bound by the
+program that runs the flow (see [Memory](/memory/)).
+
 ## Nodes
 
 Each entry under `nodes:` is either a node (a mapping with `kind:`) or a value (a tagged YAML

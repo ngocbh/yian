@@ -64,13 +64,16 @@ describe("default identities", () => {
     expect(defaultIdentity("/p/proj", "answer-questions", "lessons")).toMatch(
       /^proj-[0-9a-f]{8}\/answer-questions\/lessons$/,
     );
-    const refusal = "give the flow a plain `id:` (letters, digits, `.`, `_`, `-`) or bind `lessons` with --memory";
+    const refusal =
+      "give the flow a plain `id:` of at most 100 characters (letters, digits, `.`, `_`, `-`) " +
+      "or bind `lessons` with --memory";
     expect(() => defaultIdentity("/p/proj", "Answer questions", "lessons")).toThrow(refusal);
     expect(() => defaultIdentity("/p/proj", ".hidden", "lessons")).toThrow(refusal);
     expect(() => defaultIdentity("/p/proj", null, "lessons")).toThrow(refusal);
     // A host without --memory doesn't suggest it.
     expect(() => defaultIdentity("/p/proj", ".hidden", "lessons", false)).toThrow(
-      "give the flow a plain `id:` (letters, digits, `.`, `_`, `-`) so `lessons` gets a default memory",
+      "give the flow a plain `id:` of at most 100 characters (letters, digits, `.`, `_`, `-`) " +
+        "so `lessons` gets a default memory",
     );
   });
 });
@@ -339,7 +342,8 @@ const RESPONSES_REPLY = (() => {
     ["response.output_text.delta", { output_index: 0, content_index: 0, item_id: "msg_1", delta: "ok" }],
     ["response.completed", { response: { id: "resp_1", status: "completed", output: [message] } }],
   ];
-  return events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`).join("");
+  const lines = events.map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify({ type: event, ...data })}\n\n`);
+  return lines.join("");
 })();
 
 /** Run `body` with a `fetch` that answers every model request "ok", recording each body sent. */
@@ -461,7 +465,9 @@ describe("a memory that fails to start", () => {
   });
 
   test("a flow id longer than 100 characters isn't plain: refused before anything is written", async () => {
-    const plain = "give the flow a plain `id:` (letters, digits, `.`, `_`, `-`) or bind `lessons` with --memory";
+    const plain =
+      "give the flow a plain `id:` of at most 100 characters (letters, digits, `.`, `_`, `-`) " +
+      "or bind `lessons` with --memory";
     expect(() => defaultIdentity("/p/proj", "x".repeat(101), "lessons")).toThrow(plain);
     expect(defaultIdentity("/p/proj", "x".repeat(100), "lessons")).toEndWith(`/${"x".repeat(100)}/lessons`);
     const long = flowFile(APPEND.replace("id: answer", `id: ${"x".repeat(300)}`));
@@ -501,7 +507,11 @@ describe("default memories", () => {
   });
 
   test("a second run says nothing about the memory, and its prompt holds what the first appended", async () => {
-    const vars = { OPENAI_API_KEY: "sk-fake", YIAN_AUTH_FILE: join(tmp, "auth.json"), XDG_CONFIG_HOME: join(tmp, "xdg") };
+    const vars = {
+      OPENAI_API_KEY: "sk-fake",
+      YIAN_AUTH_FILE: join(tmp, "auth.json"),
+      XDG_CONFIG_HOME: join(tmp, "xdg"),
+    };
     const flow = flowFile(RECALL);
     await withModel(async (sent) => {
       const first = await yian(["run", flow, "--quiet", "--input", "question=What is 2+2?"], vars);
@@ -534,7 +544,8 @@ describe("default memories", () => {
   });
 
   test("an Optional memory input left unbound stays null: no default is made for it", async () => {
-    const flow = flowFile(APPEND.replace("  lessons: !FileMemory\n", "  lessons: !FileMemory\n  notes: !Optional(FileMemory)\n"));
+    const optional = "  lessons: !FileMemory\n  notes: !Optional(FileMemory)\n";
+    const flow = flowFile(APPEND.replace("  lessons: !FileMemory\n", optional));
     const result = await yian(["run", flow, "--quiet"]);
     expect(result.code, result.stderr).toBe(0);
     expect(readdirSync(join(projectFolder().path, "answer"))).toEqual(["lessons"]);
@@ -545,12 +556,14 @@ describe("default memories", () => {
     const result = await yian(["run", flowFile(APPEND.replace("id: answer", 'id: "Answer questions"')), "--quiet"]);
     expect(result.code).toBe(1);
     expect(result.stderr).toContain(
-      "give the flow a plain `id:` (letters, digits, `.`, `_`, `-`) or bind `lessons` with --memory",
+      "give the flow a plain `id:` of at most 100 characters (letters, digits, `.`, `_`, `-`) " +
+        "or bind `lessons` with --memory",
     );
     expect(runFolders()).toEqual([]);
     expect(readdirSync(join(home, ".yian", "memory"))).toEqual([]);
     // --memory binds it instead.
-    const bound = await yian(["run", flowFile(APPEND.replace("id: answer", 'id: "Answer questions"')), "--quiet", "--memory", `lessons=${join(tmp, "n")}`]);
+    const unnamed = flowFile(APPEND.replace("id: answer", 'id: "Answer questions"'));
+    const bound = await yian(["run", unnamed, "--quiet", "--memory", `lessons=${join(tmp, "n")}`]);
     expect(bound.code, bound.stderr).toBe(0);
   });
 });

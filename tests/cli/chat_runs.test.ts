@@ -1026,7 +1026,8 @@ describe("memory", () => {
         (error: Error) => error.message,
       );
       expect(refused).toBe(
-        "give the flow a plain `id:` (letters, digits, `.`, `_`, `-`) so `lessons` gets a default memory",
+        "give the flow a plain `id:` of at most 100 characters (letters, digits, `.`, `_`, `-`) " +
+          "so `lessons` gets a default memory",
       );
       expect(existsSync(join(root, "runs"))).toBe(false);
     },

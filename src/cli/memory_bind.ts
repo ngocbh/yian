@@ -79,7 +79,8 @@ export function defaultIdentity(
 ): string {
   if (flowId == null || flowId.length > PLAIN_ID_CHARS || !PLAIN_ID.test(flowId)) {
     const instead = memoryFlag ? `or bind \`${input}\` with --memory` : `so \`${input}\` gets a default memory`;
-    throw new RangeError(`give the flow a plain \`id:\` (letters, digits, \`.\`, \`_\`, \`-\`) ${instead}`);
+    const plain = "a plain `id:` of at most 100 characters (letters, digits, `.`, `_`, `-`)";
+    throw new RangeError(`give the flow ${plain} ${instead}`);
   }
   return `${projectKey(dir)}/${flowId}/${input}`;
 }

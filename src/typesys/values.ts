@@ -940,9 +940,10 @@ const TOOL_FIELDS: readonly string[] = ["name", "write", "description", "paramet
  *
  * It holds the memory's identity, contract type and settings (never a location or a credential),
  * the version and recall read at the run's start, and its tools' specs in the type's spec order.
- * Its JSON form is the mapping `{"memory": {identity, type, settings, version, recall, tools}}`;
- * a memory slot reads that mapping as a `MemoryRef`. It is frozen to the leaves, and its
- * `settings` and tool `parameters` are copies in the form the run log reads back.
+ * Its JSON form is the mapping `{"memory": {identity, type, settings, version, recall, tools}}`,
+ * which is read back as a `MemoryRef` only where yian reads its own JSON at a memory position
+ * (`normalizeFiles`); a memory slot refuses it. It is frozen to the leaves, and its `settings`
+ * and tool `parameters` are copies in the form the run log reads back.
  */
 export class MemoryRef {
   readonly identity: string;

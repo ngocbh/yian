@@ -26,6 +26,7 @@ import {
   syncFolder,
   waitForLock,
 } from "../platform.ts";
+import { ReportedToolError } from "../tools/errors.ts";
 import { canonicalJson, type JsonObject } from "../typesys/json.ts";
 import {
   type Applied,
@@ -204,7 +205,7 @@ interface Limits {
  *
  * @throws {RangeError} If `value` is given and isn't such an integer.
  */
-function count(name: string, value: number | undefined, fallback: number, minimum: number): number {
+function capOption(name: string, value: number | undefined, fallback: number, minimum: number): number {
   if (value === undefined) return fallback;
   if (!Number.isSafeInteger(value) || value < minimum) {
     throw new RangeError(`FileMemory ${name} must be an integer of at least ${minimum}, not ${String(value)}`);
@@ -218,11 +219,11 @@ function shown(path: string): string {
 }
 
 /**
- * Return why the relative path `rel` can't name a member by its text alone, or `null` when it can.
- * A member's path is relative, its components plain names, and its file sits under at most
- * `maxDepth` folders.
+ * Return why the relative path `rel` can't name a member, or with `folder` a folder of members, by
+ * its text alone, or `null` when it can. Its components are plain names, and a file sits under at
+ * most `maxDepth` folders.
  */
-function pathProblem(rel: string, maxDepth: number): string | null {
+function pathProblem(rel: string, maxDepth: number, folder = false): string | null {
   if (rel === "") return "an empty path";
   if (isAbsolute(rel)) return "an absolute path";
   const parts = rel.split("/");
@@ -233,30 +234,31 @@ function pathProblem(rel: string, maxDepth: number): string | null {
     if (part.startsWith(".")) return "a hidden name";
     if (!NAME.test(part)) return "a name other than letters, digits, `.`, `_` and `-`, starting with a letter or digit";
   }
-  if (parts.length - 1 > maxDepth) return `more than ${maxDepth} folder${maxDepth === 1 ? "" : "s"} deep`;
+  const folders = folder ? parts.length : parts.length - 1;
+  if (folders > maxDepth) return `more than ${maxDepth} folder${maxDepth === 1 ? "" : "s"} deep`;
   return null;
 }
 
 /**
- * Return why the existing components of `rel` under `root` can't lead to a member, checked with
- * `lstat`, or `null` when they can. A missing component is fine: a write creates it.
+ * Return why the existing components of `rel` under `root` can't lead to a member, or with
+ * `folder` to a folder of members, checked with `lstat`, or `null` when they can. A missing
+ * component is fine: a write creates it.
  */
-function diskProblem(root: string, rel: string): string | null {
+function diskProblem(root: string, rel: string, folder = false): string | null {
   const parts = rel.split("/");
   let path = root;
   for (let i = 0; i < parts.length; i++) {
     path = join(path, parts[i]!);
-    let stats: fs.Stats;
-    try {
-      stats = fs.lstatSync(path);
-    } catch (error) {
-      if (isSystemError(error) && error.code === "ENOENT") return null;
-      throw error;
-    }
+    const stats = lstatOrNull(path);
+    if (stats === null) return null;
     const last = i === parts.length - 1;
     if (stats.isSymbolicLink()) return last ? "a symlink" : `${shown(parts.slice(0, i + 1).join("/"))} is a symlink`;
-    if (!last && !stats.isDirectory()) return `${shown(parts.slice(0, i + 1).join("/"))} isn't a folder`;
-    if (last && !stats.isFile()) return stats.isDirectory() ? "a folder" : "not a regular file";
+    if (!last || folder) {
+      if (stats.isDirectory()) continue;
+      if (!last) return `${shown(parts.slice(0, i + 1).join("/"))} isn't a folder`;
+      return stats.isFile() ? "a file" : "not a folder";
+    }
+    if (!stats.isFile()) return stats.isDirectory() ? "a folder" : "not a regular file";
   }
   return null;
 }
@@ -269,6 +271,26 @@ function charCount(text: string): number {
     if (unit >= 0xd800 && unit <= 0xdbff) chars--;
   }
   return chars;
+}
+
+/** Return the first `limit` code points of `text`. */
+function firstChars(text: string, limit: number): string {
+  let index = 0;
+  for (let n = 0; n < limit && index < text.length; n++) index += text.codePointAt(index)! > 0xffff ? 2 : 1;
+  return text.slice(0, index);
+}
+
+/** Return `count` and `noun`, plural unless `count` is 1: `plural(2, "file")` is `"2 files"`. */
+function plural(count: number, noun: string, nouns = `${noun}s`): string {
+  return `${count} ${count === 1 ? noun : nouns}`;
+}
+
+/** Return the lines of `text`: a final line break ends the last line rather than starting one. */
+function linesOf(text: string): string[] {
+  if (text === "") return [];
+  const lines = text.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
 }
 
 /** Return the sha256 hex digest of `data`. */
@@ -455,6 +477,72 @@ function realRoot(path: string): string {
   }
 }
 
+/**
+ * Return the recall of a memory whose members are `members`: the index's text when it is a
+ * member, else each member's path and first line, within `maxRecallChars`.
+ */
+function recallOf(
+  members: { files: MemberFile[]; skipped: number },
+  index: string,
+  maxRecallChars: number,
+): Recall {
+  const indexFile = members.files.find((file) => file.path === index);
+  if (indexFile !== undefined) {
+    const over = indexFile.chars - maxRecallChars;
+    return {
+      text: over > 0 ? firstChars(indexFile.text, maxRecallChars) : indexFile.text,
+      cut: over > 0 ? `${plural(over, "more character")} of ${index} not shown` : null,
+      hint: over > 0 || members.files.length > 1 ? { tool: "read", text: "Read the rest with {tool}." } : null,
+    };
+  }
+  const lines: string[] = [];
+  let used = 0;
+  for (const file of members.files) {
+    const first = (linesOf(file.text)[0] ?? "").replace(/\r$/, "");
+    const line = first === "" ? file.path : `${file.path}: ${first}`;
+    const cost = charCount(line) + (lines.length > 0 ? 1 : 0);
+    // Whole lines only, in path order: a line cut short would misquote its file.
+    if (used + cost > maxRecallChars) break;
+    lines.push(line);
+    used += cost;
+  }
+  const notes: string[] = [];
+  const unshown = members.files.length - lines.length;
+  if (unshown > 0) notes.push(`${plural(unshown, "more file")} not shown`);
+  if (members.skipped > 0) notes.push(`${plural(members.skipped, "entry", "entries")} skipped: not part of the memory`);
+  return {
+    text: lines.join("\n"),
+    cut: notes.length > 0 ? notes.join("; ") : null,
+    hint: members.files.length > 0 ? { tool: "read", text: "Read them with {tool}." } : null,
+  };
+}
+
+/** A refusal the calling model reads: a TOOL node doesn't retry it, since it can't change. */
+function refusal(message: string): ReportedToolError {
+  return new ReportedToolError(message, { permanent: true });
+}
+
+/** Return `args[name]` when it is a string, or `undefined` when it is absent and not `required`. */
+function stringArg(args: JsonObject, name: string, required: true): string;
+function stringArg(args: JsonObject, name: string, required: false): string | undefined;
+function stringArg(args: JsonObject, name: string, required: boolean): string | undefined {
+  const value = Object.hasOwn(args, name) ? args[name] : undefined;
+  if (value === undefined && !required) return undefined;
+  if (typeof value !== "string") throw new TypeError(`FileMemory ${name} must be a string`);
+  return value;
+}
+
+/** Return `args[name]` as a number when it is an integer of at least 1, or `undefined` when absent. */
+function countArg(args: JsonObject, name: string): number | undefined {
+  const value = Object.hasOwn(args, name) ? args[name] : undefined;
+  if (value === undefined) return undefined;
+  const number = typeof value === "bigint" ? Number(value) : value;
+  if (typeof number !== "number" || !Number.isSafeInteger(number) || number < 1) {
+    throw new TypeError(`FileMemory ${name} must be an integer of at least 1`);
+  }
+  return number;
+}
+
 /** What a session needs of its memory: the folder, its caps, its lock and its clock. */
 interface Store {
   /** The memory's folder, symlinks resolved. */
@@ -500,18 +588,18 @@ export class FileMemory extends MemoryBase {
       throw new TypeError("FileMemory id must be a non-empty string on one line");
     }
     const defaults = current();
-    const maxTotalChars = count("maxTotalChars", options.maxTotalChars, defaults.fileMemoryMaxTotalChars, 1);
+    const maxTotalChars = capOption("maxTotalChars", options.maxTotalChars, defaults.fileMemoryMaxTotalChars, 1);
     const limits: Limits = Object.freeze({
-      maxFileChars: count("maxFileChars", options.maxFileChars, defaults.fileMemoryMaxFileChars, 1),
+      maxFileChars: capOption("maxFileChars", options.maxFileChars, defaults.fileMemoryMaxFileChars, 1),
       maxTotalChars,
-      maxFiles: count("maxFiles", options.maxFiles, defaults.fileMemoryMaxFiles, 1),
-      maxDepth: count("maxDepth", options.maxDepth, defaults.fileMemoryMaxDepth, 1),
-      maxRecallChars: count("maxRecallChars", options.maxRecallChars, defaults.fileMemoryMaxRecallChars, 1),
-      maxReadChars: count("maxReadChars", options.maxReadChars, defaults.fileMemoryMaxReadChars, 1),
-      maxResults: count("maxResults", options.maxResults, defaults.fileMemoryMaxResults, 1),
-      maxUndo: count("maxUndo", options.maxUndo, defaults.memoryMaxUndo, 0),
-      maxChangeIds: count("maxChangeIds", options.maxChangeIds, defaults.memoryMaxChangeIds, 1),
-      maxHistoryChars: count("maxHistoryChars", options.maxHistoryChars, maxTotalChars, 0),
+      maxFiles: capOption("maxFiles", options.maxFiles, defaults.fileMemoryMaxFiles, 1),
+      maxDepth: capOption("maxDepth", options.maxDepth, defaults.fileMemoryMaxDepth, 1),
+      maxRecallChars: capOption("maxRecallChars", options.maxRecallChars, defaults.fileMemoryMaxRecallChars, 1),
+      maxReadChars: capOption("maxReadChars", options.maxReadChars, defaults.fileMemoryMaxReadChars, 1),
+      maxResults: capOption("maxResults", options.maxResults, defaults.fileMemoryMaxResults, 1),
+      maxUndo: capOption("maxUndo", options.maxUndo, defaults.memoryMaxUndo, 0),
+      maxChangeIds: capOption("maxChangeIds", options.maxChangeIds, defaults.memoryMaxChangeIds, 1),
+      maxHistoryChars: capOption("maxHistoryChars", options.maxHistoryChars, maxTotalChars, 0),
     });
     const why = typeof index === "string" ? pathProblem(index, limits.maxDepth) : "not a string";
     if (why !== null) throw new TypeError(`FileMemory index ${shown(String(index))} isn't a member path: ${why}`);
@@ -673,11 +761,14 @@ function sessionInfo(identity: string, store: Store): MemoryInfo {
   });
 }
 
-/** One open FileMemory. */
+/** One open FileMemory. Read tools take no lock; writes and snapshots take the memory's lock. */
 class FileMemorySession implements MemorySession {
   readonly info: MemoryInfo;
   readonly created: boolean;
   readonly #store: Store;
+  // The session's own locked calls queue here, so they don't poll the lock against each other.
+  #queue: Promise<unknown> = Promise.resolve();
+  #closed = false;
 
   constructor(store: Store, info: MemoryInfo, created: boolean) {
     this.#store = store;
@@ -685,12 +776,39 @@ class FileMemorySession implements MemorySession {
     this.created = created;
   }
 
+  /**
+   * Read the version and the recall in one read under the lock.
+   *
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
   snapshot(): Promise<{ version: string; recall: Recall }> {
-    return Promise.reject(new Error("FileMemory snapshot isn't available yet"));
+    return this.#locked(undefined, () => {
+      const { root, index, limits } = this.#store;
+      const members = readMembers(root, limits);
+      return { version: memoryVersion(members.files), recall: recallOf(members, index, limits.maxRecallChars) };
+    });
   }
 
-  call(_tool: string, _args: JsonObject, _o: { signal: AbortSignal }): Promise<JsonObject> {
-    return Promise.reject(new Error("FileMemory tools aren't available yet"));
+  /**
+   * Call the read tool `tool`: `list`, `read` or `search`.
+   *
+   * @throws {ReportedToolError} (permanent) For a path that isn't part of the memory or doesn't
+   *   exist, with the reason.
+   * @throws {TypeError} For a tool that isn't a read tool, or an argument of the wrong type.
+   */
+  async call(tool: string, args: JsonObject, o: { signal: AbortSignal }): Promise<JsonObject> {
+    this.#checkOpen();
+    o.signal.throwIfAborted();
+    const spec = TOOLS.find((each) => each.name === tool);
+    if (spec === undefined) {
+      throw new TypeError(`FileMemory has no tool ${tool}; it has ${TOOLS.map((each) => each.name).join(", ")}`);
+    }
+    if (spec.write) throw new TypeError(`${tool} is a write tool: apply it as a change`);
+    if (tool === "list") return this.#list(stringArg(args, "dir", false));
+    if (tool === "read") {
+      return this.#read(stringArg(args, "path", true), countArg(args, "offset"), countArg(args, "limit"));
+    }
+    return this.#search(stringArg(args, "query", true));
   }
 
   apply(_c: { id: string; change: JsonObject; author: Author; signal: AbortSignal }): Promise<Applied> {
@@ -709,7 +827,143 @@ class FileMemorySession implements MemorySession {
     return Promise.reject(new Error("FileMemory history isn't available yet"));
   }
 
+  /** Close the session once its locked calls have finished; later calls throw. */
   async close(): Promise<void> {
-    void this.#store;
+    this.#closed = true;
+    await this.#queue;
+  }
+
+  /** List the members, or those under `dir`, within `maxResults` and `maxReadChars`. */
+  #list(dir: string | undefined): JsonObject {
+    const { root, limits } = this.#store;
+    let prefix = "";
+    if (dir !== undefined) {
+      const why = pathProblem(dir, limits.maxDepth, true) ?? diskProblem(root, dir, true);
+      if (why !== null) throw refusal(`${shown(dir)} isn't a folder of the memory: ${why}`);
+      if (lstatOrNull(join(root, dir)) === null) throw refusal(`${shown(dir)} doesn't exist`);
+      prefix = `${dir}/`;
+    }
+    const files = readMembers(root, limits).files.filter((file) => file.path.startsWith(prefix));
+    const listed: JsonObject[] = [];
+    let used = 0;
+    for (const file of files) {
+      // An entry counts as its JSON text, the size a model reads.
+      const cost = JSON.stringify({ path: file.path, hash: file.hash, chars: file.chars }).length;
+      if (listed.length === limits.maxResults || used + cost > limits.maxReadChars) break;
+      listed.push({ path: file.path, hash: file.hash, chars: BigInt(file.chars) });
+      used += cost;
+    }
+    const result: JsonObject = { files: listed };
+    if (listed.length < files.length) result.cut = `${files.length - listed.length} more; list a folder with dir`;
+    return result;
+  }
+
+  /** Read lines of the member `path` from line `offset` (1-based), at most `limit`, within `maxReadChars`. */
+  #read(path: string, offset = 1, limit?: number): JsonObject {
+    const { limits } = this.#store;
+    const file = this.#member(path);
+    const lines = linesOf(file.text);
+    const start = offset - 1;
+    const result: JsonObject = { path, hash: file.hash, text: "" };
+    if (start > 0 && start >= lines.length) {
+      result.cut = `the file has ${plural(lines.length, "line")}`;
+      return result;
+    }
+    const end = limit === undefined ? lines.length : Math.min(lines.length, start + limit);
+    const shownLines: string[] = [];
+    let used = 0;
+    for (let i = start; i < end; i++) {
+      const cost = charCount(lines[i]!) + (shownLines.length > 0 ? 1 : 0);
+      if (used + cost > limits.maxReadChars) {
+        if (shownLines.length === 0) {
+          // A first line longer than the cap is shown cut, so a read is never empty.
+          result.text = firstChars(lines[i]!, limits.maxReadChars);
+          const more = i + 1 < lines.length ? `; read on with offset ${i + 2}` : "";
+          result.cut = `line ${i + 1} of ${lines.length} is cut after ${limits.maxReadChars} characters${more}`;
+          return result;
+        }
+        break;
+      }
+      shownLines.push(lines[i]!);
+      used += cost;
+    }
+    result.text = shownLines.join("\n");
+    const last = start + shownLines.length;
+    if (last < lines.length) {
+      result.cut = `showing lines ${offset}-${last} of ${lines.length}; read on with offset ${last + 1}`;
+    }
+    return result;
+  }
+
+  /** Find the members' lines holding `query`, ignoring case, within `maxResults` and `maxReadChars`. */
+  #search(query: string): JsonObject {
+    const { root, limits } = this.#store;
+    if (query === "") throw refusal("query is empty");
+    const needle = query.toLowerCase();
+    const matches: JsonObject[] = [];
+    const notes: string[] = [];
+    let used = 0;
+    let unshown = 0;
+    let full = false;
+    for (const file of readMembers(root, limits).files) {
+      const lines = linesOf(file.text);
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]!;
+        if (!line.toLowerCase().includes(needle)) continue;
+        const match = { path: file.path, hash: file.hash, line: BigInt(i + 1) };
+        const cost = charCount(line);
+        if (full || matches.length === limits.maxResults || used + cost > limits.maxReadChars) {
+          full = true;
+          if (matches.length > 0) {
+            unshown++;
+            continue;
+          }
+          // A first match longer than the cap is shown cut, so a search that matched isn't empty.
+          matches.push({ ...match, text: firstChars(line, limits.maxReadChars) });
+          notes.push(`line ${i + 1} of ${file.path} is cut after ${limits.maxReadChars} characters`);
+          continue;
+        }
+        matches.push({ ...match, text: line });
+        used += cost;
+      }
+    }
+    if (unshown > 0) notes.push(`${plural(unshown, "more matching line")} not shown`);
+    const result: JsonObject = { matches };
+    if (notes.length > 0) result.cut = notes.join("; ");
+    return result;
+  }
+
+  /**
+   * Return the member at `path`.
+   *
+   * @throws {ReportedToolError} (permanent) If `path` isn't part of the memory or doesn't exist.
+   */
+  #member(path: string): MemberFile {
+    const { root, limits } = this.#store;
+    const why = pathProblem(path, limits.maxDepth) ?? diskProblem(root, path);
+    const file = why ?? readMemberFile(join(root, path), path, limits.maxFileChars);
+    if (typeof file === "string") throw refusal(`${shown(path)} isn't part of the memory: ${file}`);
+    if (file === null) throw refusal(`${shown(path)} doesn't exist`);
+    return file;
+  }
+
+  /** Throw when the session is closed. */
+  #checkOpen(): void {
+    if (this.#closed) throw new Error("this FileMemory session is closed");
+  }
+
+  /** Run `body` after the session's earlier locked calls, holding the memory's lock. */
+  #locked<T>(signal: AbortSignal | undefined, body: () => T): Promise<T> {
+    this.#checkOpen();
+    const run = this.#queue.then(async () => {
+      const lock = await this.#store.lock(signal);
+      try {
+        return body();
+      } finally {
+        lock.release();
+      }
+    });
+    this.#queue = run.catch(() => undefined);
+    return run;
   }
 }

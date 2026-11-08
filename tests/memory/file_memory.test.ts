@@ -1,13 +1,22 @@
 /** FileMemory: its identity, members, version, recall, read tools and writes. */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { BUILTIN_MEMORY_TOOLS, checkContract } from "../../src/memory/base.ts";
-import { FileMemory, memoryVersion, readMembers } from "../../src/memory/file.ts";
+import {
+  BUILTIN_MEMORY_TOOLS,
+  checkContract,
+  MemoryBusyError,
+  memoryErrorKind,
+  type MemorySession,
+} from "../../src/memory/base.ts";
+import { FileMemory, type FileMemoryOptions, memoryVersion, readMembers } from "../../src/memory/file.ts";
+import { lockFile, virtualScheduler } from "../../src/platform.ts";
+import { isPermanentToolError, isReportedToolError } from "../../src/tools/errors.ts";
+import type { JsonObject } from "../../src/typesys/json.ts";
 
 let dir: string;
 let root: string;
@@ -216,4 +225,294 @@ test("bad settings are refused at construction", () => {
   expect(() => new FileMemory({ root, maxDepth: 1.5 })).toThrow("maxDepth");
   expect(() => new FileMemory({ root, lockTimeoutMs: -1 })).toThrow("lockTimeoutMs");
   expect(() => new FileMemory({ root, maxUndo: 0 })).not.toThrow();
+});
+
+/** Open a FileMemory on `root` with `options`, creating it. */
+async function openAt(options: Partial<FileMemoryOptions> = {}): Promise<MemorySession> {
+  return new FileMemory({ root, id: "t/x", ...options }).open(o);
+}
+
+/** Return what `promise` rejects with. */
+async function rejection(promise: Promise<unknown>): Promise<unknown> {
+  try {
+    await promise;
+  } catch (error) {
+    return error;
+  }
+  throw new Error("expected a rejection");
+}
+
+describe("recall and snapshot", () => {
+  test("the recall is the index when it exists, with no hint when nothing else is there", async () => {
+    put(root, "profile.md", "Ada.");
+    const s = await new FileMemory({ root, id: "people/ada", index: "profile.md" }).open(o);
+    expect((await s.snapshot()).recall).toEqual({ text: "Ada.", cut: null, hint: null });
+    await s.close();
+  });
+
+  test("an index over maxRecallChars is cut, and other files bring a hint to read them", async () => {
+    put(root, "MEMORY.md", "abcdefghij");
+    const s = await openAt({ maxRecallChars: 4 });
+    expect((await s.snapshot()).recall).toEqual({
+      text: "abcd",
+      cut: "6 more characters of MEMORY.md not shown",
+      hint: { tool: "read", text: "Read the rest with {tool}." },
+    });
+    fs.writeFileSync(join(root, "MEMORY.md"), "ab");
+    put(root, "notes/a.md", "a");
+    expect((await s.snapshot()).recall).toEqual({
+      text: "ab",
+      cut: null,
+      hint: { tool: "read", text: "Read the rest with {tool}." },
+    });
+    await s.close();
+  });
+
+  test("without an index the recall lists each member's path and first line", async () => {
+    put(root, "b.md", "Bee\nmore");
+    put(root, "a/x.md", "Ex\r\nmore");
+    put(root, "empty.md", "");
+    const s = await openAt();
+    expect((await s.snapshot()).recall).toEqual({
+      text: "a/x.md: Ex\nb.md: Bee\nempty.md",
+      cut: null,
+      hint: { tool: "read", text: "Read them with {tool}." },
+    });
+    await s.close();
+  });
+
+  test("over maxRecallChars the listing is cut, saying how many files it doesn't show", async () => {
+    for (const name of ["a", "b", "c", "d", "e"]) put(root, `${name}.md`, `${name} line`);
+    const s = await openAt({ maxRecallChars: 20 });
+    expect((await s.snapshot()).recall).toEqual({
+      text: "a.md: a line",
+      cut: "4 more files not shown",
+      hint: { tool: "read", text: "Read them with {tool}." },
+    });
+    await s.close();
+  });
+
+  test("the listing counts the entries that aren't part of the memory as skipped", async () => {
+    put(root, "a.md", "A");
+    put(root, ".git/config", "g");
+    put(root, "bin.dat", new Uint8Array([0xff]));
+    const s = await openAt();
+    expect((await s.snapshot()).recall).toEqual({
+      text: "a.md: A",
+      cut: "2 entries skipped: not part of the memory",
+      hint: { tool: "read", text: "Read them with {tool}." },
+    });
+    await s.close();
+  });
+
+  test("an empty memory recalls nothing", async () => {
+    const s = await openAt();
+    expect(await s.snapshot()).toEqual({ version: memoryVersion([]), recall: { text: "", cut: null, hint: null } });
+    await s.close();
+  });
+
+  test("snapshot() returns the version and the recall from one read", async () => {
+    put(root, "MEMORY.md", "index");
+    put(root, "a.md", "A");
+    const s = await openAt();
+    const snapshot = await s.snapshot();
+    expect(snapshot.version).toBe(memoryVersion(readMembers(root, { maxDepth: 4, maxFileChars: 100_000 }).files));
+    expect(snapshot.recall.text).toBe("index");
+    await s.close();
+  });
+
+  test("a writer holding the lock makes snapshot() wait until it lets go", async () => {
+    const s = await openAt({ lockTimeoutMs: 10_000 });
+    const lock = lockFile(join(root, ".yian/lock"), { private: true });
+    let settled = false;
+    const snapshot = s.snapshot().finally(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(settled).toBe(false);
+    lock.release();
+    expect((await snapshot).recall.text).toBe("");
+    await s.close();
+  });
+
+  test("with lockTimeoutMs: 0 a held lock makes snapshot() fail busy", async () => {
+    const s = await openAt({ lockTimeoutMs: 0, scheduler: virtualScheduler() });
+    const lock = lockFile(join(root, ".yian/lock"), { private: true });
+    try {
+      const error = await rejection(s.snapshot());
+      expect(error).toBeInstanceOf(MemoryBusyError);
+      expect(memoryErrorKind(error)).toBe("busy");
+    } finally {
+      lock.release();
+    }
+    await s.close();
+  });
+});
+
+describe("read tools", () => {
+  test("list lists paths, hashes and sizes in characters", async () => {
+    put(root, "b.md", "Bé");
+    put(root, "a/x.md", "X");
+    put(root, ".git/config", "g");
+    const s = await openAt();
+    expect(await s.call("list", {}, { signal })).toEqual({
+      files: [
+        { path: "a/x.md", hash: sha256("X"), chars: 1n },
+        { path: "b.md", hash: sha256("Bé"), chars: 2n },
+      ],
+    });
+    expect(await s.call("list", { dir: "a" }, { signal })).toEqual({
+      files: [{ path: "a/x.md", hash: sha256("X"), chars: 1n }],
+    });
+    await s.close();
+  });
+
+  test("list shows at most maxResults files, and says how many more there are", async () => {
+    for (const name of ["a", "b", "c", "d"]) put(root, `${name}.md`, name);
+    const s = await openAt({ maxResults: 2 });
+    const listed = await s.call("list", {}, { signal });
+    expect((listed.files as JsonObject[]).map((file) => file.path)).toEqual(["a.md", "b.md"]);
+    expect(listed.cut).toBe("2 more; list a folder with dir");
+    await s.close();
+  });
+
+  test("list keeps within maxReadChars", async () => {
+    for (const name of ["a", "b", "c"]) put(root, `${name}.md`, name);
+    // Each entry counts as its JSON text: 99 characters for these.
+    const s = await openAt({ maxReadChars: 150 });
+    const listed = await s.call("list", {}, { signal });
+    expect((listed.files as JsonObject[]).map((file) => file.path)).toEqual(["a.md"]);
+    expect(listed.cut).toBe("2 more; list a folder with dir");
+    await s.close();
+  });
+
+  test("list of a folder that isn't there, or isn't part of the memory, is refused", async () => {
+    put(root, "a.md", "A");
+    const s = await openAt();
+    await expect(s.call("list", { dir: "nope" }, { signal })).rejects.toThrow("`nope` doesn't exist");
+    await expect(s.call("list", { dir: "a.md" }, { signal })).rejects.toThrow(
+      "`a.md` isn't a folder of the memory: a file",
+    );
+    await expect(s.call("list", { dir: ".git" }, { signal })).rejects.toThrow(
+      "`.git` isn't a folder of the memory: a hidden name",
+    );
+    await s.close();
+  });
+
+  test("read returns lines and the file's hash, computed from the bytes it read", async () => {
+    put(root, "a.md", "one\ntwo\nthree\n");
+    const s = await openAt();
+    expect(await s.call("read", { path: "a.md" }, { signal })).toEqual({
+      path: "a.md",
+      hash: sha256("one\ntwo\nthree\n"),
+      text: "one\ntwo\nthree",
+    });
+    expect(await s.call("read", { path: "a.md", offset: 2n, limit: 1n }, { signal })).toEqual({
+      path: "a.md",
+      hash: sha256("one\ntwo\nthree\n"),
+      text: "two",
+      cut: "showing lines 2-2 of 3; read on with offset 3",
+    });
+    expect(await s.call("read", { path: "a.md", offset: 9 }, { signal })).toEqual({
+      path: "a.md",
+      hash: sha256("one\ntwo\nthree\n"),
+      text: "",
+      cut: "the file has 3 lines",
+    });
+    await s.close();
+  });
+
+  test("read shows at most maxReadChars, with a cut note", async () => {
+    put(root, "a.md", "aaaa\nbbbb\ncccc");
+    const s = await openAt({ maxReadChars: 10 });
+    expect(await s.call("read", { path: "a.md" }, { signal })).toEqual({
+      path: "a.md",
+      hash: sha256("aaaa\nbbbb\ncccc"),
+      text: "aaaa\nbbbb",
+      cut: "showing lines 1-2 of 3; read on with offset 3",
+    });
+    put(root, "long.md", "x".repeat(25));
+    expect(await s.call("read", { path: "long.md" }, { signal })).toEqual({
+      path: "long.md",
+      hash: sha256("x".repeat(25)),
+      text: "x".repeat(10),
+      cut: "line 1 of 1 is cut after 10 characters",
+    });
+    await s.close();
+  });
+
+  test("search returns matching lines, ignoring case, each with its path, line and the file's hash", async () => {
+    put(root, "a.md", "Alpha\nbeta\nALPHABET");
+    put(root, "b/c.md", "no\nalpha");
+    put(root, ".git/config", "alpha");
+    const s = await openAt();
+    expect(await s.call("search", { query: "alpha" }, { signal })).toEqual({
+      matches: [
+        { path: "a.md", hash: sha256("Alpha\nbeta\nALPHABET"), line: 1n, text: "Alpha" },
+        { path: "a.md", hash: sha256("Alpha\nbeta\nALPHABET"), line: 3n, text: "ALPHABET" },
+        { path: "b/c.md", hash: sha256("no\nalpha"), line: 2n, text: "alpha" },
+      ],
+    });
+    await s.close();
+  });
+
+  test("search shows at most maxResults lines and maxReadChars, saying how many more match", async () => {
+    put(root, "long.md", "y".repeat(30));
+    put(root, "a.md", "x1\nx2\nx3\nx4");
+    const s = await openAt({ maxResults: 2 });
+    const found = await s.call("search", { query: "x" }, { signal });
+    expect((found.matches as JsonObject[]).map((match) => match.text)).toEqual(["x1", "x2"]);
+    expect(found.cut).toBe("2 more matching lines not shown");
+    const narrow = await openAt({ maxReadChars: 5 });
+    put(root, "a.md", "xxxx\nxxxx");
+    const cut = await narrow.call("search", { query: "x" }, { signal });
+    expect((cut.matches as JsonObject[]).map((match) => match.text)).toEqual(["xxxx"]);
+    expect(cut.cut).toBe("1 more matching line not shown");
+    // A first match longer than maxReadChars is shown cut, so the result is never empty.
+    expect(await narrow.call("search", { query: "y" }, { signal })).toEqual({
+      matches: [{ path: "long.md", hash: sha256("y".repeat(30)), line: 1n, text: "yyyyy" }],
+      cut: "line 1 of long.md is cut after 5 characters",
+    });
+    await s.close();
+    await narrow.close();
+  });
+
+  test.each([
+    [".git/config", "`.git/config` isn't part of the memory: a hidden name"],
+    ["../x.md", "`../x.md` isn't part of the memory: a `..` part"],
+    ["/etc/passwd", "`/etc/passwd` isn't part of the memory: an absolute path"],
+    ["linked/a.md", "`linked/a.md` isn't part of the memory: `linked` is a symlink"],
+    ["link.md", "`link.md` isn't part of the memory: a symlink"],
+    ["bin.dat", "`bin.dat` isn't part of the memory: not UTF-8 text"],
+    ["big.md", "`big.md` isn't part of the memory: over 10 characters"],
+    ["a", "`a` isn't part of the memory: a folder"],
+    ["a/b/c/d/e/f.md", "`a/b/c/d/e/f.md` isn't part of the memory: more than 4 folders deep"],
+    ["missing.md", "`missing.md` doesn't exist"],
+  ])("a read of %s is refused with its reason", async (path, reason) => {
+    put(root, ".git/config", "g");
+    put(root, "a/b.md", "b");
+    put(root, "bin.dat", new Uint8Array([0xff]));
+    put(root, "big.md", "x".repeat(11));
+    put(dir, "outside/a.md", "secret");
+    fs.symlinkSync(join(dir, "outside"), join(root, "linked"));
+    fs.symlinkSync(join(dir, "outside/a.md"), join(root, "link.md"));
+    const s = await openAt({ maxFileChars: 10 });
+    const error = await rejection(s.call("read", { path }, { signal }));
+    expect((error as Error).message).toBe(reason);
+    expect(isReportedToolError(error)).toBe(true);
+    expect(isPermanentToolError(error)).toBe(true);
+    await expect(s.call("search", { query: "secret" }, { signal })).resolves.toEqual({ matches: [] });
+    await s.close();
+  });
+
+  test("a write tool or an unknown tool isn't a read tool", async () => {
+    const s = await openAt();
+    await expect(s.call("append", { path: "a.md", text: "x" }, { signal })).rejects.toThrow(
+      "append is a write tool: apply it as a change",
+    );
+    await expect(s.call("upsert", {}, { signal })).rejects.toThrow(
+      "FileMemory has no tool upsert; it has list, read, search, append, create, edit, delete, rewrite",
+    );
+    await s.close();
+  });
 });

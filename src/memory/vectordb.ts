@@ -1014,6 +1014,11 @@ interface Store {
    * than `result` when an abort let the call go before its turn came.
    */
   locked<T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T>;
+  /**
+   * Run the async `body` holding the memory's lock for as long as it runs, as `locked` runs a
+   * synchronous one. Only host actions do this: every other writer waits for it, or times out.
+   */
+  hold<T>(signal: AbortSignal, body: () => Promise<T>): Promise<T>;
 }
 
 /** A call's place in a store's queue: its result, and when its turn has finished. */
@@ -1154,39 +1159,42 @@ export class VectorDBMemory extends MemoryBase {
     const scheduler = options.scheduler ?? realScheduler;
     this.path = real;
     this.#id = id;
+    /** Run `body` holding the lock, in this process's turn on the store, as `Store.locked` describes. */
+    const turn = <T>(signal: AbortSignal | undefined, body: () => T | Promise<T>): Turn<T> => {
+      // A monotonic clock, so a wall-clock step while queued neither stretches nor cuts the wait.
+      const deadline = performance.now() + timeoutMs;
+      return inTurn(real, signal, async () => {
+        // Checked before the lock file is opened, and on every call: the files may change.
+        checkFiles(real);
+        // Only what is left of the timeout: a call waits it out once, queued or not.
+        const left = Math.max(0, deadline - performance.now());
+        let lock: FileLock;
+        try {
+          lock = await waitForLock(`${real}.lock`, { timeoutMs: left, signal, scheduler, private: true });
+        } catch (error) {
+          if (error instanceof FileLockError && error.reason === "busy") {
+            // No cause: the lock's error names its path, and this one can reach a model.
+            throw new MemoryBusyError("this memory is busy: another writer holds its lock");
+          }
+          throw error;
+        }
+        try {
+          // Again holding the lock: the files may have changed while the call waited for it.
+          checkFiles(real);
+          return await body();
+        } finally {
+          lock.release();
+        }
+      });
+    };
     this.#store = Object.freeze({
       path: real,
       limits,
       scheduler,
       embedding,
       embed: options.embed,
-      locked<T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T> {
-        // A monotonic clock, so a wall-clock step while queued neither stretches nor cuts the wait.
-        const deadline = performance.now() + timeoutMs;
-        return inTurn(real, signal, async () => {
-          // Checked before the lock file is opened, and on every call: the files may change.
-          checkFiles(real);
-          // Only what is left of the timeout: a call waits it out once, queued or not.
-          const left = Math.max(0, deadline - performance.now());
-          let lock: FileLock;
-          try {
-            lock = await waitForLock(`${real}.lock`, { timeoutMs: left, signal, scheduler, private: true });
-          } catch (error) {
-            if (error instanceof FileLockError && error.reason === "busy") {
-              // No cause: the lock's error names its path, and this one can reach a model.
-              throw new MemoryBusyError("this memory is busy: another writer holds its lock");
-            }
-            throw error;
-          }
-          try {
-            // Again holding the lock: the files may have changed while the call waited for it.
-            checkFiles(real);
-            return body();
-          } finally {
-            lock.release();
-          }
-        });
-      },
+      locked: <T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T> => turn(signal, body),
+      hold: <T>(signal: AbortSignal, body: () => Promise<T>): Promise<T> => turn(signal, body).result,
     });
   }
 
@@ -1276,11 +1284,7 @@ export class VectorDBMemory extends MemoryBase {
     if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
     await this.#store.locked(o.signal, (): void => {
       withDb(path, (db) => {
-        const meta = readMeta(db, path);
-        if (meta === null) throw new Error(`${shown(path)} isn't a memory yet`);
-        if (this.#id !== undefined && meta.identity !== this.#id) {
-          throw new Error(`this memory is ${shown(meta.identity)}, not ${shown(this.#id)}`);
-        }
+        const meta = memoryMeta(db, path, this.#id);
         transaction(db, () => {
           // With secure_delete on, the deleted texts are overwritten, not left in free pages.
           db.exec("DELETE FROM items; DELETE FROM history; DELETE FROM changes");
@@ -1289,6 +1293,105 @@ export class VectorDBMemory extends MemoryBase {
       });
     }).result;
   }
+
+  /**
+   * Embed every item's text again with `embedding` through `embed`, retired items included, then
+   * record the new model in `meta`. It holds the memory's lock throughout, so no writer adds an
+   * item with the old model meanwhile; the texts go in batches of `current().embeddingBatchItems`.
+   * The new vectors wait in a table of their own until the last batch is in, then replace the old
+   * ones in one transaction with the new model, so a failure or a crash part way leaves the store
+   * as it was. Items keep their versions. A session open on the memory refuses its next call; open
+   * it again with the new model.
+   *
+   * It is a host action (`yian memory reembed`), never a session method: no run re-embeds.
+   *
+   * @throws {TypeError} If `embedding` isn't `{provider, model}` or `embed` isn't a function.
+   * @throws Error when the store isn't a memory or holds another identity, or the embedder fails or
+   *   breaks its contract.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
+  async reembed(o: { embedding: EmbeddingModel; embed: Embed; signal: AbortSignal }): Promise<void> {
+    o.signal.throwIfAborted();
+    const embedding = checkEmbedding(o.embedding);
+    if (typeof o.embed !== "function") throw new TypeError("reembed needs embed as a function");
+    const { path } = this.#store;
+    if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
+    await this.#store.hold(o.signal, async () => {
+      if (lstatOrNull(path) === null) throw new Error("this memory's store file is gone");
+      // One connection for the whole action: it holds no transaction while it waits for the embedder.
+      const db = openStore(path);
+      try {
+        const meta = memoryMeta(db, path, this.#id);
+        db.exec("DROP TABLE IF EXISTS reembed; CREATE TABLE reembed(id INTEGER PRIMARY KEY, vector BLOB NOT NULL)");
+        const batch = db.prepare("SELECT id, text FROM items WHERE id > ? ORDER BY id LIMIT ?");
+        let length: number | null = null;
+        for (let after = 0; ; ) {
+          // Read per batch, so a run's scoped defaults apply, as the embeddings client reads them.
+          const rows = batch.all(after, current().embeddingBatchItems);
+          if (rows.length === 0) break;
+          const texts = rows.map((row) => row.text as string);
+          const vectors = checkVectors(await o.embed(texts, { ...embedding, signal: o.signal }), texts.length);
+          length ??= vectors[0]!.length;
+          if (vectors[0]!.length !== length) throw new Error("the embedder returned vectors of different lengths");
+          transaction(db, () => {
+            const insert = db.prepare("INSERT INTO reembed(id, vector) VALUES (?, ?)");
+            for (const [i, row] of rows.entries()) insert.run(row.id as number, bytesOf(vectors[i]!));
+          });
+          after = rows.at(-1)!.id as number;
+        }
+        transaction(db, () => {
+          // Every item has its new vector: the lock kept any from being added or removed meanwhile.
+          db.exec("UPDATE items SET vector = (SELECT vector FROM reembed WHERE reembed.id = items.id)");
+          db.prepare("UPDATE meta SET value = ? WHERE key = 'settings'").run(
+            settingsText({ embedding, item_schema: meta.settings.item_schema }),
+          );
+          db.exec("DROP TABLE reembed");
+        });
+      } finally {
+        // A failed reembed's half-filled table goes, so the store is as it was.
+        try {
+          if (!db.inTransaction) db.exec("DROP TABLE IF EXISTS reembed");
+        } finally {
+          db.close();
+        }
+      }
+    });
+  }
+
+  /**
+   * Rebuild the store file with SQLite's `VACUUM`, holding the memory's lock, so the space deleted
+   * items and history took is given back. A host action (`yian memory compact`), never a session
+   * method. Temporary tables stay in memory, so no copy of a text lands in a temporary file.
+   *
+   * @throws Error when the store isn't a memory, or holds another identity than the constructor's `id`.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
+  async compact(o: { signal: AbortSignal }): Promise<void> {
+    o.signal.throwIfAborted();
+    const { path } = this.#store;
+    if (lstatOrNull(path) === null) throw new Error(`${shown(path)} isn't a memory yet`);
+    await this.#store.locked(o.signal, (): void => {
+      withDb(path, (db) => {
+        memoryMeta(db, path, this.#id);
+        db.exec("DROP TABLE IF EXISTS reembed");
+        db.exec("VACUUM");
+      });
+    }).result;
+  }
+}
+
+/**
+ * Return the store's `meta` after checking it is a memory, and the one `id` names when given.
+ *
+ * @throws Error when it isn't a memory yet, or holds another identity.
+ */
+function memoryMeta(db: Sqlite, path: string, id: string | undefined): Meta {
+  const meta = readMeta(db, path);
+  if (meta === null) throw new Error(`${shown(path)} isn't a memory yet`);
+  if (id !== undefined && meta.identity !== id) {
+    throw new Error(`this memory is ${shown(meta.identity)}, not ${shown(id)}`);
+  }
+  return meta;
 }
 
 /** Return a session's info for the store whose `meta` is `meta`: its settings hold no location. */

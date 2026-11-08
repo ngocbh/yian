@@ -1,4 +1,7 @@
-/** VectorDBMemory: its store, identity and settings, recall, read tools, writes, undo, erase and reset. */
+/**
+ * VectorDBMemory: its store, identity and settings, recall, read tools, writes, undo, erase and
+ * reset, and the host actions re-embed and compact.
+ */
 
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
@@ -7,6 +10,7 @@ import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { withEnv } from "../../src/defaults.ts";
 import type { EmbeddingModel } from "../../src/llm/embeddings.ts";
 import {
   type Applied,
@@ -1316,5 +1320,136 @@ describe("erase, history and reset", () => {
     await expect(memory({ id: "t/other" }).reset({ signal })).rejects.toThrow(
       "this memory is `t/cases`, not `t/other`",
     );
+  });
+});
+
+/** An embedder for model `b`: two dimensions, `alpha` words in the second. */
+async function embedB(texts: readonly string[], o: EmbeddingModel & { signal: AbortSignal }): Promise<Float32Array[]> {
+  embedded.push({ texts: [...texts], provider: o.provider, model: o.model });
+  return texts.map((text) => new Float32Array([1, text.split(" ").filter((word) => word === "alpha").length]));
+}
+
+const modelB: EmbeddingModel = { provider: "openai", model: "b" };
+
+describe("host actions", () => {
+  test("reembed embeds every item again in batches under the lock, then records the new model", async () => {
+    const s = await openAt();
+    for (const [i, text] of ["alpha", "bravo", "alpha alpha", "charlie", "delta"].entries()) {
+      await apply(s, { op: "add", text }, `a${i}`);
+    }
+    await apply(s, { op: "retire", id: 4n, if_version: 4n, why: "x" }, "r1");
+    await s.close();
+    embedded = [];
+    const locked: boolean[] = [];
+    const watched = (texts: readonly string[], o: EmbeddingModel & { signal: AbortSignal }) => {
+      locked.push(isLocked(`${path}.lock`));
+      return embedB(texts, o);
+    };
+    const env = (name: string) => (name === "YIAN_EMBEDDING_BATCH_ITEMS" ? "2" : undefined);
+    await withEnv(env, () => memory().reembed({ embedding: modelB, embed: watched, signal }));
+    // Retired items too: an undo or a later edit may bring them back.
+    expect(embedded).toEqual([
+      { texts: ["alpha", "bravo"], provider: "openai", model: "b" },
+      { texts: ["alpha alpha", "charlie"], provider: "openai", model: "b" },
+      { texts: ["delta"], provider: "openai", model: "b" },
+    ]);
+    expect(locked).toEqual([true, true, true]);
+    expect(JSON.parse(metaRows().settings!).embedding).toEqual({ provider: "openai", model: "b" });
+    expect(rows("items").every((row) => (row.vector as unknown as Uint8Array).byteLength === 8)).toBe(true);
+    // The version doesn't move: no item changed.
+    expect(metaRows().version).toBe("6");
+
+    await expect(openAt()).rejects.toThrow("this memory was embedded with openai/b");
+    const reopened = await openAt({ embedding: modelB, embed: embedB });
+    const found = await call(reopened, "search", { query: "alpha", k: 2n });
+    expect((found.items as JsonObject[]).map((item) => item.id)).toEqual([1n, 3n]);
+    await reopened.close();
+  });
+
+  test("a session open across a reembed refuses its next call, rather than mix two models' vectors", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await memory().reembed({ embedding: modelB, embed: embedB, signal });
+    await expect(apply(s, { op: "add", text: "bravo" }, "a2")).rejects.toThrow(
+      "this memory was re-embedded with openai/b while this session had it open; open it again",
+    );
+    await s.close();
+  });
+
+  test("a reembed whose embedder fails part way leaves the store as it was", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await apply(s, { op: "add", text: "bravo" }, "a2");
+    await apply(s, { op: "add", text: "charlie" }, "a3");
+    const before = rows("items");
+    let calls = 0;
+    const failing = async (texts: readonly string[], o: EmbeddingModel & { signal: AbortSignal }) => {
+      if (++calls === 2) throw new Error("503 unavailable");
+      return embedB(texts, o);
+    };
+    const env = (name: string) => (name === "YIAN_EMBEDDING_BATCH_ITEMS" ? "2" : undefined);
+    await expect(withEnv(env, () => memory().reembed({ embedding: modelB, embed: failing, signal }))).rejects.toThrow(
+      "503 unavailable",
+    );
+    expect(rows("items")).toEqual(before);
+    expect(JSON.parse(metaRows().settings!).embedding).toEqual(model);
+    // The session opened before goes on with the old model.
+    expect(((await call(s, "search", { query: "alpha", k: 1n })).items as JsonObject[])[0]).toMatchObject({ id: 1n });
+    // A later reembed starts over and finishes.
+    await memory().reembed({ embedding: modelB, embed: embedB, signal });
+    expect(JSON.parse(metaRows().settings!).embedding).toEqual(modelB);
+    await s.close();
+  });
+
+  test("an embedder that breaks its contract fails the reembed, writing nothing", async () => {
+    await (await openAt()).close();
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    await s.close();
+    await expect(memory().reembed({ embedding: modelB, embed: async () => [], signal })).rejects.toThrow(
+      "the embedder returned 0 vectors for 1 text",
+    );
+    expect(JSON.parse(metaRows().settings!).embedding).toEqual(model);
+  });
+
+  test("reembed refuses a store that isn't a memory, or is another one, and bad arguments", async () => {
+    await expect(memory().reembed({ embedding: modelB, embed: embedB, signal })).rejects.toThrow(
+      `\`${path}\` isn't a memory yet`,
+    );
+    await (await openAt()).close();
+    await expect(memory({ id: "t/other" }).reembed({ embedding: modelB, embed: embedB, signal })).rejects.toThrow(
+      "this memory is `t/cases`, not `t/other`",
+    );
+    await expect(
+      memory().reembed({ embedding: { provider: "openai" } as EmbeddingModel, embed: embedB, signal }),
+    ).rejects.toThrow(TypeError);
+  });
+
+  test("compact runs VACUUM under the lock, so a store shrinks after its items go", async () => {
+    const s = await openAt();
+    const big = "alpha ".repeat(1_000);
+    for (let i = 0; i < 30; i++) await apply(s, { op: "add", text: `${big}${i}` }, `a${i}`);
+    for (let i = 1; i <= 30; i++) await apply(s, { op: "delete", id: BigInt(i), if_version: BigInt(i) }, `d${i}`);
+    const before = fs.statSync(path).size;
+    await memory().compact({ signal });
+    expect(fs.statSync(path).size).toBeLessThan(before / 2);
+    expect(fs.existsSync(`${path}-journal`)).toBe(false);
+    expect((await s.snapshot()).version).toBe("60");
+
+    const lock = lockFile(`${path}.lock`, { private: true });
+    try {
+      await expect(memory({ lockTimeoutMs: 0 }).compact({ signal })).rejects.toBeInstanceOf(MemoryBusyError);
+    } finally {
+      lock.release();
+    }
+    await s.close();
+  });
+
+  test("compact refuses a store that isn't a memory; neither host action is a session method", async () => {
+    await expect(memory().compact({ signal })).rejects.toThrow(`\`${path}\` isn't a memory yet`);
+    const s = await openAt();
+    expect("reembed" in s).toBe(false);
+    expect("compact" in s).toBe(false);
+    await s.close();
   });
 });

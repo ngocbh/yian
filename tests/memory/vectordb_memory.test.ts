@@ -286,6 +286,20 @@ test("a session's tools take k up to maxK, and fields typed by the item schema o
   await typed.close();
 });
 
+test("the open that makes a store gives later opens' info, which the caller's item type can't change", async () => {
+  // Key order counts: a model sees the properties in this order.
+  const ordered = (value: unknown) => JSON.stringify(value, (_, x: unknown) => (typeof x === "bigint" ? `${x}n` : x));
+  const itemType = structuredClone(CASE);
+  const first = await openAt({}, itemType);
+  const later = await openAt({}, CASE);
+  expect(ordered(first.info)).toBe(ordered(later.info));
+  // The host changes its own object afterwards: the session's settings and specs stay.
+  (itemType.properties as JsonObject).title = { type: "integer" };
+  expect(ordered(first.info)).toBe(ordered(later.info));
+  await first.close();
+  await later.close();
+});
+
 test("bad settings are refused at construction", () => {
   expect(() => memory({ path: "" })).toThrow("path");
   expect(() => memory({ id: "" })).toThrow("id");

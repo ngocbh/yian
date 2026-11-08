@@ -497,8 +497,13 @@ function readMeta(db: Sqlite, path: string): Meta | null {
   return { identity, settings: { embedding: checkEmbedding(settings.embedding), item_schema: schema }, version };
 }
 
-/** Make the store's tables in `db`, which has none, and record its identity and settings. */
-function initStore(db: Sqlite, identity: string, settings: StoredSettings): Meta {
+/**
+ * Make the store's tables in `db`, which has none, record its identity and settings, and return
+ * its `meta` read back. A session takes its settings from that copy, as every later open does, so
+ * the open that makes a store gives the same specs as the rest, and a caller that changes its
+ * own objects afterwards changes nothing.
+ */
+function initStore(db: Sqlite, path: string, identity: string, settings: StoredSettings): Meta {
   transaction(db, () => {
     db.exec(SCHEMA);
     const insert = db.prepare("INSERT INTO meta(key, value) VALUES (?, ?)");
@@ -508,7 +513,7 @@ function initStore(db: Sqlite, identity: string, settings: StoredSettings): Meta
     insert.run("store_version", String(STORE_VERSION));
     insert.run("version", "0");
   });
-  return { identity, settings, version: 0 };
+  return readMeta(db, path)!;
 }
 
 /** Return why an input typed `given` can't bind a store whose items are typed `stored`, or `null` when it can. */
@@ -1348,7 +1353,8 @@ export class VectorDBMemory extends MemoryBase {
           if (!o.create) throw new Error(`${shown(path)} isn't a memory yet`);
           if (embedding === undefined) throw new Error("a new VectorDBMemory needs an embedding model");
           created = true;
-          return initStore(db, this.#id ?? `at-${sha256(path).slice(0, 16)}`, { embedding, item_schema: itemType });
+          const identity = this.#id ?? `at-${sha256(path).slice(0, 16)}`;
+          return initStore(db, path, identity, { embedding, item_schema: itemType });
         });
       }).result;
     } catch (error) {

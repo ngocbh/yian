@@ -89,7 +89,7 @@ export function defaultIdentity(
  * the folder `~/.yian/memory/<identity>` for a FileMemory, the store `<identity>.db` for a
  * VectorDBMemory. It is checked as `checkDefaultLocation` checks it.
  *
- * @throws {RangeError} As `checkDefaultLocation` throws.
+ * @throws As `checkDefaultLocation` throws.
  */
 export function defaultLocation(home: string, identity: string, type: "FileMemory" | "VectorDBMemory"): string {
   return checkDefaultLocation(home, type === "VectorDBMemory" ? `${identity}.db` : identity);
@@ -102,7 +102,11 @@ export function defaultLocation(home: string, identity: string, type: "FileMemor
  * real `~/.yian/memory`. A recorded identity is checked this way too, since a log can be edited.
  *
  * @throws {RangeError} When the path leaves `~/.yian/memory` or names it, a component is a symlink,
- *   or a component above the last isn't a folder.
+ *   a component above the last isn't a folder, or the real path leaves the real `~/.yian/memory`;
+ *   each message names the path from `~`.
+ * @throws {TypeError} When the path holds a NUL character, which no path can.
+ * @throws Error (a system error, such as `EACCES`, `ENAMETOOLONG` or `ELOOP`) when a component
+ *   can't be read or a real path can't be resolved; its message names the absolute path.
  */
 export function checkDefaultLocation(home: string, path: string): string {
   const root = memoryRoot(home);
@@ -304,7 +308,8 @@ export function memoryFlags(params: readonly Parameter[], flags: readonly string
  *   with no file, whose memories have no default.
  * @throws {UsageError} As `memoryFlags` throws, and for a flag naming another input's default.
  * @throws {RangeError} For an input of a memory type the command line can't bind; for a default,
- *   as `defaultIdentity` and `defaultLocation` throw, and when there is no project folder.
+ *   as `defaultIdentity` throws, and when there is no project folder.
+ * @throws As `defaultLocation` throws, for a default.
  */
 export function bindMemories(
   flow: ComposedFlow,
@@ -367,8 +372,9 @@ export function defaultMemories(
  * Nothing is created here, and the resume opens each memory without creating it.
  *
  * @throws {UsageError} As `memoryFlags` throws, and for a flag naming another input's default.
- * @throws {RangeError} For an input of a memory type the command line can't bind; as
- *   `defaultLocation` throws; when the log's START inputs hold a malformed memory value.
+ * @throws {RangeError} For an input of a memory type the command line can't bind, or when the log's
+ *   START inputs hold a malformed memory value.
+ * @throws As `defaultLocation` throws, for a default.
  * @throws Error when the log can't be read.
  */
 export function resumeMemories(
@@ -458,7 +464,7 @@ function bindEach(
 /**
  * Return the instance of the memory `identity` at its default location under `options.home`.
  *
- * @throws {RangeError} As `defaultLocation` throws.
+ * @throws As `defaultLocation` throws.
  */
 function defaultInstance(identity: string, options: BindOptions): CliFileMemory {
   const root = defaultLocation(options.home, identity, "FileMemory");

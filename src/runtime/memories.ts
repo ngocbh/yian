@@ -1,0 +1,286 @@
+/**
+ * A run's memories: the sessions on the instances a host binds to its memory inputs, one per
+ * instance, and the memory value each input records.
+ *
+ * Knows about: memory (the contract, sessions and their errors), typesys (`MemoryRef`) and
+ * diagnostics.
+ */
+
+import { noteCleanup } from "../diagnostics.ts";
+import {
+  BUILTIN_MEMORY_TOOLS,
+  checkContract,
+  type MemoryBase,
+  MemoryBusyError,
+  type MemoryContract,
+  memoryErrorKind,
+  type MemorySession,
+  type Recall,
+} from "../memory/base.ts";
+import type { JsonObject } from "../typesys/json.ts";
+import { MemoryRef } from "../typesys/values.ts";
+
+/** One memory input of a run and the instance a host bound to it. */
+export interface MemoryBinding {
+  /** The input's name. */
+  readonly input: string;
+  readonly instance: MemoryBase;
+  /** The input's memory type: the contract type its instance must declare. */
+  readonly type: string;
+  /** The JSON Schema of the input's item type, or `null` for a memory without typed items. */
+  readonly itemType: JsonObject | null;
+}
+
+/** How `RunMemories.open` opens a run's memories. */
+export interface OpenMemoriesOptions {
+  /** `false` refuses a memory that doesn't exist yet, as a resume does. */
+  readonly create: boolean;
+  readonly signal: AbortSignal;
+  /**
+   * The tool names of each host memory type the flow was loaded with, by contract type; a bound
+   * instance of such a type must declare the same tools.
+   */
+  readonly hostTypes?: ReadonlyMap<string, readonly string[]>;
+}
+
+/** One open session and the inputs bound to its instance. */
+interface Opened {
+  readonly instance: MemoryBase;
+  readonly inputs: string[];
+  readonly session: MemorySession;
+}
+
+/**
+ * The sessions of one run segment on its memories, one per bound instance, and the value each
+ * memory input records. Every node of the run bound to a memory reaches it through its session.
+ */
+export class RunMemories {
+  /** The memory value of each bound input, in binding order. */
+  readonly values: ReadonlyMap<string, MemoryRef>;
+  readonly #sessions: ReadonlyMap<string, MemorySession>;
+
+  private constructor(values: ReadonlyMap<string, MemoryRef>, sessions: ReadonlyMap<string, MemorySession>) {
+    this.values = values;
+    this.#sessions = sessions;
+  }
+
+  /**
+   * Open each distinct bound instance once, check it, and snapshot it into its inputs' values.
+   *
+   * Each instance's class must declare a contract (`checkContract`) of its input's type, and a host
+   * type the tools of the class the flow was loaded with. Each session's info must name its
+   * contract's type and tools, and no two instances may hold one identity. If any step fails, the
+   * sessions opened so far are closed.
+   *
+   * @throws TypeError when an instance's contract or its session's info is malformed or differs.
+   * @throws RangeError when an instance's contract type isn't its input's, or two instances hold one
+   *   identity.
+   * @throws MemoryBusyError when a memory's lock stays held past its timeout, naming the input.
+   * @throws Error naming the input for another failed `open` or `snapshot`, its cause the error.
+   * @throws The signal's reason once it aborted.
+   */
+  static async open(bindings: readonly MemoryBinding[], options: OpenMemoriesOptions): Promise<RunMemories> {
+    const opened = await openSessions(bindings, options);
+    try {
+      const snapshots = new Map<MemorySession, { version: string; recall: Recall }>();
+      const values = new Map<string, MemoryRef>();
+      for (const { inputs, session } of opened) {
+        const snapshot = await sessionStep(inputs[0]!, options.signal, () => session.snapshot());
+        snapshots.set(session, snapshot);
+        for (const input of inputs) values.set(input, memoryValue(input, session, snapshot));
+      }
+      const ordered = new Map(bindings.map(({ input }) => [input, values.get(input)!]));
+      return new RunMemories(ordered, sessionsByIdentity(opened));
+    } catch (error) {
+      await closeAll(opened, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Return the session on the memory `identity`.
+   *
+   * @throws Error when this run has none: a node bound to a memory the run didn't bind.
+   */
+  session(identity: string): MemorySession {
+    const session = this.#sessions.get(identity);
+    if (session === undefined) throw new Error(`this run has no session on memory \`${identity}\``);
+    return session;
+  }
+
+  /** Close every session; the first close error is thrown once all are closed. */
+  async close(): Promise<void> {
+    let failure: { error: unknown } | null = null;
+    for (const session of this.#sessions.values()) {
+      try {
+        await session.close();
+      } catch (error) {
+        if (failure === null) failure = { error };
+        else noteCleanup(failure.error, error, "closing another memory also raised");
+      }
+    }
+    if (failure !== null) throw failure.error;
+  }
+}
+
+/**
+ * Check each binding's instance, then open each distinct instance once and check its session.
+ * The sessions are closed again if a check fails.
+ */
+async function openSessions(bindings: readonly MemoryBinding[], options: OpenMemoriesOptions): Promise<Opened[]> {
+  const { create, signal } = options;
+  for (const binding of bindings) checkInstance(binding, options.hostTypes ?? new Map());
+  const opened: Opened[] = [];
+  try {
+    for (const { input, instance, itemType } of bindings) {
+      const known = opened.find((each) => each.instance === instance);
+      if (known !== undefined) {
+        known.inputs.push(input);
+        continue;
+      }
+      const session = await sessionStep(input, signal, () => instance.open({ create, itemType, signal }));
+      opened.push({ instance, inputs: [input], session });
+      checkSession(input, contractOf(instance), session);
+      const other = opened.find((each) => each.session !== session && each.session.info.identity === session.info.identity);
+      if (other !== undefined) {
+        throw new RangeError(
+          `\`${input}\` and \`${other.inputs[0]}\` are two memories with identity ` +
+            `\`${session.info.identity}\`; bind one instance`,
+        );
+      }
+    }
+  } catch (error) {
+    await closeAll(opened, error);
+    throw error;
+  }
+  return opened;
+}
+
+/** Return the contract `instance`'s class declares, which `checkContract` has checked. */
+function contractOf(instance: MemoryBase): MemoryContract {
+  return (instance.constructor as typeof MemoryBase).contract;
+}
+
+/**
+ * Check a binding's instance before it opens: its class declares a well-formed contract of the
+ * input's type, and a host type's contract has the tools of the class the flow was loaded with.
+ *
+ * @throws TypeError naming the input when the contract is malformed or its tools differ.
+ * @throws RangeError when its type isn't the input's.
+ */
+function checkInstance(binding: MemoryBinding, hostTypes: ReadonlyMap<string, readonly string[]>): void {
+  const { input, instance, type } = binding;
+  try {
+    checkContract(instance);
+  } catch (error) {
+    if (!(error instanceof TypeError)) throw error;
+    throw new TypeError(`memory \`${input}\`: ${error.message}`, { cause: error });
+  }
+  const contract = contractOf(instance);
+  if (contract.type !== type) {
+    throw new RangeError(`\`${input}\` is \`${type}\`, but its instance is \`${contract.type}\``);
+  }
+  const loaded = hostTypes.get(type);
+  if (loaded === undefined || Object.hasOwn(BUILTIN_MEMORY_TOOLS, type)) return;
+  const names = contract.tools.map((tool) => tool.name);
+  if (names.join() !== loaded.join()) {
+    const cls = (instance.constructor as { name: string }).name;
+    throw new TypeError(
+      `memory \`${input}\`: ${cls}'s tools (${names.join(", ")}) aren't those of the \`${type}\` the flow was ` +
+        `loaded with (${loaded.join(", ")})`,
+    );
+  }
+}
+
+/**
+ * Check that a session's info names its contract's type and tools, in the contract's order.
+ *
+ * @throws TypeError naming the input when they differ.
+ */
+function checkSession(input: string, contract: MemoryContract, session: MemorySession): void {
+  const { info } = session;
+  if (info.type !== contract.type) {
+    throw new TypeError(
+      `memory \`${input}\`: its session is a \`${info.type}\`, not the \`${contract.type}\` its class declares`,
+    );
+  }
+  const names = info.tools.map((tool) => tool.name);
+  const declared = contract.tools.map((tool) => tool.name);
+  if (names.join() !== declared.join()) {
+    throw new TypeError(
+      `memory \`${input}\`: its session's tools (${names.join(", ")}) aren't its contract's (${declared.join(", ")})`,
+    );
+  }
+}
+
+/**
+ * Run one session step for input `input`, naming the input in its failure: a busy memory stays
+ * busy, and any other error is wrapped. A stop's reason passes through.
+ *
+ * @throws MemoryBusyError or Error naming the input, the original its cause.
+ */
+async function sessionStep<T>(input: string, signal: AbortSignal, step: () => Promise<T>): Promise<T> {
+  try {
+    return await step();
+  } catch (error) {
+    if (signal.aborted) throw error;
+    if (memoryErrorKind(error) === "busy") {
+      throw new MemoryBusyError(`memory \`${input}\` is busy: another writer holds its lock; try again`, {
+        cause: error,
+      });
+    }
+    throw new Error(`memory \`${input}\`: ${errorText(error)}`, { cause: error });
+  }
+}
+
+/** Return an error's message, or the thrown value as text; never throws. */
+function errorText(error: unknown): string {
+  try {
+    return error instanceof Error ? error.message : String(error);
+  } catch {
+    return "an error that can't be shown";
+  }
+}
+
+/**
+ * Return input `input`'s memory value: the session's identity, type, settings and tools, and the
+ * snapshot's version and recall.
+ *
+ * @throws TypeError naming the input when the info or snapshot can't be recorded.
+ */
+function memoryValue(
+  input: string,
+  session: MemorySession,
+  snapshot: { version: string; recall: Recall },
+): MemoryRef {
+  const { identity, type, settings, tools } = session.info;
+  try {
+    return new MemoryRef({
+      identity,
+      type,
+      settings,
+      version: snapshot.version,
+      recall: snapshot.recall,
+      tools: tools.map(({ name, write, description, parameters }) => ({ name, write, description, parameters })),
+    });
+  } catch (error) {
+    if (!(error instanceof RangeError)) throw error;
+    throw new TypeError(`memory \`${input}\`: ${error.message}`, { cause: error });
+  }
+}
+
+/** Return the sessions of `opened` by their memories' identities. */
+function sessionsByIdentity(opened: readonly Opened[]): Map<string, MemorySession> {
+  return new Map(opened.map(({ session }) => [session.info.identity, session]));
+}
+
+/** Close every session of `opened` after `primary` failed, noting each close error on it. */
+async function closeAll(opened: readonly Opened[], primary: unknown): Promise<void> {
+  for (const { session } of opened) {
+    try {
+      await session.close();
+    } catch (error) {
+      noteCleanup(primary, error, "closing a memory also raised");
+    }
+  }
+}

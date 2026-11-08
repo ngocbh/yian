@@ -177,6 +177,8 @@ async function yian(args: readonly string[], vars: Record<string, string> = {}, 
     stdin: new PassThrough(),
     stderrStream: new PassThrough(),
     env: (name) => (Object.hasOwn(env, name) ? env[name] : undefined),
+    // The system's own record of the home folder is never read in a test.
+    accountHome: () => null,
     ...extra,
   };
   const code = await main([...args], io);
@@ -299,6 +301,31 @@ describe("--memory", () => {
     expect(existsSync(join(home, ".yian", "identity"))).toBe(false);
     expect(existsSync(join(home, ".yian", ".yian"))).toBe(false);
     expect(runFolders()).toEqual([]);
+  });
+
+  test("the account's own home, and a folder holding its .yian, can't be a memory when HOME is elsewhere", async () => {
+    const flow = flowFile(APPEND);
+    const account = join(tmp, "account");
+    mkdirSync(join(account, ".yian"), { recursive: true });
+    symlinkSync(account, join(tmp, "account-link"));
+    const accountHome = () => account;
+    for (const [path, refusal] of [
+      [account, `\`${account}\` can't be a memory: it holds your home's files`],
+      [join(tmp, "account-link"), `\`${join(tmp, "account-link")}\` can't be a memory: it holds your home's files`],
+      [join(account, ".yian"), `\`${join(account, ".yian")}\` can't be a memory: it holds ${join(account, ".yian")}`],
+    ] as const) {
+      const result = await yian(["run", flow, "--quiet", "--memory", `lessons=${path}`], {}, { accountHome });
+      expect(result.code, path).toBe(2);
+      expect(result.stderr).toContain(`Invalid value for --memory: ${refusal}`);
+    }
+    expect(readdirSync(account)).toEqual([".yian"]);
+    expect(readdirSync(join(account, ".yian"))).toEqual([]);
+    expect(runFolders()).toEqual([]);
+
+    // When the system can't say, HOME alone is checked.
+    const flag = `lessons=${account}`;
+    const unknown = await yian(["run", flow, "--quiet", "--memory", flag], {}, { accountHome: () => null });
+    expect(unknown.code, unknown.stderr).toBe(0);
   });
 
   test("a flag naming no memory input, a .db for a FileMemory, a repeat or a bad form is a usage error", async () => {

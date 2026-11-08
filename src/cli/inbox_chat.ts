@@ -52,6 +52,7 @@ import { canonicalTypeLabel, isInboxType, typeEquals, type Value, writeAsText } 
 import type { ChildEvent } from "./chat_events.ts";
 import { type ChatEvents, ChatFlusher } from "./chat_flush.ts";
 import {
+  accountHome,
   bindMemories,
   type CreatedMemory,
   createdLine,
@@ -699,6 +700,7 @@ export async function inboxChat(
       note: (created: CreatedMemory) =>
         void note(`${forTerminal(createdLine(created, true), io.stderr)}\n`).catch(() => {}),
       embed: io.embed ?? defaultEmbed(env.read),
+      accountHome: io.accountHome ?? accountHome,
     };
     const memory =
       resumed === null

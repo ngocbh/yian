@@ -47,6 +47,8 @@ async function yian(args: readonly string[], extra: Partial<CliIo> = {}) {
     stdin: new PassThrough(),
     stderrStream: new PassThrough(),
     env,
+    // The system's own record of the home folder is never read in a test.
+    accountHome: () => null,
     ...extra,
   };
   const code = await main([...args], io);

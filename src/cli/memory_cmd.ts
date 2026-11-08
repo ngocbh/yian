@@ -35,6 +35,7 @@ import { readRunIndex, type RunIndexRow, updateRunIndex } from "../run.ts";
 import { type JsonObject, logJson } from "../typesys/json.ts";
 import { isMemoryType } from "../typesys/values.ts";
 import {
+  accountHome,
   checkMemoryFolder,
   type CliMemory,
   defaultIdentity,
@@ -98,7 +99,7 @@ export async function resolveTarget(
       throw new UsageError(`Invalid value for --at: ${path} is a file, not a memory's folder`);
     }
     try {
-      checkMemoryFolder(path, home);
+      checkMemoryFolder(path, home, (io.accountHome ?? accountHome)());
     } catch (error) {
       if (!(error instanceof RangeError)) throw error;
       throw new UsageError(`Invalid value for --at: ${error.message}`);

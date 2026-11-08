@@ -12,6 +12,7 @@
 
 import { createHash } from "node:crypto";
 import { lstatSync, type Stats } from "node:fs";
+import { userInfo } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import { START_ID } from "../compile/model.ts";
@@ -150,23 +151,36 @@ function lstatOrNull(path: string): Stats | null {
 }
 
 /**
- * Refuse a folder that can't be a memory, compared by real paths: `/`, the home folder, or a
- * folder that holds `~/.yian` (or is it). Binding adopts a folder's files as the memory's, and a
+ * Return the account's home folder as the system records it, whatever `HOME` says, or `null` when
+ * the system has no entry for the account.
+ */
+export function accountHome(): string | null {
+  try {
+    return userInfo().homedir || null;
+  } catch {
+    // A uid with no passwd entry, as in some containers: `HOME` alone is checked.
+    return null;
+  }
+}
+
+/**
+ * Refuse a folder that can't be a memory, compared by real paths: `/`, a home folder, or a folder
+ * that holds a home's `.yian` (or is it). The homes are `home`, the one `HOME` names, and
+ * `account`, the account's own (`accountHome`, `null` when unknown), so a `HOME` pointing elsewhere
+ * can't let the account's home through. Binding adopts a folder's files as the memory's, and a
  * reset deletes them, so one of these would take everything under it.
  *
  * @throws {RangeError} Naming the folder and why.
  */
-export function checkMemoryFolder(path: string, home: string): void {
+export function checkMemoryFolder(path: string, home: string, account: string | null): void {
   const real = realOr(resolve(path));
-  const why =
-    real === "/"
-      ? "`/` can't be a memory: it holds the whole file system"
-      : real === realOr(home)
-        ? "`~` can't be a memory: it holds your home's files"
-        : leavesRoot(relative(real, realOr(join(home, ".yian"))))
-          ? null
-          : `\`${path}\` can't be a memory: it holds ~/.yian`;
-  if (why !== null) throw new RangeError(why);
+  const holds = (dir: string) => !leavesRoot(relative(real, realOr(join(dir, ".yian"))));
+  const refuse = (why: string) => new RangeError(`\`${path}\` can't be a memory: ${why}`);
+  if (real === "/") throw new RangeError("`/` can't be a memory: it holds the whole file system");
+  if (real === realOr(home)) throw new RangeError("`~` can't be a memory: it holds your home's files");
+  if (account !== null && real === realOr(account)) throw refuse("it holds your home's files");
+  if (holds(home)) throw refuse("it holds ~/.yian");
+  if (account !== null && holds(account)) throw refuse(`it holds ${join(account, ".yian")}`);
 }
 
 /**
@@ -292,6 +306,8 @@ export interface BindOptions {
   defaultEmbedding?: () => EmbeddingModel | null;
   /** The embeddings call VectorDB memories make. */
   embed?: Embed;
+  /** The account's home folder, which a `--memory` folder can't be beside `home`; `accountHome` when absent. */
+  accountHome?: () => string | null;
 }
 
 /** A memory the command line binds, of either built-in type. */
@@ -601,7 +617,7 @@ function bindEach(
     // A store is one file of its own, which a reset empties: only a folder adopts what is in it.
     if (path !== undefined && typ.memory === "FileMemory") {
       try {
-        checkMemoryFolder(path, options.home);
+        checkMemoryFolder(path, options.home, (options.accountHome ?? accountHome)());
       } catch (error) {
         if (!(error instanceof RangeError)) throw error;
         throw new UsageError(`Invalid value for --memory: ${error.message}`);

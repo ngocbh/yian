@@ -64,6 +64,11 @@ export interface CliIo {
   editor?: (path: string) => Promise<void>;
   /** The embeddings call a VectorDB memory makes; `defaultEmbed` over `env` when absent. For tests. */
   embed?: Embed;
+  /**
+   * The account's home folder as the system records it, which `--memory` and `--at` refuse beside
+   * `HOME`'s; `accountHome` (`os.userInfo`) when absent. For tests.
+   */
+  accountHome?: () => string | null;
 }
 
 // An escape sequence, matched whole: the CSI, OSC and DCS (SOS, PM, APC) sequences `sanitize`

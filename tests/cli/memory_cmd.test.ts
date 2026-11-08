@@ -67,6 +67,8 @@ function testIo(extra: Partial<CliIo> = {}) {
     stdin: new PassThrough(),
     stderrStream: new PassThrough(),
     env: envOf(),
+    // The system's own record of the home folder is never read in a test.
+    accountHome: () => null,
     ...extra,
   };
   return { io, stdout: () => out.join(""), stderr: () => err.join("") };
@@ -153,6 +155,17 @@ describe("the target", () => {
       expect(result.stderr).toContain(`Invalid value for --at: `);
       expect(result.stderr).toContain(refusal);
     }
+  });
+
+  test("--at refuses the account's own home when HOME is elsewhere", async () => {
+    const account = join(tmp, "account");
+    mkdirSync(join(account, ".yian"), { recursive: true });
+    const accountHome = () => account;
+    const result = await yian(["memory", "reset", "--at", account, "--yes"], { accountHome });
+    expect(result.code).toBe(2);
+    const refusal = `\`${account}\` can't be a memory: it holds your home's files`;
+    expect(result.stderr).toContain(`Invalid value for --at: ${refusal}`);
+    expect(readdirSync(join(account, ".yian"))).toEqual([]);
   });
 
   test("FLOW NAME is the input's default memory, and --at PATH the memory in a folder", async () => {

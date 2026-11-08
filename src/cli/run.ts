@@ -85,6 +85,7 @@ import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { loadConfined } from "./confined_load.ts";
 import { loadMcpConfig, McpConfigError, userMcpConfig } from "./mcp_config.ts";
 import {
+  accountHome,
   bindMemories,
   type CreatedMemory,
   createdLine,
@@ -1272,6 +1273,7 @@ async function startRun(
           home: homeDir(io.env),
           note: memoryNote,
           embed: io.embed ?? defaultEmbed(commandEnv.read),
+          accountHome: io.accountHome ?? accountHome,
         });
         const keyContext = {
           env: commandEnv,
@@ -1303,6 +1305,7 @@ async function startRun(
         embedding: embeddingFlag(options.embedding),
         defaultEmbedding: () => defaultEmbedding({ env: commandEnv.read }),
         embed: io.embed ?? defaultEmbed(commandEnv.read),
+        accountHome: io.accountHome ?? accountHome,
       });
       // A signal during the load stops the command before it prompts.
       controller.signal.throwIfAborted();

@@ -1375,7 +1375,7 @@ export class VectorDBMemory extends MemoryBase {
     }
     const problem = itemTypeProblem(stored.item_schema, itemType);
     if (problem !== null) throw new Error(problem);
-    return new VectorDBSession(this.#store, sessionInfo(meta, this.#store.limits), stored, created);
+    return new VectorDBSession(this.#store, sessionInfo(meta, this.#store.limits), stored, meta.version, created);
   }
 
   /**
@@ -1547,17 +1547,21 @@ class VectorDBSession implements MemorySession {
   readonly #stored: StoredSettings;
   /** The session's calls and turns not yet settled: `close` waits for them. */
   readonly #pending = new Set<Promise<void>>();
+  /** The highest version the session has seen the store at; a store found older was restored. */
+  #seen: number;
   #closed = false;
 
   /**
    * @param store The memory it reads and writes.
    * @param info What the memory is, as its recorded value holds it.
    * @param stored The settings its store held when it opened.
+   * @param version The store's version when it opened.
    * @param created Whether the open that made this session created the memory.
    */
-  constructor(store: Store, info: MemoryInfo, stored: StoredSettings, created: boolean) {
+  constructor(store: Store, info: MemoryInfo, stored: StoredSettings, version: number, created: boolean) {
     this.#store = store;
     this.#stored = stored;
+    this.#seen = version;
     this.info = info;
     this.created = created;
   }
@@ -2033,10 +2037,10 @@ class VectorDBSession implements MemorySession {
   }
 
   /**
-   * Check that the store still holds the memory this session opened: its identity, and the
-   * settings its vectors depend on.
+   * Check that the store still holds the memory this session opened: its identity, the settings
+   * its vectors depend on, and a version no older than the session has seen.
    *
-   * @throws Error when it was replaced or re-embedded since.
+   * @throws Error when it was replaced, re-embedded or restored from a copy since.
    */
   #checkStore(db: Sqlite): void {
     const { identity } = this.info;
@@ -2055,6 +2059,10 @@ class VectorDBSession implements MemorySession {
     }
     if (settingsText(meta.settings) !== settingsText(this.#stored)) {
       throw new Error("this memory's settings changed while this session had it open; open it again");
+    }
+    // A copy put back would answer for change ids it never saw, and apply them a second time.
+    if (meta.version < this.#seen) {
+      throw new Error("this memory's store is older than this session saw; it may have been restored from a copy");
     }
   }
 
@@ -2083,7 +2091,10 @@ class VectorDBSession implements MemorySession {
     const run = () =>
       withDb(path, (db) => {
         this.#checkStore(db);
-        return body(db);
+        const result = body(db);
+        // Read again after the body, so the session's own writes count as seen.
+        this.#seen = Math.max(this.#seen, storedVersion(db));
+        return result;
       });
     const { result, done } = this.#store.locked(signal, run as Held<T>);
     // The turn itself, not the call: an abort while queued lets the call go before its turn runs.

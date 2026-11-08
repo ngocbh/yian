@@ -664,6 +664,23 @@ describe("read and list", () => {
     await s.close();
   });
 
+  test("a session refuses a store older than one it saw, as one restored from a copy is", async () => {
+    const s = await openAt();
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    fs.copyFileSync(path, join(dir, "copy.db"));
+    // Its own write is the newest the session saw, with no read after it.
+    await apply(s, { op: "add", text: "bravo" }, "a2");
+    fs.copyFileSync(join(dir, "copy.db"), path);
+    await expect(call(s, "list", {})).rejects.toThrow(
+      "this memory's store is older than this session saw; it may have been restored from a copy",
+    );
+    // A session opened on the restored store takes it as it is.
+    const fresh = await openAt();
+    expect((await fresh.snapshot()).version).toBe("1");
+    await fresh.close();
+    await s.close();
+  });
+
   test("a write tool or an unknown tool isn't a read tool", async () => {
     const s = await openAt();
     await expect(call(s, "add", { text: "x" })).rejects.toThrow("add is a write tool: apply it as a change");

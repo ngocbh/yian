@@ -53,6 +53,24 @@ export interface JournalEntry {
   /** The target's file hash after the change, or `absent`. */
   readonly after: string;
   readonly inverse: Inverse;
+  /** For an undo, the id of the change it undid. */
+  readonly undoes?: string;
+}
+
+/** A change and its outcome, as the journal holds them: an aborted change has none. */
+export interface JournalChange {
+  readonly entry: JournalEntry;
+  readonly applied: Applied;
+}
+
+/** The caps a journal keeps its change ids and inverses within. */
+export interface JournalLimits {
+  /** Change ids kept to answer a repeated change. */
+  readonly maxChangeIds: number;
+  /** Changes, newest first, whose inverses are kept. */
+  readonly maxUndo: number;
+  /** Characters of old text the kept inverses may hold. */
+  readonly maxHistoryChars: number;
 }
 
 /** A change id's digest and its stored outcome. */
@@ -113,6 +131,16 @@ function damaged(line: number, what: string): Error {
   );
 }
 
+/** @internal Return the number of code points in `text`, which holds no lone surrogate. */
+export function charCount(text: string): number {
+  let chars = text.length;
+  for (let i = 0; i < text.length; i++) {
+    const unit = text.charCodeAt(i);
+    if (unit >= 0xd800 && unit <= 0xdbff) chars--;
+  }
+  return chars;
+}
+
 /** Return whether `value` is a plain JSON object. */
 function isObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -171,10 +199,11 @@ function parseLine(text: string): JournalLine | null {
   if (value.ok === false && typeof value.reason === "string" && (value.current === null || isObject(value.current))) {
     return { kind: "commit", id, applied: { ok: false, reason: value.reason, current: value.current } };
   }
-  const { digest, op, path, at, before, after } = value;
+  const { digest, op, path, at, before, after, undoes } = value;
   const author = asAuthor(value.author);
   const inverse = asInverse(value.inverse);
   if (
+    (undoes !== undefined && typeof undoes !== "string") ||
     typeof digest !== "string" ||
     typeof op !== "string" ||
     typeof path !== "string" ||
@@ -186,7 +215,8 @@ function parseLine(text: string): JournalLine | null {
   ) {
     return null;
   }
-  return { kind: "entry", entry: { id, digest, op, path, author, at, before, after, inverse } };
+  const entry: JournalEntry = { id, digest, op, path, author, at, before, after, inverse };
+  return { kind: "entry", entry: undoes === undefined ? entry : { ...entry, undoes } };
 }
 
 /**
@@ -216,7 +246,7 @@ function readFirstLine(fd: number, size: number): string | null {
 export class Journal {
   readonly #meta: string;
   readonly #path: string;
-  readonly #maxChangeIds: number;
+  readonly #limits: JournalLimits;
   /** The generation read, or `null` before a read and while there is no journal. */
   #generation: string | null = null;
   /** The bytes read, ending at a line break. */
@@ -225,17 +255,19 @@ export class Journal {
   #lines = 0;
   /** The last `maxChangeIds` change ids with an outcome, oldest first. */
   readonly #ids = new Map<string, KnownChange>();
+  /** The changes the journal holds with an outcome, in journal order. */
+  #changes: JournalChange[] = [];
   /** The last entry, while it has no outcome, and its line. */
   #pending: { entry: JournalEntry; line: number } | null = null;
 
   /**
    * @param meta The memory's `.yian` folder.
-   * @param maxChangeIds Change ids kept to answer a repeated change.
+   * @param limits The caps it keeps change ids and inverses within.
    */
-  constructor(meta: string, maxChangeIds: number) {
+  constructor(meta: string, limits: JournalLimits) {
     this.#meta = meta;
     this.#path = join(meta, "journal.jsonl");
-    this.#maxChangeIds = maxChangeIds;
+    this.#limits = limits;
   }
 
   /**
@@ -271,10 +303,43 @@ export class Journal {
     return this.#ids.get(id);
   }
 
+  /** Return the changes the journal holds with an outcome, oldest first. */
+  changes(): readonly JournalChange[] {
+    return this.#changes;
+  }
+
+  /** Return the latest change with id `id` and an outcome, or `undefined`. */
+  find(id: string): JournalChange | undefined {
+    return this.#changes.findLast((change) => change.entry.id === id);
+  }
+
+  /**
+   * Return the changes whose inverses the caps keep: among the last `maxUndo` changes, newest
+   * first, each committed one with an inverse whose old text still fits in `maxHistoryChars`.
+   */
+  undoable(): Set<JournalChange> {
+    const kept = new Set<JournalChange>();
+    const { maxUndo, maxHistoryChars } = this.#limits;
+    let chars = 0;
+    for (let i = this.#changes.length - 1; i >= Math.max(0, this.#changes.length - maxUndo); i--) {
+      const change = this.#changes[i]!;
+      const { inverse } = change.entry;
+      if (inverse === null || !change.applied.ok) continue;
+      const cost = "text" in inverse ? charCount(inverse.text) : 0;
+      // An old text too big for what is left is dropped; older, smaller ones may still fit.
+      if (chars + cost > maxHistoryChars) continue;
+      chars += cost;
+      kept.add(change);
+    }
+    return kept;
+  }
+
   /** Append `entry` and sync it, making the journal first when there is none. */
   writeEntry(entry: JournalEntry): void {
-    const { id, digest, op, path, author, at, before, after, inverse } = entry;
-    this.#append({ id, digest, op, path, author: authorOf(author), at, before, after, inverse });
+    const { id, digest, op, path, author, at, before, after, inverse, undoes } = entry;
+    const line: JsonObject = { id, digest, op, path, author: authorOf(author), at, before, after, inverse };
+    if (undoes !== undefined) line.undoes = undoes;
+    this.#append(line);
   }
 
   /** Append the outcome of the pending entry `id`, a commit or an abort, and sync it. */
@@ -335,7 +400,10 @@ export class Journal {
     if (this.#pending === null || this.#pending.entry.id !== parsed.id) {
       throw damaged(line, "has an outcome for no entry");
     }
-    if (parsed.kind === "commit") this.#remember(parsed.id, this.#pending.entry.digest, parsed.applied);
+    if (parsed.kind === "commit") {
+      this.#remember(parsed.id, this.#pending.entry.digest, parsed.applied);
+      this.#changes.push({ entry: this.#pending.entry, applied: parsed.applied });
+    }
     this.#pending = null;
   }
 
@@ -345,7 +413,7 @@ export class Journal {
     this.#ids.delete(id);
     this.#ids.set(id, { digest, applied });
     for (const old of this.#ids.keys()) {
-      if (this.#ids.size <= this.#maxChangeIds) break;
+      if (this.#ids.size <= this.#limits.maxChangeIds) break;
       this.#ids.delete(old);
     }
   }
@@ -356,6 +424,7 @@ export class Journal {
     this.#offset = 0;
     this.#lines = 0;
     this.#ids.clear();
+    this.#changes = [];
     this.#pending = null;
   }
 

@@ -45,6 +45,7 @@ import {
 import {
   ABSENT,
   authorOf,
+  charCount,
   type Inverse,
   Journal,
   type JournalEntry,
@@ -271,16 +272,6 @@ function diskProblem(root: string, rel: string, folder = false): string | null {
     if (!stats.isFile()) return stats.isDirectory() ? "a folder" : "not a regular file";
   }
   return null;
-}
-
-/** Return the number of code points in `text`, which holds no lone surrogate. */
-function charCount(text: string): number {
-  let chars = text.length;
-  for (let i = 0; i < text.length; i++) {
-    const unit = text.charCodeAt(i);
-    if (unit >= 0xd800 && unit <= 0xdbff) chars--;
-  }
-  return chars;
 }
 
 /** Return the first `limit` code points of `text`. */
@@ -904,7 +895,7 @@ class FileMemorySession implements MemorySession {
 
   constructor(store: Store, info: MemoryInfo, created: boolean) {
     this.#store = store;
-    this.#journal = new Journal(join(store.root, META), store.limits.maxChangeIds);
+    this.#journal = new Journal(join(store.root, META), store.limits);
     this.info = info;
     this.created = created;
   }
@@ -973,16 +964,61 @@ class FileMemorySession implements MemorySession {
     });
   }
 
-  undo(_o: { id: string; changeId: string; author: Author; signal: AbortSignal }): Promise<Applied> {
-    return Promise.reject(new Error("FileMemory undo isn't available yet"));
+  /**
+   * Undo change `changeId` as a new change `id`: write back what it replaced, if its file still
+   * holds what it wrote and the memory still keeps its inverse. Otherwise it is refused or
+   * conflicts, writing nothing. An undo is in history and can itself be undone.
+   *
+   * @throws {ChangeIdReusedError} If `id` was applied with a different change.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   * @throws {TypeError} If `id`, `changeId` or `author` has the wrong shape.
+   */
+  async undo(o: { id: string; changeId: string; author: Author; signal: AbortSignal }): Promise<Applied> {
+    this.#checkOpen();
+    o.signal.throwIfAborted();
+    if (typeof o.id !== "string" || o.id === "") throw new TypeError("a change id must be a non-empty string");
+    if (typeof o.changeId !== "string") throw new TypeError("undo needs the change id to undo as a string");
+    const author = checkAuthor(o.author);
+    const digest = sha256(canonicalJson({ op: "undo", change: o.changeId }));
+    return this.#locked(o.signal, () => {
+      this.#recover();
+      const known = this.#journal.known(o.id);
+      if (known !== undefined) {
+        if (known.digest !== digest) throw new ChangeIdReusedError(o.id);
+        return known.applied;
+      }
+      return this.#undo(o.id, digest, o.changeId, author);
+    });
+  }
+
+  /**
+   * List the last `limit` changes the journal holds, newest first. Aborted changes are left out;
+   * a change whose outcome is unknown is listed, since it may have landed.
+   *
+   * @throws {RangeError} If `limit` isn't an integer of at least 0.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   */
+  history(o: { limit: number }): Promise<ChangeEntry[]> {
+    this.#checkOpen();
+    if (!Number.isSafeInteger(o.limit) || o.limit < 0) {
+      throw new RangeError(`history needs a limit of 0 or more changes, not ${String(o.limit)}`);
+    }
+    return this.#locked(undefined, () => {
+      this.#recover();
+      const changes = this.#journal.changes();
+      return changes
+        .slice(Math.max(0, changes.length - o.limit))
+        .reverse()
+        .map(({ entry }) => {
+          const target: JsonObject = { path: entry.path };
+          if (entry.undoes !== undefined) target.undoes = entry.undoes;
+          return { id: entry.id, op: entry.op, target, author: authorOf(entry.author), at: entry.at };
+        });
+    });
   }
 
   erase(_o: { id: string; target: JsonObject; author: Author; signal: AbortSignal }): Promise<Erased> {
     return Promise.reject(new Error("FileMemory erase isn't available yet"));
-  }
-
-  history(_o: { limit: number }): Promise<ChangeEntry[]> {
-    return Promise.reject(new Error("FileMemory history isn't available yet"));
   }
 
   /** Close the session once its locked calls have finished; later calls throw. */
@@ -1105,15 +1141,59 @@ class FileMemorySession implements MemorySession {
     return file;
   }
 
-  /** Check `change` against the folder and the caps, then journal it, write it and commit it. */
+  /** Check that change `changeId` can be undone and its file holds what it wrote, then commit the undo. */
+  #undo(id: string, digest: string, changeId: string, author: Author): Applied {
+    const { root, limits } = this.#store;
+    const shownId = shown(changeId);
+    const target = this.#journal.find(changeId);
+    if (target === undefined) return refused(`change ${shownId} isn't in the memory's history`);
+    if (!target.applied.ok) {
+      return refused(`change ${shownId} may not have landed, so it can't be undone; check the file`);
+    }
+    const { inverse, path, after } = target.entry;
+    if (inverse === null || !this.#journal.undoable().has(target)) {
+      return refused(`change ${shownId} can't be undone: the memory no longer keeps what it replaced`);
+    }
+    // The path comes from the journal, which a person may have edited: it is checked like any other.
+    const why = pathProblem(path, limits.maxDepth) ?? diskProblem(root, path);
+    const old = why ?? readMemberFile(join(root, path), path, limits.maxFileChars);
+    if (typeof old === "string") return refused(`${shown(path)} isn't part of the memory: ${old}`);
+    if ((old?.hash ?? ABSENT) !== after) {
+      const reason = `${shown(path)} changed after change ${shownId}; undoing it would lose that`;
+      return old === null ? refused(reason) : this.#conflict(reason, old);
+    }
+    let text: string | null;
+    if ("text" in inverse) text = inverse.text;
+    else if ("absent" in inverse) text = null;
+    // The file is what the append wrote, so its first bytes are exactly the ones it had before.
+    else text = Buffer.from(old!.text, "utf8").subarray(0, inverse.truncate).toString("utf8");
+    const back: Inverse = old === null ? { absent: true } : { text: old.text };
+    return this.#commit({ id, digest, op: "undo", path, author, undoes: changeId }, old, { text, inverse: back });
+  }
+
+  /** Check `change` against the folder and its precondition, then commit it. */
   #write(id: string, digest: string, change: Change, author: Author): Applied {
-    const { root, limits, scheduler } = this.#store;
+    const { root, limits } = this.#store;
     const { path } = change;
     const why = pathProblem(path, limits.maxDepth) ?? diskProblem(root, path);
     const old = why ?? readMemberFile(join(root, path), path, limits.maxFileChars);
     if (typeof old === "string") return refused(`${shown(path)} isn't part of the memory: ${old}`);
     const next = this.#next(change, old);
     if ("ok" in next) return next;
+    return this.#commit({ id, digest, op: change.op, path, author }, old, next);
+  }
+
+  /**
+   * Check the caps for writing `next.text` (or deleting, for `null`) over the member `old`, then
+   * journal the change, write its content and commit it.
+   */
+  #commit(
+    change: { id: string; digest: string; op: string; path: string; author: Author; undoes?: string },
+    old: MemberFile | null,
+    next: { text: string | null; inverse: Inverse },
+  ): Applied {
+    const { root, limits, scheduler } = this.#store;
+    const { id, path } = change;
     const others = readMembers(root, limits).files.filter((file) => file.path !== path);
     let files = others;
     let bytes: Buffer | null = null;
@@ -1133,22 +1213,18 @@ class FileMemorySession implements MemorySession {
       bytes = Buffer.from(next.text, "utf8");
       files = [...others, { path, text: next.text, hash: sha256(bytes), chars }];
     }
-    const after = bytes === null ? ABSENT : sha256(bytes);
-    this.#journal.writeEntry({
-      id,
-      digest,
-      op: change.op,
-      path,
-      author,
+    const entry: JournalEntry = {
+      ...change,
       at: new Date(scheduler.now()).toISOString(),
       before: old?.hash ?? ABSENT,
-      after,
+      after: bytes === null ? ABSENT : sha256(bytes),
       inverse: next.inverse,
-    });
-    if (bytes === null) removeMember(root, path);
-    else writeMember(root, path, bytes);
+    };
+    this.#journal.writeEntry(entry);
+    if (bytes !== null) writeMember(root, path, bytes);
+    else if (old !== null) removeMember(root, path);
     const version = memoryVersion(files);
-    const applied: Applied = { ok: true, version, result: resultOf({ path, after } as JournalEntry, version) };
+    const applied: Applied = { ok: true, version, result: resultOf(entry, version) };
     this.#journal.writeOutcome(id, applied);
     return applied;
   }

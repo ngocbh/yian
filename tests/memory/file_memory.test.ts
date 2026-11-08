@@ -1,6 +1,6 @@
 /** FileMemory: its identity, members, version, recall, read tools and writes. */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,6 +31,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  mock.restore();
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -864,5 +865,169 @@ describe("delete and rewrite", () => {
 
   test("confinement: rewrite on a path outside the members is refused with the reason, writing nothing", async () => {
     await expectConfined((path) => ({ op: "rewrite", path, text: "x", if_hash: sha256("x") }));
+  });
+});
+
+/** Undo change `changeId` on `s` as change `id`. */
+function undo(s: MemorySession, changeId: string, id = `undo-${changeId}`): Promise<Applied> {
+  return s.undo({ id, changeId, author: { kind: "user", name: "ada" }, signal });
+}
+
+describe("history and undo", () => {
+  test("history lists changes newest first, with author, run and node; aborted ones are left out", async () => {
+    const s = await openAt({ scheduler: virtualScheduler(Date.UTC(2026, 10, 7)) });
+    await apply(s, { op: "append", path: "a.md", text: "one" }, "r/answer/1/0");
+    await s.apply({
+      id: "cli-1",
+      change: { op: "create", path: "b.md", text: "B" },
+      author: { kind: "user", name: "ada" },
+      signal,
+    });
+    // An entry a crash cut off before its file was replaced is aborted, and history leaves it out.
+    spyOn(fs, "renameSync").mockImplementation(() => {
+      throw Object.assign(new Error("no space"), { code: "ENOSPC" });
+    });
+    await expect(apply(s, { op: "append", path: "a.md", text: "lost" }, "cut")).rejects.toThrow("no space");
+    mock.restore();
+    await apply(s, { op: "append", path: "a.md", text: "two" }, "r/answer/1/1");
+    const at = "2026-11-07T00:00:00.000Z";
+    expect(await s.history({ limit: 10 })).toEqual([
+      { id: "r/answer/1/1", op: "append", target: { path: "a.md" }, author, at },
+      { id: "cli-1", op: "create", target: { path: "b.md" }, author: { kind: "user", name: "ada" }, at },
+      { id: "r/answer/1/0", op: "append", target: { path: "a.md" }, author, at },
+    ]);
+    expect((await s.history({ limit: 1 })).map((change) => change.id)).toEqual(["r/answer/1/1"]);
+    expect(await s.history({ limit: 0 })).toEqual([]);
+    await s.close();
+  });
+
+  test("undo applies a change's inverse when its file is still what that change wrote", async () => {
+    put(root, "a.md", "Prefer tabs.");
+    const s = await openAt();
+    await apply(s, { op: "edit", path: "a.md", old: "tabs", new: "spaces" }, "e");
+    await apply(s, { op: "append", path: "b.md", text: "one" }, "b1");
+    await apply(s, { op: "append", path: "b.md", text: "two" }, "b2");
+    await apply(s, { op: "create", path: "c.md", text: "C" }, "c");
+    expect(await undo(s, "c")).toMatchObject({ ok: true, result: { path: "c.md" } });
+    expect(fs.existsSync(join(root, "c.md"))).toBe(false);
+    const undone = await undo(s, "b2");
+    expect(undone).toEqual({
+      ok: true,
+      version: (await s.snapshot()).version,
+      result: { path: "b.md", hash: sha256("one"), version: (await s.snapshot()).version },
+    });
+    expect(fs.readFileSync(join(root, "b.md"), "utf8")).toBe("one");
+    expect((await undo(s, "e")).ok).toBe(true);
+    expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("Prefer tabs.");
+    // An undo is a change like any other: it is in history, and undoing it redoes the change.
+    expect((await s.history({ limit: 1 }))[0]).toMatchObject({
+      id: "undo-e",
+      op: "undo",
+      target: { path: "a.md", undoes: "e" },
+      author: { kind: "user", name: "ada" },
+    });
+    expect((await undo(s, "undo-e")).ok).toBe(true);
+    expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("Prefer spaces.");
+    await s.close();
+  });
+
+  test("undo of a deleted file brings it back; an undo's id answers again with its stored result", async () => {
+    put(root, "a.md", "keep me");
+    const s = await openAt();
+    await apply(s, { op: "delete", path: "a.md", if_hash: sha256("keep me") }, "d");
+    const undone = await undo(s, "d", "u");
+    expect(undone.ok).toBe(true);
+    expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("keep me");
+    expect(await undo(s, "d", "u")).toEqual(undone);
+    await expect(s.undo({ id: "u", changeId: "other", author, signal })).rejects.toThrow(
+      "change id `u` was used for another change",
+    );
+    await s.close();
+  });
+
+  test("undo conflicts when the file changed after that change, writing nothing", async () => {
+    const s = await openAt();
+    await apply(s, { op: "append", path: "a.md", text: "one" }, "1");
+    fs.writeFileSync(join(root, "a.md"), "one\nby hand");
+    const before = tree(dir);
+    expect(await undo(s, "1")).toEqual({
+      ok: false,
+      reason: "`a.md` changed after change `1`; undoing it would lose that",
+      current: { path: "a.md", hash: sha256("one\nby hand"), text: "one\nby hand" },
+    });
+    expect(tree(dir)).toEqual(before);
+    await s.close();
+  });
+
+  test("undo of a change the history doesn't hold, or whose outcome is unknown, is refused", async () => {
+    const s = await openAt();
+    expect(await undo(s, "nope")).toEqual(refusal("change `nope` isn't in the memory's history"));
+    await apply(s, { op: "append", path: "a.md", text: "one" }, "1");
+    // x's entry has no outcome, and its file is at neither of its hashes: its outcome is unknown.
+    const lines = fs.readFileSync(join(root, ".yian/journal.jsonl"), "utf8").trimEnd().split("\n");
+    const entry = { ...(JSON.parse(lines[1]!) as JsonObject), id: "x", before: sha256("one"), after: sha256("two") };
+    fs.appendFileSync(join(root, ".yian/journal.jsonl"), `${JSON.stringify(entry)}\n`);
+    fs.writeFileSync(join(root, "a.md"), "by hand");
+    expect(await undo(s, "x")).toEqual(
+      refusal("change `x` may not have landed, so it can't be undone; check the file"),
+    );
+    await s.close();
+  });
+
+  test("inverses are kept for the last maxUndo changes, within maxHistoryChars", async () => {
+    put(root, "big.md", "0123456789");
+    const s = await openAt({ maxUndo: 2, maxHistoryChars: 5 });
+    await apply(s, { op: "append", path: "a.md", text: "1" }, "1");
+    await apply(s, { op: "append", path: "b.md", text: "2" }, "2");
+    await apply(s, { op: "append", path: "c.md", text: "3" }, "3");
+    const gone = refusal("change `1` can't be undone: the memory no longer keeps what it replaced");
+    expect(await undo(s, "1")).toEqual(gone);
+    // A rewrite's inverse is the old text, which is over maxHistoryChars; an append's costs nothing.
+    await apply(s, { op: "rewrite", path: "big.md", text: "x", if_hash: sha256("0123456789") }, "4");
+    expect((await undo(s, "4")).ok).toBe(false);
+    expect((await undo(s, "3")).ok).toBe(true);
+    await s.close();
+  });
+
+  test("an undo first resolves another session's cut-off change, then conflicts on the moved hash", async () => {
+    const s = await openAt();
+    await apply(s, { op: "append", path: "a.md", text: "one" }, "1");
+    const other = await openAt();
+    const { writeSync } = fs;
+    spyOn(fs, "writeSync").mockImplementation(((fd: number, data: Uint8Array, offset = 0, length?: number) => {
+      const bytes = Buffer.from(data.buffer, data.byteOffset + (offset ?? 0), length ?? data.length - (offset ?? 0));
+      if (bytes.includes('"ok":true')) throw new Error("crash before the commit line");
+      return writeSync(fd, bytes);
+    }) as typeof fs.writeSync);
+    await expect(apply(other, { op: "append", path: "a.md", text: "two" }, "x")).rejects.toThrow("crash");
+    mock.restore();
+    const result = await undo(s, "1");
+    expect(result).toMatchObject({ ok: false, reason: "`a.md` changed after change `1`; undoing it would lose that" });
+    const journal = fs.readFileSync(join(root, ".yian/journal.jsonl"), "utf8").trimEnd().split("\n");
+    expect(JSON.parse(journal.at(-1)!)).toMatchObject({ id: "x", ok: true });
+    expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("one\ntwo");
+    await s.close();
+    await other.close();
+  });
+
+  test.each([
+    ["../x.md", "`../x.md` isn't part of the memory: a `..` part"],
+    [".yian/identity", "`.yian/identity` isn't part of the memory: a hidden name"],
+  ])("confinement: an undo whose hand-edited entry names %s is refused, writing nothing", async (path, reason) => {
+    put(dir, "x.md", "outside");
+    const s = await openAt();
+    await apply(s, { op: "append", path: "a.md", text: "one" }, "1");
+    const target = path === "../x.md" ? join(dir, "x.md") : join(root, ".yian/identity");
+    const journalPath = join(root, ".yian/journal.jsonl");
+    const lines = fs.readFileSync(journalPath, "utf8").trimEnd().split("\n");
+    const entry = JSON.parse(lines[1]!) as JsonObject;
+    const after = sha256(fs.readFileSync(target));
+    const forged = { ...entry, id: "evil", path, before: "absent", after, inverse: { text: "overwritten" } };
+    const commit = { id: "evil", ok: true, version: "v", result: { path } };
+    fs.appendFileSync(journalPath, `${JSON.stringify(forged)}\n${JSON.stringify(commit)}\n`);
+    const before = tree(dir);
+    expect(await undo(s, "evil")).toEqual(refusal(reason));
+    expect(tree(dir)).toEqual(before);
+    await s.close();
   });
 });

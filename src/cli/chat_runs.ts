@@ -55,7 +55,15 @@ import { pending, TAKE } from "../tools/context.ts";
 import { registeredTools, type ToolEntry } from "../tools/registry.ts";
 import { builtinType } from "../typesys/types.ts";
 import { isInboxType, typeEquals, type Value, writeAsText } from "../typesys/values.ts";
-import { bindMemories, type CreatedMemory, createdLine, driftNote, withoutLocations } from "./memory_bind.ts";
+import {
+  bindMemories,
+  type CreatedMemory,
+  createdLine,
+  type DefaultMemory,
+  defaultMemories,
+  driftNote,
+  withoutLocations,
+} from "./memory_bind.ts";
 import { removeEmptyDir } from "./run.ts";
 import { ensureProviderKeys } from "./startup.ts";
 import { CommandEnv, sleepUntil } from "./utils.ts";
@@ -404,6 +412,21 @@ export class ChildRuns {
     }
     this.#started += 1;
     return { id, log, seq };
+  }
+
+  /**
+   * Return the default memories `flow`'s start would bind, keyed by `project` as `start` keys
+   * them, by identity and whether each exists yet: for the start's approval, never a location.
+   *
+   * @throws {RangeError} As `start` throws for a memory input with no default, naming no location.
+   */
+  defaultMemories(flow: ComposedFlow, project: string | null): DefaultMemory[] {
+    const { home } = this.#options;
+    try {
+      return defaultMemories(flow, { home, project, memoryFlag: false });
+    } catch (error) {
+      throw withoutLocations(error, home, []);
+    }
   }
 
   /**

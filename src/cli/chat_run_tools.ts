@@ -43,7 +43,7 @@ import {
 } from "./chat_tools.ts";
 import { AUTHOR_TOOLS, loadAuthorFlow, loadReviewFlow, REVIEW_TOOLS } from "./authoring.ts";
 import { loadConfinedText } from "./confined_load.ts";
-import { projectFolder } from "./memory_bind.ts";
+import { type DefaultMemory, projectFolder } from "./memory_bind.ts";
 import { unifiedDiff } from "./diff.ts";
 import { loadReportFlow } from "./report_issue.ts";
 
@@ -670,8 +670,22 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
     checkStartInputs(flow, inputs);
     const files = codeFiles(flow);
     const root = resolveRoot(host.root);
+    // Its memories are keyed by the folder `path` names, as `yian run` keys them.
+    const project = projectFolder(resolve(root, path));
+    let memories: DefaultMemory[];
+    try {
+      memories = runs.defaultMemories(flow, project);
+    } catch (error) {
+      if (error instanceof Error) return `not started: ${error.message}`;
+      throw error;
+    }
     const can = capabilities(flow, files.map((each) => slashed(relative(root, each))));
-    const digest = startDigest(flow, text, files, can);
+    // The user sees when a flow (a draft, say) would use a memory another flow made. Which one it
+    // binds is part of what is approved; whether it exists yet isn't.
+    const named = memories.map(({ input, identity }) => `${input} → ${identity}`);
+    const marked = memories.map(({ exists }, i) => `${named[i]} (${exists ? "existing" : "new"})`);
+    const memoryLine = (list: readonly string[]) => (list.length === 0 ? [] : [`memories: ${list.join(", ")}`]);
+    const digest = startDigest(flow, text, files, [...can, ...memoryLine(named)]);
     if (approved.get(real) !== digest) {
       // A draft is on no disk for the user to read, so the card shows all of it.
       const draft = content !== undefined;
@@ -681,6 +695,7 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
           `Starts ${draft ? "the draft " : ""}${file} in the background.`,
           `inputs: ${cutText(JSON.stringify(inputs))}`,
           ...can,
+          ...memoryLine(marked),
         ].join("\n"),
         diff: draft
           ? unifiedDiff("", text, { oldLabel: "/dev/null", newLabel: `${file} (draft)` })
@@ -694,8 +709,6 @@ export function chatRunTools(host: ChatToolHost, runs: ChildRuns, options: ChatR
     }
     let id: string;
     try {
-      // Its memories are keyed by the folder `path` names, as `yian run` keys them.
-      const project = projectFolder(resolve(root, path));
       ({ id } = await runs.start(flow, inputs as Record<string, unknown>, { signal, name: file, project }));
     } catch (error) {
       if (error instanceof Error) return `not started: ${error.message}`;

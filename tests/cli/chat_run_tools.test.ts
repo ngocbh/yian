@@ -431,6 +431,30 @@ output: done
   );
 
   test(
+    "the start card names the memories a flow binds, by identity, new or existing",
+    async () => {
+      writeFileSync(
+        join(root, "remember.yaml"),
+        "id: remember\nname: remember\ninput:\n  lessons: !FileMemory\n  notes: !Optional(FileMemory)\n" +
+          "nodes:\n  add:\n    kind: tool\n    tool_id: {lessons: append}\n" +
+          "    input: {path: MEMORY.md, text: noted}\noutput: ${add.output.path}\n",
+      );
+      const { requests, json } = runTools();
+      const identity = `${projectKey(root)}/remember/lessons`;
+      await json("start_flow", { path: "remember.yaml", inputs: {} });
+      expect((await settledJson(json, "r1"))["status"]).toBe("succeeded");
+      // The Optional memory stays null, so it isn't named; no folder is shown.
+      expect(requests[0]!.body).toContain(`\nmemories: lessons → ${identity} (new)`);
+      expect(requests[0]!.body).not.toContain("notes");
+      expect(requests[0]!.body).not.toContain(join(tmp, "home"));
+      await json("start_flow", { path: "remember.yaml", inputs: {} });
+      expect((await settledJson(json, "r2"))["status"]).toBe("succeeded");
+      expect(requests[1]!.body).toContain(`\nmemories: lessons → ${identity} (existing)`);
+    },
+    TIMEOUT,
+  );
+
+  test(
     "a symlinked flow file's memory is keyed by the folder it was given in, as yian run keys it",
     async () => {
       mkdirSync(join(root, "proj"));

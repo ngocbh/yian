@@ -214,6 +214,11 @@ class CliFileMemory extends FileMemory {
     return this.#confined !== null;
   }
 
+  /** A default memory's identity, its path under `~/.yian/memory`; `null` for another. */
+  get defaultIdentity(): string | null {
+    return this.#confined?.path ?? null;
+  }
+
   constructor(
     options: FileMemoryOptions,
     note: (created: CreatedMemory) => void,
@@ -306,6 +311,15 @@ export function bindMemories(
   flags: readonly string[],
   options: BindOptions & { project: string | null },
 ): Record<string, FileMemory> {
+  return bindFresh(flow, flags, options);
+}
+
+/** Bind `flow`'s memory inputs as `bindMemories` describes, to the CLI's instances. */
+function bindFresh(
+  flow: ComposedFlow,
+  flags: readonly string[],
+  options: BindOptions & { project: string | null },
+): Record<string, CliFileMemory> {
   const { memoryFlag = true } = options;
   return bindEach(flow, flags, options, (input, optional) => {
     if (optional) return null;
@@ -316,6 +330,33 @@ export function bindMemories(
     }
     return defaultInstance(defaultIdentity(options.project, flow.compiled.flowId, input, memoryFlag), options);
   });
+}
+
+/** A default memory a run would bind: its input, its identity, and whether it exists yet. */
+export interface DefaultMemory {
+  readonly input: string;
+  readonly identity: string;
+  readonly exists: boolean;
+}
+
+/**
+ * Return the default memory each memory input of `flow` gets when no flag binds it, in declaration
+ * order, as `bindMemories` binds them: its identity, and whether a memory is at its location yet.
+ * An Optional input gets none, so it isn't listed. Nothing is created.
+ *
+ * @throws As `bindMemories` throws for a default.
+ */
+export function defaultMemories(
+  flow: ComposedFlow,
+  options: Omit<BindOptions, "note"> & { project: string | null },
+): DefaultMemory[] {
+  // With no flags, each instance is a default.
+  const bound = bindFresh(flow, [], { ...options, note: () => {} });
+  return Object.entries(bound).map(([input, instance]) => ({
+    input,
+    identity: instance.defaultIdentity!,
+    exists: lstatOrNull(join(instance.root, ".yian", "identity")) !== null,
+  }));
 }
 
 /**
@@ -380,9 +421,9 @@ function bindEach(
   flags: readonly string[],
   options: BindOptions,
   fallback: (input: string, optional: boolean) => CliFileMemory | null,
-): Record<string, FileMemory> {
+): Record<string, CliFileMemory> {
   const paths = memoryFlags(flow.input, flags);
-  const bound: Record<string, FileMemory> = {};
+  const bound: Record<string, CliFileMemory> = {};
   const byRoot = new Map<string, CliFileMemory>();
   for (const param of flow.input) {
     const typ = param.contract?.type;

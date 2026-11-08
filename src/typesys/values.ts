@@ -1457,8 +1457,8 @@ export function isInboxType(typ: Type | null | undefined): typ is Type & { reado
 }
 
 /**
- * Return the memory type `name` (`FileMemory`, `VectorDBMemory` or a host's own), whose items are
- * `item` records, or `null` for a memory without typed items.
+ * Return the memory type `name` (`FileMemory`, `VectorDBMemory` or a host's own). `item` is the
+ * record type of its items; pass `null` for a memory without typed items.
  */
 export function memoryType(name: string, item: Type | null): Type {
   return new Type({ kind: ValueKind.MEMORY, memory: name, element: item ?? undefined });

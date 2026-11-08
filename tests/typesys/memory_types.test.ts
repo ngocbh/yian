@@ -39,25 +39,34 @@ describe("the type language", () => {
     ["Inbox(FileMemory)", "an inbox holds values, not memories, in 'Inbox(FileMemory)'"],
     ["VectorDBMemory(str)", "VectorDBMemory's item type must be a record typedef in 'VectorDBMemory(str)'"],
     ["VectorDBMemory(FileMemory)", "VectorDBMemory's item type must be a record typedef in 'VectorDBMemory(FileMemory)'"],
+    ["VectorDBMemory(Message)", "VectorDBMemory's item type must be a record typedef in 'VectorDBMemory(Message)'"],
+    ["VectorDBMemory(Optional(Case))", "VectorDBMemory's item type must be a record typedef in 'VectorDBMemory(Optional(Case))'"],
     ["VectorDBMemory(Case, Case)", "VectorDBMemory(...) takes one type"],
   ])("%s is refused", (text, message) => {
     expect(() => typeFor(text, CASE)).toThrow(message);
   });
 
-  test("a record field can't be a memory, directly or through an alias", () => {
+  test("a record field can't be a memory", () => {
     expect(() => readTypedefs({ R: { m: "FileMemory" } })).toThrow(
       "typedef 'R' field 'm': a memory is never a record field",
     );
-    expect(() => readTypedefs({ Notes: "FileMemory", R: { m: "Optional(Notes)" } })).toThrow(
+    expect(() => readTypedefs({ R: { m: "Optional(FileMemory)" } })).toThrow(
       "typedef 'R' field 'm': a memory is never a record field",
     );
   });
 
-  test("an alias to a memory resolves to the memory, and is still never a list item", () => {
-    const registry = readTypedefs({ Notes: "FileMemory" });
-    expect(typeFor("Notes", registry).memory).toBe("FileMemory");
-    expect(() => typeFor("list(Notes)", registry)).toThrow("a memory is never a list item");
-    expect(() => typeFor("dict(str, Notes)", registry)).toThrow("a memory is never a dict key or value");
+  // A memory is written only as a flow input's tag, so no name can build one from a value.
+  test.each(["FileMemory", "Optional(FileMemory)", "VectorDBMemory(Case)"])("a typedef can't name the memory type %s", (text) => {
+    let thrown: unknown = null;
+    try {
+      readTypedefs({ Case: { title: "str" }, Notes: text });
+    } catch (error) {
+      thrown = error;
+    }
+    expect((thrown as Error).message).toBe(
+      "typedef 'Notes' names a memory type; declare memories as flow inputs (`lessons: !FileMemory`)",
+    );
+    expect((thrown as { path: unknown }).path).toEqual(["Notes"]);
   });
 
   test("the typedef walkers look inside an item type", () => {
@@ -83,10 +92,9 @@ describe("host memory types", () => {
     expect(registry.size).toBe(0);
   });
 
-  test("a host memory type named like a typedef is refused", () => {
-    expect(() => withMemoryTypes(readTypedefs({ TradeJournal: "str" }), ["TradeJournal"])).toThrow(
-      "the memory type 'TradeJournal' is also a typedef name; rename the typedef or the memory type",
-    );
+  test("a host memory type named like a typedef leaves the typedef as it is", () => {
+    const registry = withMemoryTypes(readTypedefs({ TradeJournal: "str" }), ["TradeJournal"]);
+    expect(isMemoryType(typeFor("TradeJournal", registry))).toBe(false);
   });
 
   test.each([

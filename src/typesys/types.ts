@@ -1081,19 +1081,21 @@ export function resolveType(
     }
     case "enum":
       return new Type({ kind: ValueKind.STRING, tags: new Set(t.tags) });
-    case "dict":
-      if (t.args?.some((arg) => namesWhole(arg, registry, seen) === "inbox")) {
+    case "dict": {
+      const wholes = (t.args ?? []).map((arg) => namesWhole(arg, registry, seen));
+      if (wholes.includes("inbox")) {
         throw new TypeCheckError(
           `an inbox is a whole input; it can't be a dict key or value in ${reprText(formatTypeExpr(t))}`,
         );
       }
-      if (t.args?.some((arg) => namesWhole(arg, registry, seen) === "memory")) {
+      if (wholes.includes("memory")) {
         throw new TypeCheckError(`a memory is never a dict key or value in ${reprText(formatTypeExpr(t))}`);
       }
       // Only names are checked: the dict stays a lenient object, so a record may hold itself
       // through one and its members need not resolve as a type of their own.
       for (const arg of t.args ?? []) checkLocal(arg, registry);
       return Type.scalar(ValueKind.OBJECT); // lenient (no key/value typing yet)
+    }
     case "union":
       return resolveUnion(t, registry, seen);
     case "list": {
@@ -1122,8 +1124,10 @@ export function resolveType(
     }
     case "memory": {
       if (t.item === null) return memoryType(t.type, null);
-      const item = resolveType(t.item, registry, seen);
-      if (item.fields === undefined || item.nullable) {
+      // The item is named by one of the flow's own record typedefs, whose fields type each item.
+      const named = t.item.kind === "ref" && registry.has(t.item.name);
+      const item = named ? resolveType(t.item, registry, seen) : null;
+      if (item === null || item.fields === undefined || item.nullable) {
         throw new TypeCheckError(
           `${t.type}'s item type must be a record typedef in ${reprText(formatTypeExpr(t))}`,
         );
@@ -1658,12 +1662,20 @@ function checkTypedefs(registry: TypeRegistry): void {
         const exc = new TypeCheckError(`recursive type reference: ${reprText(name)}`);
         throw typedefError(name, field, exc);
       }
+      let typ: Type;
       try {
-        const typ = resolveType(t, registry, new Set([name]));
+        typ = resolveType(t, registry, new Set([name]));
         if (field !== null) rejectWholeField(typ);
       } catch (error) {
         if (!(error instanceof TypeCheckError)) throw error;
         throw typedefError(name, field, error, { cause: error });
+      }
+      // A memory is written only as a flow input's tag, so no name can build one from a value.
+      if (isMemoryType(typ)) {
+        throw new TypeCheckError(
+          `typedef ${reprText(name)} names a memory type; declare memories as flow inputs (\`lessons: !FileMemory\`)`,
+          { path: [name] },
+        );
       }
     }
   }
@@ -1894,11 +1906,11 @@ export function readTypedefs(
 
 /**
  * Return `registry` with the host memory types `names` added, so a type names each as written
- * (`TradeJournal`, `Optional(TradeJournal)`). A built-in memory type's name is skipped: a class
- * that implements one needs no entry.
+ * (`TradeJournal`, `Optional(TradeJournal)`). A built-in memory type's name is skipped, as a class
+ * that implements one needs no entry, and so is a name `registry` already holds as a typedef,
+ * which keeps its meaning: the loader refuses a flow input that names it.
  *
- * @throws TypeCheckError, at `[name]`, when a name is not PascalCase, shadows a built-in name, or
- *   is a typedef of `registry`.
+ * @throws TypeCheckError, at `[name]`, when a name is not PascalCase or shadows a built-in name.
  */
 export function withMemoryTypes(registry: TypeRegistry, names: Iterable<string>): TypeRegistry {
   const added = new Map(registry);
@@ -1914,10 +1926,7 @@ export function withMemoryTypes(registry: TypeRegistry, names: Iterable<string>)
       fail(`memory type name ${reprText(name)} shadows the built-in type ${reprText(name)}`);
     }
     if (isShadow(name)) fail(`memory type name ${reprText(name)} shadows a builtin scalar or typing constructor`);
-    if (registry.has(name) && registry.get(name)!.kind !== "memory") {
-      fail(`the memory type ${reprText(name)} is also a typedef name; rename the typedef or the memory type`);
-    }
-    added.set(name, { kind: "memory" });
+    if (registry.get(name)?.kind === "memory" || !registry.has(name)) added.set(name, { kind: "memory" });
   }
   return added;
 }

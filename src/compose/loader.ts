@@ -1109,9 +1109,10 @@ export async function loadFlowFile(
     });
   }
   // A host memory type the file also declares as a typedef keeps the typedef's meaning, and a
-  // flow input naming it is refused (`inputTagRegistry`).
+  // flow input naming it is refused (`inputTagRegistry`); an unused one loads, since a host passes
+  // its memory types to every flow it loads.
   const clashes = new Set([...ctx.memoryTools.keys()].filter((name) => registry.has(name)));
-  registry = withMemoryTypes(registry, [...ctx.memoryTools.keys()].filter((name) => !clashes.has(name)));
+  registry = withMemoryTypes(registry, ctx.memoryTools.keys());
   const memoryTypes: MemoryTypeTable = { tools: ctx.memoryTools, opaque: ctx.opaqueMemoryTags, clashes };
 
   // `system.paths` is honored only when the file's own directory is known: it was loaded with

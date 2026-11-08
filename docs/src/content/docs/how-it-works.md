@@ -283,8 +283,8 @@ A resume does this:
 ### What comes from the log, and what you give again
 
 A resume takes the run's inputs, run id, model settings and worker count from the log. With
-`--resume`, a flow file, `--input`, `--inputs`, `--provider`, `--model` and `--log` are refused.
-`--num-workers` is allowed and changes the worker count from then on.
+`--resume`, a flow file, `--input`, `--inputs`, `--provider`, `--model`, `--embedding` and `--log`
+are refused. `--num-workers` is allowed and changes the worker count from then on.
 
 You give these again, since the log doesn't hold them:
 
@@ -293,7 +293,7 @@ You give these again, since the log doesn't hold them:
 | API keys, in the environment | Keys are never recorded |
 | The same MCP servers and skills | Agents' tools and skills must match the recorded descriptions, and tools their recorded `resumable` flags |
 | The same `YIAN_*` settings | A resume refuses settings that differ from the recorded ones |
-| The same memories, from a host's `advance` | A resume opens each again, and refuses one that is missing or differs from the recorded one. Agents keep the recall the run started with |
+| The same memories: the same `--memory` flags, or the same instances to a host's `advance` | A resume opens each again, and refuses one that is missing or differs from the recorded one. Agents keep the recall the run started with |
 
 A resume under another yian version works, with a warning that names both versions.
 

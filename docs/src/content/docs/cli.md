@@ -14,10 +14,12 @@ This page lists every `yian` command and flag, what each command prints, and its
 | [`yian chat`](#yian-chat) | Chat with yian's assistant, which finds, reads, checks, writes and runs flows for you |
 | [`yian check`](#yian-check) | Load flows without running them and report whether they load |
 | [`yian status`](#yian-status) | Report where a run stands, or list your runs |
+| [`yian memory`](#yian-memory) | List the memories runs keep, and show, undo, edit, erase or reset one |
 | [`yian auth`](#yian-auth) | Set up, list, choose the default among, or remove provider logins |
 | [`yian providers`](#yian-providers) | List the supported providers and their API-key variables |
 | [`yian models`](#yian-models) | List the models a login or an API key offers |
 | [`yian config check`](#yian-config-check) | Check an `llm_config` layer read from stdin |
+| [`yian config embedding`](#yian-config-embedding) | Save the embedding model new VectorDB memories are made with |
 | [`yian skills check`](#yian-skills-check) | Check skill directories |
 
 `yian` on its own also takes these options:
@@ -57,6 +59,8 @@ $ yian run --resume ~/.yian/runs/4f1c/log.jsonl
 | `--provider` | name | Provider for agents that set none |
 | `--model` | name | Model for agents that set none |
 | `--mcp-config` | file | Read MCP servers from this file too. Repeat it for more |
+| `--memory` | `NAME=PATH` | Bind memory input `NAME` to this folder, or `.db` store. Repeat it for more (see [Memory](#memory)) |
+| `--embedding` | `provider/model` | The embedding model a new VectorDB memory is made with (see [Memory](#memory)) |
 | `--engine-trace` | | On a failure, also print the engine's stack trace |
 | `--json` | | Print one JSON document on stdout (see [Machine-readable output](#machine-readable-output)) |
 
@@ -109,8 +113,8 @@ yian creates `~/.yian` and the run folders with mode `0700` and the log with mod
 
 `--resume PATH` continues the run recorded in that log. It runs the flow files the run started
 with, not the files on disk now, so an edited flow needs a new run. It takes no `FLOW`, `--input`,
-`--inputs`, `--provider`, `--model` or `--log`: the log holds all of those. It does take `-w` and
-`--mcp-config`.
+`--inputs`, `--provider`, `--model`, `--embedding` or `--log`: the log holds all of those. It does
+take `-w`, `--mcp-config` and `--memory`.
 
 - A finished run prints its recorded result again and runs nothing.
 - An unfinished run retries the nodes that started but never finished. A model call or tool call
@@ -121,6 +125,9 @@ with, not the files on disk now, so an edited flow needs a new run. It takes no 
 - The `YIAN_*` values must match the ones the run started with. Each one that differs is named,
   with the setting to use (see [Defaults and limits](/reference/#defaults-and-limits)).
 - Without `-w`, a resume keeps the recorded worker count.
+- Give the same `--memory` flags again: an input without one is bound to the default memory the run
+  recorded. A missing memory, or another one, stops the resume. A crash resume that finds a memory
+  changed since the run started says so, and the run keeps the recall it started with.
 
 ### Waiting runs
 
@@ -159,6 +166,29 @@ $ yian run chat.yaml
 Lines you type or paste while the flow replies wait, in order, for the next prompt.
 
 A chat that stops prints `continue with: yian run --resume LOG`; run it on a terminal to go on.
+
+### Memory
+
+`yian run` binds each [memory](/memory/) input. An input with no `--memory` flag gets its default
+memory, kept per project: `~/.yian/memory/<project>/<flow id>/<input>`, a folder, or a `.db` file
+for a VectorDBMemory. `<project>` is the flow file's folder name and a hash of its path, so each
+project keeps its own. The first run makes the memory and says so on stderr:
+
+```text
+memory lessons: support-29f8843f/answer/lessons at /home/ada/.yian/memory/support-29f8843f/answer/lessons (new)
+```
+
+- `--memory NAME=PATH` binds input `NAME` to a folder of your own, or a VectorDBMemory input to a
+  `.db` file. Inputs given one path share one memory.
+- A default needs the flow's `id:` to be a plain name; otherwise bind each memory with `--memory`.
+  An `Optional` memory input stays unbound without a flag.
+- A FileMemory folder can't be `/`, your home folder, or a folder that holds `~/.yian`: binding
+  adopts a folder's files, and a reset deletes them.
+- A new VectorDBMemory needs an embedding model: `--embedding provider/model`, else
+  `YIAN_DEFAULT_EMBEDDING`, else the one [`yian config embedding`](#yian-config-embedding) saved.
+  An existing store keeps its own; [`yian memory reembed`](#yian-memory) changes it.
+- `yian chat` binds the memories of the flows its assistant runs to their defaults, and takes no
+  `--memory`.
 
 ### Skills and MCP servers
 
@@ -269,7 +299,8 @@ or its code changes. Off a terminal nothing is approved. `report_issue`, `author
 ### Flows the assistant runs
 
 A flow the assistant starts runs in the background. Its questions reach you through the
-assistant, which sends your answers back. The keys its agents need must already be set. Its log is
+assistant, which sends your answers back. The keys its agents need must already be set, and its
+memory inputs get their default memories (see [Memory](#memory)). Its log is
 `~/.yian/runs/<chat run id>-r<n>/log.jsonl`.
 
 ### Building and reviewing flows
@@ -375,11 +406,49 @@ on too, though `ready` stays `false`. A log it can't read exits 1.
 
 `yian status` with no `LOG` lists the runs in `~/.yian/runs`, oldest first: run id, status, start
 time and flow file. It first updates the run index, `~/.yian/runs/index.sqlite`, which is rebuilt
-from the logs and safe to delete. With `--json`, each run also has its end time, result and token
-counts.
+from the logs and safe to delete. With `--json`, each run also has its end time, result, token
+counts and `memories`, each memory it was bound to by input, identity and type.
 
 A run whose log yian can't read from record N on shows `unreadable at seq N`; `yian status LOG`
 says what is wrong. With `--json`, it has `unreadable: {seq, reason}` (`null` for other runs).
+
+## yian memory
+
+`yian memory` reads and changes the memories `yian run` keeps. Name a memory as `FLOW NAME`, the
+default memory of input `NAME` of the flow file `FLOW`, or with `--at PATH`, a memory's folder or
+`.db` file. A change it makes is yours: history shows it as `user` and your user name.
+
+```console
+$ yian memory list
+$ yian memory show answer.yaml lessons
+$ yian memory history answer.yaml lessons --limit 5
+$ yian memory undo answer.yaml lessons 2001c567d78a491facd383297e13fc6b/add
+$ yian memory edit --at ./memory/lessons --file notes/math.md
+$ yian memory erase answer.yaml lessons MEMORY.md --text 555-0100
+$ yian memory edit triage.yaml cases --add "Ask for the order id first."
+$ yian memory reembed triage.yaml cases --embedding openai/text-embedding-3-large
+```
+
+| Command | What it does |
+|---|---|
+| `list` | Lists the memories under `~/.yian/memory`, each with its identity, type and location |
+| `show` | Shows where a memory is, its size and its recall. `--all` also prints every file, or every item |
+| `history` | Lists the last changes (`--limit`, 20 by default), newest first, each with its id and author |
+| `undo CHANGE` | Undoes the change with that id |
+| `edit` | Opens a file (`--file`, the index by default) in `$EDITOR`, and applies what you save. A VectorDBMemory takes `--add TEXT`, `--id N --text TEXT` or `--delete N` instead |
+| `erase TARGET` | Erases a file, or with `--text` that text in it, or a VectorDBMemory's item `TARGET`, from the memory and its history |
+| `reset` | Empties a memory and its history, keeping its identity |
+| `reembed` | Embeds a VectorDBMemory's items again with the `--embedding` model, which the store then keeps |
+| `compact` | Rebuilds a VectorDBMemory's file, giving back the space deleted items took |
+
+- `erase` and `reset` first list the runs on this machine that used the memory, then ask. `--yes`
+  doesn't ask, and off a terminal it is required. A `no` exits 1.
+- An erase doesn't reach run logs, which can hold copies of the text: delete those yourself.
+- `reset` refuses while a run is running on the memory. A waiting, stopped or crashed run resumes
+  with the emptied memory.
+- An edit or undo that conflicts with a change made meanwhile changes nothing and exits 1; an edit
+  keeps your text in a copy and says where.
+- Every command takes `--json`.
 
 ## yian auth
 
@@ -477,6 +546,20 @@ $ cat layer.json | yian config check --json
 Without `--json` it prints `ok`, or one `FIELD: MESSAGE` line per error on stderr. It exits 0 when
 the layer is valid, 1 when it has errors, and 2 when stdin isn't a JSON object.
 
+## yian config embedding
+
+`yian config embedding` saves the embedding model a new VectorDB memory is made with when
+`yian run` gets no `--embedding`. It goes in the saved-logins file, beside your logins.
+
+```console
+$ yian config embedding openai/text-embedding-3-small
+saved the default embedding model openai/text-embedding-3-small
+```
+
+The provider must be `openai` or an OpenAI-compatible one, such as `openrouter` or `vllm`; its
+calls use your saved API-key login or key. `YIAN_DEFAULT_EMBEDDING=provider/model` takes the saved
+model's place.
+
 ## yian skills check
 
 `yian skills check` loads the `SKILL.md` in each directory.
@@ -502,6 +585,13 @@ exception: it prints JSON lines (`code`, `waiting`, then `done` or `error`).
 | `yian check` | `flows` |
 | `yian status LOG` | `status`, `in_flight`, `crashed_attempts`, `ready`, `wake_at` |
 | `yian status` | `runs` |
+| `yian memory list` | `memories` |
+| `yian memory show` | `identity`, `type`, `location`, `version`, `recall`, then `characters` and `files`, or a store's `count`, `retired` and, with `--all`, `items` |
+| `yian memory history` | `changes` |
+| `yian memory undo`, `yian memory edit` | `change`, `version`, and a store edit's `item` |
+| `yian memory erase` | `runs`, `version`, `disabled_undos` |
+| `yian memory reset` | `identity`, `runs` |
+| `yian memory reembed`, `yian memory compact` | `identity`, and `embedding` for `reembed` |
 | `yian skills check` | `skills` |
 | `yian config check` | `ok`, `errors` |
 | `yian providers` | `providers` |
@@ -546,6 +636,8 @@ Any other exit, a crash included, prints no document; treat it as an internal er
 | A run stopped or crashed | `yian status LOG` shows where it stands; `yian run --resume LOG` continues it |
 | A run waits | `yian status LOG --json` shows `ready` and `wake_at`; resume once it is ready or due |
 | You lost a log path | `yian status` lists every run in `~/.yian/runs` |
+| A memory input needs an embedding model | Pass `--embedding provider/model`, or save one with `yian config embedding` |
+| An agent wrote a wrong note | `yian memory history FLOW NAME` lists the changes; `yian memory undo` takes one back |
 | A model setting is refused | Check the layer with `yian config check` before you pass it to a run |
 | A skill isn't found | `yian skills check DIR` shows why it doesn't load |
 | A resume names a `YIAN_*` variable | Set or unset it as the message says, then resume again |

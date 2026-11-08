@@ -374,25 +374,36 @@ function childEnv(env: Env): Record<string, string> {
   return values;
 }
 
+/** The signals a terminal sends its foreground group that are the editor's while it runs. */
+const EDITOR_SIGNALS = ["SIGINT", "SIGQUIT"] as const;
+
 /**
  * Run `$EDITOR` from `env` on the file `path`, the terminal its own and `env` its environment, and
  * resolve once it exits. The variable may hold arguments (`code --wait`), so the shell runs it,
- * the path passed as an argument.
+ * the path passed as an argument. Meanwhile yian ignores Ctrl-C and Ctrl-\, as git does: the
+ * terminal sends them to the editor too, which handles them, and yian must outlive it to apply or
+ * keep the edit.
  *
  * @throws {RangeError} When `$EDITOR` isn't set, or the editor fails or exits with an error.
  */
-function runEditor(env: Env, path: string): Promise<void> {
+async function runEditor(env: Env, path: string): Promise<void> {
   const editor = env("EDITOR");
   if (!editor) throw new RangeError("set $EDITOR to the editor to use");
-  return new Promise((resolve, reject) => {
-    const command = ["-c", `${editor} "$1"`, "editor", path];
-    const child = spawn("/bin/sh", command, { stdio: "inherit", env: childEnv(env) });
-    child.on("error", (error) => reject(new RangeError(`the editor didn't start: ${error.message}`)));
-    child.on("exit", (code, signal) => {
-      if (code === 0) resolve();
-      else reject(new RangeError(`the editor exited with ${signal ?? `code ${code}`}; nothing was changed`));
+  const ignore = (): void => {};
+  for (const signal of EDITOR_SIGNALS) process.on(signal, ignore);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const command = ["-c", `${editor} "$1"`, "editor", path];
+      const child = spawn("/bin/sh", command, { stdio: "inherit", env: childEnv(env) });
+      child.on("error", (error) => reject(new RangeError(`the editor didn't start: ${error.message}`)));
+      child.on("exit", (code, signal) => {
+        if (code === 0) resolve();
+        else reject(new RangeError(`the editor exited with ${signal ?? `code ${code}`}; nothing was changed`));
+      });
     });
-  });
+  } finally {
+    for (const signal of EDITOR_SIGNALS) process.off(signal, ignore);
+  }
 }
 
 /**

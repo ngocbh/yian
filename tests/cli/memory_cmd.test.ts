@@ -14,9 +14,11 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { type ChildProcess, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { fileURLToPath } from "node:url";
 
 import { main } from "../../src/cli/index.ts";
 import { defaultIdentity, defaultLocation } from "../../src/cli/memory_bind.ts";
@@ -515,4 +517,54 @@ describe("yian memory reset", () => {
     expect(piped.code).toBe(2);
     expect(piped.stderr).toContain("pass --yes");
   });
+});
+
+/** The `yian` entry script. */
+const BIN = fileURLToPath(new URL("../../src/cli/bin.ts", import.meta.url));
+
+/**
+ * Run `yian args` as a process of its own, in a new process group (a terminal's foreground group),
+ * with only the test's environment and `vars`; give back its exit code (null when a signal ended
+ * it) and both streams. A run that outlives 20 s is killed with its group.
+ */
+async function yianProcess(args: readonly string[], vars: Record<string, string>) {
+  const env = { PATH: "/usr/bin:/bin", HOME: home, USER: "ada", TMPDIR: join(tmp, "tmpdir"), ...vars };
+  const child: ChildProcess = spawn(process.execPath, [BIN, ...args], {
+    detached: true,
+    env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout!.setEncoding("utf8").on("data", (chunk: string) => void (stdout += chunk));
+  child.stderr!.setEncoding("utf8").on("data", (chunk: string) => void (stderr += chunk));
+  const killer = setTimeout(() => process.kill(-child.pid!, "SIGKILL"), 20_000);
+  const code = await new Promise<number | null>((resolve) => child.once("close", (exitCode) => resolve(exitCode)));
+  clearTimeout(killer);
+  return { code, stdout, stderr };
+}
+
+/** Write the executable shell script `body` as `<tmp>/<name>`; return its path. */
+function script(name: string, body: string): string {
+  const path = join(tmp, name);
+  writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+  return path;
+}
+
+describe("yian memory edit as a process", () => {
+  test(
+    "Ctrl-C while the editor is open is the editor's: yian waits for it, and the edit applies",
+    async () => {
+      const flow = flowFile();
+      await runOnce(flow, "first");
+      // Not an editor: ignores Ctrl-C as vim does, presses it for its whole group as a terminal
+      // would, then writes and exits.
+      const body = `trap '' INT QUIT\nkill -INT 0\nkill -QUIT 0\nsleep 1\nprintf '\\nkept' >> "$1"`;
+      const editor = script("editor.sh", body);
+      const result = await yianProcess(["memory", "edit", flow, "lessons"], { EDITOR: editor });
+      expect(result.code, result.stderr).toBe(0);
+      expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("first\nkept");
+    },
+    30_000,
+  );
 });

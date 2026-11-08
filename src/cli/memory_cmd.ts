@@ -49,7 +49,16 @@ import {
 import { diagnosticJson, printStyled } from "./render.ts";
 import { defaultRunsDir, loadFlowFile } from "./startup.ts";
 import { Terminal } from "./terminal.ts";
-import { atTerminal, checkPath, type CliIo, forTerminal, type ParsedArgs, printJson, UsageError } from "./utils.ts";
+import {
+  atTerminal,
+  checkPath,
+  type CliIo,
+  forTerminal,
+  type ParsedArgs,
+  printJson,
+  printJsonPaged,
+  UsageError,
+} from "./utils.ts";
 
 /** A memory `yian memory` acts on: its instance and location, and, for a default, its identity. */
 export interface MemoryTarget {
@@ -400,22 +409,30 @@ export async function memoryShow(command: ParsedArgs, io: CliIo): Promise<number
 /** Items a page of `VectorDBMemory.items` reads. */
 const ITEMS_PAGE = 500;
 
-/** Every item of the store `memory`, by id, retired ones included, read a page at a time. */
-async function allItems(memory: VectorDBMemory, signal: AbortSignal): Promise<JsonObject[]> {
-  const items: JsonObject[] = [];
-  for (;;) {
-    const after = items.length === 0 ? 0 : Number(items.at(-1)!["id"]);
+/** The items of the store `memory`, by id, retired ones included, a page at a time. */
+async function* itemPages(memory: VectorDBMemory, signal: AbortSignal): AsyncGenerator<JsonObject[]> {
+  for (let after = 0; ; ) {
     const page = await memory.items({ after, limit: ITEMS_PAGE, signal });
-    items.push(...page);
-    if (page.length < ITEMS_PAGE) return items;
+    if (page.length > 0) yield page;
+    if (page.length < ITEMS_PAGE) return;
+    after = Number(page.at(-1)!["id"]);
   }
+}
+
+/** The lines `show --all` writes for `item`: its heading, with why it was retired, its text and fields. */
+function itemLines(item: JsonObject): string[] {
+  const why = item["retired"] === undefined ? "" : `, retired: ${String(item["retired"])}`;
+  const lines = [`== item ${String(item["id"])} (version ${String(item["version"])})${why} ==`, String(item["text"])];
+  if (item["fields"] !== undefined) lines.push(logJson(item["fields"]));
+  return lines;
 }
 
 /**
  * `yian memory show` of a VectorDB store: a line naming it and counting its items and the retired
- * ones, then its recall; with `--all` every item, each after an `== item <id> (version <v>) ==`
- * line that says why it was retired, its fields after its text. `--json` prints the identity,
- * type, location, version, count, retired and recall, and with `--all` the items.
+ * ones, as the store records them, then its recall; with `--all` every item, each after an
+ * `== item <id> (version <v>) ==` line that says why it was retired, its fields after its text,
+ * written a page at a time so a large store is never held whole. `--json` prints the identity,
+ * type, location, version, count, retired and recall, and with `--all` the items, also by page.
  */
 async function showStore(
   command: ParsedArgs,
@@ -425,26 +442,24 @@ async function showStore(
   location: string,
 ): Promise<number> {
   const all = command.options["all"] === true;
+  const signal = stopOf(io);
   const { version, recall } = await session.snapshot();
-  const items = await allItems(memory, stopOf(io));
-  const retired = items.filter((item) => item["retired"] !== undefined).length;
+  const { count, retired } = (await memory.stored({ signal }))!;
   const { identity, type } = session.info;
   if (command.options["json"] === true) {
-    const counts = { count: BigInt(items.length), retired: BigInt(retired) };
+    const counts = { count: BigInt(count), retired: BigInt(retired) };
     const document = { identity, type, location, version, ...counts, recall: { text: recall.text, cut: recall.cut } };
-    await printJson(all ? { ...document, items } : document, io.stdout);
+    if (all) await printJsonPaged(document, "items", itemPages(memory, signal), io.stdout);
+    else await printJson(document, io.stdout);
     return 0;
   }
-  const lines = [`${identity} (${type}) at ${location}: ${counted(items.length, "item")}, ${retired} retired`];
+  const lines = [`${identity} (${type}) at ${location}: ${counted(count, "item")}, ${retired} retired`];
   lines.push(recall.text, ...(recall.cut === null ? [] : [`(${recall.cut})`]));
-  if (all) {
-    for (const item of items) {
-      const why = item["retired"] === undefined ? "" : `, retired: ${String(item["retired"])}`;
-      lines.push(`== item ${String(item["id"])} (version ${String(item["version"])})${why} ==`, String(item["text"]));
-      if (item["fields"] !== undefined) lines.push(logJson(item["fields"]));
-    }
-  }
   await io.stdout.write(`${forTerminal(lines.join("\n"), io.stdout)}\n`);
+  if (!all) return 0;
+  for await (const page of itemPages(memory, signal)) {
+    await io.stdout.write(`${forTerminal(page.flatMap(itemLines).join("\n"), io.stdout)}\n`);
+  }
   return 0;
 }
 
@@ -938,7 +953,8 @@ export async function memoryReset(command: ParsedArgs, io: CliIo): Promise<numbe
     );
     let deletes: string;
     if (target.memory instanceof VectorDBMemory) {
-      deletes = `This deletes ${counted((await allItems(target.memory, stopOf(io))).length, "item")} and its history.`;
+      const { count } = (await target.memory.stored({ signal: stopOf(io) }))!;
+      deletes = `This deletes ${counted(count, "item")} and its history.`;
     } else {
       const files = membersOf(session, target.location).map((file) => file.path);
       const named = files.length === 0 ? "" : ` (${files.slice(0, 3).join(", ")}${files.length > 3 ? ", …" : ""})`;

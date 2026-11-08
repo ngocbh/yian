@@ -1341,16 +1341,21 @@ export class VectorDBMemory extends MemoryBase {
 
   /**
    * Return what the store records of the memory, read holding its lock: its identity, embedding
-   * model and item schema (`null` for items that are text only), or `null` when there is no store.
+   * model, item schema (`null` for items that are text only), and how many items it holds
+   * (`count`, retired ones included) and how many are retired; or `null` when there is no store.
    * A host that doesn't know a store's item type opens it with this one (`yian memory --at`). A host
    * action, never a session method.
    *
    * @throws Error when the store isn't a VectorDBMemory store or a memory yet.
    * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
    */
-  async stored(o: {
-    signal: AbortSignal;
-  }): Promise<{ identity: string; embedding: EmbeddingModel; itemSchema: JsonObject | null } | null> {
+  async stored(o: { signal: AbortSignal }): Promise<{
+    identity: string;
+    embedding: EmbeddingModel;
+    itemSchema: JsonObject | null;
+    count: number;
+    retired: number;
+  } | null> {
     o.signal.throwIfAborted();
     const { path } = this.#store;
     if (lstatOrNull(path) === null) return null;
@@ -1358,7 +1363,9 @@ export class VectorDBMemory extends MemoryBase {
     return this.#store.locked(o.signal, () =>
       withDb(path, (db) => {
         const { identity, settings } = memoryMeta(db, path, this.#id);
-        return { identity, embedding: settings.embedding, itemSchema: settings.item_schema };
+        const counts = db.prepare("SELECT COUNT(*) AS count, COUNT(retired) AS retired FROM items").get()!;
+        const { embedding, item_schema: itemSchema } = settings;
+        return { identity, embedding, itemSchema, count: counts.count as number, retired: counts.retired as number };
       }),
     );
   }

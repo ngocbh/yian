@@ -564,6 +564,31 @@ export async function printJson(document: Readonly<Record<string, unknown>>, out
   await out.write(`{${fields.join(",")}}\n`);
 }
 
+/**
+ * Print `document` as `printJson` does, with the list under `key` written as `pages` yields it, so
+ * a long list is never held whole. A page that fails to come leaves the document unfinished.
+ */
+export async function printJsonPaged(
+  document: Readonly<Record<string, unknown>>,
+  key: string,
+  pages: AsyncIterable<readonly unknown[]>,
+  out: Writer,
+): Promise<void> {
+  const doc: Record<string, unknown> = { format: JSON_FORMAT, ...document, [key]: [] };
+  const keys = ["format", ...Object.keys(doc).filter((each) => each !== "format").sort(compareCodeUnits)];
+  const at = keys.indexOf(key);
+  const field = (name: string) => `${logJson(name)}:${logJson(doc[name])}`;
+  await out.write(`{${[...keys.slice(0, at).map(field), `${logJson(key)}:[`].join(",")}`);
+  let first = true;
+  for await (const page of pages) {
+    if (page.length === 0) continue;
+    await out.write(`${first ? "" : ","}${page.map((item) => logJson(item)).join(",")}`);
+    first = false;
+  }
+  const rest = keys.slice(at + 1).map(field);
+  await out.write(`]${rest.length === 0 ? "" : `,${rest.join(",")}`}}\n`);
+}
+
 /** A provider key that is required but not set, and that no prompt supplied. */
 export class MissingKeyError extends Error {
   override name = "MissingKeyError";

@@ -1482,13 +1482,19 @@ describe("host actions", () => {
     await expect(memory().items({ limit: 0, signal })).rejects.toThrow("items needs a limit of at least 1");
   });
 
-  test("stored reads the identity, model and item schema under the lock, and is null for a missing store", async () => {
+  test("stored reads the identity, model, item schema and counts under the lock; null for no store", async () => {
     const typed = { type: "object", properties: { tag: { type: "string" } } };
-    await (await openAt({}, typed)).close();
+    const s = await openAt({}, typed);
+    await apply(s, { op: "add", text: "alpha", fields: { tag: "a" } }, "a1");
+    await apply(s, { op: "add", text: "bravo", fields: { tag: "b" } }, "a2");
+    await apply(s, { op: "retire", id: 2n, if_version: 2n, why: "x" }, "r1");
+    await s.close();
     expect(await new VectorDBMemory({ path }).stored({ signal })).toEqual({
       identity: "t/cases",
       embedding: model,
       itemSchema: typed,
+      count: 2,
+      retired: 1,
     });
     expect(await new VectorDBMemory({ path: join(dir, "none.db") }).stored({ signal })).toBeNull();
   });

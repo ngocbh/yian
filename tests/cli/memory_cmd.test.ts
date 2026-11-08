@@ -3,7 +3,7 @@
  * default memory) or `--at PATH`. Memories are made by `yian run` on a temporary home, prompts
  * answered on a fake terminal, and the editor is injected.
  */
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -1139,6 +1139,44 @@ output: \${add.output.id}
     expect(added.stderr).toContain("Invalid value for --if-version: --if-version goes with --id or --delete");
     const shown = JSON.parse((await yian(["memory", "show", flow, "cases", "--all", "--json"], vectors)).stdout);
     expect(shown.items.map((each: { text: string }) => each.text)).toEqual(["Thrice."]);
+  });
+
+  test("show and reset count a store's items without reading them; show --all writes a page at a time", async () => {
+    const flow = casesFile();
+    await addCase(flow, "Check sums twice.");
+    const store = new VectorDBMemory({ path: cases().location, embed: fakeEmbed });
+    const session = await store.open({ create: false, itemType: null, signal: new AbortController().signal });
+    const author = { kind: "tool" as const, name: "fill" };
+    for (let i = 2; i <= 501; i++) {
+      const change = { op: "add", text: `Case ${i}.` };
+      await session.apply({ id: `fill-${i}`, change, author, signal: new AbortController().signal });
+    }
+    await session.close();
+    const reads = spyOn(VectorDBMemory.prototype, "items");
+    try {
+      const shown = await yian(["memory", "show", flow, "cases"], vectors);
+      const { identity, location } = cases();
+      expect(shown.stdout).toStartWith(`${identity} (VectorDBMemory) at ${location}: 501 items, 0 retired`);
+      const no = new FakeInput({ tty: true });
+      no.write(ENTER);
+      const output = new FakeOutput({ tty: true, columns: 400 });
+      await yian(["memory", "reset", flow, "cases"], { ...vectors, stdin: no, stderrStream: output });
+      expect(output.text).toContain("This deletes 501 items and its history.");
+      expect(reads).not.toHaveBeenCalled();
+    } finally {
+      reads.mockRestore();
+    }
+    const writes: string[] = [];
+    const all = await yian(["memory", "show", flow, "cases", "--all"], {
+      ...vectors,
+      stdout: { write: async (text) => void writes.push(text) },
+    });
+    expect(all.code, all.stderr).toBe(0);
+    expect(writes.length).toBeGreaterThan(2);
+    expect(writes.join("").match(/^== item \d+ /gm)).toHaveLength(501);
+    const json = JSON.parse((await yian(["memory", "show", flow, "cases", "--all", "--json"], vectors)).stdout);
+    expect(json).toMatchObject({ count: 501, retired: 0 });
+    expect(json.items.map((item: { id: number }) => item.id)).toEqual(Array.from({ length: 501 }, (_, i) => i + 1));
   });
 
   test("reset's question counts the store's items", async () => {

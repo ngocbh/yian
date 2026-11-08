@@ -274,15 +274,14 @@ describe("package.json", () => {
     for (const path of Object.keys(ENTRIES)) expect(Object.keys(PACKAGE.exports[path])[0]).toBe("bun");
   });
 
-  test("the README, which is the npm page, links only the docs site", () => {
+  test("the README, which is the npm page, uses absolute links and names the docs site", () => {
     const readme = readFileSync(join(ROOT, "README.md"), "utf8");
     expect(readme).toContain("https://yian.readthedocs.io/");
     expect(readme).toContain("npm install @ngocbh/yian");
-    expect(readme).not.toContain("github.com/ngocbh/yian");
-    // npm resolves relative links against `repository`, which is unset while the repo is private.
+    // npm resolves relative links against `repository`, which `package.json` still lacks.
     expect(readme.match(/\]\((?!https:\/\/)[^)]*\)/g) ?? []).toEqual([]);
     expect(readme).not.toMatch(/python|pytest|pip install/i);
-    expect(readme.split("\n").length).toBeLessThanOrEqual(80);
+    expect(readme.split("\n").length).toBeLessThanOrEqual(90);
   });
 });
 

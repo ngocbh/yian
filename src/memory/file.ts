@@ -1359,16 +1359,26 @@ class FileMemorySession implements MemorySession {
   #erase(id: string, digest: string, target: { path: string; text?: string }, author: Author): Applied {
     const { root, limits, scheduler } = this.#store;
     const { path, text } = target;
-    const why = pathProblem(path, limits.maxDepth) ?? diskProblem(root, path);
-    const old = why ?? readMemberFile(join(root, path), path, limits.maxFileChars);
-    if (typeof old === "string") throw new Error(`${shown(path)} isn't part of the memory: ${old}`);
-    const next = text === undefined || old === null ? null : withoutText(old.text, text);
+    const textual = pathProblem(path, limits.maxDepth);
+    if (textual !== null) throw new Error(`${shown(path)} isn't part of the memory: ${textual}`);
     // An inverse holding the text goes whole, so no part of one is left to join into the text again.
     const drop = ({ entry }: JournalChange): boolean => {
       const { inverse } = entry;
       if (entry.path === path) return true;
       return text !== undefined && inverse !== null && "text" in inverse && inverse.text.includes(text);
     };
+    const why = diskProblem(root, path);
+    const old = why ?? readMemberFile(join(root, path), path, limits.maxFileChars);
+    if (typeof old === "string") {
+      // A hand edit made the file no member: it is the person's to remove, but the memory's history
+      // is the memory's, so that is scrubbed anyway.
+      this.#journal.compact(drop);
+      throw new Error(
+        `${shown(path)} isn't part of the memory: ${old}, so erase left the file alone; the memory's history ` +
+          `no longer holds ${text === undefined ? "its old text" : "the text"}, but the file may: remove it by hand`,
+      );
+    }
+    const next = text === undefined || old === null ? null : withoutText(old.text, text);
     const undoable = this.#journal.undoable();
     const disables = this.#journal
       .changes()

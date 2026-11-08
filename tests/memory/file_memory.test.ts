@@ -1387,14 +1387,39 @@ describe("erase and reset", () => {
     fs.linkSync(join(dir, "outside/x.md"), join(root, "hard.md"));
     const s = await openAt();
     expect((await apply(s, { op: "append", path: "a.md", text: "B" }, "first")).ok).toBe(true);
-    const before = tree(dir);
+    // A file a hand edit put on disk has its history scrubbed: only the journal may change.
+    const outsideJournal = () => {
+      const { ["m/.yian/journal.jsonl"]: _, ...rest } = tree(dir);
+      return rest;
+    };
+    const before = outsideJournal();
     for (const [path, reason] of REFUSED_PATHS) {
       await expect(erase(s, { path }, `erase-${path}`)).rejects.toThrow(reason);
       await expect(erase(s, { path, text: "outside" }, `erase-text-${path}`)).rejects.toThrow(reason);
     }
-    expect(tree(dir)).toEqual(before);
+    expect(outsideJournal()).toEqual(before);
     await s.close();
   });
+
+  test.each([
+    ["too big by hand", (path: string) => fs.writeFileSync(path, "x".repeat(60)), "over 50 characters"],
+    ["hard-linked by hand", (path: string) => fs.linkSync(path, join(dir, "elsewhere.md")), "a hard link"],
+  ])(
+    "an erase on a file %s scrubs the history anyway, and says to remove the file by hand",
+    async (_, handEdit, why) => {
+      const s = await openAt({ maxFileChars: 50 });
+      await apply(s, { op: "create", path: "a.md", text: "PIN 1234" }, "c1");
+      await apply(s, { op: "rewrite", path: "a.md", text: "clean", if_hash: sha256("PIN 1234") }, "c2");
+      handEdit(join(root, "a.md"));
+      expect(holding(join(root, ".yian"), "1234")).toEqual(["journal.jsonl"]);
+      await expect(erase(s, { path: "a.md", text: "1234" })).rejects.toThrow(
+        `\`a.md\` isn't part of the memory: ${why}, so erase left the file alone; the memory's history no ` +
+          "longer holds the text, but the file may: remove it by hand",
+      );
+      expect(holding(join(root, ".yian"), "1234")).toEqual([]);
+      await s.close();
+    },
+  );
 
   test("an erase target of the wrong shape is a fault", async () => {
     const s = await openAt();

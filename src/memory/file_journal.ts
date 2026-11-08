@@ -444,11 +444,11 @@ export class Journal {
 
   /**
    * Rewrite the journal as a new generation holding only what the caps keep: each change whose id
-   * the table holds, with its outcome, and the inverses `undoable` keeps; other inverses become
-   * `null`, and aborted changes go. Hold the lock, with no entry pending.
+   * the table holds, with its outcome, and the inverses `undoable` keeps except those `drop` picks;
+   * other inverses become `null`, and aborted changes go. Hold the lock, with no entry pending.
    */
-  compact(): void {
-    this.#rewrite(this.#keptLines(() => false));
+  compact(drop: (change: JournalChange) => boolean = () => false): void {
+    this.#rewrite(this.#keptLines(drop));
   }
 
   /**

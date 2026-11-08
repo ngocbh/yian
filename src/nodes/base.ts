@@ -35,6 +35,7 @@ import { type DeclaredTypes, evaluateWhenRecord, localDeclared } from "../expr/e
 import type { ModelAccess } from "../llm_clients/factory.ts";
 import type { Request, ToolSpec } from "../llm/messages.ts";
 import type { MemorySession } from "../memory/base.ts";
+import type { RecordedMemoryTool } from "../typesys/memory.ts";
 import type { Scheduler } from "../platform.ts";
 import type { Skill } from "../skills/catalog.ts";
 import type { MemoryGrant, ToolGrant } from "../tools/grants.ts";
@@ -602,12 +603,8 @@ export class AssertionStageError extends Error {
   }
 }
 
-/** A tool of a node's own group as a rebuilt request lists it: its name in the group, and its spec. */
-export interface LocalToolSpec {
-  readonly name: string;
-  readonly description: string;
-  readonly parameters: JsonObject;
-}
+/** A tool of a node's own group as a rebuilt request lists it: a recorded memory tool's spec. */
+export type LocalToolSpec = Omit<RecordedMemoryTool, "write">;
 
 /** A run's sessions on its memories, which every node bound to a memory shares. */
 export interface NodeMemories {

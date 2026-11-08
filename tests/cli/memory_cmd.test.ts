@@ -27,6 +27,7 @@ import { defaultIdentity, defaultLocation } from "../../src/cli/memory_bind.ts";
 import { resolveTarget } from "../../src/cli/memory_cmd.ts";
 import { type CliIo, UsageError } from "../../src/cli/utils.ts";
 import { FileMemory } from "../../src/memory/file.ts";
+import { lockFile } from "../../src/platform.ts";
 import { DOWN, ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 let tmp: string;
@@ -607,6 +608,23 @@ describe("yian memory reset", () => {
     expect(existsSync(join(lessons().location, "MEMORY.md"))).toBe(false);
     expect((await historyOf(flow)).changes).toEqual([]);
     expect(readFileSync(join(lessons().location, ".yian", "identity"), "utf8")).toBe(lessons().identity);
+  });
+
+  test("a run that is running on the memory refuses the reset until it stops", async () => {
+    const waiting = await twoRuns();
+    const flow = join(project, "flow.yaml");
+    // A live engine holds its log's lock.
+    const lock = lockFile(`${realpathSync(join(home, ".yian", "runs", waiting, "log.jsonl"))}.lock`);
+    try {
+      const refused = await yian(["memory", "reset", flow, "lessons", "--yes", "--json"]);
+      expect(refused.code).toBe(1);
+      expect(refused.stderr).toContain(`reset refused: run ${waiting} is running on this memory; stop it first`);
+      expect(JSON.parse(refused.stdout).error.code).toBe("memory.refused");
+      expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("waiting\nfinished");
+    } finally {
+      lock.release();
+    }
+    expect((await yian(["memory", "reset", flow, "lessons", "--yes"])).code).toBe(0);
   });
 
   test("--json prints the identity and the unfinished runs; a no on the terminal keeps the memory", async () => {

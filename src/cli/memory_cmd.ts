@@ -585,9 +585,10 @@ const UNFINISHED: ReadonlySet<string> = new Set(["running", "waiting", "stopped"
 
 /**
  * `yian memory reset`: list the unfinished runs on this machine whose index records the memory
- * (running, waiting, stopped or crashed: a resume goes on with the emptied memory), ask (`--yes`
- * doesn't, and off a terminal it is required), then empty it: its files and history go, its
- * identity stays. A no prints `nothing reset` and exits 1. `--json` prints `{identity, runs}`.
+ * (waiting, stopped or crashed: a resume goes on with the emptied memory), ask (`--yes` doesn't,
+ * and off a terminal it is required), then empty it: its files and history go, its identity
+ * stays. A run running on it now refuses the reset (`memory.refused`); a no prints `nothing
+ * reset`; either exits 1. `--json` prints `{identity, runs}`.
  */
 export async function memoryReset(command: ParsedArgs, io: CliIo): Promise<number> {
   const json = command.options["json"] === true;
@@ -595,6 +596,13 @@ export async function memoryReset(command: ParsedArgs, io: CliIo): Promise<numbe
   return onMemory(command, io, namedOf(command), async (session, target) => {
     const { identity } = session.info;
     const runs = runsUsing(io, identity).filter((row) => UNFINISHED.has(row.status));
+    // A live engine reads and writes the memory as it goes; emptying it under the run would mix
+    // the two. A waiting, stopped or crashed run takes the emptied memory as it resumes.
+    const live = runs.find((row) => row.status === "running");
+    if (live !== undefined) {
+      const message = `run ${live.runId} is running on this memory; stop it first`;
+      return failed(io, json, { label: "reset refused", code: "memory.refused", message });
+    }
     if (!json) {
       if (runs.length === 0) {
         await io.stdout.write(`${forTerminal(`no unfinished run on this machine uses ${identity}`, io.stdout)}\n`);

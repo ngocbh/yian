@@ -701,7 +701,8 @@ export async function main(argv: readonly string[], io: CliIo = processIo()): Pr
     );
   } catch (error) {
     if (error instanceof UsageError) {
-      await io.stderr.write(usageError(spec, error));
+      // A usage error can quote what it was given, or a memory's identity: only text reaches a terminal.
+      await io.stderr.write(forTerminal(usageError(spec, error), io.stderr));
       return 2;
     }
     await io.stderr.write(`${forTerminal((error instanceof Error && error.stack) || String(error), io.stderr)}\n`);

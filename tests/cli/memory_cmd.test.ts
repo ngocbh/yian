@@ -170,6 +170,21 @@ describe("the target", () => {
     expect(readdirSync(join(account, ".yian"))).toEqual([]);
   });
 
+  test("a usage error's text reaches a terminal without escape sequences, a memory's identity included", async () => {
+    const folder = join(tmp, "marked");
+    const memory = new FileMemory({ root: folder, id: "notes\u001b]8;;https://x.test\u0007" });
+    await (await memory.open({ create: true, itemType: null, signal: new AbortController().signal })).close();
+    const err: string[] = [];
+    const stderr = { write: async (text: string) => void err.push(text), isTTY: true };
+    const result = await yian(["memory", "compact", "--at", folder], { stderr });
+    expect(result.code).toBe(2);
+    expect(err.join("")).toContain("Error: Invalid value: compact is a VectorDBMemory's; notes");
+    expect(err.join("")).not.toMatch(/[\u001b\u0007]/);
+    // Piped, the bytes are kept.
+    const piped = await yian(["memory", "compact", "--at", folder]);
+    expect(piped.stderr).toContain("\u001b]8;;");
+  });
+
   test("FLOW NAME is the input's default memory, and --at PATH the memory in a folder", async () => {
     const flow = flowFile();
     await runOnce(flow, "first");

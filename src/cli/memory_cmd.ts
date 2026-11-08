@@ -4,13 +4,14 @@
  * folder). It is a host the user runs, so its own output may name a memory's folder; a change it
  * makes is authored by the user.
  *
- * Knows about: compose (the flow's inputs), memory (`FileMemory`), the type language, the CLI's
- * memory binding (`memory_bind.ts`) and start-up, and the file system.
+ * Knows about: compose (the flow's inputs), memory (`FileMemory`), the run index (the runs that used
+ * a memory), the type language, the CLI's memory binding (`memory_bind.ts`), start-up and
+ * terminal, and the file system.
  */
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { basename, join } from "node:path";
 
@@ -18,13 +19,15 @@ import type { Env } from "../defaults.ts";
 import { compareCodeUnits, Diagnostic } from "../diagnostics.ts";
 import { type Author, type ChangeEntry, memoryErrorKind, type MemorySession } from "../memory/base.ts";
 import { FileMemory, type MemberFile, readMembers } from "../memory/file.ts";
-import { homeDir, isSystemError } from "../platform.ts";
+import { homeDir, isSystemError, withWarnings } from "../platform.ts";
+import { readRunIndex, type RunIndexRow, updateRunIndex } from "../run.ts";
 import type { JsonObject } from "../typesys/json.ts";
 import { isMemoryType } from "../typesys/values.ts";
 import { defaultLocation, defaultMemories, memoryRoot, projectFolder } from "./memory_bind.ts";
 import { diagnosticJson, printStyled } from "./render.ts";
-import { loadFlowFile } from "./startup.ts";
-import { type CliIo, forTerminal, type ParsedArgs, printJson, UsageError } from "./utils.ts";
+import { defaultRunsDir, loadFlowFile } from "./startup.ts";
+import { Terminal } from "./terminal.ts";
+import { atTerminal, type CliIo, forTerminal, type ParsedArgs, printJson, UsageError } from "./utils.ts";
 
 /** A memory `yian memory` acts on: its instance and folder, and, for a default, its identity. */
 export interface MemoryTarget {
@@ -386,5 +389,100 @@ export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number
     } finally {
       if (!keep) rmSync(folder, { recursive: true, force: true });
     }
+  });
+}
+
+/**
+ * Return the runs in `~/.yian/runs` whose index rows record the memory `identity`, by start time,
+ * the index updated first (a log it can't read is skipped quietly; `yian status` reports it).
+ *
+ * @throws What `updateRunIndex` and `readRunIndex` throw.
+ */
+function runsUsing(io: CliIo, identity: string): RunIndexRow[] {
+  const runsDir = defaultRunsDir(io.env);
+  if (!existsSync(runsDir)) return [];
+  withWarnings(() => {}, () => updateRunIndex(runsDir, { timeoutMs: 1000 }));
+  return readRunIndex(runsDir).filter((row) => row.memories.some((memory) => memory.identity === identity));
+}
+
+/** `runs` as `--json` lists them: each run's id, status, start time and log. */
+function runsJson(io: CliIo, runs: readonly RunIndexRow[]): Record<string, unknown>[] {
+  const runsDir = defaultRunsDir(io.env);
+  return runs.map((row) => ({
+    run_id: row.runId,
+    status: row.status,
+    started_at: row.startedAt,
+    log: join(runsDir, row.runId, "log.jsonl"),
+  }));
+}
+
+/** Print `runs` under `heading`, one line each with its id, status, start time and log. */
+async function printRuns(io: CliIo, heading: string, runs: readonly RunIndexRow[]): Promise<void> {
+  const lines = [heading, ...runsJson(io, runs).map((run) => `  ${Object.values(run).map(String).join("  ")}`)];
+  await io.stdout.write(`${forTerminal(lines.join("\n"), io.stdout)}\n`);
+}
+
+/**
+ * Refuse, before anything is shown, a command that asks first when it runs off a terminal without
+ * `--yes`.
+ *
+ * @throws {UsageError} Then.
+ */
+function checkAsks(command: ParsedArgs, io: CliIo, verb: string): void {
+  if (command.options["yes"] !== true && !atTerminal(io)) {
+    throw new UsageError(`Invalid value: ${verb} asks first; off a terminal, pass --yes`);
+  }
+}
+
+/** Whether the person goes on: `--yes`, or `Yes` to `question` at the terminal (`No` first). */
+async function goesOn(command: ParsedArgs, io: CliIo, question: string): Promise<boolean> {
+  if (command.options["yes"] === true) return true;
+  const terminal = new Terminal({ input: io.stdin, output: io.stderrStream });
+  try {
+    return (await terminal.askChoice(question, ["No", "Yes"], { signal: stopOf(io) })) === "Yes";
+  } finally {
+    terminal.close();
+  }
+}
+
+/**
+ * `yian memory erase FILE`: list the runs on this machine whose index records the memory (their
+ * logs may hold copies of what is erased, and deleting them is the person's choice), say that runs
+ * elsewhere can't be seen, ask (`--yes` doesn't; off a terminal it is required), then erase the
+ * file, or with `--text` every occurrence of that text in it, from the memory and its history, as
+ * the user, and print the new version and the undos the erase disabled. A no prints `nothing
+ * erased` and exits 1. `--json` prints `{runs, version, disabled_undos}`.
+ */
+export async function memoryErase(command: ParsedArgs, io: CliIo): Promise<number> {
+  const json = command.options["json"] === true;
+  const path = command.args["file"] as string;
+  const text = command.options["text"] as string | undefined;
+  checkAsks(command, io, "erase");
+  return onMemory(command, io, async (session) => {
+    const { identity } = session.info;
+    const runs = runsUsing(io, identity);
+    const unseen = "yian can't see runs on other machines or in a host's own logs";
+    if (!json) {
+      if (runs.length === 0) await io.stdout.write(`no run on this machine used ${identity}; ${unseen}\n`);
+      else {
+        await printRuns(io, `the runs on this machine that used ${identity}; their logs may hold copies:`, runs);
+        await io.stdout.write(`${unseen}\n`);
+      }
+    }
+    const what = text === undefined ? path : `${JSON.stringify(text)} from ${path}`;
+    if (!(await goesOn(command, io, `Erase ${what} from ${identity}? It can't be undone.`))) {
+      return failed(io, json, { label: "erase cancelled", code: "memory.cancelled", message: "nothing erased" });
+    }
+    const target: JsonObject = text === undefined ? { path } : { path, text };
+    const erased = await session.erase({ id: changeId(), target, author: userAuthor(io), signal: stopOf(io) });
+    const disabled = erased.disabledUndos;
+    if (json) {
+      await printJson({ runs: runsJson(io, runs), version: erased.version, disabled_undos: disabled }, io.stdout);
+      return 0;
+    }
+    const undos = disabled.length === 0 ? "it disabled no undo" : `undos it disabled: ${disabled.join(", ")}`;
+    const lines = [`erased ${what}; the memory's version is ${erased.version}`, undos];
+    await io.stdout.write(`${forTerminal(lines.join("\n"), io.stdout)}\n`);
+    return 0;
   });
 }

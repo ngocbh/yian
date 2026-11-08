@@ -68,6 +68,8 @@ const MEMORY_AT: OptionSpec = {
   help: "The memory's folder, instead of FLOW NAME.",
 };
 
+const MEMORY_YES: OptionSpec = { name: "yes", type: "boolean", help: "Don't ask first." };
+
 /** The commands by name, in the order the root help lists them. */
 export const COMMANDS: Readonly<Record<string, Command>> = {
   run: {
@@ -453,6 +455,23 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
     load: async () => {
       const { memoryEdit } = await import("./memory_cmd.ts");
       return memoryEdit;
+    },
+  },
+  "memory erase": {
+    spec: {
+      name: "memory erase",
+      summary: "Erase a file, or text in it, from a memory and its history.",
+      positionals: [{ name: "file", help: "The memory's file to erase from." }, MEMORY_FLOW, MEMORY_NAME],
+      options: [
+        MEMORY_AT,
+        { name: "text", type: "string", help: "Erase only this text from the file." },
+        MEMORY_YES,
+        JSON_OPTION,
+      ],
+    },
+    load: async () => {
+      const { memoryErase } = await import("./memory_cmd.ts");
+      return memoryErase;
     },
   },
   "skills check": {

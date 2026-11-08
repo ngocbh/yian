@@ -23,6 +23,7 @@ import { defaultIdentity, defaultLocation } from "../../src/cli/memory_bind.ts";
 import { resolveTarget } from "../../src/cli/memory_cmd.ts";
 import { type CliIo, UsageError } from "../../src/cli/utils.ts";
 import { FileMemory } from "../../src/memory/file.ts";
+import { DOWN, ENTER, FakeInput, FakeOutput } from "./terminal_both_runtimes.ts";
 
 let tmp: string;
 let home: string;
@@ -327,5 +328,73 @@ by EDITOR" >> "$0"'`;
     const none = await yian(["memory", "edit", flow, "lessons"]);
     expect(none.code).toBe(1);
     expect(none.stderr).toContain("set $EDITOR to the editor to use");
+  });
+});
+
+/** Every file under `dir`, `.yian/` included, joined: what a search of the folder would read. */
+function everything(dir: string): string {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf8"))
+    .join("\n");
+}
+
+/** The run ids under the temporary home's runs folder. */
+function runIds(): string[] {
+  return readdirSync(join(home, ".yian", "runs")).filter((name) => name !== "index.sqlite");
+}
+
+describe("yian memory erase", () => {
+  test("lists the runs that used the memory, erases the text everywhere, and prints the undos it disabled", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "keep this");
+    await runOnce(flow, "my PIN 4321");
+    const result = await yian(["memory", "erase", "MEMORY.md", flow, "lessons", "--text", "4321", "--yes"]);
+    expect(result.code, result.stderr).toBe(0);
+    for (const run of runIds()) expect(result.stdout).toContain(run);
+    expect(result.stdout).toContain("yian can't see runs on other machines or in a host's own logs");
+    expect(result.stdout).toMatch(/erased "4321" from MEMORY\.md; the memory's version is [0-9a-f]{64}/);
+    expect(result.stdout).toMatch(/undos it disabled: \S+/);
+    expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("keep this\nmy PIN ");
+    expect(everything(lessons().location)).not.toContain("4321");
+  });
+
+  test("--json prints the runs, the version and the disabled undos", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    const json = await yian(["memory", "erase", "MEMORY.md", flow, "lessons", "--yes", "--json"]);
+    expect(json.code, json.stderr).toBe(0);
+    const document = JSON.parse(json.stdout);
+    expect(document.runs).toEqual([
+      expect.objectContaining({ run_id: runIds()[0], status: "succeeded", log: expect.stringMatching(/log\.jsonl$/) }),
+    ]);
+    expect(document.version).toMatch(/^[0-9a-f]{64}$/);
+    expect(document.disabled_undos).toHaveLength(1);
+    expect(existsSync(join(lessons().location, "MEMORY.md"))).toBe(false);
+  });
+
+  test("asks first on a terminal; no, or no terminal without --yes, erases nothing", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    const piped = await yian(["memory", "erase", "MEMORY.md", flow, "lessons"]);
+    expect(piped.code).toBe(2);
+    expect(piped.stderr).toContain("pass --yes");
+    const no = new FakeInput({ tty: true });
+    no.write(ENTER);
+    const declined = await yian(["memory", "erase", "MEMORY.md", flow, "lessons"], {
+      stdin: no,
+      stderrStream: new FakeOutput({ tty: true }),
+    });
+    expect(declined.code).toBe(1);
+    expect(declined.stderr).toContain("nothing erased");
+    expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("first");
+    const yes = new FakeInput({ tty: true });
+    yes.write(`${DOWN}${ENTER}`);
+    const output = new FakeOutput({ tty: true });
+    const args = ["memory", "erase", "MEMORY.md", flow, "lessons"];
+    const erased = await yian(args, { stdin: yes, stderrStream: output });
+    expect(erased.code, erased.stderr).toBe(0);
+    expect(output.text).toContain("Erase MEMORY.md from");
+    expect(existsSync(join(lessons().location, "MEMORY.md"))).toBe(false);
   });
 });

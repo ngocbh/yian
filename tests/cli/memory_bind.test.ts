@@ -96,6 +96,15 @@ describe("withoutLocations", () => {
     );
   });
 
+  test("one pass: a replacement isn't matched again, and a path before `.` or `]` is replaced", () => {
+    // `~/.yian/memory` holds this home's text, which a second pass would replace again.
+    const scrub = (message: string) => (withoutLocations(new Error(message), "/memory", []) as Error).message;
+    expect(scrub("EACCES '/memory/.yian/memory/p'")).toBe("EACCES '~/.yian/memory/p'");
+    expect(scrub("at /memory/notes.")).toBe("at ~/notes.");
+    expect(scrub("[/memory]")).toBe("[~]");
+    expect(scrub("/memory2 stays")).toBe("/memory2 stays");
+  });
+
   test("a home of / is left in place, so no path turns into ~", () => {
     const message = "EACCES: permission denied, mkdir '/srv/x'";
     expect((withoutLocations(new Error(message), "/", []) as Error).message).toBe(message);

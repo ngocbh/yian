@@ -197,17 +197,21 @@ export function createdLine(created: CreatedMemory, location: boolean): string {
  */
 export function withoutLocations(error: unknown, home: string, roots: Iterable<string>): unknown {
   if (!(error instanceof Error)) return error;
-  // The most specific first: a folder inside another is written by its own name.
-  const names: [string, string][] = [...new Set(roots)].map((root) => [root, "the memory's folder"]);
-  for (const [path, name] of [
+  // Each path's name; the first given wins, so a folder inside another keeps its own.
+  const names = new Map<string, string>();
+  const name = (path: string, as: string) => {
+    if (path !== "/" && !names.has(path)) names.set(path, as);
+  };
+  for (const root of roots) name(root, "the memory's folder");
+  for (const [path, as] of [
     [memoryRoot(home), "~/.yian/memory"],
     [join(home, ".yian"), "~/.yian"],
     [home, "~"],
   ] as const) {
-    for (const each of new Set([realOr(path), path])) if (each !== "/") names.push([each, name]);
+    name(realOr(path), as);
+    name(path, as);
   }
-  let message = error.message;
-  for (const [path, name] of names) message = replacePath(message, path, name);
+  const message = replacePaths(error.message, names);
   if (message === error.message) return error;
   const Class = error instanceof RangeError ? RangeError : error instanceof TypeError ? TypeError : Error;
   const copy: Error & { code?: unknown; syscall?: unknown; errno?: unknown } = new Class(message);
@@ -231,12 +235,18 @@ function realOr(path: string): string {
 }
 
 /**
- * Return `text` with each whole occurrence of the path `path`, alone or as a folder of a longer
- * path, written as `name`; a path that only starts with the same characters (`/home/ada2`) stays.
+ * Return `text` with each whole occurrence of a path of `names`, alone or as a folder of a longer
+ * path, written as its name, in one pass, so a name is never matched again; the longest path is
+ * tried first at each place. A path that only starts with the same characters (`/home/ada2`)
+ * stays.
  */
-function replacePath(text: string, path: string, name: string): string {
-  const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return text.replace(new RegExp(`${escaped}(?=$|[/'"\`\\s),:;])`, "g"), () => name);
+function replacePaths(text: string, names: ReadonlyMap<string, string>): string {
+  if (names.size === 0) return text;
+  const paths = [...names.keys()].sort((a, b) => b.length - a.length);
+  const escaped = paths.map((path) => path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  // A path ends where a message's punctuation or a folder of it begins.
+  const pattern = new RegExp(`(?:${escaped.join("|")})(?=$|[/'"\`\\s),:;.\\]])`, "g");
+  return text.replace(pattern, (path) => names.get(path)!);
 }
 
 /** What `bindMemories` needs beside the flow and the flags. */

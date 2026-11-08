@@ -113,7 +113,7 @@ server that doesn't start, a bad `YIAN_*` value, a callback that throws, a log i
 | `waits` | What a waiting run waits on: `node`, `callId`, `tool`, `inbox`, `deadline`, `settled` |
 | `unread` | At the end of a run, the messages no take read, as send seqs by inbox |
 | `crashedAttempts` | Node attempts a resume ran again after a crash, by node id |
-| `memoryDrift` | After a crash resume, each memory that changed since the run started, the run's own writes included: `input`, `identity`, and the `recorded` and `current` versions |
+| `memoryDrift` | After `advance` recovers a crash or a stop, each memory that changed since the run started, the run's own writes included: `input`, `identity`, and the `recorded` and `current` versions |
 
 ### `runFlow` options
 

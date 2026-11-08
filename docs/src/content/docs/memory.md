@@ -180,11 +180,12 @@ Resuming a run:
 - `advance` never makes a memory. A missing one is refused ("memory `lessons` (`support/lessons`)
   isn't at its location; bind it with --memory"), and so is one whose identity, type, settings or
   tools differ from the recorded ones.
-- The run keeps the recall it started with. After a crash, `RunResult.memoryDrift` lists each
-  memory that changed since the run started, the run's own writes included.
+- The run keeps the recall it started with. When `advance` recovers a crash or a stop,
+  `RunResult.memoryDrift` lists each memory that changed since the run started, the run's own
+  writes included.
 - A write a crash cut off lands once. Each write carries a change id, the call's `ctx.callId`, and
-  a memory applies each id once; the resumed agent sends the call again with the same id. So give
-  every run its own run id.
+  a memory applies each id once; the resumed agent sends the call again with the same id. So a
+  `runId` you pass must be new for each run.
 
 ## Undo, erase and reset
 
@@ -208,7 +209,7 @@ await session.close();
   another change, it throws `ChangeIdReusedError`.
 - `undo` writes back what a change replaced, if the file still holds what that change wrote;
   otherwise it conflicts. A memory can undo its last `YIAN_MEMORY_MAX_UNDO` (100) changes.
-- `erase` deletes a file, or every `text` in it, and every copy in the memory's history. It can't
+- `erase` deletes a file, or each `text` in it, and every copy in the memory's history. It can't
   be undone, and it doesn't reach:
   - run logs, which keep the recall and the tool calls of each run that used the memory;
   - the file hashes the journal keeps, from which a short secret, such as a PIN, can be guessed;

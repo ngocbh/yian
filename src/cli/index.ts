@@ -371,6 +371,18 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
       return configCheck;
     },
   },
+  "memory list": {
+    spec: {
+      name: "memory list",
+      summary: "List the memories under ~/.yian/memory: each one's identity, type and folder.",
+      positionals: [],
+      options: [JSON_OPTION],
+    },
+    load: async () => {
+      const { memoryList } = await import("./memory_cmd.ts");
+      return memoryList;
+    },
+  },
   "skills check": {
     spec: {
       name: "skills check",
@@ -388,6 +400,7 @@ export const COMMANDS: Readonly<Record<string, Command>> = {
 /** The groups by name, each with its one-line summary. */
 export const GROUPS: Readonly<Record<string, string>> = {
   config: "Check an llm_config layer.",
+  memory: "List the memories flows keep, and show or change one.",
   skills: "Check skill directories.",
 };
 

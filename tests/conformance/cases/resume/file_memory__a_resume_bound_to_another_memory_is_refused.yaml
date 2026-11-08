@@ -1,0 +1,28 @@
+# A resume bound to a memory of another identity (`t/other`, made before the resume) is refused:
+# its writes would land in another memory than the one the run recorded. The golden log ends at
+# the cut.
+kind: resume
+flow: |
+  id: note
+  name: note
+  input:
+    lessons: !FileMemory
+  nodes:
+    add:
+      kind: tool
+      tool_id: {lessons: append}
+      input:
+        path: notes.md
+        text: Check sums twice.
+  output: ${add.output.path}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons}
+  crash_after_record: 8
+resume:
+  memory: {lessons: {id: t/other}}
+expect:
+  raises:
+    class: RangeError
+    message: "resume refused: memory lessons is `t/other`, not the recorded `t/lessons`"

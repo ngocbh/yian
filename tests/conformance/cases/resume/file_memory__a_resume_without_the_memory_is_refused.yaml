@@ -1,0 +1,28 @@
+# A resume binds the memories its run started with again; it never creates one. One the host
+# doesn't bind (`resume.memory: {lessons: null}`) isn't at its location, so the resume is refused
+# and the log, pinned by the golden log, ends at the cut. Record 8 is `add`'s node_started.
+kind: resume
+flow: |
+  id: note
+  name: note
+  input:
+    lessons: !FileMemory
+  nodes:
+    add:
+      kind: tool
+      tool_id: {lessons: append}
+      input:
+        path: notes.md
+        text: Check sums twice.
+  output: ${add.output.path}
+run: {run_id: r1, num_workers: 0}
+host:
+  memory:
+    lessons: {type: FileMemory, id: t/lessons}
+  crash_after_record: 8
+resume:
+  memory: {lessons: null}
+expect:
+  raises:
+    class: RangeError
+    message: "memory `lessons` (`t/lessons`) isn't at its location; bind it with --memory"

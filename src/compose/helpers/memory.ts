@@ -38,8 +38,8 @@ export const NO_MEMORY_TYPES: MemoryTypeTable = Object.freeze({
  * A class implementing a built-in contract is skipped: the built-in names it already.
  *
  * @throws TypeError when `memoryTypes` isn't a list of classes each declaring a contract with a
- *   type a tag can write and named tools, or lists two classes for one type with different
- *   tools.
+ *   type a tag can write and named tools, each once, or lists two classes for one type with
+ *   different tools.
  */
 export function memoryTypeTools(memoryTypes: unknown): ReadonlyMap<string, readonly string[]> {
   if (!Array.isArray(memoryTypes)) throw new TypeError("memoryTypes must be a list of memory classes");
@@ -59,6 +59,8 @@ export function memoryTypeTools(memoryTypes: unknown): ReadonlyMap<string, reado
     if (!names.every((tool): tool is string => typeof tool === "string" && tool !== "")) {
       throw new TypeError(`${String(name)}'s contract tools need names`);
     }
+    const twice = names.find((tool, i) => names.indexOf(tool) !== i);
+    if (twice !== undefined) throw new TypeError(`${String(name)}'s contract lists the tool ${twice} twice`);
     if (Object.hasOwn(BUILTIN_MEMORY_TOOLS, type)) continue;
     try {
       withMemoryTypes(new Map(), [type]);

@@ -126,6 +126,18 @@ describe("host memory types", () => {
   });
 });
 
+test("memoryTypes refuses a contract that lists a tool twice", async () => {
+  class Twice extends TradeJournal {
+    static override readonly contract: MemoryContract = {
+      type: "Twice",
+      tools: [TradeJournal.contract.tools[0]!, TradeJournal.contract.tools[0]!],
+    };
+  }
+  await expect(loadFlow(flowWith("q: !str"), { memoryTypes: [Twice] })).rejects.toThrow(
+    "Twice's contract lists the tool record_trade twice",
+  );
+});
+
 describe("hostInputs", () => {
   test("a memory input given a plain value is refused", async () => {
     const flow = await loadFlow(flowWith("lessons: !FileMemory\nnotes: !Optional(FileMemory)"));

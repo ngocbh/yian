@@ -30,7 +30,7 @@ import { MediaPart, Message as ModelMessage, MessageFormatError, TextPart } from
 import { checkSkillName, type Skill, SkillError } from "../../skills/catalog.ts";
 import { LOAD_SKILL, loadSkillTool, systemPromptWithSkills } from "../../skills/tool.ts";
 import { renderRecall } from "../../memory/render.ts";
-import { memoryTools } from "../../memory/tools.ts";
+import { grantedMemorySpecs, MEMORY_SCOPE_LABEL, memoryTools } from "../../memory/tools.ts";
 import type { FunctionTool } from "../../tools/function_tools.ts";
 import { asToolGrant, type MemoryGrant, type ToolGrant, visibleToolName } from "../../tools/grants.ts";
 import { ToolSet } from "../../tools/registry.ts";
@@ -870,18 +870,29 @@ export class AgentNode extends Node {
     inputs: Readonly<Record<string, unknown>>,
     caps: NodeCaps,
   ): { tools: ToolGrant[]; toolset: ToolSet | null } {
-    const memories = this.boundMemories(inputs);
-    const tools = this.tools.filter((grant) => !memories.has(grantName(grant)) || memories.get(grantName(grant)) !== null);
+    const { tools, memories } = this.memoryPlan(inputs);
     const groups = new Map<string, FunctionTool[]>();
     const author = { kind: "agent" as const, name: staticPathOf(this.id) };
     for (const [input, value] of memories) {
-      if (value === null) continue;
       const session = memorySession(caps, value.identity);
       groups.set(input, memoryTools(value, session, { input, tools: this.grantedMemoryTools(input) }, author));
     }
     const toolset = caps.tools ?? null;
     if (groups.size === 0) return { tools, toolset };
-    return { tools, toolset: (toolset ?? new ToolSet()).withLocalGroups(groups, "this node's memories") };
+    return { tools, toolset: (toolset ?? new ToolSet()).withLocalGroups(groups, MEMORY_SCOPE_LABEL) };
+  }
+
+  /**
+   * Return the grants an invocation's model is given, which the live loop and a rebuilt request
+   * both expand: every authored grant in its order, but none of a memory left out (an Optional one,
+   * null); and each bound memory a grant names, by input in grant order.
+   */
+  private memoryPlan(inputs: Readonly<Record<string, unknown>>): { tools: ToolGrant[]; memories: Map<string, MemoryRef> } {
+    const bound = this.boundMemories(inputs);
+    const tools = this.tools.filter((grant) => !bound.has(grantName(grant)) || bound.get(grantName(grant)) !== null);
+    const memories = new Map<string, MemoryRef>();
+    for (const [input, value] of bound) if (value !== null) memories.set(input, value);
+    return { tools, memories };
   }
 
   /**
@@ -1174,7 +1185,12 @@ export class AgentNode extends Node {
       return { ...none, digestOk: false };
     }
     const system = new ModelMessage({ role: "system", parts: [new TextPart(rendered.systemPrompt)] });
-    const tools = caps.toolSpecs(this.grantedTools(), rendered.skills.length > 0 ? loadSkillTool() : null);
+    // The memories' tools as the live loop built them, from the values the run recorded.
+    const { tools: grants, memories } = this.memoryPlan(inputs);
+    const local = new Map(
+      [...memories].map(([input, value]) => [input, grantedMemorySpecs(value, { input, tools: this.grantedMemoryTools(input) })]),
+    );
+    const tools = caps.toolSpecs(grants, rendered.skills.length > 0 ? loadSkillTool() : null, local);
     const contract = this.outputContract;
     const structured = async () => {
       if (!isExactly(contract, ValueContract) || caps.models === null) return null;

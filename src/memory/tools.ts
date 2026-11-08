@@ -20,6 +20,9 @@ import type { RecordedMemoryTool } from "../typesys/memory.ts";
 import { fromHost, type MemoryRef, writeAsText } from "../typesys/values.ts";
 import { type Applied, type Author, memoryErrorKind, type MemorySession } from "./base.ts";
 
+/** What a node's memory tools are, as a grant scope's messages name them. */
+export const MEMORY_SCOPE_LABEL = "this node's memories";
+
 /**
  * Return a FunctionTool per tool `grant` grants of the memory `value`, in the value's spec order,
  * each over `session` and built from its recorded spec.
@@ -36,14 +39,26 @@ export function memoryTools(
   grant: { readonly input: string; readonly tools: readonly string[] | null },
   author: { readonly kind: "agent" | "tool"; readonly name: string },
 ): FunctionTool[] {
+  return grantedMemorySpecs(value, grant).map((spec) => memoryTool(spec, session, grant.input, author));
+}
+
+/**
+ * Return the recorded specs of the tools `grant` grants of the memory `value`, in the value's spec
+ * order: what `memoryTools` builds its tools from, and what a rebuilt request lists.
+ *
+ * @throws RangeError when `grant` names a tool the value doesn't have.
+ */
+export function grantedMemorySpecs(
+  value: MemoryRef,
+  grant: { readonly input: string; readonly tools: readonly string[] | null },
+): readonly RecordedMemoryTool[] {
   const { input, tools } = grant;
   const missing = tools?.find((name) => !value.tools.some((tool) => tool.name === name));
   if (missing !== undefined) {
     const has = value.tools.map((tool) => tool.name).join(", ");
     throw new RangeError(`\`${input}\` has no tool \`${missing}\`; it has ${has}`);
   }
-  const granted = tools === null ? value.tools : value.tools.filter((tool) => tools.includes(tool.name));
-  return granted.map((spec) => memoryTool(spec, session, input, author));
+  return tools === null ? value.tools : value.tools.filter((tool) => tools.includes(tool.name));
 }
 
 /** Return the FunctionTool of one recorded memory tool `spec`. */

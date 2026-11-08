@@ -390,13 +390,15 @@ export interface RebuildCaps {
   /** The skills the run recorded, by name. */
   readonly skills: ReadonlyMap<string, Skill>;
   /**
-   * The request's tool list as the run bound it: the specs of the tools `grants` grant, as the run
-   * recorded them, each under the name the model saw, then `loadSkill` when given; `null` when a
-   * grant can't be resolved.
+   * The request's tool list as the run bound it: the specs of the tools `grants` grant, each under
+   * the name the model saw, then `loadSkill` when given; `null` when a grant can't be resolved.
+   * A grant resolves first in `local`, groups of the node's own (its memories) with their tools'
+   * specs in order, then in the tools the run recorded, as the live loop resolves it.
    */
   readonly toolSpecs: (
     grants: readonly ToolGrant[],
     loadSkill: ToolSpec | null,
+    local?: ReadonlyMap<string, readonly LocalToolSpec[]>,
   ) => readonly ToolSpec[] | null;
   /** Builds the invocation's model to read its request settings off; never called. */
   readonly models: ModelAccess | null;
@@ -598,6 +600,13 @@ export class AssertionStageError extends Error {
     super(markerMessage(original), { cause: original });
     this.original = original;
   }
+}
+
+/** A tool of a node's own group as a rebuilt request lists it: its name in the group, and its spec. */
+export interface LocalToolSpec {
+  readonly name: string;
+  readonly description: string;
+  readonly parameters: JsonObject;
 }
 
 /** A run's sessions on its memories, which every node bound to a memory shares. */

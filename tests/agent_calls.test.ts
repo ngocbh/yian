@@ -20,6 +20,8 @@ import { NamedTool, type Request, Response, Usage } from "../src/llm/messages.ts
 import { BindingError } from "../src/nodes/binding.ts";
 import { ScriptedModel } from "../src/llm/testing.ts";
 import { AuthError } from "../src/llm_clients/auth/index.ts";
+import { MemoryBase, type MemoryContract, type MemorySession } from "../src/memory/base.ts";
+import { FileMemory } from "../src/memory/file.ts";
 import type { ModelAccess } from "../src/llm_clients/factory.ts";
 import { fromModelMessage } from "../src/nodes/agent/messages.ts";
 import { AgentNode } from "../src/nodes/agent/node.ts";
@@ -42,6 +44,7 @@ import { Skill } from "../src/skills/catalog.ts";
 import { LOAD_SKILL } from "../src/skills/tool.ts";
 import { FunctionTool } from "../src/tools/function_tools.ts";
 import { logJson } from "../src/typesys/json.ts";
+import { RecordingSession } from "./helpers/memory_fakes.ts";
 import { callReply, crashAfter, NO_ENV, serving, textReply } from "./helpers/run_state_fixtures.ts";
 
 const root = mkdtempSync(join(tmpdir(), "yian-agent-calls-"));
@@ -790,4 +793,101 @@ test("an agent's rebuildRequests returns each request and whether all digests ma
   const caps = { skills: new Map(), toolSpecs: () => [], models: null };
   const material = await node.rebuildRequests({}, [], caps);
   expect(Object.keys(material!).sort()).toEqual(["digestOk", "requests"]);
+});
+
+/** A flow whose agent holds `lookup`, `read` of the memory `lessons` and the skill `style`. */
+const REMEMBER = (tag: string, grant = "{lessons: [read]}") => `
+id: remember
+name: remember
+llm_config: {provider: anthropic, model: claude-test}
+input:
+  lessons: !${tag}
+nodes:
+  writer:
+    kind: agent
+    input:
+      lessons: \${input.lessons}
+    tools: [lookup, ${grant}]
+    skills: [style]
+    prompt: "<memory>\${lessons}</memory> write"
+    output: str
+output: \${writer.output}
+`;
+
+const STYLE = new Map([["style", new Skill({ name: "style", description: "House style.", instructions: "Be brief." })]]);
+
+test("a memory grant: the rebuilt request holds the recorded recall and the memory's tools, as sent", async () => {
+  const folder = mkdtempSync(join(root, "memory-"));
+  writeFileSync(join(folder, "MEMORY.md"), "Prefer short answers.");
+  writeFileSync(join(folder, "b.md"), "B.");
+  const lessons = new FileMemory({ root: folder, id: "t/lessons" });
+  const model = new ScriptedModel([callReply(["lessons_read", { path: "b.md" }, "call-1"]), textReply("done")], {
+    provider: "anthropic",
+    model: "claude-test",
+  });
+  const { log, result } = await run(REMEMBER("FileMemory"), model, { lessons }, { tools: toolsOf(), skills: STYLE });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  // The folder changes after the run; the rebuild reads only the log.
+  writeFileSync(join(folder, "MEMORY.md"), "Changed.");
+  for (const [n, index] of [[1, 0], [3, 1]] as const) {
+    const view = await agentCall(log, { nodeId: "writer", n }, { env: NO_ENV });
+    expect(view.digestMismatch).toBe(false);
+    expect(requestOf(view).tools.map((tool) => tool.name)).toEqual(["lookup", "lessons_read", "load_skill"]);
+    expect(requestOf(view)).toMatchObject(sentView(model.requests[index]!));
+  }
+  const first = await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV });
+  expect(requestOf(first).messages[0]).toEqual({
+    role: "user",
+    parts: [{ type: "text", text: "<memory>Prefer short answers.\nRead the rest with lessons_read.</memory> write" }],
+  });
+});
+
+test("a recorded flow whose memory type is a host's own, not passed again, rebuilds the same", async () => {
+  const tools = [
+    { name: "find", write: false, description: "Find a trade.", parameters: { type: "object", properties: {} } },
+    { name: "keep", write: true, description: "Keep a trade.", parameters: { type: "object", properties: {} } },
+  ];
+  class Journal extends MemoryBase {
+    static override readonly contract: MemoryContract = { type: "Journal", tools };
+    override async open(): Promise<MemorySession> {
+      const session = new RecordingSession({ type: "Journal", identity: "t/journal", settings: { k: 1n }, tools });
+      session.onSnapshot = () => ({ version: "v1", recall: { text: "two trades", cut: null, hint: null } });
+      session.onCall = () => ({ trades: 2n });
+      return session;
+    }
+    override reset(): Promise<void> {
+      throw new Error("not reset");
+    }
+  }
+  const model = new ScriptedModel([callReply(["lessons_find", {}, "call-1"]), textReply("done")], {
+    provider: "anthropic",
+    model: "claude-test",
+  });
+  const flow = await loadFlow(REMEMBER("Journal", "lessons"), { memoryTypes: [Journal] });
+  const log = runLog();
+  const result = await runFlow(flow, { lessons: new Journal() }, {
+    models: serving(model),
+    env: NO_ENV,
+    log,
+    tools: toolsOf(),
+    skills: STYLE,
+  });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  for (const [n, index] of [[1, 0], [3, 1]] as const) {
+    const view = await agentCall(log, { nodeId: "writer", n }, { env: NO_ENV });
+    expect(view.digestMismatch).toBe(false);
+    expect(requestOf(view).tools.map((tool) => tool.name)).toEqual(["lookup", "lessons_find", "lessons_keep", "load_skill"]);
+    expect(requestOf(view)).toMatchObject(sentView(model.requests[index]!));
+  }
+});
+
+test("a granted Optional memory left out rebuilds with none of its tools and an empty recall", async () => {
+  const model = new ScriptedModel([textReply("done")], { provider: "anthropic", model: "claude-test" });
+  const { log, result } = await run(REMEMBER("Optional(FileMemory)"), model, {}, { tools: toolsOf(), skills: STYLE });
+  expect(result.status, result.failure?.message).toBe("succeeded");
+  const view = await agentCall(log, { nodeId: "writer", n: 1 }, { env: NO_ENV });
+  expect(view.digestMismatch).toBe(false);
+  expect(requestOf(view).tools.map((tool) => tool.name)).toEqual(["lookup", "load_skill"]);
+  expect(requestOf(view).messages[0]).toEqual({ role: "user", parts: [{ type: "text", text: "<memory></memory> write" }] });
+  expect(requestOf(view)).toMatchObject(sentView(model.requests[0]!));
 });

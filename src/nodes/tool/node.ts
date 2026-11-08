@@ -22,7 +22,7 @@
 
 import { current } from "../../defaults.ts";
 import { type FailureCode, reprText } from "../../diagnostics.ts";
-import { memoryTools } from "../../memory/tools.ts";
+import { MEMORY_SCOPE_LABEL, memoryTools } from "../../memory/tools.ts";
 import { realScheduler } from "../../platform.ts";
 import { ASK, BUILTIN_TOOL_IDS, type BuiltinToolId, isPending, SLEEP, TAKE, toolCallId } from "../../tools/context.ts";
 import { isPermanentToolError, isToolCheckError, isTransientToolError, ToolCheckError } from "../../tools/errors.ts";
@@ -429,7 +429,7 @@ export class ToolNode extends Node {
     if (!MemoryRef.isMemoryRef(value)) throw new TypeError(`TOOL node ${reprText(this.id)}: \`${input}\` holds no memory`);
     const session = memorySession(caps, value.identity);
     const local = memoryTools(value, session, grant!, { kind: "tool", name: staticPathOf(this.id) });
-    return tools.withLocalGroups(new Map([[input, local]]), "this node's memories");
+    return tools.withLocalGroups(new Map([[input, local]]), MEMORY_SCOPE_LABEL);
   }
 
   /** Return the inputs a memory tool takes: the bound record without its reserved memory key. */

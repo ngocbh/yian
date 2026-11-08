@@ -19,29 +19,16 @@
  * the stored result.
  *
  * It imports `defaults`, `platform`, `tools`, `typesys`, the embedding types of `llm`, and
- * `memory/base.ts` and `memory/file_journal.ts`.
+ * `memory/base.ts` and `memory/common.ts`.
  */
 
-import { createHash } from "node:crypto";
 // The default import keeps calls patchable by test spies.
 import fs from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname } from "node:path";
 
 import { current } from "../defaults.ts";
 import type { Embed, EmbeddingModel } from "../llm/embeddings.ts";
-import {
-  type FileLock,
-  FileLockError,
-  isSystemError,
-  openSqlite,
-  realScheduler,
-  type Scheduler,
-  type Sqlite,
-  sqliteErrorCode,
-  syncFolder,
-  waitForLock,
-} from "../platform.ts";
-import { ReportedToolError } from "../tools/errors.ts";
+import { openSqlite, realScheduler, type Scheduler, type Sqlite, sqliteErrorCode, syncFolder } from "../platform.ts";
 import { inputTypeFromJsonSchema } from "../tools/types.ts";
 import { type JsonObject, type JsonValue, logJson, parseJson } from "../typesys/json.ts";
 import { buildValueAs, TypeCheckError } from "../typesys/values.ts";
@@ -52,14 +39,35 @@ import {
   ChangeIdReusedError,
   type Erased,
   MemoryBase,
-  MemoryBusyError,
   type MemoryContract,
   type MemoryInfo,
   type MemorySession,
   type MemoryToolSpec,
   type Recall,
 } from "./base.ts";
-import { asAuthor, charCount, isObject, openRegular } from "./file_journal.ts";
+import {
+  asAuthor,
+  capOption,
+  charCount,
+  checkAuthor,
+  firstChars,
+  type Held,
+  isObject,
+  listed,
+  locked,
+  lstatOrNull,
+  type MemoryLock,
+  openRegular,
+  plural,
+  realPath,
+  refusal,
+  refused,
+  sha256,
+  shown,
+  stringArg,
+  type Turn,
+  withoutLocation,
+} from "./common.ts";
 
 /** The layout of the store's tables; a store of another layout is refused. */
 const STORE_VERSION = 1;
@@ -259,19 +267,6 @@ interface Limits {
   readonly maxChangeIds: number;
 }
 
-/**
- * Return `value` when it is a safe integer of at least `minimum`, else its default.
- *
- * @throws {RangeError} If `value` is given and isn't such an integer.
- */
-function capOption(name: string, value: number | undefined, fallback: number, minimum: number): number {
-  if (value === undefined) return fallback;
-  if (!Number.isSafeInteger(value) || value < minimum) {
-    throw new RangeError(`VectorDBMemory ${name} must be an integer of at least ${minimum}, not ${String(value)}`);
-  }
-  return value;
-}
-
 /** Return whether `value` is a non-empty string on one line, with no lone surrogate. */
 function isLine(value: unknown): value is string {
   return typeof value === "string" && value !== "" && value.isWellFormed() && !/[\r\n\0]/.test(value);
@@ -292,41 +287,6 @@ function checkEmbedding(value: unknown): EmbeddingModel {
 /** Return `model` as messages show it: `provider/model`. */
 function modelName(model: EmbeddingModel): string {
   return `${model.provider}/${model.model}`;
-}
-
-/** Return `path` in backticks for a message, a control character escaped. */
-function shown(path: string): string {
-  return `\`${JSON.stringify(path).slice(1, -1)}\``;
-}
-
-/** Return the sha256 hex digest of `data`. */
-function sha256(data: string | Uint8Array): string {
-  return createHash("sha256").update(data).digest("hex");
-}
-
-/** `fs.lstatSync`, or `null` when nothing is at `path`. */
-function lstatOrNull(path: string): fs.Stats | null {
-  try {
-    return fs.lstatSync(path);
-  } catch (error) {
-    if (isSystemError(error) && error.code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-/** Return `path`'s real path, resolving the symlinks of the part of it that exists. */
-function realPath(path: string): string {
-  const rest: string[] = [];
-  let head = resolve(path);
-  for (;;) {
-    try {
-      return join(fs.realpathSync(head), ...rest.reverse());
-    } catch (error) {
-      if (!isSystemError(error) || error.code !== "ENOENT" || dirname(head) === head) throw error;
-      rest.push(basename(head));
-      head = dirname(head);
-    }
-  }
 }
 
 /** Make the missing folder `folder` and its missing parents, private, syncing each new folder's parent. */
@@ -530,35 +490,6 @@ function itemTypeProblem(stored: JsonObject | null, given: JsonObject | null): s
   return "this memory's items have another type than its input's; bind a memory made with that type";
 }
 
-/** Return `count` and `noun`, plural unless `count` is 1: `plural(2, "item")` is `"2 items"`. */
-function plural(count: number, noun: string): string {
-  return `${count} ${count === 1 ? noun : `${noun}s`}`;
-}
-
-/** Return the first `limit` code points of `text`. */
-function firstChars(text: string, limit: number): string {
-  let index = 0;
-  for (let n = 0; n < limit && index < text.length; n++) index += text.codePointAt(index)! > 0xffff ? 2 : 1;
-  return text.slice(0, index);
-}
-
-/** A refusal the calling model reads: a TOOL node doesn't retry it, since it can't change. */
-function refusal(message: string): ReportedToolError {
-  return new ReportedToolError(message, { permanent: true });
-}
-
-/** Return `args[name]` when it is a string, or `undefined` when it is absent and not `required`. */
-function stringArg(args: JsonObject, name: string, required: true): string;
-function stringArg(args: JsonObject, name: string, required: false): string | undefined;
-function stringArg(args: JsonObject, name: string, required: boolean): string | undefined {
-  const value = Object.hasOwn(args, name) ? args[name] : undefined;
-  if (value === undefined && !required) return undefined;
-  if (typeof value !== "string" || !value.isWellFormed()) {
-    throw new TypeError(`VectorDBMemory ${name} must be a string`);
-  }
-  return value;
-}
-
 /**
  * Return `args[name]` as a number when it is an integer of at least 1, or `undefined` when it is
  * absent and not `required`.
@@ -733,11 +664,6 @@ const CHANGE_FIELDS: Readonly<Record<Change["op"], readonly string[]>> = Object.
   delete: ["id", "if_version"],
 });
 
-/** Return `names` joined for a message: `a`, `a and b`, `a, b and c`. */
-function listed(names: readonly string[]): string {
-  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-}
-
 /**
  * Return `fields` as the item schema `schema` types them: a copy of the value the check built.
  *
@@ -854,24 +780,6 @@ function checkChange(change: JsonObject, schema: JsonObject | null): Change {
     case "delete":
       return { op: "delete", id: int("id"), if_version: int("if_version") };
   }
-}
-
-/**
- * Return `author` with only its own fields.
- *
- * @throws {TypeError} If it isn't `{kind, name, run?, node?}` with a known kind.
- */
-function checkAuthor(author: Author): Author {
-  const checked = asAuthor(author);
-  if (checked === null) {
-    throw new TypeError("a change's author must be {kind, name, run?, node?}, its kind agent, tool, user or host");
-  }
-  return checked;
-}
-
-/** Return a refusal that wrote nothing. */
-function refused(reason: string): Applied {
-  return { ok: false, reason, current: null };
 }
 
 /** Return a conflict over the item `row`, holding its current state as `read` shows it. */
@@ -1071,112 +979,13 @@ interface Store {
   /** The model the instance was built with, or `undefined` to take the stored one. */
   readonly embedding: EmbeddingModel | undefined;
   readonly embed: Embed | undefined;
-  /**
-   * Run `body` holding the memory's lock, after this process's earlier calls on the store: they
-   * take turns, so only another process's writer makes it wait for the lock. It waits at most the
-   * lock timeout from when it was called, its time in the queue included, and an abort while it
-   * is queued rejects it at once.
-   *
-   * Returns the call's `result`, which rejects with `MemoryBusyError` if the lock is still held by
-   * another writer at the deadline, and `done`, which settles once its turn has finished, later
-   * than `result` when an abort let the call go before its turn came.
-   */
+  /** Run `body` holding the memory's lock, in this process's turn on the store, as `locked` in `common.ts` does. */
   locked<T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T>;
   /**
    * Run the async `body` holding the memory's lock for as long as it runs, as `locked` runs a
    * synchronous one. Only host actions do this: every other writer waits for it, or times out.
    */
   hold<T>(signal: AbortSignal, body: () => Promise<T>): Promise<T>;
-}
-
-/** A call's place in a store's queue: its result, and when its turn has finished. */
-interface Turn<T> {
-  readonly result: Promise<T>;
-  /** Settles, never rejecting, once the turn has run or been passed over. */
-  readonly done: Promise<void>;
-}
-
-/**
- * A body that runs holding a memory's lock. It must finish before it returns, so it can't be async:
- * the lock is released when it returns, and an async body would go on without it.
- */
-type Held<T> = (() => T) & (T extends PromiseLike<unknown> ? never : unknown);
-
-/**
- * This process's calls that hold a store's lock, keyed by the store's real path and chained, so
- * its sessions and opens take turns rather than poll the lock against each other.
- */
-const TURNS = new Map<string, Promise<void>>();
-
-/** The error a call gets when its wait for the memory's lock runs past its timeout. */
-function busy(): MemoryBusyError {
-  // No cause: a lock's error names its path, and this one can reach a model.
-  return new MemoryBusyError("this memory is busy: another writer holds its lock");
-}
-
-/**
- * Call `fn` once `ms` real milliseconds have passed, unless `signal` aborts first; never for an
- * infinite `ms`. Even 0 ms waits for a macrotask: the turns ahead of a queued call settle in
- * microtasks unless one of them waits, so only a real wait makes a queued call late.
- */
-function afterMs(ms: number, signal: AbortSignal, fn: () => void): void {
-  if (!Number.isFinite(ms)) return;
-  const wait = ms > 0 ? realScheduler.sleep(ms, signal) : new Promise<void>((resolve) => setTimeout(resolve, 0));
-  wait.then(
-    () => {
-      if (!signal.aborted) fn();
-    },
-    () => undefined,
-  );
-}
-
-/**
- * Run `fn` once this process's earlier turns on the store at `path` have finished.
- *
- * A call leaves the queue before its turn when `signal` aborts, rejecting with its reason, or
- * when it has waited `timeoutMs`, rejecting with `MemoryBusyError`, even while the turn ahead
- * still runs. Its turn, when it comes, does nothing, so the calls after it keep their order. Once
- * its turn has started, `fn` answers the abort and the timeout itself, so a change it applies is
- * never reported as aborted.
- */
-function inTurn<T>(path: string, signal: AbortSignal | undefined, timeoutMs: number, fn: () => Promise<T>): Turn<T> {
-  let started = false;
-  /** Why the call left the queue before its turn, once it has. */
-  let left: { reason: unknown } | null = null;
-  // Aborted when the turn starts or the call settles, which stops the queue's timer.
-  const waiting = new AbortController();
-  const run = (TURNS.get(path) ?? Promise.resolve()).then(() => {
-    started = true;
-    waiting.abort();
-    if (left !== null) throw left.reason;
-    signal?.throwIfAborted();
-    return fn();
-  });
-  const done = run.then(
-    () => undefined,
-    () => undefined,
-  );
-  TURNS.set(path, done);
-  void done.then(() => {
-    if (TURNS.get(path) === done) TURNS.delete(path);
-  });
-  const result = new Promise<T>((resolve, reject) => {
-    const leave = (reason: unknown) => {
-      if (started || left !== null) return;
-      left = { reason };
-      reject(reason);
-    };
-    const onAbort = () => leave(signal!.reason);
-    signal?.addEventListener("abort", onAbort, { once: true });
-    // A signal aborted already never fires its listeners.
-    if (signal?.aborted) onAbort();
-    afterMs(timeoutMs, waiting.signal, () => leave(busy()));
-    void run.then(resolve, reject).finally(() => {
-      signal?.removeEventListener("abort", onAbort);
-      waiting.abort();
-    });
-  });
-  return { result, done };
 }
 
 /**
@@ -1191,26 +1000,6 @@ function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
     if (signal.aborted) onAbort();
     promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   });
-}
-
-/**
- * Return `error` with the store's location taken out of its message: an OS error names absolute
- * paths, and a session's errors can reach a model and a run log, which never hold a location. A
- * system error keeps its code.
- */
-function withoutLocation(error: unknown, path: string): unknown {
-  const folder = dirname(path);
-  if (!(error instanceof Error) || !error.message.includes(folder)) return error;
-  const copy: Error & { code?: unknown; syscall?: unknown; errno?: unknown } = new Error(
-    error.message.replaceAll(path, "the memory's store").replaceAll(folder, "the memory's folder"),
-  );
-  copy.name = error.name;
-  // Not `path`, `dest` or `cause`, which hold the location too.
-  const { code, syscall, errno } = error as NodeJS.ErrnoException;
-  if (code !== undefined) copy.code = code;
-  if (syscall !== undefined) copy.syscall = syscall;
-  if (errno !== undefined) copy.errno = errno;
-  return copy;
 }
 
 /** The SQLite primary result code for a file that isn't a database. */
@@ -1258,14 +1047,16 @@ export class VectorDBMemory extends MemoryBase {
       throw new TypeError("VectorDBMemory embed must be a function");
     }
     const defaults = current();
+    const cap = (name: string, value: number | undefined, fallback: number, minimum: number) =>
+      capOption("VectorDBMemory", name, value, fallback, minimum);
     const limits: Limits = Object.freeze({
-      maxItems: capOption("maxItems", options.maxItems, defaults.vectorMemoryMaxItems, 1),
-      maxK: capOption("maxK", options.maxK, defaults.vectorMemoryMaxK, 1),
-      maxTextChars: capOption("maxTextChars", options.maxTextChars, defaults.vectorMemoryMaxTextChars, 1),
-      maxRecallChars: capOption("maxRecallChars", options.maxRecallChars, defaults.vectorMemoryMaxRecallChars, 1),
-      recallRecent: capOption("recallRecent", options.recallRecent, 0, 0),
-      maxUndo: capOption("maxUndo", options.maxUndo, defaults.memoryMaxUndo, 0),
-      maxChangeIds: capOption("maxChangeIds", options.maxChangeIds, defaults.memoryMaxChangeIds, 1),
+      maxItems: cap("maxItems", options.maxItems, defaults.vectorMemoryMaxItems, 1),
+      maxK: cap("maxK", options.maxK, defaults.vectorMemoryMaxK, 1),
+      maxTextChars: cap("maxTextChars", options.maxTextChars, defaults.vectorMemoryMaxTextChars, 1),
+      maxRecallChars: cap("maxRecallChars", options.maxRecallChars, defaults.vectorMemoryMaxRecallChars, 1),
+      recallRecent: cap("recallRecent", options.recallRecent, 0, 0),
+      maxUndo: cap("maxUndo", options.maxUndo, defaults.memoryMaxUndo, 0),
+      maxChangeIds: cap("maxChangeIds", options.maxChangeIds, defaults.memoryMaxChangeIds, 1),
     });
     const defaultTimeoutMs = defaults.memoryLockTimeoutSeconds * 1000;
     const timeoutMs = options.lockTimeoutMs ?? defaultTimeoutMs;
@@ -1277,30 +1068,13 @@ export class VectorDBMemory extends MemoryBase {
     const scheduler = options.scheduler ?? realScheduler;
     this.path = real;
     this.#id = id;
-    /** Run `body` holding the lock, in this process's turn on the store, as `Store.locked` describes. */
-    const turn = <T>(signal: AbortSignal | undefined, body: () => T | Promise<T>): Turn<T> => {
-      // A monotonic clock, so a wall-clock step while queued neither stretches nor cuts the wait.
-      const deadline = performance.now() + timeoutMs;
-      return inTurn(real, signal, timeoutMs, async () => {
-        // Checked before the lock file is opened, and on every call: the files may change.
-        checkFiles(real);
-        // Only what is left of the timeout: a call waits it out once, queued or not.
-        const left = Math.max(0, deadline - performance.now());
-        let lock: FileLock;
-        try {
-          lock = await waitForLock(`${real}.lock`, { timeoutMs: left, signal, scheduler, private: true });
-        } catch (error) {
-          if (error instanceof FileLockError && error.reason === "busy") throw busy();
-          throw error;
-        }
-        try {
-          // Again holding the lock: the files may have changed while the call waited for it.
-          checkFiles(real);
-          return await body();
-        } finally {
-          lock.release();
-        }
-      });
+    const lock: MemoryLock = {
+      key: real,
+      path: `${real}.lock`,
+      timeoutMs,
+      scheduler,
+      // The files may change: they are checked on every call.
+      check: () => checkFiles(real),
     };
     this.#store = Object.freeze({
       path: real,
@@ -1308,8 +1082,8 @@ export class VectorDBMemory extends MemoryBase {
       scheduler,
       embedding,
       embed: options.embed,
-      locked: <T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T> => turn(signal, body),
-      hold: <T>(signal: AbortSignal, body: () => Promise<T>): Promise<T> => turn(signal, body).result,
+      locked: <T>(signal: AbortSignal | undefined, body: Held<T>): Turn<T> => locked(lock, signal, body),
+      hold: <T>(signal: AbortSignal, body: () => Promise<T>): Promise<T> => locked(lock, signal, body).result,
     });
   }
 
@@ -1975,7 +1749,9 @@ class VectorDBSession implements MemorySession {
    */
   async #search(args: JsonObject, signal: AbortSignal): Promise<JsonObject> {
     const { limits } = this.#store;
-    const query = stringArg(args, "query", true);
+    const query = stringArg("VectorDBMemory", args, "query", true);
+    // A lone surrogate has no UTF-8 form, so no embedder could take it.
+    if (!query.isWellFormed()) throw new TypeError("VectorDBMemory query must be a string");
     const k = intArg(args, "k", true);
     const filter = Object.hasOwn(args, "filter") ? args.filter : undefined;
     if (filter !== undefined && !isObject(filter)) throw new TypeError("VectorDBMemory filter must be an object");
@@ -2115,7 +1891,10 @@ class VectorDBSession implements MemorySession {
     this.#track(done);
     return this.#track(
       result.catch((error: unknown) => {
-        throw withoutLocation(error, path);
+        throw withoutLocation(error, [
+          [path, "the memory's store"],
+          [dirname(path), "the memory's folder"],
+        ]);
       }),
     );
   }

@@ -944,6 +944,30 @@ test("a queued call waits at most its timeout from when it was made; an abort wh
   await s.close();
 });
 
+test("a call queued behind a longer wait on the root is busy at its own deadline, while that wait goes on", async () => {
+  const patient = await openAt({ lockTimeoutMs: 10_000, scheduler: realScheduler });
+  const hasty = await openAt({ lockTimeoutMs: 200, scheduler: realScheduler });
+  const lock = lockFile(join(root, ".yian/lock"), { private: true });
+  let first: Promise<Applied>;
+  let queued: unknown;
+  let waited: number;
+  try {
+    first = append(patient, "p1", "p1");
+    const started = performance.now();
+    queued = await append(hasty, "h1", "h1").catch((error: unknown) => error);
+    waited = performance.now() - started;
+  } finally {
+    lock.release();
+  }
+  expect(queued).toBeInstanceOf(MemoryBusyError);
+  expect(waited).toBeLessThan(2_000);
+  expect((await first).ok).toBe(true);
+  // The busy call left the queue for good: its change never lands.
+  expect(fs.readFileSync(join(root, "a.md"), "utf8")).toBe("p1");
+  await patient.close();
+  await hasty.close();
+});
+
 test("an abort while queued leaves the others in their order", async () => {
   const s = await openAt({ lockTimeoutMs: 5_000, scheduler: realScheduler });
   const lock = lockFile(join(root, ".yian/lock"), { private: true });

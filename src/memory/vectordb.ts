@@ -1074,17 +1074,47 @@ type Held<T> = (() => T) & (T extends PromiseLike<unknown> ? never : unknown);
  */
 const TURNS = new Map<string, Promise<void>>();
 
+/** The error a call gets when its wait for the memory's lock runs past its timeout. */
+function busy(): MemoryBusyError {
+  // No cause: a lock's error names its path, and this one can reach a model.
+  return new MemoryBusyError("this memory is busy: another writer holds its lock");
+}
+
+/**
+ * Call `fn` once `ms` real milliseconds have passed, unless `signal` aborts first; never for an
+ * infinite `ms`. Even 0 ms waits for a macrotask: the turns ahead of a queued call settle in
+ * microtasks unless one of them waits, so only a real wait makes a queued call late.
+ */
+function afterMs(ms: number, signal: AbortSignal, fn: () => void): void {
+  if (!Number.isFinite(ms)) return;
+  const wait = ms > 0 ? realScheduler.sleep(ms, signal) : new Promise<void>((resolve) => setTimeout(resolve, 0));
+  wait.then(
+    () => {
+      if (!signal.aborted) fn();
+    },
+    () => undefined,
+  );
+}
+
 /**
  * Run `fn` once this process's earlier turns on the store at `path` have finished.
  *
- * An abort of `signal` while the call is queued rejects it at once with the signal's reason; its
- * turn, when it comes, does nothing, so the calls after it keep their order. Once its turn has
- * started, `fn` answers the abort itself, so a change it applies is never reported as aborted.
+ * A call leaves the queue before its turn when `signal` aborts, rejecting with its reason, or
+ * when it has waited `timeoutMs`, rejecting with `MemoryBusyError`, even while the turn ahead
+ * still runs. Its turn, when it comes, does nothing, so the calls after it keep their order. Once
+ * its turn has started, `fn` answers the abort and the timeout itself, so a change it applies is
+ * never reported as aborted.
  */
-function inTurn<T>(path: string, signal: AbortSignal | undefined, fn: () => Promise<T>): Turn<T> {
+function inTurn<T>(path: string, signal: AbortSignal | undefined, timeoutMs: number, fn: () => Promise<T>): Turn<T> {
   let started = false;
+  /** Why the call left the queue before its turn, once it has. */
+  let left: { reason: unknown } | null = null;
+  // Aborted when the turn starts or the call settles, which stops the queue's timer.
+  const waiting = new AbortController();
   const run = (TURNS.get(path) ?? Promise.resolve()).then(() => {
     started = true;
+    waiting.abort();
+    if (left !== null) throw left.reason;
     signal?.throwIfAborted();
     return fn();
   });
@@ -1096,17 +1126,37 @@ function inTurn<T>(path: string, signal: AbortSignal | undefined, fn: () => Prom
   void done.then(() => {
     if (TURNS.get(path) === done) TURNS.delete(path);
   });
-  if (signal === undefined) return { result: run, done };
   const result = new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      if (!started) reject(signal.reason);
+    const leave = (reason: unknown) => {
+      if (started || left !== null) return;
+      left = { reason };
+      reject(reason);
     };
-    signal.addEventListener("abort", onAbort, { once: true });
+    const onAbort = () => leave(signal!.reason);
+    signal?.addEventListener("abort", onAbort, { once: true });
     // A signal aborted already never fires its listeners.
-    if (signal.aborted) onAbort();
-    void run.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+    if (signal?.aborted) onAbort();
+    afterMs(timeoutMs, waiting.signal, () => leave(busy()));
+    void run.then(resolve, reject).finally(() => {
+      signal?.removeEventListener("abort", onAbort);
+      waiting.abort();
+    });
   });
   return { result, done };
+}
+
+/**
+ * Return `promise`, or reject with `signal`'s reason as soon as it aborts, for an embedder that
+ * doesn't heed its signal: a call waiting on it would otherwise never end, and a reembed would
+ * keep the memory's lock.
+ */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    if (signal.aborted) onAbort();
+    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
 }
 
 /**
@@ -1197,7 +1247,7 @@ export class VectorDBMemory extends MemoryBase {
     const turn = <T>(signal: AbortSignal | undefined, body: () => T | Promise<T>): Turn<T> => {
       // A monotonic clock, so a wall-clock step while queued neither stretches nor cuts the wait.
       const deadline = performance.now() + timeoutMs;
-      return inTurn(real, signal, async () => {
+      return inTurn(real, signal, timeoutMs, async () => {
         // Checked before the lock file is opened, and on every call: the files may change.
         checkFiles(real);
         // Only what is left of the timeout: a call waits it out once, queued or not.
@@ -1206,10 +1256,7 @@ export class VectorDBMemory extends MemoryBase {
         try {
           lock = await waitForLock(`${real}.lock`, { timeoutMs: left, signal, scheduler, private: true });
         } catch (error) {
-          if (error instanceof FileLockError && error.reason === "busy") {
-            // No cause: the lock's error names its path, and this one can reach a model.
-            throw new MemoryBusyError("this memory is busy: another writer holds its lock");
-          }
+          if (error instanceof FileLockError && error.reason === "busy") throw busy();
           throw error;
         }
         try {
@@ -1367,7 +1414,10 @@ export class VectorDBMemory extends MemoryBase {
           const rows = batch.all(after, current().embeddingBatchItems);
           if (rows.length === 0) break;
           const texts = rows.map((row) => row.text as string);
-          const vectors = checkVectors(await o.embed(texts, { ...embedding, signal: o.signal }), texts.length);
+          const vectors = checkVectors(
+            await untilAborted(o.embed(texts, { ...embedding, signal: o.signal }), o.signal),
+            texts.length,
+          );
           length ??= vectors[0]!.length;
           if (vectors[0]!.length !== length) throw new Error("the embedder returned vectors of different lengths");
           transaction(db, () => {
@@ -1936,7 +1986,7 @@ class VectorDBSession implements MemorySession {
       throw new Error("this VectorDBMemory has no embed function; build it with one to search or write");
     }
     const { provider, model } = this.#stored.embedding;
-    return checkVectors(await embed(texts, { provider, model, signal }), texts.length);
+    return checkVectors(await untilAborted(embed(texts, { provider, model, signal }), signal), texts.length);
   }
 
   /**

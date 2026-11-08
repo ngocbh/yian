@@ -1490,6 +1490,46 @@ describe("the lock and the queue", () => {
     expect(closed).toBe(true);
   });
 
+  test("with lockTimeoutMs: 0 one session's concurrent calls take turns, and none of them is busy", async () => {
+    const s = await openAt({ lockTimeoutMs: 0 });
+    const writes = ["alpha", "bravo", "charlie", "delta"].map((text, i) => apply(s, { op: "add", text }, `a${i}`));
+    const reads = [s.snapshot(), call(s, "list", {}), s.history({ limit: 1 })];
+    const results = await Promise.all([...writes, ...reads]);
+    expect(results.slice(0, 4).every((result) => (result as Applied).ok)).toBe(true);
+    await s.close();
+  });
+
+  test("a call queued behind a stuck reembed is busy at its deadline; aborting the reembed frees it", async () => {
+    const s = await openAt({ lockTimeoutMs: 200 });
+    await apply(s, { op: "add", text: "alpha" }, "a1");
+    const stuck = new AbortController();
+    const never = () => new Promise<Float32Array[]>(() => {});
+    const host = memory({ lockTimeoutMs: 200 });
+    const reembedding = host.reembed({ embedding: modelB, embed: never, signal: stuck.signal });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const started = performance.now();
+    const queued = await rejection(s.snapshot());
+    expect(queued).toBeInstanceOf(MemoryBusyError);
+    expect(performance.now() - started).toBeLessThan(2_000);
+    // The embedder never answers, but the abort ends the reembed and lets go of the lock.
+    stuck.abort(new Error("stopped"));
+    await expect(reembedding).rejects.toThrow("stopped");
+    expect(await s.snapshot()).toMatchObject({ version: "1" });
+    expect(JSON.parse(metaRows().settings!).embedding).toEqual(model);
+    await s.close();
+  });
+
+  test("an abort ends a change whose embedder never answers, so close isn't held up", async () => {
+    const controller = new AbortController();
+    const s = await openAt({ embed: () => new Promise<Float32Array[]>(() => {}) });
+    const adding = s.apply({ id: "a1", change: { op: "add", text: "alpha" }, author, signal: controller.signal });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort(new Error("stopped"));
+    await expect(adding).rejects.toThrow("stopped");
+    await s.close();
+    expect(rows("items")).toEqual([]);
+  });
+
   const asUser = process.platform !== "win32" && process.getuid!() !== 0;
 
   test.if(asUser)("an OS error from a call names no location", async () => {

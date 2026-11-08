@@ -28,6 +28,7 @@ import {
   defaultIdentity,
   defaultLocation,
   projectKey,
+  withoutLocations,
 } from "../../src/cli/memory_bind.ts";
 import type { CliIo } from "../../src/cli/utils.ts";
 import { loadFlow } from "../../src/compose/loader.ts";
@@ -71,6 +72,30 @@ describe("default identities", () => {
     expect(() => defaultIdentity("/p/proj", ".hidden", "lessons", false)).toThrow(
       "give the flow a plain `id:` (letters, digits, `.`, `_`, `-`) so `lessons` gets a default memory",
     );
+  });
+});
+
+describe("withoutLocations", () => {
+  test("takes out the memory's folder, ~/.yian/memory and ~/.yian wherever they point, then the home", () => {
+    const elsewhere = join(tmp, "elsewhere");
+    mkdirSync(join(elsewhere, "mem"), { recursive: true });
+    mkdirSync(join(home, ".yian"), { recursive: true });
+    rmSync(join(home, ".yian", "memory"), { recursive: true });
+    symlinkSync(join(elsewhere, "mem"), join(home, ".yian", "memory"));
+    const root = join(elsewhere, "mem", "p", "f", "lessons");
+    const message =
+      `EACCES '${join(elsewhere, "mem", "p")}' '${root}/x.md' '${join(home, ".yian", "runs")}' ` +
+      `'${join(home, "notes")}' '${home}2'`;
+    const scrubbed = (withoutLocations(Object.assign(new Error(message), { code: "EACCES" }), home, [root]) as Error)
+      .message;
+    expect(scrubbed).toBe(
+      "EACCES '~/.yian/memory/p' 'the memory's folder/x.md' '~/.yian/runs' '~/notes' " + `'${home}2'`,
+    );
+  });
+
+  test("a home of / is left in place, so no path turns into ~", () => {
+    const message = "EACCES: permission denied, mkdir '/srv/x'";
+    expect((withoutLocations(new Error(message), "/", []) as Error).message).toBe(message);
   });
 });
 

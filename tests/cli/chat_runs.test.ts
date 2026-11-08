@@ -4,6 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -974,6 +975,31 @@ describe("memory", () => {
         .then(() => null, (error: Error) => error.message);
       expect(bound).toContain(`~/.yian/memory/${projectKey(root)} is a symlink`);
       expect(bound).not.toContain(root);
+    },
+    TIMEOUT,
+  );
+
+  test.skipIf(process.getuid?.() === 0)(
+    "an OS error under a ~/.yian/memory linked out of the home folder names no location",
+    async () => {
+      const home = join(root, "home");
+      const elsewhere = join(root, "elsewhere", "mem");
+      mkdirSync(elsewhere, { recursive: true });
+      mkdirSync(join(home, ".yian"), { recursive: true });
+      symlinkSync(elsewhere, join(home, ".yian", "memory"));
+      // The project's folder can't take the flow's: the open's mkdir fails there.
+      const key = join(elsewhere, projectKey(root));
+      mkdirSync(key, { mode: 0o500 });
+      try {
+        const refused = await childRuns()
+          .start(await flow(REMEMBER), {}, { project: root })
+          .then(() => null, (error: Error) => error.message);
+        expect(refused).toContain("EACCES");
+        expect(refused).toContain(`~/.yian/memory/${projectKey(root)}/answer`);
+        expect(refused).not.toContain(root);
+      } finally {
+        chmodSync(key, 0o700);
+      }
     },
     TIMEOUT,
   );

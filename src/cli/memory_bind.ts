@@ -170,15 +170,23 @@ export function createdLine(created: CreatedMemory, location: boolean): string {
 /**
  * Return `error` with the memory folders `roots` and the home folder `home` taken out of its
  * message, for a host whose messages reach a model or a run log, which never hold a location: a
- * root becomes `the memory's folder`, and a path under `home` is written from `~`. The class, name
- * and a system error's code are kept.
+ * root becomes `the memory's folder`, and `~/.yian/memory`, `~/.yian` and the home are written
+ * from `~`, each by its real path too, since `~/.yian/memory` may point out of the home. A home of
+ * `/` stays, or every path would. The class, name and a system error's code are kept.
  */
 export function withoutLocations(error: unknown, home: string, roots: Iterable<string>): unknown {
   if (!(error instanceof Error)) return error;
+  // The most specific first: a folder inside another is written by its own name.
+  const names: [string, string][] = [...new Set(roots)].map((root) => [root, "the memory's folder"]);
+  for (const [path, name] of [
+    [memoryRoot(home), "~/.yian/memory"],
+    [join(home, ".yian"), "~/.yian"],
+    [home, "~"],
+  ] as const) {
+    for (const each of new Set([realOr(path), path])) if (each !== "/") names.push([each, name]);
+  }
   let message = error.message;
-  const homes = [...new Set([resolveFlowPath(home), home])];
-  for (const root of new Set(roots)) message = message.replaceAll(root, "the memory's folder");
-  for (const each of homes) message = message.replaceAll(each, "~");
+  for (const [path, name] of names) message = replacePath(message, path, name);
   if (message === error.message) return error;
   const Class = error instanceof RangeError ? RangeError : error instanceof TypeError ? TypeError : Error;
   const copy: Error & { code?: unknown; syscall?: unknown; errno?: unknown } = new Class(message);
@@ -189,6 +197,25 @@ export function withoutLocations(error: unknown, home: string, roots: Iterable<s
   if (syscall !== undefined) copy.syscall = syscall;
   if (errno !== undefined) copy.errno = errno;
   return copy;
+}
+
+/** `path`'s real path, or `path` itself when it can't be resolved. */
+function realOr(path: string): string {
+  try {
+    return resolveFlowPath(path);
+  } catch {
+    // Called while reporting another error, which this one mustn't replace.
+    return path;
+  }
+}
+
+/**
+ * Return `text` with each whole occurrence of the path `path`, alone or as a folder of a longer
+ * path, written as `name`; a path that only starts with the same characters (`/home/ada2`) stays.
+ */
+function replacePath(text: string, path: string, name: string): string {
+  const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text.replace(new RegExp(`${escaped}(?=$|[/'"\`\\s),:;])`, "g"), () => name);
 }
 
 /** What `bindMemories` needs beside the flow and the flags. */

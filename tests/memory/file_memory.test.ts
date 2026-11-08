@@ -7,6 +7,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  type Applied,
+  type Author,
   BUILTIN_MEMORY_TOOLS,
   checkContract,
   MemoryBusyError,
@@ -513,6 +515,160 @@ describe("read tools", () => {
     await expect(s.call("upsert", {}, { signal })).rejects.toThrow(
       "FileMemory has no tool upsert; it has list, read, search, append, create, edit, delete, rewrite",
     );
+    await s.close();
+  });
+});
+
+const author: Author = { kind: "tool", name: "save", run: "r", node: "save" };
+
+/** Apply `change` as change `id` on `s`. */
+function apply(s: MemorySession, change: JsonObject, id = "c1"): Promise<Applied> {
+  return s.apply({ id, change, author, signal });
+}
+
+/**
+ * Return everything under `base`, symlinks not followed: each file's text, `dir` for a folder and
+ * the target of a symlink, keyed by relative path. The lock file, whose bytes SQLite owns, counts
+ * only by name.
+ */
+function tree(base: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const walk = (rel: string): void => {
+    for (const name of fs.readdirSync(join(base, rel)).sort()) {
+      const path = rel === "" ? name : `${rel}/${name}`;
+      const stats = fs.lstatSync(join(base, path));
+      if (stats.isSymbolicLink()) out[path] = `-> ${fs.readlinkSync(join(base, path))}`;
+      else if (stats.isDirectory()) {
+        out[path] = "dir";
+        walk(path);
+      } else out[path] = path.endsWith(".yian/lock") ? "lock" : fs.readFileSync(join(base, path), "utf8");
+    }
+  };
+  walk("");
+  return out;
+}
+
+/** The paths every write refuses, with the reason it gives. */
+const REFUSED_PATHS: [string, string][] = [
+  ["../x.md", "`../x.md` isn't part of the memory: a `..` part"],
+  ["a/../../x.md", "`a/../../x.md` isn't part of the memory: a `..` part"],
+  [".yian/journal.jsonl", "`.yian/journal.jsonl` isn't part of the memory: a hidden name"],
+  [".yian/identity", "`.yian/identity` isn't part of the memory: a hidden name"],
+  [".git/config", "`.git/config` isn't part of the memory: a hidden name"],
+  [
+    "-x.md",
+    "`-x.md` isn't part of the memory: a name other than letters, digits, `.`, `_` and `-`, starting with a letter or digit",
+  ],
+  ["a/b/c/d/e/x.md", "`a/b/c/d/e/x.md` isn't part of the memory: more than 4 folders deep"],
+  ["/tmp/x.md", "`/tmp/x.md` isn't part of the memory: an absolute path"],
+  ["linked/x.md", "`linked/x.md` isn't part of the memory: `linked` is a symlink"],
+  ["link.md", "`link.md` isn't part of the memory: a symlink"],
+  ["bin.dat", "`bin.dat` isn't part of the memory: not UTF-8 text"],
+];
+
+/**
+ * Lay out a memory with a symlinked folder, a symlinked file, a hidden folder and a binary file,
+ * pointing outside it, then check that `change` on each refused path gives its reason and writes
+ * nothing anywhere: not outside the root, not the journal, not the members.
+ */
+async function expectConfined(change: (path: string) => JsonObject): Promise<void> {
+  put(root, "a.md", "A");
+  put(root, ".git/config", "g");
+  put(root, "bin.dat", new Uint8Array([0xff]));
+  put(dir, "outside/x.md", "outside");
+  fs.symlinkSync(join(dir, "outside"), join(root, "linked"));
+  fs.symlinkSync(join(dir, "outside/x.md"), join(root, "link.md"));
+  const s = await openAt();
+  // A first change makes the journal, so a refusal can be seen to leave it alone.
+  expect((await apply(s, { op: "append", path: "a.md", text: "B" }, "first")).ok).toBe(true);
+  const before = tree(dir);
+  for (const [path, reason] of REFUSED_PATHS) {
+    expect(await apply(s, change(path), `id-${path}`)).toEqual({ ok: false, reason, current: null });
+  }
+  expect(tree(dir)).toEqual(before);
+  await s.close();
+}
+
+describe("append", () => {
+  test("append creates a missing file and its folders, private, and never conflicts", async () => {
+    const s = await openAt();
+    const applied = await apply(s, { op: "append", path: "a/b/c.md", text: "one" });
+    expect(applied).toMatchObject({ ok: true, result: { path: "a/b/c.md", hash: sha256("one") } });
+    expect(fs.readFileSync(join(root, "a/b/c.md"), "utf8")).toBe("one");
+    expect(fs.statSync(join(root, "a")).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(join(root, "a/b")).mode & 0o777).toBe(0o700);
+    expect(fs.statSync(join(root, "a/b/c.md")).mode & 0o777).toBe(0o600);
+    expect(fs.readdirSync(join(root, ".yian/tmp"))).toEqual([]);
+    await s.close();
+  });
+
+  test("append adds its text on a new line", async () => {
+    put(root, "a.md", "one");
+    put(root, "b.md", "one\n");
+    put(root, "c.md", "");
+    const s = await openAt();
+    for (const path of ["a.md", "b.md", "c.md"]) {
+      expect((await apply(s, { op: "append", path, text: "two" }, path)).ok).toBe(true);
+    }
+    expect(["a.md", "b.md", "c.md"].map((path) => fs.readFileSync(join(root, path), "utf8"))).toEqual([
+      "one\ntwo",
+      "one\ntwo",
+      "two",
+    ]);
+    await s.close();
+  });
+
+  test("its result's version is the memory's version after the change", async () => {
+    put(root, "keep.md", "K");
+    const s = await openAt();
+    const applied = await apply(s, { op: "append", path: "a.md", text: "x" });
+    const version = (await s.snapshot()).version;
+    expect(applied).toEqual({ ok: true, version, result: { path: "a.md", hash: sha256("x"), version } });
+    await s.close();
+  });
+
+  test("an append over a file, total or file-count cap is refused with the reason, writing nothing", async () => {
+    put(root, "a.md", "12345");
+    put(root, "b.md", "1234");
+    // 9 characters in 2 files; an append adds its line break too.
+    const s = await openAt({ maxFileChars: 6, maxTotalChars: 10, maxFiles: 2 });
+    const before = tree(dir);
+    expect(await apply(s, { op: "append", path: "a.md", text: "6" }, "1")).toEqual({
+      ok: false,
+      reason: "`a.md` would hold 7 characters; a file may hold 6",
+      current: null,
+    });
+    expect(await apply(s, { op: "append", path: "b.md", text: "x" }, "2")).toEqual({
+      ok: false,
+      reason: "the memory would hold 11 characters; it may hold 10",
+      current: null,
+    });
+    expect(await apply(s, { op: "append", path: "c.md", text: "x" }, "3")).toEqual({
+      ok: false,
+      reason: "the memory would hold 3 files; it may hold 2",
+      current: null,
+    });
+    expect(tree(dir)).toEqual(before);
+    await s.close();
+  });
+
+  test("confinement: append on a path outside the members is refused with the reason, writing nothing", async () => {
+    await expectConfined((path) => ({ op: "append", path, text: "x" }));
+  });
+
+  test("a change of the wrong shape is a fault, not a refusal", async () => {
+    const s = await openAt();
+    await expect(apply(s, { op: "upsert", path: "a.md" })).rejects.toThrow(
+      "FileMemory has no change upsert; its changes are append, create, edit, delete, rewrite",
+    );
+    await expect(apply(s, { op: "append", path: "a.md" })).rejects.toThrow(
+      "a FileMemory append needs text as a string",
+    );
+    await expect(apply(s, { op: "append", path: "a.md", text: "x", mode: "fast" })).rejects.toThrow(
+      "a FileMemory append takes path and text, not mode",
+    );
+    const unnamed = s.apply({ id: "", change: { op: "append", path: "a.md", text: "x" }, author, signal });
+    await expect(unnamed).rejects.toThrow("a change id must be a non-empty string");
     await s.close();
   });
 });

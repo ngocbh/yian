@@ -32,6 +32,7 @@ import {
   type Applied,
   type Author,
   type ChangeEntry,
+  ChangeIdReusedError,
   type Erased,
   MemoryBase,
   MemoryBusyError,
@@ -41,6 +42,7 @@ import {
   type MemoryToolSpec,
   type Recall,
 } from "./base.ts";
+import { ABSENT, authorOf, type Inverse, Journal, openRegular, writeAll } from "./file_journal.ts";
 
 /** The arguments `path` takes in every tool. */
 const PATH_PARAMETER: JsonObject = {
@@ -298,27 +300,6 @@ function sha256(data: string | Uint8Array): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-/**
- * Open the regular file at `path` with `flags`, never following a symlink at its last component,
- * and return its descriptor.
- *
- * @throws Error a Node system error when the open fails or `path` isn't a regular file.
- */
-function openRegular(path: string, flags: number, mode?: number): number {
-  // Non-blocking, so a FIFO's open returns (or fails ENXIO for writing) instead of blocking the
-  // thread until a peer opens it; regular files ignore the flag. The flags are missing on Windows.
-  const { O_NOCTTY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
-  const fd = fs.openSync(path, flags | (O_NONBLOCK ?? 0) | (O_NOCTTY ?? 0) | (O_NOFOLLOW ?? 0), mode);
-  // Checked on the open descriptor, so a swap after a path check can't slip through.
-  const stats = fs.fstatSync(fd);
-  if (stats.isFile()) return fd;
-  fs.closeSync(fd);
-  throw Object.assign(new Error(`not a regular file: ${path}`), {
-    code: stats.isDirectory() ? "EISDIR" : "EINVAL",
-    syscall: "open",
-  });
-}
-
 /** One member: its path under the root, its text, the sha256 of its bytes and its characters. */
 export interface MemberFile {
   readonly path: string;
@@ -423,7 +404,7 @@ export function memoryVersion(files: readonly MemberFile[]): string {
  * Write `data` to `target` atomically: a private temp file in `tmp`, synced, renamed onto
  * `target`, then both folders synced, so a crash leaves the old file or the new one.
  */
-function replaceFile(target: string, data: string | Uint8Array, tmp: string): void {
+function replaceFile(target: string, data: Uint8Array, tmp: string): void {
   const temporary = join(tmp, randomBytes(8).toString("hex"));
   const { O_CREAT, O_EXCL, O_WRONLY } = fs.constants;
   const fd = openRegular(temporary, O_CREAT | O_EXCL | O_WRONLY, 0o600);
@@ -431,7 +412,7 @@ function replaceFile(target: string, data: string | Uint8Array, tmp: string): vo
     try {
       // The open's mode is masked by the umask; fchmod isn't.
       fs.fchmodSync(fd, 0o600);
-      fs.writeFileSync(fd, data);
+      writeAll(fd, data);
       fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);
@@ -541,6 +522,83 @@ function countArg(args: JsonObject, name: string): number | undefined {
     throw new TypeError(`FileMemory ${name} must be an integer of at least 1`);
   }
   return number;
+}
+
+/** A FileMemory change, checked for shape: a write tool's arguments plus `op`, its name. */
+type Change =
+  | { op: "append" | "create"; path: string; text: string }
+  | { op: "edit"; path: string; old: string; new: string }
+  | { op: "delete"; path: string; if_hash: string }
+  | { op: "rewrite"; path: string; text: string; if_hash: string };
+
+/** The fields each change takes besides `op`, in order. */
+const CHANGE_FIELDS: Readonly<Record<Change["op"], readonly string[]>> = Object.freeze({
+  append: ["path", "text"],
+  create: ["path", "text"],
+  edit: ["path", "old", "new"],
+  delete: ["path", "if_hash"],
+  rewrite: ["path", "text", "if_hash"],
+});
+
+/** Return `names` joined for a message: `a`, `a and b`, `a, b and c`. */
+function listed(names: readonly string[]): string {
+  return names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
+}
+
+/**
+ * Return `change` as a FileMemory change.
+ *
+ * @throws {TypeError} If its `op` isn't a FileMemory change, or its fields aren't that change's,
+ *   each a string.
+ */
+function checkChange(change: JsonObject): Change {
+  const op: unknown = isJsonObject(change) ? change.op : undefined;
+  if (typeof op !== "string" || !Object.hasOwn(CHANGE_FIELDS, op)) {
+    const ops = Object.keys(CHANGE_FIELDS).join(", ");
+    throw new TypeError(`FileMemory has no change ${String(op)}; its changes are ${ops}`);
+  }
+  const fields = CHANGE_FIELDS[op as Change["op"]];
+  const extra = Object.keys(change).filter((key) => key !== "op" && !fields.includes(key));
+  if (extra.length > 0) throw new TypeError(`a FileMemory ${op} takes ${listed(fields)}, not ${listed(extra)}`);
+  for (const field of fields) {
+    const value = change[field];
+    if (typeof value !== "string") throw new TypeError(`a FileMemory ${op} needs ${field} as a string`);
+    if (!value.isWellFormed()) throw new TypeError(`a FileMemory ${op}'s ${field} holds a lone surrogate`);
+  }
+  return change as unknown as Change;
+}
+
+/** Return whether `value` is a plain object. */
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Return `author` with only its own fields.
+ *
+ * @throws {TypeError} If it isn't `{kind, name, run?, node?}` with a known kind.
+ */
+function checkAuthor(author: Author): Author {
+  const ok =
+    isJsonObject(author) &&
+    ["agent", "tool", "user", "host"].includes(author.kind) &&
+    typeof author.name === "string" &&
+    (author.run === undefined || typeof author.run === "string") &&
+    (author.node === undefined || typeof author.node === "string");
+  if (!ok) {
+    throw new TypeError("a change's author must be {kind, name, run?, node?}, its kind agent, tool, user or host");
+  }
+  return authorOf(author);
+}
+
+/** Return a refusal that wrote nothing. */
+function refused(reason: string): Applied {
+  return { ok: false, reason, current: null };
+}
+
+/** Return the sum of `files`' characters. */
+function totalChars(files: readonly MemberFile[]): number {
+  return files.reduce((sum, file) => sum + file.chars, 0);
 }
 
 /** What a session needs of its memory: the folder, its caps, its lock and its clock. */
@@ -670,7 +728,7 @@ export class FileMemory extends MemoryBase {
         identity = storedIdentity(root);
         if (identity === null) {
           identity = this.#id ?? `at-${sha256(root).slice(0, 16)}`;
-          replaceFile(join(root, META, "identity"), identity, join(root, META, "tmp"));
+          replaceFile(join(root, META, "identity"), Buffer.from(identity, "utf8"), join(root, META, "tmp"));
           created = true;
         }
       } finally {
@@ -761,17 +819,37 @@ function sessionInfo(identity: string, store: Store): MemoryInfo {
   });
 }
 
+/** Write `bytes` to the member `path`, making its missing folders (0700) first. */
+function writeMember(root: string, path: string, bytes: Uint8Array): void {
+  const parts = path.split("/");
+  for (let i = 1; i < parts.length; i++) {
+    const folder = parts.slice(0, i).join("/");
+    makeDirectory(join(root, folder), folder);
+  }
+  const tmp = join(root, META, "tmp");
+  makeDirectory(tmp, `${META}/tmp`);
+  replaceFile(join(root, path), bytes, tmp);
+}
+
+/** Delete the member `path` and sync its folder. */
+function removeMember(root: string, path: string): void {
+  fs.unlinkSync(join(root, path));
+  syncFolder(dirname(join(root, path)));
+}
+
 /** One open FileMemory. Read tools take no lock; writes and snapshots take the memory's lock. */
 class FileMemorySession implements MemorySession {
   readonly info: MemoryInfo;
   readonly created: boolean;
   readonly #store: Store;
+  readonly #journal: Journal;
   // The session's own locked calls queue here, so they don't poll the lock against each other.
   #queue: Promise<unknown> = Promise.resolve();
   #closed = false;
 
   constructor(store: Store, info: MemoryInfo, created: boolean) {
     this.#store = store;
+    this.#journal = new Journal(join(store.root, META), store.limits.maxChangeIds);
     this.info = info;
     this.created = created;
   }
@@ -811,8 +889,36 @@ class FileMemorySession implements MemorySession {
     return this.#search(stringArg(args, "query", true));
   }
 
-  apply(_c: { id: string; change: JsonObject; author: Author; signal: AbortSignal }): Promise<Applied> {
-    return Promise.reject(new Error("FileMemory changes aren't available yet"));
+  /**
+   * Apply one change under the lock, unless its id is known: then return the stored outcome.
+   *
+   * The change's path, precondition and caps are checked first, and a refusal (`ok: false`)
+   * writes nothing. Otherwise the journal entry is written and synced, then the file through a
+   * synced temp file, then the commit line.
+   *
+   * @throws {ChangeIdReusedError} If `id` was applied with a different change.
+   * @throws {MemoryBusyError} If another writer holds the lock past the timeout.
+   * @throws {TypeError} If `id`, `change` or `author` has the wrong shape.
+   */
+  async apply(c: { id: string; change: JsonObject; author: Author; signal: AbortSignal }): Promise<Applied> {
+    this.#checkOpen();
+    c.signal.throwIfAborted();
+    if (typeof c.id !== "string" || c.id === "") throw new TypeError("a change id must be a non-empty string");
+    const author = checkAuthor(c.author);
+    const change = checkChange(c.change);
+    const digest = sha256(canonicalJson(c.change));
+    return this.#locked(c.signal, () => {
+      const pending = this.#journal.catchUp();
+      if (pending !== null) {
+        throw new Error(`\`.yian/journal.jsonl\` ends with change ${shown(pending.id)}, whose outcome isn't recorded`);
+      }
+      const known = this.#journal.known(c.id);
+      if (known !== undefined) {
+        if (known.digest !== digest) throw new ChangeIdReusedError(c.id);
+        return known.applied;
+      }
+      return this.#write(c.id, digest, change, author);
+    });
   }
 
   undo(_o: { id: string; changeId: string; author: Author; signal: AbortSignal }): Promise<Applied> {
@@ -945,6 +1051,77 @@ class FileMemorySession implements MemorySession {
     if (typeof file === "string") throw refusal(`${shown(path)} isn't part of the memory: ${file}`);
     if (file === null) throw refusal(`${shown(path)} doesn't exist`);
     return file;
+  }
+
+  /** Check `change` against the folder and the caps, then journal it, write it and commit it. */
+  #write(id: string, digest: string, change: Change, author: Author): Applied {
+    const { root, limits, scheduler } = this.#store;
+    const { path } = change;
+    const why = pathProblem(path, limits.maxDepth) ?? diskProblem(root, path);
+    const old = why ?? readMemberFile(join(root, path), path, limits.maxFileChars);
+    if (typeof old === "string") return refused(`${shown(path)} isn't part of the memory: ${old}`);
+    const next = this.#next(change, old);
+    if ("ok" in next) return next;
+    const others = readMembers(root, limits).files.filter((file) => file.path !== path);
+    let files = others;
+    let bytes: Buffer | null = null;
+    if (next.text !== null) {
+      const chars = charCount(next.text);
+      if (chars > limits.maxFileChars) {
+        return refused(`${shown(path)} would hold ${chars} characters; a file may hold ${limits.maxFileChars}`);
+      }
+      const total = totalChars(others) + chars;
+      // A memory over its cap by hand may still shrink: only a change that grows it is refused.
+      if (total > limits.maxTotalChars && total > totalChars(others) + (old?.chars ?? 0)) {
+        return refused(`the memory would hold ${total} characters; it may hold ${limits.maxTotalChars}`);
+      }
+      if (old === null && others.length + 1 > limits.maxFiles) {
+        return refused(`the memory would hold ${others.length + 1} files; it may hold ${limits.maxFiles}`);
+      }
+      bytes = Buffer.from(next.text, "utf8");
+      files = [...others, { path, text: next.text, hash: sha256(bytes), chars }];
+    }
+    const after = bytes === null ? ABSENT : sha256(bytes);
+    this.#journal.writeEntry({
+      id,
+      digest,
+      op: change.op,
+      path,
+      author,
+      at: new Date(scheduler.now()).toISOString(),
+      before: old?.hash ?? ABSENT,
+      after,
+      inverse: next.inverse,
+    });
+    if (bytes === null) removeMember(root, path);
+    else writeMember(root, path, bytes);
+    const version = memoryVersion(files);
+    const applied: Applied = {
+      ok: true,
+      version,
+      result: bytes === null ? { path, version } : { path, hash: after, version },
+    };
+    this.#journal.writeOutcome(id, applied);
+    return applied;
+  }
+
+  /**
+   * Return what `change` makes of the member `old` (`null` when there is no file): the new text,
+   * or `null` to delete it, and the inverse that undoes it; or the conflict when its precondition
+   * fails.
+   */
+  #next(change: Change, old: MemberFile | null): { text: string | null; inverse: Inverse } | Applied {
+    switch (change.op) {
+      case "append": {
+        if (old === null) return { text: change.text, inverse: { absent: true } };
+        const lineBreak = old.text === "" || old.text.endsWith("\n") ? "" : "\n";
+        // The file's bytes are its old bytes and then the appended ones, so undo cuts it back.
+        const inverse = { truncate: Buffer.byteLength(old.text, "utf8") };
+        return { text: old.text + lineBreak + change.text, inverse };
+      }
+      default:
+        throw new Error(`FileMemory ${change.op} isn't available yet`);
+    }
   }
 
   /** Throw when the session is closed. */

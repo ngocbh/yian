@@ -85,11 +85,14 @@ test("runFlow refuses the removed memory option by name", async () => {
   );
 });
 
-test("advance and agentCall refuse the removed memory option by name", async () => {
+test("agentCall refuses the removed memory option by name; advance refuses the old map of memories", async () => {
   const { log } = await runSimple();
   const message = "the memory option was removed: pass each memory as a flow input";
-  await expect(advance({ log, memory: new Map(), env: hostEnv(dir) } as never)).rejects.toThrow(message);
   await expect(agentCall(log, { nodeId: "plan", n: 1 }, { memory: new Map() } as never)).rejects.toThrow(message);
+  // advance's memory binds a run's memory inputs again, by name; the old map isn't that.
+  await expect(advance({ log, memory: new Map(), env: hostEnv(dir) } as never)).rejects.toThrow(
+    "memory must be a record of memory input names to MemoryBase instances",
+  );
 });
 
 test("run_started records no old memory state and no learnable flag", async () => {

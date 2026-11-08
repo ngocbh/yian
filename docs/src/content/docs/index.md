@@ -88,6 +88,7 @@ flowchart LR
 | Choose and log in to a model provider | [Models and providers](/models/) |
 | Branch, loop and call other flows | [Control flow](/control-flow/) |
 | Wait for messages, answers and time | [Inboxes and waiting](/inboxes/) |
+| Give agents notes that last across runs | [Memory](/memory/) |
 | Look up a `yian` command | [CLI](/cli/) |
 | Run flows from your own TypeScript program | [Embedding yian](/embedding/) |
 | See how runs are logged and resumed | [How yian works](/how-it-works/) |

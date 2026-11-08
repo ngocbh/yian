@@ -666,9 +666,10 @@ function bindEach(
 
 /**
  * Return the options of input `input`'s VectorDB store at `path`: its embedding model and
- * `options.embed`. Only a fresh run makes a store, and only one that doesn't exist yet takes a
- * model: `options.embedding`, else `options.defaultEmbedding`'s. A store that exists keeps the
- * model it recorded, as a resume's and a preview's (which opens nothing) do.
+ * `options.embed`. Only a fresh run makes a store, and only one that doesn't exist yet, or is an
+ * empty file (one whose making stopped short), takes a model: `options.embedding`, else
+ * `options.defaultEmbedding`'s. A store that exists keeps the model it recorded, as a resume's and a
+ * preview's (which opens nothing) do.
  *
  * @throws {RangeError} When a fresh run's store doesn't exist yet and there is no embedding model;
  *   as `options.defaultEmbedding` throws.
@@ -676,7 +677,8 @@ function bindEach(
 function storeOptions(input: string, path: string, options: BindOptions, mode: BindMode): VectorDBMemoryOptions {
   const store: VectorDBMemoryOptions = { path };
   if (options.embed !== undefined) store.embed = options.embed;
-  if (mode !== "fresh" || lstatOrNull(path) !== null) return store;
+  const stats = lstatOrNull(path);
+  if (mode !== "fresh" || (stats !== null && !(stats.isFile() && stats.size === 0))) return store;
   // The default is read only for a new store, so a broken one fails only a run that needs it.
   const embedding = options.embedding ?? options.defaultEmbedding?.() ?? null;
   if (embedding === null) {

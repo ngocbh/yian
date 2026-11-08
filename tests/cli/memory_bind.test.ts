@@ -679,6 +679,16 @@ describe("VectorDBMemory inputs", () => {
     expect((await new VectorDBMemory({ path: store }).stored({ signal }))?.embedding.model).toBe("b");
   });
 
+  test("an empty store file is a store not made yet: it takes the default model", async () => {
+    const store = join(tmp, "empty.db");
+    writeFileSync(store, "", { mode: 0o600 });
+    const args = ["run", flowFile(ADD_CASE), "--quiet", "--memory", `cases=${store}`];
+    const result = await yian(args, { YIAN_DEFAULT_EMBEDDING: "openai/default" }, { embed: fakeEmbed });
+    expect(result.code, result.stderr).toBe(0);
+    const stored = await new VectorDBMemory({ path: store }).stored({ signal: new AbortController().signal });
+    expect(stored?.embedding).toEqual({ provider: "openai", model: "default" });
+  });
+
   test("a VectorDB input given a folder is a usage error", async () => {
     const args = ["run", flowFile(ADD_CASE), "--quiet", "--memory", `cases=${join(tmp, "c")}`, ...embedding];
     const result = await yian(args);

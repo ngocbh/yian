@@ -885,3 +885,32 @@ test("the journal refuses a line out of order before writing it", async () => {
   expect(() => journal.writeEntry({ ...entry, id: "z" })).toThrow("has an entry with no outcome before later entries");
   expect(fs.readFileSync(journalPath, "utf8")).toBe(withEntry);
 });
+
+test.each([
+  ["an append of nothing onto a line break", { op: "append", path: "a.md", text: "" }],
+  ["an edit of x to x", { op: "edit", path: "a.md", old: "x", new: "x" }],
+  ["a rewrite to the same text", { op: "rewrite", path: "a.md", text: "x\n", if_hash: sha256("x\n") }],
+])("a cut-off change that changes nothing (%s) is committed on recovery, not aborted", async (_, change) => {
+  const s = await openAt();
+  await s.apply({ id: "first", change: { op: "create", path: "a.md", text: "x\n" }, author, signal });
+  onWrite((_, data, write) => {
+    if (!data.includes('"ok":true')) return write();
+    write(data.length >> 1);
+    throw new Crash("cut in the commit line");
+  });
+  try {
+    await expect(s.apply({ id: "noop", change, author, signal })).rejects.toThrow("cut in the commit line");
+  } finally {
+    mock.restore();
+  }
+  // The journal still ends in the cut-off commit line: read the entry from the whole lines.
+  const lines = fs.readFileSync(join(root, ".yian/journal.jsonl"), "utf8").split("\n");
+  const entry = JSON.parse(lines.at(-2)!) as JsonObject;
+  expect(entry).toMatchObject({ id: "noop", before: entry.after });
+  const t = await openAt();
+  expect(journalBody().at(-1)).toMatchObject({ id: "noop", ok: true });
+  expect((await t.apply({ id: "noop", change, author, signal })).ok).toBe(true);
+  expect(journalBody().filter((line) => line.id === "noop")).toHaveLength(2);
+  await s.close();
+  await t.close();
+});

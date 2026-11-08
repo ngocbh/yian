@@ -472,7 +472,14 @@ export async function memoryEdit(command: ParsedArgs, io: CliIo): Promise<number
         if (!(error instanceof Error) || readFileSync(copy, "utf8") === before) throw error;
         return keptFailure("edit failed", "memory.failed", error.message);
       }
-      const text = readFileSync(copy, "utf8");
+      let text: string;
+      try {
+        // Fatal, so bytes that aren't UTF-8 aren't silently turned into U+FFFD and written back.
+        text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(readFileSync(copy));
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+        return keptFailure("edit failed", "memory.failed", "the edited text isn't UTF-8");
+      }
       if (text === before) {
         if (json) await printJson({ change: null }, io.stdout);
         else await io.stdout.write(`${forTerminal(path, io.stdout)} is unchanged\n`);

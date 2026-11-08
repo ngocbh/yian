@@ -434,6 +434,20 @@ describe("yian memory edit", () => {
     expect(readdirSync(join(tmp, "tmpdir"))).toEqual([]);
   });
 
+  test("an edit that isn't UTF-8 text isn't applied, and its copy is kept", async () => {
+    const flow = flowFile();
+    await runOnce(flow, "first");
+    const result = await yian(["memory", "edit", flow, "lessons"], {
+      editor: async (path) => writeFileSync(path, new Uint8Array([0x66, 0x69, 0xff, 0xfe])),
+    });
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("edit failed: the edited text isn't UTF-8; your text is in ");
+    const kept = /your text is in (.+)$/m.exec(result.stderr)![1]!;
+    expect([...readFileSync(kept)]).toEqual([0x66, 0x69, 0xff, 0xfe]);
+    rmSync(join(kept, ".."), { recursive: true });
+    expect(readFileSync(join(lessons().location, "MEMORY.md"), "utf8")).toBe("first");
+  });
+
   test("a --file that can't be a file of the memory is refused before the editor opens", async () => {
     const flow = flowFile();
     await runOnce(flow, "first");
